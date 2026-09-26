@@ -47,6 +47,7 @@ type Server struct {
 	auth        AuthService
 	oauth       OAuthService
 	tokens      TokenService
+	servers     ServerService
 	authLimiter *ipRateLimiter
 	router      http.Handler
 	closer      func()
@@ -54,11 +55,11 @@ type Server struct {
 
 // New constructs a Server bound to cfg and logging through logger. The
 // authService provides the authentication flows, oauthService the OAuth2 login
-// flows, and tokenService the scoped API tokens (nil disables the corresponding
-// routes); st supplies the shared database pool used by the health check, and
-// when st is nil a short-lived pinger is used instead. Run owns the HTTP
-// lifecycle.
-func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauthService OAuthService, tokenService TokenService, st *store.Store) (*Server, error) {
+// flows, tokenService the scoped API tokens, and serverService the node
+// registry and SSH validation (nil disables the corresponding routes); st
+// supplies the shared database pool used by the health check, and when st is
+// nil a short-lived pinger is used instead. Run owns the HTTP lifecycle.
+func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauthService OAuthService, tokenService TokenService, serverService ServerService, st *store.Store) (*Server, error) {
 	if cfg == nil {
 		return nil, errors.New("server: config is nil")
 	}
@@ -87,6 +88,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		auth:        authService,
 		oauth:       oauthService,
 		tokens:      tokenService,
+		servers:     serverService,
 		authLimiter: limiter,
 		closer: func() {
 			_ = redisClient.Close()
@@ -137,6 +139,11 @@ func (s *Server) routes() (http.Handler, error) {
 		// Token management requires both a JWT verifier and the token service.
 		if s.auth != nil && s.tokens != nil {
 			s.mountTokenRoutes(api)
+		}
+
+		// Node registry and SSH validation require an authenticated caller.
+		if s.servers != nil {
+			s.mountServerRoutes(api)
 		}
 	})
 

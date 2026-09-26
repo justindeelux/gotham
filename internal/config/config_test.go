@@ -19,6 +19,9 @@ var gothamEnvKeys = []string{
 	EnvOAuthGitHubClientID,
 	EnvOAuthGitHubClientSecret,
 	EnvOAuthGitHubRedirectURL,
+	EnvGRPCAddr,
+	EnvCADir,
+	EnvSecretKey,
 }
 
 // chdir switches into dir for the duration of the test and restores the
@@ -272,6 +275,79 @@ func TestLoadOAuthGitHubFromEnv(t *testing.T) {
 	}
 	if cfg.OAuth.GitHub.RedirectURL != "https://gotham.example/api/v1/auth/oauth/github/callback" {
 		t.Errorf("OAuth.GitHub.RedirectURL = %q", cfg.OAuth.GitHub.RedirectURL)
+	}
+}
+
+func TestLoadGRPCAndCADefaults(t *testing.T) {
+	clearGothamEnv(t)
+	chdir(t, t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.GRPC.Addr != defaultGRPCAddr {
+		t.Errorf("GRPC.Addr = %q, want %q", cfg.GRPC.Addr, defaultGRPCAddr)
+	}
+	if cfg.CA.Dir != defaultCADir {
+		t.Errorf("CA.Dir = %q, want %q", cfg.CA.Dir, defaultCADir)
+	}
+	if cfg.SecretKey != "" {
+		t.Errorf("SecretKey = %q, want empty by default", cfg.SecretKey)
+	}
+}
+
+func TestLoadGRPCAndCAFromYAML(t *testing.T) {
+	clearGothamEnv(t)
+
+	dir := t.TempDir()
+	writeConfig(t, dir, `
+grpc:
+  addr: 127.0.0.1:9442
+ca:
+  dir: /etc/gotham/ca
+secret_key: yaml-secret
+`)
+	chdir(t, dir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.GRPC.Addr != "127.0.0.1:9442" {
+		t.Errorf("GRPC.Addr = %q", cfg.GRPC.Addr)
+	}
+	if cfg.CA.Dir != "/etc/gotham/ca" {
+		t.Errorf("CA.Dir = %q", cfg.CA.Dir)
+	}
+	if cfg.SecretKey != "yaml-secret" {
+		t.Errorf("SecretKey = %q", cfg.SecretKey)
+	}
+}
+
+func TestLoadGRPCAndCAFromEnv(t *testing.T) {
+	clearGothamEnv(t)
+	chdir(t, t.TempDir())
+
+	t.Setenv(EnvGRPCAddr, "0.0.0.0:19442")
+	t.Setenv(EnvCADir, "/env/ca")
+	t.Setenv(EnvSecretKey, "env-secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.GRPC.Addr != "0.0.0.0:19442" {
+		t.Errorf("GRPC.Addr = %q", cfg.GRPC.Addr)
+	}
+	if cfg.CA.Dir != "/env/ca" {
+		t.Errorf("CA.Dir = %q", cfg.CA.Dir)
+	}
+	if cfg.SecretKey != "env-secret" {
+		t.Errorf("SecretKey = %q", cfg.SecretKey)
 	}
 }
 

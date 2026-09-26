@@ -9,7 +9,8 @@
 #   GOTHAM_REDIS_ADDR, GOTHAM_LOG_LEVEL, GOTHAM_LOG_FORMAT,
 #   GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH, GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH,
 #   GOTHAM_OAUTH_GITHUB_CLIENT_ID, GOTHAM_OAUTH_GITHUB_CLIENT_SECRET,
-#   GOTHAM_OAUTH_GITHUB_REDIRECT_URL
+#   GOTHAM_OAUTH_GITHUB_REDIRECT_URL,
+#   GOTHAM_GRPC_ADDR, GOTHAM_CA_DIR, GOTHAM_SECRET_KEY
 
 # HTTP listener.
 server:
@@ -29,6 +30,22 @@ database:
 redis:
   # host:port of the Redis server. Default: localhost:6379
   addr: localhost:6379
+
+# gRPC gateway that node agents dial (AgentService + UpdateService).
+grpc:
+  # host:port to bind. Default: :9442
+  addr: ":9442"
+
+# Certificate authority used to issue agent and control-plane mTLS certificates.
+ca:
+  # Directory holding ca.crt and ca.key. When the CA is absent the gateway
+  # falls back to an insecure listener (development only). Default: ./data/ca/
+  dir: ./data/ca/
+
+# Secret used to encrypt stored SSH private keys (AES-256-GCM). When empty an
+# ephemeral secret is generated at startup and a warning is logged: encrypted
+# keys then do not survive a restart.
+# secret_key: <32+ random bytes, e.g. `openssl rand -base64 32`>
 
 # Logging.
 log:

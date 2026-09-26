@@ -94,3 +94,61 @@ func (s *Store) RevokeAPIToken(ctx context.Context, params sqlc.RevokeAPITokenPa
 func (s *Store) TouchAPITokenLastUsed(ctx context.Context, params sqlc.TouchAPITokenLastUsedParams) error {
 	return s.queries.TouchAPITokenLastUsed(ctx, params)
 }
+
+// CreateServer stores a managed node and returns the stored row.
+func (s *Store) CreateServer(ctx context.Context, params sqlc.CreateServerParams) (sqlc.Server, error) {
+	return s.queries.CreateServer(ctx, params)
+}
+
+// GetServerByID returns the node with the given ID.
+func (s *Store) GetServerByID(ctx context.Context, id pgtype.UUID) (sqlc.Server, error) {
+	return s.queries.GetServerByID(ctx, id)
+}
+
+// GetServerByNodeID returns the node registered under nodeID.
+func (s *Store) GetServerByNodeID(ctx context.Context, nodeID *string) (sqlc.Server, error) {
+	return s.queries.GetServerByNodeID(ctx, nodeID)
+}
+
+// ListServers returns every managed node, newest first.
+func (s *Store) ListServers(ctx context.Context) ([]sqlc.Server, error) {
+	return s.queries.ListServers(ctx)
+}
+
+// DeleteServer removes the node with the given ID.
+func (s *Store) DeleteServer(ctx context.Context, id pgtype.UUID) error {
+	return s.queries.DeleteServer(ctx, id)
+}
+
+// UpdateServerAgentInfo records the agent capabilities reported at Register and
+// returns the updated row.
+func (s *Store) UpdateServerAgentInfo(ctx context.Context, params sqlc.UpdateServerAgentInfoParams) (sqlc.Server, error) {
+	return s.queries.UpdateServerAgentInfo(ctx, params)
+}
+
+// UpdateServerMetrics records a heartbeat and returns the updated row.
+func (s *Store) UpdateServerMetrics(ctx context.Context, params sqlc.UpdateServerMetricsParams) (sqlc.Server, error) {
+	return s.queries.UpdateServerMetrics(ctx, params)
+}
+
+// SetServerStatus updates a node's lifecycle status and returns the updated row.
+func (s *Store) SetServerStatus(ctx context.Context, params sqlc.SetServerStatusParams) (sqlc.Server, error) {
+	return s.queries.SetServerStatus(ctx, params)
+}
+
+// CreatePrivateKey stores an encrypted SSH private key and returns its metadata.
+func (s *Store) CreatePrivateKey(ctx context.Context, params sqlc.CreatePrivateKeyParams) (sqlc.CreatePrivateKeyRow, error) {
+	return s.queries.CreatePrivateKey(ctx, params)
+}
+
+// GetPrivateKeyByID returns the private key with the given ID, including the
+// encrypted material.
+func (s *Store) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (sqlc.PrivateKey, error) {
+	return s.queries.GetPrivateKeyByID(ctx, id)
+}
+
+// ListPrivateKeys returns private-key metadata, newest first, without the
+// encrypted material.
+func (s *Store) ListPrivateKeys(ctx context.Context) ([]sqlc.ListPrivateKeysRow, error) {
+	return s.queries.ListPrivateKeys(ctx)
+}

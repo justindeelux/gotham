@@ -13,6 +13,7 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/server"
+	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
 )
 
@@ -110,7 +111,45 @@ func runServe() int {
 	oauthService := buildOAuthService(snap.OAuth, authService, logger)
 	tokenService := auth.NewAPITokenService(authStore, logger)
 
-	srv, err := server.New(cfg, logger, authService, oauthService, tokenService, authStore)
+	// The CA is optional: without one the gRPC gateway runs an insecure
+	// development listener, matching the agent's dev fallback.
+	authority, err := servers.LoadAuthority(snap.CA.Dir)
+	if err != nil {
+		logger.Error("failed to load certificate authority", "error", err)
+		return exitError
+	}
+	if authority == nil {
+		logger.Warn("no CA found; gRPC gateway runs without TLS (development only)", "ca_dir", snap.CA.Dir)
+	} else {
+		logger.Info("certificate authority loaded", "ca_dir", snap.CA.Dir)
+	}
+
+	serverService := servers.NewService(servers.Config{
+		Store:     authStore,
+		Authority: authority,
+		Secret:    snap.SecretKey,
+		Version:   version,
+		Logger:    logger,
+	})
+
+	gateway, err := servers.NewGateway(servers.GatewayConfig{
+		Addr:      snap.GRPC.Addr,
+		Authority: authority,
+		Service:   serverService,
+		Logger:    logger,
+	})
+	if err != nil {
+		logger.Error("failed to create grpc gateway", "error", err)
+		return exitError
+	}
+	if err := gateway.Start(ctx); err != nil {
+		logger.Error("failed to start grpc gateway", "error", err)
+		return exitError
+	}
+	defer gateway.Stop()
+	logger.Info("grpc gateway started", slog.String("addr", gateway.Addr()))
+
+	srv, err := server.New(cfg, logger, authService, oauthService, tokenService, serverService, authStore)
 	if err != nil {
 		logger.Error("failed to create server", "error", err)
 		return exitError

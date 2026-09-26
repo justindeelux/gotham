@@ -57,12 +57,13 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		return nil, errors.New("server: logger is nil")
 	}
 
-	redisClient := newRedisPinger(cfg.Redis.Addr)
+	snap := cfg.Snapshot()
+	redisClient := newRedisPinger(snap.Redis.Addr)
 
 	s := &Server{
 		cfg:    cfg,
 		logger: logger,
-		db:     newPostgresPinger(cfg.Database.DSN),
+		db:     newPostgresPinger(snap.Database.DSN),
 		redis:  redisClient,
 		closer: func() { _ = redisClient.Close() },
 	}
@@ -207,7 +208,8 @@ func (s *Server) Run(ctx context.Context) error {
 		defer s.closer()
 	}
 
-	addr := net.JoinHostPort(s.cfg.Server.Addr, strconv.Itoa(s.cfg.Server.Port))
+	snap := s.cfg.Snapshot()
+	addr := net.JoinHostPort(snap.Server.Addr, strconv.Itoa(snap.Server.Port))
 	httpServer := &http.Server{
 		Addr:              addr,
 		Handler:           s.router,

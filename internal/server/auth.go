@@ -37,6 +37,7 @@ type contextKey int
 const (
 	userIDKey contextKey = iota
 	roleKey
+	scopesKey
 )
 
 // UserIDFromContext returns the authenticated user ID set by RequireAuth.
@@ -49,6 +50,13 @@ func UserIDFromContext(ctx context.Context) (uuid.UUID, bool) {
 func RoleFromContext(ctx context.Context) (string, bool) {
 	role, ok := ctx.Value(roleKey).(string)
 	return role, ok
+}
+
+// ScopesFromContext returns the API-token scopes set by RequireAuth. A JWT
+// request carries no scopes, so ok is false for it.
+func ScopesFromContext(ctx context.Context) ([]string, bool) {
+	scopes, ok := ctx.Value(scopesKey).([]string)
+	return scopes, ok
 }
 
 // credentialsRequest is the body of register and login.
@@ -198,12 +206,19 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 // RequireAuth validates the bearer token and stores the user ID and role in the
-// request context. It answers 401 for a missing or invalid token.
+// request context. It accepts both a JWT and a scoped API token: a token with
+// the API-token prefix is resolved through the token service, everything else is
+// verified as a JWT. It answers 401 for a missing or invalid token.
 func (s *Server) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := bearerToken(r)
 		if !ok {
 			writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+			return
+		}
+
+		if strings.HasPrefix(token, auth.APITokenPrefix) {
+			s.authenticateAPIToken(w, r, next, token)
 			return
 		}
 
@@ -223,6 +238,26 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, roleKey, claims.Role)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// authenticateAPIToken resolves an API token and stores its owner and scopes in
+// the request context. API tokens act as the default "user" role.
+func (s *Server) authenticateAPIToken(w http.ResponseWriter, r *http.Request, next http.Handler, token string) {
+	if s.tokens == nil {
+		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+		return
+	}
+
+	identity, err := s.tokens.Authenticate(r.Context(), token)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+		return
+	}
+
+	ctx := context.WithValue(r.Context(), userIDKey, identity.UserID)
+	ctx = context.WithValue(ctx, roleKey, apiTokenRole)
+	ctx = context.WithValue(ctx, scopesKey, identity.Scopes)
+	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // bearerToken extracts a bearer token from the Authorization header.

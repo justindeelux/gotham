@@ -108,8 +108,9 @@ func runServe() int {
 	authStore := store.New(pool)
 	authService := auth.New(authStore, signer, logger)
 	oauthService := buildOAuthService(snap.OAuth, authService, logger)
+	tokenService := auth.NewAPITokenService(authStore, logger)
 
-	srv, err := server.New(cfg, logger, authService, oauthService, authStore)
+	srv, err := server.New(cfg, logger, authService, oauthService, tokenService, authStore)
 	if err != nil {
 		logger.Error("failed to create server", "error", err)
 		return exitError

@@ -7,17 +7,26 @@ CGO_ENABLED ?= 0
 BIN_DIR     ?= bin
 LDFLAGS     ?= -s -w
 
-.PHONY: all build test lint migrate migrate-down migrate-status sqlc-generate sqlc-check dev fmt clean
+.PHONY: all build web-build test lint migrate migrate-down migrate-status sqlc-generate sqlc-check dev fmt clean
 
 all: build
 
-## build: build both binaries into bin/
-build:
+## build: build both binaries into bin/ (refreshes the SPA when npm deps are installed)
+build: web-build
 	@mkdir -p $(BIN_DIR)
 	@echo "==> building $(BIN_DIR)/gotham"
 	@CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/gotham ./cmd/gotham
 	@echo "==> building $(BIN_DIR)/gotham-agent"
 	@CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/gotham-agent ./cmd/gotham-agent
+
+## web-build: compile the SPA into internal/server/webdist when npm deps are present
+web-build:
+	@if command -v npm >/dev/null 2>&1 && [ -f web/package.json ] && [ -d web/node_modules ]; then \
+		echo "==> building web SPA (npm run build)"; \
+		cd web && npm run build; \
+	else \
+		echo "==> skipping web build; using committed internal/server/webdist"; \
+	fi
 
 ## test: run the unit test suite
 test:

@@ -1,0 +1,37 @@
+# Gotham control-plane configuration example.
+#
+# Copy to gotham.yaml in the working directory and edit as needed. Every key is
+# optional; the defaults shown below apply when a key is omitted. A missing
+# gotham.yaml is not an error.
+#
+# Environment variables override the file. Supported variables:
+#   GOTHAM_SERVER_ADDR, GOTHAM_SERVER_PORT, GOTHAM_DATABASE_DSN,
+#   GOTHAM_REDIS_ADDR, GOTHAM_LOG_LEVEL, GOTHAM_LOG_FORMAT
+
+# HTTP listener.
+server:
+  # Interface to bind. Default: 0.0.0.0
+  addr: 0.0.0.0
+  # TCP port to listen on. Default: 8000
+  port: 8000
+
+# PostgreSQL connection.
+database:
+  # libpq/pgx connection string used by the health check and, later, the store.
+  # Default: postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable
+  dsn: postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable
+
+# Redis connection.
+redis:
+  # host:port of the Redis server. Default: localhost:6379
+  addr: localhost:6379
+
+# Logging.
+log:
+  # One of: debug, info, warn, error. Default: info
+  level: info
+  # One of: json, text. Default: json
+  format: json
+
+# Hot reload: Gotham watches this file (fsnotify) and re-applies changes at
+# runtime, including the log level. No SIGHUP signal is required.

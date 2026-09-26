@@ -106,3 +106,22 @@ jobs:
 
       - name: Check committed dist is up to date
         run: git diff --exit-code -- internal/server/webdist
+
+  sqlc:
+    name: sqlc drift check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install sqlc
+        run: |
+          curl -sSfL https://github.com/sqlc-dev/sqlc/releases/download/v1.31.1/sqlc_1.31.1_linux_amd64.tar.gz -o sqlc.tar.gz
+          tar -xzf sqlc.tar.gz
+          chmod +x sqlc
+          sudo mv sqlc /usr/local/bin/
+
+      - name: Generate and check drift
+        run: |
+          sqlc generate
+          git diff --exit-code -- internal/store/sqlc

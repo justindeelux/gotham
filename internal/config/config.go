@@ -27,12 +27,14 @@ import (
 
 // Environment variables recognised by Load.
 const (
-	EnvServerAddr  = "GOTHAM_SERVER_ADDR"
-	EnvServerPort  = "GOTHAM_SERVER_PORT"
-	EnvDatabaseDSN = "GOTHAM_DATABASE_DSN"
-	EnvRedisAddr   = "GOTHAM_REDIS_ADDR"
-	EnvLogLevel    = "GOTHAM_LOG_LEVEL"
-	EnvLogFormat   = "GOTHAM_LOG_FORMAT"
+	EnvServerAddr            = "GOTHAM_SERVER_ADDR"
+	EnvServerPort            = "GOTHAM_SERVER_PORT"
+	EnvDatabaseDSN           = "GOTHAM_DATABASE_DSN"
+	EnvRedisAddr             = "GOTHAM_REDIS_ADDR"
+	EnvLogLevel              = "GOTHAM_LOG_LEVEL"
+	EnvLogFormat             = "GOTHAM_LOG_FORMAT"
+	EnvAuthJWTPrivateKeyPath = "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH"
+	EnvAuthJWTPublicKeyPath  = "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH"
 
 	envPrefix = "GOTHAM"
 )
@@ -84,6 +86,15 @@ type Log struct {
 	Format string
 }
 
+// Auth holds authentication settings.
+type Auth struct {
+	// JWTPrivateKeyPath and JWTPublicKeyPath point at a PEM-encoded Ed25519
+	// keypair. When either is empty the server generates an ephemeral keypair
+	// and sessions do not survive a restart.
+	JWTPrivateKeyPath string `mapstructure:"jwt_private_key_path"`
+	JWTPublicKeyPath  string `mapstructure:"jwt_public_key_path"`
+}
+
 // Values is the resolved configuration without any runtime bookkeeping. It is
 // the value type other packages can copy and hold safely.
 type Values struct {
@@ -91,6 +102,7 @@ type Values struct {
 	Database Database
 	Redis    Redis
 	Log      Log
+	Auth     Auth
 }
 
 // Config is the resolved Gotham configuration. Values are populated by Load and
@@ -230,12 +242,14 @@ func newViper() *viper.Viper {
 	// Explicit bindings document the supported variables and guarantee that
 	// Unmarshal sees environment-only values.
 	for key, env := range map[string]string{
-		"server.addr":  EnvServerAddr,
-		"server.port":  EnvServerPort,
-		"database.dsn": EnvDatabaseDSN,
-		"redis.addr":   EnvRedisAddr,
-		"log.level":    EnvLogLevel,
-		"log.format":   EnvLogFormat,
+		"server.addr":               EnvServerAddr,
+		"server.port":               EnvServerPort,
+		"database.dsn":              EnvDatabaseDSN,
+		"redis.addr":                EnvRedisAddr,
+		"log.level":                 EnvLogLevel,
+		"log.format":                EnvLogFormat,
+		"auth.jwt_private_key_path": EnvAuthJWTPrivateKeyPath,
+		"auth.jwt_public_key_path":  EnvAuthJWTPublicKeyPath,
 	} {
 		_ = v.BindEnv(key, env)
 	}

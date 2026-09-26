@@ -1,0 +1,270 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/auth"
+)
+
+// maxAuthBodyBytes bounds the size of an authentication request body.
+const maxAuthBodyBytes = 1 << 20 // 1 MiB
+
+// tokenTypeBearer is the OAuth2 token type reported to clients.
+const tokenTypeBearer = "Bearer"
+
+// AuthService is the subset of auth.Service the HTTP layer depends on. Keeping
+// it an interface lets tests substitute a fake without a database.
+type AuthService interface {
+	Register(ctx context.Context, email, password string) (*auth.AuthResult, error)
+	Login(ctx context.Context, email, password string) (*auth.AuthResult, error)
+	Refresh(ctx context.Context, refreshToken string) (*auth.AuthResult, error)
+	Logout(ctx context.Context, refreshToken string) error
+	Me(ctx context.Context, userID uuid.UUID) (*auth.User, error)
+	VerifyAccessToken(token string) (*auth.Claims, error)
+}
+
+// contextKey is the unexported type for authenticated-request context values.
+type contextKey int
+
+// Context keys for values set by RequireAuth.
+const (
+	userIDKey contextKey = iota
+	roleKey
+)
+
+// UserIDFromContext returns the authenticated user ID set by RequireAuth.
+func UserIDFromContext(ctx context.Context) (uuid.UUID, bool) {
+	userID, ok := ctx.Value(userIDKey).(uuid.UUID)
+	return userID, ok
+}
+
+// RoleFromContext returns the authenticated role set by RequireAuth.
+func RoleFromContext(ctx context.Context) (string, bool) {
+	role, ok := ctx.Value(roleKey).(string)
+	return role, ok
+}
+
+// credentialsRequest is the body of register and login.
+type credentialsRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// refreshTokenRequest is the body of refresh and logout.
+type refreshTokenRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+// authResponse is the token-pair body returned by register, login, and refresh.
+type authResponse struct {
+	User         *auth.User `json:"user"`
+	AccessToken  string     `json:"access_token"`
+	TokenType    string     `json:"token_type"`
+	ExpiresIn    int64      `json:"expires_in"`
+	RefreshToken string     `json:"refresh_token"`
+}
+
+// meResponse is the body returned by /auth/me.
+type meResponse struct {
+	User *auth.User `json:"user"`
+}
+
+// mountAuthRoutes registers the authentication endpoints under /api.
+func (s *Server) mountAuthRoutes(api chi.Router) {
+	api.Route("/v1/auth", func(r chi.Router) {
+		r.With(s.rateLimit).Post("/register", s.handleRegister)
+		r.With(s.rateLimit).Post("/login", s.handleLogin)
+		r.Post("/refresh", s.handleRefresh)
+		r.Post("/logout", s.handleLogout)
+
+		// Protected group: Phase 2+ can mount further authenticated routes here.
+		r.Group(func(protected chi.Router) {
+			protected.Use(s.RequireAuth)
+			protected.Get("/me", s.handleMe)
+		})
+	})
+}
+
+// handleRegister creates an account and returns a token pair.
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	var req credentialsRequest
+	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+
+	result, err := s.auth.Register(r.Context(), req.Email, req.Password)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrEmailTaken):
+			writeJSON(w, http.StatusConflict, apiError{Message: "email already registered"})
+		case errors.Is(err, auth.ErrValidation):
+			writeJSON(w, http.StatusBadRequest, apiError{Message: err.Error()})
+		default:
+			s.logger.Error("auth: register", "error", err)
+			writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, newAuthResponse(result))
+}
+
+// handleLogin verifies credentials and returns a token pair.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var req credentialsRequest
+	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+
+	result, err := s.auth.Login(r.Context(), req.Email, req.Password)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrInvalidCredentials):
+			writeJSON(w, http.StatusUnauthorized, apiError{Message: "invalid credentials"})
+		case errors.Is(err, auth.ErrValidation):
+			writeJSON(w, http.StatusBadRequest, apiError{Message: err.Error()})
+		default:
+			s.logger.Error("auth: login", "error", err)
+			writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, newAuthResponse(result))
+}
+
+// handleRefresh rotates a refresh token and returns a fresh token pair.
+func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	var req refreshTokenRequest
+	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+
+	result, err := s.auth.Refresh(r.Context(), req.RefreshToken)
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+			return
+		}
+		s.logger.Error("auth: refresh", "error", err)
+		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, newAuthResponse(result))
+}
+
+// handleLogout revokes the presented session. It always answers 204 so clients
+// cannot probe which refresh tokens exist.
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	var req refreshTokenRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		s.logger.Debug("auth: logout body", "error", err)
+	}
+
+	if err := s.auth.Logout(r.Context(), req.RefreshToken); err != nil {
+		s.logger.Warn("auth: logout", "error", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleMe returns the authenticated account.
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	userID, ok := UserIDFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+		return
+	}
+
+	user, err := s.auth.Me(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+			return
+		}
+		s.logger.Error("auth: me", "error", err)
+		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, meResponse{User: user})
+}
+
+// RequireAuth validates the bearer token and stores the user ID and role in the
+// request context. It answers 401 for a missing or invalid token.
+func (s *Server) RequireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := bearerToken(r)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+			return
+		}
+
+		claims, err := s.auth.VerifyAccessToken(token)
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+			return
+		}
+
+		userID, err := uuid.Parse(claims.Subject)
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), userIDKey, userID)
+		ctx = context.WithValue(ctx, roleKey, claims.Role)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// bearerToken extracts a bearer token from the Authorization header.
+func bearerToken(r *http.Request) (string, bool) {
+	const prefix = "Bearer "
+
+	header := r.Header.Get("Authorization")
+	if len(header) <= len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
+		return "", false
+	}
+
+	token := strings.TrimSpace(header[len(prefix):])
+	if token == "" {
+		return "", false
+	}
+	return token, true
+}
+
+// decodeJSON decodes an authentication request body, answering 400 on failure.
+func (s *Server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := decodeJSONBody(w, r, dst); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid request body"})
+		return false
+	}
+	return true
+}
+
+// decodeJSONBody decodes a size-limited JSON body, rejecting unknown fields.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(dst)
+}
+
+// newAuthResponse maps an auth result to its wire representation.
+func newAuthResponse(result *auth.AuthResult) authResponse {
+	return authResponse{
+		User:         result.User,
+		AccessToken:  result.AccessToken,
+		TokenType:    tokenTypeBearer,
+		ExpiresIn:    result.ExpiresIn,
+		RefreshToken: result.RefreshToken,
+	}
+}

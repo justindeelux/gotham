@@ -31,10 +31,11 @@ func newTestServer(t *testing.T, db, redis Pinger) *Server {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	s, err := New(cfg, logger)
+	s, err := New(cfg, logger, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	t.Cleanup(s.closer)
 	s.db = db
 	s.redis = redis
 	return s
@@ -124,10 +125,10 @@ func TestHealthzDegraded(t *testing.T) {
 func TestNewRejectsNilDependencies(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	if _, err := New(nil, logger); err == nil {
+	if _, err := New(nil, logger, nil, nil); err == nil {
 		t.Error("New(nil, logger) = nil error, want error")
 	}
-	if _, err := New(&config.Config{}, nil); err == nil {
+	if _, err := New(&config.Config{}, nil, nil, nil); err == nil {
 		t.Error("New(cfg, nil) = nil error, want error")
 	}
 }

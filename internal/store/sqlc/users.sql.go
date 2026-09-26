@@ -7,30 +7,71 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (email)
-VALUES ($1)
-RETURNING id, email, created_at
+INSERT INTO users (email, password_hash)
+VALUES ($1, $2)
+RETURNING id, email, created_at, password_hash, avatar, updated_at
 `
 
-func (q *Queries) CreateUser(ctx context.Context, email string) (User, error) {
-	row := q.db.QueryRow(ctx, createUser, email)
+type CreateUserParams struct {
+	Email        string  `json:"email"`
+	PasswordHash *string `json:"password_hash"`
+}
+
+func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, createUser, arg.Email, arg.PasswordHash)
 	var i User
-	err := row.Scan(&i.ID, &i.Email, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.CreatedAt,
+		&i.PasswordHash,
+		&i.Avatar,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, created_at
+SELECT id, email, created_at, password_hash, avatar, updated_at
 FROM users
-WHERE email = $1
+WHERE lower(email) = lower($1)
 `
 
-func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
-	row := q.db.QueryRow(ctx, getUserByEmail, email)
+func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByEmail, lower)
 	var i User
-	err := row.Scan(&i.ID, &i.Email, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.CreatedAt,
+		&i.PasswordHash,
+		&i.Avatar,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserByID = `-- name: GetUserByID :one
+SELECT id, email, created_at, password_hash, avatar, updated_at
+FROM users
+WHERE id = $1
+`
+
+func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.CreatedAt,
+		&i.PasswordHash,
+		&i.Avatar,
+		&i.UpdatedAt,
+	)
 	return i, err
 }

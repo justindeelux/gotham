@@ -14,6 +14,13 @@ require (
 	golang.org/x/crypto v0.32.0
 	golang.org/x/oauth2 v0.26.0
 	golang.org/x/time v0.8.0
+	google.golang.org/grpc v1.67.3
+	google.golang.org/protobuf v1.36.1
+)
+
+require (
+	golang.org/x/net v0.33.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20241223144023-3abc09e42ca8 // indirect
 )
 
 require (

@@ -12,6 +12,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/server"
+	"github.com/justindeelux/gotham/internal/store"
 )
 
 // version is the reported build version. Released binaries override it with
@@ -39,6 +40,8 @@ func run(args []string) int {
 	switch args[0] {
 	case "serve":
 		return runServe()
+	case "migrate":
+		return runMigrate(args[1:])
 	case "version", "-v", "--version":
 		fmt.Printf("gotham %s\n", version)
 		return exitOK
@@ -91,14 +94,49 @@ func runServe() int {
 	return exitOK
 }
 
+// runMigrate applies the embedded database migrations. It accepts an optional
+// verb (default "up") and returns the process exit code.
+func runMigrate(args []string) int {
+	command := store.MigrateUp
+	switch len(args) {
+	case 0:
+	case 1:
+		command = args[0]
+	default:
+		fmt.Fprintln(os.Stderr, "usage: gotham migrate [up|down|status]")
+		return exitUsage
+	}
+	if !store.IsMigrateCommand(command) {
+		fmt.Fprintf(os.Stderr, "unknown migrate command %q\n\n", command)
+		fmt.Fprintln(os.Stderr, "usage: gotham migrate [up|down|status]")
+		return exitUsage
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		return exitError
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := store.Migrate(ctx, cfg.Database.DSN, command); err != nil {
+		fmt.Fprintf(os.Stderr, "migrate %s: %v\n", command, err)
+		return exitError
+	}
+	return exitOK
+}
+
 // usage prints the top-level command help.
 func usage(w io.Writer) {
 	fmt.Fprintf(w, `gotham %s
 
 Usage:
-  gotham serve      Start the control plane
-  gotham version    Print the version
-  gotham help       Show this help
+  gotham serve              Start the control plane
+  gotham migrate [verb]     Run database migrations (up, down, status; default up)
+  gotham version            Print the version
+  gotham help               Show this help
 
 Configuration is read from gotham.yaml in the working directory and can be
 overridden with GOTHAM_* environment variables.

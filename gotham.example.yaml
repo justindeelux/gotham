@@ -17,7 +17,8 @@ server:
 
 # PostgreSQL connection.
 database:
-  # libpq/pgx connection string used by the health check and, later, the store.
+  # libpq/pgx connection string used by the health check, the store, and the
+  # embedded migrations (`gotham migrate` / `make migrate`).
   # Default: postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable
   dsn: postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable
 

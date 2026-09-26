@@ -7,7 +7,7 @@ CGO_ENABLED ?= 0
 BIN_DIR     ?= bin
 LDFLAGS     ?= -s -w
 
-.PHONY: all build test lint migrate dev fmt clean
+.PHONY: all build test lint migrate migrate-down migrate-status sqlc-generate sqlc-check dev fmt clean
 
 all: build
 
@@ -35,9 +35,43 @@ lint:
 	@echo "==> golangci-lint run"
 	@golangci-lint run
 
-## migrate: apply database migrations (wired up in BE-0.3)
+## migrate: apply all pending database migrations
 migrate:
-	@echo "migrate: not implemented until BE-0.3"
+	@echo "==> gotham migrate up"
+	@$(GO) run ./cmd/gotham migrate up
+
+## migrate-down: roll back the most recent migration (development only)
+migrate-down:
+	@echo "==> gotham migrate down"
+	@$(GO) run ./cmd/gotham migrate down
+
+## migrate-status: show the state of every known migration
+migrate-status:
+	@echo "==> gotham migrate status"
+	@$(GO) run ./cmd/gotham migrate status
+
+## sqlc-generate: regenerate type-safe queries from internal/store/queries
+sqlc-generate:
+	@command -v sqlc >/dev/null 2>&1 || { \
+		echo "sqlc is not installed or not on PATH."; \
+		echo "Install it with:"; \
+		echo "  brew install sqlc"; \
+		exit 1; \
+	}
+	@echo "==> sqlc generate"
+	@sqlc generate
+
+## sqlc-check: fail when the committed generated code is out of date
+sqlc-check:
+	@command -v sqlc >/dev/null 2>&1 || { \
+		echo "sqlc is not installed or not on PATH."; \
+		echo "Install it with:"; \
+		echo "  brew install sqlc"; \
+		exit 1; \
+	}
+	@echo "==> sqlc generate (drift check)"
+	@sqlc generate
+	@git diff --exit-code -- internal/store/sqlc
 
 ## dev: run the local development environment (not implemented yet)
 dev:

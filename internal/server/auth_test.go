@@ -96,7 +96,7 @@ func newTestAuthServer(t *testing.T) *Server {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	s, err := New(cfg, logger, newFakeAuthService(), nil)
+	s, err := New(cfg, logger, newFakeAuthService(), nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

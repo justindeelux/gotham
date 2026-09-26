@@ -180,6 +180,14 @@ func (s *Service) VerifyAccessToken(token string) (*Claims, error) {
 	return s.signer.VerifyAccessToken(token)
 }
 
+// IssueSession creates a refresh session and signs an access token for user. It
+// exposes the internal issue path so alternative flows (for example OAuth2
+// logins) mint sessions exactly like a password login, without duplicating the
+// token logic.
+func (s *Service) IssueSession(ctx context.Context, user sqlc.User) (*AuthResult, error) {
+	return s.issue(ctx, user)
+}
+
 // issue creates a refresh session and signs an access token for user.
 func (s *Service) issue(ctx context.Context, user sqlc.User) (*AuthResult, error) {
 	refreshToken, refreshHash, err := newRefreshToken()

@@ -107,8 +107,9 @@ func runServe() int {
 
 	authStore := store.New(pool)
 	authService := auth.New(authStore, signer, logger)
+	oauthService := buildOAuthService(snap.OAuth, authService, logger)
 
-	srv, err := server.New(cfg, logger, authService, authStore)
+	srv, err := server.New(cfg, logger, authService, oauthService, authStore)
 	if err != nil {
 		logger.Error("failed to create server", "error", err)
 		return exitError
@@ -121,6 +122,26 @@ func runServe() int {
 
 	logger.Info("server stopped")
 	return exitOK
+}
+
+// buildOAuthService wires the configured OAuth2 providers. It returns nil when
+// no provider is enabled so the server does not mount the OAuth routes.
+func buildOAuthService(oauthCfg config.OAuth, authService *auth.Service, logger *slog.Logger) server.OAuthService {
+	providers := make([]auth.OAuthProvider, 0, 1)
+	if provider := auth.NewGitHubProvider(
+		oauthCfg.GitHub.ClientID,
+		oauthCfg.GitHub.ClientSecret,
+		oauthCfg.GitHub.RedirectURL,
+	); provider != nil {
+		providers = append(providers, provider)
+	}
+
+	if len(providers) == 0 {
+		logger.Info("oauth: no providers configured")
+		return nil
+	}
+	logger.Info("oauth: providers enabled", "providers", len(providers))
+	return auth.NewOAuthService(authService, logger, providers...)
 }
 
 // loadJWTKeys reads the configured Ed25519 PEM keypair. When no paths are

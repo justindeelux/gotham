@@ -45,16 +45,18 @@ type Server struct {
 	db          Pinger
 	redis       Pinger
 	auth        AuthService
+	tokens      TokenService
 	authLimiter *ipRateLimiter
 	router      http.Handler
 	closer      func()
 }
 
 // New constructs a Server bound to cfg and logging through logger. The
-// authService provides the authentication flows (nil disables the auth routes)
-// and st supplies the shared database pool used by the health check; when st is
-// nil a short-lived pinger is used instead. Run owns the HTTP lifecycle.
-func New(cfg *config.Config, logger *slog.Logger, authService AuthService, st *store.Store) (*Server, error) {
+// authService provides the authentication flows and tokenService manages scoped
+// API tokens (nil disables the corresponding routes); st supplies the shared
+// database pool used by the health check, and when st is nil a short-lived
+// pinger is used instead. Run owns the HTTP lifecycle.
+func New(cfg *config.Config, logger *slog.Logger, authService AuthService, tokenService TokenService, st *store.Store) (*Server, error) {
 	if cfg == nil {
 		return nil, errors.New("server: config is nil")
 	}
@@ -81,6 +83,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, st *s
 		db:          db,
 		redis:       redisClient,
 		auth:        authService,
+		tokens:      tokenService,
 		authLimiter: limiter,
 		closer: func() {
 			_ = redisClient.Close()
@@ -120,6 +123,11 @@ func (s *Server) routes() (http.Handler, error) {
 
 		if s.auth != nil {
 			s.mountAuthRoutes(api)
+		}
+
+		// Token management requires both a JWT verifier and the token service.
+		if s.auth != nil && s.tokens != nil {
+			s.mountTokenRoutes(api)
 		}
 	})
 

@@ -107,8 +107,9 @@ func runServe() int {
 
 	authStore := store.New(pool)
 	authService := auth.New(authStore, signer, logger)
+	tokenService := auth.NewAPITokenService(authStore, logger)
 
-	srv, err := server.New(cfg, logger, authService, authStore)
+	srv, err := server.New(cfg, logger, authService, tokenService, authStore)
 	if err != nil {
 		logger.Error("failed to create server", "error", err)
 		return exitError

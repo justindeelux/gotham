@@ -18,4 +18,7 @@ var (
 	ErrInvalidToken = errors.New("auth: invalid token")
 	// ErrValidation is returned when user-supplied input fails validation.
 	ErrValidation = errors.New("auth: validation failed")
+	// ErrNotFound is returned when a resource does not exist or is not owned by
+	// the caller.
+	ErrNotFound = errors.New("auth: not found")
 )

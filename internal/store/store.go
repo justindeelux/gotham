@@ -60,3 +60,37 @@ func (s *Store) GetSessionByRefreshHash(ctx context.Context, refreshHash string)
 func (s *Store) RevokeSession(ctx context.Context, refreshHash string) error {
 	return s.queries.RevokeSession(ctx, refreshHash)
 }
+
+// CreateAPIToken stores a scoped API token (hash only) and returns the row.
+func (s *Store) CreateAPIToken(ctx context.Context, params sqlc.CreateAPITokenParams) (sqlc.ApiToken, error) {
+	return s.queries.CreateAPIToken(ctx, params)
+}
+
+// ListAPITokensByUser returns every API token owned by userID, newest first,
+// including revoked tokens so the caller can display their state.
+func (s *Store) ListAPITokensByUser(ctx context.Context, userID pgtype.UUID) ([]sqlc.ApiToken, error) {
+	return s.queries.ListAPITokensByUser(ctx, userID)
+}
+
+// GetAPITokenByHash returns the API token with the given hash.
+func (s *Store) GetAPITokenByHash(ctx context.Context, hash string) (sqlc.ApiToken, error) {
+	return s.queries.GetAPITokenByHash(ctx, hash)
+}
+
+// GetAPITokenByIDAndUser returns the API token with the given ID when it is
+// owned by userID.
+func (s *Store) GetAPITokenByIDAndUser(ctx context.Context, params sqlc.GetAPITokenByIDAndUserParams) (sqlc.ApiToken, error) {
+	return s.queries.GetAPITokenByIDAndUser(ctx, params)
+}
+
+// RevokeAPIToken marks an owned, active token as revoked and reports how many
+// rows were affected (0 when the token is unknown, not owned, or already
+// revoked).
+func (s *Store) RevokeAPIToken(ctx context.Context, params sqlc.RevokeAPITokenParams) (int64, error) {
+	return s.queries.RevokeAPIToken(ctx, params)
+}
+
+// TouchAPITokenLastUsed records when the token was last presented.
+func (s *Store) TouchAPITokenLastUsed(ctx context.Context, params sqlc.TouchAPITokenLastUsedParams) error {
+	return s.queries.TouchAPITokenLastUsed(ctx, params)
+}

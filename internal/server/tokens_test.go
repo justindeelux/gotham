@@ -172,7 +172,7 @@ func newTestTokenServer(t *testing.T) (*Server, *fakeTokenService) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tokens := newFakeTokenService()
 
-	s, err := New(cfg, logger, newFakeAuthService(), tokens, nil)
+	s, err := New(cfg, logger, newFakeAuthService(), nil, tokens, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -44,7 +44,7 @@ func newOAuthTestServer(t *testing.T, cfg *config.Config, oauth OAuthService) *S
 	t.Helper()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	s, err := New(cfg, logger, nil, oauth, nil)
+	s, err := New(cfg, logger, nil, oauth, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

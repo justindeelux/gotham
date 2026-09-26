@@ -66,7 +66,12 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		redis:  redisClient,
 		closer: func() { _ = redisClient.Close() },
 	}
-	s.router = s.routes()
+
+	router, err := s.routes()
+	if err != nil {
+		return nil, err
+	}
+	s.router = router
 
 	return s, nil
 }
@@ -76,8 +81,10 @@ func (s *Server) Handler() http.Handler {
 	return s.router
 }
 
-// routes assembles the Chi router and its middleware chain.
-func (s *Server) routes() http.Handler {
+// routes assembles the Chi router and its middleware chain. The SPA handler is
+// registered as the final fallback so unmatched paths render the single-page
+// app, while /healthz and /api keep their own handling.
+func (s *Server) routes() (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
@@ -85,7 +92,28 @@ func (s *Server) routes() http.Handler {
 
 	r.Get("/healthz", s.handleHealthz)
 
-	return r
+	// Unmatched API routes return JSON rather than the SPA shell.
+	r.Route("/api", func(api chi.Router) {
+		api.NotFound(s.handleAPINotFound)
+	})
+
+	spa, err := newSPAHandler()
+	if err != nil {
+		return nil, err
+	}
+	r.NotFound(spa.ServeHTTP)
+
+	return r, nil
+}
+
+// apiError is the JSON body returned for API failures.
+type apiError struct {
+	Message string `json:"message"`
+}
+
+// handleAPINotFound answers unknown /api routes with a JSON 404.
+func (s *Server) handleAPINotFound(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusNotFound, apiError{Message: "not found"})
 }
 
 // requestLogger logs one structured line per request, including the request ID

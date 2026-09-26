@@ -1,6 +1,6 @@
 # Phase 7 — Services & Templates (W10)
 
-**Goal:** `docker-compose` service deploys + a "one-click" template system (WordPress, Nextcloud...) like Coolify.
+**Goal:** `docker-compose` service deploys + a "one-click" template system (WordPress, Nextcloud...).
 
 **Exit criteria (Milestone M7):**
 - [ ] Deploy any compose file (parse + validate + run via agent).

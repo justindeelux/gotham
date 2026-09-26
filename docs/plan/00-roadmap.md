@@ -1,6 +1,6 @@
-# Roadmap — Coolify clone (PaaS Platform)
+# Gotham Roadmap — Coolify clone (PaaS Platform)
 
-Overall plan for building the self-hosted PaaS (Coolify clone) using the tech stack in `README.md`:
+Overall plan for building Gotham, a self-hosted PaaS (Coolify clone) using the tech stack in `README.md`:
 **Go + Chi + sqlc/pgx + PostgreSQL + gRPC agent + Redis + Traefik + Vue 3 + Naive UI**.
 
 ---
@@ -46,6 +46,12 @@ graph LR
 - P8 only needs P4 + P7; it can start early on parts (teams, notifications) when idle.
 
 ## 3. Shared conventions (apply to every phase)
+
+### Naming (Gotham)
+
+- Product name is **Gotham**. Control-plane binary/CLI is `gotham` (`cmd/gotham/`), node agent binary is `gotham-agent` (`cmd/gotham-agent/`, impl in `agent/`).
+- Env prefix `GOTHAM_`, config file `gotham.yaml`, container/volume prefix `gotham-`, built-app image tags `gotham/{appID}:{deployID}`.
+- See **Naming conventions** in `README.md`.
 
 ### Work packages & orca workspace
 - Each task in a phase file = 1 work package for 1 subagent, running in its **own orca workspace**: `ws/p<phase>-<slug>` (e.g. `ws/p4-builds`).

@@ -1,6 +1,6 @@
 # Phase 5 — Databases & Backups (W8–W9) — parallel with Phase 6
 
-**Goal:** Coolify-style managed databases: create, access, backup/restore.
+**Goal:** managed databases: create, access, backup/restore.
 
 **Exit criteria (Milestone M5):**
 - [ ] Create databases: PostgreSQL, MySQL/MariaDB, MongoDB, Redis (image map, standard env, persistent volume).

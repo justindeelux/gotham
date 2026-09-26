@@ -37,7 +37,7 @@
 
 ## FE-3.1 — Containers UI — `ws/p3-containers-ui`
 
-- **Context brief:** containers page for the selected server: table (name, image, state, ports) + start/stop/restart buttons; clicking opens a log terminal drawer (Coolify-style: monospace, auto-scroll, pause/clear buttons).
+- **Context brief:** containers page for the selected server: table (name, image, state, ports) + start/stop/restart buttons; clicking opens a log terminal drawer (monospace, auto-scroll, pause/clear buttons).
 - **Deliverables:** `/servers/{id}/containers` page, `LogViewer` component (reused in Phase 4), `useWebSocket` composable (reconnect, auth token).
 - **Verify:** e2e: start/stop an Nginx container → table status changes; log viewer streams correctly.
 - **Depends on:** BE-3.1 + BE-3.2.

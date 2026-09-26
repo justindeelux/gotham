@@ -1,10 +1,10 @@
-# Phase 0 — Foundation (W1)
+# Phase 0 — Gotham Foundation (W1)
 
-**Goal:** set up the repo foundation per the `README.md` structure, so all later phases can develop in parallel.
+**Goal:** set up the Gotham repo foundation per the `README.md` structure, so all later phases can develop in parallel.
 
 **Exit criteria (Milestone M0):**
-- [ ] `make build` produces 2 binaries: `bin/control-plane`, `bin/agent` (agent is a stub, see task 0.1).
-- [ ] `./bin/control-plane serve` → `GET /healthz` returns 200 (DB check OK).
+- [ ] `make build` produces 2 binaries: `bin/gotham`, `bin/gotham-agent` (agent is a stub, see task 0.1).
+- [ ] `./bin/gotham serve` → `GET /healthz` returns 200 (DB check OK).
 - [ ] `make migrate` runs goose, creating the schema on local Postgres.
 - [ ] UI opens: Vue SPA served from `embed.FS`.
 - [ ] GitHub Actions CI: lint + test + build green.
@@ -18,7 +18,7 @@
 
 ## INFRA-0.1 — Scaffold repo + Makefile + CI — `ws/p0-scaffold`
 
-- **Context brief:** the repo currently only has `README.md` and `docs/plan/`. Create the full directory structure per section 3 of the README: `cmd/control-plane/`, `cmd/agent/`, `internal/{server,deploy,builds,proxy,databases,services,auth,updates,store}/`, `agent/`, `proto/`, `web/`, `templates/`, `deploy/`. Each internal package gets a `doc.go` with a one-sentence responsibility description. `cmd/agent/main.go` temporarily prints the version and exits (the real agent lands in Phase 2).
+- **Context brief:** the repo currently only has `README.md` and `docs/plan/`. Create the full directory structure per section 3 of the README: `cmd/gotham/`, `cmd/gotham-agent/`, `internal/{server,deploy,builds,proxy,databases,services,auth,updates,store}/`, `agent/`, `proto/`, `web/`, `templates/`, `deploy/`. Each internal package gets a `doc.go` with a one-sentence responsibility description. `cmd/gotham-agent/main.go` temporarily prints the version and exits (the real agent lands in Phase 2).
 - **Deliverables:**
   - `go.mod` (module `github.com/<org>/gotham`, Go 1.22), Makefile with targets: `build`, `test`, `lint`, `migrate`, `dev`.
   - `.golangci.yml`, `.gitignore`, `.editorconfig`.
@@ -29,12 +29,12 @@
 
 ## BE-0.2 — Config + logging + HTTP server — `ws/p0-config`
 
-- **Context brief:** work on `cmd/control-plane/` and `internal/server/`. Configure via viper: read `config.yaml` (default), then override with ENV (prefix `GOTHAM_`), support hot-reload (watch file, log on reload). Logging uses `log/slog` with JSON handler, level from config.
+- **Context brief:** work on `cmd/gotham/` and `internal/server/`. Configure via viper: read `gotham.yaml` (default), then override with ENV (prefix `GOTHAM_`), support hot-reload (watch file, log on reload). Logging uses `log/slog` with JSON handler, level from config.
 - **Deliverables:**
   - `internal/config/` (may temporarily live in `internal/server/config.go` if a separate package is not needed yet): config structs `Server{Addr, Port}`, `Database{DSN}`, `Redis{Addr}`, `Log{Level}`.
   - Chi router with middleware: request log, recover, request ID; route `GET /healthz` (ping DB + Redis, return JSON).
-  - `cmd/control-plane/main.go`: read config → init logger → serve (graceful shutdown on SIGTERM/SIGINT).
-- **Verify:** `go run ./cmd/control-plane serve` → `curl localhost:8000/healthz` returns 200; change the level in config + send SIGHUP → log level changes.
+  - `cmd/gotham/main.go`: read config → init logger → serve (graceful shutdown on SIGTERM/SIGINT).
+- **Verify:** `go run ./cmd/gotham serve` → `curl localhost:8000/healthz` returns 200; change the level in config + send SIGHUP → log level changes.
 - **Depends on:** INFRA-0.1.
 
 ## BE-0.3 — Store: goose + sqlc + pgx — `ws/p0-store`
@@ -50,7 +50,7 @@
 
 ## FE-0.4 — Scaffold Vue 3 + embed into binary — `ws/p0-web`
 
-- **Context brief:** Vue 3 + Vite + TypeScript + Naive UI + Pinia + axios SPA in `web/`. The build output is embedded by Go via `embed.FS` and served by the control-plane (SPA routes fall back to `index.html`).
+- **Context brief:** Vue 3 + Vite + TypeScript + Naive UI + Pinia + axios SPA in `web/`. The build output is embedded by Go via `embed.FS` and served by Gotham (SPA routes fall back to `index.html`).
 - **Deliverables:**
   - `web/` scaffold: Vite config, strict TS, router, Pinia, Naive UI provider, basic layout (sidebar + topbar), empty "Dashboard" page.
   - axios instance with baseURL `/api/v1` + error interceptor (preparation for Phase 1).

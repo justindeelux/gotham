@@ -1,6 +1,6 @@
 # Phase 8 — Advanced (W11–W12)
 
-**Goal:** complete the core Coolify feature set: preview deployments, teams/RBAC, notifications, metrics.
+**Goal:** complete the core feature set: preview deployments, teams/RBAC, notifications, metrics.
 
 **Exit criteria (Milestone M8):**
 - [ ] Open a PR → preview app auto-deploys on a temporary subdomain.
@@ -23,7 +23,7 @@
 
 ## BE-8.2 — Teams & roles — `ws/p8-teams`
 
-- **Context brief:** Coolify model: a user belongs to many teams, a resource belongs to 1 team. Roles: `owner`, `admin`, `read-only`. Invite via email + link. Migration adds `team_id` to existing resource tables (applications, databases, services, servers) — **default team** for old data.
+- **Context brief:** team model: a user belongs to many teams, a resource belongs to 1 team. Roles: `owner`, `admin`, `read-only`. Invite via email + link. Migration adds `team_id` to existing resource tables (applications, databases, services, servers) — **default team** for old data.
 - **Deliverables:** `teams`, `team_members`, `invites` migrations; `RequireTeam` middleware + RBAC checker; teams/invites CRUD routes; API filters resources by team.
 - **Verify:** user A cannot see team B's resources (RBAC test per role).
 - **Depends on:** Phase 1 (auth). Parallel with 8.1/8.3/8.4.

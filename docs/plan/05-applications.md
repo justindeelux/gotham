@@ -1,6 +1,6 @@
 # Phase 4 — Applications (Deploy from Git) (W6–W8) ⭐
 
-**Goal:** the core Coolify-style deploy flow — from Git repo to running container. The biggest phase; orchestration (4.3) uses the strongest review model.
+**Goal:** the core deploy flow — from Git repo to running container. The biggest phase; orchestration (4.3) uses the strongest review model.
 
 **Exit criteria (Milestone M4):**
 - [ ] Connect GitHub/GitLab/Gitea, list repos/branches.

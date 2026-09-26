@@ -1,6 +1,6 @@
 # Phase 6 — Proxy, Domains & SSL (W8–W9) — parallel with Phase 5
 
-**Goal:** automatic HTTP + HTTPS routing via Traefik, Coolify-style domain management.
+**Goal:** automatic HTTP + HTTPS routing via Traefik with domain management.
 
 **Exit criteria (Milestone M6):**
 - [ ] Attach any domain to an application/service → reachable via domain.

@@ -32,15 +32,15 @@
 
 - **Context brief:** the second binary in the repo, in `agent/` (must NOT import `internal/`). Use the **Docker Engine API via the `/var/run/docker.sock` socket** (no heavy SDK — either `docker/docker/client` or a hand-written HTTP client, pick one). The agent keeps a gRPC connection to the CP, runs a heartbeat loop, and executes Docker commands.
 - **Deliverables:**
-  - `agent/`: `main.go`, `docker.go` (client + list/start/stop/pull/log stream), `grpc_server.go` (implements the BE-2.1 contract, streams logs from Docker events), `heartbeat.go`, TLS helper (reads the CP-issued cert).
-  - `deploy/agent.service` (systemd unit), `deploy/install-agent.sh` (download binary, place cert, enable service).
+  - `agent/`: `main.go`, `docker.go` (client + list/start/stop/pull/log stream), `grpc_server.go` (implements the BE-2.1 contract, streams logs from Docker events), `heartbeat.go`, TLS helper (reads the Gotham-issued cert).
+  - `deploy/gotham-agent.service` (systemd unit), `deploy/install-agent.sh` (download binary, place cert, enable service).
   - Tests: mock Docker daemon → call list/start/logs RPCs.
-- **Verify:** `make build` → run `bin/agent` locally against a stub CP → heartbeat logs visible; manually cross-check against the socket with `curl`.
+- **Verify:** `make build` → run `bin/gotham-agent` locally against a stub CP → heartbeat logs visible; manually cross-check against the socket with `curl`.
 - **Depends on:** BE-2.1. Parallel with BE-2.3.
 
 ## BE-2.3 — CP: gRPC gateway + server registry + SSH validation — `ws/p2-gateway`
 
-- **Context brief:** CP side: run the gRPC server (mTLS, self-managed CA), registry of connected agents, `servers` store. SSH validation: the CP SSHes into the target machine (`golang.org/x/crypto/ssh`, passphrase-protected key support) to check Docker version/CPU/RAM/disk before issuing a cert — the "validate server" step from Coolify.
+- **Context brief:** CP side: run the gRPC server (mTLS, self-managed CA), registry of connected agents, `servers` store. SSH validation: Gotham SSHes into the target machine (`golang.org/x/crypto/ssh`, passphrase-protected key support) to check Docker version/CPU/RAM/disk before issuing a cert.
 - **Deliverables:**
   - `servers` migration (id, name, ip, port, ssh_user, ssh_key_id (FK to the `private_keys` table — create it now, reused in Phase 4), status enum, agent info, timestamps), `private_keys` table (encrypted at rest).
   - `internal/server/` (domain): `ServerService` (Add, Validate, Delete), gRPC gateway (handle Register/Heartbeat → update store + Redis), `internal/server/ssh.go` (validation).
@@ -51,7 +51,7 @@
 
 ## FE-2.1 — Servers UI — `ws/p2-servers-ui`
 
-- **Context brief:** server management page: list (name, IP, ready/offline status badge, CPU/RAM/disk from heartbeats — 5s poll or WS), add-server wizard (enter IP/SSH → call validate → show per-step results Coolify-style: Docker check, CPU, RAM, disk → "Install agent" button runs the install script → status flips to `ready`).
+- **Context brief:** server management page: list (name, IP, ready/offline status badge, CPU/RAM/disk from heartbeats — 5s poll or WS), add-server wizard (enter IP/SSH → call validate → show per-step results: Docker check, CPU, RAM, disk → "Install agent" button runs the install script → status flips to `ready`).
 - **Deliverables:** `/servers` page + 3-step wizard; Pinia `servers` store; status badge component.
 - **Verify:** e2e: add a local server → validate shows OK per item → after running the agent it shows `ready` + metrics updating live.
 - **Depends on:** BE-2.3 (API contract).

@@ -1,6 +1,6 @@
-# PaaS Platform — Development Plan
+# Gotham — Self-Hosted PaaS
 
-A self-hosted Platform-as-a-Service (PaaS), built with **Go** (backend + agent) and **Vue 3** (frontend).
+Gotham is a self-hosted Platform-as-a-Service (PaaS), built with **Go** (backend + agent) and **Vue 3** (frontend). One `gotham` binary runs the control plane; one `gotham-agent` binary runs on each managed node.
 
 Design priorities (in order):
 
@@ -74,19 +74,19 @@ Design priorities (in order):
 ```
 .
 ├── cmd/
-│   ├── control-plane/        # CP entrypoint
-│   └── agent/                # node agent entrypoint
+│   ├── gotham/               # Gotham control-plane entrypoint (`gotham serve`, `gotham update`, ...)
+│   └── gotham-agent/         # node agent entrypoint
 ├── internal/                 # CP-only packages (modular monolith)
 │   ├── server/               # REST API, middleware, WebSocket hub
 │   ├── deploy/               # deploy orchestration
-│   ├── builds/               # build engines (dockerfile, nixpacks, buildpacks)
+│   ├── builds/               # build engines (dockerfile, railpack, buildpacks, static)
 │   ├── proxy/                # Traefik integration
 │   ├── databases/            # managed databases & backups
 │   ├── services/             # one-click service templates
 │   ├── auth/                 # JWT, OAuth2, RBAC, 2FA
 │   ├── updates/              # self-update & remote agent update
 │   └── store/                # persistence (sqlc repositories)
-├── agent/                    # agent implementation
+├── agent/                    # agent implementation (must not import `internal/`)
 ├── proto/                    # protobuf contracts (buf-managed)
 ├── web/                      # Vue 3 SPA (Vite)
 ├── templates/                # one-click service templates (YAML)
@@ -94,6 +94,19 @@ Design priorities (in order):
 └── docs/
     └── plan/                 # development plan per phase (see below)
 ```
+
+## Naming conventions
+
+| Item | Convention | Example |
+|---|---|---|
+| Product | Gotham | — |
+| Control-plane binary / CLI | `gotham` | `gotham serve`, `gotham update` |
+| Node agent binary | `gotham-agent` | `bin/gotham-agent` |
+| Go module | `github.com/<org>/gotham` | — |
+| Config file / env prefix | `gotham.yaml` / `GOTHAM_` | `GOTHAM_LOG_LEVEL` |
+| Container / volume prefix | `gotham-` | `gotham-traefik`, `gotham-db-{id}` |
+| Image tags (built apps) | `gotham/{appID}:{deployID}` | — |
+| Systemd units | `gotham.service`, `gotham-agent.service` | `deploy/` |
 
 ---
 

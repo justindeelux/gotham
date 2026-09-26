@@ -19,6 +19,36 @@ type ApiToken struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type PrivateKey struct {
+	ID           pgtype.UUID        `json:"id"`
+	Name         string             `json:"name"`
+	EncryptedKey string             `json:"encrypted_key"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type Server struct {
+	ID             pgtype.UUID        `json:"id"`
+	Name           string             `json:"name"`
+	Ip             string             `json:"ip"`
+	Port           int32              `json:"port"`
+	SshUser        string             `json:"ssh_user"`
+	SshKeyID       pgtype.UUID        `json:"ssh_key_id"`
+	Status         string             `json:"status"`
+	NodeID         *string            `json:"node_id"`
+	Os             *string            `json:"os"`
+	DockerVersion  *string            `json:"docker_version"`
+	Arch           *string            `json:"arch"`
+	TotalMem       *int64             `json:"total_mem"`
+	TotalDisk      *int64             `json:"total_disk"`
+	CpuUsage       *float64           `json:"cpu_usage"`
+	MemUsage       *float64           `json:"mem_usage"`
+	DiskUsage      *float64           `json:"disk_usage"`
+	ContainerCount *int64             `json:"container_count"`
+	LastSeen       pgtype.Timestamptz `json:"last_seen"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Session struct {
 	ID          pgtype.UUID        `json:"id"`
 	UserID      pgtype.UUID        `json:"user_id"`

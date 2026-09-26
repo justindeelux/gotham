@@ -40,6 +40,10 @@ const (
 	EnvOAuthGitHubClientSecret = "GOTHAM_OAUTH_GITHUB_CLIENT_SECRET"
 	EnvOAuthGitHubRedirectURL  = "GOTHAM_OAUTH_GITHUB_REDIRECT_URL"
 
+	EnvGRPCAddr  = "GOTHAM_GRPC_ADDR"
+	EnvCADir     = "GOTHAM_CA_DIR"
+	EnvSecretKey = "GOTHAM_SECRET_KEY"
+
 	envPrefix = "GOTHAM"
 )
 
@@ -63,6 +67,8 @@ const (
 	defaultRedisAddr   = "localhost:6379"
 	defaultLogLevel    = "info"
 	defaultLogFormat   = FormatJSON
+	defaultGRPCAddr    = ":9442"
+	defaultCADir       = "./data/ca/"
 
 	minPort = 1
 	maxPort = 65535
@@ -82,6 +88,20 @@ type Database struct {
 // Redis holds Redis connection settings.
 type Redis struct {
 	Addr string
+}
+
+// GRPC holds the control-plane gRPC listener settings.
+type GRPC struct {
+	// Addr is the host:port the gateway binds. Default: :9442
+	Addr string
+}
+
+// CA holds the certificate authority settings.
+type CA struct {
+	// Dir is the directory holding the CA certificate and key. When no CA is
+	// present the gRPC gateway falls back to an insecure development listener.
+	// Default: ./data/ca/
+	Dir string
 }
 
 // Log holds logging settings.
@@ -120,9 +140,14 @@ type Values struct {
 	Server   Server
 	Database Database
 	Redis    Redis
+	GRPC     GRPC
+	CA       CA
 	Log      Log
 	Auth     Auth
 	OAuth    OAuth
+	// SecretKey encrypts stored SSH private keys (AES-256-GCM). When empty an
+	// ephemeral secret is generated at startup and a warning is logged.
+	SecretKey string `mapstructure:"secret_key"`
 }
 
 // Config is the resolved Gotham configuration. Values are populated by Load and
@@ -252,6 +277,8 @@ func newViper() *viper.Viper {
 	v.SetDefault("server.port", defaultServerPort)
 	v.SetDefault("database.dsn", defaultDatabaseDSN)
 	v.SetDefault("redis.addr", defaultRedisAddr)
+	v.SetDefault("grpc.addr", defaultGRPCAddr)
+	v.SetDefault("ca.dir", defaultCADir)
 	v.SetDefault("log.level", defaultLogLevel)
 	v.SetDefault("log.format", defaultLogFormat)
 
@@ -266,6 +293,9 @@ func newViper() *viper.Viper {
 		"server.port":               EnvServerPort,
 		"database.dsn":              EnvDatabaseDSN,
 		"redis.addr":                EnvRedisAddr,
+		"grpc.addr":                 EnvGRPCAddr,
+		"ca.dir":                    EnvCADir,
+		"secret_key":                EnvSecretKey,
 		"log.level":                 EnvLogLevel,
 		"log.format":                EnvLogFormat,
 		"auth.jwt_private_key_path": EnvAuthJWTPrivateKeyPath,

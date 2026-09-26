@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -10,6 +11,7 @@ import (
 	"github.com/justindeelux/gotham/agent/stats"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -20,6 +22,9 @@ const (
 	defaultMaxBackoff        = 30 * time.Second
 	// dockerCallTimeout bounds best-effort Docker calls made from the loop.
 	dockerCallTimeout = 5 * time.Second
+	// nodeIDMetadataKey carries the node identity on RPCs where the gateway
+	// cannot read it from a client certificate (the bootstrap connection).
+	nodeIDMetadataKey = "node-id"
 )
 
 // Agent connects to the control plane, registers this node and streams
@@ -129,6 +134,11 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 			slog.String("node_id", a.cfg.NodeID),
 			slog.String("cp_version", response.GetCpVersion()),
 		)
+		if cert := response.GetCert(); len(cert) > 0 {
+			if _, err := SaveAgentCert(a.cfg.CertDir, cert); err != nil {
+				a.log.Warn("failed to persist agent certificate", "error", err)
+			}
+		}
 		if onRegister != nil {
 			if err := onRegister(response); err != nil {
 				return err
@@ -188,7 +198,7 @@ func (a *Agent) registerRequest(ctx context.Context) *agentv1.RegisterRequest {
 		osName += " " + release
 	}
 
-	return &agentv1.RegisterRequest{
+	request := &agentv1.RegisterRequest{
 		NodeId:        a.cfg.NodeID,
 		Os:            osName,
 		DockerVersion: dockerVersion,
@@ -196,12 +206,43 @@ func (a *Agent) registerRequest(ctx context.Context) *agentv1.RegisterRequest {
 		TotalMem:      int64(sample.TotalMem),
 		TotalDisk:     int64(sample.TotalDisk),
 	}
+	if csr, err := a.certificateRequest(); err != nil {
+		// The CSR is best effort: a node that cannot build one still
+		// registers and receives a certificate for its node id (dev fallback).
+		a.log.Warn("failed to build certificate signing request; registering without one", "error", err)
+	} else {
+		request.Csr = csr
+	}
+	return request
+}
+
+// certificateRequest ensures the agent's keypair exists and returns a PEM
+// PKCS#10 CSR for it. The private key stays on the node; only the CSR is sent.
+// It resolves the key exactly as registration does: an explicit Config.KeyFile
+// wins, otherwise <CertDir>/agent.key.
+func (a *Agent) certificateRequest() ([]byte, error) {
+	var (
+		key crypto.Signer
+		err error
+	)
+	if a.cfg.KeyFile != "" {
+		key, _, err = ensureKeyAt(a.cfg.KeyFile)
+	} else {
+		key, _, err = EnsureKey(a.cfg.CertDir)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return GenerateCSR(a.cfg.NodeID, key)
 }
 
 // heartbeat opens the Heartbeat client stream and sends a sample immediately
 // and then once per interval until the stream fails or ctx is canceled.
 func (a *Agent) heartbeat(ctx context.Context, client agentv1.AgentServiceClient) error {
-	stream, err := client.Heartbeat(ctx)
+	// The bootstrap connection presents no client certificate, so the gateway
+	// learns the node identity from metadata to attribute heartbeats.
+	streamCtx := metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, a.cfg.NodeID)
+	stream, err := client.Heartbeat(streamCtx)
 	if err != nil {
 		return err
 	}

@@ -10,6 +10,9 @@ option go_package = "github.com/justindeelux/gotham/proto/agent/v1;agentv1";
 // register themselves and stream periodic heartbeats.
 service AgentService {
   // Register announces a node and requests an mTLS certificate from the CP CA.
+  // The agent generates its keypair once, keeps the private key on the node,
+  // sends a CSR signed by that key in RegisterRequest.csr, and receives the
+  // CA-signed certificate for the matching public key in RegisterResponse.cert.
   rpc Register(RegisterRequest) returns (RegisterResponse);
   // Heartbeat is a client stream: the agent pushes one message every 10s.
   rpc Heartbeat(stream HeartbeatRequest) returns (HeartbeatResponse);
@@ -45,6 +48,10 @@ message RegisterRequest {
   string arch = 4;
   int64 total_mem = 5;   // bytes
   int64 total_disk = 6;  // bytes
+  // csr is a PEM-encoded PKCS#10 certificate signing request generated from
+  // the agent's private key. When present, the CP signs it and returns the
+  // resulting certificate in RegisterResponse.cert.
+  bytes csr = 7;
 }
 
 // RegisterResponse returns the cert the agent must present to the CP when its

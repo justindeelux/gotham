@@ -31,6 +31,9 @@ const (
 // register themselves and stream periodic heartbeats.
 type AgentServiceClient interface {
 	// Register announces a node and requests an mTLS certificate from the CP CA.
+	// The agent generates its keypair once, keeps the private key on the node,
+	// sends a CSR signed by that key in RegisterRequest.csr, and receives the
+	// CA-signed certificate for the matching public key in RegisterResponse.cert.
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	// Heartbeat is a client stream: the agent pushes one message every 10s.
 	Heartbeat(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[HeartbeatRequest, HeartbeatResponse], error)
@@ -75,6 +78,9 @@ type AgentService_HeartbeatClient = grpc.ClientStreamingClient[HeartbeatRequest,
 // register themselves and stream periodic heartbeats.
 type AgentServiceServer interface {
 	// Register announces a node and requests an mTLS certificate from the CP CA.
+	// The agent generates its keypair once, keeps the private key on the node,
+	// sends a CSR signed by that key in RegisterRequest.csr, and receives the
+	// CA-signed certificate for the matching public key in RegisterResponse.cert.
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	// Heartbeat is a client stream: the agent pushes one message every 10s.
 	Heartbeat(grpc.ClientStreamingServer[HeartbeatRequest, HeartbeatResponse]) error

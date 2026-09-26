@@ -7,7 +7,7 @@ CGO_ENABLED ?= 0
 BIN_DIR     ?= bin
 LDFLAGS     ?= -s -w
 
-.PHONY: all build web-build test lint migrate migrate-down migrate-status sqlc-generate sqlc-check dev fmt clean
+.PHONY: all build web-build test lint migrate migrate-down migrate-status sqlc-generate sqlc-check proto proto-check dev fmt clean
 
 all: build
 
@@ -81,6 +81,57 @@ sqlc-check:
 	@echo "==> sqlc generate (drift check)"
 	@sqlc generate
 	@git diff --exit-code -- internal/store/sqlc
+
+## proto: lint and regenerate protobuf/gRPC code from proto/ with buf
+proto:
+	@command -v buf >/dev/null 2>&1 || { \
+		echo "buf is not installed or not on PATH."; \
+		echo "Install it with:"; \
+		echo "  brew install bufbuild/buf/buf"; \
+		exit 1; \
+	}
+	@command -v protoc-gen-go >/dev/null 2>&1 || { \
+		echo "protoc-gen-go is not installed or not on PATH."; \
+		echo "Install it with:"; \
+		echo "  go install google.golang.org/protobuf/cmd/protoc-gen-go@latest"; \
+		exit 1; \
+	}
+	@command -v protoc-gen-go-grpc >/dev/null 2>&1 || { \
+		echo "protoc-gen-go-grpc is not installed or not on PATH."; \
+		echo "Install it with:"; \
+		echo "  go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest"; \
+		exit 1; \
+	}
+	@echo "==> buf lint"
+	@buf lint
+	@echo "==> buf generate"
+	@buf generate
+
+## proto-check: fail when the committed generated code is out of date
+proto-check:
+	@command -v buf >/dev/null 2>&1 || { \
+		echo "buf is not installed or not on PATH."; \
+		echo "Install it with:"; \
+		echo "  brew install bufbuild/buf/buf"; \
+		exit 1; \
+	}
+	@command -v protoc-gen-go >/dev/null 2>&1 || { \
+		echo "protoc-gen-go is not installed or not on PATH."; \
+		echo "Install it with:"; \
+		echo "  go install google.golang.org/protobuf/cmd/protoc-gen-go@latest"; \
+		exit 1; \
+	}
+	@command -v protoc-gen-go-grpc >/dev/null 2>&1 || { \
+		echo "protoc-gen-go-grpc is not installed or not on PATH."; \
+		echo "Install it with:"; \
+		echo "  go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest"; \
+		exit 1; \
+	}
+	@echo "==> buf lint"
+	@buf lint
+	@echo "==> buf generate (drift check)"
+	@buf generate
+	@git diff --exit-code -- proto/
 
 ## dev: run the local development environment (not implemented yet)
 dev:

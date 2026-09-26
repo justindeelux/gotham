@@ -1,0 +1,23 @@
+version: v2
+
+modules:
+  - path: proto
+
+lint:
+  use:
+    - STANDARD
+  # The Phase 2 contract is fixed by the coordinator and deliberately reuses
+  # request/response messages across RPCs (ContainerAction*, CreateContainer*)
+  # and uses domain-typed streaming responses (LogChunk, UpdateRequest). Those
+  # naming/uniqueness rules are therefore suppressed for this file only.
+  ignore_only:
+    RPC_REQUEST_STANDARD_NAME:
+      - proto/agent/v1/agent.proto
+    RPC_RESPONSE_STANDARD_NAME:
+      - proto/agent/v1/agent.proto
+    RPC_REQUEST_RESPONSE_UNIQUE:
+      - proto/agent/v1/agent.proto
+
+breaking:
+  use:
+    - FILE

@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+package agent.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/justindeelux/gotham/proto/agent/v1;agentv1";
+
+// AgentService runs on the control plane. Node agents dial it over mTLS to
+// register themselves and stream periodic heartbeats.
+service AgentService {
+  // Register announces a node and requests an mTLS certificate from the CP CA.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // Heartbeat is a client stream: the agent pushes one message every 10s.
+  rpc Heartbeat(stream HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+// UpdateService runs on the control plane. Skeleton until Phase 9 implements
+// signed self-update.
+service UpdateService {
+  // RequestUpdate asks whether a newer agent version is available.
+  rpc RequestUpdate(UpdateRequest) returns (UpdateResponse);
+}
+
+// DockerService runs on the node agent. The control plane dials it to manage
+// containers on that node.
+service DockerService {
+  rpc ListContainers(ListContainersRequest) returns (ListContainersResponse);
+  rpc StartContainer(ContainerActionRequest) returns (ContainerActionResponse);
+  rpc StopContainer(ContainerActionRequest) returns (ContainerActionResponse);
+  rpc RestartContainer(ContainerActionRequest) returns (ContainerActionResponse);
+  rpc PullImage(PullImageRequest) returns (PullImageResponse);
+  rpc CreateContainer(CreateContainerRequest) returns (ContainerActionResponse);
+  rpc RunImage(CreateContainerRequest) returns (ContainerActionResponse);
+  // StreamLogs tails container logs; chunks stream until follow ends or the
+  // client cancels.
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
+}
+
+// RegisterRequest carries the node's static identity and capabilities.
+message RegisterRequest {
+  string node_id = 1;
+  string os = 2;
+  string docker_version = 3;
+  string arch = 4;
+  int64 total_mem = 5;   // bytes
+  int64 total_disk = 6;  // bytes
+}
+
+// RegisterResponse returns the cert the agent must present to the CP when its
+// DockerService is dialed, plus the CP version for compatibility logging.
+message RegisterResponse {
+  bytes cert = 1;        // PEM-encoded agent certificate
+  string cp_version = 2;
+}
+
+// HeartbeatRequest reports live resource usage.
+message HeartbeatRequest {
+  double cpu_usage = 1;    // fraction 0..1
+  double mem_usage = 2;    // fraction 0..1
+  double disk_usage = 3;   // fraction 0..1
+  int64 container_count = 4;
+  google.protobuf.Timestamp sent_at = 5;
+}
+
+// HeartbeatResponse acknowledges the stream once it closes.
+message HeartbeatResponse {
+  google.protobuf.Timestamp received_at = 1;
+}
+
+// UpdateRequest asks the CP about available agent versions.
+message UpdateRequest {
+  string agent_version = 1;
+}
+
+// UpdateResponse reports whether an update is available.
+message UpdateResponse {
+  bool update_available = 1;
+  string latest_version = 2;
+}
+
+// ListContainersRequest filters the container list.
+message ListContainersRequest {
+  bool all = 1; // include stopped containers
+}
+
+// ContainerInfo describes one container.
+message ContainerInfo {
+  string id = 1;
+  string name = 2;
+  string image = 3;
+  string status = 4;
+  string state = 5;
+  google.protobuf.Timestamp created_at = 6;
+  map<string, string> labels = 7;
+}
+
+message ListContainersResponse {
+  repeated ContainerInfo containers = 1;
+}
+
+// ContainerActionRequest targets one container.
+message ContainerActionRequest {
+  string container_id = 1;
+}
+
+message ContainerActionResponse {
+  string container_id = 1;
+}
+
+// PullImageRequest pulls an image from a registry.
+message PullImageRequest {
+  string image = 1;
+}
+
+message PullImageResponse {}
+
+// CreateContainerRequest describes a container to create and (for RunImage)
+// start immediately.
+message CreateContainerRequest {
+  string image = 1;
+  string name = 2;
+  repeated string env = 3;       // KEY=VALUE
+  repeated string command = 4;
+  repeated string entrypoint = 5;
+  map<string, string> labels = 6;
+  repeated string ports = 7;     // host:container
+  repeated string volumes = 8;   // host:container
+  repeated string networks = 9;
+}
+
+// StreamLogsRequest tails the logs of one container.
+message StreamLogsRequest {
+  string container_id = 1;
+  bool follow = 2;
+  int64 tail = 3; // number of lines from the end; 0 = default
+}
+
+// LogChunk is one chunk of a container log stream.
+message LogChunk {
+  bytes data = 1;
+}

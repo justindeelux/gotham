@@ -1,0 +1,272 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"runtime"
+	"time"
+
+	"github.com/justindeelux/gotham/agent/stats"
+	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// Defaults for the register/heartbeat loop.
+const (
+	defaultHeartbeatInterval = 10 * time.Second
+	defaultMinBackoff        = time.Second
+	defaultMaxBackoff        = 30 * time.Second
+	// dockerCallTimeout bounds best-effort Docker calls made from the loop.
+	dockerCallTimeout = 5 * time.Second
+)
+
+// Agent connects to the control plane, registers this node and streams
+// heartbeats, reconnecting with backoff when the connection drops.
+type Agent struct {
+	cfg         Config
+	log         *slog.Logger
+	docker      dockerClient
+	sampler     *stats.Sampler
+	interval    time.Duration
+	minBackoff  time.Duration
+	maxBackoff  time.Duration
+	dialOptions []grpc.DialOption
+}
+
+// Option customizes an Agent. Options are primarily used by tests.
+type Option func(*Agent)
+
+// WithHeartbeatInterval overrides the heartbeat cadence (default 10s).
+func WithHeartbeatInterval(interval time.Duration) Option {
+	return func(a *Agent) {
+		if interval > 0 {
+			a.interval = interval
+		}
+	}
+}
+
+// WithBackoff overrides the reconnect backoff bounds.
+func WithBackoff(minBackoff, maxBackoff time.Duration) Option {
+	return func(a *Agent) {
+		if minBackoff > 0 {
+			a.minBackoff = minBackoff
+		}
+		if maxBackoff >= minBackoff && maxBackoff > 0 {
+			a.maxBackoff = maxBackoff
+		}
+	}
+}
+
+// WithDialOptions appends gRPC dial options, for example a bufconn dialer in
+// tests.
+func WithDialOptions(options ...grpc.DialOption) Option {
+	return func(a *Agent) {
+		a.dialOptions = append(a.dialOptions, options...)
+	}
+}
+
+// NewAgent returns an Agent that reports Docker state through docker.
+func NewAgent(cfg Config, log *slog.Logger, docker dockerClient, options ...Option) *Agent {
+	if log == nil {
+		log = slog.Default()
+	}
+	agent := &Agent{
+		cfg:        cfg,
+		log:        log,
+		docker:     docker,
+		sampler:    stats.New(),
+		interval:   defaultHeartbeatInterval,
+		minBackoff: defaultMinBackoff,
+		maxBackoff: defaultMaxBackoff,
+	}
+	for _, option := range options {
+		option(agent)
+	}
+	return agent
+}
+
+// Run connects to the control plane and runs the register/heartbeat loop until
+// ctx is canceled. onRegister is invoked after every successful registration.
+// It typically starts the DockerService server using the issued certificate,
+// and returning an error stops the agent. Run returns nil on a graceful
+// shutdown.
+func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterResponse) error) error {
+	options, err := a.dialOptionsFor()
+	if err != nil {
+		return err
+	}
+	conn, err := grpc.NewClient(a.cfg.CPAddr, options...)
+	if err != nil {
+		return fmt.Errorf("agent: dial control plane %s: %w", a.cfg.CPAddr, err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	client := agentv1.NewAgentServiceClient(conn)
+	backoff := a.minBackoff
+
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+
+		response, err := a.register(ctx, client)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			a.log.Warn("register failed; retrying", "error", err, "backoff", backoff.String())
+			if !sleepContext(ctx, backoff) {
+				return nil
+			}
+			backoff = nextBackoff(backoff, a.maxBackoff)
+			continue
+		}
+
+		backoff = a.minBackoff
+		a.log.Info("registered with control plane",
+			slog.String("node_id", a.cfg.NodeID),
+			slog.String("cp_version", response.GetCpVersion()),
+		)
+		if onRegister != nil {
+			if err := onRegister(response); err != nil {
+				return err
+			}
+		}
+
+		if err := a.heartbeat(ctx, client); err != nil && ctx.Err() == nil {
+			a.log.Warn("heartbeat stream ended; reconnecting", "error", err)
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		if !sleepContext(ctx, backoff) {
+			return nil
+		}
+		backoff = nextBackoff(backoff, a.maxBackoff)
+	}
+}
+
+// dialOptionsFor builds the gRPC dial options, including transport credentials
+// derived from Config.CA.
+func (a *Agent) dialOptionsFor() ([]grpc.DialOption, error) {
+	creds, dev, err := clientCredentials(a.cfg.CA)
+	if err != nil {
+		return nil, err
+	}
+	if dev {
+		a.log.Warn("no CA configured; connecting to the control plane without TLS")
+	}
+	options := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
+	return append(options, a.dialOptions...), nil
+}
+
+// register sends a single Register RPC.
+func (a *Agent) register(ctx context.Context, client agentv1.AgentServiceClient) (*agentv1.RegisterResponse, error) {
+	return client.Register(ctx, a.registerRequest(ctx))
+}
+
+// registerRequest assembles the node's static identity and capabilities.
+func (a *Agent) registerRequest(ctx context.Context) *agentv1.RegisterRequest {
+	sample, _ := a.sampler.Sample()
+
+	dockerVersion := ""
+	if a.docker != nil {
+		callCtx, cancel := context.WithTimeout(ctx, dockerCallTimeout)
+		defer cancel()
+		version, err := a.docker.Version(callCtx)
+		if err != nil {
+			a.log.Debug("docker version unavailable", "error", err)
+		} else {
+			dockerVersion = version
+		}
+	}
+
+	osName := runtime.GOOS
+	if release := stats.OSVersion(); release != "" {
+		osName += " " + release
+	}
+
+	return &agentv1.RegisterRequest{
+		NodeId:        a.cfg.NodeID,
+		Os:            osName,
+		DockerVersion: dockerVersion,
+		Arch:          runtime.GOARCH,
+		TotalMem:      int64(sample.TotalMem),
+		TotalDisk:     int64(sample.TotalDisk),
+	}
+}
+
+// heartbeat opens the Heartbeat client stream and sends a sample immediately
+// and then once per interval until the stream fails or ctx is canceled.
+func (a *Agent) heartbeat(ctx context.Context, client agentv1.AgentServiceClient) error {
+	stream, err := client.Heartbeat(ctx)
+	if err != nil {
+		return err
+	}
+	ticker := time.NewTicker(a.interval)
+	defer ticker.Stop()
+
+	for {
+		if err := stream.Send(a.heartbeatRequest(ctx)); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			_ = stream.CloseSend()
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// heartbeatRequest samples the host and current container count.
+func (a *Agent) heartbeatRequest(ctx context.Context) *agentv1.HeartbeatRequest {
+	sample, _ := a.sampler.Sample()
+	return &agentv1.HeartbeatRequest{
+		CpuUsage:       sample.CPU,
+		MemUsage:       sample.Mem,
+		DiskUsage:      sample.Disk,
+		ContainerCount: a.containerCount(ctx),
+		SentAt:         timestamppb.Now(),
+	}
+}
+
+// containerCount returns the number of containers known to Docker, or 0 when
+// it cannot be determined.
+func (a *Agent) containerCount(ctx context.Context) int64 {
+	if a.docker == nil {
+		return 0
+	}
+	callCtx, cancel := context.WithTimeout(ctx, dockerCallTimeout)
+	defer cancel()
+	containers, err := a.docker.ListContainers(callCtx, true)
+	if err != nil {
+		a.log.Debug("container count unavailable", "error", err)
+		return 0
+	}
+	return int64(len(containers))
+}
+
+// sleepContext waits for d or until ctx is canceled, reporting whether the full
+// duration elapsed.
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// nextBackoff doubles current, capped at max.
+func nextBackoff(current, max time.Duration) time.Duration {
+	next := current * 2
+	if next <= 0 || next > max {
+		return max
+	}
+	return next
+}

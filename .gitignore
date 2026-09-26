@@ -1,0 +1,31 @@
+# Binaries & build output
+bin/
+dist/
+*.exe
+*.out
+*.test
+
+# Go
+coverage.txt
+coverage.html
+
+# Node / web
+node_modules/
+web/node_modules/
+web/dist/
+
+# Env & local config
+.env
+.env.*
+!.env.example
+config.local.yaml
+
+# orca workspaces
+ws/
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

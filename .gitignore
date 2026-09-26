@@ -29,3 +29,14 @@ ws/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Go binaries built outside bin/
+/gotham
+/gotham-agent
+
+# Tool caches
+.golangci-lint-cache/
+.gocache/
+
+# Frontend local caches
+web/.vite/

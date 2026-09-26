@@ -16,6 +16,9 @@ var gothamEnvKeys = []string{
 	EnvLogFormat,
 	EnvAuthJWTPrivateKeyPath,
 	EnvAuthJWTPublicKeyPath,
+	EnvOAuthGitHubClientID,
+	EnvOAuthGitHubClientSecret,
+	EnvOAuthGitHubRedirectURL,
 }
 
 // chdir switches into dir for the duration of the test and restores the
@@ -216,6 +219,59 @@ func TestLoadAuthKeysFromEnv(t *testing.T) {
 	}
 	if cfg.Auth.JWTPublicKeyPath != "/env/public.pem" {
 		t.Errorf("Auth.JWTPublicKeyPath = %q, want /env/public.pem", cfg.Auth.JWTPublicKeyPath)
+	}
+}
+
+func TestLoadOAuthGitHub(t *testing.T) {
+	clearGothamEnv(t)
+
+	dir := t.TempDir()
+	writeConfig(t, dir, `
+oauth:
+  github:
+    client_id: yaml-client
+    client_secret: yaml-secret
+    redirect_url: http://localhost:8000/api/v1/auth/oauth/github/callback
+`)
+	chdir(t, dir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.OAuth.GitHub.ClientID != "yaml-client" {
+		t.Errorf("OAuth.GitHub.ClientID = %q", cfg.OAuth.GitHub.ClientID)
+	}
+	if cfg.OAuth.GitHub.ClientSecret != "yaml-secret" {
+		t.Errorf("OAuth.GitHub.ClientSecret = %q", cfg.OAuth.GitHub.ClientSecret)
+	}
+	if cfg.OAuth.GitHub.RedirectURL != "http://localhost:8000/api/v1/auth/oauth/github/callback" {
+		t.Errorf("OAuth.GitHub.RedirectURL = %q", cfg.OAuth.GitHub.RedirectURL)
+	}
+}
+
+func TestLoadOAuthGitHubFromEnv(t *testing.T) {
+	clearGothamEnv(t)
+	chdir(t, t.TempDir())
+
+	t.Setenv(EnvOAuthGitHubClientID, "env-client")
+	t.Setenv(EnvOAuthGitHubClientSecret, "env-secret")
+	t.Setenv(EnvOAuthGitHubRedirectURL, "https://gotham.example/api/v1/auth/oauth/github/callback")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.OAuth.GitHub.ClientID != "env-client" {
+		t.Errorf("OAuth.GitHub.ClientID = %q, want env-client", cfg.OAuth.GitHub.ClientID)
+	}
+	if cfg.OAuth.GitHub.ClientSecret != "env-secret" {
+		t.Errorf("OAuth.GitHub.ClientSecret = %q, want env-secret", cfg.OAuth.GitHub.ClientSecret)
+	}
+	if cfg.OAuth.GitHub.RedirectURL != "https://gotham.example/api/v1/auth/oauth/github/callback" {
+		t.Errorf("OAuth.GitHub.RedirectURL = %q", cfg.OAuth.GitHub.RedirectURL)
 	}
 }
 

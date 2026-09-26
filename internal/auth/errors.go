@@ -21,4 +21,13 @@ var (
 	// ErrNotFound is returned when a resource does not exist or is not owned by
 	// the caller.
 	ErrNotFound = errors.New("auth: not found")
+	// ErrProviderDisabled is returned when an OAuth provider is unknown or not
+	// configured.
+	ErrProviderDisabled = errors.New("auth: oauth provider disabled")
+	// ErrStateMismatch is returned when an OAuth state is missing, expired,
+	// already consumed, or does not match the initiating request.
+	ErrStateMismatch = errors.New("auth: oauth state mismatch")
+	// ErrMissingEmail is returned when an OAuth identity exposes no usable
+	// email address.
+	ErrMissingEmail = errors.New("auth: oauth identity missing email")
 )

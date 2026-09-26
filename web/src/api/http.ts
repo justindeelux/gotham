@@ -1,5 +1,13 @@
 import axios from "axios";
-import type { AxiosError, AxiosInstance, AxiosResponse } from "axios";
+import type {
+  AxiosError,
+  AxiosInstance,
+  AxiosResponse,
+  InternalAxiosRequestConfig,
+} from "axios";
+
+import { clearSession, getAccessToken, getRefreshToken, setSession } from "./token";
+import type { AuthResult } from "./token";
 
 /** Axios error payloads returned by the Gotham API. */
 interface ApiErrorBody {
@@ -13,8 +21,19 @@ export interface ApiError {
   cause: unknown;
 }
 
+/** Request config extended with a marker set when a 401 has been retried. */
+interface RetryableRequestConfig extends InternalAxiosRequestConfig {
+  _retry?: boolean;
+}
+
 /** Request timeout in milliseconds. */
 const requestTimeout = 15_000;
+
+/** Refresh endpoint, addressed relative to the current origin. */
+const refreshPath = "/api/v1/auth/refresh";
+
+/** Endpoints that must never trigger a refresh-and-retry on 401. */
+const noRefreshPaths = ["/auth/login", "/auth/register", "/auth/refresh"];
 
 /** Shared axios instance for the `/api/v1` control-plane API. */
 export const http: AxiosInstance = axios.create({
@@ -23,10 +42,92 @@ export const http: AxiosInstance = axios.create({
   headers: { Accept: "application/json" },
 });
 
+http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const accessToken = getAccessToken();
+  if (accessToken) {
+    config.headers.set("Authorization", `Bearer ${accessToken}`);
+  } else {
+    config.headers.delete("Authorization");
+  }
+  return config;
+});
+
+/** In-flight refresh promise shared by all concurrent 401 responses. */
+let refreshPromise: Promise<string> | null = null;
+
 http.interceptors.response.use(
   (response: AxiosResponse) => response,
-  (error: AxiosError<ApiErrorBody>) => Promise.reject(toApiError(error)),
+  async (error: AxiosError<ApiErrorBody>) => {
+    const config = error.config as RetryableRequestConfig | undefined;
+
+    if (shouldRefresh(error, config)) {
+      config._retry = true;
+      try {
+        const accessToken = await refreshAccessToken();
+        config.headers.set("Authorization", `Bearer ${accessToken}`);
+        return await http.request(config);
+      } catch {
+        clearSession();
+        redirectToLogin();
+      }
+    }
+
+    return Promise.reject(toApiError(error));
+  },
 );
+
+/** shouldRefresh reports whether a 401 warrants a single refresh-and-retry. */
+function shouldRefresh(
+  error: AxiosError<ApiErrorBody>,
+  config: RetryableRequestConfig | undefined,
+): config is RetryableRequestConfig {
+  if (!config || config._retry || error.response?.status !== 401) {
+    return false;
+  }
+
+  const url = config.url ?? "";
+  return !noRefreshPaths.some((path) => url.includes(path));
+}
+
+/** refreshAccessToken rotates the refresh token, reusing one shared request. */
+function refreshAccessToken(): Promise<string> {
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) {
+    return Promise.reject(new Error("no refresh token available"));
+  }
+
+  refreshPromise = axios
+    .post<AuthResult>(
+      refreshPath,
+      { refresh_token: refreshToken },
+      { timeout: requestTimeout, headers: { Accept: "application/json" } },
+    )
+    .then((response) => {
+      setSession({
+        user: response.data.user ?? null,
+        accessToken: response.data.access_token,
+        refreshToken: response.data.refresh_token,
+      });
+      return response.data.access_token;
+    })
+    .finally(() => {
+      refreshPromise = null;
+    });
+
+  return refreshPromise;
+}
+
+/** redirectToLogin sends the browser to the login page after a dead session. */
+function redirectToLogin(): void {
+  if (typeof window === "undefined" || window.location.pathname === "/login") {
+    return;
+  }
+  window.location.assign("/login");
+}
 
 /** toApiError maps an axios failure to a typed ApiError. */
 function toApiError(error: AxiosError<ApiErrorBody>): ApiError {

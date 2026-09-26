@@ -24,3 +24,16 @@ body {
   background-color: #f5f7fa;
   color: #1f2225;
 }
+
+.auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+}

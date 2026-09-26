@@ -23,7 +23,10 @@ const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
-const menuOptions: MenuOption[] = [{ label: "Dashboard", key: "dashboard" }];
+const menuOptions: MenuOption[] = [
+  { label: "Dashboard", key: "dashboard" },
+  { label: "Servers", key: "servers" },
+];
 
 const accountOptions: DropdownOption[] = [{ label: "Sign out", key: "sign-out" }];
 

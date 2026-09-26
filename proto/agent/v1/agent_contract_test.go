@@ -30,6 +30,7 @@ func TestRegisterRequestProtoRoundtrip(t *testing.T) {
 		Arch:          "arm64",
 		TotalMem:      8 << 30,
 		TotalDisk:     100 << 30,
+		Csr:           []byte("-----BEGIN CERTIFICATE REQUEST-----\ncsr\n-----END CERTIFICATE REQUEST-----\n"),
 	}
 
 	raw, err := proto.Marshal(want)

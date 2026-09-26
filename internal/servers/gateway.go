@@ -153,10 +153,28 @@ func (g *Gateway) Addr() string {
 }
 
 // Register handles an agent registration.
+//
+// When the agent supplies a CSR and this gateway has a CA, the certificate is
+// issued for the CSR's public key (and its SANs) instead of the node-id-only
+// fallback the service issues by default. The CSR is validated before the
+// registry is touched, so a malformed request fails without side effects. The
+// node identity recorded in the registry is always req.NodeId.
 func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error) {
+	var csrCert []byte
+	if len(req.GetCsr()) > 0 && g.authority != nil {
+		cert, err := g.authority.IssueAgentCertFromCSR(req.GetCsr())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		csrCert = cert
+	}
+
 	resp, err := g.service.RegisterNode(ctx, req)
 	if err != nil {
 		return nil, toGRPCError(err)
+	}
+	if csrCert != nil {
+		resp.Cert = csrCert
 	}
 	return resp, nil
 }

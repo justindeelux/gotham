@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -13,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -86,9 +88,9 @@ func (a *Authority) Pool() *x509.CertPool {
 // nodeID. When nodeID is an IP address it is added as an IP SAN in addition to
 // the DNS SAN.
 //
-// The returned value is the certificate PEM only: the RegisterResponse contract
-// (proto/agent/v1) carries no private key field, so the agent keypair exchange
-// must be added to the contract before mTLS can be completed end to end.
+// It is the fallback used when an agent registers without a CSR. Agents that
+// send a CSR (RegisterRequest.csr) get a certificate bound to their own key via
+// IssueAgentCertFromCSR instead.
 func (a *Authority) IssueAgentCert(nodeID string) ([]byte, error) {
 	if nodeID == "" {
 		return nil, fmt.Errorf("%w: node id is empty", ErrValidation)
@@ -98,6 +100,110 @@ func (a *Authority) IssueAgentCert(nodeID string) ([]byte, error) {
 		return nil, err
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}), nil
+}
+
+// IssueAgentCertFromCSR verifies a PEM-encoded PKCS#10 CSR and issues a
+// server-auth certificate (one year) for the public key it carries. The
+// certificate copies the CSR's DNS and IP SANs and always includes the CSR
+// subject common name as a SAN, so it verifies for both name- and
+// address-based node ids. The CSR must be self-signed and carry an identity;
+// otherwise it is rejected with an error wrapping ErrValidation.
+func (a *Authority) IssueAgentCertFromCSR(csrPEM []byte) ([]byte, error) {
+	csr, err := parseCSR(csrPEM)
+	if err != nil {
+		return nil, err
+	}
+
+	commonName, dns, ips, err := csrIdentity(csr)
+	if err != nil {
+		return nil, err
+	}
+
+	cert, err := a.sign(commonName, dns, ips, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, agentCertValidity, csr.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}), nil
+}
+
+// parseCSR decodes and verifies a PEM-encoded PKCS#10 certificate request.
+func parseCSR(csrPEM []byte) (*x509.CertificateRequest, error) {
+	if len(csrPEM) == 0 {
+		return nil, fmt.Errorf("%w: csr is required", ErrValidation)
+	}
+	block, _ := pem.Decode(csrPEM)
+	if block == nil {
+		return nil, fmt.Errorf("%w: csr is not PEM-encoded", ErrValidation)
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: parse csr: %v", ErrValidation, err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("%w: csr signature is invalid: %v", ErrValidation, err)
+	}
+	return csr, nil
+}
+
+// csrIdentity derives the certificate subject common name, DNS SANs and IP
+// SANs from a verified CSR, ensuring the common name is present as a SAN.
+func csrIdentity(csr *x509.CertificateRequest) (commonName string, dns []string, ips []net.IP, err error) {
+	commonName = strings.TrimSpace(csr.Subject.CommonName)
+	dns = uniqueStrings(csr.DNSNames)
+	ips = csr.IPAddresses
+
+	if commonName == "" {
+		switch {
+		case len(dns) > 0:
+			commonName = dns[0]
+		case len(ips) > 0:
+			commonName = ips[0].String()
+		default:
+			return "", nil, nil, fmt.Errorf("%w: csr carries no subject", ErrValidation)
+		}
+	}
+
+	if ip := net.ParseIP(commonName); ip != nil {
+		if !containsIP(ips, ip) {
+			ips = append(ips, ip)
+		}
+	} else if !containsString(dns, commonName) {
+		dns = append(dns, commonName)
+	}
+	return commonName, dns, ips, nil
+}
+
+// uniqueStrings returns s with blank entries and duplicates removed, order
+// preserved.
+func uniqueStrings(s []string) []string {
+	var out []string
+	for _, item := range s {
+		if item == "" || containsString(out, item) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// containsString reports whether s contains item.
+func containsString(s []string, item string) bool {
+	for _, existing := range s {
+		if existing == item {
+			return true
+		}
+	}
+	return false
+}
+
+// containsIP reports whether ips contains ip.
+func containsIP(ips []net.IP, ip net.IP) bool {
+	for _, existing := range ips {
+		if existing.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // IssueServerCert issues the control plane's own server certificate for the
@@ -132,10 +238,18 @@ func (a *Authority) issue(commonName string, dns []string, ips []net.IP, usages 
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
 	}
-
-	serial, err := randomSerial()
+	cert, err := a.sign(commonName, dns, ips, usages, validity, &key.PublicKey)
 	if err != nil {
 		return nil, nil, err
+	}
+	return key, cert, nil
+}
+
+// sign builds a leaf certificate for pub and signs it with the CA key.
+func (a *Authority) sign(commonName string, dns []string, ips []net.IP, usages []x509.ExtKeyUsage, validity time.Duration, pub crypto.PublicKey) (*x509.Certificate, error) {
+	serial, err := randomSerial()
+	if err != nil {
+		return nil, err
 	}
 
 	now := time.Now()
@@ -151,15 +265,15 @@ func (a *Authority) issue(commonName string, dns []string, ips []net.IP, usages 
 		IPAddresses:           ips,
 	}
 
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, a.cert, &key.PublicKey, a.key)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, a.cert, pub, a.key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create certificate: %w", err)
+		return nil, fmt.Errorf("create certificate: %w", err)
 	}
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse certificate: %w", err)
+		return nil, fmt.Errorf("parse certificate: %w", err)
 	}
-	return key, cert, nil
+	return cert, nil
 }
 
 // createAuthority generates and persists a fresh self-signed CA.

@@ -31,6 +31,10 @@ type RegisterRequest struct {
 	Arch          string                 `protobuf:"bytes,4,opt,name=arch,proto3" json:"arch,omitempty"`
 	TotalMem      int64                  `protobuf:"varint,5,opt,name=total_mem,json=totalMem,proto3" json:"total_mem,omitempty"`    // bytes
 	TotalDisk     int64                  `protobuf:"varint,6,opt,name=total_disk,json=totalDisk,proto3" json:"total_disk,omitempty"` // bytes
+	// csr is a PEM-encoded PKCS#10 certificate signing request generated from
+	// the agent's private key. When present, the CP signs it and returns the
+	// resulting certificate in RegisterResponse.cert.
+	Csr           []byte `protobuf:"bytes,7,opt,name=csr,proto3" json:"csr,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -105,6 +109,13 @@ func (x *RegisterRequest) GetTotalDisk() int64 {
 		return x.TotalDisk
 	}
 	return 0
+}
+
+func (x *RegisterRequest) GetCsr() []byte {
+	if x != nil {
+		return x.Csr
+	}
+	return nil
 }
 
 // RegisterResponse returns the cert the agent must present to the CP when its
@@ -953,7 +964,7 @@ var File_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x14agent/v1/agent.proto\x12\bagent.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb1\x01\n" +
+	"\x14agent/v1/agent.proto\x12\bagent.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc3\x01\n" +
 	"\x0fRegisterRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12%\n" +
@@ -961,7 +972,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x04arch\x18\x04 \x01(\tR\x04arch\x12\x1b\n" +
 	"\ttotal_mem\x18\x05 \x01(\x03R\btotalMem\x12\x1d\n" +
 	"\n" +
-	"total_disk\x18\x06 \x01(\x03R\ttotalDisk\"E\n" +
+	"total_disk\x18\x06 \x01(\x03R\ttotalDisk\x12\x10\n" +
+	"\x03csr\x18\a \x01(\fR\x03csr\"E\n" +
 	"\x10RegisterResponse\x12\x12\n" +
 	"\x04cert\x18\x01 \x01(\fR\x04cert\x12\x1d\n" +
 	"\n" +

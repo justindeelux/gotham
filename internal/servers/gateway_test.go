@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/justindeelux/gotham/internal/store"
@@ -38,6 +41,14 @@ func discardLogger() *slog.Logger {
 // newTestService builds a ServerService backed by the dev database, skipping
 // the test when Postgres is unavailable.
 func newTestService(t *testing.T) (*ServerService, *store.Store) {
+	t.Helper()
+	service, st, _ := newTestServiceWithAuthority(t)
+	return service, st
+}
+
+// newTestServiceWithAuthority returns the service and store together with the
+// CA the service signs agent certificates with, so tests can verify them.
+func newTestServiceWithAuthority(t *testing.T) (*ServerService, *store.Store, *Authority) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -66,7 +77,7 @@ func newTestService(t *testing.T) (*ServerService, *store.Store) {
 		Version:   "test",
 		Logger:    discardLogger(),
 	})
-	return service, st
+	return service, st, authority
 }
 
 // startTestGateway serves g (insecure) over an in-memory connection and returns
@@ -181,6 +192,48 @@ func TestGatewayRegisterCreatesServer(t *testing.T) {
 	}
 	if reregistered.DockerVersion == nil || *reregistered.DockerVersion != "25.0.0" {
 		t.Errorf("docker_version after re-register = %v, want 25.0.0", reregistered.DockerVersion)
+	}
+}
+
+func TestGatewayRegisterRejectsInvalidCSR(t *testing.T) {
+	service, _, authority := newTestServiceWithAuthority(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gateway, err := NewGateway(GatewayConfig{
+		Addr:      "127.0.0.1:0",
+		Authority: authority,
+		Service:   service,
+		Logger:    discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if err := gateway.Start(ctx); err != nil {
+		t.Fatalf("gateway.Start: %v", err)
+	}
+	t.Cleanup(gateway.Stop)
+
+	conn, err := grpc.NewClient(
+		gateway.listener.Addr().String(),
+		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(authority.Pool(), "")),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	callCtx, callCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer callCancel()
+
+	// The CSR is validated before the registry write, so no row is created.
+	_, err = agentv1.NewAgentServiceClient(conn).Register(callCtx, &agentv1.RegisterRequest{
+		NodeId: uniqueNodeID("node-bad-csr"),
+		Csr:    []byte("not a csr"),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Register(invalid CSR) = %v, want InvalidArgument", err)
 	}
 }
 

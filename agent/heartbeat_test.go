@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -100,6 +104,7 @@ func TestAgentRegisterAndHeartbeat(t *testing.T) {
 		DockerSock: defaultDockerSock,
 		LogLevel:   "error",
 	}
+	certDir := cfg.CertDir
 	docker := &fakeDockerClient{
 		version:    "24.0.5",
 		containers: []*agentv1.ContainerInfo{{Id: "a"}, {Id: "b"}, {Id: "c"}},
@@ -163,6 +168,33 @@ func TestAgentRegisterAndHeartbeat(t *testing.T) {
 		t.Errorf("DockerVersion = %q; want 24.0.5", register.GetDockerVersion())
 	}
 
+	// The agent must send a CSR bound to its node identity so the CP can issue
+	// a certificate for the agent's own keypair.
+	if len(register.GetCsr()) == 0 {
+		t.Fatal("RegisterRequest.csr is empty")
+	}
+	csr := parseCSRRequest(t, register.GetCsr())
+	if csr.Subject.CommonName != "node-1" {
+		t.Errorf("CSR common name = %q; want node-1", csr.Subject.CommonName)
+	}
+	if len(csr.DNSNames) != 1 || csr.DNSNames[0] != "node-1" {
+		t.Errorf("CSR DNS SANs = %v; want [node-1]", csr.DNSNames)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		t.Errorf("CSR signature is invalid: %v", err)
+	}
+
+	// The certificate returned by the CP is persisted next to the key, and the
+	// key generated for the CSR is written once.
+	if data, err := os.ReadFile(filepath.Join(certDir, certFileName)); err != nil {
+		t.Errorf("agent.crt not persisted: %v", err)
+	} else if string(data) != "CERTIFICATE" {
+		t.Errorf("agent.crt = %q; want CERTIFICATE", data)
+	}
+	if _, err := os.Stat(filepath.Join(certDir, keyFileName)); err != nil {
+		t.Errorf("agent.key not persisted: %v", err)
+	}
+
 	cancel()
 	select {
 	case err := <-runErr:
@@ -218,4 +250,19 @@ func assertHeartbeat(t *testing.T, heartbeat *agentv1.HeartbeatRequest, wantCont
 	if heartbeat.GetSentAt() == nil {
 		t.Error("SentAt is nil")
 	}
+}
+
+// parseCSRRequest decodes the first PKCS#10 certificate request in a PEM blob.
+func parseCSRRequest(t *testing.T, csrPEM []byte) *x509.CertificateRequest {
+	t.Helper()
+
+	block, _ := pem.Decode(csrPEM)
+	if block == nil {
+		t.Fatal("decode CSR: not PEM")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse CSR: %v", err)
+	}
+	return csr
 }

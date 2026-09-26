@@ -2,9 +2,16 @@ package servers
 
 import (
 	"bytes"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -126,4 +133,142 @@ func parseCertPEM(t *testing.T, certPEM []byte) *x509.Certificate {
 		t.Fatalf("parse certificate: %v", err)
 	}
 	return cert
+}
+
+// testKey returns a fresh P-256 key for CSR tests.
+func testKey(t *testing.T) *ecdsa.PrivateKey {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	return key
+}
+
+// testCSR builds and PEM-encodes a PKCS#10 CSR from template.
+func testCSR(t *testing.T, key crypto.Signer, template *x509.CertificateRequest) []byte {
+	t.Helper()
+	der, err := x509.CreateCertificateRequest(rand.Reader, template, key)
+	if err != nil {
+		t.Fatalf("create certificate request: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+}
+
+func TestIssueAgentCertFromCSRRoundtrip(t *testing.T) {
+	authority, err := LoadOrCreateAuthority(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateAuthority: %v", err)
+	}
+	key := testKey(t)
+	csrPEM := testCSR(t, key, &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: "node-42"},
+		DNSNames: []string{"node-42"},
+	})
+
+	certPEM, err := authority.IssueAgentCertFromCSR(csrPEM)
+	if err != nil {
+		t.Fatalf("IssueAgentCertFromCSR: %v", err)
+	}
+
+	cert := parseCertPEM(t, certPEM)
+	if _, err := cert.Verify(x509.VerifyOptions{
+		DNSName:   "node-42",
+		Roots:     authority.Pool(),
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		t.Fatalf("issued cert failed verification: %v", err)
+	}
+	if len(cert.DNSNames) != 1 || cert.DNSNames[0] != "node-42" {
+		t.Fatalf("DNS SANs = %v, want [node-42]", cert.DNSNames)
+	}
+
+	// The certificate must carry the CSR's public key, not a fresh one.
+	publicKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("certificate public key type = %T, want *ecdsa.PublicKey", cert.PublicKey)
+	}
+	if !publicKey.Equal(key.Public()) {
+		t.Fatal("certificate public key does not match the CSR key")
+	}
+}
+
+func TestIssueAgentCertFromCSRAddsCommonNameSAN(t *testing.T) {
+	authority, err := LoadOrCreateAuthority(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateAuthority: %v", err)
+	}
+
+	// A CSR with a common name but no SANs must still verify by name.
+	csrPEM := testCSR(t, testKey(t), &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "node-9"},
+	})
+	cert := parseCertPEM(t, mustIssueFromCSR(t, authority, csrPEM))
+	if len(cert.DNSNames) != 1 || cert.DNSNames[0] != "node-9" {
+		t.Fatalf("DNS SANs = %v, want [node-9]", cert.DNSNames)
+	}
+
+	// An IP common name must become an IP SAN so address-based verification works.
+	ipCSR := testCSR(t, testKey(t), &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "10.0.0.9"},
+	})
+	ipCert := parseCertPEM(t, mustIssueFromCSR(t, authority, ipCSR))
+	if len(ipCert.IPAddresses) != 1 || !ipCert.IPAddresses[0].Equal(net.ParseIP("10.0.0.9")) {
+		t.Fatalf("IP SANs = %v, want [10.0.0.9]", ipCert.IPAddresses)
+	}
+	if err := ipCert.VerifyHostname("10.0.0.9"); err != nil {
+		t.Fatalf("VerifyHostname(10.0.0.9): %v", err)
+	}
+}
+
+func TestIssueAgentCertFromCSRTampered(t *testing.T) {
+	authority, err := LoadOrCreateAuthority(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateAuthority: %v", err)
+	}
+	csrPEM := testCSR(t, testKey(t), &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: "node-tamper"},
+		DNSNames: []string{"node-tamper"},
+	})
+
+	// Flip the last byte of the DER. The CSR still parses, but the ECDSA
+	// signature no longer verifies.
+	block, _ := pem.Decode(csrPEM)
+	if block == nil {
+		t.Fatal("decode CSR: not PEM")
+	}
+	der := append([]byte(nil), block.Bytes...)
+	der[len(der)-1] ^= 0xff
+	tampered := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+
+	if _, err := authority.IssueAgentCertFromCSR(tampered); !errors.Is(err, ErrValidation) {
+		t.Fatalf("IssueAgentCertFromCSR(tampered) = %v, want ErrValidation", err)
+	}
+}
+
+func TestIssueAgentCertFromCSRRejectsEmpty(t *testing.T) {
+	authority, err := LoadOrCreateAuthority(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateAuthority: %v", err)
+	}
+
+	for name, csr := range map[string][]byte{
+		"empty":      nil,
+		"not pem":    []byte("garbage"),
+		"no subject": testCSR(t, testKey(t), &x509.CertificateRequest{}),
+	} {
+		if _, err := authority.IssueAgentCertFromCSR(csr); !errors.Is(err, ErrValidation) {
+			t.Errorf("IssueAgentCertFromCSR(%s) = %v, want ErrValidation", name, err)
+		}
+	}
+}
+
+// mustIssueFromCSR issues an agent certificate from csrPEM, failing on error.
+func mustIssueFromCSR(t *testing.T, authority *Authority, csrPEM []byte) []byte {
+	t.Helper()
+	certPEM, err := authority.IssueAgentCertFromCSR(csrPEM)
+	if err != nil {
+		t.Fatalf("IssueAgentCertFromCSR: %v", err)
+	}
+	return certPEM
 }

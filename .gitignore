@@ -40,3 +40,5 @@ Thumbs.db
 
 # Frontend local caches
 web/.vite/
+# playwright
+.playwright-mcp/

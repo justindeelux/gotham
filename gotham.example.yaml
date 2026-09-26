@@ -7,7 +7,9 @@
 # Environment variables override the file. Supported variables:
 #   GOTHAM_SERVER_ADDR, GOTHAM_SERVER_PORT, GOTHAM_DATABASE_DSN,
 #   GOTHAM_REDIS_ADDR, GOTHAM_LOG_LEVEL, GOTHAM_LOG_FORMAT,
-#   GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH, GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH
+#   GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH, GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH,
+#   GOTHAM_OAUTH_GITHUB_CLIENT_ID, GOTHAM_OAUTH_GITHUB_CLIENT_SECRET,
+#   GOTHAM_OAUTH_GITHUB_REDIRECT_URL
 
 # HTTP listener.
 server:
@@ -44,6 +46,19 @@ auth:
   # survive a restart.
   # jwt_private_key_path: /etc/gotham/jwt_ed25519.key
   # jwt_public_key_path: /etc/gotham/jwt_ed25519.pub
+
+# OAuth2 identity providers. A provider is disabled while its client_id or
+# client_secret is empty; its login route then answers 404.
+oauth:
+  github:
+    # GitHub OAuth app credentials (Settings > Developer settings > OAuth apps).
+    # The app's "Authorization callback URL" must be:
+    #   http://localhost:8000/api/v1/auth/oauth/github/callback
+    # client_id: <github-oauth-app-client-id>
+    # client_secret: <github-oauth-app-client-secret>
+    # Must match the registered callback URL. When empty the browser is sent to
+    # a relative /oauth/callback route on the current origin.
+    # redirect_url: http://localhost:8000/api/v1/auth/oauth/github/callback
 
 # Hot reload: Gotham watches this file (fsnotify) and re-applies changes at
 # runtime, including the log level. No SIGHUP signal is required.

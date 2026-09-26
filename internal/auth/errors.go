@@ -18,4 +18,13 @@ var (
 	ErrInvalidToken = errors.New("auth: invalid token")
 	// ErrValidation is returned when user-supplied input fails validation.
 	ErrValidation = errors.New("auth: validation failed")
+	// ErrProviderDisabled is returned when an OAuth provider is unknown or not
+	// configured.
+	ErrProviderDisabled = errors.New("auth: oauth provider disabled")
+	// ErrStateMismatch is returned when an OAuth state is missing, expired,
+	// already consumed, or does not match the initiating request.
+	ErrStateMismatch = errors.New("auth: oauth state mismatch")
+	// ErrMissingEmail is returned when an OAuth identity exposes no usable
+	// email address.
+	ErrMissingEmail = errors.New("auth: oauth identity missing email")
 )

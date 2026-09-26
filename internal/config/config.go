@@ -36,6 +36,10 @@ const (
 	EnvAuthJWTPrivateKeyPath = "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH"
 	EnvAuthJWTPublicKeyPath  = "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH"
 
+	EnvOAuthGitHubClientID     = "GOTHAM_OAUTH_GITHUB_CLIENT_ID"
+	EnvOAuthGitHubClientSecret = "GOTHAM_OAUTH_GITHUB_CLIENT_SECRET"
+	EnvOAuthGitHubRedirectURL  = "GOTHAM_OAUTH_GITHUB_REDIRECT_URL"
+
 	envPrefix = "GOTHAM"
 )
 
@@ -95,6 +99,21 @@ type Auth struct {
 	JWTPublicKeyPath  string `mapstructure:"jwt_public_key_path"`
 }
 
+// OAuth holds third-party identity provider settings. Each provider is disabled
+// while its client credentials are empty.
+type OAuth struct {
+	GitHub OAuthGitHub `mapstructure:"github"`
+}
+
+// OAuthGitHub holds the GitHub OAuth2 application credentials. ClientID and
+// ClientSecret are required to enable the provider; RedirectURL is the callback
+// URL registered with the GitHub OAuth app.
+type OAuthGitHub struct {
+	ClientID     string `mapstructure:"client_id"`
+	ClientSecret string `mapstructure:"client_secret"`
+	RedirectURL  string `mapstructure:"redirect_url"`
+}
+
 // Values is the resolved configuration without any runtime bookkeeping. It is
 // the value type other packages can copy and hold safely.
 type Values struct {
@@ -103,6 +122,7 @@ type Values struct {
 	Redis    Redis
 	Log      Log
 	Auth     Auth
+	OAuth    OAuth
 }
 
 // Config is the resolved Gotham configuration. Values are populated by Load and
@@ -250,6 +270,10 @@ func newViper() *viper.Viper {
 		"log.format":                EnvLogFormat,
 		"auth.jwt_private_key_path": EnvAuthJWTPrivateKeyPath,
 		"auth.jwt_public_key_path":  EnvAuthJWTPublicKeyPath,
+
+		"oauth.github.client_id":     EnvOAuthGitHubClientID,
+		"oauth.github.client_secret": EnvOAuthGitHubClientSecret,
+		"oauth.github.redirect_url":  EnvOAuthGitHubRedirectURL,
 	} {
 		_ = v.BindEnv(key, env)
 	}

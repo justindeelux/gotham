@@ -48,7 +48,7 @@ func TestStoreUserRoundtrip(t *testing.T) {
 	s := store.New(pool)
 
 	email := fmt.Sprintf("be-0.3-%d@example.com", time.Now().UnixNano())
-	created, err := s.CreateUser(ctx, email)
+	created, err := s.CreateUser(ctx, email, nil)
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}

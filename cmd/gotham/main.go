@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/server"
 	"github.com/justindeelux/gotham/internal/store"
@@ -56,7 +57,8 @@ func run(args []string) int {
 }
 
 // runServe loads configuration, builds the logger and HTTP server, and serves
-// until SIGINT or SIGTERM.
+// until SIGINT or SIGTERM. The database is required: the server exits when it
+// cannot be reached.
 func runServe() int {
 	cfg, err := config.Load()
 	if err != nil {
@@ -70,20 +72,47 @@ func runServe() int {
 		levelVar.Set(server.ParseLevel(cfg.Snapshot().Log.Level))
 	})
 
+	snap := cfg.Snapshot()
+
 	logger.Info("starting gotham",
 		slog.String("version", version),
-		slog.String("addr", cfg.Server.Addr),
-		slog.Int("port", cfg.Server.Port),
+		slog.String("addr", snap.Server.Addr),
+		slog.Int("port", snap.Server.Port),
 	)
 
-	srv, err := server.New(cfg, logger)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	pool, err := store.Open(ctx, snap.Database.DSN)
+	if err != nil {
+		logger.Error("failed to connect to database", "error", err)
+		return exitError
+	}
+	defer pool.Close()
+
+	privatePEM, publicPEM, err := loadJWTKeys(snap.Auth)
+	if err != nil {
+		logger.Error("failed to load JWT keys", "error", err)
+		return exitError
+	}
+
+	signer, err := auth.NewSigner(privatePEM, publicPEM)
+	if err != nil {
+		logger.Error("failed to build JWT signer", "error", err)
+		return exitError
+	}
+	if signer.Ephemeral() {
+		logger.Warn("ephemeral JWT keys — sessions do not survive restart")
+	}
+
+	authStore := store.New(pool)
+	authService := auth.New(authStore, signer, logger)
+
+	srv, err := server.New(cfg, logger, authService, authStore)
 	if err != nil {
 		logger.Error("failed to create server", "error", err)
 		return exitError
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	if err := srv.Run(ctx); err != nil {
 		logger.Error("server stopped with error", "error", err)
@@ -92,6 +121,25 @@ func runServe() int {
 
 	logger.Info("server stopped")
 	return exitOK
+}
+
+// loadJWTKeys reads the configured Ed25519 PEM keypair. When no paths are
+// configured it returns nil slices, which makes auth.NewSigner generate an
+// ephemeral keypair. A configured path that cannot be read is an error.
+func loadJWTKeys(cfg config.Auth) (privatePEM, publicPEM []byte, err error) {
+	if cfg.JWTPrivateKeyPath != "" {
+		privatePEM, err = os.ReadFile(cfg.JWTPrivateKeyPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read auth.jwt_private_key_path: %w", err)
+		}
+	}
+	if cfg.JWTPublicKeyPath != "" {
+		publicPEM, err = os.ReadFile(cfg.JWTPublicKeyPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read auth.jwt_public_key_path: %w", err)
+		}
+	}
+	return privatePEM, publicPEM, nil
 }
 
 // runMigrate applies the embedded database migrations. It accepts an optional

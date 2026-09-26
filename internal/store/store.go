@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -24,12 +25,38 @@ func New(pool *pgxpool.Pool) *Store {
 	}
 }
 
-// GetUserByEmail returns the user with the given email.
+// GetUserByEmail returns the user with the given email. The lookup is
+// case-insensitive, backed by the users_email_lower_idx functional index.
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (sqlc.User, error) {
 	return s.queries.GetUserByEmail(ctx, email)
 }
 
-// CreateUser inserts a user with the given email and returns the stored row.
-func (s *Store) CreateUser(ctx context.Context, email string) (sqlc.User, error) {
-	return s.queries.CreateUser(ctx, email)
+// GetUserByID returns the user with the given ID.
+func (s *Store) GetUserByID(ctx context.Context, id pgtype.UUID) (sqlc.User, error) {
+	return s.queries.GetUserByID(ctx, id)
+}
+
+// CreateUser inserts a user with the given email and password hash (nil when
+// the account has no local password) and returns the stored row.
+func (s *Store) CreateUser(ctx context.Context, email string, passwordHash *string) (sqlc.User, error) {
+	return s.queries.CreateUser(ctx, sqlc.CreateUserParams{
+		Email:        email,
+		PasswordHash: passwordHash,
+	})
+}
+
+// CreateSession stores a refresh-token session and returns the stored row.
+func (s *Store) CreateSession(ctx context.Context, params sqlc.CreateSessionParams) (sqlc.Session, error) {
+	return s.queries.CreateSession(ctx, params)
+}
+
+// GetSessionByRefreshHash returns the session with the given refresh-token hash.
+func (s *Store) GetSessionByRefreshHash(ctx context.Context, refreshHash string) (sqlc.Session, error) {
+	return s.queries.GetSessionByRefreshHash(ctx, refreshHash)
+}
+
+// RevokeSession marks the session with the given refresh-token hash as revoked.
+// It is idempotent: an unknown or already-revoked token is not an error.
+func (s *Store) RevokeSession(ctx context.Context, refreshHash string) error {
+	return s.queries.RevokeSession(ctx, refreshHash)
 }

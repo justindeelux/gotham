@@ -6,7 +6,8 @@
 #
 # Environment variables override the file. Supported variables:
 #   GOTHAM_SERVER_ADDR, GOTHAM_SERVER_PORT, GOTHAM_DATABASE_DSN,
-#   GOTHAM_REDIS_ADDR, GOTHAM_LOG_LEVEL, GOTHAM_LOG_FORMAT
+#   GOTHAM_REDIS_ADDR, GOTHAM_LOG_LEVEL, GOTHAM_LOG_FORMAT,
+#   GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH, GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH
 
 # HTTP listener.
 server:
@@ -33,6 +34,16 @@ log:
   level: info
   # One of: json, text. Default: json
   format: json
+
+# Authentication.
+auth:
+  # PEM-encoded Ed25519 keypair signing access tokens. The private key must be
+  # PKCS#8 ("PRIVATE KEY") and the public key PKIX ("PUBLIC KEY"), as produced
+  # by `openssl genpkey -algorithm ed25519`. Both paths must be set together.
+  # When unset, an ephemeral keypair is generated at startup and sessions do not
+  # survive a restart.
+  # jwt_private_key_path: /etc/gotham/jwt_ed25519.key
+  # jwt_public_key_path: /etc/gotham/jwt_ed25519.pub
 
 # Hot reload: Gotham watches this file (fsnotify) and re-applies changes at
 # runtime, including the log level. No SIGHUP signal is required.

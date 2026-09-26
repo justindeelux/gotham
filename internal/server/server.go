@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/justindeelux/gotham/internal/config"
+	"github.com/justindeelux/gotham/internal/store"
 )
 
 // shutdownTimeout bounds graceful shutdown after the context is cancelled.
@@ -39,17 +40,21 @@ type Pinger interface {
 
 // Server is the control-plane HTTP server.
 type Server struct {
-	cfg    *config.Config
-	logger *slog.Logger
-	db     Pinger
-	redis  Pinger
-	router http.Handler
-	closer func()
+	cfg         *config.Config
+	logger      *slog.Logger
+	db          Pinger
+	redis       Pinger
+	auth        AuthService
+	authLimiter *ipRateLimiter
+	router      http.Handler
+	closer      func()
 }
 
 // New constructs a Server bound to cfg and logging through logger. The
-// PostgreSQL and Redis pingers are wired here; Run owns the HTTP lifecycle.
-func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
+// authService provides the authentication flows (nil disables the auth routes)
+// and st supplies the shared database pool used by the health check; when st is
+// nil a short-lived pinger is used instead. Run owns the HTTP lifecycle.
+func New(cfg *config.Config, logger *slog.Logger, authService AuthService, st *store.Store) (*Server, error) {
 	if cfg == nil {
 		return nil, errors.New("server: config is nil")
 	}
@@ -59,13 +64,28 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 
 	snap := cfg.Snapshot()
 	redisClient := newRedisPinger(snap.Redis.Addr)
+	limiter := newDefaultAuthLimiter()
+
+	// Prefer the store's pool so the control plane does not open a second
+	// PostgreSQL connection just for the health check.
+	var db Pinger
+	if st != nil && st.DB != nil {
+		db = st.DB
+	} else {
+		db = newPostgresPinger(snap.Database.DSN)
+	}
 
 	s := &Server{
-		cfg:    cfg,
-		logger: logger,
-		db:     newPostgresPinger(snap.Database.DSN),
-		redis:  redisClient,
-		closer: func() { _ = redisClient.Close() },
+		cfg:         cfg,
+		logger:      logger,
+		db:          db,
+		redis:       redisClient,
+		auth:        authService,
+		authLimiter: limiter,
+		closer: func() {
+			_ = redisClient.Close()
+			limiter.Close()
+		},
 	}
 
 	router, err := s.routes()
@@ -87,6 +107,7 @@ func (s *Server) Handler() http.Handler {
 // app, while /healthz and /api keep their own handling.
 func (s *Server) routes() (http.Handler, error) {
 	r := chi.NewRouter()
+	r.Use(securityHeaders)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 	r.Use(s.requestLogger())
@@ -96,6 +117,10 @@ func (s *Server) routes() (http.Handler, error) {
 	// Unmatched API routes return JSON rather than the SPA shell.
 	r.Route("/api", func(api chi.Router) {
 		api.NotFound(s.handleAPINotFound)
+
+		if s.auth != nil {
+			s.mountAuthRoutes(api)
+		}
 	})
 
 	spa, err := newSPAHandler()

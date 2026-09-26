@@ -14,6 +14,8 @@ var gothamEnvKeys = []string{
 	EnvRedisAddr,
 	EnvLogLevel,
 	EnvLogFormat,
+	EnvAuthJWTPrivateKeyPath,
+	EnvAuthJWTPublicKeyPath,
 }
 
 // chdir switches into dir for the duration of the test and restores the
@@ -170,6 +172,50 @@ log:
 	}
 	if cfg.Log.Format != defaultLogFormat {
 		t.Errorf("Log.Format = %q, want default %q", cfg.Log.Format, defaultLogFormat)
+	}
+}
+
+func TestLoadAuthKeys(t *testing.T) {
+	clearGothamEnv(t)
+
+	dir := t.TempDir()
+	writeConfig(t, dir, `
+auth:
+  jwt_private_key_path: /etc/gotham/private.pem
+  jwt_public_key_path: /etc/gotham/public.pem
+`)
+	chdir(t, dir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Auth.JWTPrivateKeyPath != "/etc/gotham/private.pem" {
+		t.Errorf("Auth.JWTPrivateKeyPath = %q", cfg.Auth.JWTPrivateKeyPath)
+	}
+	if cfg.Auth.JWTPublicKeyPath != "/etc/gotham/public.pem" {
+		t.Errorf("Auth.JWTPublicKeyPath = %q", cfg.Auth.JWTPublicKeyPath)
+	}
+}
+
+func TestLoadAuthKeysFromEnv(t *testing.T) {
+	clearGothamEnv(t)
+	chdir(t, t.TempDir())
+
+	t.Setenv(EnvAuthJWTPrivateKeyPath, "/env/private.pem")
+	t.Setenv(EnvAuthJWTPublicKeyPath, "/env/public.pem")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Auth.JWTPrivateKeyPath != "/env/private.pem" {
+		t.Errorf("Auth.JWTPrivateKeyPath = %q, want /env/private.pem", cfg.Auth.JWTPrivateKeyPath)
+	}
+	if cfg.Auth.JWTPublicKeyPath != "/env/public.pem" {
+		t.Errorf("Auth.JWTPublicKeyPath = %q, want /env/public.pem", cfg.Auth.JWTPublicKeyPath)
 	}
 }
 

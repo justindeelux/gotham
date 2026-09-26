@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import {
+  NAvatar,
+  NButton,
+  NDropdown,
   NLayout,
   NLayoutContent,
   NLayoutHeader,
@@ -8,24 +11,42 @@ import {
   NSpace,
   NText,
 } from "naive-ui";
-import type { MenuOption } from "naive-ui";
+import type { DropdownOption, MenuOption } from "naive-ui";
 import { computed } from "vue";
-import { RouterView, useRoute, useRouter } from "vue-router";
+import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
 import { useAppStore } from "../stores/app";
+import { useAuthStore } from "../stores/auth";
 
 const appStore = useAppStore();
+const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
 const menuOptions: MenuOption[] = [{ label: "Dashboard", key: "dashboard" }];
 
+const accountOptions: DropdownOption[] = [{ label: "Sign out", key: "sign-out" }];
+
 const activeKey = computed<string>(() => String(route.name ?? "dashboard"));
 
 const pageTitle = computed<string>(() => route.meta.title ?? "Gotham");
 
+const userLabel = computed<string>(() => authStore.user?.email ?? "");
+
+const userInitial = computed<string>(() =>
+  (authStore.user?.email?.[0] ?? "?").toUpperCase(),
+);
+
 function handleMenuSelect(key: string | number): void {
   void router.push({ name: String(key) });
+}
+
+async function handleAccountSelect(key: string | number): Promise<void> {
+  if (key !== "sign-out") {
+    return;
+  }
+  await authStore.logout();
+  await router.push({ name: "login" });
 }
 </script>
 
@@ -55,7 +76,24 @@ function handleMenuSelect(key: string | number): void {
       <NLayoutHeader class="topbar" bordered>
         <NText strong>{{ pageTitle }}</NText>
         <NSpace align="center">
-          <NText depth="3">guest</NText>
+          <NDropdown
+            v-if="authStore.isAuthenticated"
+            trigger="click"
+            :options="accountOptions"
+            @select="handleAccountSelect"
+          >
+            <NButton quaternary>
+              <NSpace align="center" :size="8">
+                <NAvatar round :size="28" :src="authStore.user?.avatar">
+                  {{ userInitial }}
+                </NAvatar>
+                <NText depth="2">{{ userLabel }}</NText>
+              </NSpace>
+            </NButton>
+          </NDropdown>
+          <RouterLink v-else to="/login">
+            <NButton quaternary type="primary">Sign in</NButton>
+          </RouterLink>
         </NSpace>
       </NLayoutHeader>
 

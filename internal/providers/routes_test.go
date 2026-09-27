@@ -19,6 +19,12 @@ type fakeService struct {
 	repos     []Repo
 	listErr   error
 	reposErr  error
+
+	webhookID     string
+	webhookErr    error
+	webhook       Webhook
+	webhookTarget HookTarget
+	deletedHookID string
 }
 
 func (f *fakeService) List(context.Context, uuid.UUID) ([]Provider, error) {
@@ -27,6 +33,22 @@ func (f *fakeService) List(context.Context, uuid.UUID) ([]Provider, error) {
 
 func (f *fakeService) ListRepos(context.Context, uuid.UUID, uuid.UUID) ([]Repo, error) {
 	return f.repos, f.reposErr
+}
+
+// CreateWebhook implements ProviderService. The webhook tests drive the real
+// Service, so the route fake only reports the call.
+func (f *fakeService) CreateWebhook(_ context.Context, target HookTarget, hook Webhook) (string, error) {
+	f.webhookTarget, f.webhook = target, hook
+	if f.webhookErr != nil {
+		return "", f.webhookErr
+	}
+	return f.webhookID, nil
+}
+
+// DeleteWebhook implements ProviderService.
+func (f *fakeService) DeleteWebhook(_ context.Context, target HookTarget, hookID string) error {
+	f.webhookTarget, f.deletedHookID = target, hookID
+	return f.webhookErr
 }
 
 // newRouteServer mounts the provider routes with a no-op auth middleware and

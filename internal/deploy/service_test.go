@@ -117,6 +117,50 @@ func TestServiceDeployQueuesDeployment(t *testing.T) {
 	}
 }
 
+// TestServiceDeploySystem covers the system trigger a push webhook uses: the
+// application is addressed directly because the delivery has no authenticated
+// caller, and every guard Deploy applies still holds.
+func TestServiceDeploySystemQueuesWithoutCaller(t *testing.T) {
+	app := testApplication(uuid.New())
+	repo := &fakeRepository{app: app}
+	svc := newTestService(t, repo)
+	ctx := context.Background()
+
+	deployment, err := svc.DeploySystem(ctx, app.ID)
+	if err != nil {
+		t.Fatalf("DeploySystem: %v", err)
+	}
+	if deployment.State != StateQueued || deployment.Kind != KindDeploy {
+		t.Errorf("deployment = %s/%s, want deploy/queued", deployment.Kind, deployment.State)
+	}
+	if stored := listStored(t, repo, app.ID); len(stored) != 1 {
+		t.Errorf("stored %d deployments, want 1", len(stored))
+	}
+
+	// Unknown application and the zero ID are refused without a caller to
+	// blame, so a stale webhook row cannot queue anything.
+	if _, err := svc.DeploySystem(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown application err = %v, want ErrNotFound", err)
+	}
+	if _, err := svc.DeploySystem(ctx, uuid.Nil); !errors.Is(err, ErrValidation) {
+		t.Errorf("nil application id err = %v, want ErrValidation", err)
+	}
+}
+
+func TestServiceDeploySystemValidatesTarget(t *testing.T) {
+	app := testApplication(uuid.New())
+	app.ServerID = uuid.Nil // no node to run it on
+	repo := &fakeRepository{app: app}
+	svc := newTestService(t, repo)
+
+	if _, err := svc.DeploySystem(context.Background(), app.ID); !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if stored := listStored(t, repo, app.ID); len(stored) != 0 {
+		t.Errorf("queued %d deployments, want 0", len(stored))
+	}
+}
+
 func TestServiceListDeploymentsEmpty(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -298,6 +342,9 @@ func TestServiceDisabled(t *testing.T) {
 	}
 	if _, err := svc.Rollback(context.Background(), userID, app.ID, uuid.Nil); !errors.Is(err, ErrDisabled) {
 		t.Errorf("rollback err = %v, want ErrDisabled", err)
+	}
+	if _, err := svc.DeploySystem(context.Background(), app.ID); !errors.Is(err, ErrDisabled) {
+		t.Errorf("DeploySystem err = %v, want ErrDisabled", err)
 	}
 	if stored := listStored(t, repo, app.ID); len(stored) != 0 {
 		t.Errorf("queued %d deployments while disabled, want 0", len(stored))

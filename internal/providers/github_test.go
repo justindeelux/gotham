@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -130,11 +131,102 @@ func TestGitHubSourceExchangeToken(t *testing.T) {
 	}
 }
 
-func TestGitHubSourceCreateWebhookNotWired(t *testing.T) {
-	source := newGitHubSource(Provider{})
-	err := source.CreateWebhook(context.Background(), staticToken, "o/r", Webhook{URL: "https://cp/hook"})
-	if !errors.Is(err, ErrNotWired) {
-		t.Fatalf("error = %v, want ErrNotWired", err)
+// newWebhookHook returns the hook every provider webhook test installs.
+func webhookUnderTest() Webhook {
+	return Webhook{
+		URL:    "https://cp.gotham.dev/api/v1/webhooks/github",
+		Secret: "s3cr3t",
+		Events: []string{"push"},
+	}
+}
+
+func TestGitHubSourceCreateWebhook(t *testing.T) {
+	var gotMethod, gotPath, gotAuth string
+	var gotBody struct {
+		Name   string            `json:"name"`
+		Active bool              `json:"active"`
+		Events []string          `json:"events"`
+		Config map[string]string `json:"config"`
+	}
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotAuth = r.Method, r.URL.EscapedPath(), r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		writeJSONTest(t, w, map[string]any{"id": 4242})
+	})
+
+	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	id, err := source.CreateWebhook(context.Background(), staticToken, "o/r", webhookUnderTest())
+	if err != nil {
+		t.Fatalf("CreateWebhook: %v", err)
+	}
+	if id != "4242" {
+		t.Errorf("id = %q, want 4242", id)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/repos/o/r/hooks" {
+		t.Errorf("request = %s %s, want POST /repos/o/r/hooks", gotMethod, gotPath)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Errorf("Authorization = %q, want Bearer test-token", gotAuth)
+	}
+	if !gotBody.Active || gotBody.Name != "web" {
+		t.Errorf("body = %+v, want an active \"web\" hook", gotBody)
+	}
+	if len(gotBody.Events) != 1 || gotBody.Events[0] != "push" {
+		t.Errorf("events = %v, want [push]", gotBody.Events)
+	}
+	if gotBody.Config["url"] != webhookUnderTest().URL || gotBody.Config["secret"] != "s3cr3t" {
+		t.Errorf("config = %v, want the control-plane url and secret", gotBody.Config)
+	}
+	if gotBody.Config["content_type"] != "json" {
+		t.Errorf("content_type = %q, want json", gotBody.Config["content_type"])
+	}
+}
+
+func TestGitHubSourceCreateWebhookFailure(t *testing.T) {
+	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	if _, err := source.CreateWebhook(context.Background(), staticToken, "o/r", webhookUnderTest()); err == nil {
+		t.Fatal("CreateWebhook on 403: no error, want failure")
+	}
+	if _, err := source.CreateWebhook(context.Background(), staticToken, "../hooks", webhookUnderTest()); err == nil {
+		t.Fatal("CreateWebhook with a path-traversing repo: no error, want ErrValidation")
+	}
+}
+
+func TestGitHubSourceDeleteWebhook(t *testing.T) {
+	var gotMethod, gotPath string
+	status := http.StatusNoContent
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.EscapedPath()
+		w.WriteHeader(status)
+	})
+
+	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	if err := source.DeleteWebhook(context.Background(), staticToken, "o/r", "4242"); err != nil {
+		t.Fatalf("DeleteWebhook: %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/repos/o/r/hooks/4242" {
+		t.Errorf("request = %s %s, want DELETE /repos/o/r/hooks/4242", gotMethod, gotPath)
+	}
+
+	// An already-removed hook is a success: deleting stays idempotent.
+	status = http.StatusNotFound
+	if err := source.DeleteWebhook(context.Background(), staticToken, "o/r", "4242"); err != nil {
+		t.Errorf("DeleteWebhook on 404: %v, want nil", err)
+	}
+
+	status = http.StatusInternalServerError
+	if err := source.DeleteWebhook(context.Background(), staticToken, "o/r", "4242"); err == nil {
+		t.Error("DeleteWebhook on 500: no error, want failure")
+	}
+	if err := source.DeleteWebhook(context.Background(), staticToken, "o/r", "../../hooks"); err == nil {
+		t.Error("DeleteWebhook with a path-traversing hook id: no error, want ErrValidation")
 	}
 	if source.Name() != NameGitHub {
 		t.Errorf("Name = %q, want %q", source.Name(), NameGitHub)

@@ -36,6 +36,18 @@ type Application struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ApplicationWebhook struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	Provider      string             `json:"provider"`
+	Repo          string             `json:"repo"`
+	HookID        string             `json:"hook_id"`
+	Secret        string             `json:"secret"`
+	Url           string             `json:"url"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Deployment struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`
@@ -155,4 +167,16 @@ type User struct {
 	PasswordHash *string            `json:"password_hash"`
 	Avatar       *string            `json:"avatar"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WebhookEvent struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	Provider      string             `json:"provider"`
+	Event         string             `json:"event"`
+	DeliveryID    string             `json:"delivery_id"`
+	Ref           string             `json:"ref"`
+	CommitSha     string             `json:"commit_sha"`
+	DeploymentID  pgtype.UUID        `json:"deployment_id"`
+	ReceivedAt    pgtype.Timestamptz `json:"received_at"`
 }

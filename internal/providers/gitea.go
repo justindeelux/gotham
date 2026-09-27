@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -130,7 +131,53 @@ func (p *giteaSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo 
 	}
 }
 
-// CreateWebhook is deferred to BE-4.4.
-func (p *giteaSource) CreateWebhook(context.Context, *oauth2.Token, string, Webhook) error {
-	return fmt.Errorf("%w: %s", ErrNotWired, NameGitea)
+// CreateWebhook installs a push hook on repo ("owner/name") and returns the
+// hook ID the Gitea instance assigned to it.
+func (p *giteaSource) CreateWebhook(ctx context.Context, tok *oauth2.Token, repo string, hook Webhook) (string, error) {
+	if err := validateRepo(repo, 2); err != nil {
+		return "", err
+	}
+	client := p.config.Client(ctx, tok)
+	payload := map[string]any{
+		"type":   "gitea",
+		"active": true,
+		"events": hookEvents(hook.Events, "push"),
+		"config": map[string]string{
+			"url":          hook.URL,
+			"content_type": "json",
+			"secret":       hook.Secret,
+		},
+	}
+
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/hooks", p.apiBase, repo)
+	if err := doJSON(ctx, client, NameGitea, http.MethodPost, endpoint, "application/json", payload, &created); err != nil {
+		return "", err
+	}
+	if created.ID <= 0 {
+		return "", fmt.Errorf("providers: %s: webhook response has no id", NameGitea)
+	}
+	return strconv.FormatInt(created.ID, 10), nil
+}
+
+// DeleteWebhook removes the hook identified by hookID from repo. A hook that
+// is already gone (404) counts as deleted so the caller stays idempotent.
+func (p *giteaSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, repo, hookID string) error {
+	if err := validateRepo(repo, 2); err != nil {
+		return err
+	}
+	if err := validateHookID(hookID); err != nil {
+		return err
+	}
+	client := p.config.Client(ctx, tok)
+	endpoint := fmt.Sprintf("%s/repos/%s/hooks/%s", p.apiBase, repo, hookID)
+	if err := doJSON(ctx, client, NameGitea, http.MethodDelete, endpoint, "application/json", nil, nil); err != nil {
+		if isStatus(err, http.StatusNotFound) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }

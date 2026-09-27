@@ -1,8 +1,10 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,6 +59,57 @@ func getJSON(ctx context.Context, client *http.Client, provider, url, accept str
 	return nil
 }
 
+// doJSON performs method against url, encoding payload as JSON when it is not
+// nil, and decodes a non-empty response body into dst when dst is not nil.
+// Every 2xx status is a success (create answers 201, delete 204); anything
+// else yields *httpError so callers can branch on the status.
+func doJSON(ctx context.Context, client *http.Client, provider, method, url, accept string, payload, dst any) error {
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("providers: %s encode: %w", provider, err)
+		}
+		body = bytes.NewReader(encoded)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return fmt.Errorf("providers: %s request: %w", provider, err)
+	}
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("providers: %s request: %w", provider, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
+		return &httpError{provider: provider, url: url, status: resp.StatusCode}
+	}
+	if dst == nil {
+		return nil
+	}
+	limited := io.LimitReader(resp.Body, maxResponseBytes)
+	if err := json.NewDecoder(limited).Decode(dst); err != nil {
+		return fmt.Errorf("providers: %s decode: %w", provider, err)
+	}
+	return nil
+}
+
+// isStatus reports whether err is an *httpError with the given status code.
+func isStatus(err error, status int) bool {
+	var httpErr *httpError
+	return errors.As(err, &httpErr) && httpErr.status == status
+}
+
 // validateRepo rejects a repository identifier that could escape the intended
 // API path. minSegments is 1 for providers with nested groups (GitLab) and 2 for
 // "owner/name" identifiers (GitHub, Gitea).
@@ -78,6 +131,44 @@ func validateRepo(repo string, minSegments int) error {
 // into the single path segment the GitLab API expects.
 func escapeProjectPath(repo string) string {
 	return url.PathEscape(strings.TrimSpace(repo))
+}
+
+// validateHookID accepts only a decimal provider hook ID. The ID is spliced
+// into a delete path, so anything that is not digits is rejected instead of
+// being allowed to address another API route.
+func validateHookID(hookID string) error {
+	if hookID == "" || len(hookID) > 32 {
+		return fmt.Errorf("%w: invalid hook id", ErrValidation)
+	}
+	for _, r := range hookID {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("%w: invalid hook id", ErrValidation)
+		}
+	}
+	return nil
+}
+
+// hookEvents returns the events to subscribe to, defaulting to push so a
+// caller that does not care cannot install a hook that never fires.
+func hookEvents(events []string, fallback string) []string {
+	if len(events) == 0 {
+		return []string{fallback}
+	}
+	return events
+}
+
+// wantsEvent reports whether events selects name. An empty event list means
+// "the default set", which for every supported provider includes push.
+func wantsEvent(events []string, name string) bool {
+	if len(events) == 0 {
+		return true
+	}
+	for _, event := range events {
+		if strings.EqualFold(event, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // splitScopes turns a comma/space separated scope string into a slice, falling

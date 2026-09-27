@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -97,12 +98,68 @@ func TestGitLabSourceExchangeToken(t *testing.T) {
 	}
 }
 
-func TestGitLabSourceCreateWebhookNotWired(t *testing.T) {
-	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"})
-	if err := source.CreateWebhook(context.Background(), staticToken, "g/p", Webhook{}); !errors.Is(err, ErrNotWired) {
-		t.Fatalf("error = %v, want ErrNotWired", err)
+func TestGitLabSourceCreateWebhook(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody struct {
+		URL        string `json:"url"`
+		Token      string `json:"token"`
+		PushEvents bool   `json:"push_events"`
+		SSL        bool   `json:"enable_ssl_verification"`
 	}
-	if source.Name() != NameGitLab {
-		t.Errorf("Name = %q, want %q", source.Name(), NameGitLab)
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.EscapedPath()
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		writeJSONTest(t, w, map[string]any{"id": 77})
+	})
+
+	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"})
+	source.apiBase = srv.URL
+	id, err := source.CreateWebhook(context.Background(), staticToken, "group/project", Webhook{
+		URL:    "https://cp.gotham.dev/api/v1/webhooks/gitlab",
+		Secret: "s3cr3t",
+	})
+	if err != nil {
+		t.Fatalf("CreateWebhook: %v", err)
+	}
+	if id != "77" {
+		t.Errorf("id = %q, want 77", id)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/projects/group%2Fproject/hooks" {
+		t.Errorf("request = %s %s, want POST /projects/group%%2Fproject/hooks", gotMethod, gotPath)
+	}
+	if gotBody.URL != "https://cp.gotham.dev/api/v1/webhooks/gitlab" || gotBody.Token != "s3cr3t" {
+		t.Errorf("body = %+v, want the control-plane url and token", gotBody)
+	}
+	if !gotBody.PushEvents || !gotBody.SSL {
+		t.Errorf("body = %+v, want push events with TLS verification", gotBody)
+	}
+}
+
+func TestGitLabSourceDeleteWebhook(t *testing.T) {
+	var gotMethod, gotPath string
+	status := http.StatusNoContent
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.EscapedPath()
+		w.WriteHeader(status)
+	})
+
+	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"})
+	source.apiBase = srv.URL
+	if err := source.DeleteWebhook(context.Background(), staticToken, "group/project", "77"); err != nil {
+		t.Fatalf("DeleteWebhook: %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/projects/group%2Fproject/hooks/77" {
+		t.Errorf("request = %s %s, want DELETE /projects/group%%2Fproject/hooks/77", gotMethod, gotPath)
+	}
+
+	status = http.StatusNotFound
+	if err := source.DeleteWebhook(context.Background(), staticToken, "group/project", "77"); err != nil {
+		t.Errorf("DeleteWebhook on 404: %v, want nil", err)
+	}
+	if err := source.DeleteWebhook(context.Background(), staticToken, "group/project", "7;drop"); err == nil {
+		t.Error("DeleteWebhook with a non-numeric hook id: no error, want ErrValidation")
 	}
 }

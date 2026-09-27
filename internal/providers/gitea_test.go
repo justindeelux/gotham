@@ -2,7 +2,7 @@ package providers
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"net/http"
 	"testing"
 )
@@ -80,12 +80,68 @@ func TestGiteaSourceExchangeToken(t *testing.T) {
 	}
 }
 
-func TestGiteaSourceCreateWebhookNotWired(t *testing.T) {
-	source := newGiteaSource(Provider{BaseURL: "https://gitea.example"})
-	if err := source.CreateWebhook(context.Background(), staticToken, "t/r", Webhook{}); !errors.Is(err, ErrNotWired) {
-		t.Fatalf("error = %v, want ErrNotWired", err)
+func TestGiteaSourceCreateWebhook(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody struct {
+		Type   string            `json:"type"`
+		Events []string          `json:"events"`
+		Config map[string]string `json:"config"`
+	}
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.EscapedPath()
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		writeJSONTest(t, w, map[string]any{"id": 13})
+	})
+
+	source := newGiteaSource(Provider{BaseURL: srv.URL})
+	id, err := source.CreateWebhook(context.Background(), staticToken, "t/r", Webhook{
+		URL:    "https://cp.gotham.dev/api/v1/webhooks/gitea",
+		Secret: "s3cr3t",
+		Events: []string{"push"},
+	})
+	if err != nil {
+		t.Fatalf("CreateWebhook: %v", err)
+	}
+	if id != "13" {
+		t.Errorf("id = %q, want 13", id)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/v1/repos/t/r/hooks" {
+		t.Errorf("request = %s %s, want POST /api/v1/repos/t/r/hooks", gotMethod, gotPath)
+	}
+	if gotBody.Type != "gitea" || len(gotBody.Events) != 1 || gotBody.Events[0] != "push" {
+		t.Errorf("body = %+v, want a gitea push hook", gotBody)
+	}
+	if gotBody.Config["url"] != "https://cp.gotham.dev/api/v1/webhooks/gitea" || gotBody.Config["secret"] != "s3cr3t" {
+		t.Errorf("config = %v, want the control-plane url and secret", gotBody.Config)
 	}
 	if source.Name() != NameGitea {
 		t.Errorf("Name = %q, want %q", source.Name(), NameGitea)
+	}
+}
+
+func TestGiteaSourceDeleteWebhook(t *testing.T) {
+	var gotMethod, gotPath string
+	status := http.StatusNoContent
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.EscapedPath()
+		w.WriteHeader(status)
+	})
+
+	source := newGiteaSource(Provider{BaseURL: srv.URL})
+	if err := source.DeleteWebhook(context.Background(), staticToken, "t/r", "13"); err != nil {
+		t.Fatalf("DeleteWebhook: %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/api/v1/repos/t/r/hooks/13" {
+		t.Errorf("request = %s %s, want DELETE /api/v1/repos/t/r/hooks/13", gotMethod, gotPath)
+	}
+
+	status = http.StatusNotFound
+	if err := source.DeleteWebhook(context.Background(), staticToken, "t/r", "13"); err != nil {
+		t.Errorf("DeleteWebhook on 404: %v, want nil", err)
+	}
+	if err := source.DeleteWebhook(context.Background(), staticToken, "t/r", "13/../hooks"); err == nil {
+		t.Error("DeleteWebhook with a path-traversing hook id: no error, want ErrValidation")
 	}
 }

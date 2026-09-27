@@ -42,10 +42,10 @@ func (s *Store) ListDeploymentsByApp(ctx context.Context, applicationID pgtype.U
 	return s.queries.ListDeploymentsByApp(ctx, applicationID)
 }
 
-// GetActiveDeploymentByApp returns the application's in-flight deployment
-// (queued through starting), or pgx.ErrNoRows when none is running.
-func (s *Store) GetActiveDeploymentByApp(ctx context.Context, applicationID pgtype.UUID) (sqlc.Deployment, error) {
-	return s.queries.GetActiveDeploymentByApp(ctx, applicationID)
+// FailStaleDeployments marks deployments left non-terminal by a previous
+// control plane process as failed and reports how many rows were recovered.
+func (s *Store) FailStaleDeployments(ctx context.Context) (int64, error) {
+	return s.queries.FailStaleDeployments(ctx)
 }
 
 // UpdateDeployment persists the mutable deployment fields and returns the row.

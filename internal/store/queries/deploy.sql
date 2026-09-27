@@ -65,3 +65,16 @@ ORDER BY key ASC;
 SELECT * FROM storages
 WHERE application_id = $1
 ORDER BY name ASC;
+
+-- name: FailStaleDeployments :execrows
+-- Boot-time recovery: a deployment left in a non-terminal state by a previous
+-- control plane process can never resume, and its row would keep blocking the
+-- active-deployment partial unique index. Mark those rows failed so the index
+-- unblocks. Running deployments are left alone (their container is the state),
+-- and the worker pool is empty when this runs at service construction.
+UPDATE deployments
+SET state = 'failed',
+    error = 'control plane restarted before the deployment finished',
+    finished_at = now(),
+    updated_at = now()
+WHERE state NOT IN ('running', 'failed');

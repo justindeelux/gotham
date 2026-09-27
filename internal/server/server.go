@@ -53,6 +53,7 @@ type Server struct {
 	tokens      TokenService
 	servers     ServerService
 	persistence *store.Store
+	deploy      deploy.DeployService
 	authLimiter *ipRateLimiter
 	router      http.Handler
 	closer      func()
@@ -96,13 +97,19 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		servers:     serverService,
 		persistence: st,
 		authLimiter: limiter,
-		closer: func() {
-			_ = redisClient.Close()
-			limiter.Close()
-			if oauthService != nil {
-				oauthService.Close()
-			}
-		},
+	}
+	s.closer = func() {
+		// The deploy service owns its worker pool and realtime publisher;
+		// shutting it down first stops in-flight deployments before the
+		// shared Redis pinger goes away.
+		if closer, ok := s.deploy.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+		_ = redisClient.Close()
+		limiter.Close()
+		if oauthService != nil {
+			oauthService.Close()
+		}
 	}
 
 	router, err := s.routes()
@@ -165,8 +172,10 @@ func (s *Server) routes() (http.Handler, error) {
 
 		// Application deploy orchestration (BE-4.3): a nil service (no
 		// database) or FEATURE_APPLICATIONS=false mounts nothing, so Phases
-		// 0–3 stay unaffected.
-		deploy.Mount(api, s.RequireAuth, UserIDFromContext, s.deployService())
+		// 0–3 stay unaffected. The service is kept on the server so the
+		// closer can stop its worker pool and publisher on shutdown.
+		s.deploy = s.deployService()
+		deploy.Mount(api, s.RequireAuth, UserIDFromContext, s.deploy)
 	})
 
 	spa, err := newSPAHandler()

@@ -117,6 +117,28 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 	return i, err
 }
 
+const failStaleDeployments = `-- name: FailStaleDeployments :execrows
+UPDATE deployments
+SET state = 'failed',
+    error = 'control plane restarted before the deployment finished',
+    finished_at = now(),
+    updated_at = now()
+WHERE state NOT IN ('running', 'failed')
+`
+
+// Boot-time recovery: a deployment left in a non-terminal state by a previous
+// control plane process can never resume, and its row would keep blocking the
+// active-deployment partial unique index. Mark those rows failed so the index
+// unblocks. Running deployments are left alone (their container is the state),
+// and the worker pool is empty when this runs at service construction.
+func (q *Queries) FailStaleDeployments(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, failStaleDeployments)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getActiveDeploymentByApp = `-- name: GetActiveDeploymentByApp :one
 SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at FROM deployments
 WHERE application_id = $1 AND state NOT IN ('running', 'failed')

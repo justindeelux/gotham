@@ -40,13 +40,17 @@ type fakeRepository struct {
 	secrets     []Secret
 	storages    []Storage
 
-	getErr    error
-	createErr error
+	getErr       error
+	createErr    error
+	failStaleErr error
 
 	// states records every persisted deployment state in order, so tests can
 	// assert the exact state-machine walk.
 	states []State
 }
+
+// staleDeploymentError mirrors the message the boot-time sweep SQL writes.
+const staleDeploymentError = "control plane restarted before the deployment finished"
 
 // Compile-time guarantee that fakeRepository satisfies the seam.
 var _ Repository = (*fakeRepository)(nil)
@@ -104,17 +108,25 @@ func (r *fakeRepository) ListDeployments(_ context.Context, appID uuid.UUID) ([]
 	return out, nil
 }
 
-// ActiveDeployment implements Repository.
-func (r *fakeRepository) ActiveDeployment(_ context.Context, appID uuid.UUID) (Deployment, error) {
+// FailStaleDeployments implements Repository: it marks every non-terminal
+// deployment failed, mirroring the boot-time sweep, and reports the count.
+func (r *fakeRepository) FailStaleDeployments(_ context.Context) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for i := len(r.deployments) - 1; i >= 0; i-- {
-		dep := r.deployments[i]
-		if dep.ApplicationID == appID && !dep.State.Terminal() {
-			return dep, nil
-		}
+	if r.failStaleErr != nil {
+		return 0, r.failStaleErr
 	}
-	return Deployment{}, nil
+	var n int64
+	for i := range r.deployments {
+		if r.deployments[i].State.Terminal() {
+			continue
+		}
+		r.deployments[i].State = StateFailed
+		r.deployments[i].Error = staleDeploymentError
+		r.deployments[i].FinishedAt = time.Now().UTC()
+		n++
+	}
+	return n, nil
 }
 
 // UpdateDeployment implements Repository and records the persisted state.

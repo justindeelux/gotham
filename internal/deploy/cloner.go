@@ -63,9 +63,21 @@ func (gitSource) Clone(ctx context.Context, app Application, dir string, log fun
 	return nil
 }
 
+// devLocalCloneEnv re-enables local directories and file:// URLs as clone
+// sources. Production keeps the allow-list remote-only so an application
+// cannot point the control plane at its own filesystem; the flag exists for
+// development fixtures (and the cloner tests).
+const devLocalCloneEnv = "GOTHAM_DEV_CLONE_LOCAL"
+
+// devLocalClone reports whether local clone sources are allowed.
+func devLocalClone() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(devLocalCloneEnv)), "true")
+}
+
 // validateCloneURL rejects values git would refuse anyway, so the deploy log
 // reports a clear validation error instead of a raw git usage message. Local
-// paths are accepted for development fixtures.
+// paths and file:// URLs are only accepted when GOTHAM_DEV_CLONE_LOCAL=true;
+// production allows remote http(s)/ssh/git URLs and scp-like git@host:path.
 func validateCloneURL(url string) error {
 	if url == "" {
 		return fmt.Errorf("%w: application has no clone URL", ErrValidation)
@@ -76,7 +88,12 @@ func validateCloneURL(url string) error {
 			return fmt.Errorf("%w: unsupported clone URL scheme", ErrValidation)
 		}
 		return nil
-	case strings.HasPrefix(url, "git@"), strings.HasPrefix(url, "/"):
+	case strings.HasPrefix(url, "git@"):
+		return nil
+	case strings.HasPrefix(url, "/"):
+		if !devLocalClone() {
+			return fmt.Errorf("%w: local clone sources are disabled", ErrValidation)
+		}
 		return nil
 	default:
 		return fmt.Errorf("%w: unsupported clone URL", ErrValidation)
@@ -90,8 +107,10 @@ func hasAllowedScheme(url string) bool {
 		return false
 	}
 	switch strings.ToLower(scheme) {
-	case "http", "https", "ssh", "git", "file":
+	case "http", "https", "ssh", "git":
 		return true
+	case "file":
+		return devLocalClone()
 	default:
 		return false
 	}

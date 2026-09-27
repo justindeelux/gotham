@@ -21,7 +21,8 @@ func TestValidateCloneURL(t *testing.T) {
 		{"http", "http://git.internal/acme/demo.git", true},
 		{"ssh", "ssh://git@git.internal/acme/demo.git", true},
 		{"scp-like", "git@git.internal:acme/demo.git", true},
-		{"local path", "/srv/fixtures/demo", true},
+		{"local path", "/srv/fixtures/demo", false},
+		{"file URL", "file:///srv/fixtures/demo", false},
 		{"empty", "", false},
 		{"unknown scheme", "ftp://example.com/demo.git", false},
 		{"option injection", "--upload-pack=touch /tmp/pwn", false},
@@ -46,6 +47,17 @@ func TestValidateCloneURL(t *testing.T) {
 	}
 }
 
+// TestValidateCloneURLDevLocal covers the GOTHAM_DEV_CLONE_LOCAL escape
+// hatch: local paths and file:// URLs are cloneable only in dev mode.
+func TestValidateCloneURLDevLocal(t *testing.T) {
+	t.Setenv(devLocalCloneEnv, "true")
+	for _, url := range []string{"/srv/fixtures/demo", "file:///srv/fixtures/demo"} {
+		if err := validateCloneURL(url); err != nil {
+			t.Errorf("validateCloneURL(%q) with %s=true = %v, want nil", url, devLocalCloneEnv, err)
+		}
+	}
+}
+
 func TestGitSourceRejectsInvalidURLWithoutRunningGit(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.CloneURL = "ftp://example.com/demo.git"
@@ -64,6 +76,7 @@ func TestGitSourceRejectsInvalidURLWithoutRunningGit(t *testing.T) {
 }
 
 func TestGitSourceClonesBranch(t *testing.T) {
+	t.Setenv(devLocalCloneEnv, "true")
 	git, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("git binary is not available")

@@ -27,9 +27,9 @@ type Repository interface {
 	GetDeployment(ctx context.Context, appID, deploymentID uuid.UUID) (Deployment, error)
 	// ListDeployments returns an application's deployments, newest first.
 	ListDeployments(ctx context.Context, appID uuid.UUID) ([]Deployment, error)
-	// ActiveDeployment returns the in-flight deployment, or a zero Deployment
-	// with a nil error when none is running.
-	ActiveDeployment(ctx context.Context, appID uuid.UUID) (Deployment, error)
+	// FailStaleDeployments marks deployments left non-terminal by a previous
+	// control plane process as failed and reports how many were recovered.
+	FailStaleDeployments(ctx context.Context) (int64, error)
 	// UpdateDeployment persists the mutable deployment fields.
 	UpdateDeployment(ctx context.Context, dep Deployment) (Deployment, error)
 	// ListEnvVars returns the application's plain environment variables.
@@ -108,17 +108,15 @@ func (r *storeRepository) ListDeployments(ctx context.Context, appID uuid.UUID) 
 	return deployments, nil
 }
 
-// ActiveDeployment returns the in-flight deployment, or a zero value when the
-// application has none.
-func (r *storeRepository) ActiveDeployment(ctx context.Context, appID uuid.UUID) (Deployment, error) {
-	row, err := r.store.GetActiveDeploymentByApp(ctx, pgUUID(appID))
+// FailStaleDeployments marks deployments a previous control plane process
+// left in a non-terminal state as failed, unblocking the active-deployment
+// partial unique index for every application.
+func (r *storeRepository) FailStaleDeployments(ctx context.Context) (int64, error) {
+	n, err := r.store.FailStaleDeployments(ctx)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Deployment{}, nil
-		}
-		return Deployment{}, fmt.Errorf("deploy: active deployment: %w", err)
+		return 0, fmt.Errorf("deploy: fail stale deployments: %w", err)
 	}
-	return deploymentFromRow(row), nil
+	return n, nil
 }
 
 // UpdateDeployment persists the mutable deployment fields and returns the row.

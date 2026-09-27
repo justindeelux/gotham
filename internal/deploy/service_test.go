@@ -342,3 +342,61 @@ func TestServiceWithoutRepository(t *testing.T) {
 		t.Errorf("err = %v, want the repository configuration message", err)
 	}
 }
+
+// TestServiceSweepsStaleDeployments covers the boot-time recovery sweep: a
+// deployment abandoned by a previous control plane process can never resume,
+// and its row would block every later deploy of the application through the
+// active-deployment partial unique index. Running deployments are left alone.
+func TestServiceSweepsStaleDeployments(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	stale := Deployment{
+		ID:            uuid.New(),
+		ApplicationID: app.ID,
+		Kind:          KindDeploy,
+		State:         StateBuilding,
+	}
+	running := Deployment{
+		ID:            uuid.New(),
+		ApplicationID: app.ID,
+		Kind:          KindDeploy,
+		State:         StateRunning,
+	}
+	repo := &fakeRepository{app: app, deployments: []Deployment{stale, running}}
+
+	svc := NewService(Config{Repository: repo, Secret: testSecretKey, Logger: discardLogger()})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	got, ok := repo.deployment(stale.ID)
+	if !ok {
+		t.Fatal("stale deployment disappeared from the repository")
+	}
+	if got.State != StateFailed {
+		t.Errorf("stale state = %s, want %s", got.State, StateFailed)
+	}
+	if got.Error != staleDeploymentError {
+		t.Errorf("stale error = %q, want %q", got.Error, staleDeploymentError)
+	}
+	if got.FinishedAt.IsZero() {
+		t.Error("stale finished_at is zero, want a timestamp")
+	}
+	released, ok := repo.deployment(running.ID)
+	if !ok {
+		t.Fatal("running deployment disappeared from the repository")
+	}
+	if released.State != StateRunning {
+		t.Errorf("running state = %s, want %s", released.State, StateRunning)
+	}
+}
+
+// TestServiceSurvivesSweepFailure pins the contract that a failing recovery
+// sweep is logged, not fatal: the control plane must still boot.
+func TestServiceSurvivesSweepFailure(t *testing.T) {
+	repo := &fakeRepository{failStaleErr: errors.New("database is down")}
+	svc := NewService(Config{Repository: repo, Secret: testSecretKey, Logger: discardLogger()})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	if svc == nil {
+		t.Fatal("service = nil, want a service even when the sweep fails")
+	}
+}

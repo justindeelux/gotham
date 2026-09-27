@@ -97,9 +97,34 @@ var _ DeployService = (*Service)(nil)
 
 // NewService builds a Service from cfg. The returned service has no
 // repository only when cfg carries none; methods then fail with a clear
-// error instead of panicking.
+// error instead of panicking. Construction runs the boot-time recovery
+// sweep, before any worker can pick up a deployment.
 func NewService(cfg Config) *Service {
-	return &Service{Orchestrator: newOrchestrator(cfg)}
+	o := newOrchestrator(cfg)
+	o.recoverStale()
+	return &Service{Orchestrator: o}
+}
+
+// recoverStale marks deployments abandoned by a previous control plane
+// process as failed. It runs once at construction: a row stuck in
+// cloning/building/starting can never resume, and the active-deployment
+// partial unique index would turn every later deploy or rollback of that
+// application into a permanent 409. The sweep is best-effort — a database
+// error is logged and must not stop the control plane from booting.
+func (o *Orchestrator) recoverStale() {
+	if o.repo == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	n, err := o.repo.FailStaleDeployments(ctx)
+	if err != nil {
+		o.logger.Warn("deploy: stale deployment sweep failed", "error", err)
+		return
+	}
+	if n > 0 {
+		o.logger.Info("deploy: marked stale deployments failed", "count", n)
+	}
 }
 
 // NewDefaultService builds the production service for the HTTP wiring. It

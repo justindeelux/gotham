@@ -17,6 +17,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/containers"
+	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/server/ws"
 	"github.com/justindeelux/gotham/internal/store"
 )
@@ -50,6 +51,7 @@ type Server struct {
 	oauth       OAuthService
 	tokens      TokenService
 	servers     ServerService
+	persistence *store.Store
 	authLimiter *ipRateLimiter
 	router      http.Handler
 	closer      func()
@@ -91,6 +93,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		oauth:       oauthService,
 		tokens:      tokenService,
 		servers:     serverService,
+		persistence: st,
 		authLimiter: limiter,
 		closer: func() {
 			_ = redisClient.Close()
@@ -155,6 +158,9 @@ func (s *Server) routes() (http.Handler, error) {
 
 		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
 		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger)
+
+		// Source providers (GitHub/GitLab/Gitea): list connections and repos.
+		providers.Mount(api, s.RequireAuth, UserIDFromContext, providers.NewDefaultService(s.persistence, s.cfg.Snapshot().SecretKey, s.logger))
 	})
 
 	spa, err := newSPAHandler()

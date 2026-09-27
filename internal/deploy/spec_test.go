@@ -37,8 +37,8 @@ func TestBuildRunRequest(t *testing.T) {
 		t.Errorf("Name = %q, want gotham-demo-app- prefix", req.Name)
 	}
 	// buildEnv sorts by key so the payload is deterministic regardless of
-	// whether a value came from an env var or a secret.
-	if want := []string{"API_TOKEN=hunter2", "FOO=bar"}; !equalStrings(req.Env, want) {
+	// whether a value came from an env var, a secret or the PORT default.
+	if want := []string{"API_TOKEN=hunter2", "FOO=bar", "PORT=3000"}; !equalStrings(req.Env, want) {
 		t.Errorf("Env = %v, want %v", req.Env, want)
 	}
 	if want := []string{"8080:3000"}; !equalStrings(req.Ports, want) {
@@ -118,8 +118,118 @@ func TestBuildRunRequestSecretWinsOverEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildRunRequest: %v", err)
 	}
-	if want := []string{"TOKEN=from-secret"}; !equalStrings(req.Env, want) {
+	if want := []string{"PORT=3000", "TOKEN=from-secret"}; !equalStrings(req.Env, want) {
 		t.Errorf("Env = %v, want the secret to win: %v", req.Env, want)
+	}
+}
+
+// TestBuildRunRequestPortDefault pins the PORT fallback: the payload defaults
+// PORT to the application's container port, but an explicit env var or secret
+// always wins and a zero port injects nothing. The port mapping itself never
+// changes with the fallback.
+func TestBuildRunRequestPortDefault(t *testing.T) {
+	const secretKey = "test-secret-key"
+	dep := Deployment{ID: uuid.New(), ImageTag: "img"}
+
+	sealedPort, err := providers.SealSecret(secretKey, "9000")
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+
+	tests := []struct {
+		name          string
+		port          int32
+		hostPort      int32
+		envVars       []EnvVar
+		secrets       []Secret
+		wantEnv       []string
+		wantPorts     []string
+		wantPortLabel string
+	}{
+		{
+			name:          "default injected when unset",
+			port:          3000,
+			hostPort:      8080,
+			wantEnv:       []string{"PORT=3000"},
+			wantPorts:     []string{"8080:3000"},
+			wantPortLabel: "8080:3000",
+		},
+		{
+			name:          "explicit env wins",
+			port:          3000,
+			hostPort:      8080,
+			envVars:       []EnvVar{{Key: "PORT", Value: "4000"}},
+			wantEnv:       []string{"PORT=4000"},
+			wantPorts:     []string{"8080:3000"},
+			wantPortLabel: "8080:3000",
+		},
+		{
+			name:          "sealed secret wins over env and default",
+			port:          3000,
+			hostPort:      8080,
+			envVars:       []EnvVar{{Key: "PORT", Value: "4000"}},
+			secrets:       []Secret{{Key: "PORT", Ciphertext: sealedPort}},
+			wantEnv:       []string{"PORT=9000"},
+			wantPorts:     []string{"8080:3000"},
+			wantPortLabel: "8080:3000",
+		},
+		{
+			name:          "secret alone wins over default",
+			port:          3000,
+			hostPort:      8080,
+			secrets:       []Secret{{Key: "PORT", Ciphertext: sealedPort}},
+			wantEnv:       []string{"PORT=9000"},
+			wantPorts:     []string{"8080:3000"},
+			wantPortLabel: "8080:3000",
+		},
+		{
+			name:          "zero port skips the injection",
+			port:          0,
+			hostPort:      0,
+			envVars:       []EnvVar{{Key: "FOO", Value: "bar"}},
+			wantEnv:       []string{"FOO=bar"},
+			wantPorts:     nil,
+			wantPortLabel: "",
+		},
+		{
+			name:          "default sorts with the other variables",
+			port:          3000,
+			hostPort:      8080,
+			envVars:       []EnvVar{{Key: "FOO", Value: "bar"}},
+			wantEnv:       []string{"FOO=bar", "PORT=3000"},
+			wantPorts:     []string{"8080:3000"},
+			wantPortLabel: "8080:3000",
+		},
+		{
+			name:          "bare container port mapping is unchanged",
+			port:          3000,
+			hostPort:      0,
+			wantEnv:       []string{"PORT=3000"},
+			wantPorts:     []string{"3000"},
+			wantPortLabel: "3000",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := testApplication(uuid.New())
+			app.Port = tt.port
+			app.HostPort = tt.hostPort
+
+			req, err := buildRunRequest(app, dep, tt.envVars, tt.secrets, nil, secretKey)
+			if err != nil {
+				t.Fatalf("buildRunRequest: %v", err)
+			}
+			if !equalStrings(req.Env, tt.wantEnv) {
+				t.Errorf("Env = %v, want %v", req.Env, tt.wantEnv)
+			}
+			if !equalStrings(req.Ports, tt.wantPorts) {
+				t.Errorf("Ports = %v, want %v", req.Ports, tt.wantPorts)
+			}
+			if got := req.Labels[portsLabel]; got != tt.wantPortLabel {
+				t.Errorf("ports label = %q, want %q", got, tt.wantPortLabel)
+			}
+		})
 	}
 }
 

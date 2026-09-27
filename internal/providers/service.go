@@ -160,6 +160,30 @@ func (s *Service) DeleteWebhook(ctx context.Context, target HookTarget, hookID s
 	return source.DeleteWebhook(ctx, connection.token(), target.Repo, hookID)
 }
 
+// AddDeployKey registers a public key on target.Repo using the caller's stored
+// connection for that provider and returns the provider's key ID.
+func (s *Service) AddDeployKey(ctx context.Context, target HookTarget, key DeployKey) (string, error) {
+	source, connection, err := s.sourceForTarget(ctx, target)
+	if err != nil {
+		return "", err
+	}
+	if err := validateDeployKey(key); err != nil {
+		return "", err
+	}
+	return source.AddDeployKey(ctx, connection.token(), target.Repo, key)
+}
+
+// RemoveDeployKey removes the key identified by keyID from target.Repo. A key
+// the provider has already forgotten is reported as removed, so callers can
+// run it twice without special-casing.
+func (s *Service) RemoveDeployKey(ctx context.Context, target HookTarget, keyID string) error {
+	source, connection, err := s.sourceForTarget(ctx, target)
+	if err != nil {
+		return err
+	}
+	return source.RemoveDeployKey(ctx, connection.token(), target.Repo, keyID)
+}
+
 // sourceForTarget resolves the stored connection that authenticates a webhook
 // call and builds the provider implementation for it.
 func (s *Service) sourceForTarget(ctx context.Context, target HookTarget) (SourceProvider, Provider, error) {

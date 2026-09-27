@@ -252,6 +252,14 @@ type fakeContainers struct {
 	// suppressRunning keeps Run from publishing the container as running, so
 	// a test can drive the healthcheck timeout.
 	suppressRunning bool
+
+	// logs is the payload Logs hands back; logFn overrides it per container
+	// so a job flow that runs several containers can script each one. logErr
+	// fails the call instead. logIDs records every container asked for.
+	logs   [][]byte
+	logFn  func(opts containers.RunOptions) [][]byte
+	logErr error
+	logIDs []string
 }
 
 // Compile-time guarantee that fakeContainers satisfies the seam.
@@ -327,6 +335,35 @@ func (f *fakeContainers) Run(_ context.Context, _ uuid.UUID, opts containers.Run
 		f.listed = []containers.Container{{ID: id, State: "running", Status: "Up"}}
 	}
 	return id, nil
+}
+
+// Logs streams the configured payload and closes the channel, mirroring the
+// agent's behaviour of ending the stream when the container exits. logFn, when
+// set, picks the payload from the options of the container's run — job flows
+// start several containers in a row and each one answers differently.
+func (f *fakeContainers) Logs(_ context.Context, _ uuid.UUID, containerID string, _ bool) (<-chan []byte, error) {
+	f.mu.Lock()
+	f.logIDs = append(f.logIDs, containerID)
+	if f.logErr != nil {
+		err := f.logErr
+		f.mu.Unlock()
+		return nil, err
+	}
+	chunks := f.logs
+	fn := f.logFn
+	if fn != nil && len(f.runs) > 0 {
+		chunks = fn(f.runs[len(f.runs)-1])
+	}
+	f.mu.Unlock()
+
+	out := make(chan []byte)
+	go func() {
+		defer close(out)
+		for _, chunk := range chunks {
+			out <- chunk
+		}
+	}()
+	return out, nil
 }
 
 // lastRun returns the most recent run payload.

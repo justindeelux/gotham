@@ -150,6 +150,30 @@ type errorBody struct {
 	Message string `json:"message"`
 }
 
+// deployKeyResponse is the wire representation of an application deploy key.
+// Only the public half, its fingerprint and the provider's own key ID appear
+// here; the private key stays sealed on the server.
+type deployKeyResponse struct {
+	ID            string    `json:"id"`
+	ApplicationID string    `json:"application_id"`
+	Provider      string    `json:"provider"`
+	Repo          string    `json:"repo"`
+	ProviderKeyID string    `json:"provider_key_id,omitempty"`
+	Fingerprint   string    `json:"fingerprint"`
+	PublicKey     string    `json:"public_key"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// deployKeyEnvelope wraps a single deploy key.
+type deployKeyEnvelope struct {
+	DeployKey deployKeyResponse `json:"deploy_key"`
+}
+
+// deleteKeyEnvelope reports an idempotent deploy-key delete.
+type deleteKeyEnvelope struct {
+	Deleted bool `json:"deleted"`
+}
+
 // handler serves the application deploy routes for one DeployService.
 type handler struct {
 	svc    DeployService
@@ -173,6 +197,8 @@ type handler struct {
 //	POST   /v1/applications/{id}/deploy
 //	GET    /v1/applications/{id}/deployments
 //	POST   /v1/applications/{id}/rollback
+//	POST   /v1/applications/{id}/deploy-key
+//	DELETE /v1/applications/{id}/deploy-key
 //
 // auth wraps the group (the server passes its RequireAuth); a nil svc or
 // FEATURE_APPLICATIONS=false mounts nothing, so the control plane can call
@@ -198,6 +224,8 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Post("/v1/applications/{id}/deploy", h.deploy)
 		protected.Get("/v1/applications/{id}/deployments", h.list)
 		protected.Post("/v1/applications/{id}/rollback", h.rollback)
+		protected.Post("/v1/applications/{id}/deploy-key", h.createDeployKey)
+		protected.Delete("/v1/applications/{id}/deploy-key", h.deleteDeployKey)
 	})
 }
 
@@ -495,6 +523,39 @@ func (h *handler) rollback(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, deploymentEnvelope{Deployment: newDeploymentResponse(deployment)})
 }
 
+// createDeployKey serves POST .../deploy-key: generates an ed25519 keypair for
+// the application and registers its public half with the Git host. Repeating
+// the call returns the key that already exists (regenerating would strand the
+// registered one).
+func (h *handler) createDeployKey(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	key, err := h.svc.CreateDeployKey(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, deployKeyEnvelope{DeployKey: newDeployKeyResponse(key)})
+}
+
+// deleteDeployKey serves DELETE .../deploy-key: removes the key from the Git
+// host and then from the database. An application without a key answers 200
+// with deleted=false.
+func (h *handler) deleteDeployKey(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	deleted, err := h.svc.DeleteDeployKey(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, deleteKeyEnvelope{Deleted: deleted})
+}
+
 // currentUser resolves the authenticated user, answering 401 when absent.
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if h.userID == nil {
@@ -518,10 +579,15 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deployment is already in progress"})
+	case errors.Is(err, ErrNotConnected):
+		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrDisabled):
 		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "applications are disabled"})
 	case errors.Is(err, ErrAgentUnavailable):
 		writeJSON(w, http.StatusBadGateway, errorBody{Message: "agent unavailable"})
+	case errors.Is(err, ErrProvider):
+		h.logger.Error("deploy: Git host call failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, errorBody{Message: "provider unavailable"})
 	default:
 		h.logger.Error("deploy: request failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error"})
@@ -672,6 +738,21 @@ func newApplicationResponse(application Application) applicationResponse {
 		response.ServerID = &serverID
 	}
 	return response
+}
+
+// newDeployKeyResponse maps a stored deploy key to its wire representation.
+// Only the public half travels: the sealed private key stays on the server.
+func newDeployKeyResponse(key DeployKey) deployKeyResponse {
+	return deployKeyResponse{
+		ID:            key.ID.String(),
+		ApplicationID: key.ApplicationID.String(),
+		Provider:      key.Provider,
+		Repo:          key.Repo,
+		ProviderKeyID: key.ProviderKeyID,
+		Fingerprint:   key.Fingerprint,
+		PublicKey:     key.PublicKey,
+		CreatedAt:     key.CreatedAt,
+	}
 }
 
 // newDeploymentResponse maps a domain deployment to its wire representation.

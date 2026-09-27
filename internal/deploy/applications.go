@@ -177,16 +177,20 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	return s.repo.UpdateApplication(ctx, app)
 }
 
-// DeleteApplication stops the application's current container best effort and
-// then removes the row; env vars, secrets, storages and deployments cascade.
-// The container stop is deliberately best effort: a control plane that cannot
-// reach the node must still be able to delete an application.
+// DeleteApplication removes an application together with everything that hangs
+// off it. Its deploy key is detached first — on the Git host and then in the
+// database — so a host failure aborts the delete while both sides still agree;
+// the container stop stays best effort: a control plane that cannot reach the
+// node must still be able to delete an application.
 func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error {
 	if !Enabled() {
 		return ErrDisabled
 	}
 	app, err := s.application(ctx, userID, appID)
 	if err != nil {
+		return err
+	}
+	if err := s.detachDeployKey(ctx, app); err != nil {
 		return err
 	}
 	s.stopBestEffort(ctx, app)

@@ -10,3 +10,6 @@ SELECT * FROM private_keys WHERE id = $1;
 SELECT id, name, created_at
 FROM private_keys
 ORDER BY created_at DESC, id DESC;
+
+-- name: DeletePrivateKey :exec
+DELETE FROM private_keys WHERE id = $1;

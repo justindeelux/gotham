@@ -18,4 +18,10 @@ var (
 	ErrHealthcheck = errors.New("deploy: healthcheck failed")
 	// ErrDisabled — FEATURE_APPLICATIONS=false disables the whole feature (503).
 	ErrDisabled = errors.New("deploy: feature disabled")
+	// ErrNotConnected — the caller has no usable connection for the
+	// application's provider, so no deploy key can be registered (409).
+	ErrNotConnected = errors.New("deploy: provider is not connected")
+	// ErrProvider — a Git-host API call (registering or removing a deploy key)
+	// failed; handlers answer a gateway status instead of leaking the body.
+	ErrProvider = errors.New("deploy: provider call failed")
 )

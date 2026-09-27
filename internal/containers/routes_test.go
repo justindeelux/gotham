@@ -26,6 +26,8 @@ type fakeService struct {
 	runErr     error
 	runSeen    RunOptions
 	calls      []string
+	logs       [][]byte
+	logErr     error
 }
 
 func (f *fakeService) record(call string) {
@@ -82,6 +84,27 @@ func (f *fakeService) Run(_ context.Context, _ uuid.UUID, opts RunOptions) (stri
 		return "", f.runErr
 	}
 	return f.runID, nil
+}
+
+// Logs streams the configured payload (default: nothing) and closes the
+// channel, which is what the agent does when a container's stream ends.
+func (f *fakeService) Logs(_ context.Context, _ uuid.UUID, _ string, _ bool) (<-chan []byte, error) {
+	f.record("logs")
+	f.mu.Lock()
+	chunks := f.logs
+	err := f.logErr
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan []byte)
+	go func() {
+		defer close(out)
+		for _, chunk := range chunks {
+			out <- chunk
+		}
+	}()
+	return out, nil
 }
 
 // passthroughAuth stands in for RequireAuth in route tests.

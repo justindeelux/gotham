@@ -11,7 +11,7 @@
 
 **Rollback:** if something breaks midway: the `users/sessions` migrations are forward-only; run `goose down` on the dev environment (no real data yet) and revert the code. No other flow is affected since every later phase is the one depending on auth.
 
-**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 2 (see Model policy & Phase gate in `00-roadmap.md`).
+**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 2 (see Process & Phase gate in `../process.md`).
 
 ---
 

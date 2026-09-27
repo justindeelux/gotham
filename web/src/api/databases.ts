@@ -20,9 +20,8 @@ import { isApiError } from "./servers";
  *
  * Credentials never appear on the database rows: the list and detail
  * endpoints carry no secrets, and the owner reads them through the dedicated
- * credentials endpoint (or the create response). There is no backup endpoint
- * yet — backups land with BE-5.2, so the UI renders an explicit empty state
- * instead of fabricating rows.
+ * credentials endpoint (or the create response). Backup, restore, schedule
+ * and target endpoints live in `./backups`.
  */
 
 /** Lifecycle of a managed database (see model.go). */

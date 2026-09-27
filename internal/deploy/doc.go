@@ -3,7 +3,12 @@
 // engines (the node agent performs the Docker build and pushes to the node's
 // internal registry), then starts the container with the application's
 // environment variables, decrypted secrets, volume map and port mapping, and
-// gates success on a post-start healthcheck.
+// gates success on a post-start healthcheck. The runtime payload defaults
+// PORT to the application's container port whenever the application declares
+// one and neither an env var nor a secret defines PORT — an explicit value
+// (including a sealed secret reference) always wins and port 0 injects
+// nothing — so images built without a Dockerfile listen where the host port
+// mapping points, the same way Heroku/Railway/Coolify inject PORT.
 //
 // Every deployment is a persisted state machine:
 //

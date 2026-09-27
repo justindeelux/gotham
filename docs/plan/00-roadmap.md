@@ -3,6 +3,9 @@
 Overall plan for building Gotham, a self-hosted PaaS (Coolify clone) using the tech stack in `README.md`:
 **Go + Chi + sqlc/pgx + PostgreSQL + gRPC agent + Redis + Traefik + Vue 3 + Naive UI**.
 
+> Status and remaining work live in [`../TODO.md`](../TODO.md); how we work
+> lives in [`../process.md`](../process.md).
+
 ---
 
 ## 1. Phase overview
@@ -58,11 +61,6 @@ graph LR
 - Each workspace merges to the main branch via its **own PR**; CI must be green before merge.
 - Tasks may run in parallel only when they touch no common files and depend on no each other's output (noted in each phase file).
 
-### Model policy
-- Code review: `openrouter/z-ai/glm-5.3-prime` — contract design (proto, service interfaces, orchestration state machine, template engine) and all review gates (G0/G1/G2).
-- Implementation (coding): `deepseek v4.1 flash` / `Muse Spark 1.3 Contributor` / `MiMo-V2.6-Flash (go)` — implementation following agreed patterns. Task fit: Go/backend work (`internal/`, `agent/`, `proto/`, e2e scripts) → `MiMo-V2.6-Flash (go)`; spec-driven contract/API implementation → `deepseek v4.1 flash`; Vue/layout/composable/copy UI work (`web/`) → `Muse Spark 1.3 Contributor`. Subagent model IDs (exact): `opencode-go/mimo-v2.6-flash` (Go/backend), `opencode-go/deepseek-v4.1-flash`, `opencode-go/muse-spark-1.3-contributor`.
-- ⭐ = tasks requiring the strongest review model for design; unmarked tasks use the coding models.
-
 ### Phase gate (continuous mode — owner waiver from Phase 3 onward)
 - The owner waived per-phase STOPs: after a phase meets its exit criteria, the coordinator continues to the next phase automatically without asking. STOP only when blocked, when a decision is needed, or when a review gate fails.
 - Milestone reports are posted as PR descriptions and chat summaries instead of gate approvals.
@@ -78,9 +76,9 @@ graph LR
 ### Review gates (mandatory, block merge)
 | Gate | When | Reviewers |
 |---|---|---|
-| G0 | End of Phase 0 | subagent `code-reviewer` (whole foundation), review model `openrouter/z-ai/glm-5.3-prime` |
-| G1 | End of Phase 4 | `code-reviewer` + `e2e-runner` (core deploy experience), review model `openrouter/z-ai/glm-5.3-prime` |
-| G2 | End of Phase 9 | `code-reviewer` + `security-reviewer` (release/self-update, signatures, install), review model `openrouter/z-ai/glm-5.3-prime` |
+| G0 | End of Phase 0 | subagent `code-reviewer` (whole foundation) |
+| G1 | End of Phase 4 | `code-reviewer` + `e2e-runner` (core deploy experience) |
+| G2 | End of Phase 9 | `code-reviewer` + `security-reviewer` (release/self-update, signatures, install) |
 
 ### Rollback
 - Each phase file states how to roll back (revert migration, feature flag, old image tag) in its own section.

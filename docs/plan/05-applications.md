@@ -1,6 +1,6 @@
-# Phase 4 — Applications (Deploy from Git) (W6–W8) ⭐
+# Phase 4 — Applications (Deploy from Git) (W6–W8)
 
-**Goal:** the core deploy flow — from Git repo to running container. The biggest phase; orchestration (4.3) uses the strongest review model.
+**Goal:** the core deploy flow — from Git repo to running container. The biggest phase; orchestration (4.3) needs `code-reviewer` design review.
 
 **Exit criteria (Milestone M4):**
 - [ ] Connect GitHub/GitLab/Gitea, list repos/branches.
@@ -8,7 +8,7 @@
 - [ ] Build without a Dockerfile (Railpack/Nixpacks or Buildpacks auto-detect).
 - [ ] Persistent storage, env vars, secrets work.
 - [ ] Push code → webhook → auto deploy, build logs visible realtime in the UI.
-- [ ] **Gate G1**: `code-reviewer` (review model `openrouter/z-ai/glm-5.3-prime`) + `e2e-runner` run the e2e deploy scenario before merge.
+- [ ] **Gate G1**: `code-reviewer` + `e2e-runner` run the e2e deploy scenario before merge.
 
 **Rollback:** deploy is a state machine persisted in the DB (`deployments` table) — each new deploy keeps the old image tag; the "Rollback" button in FE-4.1 points back at the old container. If the phase breaks: disable with the env flag `FEATURE_APPLICATIONS=false`, Phases 0–3 unaffected.
 
@@ -33,7 +33,7 @@
 - **Verify:** run a build per engine → image appears in the internal registry; `docker pull` works.
 - **Depends on:** Phase 3. Parallel with BE-4.1.
 
-## BE-4.3 ⭐ — Deploy orchestration — `ws/p4-deploy`
+## BE-4.3 — Deploy orchestration — `ws/p4-deploy`
 
 - **Context brief:** the heart of the system. Deploy state machine: `queued → cloning → building → pushing → starting → running | failed`, persisted in the `deployments` table, each step emitting events to Redis (for realtime logs). Run containers with env vars, secrets (AES-GCM encrypted in the DB, decrypted when sent to the agent), persistent storage (volume map), port mapping, post-start healthcheck. Parent resource: `applications` (id, name, provider, repo, branch, build_pack, base_domain, env, secrets, storage, port).
 - **Deliverables:**
@@ -42,6 +42,7 @@
   - Routes: `POST /api/v1/applications/{id}/deploy`, `GET .../deployments`, `POST .../rollback`.
   - Tests: state machine with a mock agent; rollback tests.
 - **Verify:** e2e deploy via API: sample repo → `running`, full log events; kill the container → healthcheck fails → status `failed`; rollback → back to the old version.
+- **Runtime payload (BE-4.3c):** the container payload defaults `PORT` to the application's configured container port when the app declares a port and neither an env var nor a secret sets `PORT` — an explicit value (including a sealed `secret:` reference) always wins, and `port = 0` injects nothing, so Dockerfile apps that manage `PORT` themselves are untouched. This is what makes Railpack/buildpacks images (no Dockerfile) bind the port the host mapping points at, like Heroku/Railway/Coolify.
 - **Depends on:** BE-4.1 + BE-4.2.
 
 ## BE-4.3b — Applications CRUD + config + stop/start — `ws/p4-app-crud`
@@ -78,3 +79,65 @@
 - **Deliverables:** e2e tests: (1) public repo deploys successfully, (2) rollback, (3) webhook auto-deploy, (4) failed build → `failed` status with error logs.
 - **Verify:** full e2e run green on CI.
 - **Depends on:** BE-4.3 + BE-4.4 + FE-4.1.
+
+### How to run the suite
+
+The suite lives in `internal/e2e` (`p4_*_test.go`) and is gated by `GOTHAM_E2E=1`,
+same as the Phase 3 suite: without it every test skips, so plain `go test ./…`
+stays green on machines without Docker, Redis or Postgres. Each scenario boots a
+control plane in-process (real HTTP routes, real PostgreSQL, real Redis, a real
+mTLS agent on the local Docker daemon) and cleans up after itself.
+
+Locally, against Docker and the dev stack:
+
+```bash
+docker compose -f deploy/compose.dev.yml up -d     # Postgres 16 + Redis 7
+GOTHAM_E2E=1 go test ./internal/e2e/... -count=1 -timeout 20m
+```
+
+Against the shared test box, or any host whose services do not listen on the
+defaults — the suite needs `git`, the Docker daemon and the three env vars below
+(all optional):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GOTHAM_E2E` | — | `1` runs the gated suite (anything else skips it) |
+| `GOTHAM_TEST_DSN` | `postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable` | database the suite migrates and tests against |
+| `GOTHAM_E2E_REDIS` | `127.0.0.1:6379` | Redis the deploy logs are published to |
+| `GOTHAM_E2E_DOCKER_SOCK` | `/var/run/docker.sock` | daemon the agent builds and runs on |
+
+```bash
+GOTHAM_E2E=1 \
+GOTHAM_TEST_DSN='postgres://gotham:gotham@<test-box>:5432/gotham?sslmode=disable' \
+GOTHAM_E2E_REDIS='<test-box>:6379' \
+go test ./internal/e2e/... -count=1 -timeout 20m -v
+```
+
+Fixture repositories are created on disk and cloned with `GOTHAM_DEV_CLONE_LOCAL=true`
+(set by the harness); no provider API, no GitHub token and no external network
+are used — webhook deliveries are signed and replayed against
+`POST /api/v1/webhooks/github` with a seeded secret row.
+
+CI: `.github/workflows/e2e.yml` (separate from `ci.yml`) starts Postgres 16 +
+Redis 7 as service containers, applies migrations and runs the same command on
+`ubuntu-latest`. It triggers on `workflow_dispatch`, on pushes to `main` and on
+PRs touching `internal/deploy`, `internal/webhooks`, `internal/builds`,
+`internal/store`, `internal/e2e`, `internal/server`, `internal/config`, `cmd`,
+`agent`, `proto`, `go.mod`/`go.sum` or the workflow itself.
+
+### G1 decisions (2026-09-27, owner-approved)
+
+The API-level suite above is the G1 gate for Phase 4. Two QA-4.1 deliverables
+were deferred by explicit owner decision:
+
+- **Playwright UI leg** (QA-4.1 spec says "Playwright for the UI + direct API
+  calls") moves to `ws/p4-ui-e2e` (QA-4.1b), which runs beside Phase 5/6.
+  The API leg already exercises the real HTTP routes; only the browser layer
+  is missing.
+- **Network clone of a real public repo** is not part of CI (fixtures keep the
+  gate deterministic). It was verified live on the shared test box before the
+  waiver: `docker/welcome-to-docker` (Dockerfile) and
+  `heroku/node-js-getting-started` (Railpack, no Dockerfile) both deployed to
+  `running` and answered HTTP 200 through their host ports, including env vars
+  and a persistent `/data` mount. A network-gated optional test can be added
+  with QA-4.1b.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/justindeelux/gotham/internal/providers"
@@ -23,6 +24,11 @@ const (
 	labelDeploymentID = "gotham.deployment_id"
 )
 
+// portEnvKey is the environment variable every PaaS platform (Heroku,
+// Railway, Coolify) injects so the process binds the port the host mapping
+// actually points at.
+const portEnvKey = "PORT"
+
 // invalidNameChars matches anything outside the Docker container-name alphabet
 // ([a-zA-Z0-9][a-zA-Z0-9_.-]).
 var invalidNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
@@ -36,6 +42,10 @@ var invalidNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
 // in this codebase; plaintext exists only in the returned request. A secret
 // whose key collides with a plain env var wins: Docker applies the last
 // occurrence of a duplicated key, so secrets are appended after env vars.
+//
+// The payload also defaults PORT to the application's container port when the
+// application declares one (see defaultPortEnv), so images built without a
+// Dockerfile listen where the port mapping points.
 func buildRunRequest(
 	app Application,
 	dep Deployment,
@@ -52,7 +62,7 @@ func buildRunRequest(
 		return nil, fmt.Errorf("%w: deployment has no image", ErrValidation)
 	}
 
-	env, err := buildEnv(envVars, secrets, secretKey)
+	env, err := buildEnv(envVars, secrets, secretKey, defaultPortEnv(app, envVars, secrets))
 	if err != nil {
 		return nil, err
 	}
@@ -82,9 +92,11 @@ func buildRunRequest(
 }
 
 // buildEnv renders env vars first and decrypted secrets second so a colliding
-// key resolves to the secret. The result is sorted by key (secrets keep their
-// relative order over an env var of the same name) for a deterministic payload.
-func buildEnv(envVars []EnvVar, secrets []Secret, secretKey string) ([]string, error) {
+// key resolves to the secret. Defaults (only the PORT fallback today) fill the
+// gaps: a key present in either collection always wins. The result is sorted
+// by key (secrets keep their relative order over an env var of the same name)
+// for a deterministic payload.
+func buildEnv(envVars []EnvVar, secrets []Secret, secretKey string, defaults map[string]string) ([]string, error) {
 	plain := make(map[string]string, len(envVars))
 	for _, v := range envVars {
 		if v.Key == "" {
@@ -102,6 +114,15 @@ func buildEnv(envVars []EnvVar, secrets []Secret, secretKey string) ([]string, e
 			return nil, fmt.Errorf("%w: open secret %s: %v", ErrValidation, s.Key, err)
 		}
 		sealed[s.Key] = value
+	}
+	for key, value := range defaults {
+		if _, ok := plain[key]; ok {
+			continue
+		}
+		if _, ok := sealed[key]; ok {
+			continue
+		}
+		plain[key] = value
 	}
 
 	keys := make([]string, 0, len(plain)+len(sealed))
@@ -148,6 +169,32 @@ func volumeSpecs(storages []Storage) ([]string, error) {
 		specs = append(specs, host+":"+target)
 	}
 	return specs, nil
+}
+
+// defaultPortEnv returns the PORT fallback for the runtime payload: an
+// image built without a Dockerfile (Railpack, buildpacks) starts whatever the
+// repository declares — often its own default port — while the host mapping
+// points at Application.Port, so the platform tells the process which port to
+// bind, the same way Heroku, Railway and Coolify inject PORT. The default
+// applies only when the application declares a port (> 0) and neither an env
+// var nor a secret already defines PORT; an explicit value (including a
+// sealed secret reference) always wins, and a Dockerfile app that manages
+// PORT itself — or an app with no port — sees no change at all.
+func defaultPortEnv(app Application, envVars []EnvVar, secrets []Secret) map[string]string {
+	if app.Port <= 0 {
+		return nil
+	}
+	for _, v := range envVars {
+		if v.Key == portEnvKey {
+			return nil
+		}
+	}
+	for _, s := range secrets {
+		if s.Key == portEnvKey {
+			return nil
+		}
+	}
+	return map[string]string{portEnvKey: strconv.Itoa(int(app.Port))}
 }
 
 // portSpecs renders the application port as a "host:container" mapping when

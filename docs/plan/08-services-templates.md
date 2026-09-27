@@ -9,7 +9,7 @@
 
 **Rollback:** a service is a compose project — rollback = redeploy the old compose (compose file versioned per deploy). Templates are static renders — editing a template does not affect already-deployed services.
 
-**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 8 (see Model policy & Phase gate in `00-roadmap.md`).
+**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 8 (see Process & Phase gate in `../process.md`).
 
 ---
 
@@ -25,7 +25,7 @@
 - **Verify:** sample compose runs, domain maps to the right service, restart keeps state.
 - **Depends on:** Phase 6 (domains), Phase 3. Parallel with BE-7.2.
 
-## BE-7.2 ⭐ — Template engine — `ws/p7-templates`
+## BE-7.2 — Template engine — `ws/p7-templates`
 
 - **Context brief:** design the template format: `templates/{slug}/` directory with `template.yaml` (metadata: name, icon, description, form fields: input type, default, required) + `compose.yaml` (Go template or `{{ .field }}` placeholders). The engine renders fields → compose → deploys via BE-7.1. Catalog shown in the UI.
 - **Deliverables:**

@@ -39,6 +39,14 @@ type fakeDeployService struct {
 	start       Deployment
 	startErr    error
 
+	// deploy keys.
+	deployKey       DeployKey
+	createKeyErr    error
+	deleteKeyErr    error
+	deletedKey      bool
+	deletedKeyCalls int
+	createdKeyFor   uuid.UUID
+
 	seenUser        uuid.UUID
 	seenApplication uuid.UUID
 	seenRollback    uuid.UUID
@@ -92,6 +100,25 @@ func (f *fakeDeployService) UpdateApplication(_ context.Context, userID, appID u
 func (f *fakeDeployService) DeleteApplication(_ context.Context, userID, appID uuid.UUID) error {
 	f.seenUser, f.seenApplication = userID, appID
 	return f.deleteErr
+}
+
+// CreateDeployKey implements DeployService.
+func (f *fakeDeployService) CreateDeployKey(_ context.Context, userID, appID uuid.UUID) (DeployKey, error) {
+	f.seenUser, f.createdKeyFor = userID, appID
+	if f.createKeyErr != nil {
+		return DeployKey{}, f.createKeyErr
+	}
+	return f.deployKey, nil
+}
+
+// DeleteDeployKey implements DeployService.
+func (f *fakeDeployService) DeleteDeployKey(_ context.Context, userID, appID uuid.UUID) (bool, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	f.deletedKeyCalls++
+	if f.deleteKeyErr != nil {
+		return false, f.deleteKeyErr
+	}
+	return f.deletedKey, nil
 }
 
 // GetEnv implements DeployService.

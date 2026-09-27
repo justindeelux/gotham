@@ -17,8 +17,6 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -85,60 +83,12 @@ func TestM3EndToEnd(t *testing.T) {
 	}
 	t.Logf("preconditions ok: docker %s at %s, redis at %s", version, dockerSock, redisAddr)
 
-	// 2. Issue the agent certificate from a CSR signed by a throwaway CA, the
-	// same way the Phase 2 gateway does during registration.
-	authority, err := servers.LoadOrCreateAuthority(t.TempDir())
-	if err != nil {
-		t.Fatalf("load CA: %v", err)
-	}
-	certDir := t.TempDir()
-	signer, keyPath, err := agent.EnsureKey(certDir)
-	if err != nil {
-		t.Fatalf("agent key: %v", err)
-	}
-	csrPEM, err := agent.GenerateCSR(nodeID, signer)
-	if err != nil {
-		t.Fatalf("agent CSR: %v", err)
-	}
-	certPEM, err := authority.IssueAgentCertFromCSR(csrPEM)
-	if err != nil {
-		t.Fatalf("issue agent certificate: %v", err)
-	}
-	keyPEM, err := os.ReadFile(keyPath)
-	if err != nil {
-		t.Fatalf("read agent key: %v", err)
-	}
-	caPath := filepath.Join(t.TempDir(), "ca.crt")
-	if err := os.WriteFile(caPath, authority.CACertPEM(), 0o600); err != nil {
-		t.Fatalf("write CA: %v", err)
-	}
-	serverCreds, err := agent.ServerCredentials(certPEM, keyPEM, caPath)
-	if err != nil {
-		t.Fatalf("agent server credentials: %v", err)
-	}
+	// 2. Boot the agent (DockerService + BuildService) over mTLS on the real
+	// daemon; the helper issues the certificate and stops the server when the
+	// test ends.
+	agentAddr, authority := startLocalAgent(t, ctx, engine, nodeID)
 
-	// 3. Start the agent's DockerService over mTLS on the real daemon.
-	grpcServer, err := agent.NewServer("127.0.0.1:0", serverCreds, agent.NewDockerServer(engine, logger), logger)
-	if err != nil {
-		t.Fatalf("agent server: %v", err)
-	}
-	agentCtx, agentCancel := context.WithCancel(ctx)
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- grpcServer.Serve(agentCtx) }()
-	t.Cleanup(func() {
-		agentCancel()
-		select {
-		case err := <-serveErr:
-			if err != nil {
-				t.Errorf("agent serve: %v", err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Error("agent gRPC server did not stop")
-		}
-	})
-	agentAddr := grpcServer.Addr().String()
-
-	// 4. Wire the container service to the node through the production dialer.
+	// 3. Wire the container service to the node through the production dialer.
 	node := &servers.Server{
 		ID:     serverID,
 		Name:   "m3-e2e-node",
@@ -169,11 +119,11 @@ func TestM3EndToEnd(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = logClient.Close() })
 
-	// 5. M3: list the node's containers through the service.
+	// 4. M3: list the node's containers through the service.
 	baseline := mustList(t, ctx, svc, serverID)
 	t.Logf("listed %d pre-existing container(s) on %s", len(baseline), nodeID)
 
-	// 6. M3: pull the image, tolerating a registry outage only when the
+	// 5. M3: pull the image, tolerating a registry outage only when the
 	// daemon already has the image locally.
 	if err := svc.Pull(ctx, serverID, e2eImage); err != nil {
 		if imagePresentLocally(e2eImage) {
@@ -183,7 +133,7 @@ func TestM3EndToEnd(t *testing.T) {
 		}
 	}
 
-	// 7. M3: run an nginx container and watch it show up as running.
+	// 6. M3: run an nginx container and watch it show up as running.
 	suffix := uuid.New().String()[:8]
 	nginxName := "gotham-e2e-nginx-" + suffix
 	removeContainer(t, nginxName)
@@ -203,7 +153,7 @@ func TestM3EndToEnd(t *testing.T) {
 		t.Errorf("container image = %q, want %q", running.Image, e2eImage)
 	}
 
-	// 8. M3: stop it; the service must reflect the state change. A stale
+	// 7. M3: stop it; the service must reflect the state change. A stale
 	// cache would still report "running" for up to 10s, so this also proves
 	// the stop invalidated the cached list.
 	if err := svc.Stop(ctx, serverID, nginxID); err != nil {
@@ -214,13 +164,13 @@ func TestM3EndToEnd(t *testing.T) {
 		t.Error("exited container has an empty status")
 	}
 
-	// 9. M3: start it again.
+	// 8. M3: start it again.
 	if err := svc.Start(ctx, serverID, nginxID); err != nil {
 		t.Fatalf("svc.Start(nginx): %v", err)
 	}
 	waitForState(t, ctx, svc, serverID, nginxID, "running")
 
-	// 10. M3: restart keeps it running with a fresh uptime status.
+	// 9. M3: restart keeps it running with a fresh uptime status.
 	if err := svc.Restart(ctx, serverID, nginxID); err != nil {
 		t.Fatalf("svc.Restart(nginx): %v", err)
 	}
@@ -230,7 +180,7 @@ func TestM3EndToEnd(t *testing.T) {
 	}
 	t.Logf("lifecycle ok: %s %s -> running/exited/running/running", shortID(nginxID), nginxName)
 
-	// 11. M3: realtime log streaming. A second container prints a unique
+	// 10. M3: realtime log streaming. A second container prints a unique
 	// marker twice a second so the suite can prove chunks arrive live.
 	logsName := "gotham-e2e-logs-" + suffix
 	marker := "gotham-e2e-" + suffix
@@ -291,7 +241,7 @@ func TestM3EndToEnd(t *testing.T) {
 	}
 	t.Logf("received %d live log chunk(s) on %s", chunks, channel)
 
-	// 12. Kill the container: the service reports it dead and the WS client
+	// 11. Kill the container: the service reports it dead and the WS client
 	// receives the disconnect notice for the ended stream.
 	if err := svc.Stop(ctx, serverID, logsID); err != nil {
 		t.Fatalf("svc.Stop(log generator): %v", err)

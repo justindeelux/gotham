@@ -104,10 +104,12 @@ func doJSON(ctx context.Context, client *http.Client, provider, method, url, acc
 	return nil
 }
 
-// isStatus reports whether err is an *httpError with the given status code.
-func isStatus(err error, status int) bool {
+// isNotFound reports whether err is an *httpError with status 404 — the "the
+// resource is already gone" answer that deletes treat as success so callers
+// stay idempotent.
+func isNotFound(err error) bool {
 	var httpErr *httpError
-	return errors.As(err, &httpErr) && httpErr.status == status
+	return errors.As(err, &httpErr) && httpErr.status == http.StatusNotFound
 }
 
 // validateRepo rejects a repository identifier that could escape the intended
@@ -137,13 +139,36 @@ func escapeProjectPath(repo string) string {
 // into a delete path, so anything that is not digits is rejected instead of
 // being allowed to address another API route.
 func validateHookID(hookID string) error {
-	if hookID == "" || len(hookID) > 32 {
-		return fmt.Errorf("%w: invalid hook id", ErrValidation)
+	return validateProviderID(hookID, "hook id")
+}
+
+// validateDeployKeyID accepts only a decimal provider deploy-key ID (same rule
+// as validateHookID: the ID is spliced into a delete path).
+func validateDeployKeyID(keyID string) error {
+	return validateProviderID(keyID, "deploy key id")
+}
+
+// validateProviderID rejects anything but a short decimal provider identifier.
+func validateProviderID(id, what string) error {
+	if id == "" || len(id) > 32 {
+		return fmt.Errorf("%w: invalid %s", ErrValidation, what)
 	}
-	for _, r := range hookID {
+	for _, r := range id {
 		if r < '0' || r > '9' {
-			return fmt.Errorf("%w: invalid hook id", ErrValidation)
+			return fmt.Errorf("%w: invalid %s", ErrValidation, what)
 		}
+	}
+	return nil
+}
+
+// validateDeployKey rejects a public key the Git host would refuse anyway, so
+// the API answers with a clear validation error instead of a provider body.
+func validateDeployKey(key DeployKey) error {
+	if strings.TrimSpace(key.Title) == "" {
+		return fmt.Errorf("%w: deploy key title is empty", ErrValidation)
+	}
+	if strings.TrimSpace(key.Key) == "" {
+		return fmt.Errorf("%w: deploy key is empty", ErrValidation)
 	}
 	return nil
 }

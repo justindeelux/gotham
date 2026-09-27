@@ -58,6 +58,7 @@ type Server struct {
 	servers     ServerService
 	persistence *store.Store
 	deploy      deploy.DeployService
+	backups     databases.BackupService
 	authLimiter *ipRateLimiter
 	router      http.Handler
 	closer      func()
@@ -105,7 +106,11 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	s.closer = func() {
 		// The deploy service owns its worker pool and realtime publisher;
 		// shutting it down first stops in-flight deployments before the
-		// shared Redis pinger goes away.
+		// shared Redis pinger goes away. The backup service stops its cron
+		// scheduler for the same reason.
+		if s.backups != nil {
+			_ = s.backups.Close()
+		}
 		if closer, ok := s.deploy.(interface{ Close() error }); ok {
 			_ = closer.Close()
 		}
@@ -180,8 +185,11 @@ func (s *Server) routes() (http.Handler, error) {
 		// Application deploy orchestration (BE-4.3): a nil service (no
 		// database) or FEATURE_APPLICATIONS=false mounts nothing, so Phases
 		// 0–3 stay unaffected. The service is kept on the server so the
-		// closer can stop its worker pool and publisher on shutdown.
-		s.deploy = s.deployService()
+		// closer can stop its worker pool and publisher on shutdown. The
+		// provider service is passed in for deploy keys (BE-4.4b): registering
+		// a key on the Git host needs the same stored connection the webhook
+		// lifecycle uses.
+		s.deploy = s.deployService(providerSvc)
 		deploy.Mount(api, s.RequireAuth, UserIDFromContext, s.deploy)
 
 		// Push webhooks (BE-4.4): the public, signature-verified delivery
@@ -193,6 +201,14 @@ func (s *Server) routes() (http.Handler, error) {
 		// database container is created through the shared container service
 		// rather than a second agent path.
 		databases.Mount(api, s.RequireAuth, UserIDFromContext, s.databaseService(containerService))
+
+		// Backup and restore surface (BE-5.2), same container service and
+		// same feature flag as the databases routes above: a nil service
+		// (no database) or FEATURE_DATABASES=false mounts nothing. The
+		// service owns the internal cron scheduler, started here and stopped
+		// by the closer above.
+		s.backups = s.backupService(containerService)
+		databases.MountBackups(api, s.RequireAuth, UserIDFromContext, s.backups)
 	})
 
 	spa, err := newSPAHandler()
@@ -207,10 +223,13 @@ func (s *Server) routes() (http.Handler, error) {
 // deployService builds the deploy domain service for the HTTP wiring: the
 // database, the key that opens sealed application secrets and the realtime
 // publisher, plus the mTLS agent dialer when the concrete node registry is
-// available. Tests pass a fake registry that cannot dial agents, which leaves
-// the dialer unwired instead of forcing a wider interface change. It returns
-// nil (no database, or FEATURE_APPLICATIONS=false) so deploy.Mount is a no-op.
-func (s *Server) deployService() deploy.DeployService {
+// available. providerSvc contributes deploy-key registration on the Git host
+// (nil, or a provider service that cannot register keys, leaves the registrar
+// unwired and deploy-key creation answers a clear error). Tests pass a fake
+// registry that cannot dial agents, which leaves the dialer unwired instead of
+// forcing a wider interface change. It returns nil (no database, or
+// FEATURE_APPLICATIONS=false) so deploy.Mount is a no-op.
+func (s *Server) deployService(providerSvc providers.ProviderService) deploy.DeployService {
 	if s.persistence == nil {
 		return nil
 	}
@@ -219,6 +238,11 @@ func (s *Server) deployService() deploy.DeployService {
 		Secret:    s.cfg.Snapshot().SecretKey,
 		RedisAddr: s.cfg.Snapshot().Redis.Addr,
 		Logger:    s.logger,
+	}
+	if providerSvc != nil {
+		if registrar, ok := providerSvc.(deploy.KeyRegistrar); ok {
+			cfg.KeyRegistrar = registrar
+		}
 	}
 	if dialer, ok := s.servers.(deploy.AgentDialer); ok {
 		cfg.Dial = deploy.AgentDial(dialer)
@@ -287,6 +311,23 @@ func (s *Server) databaseService(containerService containers.ContainerService) d
 		return nil
 	}
 	return databases.NewDefaultService(databases.Config{
+		Store:      s.persistence,
+		Containers: containerService,
+		Secret:     s.cfg.Snapshot().SecretKey,
+		Logger:     s.logger,
+	})
+}
+
+// backupService builds the backup domain service for the HTTP wiring: the
+// database, the shared container service, the key that opens sealed
+// credentials and (through the service itself) the local backup directory
+// and the cron scheduler. It returns nil (no database, no container service,
+// or FEATURE_DATABASES=false) so databases.MountBackups stays a no-op.
+func (s *Server) backupService(containerService containers.ContainerService) databases.BackupService {
+	if s.persistence == nil || containerService == nil {
+		return nil
+	}
+	return databases.NewDefaultBackupService(databases.BackupConfig{
 		Store:      s.persistence,
 		Containers: containerService,
 		Secret:     s.cfg.Snapshot().SecretKey,

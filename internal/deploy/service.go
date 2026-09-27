@@ -30,6 +30,30 @@ func Enabled() bool {
 // DeployService is the control-plane surface the HTTP layer depends on. It is
 // implemented by Service and by fakes in route tests.
 type DeployService interface {
+	// CreateApplication stores an application together with the environment
+	// and storage configuration sent with it.
+	CreateApplication(ctx context.Context, userID uuid.UUID, in CreateApplicationInput) (Application, error)
+	// ListApplications returns the caller's applications, newest first.
+	ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error)
+	// GetApplication returns one application the caller owns (404 otherwise).
+	GetApplication(ctx context.Context, userID, appID uuid.UUID) (Application, error)
+	// UpdateApplication applies a partial update to the mutable fields.
+	UpdateApplication(ctx context.Context, userID, appID uuid.UUID, in UpdateApplicationInput) (Application, error)
+	// DeleteApplication stops the current container best effort and deletes
+	// the application; its configuration cascades.
+	DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error
+	// GetEnv returns the environment: plain values and secret references.
+	GetEnv(ctx context.Context, userID, appID uuid.UUID) ([]EnvEntry, error)
+	// ReplaceEnv replaces the environment collection and returns it as stored.
+	ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entries []EnvEntry) ([]EnvEntry, error)
+	// GetStorages returns the application's storage mappings.
+	GetStorages(ctx context.Context, userID, appID uuid.UUID) ([]Storage, error)
+	// ReplaceStorages replaces the storage collection and returns it as stored.
+	ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, storages []Storage) ([]Storage, error)
+	// Stop stops the container of the newest deployment.
+	Stop(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
+	// Start restarts the container of the newest deployment.
+	Start(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
 	// Deploy queues a deployment of the application's current revision.
 	Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
 	// ListDeployments returns the application's deployments, newest first.

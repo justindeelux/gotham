@@ -21,6 +21,25 @@ import (
 type Repository interface {
 	// GetApplication returns the application, or ErrNotFound.
 	GetApplication(ctx context.Context, appID uuid.UUID) (Application, error)
+	// ListApplications returns the applications owned by userID, newest first.
+	ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error)
+	// CreateApplication stores a new application together with its env vars,
+	// sealed secrets and storages in one transaction.
+	CreateApplication(ctx context.Context, app Application, envVars []EnvVar, secrets []Secret, storages []Storage) (Application, error)
+	// UpdateApplication persists the mutable application fields.
+	UpdateApplication(ctx context.Context, app Application) (Application, error)
+	// DeleteApplication removes the application row; its configuration
+	// (env vars, secrets, storages, deployments) cascades with it.
+	DeleteApplication(ctx context.Context, appID uuid.UUID) error
+	// ReplaceEnvVars replaces the application's plain env vars and sealed
+	// secrets as one set.
+	ReplaceEnvVars(ctx context.Context, appID uuid.UUID, envVars []EnvVar, secrets []Secret) error
+	// ReplaceStorages replaces the application's storage mappings as one set.
+	ReplaceStorages(ctx context.Context, appID uuid.UUID, storages []Storage) error
+	// ServerExists reports whether the target server is registered. The node
+	// registry has no owner column (every server is shared by the control
+	// plane's users), so "the server belongs to the caller" is this check.
+	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
 	// CreateDeployment stores a new deployment row.
 	CreateDeployment(ctx context.Context, dep Deployment) (Deployment, error)
 	// GetDeployment returns one deployment of an application, or ErrNotFound.
@@ -60,6 +79,114 @@ func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (
 		return Application{}, fmt.Errorf("deploy: get application: %w", err)
 	}
 	return applicationFromRow(row), nil
+}
+
+// ListApplications loads every application owned by userID, newest first.
+func (r *storeRepository) ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error) {
+	rows, err := r.store.ListApplicationsByUser(ctx, pgUUID(userID))
+	if err != nil {
+		return nil, fmt.Errorf("deploy: list applications: %w", err)
+	}
+	applications := make([]Application, 0, len(rows))
+	for _, row := range rows {
+		applications = append(applications, applicationFromRow(row))
+	}
+	return applications, nil
+}
+
+// CreateApplication stores the application row and its configuration in a
+// single transaction, so a rejected child row (a duplicate key, a bad storage
+// name) never leaves an application without its settings behind.
+func (r *storeRepository) CreateApplication(
+	ctx context.Context,
+	app Application,
+	envVars []EnvVar,
+	secrets []Secret,
+	storages []Storage,
+) (Application, error) {
+	row, err := r.store.CreateApplicationWithConfig(ctx,
+		sqlc.CreateApplicationParams{
+			UserID:     pgUUID(app.UserID),
+			ServerID:   pgUUID(app.ServerID),
+			Name:       app.Name,
+			Provider:   app.Provider,
+			Repo:       app.Repo,
+			CloneUrl:   app.CloneURL,
+			Branch:     app.Branch,
+			BuildPack:  app.BuildPack,
+			BaseDomain: app.BaseDomain,
+			Port:       app.Port,
+			HostPort:   app.HostPort,
+		},
+		envVarParams(envVars),
+		secretParams(secrets),
+		storageParams(storages),
+	)
+	if err != nil {
+		return Application{}, applicationWriteError(err, app.Name)
+	}
+	return applicationFromRow(row), nil
+}
+
+// UpdateApplication persists the mutable application fields and returns the row.
+func (r *storeRepository) UpdateApplication(ctx context.Context, app Application) (Application, error) {
+	row, err := r.store.UpdateApplication(ctx, sqlc.UpdateApplicationParams{
+		ID:         pgUUID(app.ID),
+		Name:       app.Name,
+		Branch:     app.Branch,
+		BuildPack:  app.BuildPack,
+		BaseDomain: app.BaseDomain,
+		Port:       app.Port,
+		HostPort:   app.HostPort,
+		ServerID:   pgUUID(app.ServerID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Application{}, ErrNotFound
+		}
+		return Application{}, applicationWriteError(err, app.Name)
+	}
+	return applicationFromRow(row), nil
+}
+
+// DeleteApplication removes the application row (children cascade).
+func (r *storeRepository) DeleteApplication(ctx context.Context, appID uuid.UUID) error {
+	if err := r.store.DeleteApplication(ctx, pgUUID(appID)); err != nil {
+		return fmt.Errorf("deploy: delete application: %w", err)
+	}
+	return nil
+}
+
+// ReplaceEnvVars rewrites the plain env vars and sealed secrets of an
+// application as one set, inside a single transaction.
+func (r *storeRepository) ReplaceEnvVars(ctx context.Context, appID uuid.UUID, envVars []EnvVar, secrets []Secret) error {
+	if err := r.store.ReplaceApplicationEnv(ctx, pgUUID(appID), envVarParams(envVars), secretParams(secrets)); err != nil {
+		return fmt.Errorf("deploy: replace env vars: %w", err)
+	}
+	return nil
+}
+
+// ReplaceStorages rewrites the storage mappings of an application as one set,
+// inside a single transaction.
+func (r *storeRepository) ReplaceStorages(ctx context.Context, appID uuid.UUID, storages []Storage) error {
+	if err := r.store.ReplaceApplicationStorages(ctx, pgUUID(appID), storageParams(storages)); err != nil {
+		return fmt.Errorf("deploy: replace storages: %w", err)
+	}
+	return nil
+}
+
+// ServerExists reports whether the server is registered on the control plane.
+func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error) {
+	if serverID == uuid.Nil {
+		return false, nil
+	}
+	if _, err := r.store.GetServerByID(ctx, pgUUID(serverID)); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("deploy: get server: %w", err)
+	}
+	return true, nil
 }
 
 // CreateDeployment stores a queued deployment. The partial unique index on
@@ -216,7 +343,61 @@ func applicationFromRow(row sqlc.Application) Application {
 		BaseDomain: row.BaseDomain,
 		Port:       row.Port,
 		HostPort:   row.HostPort,
+		CreatedAt:  timeFromPG(row.CreatedAt),
+		UpdatedAt:  timeFromPG(row.UpdatedAt),
 	}
+}
+
+// envVarParams maps domain env vars to insert rows. The application_id is
+// stamped by the transactional store method, so it is left unset here.
+func envVarParams(envVars []EnvVar) []sqlc.InsertEnvVarParams {
+	params := make([]sqlc.InsertEnvVarParams, 0, len(envVars))
+	for _, v := range envVars {
+		params = append(params, sqlc.InsertEnvVarParams{Key: v.Key, Value: v.Value})
+	}
+	return params
+}
+
+// secretParams maps sealed secrets to insert rows. A secret keeps the ID the
+// service assigned (the stable `secret:<id>` reference the API hands out); an
+// unset one is generated here so the row never carries a NULL primary key.
+func secretParams(secrets []Secret) []sqlc.InsertSecretParams {
+	params := make([]sqlc.InsertSecretParams, 0, len(secrets))
+	for _, s := range secrets {
+		id := s.ID
+		if id == uuid.Nil {
+			id = uuid.New()
+		}
+		params = append(params, sqlc.InsertSecretParams{
+			ID:         pgUUID(id),
+			Key:        s.Key,
+			Ciphertext: s.Ciphertext,
+		})
+	}
+	return params
+}
+
+// storageParams maps domain storages to insert rows (see envVarParams).
+func storageParams(storages []Storage) []sqlc.InsertStorageParams {
+	params := make([]sqlc.InsertStorageParams, 0, len(storages))
+	for _, s := range storages {
+		params = append(params, sqlc.InsertStorageParams{
+			Name:          s.Name,
+			HostPath:      s.HostPath,
+			ContainerPath: s.ContainerPath,
+		})
+	}
+	return params
+}
+
+// applicationWriteError classifies a failed application write: the unique index
+// on (user_id, name) surfaces as ErrValidation with a message the API can show,
+// every other failure is wrapped for the log.
+func applicationWriteError(err error, name string) error {
+	if isUniqueViolation(err) {
+		return fmt.Errorf("%w: an application named %q already exists", ErrValidation, name)
+	}
+	return fmt.Errorf("deploy: write application: %w", err)
 }
 
 // deploymentFromRow maps a sqlc row to the domain model.

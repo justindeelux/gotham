@@ -25,6 +25,129 @@ func (s *Store) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID) 
 	return s.queries.ListApplicationsByUser(ctx, userID)
 }
 
+// UpdateApplication persists the mutable application fields and returns the
+// row. Unset columns (server_id NULL) serialise as NULL through pgUUID.
+func (s *Store) UpdateApplication(ctx context.Context, params sqlc.UpdateApplicationParams) (sqlc.Application, error) {
+	return s.queries.UpdateApplication(ctx, params)
+}
+
+// DeleteApplication removes an application row; env vars, secrets, storages and
+// deployments cascade with it (see migration 00006).
+func (s *Store) DeleteApplication(ctx context.Context, id pgtype.UUID) error {
+	return s.queries.DeleteApplication(ctx, id)
+}
+
+// CreateApplicationWithConfig stores an application together with its env vars,
+// sealed secrets and storage mappings in one transaction: a created
+// application must never exist without the configuration the wizard sent with
+// it. The children's application_id is filled from the inserted row, so callers
+// pass the rows without an owner.
+func (s *Store) CreateApplicationWithConfig(
+	ctx context.Context,
+	params sqlc.CreateApplicationParams,
+	envVars []sqlc.InsertEnvVarParams,
+	secrets []sqlc.InsertSecretParams,
+	storages []sqlc.InsertStorageParams,
+) (sqlc.Application, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.Application{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	app, err := queries.CreateApplication(ctx, params)
+	if err != nil {
+		return sqlc.Application{}, err
+	}
+	for _, row := range envVars {
+		row.ApplicationID = app.ID
+		if _, err := queries.InsertEnvVar(ctx, row); err != nil {
+			return sqlc.Application{}, err
+		}
+	}
+	for _, row := range secrets {
+		row.ApplicationID = app.ID
+		if _, err := queries.InsertSecret(ctx, row); err != nil {
+			return sqlc.Application{}, err
+		}
+	}
+	for _, row := range storages {
+		row.ApplicationID = app.ID
+		if _, err := queries.InsertStorage(ctx, row); err != nil {
+			return sqlc.Application{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.Application{}, err
+	}
+	return app, nil
+}
+
+// ReplaceApplicationEnv replaces an application's plain env vars and sealed
+// secrets in one transaction — the collections are written as a set, so a
+// partial write would leave a half-updated configuration behind. Rows are
+// inserted without an application_id: it is stamped from applicationID here.
+func (s *Store) ReplaceApplicationEnv(
+	ctx context.Context,
+	applicationID pgtype.UUID,
+	envVars []sqlc.InsertEnvVarParams,
+	secrets []sqlc.InsertSecretParams,
+) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.ClearEnvVarsByApp(ctx, applicationID); err != nil {
+		return err
+	}
+	if err := queries.ClearSecretsByApp(ctx, applicationID); err != nil {
+		return err
+	}
+	for _, row := range envVars {
+		row.ApplicationID = applicationID
+		if _, err := queries.InsertEnvVar(ctx, row); err != nil {
+			return err
+		}
+	}
+	for _, row := range secrets {
+		row.ApplicationID = applicationID
+		if _, err := queries.InsertSecret(ctx, row); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// ReplaceApplicationStorages replaces an application's volume map in one
+// transaction (see ReplaceApplicationEnv).
+func (s *Store) ReplaceApplicationStorages(
+	ctx context.Context,
+	applicationID pgtype.UUID,
+	storages []sqlc.InsertStorageParams,
+) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.ClearStoragesByApp(ctx, applicationID); err != nil {
+		return err
+	}
+	for _, row := range storages {
+		row.ApplicationID = applicationID
+		if _, err := queries.InsertStorage(ctx, row); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 // CreateDeployment stores a queued deployment and returns the row. A partial
 // unique index guarantees at most one active deployment per application, so a
 // concurrent submit surfaces as a unique-constraint violation.

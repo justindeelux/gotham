@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearEnvVarsByApp = `-- name: ClearEnvVarsByApp :exec
+DELETE FROM env_vars WHERE application_id = $1
+`
+
+func (q *Queries) ClearEnvVarsByApp(ctx context.Context, applicationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearEnvVarsByApp, applicationID)
+	return err
+}
+
+const clearSecretsByApp = `-- name: ClearSecretsByApp :exec
+DELETE FROM secrets WHERE application_id = $1
+`
+
+func (q *Queries) ClearSecretsByApp(ctx context.Context, applicationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearSecretsByApp, applicationID)
+	return err
+}
+
+const clearStoragesByApp = `-- name: ClearStoragesByApp :exec
+DELETE FROM storages WHERE application_id = $1
+`
+
+func (q *Queries) ClearStoragesByApp(ctx context.Context, applicationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearStoragesByApp, applicationID)
+	return err
+}
+
 const createApplication = `-- name: CreateApplication :one
 INSERT INTO applications (
     user_id, server_id, name, provider, repo, clone_url,
@@ -115,6 +142,15 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deleteApplication = `-- name: DeleteApplication :exec
+DELETE FROM applications WHERE id = $1
+`
+
+func (q *Queries) DeleteApplication(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteApplication, id)
+	return err
 }
 
 const failStaleDeployments = `-- name: FailStaleDeployments :execrows
@@ -224,6 +260,96 @@ func (q *Queries) GetDeployment(ctx context.Context, arg GetDeploymentParams) (D
 		&i.FinishedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertEnvVar = `-- name: InsertEnvVar :one
+INSERT INTO env_vars (application_id, key, value)
+VALUES ($1, $2, $3)
+RETURNING id, application_id, key, value, created_at
+`
+
+type InsertEnvVarParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	Key           string      `json:"key"`
+	Value         string      `json:"value"`
+}
+
+func (q *Queries) InsertEnvVar(ctx context.Context, arg InsertEnvVarParams) (EnvVar, error) {
+	row := q.db.QueryRow(ctx, insertEnvVar, arg.ApplicationID, arg.Key, arg.Value)
+	var i EnvVar
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.Key,
+		&i.Value,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertSecret = `-- name: InsertSecret :one
+INSERT INTO secrets (id, application_id, key, ciphertext)
+VALUES ($1, $2, $3, $4)
+RETURNING id, application_id, key, ciphertext, created_at
+`
+
+type InsertSecretParams struct {
+	ID            pgtype.UUID `json:"id"`
+	ApplicationID pgtype.UUID `json:"application_id"`
+	Key           string      `json:"key"`
+	Ciphertext    string      `json:"ciphertext"`
+}
+
+// The id is written explicitly: it is the stable `secret:<id>` reference the
+// API hands out for a sealed value, so re-writing a secret keeps its reference.
+func (q *Queries) InsertSecret(ctx context.Context, arg InsertSecretParams) (Secret, error) {
+	row := q.db.QueryRow(ctx, insertSecret,
+		arg.ID,
+		arg.ApplicationID,
+		arg.Key,
+		arg.Ciphertext,
+	)
+	var i Secret
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.Key,
+		&i.Ciphertext,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertStorage = `-- name: InsertStorage :one
+INSERT INTO storages (application_id, name, host_path, container_path)
+VALUES ($1, $2, $3, $4)
+RETURNING id, application_id, name, host_path, container_path, created_at
+`
+
+type InsertStorageParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	Name          string      `json:"name"`
+	HostPath      string      `json:"host_path"`
+	ContainerPath string      `json:"container_path"`
+}
+
+func (q *Queries) InsertStorage(ctx context.Context, arg InsertStorageParams) (Storage, error) {
+	row := q.db.QueryRow(ctx, insertStorage,
+		arg.ApplicationID,
+		arg.Name,
+		arg.HostPath,
+		arg.ContainerPath,
+	)
+	var i Storage
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.Name,
+		&i.HostPath,
+		&i.ContainerPath,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -406,6 +532,62 @@ func (q *Queries) ListStoragesByApp(ctx context.Context, applicationID pgtype.UU
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateApplication = `-- name: UpdateApplication :one
+UPDATE applications
+SET name = $2,
+    branch = $3,
+    build_pack = $4,
+    base_domain = $5,
+    port = $6,
+    host_port = $7,
+    server_id = $8,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at
+`
+
+type UpdateApplicationParams struct {
+	ID         pgtype.UUID `json:"id"`
+	Name       string      `json:"name"`
+	Branch     string      `json:"branch"`
+	BuildPack  string      `json:"build_pack"`
+	BaseDomain string      `json:"base_domain"`
+	Port       int32       `json:"port"`
+	HostPort   int32       `json:"host_port"`
+	ServerID   pgtype.UUID `json:"server_id"`
+}
+
+func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (Application, error) {
+	row := q.db.QueryRow(ctx, updateApplication,
+		arg.ID,
+		arg.Name,
+		arg.Branch,
+		arg.BuildPack,
+		arg.BaseDomain,
+		arg.Port,
+		arg.HostPort,
+		arg.ServerID,
+	)
+	var i Application
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ServerID,
+		&i.Name,
+		&i.Provider,
+		&i.Repo,
+		&i.CloneUrl,
+		&i.Branch,
+		&i.BuildPack,
+		&i.BaseDomain,
+		&i.Port,
+		&i.HostPort,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateDeployment = `-- name: UpdateDeployment :one

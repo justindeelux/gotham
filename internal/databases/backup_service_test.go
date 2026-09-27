@@ -498,3 +498,71 @@ func TestBackupManagerWithoutRepositoryFailsClearly(t *testing.T) {
 		t.Error("expected an error without a repository")
 	}
 }
+
+// TestReconcileStaleBackups pins the crash recovery contract: a run left
+// running by a previous control plane process is swept to failed and its
+// database container is resumed.
+func TestReconcileStaleBackups(t *testing.T) {
+	fixture := newBackupFixture(t)
+	stale, err := fixture.backups.CreateBackup(context.Background(), Backup{
+		DatabaseID: fixture.database.ID,
+		Type:       BackupManual,
+		Status:     BackupRunning,
+		CreatedAt:  time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("seed running backup: %v", err)
+	}
+
+	fixture.manager.reconcileStaleBackups()
+
+	got, err := fixture.backups.GetBackup(context.Background(), stale.ID)
+	if err != nil {
+		t.Fatalf("GetBackup: %v", err)
+	}
+	if got.Status != BackupFailed {
+		t.Errorf("status = %q, want %q", got.Status, BackupFailed)
+	}
+	if got.Error == "" {
+		t.Error("swept backup carries no error")
+	}
+	if got.FinishedAt.IsZero() {
+		t.Error("swept backup has no finished_at")
+	}
+
+	fixture.containers.mu.Lock()
+	starts := fixture.containers.starts
+	fixture.containers.mu.Unlock()
+	if starts == 0 {
+		t.Error("database container was not resumed after the sweep")
+	}
+}
+
+// TestStageChunkFitsArgumentLimit pins Linux's per-argument limit
+// (MAX_ARG_STRLEN = 128 KiB): the base64 chunk plus script overhead must stay
+// under it, or restore fails with E2BIG for any artifact larger than ~97 KB.
+func TestStageChunkFitsArgumentLimit(t *testing.T) {
+	const maxArgStrlen = 128 * 1024
+	const scriptOverhead = 4096
+	encoded := (stageChunkBytes/3 + 1) * 4
+	if encoded+scriptOverhead >= maxArgStrlen {
+		t.Fatalf("chunk encodes to %d bytes; with %d overhead it must stay under %d",
+			encoded, scriptOverhead, maxArgStrlen)
+	}
+}
+
+// TestCreateTargetS3RequiresCredentials guards the target API: an s3 target
+// missing either key is rejected at create time instead of failing on the
+// first backup run.
+func TestCreateTargetS3RequiresCredentials(t *testing.T) {
+	fixture := newBackupFixture(t)
+	for _, req := range []TargetRequest{
+		{Name: "no-keys", Kind: "s3", Endpoint: "https://s3.example.com", Bucket: "b"},
+		{Name: "access-only", Kind: "s3", Endpoint: "https://s3.example.com", Bucket: "b", AccessKey: "ak"},
+		{Name: "secret-only", Kind: "s3", Endpoint: "https://s3.example.com", Bucket: "b", SecretKey: "sk"},
+	} {
+		if _, err := fixture.manager.CreateTarget(context.Background(), fixture.userID, req); !errors.Is(err, ErrValidation) {
+			t.Errorf("CreateTarget(%s) err = %v, want ErrValidation", req.Name, err)
+		}
+	}
+}

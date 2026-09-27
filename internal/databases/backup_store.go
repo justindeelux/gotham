@@ -298,9 +298,10 @@ func splitEndpoint(endpoint string) (string, bool, error) {
 		secure = false
 		raw = strings.TrimPrefix(raw, "http://")
 	default:
-		// Self-hosted MinIO and internal endpoints are usually plain HTTP;
-		// the operator opts into TLS by writing the scheme.
-		secure = false
+		// No scheme means TLS: an operator pointing at a plain-HTTP
+		// endpoint (usually self-hosted MinIO) must say so explicitly, so a
+		// forgotten scheme can never downgrade credentials to plaintext.
+		secure = true
 	}
 	raw = strings.TrimRight(raw, "/")
 	if raw == "" {

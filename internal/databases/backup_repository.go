@@ -28,6 +28,9 @@ type BackupRepository interface {
 	GetBackup(ctx context.Context, backupID uuid.UUID) (Backup, error)
 	// ListBackupsByDatabase returns a database's runs, newest first.
 	ListBackupsByDatabase(ctx context.Context, databaseID uuid.UUID) ([]Backup, error)
+	// ListRunningBackups returns every run still marked running, oldest
+	// first: the boot-time reconciliation sweep marks them failed.
+	ListRunningBackups(ctx context.Context) ([]Backup, error)
 	// FinishBackup persists the terminal state of a run.
 	FinishBackup(ctx context.Context, backup Backup) (Backup, error)
 	// DeleteBackup removes one run and returns the deleted row.
@@ -123,6 +126,19 @@ func (r *storeBackupRepository) ListBackupsByDatabase(ctx context.Context, datab
 	rows, err := r.store.ListBackupsByDatabase(ctx, pgUUID(databaseID))
 	if err != nil {
 		return nil, fmt.Errorf("databases: list backups: %w", err)
+	}
+	backups := make([]Backup, 0, len(rows))
+	for _, row := range rows {
+		backups = append(backups, backupFromRow(row))
+	}
+	return backups, nil
+}
+
+// ListRunningBackups implements BackupRepository.
+func (r *storeBackupRepository) ListRunningBackups(ctx context.Context) ([]Backup, error) {
+	rows, err := r.store.ListRunningBackups(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("databases: list running backups: %w", err)
 	}
 	backups := make([]Backup, 0, len(rows))
 	for _, row := range rows {

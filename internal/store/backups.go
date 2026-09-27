@@ -28,6 +28,11 @@ func (s *Store) ListBackupsByDatabase(ctx context.Context, databaseID pgtype.UUI
 	return s.queries.ListBackupsByDatabase(ctx, databaseID)
 }
 
+// ListRunningBackups returns every run the control plane left running.
+func (s *Store) ListRunningBackups(ctx context.Context) ([]sqlc.Backup, error) {
+	return s.queries.ListRunningBackups(ctx)
+}
+
 // FinishBackup persists the terminal state of a run (status, size, location,
 // error, container) and returns the row.
 func (s *Store) FinishBackup(ctx context.Context, params sqlc.FinishBackupParams) (sqlc.Backup, error) {

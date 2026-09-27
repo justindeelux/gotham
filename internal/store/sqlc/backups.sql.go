@@ -562,6 +562,47 @@ func (q *Queries) ListDueBackupSchedules(ctx context.Context, nextRunAt pgtype.T
 	return items, nil
 }
 
+const listRunningBackups = `-- name: ListRunningBackups :many
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at FROM backups
+WHERE status = 'running'
+ORDER BY created_at ASC
+`
+
+// Boot-time recovery: rows the control plane left running after a crash or
+// restart can never finish, so they are swept to failed.
+func (q *Queries) ListRunningBackups(ctx context.Context) ([]Backup, error) {
+	rows, err := q.db.Query(ctx, listRunningBackups)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Backup{}
+	for rows.Next() {
+		var i Backup
+		if err := rows.Scan(
+			&i.ID,
+			&i.DatabaseID,
+			&i.ScheduleID,
+			&i.Type,
+			&i.Status,
+			&i.Size,
+			&i.Location,
+			&i.TargetID,
+			&i.ContainerID,
+			&i.Error,
+			&i.CreatedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markBackupScheduleRun = `-- name: MarkBackupScheduleRun :one
 UPDATE backup_schedules
 SET last_run_at = $2,

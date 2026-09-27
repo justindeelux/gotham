@@ -260,6 +260,23 @@ func (r *fakeBackupRepository) ListBackupsByDatabase(_ context.Context, database
 	return list, nil
 }
 
+// ListRunningBackups implements BackupRepository.
+func (r *fakeBackupRepository) ListRunningBackups(_ context.Context) ([]Backup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.listBackupErr != nil {
+		return nil, r.listBackupErr
+	}
+	list := make([]Backup, 0, len(r.backupOrder))
+	for _, id := range r.backupOrder {
+		backup := r.backups[id]
+		if backup.Status == BackupRunning {
+			list = append(list, backup)
+		}
+	}
+	return list, nil
+}
+
 // FinishBackup implements BackupRepository.
 func (r *fakeBackupRepository) FinishBackup(_ context.Context, backup Backup) (Backup, error) {
 	r.mu.Lock()

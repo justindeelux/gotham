@@ -259,6 +259,7 @@ func NewDefaultBackupService(cfg BackupConfig) BackupService {
 		return nil
 	}
 	manager := NewBackupService(cfg)
+	manager.reconcileStaleBackups()
 	if !cfg.DisableScheduler {
 		manager.scheduler.Start()
 	}
@@ -271,6 +272,44 @@ func (m *BackupManager) Close() error {
 		m.scheduler.Close()
 	}
 	return nil
+}
+
+// reconcileStaleBackups runs once at construction. A run left in the running
+// state by a crashed control plane can never finish, and a database the
+// crash paused for the job may still be stopped: the sweep marks the run
+// failed and best-effort resumes the container.
+func (m *BackupManager) reconcileStaleBackups() {
+	if m.backups == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stale, err := m.backups.ListRunningBackups(ctx)
+	if err != nil {
+		m.logger.Warn("databases: stale backup sweep failed", "error", err)
+		return
+	}
+	for _, backup := range stale {
+		failed := backup
+		failed.Status = BackupFailed
+		failed.Error = "control plane restarted during the backup"
+		failed.FinishedAt = m.now()
+		if _, err := m.backups.FinishBackup(ctx, failed); err != nil {
+			m.logger.Warn("databases: could not fail a stale backup",
+				"backup_id", backup.ID.String(), "error", err)
+			continue
+		}
+		m.logger.Info("databases: marked stale backup failed",
+			"backup_id", backup.ID.String(), "database_id", backup.DatabaseID.String())
+		database, err := m.repo.GetDatabase(ctx, backup.DatabaseID)
+		if err != nil {
+			continue
+		}
+		if err := m.resumeDatabase(ctx, database); err != nil {
+			m.logger.Warn("databases: could not resume a database after a stale backup",
+				"database_id", database.ID.String(), "error", err)
+		}
+	}
 }
 
 // CreateBackup implements BackupService: it validates ownership and the
@@ -535,6 +574,10 @@ func (m *BackupManager) CreateTarget(ctx context.Context, userID uuid.UUID, req 
 	}
 	if err := applyTargetRequest(&target, req); err != nil {
 		return BackupTarget{}, err
+	}
+	if target.Kind == TargetS3 && (strings.TrimSpace(req.AccessKey) == "" || strings.TrimSpace(req.SecretKey) == "") {
+		return BackupTarget{}, fmt.Errorf(
+			"%w: s3 targets need both an access key and a secret key", ErrValidation)
 	}
 	now := m.now()
 	target.CreatedAt, target.UpdatedAt = now, now
@@ -841,8 +884,8 @@ func (m *BackupManager) restore(ctx context.Context, database Database, backup B
 // stageArtifact writes the artifact onto the database volume one bounded
 // chunk at a time. Each chunk is a temporary container whose command carries
 // a base64 payload: the agent contract has no file-transfer RPC, and a
-// command argument is the largest channel that survives it (ARG_MAX is
-// 2 MiB, the gRPC cap 4 MiB).
+// command argument is the largest channel that survives it. The binding
+// limit is Linux's per-argument MAX_ARG_STRLEN (128 KiB), not ARG_MAX.
 func (m *BackupManager) stageArtifact(ctx context.Context, database Database, runID uuid.UUID, data io.Reader, stagedPath string) error {
 	buffer := make([]byte, stageChunkBytes)
 	for index := 0; ; index++ {

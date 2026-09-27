@@ -113,7 +113,9 @@ func TestSplitEndpoint(t *testing.T) {
 		{endpoint: "https://s3.example.com", host: "s3.example.com", secure: true},
 		{endpoint: "https://account.r2.cloudflarestorage.com", host: "account.r2.cloudflarestorage.com", secure: true},
 		{endpoint: "http://minio.gotham.internal:9000", host: "minio.gotham.internal:9000", secure: false},
-		{endpoint: "minio.gotham.internal:9000", host: "minio.gotham.internal:9000", secure: false},
+		// A bare endpoint defaults to TLS so a forgotten scheme cannot send
+		// credentials over plaintext.
+		{endpoint: "minio.gotham.internal:9000", host: "minio.gotham.internal:9000", secure: true},
 		{endpoint: " https://s3.example.com/ ", host: "s3.example.com", secure: true},
 		{endpoint: "", wantErr: true},
 		{endpoint: "https://", wantErr: true},

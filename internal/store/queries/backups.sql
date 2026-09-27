@@ -130,3 +130,10 @@ SET last_run_at = $2,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: ListRunningBackups :many
+-- Boot-time recovery: rows the control plane left running after a crash or
+-- restart can never finish, so they are swept to failed.
+SELECT * FROM backups
+WHERE status = 'running'
+ORDER BY created_at ASC;

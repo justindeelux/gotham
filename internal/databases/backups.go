@@ -31,10 +31,12 @@ const (
 const stagingDirName = ".gotham-restore"
 
 // stageChunkBytes is the raw size of one staging chunk. base64 expands it by
-// 4/3, and the encoded chunk travels as a single command argument, so the
-// value stays well below the 2 MiB ARG_MAX (and the 4 MiB gRPC message cap)
-// of the agent call that carries it.
-const stageChunkBytes = 1_200_000
+// 4/3 and the encoded chunk travels as a single command argument inside a
+// `sh -c` script, so it must respect Linux's per-argument limit
+// (MAX_ARG_STRLEN = 32 * PAGE_SIZE = 128 KiB on the common 4 KiB page), not
+// just the 2 MiB total ARG_MAX. 90 000 raw bytes encode to 120 000, leaving
+// ~8 KiB of script and quoting overhead inside the per-argument budget.
+const stageChunkBytes = 90_000
 
 // BackupEngine builds the temporary-container jobs of one engine. The control
 // plane never runs a dump tool itself: it stops the database container, runs

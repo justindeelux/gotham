@@ -26,6 +26,36 @@ type PrivateKey struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
+type Provider struct {
+	ID             pgtype.UUID        `json:"id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	Name           string             `json:"name"`
+	BaseUrl        string             `json:"base_url"`
+	ClientID       string             `json:"client_id"`
+	ClientSecret   string             `json:"client_secret"`
+	RedirectUrl    string             `json:"redirect_url"`
+	AccessToken    string             `json:"access_token"`
+	RefreshToken   string             `json:"refresh_token"`
+	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
+	Scopes         string             `json:"scopes"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ReposCache struct {
+	ID            pgtype.UUID        `json:"id"`
+	ProviderID    pgtype.UUID        `json:"provider_id"`
+	ExternalID    string             `json:"external_id"`
+	Name          string             `json:"name"`
+	FullName      string             `json:"full_name"`
+	Private       bool               `json:"private"`
+	DefaultBranch string             `json:"default_branch"`
+	CloneUrl      string             `json:"clone_url"`
+	SshUrl        string             `json:"ssh_url"`
+	HtmlUrl       string             `json:"html_url"`
+	CachedAt      pgtype.Timestamptz `json:"cached_at"`
+}
+
 type Server struct {
 	ID             pgtype.UUID        `json:"id"`
 	Name           string             `json:"name"`

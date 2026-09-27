@@ -180,8 +180,11 @@ func (s *Server) routes() (http.Handler, error) {
 		// Application deploy orchestration (BE-4.3): a nil service (no
 		// database) or FEATURE_APPLICATIONS=false mounts nothing, so Phases
 		// 0–3 stay unaffected. The service is kept on the server so the
-		// closer can stop its worker pool and publisher on shutdown.
-		s.deploy = s.deployService()
+		// closer can stop its worker pool and publisher on shutdown. The
+		// provider service is passed in for deploy keys (BE-4.4b): registering
+		// a key on the Git host needs the same stored connection the webhook
+		// lifecycle uses.
+		s.deploy = s.deployService(providerSvc)
 		deploy.Mount(api, s.RequireAuth, UserIDFromContext, s.deploy)
 
 		// Push webhooks (BE-4.4): the public, signature-verified delivery
@@ -207,10 +210,13 @@ func (s *Server) routes() (http.Handler, error) {
 // deployService builds the deploy domain service for the HTTP wiring: the
 // database, the key that opens sealed application secrets and the realtime
 // publisher, plus the mTLS agent dialer when the concrete node registry is
-// available. Tests pass a fake registry that cannot dial agents, which leaves
-// the dialer unwired instead of forcing a wider interface change. It returns
-// nil (no database, or FEATURE_APPLICATIONS=false) so deploy.Mount is a no-op.
-func (s *Server) deployService() deploy.DeployService {
+// available. providerSvc contributes deploy-key registration on the Git host
+// (nil, or a provider service that cannot register keys, leaves the registrar
+// unwired and deploy-key creation answers a clear error). Tests pass a fake
+// registry that cannot dial agents, which leaves the dialer unwired instead of
+// forcing a wider interface change. It returns nil (no database, or
+// FEATURE_APPLICATIONS=false) so deploy.Mount is a no-op.
+func (s *Server) deployService(providerSvc providers.ProviderService) deploy.DeployService {
 	if s.persistence == nil {
 		return nil
 	}
@@ -219,6 +225,11 @@ func (s *Server) deployService() deploy.DeployService {
 		Secret:    s.cfg.Snapshot().SecretKey,
 		RedisAddr: s.cfg.Snapshot().Redis.Addr,
 		Logger:    s.logger,
+	}
+	if providerSvc != nil {
+		if registrar, ok := providerSvc.(deploy.KeyRegistrar); ok {
+			cfg.KeyRegistrar = registrar
+		}
 	}
 	if dialer, ok := s.servers.(deploy.AgentDialer); ok {
 		cfg.Dial = deploy.AgentDial(dialer)

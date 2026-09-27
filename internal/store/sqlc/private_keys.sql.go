@@ -35,6 +35,15 @@ func (q *Queries) CreatePrivateKey(ctx context.Context, arg CreatePrivateKeyPara
 	return i, err
 }
 
+const deletePrivateKey = `-- name: DeletePrivateKey :exec
+DELETE FROM private_keys WHERE id = $1
+`
+
+func (q *Queries) DeletePrivateKey(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deletePrivateKey, id)
+	return err
+}
+
 const getPrivateKeyByID = `-- name: GetPrivateKeyByID :one
 SELECT id, name, encrypted_key, created_at FROM private_keys WHERE id = $1
 `

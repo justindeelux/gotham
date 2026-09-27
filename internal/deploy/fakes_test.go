@@ -49,12 +49,20 @@ type fakeRepository struct {
 	secrets     []Secret
 	storages    []Storage
 
+	// deployKeys holds the single deploy key per application (the unique
+	// index on application_id) together with the private half, so the fake can
+	// answer the cloner's lookup the way the sealed row does.
+	deployKeys map[uuid.UUID]fakeDeployKey
+
 	// unknownServers names servers ServerExists must report as missing.
 	unknownServers map[uuid.UUID]bool
 
 	getErr       error
 	createErr    error
 	failStaleErr error
+
+	// deployKeyErr fails every deploy-key write (tests the rollback with).
+	deployKeyErr error
 
 	// states records every persisted deployment state in order, so tests can
 	// assert the exact state-machine walk.
@@ -218,6 +226,7 @@ func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) e
 		}
 	}
 	r.storages = storages
+	delete(r.deployKeys, appID)
 	return nil
 }
 
@@ -412,6 +421,81 @@ func (r *fakeRepository) ListStorages(_ context.Context, appID uuid.UUID) ([]Sto
 		}
 	}
 	return out, nil
+}
+
+// fakeDeployKey pairs a stored deploy-key mapping with the private half the
+// cloner opens (in production the private half is sealed in private_keys).
+type fakeDeployKey struct {
+	key        DeployKey
+	privatePEM string
+}
+
+// GetDeployKey implements Repository, keeping one key per application.
+func (r *fakeRepository) GetDeployKey(_ context.Context, appID uuid.UUID) (DeployKey, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stored, ok := r.deployKeys[appID]
+	if !ok {
+		return DeployKey{}, ErrNotFound
+	}
+	return stored.key, nil
+}
+
+// CreateDeployKey implements Repository, assigning IDs and timestamps like the
+// database and failing on the scriptable deployKeyErr.
+func (r *fakeRepository) CreateDeployKey(_ context.Context, key DeployKey, privateKeyPEM string) (DeployKey, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.deployKeyErr != nil {
+		return DeployKey{}, r.deployKeyErr
+	}
+	if r.deployKeys == nil {
+		r.deployKeys = make(map[uuid.UUID]fakeDeployKey)
+	}
+	if _, exists := r.deployKeys[key.ApplicationID]; exists {
+		return DeployKey{}, fmt.Errorf("%w: application already has a deploy key", ErrConflict)
+	}
+	key.ID = uuid.New()
+	key.PrivateKeyID = uuid.New()
+	key.CreatedAt = time.Now().UTC()
+	r.deployKeys[key.ApplicationID] = fakeDeployKey{key: key, privatePEM: privateKeyPEM}
+	return key, nil
+}
+
+// DeleteDeployKey implements Repository with the schema's cascade: the mapping
+// and the private key it points at go together.
+func (r *fakeRepository) DeleteDeployKey(_ context.Context, appID uuid.UUID) (DeployKey, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stored, ok := r.deployKeys[appID]
+	if !ok {
+		return DeployKey{}, ErrNotFound
+	}
+	delete(r.deployKeys, appID)
+	return stored.key, nil
+}
+
+// DeployKeyPrivatePEM implements Repository: "" for an application without a
+// key, the stored private half otherwise.
+func (r *fakeRepository) DeployKeyPrivatePEM(_ context.Context, appID uuid.UUID) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.getErr != nil {
+		return "", r.getErr
+	}
+	stored, ok := r.deployKeys[appID]
+	if !ok {
+		return "", nil
+	}
+	return stored.privatePEM, nil
+}
+
+// hasDeployKey reports whether an application holds a deploy key (test helper).
+func (r *fakeRepository) hasDeployKey(appID uuid.UUID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.deployKeys[appID]
+	return ok
 }
 
 // deployment returns the stored row by ID (test helper).

@@ -10,7 +10,7 @@
 
 **Rollback:** a DB is a container with its own volume — deleting a database only removes the container; the volume is kept 7 days (soft delete) before permanent removal. Backup/restore is the primary rollback mechanism.
 
-**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to the next phase (see Model policy & Phase gate in `00-roadmap.md`).
+**Phase gate:** continuous mode applies (see 00-roadmap.md) — after the exit criteria are met, continue to Phase 7 without stopping (Phase 6 runs in parallel on the same Phase 3 base).
 
 ---
 

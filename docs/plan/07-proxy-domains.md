@@ -10,7 +10,7 @@
 
 **Rollback:** Traefik config is generated from CP state — on error, just regenerate the config + restart Traefik (idempotent). Keep the previous config version 1 day in the DB for fast revert. Traefik itself runs as a `gotham-traefik` container on the node — upgrade by switching image tags.
 
-**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to the next phase (see Model policy & Phase gate in `00-roadmap.md`).
+**Phase gate:** continuous mode applies (see 00-roadmap.md) — after the exit criteria are met, continue to Phase 8 without stopping (Phase 5 runs in parallel on the same Phase 3 base).
 
 ---
 

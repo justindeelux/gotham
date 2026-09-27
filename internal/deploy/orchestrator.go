@@ -1,0 +1,600 @@
+package deploy
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/builds"
+	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
+)
+
+// Orchestrator tunables. Every step runs under its own timeout; a build gets a
+// much larger budget than a clone or a container start because it streams a
+// whole toolchain run.
+const (
+	defaultWorkers       = 2
+	defaultQueueSize     = 64
+	defaultMaxAttempts   = 3
+	defaultStepTimeout   = 5 * time.Minute
+	defaultBuildTimeout  = 20 * time.Minute
+	defaultHealthTimeout = 90 * time.Second
+	defaultHealthPoll    = 3 * time.Second
+)
+
+// job is one queued deployment together with everything its run needs: the
+// application snapshot taken at submit time, and the container the new
+// release retires (best-effort stop before the new one starts).
+type job struct {
+	app      Application
+	dep      Deployment
+	previous string
+}
+
+// runState is the mutable state of one running deployment.
+type runState struct {
+	app      Application
+	dep      Deployment
+	node     Node
+	previous string
+	repoDir  string
+	target   Target
+	log      func(string)
+}
+
+// Orchestrator runs deployment state machines on a fixed worker pool. Each
+// run walks stepsFor(kind), persisting every transition and mirroring it to
+// the realtime log channel; only ErrAgentUnavailable is retried, and only
+// within the step that failed.
+type Orchestrator struct {
+	repo    Repository
+	source  Source
+	dial    DialFunc
+	emitter *Emitter
+	secret  string
+	logger  *slog.Logger
+
+	queue         chan job
+	workers       int
+	maxAttempts   int
+	stepTimeout   time.Duration
+	buildTimeout  time.Duration
+	healthTimeout time.Duration
+	healthPoll    time.Duration
+
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
+	wg         sync.WaitGroup
+	startOnce  sync.Once
+	closeOnce  sync.Once
+}
+
+// newOrchestrator wires an Orchestrator from cfg, filling every unset tunable
+// with its default.
+func newOrchestrator(cfg Config) *Orchestrator {
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	source := cfg.Source
+	if source == nil {
+		source = gitSource{}
+	}
+	emitter := cfg.Emitter
+	if emitter == nil {
+		emitter = NewEmitter(defaultPublisher(cfg))
+	}
+	workers := cfg.Workers
+	if workers <= 0 {
+		workers = defaultWorkers
+	}
+	queueSize := cfg.QueueSize
+	if queueSize <= 0 {
+		queueSize = defaultQueueSize
+	}
+	maxAttempts := cfg.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = defaultMaxAttempts
+	}
+	stepTimeout := cfg.StepTimeout
+	if stepTimeout <= 0 {
+		stepTimeout = defaultStepTimeout
+	}
+	buildTimeout := cfg.BuildTimeout
+	if buildTimeout <= 0 {
+		buildTimeout = defaultBuildTimeout
+	}
+	healthTimeout := cfg.HealthTimeout
+	if healthTimeout <= 0 {
+		healthTimeout = defaultHealthTimeout
+	}
+	healthPoll := cfg.HealthPoll
+	if healthPoll <= 0 {
+		healthPoll = defaultHealthPoll
+	}
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+
+	return &Orchestrator{
+		repo:          cfg.repository(),
+		source:        source,
+		dial:          cfg.Dial,
+		emitter:       emitter,
+		secret:        cfg.Secret,
+		logger:        logger,
+		queue:         make(chan job, queueSize),
+		workers:       workers,
+		maxAttempts:   maxAttempts,
+		stepTimeout:   stepTimeout,
+		buildTimeout:  buildTimeout,
+		healthTimeout: healthTimeout,
+		healthPoll:    healthPoll,
+		baseCtx:       baseCtx,
+		baseCancel:    baseCancel,
+	}
+}
+
+// enqueue queues a deployment for the worker pool, starting the pool on first
+// use. A full queue blocks until the caller's context ends, so a submit
+// never silently drops a deployment.
+func (o *Orchestrator) enqueue(ctx context.Context, j job) error {
+	o.start()
+	select {
+	case o.queue <- j:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("deploy: queue deployment: %w", ctx.Err())
+	case <-o.baseCtx.Done():
+		return errors.New("deploy: orchestrator is shutting down")
+	}
+}
+
+// start boots the worker pool exactly once.
+func (o *Orchestrator) start() {
+	o.startOnce.Do(func() {
+		for i := 0; i < o.workers; i++ {
+			o.wg.Add(1)
+			go o.worker()
+		}
+	})
+}
+
+// worker consumes queued jobs until the orchestrator shuts down.
+func (o *Orchestrator) worker() {
+	defer o.wg.Done()
+	for {
+		select {
+		case <-o.baseCtx.Done():
+			return
+		case j := <-o.queue:
+			o.run(o.baseCtx, j)
+		}
+	}
+}
+
+// Close stops the pool and waits for in-flight runs to finish (they observe
+// the cancelled base context and terminate their steps early).
+func (o *Orchestrator) Close() error {
+	o.closeOnce.Do(func() {
+		o.baseCancel()
+		o.wg.Wait()
+	})
+	return nil
+}
+
+// run drives one deployment from queued to a terminal state: dial the node,
+// walk the steps, and on any error record it as the terminal failure.
+func (o *Orchestrator) run(ctx context.Context, j job) {
+	st := &runState{
+		app:      j.app,
+		dep:      j.dep,
+		previous: j.previous,
+		target:   Target{ServerID: j.app.ServerID, DeploymentID: j.dep.ID},
+	}
+	st.log = func(line string) {
+		o.emitter.Log(ctx, st.target, line)
+	}
+	defer func() {
+		if st.node != nil {
+			if err := st.node.Close(); err != nil {
+				o.logger.Debug("deploy: close agent connection", "deployment_id", st.dep.ID, "error", err)
+			}
+		}
+	}()
+
+	st.log("deployment " + string(st.dep.Kind) + " accepted")
+
+	if err := o.attempt(ctx, st, "connect to node", func() error {
+		node, err := o.dialNode(ctx, j.app.ServerID)
+		if err != nil {
+			return err
+		}
+		st.node = node
+		return nil
+	}); err != nil {
+		o.fail(ctx, st, err)
+		return
+	}
+
+	baseDir, err := os.MkdirTemp("", "gotham-deploy-*")
+	if err != nil {
+		o.fail(ctx, st, fmt.Errorf("deploy: workspace: %w", err))
+		return
+	}
+	defer func() { _ = os.RemoveAll(baseDir) }()
+	st.repoDir = filepath.Join(baseDir, "repo")
+
+	if err := o.execute(ctx, st); err != nil {
+		o.fail(ctx, st, err)
+		return
+	}
+	o.logger.Info("deploy: deployment finished",
+		"deployment_id", st.dep.ID, "application_id", st.app.ID, "image", st.dep.ImageTag)
+}
+
+// execute walks the deployment's steps, persisting each transition before the
+// step runs and stopping at the first failure.
+func (o *Orchestrator) execute(ctx context.Context, st *runState) error {
+	for _, step := range stepsFor(st.dep.Kind) {
+		if err := o.transition(ctx, st, step); err != nil {
+			return err
+		}
+		timeout := o.stepTimeout
+		if step == StateBuilding {
+			timeout = o.buildTimeout
+		}
+		stepCtx, cancel := context.WithTimeout(ctx, timeout)
+		err := o.runStep(stepCtx, st, step)
+		cancel()
+		if err != nil {
+			st.log("step " + string(step) + " failed: " + truncateError(err))
+			return err
+		}
+	}
+	return o.transition(ctx, st, StateRunning)
+}
+
+// runStep dispatches one state-machine step.
+func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) error {
+	switch step {
+	case StateCloning:
+		return o.attempt(ctx, st, "clone", func() error {
+			return o.source.Clone(ctx, st.app, st.repoDir, st.log)
+		})
+	case StateBuilding:
+		return o.attempt(ctx, st, "build", func() error { return o.build(ctx, st) })
+	case StatePushing:
+		return o.attempt(ctx, st, "push", func() error { return o.push(ctx, st) })
+	case StateStarting:
+		return o.attempt(ctx, st, "start", func() error { return o.startContainer(ctx, st) })
+	default:
+		return fmt.Errorf("deploy: unexpected step %q", step)
+	}
+}
+
+// attempt runs op up to MaxAttempts times, retrying only ErrAgentUnavailable
+// (the agent being unreachable), and persists the attempt counter so the API
+// shows retries. Every other failure — a build error, a failed healthcheck, a
+// step timeout — is terminal.
+func (o *Orchestrator) attempt(ctx context.Context, st *runState, what string, op func() error) error {
+	var err error
+	for try := 1; try <= o.maxAttempts; try++ {
+		if st.dep.Attempt != int32(try) {
+			st.dep.Attempt = int32(try)
+			if _, updateErr := o.repo.UpdateDeployment(context.WithoutCancel(ctx), st.dep); updateErr != nil {
+				return fmt.Errorf("deploy: persist attempt: %w", updateErr)
+			}
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("%s: %w", what, ctxErr)
+		}
+		if err = op(); err == nil {
+			return nil
+		}
+		if !errors.Is(err, ErrAgentUnavailable) || try == o.maxAttempts {
+			return err
+		}
+		st.log(fmt.Sprintf("%s: agent unavailable (%v), retrying %d/%d", what, err, try+1, o.maxAttempts))
+	}
+	return err
+}
+
+// build runs the application's build engine over the cloned tree. The node
+// builder streams the context to the agent (BuildImage), which builds and
+// pushes to the node-local registry; toolchain engines (railpack, buildpacks)
+// shell out on the control plane instead and leave the image in the local
+// daemon — the pushing step accounts for that difference.
+func (o *Orchestrator) build(ctx context.Context, st *runState) error {
+	kind, err := builds.ParseEngineKind(st.app.BuildPack)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	logs := newLineLog(st.log)
+	builder := newNodeBuilder(st.node, st.app.ID, st.dep.ID, func(chunk []byte) {
+		_, _ = logs.Write(chunk)
+	})
+	registry := builds.NewRegistry(builder)
+
+	st.log("building with engine " + string(kind))
+	ref, err := registry.Build(ctx, builds.BuildOptions{
+		RepoDir:   st.repoDir,
+		AppID:     st.app.ID,
+		DeployID:  st.dep.ID,
+		BuildPack: kind,
+		Labels: map[string]string{
+			labelAppID:        st.app.ID.String(),
+			labelDeploymentID: st.dep.ID.String(),
+		},
+		LogWriter: logs,
+	})
+	logs.Flush()
+	if err != nil {
+		return err
+	}
+
+	st.dep.ImageTag = ref.Tag
+	if outcome, ok := builder.outcomeOf(); ok {
+		st.dep.RegistryImage = outcome.RegistryImage
+		st.dep.Digest = outcome.Digest
+	} else if ref.Digest != "" {
+		st.dep.Digest = ref.Digest
+	}
+	if _, err := o.repo.UpdateDeployment(ctx, st.dep); err != nil {
+		return fmt.Errorf("deploy: persist image reference: %w", err)
+	}
+	st.log("image built: " + st.dep.ImageTag)
+	return nil
+}
+
+// push makes sure the built image is usable from the node. A build that ran
+// on the node already pushed to the node-local registry, so this confirms the
+// reference resolves; a control-plane toolchain build (railpack/buildpacks)
+// has no transport to the node yet — the agent exposes no image-upload RPC and
+// the node registry binds loopback only — so the reference is logged and the
+// start step will fail clearly when the node cannot see the image.
+func (o *Orchestrator) push(ctx context.Context, st *runState) error {
+	if strings.TrimSpace(st.dep.RegistryImage) == "" {
+		st.log("image " + st.dep.ImageTag + " was built on the control plane; " +
+			"no node registry push is possible for this engine — it must already be present on the node")
+		return nil
+	}
+	if err := st.node.Pull(ctx, st.dep.RegistryImage); err != nil {
+		return err
+	}
+	line := "image available in the node registry: " + st.dep.RegistryImage
+	if st.dep.Digest != "" {
+		line += " (" + st.dep.Digest + ")"
+	}
+	st.log(line)
+	return nil
+}
+
+// startContainer retires the container this deployment replaces, runs the new
+// one with the application's runtime payload, and gates success on the
+// post-start healthcheck.
+func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
+	if st.previous != "" {
+		if err := st.node.Stop(ctx, st.previous); err != nil {
+			st.log("could not stop previous container " + shortID(st.previous) + ": " + err.Error())
+		} else {
+			st.log("stopped previous container " + shortID(st.previous))
+		}
+	}
+
+	envVars, err := o.repo.ListEnvVars(ctx, st.app.ID)
+	if err != nil {
+		return err
+	}
+	secrets, err := o.repo.ListSecrets(ctx, st.app.ID)
+	if err != nil {
+		return err
+	}
+	storages, err := o.repo.ListStorages(ctx, st.app.ID)
+	if err != nil {
+		return err
+	}
+	request, err := buildRunRequest(st.app, st.dep, envVars, secrets, storages, o.secret)
+	if err != nil {
+		return err
+	}
+
+	st.log("starting container " + request.Name + " from " + request.Image)
+	containerID, err := st.node.Run(ctx, request)
+	if err != nil {
+		return err
+	}
+	st.dep.ContainerID = containerID
+	if _, err := o.repo.UpdateDeployment(ctx, st.dep); err != nil {
+		return fmt.Errorf("deploy: persist container: %w", err)
+	}
+	st.log("container " + shortID(containerID) + " started")
+
+	healthCtx, cancel := context.WithTimeout(ctx, o.healthTimeout)
+	defer cancel()
+	return o.waitHealthy(healthCtx, st, containerID)
+}
+
+// waitHealthy polls the node until the container reports healthy, exits or
+// the health window closes. A container without a Docker healthcheck is
+// healthy as soon as it is running, which is Docker's own semantics: only an
+// explicit "(unhealthy)" marker or a non-running state fails the deploy.
+func (o *Orchestrator) waitHealthy(ctx context.Context, st *runState, containerID string) error {
+	ticker := time.NewTicker(o.healthPoll)
+	defer ticker.Stop()
+	for {
+		state, err := o.healthState(ctx, st, containerID)
+		switch {
+		case err != nil:
+			st.log("healthcheck: " + err.Error())
+		case state == "healthy":
+			st.log("container " + shortID(containerID) + " is healthy")
+			return nil
+		case state == "unhealthy":
+			return fmt.Errorf("%w: container %s reported unhealthy", ErrHealthcheck, shortID(containerID))
+		case state == "exited":
+			return fmt.Errorf("%w: container %s is not running", ErrHealthcheck, shortID(containerID))
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w: container %s did not become healthy within %s",
+				ErrHealthcheck, shortID(containerID), o.healthTimeout)
+		case <-ticker.C:
+		}
+	}
+}
+
+// healthState inspects one container on the node and classifies it as
+// "healthy", "starting", "unhealthy" or "exited".
+func (o *Orchestrator) healthState(ctx context.Context, st *runState, containerID string) (string, error) {
+	containers, err := st.node.Containers(ctx)
+	if err != nil {
+		return "", err
+	}
+	var info *agentv1.ContainerInfo
+	for _, candidate := range containers {
+		id := candidate.GetId()
+		if id == containerID || strings.HasPrefix(containerID, id) || strings.HasPrefix(id, containerID) {
+			info = candidate
+			break
+		}
+	}
+	if info == nil {
+		return "starting", nil
+	}
+	status := strings.ToLower(info.GetStatus())
+	switch {
+	case strings.Contains(status, "(unhealthy)"):
+		return "unhealthy", nil
+	case strings.Contains(status, "(health: starting)"), strings.Contains(status, "health: starting"):
+		return "starting", nil
+	case info.GetState() != "running":
+		return "exited", nil
+	default:
+		// "(healthy)" or a container with no healthcheck configured at all.
+		return "healthy", nil
+	}
+}
+
+// transition persists one legal state-machine edge and mirrors it to the
+// realtime channel. The deployment clock starts when it leaves queued and
+// stops on a terminal state.
+func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) error {
+	from := st.dep.State
+	if !CanTransition(from, to) {
+		return fmt.Errorf("deploy: illegal transition %s → %s", from, to)
+	}
+	if from == StateQueued {
+		st.dep.StartedAt = time.Now().UTC()
+	}
+	if to.Terminal() {
+		st.dep.FinishedAt = time.Now().UTC()
+	}
+	st.dep.State = to
+
+	updated, err := o.repo.UpdateDeployment(ctx, st.dep)
+	if err != nil {
+		return fmt.Errorf("deploy: persist state %s: %w", to, err)
+	}
+	st.dep = updated
+	o.emitter.State(ctx, st.target, from, to)
+	return nil
+}
+
+// fail records the terminal failure: the error text on the row, the failed
+// transition and one log line. It uses a detached context so a cancelled run
+// (shutdown, step timeout) still leaves a terminal row behind — otherwise the
+// partial unique index would block every future deploy of the application.
+func (o *Orchestrator) fail(ctx context.Context, st *runState, cause error) {
+	st.dep.Error = truncateError(cause)
+	o.logger.Error("deploy: deployment failed",
+		"deployment_id", st.dep.ID, "application_id", st.app.ID, "state", st.dep.State, "error", cause)
+
+	fresh, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := o.transition(fresh, st, StateFailed); err != nil {
+		o.logger.Error("deploy: could not persist failed state",
+			"deployment_id", st.dep.ID, "error", err)
+		return
+	}
+	st.log("deployment failed: " + st.dep.Error)
+}
+
+// dialNode opens the agent of the deployment's server.
+func (o *Orchestrator) dialNode(ctx context.Context, serverID uuid.UUID) (Node, error) {
+	if o.dial == nil {
+		return nil, fmt.Errorf("%w: agent dialer is not configured", ErrAgentUnavailable)
+	}
+	node, err := o.dial(ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return nil, fmt.Errorf("%w: dial returned no node", ErrAgentUnavailable)
+	}
+	return node, nil
+}
+
+// lineLog accumulates streamed output and forwards complete lines to the
+// deploy log, so partial chunks from a build tool never split a log event.
+type lineLog struct {
+	mu      sync.Mutex
+	pending []byte
+	emit    func(string)
+}
+
+// newLineLog binds a line writer to one log function.
+func newLineLog(emit func(string)) *lineLog {
+	return &lineLog{emit: emit}
+}
+
+// io.Writer implementation used as builds.BuildOptions.LogWriter and for raw
+// build chunks.
+func (l *lineLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pending = append(l.pending, p...)
+	for {
+		index := strings.IndexByte(string(l.pending), '\n')
+		if index < 0 {
+			break
+		}
+		line := string(l.pending[:index])
+		l.pending = l.pending[index+1:]
+		l.emitLine(strings.TrimRight(line, "\r"))
+	}
+	return len(p), nil
+}
+
+// Flush emits whatever partial line is buffered.
+func (l *lineLog) Flush() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.pending) > 0 {
+		l.emitLine(string(l.pending))
+		l.pending = nil
+	}
+}
+
+// emitLine forwards one line to the log function, skipping blank ones.
+func (l *lineLog) emitLine(line string) {
+	if l.emit == nil || strings.TrimSpace(line) == "" {
+		return
+	}
+	l.emit(line)
+}
+
+// shortID renders the head of a Docker ID for log lines.
+func shortID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
+}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/containers"
+	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/server/ws"
 	"github.com/justindeelux/gotham/internal/store"
@@ -52,6 +53,7 @@ type Server struct {
 	tokens      TokenService
 	servers     ServerService
 	persistence *store.Store
+	deploy      deploy.DeployService
 	authLimiter *ipRateLimiter
 	router      http.Handler
 	closer      func()
@@ -95,13 +97,19 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		servers:     serverService,
 		persistence: st,
 		authLimiter: limiter,
-		closer: func() {
-			_ = redisClient.Close()
-			limiter.Close()
-			if oauthService != nil {
-				oauthService.Close()
-			}
-		},
+	}
+	s.closer = func() {
+		// The deploy service owns its worker pool and realtime publisher;
+		// shutting it down first stops in-flight deployments before the
+		// shared Redis pinger goes away.
+		if closer, ok := s.deploy.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+		_ = redisClient.Close()
+		limiter.Close()
+		if oauthService != nil {
+			oauthService.Close()
+		}
 	}
 
 	router, err := s.routes()
@@ -161,6 +169,13 @@ func (s *Server) routes() (http.Handler, error) {
 
 		// Source providers (GitHub/GitLab/Gitea): list connections and repos.
 		providers.Mount(api, s.RequireAuth, UserIDFromContext, providers.NewDefaultService(s.persistence, s.cfg.Snapshot().SecretKey, s.logger))
+
+		// Application deploy orchestration (BE-4.3): a nil service (no
+		// database) or FEATURE_APPLICATIONS=false mounts nothing, so Phases
+		// 0–3 stay unaffected. The service is kept on the server so the
+		// closer can stop its worker pool and publisher on shutdown.
+		s.deploy = s.deployService()
+		deploy.Mount(api, s.RequireAuth, UserIDFromContext, s.deploy)
 	})
 
 	spa, err := newSPAHandler()
@@ -170,6 +185,28 @@ func (s *Server) routes() (http.Handler, error) {
 	r.NotFound(spa.ServeHTTP)
 
 	return r, nil
+}
+
+// deployService builds the deploy domain service for the HTTP wiring: the
+// database, the key that opens sealed application secrets and the realtime
+// publisher, plus the mTLS agent dialer when the concrete node registry is
+// available. Tests pass a fake registry that cannot dial agents, which leaves
+// the dialer unwired instead of forcing a wider interface change. It returns
+// nil (no database, or FEATURE_APPLICATIONS=false) so deploy.Mount is a no-op.
+func (s *Server) deployService() deploy.DeployService {
+	if s.persistence == nil {
+		return nil
+	}
+	cfg := deploy.Config{
+		Store:     s.persistence,
+		Secret:    s.cfg.Snapshot().SecretKey,
+		RedisAddr: s.cfg.Snapshot().Redis.Addr,
+		Logger:    s.logger,
+	}
+	if dialer, ok := s.servers.(deploy.AgentDialer); ok {
+		cfg.Dial = deploy.AgentDial(dialer)
+	}
+	return deploy.NewDefaultService(cfg)
 }
 
 // apiError is the JSON body returned for API failures.

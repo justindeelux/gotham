@@ -93,6 +93,23 @@ func (c *secretCipher) gcm() (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
+// SealSecret encrypts plain with AES-256-GCM using the key derived from secret
+// and returns base64(nonce||ciphertext); empty plaintext stays empty.
+//
+// It is the exported entry point to this package's cipher, so sibling domain
+// packages (deploy seals application secrets) reuse the single AES-256-GCM
+// implementation instead of growing a second one. The cost of re-deriving the
+// key per call is one SHA-256 hash.
+func SealSecret(secret, plain string) (string, error) {
+	return newSecretCipher(secret).seal(plain)
+}
+
+// OpenSecret reverses SealSecret. A wrong secret, a corrupted value or
+// truncated ciphertext fails authentication and returns an error.
+func OpenSecret(secret, encoded string) (string, error) {
+	return newSecretCipher(secret).open(encoded)
+}
+
 // randomSecret returns a base64-encoded 32-byte random secret, used when no
 // GOTHAM_SECRET_KEY is configured so provider credentials are never stored in
 // the clear (at the cost of not surviving a restart).

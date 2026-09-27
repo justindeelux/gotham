@@ -19,6 +19,49 @@ type ApiToken struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type Application struct {
+	ID         pgtype.UUID        `json:"id"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	ServerID   pgtype.UUID        `json:"server_id"`
+	Name       string             `json:"name"`
+	Provider   string             `json:"provider"`
+	Repo       string             `json:"repo"`
+	CloneUrl   string             `json:"clone_url"`
+	Branch     string             `json:"branch"`
+	BuildPack  string             `json:"build_pack"`
+	BaseDomain string             `json:"base_domain"`
+	Port       int32              `json:"port"`
+	HostPort   int32              `json:"host_port"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Deployment struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	Kind          string             `json:"kind"`
+	State         string             `json:"state"`
+	ImageTag      string             `json:"image_tag"`
+	RegistryImage string             `json:"registry_image"`
+	Digest        string             `json:"digest"`
+	Error         string             `json:"error"`
+	Attempt       int32              `json:"attempt"`
+	ContainerID   string             `json:"container_id"`
+	RollbackFrom  pgtype.UUID        `json:"rollback_from"`
+	StartedAt     pgtype.Timestamptz `json:"started_at"`
+	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EnvVar struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	Key           string             `json:"key"`
+	Value         string             `json:"value"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type PrivateKey struct {
 	ID           pgtype.UUID        `json:"id"`
 	Name         string             `json:"name"`
@@ -56,6 +99,14 @@ type ReposCache struct {
 	CachedAt      pgtype.Timestamptz `json:"cached_at"`
 }
 
+type Secret struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	Key           string             `json:"key"`
+	Ciphertext    string             `json:"ciphertext"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type Server struct {
 	ID             pgtype.UUID        `json:"id"`
 	Name           string             `json:"name"`
@@ -86,6 +137,15 @@ type Session struct {
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type Storage struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	Name          string             `json:"name"`
+	HostPath      string             `json:"host_path"`
+	ContainerPath string             `json:"container_path"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
 type User struct {

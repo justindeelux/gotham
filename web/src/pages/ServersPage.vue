@@ -16,6 +16,7 @@ import {
 import type { DataTableColumns } from "naive-ui";
 import { computed, h, onMounted, onUnmounted, ref } from "vue";
 import type { VNode } from "vue";
+import { useRouter } from "vue-router";
 
 import { describeServerError } from "../api/servers";
 import type { Server } from "../api/servers";
@@ -25,6 +26,7 @@ import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
 import { relativeTime } from "../utils/format";
 
+const router = useRouter();
 const serversStore = useServersStore();
 const message = useMessage();
 
@@ -133,7 +135,12 @@ function textCell(value: string | null, mono = false): VNode {
   return h("span", {}, value);
 }
 
-/** actionsCell renders the per-row validate and delete controls. */
+/**
+ * actionsCell renders the per-row controls: re-validate (existing flow),
+ * Open node (server-detail route), Containers (server-containers route), and
+ * Delete with confirm. There is no agent-update backend route, so no Update
+ * agent action is rendered — it is omitted, never faked.
+ */
 function actionsCell(row: Server): VNode {
   return h(NSpace, { size: 8, align: "center", wrap: false }, {
     default: () => [
@@ -146,7 +153,29 @@ function actionsCell(row: Server): VNode {
             void handleValidate(row);
           },
         },
-        { default: () => "Validate" },
+        { default: () => "Re-validate" },
+      ),
+      h(
+        NButton,
+        {
+          size: "small",
+          quaternary: true,
+          onClick: () => {
+            void openNode(row.id);
+          },
+        },
+        { default: () => "Open node" },
+      ),
+      h(
+        NButton,
+        {
+          size: "small",
+          quaternary: true,
+          onClick: () => {
+            void openContainers(row.id);
+          },
+        },
+        { default: () => "Containers" },
       ),
       h(
         NPopconfirm,
@@ -245,7 +274,7 @@ const columns: DataTableColumns<Server> = [
   {
     title: "Actions",
     key: "actions",
-    width: 180,
+    width: 320,
     render: (row) => actionsCell(row),
   },
 ];
@@ -303,6 +332,16 @@ async function handleCheckAll(): Promise<void> {
   } finally {
     checkingAll.value = false;
   }
+}
+
+/** openNode navigates to the server-detail route for one server. */
+function openNode(id: string): Promise<void> {
+  return router.push({ name: "server-detail", params: { id } }).then(() => undefined);
+}
+
+/** openContainers navigates to the server-containers route for one server. */
+function openContainers(id: string): Promise<void> {
+  return router.push({ name: "server-containers", params: { id } }).then(() => undefined);
 }
 
 /** handleDelete removes one server after the popconfirm is accepted. */
@@ -421,7 +460,7 @@ onUnmounted(() => {
         :loading="serversStore.loading"
         :row-key="rowKey"
         :bordered="false"
-        :scroll-x="1320"
+        :scroll-x="1500"
         :pagination="{ pageSize: 10 }"
       />
       <NEmpty v-else class="servers-empty" description="No nodes match the current filters">
@@ -437,6 +476,48 @@ onUnmounted(() => {
           </NButton>
         </template>
       </NEmpty>
+    </NCard>
+
+    <NCard class="install-card" title="Install the agent on a new node">
+      <template #header-extra>
+        <code class="inline-code">deploy/install-agent.sh</code>
+      </template>
+      <pre class="install-cmd"><code>curl -fsSL https://get.gotham.dev/install.sh | sudo sh -s -- \
+  --cp-addr cp.gotham.dev:9442 \
+  --node-id new-node-01
+
+# The script downloads the arch-matched binary, verifies the checksum +
+# Ed25519 signature, writes /etc/gotham/agent.crt issued by the
+# control-plane CA, then enables the systemd unit.
+systemctl status gotham-agent</code></pre>
+      <div class="callouts">
+        <div class="callout">
+          <NIcon>
+            <GothamIcon name="shield" />
+          </NIcon>
+          <div>
+            <h4>Mutual mTLS</h4>
+            <p>
+              The control plane's internal CA signs a dedicated certificate for
+              each agent at <code class="inline-code">Register</code> time. An
+              agent only accepts commands from an authenticated control plane.
+            </p>
+          </div>
+        </div>
+        <div class="callout">
+          <NIcon>
+            <GothamIcon name="refresh" />
+          </NIcon>
+          <div>
+            <h4>10-second heartbeat</h4>
+            <p>
+              Every heartbeat carries CPU, RAM, disk, and container count. Three
+              missed beats in a row mark the node
+              <span class="mono">offline</span> and raise an alert.
+            </p>
+          </div>
+        </div>
+      </div>
     </NCard>
 
     <AddServerWizard v-model:show="wizardOpen" />
@@ -579,6 +660,61 @@ onUnmounted(() => {
   color: var(--muted);
   font-size: var(--text-sm);
   margin: 0 0 var(--space-3);
+}
+
+.install-card {
+  margin-top: var(--space-4);
+}
+
+.install-cmd {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--fg);
+  background: var(--surface-warm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  margin: 0 0 var(--space-4);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.install-cmd code {
+  font-family: inherit;
+}
+
+.callouts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.callout {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+}
+
+.callout h4 {
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+  margin: 0 0 var(--space-2);
+}
+
+.callout p {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  margin: 0;
+}
+
+@media (max-width: 860px) {
+  .callouts {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 860px) {

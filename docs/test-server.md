@@ -54,6 +54,45 @@ GOTHAM_AGENT_CERT_DIR=./data/agent \
 Expected: the agent registers, the control plane shows the server as `ready`
 with live CPU/RAM/disk metrics, and heartbeats arrive every 10s.
 
+## Browser UI smoke (Playwright)
+
+The `web/e2e` suite drives the embedded SPA in headless Chromium against a
+running control plane. It complements the API-level suite in `internal/e2e`
+by proving the browser paths work end to end: real login form, core-page
+navigation, and an API-seeded application appearing in the UI.
+
+It never starts a server itself — point it at a running `gotham serve` (see
+the all-in-one workflow above) with `GOTHAM_E2E_BASE_URL`.
+
+```sh
+cd web
+npm ci
+npm run e2e:install           # Linux: Chromium + OS deps (with --with-deps)
+# macOS: npx playwright install chromium
+
+# Against the default test-server CP on :8000:
+GOTHAM_E2E_BASE_URL=http://localhost:8000 npm run e2e
+```
+
+Scenarios:
+
+- **auth** — register one account through the API, then sign in through the
+  real login form and assert the dashboard renders.
+- **navigation** — walk Dashboard, Servers, Applications and Databases; assert
+  each heading renders with no console errors or failed `/api/v1/*` requests.
+- **applications** — seed a server row and an application row through the API
+  (public clone URL, no deployment) and assert the app lists and its detail
+  page opens.
+- **guardrail** — any `console.error`, page error, or `/api/v1/*` 5xx fails the
+  test; the navigation and applications scenarios also fail on any 4xx.
+
+Every run namespaces its data with a unique suffix (account email, server and
+application names) and removes nothing owned by the shared box.
+
+CI runs the same suite in `.github/workflows/ui-e2e.yml` (Postgres 16 + Redis
+7 services, port 8099, report/trace artifacts on failure). Trigger it manually
+via *workflow_dispatch* or by opening a PR that touches `web/**`.
+
 ## Notes
 
 - Development mode: when there is no CA (empty `GOTHAM_CA_DIR`), the control

@@ -44,10 +44,16 @@ func clientCredentials(caPath string) (credentials.TransportCredentials, bool, e
 
 // ServerCredentials builds credentials for the agent's DockerService server.
 // certPEM is the certificate issued by the CP at registration and keyPEM its
-// matching private key. When certPEM is empty a self-signed certificate is
-// generated. When caPath is non-empty the server requires and verifies client
-// certificates; otherwise it does not request one (development mode).
+// matching private key. When caPath is non-empty the server requires and
+// verifies client certificates; otherwise it does not request one. In
+// development mode — no certificate issued and no CA configured — it returns
+// nil credentials, so the agent serves plaintext and matches the control
+// plane's insecure dial when it runs without a CA. With a CA configured but no
+// issued certificate it falls back to a self-signed certificate (still TLS).
 func ServerCredentials(certPEM, keyPEM []byte, caPath string) (credentials.TransportCredentials, error) {
+	if len(certPEM) == 0 && caPath == "" {
+		return nil, nil
+	}
 	if len(certPEM) == 0 {
 		generatedCert, generatedKey, err := generateSelfSigned()
 		if err != nil {

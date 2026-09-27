@@ -94,7 +94,10 @@ func runServe() int {
 		var startErr error
 		serverOnce.Do(func() {
 			certPath := ""
-			if len(response.GetCert()) == 0 {
+			devPlaintext := len(response.GetCert()) == 0 && cfg.CA == ""
+			if devPlaintext {
+				log.Warn("control plane returned no certificate; serving plaintext in development mode")
+			} else if len(response.GetCert()) == 0 {
 				log.Warn("control plane returned no certificate; using a self-signed certificate")
 			} else {
 				written, err := agent.SaveAgentCert(cfg.CertDir, response.GetCert())

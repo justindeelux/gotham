@@ -56,6 +56,10 @@ with live CPU/RAM/disk metrics, and heartbeats arrive every 10s.
 
 ## Notes
 
+- Development mode: when there is no CA (empty `GOTHAM_CA_DIR`), the control
+  plane dials agents over plaintext and the agent serves its DockerService
+  without TLS. As soon as a CA exists, registration issues certificates and
+  both sides use mTLS.
 - Go toolchain: install a Go release matching `go.mod` before `make build`.
 - Ports used on this host: 8000 (CP HTTP), 9442 (CP gRPC), 9443 (agent
   DockerService), 5432 (Postgres), 6379 (Redis).

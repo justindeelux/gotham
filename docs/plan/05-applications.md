@@ -121,4 +121,22 @@ CI: `.github/workflows/e2e.yml` (separate from `ci.yml`) starts Postgres 16 +
 Redis 7 as service containers, applies migrations and runs the same command on
 `ubuntu-latest`. It triggers on `workflow_dispatch`, on pushes to `main` and on
 PRs touching `internal/deploy`, `internal/webhooks`, `internal/builds`,
-`internal/store`, `internal/e2e`, `agent`, `proto` or the workflow itself.
+`internal/store`, `internal/e2e`, `internal/server`, `internal/config`, `cmd`,
+`agent`, `proto`, `go.mod`/`go.sum` or the workflow itself.
+
+### G1 decisions (2026-09-27, owner-approved)
+
+The API-level suite above is the G1 gate for Phase 4. Two QA-4.1 deliverables
+were deferred by explicit owner decision:
+
+- **Playwright UI leg** (QA-4.1 spec says "Playwright for the UI + direct API
+  calls") moves to `ws/p4-ui-e2e` (QA-4.1b), which runs beside Phase 5/6.
+  The API leg already exercises the real HTTP routes; only the browser layer
+  is missing.
+- **Network clone of a real public repo** is not part of CI (fixtures keep the
+  gate deterministic). It was verified live on the shared test box before the
+  waiver: `docker/welcome-to-docker` (Dockerfile) and
+  `heroku/node-js-getting-started` (Railpack, no Dockerfile) both deployed to
+  `running` and answered HTTP 200 through their host ports, including env vars
+  and a persistent `/data` mount. A network-gated optional test can be added
+  with QA-4.1b.

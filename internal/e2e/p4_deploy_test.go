@@ -71,6 +71,10 @@ func TestP4FailedBuild(t *testing.T) {
 	fixture := newBrokenP4Fixture(t, "e2e/p4-broken-"+suffix, "gotham-p4-broken-"+suffix)
 	hostPort := freeHostPort(t)
 
+	// The legacy Docker builder leaves the failed RUN step's scratch container
+	// behind without any label, so cleanup must match it by command text.
+	t.Cleanup(func() { removeContainersMatchingCommand(t, "P4-BUILD-BOOM") })
+
 	app := h.createApplication(t, p4CreateApplication{
 		Name:      "p4-broken-" + suffix,
 		Provider:  "github",

@@ -559,6 +559,38 @@ func removeLabelledContainers(t *testing.T, label string) {
 	}
 }
 
+// removeContainersMatchingCommand force-removes every container whose
+// reported command contains marker. The legacy Docker builder leaves the
+// scratch container of a failed RUN step behind without labels, so
+// label-based cleanup cannot see it.
+func removeContainersMatchingCommand(t *testing.T, marker string) {
+	t.Helper()
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Logf("cleanup: docker CLI not found, remove containers running %q manually", marker)
+		return
+	}
+	output, err := exec.Command(docker, "ps", "-a", "--format", "{{.ID}} {{.Command}}").CombinedOutput()
+	if err != nil {
+		t.Logf("cleanup: docker ps -a: %v: %s", err, strings.TrimSpace(string(output)))
+		return
+	}
+	var ids []string
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		id, command, ok := strings.Cut(line, " ")
+		if ok && strings.Contains(command, marker) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	args := append([]string{"rm", "-f"}, ids...)
+	if removed, err := exec.Command(docker, args...).CombinedOutput(); err != nil {
+		t.Logf("cleanup: docker rm %v: %v: %s", ids, err, strings.TrimSpace(string(removed)))
+	}
+}
+
 // removeImages force-removes every image reference containing ref, including
 // the node-registry tag a build produced.
 func removeImages(t *testing.T, ref string) {

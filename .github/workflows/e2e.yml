@@ -16,8 +16,13 @@ on:
       - "internal/builds/**"
       - "internal/store/**"
       - "internal/e2e/**"
+      - "internal/server/**"
+      - "internal/config/**"
+      - "cmd/**"
       - "agent/**"
       - "proto/**"
+      - "go.mod"
+      - "go.sum"
       - ".github/workflows/e2e.yml"
   pull_request:
     paths:
@@ -26,8 +31,13 @@ on:
       - "internal/builds/**"
       - "internal/store/**"
       - "internal/e2e/**"
+      - "internal/server/**"
+      - "internal/config/**"
+      - "cmd/**"
       - "agent/**"
       - "proto/**"
+      - "go.mod"
+      - "go.sum"
       - ".github/workflows/e2e.yml"
 
 permissions:
@@ -84,6 +94,18 @@ jobs:
 
       - name: Docker available
         run: docker version
+
+      - name: Pre-pull base images (retry on Docker Hub flakes)
+        run: |
+          for image in busybox:1.36 registry:2; do
+            pulled=""
+            for attempt in 1 2 3 4; do
+              if docker pull "$image"; then pulled=1; break; fi
+              echo "pull $image attempt $attempt failed; retrying" >&2
+              sleep 10
+            done
+            if [ -z "$pulled" ]; then echo "could not pull $image" >&2; exit 1; fi
+          done
 
       - name: Apply migrations
         run: go run ./cmd/gotham migrate up

@@ -46,10 +46,13 @@ CREATE UNIQUE INDEX webhook_events_app_delivery_idx ON webhook_events (applicati
 CREATE INDEX webhook_events_app_idx ON webhook_events (application_id, received_at DESC);
 
 -- An incoming delivery names the repository and branch it was sent for; the
--- control plane resolves the applications watching that exact target.
-CREATE INDEX applications_webhook_target_idx ON applications (provider, repo, branch);
+-- control plane resolves applications watching that target through
+-- application_webhooks, so the lookup index lives there (provider first,
+-- repository folded to lower case like the query).
+CREATE INDEX application_webhooks_target_idx
+    ON application_webhooks (provider, lower(repo));
 
 -- +goose Down
-DROP INDEX IF EXISTS applications_webhook_target_idx;
+DROP INDEX IF EXISTS application_webhooks_target_idx;
 DROP TABLE IF EXISTS webhook_events;
 DROP TABLE IF EXISTS application_webhooks;

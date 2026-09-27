@@ -58,6 +58,13 @@
 - **Verify:** push a commit to the test repo → a deploy starts automatically (visible in DB + logs).
 - **Depends on:** BE-4.3 + BE-4.1.
 
+## BE-4.4b — SSH deploy keys for private repos — `ws/p4-deploy-keys`
+
+- **Context brief:** BE-4.4 authenticates webhooks, but the cloner still clones anonymously, so private repos cannot be deployed. This closes that gap.
+- **Deliverables:** generate an ed25519 keypair per application (reuse `private_keys`), register the public key with the provider (GitHub/GitLab/Gitea) and delete it with the application; clone via `GIT_SSH_COMMAND` with an ephemeral key file on the CP; unit tests with a fake provider + a local `git`+`ssh` fixture, no external network.
+- **Verify:** deploy a private repo via SSH; deleting the app removes the key at the provider.
+- **Depends on:** BE-4.4 + BE-4.3b (application lifecycle).
+
 ## FE-4.1 — Application wizard + deploy UI — `ws/p4-app-ui`
 
 - **Context brief:** the product's main screen. App creation wizard: pick provider → repo → branch → build pack (auto-detect) → port/domain → env vars → storage → Deploy button. Detail screen: deployments list, realtime build/deploy logs (reuse the Phase 3 `LogViewer`), rollback, redeploy, stop/start buttons.

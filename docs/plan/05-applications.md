@@ -12,7 +12,7 @@
 
 **Rollback:** deploy is a state machine persisted in the DB (`deployments` table) — each new deploy keeps the old image tag; the "Rollback" button in FE-4.1 points back at the old container. If the phase breaks: disable with the env flag `FEATURE_APPLICATIONS=false`, Phases 0–3 unaffected.
 
-**Phase gate:** after the exit criteria are met and Gate G1 passes, STOP and ask the project owner before continuing to Phase 5/6 (see Model policy & Phase gate in `00-roadmap.md`).
+**Phase gate:** continuous mode applies (see 00-roadmap.md) — after the exit criteria are met and Gate G1 passes, continue to Phase 5/6 without stopping. Gate G1 itself still blocks: no Phase 4 merge without `code-reviewer` + `e2e-runner` approval.
 
 ---
 

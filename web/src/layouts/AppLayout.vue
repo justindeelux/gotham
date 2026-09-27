@@ -1,46 +1,104 @@
 <script setup lang="ts">
-import {
-  NAvatar,
-  NButton,
-  NDropdown,
-  NMenu,
-  NSpace,
-  NText,
-} from "naive-ui";
-import type { DropdownOption, MenuOption } from "naive-ui";
+import { NAvatar, NButton, NDropdown, NInput, NTooltip } from "naive-ui";
+import type { DropdownOption } from "naive-ui";
 import { computed, ref, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
+import { version as appVersion } from "../../package.json";
 
+import GothamIcon from "../components/GothamIcon.vue";
+import type { IconName } from "../components/GothamIcon.vue";
+import MeCard from "../components/MeCard.vue";
 import ServerRail from "../components/ServerRail.vue";
 import { useAppStore } from "../stores/app";
 import { useAuthStore } from "../stores/auth";
+import { useServersStore } from "../stores/servers";
+
+/**
+ * Listener ports shown as topbar chips. They mirror the backend defaults in
+ * `internal/config/config.go` (`defaultServerPort = 8000`,
+ * `defaultGRPCAddr = ":9442"`); the SPA itself is served from the same
+ * origin, so these are labels, not live config.
+ */
+const cpPort = 8000;
+const grpcPort = 9442;
+
+/** Sidebar entry: live route when `to` is set, inert stub otherwise. */
+interface NavItem {
+  key: string;
+  label: string;
+  icon: IconName;
+  to?: string;
+  phase?: number;
+}
+
+interface NavSection {
+  label: string;
+  items: NavItem[];
+}
+
+// Group order and English labels follow the docs/design shell renderer
+// (docs/design/assets/gotham-ui.js SECTIONS). Placeholder entries have no
+// route and name the backend phase that will build them.
+const navSections: NavSection[] = [
+  {
+    label: "Operations",
+    items: [
+      { key: "dashboard", label: "Dashboard", icon: "grid", to: "dashboard" },
+      { key: "servers", label: "Servers", icon: "server", to: "servers" },
+      { key: "applications", label: "Applications", icon: "box", phase: 4 },
+      { key: "services", label: "Services", icon: "layers", phase: 7 },
+      { key: "databases", label: "Databases", icon: "db", phase: 5 },
+      { key: "files", label: "File manager", icon: "folder", phase: 4 },
+      { key: "templates", label: "Template library", icon: "rocket", phase: 7 },
+      { key: "domains", label: "Domains & SSL", icon: "globe", phase: 6 },
+    ],
+  },
+  {
+    label: "Team",
+    items: [
+      { key: "members", label: "Members & roles", icon: "users", phase: 8 },
+      { key: "notifications", label: "Notification channels", icon: "bell", phase: 8 },
+      { key: "tokens", label: "API tokens", icon: "key", phase: 8 },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { key: "updates", label: "Updates & settings", icon: "gear", phase: 9 },
+    ],
+  },
+];
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
+const serversStore = useServersStore();
 const route = useRoute();
 const router = useRouter();
 
-const menuOptions: MenuOption[] = [
-  { label: "Dashboard", key: "dashboard" },
-  { label: "Servers", key: "servers" },
-];
-
 const accountOptions: DropdownOption[] = [{ label: "Sign out", key: "sign-out" }];
 
+// Live count: the only pill backed by a store. Every other section has no
+// backend yet, so no pill is rendered rather than a fabricated number.
+const serversCount = computed<number>(() => serversStore.servers.length);
+
 const activeKey = computed<string>(() => String(route.name ?? "dashboard"));
-
-const pageTitle = computed<string>(() => route.meta.title ?? "Gotham");
-
-const userLabel = computed<string>(() => authStore.user?.email ?? "");
 
 const userInitial = computed<string>(() =>
   (authStore.user?.email?.[0] ?? "?").toUpperCase(),
 );
 
-const mobileNavOpen = ref(false);
+// The control plane exposes no environment endpoint, so the chip reflects
+// where the SPA itself is served from: loopback means a local setup.
+const envLabel = computed<string>(() => {
+  const host = window.location.hostname;
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === ""
+    ? "local"
+    : "production";
+});
 
-function handleMenuSelect(key: string | number): void {
-  void router.push({ name: String(key) });
+/** stubTip names the backend phase behind an inert sidebar entry. */
+function stubTip(phase: number): string {
+  return `Coming in Phase ${phase}`;
 }
 
 async function handleAccountSelect(key: string | number): Promise<void> {
@@ -63,6 +121,8 @@ function toggleNav(): void {
   appStore.toggleSidebar();
 }
 
+const mobileNavOpen = ref(false);
+
 watch(
   () => route.path,
   () => {
@@ -82,9 +142,38 @@ watch(
     <ServerRail />
 
     <aside class="sidebar" aria-label="Product navigation">
-      <div class="sidebar-head">Gotham</div>
-      <div class="sidebar-body">
-        <NMenu :value="activeKey" :options="menuOptions" @update:value="handleMenuSelect" />
+      <div class="sidebar-head">
+        <span class="brand">Gotham</span>
+        <span class="tag" :title="`Web build ${appVersion}`">v{{ appVersion }}</span>
+      </div>
+      <nav class="sidebar-body">
+        <template v-for="section in navSections" :key="section.label">
+          <p class="nav-label">{{ section.label }}</p>
+          <template v-for="item in section.items" :key="item.key">
+            <RouterLink
+              v-if="item.to"
+              class="nav-item"
+              :class="{ 'is-active': activeKey === item.key }"
+              :to="{ name: item.to }"
+            >
+              <GothamIcon :name="item.icon" />
+              <span>{{ item.label }}</span>
+              <span v-if="item.key === 'servers'" class="nav-count">{{ serversCount }}</span>
+            </RouterLink>
+            <NTooltip v-else trigger="hover" :tooltip-style="{ maxWidth: '240px' }">
+              <template #trigger>
+                <span class="nav-item is-disabled" role="link" aria-disabled="true">
+                  <GothamIcon :name="item.icon" />
+                  <span>{{ item.label }}</span>
+                </span>
+              </template>
+              {{ item.phase !== undefined ? stubTip(item.phase) : "Coming soon" }}
+            </NTooltip>
+          </template>
+        </template>
+      </nav>
+      <div class="sidebar-foot">
+        <MeCard />
       </div>
     </aside>
 
@@ -98,43 +187,63 @@ watch(
           @click="toggleNav"
         >
           <template #icon>
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-              width="18"
-              height="18"
-            >
-              <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" />
-            </svg>
+            <GothamIcon name="grid" />
           </template>
         </NButton>
-        <NText strong>{{ pageTitle }}</NText>
+        <span class="status-line" :title="`Serving environment: ${envLabel}`">
+          <GothamIcon name="shield" class="status-icon" />
+          {{ envLabel }}
+        </span>
+        <span class="channel-chip" :title="`Control-plane HTTP port`">CP :{{ cpPort }}</span>
+        <span class="channel-chip" :title="`Agent gRPC port`">gRPC :{{ grpcPort }}</span>
+        <NTooltip trigger="hover">
+          <template #trigger>
+            <div class="search" role="search" aria-label="Search (coming soon)">
+              <GothamIcon name="search" />
+              <NInput disabled placeholder="Search apps, servers, databases…" aria-label="Search" />
+              <span class="kbd">⌘K</span>
+            </div>
+          </template>
+          Search is coming soon
+        </NTooltip>
         <div class="topbar-right">
-          <NSpace align="center">
-            <NDropdown
-              v-if="authStore.isAuthenticated"
-              trigger="click"
-              :options="accountOptions"
-              @select="handleAccountSelect"
-            >
-              <NButton quaternary>
-                <NSpace align="center" :size="8">
-                  <NAvatar round :size="28" :src="authStore.user?.avatar">
-                    {{ userInitial }}
-                  </NAvatar>
-                  <NText depth="2">{{ userLabel }}</NText>
-                </NSpace>
+          <NTooltip trigger="hover">
+            <template #trigger>
+              <NButton quaternary circle aria-label="Notifications (coming soon)" class="is-stub">
+                <template #icon>
+                  <GothamIcon name="bell" />
+                </template>
               </NButton>
-            </NDropdown>
-            <RouterLink v-else to="/login">
-              <NButton quaternary type="primary">Sign in</NButton>
-            </RouterLink>
-          </NSpace>
+            </template>
+            Notifications — coming in Phase 8
+          </NTooltip>
+          <NTooltip trigger="hover">
+            <template #trigger>
+              <NButton quaternary circle aria-label="Docs (coming soon)" class="is-stub">
+                <template #icon>
+                  <GothamIcon name="doc" />
+                </template>
+              </NButton>
+            </template>
+            Docs — coming soon
+          </NTooltip>
+          <NDropdown
+            v-if="authStore.isAuthenticated"
+            trigger="click"
+            :options="accountOptions"
+            @select="handleAccountSelect"
+          >
+            <NButton quaternary circle aria-label="Account">
+              <template #icon>
+                <NAvatar round :size="24" :src="authStore.user?.avatar">
+                  {{ userInitial }}
+                </NAvatar>
+              </template>
+            </NButton>
+          </NDropdown>
+          <RouterLink v-else to="/login">
+            <NButton quaternary type="primary">Sign in</NButton>
+          </RouterLink>
         </div>
       </header>
 
@@ -198,12 +307,115 @@ watch(
   color: var(--fg-2);
 }
 
+.brand {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
 .sidebar-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: var(--space-3) var(--space-2) var(--space-4);
+}
+
+.nav-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: var(--space-3) var(--space-2) 3px;
+  margin: 0;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 6px var(--space-2);
+  min-height: 30px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-decoration: none;
+  transition:
+    background var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard);
+}
+
+.nav-item :deep(svg) {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  color: var(--meta);
+}
+
+a.nav-item:hover {
+  background: var(--hover-row);
+  color: var(--fg-2);
+}
+
+a.nav-item:hover :deep(svg) {
+  color: var(--fg);
+}
+
+a.nav-item.is-active {
+  background: var(--selected-row);
+  color: var(--fg-2);
+}
+
+a.nav-item.is-active :deep(svg) {
+  color: var(--fg-2);
+}
+
+.nav-item .nav-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--surface-warm);
+  border-radius: var(--radius-pill);
+  padding: 1px 6px;
+}
+
+a.nav-item.is-active .nav-count {
+  color: var(--fg);
+}
+
+.nav-item.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sidebar-foot {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: var(--space-2);
+  border-top: 1px solid var(--border);
+  background: var(--surface-warm);
 }
 
 .main {
@@ -229,11 +441,82 @@ watch(
   z-index: 20;
 }
 
-.topbar-right {
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.status-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.channel-chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--surface-warm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+  white-space: nowrap;
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface-warm);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
+  height: 28px;
+  width: min(360px, 38vw);
+  color: var(--muted);
   margin-left: auto;
+  cursor: not-allowed;
+}
+
+.search :deep(svg) {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.search :deep(.n-input) {
+  background: none;
+  cursor: not-allowed;
+}
+
+.search :deep(.n-input .n-input__input-el) {
+  cursor: not-allowed;
+}
+
+.kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--surface-warm);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 1px 5px;
+  flex: 0 0 auto;
+}
+
+.topbar-right {
   display: flex;
   align-items: center;
   gap: var(--space-1);
+}
+
+.is-stub {
+  opacity: 0.65;
+  cursor: default;
 }
 
 .nav-toggle {
@@ -292,6 +575,22 @@ watch(
 
   .page {
     padding: var(--space-5) var(--space-5) var(--space-8);
+  }
+}
+
+@media (max-width: 860px) {
+  .topbar .channel-chip,
+  .topbar .status-line {
+    display: none;
+  }
+
+  .search {
+    width: auto;
+  }
+
+  .topbar .search :deep(.n-input) {
+    width: 0;
+    padding: 0;
   }
 }
 

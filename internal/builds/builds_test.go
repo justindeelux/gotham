@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -235,29 +236,41 @@ func TestRegistryBuildStaticPublicDir(t *testing.T) {
 	}
 }
 
-func TestRegistryBuildRailpackNotWired(t *testing.T) {
-	repoDir := t.TempDir()
-	writeTestFile(t, filepath.Join(repoDir, "package.json"), "{}\n")
-	builder := &mockBuilder{}
-	registry := NewRegistry(builder)
-
-	_, err := registry.Build(context.Background(), testOptions(repoDir))
-	if !errors.Is(err, ErrEngineNotWired) {
-		t.Fatalf("Build error = %v; want ErrEngineNotWired", err)
+// The Railpack and Buildpacks engines shell out to CLIs that may not be
+// installed on the node: with an empty PATH the build must fail with
+// ErrCLIMissing and an install hint, never with a fabricated image.
+func TestRegistryBuildCLIMissing(t *testing.T) {
+	tests := []struct {
+		name     string
+		marker   string
+		content  string
+		wantTool string
+	}{
+		{name: "railpack", marker: "package.json", content: "{}\n", wantTool: "railpack"},
+		{name: "buildpacks", marker: "Procfile", content: "web: ./app\n", wantTool: "pack"},
 	}
-	if builder.calls != 0 {
-		t.Errorf("builder called %d times; want 0", builder.calls)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("PATH", t.TempDir())
+			repoDir := t.TempDir()
+			writeTestFile(t, filepath.Join(repoDir, tt.marker), tt.content)
+			builder := &mockBuilder{}
+			registry := NewRegistry(builder)
 
-func TestRegistryBuildBuildpacksNotWired(t *testing.T) {
-	repoDir := t.TempDir()
-	writeTestFile(t, filepath.Join(repoDir, "Procfile"), "web: ./app\n")
-	registry := NewRegistry(&mockBuilder{})
-
-	_, err := registry.Build(context.Background(), testOptions(repoDir))
-	if !errors.Is(err, ErrEngineNotWired) {
-		t.Fatalf("Build error = %v; want ErrEngineNotWired", err)
+			_, err := registry.Build(context.Background(), testOptions(repoDir))
+			if !errors.Is(err, ErrCLIMissing) {
+				t.Fatalf("Build error = %v; want ErrCLIMissing", err)
+			}
+			if !strings.Contains(err.Error(), tt.wantTool) {
+				t.Errorf("Build error = %q; want it to name the %s CLI", err, tt.wantTool)
+			}
+			if !strings.Contains(err.Error(), "install") {
+				t.Errorf("Build error = %q; want an install hint", err)
+			}
+			if builder.calls != 0 {
+				t.Errorf("builder called %d times; want 0", builder.calls)
+			}
+		})
 	}
 }
 

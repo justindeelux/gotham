@@ -1,10 +1,7 @@
+@import "./tokens.css";
+
 :root {
-  color-scheme: light;
-  font-family:
-    Inter,
-    "Helvetica Neue",
-    Arial,
-    sans-serif;
+  color-scheme: dark;
 }
 
 *,
@@ -21,8 +18,105 @@ body,
 }
 
 body {
-  background-color: #f5f7fa;
-  color: #1f2225;
+  background-color: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  margin: 0;
+  font-family: var(--font-display);
+  color: var(--fg-2);
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+h3 {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+::selection {
+  background: var(--accent-softer);
+  color: var(--fg-2);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-warm) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--surface-warm);
+  border-radius: var(--radius-pill);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--border-soft);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--muted);
 }
 
 .auth-page {

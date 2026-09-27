@@ -24,10 +24,20 @@
 // directory and the ACME volume mounted and ports 80/443 (plus a
 // loopback-bound 8080 for /ping) published.
 //
-// Every mutation of an application with a base_domain triggers a resync for
-// the affected servers. Generation is a pure function of database state, so
-// syncs are idempotent: running them twice yields byte-identical files and a
-// second push is a no-op for Traefik. Errors are logged on the applications
-// CRUD path (a failed proxy push must never fail a mutation) and returned to
-// this package's own domain API (POST /v1/proxy/sync) only.
+// Every mutation that affects routing — an application created, updated or
+// deleted, and every deployment that reaches running — triggers a resync for
+// the affected servers. The resync is best effort on those paths (a failure is
+// logged and must never fail the mutation) and returned to this package's own
+// domain API (POST /v1/proxy/sync) only. Generation is a pure function of
+// database state, so syncs are idempotent: running them twice yields
+// byte-identical files, and bootstrap is idempotent too (an existing
+// gotham-traefik container is started, never recreated).
+//
+// Only an application with a pinned host port is routable: without one Docker
+// assigns an ephemeral port that no generated configuration can know, so the
+// sync reports such a row as a validation error instead of silently dropping
+// it.
+//
+// FEATURE_PROXY=false disables the whole surface: no routes are mounted, no
+// deploy hook is wired and no configuration is pushed.
 package proxy

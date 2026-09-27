@@ -14,4 +14,6 @@ var (
 	// ErrReload — the configuration files were written but Traefik did not
 	// answer its ping, so the reload is unconfirmed (502).
 	ErrReload = errors.New("proxy: reload not confirmed")
+	// ErrServerNotFound — the node has no registry row (404).
+	ErrServerNotFound = errors.New("proxy: server not found")
 )

@@ -21,6 +21,7 @@ import (
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
+	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/server/ws"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
@@ -58,6 +59,7 @@ type Server struct {
 	servers     ServerService
 	persistence *store.Store
 	deploy      deploy.DeployService
+	proxy       proxy.ProxyService
 	backups     databases.BackupService
 	authLimiter *ipRateLimiter
 	router      http.Handler
@@ -175,6 +177,14 @@ func (s *Server) routes() (http.Handler, error) {
 		containerService := s.containerService()
 		containers.Mount(api, s.RequireAuth, containerService)
 
+		// Traefik proxy synchronization (BE-6.1): the shared container
+		// service provisions the gotham-traefik container and the mTLS agent
+		// dialer pushes the generated configuration. A nil service (no
+		// database, no container service, or FEATURE_PROXY=false) mounts
+		// nothing and leaves the deploy lifecycle without a proxy hook.
+		s.proxy = s.proxyService(containerService)
+		proxy.Mount(api, s.RequireAuth, s.proxy)
+
 		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
 		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger)
 
@@ -188,8 +198,9 @@ func (s *Server) routes() (http.Handler, error) {
 		// closer can stop its worker pool and publisher on shutdown. The
 		// provider service is passed in for deploy keys (BE-4.4b): registering
 		// a key on the Git host needs the same stored connection the webhook
-		// lifecycle uses.
-		s.deploy = s.deployService(providerSvc)
+		// lifecycle uses. The proxy service (BE-6.1) receives a best-effort
+		// resync after application mutations and successful deployments.
+		s.deploy = s.deployService(providerSvc, s.proxy)
 		deploy.Mount(api, s.RequireAuth, UserIDFromContext, s.deploy)
 
 		// Push webhooks (BE-4.4): the public, signature-verified delivery
@@ -225,11 +236,12 @@ func (s *Server) routes() (http.Handler, error) {
 // publisher, plus the mTLS agent dialer when the concrete node registry is
 // available. providerSvc contributes deploy-key registration on the Git host
 // (nil, or a provider service that cannot register keys, leaves the registrar
-// unwired and deploy-key creation answers a clear error). Tests pass a fake
-// registry that cannot dial agents, which leaves the dialer unwired instead of
-// forcing a wider interface change. It returns nil (no database, or
-// FEATURE_APPLICATIONS=false) so deploy.Mount is a no-op.
-func (s *Server) deployService(providerSvc providers.ProviderService) deploy.DeployService {
+// unwired and deploy-key creation answers a clear error). proxySvc receives
+// the best-effort resync after domain changes and successful deployments.
+// Tests pass a fake registry that cannot dial agents, which leaves the dialer
+// unwired instead of forcing a wider interface change. It returns nil (no
+// database, or FEATURE_APPLICATIONS=false) so deploy.Mount is a no-op.
+func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc proxy.ProxyService) deploy.DeployService {
 	if s.persistence == nil {
 		return nil
 	}
@@ -246,6 +258,9 @@ func (s *Server) deployService(providerSvc providers.ProviderService) deploy.Dep
 	}
 	if dialer, ok := s.servers.(deploy.AgentDialer); ok {
 		cfg.Dial = deploy.AgentDial(dialer)
+	}
+	if proxySvc != nil {
+		cfg.Proxy = proxySvc
 	}
 	return deploy.NewDefaultService(cfg)
 }
@@ -300,6 +315,38 @@ func (s *Server) containerService() containers.ContainerService {
 		})
 	}
 	return service
+}
+
+// proxyDialer is the mTLS ProxyService dial implemented by
+// *servers.ServerService. The HTTP layer type-asserts its server registry to
+// this interface, so tests that pass a fake registry simply leave the dialer
+// unwired instead of forcing a wider interface change (containerDialer and
+// deploy.AgentDialer declare the same pattern).
+type proxyDialer interface {
+	DialProxyClient(ctx context.Context, id uuid.UUID, opts ...servers.DockerDialOption) (*servers.ProxyClient, error)
+}
+
+// proxyService builds the proxy domain service for the HTTP wiring: the
+// routing input from the database, the shared container service that
+// provisions the gotham-traefik container and the mTLS agent dialer that
+// pushes the generated configuration. It returns nil (no database, no
+// container service, or FEATURE_PROXY=false) so proxy.Mount is a no-op and
+// the deploy lifecycle receives no resync hook.
+func (s *Server) proxyService(containerService containers.ContainerService) proxy.ProxyService {
+	if s.persistence == nil || containerService == nil {
+		return nil
+	}
+	cfg := proxy.Config{
+		Store:      s.persistence,
+		Containers: containerService,
+		Logger:     s.logger,
+	}
+	if dialer, ok := s.servers.(proxyDialer); ok {
+		cfg.Dial = func(ctx context.Context, serverID uuid.UUID) (proxy.AgentClient, error) {
+			return dialer.DialProxyClient(ctx, serverID)
+		}
+	}
+	return proxy.NewDefaultService(cfg)
 }
 
 // databaseService builds the databases domain service for the HTTP wiring: the

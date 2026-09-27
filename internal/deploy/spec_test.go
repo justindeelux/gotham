@@ -22,7 +22,7 @@ func TestBuildRunRequest(t *testing.T) {
 		ImageTag:      "gotham/app:tag",
 		RegistryImage: "127.0.0.1:5000/gotham/app:tag",
 	}
-	envVars, secrets := testEnv(t, secretKey)
+	envVars, secrets := testEnv(t)
 	storages := []Storage{{Name: "data", HostPath: "/data/app", ContainerPath: "/var/lib/app"}}
 
 	req, err := buildRunRequest(app, dep, envVars, secrets, storages, secretKey)

@@ -85,7 +85,7 @@ func dialAlways(node Node) DialFunc {
 func TestOrchestratorHappyPath(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
-	envVars, secrets := testEnv(t, testSecretKey)
+	envVars, secrets := testEnv(t)
 	repo.envVars, repo.secrets = envVars, secrets
 	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
 

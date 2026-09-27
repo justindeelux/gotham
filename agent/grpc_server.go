@@ -180,6 +180,14 @@ func WithBuildService(build agentv1.BuildServiceServer) ServerOption {
 	}
 }
 
+// WithProxyService registers proxy so the control plane can push generated
+// Traefik configuration to this node. Pass it to NewServer.
+func WithProxyService(proxy agentv1.ProxyServiceServer) ServerOption {
+	return func(server *grpc.Server) {
+		agentv1.RegisterProxyServiceServer(server, proxy)
+	}
+}
+
 // Server wraps a gRPC server exposing DockerService over TLS.
 type Server struct {
 	grpc *grpc.Server

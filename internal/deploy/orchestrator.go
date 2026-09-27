@@ -39,6 +39,18 @@ type job struct {
 	previous string
 }
 
+// proxySyncTimeout bounds one best-effort proxy resync. A sync that must
+// bootstrap the Traefik container (image pull) may exceed it; the node's
+// validation bootstrap or a manual POST /v1/proxy/sync completes it then.
+const proxySyncTimeout = time.Minute
+
+// ProxySync receives a node id after a change that affects its routing
+// configuration. It is implemented by *proxy.SyncService and wired by
+// internal/server; nil disables proxy synchronization.
+type ProxySync interface {
+	SyncServer(ctx context.Context, serverID uuid.UUID) error
+}
+
 // runState is the mutable state of one running deployment.
 type runState struct {
 	app      Application
@@ -61,6 +73,7 @@ type Orchestrator struct {
 	emitter *Emitter
 	secret  string
 	logger  *slog.Logger
+	proxy   ProxySync
 
 	queue         chan job
 	workers       int
@@ -132,6 +145,7 @@ func newOrchestrator(cfg Config) *Orchestrator {
 		emitter:       emitter,
 		secret:        cfg.Secret,
 		logger:        logger,
+		proxy:         cfg.Proxy,
 		queue:         make(chan job, queueSize),
 		workers:       workers,
 		maxAttempts:   maxAttempts,
@@ -238,8 +252,35 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 		o.fail(ctx, st, err)
 		return
 	}
+	// A release reached running: the node's routing may now point at the new
+	// container's published port. Best effort, see syncProxy.
+	o.syncProxy(ctx, st.app)
 	o.logger.Info("deploy: deployment finished",
 		"deployment_id", st.dep.ID, "application_id", st.app.ID, "image", st.dep.ImageTag)
+}
+
+// syncProxy pushes the routing state of the node hosting app. Applications
+// without a domain have no route to refresh, so they are skipped.
+func (o *Orchestrator) syncProxy(ctx context.Context, app Application) {
+	if app.BaseDomain == "" {
+		return
+	}
+	o.syncProxyServer(ctx, app.ServerID)
+}
+
+// syncProxyServer pushes the routing state of one node, best effort:
+// configuration is a pure function of the database, so a failed push is
+// repaired by the next mutation or by POST /v1/proxy/sync, and it must never
+// fail the operation that triggered it.
+func (o *Orchestrator) syncProxyServer(ctx context.Context, serverID uuid.UUID) {
+	if o.proxy == nil || serverID == uuid.Nil {
+		return
+	}
+	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), proxySyncTimeout)
+	defer cancel()
+	if err := o.proxy.SyncServer(syncCtx, serverID); err != nil {
+		o.logger.Warn("deploy: proxy sync failed", "server_id", serverID.String(), "error", err)
+	}
 }
 
 // execute walks the deployment's steps, persisting each transition before the

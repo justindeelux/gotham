@@ -11,6 +11,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/providers"
+	"github.com/justindeelux/gotham/internal/proxy"
 )
 
 // secretRefPrefix marks an environment value as a sealed secret. Written by an
@@ -80,7 +81,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		CloneURL:   strings.TrimSpace(in.CloneURL),
 		Branch:     strings.TrimSpace(in.Branch),
 		BuildPack:  strings.TrimSpace(in.BuildPack),
-		BaseDomain: strings.TrimSpace(in.BaseDomain),
+		BaseDomain: proxy.NormalizeDomain(in.BaseDomain),
 		Port:       in.Port,
 		HostPort:   in.HostPort,
 		ServerID:   in.ServerID,
@@ -102,7 +103,16 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err != nil {
 		return Application{}, err
 	}
-	return s.repo.CreateApplication(ctx, app, envVars, secrets, storages)
+	created, err := s.repo.CreateApplication(ctx, app, envVars, secrets, storages)
+	if err != nil {
+		return Application{}, err
+	}
+	// A new domain starts routing as soon as it is stored; the node may not
+	// have Traefik yet, in which case the sync bootstraps it.
+	if created.BaseDomain != "" {
+		s.syncProxy(ctx, created)
+	}
+	return created, nil
 }
 
 // ListApplications returns the caller's applications, newest first.
@@ -139,6 +149,8 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if err != nil {
 		return Application{}, err
 	}
+	previousServer := app.ServerID
+	previousDomain, previousPort, previousHostPort := app.BaseDomain, app.Port, app.HostPort
 	if in.Name != nil {
 		app.Name = strings.TrimSpace(*in.Name)
 	}
@@ -149,7 +161,7 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		app.BuildPack = strings.TrimSpace(*in.BuildPack)
 	}
 	if in.BaseDomain != nil {
-		app.BaseDomain = strings.TrimSpace(*in.BaseDomain)
+		app.BaseDomain = proxy.NormalizeDomain(*in.BaseDomain)
 	}
 	if in.Port != nil {
 		app.Port = *in.Port
@@ -174,7 +186,27 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if err := validateApplication(app, false); err != nil {
 		return Application{}, err
 	}
-	return s.repo.UpdateApplication(ctx, app)
+	updated, err := s.repo.UpdateApplication(ctx, app)
+	if err != nil {
+		return Application{}, err
+	}
+	// Routing input changed: refresh the hosting node's configuration. A node
+	// whose route may have disappeared (a move, a changed domain, a cleared
+	// domain) is refreshed too, so no stale route is left behind.
+	moved := updated.ServerID != previousServer
+	routingChanged := updated.BaseDomain != previousDomain || updated.Port != previousPort ||
+		updated.HostPort != previousHostPort
+	targets := make(map[uuid.UUID]bool, 2)
+	if updated.BaseDomain != "" && (routingChanged || moved) {
+		targets[updated.ServerID] = true
+	}
+	if previousDomain != "" && (moved || updated.BaseDomain != previousDomain) {
+		targets[previousServer] = true
+	}
+	for serverID := range targets {
+		s.syncProxyServer(ctx, serverID)
+	}
+	return updated, nil
 }
 
 // DeleteApplication removes an application together with everything that hangs
@@ -194,7 +226,16 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 		return err
 	}
 	s.stopBestEffort(ctx, app)
-	return s.repo.DeleteApplication(ctx, appID)
+	if err := s.repo.DeleteApplication(ctx, appID); err != nil {
+		return err
+	}
+	// The application row is gone: regenerate the node's configuration so the
+	// deleted route stops being served immediately. An application without a
+	// domain never had a route to remove.
+	if app.BaseDomain != "" {
+		s.syncProxyServer(ctx, app.ServerID)
+	}
+	return nil
 }
 
 // GetEnv returns the application's environment: plain values verbatim and
@@ -400,6 +441,14 @@ func validateApplication(app Application, checkSource bool) error {
 	}
 	if _, err := builds.ParseEngineKind(app.BuildPack); err != nil {
 		return fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	if app.BaseDomain != "" {
+		// The domain ends up inside a Traefik Host() rule, so it is validated
+		// at write time: an injection attempt or a malformed hostname must
+		// never reach the generator.
+		if err := proxy.ValidateDomain(app.BaseDomain); err != nil {
+			return fmt.Errorf("%w: %v", ErrValidation, err)
+		}
 	}
 	if err := validatePort("port", app.Port); err != nil {
 		return err

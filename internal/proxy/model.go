@@ -93,7 +93,8 @@ type Middleware struct {
 type RedirectScheme struct {
 	// Scheme is the target scheme, e.g. "https".
 	Scheme string `yaml:"scheme" toml:"scheme"`
-	// Permanent emits a 308 instead of a 307 redirect.
+	// Permanent emits a 301 instead of a 302 redirect (Traefik's
+	// redirectScheme middleware semantics).
 	Permanent bool `yaml:"permanent,omitempty" toml:"permanent,omitempty"`
 }
 

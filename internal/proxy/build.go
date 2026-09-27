@@ -60,6 +60,13 @@ func ValidateDomain(domain string) error {
 	if !domainPattern.MatchString(domain) {
 		return fmt.Errorf("%w: invalid domain %q", ErrValidation, domain)
 	}
+	// DNS labels are at most 63 characters; a longer label is not a hostname
+	// a certificate could ever match.
+	for _, label := range strings.Split(domain, ".") {
+		if len(label) > 63 {
+			return fmt.Errorf("%w: domain label exceeds 63 characters", ErrValidation)
+		}
+	}
 	return nil
 }
 

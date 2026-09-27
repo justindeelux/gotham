@@ -31,6 +31,13 @@ const (
 	registryPreferredPort = 5000
 	// registryPortRange is how many consecutive host ports are probed.
 	registryPortRange = 32
+	// registryAuthHeader carries the base64-encoded auth config of a registry
+	// operation. Docker 28+ rejects a push that omits it entirely.
+	registryAuthHeader = "X-Registry-Auth"
+	// anonymousRegistryAuth is base64.StdEncoding.EncodeToString([]byte("{}"))
+	// — an empty auth config. The agent holds no registry credentials, so
+	// anonymous is the correct value for the node-local registry (moby#50614).
+	anonymousRegistryAuth = "e30="
 	// maxDockerStreamLine bounds a single line of a Docker JSON stream.
 	maxDockerStreamLine = 1 << 20
 )
@@ -118,7 +125,7 @@ func (c *DockerClient) PushImage(ctx context.Context, repository, tag string, em
 	query := url.Values{}
 	query.Set("tag", tag)
 
-	response, err := c.do(ctx, http.MethodPost, "/images/"+repository+"/push?"+query.Encode(), nil)
+	response, err := c.doRegistry(ctx, "/images/"+repository+"/push?"+query.Encode())
 	if err != nil {
 		return err
 	}

@@ -264,6 +264,29 @@ func (c *DockerClient) do(ctx context.Context, method, path string, body io.Read
 	return c.doHeader(ctx, method, path, body, "application/json")
 }
 
+// doRegistry issues an image push with the anonymous X-Registry-Auth header
+// and validates the HTTP status. The engine rejects a push that carries no
+// auth header at all (moby/moby#50614, Docker 28+), and Gotham holds no
+// per-registry credentials, so the empty auth config is the right value for
+// the node-local registry. The caller owns the response body.
+func (c *DockerClient) doRegistry(ctx context.Context, path string) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("docker: POST %s: %w", path, err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(registryAuthHeader, anonymousRegistryAuth)
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("docker: POST %s: %w", path, err)
+	}
+	if !dockerOK(response.StatusCode) {
+		return nil, statusError(http.MethodPost, path, response)
+	}
+	return response, nil
+}
+
 // doHeader issues a request with an explicit content type and validates the
 // HTTP status. The caller owns the response body.
 func (c *DockerClient) doHeader(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {

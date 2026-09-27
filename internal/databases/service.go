@@ -243,6 +243,15 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	}
 	stored.ContainerID = containerID
 	if stored, err = s.repo.UpdateDatabase(ctx, stored); err != nil {
+		// The agent started the container but the row could not record its
+		// ID, so the control plane would never be able to manage it again.
+		// Best-effort removal beats an orphan container on the node.
+		if removeErr := s.containers.Remove(ctx, stored.ServerID, containerID); removeErr != nil &&
+			!errors.Is(removeErr, containers.ErrContainerNotFound) &&
+			!errors.Is(removeErr, containers.ErrServerNotFound) {
+			s.logger.Warn("databases: could not remove container after a failed update",
+				"database_id", stored.ID.String(), "container_id", containerID, "error", removeErr)
+		}
 		return Database{}, Credentials{}, err
 	}
 	if err := s.waitHealthy(ctx, stored, engine.Healthcheck()); err != nil {
@@ -323,7 +332,8 @@ func (s *Service) Delete(ctx context.Context, userID, databaseID uuid.UUID) erro
 				"database_id", database.ID.String(), "error", err)
 		}
 		if err := s.containers.Remove(ctx, database.ServerID, database.ContainerID); err != nil &&
-			!errors.Is(err, containers.ErrContainerNotFound) {
+			!errors.Is(err, containers.ErrContainerNotFound) &&
+			!errors.Is(err, containers.ErrServerNotFound) {
 			return mapContainerError(err)
 		}
 	}

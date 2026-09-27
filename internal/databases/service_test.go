@@ -521,6 +521,58 @@ func TestDeleteWithoutContainer(t *testing.T) {
 	}
 }
 
+// TestDeleteSucceedsWhenTheServerIsGone: deleting a server nulls the FK on its
+// databases, and the agent then knows no such node. The row must still
+// soft-delete instead of wedging on ErrServerNotFound forever.
+func TestDeleteSucceedsWhenTheServerIsGone(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{runID: "container-1"}
+	cs.setRunning("container-1")
+	svc := newTestService(repo, cs)
+	owner := uuid.New()
+
+	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	cs.removeErr = containers.ErrServerNotFound
+
+	if err := svc.Delete(context.Background(), owner, created.ID); err != nil {
+		t.Fatalf("Delete with a gone server: %v", err)
+	}
+	if _, err := svc.Get(context.Background(), owner, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get after delete: %v, want ErrNotFound", err)
+	}
+}
+
+// TestCreateRemovesContainerWhenTheRowCannotBeUpdated: when the agent starts a
+// container but its ID cannot be persisted, the row can never manage it again,
+// so the container is removed instead of becoming an orphan.
+func TestCreateRemovesContainerWhenTheRowCannotBeUpdated(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{runID: "container-1"}
+	cs.setRunning("container-1")
+	svc := newTestService(repo, cs)
+
+	repo.updateErr = errors.New("database is down")
+	if _, _, err := svc.Create(context.Background(), uuid.New(), CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID,
+	}); err == nil {
+		t.Fatal("Create should fail when the row cannot be updated")
+	}
+
+	cs.mu.Lock()
+	removes := append([]string(nil), cs.removes...)
+	cs.mu.Unlock()
+	if len(removes) != 1 || removes[0] != "container-1" {
+		t.Fatalf("removes = %v, want the unmanageable container removed", removes)
+	}
+}
+
 // TestLifecycleStatuses walks start/stop/restart and their container calls.
 func TestLifecycleStatuses(t *testing.T) {
 	repo := newFakeRepository()

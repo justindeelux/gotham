@@ -60,7 +60,7 @@ graph LR
 
 ### Model policy
 - Code review: `openrouter/z-ai/glm-5.3-prime` — contract design (proto, service interfaces, orchestration state machine, template engine) and all review gates (G0/G1/G2).
-- Implementation (coding): `deepseek v4.1 flash` / `Muse Spark 1.3 Contributor` / `MiMo-V2.6-Flash (go)` — implementation following agreed patterns.
+- Implementation (coding): `deepseek v4.1 flash` / `Muse Spark 1.3 Contributor` / `MiMo-V2.6-Flash (go)` — implementation following agreed patterns. Task fit: Go/backend work (`internal/`, `agent/`, `proto/`, e2e scripts) → `MiMo-V2.6-Flash (go)`; spec-driven contract/API implementation → `deepseek v4.1 flash`; Vue/layout/composable/copy UI work (`web/`) → `Muse Spark 1.3 Contributor`.
 - ⭐ = tasks requiring the strongest review model for design; unmarked tasks use the coding models.
 
 ### Phase gate (continuous mode — owner waiver from Phase 3 onward)

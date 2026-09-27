@@ -20,8 +20,8 @@ web/dist/
 !.env.example
 config.local.yaml
 
-# orca workspaces
-ws/
+# orca workspaces (repo root only; backend code may use ws/ package paths)
+/ws/
 
 # IDE & OS
 .idea/

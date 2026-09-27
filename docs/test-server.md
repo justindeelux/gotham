@@ -93,6 +93,33 @@ CI runs the same suite in `.github/workflows/ui-e2e.yml` (Postgres 16 + Redis
 7 services, port 8099, report/trace artifacts on failure). Trigger it manually
 via *workflow_dispatch* or by opening a PR that touches `web/**`.
 
+## Verified on real hardware (2026-09-27)
+
+Environment prerequisites installed for the current feature set:
+
+- `railpack` 0.40 on PATH and a `buildkit` container with
+  `BUILDKIT_HOST=docker-container://buildkit` in
+  `/etc/systemd/system/gotham.service.d/buildkit.conf` (Railpack apps).
+- `servers.ip = 127.0.0.1` for `test-node-1` (the all-in-one registration has
+  no operator address; the CP dials the agent on the node port 9443).
+- Dev mode: no CA configured, so CP and agent speak plaintext.
+
+Verified live (beyond CI):
+
+- Deploy `docker/welcome-to-docker` (Dockerfile) → build on the agent →
+  container running → HTTP 200 via host port; update + redeploy; rollback →
+  previous image runs → HTTP 200; manual stop/start.
+- Deploy `heroku/node-js-getting-started` (no Dockerfile, Railpack) →
+  running → HTTP 200; `PORT=3000` auto-injected; env vars applied;
+  persistent `/data` mount present.
+- Containers list through the agent (`/api/v1/servers/{id}/containers`).
+- Migrations `00010_deploy_keys`, `00011_backups` applied; new routes mounted
+  (`/api/v1/databases/backup-targets` → 401 unauthenticated).
+
+Not yet verified live: webhook delivery end-to-end (needs a provider
+connection or a seeded row), managed database create/backup/restore, S3
+targets, Traefik/domains, GitHub OAuth (owner credentials).
+
 ## Notes
 
 - Development mode: when there is no CA (empty `GOTHAM_CA_DIR`), the control

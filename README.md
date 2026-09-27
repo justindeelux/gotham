@@ -91,8 +91,13 @@ Design priorities (in order):
 ├── web/                      # Vue 3 SPA (Vite)
 ├── templates/                # one-click service templates (YAML)
 ├── deploy/                   # install scripts, systemd units, compose
-└── docs/
-    └── plan/                 # development plan per phase (see below)
+└── docs/                     # docs index, process, plan, test server
+    ├── README.md             # start here: plan status, process, test server
+    ├── process.md            # how we work (packages, gates, invariants)
+    ├── TODO.md               # remaining work, checkbox by checkbox
+    ├── test-server.md        # shared all-in-one test box
+    ├── plan/                 # development plan per phase
+    └── design/               # UI mockups (*.html) + design tokens
 ```
 
 ## Naming conventions
@@ -112,24 +117,7 @@ Design priorities (in order):
 
 ## 4. Development Plan
 
-Development is split into phases, one file per phase in [`docs/plan/`](docs/plan/) — each file contains: goal, exit criteria (milestone), work package list for subagents (orca workspace), dependencies, and rollback.
-
-| Phase | File | Week* |
-|---|---|---|
-| Overall roadmap | [docs/plan/00-roadmap.md](docs/plan/00-roadmap.md) | — |
-| 0 — Foundation | [docs/plan/01-foundation.md](docs/plan/01-foundation.md) | W1 |
-| 1 — Auth & Users | [docs/plan/02-auth-users.md](docs/plan/02-auth-users.md) | W2 |
-| 2 — Server + Agent | [docs/plan/03-server-agent.md](docs/plan/03-server-agent.md) | W3–W4 |
-| 3 — Docker Engine Core | [docs/plan/04-docker-core.md](docs/plan/04-docker-core.md) | W5 |
-| 4 — Applications | [docs/plan/05-applications.md](docs/plan/05-applications.md) | W6–W8 |
-| 5 — Databases & Backups | [docs/plan/06-databases-backups.md](docs/plan/06-databases-backups.md) | W8–W9 |
-| 6 — Proxy, Domains & SSL | [docs/plan/07-proxy-domains.md](docs/plan/07-proxy-domains.md) | W8–W9 |
-| 7 — Services & Templates | [docs/plan/08-services-templates.md](docs/plan/08-services-templates.md) | W10 |
-| 8 — Advanced | [docs/plan/09-advanced.md](docs/plan/09-advanced.md) | W11–W12 |
-| 9 — Self-update & Release | [docs/plan/10-self-update-release.md](docs/plan/10-self-update-release.md) | W13 |
-
-\* Relative week (dev-week) from the start, assuming 1 coordinator + 3–4 subagents running in parallel in an orca workspace.
-
-Review gates: end of Phases 0, 4, 9 require subagent review (`code-reviewer` + `e2e-runner` / `security-reviewer`, review model `openrouter/z-ai/glm-5.3-prime`) before merge.
-
-Phase gate: after each phase, stop and ask the project owner before continuing. See [`docs/plan/00-roadmap.md`](docs/plan/00-roadmap.md).
+Development is phased — one file per phase in `docs/plan/`. See
+[`docs/README.md`](docs/README.md) for the plan index with per-phase status,
+[`docs/process.md`](docs/process.md) for how we work, and
+[`docs/TODO.md`](docs/TODO.md) for what is left.

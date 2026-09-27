@@ -38,6 +38,7 @@ docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
 
 ## Development Workflow
 
+- Docs index: `docs/README.md` (plan status, process, test server, design).
 - 10 phases defined in `docs/plan/00-roadmap.md`; each task = 1 work package in an orca workspace (`ws/p<phase>-<slug>`), merged via its own PR; CI must be green before merge.
 - Invariants (run after every task, before merge):
   1. `go build ./...` clean
@@ -48,7 +49,6 @@ docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
   6. No cross-scope imports: `agent/` must not import `internal/`; domain packages must not import the HTTP server
 - Mandatory review gates: G0 (end of Phase 0), G1 (Phase 4), G2 (Phase 9) — see `docs/plan/00-roadmap.md`.
 - Phase gate: after each phase meets its exit criteria, STOP and ask the project owner before starting the next phase.
-- Model policy: code review with `openrouter/z-ai/glm-5.3-prime`; implementation with `deepseek v4.1 flash` / `Muse Spark 1.3 Contributor` / `MiMo-V2.6-Flash (go)` (see `docs/plan/00-roadmap.md`).
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
 
 ## Code Style

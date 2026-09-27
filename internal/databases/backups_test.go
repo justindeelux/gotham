@@ -24,7 +24,8 @@ func jobFrame(runID string, payload []byte) []byte {
 
 // jobFrameB64 renders a successful dump frame the way the engine scripts
 // write it: the payload base64-encoded, followed directly by the end marker
-// (the real scripts emit no newline between the two).
+// (the real scripts emit no newline between the two), plus post-frame engine
+// chatter the collector must keep as diagnostics.
 func jobFrameB64(runID string, payload []byte) []byte {
 	encoded := base64.StdEncoding.EncodeToString(payload)
 	var buf bytes.Buffer
@@ -33,6 +34,7 @@ func jobFrameB64(runID string, payload []byte) []byte {
 	buf.WriteString(jobPayloadB64Prefix + runID + " " + strconv.Itoa(len(encoded)) + "\n")
 	buf.WriteString(encoded)
 	buf.WriteString(jobEndPrefix + runID + " ok\n")
+	buf.WriteString("engine: shutdown complete\n")
 	return buf.Bytes()
 }
 
@@ -149,10 +151,42 @@ func TestBackupEngineRestoreOptions(t *testing.T) {
 	}
 }
 
-// TestPostgresRestoreScriptReadsStdin pins the pg_restore invocation: the tool
-// treats a trailing "-" as a file name, not as stdin, so the script must omit
-// the input file argument and let pg_restore read the piped archive.
-func TestPostgresRestoreScriptReadsStdin(t *testing.T) {
+// TestRestoreScriptsValidateDecompression pins the restore contract shared by
+// all five engines: the staged artifact is decompressed with a checked status
+// before the engine tool runs, the decompressor is never read through a
+// pipeline whose status could mask corruption, and a decompression failure
+// ends the frame with status 5.
+func TestRestoreScriptsValidateDecompression(t *testing.T) {
+	for _, name := range engineOrder {
+		t.Run(name, func(t *testing.T) {
+			engine, ok := LookupBackupEngine(name)
+			if !ok {
+				t.Fatalf("no backup engine for %q", name)
+			}
+			options, err := engine.RestoreOptions(testDatabase(name, ""), testCredentials(),
+				"run-2", "/var/lib/postgresql/data/.gotham-restore/x.part")
+			if err != nil {
+				t.Fatalf("RestoreOptions: %v", err)
+			}
+			script := options.Command[2]
+			if !strings.Contains(script, `gunzip -c "$payload" >"$archive"`) {
+				t.Errorf("%s: restore does not decompress with a checked status:\n%s", name, script)
+			}
+			if !strings.Contains(script, "status=5") {
+				t.Errorf("%s: a decompression failure has no distinct exit status", name)
+			}
+			if strings.Contains(script, `gunzip -c "$payload" 2>>"$log" |`) {
+				t.Errorf("%s: the decompressor status is discarded by a pipeline", name)
+			}
+		})
+	}
+}
+
+// TestPostgresRestoreUsesFileAndTransaction pins the PostgreSQL restore
+// invocation: pg_restore reads the checked decompressed archive by name (a
+// trailing "-" is a file name, not stdin) and runs inside a single
+// transaction, so a mid-archive failure cannot leave partial changes.
+func TestPostgresRestoreUsesFileAndTransaction(t *testing.T) {
 	engine, _ := LookupBackupEngine(EnginePostgres)
 	options, err := engine.RestoreOptions(testDatabase(EnginePostgres, ""), testCredentials(),
 		"run-2", "/var/lib/postgresql/data/.gotham-restore/x.part")
@@ -163,8 +197,8 @@ func TestPostgresRestoreScriptReadsStdin(t *testing.T) {
 	if !strings.Contains(script, "pg_restore") {
 		t.Fatalf("script does not run pg_restore: %s", script)
 	}
-	if strings.Contains(script, "--no-owner -") {
-		t.Error(`pg_restore must read stdin; "-" is opened as a file name`)
+	if !strings.Contains(script, `--no-owner --single-transaction "$archive"`) {
+		t.Errorf("pg_restore must read the checked archive inside one transaction:\n%s", script)
 	}
 }
 
@@ -352,6 +386,116 @@ func TestJobCollectorBase64AcrossSmallChunks(t *testing.T) {
 		if !bytes.Equal(stored.Bytes(), payload) {
 			t.Errorf("size %d: payload = %v, want %v", size, stored.Bytes(), payload)
 		}
+	}
+}
+
+// TestJobCollectorBase64PaddingAcrossWrites covers positive payloads whose
+// base64 ends in one or two padding characters, split at every byte boundary:
+// validity must not depend on how the log stream chunks the writes.
+func TestJobCollectorBase64PaddingAcrossWrites(t *testing.T) {
+	for size := 1; size <= 8; size++ {
+		payload := make([]byte, size)
+		for i := range payload {
+			payload[i] = byte('a' + i)
+		}
+		frame := jobFrameB64("run-1", payload)
+		for split := 0; split <= len(frame); split++ {
+			var stored bytes.Buffer
+			collector := newJobCollector("run-1", &stored)
+			if _, err := collector.Write(frame[:split]); err != nil {
+				t.Fatalf("size %d split %d: write head: %v", size, split, err)
+			}
+			if _, err := collector.Write(frame[split:]); err != nil {
+				t.Fatalf("size %d split %d: write tail: %v", size, split, err)
+			}
+			if err := collector.Result(); err != nil {
+				t.Fatalf("size %d split %d: Result: %v", size, split, err)
+			}
+			if !bytes.Equal(stored.Bytes(), payload) {
+				t.Fatalf("size %d split %d: got %q, want %q", size, split, stored.Bytes(), payload)
+			}
+		}
+	}
+}
+
+// TestJobCollectorRejectsInteriorPadding pins the terminal-padding state: once
+// a quantum carries "=", the encoded stream ended, so any later quantum is
+// invalid whether or not it arrives in the same Write call.
+func TestJobCollectorRejectsInteriorPadding(t *testing.T) {
+	head := jobStartPrefix + "run-1\n" + jobPayloadB64Prefix + "run-1 8\n"
+	tail := jobEndPrefix + "run-1 ok\n"
+	cases := []struct {
+		name   string
+		writes []string
+	}{
+		{name: "one write", writes: []string{head + "aA==aQ==" + tail}},
+		{name: "split writes", writes: []string{head + "aA==", "aQ==" + tail}},
+		{name: "split inside padding", writes: []string{head + "aA=", "=aQ==" + tail}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			collector := newJobCollector("run-1", nil)
+			for _, write := range test.writes {
+				if _, err := collector.Write([]byte(write)); err != nil {
+					t.Fatalf("Write: %v", err)
+				}
+			}
+			if err := collector.Result(); err == nil {
+				t.Fatal("expected interior padding to fail the frame")
+			}
+		})
+	}
+}
+
+// TestJobCollectorRejectsUnderdeclaredExtraPayload is the review's F2 case: a
+// B64 frame that declares fewer bytes than it carries must fail instead of
+// silently storing a truncated artifact, whatever the Write boundaries and
+// even when the excess looks like a repeated payload header.
+func TestJobCollectorRejectsUnderdeclaredExtraPayload(t *testing.T) {
+	head := jobStartPrefix + "run-1\n" + jobPayloadB64Prefix + "run-1 4\n"
+	end := jobEndPrefix + "run-1 ok\n"
+	cases := []struct {
+		name   string
+		writes []string
+	}{
+		{name: "one write", writes: []string{head + "YWJjZGVm\n" + end}},
+		{name: "payload split", writes: []string{head + "YWJj", "ZGVm\n" + end}},
+		{name: "repeated payload header", writes: []string{head + "YWJj", jobPayloadB64Prefix + "run-1 4\n", "ZGVm" + end}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			var stored bytes.Buffer
+			collector := newJobCollector("run-1", &stored)
+			for _, write := range test.writes {
+				if _, err := collector.Write([]byte(write)); err != nil {
+					t.Fatalf("Write: %v", err)
+				}
+			}
+			if err := collector.Result(); err == nil {
+				t.Fatalf("under-declared payload accepted: truncated decoded=%q", stored.String())
+			}
+		})
+	}
+}
+
+// TestJobCollectorBase64KeepsPostFrameDiagnostics proves the strict end-marker
+// rule stops at the frame: chatter after the end marker is still collected.
+func TestJobCollectorBase64KeepsPostFrameDiagnostics(t *testing.T) {
+	const chatter = "engine: shutdown complete\n"
+	frame := string(jobFrameB64("run-1", []byte("payload")))
+	frame = strings.TrimSuffix(frame, chatter)
+	collector := newJobCollector("run-1", nil)
+	if _, err := collector.Write([]byte(frame)); err != nil {
+		t.Fatalf("Write frame: %v", err)
+	}
+	if _, err := collector.Write([]byte(chatter)); err != nil {
+		t.Fatalf("Write chatter: %v", err)
+	}
+	if err := collector.Result(); err != nil {
+		t.Fatalf("Result: %v", err)
+	}
+	if !strings.Contains(collector.Diagnostics(), "shutdown complete") {
+		t.Errorf("post-frame diagnostics were dropped: %q", collector.Diagnostics())
 	}
 }
 

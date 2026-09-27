@@ -11,7 +11,7 @@ Plan: [`plan/00-roadmap.md`](plan/00-roadmap.md).
 - [x] Phase 3 — Docker Engine Core (PRs #15–#30)
 - [x] Phase 4 — Applications (PRs #31–#50; gate G1 passed with waivers)
 - [x] Phase 5 core — Database engines + CRUD (#39), databases UI (#43), backups + S3 + restore (#46), backups UI (#50)
-- [x] Phase 5 residuals — live backup/restore smoke, chunk-scale backup e2e, S3 smoke (backups LOWs remain, see below)
+- [ ] Phase 5 residuals — live smoke, chunk-scale e2e and S3 smoke are proven (below); the deferred backups LOWs keep this umbrella open
 - [ ] Phase 6 — Proxy, Domains & SSL (BE-6.1 paused on `feat/p6-traefik`; BE-6.2 and FE-6.1 not started)
 - [ ] Phase 7 — Services & Templates
 - [ ] Phase 8 — Advanced

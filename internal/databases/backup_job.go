@@ -24,9 +24,12 @@ import (
 // API serves container logs through the daemon's logging driver, which
 // replaces every invalid UTF-8 byte with U+FFFD before the control plane can
 // read it. Base64 keeps the wire ASCII, so the artifact survives byte for
-// byte, while the declared encoded size still streams without buffering. The
-// plain GOTHAM-BACKUP-PAYLOAD marker remains supported for frames with no
-// byte payload (restore and staging jobs announce zero) and for
+// byte, while the declared encoded size still streams without buffering. A
+// base64 frame ends exactly at its declared size: the end marker must follow
+// immediately (zero separator bytes), so an under-declared payload or extra
+// encoded input is rejected instead of silently truncated. The plain
+// GOTHAM-BACKUP-PAYLOAD marker remains supported for frames with no byte
+// payload (restore and staging jobs announce zero) and for
 // backwards-compatible callers; the markers carry the run id so output of an
 // earlier container can never be mistaken for this one.
 const (
@@ -77,9 +80,12 @@ type jobCollector struct {
 
 	// base64 marks a payload that travels encoded (the dump jobs): the bytes
 	// are decoded while they stream to dst. carry holds the fewer-than-four
-	// trailing characters of an unfinished quantum between writes.
+	// trailing characters of an unfinished quantum between writes, and padded
+	// records that a quantum ended the encoded stream, so no further encoded
+	// byte may follow regardless of how Docker splits the writes.
 	base64 bool
 	carry  []byte
+	padded bool
 
 	ok     bool
 	status string
@@ -170,6 +176,12 @@ func (c *jobCollector) step() bool {
 		return true
 
 	case jobSeekEnd:
+		// A base64 payload ends at its declared size, so the end marker must
+		// follow immediately; only raw zero-payload frames (restore, staging)
+		// tolerate engine chatter here.
+		if c.base64 && !c.matchEndPrefix() {
+			return false
+		}
 		line, ok := c.takeLine()
 		if !ok {
 			return false
@@ -189,6 +201,28 @@ func (c *jobCollector) step() bool {
 		return false
 	}
 	return false
+}
+
+// matchEndPrefix enforces the base64 frame contract: the declared payload is
+// followed immediately by the end marker, with no separator or extra bytes.
+// It reports false while more bytes are needed and records a framing error on
+// the first mismatching byte, so an under-declared payload that hides extra
+// encoded input can never complete successfully.
+func (c *jobCollector) matchEndPrefix() bool {
+	prefix := []byte(jobEndPrefix + c.runID)
+	if len(c.buf) < len(prefix) {
+		if !bytes.HasPrefix(prefix, c.buf) {
+			c.err = fmt.Errorf("databases: base64 job payload is not followed by the completion marker")
+			c.state = jobDone
+		}
+		return false
+	}
+	if !bytes.HasPrefix(c.buf, prefix) {
+		c.err = fmt.Errorf("databases: base64 job payload is not followed by the completion marker")
+		c.state = jobDone
+		return false
+	}
+	return true
 }
 
 // startPayload parses the byte count of a payload header and enters the
@@ -224,10 +258,17 @@ func (c *jobCollector) writePayload(chunk []byte) error {
 	if full == 0 {
 		return nil
 	}
+	if c.padded {
+		return fmt.Errorf("databases: base64 job payload continues after padding")
+	}
+	batch := c.carry[:full]
 	decoded := make([]byte, base64.StdEncoding.DecodedLen(full))
-	count, err := base64.StdEncoding.Decode(decoded, c.carry[:full])
+	count, err := base64.StdEncoding.Decode(decoded, batch)
 	if err != nil {
 		return fmt.Errorf("databases: decode base64 job payload: %w", err)
+	}
+	if bytes.IndexByte(batch, '=') >= 0 {
+		c.padded = true
 	}
 	if c.dst != nil && count > 0 {
 		if _, err := c.dst.Write(decoded[:count]); err != nil {

@@ -8,7 +8,7 @@
 - [ ] Build without a Dockerfile (Railpack/Nixpacks or Buildpacks auto-detect).
 - [ ] Persistent storage, env vars, secrets work.
 - [ ] Push code → webhook → auto deploy, build logs visible realtime in the UI.
-- [ ] **Gate G1**: `code-reviewer` (review model `deepseek v4 pro (deepseek)`) + `e2e-runner` run the e2e deploy scenario before merge.
+- [ ] **Gate G1**: `code-reviewer` (review model `openrouter/z-ai/glm-5.3-prime`) + `e2e-runner` run the e2e deploy scenario before merge.
 
 **Rollback:** deploy is a state machine persisted in the DB (`deployments` table) — each new deploy keeps the old image tag; the "Rollback" button in FE-4.1 points back at the old container. If the phase breaks: disable with the env flag `FEATURE_APPLICATIONS=false`, Phases 0–3 unaffected.
 

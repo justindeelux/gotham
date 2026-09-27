@@ -33,6 +33,7 @@ web/             # Vue 3 SPA (Vite)
 templates/       # one-click service templates (YAML)
 deploy/          # install scripts, systemd units, compose
 docs/plan/       # per-phase development plans
+docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
 ```
 
 ## Development Workflow
@@ -47,7 +48,7 @@ docs/plan/       # per-phase development plans
   6. No cross-scope imports: `agent/` must not import `internal/`; domain packages must not import the HTTP server
 - Mandatory review gates: G0 (end of Phase 0), G1 (Phase 4), G2 (Phase 9) — see `docs/plan/00-roadmap.md`.
 - Phase gate: after each phase meets its exit criteria, STOP and ask the project owner before starting the next phase.
-- Model policy: code review with `deepseek v4 pro (deepseek)`; implementation with `deepseek v4.1 flash` / `Muse Spark 1.3 Contributor` / `MiMo-V2.6-Flash (go)` (see `docs/plan/00-roadmap.md`).
+- Model policy: code review with `openrouter/z-ai/glm-5.3-prime`; implementation with `deepseek v4.1 flash` / `Muse Spark 1.3 Contributor` / `MiMo-V2.6-Flash (go)` (see `docs/plan/00-roadmap.md`).
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
 
 ## Code Style
@@ -57,6 +58,14 @@ docs/plan/       # per-phase development plans
 - 2-space indent, LF, UTF-8, max line length ~100
 - Semicolons, double quotes, trailing commas
 - Strict TypeScript; clear names (`isActive`, `getRoomById`) over abbreviations
+
+## UI Design
+
+- `docs/design/` is the UI source of truth: one `*.html` mockup per page + shared tokens in `assets/gotham-ui.css` (+ page CSS in `assets/gotham-views.css`).
+- Any task touching `web/` MUST compare against the matching mockup first and port the gap: extract design tokens (colors, fonts, spacing, radii) from `gotham-ui.css` into the Vue app, theme Naive UI to match — keep Naive UI as the component base, do not rebuild components from raw CSS.
+- UI copy is English (rewrite from the mockups where they differ); code/docs stay English-only per Language below.
+- Mockups for future-phase pages (applications, databases, domains, services, files, team-settings) are references only — implement them when their phase lands, not before.
+- Rebuilt `internal/server/webdist` stays committed; the CI dist-drift check must pass.
 
 ## Language
 

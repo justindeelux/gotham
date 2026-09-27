@@ -130,6 +130,6 @@ Development is split into phases, one file per phase in [`docs/plan/`](docs/plan
 
 \* Relative week (dev-week) from the start, assuming 1 coordinator + 3–4 subagents running in parallel in an orca workspace.
 
-Review gates: end of Phases 0, 4, 9 require subagent review (`code-reviewer` + `e2e-runner` / `security-reviewer`, review model `deepseek v4 pro (deepseek)`) before merge.
+Review gates: end of Phases 0, 4, 9 require subagent review (`code-reviewer` + `e2e-runner` / `security-reviewer`, review model `openrouter/z-ai/glm-5.3-prime`) before merge.
 
 Phase gate: after each phase, stop and ask the project owner before continuing. See [`docs/plan/00-roadmap.md`](docs/plan/00-roadmap.md).

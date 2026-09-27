@@ -26,6 +26,7 @@ import {
   stopContainer,
 } from "../api/containers";
 import { getServer } from "../api/servers";
+import { useMediaQuery } from "../composables/useMediaQuery";
 import LogViewer from "../components/LogViewer.vue";
 
 /** Polling cadence for the container list, in milliseconds. */
@@ -47,6 +48,14 @@ const pending = ref<Record<string, boolean>>({});
 
 const selected = ref<Container | null>(null);
 const drawerOpen = ref(false);
+
+/** isNarrow tracks viewports where the fixed log drawer would overflow. */
+const isNarrow = useMediaQuery("(max-width: 760px)");
+
+/** drawerWidth keeps the log drawer inside narrow viewports. */
+const drawerWidth = computed<number | string>(() =>
+  isNarrow.value ? "94vw" : 720,
+);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -348,6 +357,7 @@ onUnmounted(() => {
         :row-key="rowKey"
         :row-props="rowProps"
         :bordered="false"
+        :scroll-x="960"
         :pagination="{ pageSize: 10 }"
       >
         <template #empty>
@@ -360,7 +370,7 @@ onUnmounted(() => {
       </NDataTable>
     </NCard>
 
-    <NDrawer v-model:show="drawerOpen" :width="720" placement="right">
+    <NDrawer v-model:show="drawerOpen" :width="drawerWidth" placement="right">
       <NDrawerContent closable :native-scrollbar="false">
         <LogViewer
           v-if="selected"

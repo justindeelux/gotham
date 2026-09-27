@@ -39,6 +39,20 @@ export function formatPercent(value: number | null | undefined): string {
   return `${clamped.toFixed(1)}%`;
 }
 
+/** toPercent normalizes a usage reading to a 0-100 percentage.
+ *
+ * The proto contract (proto/agent/v1/agent.proto) defines heartbeat usage
+ * as a fraction 0..1, so fractional readings are scaled up. Readings above
+ * 1 pass through unchanged for forward compatibility.
+ */
+export function toPercent(value: number | null | undefined): number {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return 0;
+  }
+  const scaled = value <= 1 ? value * 100 : value;
+  return Math.round(Math.min(Math.max(scaled, 0), 100));
+}
+
 /** relativeTime renders an ISO timestamp as a short "x ago" string. */
 export function relativeTime(iso: string | null | undefined): string {
   if (!iso) {

@@ -24,7 +24,7 @@ import AddServerWizard from "../components/AddServerWizard.vue";
 import GothamIcon from "../components/GothamIcon.vue";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
-import { relativeTime } from "../utils/format";
+import { relativeTime, toPercent } from "../utils/format";
 
 const router = useRouter();
 const serversStore = useServersStore();
@@ -105,12 +105,16 @@ function meterColor(value: number, base: string): string {
   return base;
 }
 
-/** usageCell renders a nullable percentage as value + threshold-colored bar. */
+/** usageCell renders a nullable usage reading as value + threshold bar.
+ *
+ * Heartbeat usage arrives as a fraction 0..1 (see toPercent), so the raw
+ * reading is normalized before display and threshold coloring.
+ */
 function usageCell(value: number | null, baseColor: string): VNode {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return h(NText, { depth: 3 }, { default: () => "—" });
   }
-  const rounded = Math.round(Math.min(Math.max(value, 0), 100));
+  const rounded = toPercent(value);
   return h("div", { class: "metric" }, [
     h("span", { class: "metric-val" }, `${rounded}%`),
     h(NProgress, {
@@ -715,9 +719,7 @@ systemctl status gotham-agent</code></pre>
   .callouts {
     grid-template-columns: 1fr;
   }
-}
 
-@media (max-width: 860px) {
   .page-actions {
     margin-left: 0;
     width: 100%;

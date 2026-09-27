@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/justindeelux/gotham/internal/config"
+	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/store"
 )
 
@@ -145,6 +146,11 @@ func (s *Server) routes() (http.Handler, error) {
 		if s.servers != nil {
 			s.mountServerRoutes(api)
 		}
+
+		// Container management routes to the node agent; a nil service (no
+		// registry) mounts nothing. The agent dialer stays unwired until the
+		// P3-CONN mTLS dial lands (see containers.Service.SetDial).
+		containers.Mount(api, s.RequireAuth, containers.NewDefaultService(s.servers, s.cfg.Snapshot().Redis.Addr))
 	})
 
 	spa, err := newSPAHandler()

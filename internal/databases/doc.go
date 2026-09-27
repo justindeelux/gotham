@@ -27,7 +27,7 @@
 // artifact is staged onto the volume in bounded base64 chunks — the agent
 // contract has no file-transfer RPC — then applied by a temporary container
 // while the database is stopped. Runs, schedules and storage targets live in
-// the backups, backup_schedules and backup_targets tables of 00010_backups;
+// the backups, backup_schedules and backup_targets tables of 00011_backups;
 // target credentials are sealed (providers.SealSecret) in
 // backup_target_secrets and never appear in an API response or a log line.
 // The internal cron scheduler is a ticker plus one due-time query with a

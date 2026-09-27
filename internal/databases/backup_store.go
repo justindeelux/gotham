@@ -178,7 +178,7 @@ type s3Config struct {
 
 // newS3Store builds a client for cfg. The endpoint may carry an http(s)
 // scheme, which decides whether the transport is TLS; without a scheme the
-// endpoint is assumed to be plain HTTP (the usual self-hosted MinIO setup).
+// endpoint is assumed to be HTTPS (a plain-HTTP endpoint must say http://).
 func newS3Store(cfg s3Config) (*s3Store, error) {
 	if strings.TrimSpace(cfg.bucket) == "" {
 		return nil, fmt.Errorf("%w: s3 target needs a bucket", ErrValidation)

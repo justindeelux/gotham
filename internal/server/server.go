@@ -17,6 +17,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/containers"
+	"github.com/justindeelux/gotham/internal/server/ws"
 	"github.com/justindeelux/gotham/internal/store"
 )
 
@@ -151,6 +152,9 @@ func (s *Server) routes() (http.Handler, error) {
 		// registry) mounts nothing. The agent dialer stays unwired until the
 		// P3-CONN mTLS dial lands (see containers.Service.SetDial).
 		containers.Mount(api, s.RequireAuth, containers.NewDefaultService(s.servers, s.cfg.Snapshot().Redis.Addr))
+
+		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
+		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger)
 	})
 
 	spa, err := newSPAHandler()

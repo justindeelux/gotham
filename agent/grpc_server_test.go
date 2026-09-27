@@ -28,6 +28,7 @@ type fakeDockerClient struct {
 	started    []string
 	stopped    []string
 	restarted  []string
+	removed    []string
 	createdID  string
 }
 
@@ -63,6 +64,14 @@ func (f *fakeDockerClient) Restart(_ context.Context, id string) error {
 		return f.err
 	}
 	f.restarted = append(f.restarted, id)
+	return nil
+}
+
+func (f *fakeDockerClient) Remove(_ context.Context, id string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.removed = append(f.removed, id)
 	return nil
 }
 
@@ -158,6 +167,9 @@ func TestDockerServerContainerActions(t *testing.T) {
 	if _, err := client.RestartContainer(ctx, request); err != nil {
 		t.Fatalf("RestartContainer: %v", err)
 	}
+	if _, err := client.RemoveContainer(ctx, request); err != nil {
+		t.Fatalf("RemoveContainer: %v", err)
+	}
 
 	if len(fake.started) != 1 || fake.started[0] != "abc" {
 		t.Errorf("started = %v; want [abc]", fake.started)
@@ -167,6 +179,9 @@ func TestDockerServerContainerActions(t *testing.T) {
 	}
 	if len(fake.restarted) != 1 || fake.restarted[0] != "abc" {
 		t.Errorf("restarted = %v; want [abc]", fake.restarted)
+	}
+	if len(fake.removed) != 1 || fake.removed[0] != "abc" {
+		t.Errorf("removed = %v; want [abc]", fake.removed)
 	}
 }
 
@@ -200,6 +215,14 @@ func TestDockerServerValidation(t *testing.T) {
 			name: "start without id",
 			call: func() error {
 				_, err := client.StartContainer(ctx, &agentv1.ContainerActionRequest{})
+				return err
+			},
+			code: codes.InvalidArgument,
+		},
+		{
+			name: "remove without id",
+			call: func() error {
+				_, err := client.RemoveContainer(ctx, &agentv1.ContainerActionRequest{})
 				return err
 			},
 			code: codes.InvalidArgument,

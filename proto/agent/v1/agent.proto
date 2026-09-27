@@ -32,6 +32,10 @@ service DockerService {
   rpc StartContainer(ContainerActionRequest) returns (ContainerActionResponse);
   rpc StopContainer(ContainerActionRequest) returns (ContainerActionResponse);
   rpc RestartContainer(ContainerActionRequest) returns (ContainerActionResponse);
+  // RemoveContainer deletes a container (force + remove anonymous volumes).
+  // Named volumes are never removed: deleting a resource must not delete its
+  // data (Phase 5 database soft delete relies on this).
+  rpc RemoveContainer(ContainerActionRequest) returns (ContainerActionResponse);
   rpc PullImage(PullImageRequest) returns (PullImageResponse);
   rpc CreateContainer(CreateContainerRequest) returns (ContainerActionResponse);
   rpc RunImage(CreateContainerRequest) returns (ContainerActionResponse);

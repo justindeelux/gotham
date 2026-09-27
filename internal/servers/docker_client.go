@@ -29,10 +29,11 @@ const (
 )
 
 // DockerClient is a DockerService client bound to its connection. It embeds
-// agentv1.DockerServiceClient, so all eight RPCs are exposed directly:
-// ListContainers, StartContainer, StopContainer, RestartContainer, PullImage,
-// CreateContainer, RunImage, and StreamLogs. Close releases the connection
-// when the caller is done; Conn exposes the raw connection for health checks.
+// agentv1.DockerServiceClient, so all nine RPCs are exposed directly:
+// ListContainers, StartContainer, StopContainer, RestartContainer,
+// RemoveContainer, PullImage, CreateContainer, RunImage, and StreamLogs.
+// Close releases the connection when the caller is done; Conn exposes the raw
+// connection for health checks.
 type DockerClient struct {
 	agentv1.DockerServiceClient
 	conn *grpc.ClientConn

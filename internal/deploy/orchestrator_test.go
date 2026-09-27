@@ -162,8 +162,8 @@ func TestOrchestratorHappyPath(t *testing.T) {
 	if req.Image != stored.RegistryImage {
 		t.Errorf("image = %q, want %q", req.Image, stored.RegistryImage)
 	}
-	if !equalStrings(req.Env, []string{"API_TOKEN=hunter2", "FOO=bar"}) {
-		t.Errorf("env = %v, want decrypted secret and plain variable", req.Env)
+	if !equalStrings(req.Env, []string{"API_TOKEN=hunter2", "FOO=bar", "PORT=3000"}) {
+		t.Errorf("env = %v, want decrypted secret, plain variable and the PORT default", req.Env)
 	}
 	if !equalStrings(req.Ports, []string{"8080:3000"}) {
 		t.Errorf("ports = %v, want [8080:3000]", req.Ports)

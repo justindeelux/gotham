@@ -156,9 +156,18 @@ func TestServerCredentials(t *testing.T) {
 		t.Errorf("ServerCredentials(cert, key, ca) = (%v, %v); want TLS creds", creds, err)
 	}
 
+	// Development mode: no issued certificate and no CA → plaintext, matching
+	// the control plane's insecure dial.
 	creds, err = ServerCredentials(nil, nil, "")
+	if err != nil || creds != nil {
+		t.Errorf("ServerCredentials(nil, nil, empty) = (%v, %v); want nil plaintext creds", creds, err)
+	}
+
+	// A CA configured with no issued certificate still keeps the listener on
+	// TLS with a self-signed certificate.
+	creds, err = ServerCredentials(nil, nil, caPath)
 	if err != nil || creds == nil {
-		t.Errorf("ServerCredentials(nil, nil, empty) = (%v, %v); want self-signed creds", creds, err)
+		t.Errorf("ServerCredentials(nil, nil, ca) = (%v, %v); want self-signed TLS creds", creds, err)
 	}
 
 	if _, err := ServerCredentials(certPEM, nil, ""); err == nil {

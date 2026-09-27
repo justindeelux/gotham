@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
@@ -13,7 +12,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
@@ -321,6 +319,8 @@ func TestDockerServerStreamLogs(t *testing.T) {
 
 func TestServerServeAndShutdown(t *testing.T) {
 	fake := &fakeDockerClient{containers: []*agentv1.ContainerInfo{{Id: "abc"}}}
+	// Development mode: no certificate and no CA → plaintext listener, which
+	// is what the control plane's insecure dial expects.
 	creds, err := ServerCredentials(nil, nil, "")
 	if err != nil {
 		t.Fatalf("ServerCredentials: %v", err)
@@ -336,7 +336,7 @@ func TestServerServeAndShutdown(t *testing.T) {
 	go func() { serveErr <- server.Serve(ctx) }()
 
 	conn, err := grpc.NewClient(server.Addr().String(),
-		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
 		t.Fatalf("dial: %v", err)

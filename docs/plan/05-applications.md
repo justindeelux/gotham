@@ -44,6 +44,13 @@
 - **Verify:** e2e deploy via API: sample repo → `running`, full log events; kill the container → healthcheck fails → status `failed`; rollback → back to the old version.
 - **Depends on:** BE-4.1 + BE-4.2.
 
+## BE-4.3b — Applications CRUD + config + stop/start — `ws/p4-app-crud`
+
+- **Context brief:** BE-4.3 mounted only the deploy/deployments/rollback routes; the FE-4.1 wizard codes against conventional REST (`GET/POST /applications`, `GET/PUT/DELETE /applications/{id}`, env/storage collections, manual stop/start). This package closes that gap; no new migration (00006 already has the tables).
+- **Deliverables:** applications CRUD (ownership 404, validation 400), nested env + storage on create (values prefixed `secret:` become sealed rows), `PUT .../{id}/env`, `PUT .../{id}/storages`, `POST .../{id}/stop|start`; sqlc queries + wire envelopes matching `web/src/api/applications.ts`.
+- **Verify:** create an app through the API → list/get → replace env/storages → stop/start; unit tests with the existing fakes.
+- **Depends on:** BE-4.3. Unblocks FE-4.1 and BE-4.4 hook lifecycle.
+
 ## BE-4.4 — Webhooks & deploy keys — `ws/p4-webhooks`
 
 - **Context brief:** auto-deploy on push. Create a webhook on the provider pointing at the public CP endpoint; authenticate via secret or deploy key (SSH keys reuse the `private_keys` table). Anti-spam: rate-limit + dedupe by commit SHA.

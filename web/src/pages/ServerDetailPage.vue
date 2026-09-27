@@ -21,8 +21,9 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import type { Server } from "../api/servers";
 import { describeServerError, getServer } from "../api/servers";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
+import { useMediaQuery } from "../composables/useMediaQuery";
 import { useServersStore } from "../stores/servers";
-import { relativeTime } from "../utils/format";
+import { relativeTime, toPercent } from "../utils/format";
 
 const route = useRoute();
 const router = useRouter();
@@ -37,6 +38,12 @@ const error = ref<string | null>(null);
 const validating = ref(false);
 const deleting = ref(false);
 const activeTab = ref("overview");
+
+/** isNarrow stacks the two-column descriptions on small screens. */
+const isNarrow = useMediaQuery("(max-width: 640px)");
+
+/** descColumns renders descriptions in one column below 640px. */
+const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
 
 /** initials derives a two-letter avatar from the server name. */
 const initials = computed<string>(() => {
@@ -70,12 +77,16 @@ function fallback(value: string | null): string {
   return value ?? "—";
 }
 
-/** usageText renders a nullable percentage as display text. */
+/** usageText renders a nullable usage reading as display text.
+ *
+ * Heartbeat usage arrives as a fraction 0..1 (see toPercent), so the raw
+ * reading is normalized before display.
+ */
 function usageText(value: number | null): string {
   if (value === null || value === undefined) {
     return "—";
   }
-  return `${Math.round(value)}%`;
+  return `${toPercent(value)}%`;
 }
 
 /** fetchServer loads one server by route id; 404 surfaces as an error state. */
@@ -202,7 +213,7 @@ onMounted(() => {
           <NTabPane name="overview" tab="Overview">
             <NSpace vertical :size="16" style="margin-top: 16px">
               <NCard title="Node info">
-                <NDescriptions :column="2" bordered label-placement="left">
+                <NDescriptions :column="descColumns" bordered label-placement="left">
                   <NDescriptionsItem label="Name">
                     {{ server.name }}
                   </NDescriptionsItem>
@@ -316,7 +327,7 @@ onMounted(() => {
                 Editable settings do not exist in the backend yet. Values below
                 are read-only.
               </NText>
-              <NDescriptions :column="2" bordered label-placement="left">
+              <NDescriptions :column="descColumns" bordered label-placement="left">
                 <NDescriptionsItem label="Name">
                   {{ server.name }}
                 </NDescriptionsItem>

@@ -84,9 +84,12 @@ func newOrchestrator(cfg Config) *Orchestrator {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// The repository doubles as the cloner's deploy-key resolver, so a key
+	// lookup and a deployment share one connection pool (and one secret).
+	repo := cfg.repository()
 	source := cfg.Source
 	if source == nil {
-		source = gitSource{}
+		source = gitSource{keys: repo}
 	}
 	emitter := cfg.Emitter
 	if emitter == nil {
@@ -123,7 +126,7 @@ func newOrchestrator(cfg Config) *Orchestrator {
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 
 	return &Orchestrator{
-		repo:          cfg.repository(),
+		repo:          repo,
 		source:        source,
 		dial:          cfg.Dial,
 		emitter:       emitter,

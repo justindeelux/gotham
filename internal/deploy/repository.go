@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
@@ -57,16 +58,33 @@ type Repository interface {
 	ListSecrets(ctx context.Context, appID uuid.UUID) ([]Secret, error)
 	// ListStorages returns the application's volume map.
 	ListStorages(ctx context.Context, appID uuid.UUID) ([]Storage, error)
+	// GetDeployKey returns the deploy key of an application, or ErrNotFound.
+	GetDeployKey(ctx context.Context, appID uuid.UUID) (DeployKey, error)
+	// CreateDeployKey stores the mapping row together with the private key it
+	// points at, sealed with providers.SealSecret (the private_keys contract).
+	CreateDeployKey(ctx context.Context, key DeployKey, privateKeyPEM string) (DeployKey, error)
+	// DeleteDeployKey removes an application's deploy key: the mapping row and
+	// the private key it points at. It returns the removed mapping, or
+	// ErrNotFound when there was nothing to delete.
+	DeleteDeployKey(ctx context.Context, appID uuid.UUID) (DeployKey, error)
+	// DeployKeyPrivatePEM opens an application's deploy private key for the
+	// cloner. An application without a key answers "" and no error, which is
+	// what keeps anonymous cloning the default.
+	DeployKeyPrivatePEM(ctx context.Context, appID uuid.UUID) (string, error)
 }
 
-// storeRepository adapts *store.Store to Repository.
+// storeRepository adapts *store.Store to Repository. secret opens sealed
+// values (application secrets, deploy private keys) with providers.SealSecret.
 type storeRepository struct {
-	store *store.Store
+	store  *store.Store
+	secret string
 }
 
-// newStoreRepository builds the PostgreSQL-backed repository.
-func newStoreRepository(st *store.Store) *storeRepository {
-	return &storeRepository{store: st}
+// newStoreRepository builds the PostgreSQL-backed repository. secret is the
+// key providers.SealSecret seals values with; the same key must be configured
+// at read time, so it comes from the service Config either way.
+func newStoreRepository(st *store.Store, secret string) *storeRepository {
+	return &storeRepository{store: st, secret: secret}
 }
 
 // GetApplication loads one application, mapping a missing row to ErrNotFound.
@@ -327,6 +345,78 @@ func (r *storeRepository) ListStorages(ctx context.Context, appID uuid.UUID) ([]
 	return storages, nil
 }
 
+// GetDeployKey loads the deploy key of an application, or ErrNotFound.
+func (r *storeRepository) GetDeployKey(ctx context.Context, appID uuid.UUID) (DeployKey, error) {
+	row, err := r.store.GetApplicationDeployKey(ctx, pgUUID(appID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DeployKey{}, ErrNotFound
+		}
+		return DeployKey{}, fmt.Errorf("deploy: get deploy key: %w", err)
+	}
+	return deployKeyFromRow(row), nil
+}
+
+// CreateDeployKey stores the deploy key of an application, sealing the private
+// half with providers.SealSecret — the same base64(nonce||ciphertext) AES-256
+// GCM shape servers.EncryptKey writes into private_keys.encrypted_key, so both
+// readers open the same row format.
+func (r *storeRepository) CreateDeployKey(ctx context.Context, key DeployKey, privateKeyPEM string) (DeployKey, error) {
+	sealed, err := providers.SealSecret(r.secret, privateKeyPEM)
+	if err != nil {
+		return DeployKey{}, fmt.Errorf("deploy: seal deploy key: %w", err)
+	}
+	row, err := r.store.CreateApplicationDeployKey(ctx, sqlc.CreateApplicationDeployKeyParams{
+		ApplicationID: pgUUID(key.ApplicationID),
+		Provider:      key.Provider,
+		Repo:          key.Repo,
+		ProviderKeyID: key.ProviderKeyID,
+		Fingerprint:   key.Fingerprint,
+		PublicKey:     key.PublicKey,
+	}, deployKeyRowName(key.ApplicationID), sealed)
+	if err != nil {
+		return DeployKey{}, fmt.Errorf("deploy: create deploy key: %w", err)
+	}
+	return deployKeyFromRow(row), nil
+}
+
+// DeleteDeployKey removes an application's deploy key: the mapping row and the
+// private key it points at. An already-removed key answers ErrNotFound.
+func (r *storeRepository) DeleteDeployKey(ctx context.Context, appID uuid.UUID) (DeployKey, error) {
+	row, err := r.store.DeleteApplicationDeployKey(ctx, pgUUID(appID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DeployKey{}, ErrNotFound
+		}
+		return DeployKey{}, fmt.Errorf("deploy: delete deploy key: %w", err)
+	}
+	return deployKeyFromRow(row), nil
+}
+
+// DeployKeyPrivatePEM opens an application's deploy private key for the
+// cloner. An application without a key answers "" and no error; a key that
+// cannot be opened (rotated secret, corrupted row) is an error — falling back
+// to an anonymous clone would hide the real problem behind an auth failure
+// from the Git host.
+func (r *storeRepository) DeployKeyPrivatePEM(ctx context.Context, appID uuid.UUID) (string, error) {
+	mapping, err := r.store.GetApplicationDeployKey(ctx, pgUUID(appID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("deploy: get deploy key: %w", err)
+	}
+	row, err := r.store.GetPrivateKeyByID(ctx, mapping.PrivateKeyID)
+	if err != nil {
+		return "", fmt.Errorf("deploy: get deploy private key: %w", err)
+	}
+	privatePEM, err := providers.OpenSecret(r.secret, row.EncryptedKey)
+	if err != nil {
+		return "", fmt.Errorf("deploy: open deploy private key: %w", err)
+	}
+	return privatePEM, nil
+}
+
 // applicationFromRow maps a sqlc row to the domain model. A NULL server_id
 // becomes the zero UUID, which validation rejects at enqueue time.
 func applicationFromRow(row sqlc.Application) Application {
@@ -345,6 +435,21 @@ func applicationFromRow(row sqlc.Application) Application {
 		HostPort:   row.HostPort,
 		CreatedAt:  timeFromPG(row.CreatedAt),
 		UpdatedAt:  timeFromPG(row.UpdatedAt),
+	}
+}
+
+// deployKeyFromRow maps a sqlc deploy-key row to the domain model.
+func deployKeyFromRow(row sqlc.ApplicationDeployKey) DeployKey {
+	return DeployKey{
+		ID:            uuidFromPG(row.ID),
+		ApplicationID: uuidFromPG(row.ApplicationID),
+		PrivateKeyID:  uuidFromPG(row.PrivateKeyID),
+		Provider:      row.Provider,
+		Repo:          row.Repo,
+		ProviderKeyID: row.ProviderKeyID,
+		Fingerprint:   row.Fingerprint,
+		PublicKey:     row.PublicKey,
+		CreatedAt:     timeFromPG(row.CreatedAt),
 	}
 }
 

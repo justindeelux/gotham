@@ -187,7 +187,56 @@ func (p *gitLabSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, rep
 	client := p.config.Client(ctx, tok)
 	endpoint := fmt.Sprintf("%s/projects/%s/hooks/%s", p.apiBase, escapeProjectPath(repo), hookID)
 	if err := doJSON(ctx, client, NameGitLab, http.MethodDelete, endpoint, "application/json", nil, nil); err != nil {
-		if isStatus(err, http.StatusNotFound) {
+		if isNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// AddDeployKey registers the public key on repo ("group/project", nested
+// allowed) as a project deploy key and returns the key ID GitLab assigned to
+// it. The key stays read-only: GitLab defaults can_push to false.
+func (p *gitLabSource) AddDeployKey(ctx context.Context, tok *oauth2.Token, repo string, key DeployKey) (string, error) {
+	if err := validateRepo(repo, 1); err != nil {
+		return "", err
+	}
+	if err := validateDeployKey(key); err != nil {
+		return "", err
+	}
+	client := p.config.Client(ctx, tok)
+	payload := map[string]any{
+		"title": key.Title,
+		"key":   key.Key,
+	}
+
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	endpoint := fmt.Sprintf("%s/projects/%s/deploy_keys", p.apiBase, escapeProjectPath(repo))
+	if err := doJSON(ctx, client, NameGitLab, http.MethodPost, endpoint, "application/json", payload, &created); err != nil {
+		return "", err
+	}
+	if created.ID <= 0 {
+		return "", fmt.Errorf("providers: %s: deploy key response has no id", NameGitLab)
+	}
+	return strconv.FormatInt(created.ID, 10), nil
+}
+
+// RemoveDeployKey removes the key identified by keyID from repo. A key that is
+// already gone (404) counts as removed so the caller stays idempotent.
+func (p *gitLabSource) RemoveDeployKey(ctx context.Context, tok *oauth2.Token, repo, keyID string) error {
+	if err := validateRepo(repo, 1); err != nil {
+		return err
+	}
+	if err := validateDeployKeyID(keyID); err != nil {
+		return err
+	}
+	client := p.config.Client(ctx, tok)
+	endpoint := fmt.Sprintf("%s/projects/%s/deploy_keys/%s", p.apiBase, escapeProjectPath(repo), keyID)
+	if err := doJSON(ctx, client, NameGitLab, http.MethodDelete, endpoint, "application/json", nil, nil); err != nil {
+		if isNotFound(err) {
 			return nil
 		}
 		return err

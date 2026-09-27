@@ -36,6 +36,19 @@ type Application struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ApplicationDeployKey struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	PrivateKeyID  pgtype.UUID        `json:"private_key_id"`
+	Provider      string             `json:"provider"`
+	Repo          string             `json:"repo"`
+	ProviderKeyID string             `json:"provider_key_id"`
+	Fingerprint   string             `json:"fingerprint"`
+	PublicKey     string             `json:"public_key"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ApplicationWebhook struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`

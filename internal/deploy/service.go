@@ -54,6 +54,12 @@ type DeployService interface {
 	Stop(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
 	// Start restarts the container of the newest deployment.
 	Start(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
+	// CreateDeployKey generates and registers an SSH deploy key for a private
+	// repository; an application that already has one gets it back.
+	CreateDeployKey(ctx context.Context, userID, appID uuid.UUID) (DeployKey, error)
+	// DeleteDeployKey removes the deploy key from the Git host and the
+	// database; an application without one reports false.
+	DeleteDeployKey(ctx context.Context, userID, appID uuid.UUID) (bool, error)
 	// Deploy queues a deployment of the application's current revision.
 	Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
 	// ListDeployments returns the application's deployments, newest first.
@@ -80,6 +86,9 @@ type Config struct {
 	Publisher Publisher
 	// Dial opens a node agent; nil fails deployments with ErrAgentUnavailable.
 	Dial DialFunc
+	// KeyRegistrar registers and removes deploy keys on the Git host; nil
+	// disables deploy-key creation (the routes answer a clear error).
+	KeyRegistrar KeyRegistrar
 	// Source clones the repository; nil selects git on the control plane.
 	Source Source
 	// Emitter overrides the publisher-based realtime emitter (tests).
@@ -104,16 +113,22 @@ func (c Config) repository() Repository {
 		return c.Repository
 	}
 	if c.Store != nil {
-		return newStoreRepository(c.Store)
+		return newStoreRepository(c.Store, c.Secret)
 	}
 	return nil
 }
 
 // Service is the deploy domain service: it validates and queues deployments,
 // lists them, drives rollbacks, and runs them on the orchestrator's worker
-// pool. It is safe for concurrent use.
+// pool. It also owns the application deploy-key lifecycle (registering a key
+// on the Git host and removing it with the application). It is safe for
+// concurrent use.
 type Service struct {
 	*Orchestrator
+	// registrar talks to the Git host for deploy keys; nil when no provider
+	// service is wired (creation then answers a clear error instead of a nil
+	// dereference).
+	registrar KeyRegistrar
 }
 
 // Compile-time guarantee that Service satisfies the route-level contract.
@@ -126,7 +141,7 @@ var _ DeployService = (*Service)(nil)
 func NewService(cfg Config) *Service {
 	o := newOrchestrator(cfg)
 	o.recoverStale()
-	return &Service{Orchestrator: o}
+	return &Service{Orchestrator: o, registrar: cfg.KeyRegistrar}
 }
 
 // recoverStale marks deployments abandoned by a previous control plane

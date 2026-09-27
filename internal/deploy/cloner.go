@@ -3,9 +3,13 @@ package deploy
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // Source prepares the build tree for a deployment: it checks the
@@ -15,10 +19,35 @@ type Source interface {
 	Clone(ctx context.Context, app Application, dir string, log func(string)) error
 }
 
+// deployKeyResolver is the slice of Repository the cloner needs: the sealed
+// deploy private key of one application. It is an interface so tests can hand
+// the cloner a fixed key without a database.
+type deployKeyResolver interface {
+	// DeployKeyPrivatePEM opens an application's deploy key. An application
+	// without one answers "" and no error — that is what keeps anonymous
+	// cloning the default.
+	DeployKeyPrivatePEM(ctx context.Context, appID uuid.UUID) (string, error)
+}
+
+// cloneRunner executes git with an environment and returns its combined
+// output. Tests substitute one to assert the command line, the environment
+// and the ephemeral key file without a network or an sshd.
+type cloneRunner func(ctx context.Context, argv []string, env []string) ([]byte, error)
+
 // gitSource clones over HTTPS/SSH with the git binary on the control plane.
 // The result is a shallow, single-branch working tree that the build engines
 // consume directly (they exclude .git from the context themselves).
-type gitSource struct{}
+//
+// An application that holds a deploy key is cloned through GIT_SSH_COMMAND
+// with an ephemeral 0600 key file; an application without one keeps the
+// anonymous clone it has always had.
+type gitSource struct {
+	// keys opens the application's deploy private key; nil disables key
+	// lookup entirely (anonymous clone).
+	keys deployKeyResolver
+	// run executes git; nil selects the real binary.
+	run cloneRunner
+}
 
 // Compile-time guarantee that gitSource satisfies the Source seam.
 var _ Source = gitSource{}
@@ -30,10 +59,20 @@ const defaultBranch = "main"
 // Clone implements Source. The clone URL is passed after "--" so a hostile
 // value can never be parsed as an option, and only the known git URL shapes
 // are accepted.
-func (gitSource) Clone(ctx context.Context, app Application, dir string, log func(string)) error {
+func (s gitSource) Clone(ctx context.Context, app Application, dir string, log func(string)) error {
 	url := strings.TrimSpace(app.CloneURL)
 	if err := validateCloneURL(url); err != nil {
 		return err
+	}
+	privatePEM, err := s.deployKeyPEM(ctx, app.ID)
+	if err != nil {
+		return err
+	}
+	if privatePEM != "" {
+		// A deploy key is an SSH credential: over http(s) it would
+		// authenticate nothing, so a URL the wizard prefilled from the
+		// provider is rewritten to its SSH shape first.
+		url = sshCloneURL(url)
 	}
 	branch := strings.TrimSpace(app.Branch)
 	if branch == "" {
@@ -45,12 +84,30 @@ func (gitSource) Clone(ctx context.Context, app Application, dir string, log fun
 		return fmt.Errorf("git clone: clear %s: %w", dir, err)
 	}
 
-	if log != nil {
-		log(fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, url))
+	env := os.Environ()
+	if privatePEM != "" {
+		files, err := newDeployKeyFiles(privatePEM)
+		if err != nil {
+			return err
+		}
+		defer files.remove()
+		env = files.sshEnv(env)
 	}
-	command := exec.CommandContext(ctx, "git", "clone",
-		"--depth", "1", "--single-branch", "--branch", branch, "--", url, dir)
-	output, err := command.CombinedOutput()
+
+	if log != nil {
+		line := fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, url)
+		if privatePEM != "" {
+			line += " (using the application deploy key)"
+		}
+		log(line)
+	}
+	argv := []string{"git", "clone",
+		"--depth", "1", "--single-branch", "--branch", branch, "--", url, dir}
+	runner := s.run
+	if runner == nil {
+		runner = runGit
+	}
+	output, err := runner(ctx, argv, env)
 	if ctx.Err() != nil {
 		return fmt.Errorf("git clone: %w", ctx.Err())
 	}
@@ -61,6 +118,114 @@ func (gitSource) Clone(ctx context.Context, app Application, dir string, log fun
 		log("repository cloned (" + branch + ")")
 	}
 	return nil
+}
+
+// deployKeyPEM resolves the application's deploy private key, turning a
+// lookup failure into a clear clone error. Silently falling back to an
+// anonymous clone would hide the problem behind an auth failure from the Git
+// host on a private repository.
+func (s gitSource) deployKeyPEM(ctx context.Context, appID uuid.UUID) (string, error) {
+	if s.keys == nil {
+		return "", nil
+	}
+	privatePEM, err := s.keys.DeployKeyPrivatePEM(ctx, appID)
+	if err != nil {
+		return "", fmt.Errorf("deploy: load deploy key: %w", err)
+	}
+	return strings.TrimSpace(privatePEM), nil
+}
+
+// runGit executes argv (starting with "git") with env and returns its combined
+// output, preserving exec.CommandContext's cancellation behaviour.
+func runGit(ctx context.Context, argv []string, env []string) ([]byte, error) {
+	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	command.Env = env
+	return command.CombinedOutput()
+}
+
+// deployKeyFiles is the per-deployment materialisation of a deploy private
+// key: one 0600 file inside a fresh private directory, removed as soon as the
+// clone returns. The key is never written anywhere else and never logged.
+type deployKeyFiles struct {
+	dir     string
+	keyPath string
+}
+
+// newDeployKeyFiles writes the PEM private key into a fresh private directory
+// (0700 by os.MkdirTemp) and returns it. The directory also holds the
+// known_hosts the clone accepts its first host key into.
+func newDeployKeyFiles(privatePEM string) (*deployKeyFiles, error) {
+	dir, err := os.MkdirTemp("", "gotham-deploy-key-*")
+	if err != nil {
+		return nil, fmt.Errorf("deploy: deploy key workspace: %w", err)
+	}
+	keyPath := filepath.Join(dir, "id_ed25519")
+	if err := os.WriteFile(keyPath, []byte(privatePEM), 0o600); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, fmt.Errorf("deploy: write deploy key: %w", err)
+	}
+	// WriteFile only applies its mode when it creates the file; chmod keeps
+	// the guarantee explicit for every path (a re-used file must never keep a
+	// wider mode).
+	if err := os.Chmod(keyPath, 0o600); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, fmt.Errorf("deploy: protect deploy key: %w", err)
+	}
+	return &deployKeyFiles{dir: dir, keyPath: keyPath}, nil
+}
+
+// remove deletes the ephemeral key and the known_hosts it accepted into.
+func (f *deployKeyFiles) remove() {
+	_ = os.RemoveAll(f.dir)
+}
+
+// sshEnv returns env plus GIT_SSH_COMMAND: ssh offering only this key
+// (IdentitiesOnly), reading the ephemeral file and accepting host keys into
+// the ephemeral known_hosts — the control plane neither touches ~/.ssh nor
+// prompts during a clone.
+func (f *deployKeyFiles) sshEnv(env []string) []string {
+	command := "ssh -i " + shellQuote(f.keyPath) +
+		" -o IdentitiesOnly=yes" +
+		" -o UserKnownHostsFile=" + shellQuote(filepath.Join(f.dir, "known_hosts")) +
+		" -o StrictHostKeyChecking=accept-new"
+	return append(env, "GIT_SSH_COMMAND="+command)
+}
+
+// shellQuote wraps a path for the shell git runs GIT_SSH_COMMAND through
+// (`sh -c`): single quotes keep spaces intact and a lone quote is escaped the
+// POSIX way.
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// sshCloneURL rewrites an http(s) clone URL into its SSH equivalent
+// (https://host/owner/repo.git → ssh://git@host/owner/repo.git). Every other
+// shape — ssh://, scp-like git@host:path, and development-local paths — is
+// returned unchanged.
+//
+// The port is dropped because a web port does not identify an SSH port (a
+// self-hosted instance is often reached on 443 through a proxy while sshd
+// listens on 22); an application that needs a non-default SSH port must store
+// an ssh:// clone URL of its own.
+func sshCloneURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+	default:
+		return raw
+	}
+	if parsed.Hostname() == "" {
+		return raw
+	}
+	return (&url.URL{
+		Scheme: "ssh",
+		User:   url.User("git"),
+		Host:   parsed.Hostname(),
+		Path:   parsed.Path,
+	}).String()
 }
 
 // devLocalCloneEnv re-enables local directories and file:// URLs as clone

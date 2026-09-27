@@ -185,7 +185,56 @@ func (p *gitHubSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, rep
 	client := p.config.Client(ctx, tok)
 	endpoint := fmt.Sprintf("%s/repos/%s/hooks/%s", p.apiBase, repo, hookID)
 	if err := doJSON(ctx, client, NameGitHub, http.MethodDelete, endpoint, gitHubAccept, nil, nil); err != nil {
-		if isStatus(err, http.StatusNotFound) {
+		if isNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// AddDeployKey registers the public key on repo ("owner/name") as a read-only
+// deploy key and returns the key ID GitHub assigned to it.
+func (p *gitHubSource) AddDeployKey(ctx context.Context, tok *oauth2.Token, repo string, key DeployKey) (string, error) {
+	if err := validateRepo(repo, 2); err != nil {
+		return "", err
+	}
+	if err := validateDeployKey(key); err != nil {
+		return "", err
+	}
+	client := p.config.Client(ctx, tok)
+	payload := map[string]any{
+		"title":     key.Title,
+		"key":       key.Key,
+		"read_only": true,
+	}
+
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/keys", p.apiBase, repo)
+	if err := doJSON(ctx, client, NameGitHub, http.MethodPost, endpoint, gitHubAccept, payload, &created); err != nil {
+		return "", err
+	}
+	if created.ID <= 0 {
+		return "", fmt.Errorf("providers: %s: deploy key response has no id", NameGitHub)
+	}
+	return strconv.FormatInt(created.ID, 10), nil
+}
+
+// RemoveDeployKey removes the key identified by keyID from repo. A key that is
+// already gone (404) counts as removed so the caller stays idempotent.
+func (p *gitHubSource) RemoveDeployKey(ctx context.Context, tok *oauth2.Token, repo, keyID string) error {
+	if err := validateRepo(repo, 2); err != nil {
+		return err
+	}
+	if err := validateDeployKeyID(keyID); err != nil {
+		return err
+	}
+	client := p.config.Client(ctx, tok)
+	endpoint := fmt.Sprintf("%s/repos/%s/keys/%s", p.apiBase, repo, keyID)
+	if err := doJSON(ctx, client, NameGitHub, http.MethodDelete, endpoint, gitHubAccept, nil, nil); err != nil {
+		if isNotFound(err) {
 			return nil
 		}
 		return err

@@ -60,10 +60,19 @@ type Webhook struct {
 	Events []string
 }
 
-// HookTarget names the repository a hook is installed on, together with the
-// caller whose stored connection authenticates the call. CloneURL selects
-// between several connections of the same provider (two self-hosted Gitea
-// instances, for example).
+// DeployKey is a public SSH key to install on a repository so the control
+// plane can clone it over SSH. Title is what the Git host shows in its key
+// list; Key is one OpenSSH public-key line ("ssh-ed25519 AAAA… comment").
+type DeployKey struct {
+	Title string
+	Key   string
+}
+
+// HookTarget names the repository a provider API call operates on (installing
+// a hook, registering a deploy key), together with the caller whose stored
+// connection authenticates the call. CloneURL selects between several
+// connections of the same provider (two self-hosted Gitea instances, for
+// example).
 type HookTarget struct {
 	UserID   uuid.UUID
 	Provider string
@@ -94,6 +103,12 @@ type SourceProvider interface {
 	// DeleteWebhook removes the hook identified by hookID from repo. A hook
 	// that is already gone is a success, so deleting is idempotent.
 	DeleteWebhook(ctx context.Context, tok *oauth2.Token, repo, hookID string) error
+	// AddDeployKey registers the public key on repo and returns the
+	// provider's own key ID, which RemoveDeployKey needs to remove it later.
+	AddDeployKey(ctx context.Context, tok *oauth2.Token, repo string, key DeployKey) (string, error)
+	// RemoveDeployKey removes the key identified by keyID from repo. A key
+	// that is already gone is a success, so removing stays idempotent.
+	RemoveDeployKey(ctx context.Context, tok *oauth2.Token, repo, keyID string) error
 }
 
 // Provider is a stored source-provider connection. ClientSecret, AccessToken

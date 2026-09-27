@@ -232,27 +232,50 @@ func (c *DockerClient) doJSON(ctx context.Context, method, path string, body, ou
 	return nil
 }
 
-// do issues a request and validates the HTTP status. The caller owns the
+// do issues a JSON request and validates the HTTP status. The caller owns the
 // response body.
 func (c *DockerClient) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
+	return c.doHeader(ctx, method, path, body, "application/json")
+}
+
+// doHeader issues a request with an explicit content type and validates the
+// HTTP status. The caller owns the response body.
+func (c *DockerClient) doHeader(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
+	response, err := c.doRaw(ctx, method, path, body, contentType)
+	if err != nil {
+		return nil, err
+	}
+	if !dockerOK(response.StatusCode) {
+		return nil, statusError(method, path, response)
+	}
+	return response, nil
+}
+
+// doRaw issues a request without validating the HTTP status so callers can
+// branch on codes such as 404 and 409. contentType is applied only when body
+// is non-nil. The caller owns the response body.
+func (c *DockerClient) doRaw(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
-		return nil, fmt.Errorf("docker: build request: %w", err)
+		return nil, fmt.Errorf("docker: %s %s: %w", method, path, err)
 	}
-	if body != nil {
-		request.Header.Set("Content-Type", "application/json")
+	if body != nil && contentType != "" {
+		request.Header.Set("Content-Type", contentType)
 	}
 
 	response, err := c.http.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("docker: %s %s: %w", method, path, err)
 	}
-	if !dockerOK(response.StatusCode) {
-		defer func() { _ = response.Body.Close() }()
-		message, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
-		return nil, fmt.Errorf("docker: %s %s: status %d: %s", method, path, response.StatusCode, strings.TrimSpace(string(message)))
-	}
 	return response, nil
+}
+
+// statusError reads a bounded error body, closes the response, and formats the
+// status failure.
+func statusError(method, path string, response *http.Response) error {
+	defer func() { _ = response.Body.Close() }()
+	message, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+	return fmt.Errorf("docker: %s %s: status %d: %s", method, path, response.StatusCode, strings.TrimSpace(string(message)))
 }
 
 // dockerOK reports whether status indicates success. Docker returns 304 for
@@ -359,13 +382,20 @@ type dockerCreateBody struct {
 
 // dockerHostConfig carries bind mounts and port bindings.
 type dockerHostConfig struct {
-	Binds        []string                `json:"Binds,omitempty"`
-	PortBindings map[string][]dockerPort `json:"PortBindings,omitempty"`
+	Binds         []string                `json:"Binds,omitempty"`
+	PortBindings  map[string][]dockerPort `json:"PortBindings,omitempty"`
+	RestartPolicy *dockerRestartPolicy    `json:"RestartPolicy,omitempty"`
 }
 
 // dockerPort is one host-side port binding.
 type dockerPort struct {
-	HostPort string `json:"HostPort"`
+	HostIP   string `json:"HostIp,omitempty"`
+	HostPort string `json:"HostPort,omitempty"`
+}
+
+// dockerRestartPolicy is the Docker restart policy for a container.
+type dockerRestartPolicy struct {
+	Name string `json:"Name"`
 }
 
 // dockerNetworkingCfg attaches the container to the named networks.

@@ -161,6 +161,17 @@ func dockerError(action string, err error) error {
 	}
 }
 
+// ServerOption registers an optional service on the agent gRPC server.
+type ServerOption func(*grpc.Server)
+
+// WithBuildService registers build so the control plane can build images on
+// this node. Pass it to NewServer.
+func WithBuildService(build agentv1.BuildServiceServer) ServerOption {
+	return func(server *grpc.Server) {
+		agentv1.RegisterBuildServiceServer(server, build)
+	}
+}
+
 // Server wraps a gRPC server exposing DockerService over TLS.
 type Server struct {
 	grpc *grpc.Server
@@ -168,19 +179,23 @@ type Server struct {
 	log  *slog.Logger
 }
 
-// NewServer binds addr and registers the DockerService implementation. The
-// caller must call Serve to begin accepting connections.
-func NewServer(addr string, creds credentials.TransportCredentials, impl agentv1.DockerServiceServer, log *slog.Logger) (*Server, error) {
+// NewServer binds addr and registers the DockerService implementation plus any
+// optional services. The caller must call Serve to begin accepting
+// connections.
+func NewServer(addr string, creds credentials.TransportCredentials, impl agentv1.DockerServiceServer, log *slog.Logger, options ...ServerOption) (*Server, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("agent: listen %s: %w", addr, err)
 	}
-	options := make([]grpc.ServerOption, 0, 1)
+	var serverOptions []grpc.ServerOption
 	if creds != nil {
-		options = append(options, grpc.Creds(creds))
+		serverOptions = append(serverOptions, grpc.Creds(creds))
 	}
-	server := grpc.NewServer(options...)
+	server := grpc.NewServer(serverOptions...)
 	agentv1.RegisterDockerServiceServer(server, impl)
+	for _, option := range options {
+		option(server)
+	}
 	if log == nil {
 		log = slog.Default()
 	}

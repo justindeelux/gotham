@@ -40,6 +40,20 @@ service DockerService {
   rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
 }
 
+// BuildService runs on the node agent. The control plane dials it to build
+// application images on that node: it streams the build context tarball in
+// and receives build log chunks back. Images are pushed to a node-local
+// registry:2 container that the agent bootstraps on first build.
+service BuildService {
+  // BuildImage receives build parameters followed by the build context
+  // tarball, then streams build output back. The first request must carry
+  // meta; every subsequent request carries a slice of the tarball until the
+  // client closes its send side. The final response carries the pushed image
+  // digest and the node registry address; failures are reported as gRPC
+  // status errors after any log chunks already sent.
+  rpc BuildImage(stream BuildImageRequest) returns (stream BuildImageResponse);
+}
+
 // RegisterRequest carries the node's static identity and capabilities.
 message RegisterRequest {
   string node_id = 1;
@@ -146,4 +160,57 @@ message StreamLogsRequest {
 // LogChunk is one chunk of a container log stream.
 message LogChunk {
   bytes data = 1;
+}
+
+// BuildImageRequest is one part of a BuildImage stream: either the build
+// parameters (first message only) or a slice of the build context tarball.
+message BuildImageRequest {
+  oneof part {
+    BuildMeta meta = 1;
+    bytes context_chunk = 2;
+  }
+}
+
+// BuildMeta describes one image build.
+message BuildMeta {
+  // app_id and deploy_id form the standardized image tag
+  // gotham/{app_id}:{deploy_id}. Both must be non-empty ref path segments
+  // (letters, digits, dot, underscore, dash).
+  string app_id = 1;
+  string deploy_id = 2;
+  // dockerfile is the Dockerfile path relative to the context root.
+  // Empty means "Dockerfile".
+  string dockerfile = 3;
+  // build_args are forwarded to the Docker build as --build-arg values.
+  map<string, string> build_args = 4;
+}
+
+// BuildImageResponse is one message of a BuildImage stream: either a build
+// log chunk or, exactly once when the build succeeds, the build result.
+message BuildImageResponse {
+  oneof event {
+    // log carries raw build output (build and push progress merged).
+    BuildLogChunk log = 1;
+    // result closes a successful build.
+    BuildImageResult result = 2;
+  }
+}
+
+// BuildLogChunk is one chunk of build output.
+message BuildLogChunk {
+  bytes data = 1;
+}
+
+// BuildImageResult reports a completed build and push.
+message BuildImageResult {
+  // image_tag is the standardized local tag: gotham/{app_id}:{deploy_id}.
+  string image_tag = 1;
+  // registry_image is the full pushed reference:
+  // {registry_addr}/gotham/{app_id}:{deploy_id}.
+  string registry_image = 2;
+  // digest is the pushed image manifest digest: sha256:...
+  string digest = 3;
+  // registry_addr is the node-local registry the image was pushed to, e.g.
+  // "127.0.0.1:5000". It is returned so the control plane can persist it.
+  string registry_addr = 4;
 }

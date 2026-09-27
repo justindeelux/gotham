@@ -58,6 +58,7 @@ type Server struct {
 	servers     ServerService
 	persistence *store.Store
 	deploy      deploy.DeployService
+	backups     databases.BackupService
 	authLimiter *ipRateLimiter
 	router      http.Handler
 	closer      func()
@@ -105,7 +106,11 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	s.closer = func() {
 		// The deploy service owns its worker pool and realtime publisher;
 		// shutting it down first stops in-flight deployments before the
-		// shared Redis pinger goes away.
+		// shared Redis pinger goes away. The backup service stops its cron
+		// scheduler for the same reason.
+		if s.backups != nil {
+			_ = s.backups.Close()
+		}
 		if closer, ok := s.deploy.(interface{ Close() error }); ok {
 			_ = closer.Close()
 		}
@@ -196,6 +201,14 @@ func (s *Server) routes() (http.Handler, error) {
 		// database container is created through the shared container service
 		// rather than a second agent path.
 		databases.Mount(api, s.RequireAuth, UserIDFromContext, s.databaseService(containerService))
+
+		// Backup and restore surface (BE-5.2), same container service and
+		// same feature flag as the databases routes above: a nil service
+		// (no database) or FEATURE_DATABASES=false mounts nothing. The
+		// service owns the internal cron scheduler, started here and stopped
+		// by the closer above.
+		s.backups = s.backupService(containerService)
+		databases.MountBackups(api, s.RequireAuth, UserIDFromContext, s.backups)
 	})
 
 	spa, err := newSPAHandler()
@@ -298,6 +311,23 @@ func (s *Server) databaseService(containerService containers.ContainerService) d
 		return nil
 	}
 	return databases.NewDefaultService(databases.Config{
+		Store:      s.persistence,
+		Containers: containerService,
+		Secret:     s.cfg.Snapshot().SecretKey,
+		Logger:     s.logger,
+	})
+}
+
+// backupService builds the backup domain service for the HTTP wiring: the
+// database, the shared container service, the key that opens sealed
+// credentials and (through the service itself) the local backup directory
+// and the cron scheduler. It returns nil (no database, no container service,
+// or FEATURE_DATABASES=false) so databases.MountBackups stays a no-op.
+func (s *Server) backupService(containerService containers.ContainerService) databases.BackupService {
+	if s.persistence == nil || containerService == nil {
+		return nil
+	}
+	return databases.NewDefaultBackupService(databases.BackupConfig{
 		Store:      s.persistence,
 		Containers: containerService,
 		Secret:     s.cfg.Snapshot().SecretKey,

@@ -1,0 +1,500 @@
+package databases
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"errors"
+	"log/slog"
+	"os"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/containers"
+)
+
+func TestBackupStoresCompressedArtifact(t *testing.T) {
+	fixture := newBackupFixture(t)
+
+	backup := fixture.queueBackup(t)
+	if backup.Status != BackupCompleted {
+		t.Fatalf("status = %q (%s), want completed", backup.Status, backup.Error)
+	}
+	if backup.Type != BackupManual {
+		t.Errorf("type = %q, want manual", backup.Type)
+	}
+	if !strings.HasPrefix(backup.Location, locationFilePrefix) {
+		t.Errorf("location = %q, want a file:// uri", backup.Location)
+	}
+	if backup.Size <= 0 {
+		t.Errorf("size = %d, want the compressed length", backup.Size)
+	}
+	if backup.FinishedAt.IsZero() {
+		t.Error("finished_at must be set on a terminal run")
+	}
+	if backup.ContainerID == "" {
+		t.Error("the temporary container id must be recorded")
+	}
+
+	// The stored bytes are the gzip of what the job streamed.
+	if got := string(readArtifact(t, backup.Location)); got != dumpPayload {
+		t.Errorf("artifact = %q, want %q", got, dumpPayload)
+	}
+	info, err := os.Stat(strings.TrimPrefix(backup.Location, locationFilePrefix))
+	if err != nil {
+		t.Fatalf("stat artifact: %v", err)
+	}
+	if info.Size() != backup.Size {
+		t.Errorf("file is %d bytes, row says %d", info.Size(), backup.Size)
+	}
+
+	// The database was paused for the dump and started again afterwards, and
+	// the job container was removed.
+	fixture.containers.mu.Lock()
+	stops, starts, runs, removes := fixture.containers.stops, fixture.containers.starts, len(fixture.containers.runs), fixture.containers.removes
+	fixture.containers.mu.Unlock()
+	if stops != 1 || starts != 1 {
+		t.Errorf("stops = %d, starts = %d, want 1 and 1", stops, starts)
+	}
+	if runs != 1 {
+		t.Errorf("started %d containers, want only the dump job", runs)
+	}
+	if len(removes) == 0 {
+		t.Error("the temporary container must be removed")
+	}
+}
+
+func TestBackupFailureIsRecordedAndDatabaseRestarted(t *testing.T) {
+	fixture := newBackupFixture(t)
+	fixture.containers.logFn = func(opts containers.RunOptions) [][]byte {
+		runID := envValue(opts.Env, "GOTHAM_RUN_ID")
+		return [][]byte{[]byte(
+			jobStartPrefix + runID + "\n" +
+				jobEndPrefix + runID + " fail 7\n" +
+				"pg_dump: error: could not connect\n")}
+	}
+
+	backup := fixture.queueBackup(t)
+	if backup.Status != BackupFailed {
+		t.Fatalf("status = %q, want failed", backup.Status)
+	}
+	if backup.Location != "" {
+		t.Errorf("a failed run must not record a location, got %q", backup.Location)
+	}
+	if !strings.Contains(backup.Error, "status 7") || !strings.Contains(backup.Error, "could not connect") {
+		t.Errorf("error = %q, want the status and the diagnostics", backup.Error)
+	}
+
+	fixture.containers.mu.Lock()
+	starts := fixture.containers.starts
+	fixture.containers.mu.Unlock()
+	if starts != 1 {
+		t.Errorf("starts = %d, want the database back up after the failure", starts)
+	}
+}
+
+func TestBackupLeavesStoppedDatabaseStopped(t *testing.T) {
+	fixture := newBackupFixture(t)
+	// No container listed: the database is stopped before the job runs.
+	fixture.containers.listed = nil
+
+	backup := fixture.queueBackup(t)
+	if backup.Status != BackupCompleted {
+		t.Fatalf("status = %q (%s), want completed", backup.Status, backup.Error)
+	}
+	fixture.containers.mu.Lock()
+	stops, starts := fixture.containers.stops, fixture.containers.starts
+	fixture.containers.mu.Unlock()
+	if stops != 0 || starts != 0 {
+		t.Errorf("stops = %d, starts = %d, want neither: the database was already down", stops, starts)
+	}
+}
+
+func TestBackupRejectsSecondJobWhileRunning(t *testing.T) {
+	fixture := newBackupFixture(t)
+	if !fixture.manager.claim(fixture.database.ID) {
+		t.Fatal("could not take the claim")
+	}
+	defer fixture.manager.release(fixture.database.ID)
+
+	_, err := fixture.manager.CreateBackup(context.Background(), fixture.userID, fixture.database.ID, CreateBackupRequest{})
+	if !errors.Is(err, ErrBackupInFlight) {
+		t.Fatalf("err = %v, want ErrBackupInFlight", err)
+	}
+}
+
+func TestBackupEnforcesOwnership(t *testing.T) {
+	fixture := newBackupFixture(t)
+	stranger := uuid.New()
+
+	if _, err := fixture.manager.CreateBackup(context.Background(), stranger, fixture.database.ID, CreateBackupRequest{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("CreateBackup err = %v, want ErrNotFound", err)
+	}
+	if _, err := fixture.manager.ListBackups(context.Background(), stranger, fixture.database.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ListBackups err = %v, want ErrNotFound", err)
+	}
+	if _, err := fixture.manager.GetBackup(context.Background(), stranger, fixture.database.ID, uuid.New()); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetBackup err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestBackupUsesObjectStoreSeam(t *testing.T) {
+	databaseRepo := newFakeRepository()
+	database := databaseRepo.seed(testDatabase(EnginePostgres, ""))
+	containers := &fakeContainers{logFn: defaultJobLogs}
+	containers.setRunning(database.ContainerID)
+	objects := newFakeObjectStore()
+
+	manager := NewBackupService(BackupConfig{
+		Repository:         newFakeBackupRepository(),
+		DatabaseRepository: databaseRepo,
+		Containers:         containers,
+		Secret:             testSecret,
+		Logger:             discardLogger(),
+		ObjectStore:        objects,
+		JobTimeout:         30 * time.Second,
+	})
+
+	queued, err := manager.CreateBackup(context.Background(), database.UserID, database.ID, CreateBackupRequest{})
+	if err != nil {
+		t.Fatalf("CreateBackup: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		backup, ok := manager.backups.(*fakeBackupRepository).getBackup(queued.ID)
+		if ok && backup.Status != BackupRunning {
+			if backup.Status != BackupCompleted {
+				t.Fatalf("status = %q (%s)", backup.Status, backup.Error)
+			}
+			if !strings.HasPrefix(backup.Location, locationS3Prefix) {
+				t.Errorf("location = %q, want an s3 uri", backup.Location)
+			}
+			wantKey := "databases/" + database.ID.String() + "/" + queued.ID.String() + ".dump.gz"
+			if len(objects.puts) != 1 || objects.puts[0] != wantKey {
+				t.Errorf("puts = %v, want [%s]", objects.puts, wantKey)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("backup never finished")
+}
+
+func TestRestoreStagesArtifactAndRunsJob(t *testing.T) {
+	fixture := newBackupFixture(t)
+	backup := fixture.queueBackup(t)
+
+	artifact, err := os.ReadFile(strings.TrimPrefix(backup.Location, locationFilePrefix))
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+
+	result, err := fixture.manager.RestoreBackup(context.Background(), fixture.userID, fixture.database.ID,
+		RestoreRequest{BackupID: backup.ID})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if result.Status != BackupRunning || result.BackupID != backup.ID {
+		t.Errorf("result = %+v, want the queued restore", result)
+	}
+
+	fixture.containers.mu.Lock()
+	runsBefore := len(fixture.containers.runs)
+	fixture.containers.mu.Unlock()
+	_ = runsBefore
+
+	waitFor(t, "the restore job", func() bool {
+		fixture.containers.mu.Lock()
+		defer fixture.containers.mu.Unlock()
+		for _, opts := range fixture.containers.runs {
+			if opts.Labels[labelRole] == roleRestore {
+				return true
+			}
+		}
+		return false
+	})
+
+	fixture.containers.mu.Lock()
+	runs := append([]containers.RunOptions(nil), fixture.containers.runs...)
+	stops, starts := fixture.containers.stops, fixture.containers.starts
+	fixture.containers.mu.Unlock()
+
+	var staged, restored *containers.RunOptions
+	for i := range runs {
+		switch runs[i].Labels[labelRole] {
+		case roleStage:
+			staged = &runs[i]
+		case roleRestore:
+			restored = &runs[i]
+		}
+	}
+	if staged == nil {
+		t.Fatal("no staging container ran")
+	}
+	if restored == nil {
+		t.Fatal("no restore container ran")
+	}
+
+	// The staged chunk must carry the artifact byte for byte.
+	pattern := regexp.MustCompile(`printf '%s' '([A-Za-z0-9+/=]+)'`)
+	match := pattern.FindStringSubmatch(staged.Command[2])
+	if match == nil {
+		t.Fatalf("staging script has no payload: %s", staged.Command[2])
+	}
+	decoded, err := base64.StdEncoding.DecodeString(match[1])
+	if err != nil {
+		t.Fatalf("decode staged chunk: %v", err)
+	}
+	if !bytes.Equal(decoded, artifact) {
+		t.Errorf("staged %d bytes, artifact is %d bytes (or they differ)", len(decoded), len(artifact))
+	}
+
+	// The restore job mounts the volume and knows where the artifact is.
+	if want := fixture.database.StoragePath + ":/var/lib/postgresql/data"; len(restored.Volumes) != 1 || restored.Volumes[0] != want {
+		t.Errorf("volumes = %v, want [%s]", restored.Volumes, want)
+	}
+	if stagedPath := envValue(restored.Env, "GOTHAM_STAGED"); !strings.Contains(stagedPath, stagingDirName) {
+		t.Errorf("GOTHAM_STAGED = %q, want a path inside %s", stagedPath, stagingDirName)
+	}
+	if stops < 1 || starts < 1 {
+		t.Errorf("stops = %d, starts = %d, want the database paused and resumed", stops, starts)
+	}
+}
+
+func TestRestoreRejectsIncompleteBackup(t *testing.T) {
+	fixture := newBackupFixture(t)
+	backup := fixture.backups.seedBackup(Backup{
+		DatabaseID: fixture.database.ID,
+		Status:     BackupFailed,
+		Location:   locationFilePrefix + "/tmp/missing.gz",
+	})
+	_, err := fixture.manager.RestoreBackup(context.Background(), fixture.userID, fixture.database.ID,
+		RestoreRequest{BackupID: backup.ID})
+	if !errors.Is(err, ErrBackupNotCompleted) {
+		t.Fatalf("err = %v, want ErrBackupNotCompleted", err)
+	}
+}
+
+func TestRestoreEnforcesOwnership(t *testing.T) {
+	fixture := newBackupFixture(t)
+	other := fixture.backups.seedBackup(Backup{DatabaseID: fixture.database.ID, Status: BackupCompleted})
+	stranger := uuid.New()
+
+	if _, err := fixture.manager.RestoreBackup(context.Background(), stranger, fixture.database.ID,
+		RestoreRequest{BackupID: other.ID}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("foreign caller err = %v, want ErrNotFound", err)
+	}
+	if _, err := fixture.manager.RestoreBackup(context.Background(), fixture.userID, fixture.database.ID,
+		RestoreRequest{}); !errors.Is(err, ErrValidation) {
+		t.Errorf("missing backup id err = %v, want ErrValidation", err)
+	}
+
+	// A backup that belongs to another database is invisible here.
+	foreign := fixture.backups.seedBackup(Backup{DatabaseID: uuid.New(), Status: BackupCompleted})
+	if _, err := fixture.manager.RestoreBackup(context.Background(), fixture.userID, fixture.database.ID,
+		RestoreRequest{BackupID: foreign.ID}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("cross-database err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteBackupRemovesArtifactAndRow(t *testing.T) {
+	fixture := newBackupFixture(t)
+	backup := fixture.queueBackup(t)
+	path := strings.TrimPrefix(backup.Location, locationFilePrefix)
+
+	if err := fixture.manager.DeleteBackup(context.Background(), fixture.userID, fixture.database.ID, backup.ID); err != nil {
+		t.Fatalf("DeleteBackup: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("artifact still on disk: %v", err)
+	}
+	if _, ok := fixture.backups.getBackup(backup.ID); ok {
+		t.Error("row still present after delete")
+	}
+	if err := fixture.manager.DeleteBackup(context.Background(), fixture.userID, fixture.database.ID, backup.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second delete err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestTargetCredentialsAreSealed(t *testing.T) {
+	fixture := newBackupFixture(t)
+
+	target, err := fixture.manager.CreateTarget(context.Background(), fixture.userID, TargetRequest{
+		Name:      "r2",
+		Kind:      "s3",
+		Endpoint:  "https://account.r2.cloudflarestorage.com",
+		Region:    "auto",
+		Bucket:    "gotham-backups",
+		Prefix:    "pg-orders/",
+		AccessKey: "R2AK7f3c9a2b51de84",
+		SecretKey: "b7d41e90c3f5a28e6d0194bc7a3e52f0",
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+
+	secrets := fixture.backups.getSecrets(target.ID)
+	if len(secrets) != 2 {
+		t.Fatalf("stored %d secrets, want access and secret key", len(secrets))
+	}
+	for _, secret := range secrets {
+		if secret.Ciphertext == "" {
+			t.Errorf("%s stored empty", secret.Key)
+		}
+		if strings.Contains(secret.Ciphertext, "R2AK7f3c9a2b51de84") ||
+			strings.Contains(secret.Ciphertext, "b7d41e90c3f5a28e6d0194bc7a3e52f0") {
+			t.Errorf("%s is stored in the clear", secret.Key)
+		}
+	}
+
+	// The sealed rows open back to the original values.
+	accessKey, secretKey, err := openTargetSecrets(testSecret, secrets)
+	if err != nil {
+		t.Fatalf("openTargetSecrets: %v", err)
+	}
+	if accessKey != "R2AK7f3c9a2b51de84" || secretKey != "b7d41e90c3f5a28e6d0194bc7a3e52f0" {
+		t.Errorf("opened %q / %q", accessKey, secretKey)
+	}
+
+	// A request without credentials keeps the stored ones.
+	if _, err := fixture.manager.UpdateTarget(context.Background(), fixture.userID, target.ID, TargetRequest{
+		Name: "r2-renamed",
+	}); err != nil {
+		t.Fatalf("UpdateTarget: %v", err)
+	}
+	accessKey, _, err = openTargetSecrets(testSecret, fixture.backups.getSecrets(target.ID))
+	if err != nil || accessKey != "R2AK7f3c9a2b51de84" {
+		t.Errorf("stored access key was lost: %q, %v", accessKey, err)
+	}
+}
+
+func TestTargetOwnershipAndValidation(t *testing.T) {
+	fixture := newBackupFixture(t)
+	stranger := uuid.New()
+
+	if _, err := fixture.manager.CreateTarget(context.Background(), uuid.Nil, TargetRequest{Name: "x", Kind: "local"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("nil user err = %v, want ErrNotFound", err)
+	}
+	if _, err := fixture.manager.CreateTarget(context.Background(), fixture.userID, TargetRequest{Name: "", Kind: "s3"}); !errors.Is(err, ErrValidation) {
+		t.Errorf("missing name err = %v, want ErrValidation", err)
+	}
+	if _, err := fixture.manager.CreateTarget(context.Background(), fixture.userID, TargetRequest{
+		Name: "s3", Kind: "s3", Endpoint: "", Bucket: "",
+	}); !errors.Is(err, ErrValidation) {
+		t.Errorf("missing endpoint err = %v, want ErrValidation", err)
+	}
+	if _, err := fixture.manager.CreateTarget(context.Background(), fixture.userID, TargetRequest{
+		Name: "weird", Kind: "ftp",
+	}); !errors.Is(err, ErrValidation) {
+		t.Errorf("bad kind err = %v, want ErrValidation", err)
+	}
+
+	target := fixture.backups.seedTarget(BackupTarget{UserID: fixture.userID, Name: "mine", Kind: TargetS3,
+		Endpoint: "http://minio:9000", Bucket: "b"})
+	if _, err := fixture.manager.UpdateTarget(context.Background(), stranger, target.ID, TargetRequest{Name: "stolen"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("foreign update err = %v, want ErrNotFound", err)
+	}
+	if err := fixture.manager.DeleteTarget(context.Background(), stranger, target.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("foreign delete err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestBackupNeverLogsCredentials(t *testing.T) {
+	var logged bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	fixture := newBackupFixtureWith(t, logger)
+
+	backup := fixture.queueBackup(t)
+	if backup.Status != BackupCompleted {
+		t.Fatalf("status = %q (%s)", backup.Status, backup.Error)
+	}
+
+	output := logged.String()
+	credentials := testCredentials()
+	for _, secret := range []string{credentials.Password, credentials.RootPassword, credentials.Username} {
+		if secret != "" && strings.Contains(output, secret) {
+			t.Errorf("credentials leaked into the log: %q", secret)
+		}
+	}
+	// The job container carries the password in its environment — that is
+	// where the live database keeps it too — but the payload itself must be
+	// described without it.
+	if strings.Contains(output, "POSTGRES_PASSWORD") {
+		t.Error("the log must not echo the job environment")
+	}
+}
+
+func TestSchedulesLifecycle(t *testing.T) {
+	fixture := newBackupFixture(t)
+	ctx := context.Background()
+
+	if _, err := fixture.manager.CreateSchedule(ctx, fixture.userID, fixture.database.ID, ScheduleRequest{
+		Cron: "not a cron",
+	}); !errors.Is(err, ErrValidation) {
+		t.Errorf("invalid cron err = %v, want ErrValidation", err)
+	}
+
+	enabled := false
+	schedule, err := fixture.manager.CreateSchedule(ctx, fixture.userID, fixture.database.ID, ScheduleRequest{
+		Cron:    "0 2 * * *",
+		Enabled: &enabled,
+	})
+	if err != nil {
+		t.Fatalf("CreateSchedule: %v", err)
+	}
+	if schedule.NextRunAt.IsZero() || schedule.NextRunAt.Before(time.Now()) {
+		t.Errorf("next_run_at = %v, want a future instant", schedule.NextRunAt)
+	}
+	if schedule.Enabled {
+		t.Error("enabled = true, want the requested false")
+	}
+
+	enabled = true
+	updated, err := fixture.manager.UpdateSchedule(ctx, fixture.userID, fixture.database.ID, schedule.ID, ScheduleRequest{
+		Cron:    "0 */6 * * *",
+		Enabled: &enabled,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSchedule: %v", err)
+	}
+	if updated.Cron != "0 */6 * * *" || !updated.Enabled {
+		t.Errorf("schedule = %+v, want the new cron and enabled", updated)
+	}
+
+	list, err := fixture.manager.ListSchedules(ctx, fixture.userID, fixture.database.ID)
+	if err != nil {
+		t.Fatalf("ListSchedules: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("listed %d schedules, want 1", len(list))
+	}
+
+	// A schedule of another database is not ours to delete.
+	stranger := uuid.New()
+	if err := fixture.manager.DeleteSchedule(ctx, stranger, fixture.database.ID, schedule.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("foreign delete err = %v, want ErrNotFound", err)
+	}
+	if err := fixture.manager.DeleteSchedule(ctx, fixture.userID, fixture.database.ID, schedule.ID); err != nil {
+		t.Fatalf("DeleteSchedule: %v", err)
+	}
+	if _, err := fixture.manager.ListSchedules(ctx, fixture.userID, fixture.database.ID); err != nil {
+		t.Fatalf("ListSchedules after delete: %v", err)
+	}
+}
+
+func TestBackupManagerWithoutRepositoryFailsClearly(t *testing.T) {
+	manager := NewBackupService(BackupConfig{Logger: discardLogger()})
+	if _, err := manager.ListTargets(context.Background(), uuid.New()); err == nil {
+		t.Error("expected an error without a repository")
+	}
+	if _, err := manager.ListBackups(context.Background(), uuid.New(), uuid.New()); err == nil {
+		t.Error("expected an error without a repository")
+	}
+	if _, err := manager.CreateBackup(context.Background(), uuid.New(), uuid.New(), CreateBackupRequest{}); err == nil {
+		t.Error("expected an error without a repository")
+	}
+}

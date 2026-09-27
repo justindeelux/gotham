@@ -61,6 +61,54 @@ type ApplicationWebhook struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Backup struct {
+	ID          pgtype.UUID        `json:"id"`
+	DatabaseID  pgtype.UUID        `json:"database_id"`
+	ScheduleID  pgtype.UUID        `json:"schedule_id"`
+	Type        string             `json:"type"`
+	Status      string             `json:"status"`
+	Size        int64              `json:"size"`
+	Location    string             `json:"location"`
+	TargetID    pgtype.UUID        `json:"target_id"`
+	ContainerID string             `json:"container_id"`
+	Error       string             `json:"error"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+}
+
+type BackupSchedule struct {
+	ID         pgtype.UUID        `json:"id"`
+	DatabaseID pgtype.UUID        `json:"database_id"`
+	Cron       string             `json:"cron"`
+	TargetID   pgtype.UUID        `json:"target_id"`
+	Enabled    bool               `json:"enabled"`
+	LastRunAt  pgtype.Timestamptz `json:"last_run_at"`
+	NextRunAt  pgtype.Timestamptz `json:"next_run_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type BackupTarget struct {
+	ID        pgtype.UUID        `json:"id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	Name      string             `json:"name"`
+	Kind      string             `json:"kind"`
+	Endpoint  string             `json:"endpoint"`
+	Region    string             `json:"region"`
+	Bucket    string             `json:"bucket"`
+	Prefix    string             `json:"prefix"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type BackupTargetSecret struct {
+	ID         pgtype.UUID        `json:"id"`
+	TargetID   pgtype.UUID        `json:"target_id"`
+	Key        string             `json:"key"`
+	Ciphertext string             `json:"ciphertext"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type Database struct {
 	ID          pgtype.UUID        `json:"id"`
 	UserID      pgtype.UUID        `json:"user_id"`

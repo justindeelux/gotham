@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -18,10 +19,13 @@ import (
 )
 
 // Timeout defaults bound agent RPCs. Pulls and runs transfer image layers, so
-// they get a longer budget than listings and lifecycle actions.
+// they get a longer budget than listings and lifecycle actions. Log streams
+// are long-lived by nature — a backup job tails its temporary container until
+// the dump finishes — so they get their own, much larger budget.
 const (
 	defaultRPCTimeout  = 30 * time.Second
 	defaultPullTimeout = 5 * time.Minute
+	defaultLogTimeout  = 30 * time.Minute
 )
 
 // ContainerService routes Docker commands for one node to that node's agent.
@@ -37,6 +41,10 @@ type ContainerService interface {
 	Remove(ctx context.Context, serverID uuid.UUID, containerID string) error
 	Pull(ctx context.Context, serverID uuid.UUID, image string) error
 	Run(ctx context.Context, serverID uuid.UUID, opts RunOptions) (string, error)
+	// Logs streams a container's stdout and stderr payloads (the agent merges
+	// both) until the stream ends — with follow, Docker closes it when the
+	// container stops — or ctx is cancelled. The channel is closed on both.
+	Logs(ctx context.Context, serverID uuid.UUID, containerID string, follow bool) (<-chan []byte, error)
 }
 
 // Config wires a Service. Registry and Cache are required inputs except that
@@ -50,6 +58,7 @@ type Config struct {
 	Logger      *slog.Logger
 	RPCTimeout  time.Duration
 	PullTimeout time.Duration
+	LogTimeout  time.Duration
 }
 
 // Service is the control-plane container domain service.
@@ -61,6 +70,7 @@ type Service struct {
 	logger      *slog.Logger
 	rpcTimeout  time.Duration
 	pullTimeout time.Duration
+	logTimeout  time.Duration
 }
 
 // NewService builds a Service. When cfg.Cache is nil a Redis cache over
@@ -82,6 +92,10 @@ func NewService(cfg Config) *Service {
 	if pullTimeout <= 0 {
 		pullTimeout = defaultPullTimeout
 	}
+	logTimeout := cfg.LogTimeout
+	if logTimeout <= 0 {
+		logTimeout = defaultLogTimeout
+	}
 	return &Service{
 		registry:    cfg.Registry,
 		dial:        cfg.Dial,
@@ -89,6 +103,7 @@ func NewService(cfg Config) *Service {
 		logger:      logger,
 		rpcTimeout:  rpcTimeout,
 		pullTimeout: pullTimeout,
+		logTimeout:  logTimeout,
 	}
 }
 
@@ -264,6 +279,64 @@ func (s *Service) Run(ctx context.Context, serverID uuid.UUID, opts RunOptions) 
 	}
 	s.invalidate(ctx, serverID)
 	return response.GetContainerId(), nil
+}
+
+// Logs streams a container's stdout and stderr payloads until the stream ends
+// or ctx is cancelled. With follow the agent tails the container, and Docker
+// closes the stream when it stops — which is how a job waits for its
+// temporary container to finish without an Exec or Wait RPC.
+//
+// The stream lives in its own context bounded by Config.LogTimeout rather than
+// the short RPC timeout: a dump of a large database runs for minutes.
+func (s *Service) Logs(ctx context.Context, serverID uuid.UUID, containerID string, follow bool) (<-chan []byte, error) {
+	if strings.TrimSpace(containerID) == "" {
+		return nil, fmt.Errorf("%w: container id is required", ErrValidation)
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.logTimeout)
+	server, err := s.resolve(ctx, serverID)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	client, err := s.dialClient(ctx, server)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	stream, err := client.StreamLogs(ctx, &agentv1.StreamLogsRequest{ContainerId: containerID, Follow: follow})
+	if err != nil {
+		cancel()
+		return nil, mapRPCError(err)
+	}
+
+	out := make(chan []byte)
+	go func() {
+		defer close(out)
+		defer cancel()
+		for {
+			chunk, err := stream.Recv()
+			if err != nil {
+				// io.EOF is the normal end of a log stream; anything else is
+				// reported for diagnosis but still closes the channel so the
+				// caller never blocks on a dead stream.
+				if !errors.Is(err, io.EOF) && ctx.Err() == nil {
+					s.logger.Debug("containers: log stream ended early",
+						"container_id", containerID, "error", err)
+				}
+				return
+			}
+			data := chunk.GetData()
+			if len(data) == 0 {
+				continue
+			}
+			select {
+			case out <- data:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
 }
 
 // resolve returns the registry entry for a server, mapping a missing row to

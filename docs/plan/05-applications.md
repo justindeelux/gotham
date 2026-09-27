@@ -1,6 +1,6 @@
-# Phase 4 — Applications (Deploy from Git) (W6–W8) ⭐
+# Phase 4 — Applications (Deploy from Git) (W6–W8)
 
-**Goal:** the core deploy flow — from Git repo to running container. The biggest phase; orchestration (4.3) uses the strongest review model.
+**Goal:** the core deploy flow — from Git repo to running container. The biggest phase; orchestration (4.3) needs `code-reviewer` design review.
 
 **Exit criteria (Milestone M4):**
 - [ ] Connect GitHub/GitLab/Gitea, list repos/branches.
@@ -8,7 +8,7 @@
 - [ ] Build without a Dockerfile (Railpack/Nixpacks or Buildpacks auto-detect).
 - [ ] Persistent storage, env vars, secrets work.
 - [ ] Push code → webhook → auto deploy, build logs visible realtime in the UI.
-- [ ] **Gate G1**: `code-reviewer` (review model `openrouter/z-ai/glm-5.3-prime`) + `e2e-runner` run the e2e deploy scenario before merge.
+- [ ] **Gate G1**: `code-reviewer` + `e2e-runner` run the e2e deploy scenario before merge.
 
 **Rollback:** deploy is a state machine persisted in the DB (`deployments` table) — each new deploy keeps the old image tag; the "Rollback" button in FE-4.1 points back at the old container. If the phase breaks: disable with the env flag `FEATURE_APPLICATIONS=false`, Phases 0–3 unaffected.
 
@@ -33,7 +33,7 @@
 - **Verify:** run a build per engine → image appears in the internal registry; `docker pull` works.
 - **Depends on:** Phase 3. Parallel with BE-4.1.
 
-## BE-4.3 ⭐ — Deploy orchestration — `ws/p4-deploy`
+## BE-4.3 — Deploy orchestration — `ws/p4-deploy`
 
 - **Context brief:** the heart of the system. Deploy state machine: `queued → cloning → building → pushing → starting → running | failed`, persisted in the `deployments` table, each step emitting events to Redis (for realtime logs). Run containers with env vars, secrets (AES-GCM encrypted in the DB, decrypted when sent to the agent), persistent storage (volume map), port mapping, post-start healthcheck. Parent resource: `applications` (id, name, provider, repo, branch, build_pack, base_domain, env, secrets, storage, port).
 - **Deliverables:**

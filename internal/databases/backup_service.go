@@ -859,8 +859,17 @@ func (m *BackupManager) restore(ctx context.Context, database Database, backup B
 		return err
 	}
 	if err := m.stageArtifact(ctx, database, backup.ID, artifact, staged); err != nil {
+		m.removeStagedArtifact(database, staged)
 		return err
 	}
+	// Any later failure leaves a staged artifact behind in the volume; a
+	// best-effort cleanup keeps a retry from starting on a partial file.
+	restoreSucceeded := false
+	defer func() {
+		if !restoreSucceeded {
+			m.removeStagedArtifact(database, staged)
+		}
+	}()
 
 	engine, ok := LookupBackupEngine(database.Engine)
 	if !ok {
@@ -878,7 +887,63 @@ func (m *BackupManager) restore(ctx context.Context, database Database, backup B
 	if _, err := m.runJob(ctx, database.ServerID, options, collector); err != nil {
 		return err
 	}
-	return collector.Result()
+	if err := collector.Result(); err != nil {
+		return err
+	}
+	restoreSucceeded = true
+	return nil
+}
+
+// removeStagedArtifact best-effort removes a staged restore artifact and its
+// directory after a failed restore, so a retry starts from a clean volume. It
+// runs its own bounded job with a fresh context — the restore's may already be
+// gone — and every failure is logged, never returned: the caller must keep
+// the original restore error.
+func (m *BackupManager) removeStagedArtifact(database Database, stagedPath string) {
+	engine, _, err := parseEngine(database.Engine)
+	if err != nil || !safeJobPath(stagedPath) {
+		return
+	}
+	volume := engine.VolumeSpec()
+	if strings.TrimSpace(volume.MountPath) == "" {
+		return
+	}
+	runID := database.ID.String()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	// The script reports through the standard frame, so the collector
+	// validates that the removal actually ran.
+	script := fmt.Sprintf(
+		"if rm -f '%s' && rm -rf '%s'; then\n"+
+			"  printf 'GOTHAM-BACKUP-START %%s\\nGOTHAM-BACKUP-PAYLOAD %%s 0\\nGOTHAM-BACKUP-END %%s ok\\n' \"$GOTHAM_RUN_ID\" \"$GOTHAM_RUN_ID\" \"$GOTHAM_RUN_ID\"\n"+
+			"else\n"+
+			"  printf 'GOTHAM-BACKUP-START %%s\\nGOTHAM-BACKUP-END %%s fail 3\\n' \"$GOTHAM_RUN_ID\" \"$GOTHAM_RUN_ID\"\n"+
+			"fi\n",
+		stagedPath, path.Dir(stagedPath))
+	options := containers.RunOptions{
+		Image:   engine.Image(database.Version),
+		Name:    tempJobName(roleStage+"-cleanup", runID),
+		Env:     []string{"GOTHAM_RUN_ID=" + runID},
+		Command: []string{"sh", "-c", script},
+		Labels: map[string]string{
+			labelManaged:    "true",
+			labelDatabaseID: runID,
+			labelEngine:     database.Engine,
+			labelRole:       roleStage,
+			labelBackupID:   runID,
+		},
+		Volumes: []string{database.StoragePath + ":" + volume.MountPath},
+	}
+	collector := newJobCollector(runID, nil)
+	if _, err := m.runJob(ctx, database.ServerID, options, collector); err != nil {
+		m.logger.Warn("databases: could not clean up a staged restore artifact",
+			"database_id", runID, "error", err)
+		return
+	}
+	if err := collector.Result(); err != nil {
+		m.logger.Warn("databases: staged restore artifact cleanup did not complete",
+			"database_id", runID, "error", err)
+	}
 }
 
 // stageArtifact writes the artifact onto the database volume one bounded
@@ -905,8 +970,11 @@ func (m *BackupManager) stageArtifact(ctx context.Context, database Database, ru
 	}
 }
 
-// stageChunk appends (or, for index 0, replaces) one base64 chunk of the
-// artifact inside the database volume and waits for the container to finish.
+// stageChunk appends (or, for index 0, replaces) one chunk of the artifact
+// inside the database volume and waits for the container to finish. The chunk
+// travels base64-encoded inside the command argument — the only channel the
+// agent contract offers — and is decoded back to the artifact bytes by the
+// container, so the restore job reads the raw gzip file it expects.
 func (m *BackupManager) stageChunk(ctx context.Context, database Database, runID uuid.UUID, chunk []byte, stagedPath string, index int) error {
 	encoded := base64.StdEncoding.EncodeToString(chunk)
 	operator := ">>"
@@ -922,7 +990,7 @@ func (m *BackupManager) stageChunk(ctx context.Context, database Database, runID
 	// and a UUID.
 	script := fmt.Sprintf(
 		"id=\"$GOTHAM_RUN_ID\"\n"+
-			"if mkdir -p '%s' && printf '%%s' '%s' %s '%s'; then\n"+
+			"if mkdir -p '%s' && printf '%%s' '%s' | base64 -d %s '%s'; then\n"+
 			"  printf 'GOTHAM-BACKUP-START %%s\\nGOTHAM-BACKUP-PAYLOAD %%s 0\\nGOTHAM-BACKUP-END %%s ok\\n' \"$id\" \"$id\" \"$id\"\n"+
 			"else\n"+
 			"  printf 'GOTHAM-BACKUP-START %%s\\nGOTHAM-BACKUP-END %%s fail 3\\n' \"$id\" \"$id\"\n"+

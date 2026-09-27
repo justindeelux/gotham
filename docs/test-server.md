@@ -93,6 +93,48 @@ CI runs the same suite in `.github/workflows/ui-e2e.yml` (Postgres 16 + Redis
 7 services, port 8099, report/trace artifacts on failure). Trigger it manually
 via *workflow_dispatch* or by opening a PR that touches `web/**`.
 
+## Verified on real hardware (2026-09-27)
+
+Environment prerequisites installed for the current feature set:
+
+- `railpack` 0.40 on PATH and a `buildkit` container with
+  `BUILDKIT_HOST=docker-container://buildkit` in
+  `/etc/systemd/system/gotham.service.d/buildkit.conf` (Railpack apps).
+- `servers.ip = 127.0.0.1` for `test-node-1` (the all-in-one registration has
+  no operator address; the CP dials the agent on the node port 9443).
+- Dev mode: no CA configured, so CP and agent speak plaintext.
+
+Verified live (beyond CI):
+
+- Deploy `docker/welcome-to-docker` (Dockerfile) → build on the agent →
+  container running → HTTP 200 via host port; update + redeploy; rollback →
+  previous image runs → HTTP 200; manual stop/start.
+- Deploy `heroku/node-js-getting-started` (no Dockerfile, Railpack) →
+  running → HTTP 200; `PORT=3000` auto-injected; env vars applied;
+  persistent `/data` mount present.
+- Containers list through the agent (`/api/v1/servers/{id}/containers`).
+- Migrations `00010_deploy_keys`, `00011_backups` applied; new routes mounted
+  (`/api/v1/databases/backup-targets` → 401 unauthenticated).
+- Managed PostgreSQL backup/restore through the real CP/API → agent → Docker
+  path (2026-09-27, disposable local stack: `GOTHAM_E2E=1 go test
+  ./internal/e2e/ -run TestP5Backup`): local backup → drop only the disposable
+  table → restore → identical row count and md5 checksum
+  (`200:3dfbedd249eae27832cc4181ee42a6c7`); a 473 411-byte incompressible
+  artifact spanned six 90 000-byte staging chunks and restored to the same
+  400-row checksum; an S3 target with an explicit `http://127.0.0.1:<port>`
+  endpoint passed the connection check, its object
+  `databases/<db>/<backup>.dump.gz` was verified in the bucket, and the
+  restore reproduced `150:536d8ea0f682d75eff6602e3ce38e970`. The smoke found
+  and fixed three latent BE-5.2 defects on the real path (binary dump bytes
+  replaced by the Docker log driver's UTF-8 handling, restore staging writing
+  base64 instead of decoding it, `pg_restore -` opening a file named `-`).
+
+Not yet verified live on this host: webhook delivery end-to-end (needs a
+provider connection or a seeded row), Traefik/domains, GitHub OAuth (owner
+credentials). Managed database backup/restore and S3 targets are verified on
+the local disposable `internal/e2e` stack described above but have not been
+repeated against this shared box's CP/agent yet.
+
 ## Notes
 
 - Development mode: when there is no CA (empty `GOTHAM_CA_DIR`), the control

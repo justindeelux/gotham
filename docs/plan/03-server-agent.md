@@ -1,6 +1,6 @@
-# Phase 2 — Server Management + Agent (W3–W4) ⭐
+# Phase 2 — Server Management + Agent (W3–W4)
 
-**Goal:** node management infrastructure — the CP controls remote machines via a gRPC mTLS agent. This is a **contract-design** phase; use the strongest review model for the proto part.
+**Goal:** node management infrastructure — the CP controls remote machines via a gRPC mTLS agent. This is a **contract-design** phase; the proto part needs `code-reviewer` design review.
 
 **Exit criteria (Milestone M2):**
 - [ ] `buf lint && buf generate` clean; the `proto/agent/v1` contract is versioned.
@@ -10,11 +10,11 @@
 
 **Rollback:** everything new is an add-on (server registry, agent). If it breaks: the agent exits on its own when it loses the CP connection (safe), the `servers` table can be wiped on dev. Phases 0–1 are unaffected.
 
-**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 3 (see Model policy & Phase gate in `00-roadmap.md`).
+**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 3 (see Process & Phase gate in `../process.md`).
 
 ---
 
-## BE-2.1 ⭐ — gRPC contract (buf) — `ws/p2-proto`
+## BE-2.1 — gRPC contract (buf) — `ws/p2-proto`
 
 - **Context brief:** design the full CP↔Agent protocol in `proto/agent/v1/`. Principles: **version in the package name** (e.g. `agent.v1`), every RPC stream-friendly, explicit optional fields (use `optional` / `google.protobuf.Timestamp`). mTLS: self-signed CA managed by the CP, per-agent certs issued by the CP at registration.
 - **Deliverables:**

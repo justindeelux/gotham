@@ -8,11 +8,11 @@
 - [ ] `make migrate` runs goose, creating the schema on local Postgres.
 - [ ] UI opens: Vue SPA served from `embed.FS`.
 - [ ] GitHub Actions CI: lint + test + build green.
-- [ ] **Gate G0**: subagent `code-reviewer` (review model `openrouter/z-ai/glm-5.3-prime`) approves the whole phase before the foundation is locked.
+- [ ] **Gate G0**: subagent `code-reviewer` approves the whole phase before the foundation is locked.
 
 **Rollback:** this phase is the starting point — if anything breaks, fix directly on main (no users, no data yet). No rollback mechanism needed.
 
-**Phase gate:** after the exit criteria are met and Gate G0 passes, STOP and ask the project owner before continuing to Phase 1 (see Model policy & Phase gate in `00-roadmap.md`).
+**Phase gate:** after the exit criteria are met and Gate G0 passes, STOP and ask the project owner before continuing to Phase 1 (see Process & Phase gate in `../process.md`).
 
 ---
 

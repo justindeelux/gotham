@@ -10,7 +10,7 @@
 
 **Rollback:** container operations via the agent are control commands — if the UI breaks, only display is affected, no data is touched. Redis pub/sub can be disabled with the env flag `REALTIME_ENABLED=false` (5s poll fallback).
 
-**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 4 (see Model policy & Phase gate in `00-roadmap.md`).
+**Phase gate:** continuous mode applies (see 00-roadmap.md) — after the exit criteria are met, continue to Phase 4 without stopping.
 
 ---
 

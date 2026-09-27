@@ -33,9 +33,7 @@ package in this phase; backend-dependent widgets ship as explicit stubs.
 **Rollback:** pure frontend — revert the PR. `internal/server/webdist` is
 committed, so rollback is a single revert with no migration involved.
 
-**Phase gate:** after the exit criteria are met, STOP and ask the project owner
-before scheduling further UI work. This track runs in parallel with the paused
-backend pipeline and merges to main via its own PRs.
+**Phase gate:** continuous mode applies (see 00-roadmap.md) — this track runs in parallel with the backend pipeline and merges to main via its own PRs without stopping.
 
 **Recorded decisions:**
 - Keep separate `/login` and `/register` routes; add a tab-style switch UI

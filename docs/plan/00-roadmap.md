@@ -63,8 +63,9 @@ graph LR
 - Implementation (coding): `deepseek v4.1 flash` / `Muse Spark 1.3 Contributor` / `MiMo-V2.6-Flash (go)` — implementation following agreed patterns.
 - ⭐ = tasks requiring the strongest review model for design; unmarked tasks use the coding models.
 
-### Phase gate (human approval)
-- After each phase meets its exit criteria (and passes its review gate where one exists), **STOP and ask the project owner for approval before starting the next phase**. Never auto-continue.
+### Phase gate (continuous mode — owner waiver from Phase 3 onward)
+- The owner waived per-phase STOPs: after a phase meets its exit criteria, the coordinator continues to the next phase automatically without asking. STOP only when blocked, when a decision is needed, or when a review gate fails.
+- Milestone reports are posted as PR descriptions and chat summaries instead of gate approvals.
 
 ### Invariant (run after every task, before PR merge)
 1. `go build ./...` passes.

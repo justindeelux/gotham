@@ -42,6 +42,7 @@
   - Routes: `POST /api/v1/applications/{id}/deploy`, `GET .../deployments`, `POST .../rollback`.
   - Tests: state machine with a mock agent; rollback tests.
 - **Verify:** e2e deploy via API: sample repo → `running`, full log events; kill the container → healthcheck fails → status `failed`; rollback → back to the old version.
+- **Runtime payload (BE-4.3c):** the container payload defaults `PORT` to the application's configured container port when the app declares a port and neither an env var nor a secret sets `PORT` — an explicit value (including a sealed `secret:` reference) always wins, and `port = 0` injects nothing, so Dockerfile apps that manage `PORT` themselves are untouched. This is what makes Railpack/buildpacks images (no Dockerfile) bind the port the host mapping points at, like Heroku/Railway/Coolify.
 - **Depends on:** BE-4.1 + BE-4.2.
 
 ## BE-4.3b — Applications CRUD + config + stop/start — `ws/p4-app-crud`

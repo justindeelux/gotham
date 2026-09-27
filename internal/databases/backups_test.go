@@ -2,14 +2,15 @@ package databases
 
 import (
 	"bytes"
+	"encoding/base64"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
 
-// jobFrame renders a successful frame the way a temporary container writes
-// it: engine chatter first, then the markers and the payload.
+// jobFrame renders a successful raw frame the way a temporary container could
+// write it: engine chatter first, then the markers and the payload.
 func jobFrame(runID string, payload []byte) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("engine: temporary server started\n")
@@ -18,6 +19,20 @@ func jobFrame(runID string, payload []byte) []byte {
 	buf.Write(payload)
 	buf.WriteString("\n" + jobEndPrefix + runID + " ok\n")
 	buf.WriteString("engine: shutdown complete\n")
+	return buf.Bytes()
+}
+
+// jobFrameB64 renders a successful dump frame the way the engine scripts
+// write it: the payload base64-encoded, followed directly by the end marker
+// (the real scripts emit no newline between the two).
+func jobFrameB64(runID string, payload []byte) []byte {
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	var buf bytes.Buffer
+	buf.WriteString("engine: temporary server started\n")
+	buf.WriteString(jobStartPrefix + runID + "\n")
+	buf.WriteString(jobPayloadB64Prefix + runID + " " + strconv.Itoa(len(encoded)) + "\n")
+	buf.WriteString(encoded)
+	buf.WriteString(jobEndPrefix + runID + " ok\n")
 	return buf.Bytes()
 }
 
@@ -131,6 +146,25 @@ func TestBackupEngineRestoreOptions(t *testing.T) {
 				t.Errorf("role label = %q, want %q", options.Labels[labelRole], roleRestore)
 			}
 		})
+	}
+}
+
+// TestPostgresRestoreScriptReadsStdin pins the pg_restore invocation: the tool
+// treats a trailing "-" as a file name, not as stdin, so the script must omit
+// the input file argument and let pg_restore read the piped archive.
+func TestPostgresRestoreScriptReadsStdin(t *testing.T) {
+	engine, _ := LookupBackupEngine(EnginePostgres)
+	options, err := engine.RestoreOptions(testDatabase(EnginePostgres, ""), testCredentials(),
+		"run-2", "/var/lib/postgresql/data/.gotham-restore/x.part")
+	if err != nil {
+		t.Fatalf("RestoreOptions: %v", err)
+	}
+	script := options.Command[2]
+	if !strings.Contains(script, "pg_restore") {
+		t.Fatalf("script does not run pg_restore: %s", script)
+	}
+	if strings.Contains(script, "--no-owner -") {
+		t.Error(`pg_restore must read stdin; "-" is opened as a file name`)
 	}
 }
 
@@ -272,6 +306,114 @@ func TestJobCollectorAcceptsNoPayloadFrame(t *testing.T) {
 	}
 	if collector.Written() != 0 {
 		t.Errorf("written = %d, want 0", collector.Written())
+	}
+}
+
+func TestJobCollectorBase64Payload(t *testing.T) {
+	// 200 KiB of arbitrary bytes stream through in base64: the decoded
+	// artifact must match byte for byte.
+	payload := make([]byte, 200_000)
+	for i := range payload {
+		payload[i] = byte(i*7 + 3)
+	}
+	var stored bytes.Buffer
+	collector := newJobCollector("run-1", &stored)
+	for _, chunk := range splitEvery(jobFrameB64("run-1", payload), 1021) {
+		if _, err := collector.Write(chunk); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+	if err := collector.Result(); err != nil {
+		t.Fatalf("Result: %v", err)
+	}
+	if collector.Written() != int64(len(payload)) {
+		t.Errorf("written = %d, want %d", collector.Written(), len(payload))
+	}
+	if !bytes.Equal(stored.Bytes(), payload) {
+		t.Errorf("stored %d bytes, want %d", stored.Len(), len(payload))
+	}
+}
+
+func TestJobCollectorBase64AcrossSmallChunks(t *testing.T) {
+	// A chunk boundary can fall inside a base64 quantum; every boundary from
+	// one to seven bytes exercises the carry of the streaming decoder.
+	payload := []byte{0x00, 0x01, 0x02, '\n', 0xff, 0xfe, 'P', 'K', 0x7f}
+	for size := 1; size <= 7; size++ {
+		var stored bytes.Buffer
+		collector := newJobCollector("run-1", &stored)
+		for _, chunk := range splitEvery(jobFrameB64("run-1", payload), size) {
+			if _, err := collector.Write(chunk); err != nil {
+				t.Fatalf("size %d: Write: %v", size, err)
+			}
+		}
+		if err := collector.Result(); err != nil {
+			t.Fatalf("size %d: Result: %v", size, err)
+		}
+		if !bytes.Equal(stored.Bytes(), payload) {
+			t.Errorf("size %d: payload = %v, want %v", size, stored.Bytes(), payload)
+		}
+	}
+}
+
+func TestJobCollectorRejectsCorruptBase64(t *testing.T) {
+	collector := newJobCollector("run-1", nil)
+	frame := jobFrameB64("run-1", []byte("payload"))
+	frame = bytes.Replace(frame, []byte("cGF5bG9hZA=="), []byte("cGF5bG9hZ!=="), 1)
+	if _, err := collector.Write(frame); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := collector.Result(); err == nil {
+		t.Fatal("expected corrupt base64 to fail the frame")
+	}
+}
+
+func TestJobCollectorRejectsPayloadSizeMismatch(t *testing.T) {
+	// The declared encoded size is the frame's integrity check: a stream that
+	// is shorter or longer than announced must fail instead of producing a
+	// truncated artifact.
+	encoded := base64.StdEncoding.EncodeToString([]byte("hello world"))
+	header := jobStartPrefix + "run-1\n" + jobPayloadB64Prefix + "run-1 "
+	end := jobEndPrefix + "run-1 ok\n"
+
+	larger := header + strconv.Itoa(len(encoded)+4) + "\n" + encoded + end
+	collector := newJobCollector("run-1", nil)
+	if _, err := collector.Write([]byte(larger)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := collector.Result(); err == nil {
+		t.Fatal("expected a declared size larger than the payload to fail the frame")
+	}
+
+	truncated := header + strconv.Itoa(len(encoded)) + "\n" + encoded[:len(encoded)-4] + end
+	collector = newJobCollector("run-1", nil)
+	if _, err := collector.Write([]byte(truncated)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := collector.Result(); err == nil {
+		t.Fatal("expected a truncated payload to fail the frame")
+	}
+}
+
+func TestBackupEngineDumpScriptsEncodePayload(t *testing.T) {
+	for _, name := range engineOrder {
+		engine, ok := LookupBackupEngine(name)
+		if !ok {
+			t.Fatalf("no backup engine for %q", name)
+		}
+		options, err := engine.DumpOptions(testDatabase(name, ""), testCredentials(), "run-1")
+		if err != nil {
+			t.Fatalf("%s: DumpOptions: %v", name, err)
+		}
+		script := options.Command[2]
+		if !strings.Contains(script, jobPayloadB64Prefix) {
+			t.Errorf("%s: script does not emit the base64 payload marker", name)
+		}
+		if !strings.Contains(script, "base64 ") {
+			t.Errorf("%s: script does not encode the payload with base64", name)
+		}
+		if strings.Contains(script, `cat "$tmp"`) {
+			t.Errorf("%s: script still streams the raw payload", name)
+		}
 	}
 }
 

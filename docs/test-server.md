@@ -115,10 +115,25 @@ Verified live (beyond CI):
 - Containers list through the agent (`/api/v1/servers/{id}/containers`).
 - Migrations `00010_deploy_keys`, `00011_backups` applied; new routes mounted
   (`/api/v1/databases/backup-targets` → 401 unauthenticated).
+- Managed PostgreSQL backup/restore through the real CP/API → agent → Docker
+  path (2026-09-27, disposable local stack: `GOTHAM_E2E=1 go test
+  ./internal/e2e/ -run TestP5Backup`): local backup → drop only the disposable
+  table → restore → identical row count and md5 checksum
+  (`200:3dfbedd249eae27832cc4181ee42a6c7`); a 473 411-byte incompressible
+  artifact spanned six 90 000-byte staging chunks and restored to the same
+  400-row checksum; an S3 target with an explicit `http://127.0.0.1:<port>`
+  endpoint passed the connection check, its object
+  `databases/<db>/<backup>.dump.gz` was verified in the bucket, and the
+  restore reproduced `150:536d8ea0f682d75eff6602e3ce38e970`. The smoke found
+  and fixed three latent BE-5.2 defects on the real path (binary dump bytes
+  replaced by the Docker log driver's UTF-8 handling, restore staging writing
+  base64 instead of decoding it, `pg_restore -` opening a file named `-`).
 
-Not yet verified live: webhook delivery end-to-end (needs a provider
-connection or a seeded row), managed database create/backup/restore, S3
-targets, Traefik/domains, GitHub OAuth (owner credentials).
+Not yet verified live on this host: webhook delivery end-to-end (needs a
+provider connection or a seeded row), Traefik/domains, GitHub OAuth (owner
+credentials). Managed database backup/restore and S3 targets are verified on
+the local disposable `internal/e2e` stack described above but have not been
+repeated against this shared box's CP/agent yet.
 
 ## Notes
 

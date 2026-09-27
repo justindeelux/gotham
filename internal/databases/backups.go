@@ -41,7 +41,10 @@ const stageChunkBytes = 90_000
 // BackupEngine builds the temporary-container jobs of one engine. The control
 // plane never runs a dump tool itself: it stops the database container, runs
 // the job on the same node with the database volume mounted, and reads the
-// framed payload back from the container's log stream.
+// framed payload back from the container's log stream. The payload travels
+// base64-encoded (see backup_job.go): the Docker log pipeline replaces
+// invalid UTF-8 bytes, so raw dump bytes would be corrupted before the
+// control plane could read them.
 //
 // Implementations are stateless and shared; every method must be safe for
 // concurrent use.
@@ -113,9 +116,10 @@ if pg_isready -q -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"; then
   status=$?
 fi
 if [ "$status" -eq 0 ]; then
-  size=$(wc -c <"$tmp" | tr -d ' ')
-  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD %s %s\n' "$id" "$id" "$size"
-  cat "$tmp"
+  raw=$(wc -c <"$tmp" | tr -d ' ')
+  size=$(( (raw + 2) / 3 * 4 ))
+  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD-B64 %s %s\n' "$id" "$id" "$size"
+  base64 "$tmp" | tr -d '\n'
   printf 'GOTHAM-BACKUP-END %s ok\n' "$id"
 else
   printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-END %s fail %s\n' "$id" "$id" "$status"
@@ -148,7 +152,7 @@ if [ "$status" -eq 0 ]; then
   done
   if pg_isready -q -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"; then
     export PGPASSWORD="$POSTGRES_PASSWORD"
-    gunzip -c "$payload" 2>>"$log" | pg_restore -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner - 2>>"$log"
+    gunzip -c "$payload" 2>>"$log" | pg_restore -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner 2>>"$log"
     status=$?
   else
     status=4
@@ -199,9 +203,10 @@ if mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/n
   status=$?
 fi
 if [ "$status" -eq 0 ]; then
-  size=$(wc -c <"$tmp" | tr -d ' ')
-  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD %s %s\n' "$id" "$id" "$size"
-  cat "$tmp"
+  raw=$(wc -c <"$tmp" | tr -d ' ')
+  size=$(( (raw + 2) / 3 * 4 ))
+  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD-B64 %s %s\n' "$id" "$id" "$size"
+  base64 "$tmp" | tr -d '\n'
   printf 'GOTHAM-BACKUP-END %s ok\n' "$id"
 else
   printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-END %s fail %s\n' "$id" "$id" "$status"
@@ -283,9 +288,10 @@ if mongosh --quiet --host 127.0.0.1 --username "$MONGO_INITDB_ROOT_USERNAME" --p
   status=$?
 fi
 if [ "$status" -eq 0 ]; then
-  size=$(wc -c <"$tmp" | tr -d ' ')
-  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD %s %s\n' "$id" "$id" "$size"
-  cat "$tmp"
+  raw=$(wc -c <"$tmp" | tr -d ' ')
+  size=$(( (raw + 2) / 3 * 4 ))
+  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD-B64 %s %s\n' "$id" "$id" "$size"
+  base64 "$tmp" | tr -d '\n'
   printf 'GOTHAM-BACKUP-END %s ok\n' "$id"
 else
   printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-END %s fail %s\n' "$id" "$id" "$status"
@@ -360,9 +366,10 @@ status=1
 tar -cf - -C /data . >"$tmp" 2>>"$log"
 status=$?
 if [ "$status" -eq 0 ]; then
-  size=$(wc -c <"$tmp" | tr -d ' ')
-  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD %s %s\n' "$id" "$id" "$size"
-  cat "$tmp"
+  raw=$(wc -c <"$tmp" | tr -d ' ')
+  size=$(( (raw + 2) / 3 * 4 ))
+  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD-B64 %s %s\n' "$id" "$id" "$size"
+  base64 "$tmp" | tr -d '\n'
   printf 'GOTHAM-BACKUP-END %s ok\n' "$id"
 else
   printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-END %s fail %s\n' "$id" "$id" "$status"

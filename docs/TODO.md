@@ -11,7 +11,7 @@ Plan: [`plan/00-roadmap.md`](plan/00-roadmap.md).
 - [x] Phase 3 — Docker Engine Core (PRs #15–#30)
 - [x] Phase 4 — Applications (PRs #31–#50; gate G1 passed with waivers)
 - [x] Phase 5 core — Database engines + CRUD (#39), databases UI (#43), backups + S3 + restore (#46), backups UI (#50)
-- [ ] Phase 5 residuals — live backup/restore smoke, chunk-scale backup e2e, S3 smoke, backups LOWs (see below)
+- [x] Phase 5 residuals — live backup/restore smoke, chunk-scale backup e2e, S3 smoke (backups LOWs remain, see below)
 - [ ] Phase 6 — Proxy, Domains & SSL (BE-6.1 paused on `feat/p6-traefik`; BE-6.2 and FE-6.1 not started)
 - [ ] Phase 7 — Services & Templates
 - [ ] Phase 8 — Advanced
@@ -20,12 +20,22 @@ Plan: [`plan/00-roadmap.md`](plan/00-roadmap.md).
 
 ## Phase 5 residuals
 
-- [ ] Live smoke: create a managed Postgres via the API, local backup, drop a
-  table, restore, verify rows (BE-5.2 exit criterion).
-- [ ] Backup e2e for the review finding class: artifact larger than one staging
-  chunk (> ~97 KB) through the real Docker path.
-- [ ] S3 target smoke against MinIO (endpoint must carry `http://` explicitly —
-  scheme-less endpoints default to TLS).
+- [x] Live smoke: create a managed Postgres via the API, local backup, drop a
+  table, restore, verify rows (BE-5.2 exit criterion). Proven on the
+  disposable local stack: `internal/e2e/p5_backup_test.go`
+  (`TestP5BackupLocalRoundTrip`), 200 rows, identical md5 checksum before and
+  after (run5: `200:3dfbedd249eae27832cc4181ee42a6c7`).
+- [x] Backup e2e for the review finding class: artifact larger than one staging
+  chunk (> ~97 KB) through the real Docker path. Proven: 473 411-byte artifact
+  over six 90 000-byte staging chunks, 400-row checksum
+  `400:ee0967651ce32132e90861116d721f43` restored identical.
+- [x] S3 target smoke against MinIO (endpoint must carry `http://` explicitly —
+  scheme-less endpoints default to TLS). Proven: target check ok, object
+  `databases/<db>/<backup>.dump.gz` (1629 bytes) verified in the bucket,
+  restore reproduced `150:536d8ea0f682d75eff6602e3ce38e970`; the smoke also
+  found and fixed three latent BE-5.2 path defects (binary dump bytes mangled
+  by the Docker log driver, restore staging not base64-decoding the chunk,
+  `pg_restore -` opened as a file name).
 - [ ] Backups deferred LOWs: explicit "clear target" semantics on schedule
   update; split `backup_service.go`; require credentials on the update path
   too when switching a target to s3.

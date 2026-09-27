@@ -3,6 +3,10 @@
 Overall plan for building Gotham, a self-hosted PaaS (Coolify clone) using the tech stack in `README.md`:
 **Go + Chi + sqlc/pgx + PostgreSQL + gRPC agent + Redis + Traefik + Vue 3 + Naive UI**.
 
+> Current status and the remaining TODO list live in
+> [12-progress-and-todo.md](12-progress-and-todo.md). Keep that file updated at
+> every phase boundary.
+
 ---
 
 ## 1. Phase overview

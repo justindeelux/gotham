@@ -45,7 +45,7 @@ const navSections: NavSection[] = [
     items: [
       { key: "dashboard", label: "Dashboard", icon: "grid", to: "dashboard" },
       { key: "servers", label: "Servers", icon: "server", to: "servers" },
-      { key: "applications", label: "Applications", icon: "box", phase: 4 },
+      { key: "applications", label: "Applications", icon: "box", to: "applications" },
       { key: "services", label: "Services", icon: "layers", phase: 7 },
       { key: "databases", label: "Databases", icon: "db", phase: 5 },
       { key: "files", label: "File manager", icon: "folder", phase: 4 },

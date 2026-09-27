@@ -23,6 +23,8 @@ export type IconName =
   | "gear"
   | "folder"
   | "key"
+  | "plus"
+  | "trash"
   | "chevron-down";
 
 interface Props {
@@ -54,6 +56,9 @@ const paths: Record<IconName, string> = {
   gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',
   folder: '<path d="M3 7a2 2 0 012-2h4l2 2.4h6a2 2 0 012 2V17a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>',
   key: '<circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M15 12v2.5"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  trash:
+    '<path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13M10 11v6M14 11v6"/>',
   "chevron-down": '<path d="M6 9l6 6 6-6"/>',
 };
 

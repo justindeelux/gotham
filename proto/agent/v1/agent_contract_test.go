@@ -2,6 +2,8 @@ package agentv1_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -170,9 +172,150 @@ func TestDockerServiceStreamLogs(t *testing.T) {
 	}
 }
 
-// startTestServer serves the stub AgentService and DockerService over an
-// in-memory bufconn listener and returns a dialed client connection. Teardown
-// is registered with t.Cleanup and reports any serve error.
+func TestBuildImageRequestProtoRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	meta := &agentv1.BuildImageRequest{
+		Part: &agentv1.BuildImageRequest_Meta{Meta: &agentv1.BuildMeta{
+			AppId:      "web",
+			DeployId:   "dep-1",
+			Dockerfile: "deploy/Dockerfile",
+			BuildArgs:  map[string]string{"NODE_ENV": "production"},
+		}},
+	}
+	raw, err := proto.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal meta: %v", err)
+	}
+	var gotMeta agentv1.BuildImageRequest
+	if err := proto.Unmarshal(raw, &gotMeta); err != nil {
+		t.Fatalf("unmarshal meta: %v", err)
+	}
+	if !proto.Equal(meta, &gotMeta) {
+		t.Fatalf("meta roundtrip mismatch: want %v, got %v", meta, &gotMeta)
+	}
+
+	chunk := &agentv1.BuildImageRequest{
+		Part: &agentv1.BuildImageRequest_ContextChunk{ContextChunk: []byte("tar-bytes")},
+	}
+	raw, err = proto.Marshal(chunk)
+	if err != nil {
+		t.Fatalf("marshal chunk: %v", err)
+	}
+	var gotChunk agentv1.BuildImageRequest
+	if err := proto.Unmarshal(raw, &gotChunk); err != nil {
+		t.Fatalf("unmarshal chunk: %v", err)
+	}
+	if !proto.Equal(chunk, &gotChunk) {
+		t.Fatalf("chunk roundtrip mismatch: want %v, got %v", chunk, &gotChunk)
+	}
+}
+
+func TestBuildImageResponseProtoRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	want := &agentv1.BuildImageResponse{
+		Event: &agentv1.BuildImageResponse_Result{
+			Result: &agentv1.BuildImageResult{
+				ImageTag:      "gotham/web:dep-1",
+				RegistryImage: "127.0.0.1:5000/gotham/web:dep-1",
+				Digest:        "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				RegistryAddr:  "127.0.0.1:5000",
+			},
+		},
+	}
+
+	raw, err := proto.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got agentv1.BuildImageResponse
+	if err := proto.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !proto.Equal(want, &got) {
+		t.Fatalf("roundtrip mismatch: want %v, got %v", want, &got)
+	}
+}
+
+func TestBuildServiceBuildImage(t *testing.T) {
+	t.Parallel()
+
+	client := agentv1.NewBuildServiceClient(startTestServer(t))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := client.BuildImage(ctx)
+	if err != nil {
+		t.Fatalf("build image: %v", err)
+	}
+
+	if err := stream.Send(&agentv1.BuildImageRequest{
+		Part: &agentv1.BuildImageRequest_Meta{Meta: &agentv1.BuildMeta{
+			AppId:    "web",
+			DeployId: "dep-1",
+		}},
+	}); err != nil {
+		t.Fatalf("send meta: %v", err)
+	}
+	for _, chunk := range [][]byte{[]byte("hello "), []byte("world")} {
+		if err := stream.Send(&agentv1.BuildImageRequest{
+			Part: &agentv1.BuildImageRequest_ContextChunk{ContextChunk: chunk},
+		}); err != nil {
+			t.Fatalf("send chunk: %v", err)
+		}
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+
+	var logs []string
+	var result *agentv1.BuildImageResult
+	for {
+		response, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		switch event := response.GetEvent().(type) {
+		case *agentv1.BuildImageResponse_Log:
+			logs = append(logs, string(event.Log.GetData()))
+		case *agentv1.BuildImageResponse_Result:
+			result = event.Result
+		default:
+			t.Fatalf("unexpected event %T", event)
+		}
+	}
+
+	wantLogs := []string{"building gotham/web:dep-1\n"}
+	if !slices.Equal(logs, wantLogs) {
+		t.Fatalf("logs = %q, want %q", logs, wantLogs)
+	}
+	if result == nil {
+		t.Fatal("result is missing")
+	}
+	if result.GetImageTag() != "gotham/web:dep-1" {
+		t.Fatalf("image_tag = %q, want %q", result.GetImageTag(), "gotham/web:dep-1")
+	}
+	if result.GetRegistryImage() != "127.0.0.1:5000/gotham/web:dep-1" {
+		t.Fatalf("registry_image = %q", result.GetRegistryImage())
+	}
+	if result.GetRegistryAddr() != "127.0.0.1:5000" {
+		t.Fatalf("registry_addr = %q", result.GetRegistryAddr())
+	}
+	sum := sha256.Sum256([]byte("hello world"))
+	if want := "sha256:" + hex.EncodeToString(sum[:]); result.GetDigest() != want {
+		t.Fatalf("digest = %q, want %q", result.GetDigest(), want)
+	}
+}
+
+// startTestServer serves the stub AgentService, DockerService and
+// BuildService over an in-memory bufconn listener and returns a dialed client
+// connection. Teardown is registered with t.Cleanup and reports any serve
+// error.
 func startTestServer(t *testing.T) *grpc.ClientConn {
 	t.Helper()
 
@@ -180,6 +323,7 @@ func startTestServer(t *testing.T) *grpc.ClientConn {
 	srv := grpc.NewServer()
 	agentv1.RegisterAgentServiceServer(srv, stubAgentServer{})
 	agentv1.RegisterDockerServiceServer(srv, stubDockerServer{})
+	agentv1.RegisterBuildServiceServer(srv, stubBuildServer{})
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(lis) }()
@@ -249,4 +393,54 @@ func (stubDockerServer) StreamLogs(req *agentv1.StreamLogsRequest, stream grpc.S
 		}
 	}
 	return nil
+}
+
+type stubBuildServer struct {
+	agentv1.UnimplementedBuildServiceServer
+}
+
+func (stubBuildServer) BuildImage(stream grpc.BidiStreamingServer[agentv1.BuildImageRequest, agentv1.BuildImageResponse]) error {
+	first, err := stream.Recv()
+	if errors.Is(err, io.EOF) {
+		return errors.New("build stream is missing build meta")
+	}
+	if err != nil {
+		return err
+	}
+	meta := first.GetMeta()
+	if meta == nil {
+		return errors.New("first request must carry build meta")
+	}
+
+	var contextBytes []byte
+	for {
+		request, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		contextBytes = append(contextBytes, request.GetContextChunk()...)
+	}
+
+	imageTag := "gotham/" + meta.GetAppId() + ":" + meta.GetDeployId()
+	if err := stream.Send(&agentv1.BuildImageResponse{
+		Event: &agentv1.BuildImageResponse_Log{
+			Log: &agentv1.BuildLogChunk{Data: []byte("building " + imageTag + "\n")},
+		},
+	}); err != nil {
+		return err
+	}
+	sum := sha256.Sum256(contextBytes)
+	return stream.Send(&agentv1.BuildImageResponse{
+		Event: &agentv1.BuildImageResponse_Result{
+			Result: &agentv1.BuildImageResult{
+				ImageTag:      imageTag,
+				RegistryImage: "127.0.0.1:5000/" + imageTag,
+				Digest:        "sha256:" + hex.EncodeToString(sum[:]),
+				RegistryAddr:  "127.0.0.1:5000",
+			},
+		},
+	})
 }

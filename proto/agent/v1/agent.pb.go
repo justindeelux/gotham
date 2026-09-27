@@ -960,6 +960,371 @@ func (x *LogChunk) GetData() []byte {
 	return nil
 }
 
+// BuildImageRequest is one part of a BuildImage stream: either the build
+// parameters (first message only) or a slice of the build context tarball.
+type BuildImageRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Part:
+	//
+	//	*BuildImageRequest_Meta
+	//	*BuildImageRequest_ContextChunk
+	Part          isBuildImageRequest_Part `protobuf_oneof:"part"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildImageRequest) Reset() {
+	*x = BuildImageRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildImageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildImageRequest) ProtoMessage() {}
+
+func (x *BuildImageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildImageRequest.ProtoReflect.Descriptor instead.
+func (*BuildImageRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *BuildImageRequest) GetPart() isBuildImageRequest_Part {
+	if x != nil {
+		return x.Part
+	}
+	return nil
+}
+
+func (x *BuildImageRequest) GetMeta() *BuildMeta {
+	if x != nil {
+		if x, ok := x.Part.(*BuildImageRequest_Meta); ok {
+			return x.Meta
+		}
+	}
+	return nil
+}
+
+func (x *BuildImageRequest) GetContextChunk() []byte {
+	if x != nil {
+		if x, ok := x.Part.(*BuildImageRequest_ContextChunk); ok {
+			return x.ContextChunk
+		}
+	}
+	return nil
+}
+
+type isBuildImageRequest_Part interface {
+	isBuildImageRequest_Part()
+}
+
+type BuildImageRequest_Meta struct {
+	Meta *BuildMeta `protobuf:"bytes,1,opt,name=meta,proto3,oneof"`
+}
+
+type BuildImageRequest_ContextChunk struct {
+	ContextChunk []byte `protobuf:"bytes,2,opt,name=context_chunk,json=contextChunk,proto3,oneof"`
+}
+
+func (*BuildImageRequest_Meta) isBuildImageRequest_Part() {}
+
+func (*BuildImageRequest_ContextChunk) isBuildImageRequest_Part() {}
+
+// BuildMeta describes one image build.
+type BuildMeta struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// app_id and deploy_id form the standardized image tag
+	// gotham/{app_id}:{deploy_id}. Both must be non-empty ref path segments
+	// (letters, digits, dot, underscore, dash).
+	AppId    string `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	DeployId string `protobuf:"bytes,2,opt,name=deploy_id,json=deployId,proto3" json:"deploy_id,omitempty"`
+	// dockerfile is the Dockerfile path relative to the context root.
+	// Empty means "Dockerfile".
+	Dockerfile string `protobuf:"bytes,3,opt,name=dockerfile,proto3" json:"dockerfile,omitempty"`
+	// build_args are forwarded to the Docker build as --build-arg values.
+	BuildArgs     map[string]string `protobuf:"bytes,4,rep,name=build_args,json=buildArgs,proto3" json:"build_args,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildMeta) Reset() {
+	*x = BuildMeta{}
+	mi := &file_agent_v1_agent_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildMeta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildMeta) ProtoMessage() {}
+
+func (x *BuildMeta) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildMeta.ProtoReflect.Descriptor instead.
+func (*BuildMeta) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *BuildMeta) GetAppId() string {
+	if x != nil {
+		return x.AppId
+	}
+	return ""
+}
+
+func (x *BuildMeta) GetDeployId() string {
+	if x != nil {
+		return x.DeployId
+	}
+	return ""
+}
+
+func (x *BuildMeta) GetDockerfile() string {
+	if x != nil {
+		return x.Dockerfile
+	}
+	return ""
+}
+
+func (x *BuildMeta) GetBuildArgs() map[string]string {
+	if x != nil {
+		return x.BuildArgs
+	}
+	return nil
+}
+
+// BuildImageResponse is one message of a BuildImage stream: either a build
+// log chunk or, exactly once when the build succeeds, the build result.
+type BuildImageResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Event:
+	//
+	//	*BuildImageResponse_Log
+	//	*BuildImageResponse_Result
+	Event         isBuildImageResponse_Event `protobuf_oneof:"event"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildImageResponse) Reset() {
+	*x = BuildImageResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildImageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildImageResponse) ProtoMessage() {}
+
+func (x *BuildImageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildImageResponse.ProtoReflect.Descriptor instead.
+func (*BuildImageResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *BuildImageResponse) GetEvent() isBuildImageResponse_Event {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+func (x *BuildImageResponse) GetLog() *BuildLogChunk {
+	if x != nil {
+		if x, ok := x.Event.(*BuildImageResponse_Log); ok {
+			return x.Log
+		}
+	}
+	return nil
+}
+
+func (x *BuildImageResponse) GetResult() *BuildImageResult {
+	if x != nil {
+		if x, ok := x.Event.(*BuildImageResponse_Result); ok {
+			return x.Result
+		}
+	}
+	return nil
+}
+
+type isBuildImageResponse_Event interface {
+	isBuildImageResponse_Event()
+}
+
+type BuildImageResponse_Log struct {
+	// log carries raw build output (build and push progress merged).
+	Log *BuildLogChunk `protobuf:"bytes,1,opt,name=log,proto3,oneof"`
+}
+
+type BuildImageResponse_Result struct {
+	// result closes a successful build.
+	Result *BuildImageResult `protobuf:"bytes,2,opt,name=result,proto3,oneof"`
+}
+
+func (*BuildImageResponse_Log) isBuildImageResponse_Event() {}
+
+func (*BuildImageResponse_Result) isBuildImageResponse_Event() {}
+
+// BuildLogChunk is one chunk of build output.
+type BuildLogChunk struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildLogChunk) Reset() {
+	*x = BuildLogChunk{}
+	mi := &file_agent_v1_agent_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildLogChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildLogChunk) ProtoMessage() {}
+
+func (x *BuildLogChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildLogChunk.ProtoReflect.Descriptor instead.
+func (*BuildLogChunk) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *BuildLogChunk) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// BuildImageResult reports a completed build and push.
+type BuildImageResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// image_tag is the standardized local tag: gotham/{app_id}:{deploy_id}.
+	ImageTag string `protobuf:"bytes,1,opt,name=image_tag,json=imageTag,proto3" json:"image_tag,omitempty"`
+	// registry_image is the full pushed reference:
+	// {registry_addr}/gotham/{app_id}:{deploy_id}.
+	RegistryImage string `protobuf:"bytes,2,opt,name=registry_image,json=registryImage,proto3" json:"registry_image,omitempty"`
+	// digest is the pushed image manifest digest: sha256:...
+	Digest string `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`
+	// registry_addr is the node-local registry the image was pushed to, e.g.
+	// "127.0.0.1:5000". It is returned so the control plane can persist it.
+	RegistryAddr  string `protobuf:"bytes,4,opt,name=registry_addr,json=registryAddr,proto3" json:"registry_addr,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildImageResult) Reset() {
+	*x = BuildImageResult{}
+	mi := &file_agent_v1_agent_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildImageResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildImageResult) ProtoMessage() {}
+
+func (x *BuildImageResult) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildImageResult.ProtoReflect.Descriptor instead.
+func (*BuildImageResult) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *BuildImageResult) GetImageTag() string {
+	if x != nil {
+		return x.ImageTag
+	}
+	return ""
+}
+
+func (x *BuildImageResult) GetRegistryImage() string {
+	if x != nil {
+		return x.RegistryImage
+	}
+	return ""
+}
+
+func (x *BuildImageResult) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *BuildImageResult) GetRegistryAddr() string {
+	if x != nil {
+		return x.RegistryAddr
+	}
+	return ""
+}
+
 var File_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_agent_v1_agent_proto_rawDesc = "" +
@@ -1038,7 +1403,33 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06follow\x18\x02 \x01(\bR\x06follow\x12\x12\n" +
 	"\x04tail\x18\x03 \x01(\x03R\x04tail\"\x1e\n" +
 	"\bLogChunk\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data2\x99\x01\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\"m\n" +
+	"\x11BuildImageRequest\x12)\n" +
+	"\x04meta\x18\x01 \x01(\v2\x13.agent.v1.BuildMetaH\x00R\x04meta\x12%\n" +
+	"\rcontext_chunk\x18\x02 \x01(\fH\x00R\fcontextChunkB\x06\n" +
+	"\x04part\"\xe0\x01\n" +
+	"\tBuildMeta\x12\x15\n" +
+	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x1b\n" +
+	"\tdeploy_id\x18\x02 \x01(\tR\bdeployId\x12\x1e\n" +
+	"\n" +
+	"dockerfile\x18\x03 \x01(\tR\n" +
+	"dockerfile\x12A\n" +
+	"\n" +
+	"build_args\x18\x04 \x03(\v2\".agent.v1.BuildMeta.BuildArgsEntryR\tbuildArgs\x1a<\n" +
+	"\x0eBuildArgsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x80\x01\n" +
+	"\x12BuildImageResponse\x12+\n" +
+	"\x03log\x18\x01 \x01(\v2\x17.agent.v1.BuildLogChunkH\x00R\x03log\x124\n" +
+	"\x06result\x18\x02 \x01(\v2\x1a.agent.v1.BuildImageResultH\x00R\x06resultB\a\n" +
+	"\x05event\"#\n" +
+	"\rBuildLogChunk\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\"\x93\x01\n" +
+	"\x10BuildImageResult\x12\x1b\n" +
+	"\timage_tag\x18\x01 \x01(\tR\bimageTag\x12%\n" +
+	"\x0eregistry_image\x18\x02 \x01(\tR\rregistryImage\x12\x16\n" +
+	"\x06digest\x18\x03 \x01(\tR\x06digest\x12#\n" +
+	"\rregistry_addr\x18\x04 \x01(\tR\fregistryAddr2\x99\x01\n" +
 	"\fAgentService\x12A\n" +
 	"\bRegister\x12\x19.agent.v1.RegisterRequest\x1a\x1a.agent.v1.RegisterResponse\x12F\n" +
 	"\tHeartbeat\x12\x1a.agent.v1.HeartbeatRequest\x1a\x1b.agent.v1.HeartbeatResponse(\x012S\n" +
@@ -1053,7 +1444,10 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x0fCreateContainer\x12 .agent.v1.CreateContainerRequest\x1a!.agent.v1.ContainerActionResponse\x12O\n" +
 	"\bRunImage\x12 .agent.v1.CreateContainerRequest\x1a!.agent.v1.ContainerActionResponse\x12?\n" +
 	"\n" +
-	"StreamLogs\x12\x1b.agent.v1.StreamLogsRequest\x1a\x12.agent.v1.LogChunk0\x01B7Z5github.com/justindeelux/gotham/proto/agent/v1;agentv1b\x06proto3"
+	"StreamLogs\x12\x1b.agent.v1.StreamLogsRequest\x1a\x12.agent.v1.LogChunk0\x012[\n" +
+	"\fBuildService\x12K\n" +
+	"\n" +
+	"BuildImage\x12\x1b.agent.v1.BuildImageRequest\x1a\x1c.agent.v1.BuildImageResponse(\x010\x01B7Z5github.com/justindeelux/gotham/proto/agent/v1;agentv1b\x06proto3"
 
 var (
 	file_agent_v1_agent_proto_rawDescOnce sync.Once
@@ -1067,7 +1461,7 @@ func file_agent_v1_agent_proto_rawDescGZIP() []byte {
 	return file_agent_v1_agent_proto_rawDescData
 }
 
-var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_agent_v1_agent_proto_goTypes = []any{
 	(*RegisterRequest)(nil),         // 0: agent.v1.RegisterRequest
 	(*RegisterResponse)(nil),        // 1: agent.v1.RegisterResponse
@@ -1085,44 +1479,56 @@ var file_agent_v1_agent_proto_goTypes = []any{
 	(*CreateContainerRequest)(nil),  // 13: agent.v1.CreateContainerRequest
 	(*StreamLogsRequest)(nil),       // 14: agent.v1.StreamLogsRequest
 	(*LogChunk)(nil),                // 15: agent.v1.LogChunk
-	nil,                             // 16: agent.v1.ContainerInfo.LabelsEntry
-	nil,                             // 17: agent.v1.CreateContainerRequest.LabelsEntry
-	(*timestamppb.Timestamp)(nil),   // 18: google.protobuf.Timestamp
+	(*BuildImageRequest)(nil),       // 16: agent.v1.BuildImageRequest
+	(*BuildMeta)(nil),               // 17: agent.v1.BuildMeta
+	(*BuildImageResponse)(nil),      // 18: agent.v1.BuildImageResponse
+	(*BuildLogChunk)(nil),           // 19: agent.v1.BuildLogChunk
+	(*BuildImageResult)(nil),        // 20: agent.v1.BuildImageResult
+	nil,                             // 21: agent.v1.ContainerInfo.LabelsEntry
+	nil,                             // 22: agent.v1.CreateContainerRequest.LabelsEntry
+	nil,                             // 23: agent.v1.BuildMeta.BuildArgsEntry
+	(*timestamppb.Timestamp)(nil),   // 24: google.protobuf.Timestamp
 }
 var file_agent_v1_agent_proto_depIdxs = []int32{
-	18, // 0: agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
-	18, // 1: agent.v1.HeartbeatResponse.received_at:type_name -> google.protobuf.Timestamp
-	18, // 2: agent.v1.ContainerInfo.created_at:type_name -> google.protobuf.Timestamp
-	16, // 3: agent.v1.ContainerInfo.labels:type_name -> agent.v1.ContainerInfo.LabelsEntry
+	24, // 0: agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
+	24, // 1: agent.v1.HeartbeatResponse.received_at:type_name -> google.protobuf.Timestamp
+	24, // 2: agent.v1.ContainerInfo.created_at:type_name -> google.protobuf.Timestamp
+	21, // 3: agent.v1.ContainerInfo.labels:type_name -> agent.v1.ContainerInfo.LabelsEntry
 	7,  // 4: agent.v1.ListContainersResponse.containers:type_name -> agent.v1.ContainerInfo
-	17, // 5: agent.v1.CreateContainerRequest.labels:type_name -> agent.v1.CreateContainerRequest.LabelsEntry
-	0,  // 6: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
-	2,  // 7: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
-	4,  // 8: agent.v1.UpdateService.RequestUpdate:input_type -> agent.v1.UpdateRequest
-	6,  // 9: agent.v1.DockerService.ListContainers:input_type -> agent.v1.ListContainersRequest
-	9,  // 10: agent.v1.DockerService.StartContainer:input_type -> agent.v1.ContainerActionRequest
-	9,  // 11: agent.v1.DockerService.StopContainer:input_type -> agent.v1.ContainerActionRequest
-	9,  // 12: agent.v1.DockerService.RestartContainer:input_type -> agent.v1.ContainerActionRequest
-	11, // 13: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
-	13, // 14: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
-	13, // 15: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
-	14, // 16: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
-	1,  // 17: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
-	3,  // 18: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
-	5,  // 19: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
-	8,  // 20: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
-	10, // 21: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
-	10, // 22: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
-	10, // 23: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
-	12, // 24: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
-	10, // 25: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
-	10, // 26: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
-	15, // 27: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
-	17, // [17:28] is the sub-list for method output_type
-	6,  // [6:17] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	22, // 5: agent.v1.CreateContainerRequest.labels:type_name -> agent.v1.CreateContainerRequest.LabelsEntry
+	17, // 6: agent.v1.BuildImageRequest.meta:type_name -> agent.v1.BuildMeta
+	23, // 7: agent.v1.BuildMeta.build_args:type_name -> agent.v1.BuildMeta.BuildArgsEntry
+	19, // 8: agent.v1.BuildImageResponse.log:type_name -> agent.v1.BuildLogChunk
+	20, // 9: agent.v1.BuildImageResponse.result:type_name -> agent.v1.BuildImageResult
+	0,  // 10: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
+	2,  // 11: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
+	4,  // 12: agent.v1.UpdateService.RequestUpdate:input_type -> agent.v1.UpdateRequest
+	6,  // 13: agent.v1.DockerService.ListContainers:input_type -> agent.v1.ListContainersRequest
+	9,  // 14: agent.v1.DockerService.StartContainer:input_type -> agent.v1.ContainerActionRequest
+	9,  // 15: agent.v1.DockerService.StopContainer:input_type -> agent.v1.ContainerActionRequest
+	9,  // 16: agent.v1.DockerService.RestartContainer:input_type -> agent.v1.ContainerActionRequest
+	11, // 17: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
+	13, // 18: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
+	13, // 19: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
+	14, // 20: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
+	16, // 21: agent.v1.BuildService.BuildImage:input_type -> agent.v1.BuildImageRequest
+	1,  // 22: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
+	3,  // 23: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
+	5,  // 24: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
+	8,  // 25: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
+	10, // 26: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
+	10, // 27: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
+	10, // 28: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
+	12, // 29: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
+	10, // 30: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
+	10, // 31: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
+	15, // 32: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
+	18, // 33: agent.v1.BuildService.BuildImage:output_type -> agent.v1.BuildImageResponse
+	22, // [22:34] is the sub-list for method output_type
+	10, // [10:22] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }
@@ -1130,15 +1536,23 @@ func file_agent_v1_agent_proto_init() {
 	if File_agent_v1_agent_proto != nil {
 		return
 	}
+	file_agent_v1_agent_proto_msgTypes[16].OneofWrappers = []any{
+		(*BuildImageRequest_Meta)(nil),
+		(*BuildImageRequest_ContextChunk)(nil),
+	}
+	file_agent_v1_agent_proto_msgTypes[18].OneofWrappers = []any{
+		(*BuildImageResponse_Log)(nil),
+		(*BuildImageResponse_Result)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_proto_rawDesc), len(file_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   24,
 			NumExtensions: 0,
-			NumServices:   3,
+			NumServices:   4,
 		},
 		GoTypes:           file_agent_v1_agent_proto_goTypes,
 		DependencyIndexes: file_agent_v1_agent_proto_depIdxs,

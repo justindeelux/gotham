@@ -115,7 +115,8 @@ func runServe() int {
 				startErr = err
 				return
 			}
-			server, err := agent.NewServer(cfg.ListenAddr, creds, agent.NewDockerServer(docker, log), log)
+			server, err := agent.NewServer(cfg.ListenAddr, creds, agent.NewDockerServer(docker, log), log,
+				agent.WithBuildService(agent.NewBuildServer(docker, log)))
 			if err != nil {
 				startErr = err
 				return

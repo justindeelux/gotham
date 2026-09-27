@@ -659,3 +659,121 @@ var DockerService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "agent/v1/agent.proto",
 }
+
+const (
+	BuildService_BuildImage_FullMethodName = "/agent.v1.BuildService/BuildImage"
+)
+
+// BuildServiceClient is the client API for BuildService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// BuildService runs on the node agent. The control plane dials it to build
+// application images on that node: it streams the build context tarball in
+// and receives build log chunks back. Images are pushed to a node-local
+// registry:2 container that the agent bootstraps on first build.
+type BuildServiceClient interface {
+	// BuildImage receives build parameters followed by the build context
+	// tarball, then streams build output back. The first request must carry
+	// meta; every subsequent request carries a slice of the tarball until the
+	// client closes its send side. The final response carries the pushed image
+	// digest and the node registry address; failures are reported as gRPC
+	// status errors after any log chunks already sent.
+	BuildImage(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[BuildImageRequest, BuildImageResponse], error)
+}
+
+type buildServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewBuildServiceClient(cc grpc.ClientConnInterface) BuildServiceClient {
+	return &buildServiceClient{cc}
+}
+
+func (c *buildServiceClient) BuildImage(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[BuildImageRequest, BuildImageResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &BuildService_ServiceDesc.Streams[0], BuildService_BuildImage_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[BuildImageRequest, BuildImageResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type BuildService_BuildImageClient = grpc.BidiStreamingClient[BuildImageRequest, BuildImageResponse]
+
+// BuildServiceServer is the server API for BuildService service.
+// All implementations must embed UnimplementedBuildServiceServer
+// for forward compatibility.
+//
+// BuildService runs on the node agent. The control plane dials it to build
+// application images on that node: it streams the build context tarball in
+// and receives build log chunks back. Images are pushed to a node-local
+// registry:2 container that the agent bootstraps on first build.
+type BuildServiceServer interface {
+	// BuildImage receives build parameters followed by the build context
+	// tarball, then streams build output back. The first request must carry
+	// meta; every subsequent request carries a slice of the tarball until the
+	// client closes its send side. The final response carries the pushed image
+	// digest and the node registry address; failures are reported as gRPC
+	// status errors after any log chunks already sent.
+	BuildImage(grpc.BidiStreamingServer[BuildImageRequest, BuildImageResponse]) error
+	mustEmbedUnimplementedBuildServiceServer()
+}
+
+// UnimplementedBuildServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedBuildServiceServer struct{}
+
+func (UnimplementedBuildServiceServer) BuildImage(grpc.BidiStreamingServer[BuildImageRequest, BuildImageResponse]) error {
+	return status.Error(codes.Unimplemented, "method BuildImage not implemented")
+}
+func (UnimplementedBuildServiceServer) mustEmbedUnimplementedBuildServiceServer() {}
+func (UnimplementedBuildServiceServer) testEmbeddedByValue()                      {}
+
+// UnsafeBuildServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to BuildServiceServer will
+// result in compilation errors.
+type UnsafeBuildServiceServer interface {
+	mustEmbedUnimplementedBuildServiceServer()
+}
+
+func RegisterBuildServiceServer(s grpc.ServiceRegistrar, srv BuildServiceServer) {
+	// If the following call panics, it indicates UnimplementedBuildServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&BuildService_ServiceDesc, srv)
+}
+
+func _BuildService_BuildImage_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(BuildServiceServer).BuildImage(&grpc.GenericServerStream[BuildImageRequest, BuildImageResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type BuildService_BuildImageServer = grpc.BidiStreamingServer[BuildImageRequest, BuildImageResponse]
+
+// BuildService_ServiceDesc is the grpc.ServiceDesc for BuildService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var BuildService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "agent.v1.BuildService",
+	HandlerType: (*BuildServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "BuildImage",
+			Handler:       _BuildService_BuildImage_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "agent/v1/agent.proto",
+}

@@ -2,21 +2,31 @@ import { http } from "./http";
 import { isApiError } from "./servers";
 
 /**
- * Typed client for the deploy routes served by `internal/deploy`:
+ * Typed client for the application routes served by `internal/deploy`
+ * (see `Mount` in routes.go):
  *
- *   POST /applications/{id}/deploy
- *   GET  /applications/{id}/deployments
- *   POST /applications/{id}/rollback
+ *   GET    /applications
+ *   POST   /applications
+ *   GET    /applications/{id}
+ *   PUT    /applications/{id}
+ *   DELETE /applications/{id}
+ *   GET    /applications/{id}/env
+ *   PUT    /applications/{id}/env
+ *   GET    /applications/{id}/storages
+ *   PUT    /applications/{id}/storages
+ *   POST   /applications/{id}/stop
+ *   POST   /applications/{id}/start
+ *   POST   /applications/{id}/deploy
+ *   GET    /applications/{id}/deployments
+ *   POST   /applications/{id}/rollback
  *
  * Paths are relative to the shared axios instance (`baseURL: /api/v1`), so the
  * auth header and refresh-on-401 behaviour come from `./http` unchanged.
  *
- * There is no applications CRUD route in this backend build (BE-4.3 mounts
- * only the three deploy endpoints above), so the `Application` interface below
- * mirrors the domain model (`internal/deploy/model.go`) for display and for
- * the creation-wizard payload only — `listApplications`, `getApplication` and
- * `createApplication` call the conventional REST shape and surface the
- * backend's answer honestly (currently 404) instead of fabricating rows.
+ * The `Application` interface below mirrors the domain model
+ * (`internal/deploy/model.go`) and its wire representation
+ * (`applicationResponse` in routes.go): `server_id` is null while no node is
+ * assigned.
  */
 
 /** An application as stored by the deploy domain (see model.go). */
@@ -107,6 +117,21 @@ export interface CreateApplicationInput {
   storage: StorageMapping[];
 }
 
+/** Body accepted by PUT /applications/{id} (see updateApplicationRequest). */
+export interface UpdateApplicationInput {
+  name?: string;
+  branch?: string;
+  build_pack?: string;
+  base_domain?: string;
+  port?: number;
+  host_port?: number;
+  /**
+   * server_id pins the application to a node. An empty string clears the
+   * assignment; omit the field to leave it unchanged.
+   */
+  server_id?: string;
+}
+
 /** Optional body of POST .../rollback (see routes.go). */
 export interface RollbackInput {
   deployment_id?: string;
@@ -122,14 +147,24 @@ interface DeploymentListEnvelope {
   deployments: Deployment[];
 }
 
-/** Wire envelope for an application list (pending backend route). */
+/** Wire envelope for an application list. */
 interface ApplicationListEnvelope {
   applications: Application[];
 }
 
-/** Wire envelope for a single application (pending backend route). */
+/** Wire envelope for a single application. */
 interface ApplicationEnvelope {
   application: Application;
+}
+
+/** Wire envelope for the environment collection (see envListEnvelope). */
+interface EnvListEnvelope {
+  env: EnvVar[];
+}
+
+/** Wire envelope for the storage collection (see storageListEnvelope). */
+interface StorageListEnvelope {
+  storage: StorageMapping[];
 }
 
 /** Non-terminal states: a deployment still moving through the machine. */
@@ -192,9 +227,8 @@ export async function rollbackDeployment(
 }
 
 /**
- * listApplications reads the conventional list shape. The route is not mounted
- * in this backend build, so callers must handle the rejection — the
- * applications page renders an explicit empty state instead of fake rows.
+ * listApplications returns the caller's applications, newest first
+ * (GET /applications → 200).
  */
 export async function listApplications(): Promise<Application[]> {
   const response = await http.get<ApplicationListEnvelope>("/applications");
@@ -202,8 +236,8 @@ export async function listApplications(): Promise<Application[]> {
 }
 
 /**
- * getApplication reads one application. The route is not mounted in this
- * backend build; the detail page falls back to the deployment history.
+ * getApplication returns one application (GET /applications/{id} → 200).
+ * Another user's row answers 404, so ids cannot be probed.
  */
 export async function getApplication(id: string): Promise<Application> {
   const response = await http.get<ApplicationEnvelope>(`/applications/${id}`);
@@ -211,9 +245,8 @@ export async function getApplication(id: string): Promise<Application> {
 }
 
 /**
- * createApplication posts the wizard payload. The route is not mounted in this
- * backend build — the rejection surfaces through describeApplicationError so
- * the failure is explicit and the payload shape stays ready for the backend.
+ * createApplication stores a new application with its environment and storage
+ * in one transaction (POST /applications → 201).
  */
 export async function createApplication(
   input: CreateApplicationInput,
@@ -225,14 +258,124 @@ export async function createApplication(
   return response.data.application;
 }
 
-/** describeApplicationError maps a thrown error to a user-facing message. */
+/**
+ * updateApplication applies a partial update to the mutable fields
+ * (PUT /applications/{id} → 200). Absent fields stay unchanged.
+ */
+export async function updateApplication(
+  id: string,
+  input: UpdateApplicationInput,
+): Promise<Application> {
+  const response = await http.put<ApplicationEnvelope>(
+    `/applications/${id}`,
+    input,
+  );
+  return response.data.application;
+}
+
+/**
+ * deleteApplication stops the current container best effort and removes the
+ * row (DELETE /applications/{id} → 204, no body).
+ */
+export async function deleteApplication(id: string): Promise<void> {
+  await http.delete(`/applications/${id}`);
+}
+
+/**
+ * getEnv returns the environment: plain values verbatim, sealed secrets as
+ * `secret:<id>` references (GET .../env → 200). Plaintext never leaves the
+ * server.
+ */
+export async function getEnv(appId: string): Promise<EnvVar[]> {
+  const response = await http.get<EnvListEnvelope>(
+    `/applications/${appId}/env`,
+  );
+  return response.data.env ?? [];
+}
+
+/**
+ * replaceEnv rewrites the whole environment collection and returns it as
+ * stored (PUT .../env → 200). A `secret:` value that still points at a stored
+ * secret keeps its ciphertext; any other `secret:` value is sealed as new
+ * plaintext.
+ */
+export async function replaceEnv(
+  appId: string,
+  env: EnvVar[],
+): Promise<EnvVar[]> {
+  const response = await http.put<EnvListEnvelope>(
+    `/applications/${appId}/env`,
+    { env },
+  );
+  return response.data.env ?? [];
+}
+
+/** getStorages returns the application's storage mappings (GET → 200). */
+export async function getStorages(appId: string): Promise<StorageMapping[]> {
+  const response = await http.get<StorageListEnvelope>(
+    `/applications/${appId}/storages`,
+  );
+  return response.data.storage ?? [];
+}
+
+/**
+ * replaceStorages rewrites the whole storage collection and returns it as
+ * stored (PUT .../storages → 200).
+ */
+export async function replaceStorages(
+  appId: string,
+  storage: StorageMapping[],
+): Promise<StorageMapping[]> {
+  const response = await http.put<StorageListEnvelope>(
+    `/applications/${appId}/storages`,
+    { storage },
+  );
+  return response.data.storage ?? [];
+}
+
+/**
+ * stopApplication stops the container of the newest deployment and answers
+ * with that deployment (POST .../stop → 200).
+ */
+export async function stopApplication(appId: string): Promise<Deployment> {
+  const response = await http.post<DeploymentEnvelope>(
+    `/applications/${appId}/stop`,
+    {},
+  );
+  return response.data.deployment;
+}
+
+/**
+ * startApplication restarts the container of the newest deployment
+ * (POST .../start → 200).
+ */
+export async function startApplication(appId: string): Promise<Deployment> {
+  const response = await http.post<DeploymentEnvelope>(
+    `/applications/${appId}/start`,
+    {},
+  );
+  return response.data.deployment;
+}
+
+/**
+ * describeApplicationError maps a thrown error to a user-facing message. The
+ * mapping mirrors `writeServiceError` in `internal/deploy/routes.go`: 404 is
+ * a missing (or foreign) application, 409 an in-flight deployment, 502 an
+ * unreachable node agent and 503 a disabled feature flag.
+ */
 export function describeApplicationError(error: unknown): string {
   if (isApiError(error)) {
+    if (error.status === 401) {
+      return "Your session expired. Please sign in again.";
+    }
+    if (error.status === 400) {
+      return error.message || "Invalid request. Check the highlighted fields and retry.";
+    }
     if (error.status === 404) {
-      return "The applications API is not available in this backend build yet.";
+      return "Application not found. It may have been deleted or belong to another account.";
     }
     if (error.status === 409) {
-      return "A deployment is already in progress for this application.";
+      return "A deployment is already in progress for this application. Wait for it to finish and retry.";
     }
     if (error.status === 502) {
       return "The node agent is unreachable. Check the node status and retry.";

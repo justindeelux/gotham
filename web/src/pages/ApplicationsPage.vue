@@ -14,7 +14,7 @@ import {
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
-import { listApplications } from "../api/applications";
+import { describeApplicationError, listApplications } from "../api/applications";
 import type { Application } from "../api/applications";
 import CreateAppWizard from "../components/CreateAppWizard.vue";
 import GothamIcon from "../components/GothamIcon.vue";
@@ -31,9 +31,8 @@ const knownApps = ref<Application[]>([]);
 const openById = ref("");
 
 /**
- * fetchKnownApplications attempts the conventional list shape. The route is
- * not mounted in this backend build, so the rejection is expected — the page
- * keeps an explicit empty state and never fabricates rows.
+ * fetchKnownApplications reads the mounted list route. A rejection renders
+ * explicitly — the page never fabricates rows.
  */
 async function fetchKnownApplications(): Promise<void> {
   listLoading.value = true;
@@ -42,8 +41,7 @@ async function fetchKnownApplications(): Promise<void> {
     knownApps.value = await listApplications();
   } catch (error) {
     knownApps.value = [];
-    listError.value =
-      error instanceof Error ? error.message : "Applications API unavailable";
+    listError.value = describeApplicationError(error);
   } finally {
     listLoading.value = false;
   }
@@ -149,9 +147,30 @@ onMounted(() => {
         {{ listError }} Create an application to get started, or open one by ID below.
       </NAlert>
 
+      <NSpace v-if="knownApps.length > 0" vertical :size="8">
+        <div
+          v-for="app in knownApps"
+          :key="app.id"
+          class="provider-row"
+        >
+          <GothamIcon name="box" />
+          <NText strong class="mono">{{ app.name }}</NText>
+          <NText depth="3" class="mono">{{ app.id.slice(0, 8) }}</NText>
+          <NText depth="3" class="mono">{{ app.branch || "—" }}</NText>
+          <NButton
+            quaternary
+            size="small"
+            @click="() => router.push({ name: 'application-detail', params: { id: app.id } })"
+          >
+            Open
+          </NButton>
+        </div>
+      </NSpace>
+
       <NEmpty
+        v-else
         class="apps-empty"
-        description="No applications indexed by the API yet"
+        description="No applications yet"
       >
         <template #icon>
           <NIcon>
@@ -160,9 +179,8 @@ onMounted(() => {
         </template>
         <template #extra>
           <p class="apps-empty-hint">
-            Deployments created through the API appear here once the
-            applications list route lands. Every deploy keeps its old image
-            tag, so rollback is just a tag switch — never a rebuild.
+            Create the first application to get a deployment pipeline with
+            environment, volumes and rollback per release.
           </p>
           <NSpace justify="center" :size="8">
             <NButton type="primary" @click="wizardOpen = true">

@@ -51,8 +51,11 @@ type Node interface {
 	Pull(ctx context.Context, image string) error
 	// Run creates and starts a container, returning its ID.
 	Run(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
-	// Stop stops a running container (used to retire the previous release).
+	// Stop stops a running container (used to retire the previous release and
+	// for the manual stop endpoint).
 	Stop(ctx context.Context, containerID string) error
+	// Start starts a stopped container (manual start endpoint).
+	Start(ctx context.Context, containerID string) error
 	// Containers lists every container on the node, including stopped ones.
 	Containers(ctx context.Context) ([]*agentv1.ContainerInfo, error)
 	// Close releases the underlying agent connection.
@@ -212,6 +215,17 @@ func (n *agentNode) Stop(ctx context.Context, containerID string) error {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
 	}
 	if _, err := n.docker.StopContainer(ctx, &agentv1.ContainerActionRequest{ContainerId: containerID}); err != nil {
+		return mapRPCError(err)
+	}
+	return nil
+}
+
+// Start implements Node.
+func (n *agentNode) Start(ctx context.Context, containerID string) error {
+	if strings.TrimSpace(containerID) == "" {
+		return fmt.Errorf("%w: container id is required", ErrValidation)
+	}
+	if _, err := n.docker.StartContainer(ctx, &agentv1.ContainerActionRequest{ContainerId: containerID}); err != nil {
 		return mapRPCError(err)
 	}
 	return nil

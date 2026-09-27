@@ -14,6 +14,22 @@ SELECT * FROM applications
 WHERE user_id = $1
 ORDER BY created_at DESC, id DESC;
 
+-- name: UpdateApplication :one
+UPDATE applications
+SET name = $2,
+    branch = $3,
+    build_pack = $4,
+    base_domain = $5,
+    port = $6,
+    host_port = $7,
+    server_id = $8,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeleteApplication :exec
+DELETE FROM applications WHERE id = $1;
+
 -- name: CreateDeployment :one
 INSERT INTO deployments (
     application_id, kind, state, image_tag, registry_image, digest, rollback_from
@@ -65,6 +81,32 @@ ORDER BY key ASC;
 SELECT * FROM storages
 WHERE application_id = $1
 ORDER BY name ASC;
+
+-- name: ClearEnvVarsByApp :exec
+DELETE FROM env_vars WHERE application_id = $1;
+
+-- name: InsertEnvVar :one
+INSERT INTO env_vars (application_id, key, value)
+VALUES ($1, $2, $3)
+RETURNING *;
+
+-- name: ClearSecretsByApp :exec
+DELETE FROM secrets WHERE application_id = $1;
+
+-- name: InsertSecret :one
+-- The id is written explicitly: it is the stable `secret:<id>` reference the
+-- API hands out for a sealed value, so re-writing a secret keeps its reference.
+INSERT INTO secrets (id, application_id, key, ciphertext)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
+
+-- name: ClearStoragesByApp :exec
+DELETE FROM storages WHERE application_id = $1;
+
+-- name: InsertStorage :one
+INSERT INTO storages (application_id, name, host_path, container_path)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
 
 -- name: FailStaleDeployments :execrows
 -- Boot-time recovery: a deployment left in a non-terminal state by a previous

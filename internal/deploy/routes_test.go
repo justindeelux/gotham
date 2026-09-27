@@ -22,14 +22,131 @@ type fakeDeployService struct {
 	rollback    Deployment
 	rollbackErr error
 
+	// applications CRUD and configuration.
+	application Application
+	createErr   error
+	listApps    []Application
+	listAppsErr error
+	getErr      error
+	updateErr   error
+	deleteErr   error
+	env         []EnvEntry
+	envErr      error
+	storages    []Storage
+	storagesErr error
+	stop        Deployment
+	stopErr     error
+	start       Deployment
+	startErr    error
+
 	seenUser        uuid.UUID
 	seenApplication uuid.UUID
 	seenRollback    uuid.UUID
 	seenRollbackSet bool
+	seenCreate      CreateApplicationInput
+	seenUpdate      UpdateApplicationInput
+	seenEntries     []EnvEntry
+	seenStorages    []Storage
 }
 
 // Compile-time guarantee that fakeDeployService satisfies the route seam.
 var _ DeployService = (*fakeDeployService)(nil)
+
+// CreateApplication implements DeployService.
+func (f *fakeDeployService) CreateApplication(_ context.Context, userID uuid.UUID, in CreateApplicationInput) (Application, error) {
+	f.seenUser, f.seenCreate = userID, in
+	if f.createErr != nil {
+		return Application{}, f.createErr
+	}
+	return f.application, nil
+}
+
+// ListApplications implements DeployService.
+func (f *fakeDeployService) ListApplications(_ context.Context, userID uuid.UUID) ([]Application, error) {
+	f.seenUser = userID
+	if f.listAppsErr != nil {
+		return nil, f.listAppsErr
+	}
+	return f.listApps, nil
+}
+
+// GetApplication implements DeployService.
+func (f *fakeDeployService) GetApplication(_ context.Context, userID, appID uuid.UUID) (Application, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	if f.getErr != nil {
+		return Application{}, f.getErr
+	}
+	return f.application, nil
+}
+
+// UpdateApplication implements DeployService.
+func (f *fakeDeployService) UpdateApplication(_ context.Context, userID, appID uuid.UUID, in UpdateApplicationInput) (Application, error) {
+	f.seenUser, f.seenApplication, f.seenUpdate = userID, appID, in
+	if f.updateErr != nil {
+		return Application{}, f.updateErr
+	}
+	return f.application, nil
+}
+
+// DeleteApplication implements DeployService.
+func (f *fakeDeployService) DeleteApplication(_ context.Context, userID, appID uuid.UUID) error {
+	f.seenUser, f.seenApplication = userID, appID
+	return f.deleteErr
+}
+
+// GetEnv implements DeployService.
+func (f *fakeDeployService) GetEnv(_ context.Context, userID, appID uuid.UUID) ([]EnvEntry, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	if f.envErr != nil {
+		return nil, f.envErr
+	}
+	return f.env, nil
+}
+
+// ReplaceEnv implements DeployService.
+func (f *fakeDeployService) ReplaceEnv(_ context.Context, userID, appID uuid.UUID, entries []EnvEntry) ([]EnvEntry, error) {
+	f.seenUser, f.seenApplication, f.seenEntries = userID, appID, entries
+	if f.envErr != nil {
+		return nil, f.envErr
+	}
+	if f.env != nil {
+		return f.env, nil
+	}
+	return entries, nil
+}
+
+// GetStorages implements DeployService.
+func (f *fakeDeployService) GetStorages(_ context.Context, userID, appID uuid.UUID) ([]Storage, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	if f.storagesErr != nil {
+		return nil, f.storagesErr
+	}
+	return f.storages, nil
+}
+
+// ReplaceStorages implements DeployService.
+func (f *fakeDeployService) ReplaceStorages(_ context.Context, userID, appID uuid.UUID, storages []Storage) ([]Storage, error) {
+	f.seenUser, f.seenApplication, f.seenStorages = userID, appID, storages
+	if f.storagesErr != nil {
+		return nil, f.storagesErr
+	}
+	if f.storages != nil {
+		return f.storages, nil
+	}
+	return storages, nil
+}
+
+// Stop implements DeployService.
+func (f *fakeDeployService) Stop(_ context.Context, userID, appID uuid.UUID) (Deployment, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	return f.stop, f.stopErr
+}
+
+// Start implements DeployService.
+func (f *fakeDeployService) Start(_ context.Context, userID, appID uuid.UUID) (Deployment, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	return f.start, f.startErr
+}
 
 // Deploy implements DeployService.
 func (f *fakeDeployService) Deploy(_ context.Context, userID, appID uuid.UUID) (Deployment, error) {

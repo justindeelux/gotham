@@ -1,0 +1,669 @@
+package deploy
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+)
+
+// applicationsPath is the collection route.
+const applicationsPath = "/v1/applications"
+
+// applicationBody is the create payload exactly as FE-4.1's wizard sends it
+// (see CreateApplicationInput in web/src/api/applications.ts).
+const applicationBody = `{
+	"name": "demo app",
+	"provider": "github",
+	"repo": "acme/demo",
+	"clone_url": "https://github.com/acme/demo.git",
+	"branch": "main",
+	"build_pack": "dockerfile",
+	"base_domain": "demo.example.com",
+	"port": 3000,
+	"host_port": 8080,
+	"server_id": "%s",
+	"env": [
+		{"key": "NODE_ENV", "value": "production"},
+		{"key": "API_TOKEN", "value": "secret:super-secret"}
+	],
+	"storage": [
+		{"name": "data", "host_path": "/data/app", "container_path": "/var/lib/app"}
+	]
+}`
+
+// applicationWireKeys are the fields of the FE's `Application` interface; the
+// envelope must carry exactly these, or the SPA reads undefined values.
+var applicationWireKeys = []string{
+	"id", "name", "provider", "repo", "clone_url", "branch", "build_pack",
+	"base_domain", "port", "host_port", "server_id", "created_at", "updated_at",
+}
+
+// assertJSONKeys fails unless body is an object with exactly the given keys.
+func assertJSONKeys(t *testing.T, body []byte, want ...string) {
+	t.Helper()
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode body %s: %v", body, err)
+	}
+	if len(payload) != len(want) {
+		t.Errorf("keys = %v, want %v", keysOf(payload), want)
+	}
+	for _, key := range want {
+		if _, ok := payload[key]; !ok {
+			t.Errorf("missing key %q in %s", key, body)
+		}
+	}
+}
+
+// keysOf renders a decoded object's keys for failure output.
+func keysOf(payload map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(payload))
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// sampleApplication returns an application with every wire field filled.
+func sampleApplication() Application {
+	return Application{
+		ID:         uuid.New(),
+		UserID:     uuid.New(),
+		ServerID:   uuid.New(),
+		Name:       "demo app",
+		Provider:   "github",
+		Repo:       "acme/demo",
+		CloneURL:   "https://github.com/acme/demo.git",
+		Branch:     "main",
+		BuildPack:  "dockerfile",
+		BaseDomain: "demo.example.com",
+		Port:       3000,
+		HostPort:   8080,
+	}
+}
+
+func TestRoutesCreateApplication(t *testing.T) {
+	userID, serverID := uuid.New(), uuid.New()
+	app := sampleApplication()
+	app.UserID = userID
+	svc := &fakeDeployService{application: app}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
+		strings.NewReader(strings.Replace(applicationBody, "%s", serverID.String(), 1))))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	assertJSONKeys(t, rec.Body.Bytes(), "application")
+	assertJSONKeys(t, mustJSON(t, rec.Body.Bytes(), "application"), applicationWireKeys...)
+
+	if svc.seenUser != userID {
+		t.Errorf("service saw user %s, want %s", svc.seenUser, userID)
+	}
+	in := svc.seenCreate
+	if in.Name != "demo app" || in.CloneURL != "https://github.com/acme/demo.git" {
+		t.Errorf("input = %+v, want the parsed create payload", in)
+	}
+	if in.ServerID != serverID {
+		t.Errorf("server_id = %s, want %s", in.ServerID, serverID)
+	}
+	if in.Port != 3000 || in.HostPort != 8080 {
+		t.Errorf("ports = %d/%d, want 3000/8080", in.Port, in.HostPort)
+	}
+	if len(in.Env) != 2 || in.Env[1].Key != "API_TOKEN" || in.Env[1].Value != "secret:super-secret" {
+		t.Errorf("env = %+v, want the nested environment as sent", in.Env)
+	}
+	if len(in.Storage) != 1 || in.Storage[0].ContainerPath != "/var/lib/app" {
+		t.Errorf("storage = %+v, want the nested volume map as sent", in.Storage)
+	}
+}
+
+func TestRoutesCreateApplicationRejectsBadInput(t *testing.T) {
+	userID, serverID := uuid.New(), uuid.New()
+	app := sampleApplication()
+	app.UserID = userID
+	valid := strings.Replace(applicationBody, "%s", serverID.String(), 1)
+
+	cases := []struct {
+		name string
+		body func() string
+		want int
+	}{
+		{"empty body", func() string { return "" }, http.StatusBadRequest},
+		{"unknown field", func() string {
+			return strings.TrimSuffix(valid, "}") + `,"nope":1}`
+		}, http.StatusBadRequest},
+		{"malformed json", func() string { return "{" }, http.StatusBadRequest},
+		{"invalid server id", func() string {
+			return strings.Replace(valid, serverID.String(), "not-a-uuid", 1)
+		}, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeDeployService{application: app}
+			srv := newRouteServer(svc, alwaysUser(userID))
+
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath, strings.NewReader(tc.body())))
+
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestRoutesListApplications(t *testing.T) {
+	userID := uuid.New()
+	app := sampleApplication()
+	app.UserID = userID
+
+	cases := []struct {
+		name string
+		apps []Application
+	}{
+		{"empty", nil},
+		{"one", []Application{app}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeDeployService{listApps: tc.apps}
+			srv := newRouteServer(svc, alwaysUser(userID))
+
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, applicationsPath, nil))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			assertJSONKeys(t, rec.Body.Bytes(), "applications")
+
+			var body applicationListEnvelope
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body.Applications == nil {
+				t.Fatal("applications = null, want an empty array the SPA can map over")
+			}
+			if len(body.Applications) != len(tc.apps) {
+				t.Fatalf("applications = %d, want %d", len(body.Applications), len(tc.apps))
+			}
+			if len(tc.apps) == 1 {
+				assertJSONKeys(t, mustJSON(t, rec.Body.Bytes(), "applications", "0"), applicationWireKeys...)
+				if body.Applications[0].ID != app.ID.String() {
+					t.Errorf("id = %q, want %q", body.Applications[0].ID, app.ID)
+				}
+			}
+			if svc.seenUser != userID {
+				t.Errorf("service saw user %s, want %s", svc.seenUser, userID)
+			}
+		})
+	}
+}
+
+func TestRoutesGetApplication(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	app := sampleApplication()
+	app.ID = appID
+	svc := &fakeDeployService{application: app}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, applicationsPath+"/"+appID.String(), nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	assertJSONKeys(t, rec.Body.Bytes(), "application")
+	assertJSONKeys(t, mustJSON(t, rec.Body.Bytes(), "application"), applicationWireKeys...)
+	if svc.seenApplication != appID {
+		t.Errorf("service saw application %s, want %s", svc.seenApplication, appID)
+	}
+}
+
+func TestRoutesApplicationNotFound(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	svc := &fakeDeployService{getErr: ErrNotFound}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, applicationsPath+"/"+appID.String(), nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for another user's application", rec.Code)
+	}
+}
+
+func TestRoutesNullServerID(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	app := sampleApplication()
+	app.ID, app.ServerID = appID, uuid.Nil
+	svc := &fakeDeployService{application: app}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, applicationsPath+"/"+appID.String(), nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body applicationEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Application.ServerID != nil {
+		t.Errorf("server_id = %q, want null when no node is assigned", *body.Application.ServerID)
+	}
+}
+
+func TestRoutesUpdateApplication(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	app := sampleApplication()
+	app.ID = appID
+
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"partial patch", `{"name":"renamed","branch":"release","port":9090}`, http.StatusOK},
+		{"empty object", `{}`, http.StatusOK},
+		{"no body", ``, http.StatusBadRequest},
+		{"unknown field", `{"nope":1}`, http.StatusBadRequest},
+		{"invalid port", `{"port":"8080"}`, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeDeployService{application: app}
+			srv := newRouteServer(svc, alwaysUser(userID))
+
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+				applicationsPath+"/"+appID.String(), strings.NewReader(tc.body)))
+
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+			}
+			if rec.Code != http.StatusOK {
+				return
+			}
+			assertJSONKeys(t, rec.Body.Bytes(), "application")
+			if svc.seenApplication != appID {
+				t.Errorf("service saw application %s, want %s", svc.seenApplication, appID)
+			}
+		})
+	}
+
+	t.Run("forwards the patched fields", func(t *testing.T) {
+		svc := &fakeDeployService{application: app}
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, applicationsPath+"/"+appID.String(),
+			strings.NewReader(`{"name":"renamed","branch":"release","port":9090}`)))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		in := svc.seenUpdate
+		if in.Name == nil || *in.Name != "renamed" {
+			t.Errorf("name = %v, want the patched value", in.Name)
+		}
+		if in.Branch == nil || *in.Branch != "release" {
+			t.Errorf("branch = %v, want the patched value", in.Branch)
+		}
+		if in.Port == nil || *in.Port != 9090 {
+			t.Errorf("port = %v, want the patched value", in.Port)
+		}
+		if in.HostPort != nil || in.BuildPack != nil || in.ServerID != nil {
+			t.Errorf("unpatched fields were sent: %+v", in)
+		}
+	})
+}
+
+func TestRoutesDeleteApplication(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	svc := &fakeDeployService{}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, applicationsPath+"/"+appID.String(), nil))
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("body = %q, want it empty", rec.Body.String())
+	}
+	if svc.seenUser != userID || svc.seenApplication != appID {
+		t.Errorf("service saw %s/%s, want %s/%s", svc.seenUser, svc.seenApplication, userID, appID)
+	}
+}
+
+func TestRoutesEnvCollection(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	reference := secretRefPrefix + uuid.New().String()
+	svc := &fakeDeployService{env: []EnvEntry{
+		{Key: "API_TOKEN", Value: reference},
+		{Key: "NODE_ENV", Value: "production"},
+	}}
+	srv := newRouteServer(svc, alwaysUser(userID))
+	path := applicationsPath + "/" + appID.String() + "/env"
+
+	t.Run("read", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		assertJSONKeys(t, rec.Body.Bytes(), "env")
+
+		var body envListEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(body.Env) != 2 {
+			t.Fatalf("env = %+v, want both rows", body.Env)
+		}
+		if body.Env[0].Value != reference {
+			t.Errorf("secret value = %q, want the reference, never the plaintext", body.Env[0].Value)
+		}
+	})
+
+	t.Run("replace", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		body := `{"env":[{"key":"API_TOKEN","value":"` + reference + `"},{"key":"LOG_LEVEL","value":"debug"}]}`
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, path, strings.NewReader(body)))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		assertJSONKeys(t, rec.Body.Bytes(), "env")
+		if len(svc.seenEntries) != 2 || svc.seenEntries[1].Key != "LOG_LEVEL" {
+			t.Errorf("entries = %+v, want the collection as sent", svc.seenEntries)
+		}
+		if svc.seenApplication != appID {
+			t.Errorf("service saw application %s, want %s", svc.seenApplication, appID)
+		}
+	})
+
+	t.Run("empty body does not clear the collection", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, path, strings.NewReader("")))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", rec.Code)
+		}
+	})
+
+	t.Run("unknown field", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"nope":1}`)))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", rec.Code)
+		}
+	})
+}
+
+func TestRoutesStorageCollection(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	svc := &fakeDeployService{storages: []Storage{
+		{Name: "data", HostPath: "/data/app", ContainerPath: "/var/lib/app"},
+	}}
+	srv := newRouteServer(svc, alwaysUser(userID))
+	path := applicationsPath + "/" + appID.String() + "/storages"
+
+	t.Run("read", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		assertJSONKeys(t, rec.Body.Bytes(), "storage")
+
+		var body storageListEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(body.Storage) != 1 || body.Storage[0].Name != "data" {
+			t.Errorf("storage = %+v, want the stored mapping", body.Storage)
+		}
+	})
+
+	t.Run("replace", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		body := `{"storage":[{"name":"cache","host_path":"/data/cache","container_path":"/var/cache"}]}`
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, path, strings.NewReader(body)))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		assertJSONKeys(t, rec.Body.Bytes(), "storage")
+		if len(svc.seenStorages) != 1 || svc.seenStorages[0].Name != "cache" {
+			t.Errorf("storages = %+v, want the collection as sent", svc.seenStorages)
+		}
+	})
+
+	t.Run("empty body does not clear the collection", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, path, strings.NewReader("")))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", rec.Code)
+		}
+	})
+}
+
+func TestRoutesStopStart(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	deployment := Deployment{
+		ID:            uuid.New(),
+		ApplicationID: appID,
+		Kind:          KindDeploy,
+		State:         StateRunning,
+		ContainerID:   "abc123",
+	}
+
+	t.Run("stop answers the deployment", func(t *testing.T) {
+		svc := &fakeDeployService{stop: deployment}
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath+"/"+appID.String()+"/stop", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		assertJSONKeys(t, rec.Body.Bytes(), "deployment")
+		// The deployment envelope carries omitempty fields (image_tag, error,
+		// timestamps) exactly like the routes FE-4.1 already consumes; these
+		// are the keys every answer has.
+		assertJSONKeys(t, mustJSON(t, rec.Body.Bytes(), "deployment"),
+			"id", "application_id", "kind", "state", "attempt", "container_id",
+			"created_at", "updated_at")
+		if svc.seenApplication != appID {
+			t.Errorf("service saw application %s, want %s", svc.seenApplication, appID)
+		}
+	})
+
+	t.Run("start answers the deployment", func(t *testing.T) {
+		svc := &fakeDeployService{start: deployment}
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath+"/"+appID.String()+"/start", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		assertJSONKeys(t, rec.Body.Bytes(), "deployment")
+	})
+
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"not found", ErrNotFound, http.StatusNotFound},
+		{"server not found", ErrServerNotFound, http.StatusNotFound},
+		{"conflict", ErrConflict, http.StatusConflict},
+		{"agent unavailable", ErrAgentUnavailable, http.StatusBadGateway},
+		{"validation", ErrValidation, http.StatusBadRequest},
+		{"disabled", ErrDisabled, http.StatusServiceUnavailable},
+		{"internal", errors.New("boom"), http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		for _, action := range []string{"stop", "start"} {
+			t.Run(action+"/"+tc.name, func(t *testing.T) {
+				svc := &fakeDeployService{stopErr: tc.err, startErr: tc.err}
+				srv := newRouteServer(svc, alwaysUser(userID))
+
+				rec := httptest.NewRecorder()
+				srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+					applicationsPath+"/"+appID.String()+"/"+action, nil))
+
+				if rec.Code != tc.want {
+					t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestRoutesApplicationServiceErrors(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	svc := &fakeDeployService{
+		createErr:   ErrValidation,
+		listAppsErr: ErrValidation,
+		getErr:      ErrValidation,
+		updateErr:   ErrValidation,
+		deleteErr:   ErrValidation,
+		envErr:      ErrValidation,
+		storagesErr: ErrValidation,
+	}
+	srv := newRouteServer(svc, alwaysUser(userID))
+	application := applicationsPath + "/" + appID.String()
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"create", http.MethodPost, applicationsPath, `{"name":"demo","clone_url":"https://example.com/a.git","server_id":"` + uuid.New().String() + `"}`},
+		{"list", http.MethodGet, applicationsPath, ""},
+		{"get", http.MethodGet, application, ""},
+		{"update", http.MethodPut, application, `{"name":"renamed"}`},
+		{"delete", http.MethodDelete, application, ""},
+		{"env read", http.MethodGet, application + "/env", ""},
+		{"env replace", http.MethodPut, application + "/env", `{"env":[{"key":"A","value":"b"}]}`},
+		{"storages read", http.MethodGet, application + "/storages", ""},
+		{"storages replace", http.MethodPut, application + "/storages", `{"storage":[]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body io.Reader
+			if tc.body != "" {
+				body = strings.NewReader(tc.body)
+			}
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, body))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestRoutesNewApplicationRoutesGuardAccess(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	svc := &fakeDeployService{}
+	unauthenticated := newRouteServer(svc, func(context.Context) (uuid.UUID, bool) { return uuid.Nil, false })
+
+	guards := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, applicationsPath},
+		{http.MethodGet, applicationsPath},
+		{http.MethodGet, applicationsPath + "/" + appID.String()},
+		{http.MethodPut, applicationsPath + "/" + appID.String()},
+		{http.MethodDelete, applicationsPath + "/" + appID.String()},
+		{http.MethodGet, applicationsPath + "/" + appID.String() + "/env"},
+		{http.MethodPut, applicationsPath + "/" + appID.String() + "/env"},
+		{http.MethodGet, applicationsPath + "/" + appID.String() + "/storages"},
+		{http.MethodPut, applicationsPath + "/" + appID.String() + "/storages"},
+		{http.MethodPost, applicationsPath + "/" + appID.String() + "/stop"},
+		{http.MethodPost, applicationsPath + "/" + appID.String() + "/start"},
+	}
+	for _, guard := range guards {
+		t.Run(guard.method+" "+guard.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			unauthenticated.ServeHTTP(rec, httptest.NewRequest(guard.method, guard.path, nil))
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401", rec.Code)
+			}
+		})
+	}
+
+	t.Run("invalid application id", func(t *testing.T) {
+		srv := newRouteServer(svc, alwaysUser(userID))
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, applicationsPath+"/not-a-uuid", nil))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", rec.Code)
+		}
+	})
+}
+
+// mustJSON walks a JSON document along the given path (object keys and array
+// indexes as strings) and returns the raw slice at that location.
+func mustJSON(t *testing.T, body []byte, path ...string) []byte {
+	t.Helper()
+	var node any
+	if err := json.Unmarshal(body, &node); err != nil {
+		t.Fatalf("decode body %s: %v", body, err)
+	}
+	current := node
+	for _, segment := range path {
+		switch typed := current.(type) {
+		case map[string]any:
+			value, ok := typed[segment]
+			if !ok {
+				t.Fatalf("path segment %q missing in %s", segment, body)
+			}
+			current = value
+		case []any:
+			index, err := strconv.Atoi(segment)
+			if err != nil {
+				t.Fatalf("invalid array index %q: %v", segment, err)
+			}
+			if index < 0 || index >= len(typed) {
+				t.Fatalf("array index %d out of range in %s", index, body)
+			}
+			current = typed[index]
+		default:
+			t.Fatalf("cannot descend into %T at %q", current, segment)
+		}
+	}
+	encoded, err := json.Marshal(current)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	return encoded
+}

@@ -3,10 +3,12 @@ package deploy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -32,13 +34,23 @@ func discardLogger() *slog.Logger {
 
 // fakeRepository is a scriptable in-memory Repository. Rows are kept in
 // insertion order and ListDeployments returns them newest first.
+//
+// The zero-value `app` field is the seeded application the pre-existing tests
+// build their fixtures around; every application created through
+// CreateApplication is kept in `apps`. Configuration rows (env vars, secrets,
+// storages) are matched by application_id, and a row left without one by a test
+// fixture belongs to whichever application is asked for.
 type fakeRepository struct {
 	mu          sync.Mutex
 	app         Application
+	apps        []Application
 	deployments []Deployment
 	envVars     []EnvVar
 	secrets     []Secret
 	storages    []Storage
+
+	// unknownServers names servers ServerExists must report as missing.
+	unknownServers map[uuid.UUID]bool
 
 	getErr       error
 	createErr    error
@@ -62,10 +74,227 @@ func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (App
 	if r.getErr != nil {
 		return Application{}, r.getErr
 	}
-	if r.app.ID != appID {
-		return Application{}, ErrNotFound
+	if r.app.ID != uuid.Nil && r.app.ID == appID {
+		return r.app, nil
 	}
-	return r.app, nil
+	for _, app := range r.apps {
+		if app.ID == appID {
+			return app, nil
+		}
+	}
+	return Application{}, ErrNotFound
+}
+
+// ListApplications implements Repository, newest first (created_at DESC, id DESC).
+func (r *fakeRepository) ListApplications(_ context.Context, userID uuid.UUID) ([]Application, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	var out []Application
+	if r.app.ID != uuid.Nil && r.app.UserID == userID {
+		out = append(out, r.app)
+	}
+	for _, app := range r.apps {
+		if app.UserID == userID {
+			out = append(out, app)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID.String() > out[j].ID.String()
+	})
+	return out, nil
+}
+
+// CreateApplication implements Repository: it assigns an ID and timestamps like
+// the database and stores the configuration rows with the application.
+func (r *fakeRepository) CreateApplication(_ context.Context, app Application, envVars []EnvVar, secrets []Secret, storages []Storage) (Application, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.createErr != nil {
+		return Application{}, r.createErr
+	}
+	for _, existing := range r.ownedApplications() {
+		if existing.UserID == app.UserID && existing.Name == app.Name {
+			return Application{}, fmt.Errorf("%w: an application named %q already exists", ErrValidation, app.Name)
+		}
+	}
+	now := time.Now().UTC()
+	// Keep insertion order observable: two rows created inside the same clock
+	// tick would otherwise sort back into an arbitrary order (the production
+	// query breaks created_at ties on id DESC).
+	for _, existing := range r.ownedApplications() {
+		if !now.After(existing.CreatedAt) {
+			now = existing.CreatedAt.Add(time.Nanosecond)
+		}
+	}
+	app.ID = uuid.New()
+	app.CreatedAt = now
+	app.UpdatedAt = now
+	r.apps = append(r.apps, app)
+	for _, v := range envVars {
+		v.ApplicationID = app.ID
+		v.ID = uuid.New()
+		r.envVars = append(r.envVars, v)
+	}
+	for _, s := range secrets {
+		if s.ID == uuid.Nil {
+			s.ID = uuid.New()
+		}
+		s.ApplicationID = app.ID
+		r.secrets = append(r.secrets, s)
+	}
+	for _, s := range storages {
+		s.ApplicationID = app.ID
+		r.storages = append(r.storages, s)
+	}
+	return app, nil
+}
+
+// UpdateApplication implements Repository and bumps updated_at.
+func (r *fakeRepository) UpdateApplication(_ context.Context, app Application) (Application, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.app.ID == app.ID {
+		app.CreatedAt = r.app.CreatedAt
+		app.UpdatedAt = time.Now().UTC()
+		r.app = app
+		return app, nil
+	}
+	for i, existing := range r.apps {
+		if existing.ID == app.ID {
+			app.CreatedAt = existing.CreatedAt
+			app.UpdatedAt = time.Now().UTC()
+			r.apps[i] = app
+			return app, nil
+		}
+	}
+	return Application{}, ErrNotFound
+}
+
+// DeleteApplication implements Repository with the schema's cascade: the row
+// goes, and its configuration and deployments with it.
+func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.app.ID == appID {
+		r.app = Application{}
+	}
+	for i, app := range r.apps {
+		if app.ID == appID {
+			r.apps = append(r.apps[:i], r.apps[i+1:]...)
+			break
+		}
+	}
+	deployments := make([]Deployment, 0, len(r.deployments))
+	for _, dep := range r.deployments {
+		if dep.ApplicationID != appID {
+			deployments = append(deployments, dep)
+		}
+	}
+	r.deployments = deployments
+	envVars := make([]EnvVar, 0, len(r.envVars))
+	for _, v := range r.envVars {
+		if v.ApplicationID != appID && v.ApplicationID != uuid.Nil {
+			envVars = append(envVars, v)
+		}
+	}
+	r.envVars = envVars
+	secrets := make([]Secret, 0, len(r.secrets))
+	for _, s := range r.secrets {
+		if s.ApplicationID != appID && s.ApplicationID != uuid.Nil {
+			secrets = append(secrets, s)
+		}
+	}
+	r.secrets = secrets
+	storages := make([]Storage, 0, len(r.storages))
+	for _, s := range r.storages {
+		if s.ApplicationID != appID && s.ApplicationID != uuid.Nil {
+			storages = append(storages, s)
+		}
+	}
+	r.storages = storages
+	return nil
+}
+
+// ReplaceEnvVars implements Repository, replacing both collections as one set.
+func (r *fakeRepository) ReplaceEnvVars(_ context.Context, appID uuid.UUID, envVars []EnvVar, secrets []Secret) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.getErr != nil {
+		return r.getErr
+	}
+	keptVars := make([]EnvVar, 0, len(r.envVars))
+	for _, v := range r.envVars {
+		if v.ApplicationID != uuid.Nil && v.ApplicationID != appID {
+			keptVars = append(keptVars, v)
+		}
+	}
+	keptSecrets := make([]Secret, 0, len(r.secrets))
+	for _, s := range r.secrets {
+		if s.ApplicationID != uuid.Nil && s.ApplicationID != appID {
+			keptSecrets = append(keptSecrets, s)
+		}
+	}
+	for _, v := range envVars {
+		v.ApplicationID = appID
+		v.ID = uuid.New()
+		keptVars = append(keptVars, v)
+	}
+	for _, s := range secrets {
+		if s.ID == uuid.Nil {
+			s.ID = uuid.New()
+		}
+		s.ApplicationID = appID
+		keptSecrets = append(keptSecrets, s)
+	}
+	r.envVars, r.secrets = keptVars, keptSecrets
+	return nil
+}
+
+// ReplaceStorages implements Repository, replacing the collection as one set.
+func (r *fakeRepository) ReplaceStorages(_ context.Context, appID uuid.UUID, storages []Storage) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.getErr != nil {
+		return r.getErr
+	}
+	kept := make([]Storage, 0, len(r.storages))
+	for _, s := range r.storages {
+		if s.ApplicationID != uuid.Nil && s.ApplicationID != appID {
+			kept = append(kept, s)
+		}
+	}
+	for _, s := range storages {
+		s.ApplicationID = appID
+		s.ID = uuid.New()
+		kept = append(kept, s)
+	}
+	r.storages = kept
+	return nil
+}
+
+// ServerExists implements Repository.
+func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if serverID == uuid.Nil {
+		return false, nil
+	}
+	return !r.unknownServers[serverID], nil
+}
+
+// ownedApplications returns every application the fake holds (seed first).
+func (r *fakeRepository) ownedApplications() []Application {
+	applications := make([]Application, 0, len(r.apps)+1)
+	if r.app.ID != uuid.Nil {
+		applications = append(applications, r.app)
+	}
+	return append(applications, r.apps...)
 }
 
 // CreateDeployment implements Repository, assigning an ID like the database.
@@ -145,25 +374,44 @@ func (r *fakeRepository) UpdateDeployment(_ context.Context, dep Deployment) (De
 	return Deployment{}, ErrNotFound
 }
 
-// ListEnvVars implements Repository.
-func (r *fakeRepository) ListEnvVars(_ context.Context, _ uuid.UUID) ([]EnvVar, error) {
+// ListEnvVars implements Repository, scoped to the application (a fixture row
+// without an application id belongs to whichever application is asked for).
+func (r *fakeRepository) ListEnvVars(_ context.Context, appID uuid.UUID) ([]EnvVar, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]EnvVar(nil), r.envVars...), nil
+	out := make([]EnvVar, 0, len(r.envVars))
+	for _, v := range r.envVars {
+		if v.ApplicationID == uuid.Nil || v.ApplicationID == appID {
+			out = append(out, v)
+		}
+	}
+	return out, nil
 }
 
-// ListSecrets implements Repository.
-func (r *fakeRepository) ListSecrets(_ context.Context, _ uuid.UUID) ([]Secret, error) {
+// ListSecrets implements Repository (see ListEnvVars for fixture rows).
+func (r *fakeRepository) ListSecrets(_ context.Context, appID uuid.UUID) ([]Secret, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]Secret(nil), r.secrets...), nil
+	out := make([]Secret, 0, len(r.secrets))
+	for _, s := range r.secrets {
+		if s.ApplicationID == uuid.Nil || s.ApplicationID == appID {
+			out = append(out, s)
+		}
+	}
+	return out, nil
 }
 
-// ListStorages implements Repository.
-func (r *fakeRepository) ListStorages(_ context.Context, _ uuid.UUID) ([]Storage, error) {
+// ListStorages implements Repository (see ListEnvVars for fixture rows).
+func (r *fakeRepository) ListStorages(_ context.Context, appID uuid.UUID) ([]Storage, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]Storage(nil), r.storages...), nil
+	out := make([]Storage, 0, len(r.storages))
+	for _, s := range r.storages {
+		if s.ApplicationID == uuid.Nil || s.ApplicationID == appID {
+			out = append(out, s)
+		}
+	}
+	return out, nil
 }
 
 // deployment returns the stored row by ID (test helper).
@@ -231,6 +479,7 @@ type mockNode struct {
 	pullErr   error
 	runErr    error
 	stopErr   error
+	startErr  error
 
 	// registryAddr and digest seed the BuildImage-style outcome.
 	registryAddr string
@@ -245,10 +494,12 @@ type mockNode struct {
 	pullCalls  int
 	runCalls   int
 	stopCalls  int
+	startCalls int
 	closed     int
 
 	requests []*agentv1.CreateContainerRequest
 	stopped  []string
+	started  []string
 	metas    []BuildMeta
 }
 
@@ -322,6 +573,15 @@ func (m *mockNode) Stop(_ context.Context, containerID string) error {
 	m.stopCalls++
 	m.stopped = append(m.stopped, containerID)
 	return m.stopErr
+}
+
+// Start implements Node.
+func (m *mockNode) Start(_ context.Context, containerID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.startCalls++
+	m.started = append(m.started, containerID)
+	return m.startErr
 }
 
 // Containers implements Node, exposing the container Run created.

@@ -59,6 +59,92 @@ type rollbackRequest struct {
 	DeploymentID string `json:"deployment_id"`
 }
 
+// applicationResponse is the wire representation of an application. It mirrors
+// `Application` in web/src/api/applications.ts field for field: server_id is
+// null while no node is assigned.
+type applicationResponse struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Provider   string    `json:"provider"`
+	Repo       string    `json:"repo"`
+	CloneURL   string    `json:"clone_url"`
+	Branch     string    `json:"branch"`
+	BuildPack  string    `json:"build_pack"`
+	BaseDomain string    `json:"base_domain"`
+	Port       int32     `json:"port"`
+	HostPort   int32     `json:"host_port"`
+	ServerID   *string   `json:"server_id"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// applicationEnvelope wraps a single application.
+type applicationEnvelope struct {
+	Application applicationResponse `json:"application"`
+}
+
+// applicationListEnvelope wraps an application list.
+type applicationListEnvelope struct {
+	Applications []applicationResponse `json:"applications"`
+}
+
+// envEntryRequest is one environment row on the wire (`EnvVar` in the FE). A
+// value carrying the `secret:` prefix names a sealed secret; the API answers
+// with `secret:<id>` references and never with plaintext.
+type envEntryRequest struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// envListEnvelope wraps the environment collection (`env` in the FE payload).
+type envListEnvelope struct {
+	Env []envEntryRequest `json:"env"`
+}
+
+// storageRequest is one storage mapping on the wire (`StorageMapping` in the
+// FE). The collection is named `storage` everywhere — the create payload, the
+// replace body and the read response — so the FE reuses one field name.
+type storageRequest struct {
+	Name          string `json:"name"`
+	HostPath      string `json:"host_path"`
+	ContainerPath string `json:"container_path"`
+}
+
+// storageListEnvelope wraps the storage collection.
+type storageListEnvelope struct {
+	Storage []storageRequest `json:"storage"`
+}
+
+// createApplicationRequest is the POST /applications body; it matches
+// CreateApplicationInput in web/src/api/applications.ts.
+type createApplicationRequest struct {
+	Name       string            `json:"name"`
+	Provider   string            `json:"provider"`
+	Repo       string            `json:"repo"`
+	CloneURL   string            `json:"clone_url"`
+	Branch     string            `json:"branch"`
+	BuildPack  string            `json:"build_pack"`
+	BaseDomain string            `json:"base_domain"`
+	Port       int32             `json:"port"`
+	HostPort   int32             `json:"host_port"`
+	ServerID   string            `json:"server_id"`
+	Env        []envEntryRequest `json:"env"`
+	Storage    []storageRequest  `json:"storage"`
+}
+
+// updateApplicationRequest is the PUT /applications/{id} body. Fields are
+// optional pointers: absent fields stay unchanged, an empty server_id clears
+// the assignment.
+type updateApplicationRequest struct {
+	Name       *string `json:"name"`
+	Branch     *string `json:"branch"`
+	BuildPack  *string `json:"build_pack"`
+	BaseDomain *string `json:"base_domain"`
+	Port       *int32  `json:"port"`
+	HostPort   *int32  `json:"host_port"`
+	ServerID   *string `json:"server_id"`
+}
+
 // errorBody is the JSON body returned for failures.
 type errorBody struct {
 	Message string `json:"message"`
@@ -73,9 +159,20 @@ type handler struct {
 
 // Mount registers the authenticated application endpoints on r:
 //
-//	POST /v1/applications/{id}/deploy
-//	GET  /v1/applications/{id}/deployments
-//	POST /v1/applications/{id}/rollback
+//	POST   /v1/applications
+//	GET    /v1/applications
+//	GET    /v1/applications/{id}
+//	PUT    /v1/applications/{id}
+//	DELETE /v1/applications/{id}
+//	GET    /v1/applications/{id}/env
+//	PUT    /v1/applications/{id}/env
+//	GET    /v1/applications/{id}/storages
+//	PUT    /v1/applications/{id}/storages
+//	POST   /v1/applications/{id}/stop
+//	POST   /v1/applications/{id}/start
+//	POST   /v1/applications/{id}/deploy
+//	GET    /v1/applications/{id}/deployments
+//	POST   /v1/applications/{id}/rollback
 //
 // auth wraps the group (the server passes its RequireAuth); a nil svc or
 // FEATURE_APPLICATIONS=false mounts nothing, so the control plane can call
@@ -87,10 +184,238 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 	h := &handler{svc: svc, userID: userID, logger: slog.Default()}
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
+		protected.Post("/v1/applications", h.createApplication)
+		protected.Get("/v1/applications", h.listApplications)
+		protected.Get("/v1/applications/{id}", h.getApplication)
+		protected.Put("/v1/applications/{id}", h.updateApplication)
+		protected.Delete("/v1/applications/{id}", h.deleteApplication)
+		protected.Get("/v1/applications/{id}/env", h.getEnv)
+		protected.Put("/v1/applications/{id}/env", h.putEnv)
+		protected.Get("/v1/applications/{id}/storages", h.getStorages)
+		protected.Put("/v1/applications/{id}/storages", h.putStorages)
+		protected.Post("/v1/applications/{id}/stop", h.stop)
+		protected.Post("/v1/applications/{id}/start", h.start)
 		protected.Post("/v1/applications/{id}/deploy", h.deploy)
 		protected.Get("/v1/applications/{id}/deployments", h.list)
 		protected.Post("/v1/applications/{id}/rollback", h.rollback)
 	})
+}
+
+// createApplication serves POST /applications: validates the payload, seals the
+// values marked as secrets and stores the application with its configuration in
+// one transaction (201).
+func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	var req createApplicationRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	serverID, ok := applicationServerID(w, req.ServerID)
+	if !ok {
+		return
+	}
+
+	application, err := h.svc.CreateApplication(r.Context(), userID, CreateApplicationInput{
+		Name:       req.Name,
+		Provider:   req.Provider,
+		Repo:       req.Repo,
+		CloneURL:   req.CloneURL,
+		Branch:     req.Branch,
+		BuildPack:  req.BuildPack,
+		BaseDomain: req.BaseDomain,
+		Port:       req.Port,
+		HostPort:   req.HostPort,
+		ServerID:   serverID,
+		Env:        toEnvEntries(req.Env),
+		Storage:    toStorages(req.Storage),
+	})
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, applicationEnvelope{Application: newApplicationResponse(application)})
+}
+
+// listApplications serves GET /applications: the caller's own rows, newest
+// first.
+func (h *handler) listApplications(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	applications, err := h.svc.ListApplications(r.Context(), userID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	response := make([]applicationResponse, 0, len(applications))
+	for _, application := range applications {
+		response = append(response, newApplicationResponse(application))
+	}
+	writeJSON(w, http.StatusOK, applicationListEnvelope{Applications: response})
+}
+
+// getApplication serves GET /applications/{id}. Another user's application
+// answers 404, so IDs cannot be probed.
+func (h *handler) getApplication(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	application, err := h.svc.GetApplication(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, applicationEnvelope{Application: newApplicationResponse(application)})
+}
+
+// updateApplication serves PUT /applications/{id} with the partial body.
+func (h *handler) updateApplication(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	var req updateApplicationRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	in := UpdateApplicationInput{
+		Name:       req.Name,
+		Branch:     req.Branch,
+		BuildPack:  req.BuildPack,
+		BaseDomain: req.BaseDomain,
+		Port:       req.Port,
+		HostPort:   req.HostPort,
+	}
+	if req.ServerID != nil {
+		serverID, parsed := applicationServerID(w, *req.ServerID)
+		if !parsed {
+			return
+		}
+		in.ServerID = &serverID
+	}
+
+	application, err := h.svc.UpdateApplication(r.Context(), userID, appID, in)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, applicationEnvelope{Application: newApplicationResponse(application)})
+}
+
+// deleteApplication serves DELETE /applications/{id}: the service stops the
+// current container best effort and removes the row (204, no body).
+func (h *handler) deleteApplication(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.DeleteApplication(r.Context(), userID, appID); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// getEnv serves GET /applications/{id}/env: plain values and secret references.
+func (h *handler) getEnv(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	entries, err := h.svc.GetEnv(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, envListEnvelope{Env: wireEnvEntries(entries)})
+}
+
+// putEnv serves PUT /applications/{id}/env: replaces the whole collection.
+func (h *handler) putEnv(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	var req envListEnvelope
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	entries, err := h.svc.ReplaceEnv(r.Context(), userID, appID, toEnvEntries(req.Env))
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, envListEnvelope{Env: wireEnvEntries(entries)})
+}
+
+// getStorages serves GET /applications/{id}/storages.
+func (h *handler) getStorages(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	storages, err := h.svc.GetStorages(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, storageListEnvelope{Storage: wireStorages(storages)})
+}
+
+// putStorages serves PUT /applications/{id}/storages: replaces the collection.
+func (h *handler) putStorages(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	var req storageListEnvelope
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	storages, err := h.svc.ReplaceStorages(r.Context(), userID, appID, toStorages(req.Storage))
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, storageListEnvelope{Storage: wireStorages(storages)})
+}
+
+// stop serves POST /applications/{id}/stop: stops the container of the newest
+// deployment and answers with that deployment.
+func (h *handler) stop(w http.ResponseWriter, r *http.Request) {
+	h.control(w, r, false)
+}
+
+// start serves POST /applications/{id}/start: restarts that container.
+func (h *handler) start(w http.ResponseWriter, r *http.Request) {
+	h.control(w, r, true)
+}
+
+// control runs one manual container operation (start when start is true).
+func (h *handler) control(w http.ResponseWriter, r *http.Request, start bool) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	var (
+		deployment Deployment
+		err        error
+	)
+	if start {
+		deployment, err = h.svc.Start(r.Context(), userID, appID)
+	} else {
+		deployment, err = h.svc.Stop(r.Context(), userID, appID)
+	}
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, deploymentEnvelope{Deployment: newDeploymentResponse(deployment)})
 }
 
 // deploy serves POST .../deploy: validates, persists a queued deployment and
@@ -225,6 +550,22 @@ func decodeOptionalBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if len(strings.TrimSpace(string(body))) == 0 {
 		return true
 	}
+	return decodeJSONBody(w, body, dst)
+}
+
+// decodeBody decodes a required JSON body: an empty or malformed body answers
+// 400, so a collection replace can never wipe a collection by accident.
+func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	if err != nil || len(strings.TrimSpace(string(body))) == 0 {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+		return false
+	}
+	return decodeJSONBody(w, body, dst)
+}
+
+// decodeJSONBody decodes body into dst, rejecting unknown fields.
+func decodeJSONBody(w http.ResponseWriter, body []byte, dst any) bool {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
@@ -232,6 +573,105 @@ func decodeOptionalBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// requestTarget resolves the authenticated user and the {id} path parameter in
+// one step, answering 401/400 as appropriate.
+func (h *handler) requestTarget(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return uuid.Nil, uuid.Nil, false
+	}
+	appID, ok := applicationIDParam(w, r)
+	if !ok {
+		return uuid.Nil, uuid.Nil, false
+	}
+	return userID, appID, true
+}
+
+// applicationServerID parses a request's server_id: an empty string means "no
+// server assigned" (uuid.Nil), anything else must be a UUID.
+func applicationServerID(w http.ResponseWriter, raw string) (uuid.UUID, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return uuid.Nil, true
+	}
+	serverID, err := uuid.Parse(raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid server id"})
+		return uuid.Nil, false
+	}
+	return serverID, true
+}
+
+// toEnvEntries maps the wire environment rows to the domain view. The two
+// types are field-identical on purpose, so the conversion fails to compile the
+// moment either side grows a field the other does not carry.
+func toEnvEntries(rows []envEntryRequest) []EnvEntry {
+	entries := make([]EnvEntry, 0, len(rows))
+	for _, row := range rows {
+		entries = append(entries, EnvEntry(row))
+	}
+	return entries
+}
+
+// wireEnvEntries maps the domain environment back to the wire (always a JSON
+// array, even when empty).
+func wireEnvEntries(entries []EnvEntry) []envEntryRequest {
+	rows := make([]envEntryRequest, 0, len(entries))
+	for _, entry := range entries {
+		rows = append(rows, envEntryRequest(entry))
+	}
+	return rows
+}
+
+// toStorages maps the wire storage rows to the domain model.
+func toStorages(rows []storageRequest) []Storage {
+	storages := make([]Storage, 0, len(rows))
+	for _, row := range rows {
+		storages = append(storages, Storage{
+			Name:          row.Name,
+			HostPath:      row.HostPath,
+			ContainerPath: row.ContainerPath,
+		})
+	}
+	return storages
+}
+
+// wireStorages maps the domain storages back to the wire (always a JSON array).
+func wireStorages(storages []Storage) []storageRequest {
+	rows := make([]storageRequest, 0, len(storages))
+	for _, storage := range storages {
+		rows = append(rows, storageRequest{
+			Name:          storage.Name,
+			HostPath:      storage.HostPath,
+			ContainerPath: storage.ContainerPath,
+		})
+	}
+	return rows
+}
+
+// newApplicationResponse maps a domain application to its wire representation.
+func newApplicationResponse(application Application) applicationResponse {
+	response := applicationResponse{
+		ID:         application.ID.String(),
+		Name:       application.Name,
+		Provider:   application.Provider,
+		Repo:       application.Repo,
+		CloneURL:   application.CloneURL,
+		Branch:     application.Branch,
+		BuildPack:  application.BuildPack,
+		BaseDomain: application.BaseDomain,
+		Port:       application.Port,
+		HostPort:   application.HostPort,
+		CreatedAt:  application.CreatedAt,
+		UpdatedAt:  application.UpdatedAt,
+	}
+	if application.ServerID != uuid.Nil {
+		serverID := application.ServerID.String()
+		response.ServerID = &serverID
+	}
+	return response
 }
 
 // newDeploymentResponse maps a domain deployment to its wire representation.

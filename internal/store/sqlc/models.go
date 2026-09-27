@@ -48,6 +48,30 @@ type ApplicationWebhook struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Database struct {
+	ID          pgtype.UUID        `json:"id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	ServerID    pgtype.UUID        `json:"server_id"`
+	Name        string             `json:"name"`
+	Engine      string             `json:"engine"`
+	Version     string             `json:"version"`
+	Status      string             `json:"status"`
+	ContainerID string             `json:"container_id"`
+	PublicPort  int32              `json:"public_port"`
+	StoragePath string             `json:"storage_path"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
+}
+
+type DatabaseSecret struct {
+	ID         pgtype.UUID        `json:"id"`
+	DatabaseID pgtype.UUID        `json:"database_id"`
+	Key        string             `json:"key"`
+	Ciphertext string             `json:"ciphertext"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type Deployment struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`

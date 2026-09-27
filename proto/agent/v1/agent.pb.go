@@ -1434,12 +1434,13 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\bRegister\x12\x19.agent.v1.RegisterRequest\x1a\x1a.agent.v1.RegisterResponse\x12F\n" +
 	"\tHeartbeat\x12\x1a.agent.v1.HeartbeatRequest\x1a\x1b.agent.v1.HeartbeatResponse(\x012S\n" +
 	"\rUpdateService\x12B\n" +
-	"\rRequestUpdate\x12\x17.agent.v1.UpdateRequest\x1a\x18.agent.v1.UpdateResponse2\x9a\x05\n" +
+	"\rRequestUpdate\x12\x17.agent.v1.UpdateRequest\x1a\x18.agent.v1.UpdateResponse2\xf2\x05\n" +
 	"\rDockerService\x12S\n" +
 	"\x0eListContainers\x12\x1f.agent.v1.ListContainersRequest\x1a .agent.v1.ListContainersResponse\x12U\n" +
 	"\x0eStartContainer\x12 .agent.v1.ContainerActionRequest\x1a!.agent.v1.ContainerActionResponse\x12T\n" +
 	"\rStopContainer\x12 .agent.v1.ContainerActionRequest\x1a!.agent.v1.ContainerActionResponse\x12W\n" +
-	"\x10RestartContainer\x12 .agent.v1.ContainerActionRequest\x1a!.agent.v1.ContainerActionResponse\x12D\n" +
+	"\x10RestartContainer\x12 .agent.v1.ContainerActionRequest\x1a!.agent.v1.ContainerActionResponse\x12V\n" +
+	"\x0fRemoveContainer\x12 .agent.v1.ContainerActionRequest\x1a!.agent.v1.ContainerActionResponse\x12D\n" +
 	"\tPullImage\x12\x1a.agent.v1.PullImageRequest\x1a\x1b.agent.v1.PullImageResponse\x12V\n" +
 	"\x0fCreateContainer\x12 .agent.v1.CreateContainerRequest\x1a!.agent.v1.ContainerActionResponse\x12O\n" +
 	"\bRunImage\x12 .agent.v1.CreateContainerRequest\x1a!.agent.v1.ContainerActionResponse\x12?\n" +
@@ -1507,25 +1508,27 @@ var file_agent_v1_agent_proto_depIdxs = []int32{
 	9,  // 14: agent.v1.DockerService.StartContainer:input_type -> agent.v1.ContainerActionRequest
 	9,  // 15: agent.v1.DockerService.StopContainer:input_type -> agent.v1.ContainerActionRequest
 	9,  // 16: agent.v1.DockerService.RestartContainer:input_type -> agent.v1.ContainerActionRequest
-	11, // 17: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
-	13, // 18: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
-	13, // 19: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
-	14, // 20: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
-	16, // 21: agent.v1.BuildService.BuildImage:input_type -> agent.v1.BuildImageRequest
-	1,  // 22: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
-	3,  // 23: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
-	5,  // 24: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
-	8,  // 25: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
-	10, // 26: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
-	10, // 27: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
-	10, // 28: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
-	12, // 29: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
-	10, // 30: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
-	10, // 31: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
-	15, // 32: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
-	18, // 33: agent.v1.BuildService.BuildImage:output_type -> agent.v1.BuildImageResponse
-	22, // [22:34] is the sub-list for method output_type
-	10, // [10:22] is the sub-list for method input_type
+	9,  // 17: agent.v1.DockerService.RemoveContainer:input_type -> agent.v1.ContainerActionRequest
+	11, // 18: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
+	13, // 19: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
+	13, // 20: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
+	14, // 21: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
+	16, // 22: agent.v1.BuildService.BuildImage:input_type -> agent.v1.BuildImageRequest
+	1,  // 23: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
+	3,  // 24: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
+	5,  // 25: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
+	8,  // 26: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
+	10, // 27: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
+	10, // 28: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
+	10, // 29: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
+	10, // 30: agent.v1.DockerService.RemoveContainer:output_type -> agent.v1.ContainerActionResponse
+	12, // 31: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
+	10, // 32: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
+	10, // 33: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
+	15, // 34: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
+	18, // 35: agent.v1.BuildService.BuildImage:output_type -> agent.v1.BuildImageResponse
+	23, // [23:36] is the sub-list for method output_type
+	10, // [10:23] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name
 	10, // [10:10] is the sub-list for extension extendee
 	0,  // [0:10] is the sub-list for field type_name

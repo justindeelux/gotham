@@ -59,6 +59,7 @@ type mockDockerClient struct {
 	starts    int
 	stops     int
 	restarts  int
+	removes   int
 	pulls     int
 	runs      int
 	listResp  *agentv1.ListContainersResponse
@@ -101,6 +102,13 @@ func (m *mockDockerClient) RestartContainer(context.Context, *agentv1.ContainerA
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.restarts++
+	return &agentv1.ContainerActionResponse{}, m.actionErr
+}
+
+func (m *mockDockerClient) RemoveContainer(context.Context, *agentv1.ContainerActionRequest, ...grpc.CallOption) (*agentv1.ContainerActionResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.removes++
 	return &agentv1.ContainerActionResponse{}, m.actionErr
 }
 
@@ -297,6 +305,7 @@ func TestMutationsInvalidateCache(t *testing.T) {
 		"start":   func() error { return svc.Start(context.Background(), server.ID, "abc123") },
 		"stop":    func() error { return svc.Stop(context.Background(), server.ID, "abc123") },
 		"restart": func() error { return svc.Restart(context.Background(), server.ID, "abc123") },
+		"remove":  func() error { return svc.Remove(context.Background(), server.ID, "abc123") },
 		"pull":    func() error { return svc.Pull(context.Background(), server.ID, "nginx:latest") },
 		"run": func() error {
 			_, err := svc.Run(context.Background(), server.ID, RunOptions{Image: "nginx:latest"})
@@ -383,6 +392,9 @@ func TestValidationRejectsBadInput(t *testing.T) {
 	}
 	if err := svc.Restart(ctx, server.ID, ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("Restart empty id: %v, want ErrValidation", err)
+	}
+	if err := svc.Remove(ctx, server.ID, " "); !errors.Is(err, ErrValidation) {
+		t.Errorf("Remove blank id: %v, want ErrValidation", err)
 	}
 	if err := svc.Pull(ctx, server.ID, ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("Pull empty image: %v, want ErrValidation", err)

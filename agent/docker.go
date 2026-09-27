@@ -95,6 +95,32 @@ func (c *DockerClient) Restart(ctx context.Context, id string) error {
 	return c.action(ctx, id, "restart")
 }
 
+// Remove deletes the container with the given id, forcing a stop when it is
+// still running. A container that is already gone (404) is reported as
+// success so callers can treat removal as idempotent. Named volumes are left
+// in place: only anonymous volumes are cleaned up (v=true), which is what
+// makes "delete the resource, keep the data" possible.
+func (c *DockerClient) Remove(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("docker: container id is required")
+	}
+	path := "/containers/" + url.PathEscape(id) + "?force=true&v=true"
+	response, err := c.doRaw(ctx, http.MethodDelete, path, nil, "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, response.Body)
+		return nil
+	}
+	if !dockerOK(response.StatusCode) {
+		return statusError(http.MethodDelete, path, response)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	return nil
+}
+
 // PullImage pulls image from its registry, consuming the progress stream. An
 // error reported inside the progress payload is returned as an error.
 func (c *DockerClient) PullImage(ctx context.Context, image string) error {

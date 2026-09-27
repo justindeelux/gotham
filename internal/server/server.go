@@ -14,12 +14,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/containers"
+	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/server/ws"
+	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/webhooks"
 )
@@ -161,9 +164,11 @@ func (s *Server) routes() (http.Handler, error) {
 		}
 
 		// Container management routes to the node agent; a nil service (no
-		// registry) mounts nothing. The agent dialer stays unwired until the
-		// P3-CONN mTLS dial lands (see containers.Service.SetDial).
-		containers.Mount(api, s.RequireAuth, containers.NewDefaultService(s.servers, s.cfg.Snapshot().Redis.Addr))
+		// registry) mounts nothing. The mTLS agent dialer is plugged in here
+		// (the P3-CONN seam) so the container routes and the databases
+		// provisioning path both reach a node agent.
+		containerService := s.containerService()
+		containers.Mount(api, s.RequireAuth, containerService)
 
 		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
 		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger)
@@ -183,6 +188,11 @@ func (s *Server) routes() (http.Handler, error) {
 		// endpoint plus authenticated hook management. It reuses the deploy
 		// service instance above so both share one worker pool.
 		webhooks.Mount(api, s.RequireAuth, UserIDFromContext, s.webhookService(providerSvc))
+
+		// Managed databases (BE-5.1): same container service as above, so a
+		// database container is created through the shared container service
+		// rather than a second agent path.
+		databases.Mount(api, s.RequireAuth, UserIDFromContext, s.databaseService(containerService))
 	})
 
 	spa, err := newSPAHandler()
@@ -240,6 +250,47 @@ func (s *Server) webhookService(providerSvc providers.ProviderService) *webhooks
 		Deployer:  deployer,
 		Secret:    s.cfg.Snapshot().SecretKey,
 		Logger:    s.logger,
+	})
+}
+
+// containerDialer is the mTLS dial implemented by *servers.ServerService. The
+// HTTP layer type-asserts its server registry to this interface, so tests that
+// pass a fake registry simply leave the dialer unwired instead of forcing a
+// wider interface change (deploy.AgentDialer declares the same contract).
+type containerDialer interface {
+	DialDockerClient(ctx context.Context, id uuid.UUID, opts ...servers.DockerDialOption) (*servers.DockerClient, error)
+}
+
+// containerService builds the shared container service for the HTTP wiring and
+// plugs the agent dialer, which is what makes container operations (and
+// database provisioning through them) reach a node. It returns a nil
+// interface when there is no server registry, so Mount stays a no-op.
+func (s *Server) containerService() containers.ContainerService {
+	service := containers.NewDefaultService(s.servers, s.cfg.Snapshot().Redis.Addr)
+	if service == nil {
+		return nil
+	}
+	if dialer, ok := s.servers.(containerDialer); ok {
+		service.SetDial(func(ctx context.Context, server *servers.Server) (containers.DockerClient, error) {
+			return dialer.DialDockerClient(ctx, server.ID)
+		})
+	}
+	return service
+}
+
+// databaseService builds the databases domain service for the HTTP wiring: the
+// database, the shared container service and the key that opens sealed
+// credentials. It returns nil (no database, no container service, or
+// FEATURE_DATABASES=false) so databases.Mount is a no-op.
+func (s *Server) databaseService(containerService containers.ContainerService) databases.DatabaseService {
+	if s.persistence == nil || containerService == nil {
+		return nil
+	}
+	return databases.NewDefaultService(databases.Config{
+		Store:      s.persistence,
+		Containers: containerService,
+		Secret:     s.cfg.Snapshot().SecretKey,
+		Logger:     s.logger,
 	})
 }
 

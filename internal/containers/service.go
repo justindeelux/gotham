@@ -31,6 +31,10 @@ type ContainerService interface {
 	Start(ctx context.Context, serverID uuid.UUID, containerID string) error
 	Stop(ctx context.Context, serverID uuid.UUID, containerID string) error
 	Restart(ctx context.Context, serverID uuid.UUID, containerID string) error
+	// Remove force-removes a container (idempotent: an already-gone container
+	// is not an error). Named volumes are kept, so removing a container never
+	// deletes its data.
+	Remove(ctx context.Context, serverID uuid.UUID, containerID string) error
 	Pull(ctx context.Context, serverID uuid.UUID, image string) error
 	Run(ctx context.Context, serverID uuid.UUID, opts RunOptions) (string, error)
 }
@@ -198,6 +202,26 @@ func (s *Service) Restart(ctx context.Context, serverID uuid.UUID, containerID s
 	defer cancel()
 
 	if _, err := client.RestartContainer(ctx, &agentv1.ContainerActionRequest{ContainerId: containerID}); err != nil {
+		return mapRPCError(err)
+	}
+	s.invalidate(ctx, serverID)
+	return nil
+}
+
+// Remove force-removes a container and invalidates the cached list. The agent
+// treats an already-gone container as success, so a retry of a delete stays
+// idempotent; named volumes survive the removal.
+func (s *Service) Remove(ctx context.Context, serverID uuid.UUID, containerID string) error {
+	if strings.TrimSpace(containerID) == "" {
+		return fmt.Errorf("%w: container id is required", ErrValidation)
+	}
+	client, cancel, err := s.client(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	if _, err := client.RemoveContainer(ctx, &agentv1.ContainerActionRequest{ContainerId: containerID}); err != nil {
 		return mapRPCError(err)
 	}
 	s.invalidate(ctx, serverID)

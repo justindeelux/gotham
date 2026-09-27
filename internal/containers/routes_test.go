@@ -57,6 +57,11 @@ func (f *fakeService) Restart(_ context.Context, _ uuid.UUID, _ string) error {
 	return f.actionErr
 }
 
+func (f *fakeService) Remove(_ context.Context, _ uuid.UUID, _ string) error {
+	f.record("remove")
+	return f.actionErr
+}
+
 func (f *fakeService) Pull(_ context.Context, _ uuid.UUID, image string) error {
 	f.record("pull")
 	if image == "" {

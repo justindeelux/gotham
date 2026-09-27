@@ -26,6 +26,7 @@ type dockerClient interface {
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string) error
 	Restart(ctx context.Context, id string) error
+	Remove(ctx context.Context, id string) error
 	PullImage(ctx context.Context, image string) error
 	CreateContainer(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	RunImage(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
@@ -69,6 +70,13 @@ func (s *DockerServer) StopContainer(ctx context.Context, req *agentv1.Container
 // RestartContainer restarts a container.
 func (s *DockerServer) RestartContainer(ctx context.Context, req *agentv1.ContainerActionRequest) (*agentv1.ContainerActionResponse, error) {
 	return s.containerAction(ctx, req, "restart", s.docker.Restart)
+}
+
+// RemoveContainer deletes a container on the node. Removal is idempotent: a
+// container that is already gone is reported as success, so the control plane
+// can retry a delete without checking the container first.
+func (s *DockerServer) RemoveContainer(ctx context.Context, req *agentv1.ContainerActionRequest) (*agentv1.ContainerActionResponse, error) {
+	return s.containerAction(ctx, req, "remove", s.docker.Remove)
 }
 
 // PullImage pulls an image onto the node.

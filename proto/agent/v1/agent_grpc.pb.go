@@ -283,6 +283,7 @@ const (
 	DockerService_StartContainer_FullMethodName   = "/agent.v1.DockerService/StartContainer"
 	DockerService_StopContainer_FullMethodName    = "/agent.v1.DockerService/StopContainer"
 	DockerService_RestartContainer_FullMethodName = "/agent.v1.DockerService/RestartContainer"
+	DockerService_RemoveContainer_FullMethodName  = "/agent.v1.DockerService/RemoveContainer"
 	DockerService_PullImage_FullMethodName        = "/agent.v1.DockerService/PullImage"
 	DockerService_CreateContainer_FullMethodName  = "/agent.v1.DockerService/CreateContainer"
 	DockerService_RunImage_FullMethodName         = "/agent.v1.DockerService/RunImage"
@@ -300,6 +301,10 @@ type DockerServiceClient interface {
 	StartContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
 	StopContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
 	RestartContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
+	// RemoveContainer deletes a container (force + remove anonymous volumes).
+	// Named volumes are never removed: deleting a resource must not delete its
+	// data (Phase 5 database soft delete relies on this).
+	RemoveContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
 	PullImage(ctx context.Context, in *PullImageRequest, opts ...grpc.CallOption) (*PullImageResponse, error)
 	CreateContainer(ctx context.Context, in *CreateContainerRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
 	RunImage(ctx context.Context, in *CreateContainerRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
@@ -350,6 +355,16 @@ func (c *dockerServiceClient) RestartContainer(ctx context.Context, in *Containe
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ContainerActionResponse)
 	err := c.cc.Invoke(ctx, DockerService_RestartContainer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) RemoveContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ContainerActionResponse)
+	err := c.cc.Invoke(ctx, DockerService_RemoveContainer_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -416,6 +431,10 @@ type DockerServiceServer interface {
 	StartContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
 	StopContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
 	RestartContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
+	// RemoveContainer deletes a container (force + remove anonymous volumes).
+	// Named volumes are never removed: deleting a resource must not delete its
+	// data (Phase 5 database soft delete relies on this).
+	RemoveContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
 	PullImage(context.Context, *PullImageRequest) (*PullImageResponse, error)
 	CreateContainer(context.Context, *CreateContainerRequest) (*ContainerActionResponse, error)
 	RunImage(context.Context, *CreateContainerRequest) (*ContainerActionResponse, error)
@@ -443,6 +462,9 @@ func (UnimplementedDockerServiceServer) StopContainer(context.Context, *Containe
 }
 func (UnimplementedDockerServiceServer) RestartContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RestartContainer not implemented")
+}
+func (UnimplementedDockerServiceServer) RemoveContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveContainer not implemented")
 }
 func (UnimplementedDockerServiceServer) PullImage(context.Context, *PullImageRequest) (*PullImageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PullImage not implemented")
@@ -549,6 +571,24 @@ func _DockerService_RestartContainer_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DockerService_RemoveContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerActionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).RemoveContainer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_RemoveContainer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).RemoveContainer(ctx, req.(*ContainerActionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DockerService_PullImage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PullImageRequest)
 	if err := dec(in); err != nil {
@@ -636,6 +676,10 @@ var DockerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RestartContainer",
 			Handler:    _DockerService_RestartContainer_Handler,
+		},
+		{
+			MethodName: "RemoveContainer",
+			Handler:    _DockerService_RemoveContainer_Handler,
 		},
 		{
 			MethodName: "PullImage",

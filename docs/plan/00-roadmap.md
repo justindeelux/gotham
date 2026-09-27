@@ -60,7 +60,7 @@ graph LR
 
 ### Model policy
 - Code review: `openrouter/z-ai/glm-5.3-prime` — contract design (proto, service interfaces, orchestration state machine, template engine) and all review gates (G0/G1/G2).
-- Implementation (coding): `deepseek v4.1 flash` / `Muse Spark 1.3 Contributor` / `MiMo-V2.6-Flash (go)` — implementation following agreed patterns. Task fit: Go/backend work (`internal/`, `agent/`, `proto/`, e2e scripts) → `MiMo-V2.6-Flash (go)`; spec-driven contract/API implementation → `deepseek v4.1 flash`; Vue/layout/composable/copy UI work (`web/`) → `Muse Spark 1.3 Contributor`. Subagent model IDs (exact): `opencode/mimo-v2.6-flash-free` (Go/backend), `opencode-go/deepseek-v4.1-flash`, `opencode-go/muse-spark-1.3-contributor`.
+- Implementation (coding): `deepseek v4.1 flash` / `Muse Spark 1.3 Contributor` / `MiMo-V2.6-Flash (go)` — implementation following agreed patterns. Task fit: Go/backend work (`internal/`, `agent/`, `proto/`, e2e scripts) → `MiMo-V2.6-Flash (go)`; spec-driven contract/API implementation → `deepseek v4.1 flash`; Vue/layout/composable/copy UI work (`web/`) → `Muse Spark 1.3 Contributor`. Subagent model IDs (exact): `opencode-go/mimo-v2.6-flash` (Go/backend), `opencode-go/deepseek-v4.1-flash`, `opencode-go/muse-spark-1.3-contributor`.
 - ⭐ = tasks requiring the strongest review model for design; unmarked tasks use the coding models.
 
 ### Phase gate (continuous mode — owner waiver from Phase 3 onward)

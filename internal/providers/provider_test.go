@@ -98,35 +98,6 @@ func (f *fakeRepo) ListCachedRepos(_ context.Context, providerID uuid.UUID) ([]R
 	return f.cached[providerID], nil
 }
 
-// fakeSource is a SourceProvider whose results are fixed.
-type fakeSource struct {
-	name       string
-	repos      []Repo
-	branches   []Branch
-	listErr    error
-	branchErr  error
-	exchanged  *oauth2.Token
-	webhookErr error
-}
-
-func (f *fakeSource) Name() string { return f.name }
-
-func (f *fakeSource) ExchangeToken(context.Context, string) (*oauth2.Token, error) {
-	return f.exchanged, nil
-}
-
-func (f *fakeSource) ListRepos(context.Context, *oauth2.Token) ([]Repo, error) {
-	return f.repos, f.listErr
-}
-
-func (f *fakeSource) ListBranches(context.Context, *oauth2.Token, string) ([]Branch, error) {
-	return f.branches, f.branchErr
-}
-
-func (f *fakeSource) CreateWebhook(context.Context, *oauth2.Token, string, Webhook) error {
-	return f.webhookErr
-}
-
 // serve starts a test HTTP server and returns it.
 func serve(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()

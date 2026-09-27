@@ -26,12 +26,14 @@ import (
 // read it. Base64 keeps the wire ASCII, so the artifact survives byte for
 // byte, while the declared encoded size still streams without buffering. A
 // base64 frame ends exactly at its declared size: the end marker must follow
-// immediately (zero separator bytes), so an under-declared payload or extra
-// encoded input is rejected instead of silently truncated. The plain
-// GOTHAM-BACKUP-PAYLOAD marker remains supported for frames with no byte
-// payload (restore and staging jobs announce zero) and for
-// backwards-compatible callers; the markers carry the run id so output of an
-// earlier container can never be mistaken for this one.
+// immediately (zero separator bytes), the encoded payload itself is unwrapped
+// (no CR/LF), and a job emits exactly one frame, so an under-declared payload,
+// extra encoded input or a repeated same-run framing sequence is rejected
+// instead of silently truncated or discarded. The plain GOTHAM-BACKUP-PAYLOAD
+// marker remains supported for frames with no byte payload (restore and
+// staging jobs announce zero) and for backwards-compatible callers; the
+// markers carry the run id so output of an earlier container can never be
+// mistaken for this one.
 const (
 	jobStartPrefix      = "GOTHAM-BACKUP-START "
 	jobPayloadPrefix    = "GOTHAM-BACKUP-PAYLOAD "
@@ -86,6 +88,11 @@ type jobCollector struct {
 	base64 bool
 	carry  []byte
 	padded bool
+
+	// scan carries the tail of post-frame output between writes so a second
+	// same-run framing sequence is detected even when it is split across
+	// chunks. It never holds more than the start marker's length.
+	scan []byte
 
 	ok     bool
 	status string
@@ -195,6 +202,12 @@ func (c *jobCollector) step() bool {
 
 	case jobDone:
 		if len(c.buf) > 0 {
+			if c.detectSecondFrame(c.buf) {
+				c.err = fmt.Errorf("databases: job emitted a second completion frame")
+				c.buf = nil
+				c.scan = nil
+				return false
+			}
 			c.keepNoise(string(c.buf))
 			c.buf = nil
 		}
@@ -253,6 +266,14 @@ func (c *jobCollector) writePayload(chunk []byte) error {
 		c.written += int64(len(chunk))
 		return nil
 	}
+	// The wire format is explicitly unwrapped: the declared payload must not
+	// contain CR/LF, which the standard decoder would silently ignore in one
+	// batch and the padding state would reject in another. Rejecting every
+	// payload chunk here keeps validity independent of how Docker splits the
+	// writes.
+	if bytes.ContainsAny(chunk, "\r\n") {
+		return fmt.Errorf("databases: base64 job payload contains a line break")
+	}
 	c.carry = append(c.carry, chunk...)
 	full := len(c.carry) - len(c.carry)%4
 	if full == 0 {
@@ -278,6 +299,24 @@ func (c *jobCollector) writePayload(chunk []byte) error {
 	c.written += int64(count)
 	c.carry = append(c.carry[:0], c.carry[full:]...)
 	return nil
+}
+
+// detectSecondFrame reports whether another same-run start marker appears in
+// tail once the bytes carried from previous writes are prepended. Real jobs
+// emit exactly one frame, so a second start/payload/end sequence is a producer
+// violation; it fails the frame while bounded post-frame diagnostics remain
+// allowed.
+func (c *jobCollector) detectSecondFrame(tail []byte) bool {
+	needle := jobStartPrefix + c.runID
+	scan := append(c.scan, tail...)
+	if bytes.Contains(scan, []byte(needle)) {
+		return true
+	}
+	if keep := len(needle) - 1; len(scan) > keep {
+		scan = scan[len(scan)-keep:]
+	}
+	c.scan = append(c.scan[:0], scan...)
+	return false
 }
 
 // takeLine removes the first complete line from the buffer. ok is false when

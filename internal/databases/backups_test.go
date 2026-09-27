@@ -499,6 +499,82 @@ func TestJobCollectorBase64KeepsPostFrameDiagnostics(t *testing.T) {
 	}
 }
 
+// TestJobCollectorRejectsLineBreaksInBase64Payload pins R2: the wire payload is
+// explicitly unwrapped, so CR/LF inside the declared size must be rejected in
+// one write and at every split point, instead of being silently ignored by the
+// standard decoder in a single batch.
+func TestJobCollectorRejectsLineBreaksInBase64Payload(t *testing.T) {
+	for _, lineBreak := range []string{"\n\n\n\n", "\r\r\r\r", "\r\n\r\n"} {
+		frame := jobStartPrefix + "run-1\n" + jobPayloadB64Prefix + "run-1 8\n" +
+			"aA==" + lineBreak + jobEndPrefix + "run-1 ok\n"
+		for split := 0; split <= len(frame); split++ {
+			collector := newJobCollector("run-1", nil)
+			if _, err := collector.Write([]byte(frame[:split])); err != nil {
+				t.Fatalf("break %q split %d: write head: %v", lineBreak, split, err)
+			}
+			if _, err := collector.Write([]byte(frame[split:])); err != nil {
+				t.Fatalf("break %q split %d: write tail: %v", lineBreak, split, err)
+			}
+			if err := collector.Result(); err == nil {
+				t.Fatalf("line break %q accepted at split %d", lineBreak, split)
+			}
+		}
+	}
+}
+
+// TestJobCollectorRejectsRepeatedCompleteFrame pins R3: a job emits exactly one
+// frame, so a second same-run start/payload/end sequence after a completed
+// frame fails the frame whether it arrives in one write or across writes,
+// while bounded post-frame diagnostics remain allowed.
+func TestJobCollectorRejectsRepeatedCompleteFrame(t *testing.T) {
+	head := jobStartPrefix + "run-1\n" + jobPayloadB64Prefix + "run-1 4\n"
+	end := jobEndPrefix + "run-1 ok\n"
+	first := head + "aA==" + end
+	second := head + "aQ==" + end
+	failure := jobStartPrefix + "run-1\n" + jobEndPrefix + "run-1 fail 9\n"
+	cases := []struct {
+		name   string
+		writes []string
+	}{
+		{name: "duplicate frame one write", writes: []string{first + second}},
+		{name: "duplicate frame split", writes: []string{first, second}},
+		{name: "success then failure one write", writes: []string{first + failure}},
+		{name: "success then failure split", writes: []string{first, failure}},
+		{name: "start marker split across writes", writes: []string{
+			first + second[:len(jobStartPrefix)+3],
+			second[len(jobStartPrefix)+3:],
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			collector := newJobCollector("run-1", nil)
+			for _, write := range test.writes {
+				if _, err := collector.Write([]byte(write)); err != nil {
+					t.Fatalf("Write: %v", err)
+				}
+			}
+			if err := collector.Result(); err == nil {
+				t.Fatal("repeated same-run frame accepted")
+			}
+		})
+	}
+
+	// Harmless diagnostics after the frame stay allowed and bounded.
+	collector := newJobCollector("run-1", nil)
+	if _, err := collector.Write([]byte(first)); err != nil {
+		t.Fatalf("Write frame: %v", err)
+	}
+	if _, err := collector.Write([]byte("engine: shutdown complete\n")); err != nil {
+		t.Fatalf("Write diagnostics: %v", err)
+	}
+	if err := collector.Result(); err != nil {
+		t.Fatalf("legitimate diagnostics rejected: %v", err)
+	}
+	if !strings.Contains(collector.Diagnostics(), "shutdown complete") {
+		t.Errorf("diagnostics dropped: %q", collector.Diagnostics())
+	}
+}
+
 func TestJobCollectorRejectsCorruptBase64(t *testing.T) {
 	collector := newJobCollector("run-1", nil)
 	frame := jobFrameB64("run-1", []byte("payload"))

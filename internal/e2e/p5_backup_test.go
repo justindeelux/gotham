@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -94,7 +93,16 @@ type p5Harness struct {
 // backup id before the test would notice through SQL polling.
 type p5LogWatcher struct {
 	next slog.Handler
+	// state is shared by every derived handler, so WithAttrs/WithGroup clones
+	// synchronize on the same mutex and maps.
+	state *p5LogWatcherState
+	// boundBackupID is the backup id attached with Logger.With, used when a
+	// record does not carry the attribute itself.
+	boundBackupID string
+}
 
+// p5LogWatcherState is the mutex-guarded outcome store shared by all clones.
+type p5LogWatcherState struct {
 	mu        sync.Mutex
 	failures  map[string]string
 	completed map[string]bool
@@ -103,9 +111,11 @@ type p5LogWatcher struct {
 // newP5LogWatcher wraps next with the restore-outcome recorder.
 func newP5LogWatcher(next slog.Handler) *p5LogWatcher {
 	return &p5LogWatcher{
-		next:      next,
-		failures:  make(map[string]string),
-		completed: make(map[string]bool),
+		next: next,
+		state: &p5LogWatcherState{
+			failures:  make(map[string]string),
+			completed: make(map[string]bool),
+		},
 	}
 }
 
@@ -115,9 +125,10 @@ func (w *p5LogWatcher) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 // Handle implements slog.Handler: it records restore outcomes and forwards
-// every record unchanged.
+// every record unchanged. A backup id bound with Logger.With is used when the
+// record itself does not carry one.
 func (w *p5LogWatcher) Handle(ctx context.Context, record slog.Record) error {
-	var backupID, errText string
+	backupID, errText := w.boundBackupID, ""
 	record.Attrs(func(attr slog.Attr) bool {
 		switch attr.Key {
 		case "backup_id":
@@ -130,45 +141,81 @@ func (w *p5LogWatcher) Handle(ctx context.Context, record slog.Record) error {
 	if backupID != "" {
 		switch record.Message {
 		case "databases: restore failed":
-			w.mu.Lock()
-			w.failures[backupID] = errText
-			w.mu.Unlock()
+			w.state.mu.Lock()
+			w.state.failures[backupID] = errText
+			w.state.mu.Unlock()
 		case "databases: restore completed":
-			w.mu.Lock()
-			w.completed[backupID] = true
-			w.mu.Unlock()
+			w.state.mu.Lock()
+			w.state.completed[backupID] = true
+			w.state.mu.Unlock()
 		}
 	}
 	return w.next.Handle(ctx, record)
 }
 
-// WithAttrs implements slog.Handler, sharing the recorded state.
+// WithAttrs implements slog.Handler: the clone shares the recorded state and
+// remembers a bound backup id.
 func (w *p5LogWatcher) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &p5LogWatcher{next: w.next.WithAttrs(attrs), failures: w.failures, completed: w.completed}
+	clone := &p5LogWatcher{next: w.next.WithAttrs(attrs), state: w.state, boundBackupID: w.boundBackupID}
+	for _, attr := range attrs {
+		if attr.Key == "backup_id" {
+			clone.boundBackupID = attr.Value.String()
+		}
+	}
+	return clone
 }
 
 // WithGroup implements slog.Handler, sharing the recorded state.
 func (w *p5LogWatcher) WithGroup(name string) slog.Handler {
-	return &p5LogWatcher{next: w.next.WithGroup(name), failures: w.failures, completed: w.completed}
+	return &p5LogWatcher{next: w.next.WithGroup(name), state: w.state, boundBackupID: w.boundBackupID}
 }
 
 // restoreFailure reports the recorded terminal failure of a backup's restore.
 func (w *p5LogWatcher) restoreFailure(backupID string) (string, bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	message, ok := w.failures[backupID]
+	w.state.mu.Lock()
+	defer w.state.mu.Unlock()
+	message, ok := w.state.failures[backupID]
 	return message, ok
 }
 
-// p5RedactedDSN strips credential-bearing userinfo from a DSN before it can
-// reach a test log or an error message. An unparseable DSN is fully redacted.
-func p5RedactedDSN(dsn string) string {
-	parsed, err := url.Parse(dsn)
-	if err != nil {
-		return "<redacted DSN>"
+// TestP5LogWatcherBoundBackupID proves a backup id attached with Logger.With is
+// honored when the record itself does not repeat the attribute, and that a
+// record-level attribute still wins.
+func TestP5LogWatcherBoundBackupID(t *testing.T) {
+	watcher := newP5LogWatcher(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(watcher).With("backup_id", "backup-7")
+	logger.Error("databases: restore failed", "error", "boom")
+	message, ok := watcher.restoreFailure("backup-7")
+	if !ok || !strings.Contains(message, "boom") {
+		t.Fatalf("bound backup id not recorded: ok=%v message=%q", ok, message)
 	}
-	parsed.User = nil
-	return parsed.String()
+	logger.Error("databases: restore failed", "backup_id", "backup-8", "error", "later")
+	if message, ok := watcher.restoreFailure("backup-8"); !ok || !strings.Contains(message, "later") {
+		t.Fatalf("record backup id not recorded: ok=%v message=%q", ok, message)
+	}
+}
+
+// TestP5LogWatcherDerivedHandlerRace pins R4: a logger derived with With must
+// share the watcher's mutex with the original, so logging and polling cannot
+// race (run under -race).
+func TestP5LogWatcherDerivedHandlerRace(t *testing.T) {
+	watcher := newP5LogWatcher(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(watcher).With("component", "backup")
+	var wait sync.WaitGroup
+	wait.Add(1)
+	go func() {
+		defer wait.Done()
+		for i := 0; i < 1000; i++ {
+			logger.Error("databases: restore failed", "backup_id", "backup-1", "error", "dummy")
+		}
+	}()
+	for i := 0; i < 1000; i++ {
+		watcher.restoreFailure("backup-1")
+	}
+	wait.Wait()
+	if message, ok := watcher.restoreFailure("backup-1"); !ok || !strings.Contains(message, "dummy") {
+		t.Fatalf("derived handler did not record the failure: ok=%v message=%q", ok, message)
+	}
 }
 
 // p5Database is the database half of the API wire format.
@@ -263,15 +310,17 @@ func newP5Harness(t *testing.T) *p5Harness {
 
 	// 1. PostgreSQL: the suite proves the real schema — databases, secrets,
 	// backups and targets. After an explicit GOTHAM_E2E=1 a broken database is
-	// a failure, not a skip; diagnostics never print credential-bearing DSNs.
+	// a failure, not a skip. The diagnostic is deliberately generic: neither
+	// the DSN nor the raw connection/migration error may reach a log, whatever
+	// format the operator supplied (URL userinfo, keyword DSN or query
+	// password), because pgx/goose errors can embed the connection string.
 	dsn := p4DSN()
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Fatalf("GOTHAM_E2E=1 requires a migrated Postgres at %s: %v (run: docker compose -f deploy/compose.dev.yml up -d)",
-			p5RedactedDSN(dsn), err)
+		t.Fatalf("GOTHAM_E2E=1 requires a reachable, migrated Postgres (run: docker compose -f deploy/compose.dev.yml up -d); check GOTHAM_TEST_DSN")
 	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
-		t.Fatalf("GOTHAM_E2E=1 requires a reachable Postgres at %s: %v", p5RedactedDSN(dsn), err)
+		t.Fatalf("GOTHAM_E2E=1 requires a reachable Postgres (run: docker compose -f deploy/compose.dev.yml up -d); check GOTHAM_TEST_DSN")
 	}
 	t.Cleanup(pool.Close)
 	st := store.New(pool)

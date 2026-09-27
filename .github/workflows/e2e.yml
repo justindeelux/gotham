@@ -1,0 +1,100 @@
+name: E2E
+
+# Gate G1 (QA-4.1): the Phase 4 end-to-end suite drives a real control plane —
+# PostgreSQL, Redis and a node agent on the runner's Docker daemon — so it runs
+# in its own workflow instead of the unit-test job. The tests are gated by
+# GOTHAM_E2E=1 and skip when a precondition is missing, which keeps ci.yml green
+# on machines without Docker.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "internal/deploy/**"
+      - "internal/webhooks/**"
+      - "internal/builds/**"
+      - "internal/store/**"
+      - "internal/e2e/**"
+      - "agent/**"
+      - "proto/**"
+      - ".github/workflows/e2e.yml"
+  pull_request:
+    paths:
+      - "internal/deploy/**"
+      - "internal/webhooks/**"
+      - "internal/builds/**"
+      - "internal/store/**"
+      - "internal/e2e/**"
+      - "agent/**"
+      - "proto/**"
+      - ".github/workflows/e2e.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: phase 4 end-to-end (GOTHAM_E2E=1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: gotham
+          POSTGRES_PASSWORD: gotham
+          POSTGRES_DB: gotham
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U gotham -d gotham"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      GOTHAM_DATABASE_DSN: postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable
+      GOTHAM_TEST_DSN: postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable
+      GOTHAM_E2E_REDIS: 127.0.0.1:6379
+      GOTHAM_E2E_DOCKER_SOCK: /var/run/docker.sock
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+
+      - name: Download modules
+        if: ${{ hashFiles('go.sum') != '' }}
+        run: go mod download
+
+      - name: Docker available
+        run: docker version
+
+      - name: Apply migrations
+        run: go run ./cmd/gotham migrate up
+
+      - name: Run the gated end-to-end suite
+        env:
+          GOTHAM_E2E: "1"
+        run: go test ./internal/e2e/... -count=1 -timeout 20m -v
+
+      - name: Dump container state on failure
+        if: failure()
+        run: |
+          docker ps -a || true
+          docker images || true

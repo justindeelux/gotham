@@ -78,3 +78,47 @@
 - **Deliverables:** e2e tests: (1) public repo deploys successfully, (2) rollback, (3) webhook auto-deploy, (4) failed build → `failed` status with error logs.
 - **Verify:** full e2e run green on CI.
 - **Depends on:** BE-4.3 + BE-4.4 + FE-4.1.
+
+### How to run the suite
+
+The suite lives in `internal/e2e` (`p4_*_test.go`) and is gated by `GOTHAM_E2E=1`,
+same as the Phase 3 suite: without it every test skips, so plain `go test ./…`
+stays green on machines without Docker, Redis or Postgres. Each scenario boots a
+control plane in-process (real HTTP routes, real PostgreSQL, real Redis, a real
+mTLS agent on the local Docker daemon) and cleans up after itself.
+
+Locally, against Docker and the dev stack:
+
+```bash
+docker compose -f deploy/compose.dev.yml up -d     # Postgres 16 + Redis 7
+GOTHAM_E2E=1 go test ./internal/e2e/... -count=1 -timeout 20m
+```
+
+Against the shared test box, or any host whose services do not listen on the
+defaults — the suite needs `git`, the Docker daemon and the three env vars below
+(all optional):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GOTHAM_E2E` | — | `1` runs the gated suite (anything else skips it) |
+| `GOTHAM_TEST_DSN` | `postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable` | database the suite migrates and tests against |
+| `GOTHAM_E2E_REDIS` | `127.0.0.1:6379` | Redis the deploy logs are published to |
+| `GOTHAM_E2E_DOCKER_SOCK` | `/var/run/docker.sock` | daemon the agent builds and runs on |
+
+```bash
+GOTHAM_E2E=1 \
+GOTHAM_TEST_DSN='postgres://gotham:gotham@<test-box>:5432/gotham?sslmode=disable' \
+GOTHAM_E2E_REDIS='<test-box>:6379' \
+go test ./internal/e2e/... -count=1 -timeout 20m -v
+```
+
+Fixture repositories are created on disk and cloned with `GOTHAM_DEV_CLONE_LOCAL=true`
+(set by the harness); no provider API, no GitHub token and no external network
+are used — webhook deliveries are signed and replayed against
+`POST /api/v1/webhooks/github` with a seeded secret row.
+
+CI: `.github/workflows/e2e.yml` (separate from `ci.yml`) starts Postgres 16 +
+Redis 7 as service containers, applies migrations and runs the same command on
+`ubuntu-latest`. It triggers on `workflow_dispatch`, on pushes to `main` and on
+PRs touching `internal/deploy`, `internal/webhooks`, `internal/builds`,
+`internal/store`, `internal/e2e`, `agent`, `proto` or the workflow itself.

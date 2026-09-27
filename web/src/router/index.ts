@@ -78,6 +78,18 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/ApplicationDetailPage.vue"),
         meta: { title: "Application detail", requiresAuth: true },
       },
+      {
+        path: "databases",
+        name: "databases",
+        component: () => import("../pages/DatabasesPage.vue"),
+        meta: { title: "Databases", requiresAuth: true },
+      },
+      {
+        path: "databases/:id",
+        name: "database-detail",
+        component: () => import("../pages/DatabaseDetailPage.vue"),
+        meta: { title: "Database detail", requiresAuth: true },
+      },
     ],
   },
   { path: "/:pathMatch(.*)*", redirect: { name: "dashboard" } },

@@ -13,22 +13,28 @@ declare module "vue-router" {
 
 const routes: RouteRecordRaw[] = [
   {
-    path: "/login",
-    name: "login",
-    component: () => import("../pages/LoginPage.vue"),
-    meta: { title: "Sign in", publicOnly: true },
-  },
-  {
-    path: "/register",
-    name: "register",
-    component: () => import("../pages/RegisterPage.vue"),
-    meta: { title: "Create account", publicOnly: true },
-  },
-  {
-    path: "/oauth/callback",
-    name: "oauth-callback",
-    component: () => import("../pages/OAuthCallbackPage.vue"),
-    meta: { title: "Signing in" },
+    path: "",
+    component: () => import("../layouts/AuthLayout.vue"),
+    children: [
+      {
+        path: "/login",
+        name: "login",
+        component: () => import("../pages/LoginPage.vue"),
+        meta: { title: "Sign in", publicOnly: true },
+      },
+      {
+        path: "/register",
+        name: "register",
+        component: () => import("../pages/RegisterPage.vue"),
+        meta: { title: "Create account", publicOnly: true },
+      },
+      {
+        path: "/oauth/callback",
+        name: "oauth-callback",
+        component: () => import("../pages/OAuthCallbackPage.vue"),
+        meta: { title: "Signing in" },
+      },
+    ],
   },
   {
     path: "/",

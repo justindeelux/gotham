@@ -196,12 +196,14 @@ func TestDockerClientBuildRequiresTagAndContext(t *testing.T) {
 
 func TestDockerClientPushImage(t *testing.T) {
 	var (
-		gotPath string
-		gotTag  string
+		gotPath    string
+		gotTag     string
+		gotAuthHdr string
 	)
 	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotTag = r.URL.Query().Get("tag")
+		gotAuthHdr = r.Header.Get(registryAuthHeader)
 		writeJSONStream(t, w,
 			map[string]string{"status": "The push refers to repository [127.0.0.1:5000/gotham/web]"},
 			map[string]string{"status": "dep-1: digest: sha256:abc size: 512"},
@@ -222,6 +224,11 @@ func TestDockerClientPushImage(t *testing.T) {
 	}
 	if gotTag != "dep-1" {
 		t.Errorf("tag = %q", gotTag)
+	}
+	// Docker 28+ rejects a push with no X-Registry-Auth header at all
+	// (moby/moby#50614); the agent must always send the anonymous config.
+	if gotAuthHdr != anonymousRegistryAuth {
+		t.Errorf("%s = %q, want the anonymous auth config %q", registryAuthHeader, gotAuthHdr, anonymousRegistryAuth)
 	}
 	want := "The push refers to repository [127.0.0.1:5000/gotham/web]\ndep-1: digest: sha256:abc size: 512\n"
 	if logs.String() != want {

@@ -375,6 +375,9 @@ func (r *storeRepository) CreateDeployKey(ctx context.Context, key DeployKey, pr
 		PublicKey:     key.PublicKey,
 	}, deployKeyRowName(key.ApplicationID), sealed)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return DeployKey{}, ErrConflict
+		}
 		return DeployKey{}, fmt.Errorf("deploy: create deploy key: %w", err)
 	}
 	return deployKeyFromRow(row), nil

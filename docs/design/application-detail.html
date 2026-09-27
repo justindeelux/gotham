@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>storefront · Ứng dụng · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+</head>
+<body data-page="application-detail" data-nav="applications">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Máy chủ đang quản lý"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <nav class="breadcrumb" aria-label="Đường dẫn">
+          <a href="applications.html">Ứng dụng</a><span>/</span><span class="fg-2">storefront</span>
+        </nav>
+
+        <div class="page-head">
+          <span class="avatar avatar--lg avatar--neutral">S</span>
+          <div>
+            <h1 class="row gap-2 wrap">storefront
+              <span class="tag tag--success"><span class="dot dot--online"></span>running</span>
+              <span class="tag">production</span>
+            </h1>
+            <p class="page-desc"><span class="mono">medusajs/medusa</span> · nhánh <span class="mono">main</span> · build pack Railpack (tự nhận diện) · node gotham-prod-01 · deploy gần nhất 1184 lúc 11:48.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-outline" type="button" data-open="rollback">Rollback</button>
+            <button class="btn btn-outline" type="button" data-toast="Đã enqueue deploy 1185 với commit 9a12ff0.|info">Deploy lại</button>
+            <button class="btn btn-danger-ghost" type="button" data-confirm="Dừng container storefront? Domain sẽ trả 502 cho tới khi bạn khởi động lại." data-confirm-label="Dừng ứng dụng" data-confirm-kind="danger">Dừng</button>
+          </div>
+        </div>
+
+        <div class="card mb-5" data-od-id="app-summary">
+          <div class="card-body">
+            <div class="grid cols-4">
+              <div><p class="stat-label">Tên miền</p><p class="mt-2"><a class="link" href="domains.html">storefront.gotham.dev <svg style="display:inline;vertical-align:-2px" aria-hidden="true"><use href="#i-external"></use></svg></a></p><p class="small muted">cert Let's Encrypt · hết hạn sau 62 ngày</p></div>
+              <div><p class="stat-label">Image</p><p class="mono mt-2">gotham/storefront:1184</p><p class="small muted">registry nội bộ · 84 MiB</p></div>
+              <div><p class="stat-label">Cổng</p><p class="mono mt-2">3000 → 80</p><p class="small muted">healthcheck <span class="mono">/api/health</span></p></div>
+              <div><p class="stat-label">Auto deploy</p><div class="row gap-2 mt-2"><button class="switch" type="button" role="switch" aria-checked="true" data-switch data-switch-toast="Auto deploy {state}." aria-label="Auto deploy"></button><span class="small fg-2">webhook push</span></div><p class="small muted">commit 9a12ff0 · 14:03</p></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tabs" data-tabs="app" data-default="overview" role="tablist">
+          <button class="tab" type="button" data-tab="overview" role="tab">Tổng quan</button>
+          <button class="tab" type="button" data-tab="deployments" role="tab">Deployments <span class="tag">24</span></button>
+          <button class="tab" type="button" data-tab="logs" role="tab">Logs realtime</button>
+          <button class="tab" type="button" data-tab="env" role="tab">Biến môi trường</button>
+          <button class="tab" type="button" data-tab="storage" role="tab">Lưu trữ</button>
+          <button class="tab" type="button" data-tab="domains" role="tab">Tên miền</button>
+          <button class="tab" type="button" data-tab="previews" role="tab">Previews <span class="tag">1</span></button>
+        </div>
+
+        <!-- ── Tổng quan ─────────────────────────────────────────────────── -->
+        <section class="tab-panel" data-od-id="overview-panel" data-panel="overview" role="tabpanel">
+          <div class="split-2 mt-5">
+            <div class="stack gap-4">
+              <div class="card">
+                <div class="card-head">
+                  <h3>deploy 1185</h3>
+                  <span class="tag tag--accent">đang chạy</span>
+                  <span class="meta">trigger webhook · commit <span class="mono">9a12ff0</span> · 1p12s</span>
+                  <span class="card-actions">
+                    <button class="btn btn-sm btn-outline" type="button" data-pipeline-run="#pipeline">Chạy lại mô phỏng</button>
+                    <a class="btn btn-sm btn-ghost" href="application-detail.html#logs">Mở log</a>
+                  </span>
+                </div>
+                <div class="card-body">
+                  <div class="pipeline mb-4" id="pipeline">
+                    <span class="node is-done" data-step="queued"><span class="dot"></span>queued</span>
+                    <span class="arrow">→</span>
+                    <span class="node is-done" data-step="cloning"><span class="dot"></span>cloning</span>
+                    <span class="arrow">→</span>
+                    <span class="node is-active" data-step="building"><span class="dot"></span>building</span>
+                    <span class="arrow">→</span>
+                    <span class="node is-idle" data-step="pushing"><span class="dot"></span>pushing</span>
+                    <span class="arrow">→</span>
+                    <span class="node is-idle" data-step="starting"><span class="dot"></span>starting</span>
+                    <span class="arrow">→</span>
+                    <span class="node is-idle" data-step="running"><span class="dot"></span>running</span>
+                  </div>
+                  <div class="steps">
+                    <div class="step is-done"><span class="step-mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="step-name">queued · nhận webhook, dedupe theo commit</span><span class="step-time">0.2s</span></div>
+                    <div class="step is-done"><span class="step-mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="step-name">cloning · CP clone repo rồi stream context xuống agent</span><span class="step-time">11.4s</span></div>
+                    <div class="step is-active"><span class="step-mark"></span><span class="step-name">building · Railpack phát hiện Node 20 + pnpm</span><span class="step-time">đang chạy</span></div>
+                    <div class="step"><span class="step-mark"></span><span class="step-name">pushing · đẩy <span class="mono">gotham/storefront:1185</span> vào registry nội bộ</span><span class="step-time">—</span></div>
+                    <div class="step"><span class="step-mark"></span><span class="step-name">starting · tạo container với env, secret, volume, cổng</span><span class="step-time">—</span></div>
+                    <div class="step"><span class="step-mark"></span><span class="step-name">running · healthcheck <span class="mono">/api/health</span> 200</span><span class="step-time">—</span></div>
+                  </div>
+                </div>
+                <div class="card-foot">
+                  <span class="small muted grow">State machine lưu trong bảng <span class="mono">deployments</span> · sự kiện đẩy qua Redis để hiển thị realtime</span>
+                  <span class="channel-chip">logs:prod-01:storefront-1185</span>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-head"><h3>Deploy gần đây</h3><span class="card-actions"><a class="btn btn-sm btn-ghost" href="application-detail.html#deployments">Xem tất cả</a></span></div>
+                <div class="table-wrap">
+                  <table class="table">
+                    <thead><tr><th>Deploy</th><th>Commit</th><th>Kích hoạt</th><th class="num-col">Thời lượng</th><th>Trạng thái</th><th class="actions">Thao tác</th></tr></thead>
+                    <tbody>
+                      <tr><td class="mono">1185</td><td class="mono">9a12ff0</td><td><span class="tag">webhook</span></td><td class="num-col">1p12s…</td><td><span class="cert cert--pending"><span class="dot dot--idle dot-pulse"></span>building</span></td><td class="actions"><a class="btn btn-sm btn-outline" href="application-detail.html#logs">Log</a></td></tr>
+                      <tr><td class="mono">1184</td><td class="mono">8f2c1ab</td><td><span class="tag">webhook</span></td><td class="num-col">1p42s</td><td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span></td><td class="actions"><button class="btn btn-sm btn-outline" type="button" data-open="rollback">Rollback</button></td></tr>
+                      <tr><td class="mono">1182</td><td class="mono">c77e3d1</td><td><span class="tag">thủ công</span></td><td class="num-col">1p51s</td><td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span></td><td class="actions"><button class="btn btn-sm btn-outline" type="button" data-open="rollback">Rollback</button></td></tr>
+                      <tr><td class="mono">1179</td><td class="mono">2c04ba8</td><td><span class="tag">webhook</span></td><td class="num-col">2p04s</td><td><span class="cert cert--error"><span class="dot dot--dnd"></span>failed · healthcheck</span></td><td class="actions"><a class="btn btn-sm btn-outline" href="application-detail.html#logs">Log lỗi</a></td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <aside class="stack gap-4">
+              <div class="aside-card">
+                <h4 class="mb-3">Nguồn</h4>
+                <dl class="kv">
+                  <dt>Provider</dt><dd>GitHub · <span class="mono">medusajs/medusa</span></dd>
+                  <dt>Nhánh</dt><dd class="mono">main</dd>
+                  <dt>Build pack</dt><dd>Railpack · tự nhận diện</dd>
+                  <dt>Base dir</dt><dd class="mono">/</dd>
+                  <dt>Dockerfile</dt><dd>không dùng · build không cần Dockerfile</dd>
+                  <dt>Webhook</dt><dd class="mono">/api/v1/webhooks/github</dd>
+                </dl>
+                <button class="btn btn-outline btn-block mt-4" type="button" data-copy="https://cp.gotham.dev/api/v1/webhooks/github">Sao chép URL webhook</button>
+              </div>
+
+              <div class="aside-card">
+                <h4 class="mb-3">Tài nguyên container</h4>
+                <div class="stack gap-3">
+                  <div><div class="between"><span class="small muted">CPU</span><span class="mono small">21%</span></div><div class="meter mt-2" data-meter="21"></div></div>
+                  <div><div class="between"><span class="small muted">RAM</span><span class="mono small">412 / 768 MiB</span></div><div class="meter mt-2" data-meter="54" data-meter-kind="warn"></div></div>
+                  <div class="between"><span class="small muted">Uptime</span><span class="mono small">2 giờ 14 phút</span></div>
+                  <div class="between"><span class="small muted">Restart</span><span class="mono small">0</span></div>
+                </div>
+              </div>
+
+              <div class="aside-card">
+                <h4 class="mb-3">Healthcheck</h4>
+                <dl class="kv">
+                  <dt>Đường dẫn</dt><dd class="mono">/api/health</dd>
+                  <dt>Chu kỳ</dt><dd class="mono">10s · timeout 3s</dd>
+                  <dt>Số lần thử</dt><dd class="mono">3 · cách 5s</dd>
+                  <dt>Lần cuối</dt><dd><span class="cert cert--issued"><span class="dot dot--online"></span>200 · 41ms</span></dd>
+                </dl>
+                <p class="small muted mt-3">Healthcheck fail 3 lần liên tiếp → deploy chuyển <span class="mono">failed</span> và giữ container cũ để rollback.</p>
+              </div>
+
+              <div class="aside-card">
+                <h4 class="mb-3">Biến môi trường</h4>
+                <p class="small muted">14 biến · 3 secret được mã hoá AES-256-GCM trong bảng <span class="mono">secrets</span>, chỉ giải mã khi gửi xuống agent.</p>
+                <a class="btn btn-outline btn-block mt-4" href="application-detail.html#env">Mở trình soạn env</a>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- ── Deployments ───────────────────────────────────────────────── -->
+        <section class="tab-panel" data-od-id="deployments-panel" data-panel="deployments" role="tabpanel" hidden>
+          <div class="toolbar mt-5">
+            <div class="filters" data-filter-group data-filter-target="[data-deploy-row]">
+              <button class="chip is-active" type="button" data-filter="all">Tất cả <span class="nav-count">24</span></button>
+              <button class="chip" type="button" data-filter="success">Thành công <span class="nav-count">21</span></button>
+              <button class="chip" type="button" data-filter="failed">Thất bại <span class="nav-count">2</span></button>
+              <button class="chip" type="button" data-filter="running">Đang chạy <span class="nav-count">1</span></button>
+            </div>
+            <div class="search grow" style="margin-left:auto;max-width:260px">
+              <svg aria-hidden="true"><use href="#i-search"></use></svg>
+              <input type="search" placeholder="Tìm theo commit hoặc deploy ID…" aria-label="Tìm deploy" data-search="[data-deploy-row]" />
+            </div>
+          </div>
+          <div class="card">
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th>Deploy</th><th>Commit</th><th>Nhánh</th><th>Kích hoạt</th><th class="num-col">Thời lượng</th><th>Image</th><th>Trạng thái</th><th class="actions">Thao tác</th></tr></thead>
+                <tbody>
+                  <tr data-deploy-row data-tag="running"><td class="mono">1185</td><td class="mono">9a12ff0</td><td class="mono">main</td><td><span class="tag">webhook</span></td><td class="num-col">1p12s…</td><td class="mono muted">gotham/storefront:1185</td><td><span class="cert cert--pending"><span class="dot dot--idle dot-pulse"></span>building</span></td><td class="actions"><a class="btn btn-sm btn-outline" href="application-detail.html#logs">Log</a></td></tr>
+                  <tr data-deploy-row data-tag="success"><td class="mono">1184</td><td class="mono">8f2c1ab</td><td class="mono">main</td><td><span class="tag">webhook</span></td><td class="num-col">1p42s</td><td class="mono muted">gotham/storefront:1184</td><td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span></td><td class="actions"><button class="btn btn-sm btn-outline" type="button" data-open="rollback">Rollback</button><button class="btn btn-sm btn-outline" type="button" data-toast="Đã enqueue deploy lại image 1184.|info">Deploy lại</button></td></tr>
+                  <tr data-deploy-row data-tag="success"><td class="mono">1182</td><td class="mono">c77e3d1</td><td class="mono">main</td><td><span class="tag">thủ công</span></td><td class="num-col">1p51s</td><td class="mono muted">gotham/storefront:1182</td><td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span></td><td class="actions"><button class="btn btn-sm btn-outline" type="button" data-open="rollback">Rollback</button></td></tr>
+                  <tr data-deploy-row data-tag="failed"><td class="mono">1179</td><td class="mono">2c04ba8</td><td class="mono">main</td><td><span class="tag">webhook</span></td><td class="num-col">2p04s</td><td class="mono muted">gotham/storefront:1179</td><td><span class="cert cert--error"><span class="dot dot--dnd"></span>failed · healthcheck</span></td><td class="actions"><a class="btn btn-sm btn-outline" href="application-detail.html#logs">Log lỗi</a></td></tr>
+                  <tr data-deploy-row data-tag="failed"><td class="mono">1174</td><td class="mono">77b0e12</td><td class="mono">main</td><td><span class="tag">webhook</span></td><td class="num-col">1p28s</td><td class="mono muted">—</td><td><span class="cert cert--error"><span class="dot dot--dnd"></span>failed · build</span></td><td class="actions"><a class="btn btn-sm btn-outline" href="application-detail.html#logs">Log lỗi</a></td></tr>
+                  <tr data-deploy-row data-tag="success"><td class="mono">1171</td><td class="mono">a41d9c3</td><td class="mono">main</td><td><span class="tag">webhook</span></td><td class="num-col">1p44s</td><td class="mono muted">gotham/storefront:1171</td><td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span></td><td class="actions"><button class="btn btn-sm btn-outline" type="button" data-open="rollback">Rollback</button></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="card-foot"><span class="small muted grow">Rollback chỉ đổi tag image về deploy đã chọn — image cũ luôn được giữ trong registry nội bộ.</span><span class="channel-chip">giữ 5 tag / ứng dụng</span></div>
+          </div>
+        </section>
+
+        <!-- ── Logs ──────────────────────────────────────────────────────── -->
+        <section class="tab-panel" data-od-id="logs-panel" data-panel="logs" role="tabpanel" hidden>
+          <div class="split-2 split-2--wide mt-5">
+            <div class="card">
+              <div class="card-head">
+                <h3>deploy 1185 · build log</h3>
+                <span class="card-actions">
+                  <span class="realtime" data-log-state>đang stream</span>
+                  <span class="channel-chip">WS /api/v1/ws?token=…</span>
+                </span>
+              </div>
+              <div class="card-body stack gap-3" data-log="build-log">
+                <div class="row gap-2 wrap">
+                  <button class="btn btn-sm btn-outline" type="button" data-log-pause><svg aria-hidden="true"><use href="#i-stop"></use></svg><span>Tạm dừng</span></button>
+                  <button class="btn btn-sm btn-outline" type="button" data-log-follow><svg aria-hidden="true"><use href="#i-download"></use></svg><span>Tự động cuộn</span></button>
+                  <button class="btn btn-sm btn-outline" type="button" data-log-clear>Xoá buffer</button>
+                  <button class="btn btn-sm btn-outline" type="button" data-log-download data-log-name="storefront-1185-build.log"><svg aria-hidden="true"><use href="#i-download"></use></svg><span>Tải log</span></button>
+                  <span class="small muted grow right" data-log-clock>đang stream</span>
+                </div>
+                <div class="log" data-log-body style="min-height:340px;max-height:52vh"></div>
+                <p class="small meta">Log của agent được CP publish vào kênh <span class="mono">logs:prod-01:storefront-1185</span> rồi đẩy qua WebSocket tới trình duyệt. Mất kết nối → tự reconnect và phát thông báo.</p>
+              </div>
+            </div>
+            <aside class="stack gap-4">
+              <div class="aside-card">
+                <h4 class="mb-3">Mốc thời gian</h4>
+                <div class="steps">
+                  <div class="step is-done"><span class="step-mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="step-name">queued</span><span class="step-time">0.2s</span></div>
+                  <div class="step is-done"><span class="step-mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="step-name">cloning</span><span class="step-time">11.4s</span></div>
+                  <div class="step is-active"><span class="step-mark"></span><span class="step-name">building</span><span class="step-time">đang chạy</span></div>
+                  <div class="step"><span class="step-mark"></span><span class="step-name">pushing</span><span class="step-time">—</span></div>
+                  <div class="step"><span class="step-mark"></span><span class="step-name">starting</span><span class="step-time">—</span></div>
+                  <div class="step"><span class="step-mark"></span><span class="step-name">running</span><span class="step-time">—</span></div>
+                </div>
+              </div>
+              <div class="aside-card">
+                <h4 class="mb-3">Ngữ cảnh build</h4>
+                <dl class="kv">
+                  <dt>Engine</dt><dd>Railpack</dd>
+                  <dt>Phát hiện</dt><dd class="mono">Node 20 · pnpm-lock.yaml</dd>
+                  <dt>Lệnh build</dt><dd class="mono">pnpm build</dd>
+                  <dt>Lệnh chạy</dt><dd class="mono">pnpm start</dd>
+                  <dt>Cache</dt><dd>BuildKit cache từ deploy 1184</dd>
+                </dl>
+              </div>
+              <div class="aside-card">
+                <h4 class="mb-3">Log runtime</h4>
+                <p class="small muted">Container đang chạy có luồng log riêng, xem trong tab Containers của node hoặc mở nhanh tại đây.</p>
+                <a class="btn btn-outline btn-block mt-3" href="server-detail.html#containers">Mở log container</a>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- ── Env & secrets ─────────────────────────────────────────────── -->
+        <section class="tab-panel" data-od-id="env-panel" data-panel="env" role="tabpanel" hidden>
+          <div class="split-2 mt-5">
+            <div class="card">
+              <div class="card-head">
+                <h3>Biến môi trường</h3>
+                <span class="meta">áp dụng ở lần khởi động container kế tiếp</span>
+                <span class="card-actions">
+                  <button class="btn btn-sm btn-outline" type="button" data-env-add><svg aria-hidden="true"><use href="#i-plus"></use></svg><span>Thêm biến</span></button>
+                  <button class="btn btn-sm btn-primary" type="button" data-toast="Đã lưu 14 biến môi trường và 3 secret. Container sẽ nhận giá trị mới ở lần deploy tới.|success">Lưu</button>
+                </span>
+              </div>
+              <div class="card-body">
+                <div class="stack gap-3" data-env-list>
+                  <div class="row gap-2"><input class="input mono" style="max-width:280px" value="NODE_ENV" aria-label="Tên biến" /><input class="input mono" value="production" aria-label="Giá trị" /><button class="btn btn-icon btn-outline" type="button" data-env-remove aria-label="Xoá biến"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div>
+                  <div class="row gap-2"><input class="input mono" style="max-width:280px" value="PORT" aria-label="Tên biến" /><input class="input mono" value="3000" aria-label="Giá trị" /><button class="btn btn-icon btn-outline" type="button" data-env-remove aria-label="Xoá biến"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div>
+                  <div class="row gap-2"><input class="input mono" style="max-width:280px" value="DATABASE_URL" aria-label="Tên biến" /><input class="input mono" value="postgres://gotham:••••@gotham-db-pg-orders:5432/storefront" aria-label="Giá trị" /><button class="btn btn-icon btn-outline" type="button" data-env-remove aria-label="Xoá biến"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div>
+                  <div class="row gap-2"><input class="input mono" style="max-width:280px" value="REDIS_URL" aria-label="Tên biến" /><input class="input mono" value="redis://gotham-db-redis-cache:6379" aria-label="Giá trị" /><button class="btn btn-icon btn-outline" type="button" data-env-remove aria-label="Xoá biến"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div>
+                  <div class="row gap-2"><input class="input mono" style="max-width:280px" value="SENTRY_DSN" aria-label="Tên biến" /><input class="input mono" value="https://••••@o4507.ingest.sentry.io/4507" aria-label="Giá trị" /><button class="btn btn-icon btn-outline" type="button" data-env-remove aria-label="Xoá biến"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div>
+                </div>
+                <p class="small muted mt-4">Tên biến phải khớp <span class="inline-code">^[A-Z][A-Z0-9_]*$</span>. Giá trị bắt đầu bằng <span class="inline-code">secret:</span> được lưu trong bảng <span class="mono">secrets</span> và không bao giờ trả về qua API.</p>
+              </div>
+            </div>
+            <aside class="stack gap-4">
+              <div class="aside-card">
+                <h4 class="mb-3">Secrets</h4>
+                <div class="stack gap-3">
+                  <div class="between"><span class="small muted">STRIPE_SECRET_KEY</span><span class="row gap-2"><span class="mono small" id="sec-1" data-value="sk_live_51H8xQ2fZvK9pLm3tR7" data-mask="••••••••••••••••">••••••••••••••••</span><button class="btn btn-sm btn-icon btn-outline" type="button" data-reveal="#sec-1" aria-label="Hiện giá trị"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button></span></div>
+                  <div class="between"><span class="small muted">PAYMENT_WEBHOOK_SECRET</span><span class="row gap-2"><span class="mono small" id="sec-2" data-value="whsec_9f2c4b7e1a8d3f60" data-mask="••••••••••••••••">••••••••••••••••</span><button class="btn btn-sm btn-icon btn-outline" type="button" data-reveal="#sec-2" aria-label="Hiện giá trị"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button></span></div>
+                  <div class="between"><span class="small muted">SMTP_PASSWORD</span><span class="row gap-2"><span class="mono small" id="sec-3" data-value="gth-smtp-8a1f-4c2e" data-mask="••••••••••••••">••••••••••••••</span><button class="btn btn-sm btn-icon btn-outline" type="button" data-reveal="#sec-3" aria-label="Hiện giá trị"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button></span></div>
+                </div>
+                <button class="btn btn-outline btn-block mt-4" type="button" data-toast="Mở form thêm secret mới (mã hoá AES-256-GCM trước khi lưu).|info">Thêm secret</button>
+              </div>
+              <div class="aside-card">
+                <div class="callout">
+                  <svg aria-hidden="true"><use href="#i-lock"></use></svg>
+                  <div><h4>Khoá giải mã nằm ở CP</h4><p>Secret được mã hoá bằng khoá <span class="mono">GOTHAM_SECRET_KEY</span> (AES-256-GCM). Agent chỉ nhận giá trị đã giải mã qua kênh mTLS, không bao giờ đọc database.</p></div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- ── Storage ───────────────────────────────────────────────────── -->
+        <section class="tab-panel" data-od-id="storage-panel" data-panel="storage" role="tabpanel" hidden>
+          <div class="card mt-5">
+            <div class="card-head">
+              <h3>Volume &amp; mount</h3>
+              <span class="meta">dữ liệu nằm trên node, không nằm trong image</span>
+              <span class="card-actions"><button class="btn btn-sm btn-outline" type="button" data-toast="Mở form thêm volume mới cho ứng dụng.|info"><svg aria-hidden="true"><use href="#i-plus"></use></svg><span>Thêm volume</span></button></span>
+            </div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th>Tên volume</th><th>Đường dẫn trong container</th><th>Volume trên node</th><th>Chế độ</th><th class="num-col">Dung lượng</th><th class="actions">Thao tác</th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">uploads</td><td class="mono">/app/public/uploads</td><td class="mono">gotham-storefront-uploads</td><td><span class="tag">rw</span></td><td class="num-col">2.4 GiB</td><td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-toast="Đang tải ảnh chụp volume uploads…|info">Sao lưu</button><button class="btn btn-sm btn-icon btn-danger-ghost" type="button" data-confirm="Gỡ mount uploads? Dữ liệu trên volume vẫn được giữ." data-confirm-label="Gỡ mount" data-remove="tr" aria-label="Gỡ"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div></td></tr>
+                  <tr><td class="mono">cache</td><td class="mono">/app/.cache</td><td class="mono">gotham-storefront-cache</td><td><span class="tag">rw</span></td><td class="num-col">618 MiB</td><td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-toast="Đang tải ảnh chụp volume cache…|info">Sao lưu</button><button class="btn btn-sm btn-icon btn-danger-ghost" type="button" data-confirm="Gỡ mount cache? Dữ liệu trên volume vẫn được giữ." data-confirm-label="Gỡ mount" data-remove="tr" aria-label="Gỡ"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div></td></tr>
+                  <tr><td class="mono">logs</td><td class="mono">/app/logs</td><td class="mono">gotham-storefront-logs</td><td><span class="tag">ro</span></td><td class="num-col">96 MiB</td><td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-toast="Đang tải ảnh chụp volume logs…|info">Sao lưu</button><button class="btn btn-sm btn-icon btn-danger-ghost" type="button" data-confirm="Gỡ mount logs?" data-confirm-label="Gỡ mount" data-remove="tr" aria-label="Gỡ"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="card-foot"><span class="small muted grow">Mỗi deploy mới dùng lại đúng các volume này — rollback không làm mất dữ liệu.</span><a class="btn btn-sm btn-outline" href="files.html"><svg aria-hidden="true"><use href="#i-folder"></use></svg>Quản lý file</a><span class="channel-chip">node gotham-prod-01</span></div>
+          </div>
+        </section>
+
+        <!-- ── Domains ───────────────────────────────────────────────────── -->
+        <section class="tab-panel" data-od-id="domains-panel" data-panel="domains" role="tabpanel" hidden>
+          <div class="card mt-5" data-od-id="app-domains">
+            <div class="card-head">
+              <h3>Tên miền của ứng dụng</h3>
+              <span class="meta">sinh router Traefik tự động khi thêm</span>
+              <span class="card-actions"><button class="btn btn-sm btn-outline" type="button" data-open="add-domain"><svg aria-hidden="true"><use href="#i-plus"></use></svg><span>Thêm tên miền</span></button></span>
+            </div>
+            <div class="card-body" style="padding:0">
+              <div class="domain-row">
+                <div><p class="fg-2 mono">storefront.gotham.dev</p><p class="small muted">→ container :3000 · node gotham-prod-01</p></div>
+                <div><span class="cert cert--issued"><svg aria-hidden="true"><use href="#i-shield"></use></svg>đã cấp · hết hạn sau 62 ngày</span><p class="small meta">Let's Encrypt · HTTP-01</p></div>
+                <div><span class="tag">redirect HTTPS</span><p class="small meta">middleware gzip, rate-limit</p></div>
+                <div class="row gap-2"><button class="btn btn-sm btn-outline" type="button" data-toast="Đã chạy kiểm tra DNS + cert cho storefront.gotham.dev: OK.|success">Kiểm tra</button><button class="btn btn-sm btn-icon btn-danger-ghost" type="button" data-confirm="Xoá tên miền storefront.gotham.dev? Router Traefik tương ứng sẽ bị gỡ." data-confirm-label="Xoá tên miền" data-remove=".domain-row" aria-label="Xoá"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div>
+              </div>
+              <div class="domain-row">
+                <div><p class="fg-2 mono">www.storefront.gotham.dev</p><p class="small muted">redirect 301 → storefront.gotham.dev</p></div>
+                <div><span class="cert cert--issued"><svg aria-hidden="true"><use href="#i-shield"></use></svg>đã cấp · hết hạn sau 62 ngày</span><p class="small meta">dùng chung cert wildcard? không</p></div>
+                <div><span class="tag">redirect 301</span><p class="small meta">middleware redirect-https</p></div>
+                <div class="row gap-2"><button class="btn btn-sm btn-outline" type="button" data-toast="Đã kiểm tra redirect: 301 tới storefront.gotham.dev.|success">Kiểm tra</button><button class="btn btn-sm btn-icon btn-danger-ghost" type="button" data-confirm="Xoá tên miền www.storefront.gotham.dev?" data-confirm-label="Xoá tên miền" data-remove=".domain-row" aria-label="Xoá"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div>
+              </div>
+              <div class="domain-row">
+                <div><p class="fg-2 mono">pr-482-storefront.preview.gotham.dev</p><p class="small muted">preview PR 482 · tự xoá khi merge/close</p></div>
+                <div><span class="cert cert--issued"><svg aria-hidden="true"><use href="#i-shield"></use></svg>wildcard · hết hạn sau 84 ngày</span><p class="small meta">DNS-01 · Cloudflare</p></div>
+                <div><span class="tag tag--warn">preview</span><p class="small meta">xoá sau 7 ngày</p></div>
+                <div class="row gap-2"><button class="btn btn-sm btn-outline" type="button" data-toast="Preview đang phục vụ branch feat/checkout-v2.|info">Mở</button><button class="btn btn-sm btn-icon btn-danger-ghost" type="button" data-confirm="Xoá preview PR 482?" data-confirm-label="Xoá preview" data-remove=".domain-row" aria-label="Xoá"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div>
+              </div>
+            </div>
+            <div class="card-foot"><span class="small muted grow">Cert trạng thái <span class="mono">pending</span> sẽ tự chuyển <span class="mono">issued</span> sau khi ACME hoàn tất challenge.</span><a class="btn btn-sm btn-ghost" href="domains.html">Quản lý toàn bộ tên miền</a></div>
+          </div>
+        </section>
+
+        <!-- ── Previews ──────────────────────────────────────────────────── -->
+        <section class="tab-panel" data-od-id="previews-panel" data-panel="previews" role="tabpanel" hidden>
+          <div class="split-2 mt-5">
+            <div class="card">
+              <div class="card-head"><h3>Preview deployment</h3><span class="tag">1 đang chạy</span></div>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead><tr><th>Pull request</th><th>Nhánh</th><th>Tên miền tạm</th><th>TTL</th><th>Trạng thái</th><th class="actions">Thao tác</th></tr></thead>
+                  <tbody>
+                    <tr>
+                      <td><span class="fg-2">PR 482</span> <span class="small muted">feat/checkout-v2</span></td>
+                      <td class="mono">feat/checkout-v2</td>
+                      <td class="mono">pr-482-storefront.preview.gotham.dev</td>
+                      <td class="mono">7 ngày</td>
+                      <td><span class="cert cert--pending"><span class="dot dot--idle"></span>tạm dừng</span></td>
+                      <td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-toast="Đã khởi động lại preview PR 482.|success">Khởi động</button><button class="btn btn-sm btn-icon btn-danger-ghost" type="button" data-confirm="Xoá preview của PR 482? Domain tạm và container sẽ bị gỡ." data-confirm-label="Xoá preview" data-remove="tr" aria-label="Xoá"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="card-foot"><span class="small muted grow">Preview dùng lại orchestrator của deploy thường, chỉ khác nguồn trigger, tên miền và TTL.</span><button class="btn btn-sm btn-outline" type="button" data-toast="Đã bật preview cho mọi PR mở vào nhánh main.|success">Bật preview cho PR mới</button></div>
+            </div>
+            <aside class="stack gap-4">
+              <div class="aside-card">
+                <h4 class="mb-3">Bình luận CP đăng lên PR</h4>
+                <div class="embed embed--info">
+                  <h4>Gotham preview ready</h4>
+                  <p>Deploy <span class="mono">1185</span> cho commit <span class="mono">9a12ff0</span> đã sẵn sàng.</p>
+                  <p class="mono mt-2">https://pr-482-storefront.preview.gotham.dev</p>
+                </div>
+                <p class="small muted mt-3">Bình luận được cập nhật mỗi lần push vào PR, không tạo bình luận mới.</p>
+              </div>
+              <div class="aside-card">
+                <h4 class="mb-3">Chính sách dọn dẹp</h4>
+                <div class="stack gap-3">
+                  <div class="between"><span class="small muted">PR merge hoặc close</span><span class="mono small">xoá ngay</span></div>
+                  <div class="between"><span class="small muted">Không hoạt động</span><span class="mono small">xoá sau 7 ngày</span></div>
+                  <div class="between"><span class="small muted">Giữ image preview</span><span class="mono small">2 tag gần nhất</span></div>
+                </div>
+              </div>
+              <div class="aside-card">
+                <div class="callout">
+                  <svg aria-hidden="true"><use href="#i-branch"></use></svg>
+                  <div><h4>Wildcard cert dùng chung</h4><p>Mọi subdomain <span class="mono">*.preview.gotham.dev</span> dùng một cert DNS-01, nên preview mới không tốn thêm lượt cấp cert.</p></div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ── Rollback dialog ───────────────────────────────────────────────────── -->
+<div class="overlay" id="rollback" hidden>
+  <div class="modal modal--sm" role="dialog" aria-modal="true" aria-labelledby="rollback-title">
+    <div class="modal-head">
+      <div><h3 id="rollback-title">Rollback storefront</h3><p class="small muted">Chọn image cũ để đưa về. Container hiện tại được giữ lại để rollback ngược.</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-3">
+      <label class="check"><input type="radio" name="rb" checked /> <span><span class="mono fg-2">1184</span> · 8f2c1ab · 11:48 · running 2 giờ</span></label>
+      <label class="check"><input type="radio" name="rb" /> <span><span class="mono fg-2">1182</span> · c77e3d1 · hôm qua 18:20 · deploy thủ công</span></label>
+      <label class="check"><input type="radio" name="rb" /> <span><span class="mono fg-2">1171</span> · a41d9c3 · 25/09 09:04</span></label>
+      <div class="embed embed--warn"><h4>Rollback không chạy lại build</h4><p>CP chỉ đổi tag image và khởi động lại container. Biến môi trường và volume giữ nguyên.</p></div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">Deploy mới sẽ được ghi thành <span class="mono">1186</span></span>
+      <button class="btn btn-outline" type="button" data-close>Huỷ</button>
+      <button class="btn btn-primary" type="button" data-close data-toast="Đã rollback storefront về 1184. Container mới đang khởi động.|success">Rollback</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add-domain dialog ─────────────────────────────────────────────────── -->
+<div class="overlay" id="add-domain" hidden>
+  <div class="modal modal--sm" role="dialog" aria-modal="true" aria-labelledby="add-domain-title">
+    <div class="modal-head">
+      <div><h3 id="add-domain-title">Thêm tên miền</h3><p class="small muted">CP sinh router Traefik và yêu cầu cert qua ACME.</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-4">
+      <div class="field">
+        <label class="field-label" for="ad-host">Tên miền</label>
+        <input class="input" id="ad-host" placeholder="shop.gotham.dev" required data-pattern="^[a-z0-9.-]+\.[a-z]{2,}$" />
+        <span class="field-hint">Bản ghi A/CNAME phải trỏ về node trước khi cấp cert.</span>
+        <span class="field-error">Tên miền không hợp lệ.</span>
+      </div>
+      <div class="field">
+        <label class="field-label" for="ad-port">Cổng nội bộ</label>
+        <input class="input" id="ad-port" value="3000" required data-pattern="^[0-9]{2,5}$" />
+        <span class="field-error">Cổng phải là số.</span>
+      </div>
+      <label class="check"><input type="checkbox" checked /> <span>Bật redirect HTTP → HTTPS (middleware <span class="mono">redirect-https</span>)</span></label>
+      <label class="check"><input type="checkbox" /> <span>Dùng wildcard cert <span class="mono">*.preview.gotham.dev</span> (DNS-01, không cần HTTP-01)</span></label>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">Cert thường cấp trong 15–40 giây</span>
+      <button class="btn btn-outline" type="button" data-close>Huỷ</button>
+      <button class="btn btn-primary" type="button" data-close data-toast="Đã thêm tên miền, đang chờ ACME cấp cert.|info">Thêm tên miền</button>
+    </div>
+  </div>
+</div>
+
+<script type="application/json" id="build-log">
+[
+  {"t":"14:03:41","level":"step","m":"deploy 1185 · queued → cloning (trigger: webhook 9a12ff0)"},
+  {"t":"14:03:41","level":"dim","m":"git clone --depth 1 https://github.com/medusajs/medusa.git (nhánh main)"},
+  {"t":"14:03:52","level":"info","m":"context 24.8 MiB · 1.284 file · stream xuống agent qua gRPC"},
+  {"t":"14:03:53","level":"step","m":"cloning → building (engine: railpack, phát hiện Node 20 + pnpm)"},
+  {"t":"14:03:54","level":"info","m":"buildkit cache hit: pnpm store (deploy 1184)"},
+  {"t":"14:04:02","level":"info","m":"pnpm install --frozen-lockfile · 1.184 package trong 8.4s"},
+  {"t":"14:04:19","level":"info","m":"pnpm build · next build · 42 route (12 static, 30 dynamic)"},
+  {"t":"14:04:31","level":"warn","m":"cảnh báo: bundle lớn 812 KiB ở route /checkout"},
+  {"t":"14:04:38","level":"info","m":"image gotham/storefront:1185 · 84 MiB (giảm 6 MiB so với 1184)"},
+  {"t":"14:04:52","level":"step","m":"building → pushing (registry nội bộ :5000)"},
+  {"t":"14:05:04","level":"info","m":"pushed 4 layer trong 11.8s · digest sha256:7c1f…"},
+  {"t":"14:05:05","level":"step","m":"pushing → starting (env 14 biến, secret 3, volume 3)"},
+  {"t":"14:05:11","level":"info","m":"container storefront-1185 tạo với cổng 3000 → 80"},
+  {"t":"14:05:19","level":"info","m":"healthcheck GET /api/health 200 · 41ms (lần 1/3)"},
+  {"t":"14:05:29","level":"step","m":"starting → running · deploy 1185 hoàn tất trong 1p48s"},
+  {"t":"14:05:30","level":"info","m":"traefik reload router storefront.gotham.dev → container mới"},
+  {"t":"14:05:31","level":"dim","m":"container gotham/storefront:1184 được giữ để rollback"}
+]
+</script>
+
+<script src="assets/gotham-ui.js"></script>
+<script>
+  /* Trình soạn biến môi trường: thêm / xoá dòng, dùng lại đúng class của bảng. */
+  document.addEventListener("click", function (e) {
+    var add = e.target.closest("[data-env-add]");
+    if (add) {
+      var list = document.querySelector("[data-env-list]");
+      var row = document.createElement("div");
+      row.className = "row gap-2";
+      row.innerHTML = '<input class="input mono" style="max-width:280px" placeholder="TÊN_BIẾN" aria-label="Tên biến" />' +
+        '<input class="input mono" placeholder="giá trị hoặc secret:tên-secret" aria-label="Giá trị" />' +
+        '<button class="btn btn-icon btn-outline" type="button" data-env-remove aria-label="Xoá biến"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>';
+      list.appendChild(row);
+      row.querySelector("input").focus();
+      window.Gotham.toast("Đã thêm một dòng biến môi trường.", "info");
+    }
+    var rm = e.target.closest("[data-env-remove]");
+    if (rm) { rm.closest(".row").remove(); }
+  });
+
+  /* Log build khởi động đúng trạng thái pipeline đang chạy. */
+  document.addEventListener("gotham:deploy-step", function (e) {
+    var order = ["queued", "cloning", "building", "pushing", "starting", "running"];
+    window.Gotham.toast("deploy 1185 · bước " + (order[e.detail.index] || e.detail.name), "info");
+  });
+</script>
+</body>
+</html>

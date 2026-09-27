@@ -1,0 +1,900 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Cơ sở dữ liệu · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+<style>
+  /* ── Page-local classes only (pg- prefix). No global class is redefined. ── */
+  .pg-engine-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(206px, 1fr)); gap: var(--space-3); }
+  .pg-engine { gap: var(--space-2); cursor: pointer; }
+  .pg-engine:hover { border-color: var(--accent); }
+  .pg-engine:has(input:checked) { border-color: var(--accent); background: color-mix(in oklab, var(--surface) 86%, var(--accent)); }
+  .pg-engine input[type="radio"] { border-radius: var(--radius-pill); }
+  .pg-engine-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+  .pg-engine-name { display: block; font-weight: 600; color: var(--fg-2); }
+  .pg-engine-meta { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); }
+  .pg-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+  .pg-cron { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+</style>
+</head>
+<body data-page="databases" data-nav="databases">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Máy chủ đang quản lý"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Vận hành · managed database</p>
+            <h1>Cơ sở dữ liệu</h1>
+            <p class="page-desc">Mỗi database là một container với volume riêng, chạy trên một node do agent quản lý. Mật khẩu không nằm trong container — chúng được lưu trong bảng <span class="inline-code">secrets</span> đã mã hoá, và mọi bản dump đều chạy trong một container tạm trên cùng node đó.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-outline" type="button" data-open="s3config">Cấu hình S3</button>
+            <button class="btn btn-primary" type="button" data-open="wizard">Tạo database</button>
+          </div>
+        </div>
+        <!-- ── KPI ───────────────────────────────────────────────────────── -->
+        <div class="grid cols-4" data-od-id="db-kpis">
+          <div class="stat" data-od-id="kpi-db-count">
+            <p class="stat-label">Database</p>
+            <p class="stat-value num"><span data-count="5">5</span><span class="unit">database</span></p>
+            <p class="stat-sub"><span class="dot dot--online"></span>2 PostgreSQL · 1 MySQL</p>
+            <p class="stat-sub"><span class="dot dot--online"></span>1 MongoDB · 1 Redis</p>
+          </div>
+          <div class="stat" data-od-id="kpi-db-size">
+            <p class="stat-label">Dung lượng</p>
+            <p class="stat-value num"><span data-count="4.6">4.6</span><span class="unit">GiB</span></p>
+            <p class="stat-sub"><span class="tag">PostgreSQL 4.1 GiB</span><span class="tag">MySQL 336 MiB</span></p>
+            <p class="stat-sub"><span class="tag">MongoDB 96 MiB</span><span class="tag">Redis 84 MiB</span></p>
+          </div>
+          <div class="stat" data-od-id="kpi-db-backup">
+            <p class="stat-label">Backup 24 giờ</p>
+            <p class="stat-value num"><span data-count="4">4</span></p>
+            <p class="stat-sub"><span class="tag tag--success">3 thành công</span><span class="tag tag--warn">1 đang chạy</span></p>
+            <p class="stat-sub"><span class="dot dot--online"></span>pg_dump → Cloudflare R2 · gotham-backups</p>
+          </div>
+          <div class="stat" data-od-id="kpi-db-schedule">
+            <p class="stat-label">Lịch tự động</p>
+            <p class="stat-value num"><span data-count="3">3</span></p>
+            <p class="stat-sub"><span class="dot dot--online"></span>hằng ngày 02:00 · pg-orders, pg-analytics</p>
+            <p class="stat-sub"><span class="dot dot--online"></span>mỗi 6 giờ · redis-cache RDB</p>
+          </div>
+        </div>
+        <!-- ── Master list ───────────────────────────────────────────────── -->
+        <div class="toolbar mt-6">
+          <div class="filters" data-filter-group data-filter-target="[data-db-row]" data-filter-empty="#dbs-empty">
+            <button class="chip is-active" type="button" data-filter="all">Tất cả <span class="nav-count">5</span></button>
+            <button class="chip" type="button" data-filter="running">Đang chạy <span class="nav-count">5</span></button>
+            <button class="chip" type="button" data-filter="public">Có public port <span class="nav-count">2</span></button>
+            <button class="chip" type="button" data-filter="stopped">Đã tắt <span class="nav-count">0</span></button>
+          </div>
+          <div class="search grow" style="margin-left:auto;max-width:280px">
+            <svg aria-hidden="true"><use href="#i-search"></use></svg>
+            <input type="search" placeholder="Tìm database, engine, node…" aria-label="Tìm database" data-search="[data-db-row]" />
+          </div>
+        </div>
+        <div class="card" data-od-id="db-master">
+          <div class="card-head">
+            <h3>Database đang quản lý</h3>
+            <span class="tag">5 container · 4 engine</span>
+            <span class="card-actions"><span class="muted">volume <span class="mono">gotham-db-{id}</span> · network nội bộ <span class="mono">gotham-db</span></span></span>
+          </div>
+          <div class="table-wrap">
+            <table class="table" data-od-id="db-table">
+              <thead>
+                <tr>
+                  <th>Database</th><th>Node</th><th class="num-col">Kích thước</th><th>Public port</th>
+                  <th>Backup gần nhất</th><th>Trạng thái</th><th class="actions">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr data-db-row data-tag="running public" data-name="pg-orders">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">PG</span><span><span class="fg-2">pg-orders</span><span class="cell-sub" style="display:block">PostgreSQL 16 · postgres:16-alpine</span></span></div></td>
+                  <td class="mono muted">gotham-prod-01</td>
+                  <td class="num-col">3.1 GiB</td><td><span class="tag"><span class="dot dot--online"></span>15432</span></td>
+                  <td class="mono small">27/09 02:00 · pg_dump</td><td><span class="cert cert--issued"><span class="dot dot--online" data-container-dot></span><span data-container-state>running</span></span></td>
+                  <td class="actions"><div class="row-actions">
+                    <button class="btn btn-sm btn-outline" type="button" data-drawer-open="dbdetail" data-drawer-title="pg-orders" data-drawer-sub="postgres:16-alpine · gotham-prod-01 · volume gotham-db-pg-orders">Chi tiết</button>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng job backup cho pg-orders · container tạm gotham-backup-4830.|info">Sao lưu ngay</button>
+                    <button class="btn btn-sm btn-icon btn-outline" type="button" data-container-action="restart" aria-label="Khởi động lại pg-orders"><svg aria-hidden="true"><use href="#i-restart"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá pg-orders" data-confirm="Xoá database pg-orders? Container bị gỡ khỏi node, volume gotham-db-pg-orders vẫn được giữ 7 ngày trước khi xoá vĩnh viễn." data-confirm-label="Xoá database" data-confirm-toast="Đã xoá container pg-orders · volume giữ tới 04/10." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                  </div></td>
+                </tr>
+                <tr data-db-row data-tag="running" data-name="pg-analytics">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">PG</span><span><span class="fg-2">pg-analytics</span><span class="cell-sub" style="display:block">PostgreSQL 16 · postgres:16-alpine</span></span></div></td>
+                  <td class="mono muted">gotham-prod-01</td>
+                  <td class="num-col">1.0 GiB</td>
+                  <td><span class="muted">tắt</span></td>
+                  <td class="mono small">27/09 02:00 · pg_dump</td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online" data-container-dot></span><span data-container-state>running</span></span></td>
+                  <td class="actions"><div class="row-actions">
+                    <button class="btn btn-sm btn-outline" type="button" data-drawer-open="dbdetail" data-drawer-title="pg-analytics" data-drawer-sub="postgres:16-alpine · gotham-prod-01 · volume gotham-db-pg-analytics">Chi tiết</button>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng job backup cho pg-analytics.|info">Sao lưu ngay</button>
+                    <button class="btn btn-sm btn-icon btn-outline" type="button" data-container-action="restart" aria-label="Khởi động lại pg-analytics"><svg aria-hidden="true"><use href="#i-restart"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá pg-analytics" data-confirm="Xoá database pg-analytics? Container bị gỡ khỏi node, volume gotham-db-pg-analytics vẫn được giữ 7 ngày trước khi xoá vĩnh viễn." data-confirm-label="Xoá database" data-confirm-toast="Đã xoá container pg-analytics · volume giữ tới 04/10." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                  </div></td>
+                </tr>
+                <tr data-db-row data-tag="running public" data-name="mysql-legacy">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">MY</span><span><span class="fg-2">mysql-legacy</span><span class="cell-sub" style="display:block">MySQL 8.0 · mysql:8.0</span></span></div></td>
+                  <td class="mono muted">staging-01</td>
+                  <td class="num-col">336 MiB</td><td><span class="tag"><span class="dot dot--online"></span>13306</span></td>
+                  <td class="mono small">27/09 03:00 · mysqldump</td><td><span class="cert cert--issued"><span class="dot dot--online" data-container-dot></span><span data-container-state>running</span></span> <span class="tag tag--warn">chờ migrate</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <button class="btn btn-sm btn-outline" type="button" data-drawer-open="dbdetail" data-drawer-title="mysql-legacy" data-drawer-sub="mysql:8.0 · staging-01 · volume gotham-db-mysql-legacy">Chi tiết</button>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng job backup cho mysql-legacy · mysqldump.|info">Sao lưu ngay</button>
+                    <button class="btn btn-sm btn-icon btn-outline" type="button" data-container-action="restart" aria-label="Khởi động lại mysql-legacy"><svg aria-hidden="true"><use href="#i-restart"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá mysql-legacy" data-confirm="Xoá database mysql-legacy? Container bị gỡ khỏi node, volume gotham-db-mysql-legacy vẫn được giữ 7 ngày trước khi xoá vĩnh viễn." data-confirm-label="Xoá database" data-confirm-toast="Đã xoá container mysql-legacy · volume giữ tới 04/10." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                  </div></td>
+                </tr>
+                <tr data-db-row data-tag="running" data-name="mongo-catalog">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">MG</span><span><span class="fg-2">mongo-catalog</span><span class="cell-sub" style="display:block">MongoDB 7 · mongo:7</span></span></div></td>
+                  <td class="mono muted">gotham-prod-01</td>
+                  <td class="num-col">96 MiB</td>
+                  <td><span class="muted">tắt</span></td>
+                  <td class="mono small">26/09 22:00 · mongodump</td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online" data-container-dot></span><span data-container-state>running</span></span></td>
+                  <td class="actions"><div class="row-actions">
+                    <button class="btn btn-sm btn-outline" type="button" data-drawer-open="dbdetail" data-drawer-title="mongo-catalog" data-drawer-sub="mongo:7 · gotham-prod-01 · volume gotham-db-mongo-catalog">Chi tiết</button>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng job backup cho mongo-catalog · mongodump.|info">Sao lưu ngay</button>
+                    <button class="btn btn-sm btn-icon btn-outline" type="button" data-container-action="restart" aria-label="Khởi động lại mongo-catalog"><svg aria-hidden="true"><use href="#i-restart"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá mongo-catalog" data-confirm="Xoá database mongo-catalog? Container bị gỡ khỏi node, volume gotham-db-mongo-catalog vẫn được giữ 7 ngày trước khi xoá vĩnh viễn." data-confirm-label="Xoá database" data-confirm-toast="Đã xoá container mongo-catalog · volume giữ tới 04/10." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                  </div></td>
+                </tr>
+                <tr data-db-row data-tag="running" data-name="redis-cache">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">RD</span><span><span class="fg-2">redis-cache</span><span class="cell-sub" style="display:block">Redis 7 · redis:7-alpine</span></span></div></td>
+                  <td class="mono muted">edge-sg-01</td>
+                  <td class="num-col">84 MiB</td>
+                  <td><span class="muted">tắt</span></td>
+                  <td class="mono small">27/09 00:00 · RDB copy</td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online" data-container-dot></span><span data-container-state>running</span></span></td>
+                  <td class="actions"><div class="row-actions">
+                    <button class="btn btn-sm btn-outline" type="button" data-drawer-open="dbdetail" data-drawer-title="redis-cache" data-drawer-sub="redis:7-alpine · edge-sg-01 · volume gotham-db-redis-cache">Chi tiết</button>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng job backup cho redis-cache · copy RDB + AOF.|info">Sao lưu ngay</button>
+                    <button class="btn btn-sm btn-icon btn-outline" type="button" data-container-action="restart" aria-label="Khởi động lại redis-cache"><svg aria-hidden="true"><use href="#i-restart"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá redis-cache" data-confirm="Xoá database redis-cache? Container bị gỡ khỏi node, volume gotham-db-redis-cache vẫn được giữ 7 ngày trước khi xoá vĩnh viễn." data-confirm-label="Xoá database" data-confirm-toast="Đã xoá container redis-cache · volume giữ tới 04/10." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                  </div></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="empty" id="dbs-empty" hidden data-od-id="dbs-empty">
+            <svg aria-hidden="true"><use href="#i-db"></use></svg>
+            <h4>Không có database khớp bộ lọc</h4>
+            <p class="small">Đổi bộ lọc hoặc tạo database mới bằng wizard <span class="mono">Tạo database</span>.</p>
+          </div>
+          <div class="card-foot">
+            <span class="small muted grow">Xoá database chỉ gỡ container — volume <span class="mono">gotham-db-{id}</span> giữ 7 ngày để restore.</span>
+            <button class="btn btn-sm btn-ghost" type="button" data-open="wizard">Tạo database</button>
+          </div>
+        </div>
+        <!-- ── Dump tooling + reference ──────────────────────────────────── -->
+        <div class="callout mt-5" data-od-id="db-dump-callout">
+          <svg aria-hidden="true"><use href="#i-terminal"></use></svg>
+          <div>
+            <h4>Dump tool phụ thuộc engine và chạy trong container tạm</h4>
+            <p>Control plane không cài sẵn công cụ dump trên node. Mỗi job backup tạo một container dùng đúng image của engine (<span class="mono">postgres:16-alpine</span>, <span class="mono">mysql:8.0</span>, <span class="mono">mongo:7</span>, <span class="mono">redis:7-alpine</span>), gắn volume của database rồi chạy <span class="mono">pg_dump</span> / <span class="mono">mysqldump</span> / <span class="mono">mongodump</span> / copy RDB-AOF. Container bị xoá ngay sau khi bản dump được nén và đẩy lên đích lưu trữ.</p>
+          </div>
+        </div>
+        <div class="split-2 mt-5">
+          <div class="card" data-od-id="db-engine-map">
+            <div class="card-head"><h3>Bản đồ engine &amp; công cụ</h3><span class="muted">5 implementation của <span class="mono">DatabaseEngine</span></span></div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th>Engine</th><th>Image mặc định</th><th class="num-col">Port</th><th>Backup</th><th>Restore</th><th>Healthcheck</th></tr></thead>
+                <tbody>
+                  <tr><td class="fg-2">PostgreSQL</td><td class="mono muted">postgres:16-alpine</td><td class="num-col">5432</td><td class="mono">pg_dump</td><td class="mono">pg_restore</td><td class="mono">pg_isready</td></tr>
+                  <tr><td class="fg-2">MySQL</td><td class="mono muted">mysql:8.0</td><td class="num-col">3306</td><td class="mono">mysqldump</td><td class="mono">mysql &lt; dump.sql</td><td class="mono">mysqladmin ping</td></tr>
+                  <tr><td class="fg-2">MariaDB</td><td class="mono muted">mariadb:11</td><td class="num-col">3306</td><td class="mono">mariadb-dump</td><td class="mono">mariadb &lt; dump.sql</td><td class="mono">healthcheck.sh</td></tr>
+                  <tr><td class="fg-2">MongoDB</td><td class="mono muted">mongo:7</td><td class="num-col">27017</td><td class="mono">mongodump</td><td class="mono">mongorestore</td><td class="mono">mongosh --eval ping</td></tr>
+                  <tr><td class="fg-2">Redis</td><td class="mono muted">redis:7-alpine</td><td class="num-col">6379</td><td class="mono">RDB / AOF copy</td><td class="mono">nạp lại RDB</td><td class="mono">redis-cli ping</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="card-foot"><span class="small muted grow">Env chuẩn khi tạo container: user, password, database — password đọc từ bảng <span class="mono">secrets</span> theo reference.</span></div>
+          </div>
+          <aside class="stack gap-4" data-od-id="db-aside">
+            <div class="aside-card" data-od-id="db-storage-aside">
+              <div class="between mb-3">
+                <h4>Đích lưu trữ</h4>
+                <span class="tag tag--success"><span class="dot dot--online"></span>đã kiểm tra</span>
+              </div>
+              <dl class="kv">
+                <dt>Nhà cung cấp</dt><dd>Cloudflare R2</dd>
+                <dt>Bucket</dt><dd class="mono">gotham-backups</dd>
+                <dt>Endpoint</dt><dd class="mono truncate">8f2c1ab9d4e7.r2.cloudflarestorage.com</dd>
+                <dt>Khoá</dt><dd class="mono">secrets#s3-backup-key</dd>
+              </dl>
+              <button class="btn btn-outline btn-block mt-4" type="button" data-open="s3config">Cấu hình S3</button>
+            </div>
+            <div class="aside-card" data-od-id="db-schedule-aside">
+              <h4 class="mb-3">Lịch backup tự động</h4>
+              <div class="stack gap-3">
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow">pg-orders <span class="mono">0 2 * * *</span></span><span class="mono small">02:00</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow">pg-analytics <span class="mono">0 2 * * *</span></span><span class="mono small">02:00</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow">redis-cache <span class="mono">0 */6 * * *</span></span><span class="mono small">6 giờ</span></div>
+                <div class="status-line"><span class="dot dot--offline"></span><span class="grow">mysql-legacy · chưa bật lịch</span><span class="mono small">—</span></div>
+                <div class="status-line"><span class="dot dot--offline"></span><span class="grow">mongo-catalog · chưa bật lịch</span><span class="mono small">—</span></div>
+              </div>
+              <p class="small muted mt-3">Cron chạy trong control plane, bảng <span class="mono">backup_schedules</span>.</p>
+            </div>
+            <div class="aside-card" data-od-id="db-retention-aside">
+              <h4 class="mb-3">Soft delete &amp; retention</h4>
+              <dl class="kv">
+                <dt>Volume</dt><dd class="mono">giữ 7 ngày</dd>
+                <dt>Bản dump</dt><dd class="mono">30 ngày trên R2</dd>
+                <dt>Rollback</dt><dd>restore từ dump mới nhất</dd>
+              </dl>
+              <p class="small muted mt-3">Sau 7 ngày, job dọn dẹp của CP xoá volume vĩnh viễn. Bản dump trên S3 không bị ảnh hưởng.</p>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+<!-- ── Create-database wizard ────────────────────────────────────────────── -->
+<div class="overlay" id="wizard" hidden>
+  <div class="modal modal--lg" role="dialog" aria-modal="true" aria-labelledby="db-wizard-title">
+    <div class="modal-head">
+      <div>
+        <h3 id="db-wizard-title">Tạo database</h3>
+        <p class="small muted">Chọn engine → cấu hình volume, credentials và backup → xác nhận. Container được tạo trên node qua agent gRPC.</p>
+      </div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="wizard" data-wizard>
+      <div class="wizard-rail">
+        <ol>
+          <li class="is-active"><span class="idx">1</span>Chọn engine</li>
+          <li><span class="idx">2</span>Cấu hình</li>
+          <li><span class="idx">3</span>Xác nhận &amp; tạo</li>
+        </ol>
+        <p class="small muted mt-4">Healthcheck và port lấy từ spec của engine. Volume luôn tách khỏi vòng đời container.</p>
+      </div>
+      <div>
+        <div class="wizard-body">
+          <section class="wstep" data-od-id="wizard-step-1">
+            <h4 class="mb-3">Engine</h4>
+            <div class="pg-engine-grid">
+              <label class="tpl-card pg-engine" for="e-postgres">
+                <span class="pg-engine-top"><span class="tpl-mark">PG</span><span class="check"><input type="radio" id="e-postgres" name="db-engine" value="postgres" checked /></span></span>
+                <span><span class="pg-engine-name">PostgreSQL 16</span><span class="pg-engine-meta">postgres:16-alpine · :5432</span></span>
+              </label>
+              <label class="tpl-card pg-engine" for="e-mysql">
+                <span class="pg-engine-top"><span class="tpl-mark">MY</span><span class="check"><input type="radio" id="e-mysql" name="db-engine" value="mysql" /></span></span>
+                <span><span class="pg-engine-name">MySQL 8.0</span><span class="pg-engine-meta">mysql:8.0 · :3306</span></span>
+              </label>
+              <label class="tpl-card pg-engine" for="e-mariadb">
+                <span class="pg-engine-top"><span class="tpl-mark">MD</span><span class="check"><input type="radio" id="e-mariadb" name="db-engine" value="mariadb" /></span></span>
+                <span><span class="pg-engine-name">MariaDB 11</span><span class="pg-engine-meta">mariadb:11 · :3306</span></span>
+              </label>
+              <label class="tpl-card pg-engine" for="e-mongo">
+                <span class="pg-engine-top"><span class="tpl-mark">MG</span><span class="check"><input type="radio" id="e-mongo" name="db-engine" value="mongodb" /></span></span>
+                <span><span class="pg-engine-name">MongoDB 7</span><span class="pg-engine-meta">mongo:7 · :27017</span></span>
+              </label>
+              <label class="tpl-card pg-engine" for="e-redis">
+                <span class="pg-engine-top"><span class="tpl-mark">RD</span><span class="check"><input type="radio" id="e-redis" name="db-engine" value="redis" /></span></span>
+                <span><span class="pg-engine-name">Redis 7</span><span class="pg-engine-meta">redis:7-alpine · :6379</span></span>
+              </label>
+            </div>
+            <div class="grid cols-2 mt-4">
+              <div class="field">
+                <label class="field-label" for="w-version">Phiên bản</label>
+                <select class="select" id="w-version">
+                  <option value="16">16 · alpine</option>
+                  <option value="15">15 · alpine</option>
+                  <option value="14">14 · alpine</option>
+                </select>
+                <span class="field-hint">Tag image = engine + phiên bản, ví dụ <span class="mono">postgres:16-alpine</span>.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="w-node">Node</label>
+                <select class="select" id="w-node">
+                  <option value="gotham-prod-01">gotham-prod-01 · 203.0.113.18 · 68 GiB trống</option>
+                  <option value="edge-sg-01">edge-sg-01 · 198.51.100.24 · 40 GiB trống</option>
+                  <option value="staging-01">staging-01 · 203.0.113.42 · 40 GiB trống</option>
+                </select>
+                <span class="field-hint">Container tạo qua agent trên node này; backup cũng chạy tại đây.</span>
+              </div>
+            </div>
+          </section>
+          <section class="wstep" hidden data-od-id="wizard-step-2">
+            <h4 class="mb-3">Cấu hình database</h4>
+            <div class="grid cols-2">
+              <div class="field">
+                <label class="field-label" for="w-name">Tên database</label>
+                <input class="input" id="w-name" value="pg-inventory" required data-pattern="^[a-z][a-z0-9-]{2,30}$" />
+                <span class="field-hint">Dùng cho container <span class="mono">gotham-db-{tên}</span>.</span>
+                <span class="field-error">Tên không hợp lệ: 3–31 ký tự, bắt đầu bằng chữ cái, chỉ a-z, 0-9 và dấu gạch ngang.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="w-pass">Mật khẩu</label>
+                <div class="input-group">
+                  <input class="input" id="w-pass" type="password" value="inv_9f42c7ab51de" required />
+                  <button class="btn btn-icon btn-outline" type="button" data-copy="#w-pass" aria-label="Sao chép mật khẩu"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+                </div>
+                <span class="pg-actions mt-2">
+                  <button class="btn btn-sm btn-outline" type="button" id="w-pass-gen">Tạo mật khẩu mạnh</button>
+                  <span class="small muted">Lưu trong bảng <span class="mono">secrets</span>, mã hoá AES-256-GCM.</span>
+                </span>
+              </div>
+            </div>
+            <div class="field mt-4">
+              <div class="switch-row">
+                <button class="switch" type="button" role="switch" aria-checked="false" data-switch aria-label="Bật public access" data-when-on="#public-warning"></button>
+                <div class="grow">
+                  <p class="fg-2 small bold">Bật public access</p>
+                  <p class="small muted">Mặc định database chỉ nằm trong network nội bộ. Bật để Traefik mở một cổng ra internet cho client bên ngoài.</p>
+                </div>
+              </div>
+              <div class="embed embed--warn" id="public-warning" hidden>
+                <h4>Public port là bề mặt tấn công</h4>
+                <p>Cổng sẽ được mở trên node và không giới hạn IP nguồn. Chỉ bật khi client bắt buộc, dùng mật khẩu mạnh và xoay vòng định kỳ — hoặc để trống và truy cập qua network nội bộ.</p>
+              </div>
+            </div>
+            <div class="field mt-4">
+              <label class="field-label" for="w-volume">Đường dẫn volume</label>
+              <input class="input" id="w-volume" value="/var/lib/gotham/volumes/gotham-db-pg-inventory" />
+              <span class="field-hint">Docker volume <span class="mono">gotham-db-{id}</span> được mount vào đây và giữ lại 7 ngày sau khi xoá database.</span>
+            </div>
+            <div class="grid cols-2 mt-4">
+              <div class="field">
+                <div class="switch-row">
+                  <button class="switch" type="button" role="switch" aria-checked="true" data-switch aria-label="Bật backup hằng ngày" data-when-on="#w-bkp-time"></button>
+                  <div class="grow">
+                    <p class="fg-2 small bold">Bật backup hằng ngày</p>
+                    <p class="small muted">Job chạy trong container tạm, nén rồi đẩy lên đích S3 đã cấu hình.</p>
+                  </div>
+                </div>
+              </div>
+              <div class="field" id="w-bkp-time">
+                <label class="field-label" for="w-backup-hour">Giờ chạy</label>
+                <select class="select" id="w-backup-hour">
+                  <option value="0 2 * * *">02:00 hằng ngày · 0 2 * * *</option>
+                  <option value="0 */6 * * *">mỗi 6 giờ · 0 */6 * * *</option>
+                  <option value="0 3 * * 0">03:00 chủ nhật · 0 3 * * 0</option>
+                </select>
+              </div>
+            </div>
+          </section>
+          <section class="wstep" hidden data-on-enter="runDbHealthcheck" data-od-id="wizard-step-3">
+            <h4 class="mb-3">Xác nhận &amp; tạo</h4>
+            <dl class="kv mb-4">
+              <dt>Engine / image</dt><dd class="mono">PostgreSQL 16 · postgres:16-alpine · cổng nội bộ 5432</dd>
+              <dt>Node</dt><dd class="mono">gotham-prod-01 · 203.0.113.18</dd>
+              <dt>Tên</dt><dd class="mono">pg-inventory → container gotham-db-pg-inventory</dd>
+              <dt>Volume</dt><dd class="mono">/var/lib/gotham/volumes/gotham-db-pg-inventory</dd>
+              <dt>Public port</dt><dd class="mono">tắt · chỉ trong network gotham-db</dd>
+              <dt>Backup</dt><dd class="mono">hằng ngày 02:00 · 0 2 * * * → gotham-backups</dd>
+            </dl>
+            <div class="progress mb-3">
+              <div class="bar"><div class="meter" id="hc-meter" data-meter="0"></div></div>
+              <span class="mono small" id="hc-pct">0%</span>
+            </div>
+            <div class="check-list" id="hc-checks">
+              <div class="check-row is-idle" data-check><span class="mark"></span><span class="grow">Kéo image <span class="mono">postgres:16-alpine</span></span><span class="detail">chờ</span></div>
+              <div class="check-row is-idle" data-check><span class="mark"></span><span class="grow">Tạo volume <span class="mono">gotham-db-pg-inventory</span></span><span class="detail">chờ</span></div>
+              <div class="check-row is-idle" data-check><span class="mark"></span><span class="grow">Ghi secret vào bảng <span class="mono">secrets</span></span><span class="detail">chờ</span></div>
+              <div class="check-row is-idle" data-check><span class="mark"></span><span class="grow">Chạy container qua agent gRPC</span><span class="detail">chờ</span></div>
+              <div class="check-row is-idle" data-check><span class="mark"></span><span class="grow">Healthcheck <span class="mono">pg_isready</span></span><span class="detail">chờ</span></div>
+            </div>
+            <div id="db-success" class="mt-4" hidden data-od-id="db-success">
+              <div class="embed embed--success">
+                <h4>Database đã tạo và healthcheck xanh</h4>
+                <p>Container <span class="mono">gotham-db-pg-inventory</span> đang chạy trên gotham-prod-01. Volume đã gắn, secret đã lưu và lịch backup 02:00 đã bật.</p>
+              </div>
+              <dl class="kv mt-4">
+                <dt>Host nội bộ</dt><dd class="mono">gotham-db-pg-inventory:5432</dd>
+                <dt>User</dt><dd class="mono">gotham</dd>
+                <dt>Database</dt><dd class="mono">inventory</dd>
+                <dt>Mật khẩu</dt><dd class="row gap-2"><span class="mono">inv_9f42c7ab51de</span>
+                  <button class="btn btn-sm btn-icon btn-outline" type="button" data-copy="inv_9f42c7ab51de" aria-label="Sao chép mật khẩu"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button></dd>
+                <dt>Connection string</dt><dd class="row gap-2"><span class="mono truncate">postgresql://gotham@…:5432/inventory</span>
+                  <button class="btn btn-sm btn-icon btn-outline" type="button" data-copy="postgresql://gotham:inv_9f42c7ab51de@gotham-db-pg-inventory:5432/inventory" aria-label="Sao chép connection string"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button></dd>
+              </dl>
+            </div>
+          </section>
+        </div>
+        <div class="wizard-foot">
+          <button class="btn btn-outline" type="button" data-wizard-back hidden>Quay lại</button>
+          <span class="small muted" data-wizard-counter>Bước 1 / 3</span>
+          <span class="grow"></span>
+          <button class="btn btn-ghost" type="button" data-close>Huỷ</button>
+          <button class="btn btn-secondary" type="button" data-wizard-next>Tiếp tục</button>
+          <button class="btn btn-secondary" type="button" data-wizard-done data-close hidden>Hoàn tất</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- ── S3 destination dialog ─────────────────────────────────────────────── -->
+<div class="overlay" id="s3config" hidden>
+  <div class="modal modal--sm" role="dialog" aria-modal="true" aria-labelledby="s3-title" data-od-id="s3-dialog">
+    <div class="modal-head">
+      <svg aria-hidden="true"><use href="#i-cloud"></use></svg>
+      <div>
+        <h3 id="s3-title">Đích lưu trữ S3</h3>
+        <p class="small muted">Dùng chung cho mọi database · khoá lưu trong bảng <span class="mono">secrets</span></p>
+      </div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-4">
+      <div class="field">
+        <label class="field-label" for="d-s3-provider">Nhà cung cấp</label>
+        <select class="select" id="d-s3-provider">
+          <option>AWS S3</option>
+          <option selected>Cloudflare R2</option>
+          <option>MinIO</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="field-label" for="d-s3-endpoint">Endpoint</label>
+        <input class="input" id="d-s3-endpoint" value="https://8f2c1ab9d4e7.r2.cloudflarestorage.com" />
+      </div>
+      <div class="grid cols-2">
+        <div class="field">
+          <label class="field-label" for="d-s3-bucket">Bucket</label>
+          <input class="input" id="d-s3-bucket" value="gotham-backups" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="d-s3-region">Region</label>
+          <input class="input" id="d-s3-region" value="auto" />
+        </div>
+      </div>
+      <dl class="kv">
+        <dt>Access key</dt>
+        <dd class="row gap-2"><span class="inline-code" id="d-s3-access" data-masked="true" data-value="R2AK7f3c9a2b51de84">••••••••••••</span>
+          <button class="btn btn-sm btn-icon btn-outline" type="button" data-reveal="#d-s3-access" aria-label="Hiện access key"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button></dd>
+        <dt>Secret key</dt>
+        <dd class="row gap-2"><span class="inline-code" id="d-s3-secret" data-masked="true" data-value="b7d41e90c3f5a28e6d0194bc7a3e52f0">••••••••••••</span>
+          <button class="btn btn-sm btn-icon btn-outline" type="button" data-reveal="#d-s3-secret" aria-label="Hiện secret key"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button></dd>
+      </dl>
+      <div class="row gap-3 wrap">
+        <button class="btn btn-outline" type="button" id="d-s3-test">Kiểm tra kết nối</button>
+        <span class="small muted" id="d-s3-result">chưa kiểm tra trong phiên này</span>
+      </div>
+      <div class="embed embed--info">
+        <h4>Retention</h4>
+        <p>Bản dump giữ 30 ngày trên S3. Khi xoá database, volume vẫn được giữ <span class="bold">7 ngày</span> trên node trước khi xoá vĩnh viễn.</p>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">Kiểm tra kết nối PUT rồi DELETE một object test.</span>
+      <button class="btn btn-outline" type="button" data-close>Huỷ</button>
+      <button class="btn btn-secondary" type="button" data-toast="Đã lưu đích lưu trữ Cloudflare R2 · bucket gotham-backups.|success" data-close>Lưu cấu hình</button>
+    </div>
+  </div>
+</div>
+<!-- ── Database detail drawer (pg-orders) ───────────────────────────────── -->
+<div class="drawer" id="dbdetail" hidden aria-label="Chi tiết database">
+  <div class="drawer-head">
+    <svg aria-hidden="true"><use href="#i-db"></use></svg>
+    <div class="grow">
+      <h3 data-drawer-title>pg-orders</h3>
+      <p class="small muted" data-drawer-sub>postgres:16-alpine · gotham-prod-01 · volume gotham-db-pg-orders</p>
+    </div>
+    <span class="tag tag--success"><span class="dot dot--online"></span>running</span>
+    <button class="btn btn-ghost btn-icon" type="button" data-drawer-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+  </div>
+  <div class="drawer-body">
+    <div class="tabs" data-tabs="dbdetail" data-default="overview" role="tablist">
+      <button class="tab" type="button" data-tab="overview" role="tab">Tổng quan</button>
+      <button class="tab" type="button" data-tab="backup" role="tab">Backup <span class="tag">5</span></button>
+      <button class="tab" type="button" data-tab="storage" role="tab">Đích lưu trữ</button>
+      <button class="tab" type="button" data-tab="logs" role="tab">Nhật ký</button>
+    </div>
+    <div class="stack gap-4 mt-4">
+      <!-- Tổng quan -->
+      <section class="tab-panel" data-panel="overview" role="tabpanel" data-od-id="db-panel-overview">
+        <div class="embed embed--info mb-4">
+          <h4>Bản mẫu dựng đầy đủ cho pg-orders</h4>
+          <p>Số liệu, backup và nhật ký bên dưới là của <span class="mono">pg-orders</span> trên gotham-prod-01; các database khác dùng chung bố cục này.</p>
+        </div>
+        <div class="card" data-od-id="db-credentials">
+          <div class="card-head">
+            <h4>Credentials</h4>
+            <span class="muted">bảng <span class="mono">secrets</span> · AES-256-GCM</span>
+            <span class="card-actions"><button class="btn btn-sm btn-outline" type="button" data-copy="#db-conn-raw">Sao chép connection string</button></span>
+          </div>
+          <div class="card-body stack gap-4">
+            <dl class="kv">
+              <dt>Host</dt><dd class="mono">203.0.113.18 <span class="muted">(public) · gotham-db-pg-orders (nội bộ)</span></dd>
+              <dt>Cổng</dt><dd class="mono">15432 → 5432</dd>
+              <dt>User</dt><dd class="mono">gotham</dd>
+              <dt>Database</dt><dd class="mono">orders</dd>
+              <dt>Mật khẩu</dt>
+              <dd class="row gap-2">
+                <span class="inline-code" id="db-pass" data-masked="true" data-value="pg0rd3rs_9f42c7ab51de">••••••••••••</span>
+                <button class="btn btn-sm btn-icon btn-outline" type="button" data-reveal="#db-pass" aria-label="Hiện mật khẩu"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
+                <button class="btn btn-sm btn-icon btn-outline" type="button" data-copy="pg0rd3rs_9f42c7ab51de" aria-label="Sao chép mật khẩu"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+              </dd>
+            </dl>
+            <div>
+              <p class="field-label mb-2">Connection string</p>
+              <pre class="code" id="db-conn">postgresql://gotham:••••••••••••@203.0.113.18:15432/orders?sslmode=require
+<span class="cm"># trong network nội bộ của node:</span>
+postgresql://gotham:••••••••••••@gotham-db-pg-orders:5432/orders</pre>
+              <input type="hidden" id="db-conn-raw" value="postgresql://gotham:pg0rd3rs_9f42c7ab51de@203.0.113.18:15432/orders?sslmode=require" />
+            </div>
+          </div>
+        </div>
+        <div class="card mt-4" data-od-id="db-access">
+          <div class="card-head"><h4>Public access</h4><span class="tag tag--warn">đang mở cổng 15432</span></div>
+          <div class="card-body stack gap-4">
+            <div class="switch-row">
+              <button class="switch" type="button" role="switch" aria-checked="true" data-switch aria-label="Bật public access cho pg-orders" data-switch-toast="Public access pg-orders: {state} · Traefik cập nhật cổng 15432."></button>
+              <div class="grow">
+                <p class="fg-2 small bold">Public access</p>
+                <p class="small muted">Cổng <span class="mono">15432</span> trên gotham-prod-01 chuyển tiếp vào <span class="mono">5432</span> của container. Tắt khi không còn client ngoài.</p>
+              </div>
+            </div>
+            <div class="check-list">
+              <div class="check-row is-ok"><span class="mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="grow">Healthcheck <span class="mono">pg_isready -U gotham -d orders</span></span><span class="detail">198ms · 10s trước</span></div>
+              <div class="check-row is-ok"><span class="mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="grow">Backup gần nhất <span class="mono">pg_dump</span> → Cloudflare R2</span><span class="detail">27/09 02:00</span></div>
+              <div class="check-row is-ok"><span class="mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="grow">Lịch tự động <span class="mono">0 2 * * *</span></span><span class="detail">chạy tiếp 28/09 02:00</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="card mt-4" data-od-id="db-engine-spec">
+          <div class="card-head"><h4>Spec engine</h4><span class="muted">từ implementation <span class="mono">postgres</span></span></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Thuộc tính</th><th>Giá trị</th></tr></thead>
+              <tbody>
+                <tr><td>Image</td><td class="mono">postgres:16-alpine</td></tr>
+                <tr><td>Volume</td><td class="mono">gotham-db-pg-orders → /var/lib/gotham/volumes/gotham-db-pg-orders</td></tr>
+                <tr><td>Healthcheck</td><td class="mono">pg_isready -U gotham -d orders · 10s</td></tr>
+                <tr><td>Env chuẩn</td><td class="mono">POSTGRES_USER · POSTGRES_PASSWORD · POSTGRES_DB</td></tr>
+                <tr><td>Secret refs</td><td class="mono">secrets#db-pg-orders-password</td></tr>
+                <tr><td>Cổng nội bộ</td><td class="mono">5432 (network gotham-db)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+      <!-- Backup -->
+      <section class="tab-panel" data-panel="backup" role="tabpanel" hidden data-od-id="db-panel-backup">
+        <div class="card" data-od-id="db-backup-list-card">
+          <div class="card-head">
+            <h4>Bản backup</h4>
+            <span class="tag">giữ 30 ngày trên R2</span>
+            <span class="card-actions">
+              <button class="btn btn-sm btn-secondary" type="button" id="db-backup-now">Sao lưu ngay</button>
+              <button class="btn btn-sm btn-outline" type="button" data-toast="Đã đọc lại danh sách backup từ bảng backups.|info">Làm mới</button>
+            </span>
+          </div>
+          <div id="db-backup-list" data-od-id="db-backup-rows">
+            <div class="backup-row">
+              <span class="mono small">27/09 06:00</span>
+              <span><span class="fg-2">pg_dump → container tạm gotham-backup-4830</span><span class="small muted" style="display:block">đang nén zstd rồi đẩy lên R2</span></span>
+              <span class="mono small">—</span><span class="tag tag--warn"><span class="dot dot--idle dot-pulse"></span>đang chạy</span>
+              <span class="small muted">chờ hoàn tất</span>
+            </div>
+            <div class="backup-row">
+              <span class="mono small">27/09 02:00</span>
+              <span><span class="fg-2">pg_dump → s3://gotham-backups/pg-orders/2026-09-27T0200.dump</span><span class="small muted" style="display:block">theo lịch 0 2 * * * · container gotham-backup-4821</span></span>
+              <span class="mono small">1.4 GiB</span><span class="tag tag--success"><span class="dot dot--online"></span>thành công</span>
+              <span class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-confirm="Phục hồi pg-orders từ bản 27/09 02:00? pg_restore chạy trong container tạm gotham-restore-4902 gắn volume gotham-db-pg-orders và ghi đè dữ liệu hiện tại." data-confirm-label="Phục hồi" data-confirm-toast="Đang phục hồi pg-orders từ bản 27/09 02:00 · pg_restore trong container tạm.">Phục hồi</button>
+                <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Tải bản 27/09 02:00" data-toast="Đang tải 2026-09-27T0200.dump (1.4 GiB) từ R2…|info"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
+                <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá bản 27/09 02:00" data-confirm="Xoá bản dump 2026-09-27T0200.dump trên R2? Không thể hoàn tác." data-confirm-label="Xoá bản dump" data-remove=".backup-row"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+              </span>
+            </div>
+            <div class="backup-row">
+              <span class="mono small">26/09 20:00</span>
+              <span><span class="fg-2">pg_dump → volume local gotham-backups</span><span class="small muted" style="display:block">sao lưu thủ công trước khi migrate index</span></span>
+              <span class="mono small">1.4 GiB</span><span class="tag tag--success"><span class="dot dot--online"></span>thành công</span>
+              <span class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-confirm="Phục hồi pg-orders từ bản 26/09 20:00? pg_restore chạy trong container tạm gắn volume gotham-db-pg-orders và ghi đè dữ liệu hiện tại." data-confirm-label="Phục hồi" data-confirm-toast="Đang phục hồi pg-orders từ bản 26/09 20:00.">Phục hồi</button>
+                <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Tải bản 26/09 20:00" data-toast="Đang tải bản local 26/09 20:00 (1.4 GiB)…|info"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
+                <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá bản 26/09 20:00" data-confirm="Xoá bản dump local 26/09 20:00 trên node? Không thể hoàn tác." data-confirm-label="Xoá bản dump" data-remove=".backup-row"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+              </span>
+            </div>
+            <div class="backup-row">
+              <span class="mono small">26/09 14:00</span>
+              <span><span class="fg-2">pg_dump → s3://gotham-backups/pg-orders/2026-09-26T1400.dump</span><span class="small muted" style="display:block">sao lưu thủ công trước khi deploy 1184</span></span>
+              <span class="mono small">1.3 GiB</span><span class="tag tag--success"><span class="dot dot--online"></span>thành công</span>
+              <span class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-confirm="Phục hồi pg-orders từ bản 26/09 14:00? pg_restore chạy trong container tạm gắn volume gotham-db-pg-orders và ghi đè dữ liệu hiện tại." data-confirm-label="Phục hồi" data-confirm-toast="Đang phục hồi pg-orders từ bản 26/09 14:00.">Phục hồi</button>
+                <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Tải bản 26/09 14:00" data-toast="Đang tải 2026-09-26T1400.dump (1.3 GiB) từ R2…|info"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
+                <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá bản 26/09 14:00" data-confirm="Xoá bản dump 2026-09-26T1400.dump trên R2? Không thể hoàn tác." data-confirm-label="Xoá bản dump" data-remove=".backup-row"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+              </span>
+            </div>
+            <div class="backup-row">
+              <span class="mono small">26/09 02:00</span>
+              <span><span class="fg-2">pg_dump → s3://gotham-backups/pg-orders/2026-09-26T0200.dump</span><span class="small muted" style="display:block">S3 trả 503 ba lần liên tiếp, job dừng sau retry 3/3</span></span>
+              <span class="mono small">1.3 GiB</span><span class="tag tag--danger"><span class="dot dot--dnd"></span>thất bại</span>
+              <span class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng chạy lại job backup 26/09 02:00.|info">Chạy lại</button>
+                <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Tải log job 26/09 02:00" data-drawer-open="dbdetail" data-drawer-title="pg-orders" data-drawer-sub="job backup 26/09 02:00 thất bại · xem tab Nhật ký"><svg aria-hidden="true"><use href="#i-terminal"></use></svg></button>
+              </span>
+            </div>
+          </div>
+          <div class="card-foot">
+            <span class="small muted grow">Mỗi job tạo container tạm, mount volume và xoá container ngay sau khi upload xong.</span>
+          </div>
+        </div>
+        <div class="card mt-4" data-od-id="db-schedule-editor">
+          <div class="card-head"><h4>Lịch tự động</h4><span class="muted">bảng <span class="mono">backup_schedules</span> · cron trong control plane</span></div>
+          <div class="card-body stack gap-4">
+            <div class="field">
+              <label class="field-label" for="cron-input">Cron</label>
+              <div class="filters">
+                <button class="chip is-active" type="button" data-cron="0 2 * * *">0 2 * * * · hằng ngày 02:00</button>
+                <button class="chip" type="button" data-cron="0 */6 * * *">0 */6 * * * · mỗi 6 giờ</button>
+                <button class="chip" type="button" data-cron="0 3 * * 0">0 3 * * 0 · chủ nhật 03:00</button>
+              </div>
+              <div class="pg-cron mt-2">
+                <input class="input grow" id="cron-input" value="0 2 * * *" aria-label="Biểu thức cron" />
+                <button class="btn btn-outline" type="button" id="db-cron-save">Lưu lịch</button>
+              </div>
+              <span class="field-hint">Giờ theo timezone control plane (Asia/Ho_Chi_Minh). Job chạy tuần tự trên từng node để không tranh disk I/O.</span>
+            </div>
+            <div class="check-list">
+              <div class="check-row is-ok"><span class="mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="grow">Lần chạy gần nhất · 27/09 02:00 · 3 phút 18 giây</span><span class="detail">1.4 GiB</span></div>
+              <div class="check-row is-idle"><span class="mark"></span><span class="grow">Lần chạy kế tiếp · 28/09 02:00</span><span class="detail">còn 19 giờ</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- Đích lưu trữ -->
+      <section class="tab-panel" data-panel="storage" role="tabpanel" hidden data-od-id="db-panel-storage">
+        <div class="card" data-od-id="db-s3-destination">
+          <div class="card-head">
+            <h4>Đích lưu trữ S3</h4>
+            <span class="tag tag--success"><span class="dot dot--online"></span>kiểm tra 5 giờ trước</span>
+          </div>
+          <div class="card-body stack gap-4">
+            <div class="grid cols-2">
+              <div class="field">
+                <label class="field-label" for="s3-provider">Nhà cung cấp</label>
+                <select class="select" id="s3-provider">
+                  <option>AWS S3</option>
+                  <option selected>Cloudflare R2</option>
+                  <option>MinIO</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="field-label" for="s3-region">Region</label>
+                <input class="input" id="s3-region" value="auto" />
+              </div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="s3-endpoint">Endpoint</label>
+              <input class="input" id="s3-endpoint" value="https://8f2c1ab9d4e7.r2.cloudflarestorage.com" />
+              <span class="field-hint">MinIO nội bộ dùng dạng <span class="mono">http://minio.gotham.internal:9000</span>.</span>
+            </div>
+            <div class="grid cols-2">
+              <div class="field">
+                <label class="field-label" for="s3-bucket">Bucket</label>
+                <input class="input" id="s3-bucket" value="gotham-backups" />
+              </div>
+              <div class="field">
+                <label class="field-label" for="s3-prefix">Tiền tố key</label>
+                <input class="input" id="s3-prefix" value="pg-orders/" />
+              </div>
+            </div>
+            <dl class="kv">
+              <dt>Access key</dt>
+              <dd class="row gap-2"><span class="inline-code" id="s3-access" data-masked="true" data-value="R2AK7f3c9a2b51de84">••••••••••••</span>
+                <button class="btn btn-sm btn-icon btn-outline" type="button" data-reveal="#s3-access" aria-label="Hiện access key"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button></dd>
+              <dt>Secret key</dt>
+              <dd class="row gap-2"><span class="inline-code" id="s3-secret" data-masked="true" data-value="b7d41e90c3f5a28e6d0194bc7a3e52f0">••••••••••••</span>
+                <button class="btn btn-sm btn-icon btn-outline" type="button" data-reveal="#s3-secret" aria-label="Hiện secret key"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button></dd>
+              <dt>Object gần nhất</dt><dd class="mono truncate">pg-orders/2026-09-27T0200.dump</dd>
+            </dl>
+            <div class="row gap-3 wrap">
+              <button class="btn btn-outline" type="button" id="s3-test">Kiểm tra kết nối</button>
+              <button class="btn btn-outline" type="button" data-toast="Đã lưu đích lưu trữ cho pg-orders.|success">Lưu cấu hình</button>
+              <span class="small muted" id="s3-result">chưa kiểm tra trong phiên này</span>
+            </div>
+            <div class="embed embed--info">
+              <h4>Retention &amp; soft delete</h4>
+              <p>Bản dump giữ 30 ngày trên S3. Khi xoá database, container bị gỡ ngay nhưng volume <span class="mono">gotham-db-pg-orders</span> vẫn được giữ <span class="bold">7 ngày</span> trên node trước khi xoá vĩnh viễn — restore từ bản dump mới nhất là cách rollback chính.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- Nhật ký -->
+      <section class="tab-panel" data-panel="logs" role="tabpanel" hidden data-od-id="db-panel-logs">
+        <div class="card" data-od-id="db-log-viewer" data-log="db-log">
+          <div class="card-head">
+            <h4>Nhật ký backup &amp; restore</h4>
+            <span class="realtime" data-log-state>đang stream</span>
+          </div>
+          <div class="card-body stack gap-3">
+            <div class="row gap-2 wrap">
+              <button class="btn btn-sm btn-outline" type="button" data-log-pause><svg aria-hidden="true"><use href="#i-stop"></use></svg><span>Tạm dừng</span></button>
+              <button class="btn btn-sm btn-outline" type="button" data-log-follow><svg aria-hidden="true"><use href="#i-download"></use></svg><span>Tự động cuộn</span></button>
+              <button class="btn btn-sm btn-outline" type="button" data-log-clear>Xoá buffer</button>
+              <button class="btn btn-sm btn-outline" type="button" data-log-download data-log-name="pg-orders-backup.log"><svg aria-hidden="true"><use href="#i-download"></use></svg><span>Tải log</span></button>
+              <span class="small muted grow right" data-log-clock>đang stream</span>
+            </div>
+            <div class="log" data-log-body style="min-height:320px;max-height:46vh"></div>
+            <p class="small muted">Job backup 4821 · <span class="mono">pg_dump</span> trong container tạm gotham-backup-4821 · nguồn: stdout của container, đẩy qua agent gRPC → WebSocket.</p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script type="application/json" id="db-log">
+[
+  {"t":"02:00:01","level":"step","m":"job backup 4821 bắt đầu · pg-orders · lịch 0 2 * * *"},
+  {"t":"02:00:02","level":"info","m":"tạo container tạm gotham-backup-4821 · image postgres:16-alpine"},
+  {"t":"02:00:02","level":"dim","m":"mount gotham-db-pg-orders:/var/lib/gotham/volumes/gotham-db-pg-orders"},
+  {"t":"02:00:03","level":"info","m":"pg_dump --format=custom --no-owner --no-acl -U gotham -d orders"},
+  {"t":"02:00:41","level":"info","m":"pg_dump: dumping contents of table \"public.orders\""},
+  {"t":"02:01:12","level":"info","m":"pg_dump: dumping contents of table \"public.order_items\""},
+  {"t":"02:02:03","level":"info","m":"pg_dump: dumping contents of table \"public.customers\""},
+  {"t":"02:02:44","level":"warn","m":"pg_dump: bỏ qua large object 16422 · không đủ quyền đọc"},
+  {"t":"02:03:20","level":"info","m":"pg_dump hoàn tất · 1.4 GiB · 3 phút 18 giây"},
+  {"t":"02:03:21","level":"info","m":"nén zstd -19 → pg-orders-2026-09-27T0200.dump.zst"},
+  {"t":"02:03:58","level":"info","m":"upload s3://gotham-backups/pg-orders/2026-09-27T0200.dump.zst · 412 MiB"},
+  {"t":"02:04:06","level":"ok","m":"checksum sha256 khớp · 9f42c7ab51de84b2"},
+  {"t":"02:04:07","level":"info","m":"xoá container tạm gotham-backup-4821"},
+  {"t":"02:04:08","level":"ok","m":"backup 4821 thành công · giữ 30 ngày trên Cloudflare R2"},
+  {"t":"02:04:08","level":"dim","m":"lịch kế tiếp 2026-09-28 02:00 (Asia/Ho_Chi_Minh)"}
+]
+</script>
+
+<script src="assets/gotham-ui.js"></script>
+<script>
+  /* ── Page behaviour: chỉ dùng contract có sẵn của gotham-ui.js ─────────── */
+  (function () {
+    "use strict";
+
+    /* 1. Tên database → đường dẫn volume gotham-db-{id}. */
+    var nameInput = document.getElementById("w-name");
+    var volInput = document.getElementById("w-volume");
+    function syncVolume() {
+      if (!nameInput || !volInput) return;
+      var slug = (nameInput.value || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+      volInput.value = "/var/lib/gotham/volumes/gotham-db-" + (slug || "{id}");
+    }
+    if (nameInput) nameInput.addEventListener("input", syncVolume);
+    syncVolume();
+
+    /* 2. Tạo mật khẩu mạnh. */
+    var gen = document.getElementById("w-pass-gen");
+    var pwInput = document.getElementById("w-pass");
+    if (gen && pwInput) {
+      gen.addEventListener("click", function () {
+        var chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        var bytes = new Uint8Array(24);
+        if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes);
+        else for (var k = 0; k < bytes.length; k++) bytes[k] = Math.floor(Math.random() * 256);
+        var out = "";
+        for (var i = 0; i < bytes.length; i++) out += chars.charAt(bytes[i] % chars.length);
+        pwInput.value = out;
+        pwInput.type = "text";
+        window.Gotham.toast("Đã tạo mật khẩu 24 ký tự. Bấm biểu tượng copy để lấy giá trị.", "success");
+      });
+    }
+
+    /* 3. Wizard bước 3: healthcheck + trạng thái thành công. */
+    var HC = [
+      "postgres:16-alpine · 68 MiB · 4.2s",
+      "gotham-db-pg-inventory · 0 B đã dùng",
+      "secrets#db-pg-inventory-password · AES-256-GCM",
+      "gotham-db-pg-inventory · running · agent gRPC",
+      "pg_isready -U gotham -d inventory · 204ms"
+    ];
+    window.runDbHealthcheck = function () {
+      var meter = document.getElementById("hc-meter");
+      var pct = document.getElementById("hc-pct");
+      var ok = document.getElementById("db-success");
+      var rows = document.querySelectorAll("#hc-checks [data-check]");
+      if (!meter || !rows.length) return;
+      var fill = meter.querySelector(".meter-fill");
+      if (!fill) { fill = document.createElement("span"); fill.className = "meter-fill"; meter.appendChild(fill); }
+      if (ok) ok.hidden = true;
+      rows.forEach(function (r) {
+        r.className = "check-row is-idle";
+        r.querySelector(".mark").textContent = "";
+        r.querySelector(".detail").textContent = "chờ";
+      });
+      var i = 0;
+      var step = function () {
+        var p = Math.round((i / rows.length) * 100);
+        fill.style.width = p + "%";
+        if (pct) pct.textContent = p + "%";
+        if (i >= rows.length) {
+          if (ok) ok.hidden = false;
+          window.Gotham.toast("pg-inventory đã tạo trên gotham-prod-01 · healthcheck xanh.", "success");
+          return;
+        }
+        var row = rows[i];
+        row.className = "check-row is-running";
+        row.querySelector(".detail").textContent = "đang chạy";
+        var detail = HC[i];
+        window.setTimeout(function () { row.querySelector(".detail").textContent = detail; }, 360);
+        i++;
+        window.setTimeout(step, 620);
+      };
+      step();
+    };
+
+    /* 4. Sao lưu ngay: thêm dòng đang chạy rồi chuyển sang thành công. */
+    var nowBtn = document.getElementById("db-backup-now");
+    var list = document.getElementById("db-backup-list");
+    var seq = 0;
+    if (nowBtn && list) {
+      nowBtn.addEventListener("click", function () {
+        seq++;
+        var row = document.createElement("div");
+        row.className = "backup-row";
+        row.innerHTML =
+          '<span class="mono small">27/09 14:0' + seq + '</span>' +
+          '<span><span class="fg-2">pg_dump → container tạm gotham-backup-483' + seq + '</span>' +
+          '<span class="small muted" style="display:block">đang nén zstd rồi đẩy lên R2</span></span>' +
+          '<span class="mono small">—</span>' +
+          '<span class="tag tag--warn"><span class="dot dot--idle dot-pulse"></span>đang chạy</span>' +
+          '<span class="small muted">chờ hoàn tất</span>';
+        list.insertBefore(row, list.firstChild);
+        nowBtn.classList.add("is-busy");
+        window.setTimeout(function () {
+          nowBtn.classList.remove("is-busy");
+          row.children[1].innerHTML =
+            '<span class="fg-2">pg_dump → s3://gotham-backups/pg-orders/2026-09-27T140' + seq + '.dump</span>' +
+            '<span class="small muted" style="display:block">checksum khớp · đã upload lên Cloudflare R2</span>';
+          row.children[2].textContent = "1.4 GiB";
+          row.children[3].className = "tag tag--success";
+          row.children[3].innerHTML = '<span class="dot dot--online"></span>thành công';
+          row.children[4].className = "row-actions";
+          row.children[4].innerHTML =
+            '<button class="btn btn-sm btn-outline" type="button" data-confirm="Phục hồi pg-orders từ bản vừa tạo? pg_restore chạy trong container tạm gắn volume gotham-db-pg-orders và ghi đè dữ liệu hiện tại." data-confirm-label="Phục hồi" data-confirm-toast="Đang phục hồi pg-orders từ bản vừa tạo.">Phục hồi</button>' +
+            '<button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Tải bản vừa tạo" data-toast="Đang tải bản dump vừa tạo (1.4 GiB) từ R2…|info"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>';
+          window.Gotham.init(row);
+          window.Gotham.toast("Backup pg-orders hoàn tất · 1.4 GiB trên Cloudflare R2.", "success");
+        }, 1800);
+      });
+    }
+
+    /* 5. Preset cron + lưu lịch. */
+    var cronInput = document.getElementById("cron-input");
+    var cronChips = document.querySelectorAll("[data-cron]");
+    cronChips.forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        if (cronInput) cronInput.value = chip.dataset.cron;
+        cronChips.forEach(function (c) { c.classList.toggle("is-active", c === chip); });
+      });
+    });
+    var cronSave = document.getElementById("db-cron-save");
+    if (cronSave && cronInput) {
+      cronSave.addEventListener("click", function () {
+        window.Gotham.toast("Đã lưu lịch " + cronInput.value + " cho pg-orders · lần chạy kế tiếp 28/09 02:00.", "success");
+      });
+    }
+
+    /* 6. Kiểm tra kết nối S3 (dialog + tab Đích lưu trữ). */
+    function wireS3Test(btnId, outId) {
+      var btn = document.getElementById(btnId);
+      var out = document.getElementById(outId);
+      if (!btn || !out) return;
+      btn.addEventListener("click", function () {
+        btn.classList.add("is-busy");
+        out.className = "small muted";
+        out.textContent = "Đang PUT object test…";
+        window.setTimeout(function () {
+          btn.classList.remove("is-busy");
+          out.className = "tag tag--success";
+          out.innerHTML = '<span class="dot dot--online"></span>PUT + DELETE OK · 214ms';
+          window.Gotham.toast("Kết nối S3 OK · bucket gotham-backups ghi được object test.", "success");
+        }, 1100);
+      });
+    }
+    wireS3Test("d-s3-test", "d-s3-result");
+    wireS3Test("s3-test", "s3-result");
+  })();
+</script>
+</body>
+</html>

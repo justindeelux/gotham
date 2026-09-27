@@ -1,0 +1,847 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Nhóm &amp; cài đặt · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+<style>
+  /* Trang cục bộ: chỉ class mới có tiền tố pg-, không định nghĩa lại class chung. */
+  .pg-role { width: 132px; }
+  .pg-note { font-size: var(--text-xs); color: var(--muted); }
+</style>
+</head>
+<body data-page="team-settings" data-nav="team">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Máy chủ đang quản lý"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Nhóm · Gotham Labs</p>
+            <h1>Nhóm &amp; cài đặt</h1>
+            <p class="page-desc">Mọi tài nguyên — ứng dụng, database, service, máy chủ — thuộc đúng một nhóm. Thành viên giữ một trong ba role <span class="inline-code">owner</span> / <span class="inline-code">admin</span> / <span class="inline-code">read-only</span>. Thông báo phát ra từ event emitter của deploy và backup, cấu hình ở cấp nhóm và có thể ghi đè ở cấp tài nguyên.</p>
+          </div>
+          <div class="page-actions"><button class="btn btn-primary" type="button" data-open="invite">Mời thành viên</button></div>
+        </div>
+
+        <div class="tabs" data-tabs="settings" data-default="members" role="tablist">
+          <button class="tab" type="button" data-tab="members" role="tab">Thành viên</button>
+          <button class="tab" type="button" data-tab="invites" role="tab">Lời mời <span class="tag">1</span></button>
+          <button class="tab" type="button" data-tab="notifications" role="tab">Kênh thông báo <span class="tag">4</span></button>
+          <button class="tab" type="button" data-tab="tokens" role="tab">API tokens <span class="tag">3</span></button>
+          <button class="tab" type="button" data-tab="update" role="tab">Cập nhật <span class="tag">v0.10.0</span></button>
+        </div>
+
+        <!-- ── Thành viên ────────────────────────────────────────────────── -->
+        <section class="tab-panel" data-panel="members" role="tabpanel" data-od-id="panel-members">
+          <div class="split-2 mt-5">
+            <div class="stack gap-4">
+              <div class="card" data-od-id="member-table">
+                <div class="card-head">
+                  <h3>Thành viên nhóm</h3><span class="meta">4 thành viên · 1 owner · 2 admin · 1 read-only</span>
+                </div>
+                <div class="table-wrap">
+                  <table class="table">
+                    <thead><tr><th>Thành viên</th><th>Tên</th><th>Role</th><th>2FA</th><th>Hoạt động cuối</th><th class="actions">Thao tác</th></tr></thead>
+                    <tbody>
+                      <tr>
+                        <td><div class="cell-main"><span class="avatar-wrap"><span class="avatar avatar--sm avatar--neutral">NA</span><span class="dot dot--online dot--ring"></span></span><span><span class="fg-2">nga.tran@gotham.dev</span><span class="cell-sub" style="display:block">đăng nhập qua GitHub OAuth</span></span></div></td>
+                        <td>Nga Trần</td>
+                        <td><select class="select pg-role" aria-label="Role của nga.tran@gotham.dev"><option value="owner" selected>owner</option><option value="admin">admin</option><option value="read-only">read-only</option></select></td>
+                        <td><span class="tag tag--success">TOTP</span></td><td class="mono small">vừa xong</td>
+                        <td class="actions"><div class="row-actions"><button class="btn btn-sm btn-ghost" type="button" aria-disabled="true" data-toast="Không thể gỡ owner cuối cùng — chuyển role owner cho người khác trước.|warn">Gỡ</button></div></td>
+                      </tr>
+                      <tr>
+                        <td><div class="cell-main"><span class="avatar-wrap"><span class="avatar avatar--sm avatar--neutral">MP</span><span class="dot dot--online dot--ring"></span></span><span><span class="fg-2">minh.pham@gotham.dev</span><span class="cell-sub" style="display:block">đang xem deploy 1184</span></span></div></td>
+                        <td>Minh Phạm</td>
+                        <td><select class="select pg-role" aria-label="Role của minh.pham@gotham.dev"><option value="owner">owner</option><option value="admin" selected>admin</option><option value="read-only">read-only</option></select></td>
+                        <td><span class="tag tag--success">TOTP</span></td><td class="mono small">4 phút trước</td>
+                        <td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-confirm="Gỡ minh.pham@gotham.dev khỏi nhóm Gotham Labs? Tài nguyên và lịch sử deploy vẫn được giữ." data-confirm-label="Gỡ thành viên" data-confirm-toast="Đã gỡ minh.pham@gotham.dev khỏi nhóm." data-remove="tr">Gỡ</button></div></td>
+                      </tr>
+                      <tr>
+                        <td><div class="cell-main"><span class="avatar-wrap"><span class="avatar avatar--sm avatar--neutral">DL</span><span class="dot dot--offline dot--ring"></span></span><span><span class="fg-2">duc.le@gotham.dev</span><span class="cell-sub" style="display:block">offline 2 giờ</span></span></div></td>
+                        <td>Đức Lê</td>
+                        <td><select class="select pg-role" aria-label="Role của duc.le@gotham.dev"><option value="owner">owner</option><option value="admin" selected>admin</option><option value="read-only">read-only</option></select></td>
+                        <td><span class="tag tag--warn">chưa bật</span></td><td class="mono small">2 giờ trước</td>
+                        <td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-confirm="Gỡ duc.le@gotham.dev khỏi nhóm Gotham Labs? Tài nguyên và lịch sử deploy vẫn được giữ." data-confirm-label="Gỡ thành viên" data-confirm-toast="Đã gỡ duc.le@gotham.dev khỏi nhóm." data-remove="tr">Gỡ</button></div></td>
+                      </tr>
+                      <tr>
+                        <td><div class="cell-main"><span class="avatar-wrap"><span class="avatar avatar--sm avatar--neutral">LN</span><span class="dot dot--idle dot--ring"></span></span><span><span class="fg-2">linh.nguyen@gotham.dev</span><span class="cell-sub" style="display:block">read-only · chỉ xem metrics</span></span></div></td>
+                        <td>Linh Nguyễn</td>
+                        <td><select class="select pg-role" aria-label="Role của linh.nguyen@gotham.dev"><option value="owner">owner</option><option value="admin">admin</option><option value="read-only" selected>read-only</option></select></td>
+                        <td><span class="tag tag--success">TOTP</span></td><td class="mono small">12 phút trước</td>
+                        <td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-confirm="Gỡ linh.nguyen@gotham.dev khỏi nhóm Gotham Labs? Tài nguyên và lịch sử deploy vẫn được giữ." data-confirm-label="Gỡ thành viên" data-confirm-toast="Đã gỡ linh.nguyen@gotham.dev khỏi nhóm." data-remove="tr">Gỡ</button></div></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="card-foot">
+                  <span class="small muted grow">Vai trò kiểm tra qua <span class="mono">RequireTeam</span> + RBAC checker; bảng <span class="mono">team_members</span> gắn user với nhóm.</span>
+                  <a class="btn btn-sm btn-ghost" href="team-settings.html#invites">Lời mời đang chờ</a>
+                </div>
+              </div>
+
+              <div class="callout" data-od-id="last-owner-note">
+                <svg aria-hidden="true"><use href="#i-lock"></use></svg>
+                <div>
+                  <h4>Owner cuối cùng không thể bị hạ quyền</h4>
+                  <p>Nhóm luôn phải còn ít nhất một <span class="inline-code">owner</span>. API trả <span class="mono">409 last_owner</span> khi bạn đổi role của owner cuối cùng hoặc tự gỡ mình khỏi nhóm — hãy chuyển role owner cho người khác trước. Đây là ghi chú chỉ đọc, không phải một thiết lập.</p>
+                </div>
+              </div>
+
+              <div class="card" data-od-id="permission-matrix">
+                <div class="card-head">
+                  <h3>Ma trận quyền theo role</h3><span class="meta">áp dụng cho mọi tài nguyên của nhóm</span>
+                </div>
+                <div class="table-wrap">
+                  <table class="table">
+                    <thead><tr><th>Quyền</th><th class="center">owner</th><th class="center">admin</th><th class="center">read-only</th></tr></thead>
+                    <tbody>
+                      <tr><td>Xem tài nguyên</td><td class="center"><span class="tick">✓</span></td><td class="center"><span class="tick">✓</span></td><td class="center"><span class="tick">✓</span></td></tr>
+                      <tr><td>Deploy &amp; rollback</td><td class="center"><span class="tick">✓</span></td><td class="center"><span class="tick">✓</span></td><td class="center"><span class="dash">—</span></td></tr>
+                      <tr><td>Quản lý biến môi trường &amp; secrets</td><td class="center"><span class="tick">✓</span></td><td class="center"><span class="tick">✓</span></td><td class="center"><span class="dash">—</span></td></tr>
+                      <tr><td>Thêm &amp; xoá máy chủ</td><td class="center"><span class="tick">✓</span></td><td class="center"><span class="dash">—</span></td><td class="center"><span class="dash">—</span></td></tr>
+                      <tr><td>Quản lý thành viên &amp; token</td><td class="center"><span class="tick">✓</span></td><td class="center"><span class="tick">✓</span></td><td class="center"><span class="dash">—</span></td></tr>
+                      <tr><td>Cập nhật control plane</td><td class="center"><span class="tick">✓</span></td><td class="center"><span class="dash">—</span></td><td class="center"><span class="dash">—</span></td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="card-foot">
+                  <span class="small muted grow">admin quản lý được thành viên và token nhưng không thể gỡ owner hay đổi role owner; cập nhật control plane chỉ dành cho owner.</span>
+                </div>
+              </div>
+            </div>
+
+            <aside class="stack gap-4" data-od-id="members-aside">
+              <div class="aside-card">
+                <h4 class="mb-3">Nhóm Gotham Labs</h4>
+                <dl class="kv">
+                  <dt>team_id</dt><dd class="mono">t_gotham-labs</dd><dt>Thành viên</dt><dd class="mono">4</dd>
+                  <dt>Tài nguyên</dt><dd class="mono">25</dd><dt>Vai trò của bạn</dt><dd class="mono">owner</dd>
+                  <dt>Tạo lúc</dt><dd class="mono">2026-08-27</dd>
+                </dl>
+                <p class="pg-note mt-3">12 ứng dụng · 5 database · 4 service · 4 máy chủ đều gắn <span class="mono">team_id</span> này.</p>
+              </div>
+              <div class="aside-card">
+                <h4 class="mb-3">RBAC thực thi ở đâu</h4>
+                <div class="stack gap-3">
+                  <div class="status-line"><span class="dot dot--online"></span><span class="grow">JWT claim <span class="mono">role</span> theo từng nhóm</span></div>
+                  <div class="status-line"><span class="dot dot--online"></span><span class="grow">API lọc tài nguyên theo <span class="mono">team_id</span></span></div>
+                  <div class="status-line"><span class="dot dot--online"></span><span class="grow">Ghi audit log mọi thao tác quản trị</span></div>
+                </div>
+                <a class="btn btn-outline btn-block mt-4" href="team-settings.html#tokens">API tokens của nhóm</a>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- ── Lời mời ──────────────────────────────────────────────────── -->
+        <section class="tab-panel" data-panel="invites" role="tabpanel" hidden data-od-id="panel-invites">
+          <div class="split-2 mt-5">
+            <div class="card" data-od-id="invite-table">
+              <div class="card-head">
+                <h3>Lời mời đang chờ</h3><span class="meta">1 lời mời · hết hạn sau 6 ngày</span>
+                <span class="card-actions"><button class="btn btn-sm btn-outline" type="button" data-open="invite"><svg aria-hidden="true"><use href="#i-plus"></use></svg>Mời thành viên</button></span>
+              </div>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead><tr><th>Email</th><th>Role</th><th>Gửi</th><th>Hết hạn</th><th class="actions">Thao tác</th></tr></thead>
+                  <tbody>
+                    <tr>
+                      <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">HD</span><span><span class="fg-2">hai.do@gotham.dev</span><span class="cell-sub" style="display:block">người nhận chưa có tài khoản Gotham</span></span></div></td>
+                      <td><span class="tag">read-only</span></td>
+                      <td class="mono small">2 ngày trước</td>
+                      <td class="mono small">còn 6 ngày</td>
+                      <td class="actions"><div class="row-actions">
+                        <button class="btn btn-sm btn-outline" type="button" data-copy="https://cp.gotham.dev/invite/8f2c4e7a91d3b650"><svg aria-hidden="true"><use href="#i-copy"></use></svg>Sao chép link</button>
+                        <button class="btn btn-sm btn-outline" type="button" data-confirm="Thu hồi lời mời tới hai.do@gotham.dev? Link trong email hết hiệu lực ngay lập tức." data-confirm-label="Thu hồi lời mời" data-confirm-toast="Đã thu hồi lời mời tới hai.do@gotham.dev." data-remove="tr">Thu hồi</button>
+                      </div></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="card-foot">
+                <span class="small muted grow">Lời mời dùng một lần và gắn với email; chấp nhận xong người nhận vào nhóm với role đã chọn.</span>
+              </div>
+            </div>
+
+            <aside class="stack gap-4" data-od-id="invite-aside">
+              <div class="aside-card">
+                <div class="between mb-3">
+                  <h4>Link mời của nhóm</h4>
+                  <span class="tag">1 link</span>
+                </div>
+                <pre class="code">https://cp.gotham.dev/invite/8f2c4e7a91d3b650</pre>
+                <p class="pg-note mt-3">Gắn với hai.do@gotham.dev · hết hạn 03/10/2026 · role read-only.</p>
+                <div class="row gap-2 mt-4 wrap">
+                  <button class="btn btn-sm btn-outline" type="button" data-copy="https://cp.gotham.dev/invite/8f2c4e7a91d3b650"><svg aria-hidden="true"><use href="#i-copy"></use></svg>Sao chép link</button>
+                  <a class="btn btn-sm btn-ghost" href="team-settings.html#members">Về danh sách thành viên</a>
+                </div>
+              </div>
+              <div class="aside-card">
+                <h4 class="mb-3">Quy trình lời mời</h4>
+                <div class="stack gap-3">
+                  <div class="status-line"><span class="dot dot--online"></span><span class="grow">Gửi email kèm link một lần</span></div>
+                  <div class="status-line"><span class="dot dot--online"></span><span class="grow">Người nhận tạo mật khẩu argon2id</span></div>
+                  <div class="status-line"><span class="dot dot--idle"></span><span class="grow">Hết hạn sau 8 ngày là thu hồi</span></div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- ── Kênh thông báo ────────────────────────────────────────────── -->
+        <section class="tab-panel" data-panel="notifications" role="tabpanel" hidden data-od-id="panel-notifications">
+          <div class="stack gap-4 mt-5">
+            <div class="card" data-od-id="event-matrix">
+              <div class="card-head">
+                <h3>Sự kiện phát thông báo</h3><span class="meta">nguồn: event emitter của deploy, backup, heartbeat và ACME</span>
+                <span class="card-actions"><span class="tag">6 sự kiện</span></span>
+              </div>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead><tr><th>Sự kiện</th><th>Event key</th><th>Payload chính</th><th class="actions">Bật</th></tr></thead>
+                  <tbody>
+                    <tr>
+                      <td><span class="fg-2">Deploy thành công</span><span class="cell-sub" style="display:block">app, commit, thời lượng, URL</span></td>
+                      <td class="mono muted">deploy.succeeded</td><td class="mono muted">deploy_id · app · duration_ms</td>
+                      <td class="actions"><button class="switch" type="button" role="switch" aria-checked="true" aria-label="Bật thông báo Deploy thành công" data-switch data-switch-toast="Deploy thành công: đã {state} thông báo."></button></td>
+                    </tr>
+                    <tr>
+                      <td><span class="fg-2">Deploy thất bại</span><span class="cell-sub" style="display:block">bước lỗi, log cuối, deploy_id</span></td>
+                      <td class="mono muted">deploy.failed</td><td class="mono muted">deploy_id · step · exit_code</td>
+                      <td class="actions"><button class="switch" type="button" role="switch" aria-checked="true" aria-label="Bật thông báo Deploy thất bại" data-switch data-switch-toast="Deploy thất bại: đã {state} thông báo."></button></td>
+                    </tr>
+                    <tr>
+                      <td><span class="fg-2">Backup thành công</span><span class="cell-sub" style="display:block">database, dung lượng, nơi lưu</span></td>
+                      <td class="mono muted">backup.succeeded</td><td class="mono muted">database_id · size · target</td>
+                      <td class="actions"><button class="switch" type="button" role="switch" aria-checked="true" aria-label="Bật thông báo Backup thành công" data-switch data-switch-toast="Backup thành công: đã {state} thông báo."></button></td>
+                    </tr>
+                    <tr>
+                      <td><span class="fg-2">Backup thất bại</span><span class="cell-sub" style="display:block">database, mã lỗi, lần thử lại</span></td>
+                      <td class="mono muted">backup.failed</td><td class="mono muted">database_id · error · retry_at</td>
+                      <td class="actions"><button class="switch" type="button" role="switch" aria-checked="true" aria-label="Bật thông báo Backup thất bại" data-switch data-switch-toast="Backup thất bại: đã {state} thông báo."></button></td>
+                    </tr>
+                    <tr>
+                      <td><span class="fg-2">Node mất heartbeat</span><span class="cell-sub" style="display:block">node, độ trễ, phiên bản agent</span></td>
+                      <td class="mono muted">heartbeat.missed</td><td class="mono muted">server_id · late_seconds · agent</td>
+                      <td class="actions"><button class="switch" type="button" role="switch" aria-checked="true" aria-label="Bật thông báo Node mất heartbeat" data-switch data-switch-toast="Node mất heartbeat: đã {state} thông báo."></button></td>
+                    </tr>
+                    <tr>
+                      <td><span class="fg-2">Chứng chỉ sắp hết hạn</span><span class="cell-sub" style="display:block">domain, ngày hết hạn, resolver</span></td>
+                      <td class="mono muted">cert.expiring</td><td class="mono muted">domain · expires_at · resolver</td>
+                      <td class="actions"><button class="switch" type="button" role="switch" aria-checked="false" aria-label="Bật thông báo Chứng chỉ sắp hết hạn" data-switch data-switch-toast="Chứng chỉ sắp hết hạn: đã {state} thông báo."></button></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="card-foot">
+                <span class="small muted grow">Sự kiện phát ra từ event emitter của Phase 4, <span class="mono">Notifier</span> gửi tới 4 kênh bên dưới.</span>
+              </div>
+            </div>
+
+            <div class="channel-card" data-od-id="channel-discord">
+              <span class="channel-mark"><svg aria-hidden="true"><use href="#i-chat"></use></svg></span>
+              <div class="grow stack gap-3">
+                <div class="between gap-4">
+                  <div><h4>Discord webhook</h4><p class="small muted">Kênh <span class="mono">#gotham-alerts</span> · webhook của nhóm Gotham Labs</p></div>
+                  <span class="tag tag--success"><span class="dot dot--online"></span>đang bật</span>
+                </div>
+                <div class="grid cols-2">
+                  <div class="field">
+                    <label class="field-label" for="dc-url">Webhook URL</label><input class="input" id="dc-url" value="https://discord.com/api/webhooks/1184…/8f2c…" />
+                    <span class="field-hint">Lưu mã hoá AES-256-GCM, giao diện chỉ hiện 4 ký tự cuối.</span>
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="dc-chan">Kênh nhận</label><input class="input" id="dc-chan" value="#gotham-alerts" />
+                  </div>
+                </div>
+                <div class="row gap-3 wrap">
+                  <button class="btn btn-sm btn-outline" type="button" data-test-channel="discord"><svg aria-hidden="true"><use href="#i-send"></use></svg>Gửi thử</button>
+                  <span class="small muted" data-test-result="discord">Lần gửi gần nhất 14:02 · 200 OK</span>
+                </div>
+                <div class="between gap-4">
+                  <span class="small muted">Bật kênh này — deploy và backup của nhóm sẽ gửi thông báo vào Discord</span>
+                  <button class="switch" type="button" role="switch" aria-checked="true" aria-label="Bật kênh Discord webhook" data-switch data-switch-toast="Discord webhook: đã {state}."></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="channel-card" data-od-id="channel-slack">
+              <span class="channel-mark"><svg aria-hidden="true"><use href="#i-hash"></use></svg></span>
+              <div class="grow stack gap-3">
+                <div class="between gap-4">
+                  <div><h4>Slack</h4><p class="small muted">Kênh <span class="mono">#deploys</span> · incoming webhook</p></div>
+                  <span class="tag">chưa bật</span>
+                </div>
+                <div class="grid cols-2">
+                  <div class="field">
+                    <label class="field-label" for="sl-url">Incoming webhook URL</label><input class="input" id="sl-url" value="https://hooks.slack.com/services/T04…/B07…/…" />
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="sl-chan">Kênh nhận</label><input class="input" id="sl-chan" value="#deploys" />
+                  </div>
+                </div>
+                <div class="row gap-3 wrap">
+                  <button class="btn btn-sm btn-outline" type="button" data-test-channel="slack"><svg aria-hidden="true"><use href="#i-send"></use></svg>Gửi thử</button>
+                  <span class="small muted" data-test-result="slack">Chưa gửi thử lần nào</span>
+                </div>
+                <div class="between gap-4">
+                  <span class="small muted">Bật kênh này — chỉ nhận các sự kiện đã bật ở bảng phía trên</span>
+                  <button class="switch" type="button" role="switch" aria-checked="false" aria-label="Bật kênh Slack" data-switch data-switch-toast="Slack: đã {state}."></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="channel-card" data-od-id="channel-telegram">
+              <span class="channel-mark"><svg aria-hidden="true"><use href="#i-send"></use></svg></span>
+              <div class="grow stack gap-3">
+                <div class="between gap-4">
+                  <div><h4>Telegram</h4><p class="small muted">Bot <span class="mono">@gotham_deploy_bot</span> · chat của nhóm</p></div>
+                  <span class="tag">chưa bật</span>
+                </div>
+                <div class="grid cols-2">
+                  <div class="field">
+                    <label class="field-label" for="tg-token">Bot token</label><input class="input" id="tg-token" type="password" value="7184…:AAH…" />
+                    <span class="field-hint">Token do BotFather cấp, lưu mã hoá cùng webhook.</span>
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="tg-chat">Chat ID</label><input class="input" id="tg-chat" value="-1002184…" />
+                  </div>
+                </div>
+                <div class="row gap-3 wrap">
+                  <button class="btn btn-sm btn-outline" type="button" data-test-channel="telegram"><svg aria-hidden="true"><use href="#i-send"></use></svg>Gửi thử</button>
+                  <span class="small muted" data-test-result="telegram">Chưa gửi thử lần nào</span>
+                </div>
+                <div class="between gap-4">
+                  <span class="small muted">Bật kênh này — phù hợp cho cảnh báo heartbeat ngoài giờ</span>
+                  <button class="switch" type="button" role="switch" aria-checked="false" aria-label="Bật kênh Telegram" data-switch data-switch-toast="Telegram: đã {state}."></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="channel-card" data-od-id="channel-email">
+              <span class="channel-mark"><svg aria-hidden="true"><use href="#i-mail"></use></svg></span>
+              <div class="grow stack gap-3">
+                <div class="between gap-4">
+                  <div><h4>Email</h4><p class="small muted">SMTP <span class="mono">ops@gotham.dev</span> · gửi tới mọi thành viên owner và admin</p></div>
+                  <span class="tag">chưa bật</span>
+                </div>
+                <div class="grid cols-2">
+                  <div class="field">
+                    <label class="field-label" for="em-host">Máy chủ SMTP</label><input class="input" id="em-host" value="smtp.gotham.dev" />
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="em-port">Cổng</label><input class="input" id="em-port" value="587" inputmode="numeric" />
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="em-user">Người dùng SMTP</label><input class="input" id="em-user" value="ops@gotham.dev" />
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="em-tls">Mã hoá</label><span class="input-affix"><input class="input" id="em-tls" value="STARTTLS" readonly /></span>
+                  </div>
+                </div>
+                <div class="row gap-3 wrap">
+                  <button class="btn btn-sm btn-outline" type="button" data-test-channel="email"><svg aria-hidden="true"><use href="#i-send"></use></svg>Gửi thử</button>
+                  <span class="small muted" data-test-result="email">Chưa gửi thử lần nào</span>
+                </div>
+                <div class="between gap-4">
+                  <span class="small muted">Bật kênh này — dùng địa chỉ <span class="mono">ops@gotham.dev</span> làm người gửi</span>
+                  <button class="switch" type="button" role="switch" aria-checked="false" aria-label="Bật kênh Email" data-switch data-switch-toast="Email: đã {state}."></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="callout" data-od-id="channel-scope-note">
+              <svg aria-hidden="true"><use href="#i-info"></use></svg>
+              <div>
+                <h4>Channel cấu hình ở cấp nhóm, từng tài nguyên có thể ghi đè</h4>
+                <p>Bảng <span class="mono">notification_channels</span> giữ cấu hình nhóm kèm mapping sự kiện → kênh; mỗi ứng dụng hoặc database có thể ghi đè để chỉ gửi deploy của riêng nó vào một kênh khác (ví dụ <span class="mono">#shop-alerts</span>). Ghi đè ở tài nguyên thắng cấu hình nhóm.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── API tokens ────────────────────────────────────────────────── -->
+        <section class="tab-panel" data-panel="tokens" role="tabpanel" hidden data-od-id="panel-tokens">
+          <div class="split-2 mt-5">
+            <div class="stack gap-4">
+              <div class="card" data-od-id="token-table">
+                <div class="card-head">
+                  <h3>API tokens của nhóm</h3><span class="meta">3 token đang hoạt động</span>
+                  <span class="card-actions"><button class="btn btn-sm btn-outline" type="button" data-open="token-modal"><svg aria-hidden="true"><use href="#i-plus"></use></svg>Tạo token</button></span>
+                </div>
+                <div class="table-wrap">
+                  <table class="table">
+                    <thead><tr><th>Tên token</th><th>Scope</th><th>Người tạo</th><th>Dùng lần cuối</th><th>Ngày tạo</th><th class="actions">Thao tác</th></tr></thead>
+                    <tbody data-token-rows>
+                      <tr>
+                        <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">CD</span><span><span class="mono fg-2">ci-deploy</span><span class="cell-sub" style="display:block">dùng cho GitHub Actions của repo storefront</span></span></div></td>
+                        <td><span class="tag">deploy</span></td>
+                        <td class="small muted">nga.tran@gotham.dev</td><td class="mono small">12 phút trước</td><td class="mono small">27/08/2026</td>
+                        <td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-confirm="Thu hồi token ci-deploy? Mọi request dùng token này nhận 401 ngay lập tức." data-confirm-label="Thu hồi token" data-confirm-toast="Đã thu hồi token ci-deploy." data-remove="tr">Thu hồi</button></div></td>
+                      </tr>
+                      <tr>
+                        <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">GR</span><span><span class="mono fg-2">grafana-read</span><span class="cell-sub" style="display:block">dashboard Grafana đọc metrics node</span></span></div></td>
+                        <td><span class="tag">read</span></td>
+                        <td class="small muted">minh.pham@gotham.dev</td><td class="mono small">3 giờ trước</td><td class="mono small">27/08/2026</td>
+                        <td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-confirm="Thu hồi token grafana-read? Dashboard Grafana sẽ mất quyền đọc metrics." data-confirm-label="Thu hồi token" data-confirm-toast="Đã thu hồi token grafana-read." data-remove="tr">Thu hồi</button></div></td>
+                      </tr>
+                      <tr>
+                        <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">LA</span><span><span class="mono fg-2">legacy-admin</span><span class="cell-sub" style="display:block">token cũ của CLI, không còn dùng</span></span></div></td>
+                        <td><span class="tag">read</span> <span class="tag">deploy</span> <span class="tag tag--warn">admin</span></td>
+                        <td class="small muted">nga.tran@gotham.dev</td><td><span class="mono small" style="color:var(--warn-ink)">41 ngày trước</span></td><td class="mono small">27/08/2026</td>
+                        <td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-confirm="Thu hồi token legacy-admin? Token này có scope admin nên thu hồi nếu không còn dùng." data-confirm-label="Thu hồi token" data-confirm-toast="Đã thu hồi token legacy-admin." data-remove="tr">Thu hồi</button></div></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="card-foot">
+                  <span class="small muted grow">Token tạo một lần, CP chỉ lưu hash argon2id cùng mảng <span class="mono">scopes[]</span> và <span class="mono">last_used_at</span>.</span>
+                </div>
+              </div>
+
+              <div class="callout" data-od-id="token-bearer-note">
+                <svg aria-hidden="true"><use href="#i-shield"></use></svg>
+                <div>
+                  <h4>API token và JWT dùng chung một Bearer middleware</h4>
+                  <p>Mọi request tới <span class="mono">/api/v1</span> đi qua <span class="mono">RequireAuth</span>: header <span class="inline-code">Authorization: Bearer &lt;token&gt;</span> được verify như JWT trước, nếu không phải JWT thì tra hash token. Scope map sang role khi kiểm tra RBAC — <span class="mono">read</span> → <span class="mono">read-only</span>, <span class="mono">deploy</span> → <span class="mono">admin</span>, <span class="mono">admin</span> → <span class="mono">owner</span> — nên token luôn bị giới hạn trong nhóm đã tạo nó.</p>
+                </div>
+              </div>
+            </div>
+
+            <aside class="stack gap-4" data-od-id="tokens-aside">
+              <div class="aside-card">
+                <h4 class="mb-3">Quy tắc token</h4>
+                <dl class="kv">
+                  <dt>Tiền tố</dt><dd class="mono">gth_</dd><dt>Hash</dt><dd class="mono">argon2id</dd>
+                  <dt>Hiển thị</dt><dd>một lần duy nhất</dd><dt>Thu hồi</dt><dd>có hiệu lực tức thời</dd>
+                  <dt>Kiểm tra</dt><dd class="mono">last_used_at</dd>
+                </dl>
+              </div>
+              <div class="aside-card">
+                <h4 class="mb-3">Dùng token</h4>
+                <pre class="code">curl -H "Authorization: Bearer gth_…" \
+  https://cp.gotham.dev/api/v1/applications</pre>
+                <p class="pg-note mt-3">Webhook deploy cũng nhận token qua query <span class="mono">?token=</span> cho CI không đặt được header.</p>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- ── Cập nhật ──────────────────────────────────────────────────── -->
+        <section class="tab-panel" data-panel="update" role="tabpanel" hidden data-od-id="panel-update">
+          <div class="split-2 mt-5">
+            <div class="stack gap-4">
+              <div class="update-card" data-od-id="update-control-plane">
+                <div class="between gap-4 wrap">
+                  <div><h3 class="row gap-2">Control plane <span class="version-chip" data-cp-version>v0.9.4</span></h3><p class="small muted mt-2">Binary <span class="mono">/usr/local/bin/gotham</span> · systemd <span class="mono">gotham.service</span> · kênh <span class="mono" data-channel-label>stable</span></p></div>
+                  <div class="row gap-2 wrap">
+                    <div class="segmented" data-seg="cp-channel" aria-label="Kênh phát hành">
+                      <button class="is-active" type="button" data-value="stable">stable</button>
+                      <button type="button" data-value="beta">beta</button>
+                    </div>
+                    <button class="btn btn-outline" type="button" data-update-check><svg aria-hidden="true"><use href="#i-refresh"></use></svg>Kiểm tra cập nhật</button>
+                  </div>
+                </div>
+
+                <div class="mt-4" data-update-result hidden data-od-id="update-result">
+                  <div class="rule mb-4"></div>
+                  <div class="between gap-4 wrap">
+                    <div>
+                      <p class="fg-2 bold">v0.10.0 khả dụng <span class="tag tag--accent">kênh stable</span></p>
+                      <p class="small muted mt-2">Phát hành 24/09/2026 · 19.2 MiB · linux/amd64 · tải từ GitHub Releases</p>
+                    </div>
+                    <span class="tag tag--success"><span class="tick">✓</span> chữ ký hợp lệ</span>
+                  </div>
+                  <dl class="kv mt-4">
+                    <dt>Chữ ký</dt><dd><span class="tick">✓</span> Ed25519 đã xác minh bằng public key nhúng trong binary</dd>
+                    <dt>Checksum</dt><dd class="mono">sha256:4f1a9c07e2b6d8…</dd><dt>Kiến trúc</dt><dd class="mono">linux/amd64</dd>
+                    <dt>Kích thước</dt><dd class="mono">19.2 MiB</dd>
+                  </dl>
+                  <h4 class="mt-5 mb-3">Release notes</h4>
+                  <ul class="stack gap-2">
+                    <li class="status-line"><span class="tick">✓</span><span>Self-update có chữ ký: <span class="mono">gotham update</span> tải bản mới, xác minh Ed25519, thay binary và giữ <span class="mono">gotham.old</span>.</span></li>
+                    <li class="status-line"><span class="tick">✓</span><span>Agent tự cập nhật từ xa qua <span class="mono">RequestUpdate</span> (chỉ nhận từ CP đã xác thực mTLS).</span></li>
+                    <li class="status-line"><span class="tick">✓</span><span>Nhóm &amp; RBAC: role owner/admin/read-only, lời mời qua email kèm link một lần.</span></li>
+                    <li class="status-line"><span class="tick">✓</span><span>Thông báo deploy/backup qua Discord, Slack, Telegram và email, ghi đè được ở cấp tài nguyên.</span></li>
+                    <li class="status-line"><span class="tick">✓</span><span>Metrics node thêm network I/O và rollup 1m/1h/1d, lưu 30 ngày.</span></li>
+                  </ul>
+                  <div class="row gap-2 wrap mt-5">
+                    <button class="btn btn-outline" type="button" data-update-apply><svg aria-hidden="true"><use href="#i-download"></use></svg>Cập nhật ngay</button>
+                    <button class="btn btn-outline" type="button" data-update-rollback>Quay lại v0.9.4</button>
+                    <span class="small muted">Giữ <span class="inline-code">gotham.old</span> để quay lại tức thời.</span>
+                  </div>
+                  <p class="small muted mt-3">Khi cập nhật, service tự khởi động lại, healthcheck sau update, rollback tự động nếu fail.</p>
+                  <div class="progress mt-3" data-update-progress hidden>
+                    <span class="small muted nowrap" data-update-label>Đang tải gotham v0.10.0…</span>
+                    <span class="bar meter" data-meter="0" data-update-meter></span>
+                    <span class="mono small" data-update-pct>0%</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="update-card" data-od-id="update-agents">
+                <div class="between gap-4 wrap">
+                  <div><h3>Agent trên các node</h3><p class="small muted mt-2">CP giữ bảng phiên bản agent và đẩy <span class="inline-code">RequestUpdate</span> kèm URL, checksum, chữ ký qua gRPC mTLS.</p></div>
+                  <button class="btn btn-outline" type="button" data-agents-update><svg aria-hidden="true"><use href="#i-upload"></use></svg>Cập nhật tất cả agent</button>
+                </div>
+                <div class="table-wrap mt-4">
+                  <table class="table">
+                    <thead><tr><th>Node</th><th>Agent</th><th>Kiến trúc</th><th>Trạng thái</th></tr></thead>
+                    <tbody>
+                      <tr data-agent-row>
+                        <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">P1</span><span class="fg-2">gotham-prod-01</span></div></td>
+                        <td class="mono" data-agent-ver>v0.9.4</td><td class="mono muted">linux/amd64</td>
+                        <td><span class="status-line" data-agent-state><span class="dot dot--online"></span>ổn định · heartbeat 3s</span></td>
+                      </tr>
+                      <tr data-agent-row>
+                        <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">ES</span><span class="fg-2">edge-sg-01</span></div></td>
+                        <td class="mono" data-agent-ver>v0.9.4</td><td class="mono muted">linux/amd64</td>
+                        <td><span class="status-line" data-agent-state><span class="dot dot--online"></span>ổn định · heartbeat 2s</span></td>
+                      </tr>
+                      <tr data-agent-row>
+                        <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">ST</span><span class="fg-2">staging-01</span></div></td>
+                        <td class="mono" data-agent-ver>v0.9.4</td><td class="mono muted">linux/amd64</td>
+                        <td><span class="status-line" data-agent-state><span class="dot dot--idle"></span>đang xác thực SSH</span></td>
+                      </tr>
+                      <tr data-agent-row data-agent-offline="true">
+                        <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">B2</span><span class="fg-2">build-node-02</span></div></td>
+                        <td class="mono" data-agent-ver>v0.9.3</td><td class="mono muted">linux/amd64</td>
+                        <td><span class="status-line" data-agent-state style="color:var(--danger-ink)"><span class="dot dot--dnd dot-pulse"></span>offline · heartbeat trễ 42 phút</span></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="card-foot">
+                  <span class="small muted grow">3 node ở v0.9.4, build-node-02 còn v0.9.3 và đang mất kết nối.</span>
+                </div>
+              </div>
+
+              <div class="callout" data-od-id="update-signing-note">
+                <svg aria-hidden="true"><use href="#i-shield"></use></svg>
+                <div>
+                  <h4>Bản phát hành có chữ ký, agent chỉ nhận update từ CP đã xác thực</h4>
+                  <p>Binary được ký bằng Ed25519 và xác minh bằng public key nhúng trong chính binary (<span class="mono">internal/updates</span>), dùng chung <span class="mono">cmd/signer</span> với pipeline release. Agent chỉ chấp nhận <span class="inline-code">RequestUpdate</span> từ control plane đã qua mTLS; chữ ký sai thì agent từ chối và giữ nguyên binary cũ.</p>
+                </div>
+              </div>
+            </div>
+
+            <aside class="stack gap-4" data-od-id="update-aside">
+              <div class="aside-card">
+                <h4 class="mb-3">Cấu hình cập nhật</h4>
+                <dl class="kv">
+                  <dt>Kênh</dt><dd class="mono" data-channel-label>stable</dd><dt>Binary</dt><dd class="mono">/usr/local/bin/gotham</dd>
+                  <dt>Bản cũ</dt><dd class="mono">/usr/local/bin/gotham.old</dd><dt>systemd</dt><dd class="mono">gotham.service</dd>
+                  <dt>Env</dt><dd class="mono">AUTO_UPDATE=false</dd><dt>Public key</dt><dd class="mono">ed25519 · nhúng trong binary</dd>
+                </dl>
+                <a class="btn btn-outline btn-block mt-4" href="team-settings.html#notifications">Bật thông báo khi update xong</a>
+              </div>
+              <div class="aside-card">
+                <h4 class="mb-3">Lịch sử cập nhật</h4>
+                <div class="stack gap-3">
+                  <div class="between"><span class="small muted">v0.9.4 · stable</span><span class="mono small">27/08/2026</span></div>
+                  <div class="between"><span class="small muted">v0.9.3 · stable</span><span class="mono small">12/08/2026</span></div>
+                  <div class="between"><span class="small muted">v0.9.1 · beta</span><span class="mono small">02/08/2026</span></div>
+                </div>
+                <p class="pg-note mt-3">Rollback là một phần của tính năng: bản cũ nằm ở <span class="mono">gotham.old</span> cho tới lần cập nhật kế tiếp.</p>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ── Mời thành viên ───────────────────────────────────────────────────── -->
+<div class="overlay" id="invite" hidden>
+  <div class="modal modal--sm" role="dialog" aria-modal="true" aria-labelledby="invite-title">
+    <div class="modal-head">
+      <div><h3 id="invite-title">Mời thành viên</h3><p class="small muted">Lời mời gửi qua email kèm link tham gia nhóm Gotham Labs.</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-4">
+      <div class="field" data-invite-email-field>
+        <label class="field-label" for="inv-email">Email</label>
+        <input class="input" id="inv-email" type="email" placeholder="ten@gotham.dev" required />
+        <span class="field-error">Email không hợp lệ.</span>
+      </div>
+      <div class="field">
+        <label class="field-label" for="inv-role">Role</label>
+        <select class="select" id="inv-role">
+          <option value="read-only" selected>read-only — chỉ xem tài nguyên</option>
+          <option value="admin">admin — deploy, secret, thành viên &amp; token</option>
+          <option value="owner">owner — toàn quyền, kể cả cập nhật control plane</option>
+        </select>
+        <span class="field-hint">Có thể đổi role sau khi người được mời chấp nhận.</span>
+      </div>
+      <div class="callout">
+        <svg aria-hidden="true"><use href="#i-key"></use></svg>
+        <div>
+          <h4>Link mời dùng một lần</h4>
+          <p>Link gắn với email nhận được, hiệu lực 8 ngày và tự hết hạn. Người nhận đặt mật khẩu argon2id ở lần đăng nhập đầu tiên.</p>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">Lời mời được ghi vào audit log của nhóm.</span>
+      <button class="btn btn-ghost" type="button" data-close>Huỷ</button>
+      <button class="btn btn-primary" type="button" data-invite-send>Gửi lời mời</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Tạo API token ────────────────────────────────────────────────────── -->
+<div class="overlay" id="token-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="token-modal-title">
+    <div class="modal-head">
+      <div><h3 id="token-modal-title">Tạo API token</h3><p class="small muted">Token dùng cho CI, webhook và CLI. Plaintext chỉ hiện một lần, CP lưu hash argon2id.</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="stack gap-4" data-token-form>
+        <div class="field" data-token-name-field>
+          <label class="field-label" for="tok-name">Tên token</label>
+          <input class="input" id="tok-name" value="ci-deploy-2" required pattern="^[a-z][a-z0-9-]{2,30}$" data-pattern="^[a-z][a-z0-9-]{2,30}$" aria-describedby="tok-name-hint" />
+          <span class="field-hint" id="tok-name-hint">Chữ thường, số và gạch ngang. Ví dụ: <span class="mono">ci-deploy</span></span>
+          <span class="field-error">Tên token phải khớp <span class="mono">^[a-z][a-z0-9-]{2,30}$</span>.</span>
+        </div>
+        <fieldset style="border:0;padding:0;margin:0">
+          <legend class="field-label mb-2">Scope của token</legend>
+          <div class="scope-grid">
+            <label class="check">
+              <input type="checkbox" data-scope="read" checked />
+              <span><span class="fg-2">read</span><span class="cell-sub" style="display:block">chỉ đọc tài nguyên</span></span>
+            </label>
+            <label class="check">
+              <input type="checkbox" data-scope="deploy" checked />
+              <span><span class="fg-2">deploy</span><span class="cell-sub" style="display:block">kích hoạt deploy, rollback, webhook</span></span>
+            </label>
+            <label class="check">
+              <input type="checkbox" data-scope="admin" />
+              <span><span class="fg-2">admin</span><span class="cell-sub" style="display:block">toàn quyền, gồm quản lý máy chủ và token</span></span>
+            </label>
+          </div>
+        </fieldset>
+      </div>
+
+      <div class="token-reveal" data-token-reveal hidden data-od-id="token-reveal">
+        <div class="between mb-3">
+          <h4>Token vừa tạo</h4>
+          <span class="tag tag--warn">chỉ hiển thị một lần</span>
+        </div>
+        <div class="row gap-2">
+          <code class="code grow" id="token-plain" data-masked="false" data-value="gth_9f2c4b7e1a8d3f60c5b2e9147ad83f26" data-mask="gth_••••••••••••••••••••••••••••">gth_9f2c4b7e1a8d3f60c5b2e9147ad83f26</code>
+          <button class="btn btn-sm btn-icon btn-outline" type="button" data-reveal="#token-plain" aria-label="Ẩn giá trị token"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
+          <button class="btn btn-sm btn-icon btn-outline" type="button" data-copy="gth_9f2c4b7e1a8d3f60c5b2e9147ad83f26" data-token-copy aria-label="Sao chép token"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+        </div>
+        <p class="small mt-3">Token chỉ hiển thị một lần — CP chỉ lưu hash (argon2id). Sao chép và cất vào secret store của CI ngay bây giờ.</p>
+        <p class="small muted mt-2" data-token-meta>Tên: ci-deploy-2 · scope: read, deploy · tạo lúc 27/09/2026 14:20</p>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">Token gắn với nhóm Gotham Labs; thu hồi có hiệu lực tức thời.</span>
+      <button class="btn btn-ghost" type="button" data-close>Huỷ</button>
+      <button class="btn btn-primary" type="button" data-token-create>Tạo</button>
+      <button class="btn btn-primary" type="button" data-close hidden data-token-done>Xong</button>
+    </div>
+  </div>
+</div>
+
+<script src="assets/gotham-ui.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  /* Hash → tab: initTabs đọc location.hash lúc mount; ở đây xử lý khi hash đổi
+     ngay trên trang (sidebar và các liên kết trỏ tới #notifications, #tokens, #update). */
+  window.addEventListener("hashchange", function () {
+    var key = location.hash.replace("#", "");
+    var btn = document.querySelector('[data-tabs="settings"] [data-tab="' + key + '"]');
+    if (btn) btn.click();
+  });
+
+  /* Kênh thông báo — gửi thử: đang gửi → đã gửi, kèm toast và dòng kết quả inline. */
+  var KET_QUA = {
+    discord: "Đã gửi tới Discord #gotham-alerts · 200 OK · 142ms",
+    slack: "Đã gửi tới Slack #deploys · 200 OK · 208ms",
+    telegram: "Đã gửi tới Telegram chat -1002184… · 200 OK · 331ms",
+    email: "SMTP smtp.gotham.dev:587 · STARTTLS · đã xếp hàng 1 thư tới ops@gotham.dev"
+  };
+  document.querySelectorAll("[data-test-channel]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      if (btn.classList.contains("is-busy")) return;
+      var id = btn.dataset.testChannel;
+      var out = document.querySelector('[data-test-result="' + id + '"]');
+      btn.classList.add("is-busy");
+      if (out) { out.textContent = "Đang gửi…"; out.style.color = "var(--muted)"; }
+      window.setTimeout(function () {
+        btn.classList.remove("is-busy");
+        if (out) { out.textContent = KET_QUA[id] || "Đã gửi thử."; out.style.color = "var(--success-ink)"; }
+        window.Gotham.toast("Gửi thử thành công qua kênh " + id + ".", "success");
+      }, 900);
+    });
+  });
+
+  /* Lời mời: kiểm tra email rồi đóng dialog. */
+  var inviteSend = document.querySelector("[data-invite-send]");
+  if (inviteSend) inviteSend.addEventListener("click", function () {
+    var field = document.querySelector("[data-invite-email-field]");
+    var input = document.getElementById("inv-email");
+    var email = (input.value || "").trim();
+    var ok = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(email);
+    field.classList.toggle("has-error", !ok);
+    if (!ok) { window.Gotham.toast("Nhập email hợp lệ để gửi lời mời.", "danger"); return; }
+    var role = document.getElementById("inv-role").value;
+    window.Gotham.toast("Đã gửi lời mời tới " + email + " · role " + role + " · link hiệu lực 8 ngày.", "success");
+    window.Gotham.close(document.getElementById("invite"));
+  });
+
+  /* API token: tạo → hiện panel token một lần. Hai chuỗi mẫu để thử tạo nhiều lần. */
+  var TOKENS = ["gth_9f2c4b7e1a8d3f60c5b2e9147ad83f26", "gth_3b71d05ca9e4f8126b7d3a5e0c91f4d2"];
+  var tokenIdx = 0;
+  var tokenForm = document.querySelector("[data-token-form]");
+  var tokenReveal = document.querySelector("[data-token-reveal]");
+  var tokenPlain = document.getElementById("token-plain");
+  var tokenMeta = document.querySelector("[data-token-meta]");
+  var tokenCopy = document.querySelector("[data-token-copy]");
+  var tokenNameField = document.querySelector("[data-token-name-field]");
+  var tokenName = document.getElementById("tok-name");
+  var tokenCreate = document.querySelector("[data-token-create]");
+  var tokenDone = document.querySelector("[data-token-done]");
+
+  document.querySelectorAll('[data-open="token-modal"]').forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      tokenForm.hidden = false;
+      tokenReveal.hidden = true;
+      tokenCreate.hidden = false;
+      tokenDone.hidden = true;
+      tokenNameField.classList.remove("has-error");
+    });
+  });
+
+  tokenCreate.addEventListener("click", function () {
+    var name = (tokenName.value || "").trim();
+    var hopLe = /^[a-z][a-z0-9-]{2,30}$/.test(name);
+    tokenNameField.classList.toggle("has-error", !hopLe);
+    if (!hopLe) { window.Gotham.toast("Tên token phải khớp ^[a-z][a-z0-9-]{2,30}$.", "danger"); return; }
+    var scopes = [];
+    document.querySelectorAll("[data-scope]").forEach(function (box) { if (box.checked) scopes.push(box.dataset.scope); });
+    if (!scopes.length) { window.Gotham.toast("Chọn ít nhất một scope cho token.", "danger"); return; }
+
+    var token = TOKENS[tokenIdx++ % TOKENS.length];
+    tokenPlain.textContent = token;
+    tokenPlain.dataset.value = token;
+    tokenPlain.dataset.masked = "false";
+    tokenCopy.dataset.copy = token;
+    tokenMeta.textContent = "Tên: " + name + " · scope: " + scopes.join(", ") + " · tạo lúc 27/09/2026 14:20";
+    tokenForm.hidden = true;
+    tokenReveal.hidden = false;
+    tokenCreate.hidden = true;
+    tokenDone.hidden = false;
+
+    var row = document.createElement("tr");
+    row.innerHTML =
+      '<td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">' + name.slice(0, 2).toUpperCase() + '</span><span><span class="mono fg-2">' + name + '</span><span class="cell-sub" style="display:block">vừa tạo từ giao diện</span></span></div></td>' +
+      '<td>' + scopes.map(function (s) { return '<span class="tag">' + s + '</span>'; }).join(" ") + '</td>' +
+      '<td class="small muted">nga.tran@gotham.dev</td>' +
+      '<td class="mono small">vừa tạo</td>' +
+      '<td class="mono small">27/09/2026</td>' +
+      '<td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button" data-confirm="Thu hồi token ' + name + '? Mọi request dùng token này nhận 401 ngay lập tức." data-confirm-label="Thu hồi token" data-confirm-toast="Đã thu hồi token ' + name + '." data-remove="tr">Thu hồi</button></div></td>';
+    document.querySelector("[data-token-rows]").appendChild(row);
+    window.Gotham.init(row);
+    window.Gotham.toast("Đã tạo token " + name + " · scope " + scopes.join(", ") + ".", "success");
+  });
+
+  /* Cập nhật control plane: kiểm tra → kết quả, apply → tiến trình, rollback → bản cũ. */
+  var checkBtn = document.querySelector("[data-update-check]");
+  checkBtn.addEventListener("click", function () {
+    if (checkBtn.classList.contains("is-busy")) return;
+    checkBtn.classList.add("is-busy");
+    window.setTimeout(function () {
+      checkBtn.classList.remove("is-busy");
+      document.querySelector("[data-update-result]").hidden = false;
+      window.Gotham.toast("Có bản mới v0.10.0 trên kênh stable · chữ ký Ed25519 đã xác minh.", "success");
+    }, 1000);
+  });
+
+  document.addEventListener("gotham:segment", function (e) {
+    if (e.detail.group !== "cp-channel") return;
+    document.querySelectorAll("[data-channel-label]").forEach(function (el) { el.textContent = e.detail.value; });
+    window.Gotham.toast("Đã chuyển kênh cập nhật sang " + e.detail.value + ".", "info");
+  });
+
+  var applyBtn = document.querySelector("[data-update-apply]");
+  applyBtn.addEventListener("click", function () {
+    var box = document.querySelector("[data-update-progress]");
+    var fill = document.querySelector("[data-update-meter] .meter-fill");
+    var pct = document.querySelector("[data-update-pct]");
+    var label = document.querySelector("[data-update-label]");
+    if (!fill) return;
+    box.hidden = false;
+    var buoc = ["Đang tải gotham v0.10.0 (19.2 MiB)…", "Xác minh chữ ký Ed25519…", "Thay binary, giữ gotham.old…", "systemctl restart gotham…", "Healthcheck /api/v1/health…"];
+    var v = 0;
+    window.clearInterval(window.__updateTimer);
+    window.__updateTimer = window.setInterval(function () {
+      v = Math.min(100, v + 5);
+      fill.style.width = v + "%";
+      pct.textContent = v + "%";
+      label.textContent = buoc[Math.min(buoc.length - 1, Math.floor(v / 20))];
+      if (v < 100) return;
+      window.clearInterval(window.__updateTimer);
+      label.textContent = "v0.10.0 đang chạy";
+      document.querySelector("[data-cp-version]").textContent = "v0.10.0";
+      window.Gotham.toast("Đã cập nhật lên v0.10.0 · service khởi động lại, healthcheck OK.", "success");
+    }, 80);
+  });
+
+  var rollbackBtn = document.querySelector("[data-update-rollback]");
+  rollbackBtn.addEventListener("click", function () {
+    document.querySelector("[data-cp-version]").textContent = "v0.9.4";
+    document.querySelector("[data-update-progress]").hidden = true;
+    window.Gotham.toast("Đã quay lại v0.9.4 từ /usr/local/bin/gotham.old trong 1.2s.", "info");
+  });
+
+  /* Agent: đẩy binary mới tới từng node, node offline chờ kết nối lại. */
+  var agentsBtn = document.querySelector("[data-agents-update]");
+  agentsBtn.addEventListener("click", function () {
+    if (agentsBtn.classList.contains("is-busy")) return;
+    agentsBtn.classList.add("is-busy");
+    var rows = document.querySelectorAll("[data-agent-row]");
+    rows.forEach(function (row, i) {
+      var state = row.querySelector("[data-agent-state]");
+      var ver = row.querySelector("[data-agent-ver]");
+      if (row.dataset.agentOffline === "true") {
+        state.innerHTML = '<span class="dot dot--idle dot-pulse"></span>chờ agent kết nối lại';
+        state.style.color = "var(--warn-ink)";
+        return;
+      }
+      state.innerHTML = '<span class="dot dot--idle dot-pulse"></span>đang đẩy binary v0.10.0…';
+      window.setTimeout(function () {
+        ver.textContent = "v0.10.0";
+        state.innerHTML = '<span class="dot dot--online"></span>đã cập nhật · v0.10.0';
+        state.style.color = "var(--success-ink)";
+      }, 800 + i * 600);
+    });
+    window.setTimeout(function () {
+      agentsBtn.classList.remove("is-busy");
+      window.Gotham.toast("3/4 agent đã lên v0.10.0 · build-node-02 sẽ cập nhật khi kết nối lại.", "success");
+    }, 800 + rows.length * 600 + 400);
+  });
+})();
+</script>
+</body>
+</html>

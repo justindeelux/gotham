@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Bản đồ giao diện · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+</head>
+<body data-page="index" data-nav="map">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Máy chủ đang quản lý"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="ov-hero">
+          <div>
+            <p class="eyebrow">Bản đồ giao diện · control plane v0.9.4</p>
+            <h1 class="ov-title">Toàn bộ website Gotham, thiết kế lại theo ngôn ngữ Discord.</h1>
+            <p class="lede mt-4">12 màn hình phủ hết 10 phase trong <span class="inline-code">docs/plan</span>: xác thực, node &amp; agent, Docker, deploy từ Git, database &amp; backup, Traefik/SSL, services &amp; template, preview/team/thông báo, self-update. Dark-first, một accent blurple, rail máy chủ — sidebar — cột nội dung.</p>
+            <div class="row gap-3 wrap mt-6">
+              <a class="btn btn-primary" href="dashboard.html">Mở dashboard</a>
+              <a class="btn btn-outline" href="#screens">Danh sách màn hình</a>
+              <a class="btn btn-ghost" href="#tokens">Xem token</a>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Ngữ cảnh thiết kế</h3><span class="tag">high-fidelity</span></div>
+            <div class="card-body">
+              <dl class="kv">
+                <dt>Sản phẩm</dt><dd>Gotham — self-hosted PaaS (Go + Chi + PostgreSQL + gRPC agent + Traefik + Vue 3)</dd>
+                <dt>Nguồn nội dung</dt><dd><span class="mono">README.md</span>, <span class="mono">docs/plan/00–10</span>, <span class="mono">docs/test-server.md</span>, <span class="mono">web/src</span></dd>
+                <dt>Design system</dt><dd>Discord — dark-first 3 bước, blurple <span class="mono">var(--accent)</span> là accent duy nhất</dd>
+                <dt>Khung xương</dt><dd>Rail 72px (node &amp; trạng thái) · sidebar 260px · topbar 48px · cột nội dung</dd>
+                <dt>Dữ liệu</dt><dd>Mẫu, lấy từ tài liệu dự án — xem ghi chú cuối trang</dd>
+              </dl>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title mt-8" id="screens">
+          <h2>Danh sách màn hình</h2>
+          <span class="meta">bấm để mở · điều hướng chéo bằng rail và sidebar</span>
+        </div>
+        <div class="screen-grid">
+
+          <a class="screen-card" href="dashboard.html" data-od-id="screen-dashboard">
+            <span class="thumb"><span class="thumb-rail"><i class="on"></i><i></i><i></i></span><span class="thumb-side"><i class="on"></i><i></i><i></i><i></i></span><span class="thumb-main"><span class="tiles"><i class="on"></i><i></i><i></i></span><span class="bar"></span><span class="bar w80"></span><span class="bar w60"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Tổng quan</span>
+              <span class="small muted">Sức khỏe toàn hệ: node, deploy 24 giờ, chứng chỉ, nhịp heartbeat và cảnh báo cần xử lý.</span>
+              <span class="foot"><span class="tag">Phase 0–8</span><span class="tag">KPI + activity</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="applications.html" data-od-id="screen-applications">
+            <span class="thumb"><span class="thumb-rail"><i></i><i class="on"></i><i></i></span><span class="thumb-side"><i></i><i class="on"></i><i></i><i></i></span><span class="thumb-main"><span class="bar w40"></span><span class="bar"></span><span class="bar"></span><span class="bar w80"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Ứng dụng</span>
+              <span class="small muted">12 ứng dụng từ Git, 4 build engine, wizard 5 bước từ repo tới container.</span>
+              <span class="foot"><span class="tag">Phase 4</span><span class="tag">Wizard + filter</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="application-detail.html" data-od-id="screen-application-detail">
+            <span class="thumb"><span class="thumb-rail"><i></i><i class="on"></i><i></i></span><span class="thumb-side"><i class="on"></i><i></i><i></i></span><span class="thumb-main"><span class="bar w60"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar w40"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Chi tiết ứng dụng</span>
+              <span class="small muted">State machine deploy, log build realtime, env/secret, volume, tên miền, preview PR.</span>
+              <span class="foot"><span class="tag">Phase 4 + 6 + 8</span><span class="tag">Log streaming</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="services.html" data-od-id="screen-services">
+            <span class="thumb"><span class="thumb-rail"><i></i><i></i><i class="on"></i></span><span class="thumb-side"><i></i><i></i><i class="on"></i></span><span class="thumb-main"><span class="tiles"><i></i><i class="on"></i><i></i></span><span class="bar"></span><span class="bar w60"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Services &amp; template</span>
+              <span class="small muted">Compose project, editor YAML có kiểm tra, thư viện template deploy 1-click.</span>
+              <span class="foot"><span class="tag">Phase 7</span><span class="tag">Dynamic form</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="databases.html" data-od-id="screen-databases">
+            <span class="thumb"><span class="thumb-rail"><i></i><i></i><i></i></span><span class="thumb-side"><i></i><i class="on"></i><i></i></span><span class="thumb-main"><span class="bar w40"></span><span class="bar"></span><span class="bar w80"></span><span class="bar"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Cơ sở dữ liệu</span>
+              <span class="small muted">5 engine, credentials, public port, backup ngay, lịch cron, phục hồi, đích S3/R2/MinIO.</span>
+              <span class="foot"><span class="tag">Phase 5</span><span class="tag">Destructive flows</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="files.html" data-od-id="screen-files">
+            <span class="thumb"><span class="thumb-rail"><i></i><i></i><i></i></span><span class="thumb-side"><i></i><i class="on"></i><i></i></span><span class="thumb-main"><span class="bar w60"></span><span class="bar"></span><span class="bar"></span><span class="bar w80"></span><span class="bar w40"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Quản lý file</span>
+              <span class="small muted">Duyệt volume của ứng dụng: nhiều cột, sắp xếp, tick chọn nhiều, và cụm nút chức năng hiện ra khi hover từng mục.</span>
+              <span class="foot"><span class="tag">Volume</span><span class="tag">Hover actions</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="servers.html" data-od-id="screen-servers">
+            <span class="thumb"><span class="thumb-rail"><i class="on"></i><i></i><i></i></span><span class="thumb-side"><i></i><i></i><i class="on"></i></span><span class="thumb-main"><span class="tiles"><i></i><i></i><i class="on"></i></span><span class="bar w80"></span><span class="bar w40"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Máy chủ</span>
+              <span class="small muted">Node registry, trạng thái agent, wizard SSH → xác thực → cài agent → ready.</span>
+              <span class="foot"><span class="tag">Phase 2</span><span class="tag">Wizard 4 bước</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="server-detail.html" data-od-id="screen-server-detail">
+            <span class="thumb"><span class="thumb-rail"><i class="on"></i><i></i><i></i></span><span class="thumb-side"><i></i><i class="on"></i><i></i></span><span class="thumb-main"><span class="bar"></span><span class="bar w80"></span><span class="bar"></span><span class="bar w60"></span><span class="bar"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Chi tiết máy chủ</span>
+              <span class="small muted">Container + thao tác start/stop/restart, log drawer, metrics 1h/24h/7d, Traefik, cài đặt node.</span>
+              <span class="foot"><span class="tag">Phase 3 + 8</span><span class="tag">Charts + drawer</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="domains.html" data-od-id="screen-domains">
+            <span class="thumb"><span class="thumb-rail"><i></i><i></i><i></i></span><span class="thumb-side"><i class="on"></i><i></i><i></i></span><span class="thumb-main"><span class="bar w60"></span><span class="bar"></span><span class="bar w80"></span><span class="bar w40"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Tên miền &amp; SSL</span>
+              <span class="small muted">Router Traefik, cấp cert HTTP-01/DNS-01, wildcard, nhà cung cấp DNS, redirect.</span>
+              <span class="foot"><span class="tag">Phase 6</span><span class="tag">Cert lifecycle</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="team-settings.html" data-od-id="screen-team">
+            <span class="thumb"><span class="thumb-rail"><i></i><i></i><i></i></span><span class="thumb-side"><i></i><i class="on"></i><i></i></span><span class="thumb-main"><span class="bar w40"></span><span class="bar"></span><span class="bar"></span><span class="bar w60"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Nhóm &amp; cài đặt</span>
+              <span class="small muted">Vai trò owner/admin/read-only, lời mời, 4 kênh thông báo, API token theo scope, self-update có chữ ký.</span>
+              <span class="foot"><span class="tag">Phase 1 + 8 + 9</span><span class="tag">RBAC + token</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="login.html" data-od-id="screen-login">
+            <span class="thumb"><span class="thumb-side" style="width:50%"><i class="on"></i><i></i><i></i><i></i></span><span class="thumb-main"><span class="bar w60"></span><span class="bar"></span><span class="bar"></span><span class="bar w40"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Đăng nhập / Đăng ký</span>
+              <span class="small muted">Form email + mật khẩu có kiểm tra, độ mạnh mật khẩu, OAuth GitHub, phiên JWT 15 phút.</span>
+              <span class="foot"><span class="tag">Phase 1</span><span class="tag">Validation</span></span>
+            </span>
+          </a>
+
+        </div>
+
+        <div class="section-title mt-8" id="tokens">
+          <h2>Token &amp; bảng màu</h2>
+          <span class="meta">nguồn duy nhất: <span class="mono">assets/gotham-ui.css</span> · không có hex ngoài khối token</span>
+        </div>
+        <div class="swatches" data-od-id="swatches">
+          <div class="swatch"><div class="chip-color" style="background:var(--surface-warm)"></div><div class="meta-line"><b>--surface-warm</b><span>rail · mặt phẳng sâu nhất</span></div></div>
+          <div class="swatch"><div class="chip-color" style="background:var(--surface)"></div><div class="meta-line"><b>--surface</b><span>sidebar · card</span></div></div>
+          <div class="swatch"><div class="chip-color" style="background:var(--bg)"></div><div class="meta-line"><b>--bg</b><span>mặt phẳng nội dung</span></div></div>
+          <div class="swatch"><div class="chip-color" style="background:var(--accent)"></div><div class="meta-line"><b>--accent</b><span>blurple · CTA &amp; chuỗi dữ liệu</span></div></div>
+          <div class="swatch"><div class="chip-color" style="background:var(--accent-hover)"></div><div class="meta-line"><b>--accent-hover</b><span>hover của CTA</span></div></div>
+          <div class="swatch"><div class="chip-color" style="background:var(--success)"></div><div class="meta-line"><b>--success</b><span>ready · online</span></div></div>
+          <div class="swatch"><div class="chip-color" style="background:var(--warn)"></div><div class="meta-line"><b>--warn</b><span>idle · đang chờ</span></div></div>
+          <div class="swatch"><div class="chip-color" style="background:var(--danger)"></div><div class="meta-line"><b>--danger</b><span>offline · thất bại</span></div></div>
+          <div class="swatch"><div class="chip-color" style="background:var(--fg-2)"></div><div class="meta-line"><b>--fg-2</b><span>tiêu đề</span></div></div>
+          <div class="swatch"><div class="chip-color" style="background:var(--fg)"></div><div class="meta-line"><b>--fg</b><span>nội dung chính</span></div></div>
+          <div class="swatch"><div class="chip-color" style="background:var(--muted)"></div><div class="meta-line"><b>--muted</b><span>chữ phụ · 4.5:1</span></div></div>
+          <div class="swatch"><div class="chip-color" style="background:var(--border-soft)"></div><div class="meta-line"><b>--border-soft</b><span>viền card</span></div></div>
+        </div>
+
+        <div class="split-2 mt-6">
+          <div class="card">
+            <div class="card-head"><h3>Thang chữ</h3><span class="meta">gg sans 400 → 800, body 16px không nhỏ hơn</span></div>
+            <div class="card-body">
+              <div class="type-row"><span class="small muted mono">Display 56 · 700</span><span style="font-family:var(--font-display);font-size:var(--text-4xl);font-weight:700;letter-spacing:var(--tracking-display);line-height:1.1;color:var(--fg-2)">Deploy trong một nút</span></div>
+              <div class="type-row"><span class="small muted mono">Heading 24 · 700</span><span style="font-size:var(--text-2xl);font-weight:700;color:var(--fg-2)">Máy chủ &amp; agent</span></div>
+              <div class="type-row"><span class="small muted mono">Sub-heading 18 · 600</span><span style="font-size:var(--text-lg);font-weight:600;color:var(--fg-2)">Biến môi trường &amp; secret</span></div>
+              <div class="type-row"><span class="small muted mono">Body 16 · 400</span><span style="font-size:var(--text-base);color:var(--fg)">Agent đọc Docker Engine API trên node và stream log về control plane qua gRPC mTLS.</span></div>
+              <div class="type-row"><span class="small muted mono">Meta 12 · mono</span><span class="mono" style="font-size:var(--text-xs);color:var(--muted)">14:05:31 · ready · gotham/storefront:1184</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Trạng thái tương tác</h3><span class="meta">cặp màu chữ/nền được kiểm tra</span></div>
+            <div class="card-body stack gap-4">
+              <div>
+                <p class="stat-label mb-2">Nút</p>
+                <div class="row gap-2 wrap">
+                  <button class="btn btn-primary" type="button">Primary</button>
+                  <button class="btn btn-outline" type="button">Outline</button>
+                  <button class="btn btn-ghost" type="button">Ghost</button>
+                  <button class="btn btn-danger-ghost" type="button">Nguy hiểm</button>
+                  <button class="btn btn-outline" type="button" disabled>Disabled</button>
+                </div>
+              </div>
+              <div>
+                <p class="stat-label mb-2">Chỉ báo</p>
+                <div class="row gap-4 wrap">
+                  <span class="status-line"><span class="dot dot--online"></span>ready</span>
+                  <span class="status-line"><span class="dot dot--idle"></span>đang chờ</span>
+                  <span class="status-line"><span class="dot dot--dnd"></span>thất bại</span>
+                  <span class="status-line"><span class="dot dot--offline"></span>offline</span>
+                  <span class="tag tag--success">thành công</span>
+                  <span class="tag tag--warn">cảnh báo</span>
+                  <span class="tag tag--danger">lỗi</span>
+                </div>
+              </div>
+              <div>
+                <p class="stat-label mb-2">Điều khiển</p>
+                <div class="row gap-4 wrap">
+                  <button class="switch" type="button" role="switch" aria-checked="true" data-switch aria-label="Bật"></button>
+                  <button class="switch" type="button" role="switch" aria-checked="false" data-switch aria-label="Tắt"></button>
+                  <span class="meter" style="width:120px" data-meter="62" data-meter-kind="success"></span>
+                  <span class="segmented"><button class="is-active" type="button">1 giờ</button><button type="button">24 giờ</button></span>
+                </div>
+              </div>
+              <p class="small muted">Hover chỉ đổi nền/viền (±0.06–0.12 độ sáng OKLch) hoặc dịch chuyển 1px — không bao giờ làm chữ nhạt hơn. Mọi phần tử nhận focus đều có vòng <span class="mono">--focus-ring</span>; chỉ trạng thái disabled được giảm tương phản.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title"><h2>Linh kiện dùng chung</h2><span class="meta">một nguồn CSS cho cả 11 màn hình</span></div>
+        <div class="token-grid">
+          <div class="token-cell"><p class="t-name">Rail &amp; avatar</p><p class="t-val">.rail-btn .avatar</p><p class="small muted mt-2">Vuông bo 16px → tròn khi hover (350ms), pill trắng 4px đánh dấu node đang mở.</p></div>
+          <div class="token-cell"><p class="t-name">Log viewer</p><p class="t-val">.log · data-log</p><p class="small muted mt-2">Stream có tạm dừng, tự cuộn, xoá buffer, tải về; màu theo mức log.</p></div>
+          <div class="token-cell"><p class="t-name">Biểu đồ</p><p class="t-val">[data-chart]</p><p class="small muted mt-2">Vùng tô kín + đường, trục mono, hover đọc số tại điểm gần nhất.</p></div>
+          <div class="token-cell"><p class="t-name">Wizard</p><p class="t-val">[data-wizard]</p><p class="small muted mt-2">Kiểm tra trường theo bước, chặn bước khi lỗi, bước async có spinner.</p></div>
+          <div class="token-cell"><p class="t-name">Hộp thoại &amp; drawer</p><p class="t-val">.overlay .modal .drawer</p><p class="small muted mt-2">Đóng bằng ESC, click nền, nút đóng; focus quay lại phần tử mở.</p></div>
+          <div class="token-cell"><p class="t-name">Bảng &amp; chip lọc</p><p class="t-val">.table [data-filter]</p><p class="small muted mt-2">Viền trên mảnh, hover hàng, tìm kiếm trong bảng, trạng thái rỗng có chủ đích.</p></div>
+        </div>
+
+        <div class="section-title"><h2>Phủ theo phase trong docs/plan</h2><span class="meta">mỗi phase đều có màn hình tương ứng</span></div>
+        <div class="card">
+          <div class="table-wrap">
+            <table class="coverage">
+              <thead>
+                <tr><th>Phase</th><th>Năng lực</th><th>Màn hình</th><th>Điểm đã thiết kế</th></tr>
+              </thead>
+              <tbody>
+                <tr><td class="ph">0 · Foundation</td><td>Binary, config, store, SPA nhúng</td><td><a class="link" href="login.html">login.html</a>, <a class="link" href="team-settings.html#update">team-settings.html</a></td><td>Phiên đăng nhập, phiên bản CP, healthcheck nền</td></tr>
+                <tr><td class="ph">1 · Auth</td><td>JWT 15 phút + refresh 30 ngày, OAuth GitHub, API token theo scope</td><td><a class="link" href="login.html">login.html</a>, <a class="link" href="team-settings.html#tokens">team-settings.html</a></td><td>Kiểm tra form, độ mạnh mật khẩu, token chỉ hiện một lần</td></tr>
+                <tr><td class="ph">2 · Server + agent</td><td>gRPC mTLS, registry node, SSH validate</td><td><a class="link" href="servers.html">servers.html</a>, <a class="link" href="server-detail.html">server-detail.html</a></td><td>Wizard 4 bước, 5 probe, heartbeat 10 giây, chứng chỉ agent</td></tr>
+                <tr><td class="ph">3 · Docker core</td><td>List/start/stop/restart, log realtime, duyệt volume</td><td><a class="link" href="server-detail.html#containers">server-detail.html</a>, <a class="link" href="files.html">files.html</a></td><td>Bảng container, drawer log, chỉ báo WebSocket, trình quản lý file có hover actions</td></tr>
+                <tr><td class="ph">4 · Applications</td><td>Provider, 4 build engine, state machine deploy, webhook</td><td><a class="link" href="applications.html">applications.html</a>, <a class="link" href="application-detail.html">application-detail.html</a></td><td>Wizard 5 bước, pipeline 6 pha, log build, rollback</td></tr>
+                <tr><td class="ph">5 · Databases</td><td>5 engine, backup/restore, lịch cron, S3</td><td><a class="link" href="databases.html">databases.html</a></td><td>Credentials, public port, phục hồi có xác nhận, đích lưu trữ</td></tr>
+                <tr><td class="ph">6 · Proxy &amp; SSL</td><td>Traefik file provider, HTTP-01 + DNS-01</td><td><a class="link" href="domains.html">domains.html</a></td><td>Router, vòng đời cert, wildcard, nhà cung cấp DNS, redirect</td></tr>
+                <tr><td class="ph">7 · Services</td><td>Compose project, template engine</td><td><a class="link" href="services.html">services.html</a></td><td>Editor YAML có kiểm tra, gallery, form động theo schema</td></tr>
+                <tr><td class="ph">8 · Advanced</td><td>Preview PR, team/RBAC, thông báo, metrics</td><td><a class="link" href="application-detail.html#previews">application-detail.html</a>, <a class="link" href="team-settings.html#notifications">team-settings.html</a></td><td>Preview + TTL, ma trận quyền, 4 kênh, biểu đồ 30 ngày</td></tr>
+                <tr><td class="ph">9 · Self-update</td><td>Cập nhật ký Ed25519, rollback, release</td><td><a class="link" href="team-settings.html#update">team-settings.html</a></td><td>Kiểm tra bản mới, xác minh chữ ký, cập nhật agent từ xa</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid cols-2 mt-6">
+          <div class="card">
+            <div class="card-head"><h3>Ghi chú dữ liệu &amp; nguồn</h3></div>
+            <div class="card-body stack gap-3">
+              <div class="callout">
+                <svg aria-hidden="true"><use href="#i-info"></use></svg>
+                <div><h4>Dữ liệu mẫu, không phải số liệu sản phẩm</h4><p>CPU/RAM, thời lượng deploy, số container… là dữ liệu mẫu để dựng giao diện. Không có chỉ số marketing nào được thêm vào.</p></div>
+              </div>
+              <p class="small muted">Địa chỉ IP dùng dải tài liệu RFC 5737 (<span class="mono">203.0.113.0/24</span>, <span class="mono">198.51.100.0/24</span>) để tránh trùng với hạ tầng thật. Tên repo là dự án mã nguồn mở có thật, dùng làm ví dụ nguồn deploy.</p>
+              <p class="small muted">Toàn bộ hình ảnh/biểu tượng là SVG nội bộ; không dùng logo hay nhãn hiệu của bên thứ ba, không tải font hay ảnh từ mạng.</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>Tệp trong bàn giao</h3><span class="meta">mở trực tiếp, không cần build</span></div>
+            <div class="card-body">
+              <div class="token-grid">
+                <div class="token-cell"><p class="t-name">Khung &amp; hệ thống</p><p class="t-val">assets/gotham-ui.css<br />assets/gotham-views.css<br />assets/gotham-ui.js</p></div>
+                <div class="token-cell"><p class="t-name">Màn hình</p><p class="t-val">index · dashboard<br />applications · application-detail<br />services · databases · files<br />servers · server-detail<br />domains · team-settings<br />login</p></div>
+              </div>
+              <p class="small muted mt-3">Mở bất kỳ tệp nào trong trình duyệt. Nhấn <span class="kbd">⌘K</span> để mở bảng lệnh, điều hướng chéo giữa các màn hình bằng rail bên trái (máy chủ) và sidebar (nhóm chức năng).</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="pagefoot" style="border-top:0;padding-top:var(--space-8)">
+          <div class="between wrap gap-4">
+            <div class="brand-lockup">
+              <span class="brand-mark brand-mark--sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 19V11a7 7 0 0114 0v8" /><path d="M9.5 19v-6.5a2.5 2.5 0 015 0V19" /></svg></span>
+              <div><p class="wordmark">Gotham</p><p class="small muted">Self-hosted PaaS · control plane v0.9.4</p></div>
+            </div>
+            <p class="small meta">Thiết kế theo design system Discord · 12 màn hình · dữ liệu mẫu từ <span class="mono">docs/plan</span></p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="assets/gotham-ui.js"></script>
+</body>
+</html>

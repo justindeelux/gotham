@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Services &amp; Templates · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+<style>
+  /* Page-local helpers — pg- prefix only, built from existing tokens. */
+  .pg-yaml { min-height: 300px; } .pg-import-yaml { min-height: 132px; } .pg-preview { max-height: 300px; overflow: auto; }
+  .pg-log-tall { min-height: 286px; max-height: 42vh; } .pg-log-tpl { min-height: 168px; max-height: 26vh; } .pg-log-drawer { min-height: 320px; max-height: 52vh; }
+</style>
+</head>
+<body data-page="services" data-nav="services">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Máy chủ đang quản lý"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head" data-od-id="services-head">
+          <div>
+            <p class="eyebrow">Vận hành · compose project</p>
+            <h1>Services</h1>
+            <p class="page-desc">Một service là một docker-compose project chạy trên một node. Control plane lưu <span class="mono">compose_yaml</span> trong bảng <span class="mono">services</span> và version hoá theo từng deploy, còn agent chạy compose CLI để giữ đúng hành vi của Docker. 4 service đang chạy trên 3 node.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-outline" type="button" data-open="compose-import"><svg aria-hidden="true"><use href="#i-upload"></use></svg>Nhập compose</button>
+            <a class="btn btn-primary" href="services.html#templates" data-goto-tab="templates"><svg aria-hidden="true"><use href="#i-rocket"></use></svg>Triển khai từ template</a>
+          </div>
+        </div>
+
+        <div class="tabs" data-tabs="services" data-default="compose" role="tablist" data-od-id="services-tabs">
+          <button class="tab" type="button" data-tab="compose" role="tab" id="tab-compose" aria-controls="panel-compose" aria-selected="true">Compose services</button>
+          <button class="tab" type="button" data-tab="templates" role="tab" id="tab-templates" aria-controls="panel-templates" aria-selected="false">Thư viện template <span class="tag">4</span></button>
+        </div>
+
+        <!-- ── Compose services ──────────────────────────────────────────── -->
+        <section class="tab-panel" data-panel="compose" role="tabpanel" id="panel-compose" aria-labelledby="tab-compose">
+          <div class="toolbar mt-5" data-od-id="services-toolbar">
+            <div class="filters" data-filter-group data-filter-target="[data-svc-card]" data-filter-empty="#svc-empty" role="group" aria-label="Lọc service theo trạng thái">
+              <button class="chip is-active" type="button" data-filter="all">Tất cả <span class="nav-count">4</span></button>
+              <button class="chip" type="button" data-filter="running">Đang chạy <span class="nav-count">3</span></button>
+              <button class="chip" type="button" data-filter="stopped">Đã dừng <span class="nav-count">1</span></button>
+            </div>
+            <div class="search grow" style="margin-left:auto;max-width:300px">
+              <svg aria-hidden="true"><use href="#i-search"></use></svg>
+              <input type="search" placeholder="Tìm service, node hoặc domain…" aria-label="Tìm service" data-search="[data-svc-card]" />
+            </div>
+          </div>
+
+          <div class="grid cols-2" data-od-id="svc-grid">
+            <article class="card" data-svc-card data-tag="running" data-od-id="svc-wordpress-blog">
+              <div class="card-head"><span class="avatar avatar--sm avatar--neutral">W</span>
+                <div class="grow"><h3 class="mono">wordpress-blog</h3><p class="small muted">WordPress + MySQL · gotham-prod-01</p></div>
+                <span class="tag tag--success"><span class="dot dot--online"></span>running</span>
+              </div>
+              <div class="card-body stack gap-3">
+                <div class="row gap-2 wrap"><span class="tag">2 container</span><span class="tag">deploy #12 · compose v3</span><span class="tag">wordpress.gotham.dev</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow mono">wordpress-blog-wordpress-1</span><span class="mono small">running</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow mono">wordpress-blog-db-1</span><span class="mono small">running</span></div>
+              </div>
+              <div class="card-foot">
+                <span class="small muted grow">cập nhật 12 phút trước</span>
+                <button class="btn btn-sm btn-outline" type="button" data-drawer-open="svclog" data-drawer-title="wordpress-blog" data-drawer-sub="wordpress:6.7-php8.3-apache · gotham-prod-01"><svg aria-hidden="true"><use href="#i-terminal"></use></svg>Mở log</button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Đã gửi ComposeRestart tới agent gotham-prod-01 · project wordpress-blog.|info"><svg aria-hidden="true"><use href="#i-restart"></use></svg>Khởi động lại</button>
+                <button class="btn btn-sm btn-danger-ghost btn-icon" type="button" data-confirm="Xoá service wordpress-blog? ComposeDown dừng 2 container; volume wp-data và db-data vẫn được giữ." data-confirm-label="Xoá service" data-confirm-toast="Đã xoá wordpress-blog khỏi control plane." data-remove="[data-svc-card]" aria-label="Xoá service wordpress-blog"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+              </div>
+            </article>
+
+            <article class="card" data-svc-card data-tag="running" data-od-id="svc-nextcloud-team">
+              <div class="card-head"><span class="avatar avatar--sm avatar--neutral">NC</span>
+                <div class="grow"><h3 class="mono">nextcloud-team</h3><p class="small muted">Nextcloud + Postgres + Redis · gotham-prod-01</p></div>
+                <span class="tag tag--success"><span class="dot dot--online"></span>running</span>
+              </div>
+              <div class="card-body stack gap-3">
+                <div class="row gap-2 wrap"><span class="tag">3 container</span><span class="tag">deploy #7 · compose v2</span><span class="tag">cloud.gotham.dev</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow mono">nextcloud-team-app-1</span><span class="mono small">running</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow mono">nextcloud-team-db-1</span><span class="mono small">running</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow mono">nextcloud-team-redis-1</span><span class="mono small">running</span></div>
+              </div>
+              <div class="card-foot">
+                <span class="small muted grow">cập nhật 1 giờ trước</span>
+                <button class="btn btn-sm btn-outline" type="button" data-drawer-open="svclog" data-drawer-title="nextcloud-team" data-drawer-sub="nextcloud:30-apache · gotham-prod-01"><svg aria-hidden="true"><use href="#i-terminal"></use></svg>Mở log</button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Đã gửi ComposeRestart tới agent gotham-prod-01 · project nextcloud-team.|info"><svg aria-hidden="true"><use href="#i-restart"></use></svg>Khởi động lại</button>
+                <button class="btn btn-sm btn-danger-ghost btn-icon" type="button" data-confirm="Xoá service nextcloud-team? 3 container sẽ dừng; dữ liệu người dùng trên volume nextcloud-data vẫn được giữ." data-confirm-label="Xoá service" data-confirm-toast="Đã xoá nextcloud-team khỏi control plane." data-remove="[data-svc-card]" aria-label="Xoá service nextcloud-team"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+              </div>
+            </article>
+
+            <article class="card" data-svc-card data-tag="running" data-od-id="svc-n8n-automation">
+              <div class="card-head">
+                <span class="avatar avatar--sm avatar--neutral">N8</span>
+                <div class="grow"><h3 class="mono">n8n-automation</h3><p class="small muted">n8n + Postgres · edge-sg-01</p></div>
+                <span class="tag tag--success"><span class="dot dot--online"></span>running</span>
+              </div>
+              <div class="card-body stack gap-3">
+                <div class="row gap-2 wrap"><span class="tag">2 container</span><span class="tag">deploy #4 · compose v1</span><span class="tag tag--warn">cert đang chờ</span><span class="tag">n8n.gotham.dev</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow mono">n8n-automation-app-1</span><span class="mono small">running</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow mono">n8n-automation-db-1</span><span class="mono small">running</span></div>
+              </div>
+              <div class="card-foot">
+                <span class="small muted grow">ACME HTTP-01 lần 2 · chờ DNS edge-sg-01</span>
+                <button class="btn btn-sm btn-outline" type="button" data-drawer-open="svclog" data-drawer-title="n8n-automation" data-drawer-sub="n8nio/n8n:1.70.0 · edge-sg-01"><svg aria-hidden="true"><use href="#i-terminal"></use></svg>Mở log</button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Đã gửi ComposeRestart tới agent edge-sg-01 · project n8n-automation.|info"><svg aria-hidden="true"><use href="#i-restart"></use></svg>Khởi động lại</button>
+                <button class="btn btn-sm btn-danger-ghost btn-icon" type="button" data-confirm="Xoá service n8n-automation? Workflow đã lưu trong Postgres vẫn giữ trên volume db-data." data-confirm-label="Xoá service" data-confirm-toast="Đã xoá n8n-automation khỏi control plane." data-remove="[data-svc-card]" aria-label="Xoá service n8n-automation"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+              </div>
+            </article>
+
+            <article class="card" data-svc-card data-tag="stopped" data-od-id="svc-uptime-kuma">
+              <div class="card-head">
+                <span class="avatar avatar--sm avatar--neutral">UK</span>
+                <div class="grow"><h3 class="mono">uptime-kuma</h3><p class="small muted">Uptime Kuma + volume · staging-01</p></div>
+                <span class="tag"><span class="dot dot--offline"></span>exited</span>
+              </div>
+              <div class="card-body stack gap-3">
+                <div class="row gap-2 wrap"><span class="tag">1 container</span><span class="tag">deploy #2 · compose v1</span><span class="tag">status.gotham.dev</span></div>
+                <div class="status-line"><span class="dot dot--offline"></span><span class="grow mono">uptime-kuma-1</span><span class="mono small">exited (0) · dừng 2 ngày</span></div>
+                <div class="status-line"><span class="dot dot--idle"></span><span class="grow">volume kuma-data</span><span class="mono small">1.2 GiB</span></div>
+              </div>
+              <div class="card-foot">
+                <span class="small muted grow">node staging-01 đang xác thực SSH lại</span>
+                <button class="btn btn-sm btn-outline" type="button" data-drawer-open="svclog" data-drawer-title="uptime-kuma" data-drawer-sub="louislam/uptime-kuma:1 · staging-01"><svg aria-hidden="true"><use href="#i-terminal"></use></svg>Mở log</button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Đã gửi ComposeUp tới agent staging-01 · project uptime-kuma.|success"><svg aria-hidden="true"><use href="#i-play"></use></svg>Khởi động</button>
+                <button class="btn btn-sm btn-danger-ghost btn-icon" type="button" data-confirm="Xoá service uptime-kuma? Volume kuma-data chứa toàn bộ lịch sử monitor vẫn được giữ." data-confirm-label="Xoá service" data-confirm-toast="Đã xoá uptime-kuma khỏi control plane." data-remove="[data-svc-card]" aria-label="Xoá service uptime-kuma"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+              </div>
+            </article>
+          </div>
+
+          <div class="empty" id="svc-empty" hidden data-od-id="svc-empty">
+            <svg aria-hidden="true"><use href="#i-layers"></use></svg>
+            <h4>Không có service nào khớp</h4>
+            <p class="small">Bỏ bộ lọc hoặc xoá từ khoá tìm kiếm để xem lại 4 compose project.</p>
+          </div>
+
+          <div class="card mt-5" data-od-id="compose-editor">
+            <div class="card-head"><h3>compose.yaml · wordpress-blog</h3>
+              <span class="tag tag--warn">bản nháp v4</span>
+              <span class="card-actions"><div class="segmented" data-seg="compose-sample" aria-label="Bản compose để kiểm tra">
+                  <button class="is-active" type="button" data-value="ok">Nháp v4 · có Redis</button>
+                  <button type="button" data-value="broken">Bản lỗi (tab)</button>
+                </div>
+              </span>
+            </div>
+            <div class="card-body stack gap-3">
+              <label class="field-label" for="compose-src">compose_yaml gửi agent · bản đang chạy: deploy #12 · compose v3 (2 service)</label>
+              <textarea class="textarea pg-yaml mono" id="compose-src" spellcheck="false">services:
+  wordpress:
+    image: wordpress:6.7-php8.3-apache
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${MYSQL_DATABASE}
+      WORDPRESS_DB_USER: ${MYSQL_USER}
+      WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD}
+      WORDPRESS_REDIS_HOST: redis
+    volumes:
+      - wp-data:/var/www/html
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.wordpress-blog.rule=Host(`${DOMAIN}`)
+      - traefik.http.routers.wordpress-blog.entrypoints=websecure
+      - traefik.http.routers.wordpress-blog.tls.certresolver=le-http
+      - traefik.http.services.wordpress-blog.loadbalancer.server.port=80
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 10s
+      retries: 6
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+volumes:
+  wp-data:
+  db-data:</textarea>
+              <p class="small muted" id="compose-hint">Biến <span class="mono">${DOMAIN}</span>, <span class="mono">${MYSQL_*}</span> được CP thay giá trị trước khi gọi <span class="mono">ComposeValidate</span> / <span class="mono">ComposeUp</span> trên agent. Lưu compose tạo phiên bản mới; rollback = deploy lại compose cũ.</p>
+              <div id="compose-result" hidden data-od-id="compose-result"></div>
+              <div class="row gap-2 wrap">
+                <button class="btn btn-outline" type="button" id="compose-check"><svg aria-hidden="true"><use href="#i-shield"></use></svg>Kiểm tra</button>
+                <button class="btn btn-primary" type="button" id="compose-deploy"><svg aria-hidden="true"><use href="#i-rocket"></use></svg>Triển khai</button>
+                <span class="small muted" id="compose-status">Chưa kiểm tra · ComposeValidate chạy trên agent</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="split-2 mt-5" data-od-id="deploy-panel">
+            <div class="card" data-od-id="deploy-log">
+              <div class="card-head">
+                <h3>Log deploy · wordpress-blog</h3>
+                <span class="tag">deploy #13</span>
+                <span class="card-actions"><span class="small muted">agent gotham-prod-01 · docker compose v2.29</span></span>
+              </div>
+              <div class="card-body">
+                <div id="deploy-log-mount">
+                  <div class="stack gap-3" data-log="compose-log" data-log-name="deploy-13-compose.log">
+                    <div class="row gap-2 wrap">
+                      <button class="btn btn-sm btn-outline" type="button" data-log-pause><svg aria-hidden="true"><use href="#i-stop"></use></svg><span>Tạm dừng</span></button>
+                      <button class="btn btn-sm btn-outline" type="button" data-log-follow><svg aria-hidden="true"><use href="#i-chevron-down"></use></svg><span>Tự động cuộn</span></button>
+                      <button class="btn btn-sm btn-outline" type="button" data-log-clear>Xoá buffer</button>
+                      <button class="btn btn-sm btn-outline" type="button" data-log-download data-log-name="deploy-13-compose.log"><svg aria-hidden="true"><use href="#i-download"></use></svg><span>Tải log</span></button>
+                      <span class="realtime" data-log-state>đang stream</span>
+                      <span class="small muted grow right" data-log-clock>đang stream</span>
+                    </div>
+                    <div class="log pg-log-tall" data-log-body></div>
+                  </div>
+                </div>
+                <p class="small meta mt-3">Nguồn log: agent chạy compose CLI → gRPC stream → Redis <span class="mono">logs:prod-01:compose:wordpress-blog</span> → WebSocket tới trình duyệt.</p>
+              </div>
+            </div>
+
+            <aside class="stack gap-4" data-od-id="deploy-aside">
+              <div class="aside-card" data-od-id="deploy-steps">
+                <div class="between mb-3">
+                  <h4>Tiến trình deploy</h4>
+                  <span class="realtime"><span class="dot dot--online dot-pulse"></span>gRPC :9442</span>
+                </div>
+                <ol class="steps" id="deploy-steps">
+                  <li class="step is-done" data-step="queued"><span class="step-mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="step-name">queued · nhận yêu cầu</span><span class="step-time">14:02:08</span></li>
+                  <li class="step is-done" data-step="validating"><span class="step-mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="step-name">validating compose</span><span class="step-time">14:02:09</span></li>
+                  <li class="step is-done" data-step="pulling"><span class="step-mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="step-name">pulling images</span><span class="step-time">14:02:27</span></li>
+                  <li class="step is-done" data-step="starting"><span class="step-mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="step-name">starting services</span><span class="step-time">14:02:41</span></li>
+                  <li class="step is-done" data-step="healthcheck"><span class="step-mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="step-name">healthcheck</span><span class="step-time">14:02:54</span></li>
+                </ol>
+                <p class="small meta mt-3">Agent chạy <span class="mono">docker compose up -d</span> rồi trả trạng thái qua <span class="mono">ComposePs</span>. Deploy lỗi ở bước nào thì container cũ được giữ nguyên.</p>
+              </div>
+
+              <div class="aside-card" data-od-id="compose-meta">
+                <h4 class="mb-3">Phiên bản &amp; rollback</h4>
+                <dl class="kv">
+                  <dt>Đang chạy</dt><dd class="mono">deploy #12 · compose v3</dd>
+                  <dt>Bản nháp</dt><dd class="mono">v4 · thêm redis cache</dd>
+                  <dt>Lưu trữ</dt><dd>1 compose / deploy trong <span class="mono">service_deploys</span></dd>
+                  <dt>Rollback</dt><dd>deploy lại compose cũ</dd>
+                  <dt>Node</dt><dd class="mono">gotham-prod-01 · agent v0.9.4</dd>
+                </dl>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- ── Thư viện template ─────────────────────────────────────────── -->
+        <section class="tab-panel" data-panel="templates" role="tabpanel" id="panel-templates" aria-labelledby="tab-templates" hidden>
+          <div class="section-title">
+            <h2>Thư viện template</h2>
+            <span class="meta">nguồn: <span class="mono">GET /api/v1/templates</span> · 4 template</span>
+          </div>
+          <p class="page-desc mb-4">Chọn template, điền form, control plane render compose rồi deploy qua agent. Form được sinh từ schema của template nên thêm template mới không cần sửa UI.</p>
+
+          <div class="tpl-grid" data-od-id="tpl-grid">
+            <button class="tpl-card" type="button" data-open="tpl-modal" data-template="wordpress" data-od-id="tpl-wordpress">
+              <span class="tpl-mark">W</span>
+              <span class="fg-2 bold">WordPress</span><span class="small muted">WordPress + MySQL, volume cho wp-content, domain qua Traefik.</span>
+              <span class="tpl-meta"><span class="tag">2 service</span><span class="tag">2 volume</span><span class="tag">7 trường</span></span>
+            </button>
+            <button class="tpl-card" type="button" data-open="tpl-modal" data-template="nextcloud" data-od-id="tpl-nextcloud">
+              <span class="tpl-mark">NC</span>
+              <span class="fg-2 bold">Nextcloud</span><span class="small muted">Nextcloud + PostgreSQL + Redis, dữ liệu người dùng trên volume riêng.</span>
+              <span class="tpl-meta"><span class="tag">3 service</span><span class="tag">2 volume</span><span class="tag">6 trường</span></span>
+            </button>
+            <button class="tpl-card" type="button" data-open="tpl-modal" data-template="n8n" data-od-id="tpl-n8n">
+              <span class="tpl-mark">N8</span>
+              <span class="fg-2 bold">n8n</span><span class="small muted">n8n + PostgreSQL, workflow automation tự host sau domain riêng.</span>
+              <span class="tpl-meta"><span class="tag">2 service</span><span class="tag">2 volume</span><span class="tag">5 trường</span></span>
+            </button>
+            <button class="tpl-card" type="button" data-open="tpl-modal" data-template="uptime-kuma" data-od-id="tpl-uptime-kuma">
+              <span class="tpl-mark">UK</span>
+              <span class="fg-2 bold">Uptime Kuma</span><span class="small muted">Một container Uptime Kuma, volume cho lịch sử monitor, domain riêng.</span>
+              <span class="tpl-meta"><span class="tag">1 service</span><span class="tag">1 volume</span><span class="tag">4 trường</span></span>
+            </button>
+          </div>
+
+          <div class="callout mt-6" data-od-id="template-schema">
+            <svg aria-hidden="true"><use href="#i-doc"></use></svg>
+            <div>
+              <h4>Cấu trúc một template</h4>
+              <p><span class="inline-code">templates/{slug}/template.yaml</span> khai báo name, icon, description và danh sách form field (type, default, required).</p>
+              <p class="mt-2"><span class="inline-code">templates/{slug}/compose.yaml</span> dùng placeholder <span class="mono">{{ .field }}</span>. Engine chỉ thay chuỗi, không thực thi code, nên template không thể chạy lệnh trên node. Sửa template không ảnh hưởng service đã deploy.</p>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ── Nhập compose ──────────────────────────────────────────────────────── -->
+<div class="overlay" id="compose-import" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="import-title" data-od-id="compose-import-modal">
+    <div class="modal-head">
+      <div class="grow"><h3 id="import-title">Nhập compose</h3>
+        <p class="small muted">Dán compose.yaml có sẵn. CP lưu nguyên văn vào <span class="mono">services.compose_yaml</span> và gọi agent kiểm tra trước khi chạy.</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-4">
+      <div class="grid cols-2">
+        <div class="field">
+          <label class="field-label" for="imp-name">Tên service</label>
+          <input class="input" id="imp-name" value="blog-staging" required />
+          <span class="field-error">Nhập tên service.</span>
+        </div>
+        <div class="field">
+          <label class="field-label" for="imp-node">Máy chủ</label>
+          <select class="select" id="imp-node"><option>gotham-prod-01</option><option>edge-sg-01</option><option>staging-01</option></select>
+          <span class="field-hint">Một service chỉ chạy trên một node.</span>
+        </div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="imp-yaml">compose.yaml</label>
+        <textarea class="textarea pg-import-yaml mono" id="imp-yaml" spellcheck="false">services:
+  web:
+    image: nginx:1.27-alpine
+    volumes:
+      - web-data:/usr/share/nginx/html
+volumes:
+  web-data:</textarea>
+        <span class="field-hint">Hỗ trợ biến <span class="mono">${DOMAIN}</span> và <span class="mono">${...}</span> — CP thay giá trị trước khi gửi agent.</span>
+      </div>
+      <div class="embed embed--info">
+        <h4>Control plane không gọi Docker trực tiếp</h4>
+        <p>Mọi lệnh đi qua gRPC tới agent trên node: <span class="mono">ComposeValidate</span>, <span class="mono">ComposeUp</span>, <span class="mono">ComposeDown</span>, <span class="mono">ComposePs</span>, <span class="mono">ComposeLogs</span>.</p>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">File lớn hơn 256 KiB nên đặt trong repo và trỏ tới bằng đường dẫn.</span>
+      <button class="btn btn-outline" type="button" data-close>Huỷ</button>
+      <button class="btn btn-primary" type="button" data-close data-import-check>Nhập &amp; kiểm tra</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Template wizard (dùng chung cho 4 template) ───────────────────────── -->
+<div class="overlay" id="tpl-modal" hidden>
+  <div class="modal modal--lg" role="dialog" aria-modal="true" aria-labelledby="tpl-title" data-od-id="tpl-modal">
+    <div class="modal-head">
+      <span class="tpl-mark" id="tpl-mark">W</span>
+      <div class="grow"><h3 id="tpl-title">Triển khai template WordPress</h3>
+        <p class="small muted" id="tpl-sub">templates/wordpress · 2 service · 2 volume · 7 trường form</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+
+    <div class="wizard" data-wizard>
+      <div class="wizard-rail">
+        <ol>
+          <li class="is-active"><span class="idx">1</span>Cấu hình</li>
+          <li><span class="idx">2</span>Xem trước compose</li>
+          <li><span class="idx">3</span>Triển khai</li>
+        </ol>
+        <p class="small meta mt-4">Field lấy từ <span class="mono">template.yaml</span>: type, default, required. Render chỉ thay chuỗi.</p>
+      </div>
+
+      <div>
+        <div class="wizard-body">
+          <section class="wstep" data-od-id="tpl-step-1">
+            <h4 class="mb-3">Cấu hình template</h4>
+            <div class="grid cols-2">
+              <div class="field" data-tpl-field="site domain email pass">
+                <label class="field-label" for="tf-site">Tên site</label>
+                <input class="input" id="tf-site" value="blog" required />
+                <span class="field-hint">Dùng làm tên service, database và router Traefik.</span>
+                <span class="field-error">Nhập tên site.</span>
+              </div>
+              <div class="field" data-tpl-field="domain">
+                <label class="field-label" for="tf-domain">Tên miền</label>
+                <input class="input mono" id="tf-domain" value="blog.gotham.dev" required data-pattern="^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$" />
+                <span class="field-hint">Trỏ A record về node trước khi deploy.</span>
+                <span class="field-error">Tên miền chưa đúng định dạng, ví dụ blog.gotham.dev.</span>
+              </div>
+              <div class="field" data-tpl-field="email">
+                <label class="field-label" for="tf-email">Email quản trị</label>
+                <input class="input" id="tf-email" type="email" value="admin@gotham.dev" required />
+                <span class="field-error">Email không hợp lệ.</span>
+              </div>
+              <div class="field" data-tpl-field="pass">
+                <label class="field-label" for="tf-pass">Mật khẩu quản trị</label>
+                <input class="input" id="tf-pass" type="password" value="gotham-blog-2026" required aria-describedby="tf-pass-hint" />
+                <span class="field-hint" id="tf-pass-hint">Tối thiểu 12 ký tự, lưu dạng secret trong CP.</span>
+                <span class="field-error">Nhập mật khẩu quản trị.</span>
+              </div>
+              <div class="field" data-tpl-field="wpver">
+                <label class="field-label" for="tf-wpver">Phiên bản WordPress</label>
+                <select class="select" id="tf-wpver">
+                  <option value="6.7-php8.3-apache">6.7 · php8.3-apache</option>
+                  <option value="6.6-php8.2-apache">6.6 · php8.2-apache</option>
+                  <option value="latest">latest</option>
+                </select>
+                <span class="field-hint">Image tag ghi thẳng vào compose.</span>
+              </div>
+              <div class="field" data-tpl-field="redis">
+                <div class="switch-row">
+                  <button class="switch" type="button" role="switch" aria-checked="true" data-switch id="tf-redis" aria-labelledby="tf-redis-label"></button>
+                  <span class="grow"><span class="fg-2" id="tf-redis-label">Bật Redis cache</span><span class="small muted" style="display:block">Thêm service redis:7-alpine và biến WP_REDIS_HOST.</span></span>
+                </div>
+              </div>
+              <div class="field" data-tpl-field="backup">
+                <div class="switch-row">
+                  <button class="switch" type="button" role="switch" aria-checked="true" data-switch id="tf-backup" aria-labelledby="tf-backup-label"></button>
+                  <span class="grow"><span class="fg-2" id="tf-backup-label">Bật backup hằng ngày</span><span class="small muted" style="display:block">mysqldump 03:00, giữ 7 bản trong <span class="mono">service_deploys</span>.</span></span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="wstep" hidden data-on-enter="renderTplPreview" data-od-id="tpl-step-2">
+            <div class="between mb-3">
+              <h4>Compose đã render</h4>
+              <span class="tag" id="tpl-preview-tag">compose v1</span>
+            </div>
+            <pre class="code pg-preview" id="tpl-preview"></pre>
+            <div class="callout mt-4">
+              <svg aria-hidden="true"><use href="#i-shield"></use></svg>
+              <div>
+                <h4>Engine chỉ thay chuỗi</h4>
+                <p>Template không chạy code: placeholder <span class="mono">{{ .field }}</span> được thay bằng giá trị trong form rồi chuyển cho <span class="mono">ComposeValidate</span>. Giá trị sinh tự động (mật khẩu database) không hiển thị ở đây.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="wstep" hidden data-on-enter="startTplDeploy" data-async="true" data-od-id="tpl-step-3">
+            <h4 class="mb-3">Đang triển khai</h4>
+            <div class="progress mb-3">
+              <span class="small muted nowrap" id="tpl-progress-label">Đang render template…</span>
+              <span class="bar meter" id="tpl-meter" data-meter="0"></span>
+              <span class="mono small" id="tpl-pct">0%</span>
+            </div>
+            <div id="tpl-log-mount">
+              <div class="stack gap-3" data-log="tpl-log" data-log-name="deploy-template.log">
+                <div class="row gap-2 wrap">
+                  <button class="btn btn-sm btn-outline" type="button" data-log-pause><svg aria-hidden="true"><use href="#i-stop"></use></svg><span>Tạm dừng</span></button>
+                  <button class="btn btn-sm btn-outline" type="button" data-log-clear>Xoá buffer</button>
+                  <span class="realtime" data-log-state>đang stream</span>
+                  <span class="small muted grow right" data-log-clock>đang stream</span>
+                </div>
+                <div class="log pg-log-tpl" data-log-body></div>
+              </div>
+            </div>
+            <div class="empty" id="tpl-success" hidden data-od-id="tpl-success">
+              <span class="avatar avatar--lg">W</span>
+              <h4 id="tpl-success-title">blog đã chạy</h4>
+              <p class="small">Template render thành compose và agent đã <span class="mono">compose up -d</span>. Mở domain để hoàn tất bước cài đặt cuối.</p>
+              <div class="row gap-2 mt-3 wrap" style="justify-content:center">
+                <span class="tag tag--success"><span class="dot dot--online"></span>running</span>
+                <span class="tag mono" id="tpl-success-domain">blog.gotham.dev</span>
+                <span class="tag">cert Let's Encrypt</span>
+              </div>
+              <button class="btn btn-outline mt-4" type="button" id="tpl-open" data-toast="Mở https://blog.gotham.dev/wp-admin/install.php trong tab mới.|info"><svg aria-hidden="true"><use href="#i-external"></use></svg>Mở trang cài đặt</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="wizard-foot">
+          <button class="btn btn-outline" type="button" data-wizard-back hidden>Quay lại</button>
+          <span class="small muted" data-wizard-counter>Bước 1 / 3</span>
+          <span class="grow"></span>
+          <button class="btn btn-ghost" type="button" data-close>Huỷ</button>
+          <button class="btn btn-primary" type="button" data-wizard-next>Tiếp tục</button>
+          <button class="btn btn-primary" type="button" data-wizard-done data-close hidden>Đóng</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Log service theo compose project ──────────────────────────────────── -->
+<div class="drawer" id="svclog" hidden data-log="service-log" aria-label="Log service">
+  <div class="drawer-head">
+    <svg aria-hidden="true"><use href="#i-terminal"></use></svg>
+    <div class="grow"><h3 data-drawer-title>wordpress-blog</h3><p class="small muted" data-drawer-sub>compose project · gotham-prod-01</p></div>
+    <span class="realtime" data-log-state>đang stream</span>
+    <button class="btn btn-ghost btn-icon" type="button" data-drawer-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+  </div>
+  <div class="drawer-body stack gap-3">
+    <div class="row gap-2 wrap">
+      <button class="btn btn-sm btn-outline" type="button" data-log-pause><svg aria-hidden="true"><use href="#i-stop"></use></svg><span>Tạm dừng</span></button>
+      <button class="btn btn-sm btn-outline" type="button" data-log-follow><svg aria-hidden="true"><use href="#i-chevron-down"></use></svg><span>Tự động cuộn</span></button>
+      <button class="btn btn-sm btn-outline" type="button" data-log-clear>Xoá buffer</button>
+      <button class="btn btn-sm btn-outline" type="button" data-log-download data-log-name="service.log"><svg aria-hidden="true"><use href="#i-download"></use></svg><span>Tải log</span></button>
+      <span class="small muted grow right" data-log-clock>đang stream</span>
+    </div>
+    <div class="log pg-log-drawer" data-log-body></div>
+    <p class="small meta">Kênh: <span class="mono">logs:prod-01:compose:{serviceID}</span> · agent chạy <span class="mono">docker compose logs -f</span> cho từng service trong project rồi gộp qua gRPC stream.</p>
+  </div>
+</div>
+
+<script type="application/json" id="compose-log">
+[
+  {"t":"14:02:08","level":"step","m":"deploy #13 xếp hàng · trigger thủ công · nga.tran@gotham.dev"},
+  {"t":"14:02:08","level":"dim","m":"POST /api/v1/services/wordpress-blog/deploy → 202 Accepted"},
+  {"t":"14:02:09","level":"info","m":"ComposeValidate · services.compose_yaml v4 (3 service, 2 volume)"},
+  {"t":"14:02:09","level":"info","m":"thay biến: DOMAIN=wordpress.gotham.dev · MYSQL_DATABASE=wordpress"},
+  {"t":"14:02:10","level":"step","m":"gửi ComposeUp tới agent gotham-prod-01 · compose v2.29 · project wordpress-blog"},
+  {"t":"14:02:12","level":"dim","m":"db Pulling · mysql:8.0 · 181 MB"},
+  {"t":"14:02:17","level":"dim","m":"wordpress + redis Pulling · 612 MB + 41 MB"},
+  {"t":"14:02:26","level":"warn","m":"image wordpress 612 MB · kéo mất 14s trên gotham-prod-01"},
+  {"t":"14:02:27","level":"step","m":"creating network + volumes"},
+  {"t":"14:02:28","level":"info","m":"Network wordpress-blog_default Created · Volume wp-data, db-data Created (driver local)"},
+  {"t":"14:02:30","level":"step","m":"starting services"},
+  {"t":"14:02:31","level":"info","m":"Container wordpress-blog-db-1 Started"},
+  {"t":"14:02:33","level":"info","m":"Container wordpress-blog-redis-1 Started"},
+  {"t":"14:02:41","level":"info","m":"Container wordpress-blog-wordpress-1 Started"},
+  {"t":"14:02:44","level":"info","m":"healthcheck db: mysqladmin ping → mysqld is alive (12ms)"},
+  {"t":"14:02:52","level":"info","m":"healthcheck wordpress: GET https://wordpress.gotham.dev/wp-login.php → 200"},
+  {"t":"14:02:53","level":"info","m":"Traefik router wordpress-blog@file nạp từ label · cert Let's Encrypt đã cấp"},
+  {"t":"14:02:54","level":"step","m":"deploy #13 hoàn tất · 3/3 container running"}
+]
+</script>
+
+<script type="application/json" id="service-log">
+[
+  {"t":"14:03:02","level":"info","m":"wordpress-blog-wordpress-1 | Apache/2.4.62 (Debian) configured · listening on :80"},
+  {"t":"14:03:02","level":"info","m":"wordpress-blog-wordpress-1 | kết nối database OK · db:3306 · wordpress"},
+  {"t":"14:03:03","level":"info","m":"wordpress-blog-redis-1 | Ready to accept connections tcp"},
+  {"t":"14:03:05","level":"info","m":"wordpress-blog-wordpress-1 | 172.18.0.1 GET /wp-login.php 200 in 48ms"},
+  {"t":"14:03:11","level":"warn","m":"wordpress-blog-wordpress-1 | object cache Redis chưa bật trong wp-config · đang dùng transient MySQL"},
+  {"t":"14:03:18","level":"info","m":"wordpress-blog-wordpress-1 | GET /wp-json/wp/v2/posts 200 in 84ms"},
+  {"t":"14:03:26","level":"info","m":"wordpress-blog-wordpress-1 | POST /wp-admin/admin-ajax.php 200 in 132ms"},
+  {"t":"14:03:39","level":"error","m":"wordpress-blog-wordpress-1 | PHP Fatal error: Allowed memory size of 268435456 bytes exhausted (wp-cron.php)"},
+  {"t":"14:03:41","level":"info","m":"wordpress-blog-wordpress-1 | nâng memory_limit 512M · wp-cron hoàn tất, 0 job lỗi"},
+  {"t":"14:04:38","level":"dim","m":"wordpress-blog-db-1 | InnoDB buffer pool 128M · compose logs -f qua gRPC, tail 200"}
+]
+</script>
+
+<script type="application/json" id="tpl-log">
+[
+  {"t":"14:07:02","level":"step","m":"render templates/wordpress/compose.yaml → compose v1"},
+  {"t":"14:07:03","level":"info","m":"ComposeValidate · hợp lệ · 2 service, 2 volume, 1 domain"}
+]
+</script>
+
+<script src="assets/gotham-ui.js"></script>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var icon = function (n) { return window.Gotham.icon(n); };
+  var each = function (list, fn) { Array.prototype.forEach.call(list, fn); };
+  var clock = function () { return new Date().toTimeString().slice(0, 8); };
+  var GEN = "(CP sinh tự động)";
+
+  /* ── Nút primary ở page head mở tab thư viện template ───────────────── */
+  var goto = document.querySelector("[data-goto-tab]");
+  if (goto) {
+    goto.addEventListener("click", function (e) {
+      e.preventDefault();
+      var tab = document.querySelector('[data-tab="' + goto.dataset.gotoTab + '"]');
+      if (tab) tab.click();
+    });
+  }
+
+  /* ── Compose editor ─────────────────────────────────────────────────── */
+  var src = $("compose-src");
+  var VALID_SOURCE = src.value;
+  var BROKEN_SOURCE = [
+    "services:",
+    "  wordpress:",
+    "    image: wordpress:6.7-php8.3-apache",
+    "    volumes:",
+    "\t- wp-data:/var/www/html",
+    "  db:",
+    "    image: mysql:8.0",
+    "volumes:",
+    "  wp-data:"
+  ].join("\n");
+
+  document.addEventListener("gotham:segment", function (e) {
+    if (e.detail.group !== "compose-sample") return;
+    src.value = e.detail.value === "broken" ? BROKEN_SOURCE : VALID_SOURCE;
+    var host = $("compose-result");
+    host.hidden = true;
+    host.innerHTML = "";
+    $("compose-status").textContent = "Chưa kiểm tra · ComposeValidate chạy trên agent";
+  });
+
+  function composeCheck(text) {
+    var lines = text.replace(/\r/g, "").split("\n"), i, l, block;
+    for (i = 0; i < lines.length; i++) {
+      if (lines[i].indexOf("\t") >= 0) {
+        return { ok: false, n: i + 1, why: "thụt lề bằng tab — compose yêu cầu dấu cách", snippet: lines[i].replace(/\t/g, "→") };
+      }
+    }
+    var openVar = (text.match(/\$\{/g) || []).length;
+    var closeVar = (text.match(/\}/g) || []).length;
+    if (openVar !== closeVar) {
+      return { ok: false, n: 1, why: "biến ${…} chưa được đóng (" + openVar + " mở / " + closeVar + " đóng)", snippet: "" };
+    }
+    var svcStart = -1;
+    for (i = 0; i < lines.length; i++) { if (/^services:\s*$/.test(lines[i])) { svcStart = i; break; } }
+    if (svcStart < 0) return { ok: false, n: 1, why: "thiếu khoá gốc services:", snippet: "" };
+
+    var blocks = [];
+    for (i = svcStart + 1; i < lines.length; i++) {
+      l = lines[i];
+      if (l && !/^\s/.test(l)) break;
+      if (/^ {2}[A-Za-z0-9_.-]+:\s*$/.test(l)) {
+        block = { name: l.trim().replace(":", ""), at: i, hasImage: false };
+        blocks.push(block);
+      } else if (block && /^\s+image:/.test(l)) { block.hasImage = true; }
+    }
+    if (!blocks.length) return { ok: false, n: svcStart + 1, why: "services: chưa khai báo service nào", snippet: "" };
+    for (i = 0; i < blocks.length; i++) {
+      if (!blocks[i].hasImage) return { ok: false, n: blocks[i].at + 1, why: 'service "' + blocks[i].name + '" thiếu khoá image', snippet: lines[blocks[i].at] };
+    }
+    var volStart = -1, volumes = 0;
+    for (i = 0; i < lines.length; i++) { if (/^volumes:\s*$/.test(lines[i])) { volStart = i; break; } }
+    if (volStart >= 0) {
+      for (i = volStart + 1; i < lines.length; i++) {
+        l = lines[i];
+        if (l && !/^\s/.test(l)) break;
+        if (/^ {2}[A-Za-z0-9_.-]+:\s*$/.test(l)) volumes++;
+      }
+    }
+    return { ok: true, services: blocks.length, volumes: volumes, domains: (text.match(/Host\(/g) || []).length };
+  }
+
+  function resultPanel(r) {
+    var host = $("compose-result"), p;
+    if (r.ok) {
+      host.innerHTML = '<div class="embed embed--success"><div class="between"><h4>compose hợp lệ</h4>' +
+        '<span class="small meta">ComposeValidate · agent gotham-prod-01</span></div><p class="mono"></p></div>';
+      p = host.querySelector("p");
+      p.textContent = "compose hợp lệ · " + r.services + " service · " + r.volumes + " volume · " + r.domains + " domain";
+      $("compose-status").textContent = "Đã kiểm tra " + clock() + " · sẵn sàng deploy";
+    } else {
+      host.innerHTML = '<div class="embed embed--danger"><div class="between"><h4>ComposeValidate trả về lỗi</h4>' +
+        '<span class="small meta">dòng ' + r.n + "</span></div><p></p>" +
+        '<p class="mt-2">Sửa dòng lỗi rồi chạy lại <span class="inline-code">Kiểm tra</span>.</p></div>';
+      p = host.querySelector("p");
+      p.textContent = "Dòng " + r.n + ": " + r.why + (r.snippet ? " — " + r.snippet : "");
+      $("compose-status").textContent = "Kiểm tra thất bại " + clock();
+    }
+    host.hidden = false;
+  }
+
+  $("compose-check").addEventListener("click", function () {
+    var r = composeCheck(src.value);
+    resultPanel(r);
+    window.Gotham.toast(r.ok
+      ? "compose hợp lệ · " + r.services + " service · " + r.volumes + " volume · " + r.domains + " domain."
+      : "Dòng " + r.n + ": " + r.why, r.ok ? "success" : "danger");
+  });
+
+  /* ── Nạp lại một host [data-log] sạch rồi stream log từ đầu ─────────── */
+  function restartLog(hostId) {
+    var host = document.querySelector('[data-log="' + hostId + '"]');
+    if (!host || !host.parentNode) return;
+    var mount = host.parentNode;
+    var fresh = host.cloneNode(true);
+    var body = fresh.querySelector("[data-log-body]");
+    if (body) body.innerHTML = "";
+    var state = fresh.querySelector("[data-log-state]");
+    if (state) { state.textContent = "đang stream"; state.className = "realtime"; }
+    var clk = fresh.querySelector("[data-log-clock]");
+    if (clk) clk.textContent = "đang stream";
+    var pause = fresh.querySelector("[data-log-pause]");
+    if (pause) pause.innerHTML = icon("i-stop") + "<span>Tạm dừng</span>";
+    mount.replaceChild(fresh, host);
+    window.Gotham.init(mount);
+  }
+
+  /* ── Deploy compose: chạy .steps rồi stream log ─────────────────────── */
+  var deployBtn = $("compose-deploy");
+  var deployRunning = false;
+  var PLAN = [0, 500, 1400, 3600, 5400, 6600];
+
+  function runSteps(done) {
+    var steps = document.querySelectorAll("#deploy-steps .step");
+    each(steps, function (s) {
+      s.classList.remove("is-done", "is-active", "is-failed");
+      s.querySelector(".step-mark").innerHTML = "";
+      s.querySelector(".step-time").textContent = "chờ";
+    });
+    each(steps, function (s, i) {
+      window.setTimeout(function () {
+        s.classList.add("is-active");
+        s.querySelector(".step-time").textContent = "đang chạy";
+      }, PLAN[i]);
+      window.setTimeout(function () {
+        s.classList.remove("is-active");
+        s.classList.add("is-done");
+        s.querySelector(".step-mark").innerHTML = icon("i-check");
+        s.querySelector(".step-time").textContent = clock();
+      }, PLAN[i + 1]);
+    });
+    window.setTimeout(done, PLAN[steps.length] + 200);
+  }
+
+  deployBtn.addEventListener("click", function () {
+    var r = composeCheck(src.value);
+    resultPanel(r);
+    if (!r.ok) {
+      window.Gotham.toast("Không deploy được · dòng " + r.n + ": " + r.why, "danger");
+      return;
+    }
+    if (deployRunning) return;
+    deployRunning = true;
+    deployBtn.classList.add("is-busy");
+    deployBtn.disabled = true;
+    restartLog("compose-log");
+    runSteps(function () {
+      deployRunning = false;
+      deployBtn.classList.remove("is-busy");
+      deployBtn.disabled = false;
+      $("compose-status").textContent = "Deploy #13 hoàn tất " + clock() + " · 3 container running";
+      window.Gotham.toast("Deploy #13 thành công · 3/3 container running (wordpress, db, redis).", "success");
+    });
+  });
+
+  /* ── Nhập compose: kiểm tra YAML dán vào ───────────────────────────── */
+  var impBtn = document.querySelector("[data-import-check]");
+  if (impBtn) {
+    impBtn.addEventListener("click", function () {
+      var r = composeCheck($("imp-yaml").value);
+      window.Gotham.toast(r.ok
+        ? "Compose hợp lệ · " + r.services + " service · " + r.volumes + " volume · " + r.domains + " domain."
+        : "Dòng " + r.n + ": " + r.why, r.ok ? "success" : "danger");
+    });
+  }
+
+  /* ── Template: schema rút gọn dùng cho form động + preview ──────────── */
+  function svc(key, image, port, volume, env) {
+    return { key: key, image: image, port: port, volumes: volume ? [volume] : null, env: env };
+  }
+  var TPL = {
+    wordpress: {
+      slug: "wordpress", name: "WordPress", mark: "W", redis: true, entry: "wp-admin/install.php",
+      count: { svc: 2, vol: 2, fld: 7 }, fields: ["site", "domain", "email", "pass", "wpver", "redis", "backup"],
+      services: [
+        svc("wordpress", "wordpress:{wpver}", 80, "wp-data:/var/www/html",
+          ["WORDPRESS_DB_HOST: db:3306", "WORDPRESS_DB_NAME: {site}", "WORDPRESS_DB_USER: {site}",
+           "WORDPRESS_DB_PASSWORD: " + GEN, "WORDPRESS_CONFIG_EXTRA: \"define('WP_HOME', 'https://{domain}');\""]),
+        svc("db", "mysql:8.0", null, "db-data:/var/lib/mysql", ["MYSQL_DATABASE: {site}", "MYSQL_USER: {site}", "MYSQL_ROOT_PASSWORD: " + GEN])
+      ],
+      volumes: ["wp-data", "db-data"]
+    },
+    nextcloud: {
+      slug: "nextcloud", name: "Nextcloud", mark: "NC", redis: true, entry: "index.php",
+      count: { svc: 3, vol: 2, fld: 6 }, fields: ["site", "domain", "email", "pass", "redis", "backup"],
+      services: [
+        svc("nextcloud", "nextcloud:30-apache", 80, "nextcloud-data:/var/www/html",
+          ["NEXTCLOUD_TRUSTED_DOMAINS: {domain}", "NEXTCLOUD_ADMIN_USER: admin", "POSTGRES_HOST: db", "REDIS_HOST: redis"]),
+        svc("db", "postgres:16-alpine", null, "db-data:/var/lib/postgresql/data", ["POSTGRES_DB: {site}", "POSTGRES_USER: {site}", "POSTGRES_PASSWORD: " + GEN])
+      ],
+      volumes: ["nextcloud-data", "db-data"]
+    },
+    n8n: {
+      slug: "n8n", name: "n8n", mark: "N8", redis: false, entry: "setup",
+      count: { svc: 2, vol: 2, fld: 5 }, fields: ["site", "domain", "email", "pass", "backup"],
+      services: [
+        svc("n8n", "n8nio/n8n:1.70.0", 5678, "n8n-data:/home/node/.n8n",
+          ["N8N_HOST: {domain}", "N8N_PROTOCOL: https", "DB_TYPE: postgresdb", "DB_POSTGRESDB_HOST: db", "DB_POSTGRESDB_DATABASE: {site}"]),
+        svc("db", "postgres:16-alpine", null, "db-data:/var/lib/postgresql/data", ["POSTGRES_DB: {site}", "POSTGRES_USER: {site}", "POSTGRES_PASSWORD: " + GEN])
+      ],
+      volumes: ["n8n-data", "db-data"]
+    },
+    "uptime-kuma": {
+      slug: "uptime-kuma", name: "Uptime Kuma", mark: "UK", redis: false, entry: "dashboard",
+      count: { svc: 1, vol: 1, fld: 4 }, fields: ["site", "domain", "email", "backup"],
+      services: [svc("uptime-kuma", "louislam/uptime-kuma:1", 3001, "kuma-data:/app/data", ["UPTIME_KUMA_PORT: 3001"])],
+      volumes: ["kuma-data"]
+    }
+  };
+  var current = TPL.wordpress;
+
+  function applyTemplate(slug) {
+    var t = TPL[slug];
+    if (!t) return;
+    current = t;
+    each(document.querySelectorAll("[data-tpl-field]"), function (el) {
+      el.hidden = t.fields.indexOf(el.dataset.tplField) < 0;
+    });
+    $("tpl-mark").textContent = t.mark;
+    $("tpl-title").textContent = "Triển khai template " + t.name;
+    $("tpl-sub").textContent = "templates/" + t.slug + " · " + t.count.svc + " service · " + t.count.vol + " volume · " + t.count.fld + " trường form";
+    $("tpl-success").hidden = true;
+  }
+
+  each(document.querySelectorAll("[data-template]"), function (card) {
+    card.addEventListener("click", function () { applyTemplate(card.dataset.template); });
+  });
+
+  function tplValues() {
+    return {
+      site: ($("tf-site").value || "site").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-"),
+      domain: ($("tf-domain").value || "").trim(),
+      email: ($("tf-email").value || "").trim(),
+      wptag: $("tf-wpver").value,
+      redis: $("tf-redis").getAttribute("aria-checked") === "true",
+      backup: $("tf-backup").getAttribute("aria-checked") === "true"
+    };
+  }
+  function fill(s, v) {
+    return s.replace(/\{site\}/g, v.site).replace(/\{domain\}/g, v.domain).replace(/\{wpver\}/g, v.wptag);
+  }
+
+  window.renderTplPreview = function () {
+    var t = current, v = tplValues(), out = [], redisOn = v.redis && t.redis;
+    out.push("# render: templates/" + t.slug + "/compose.yaml · thay chuỗi, không thực thi code");
+    out.push("name: " + v.site);
+    out.push("services:");
+    t.services.forEach(function (s) {
+      out.push("  " + s.key + ":");
+      out.push("    image: " + fill(s.image, v));
+      out.push("    restart: unless-stopped");
+      out.push("    environment:");
+      s.env.forEach(function (e) { out.push("      " + fill(e, v)); });
+      if (s.volumes) {
+        out.push("    volumes:");
+        s.volumes.forEach(function (x) { out.push("      - " + x); });
+      }
+      if (s.port) {
+        out.push("    labels:");
+        out.push("      - traefik.enable=true");
+        out.push("      - traefik.http.routers." + v.site + ".rule=Host(`" + v.domain + "`)");
+        out.push("      - traefik.http.routers." + v.site + ".tls.certresolver=le-http");
+        out.push("      - traefik.http.services." + v.site + ".loadbalancer.server.port=" + s.port);
+      }
+    });
+    if (redisOn) {
+      out.push("  redis:");
+      out.push("    image: redis:7-alpine");
+      out.push("    restart: unless-stopped");
+      out.push('    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]');
+    }
+    out.push("volumes:");
+    t.volumes.forEach(function (x) { out.push("  " + x + ":"); });
+    out.push("# admin: " + v.email);
+    out.push("# sao lưu: " + (v.backup ? "mysqldump hằng ngày 03:00 · giữ 7 bản" : "tắt"));
+    $("tpl-preview").textContent = out.join("\n");
+    $("tpl-preview-tag").textContent = "compose v1 · " + (t.count.svc + (redisOn ? 1 : 0)) + " service";
+  };
+
+  function tplDeployLog(t, v) {
+    var keys = t.services.map(function (s) { return s.key; });
+    if (v.redis && t.redis) keys.push("redis");
+    var L = [
+      { t: "14:07:02", level: "step", m: "render templates/" + t.slug + "/compose.yaml → compose v1" },
+      { t: "14:07:02", level: "dim", m: "thay " + v.site + " · " + v.domain + " · " + v.email },
+      { t: "14:07:03", level: "info", m: "ComposeValidate · hợp lệ · " + keys.length + " service · " + t.count.vol + " volume · 1 domain" },
+      { t: "14:07:04", level: "info", m: "tạo service " + v.site + " trên gotham-prod-01 · compose v2.29" },
+      { t: "14:07:05", level: "step", m: "pulling images" },
+      { t: "14:07:06", level: "dim", m: "kéo " + keys.length + " image · digest sha256 xác minh OK" }
+    ];
+    keys.forEach(function (k, i) {
+      L.push({ t: "14:07:1" + (4 + i * 2), level: "info", m: "Container " + v.site + "-" + k + "-1 Started" });
+    });
+    if (keys.indexOf("db") >= 0) L.push({ t: "14:07:22", level: "info", m: "healthcheck db: ready to accept connections" });
+    L.push({ t: "14:07:24", level: "info", m: "Traefik router " + v.site + "@file nạp từ label · Host(" + v.domain + ")" });
+    L.push({ t: "14:07:27", level: "info", m: "cert Let's Encrypt cấp qua HTTP-01 · hạn 89 ngày" });
+    L.push({ t: "14:07:31", level: "step", m: "deploy hoàn tất · " + v.site + " chạy tại https://" + v.domain });
+    L.push({ t: "14:07:31", level: "dim", m: v.backup ? "đã đặt lịch backup hằng ngày 03:00" : "backup hằng ngày đang tắt" });
+    return L;
+  }
+
+  var tplRunning = false;
+  window.startTplDeploy = function () {
+    if (tplRunning) return;
+    tplRunning = true;
+    var t = current, v = tplValues();
+    var script = $("tpl-log");
+    if (script) script.textContent = JSON.stringify(tplDeployLog(t, v));
+
+    var fillEl = document.querySelector("#tpl-meter .meter-fill");
+    var pct = $("tpl-pct"), label = $("tpl-progress-label");
+    $("tpl-success").hidden = true;
+    [[0, "Đang render template…", 14], [900, "ComposeValidate trên agent…", 40], [2400, "Đang kéo image…", 75],
+     [4800, "Đang khởi động container…", 92], [6200, "Healthcheck + cấp cert…", 100]].forEach(function (m) {
+      window.setTimeout(function () {
+        if (fillEl) fillEl.style.width = m[2] + "%";
+        if (pct) pct.textContent = m[2] + "%";
+        if (label) label.textContent = m[1];
+      }, m[0]);
+    });
+
+    restartLog("tpl-log");
+
+    window.setTimeout(function () {
+      var domain = v.domain || (v.site + ".gotham.dev");
+      $("tpl-success-title").textContent = v.site + " đã chạy";
+      $("tpl-success-domain").textContent = domain;
+      var open = $("tpl-open");
+      if (open) open.setAttribute("data-toast", "Mở https://" + domain + "/" + t.entry + " trong tab mới.|info");
+      $("tpl-success").hidden = false;
+      tplRunning = false;
+      window.Gotham.toast("Deploy " + v.site + " thành công · " + t.count.svc + " container running.", "success");
+    }, 6400);
+  };
+})();
+</script>
+</body>
+</html>

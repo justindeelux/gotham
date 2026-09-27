@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Quản lý file · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+<style>
+  /* Trang cục bộ: chỉ class mới, tiền tố pg-. */
+  .pg-headcheck { width: 28px; display: grid; place-items: center; flex: 0 0 auto; }
+  .pg-pre { max-height: 220px; overflow: auto; }
+  .pg-meta { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+</style>
+</head>
+<body data-page="files" data-nav="files">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Máy chủ đang quản lý"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Vận hành · volume browser</p>
+            <h1>Quản lý file</h1>
+            <p class="page-desc">Duyệt trực tiếp volume của ứng dụng trên node. Mọi thao tác (đọc, tải lên, đổi tên, xoá) đi qua agent bằng kênh mTLS — control plane không mount ổ đĩa của node.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-outline" type="button" data-open="new-folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg>Tạo thư mục</button>
+            <button class="btn btn-primary" type="button" data-open="upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg>Tải lên</button>
+          </div>
+        </div>
+
+        <div class="card" data-od-id="file-browser">
+          <div class="card-head">
+            <span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span>
+            <div>
+              <h3>gotham-storefront-uploads</h3>
+              <p class="small muted">Mount <span class="mono">rw</span> · <span class="mono">/app/public/uploads</span> · node gotham-prod-01</p>
+            </div>
+            <span class="card-actions">
+              <span class="tag">volume</span>
+              <span class="tag">storefront</span>
+            </span>
+          </div>
+
+          <div class="fm-bulk" hidden data-fm-bulk>
+            <svg aria-hidden="true" style="width:15px;height:15px"><use href="#i-check"></use></svg>
+            <span data-fm-bulk-count>Đã chọn 0 mục</span>
+            <span class="grow"></span>
+            <button class="btn btn-sm btn-outline" type="button" data-fm-bulk-download><svg aria-hidden="true"><use href="#i-download"></use></svg>Tải xuống</button>
+            <button class="btn btn-sm btn-danger-ghost" type="button" data-fm-bulk-delete><svg aria-hidden="true"><use href="#i-trash"></use></svg>Xoá</button>
+            <button class="btn btn-sm btn-ghost" type="button" data-fm-clear>Bỏ chọn</button>
+          </div>
+
+          <div class="card-body" style="padding-bottom: 0">
+            <div class="fm-bar">
+              <nav class="fm-path" data-fm-crumbs aria-label="Đường dẫn thư mục"></nav>
+              <div class="search grow" style="margin-left:auto;max-width:260px">
+                <svg aria-hidden="true"><use href="#i-search"></use></svg>
+                <input type="search" placeholder="Tìm theo tên tệp…" aria-label="Tìm tệp" data-fm-search />
+              </div>
+              <div class="segmented" data-fm-view role="group" aria-label="Kiểu hiển thị">
+                <button class="is-active" type="button" data-view="list" aria-label="Dạng danh sách"><svg aria-hidden="true" style="width:13px;height:13px"><use href="#i-list"></use></svg></button>
+                <button type="button" data-view="grid" aria-label="Dạng lưới"><svg aria-hidden="true" style="width:13px;height:13px"><use href="#i-grid"></use></svg></button>
+              </div>
+            </div>
+            <div class="filters" data-fm-filters style="margin-bottom: var(--space-3)">
+              <button class="chip is-active" type="button" data-filter="all">Tất cả <span class="nav-count" data-fm-count-all>0</span></button>
+              <button class="chip" type="button" data-filter="folder">Thư mục</button>
+              <button class="chip" type="button" data-filter="image">Ảnh</button>
+              <button class="chip" type="button" data-filter="doc">Tài liệu</button>
+              <button class="chip" type="button" data-filter="archive">Lưu trữ</button>
+            </div>
+          </div>
+
+          <div class="table-wrap" data-fm-list-wrap>
+            <div class="fm-table" data-fm-list></div>
+          </div>
+          <div class="fm-grid" data-fm-grid hidden style="padding: var(--space-4)"></div>
+
+          <div class="empty" data-fm-empty hidden>
+            <svg aria-hidden="true"><use href="#i-folder"></use></svg>
+            <h4>Thư mục trống</h4>
+            <p class="small">Kéo tệp vào đây hoặc dùng nút <span class="mono">Tải lên</span> để thêm nội dung.</p>
+          </div>
+
+          <div class="fm-foot">
+            <span data-fm-stats>—</span>
+            <span class="row gap-3 pg-meta">
+              <span class="row gap-2"><span class="mono">1.4 GiB / 8 GiB</span><span class="meter" style="width:96px" data-meter="18" data-meter-kind="success"></span></span>
+              <span class="mono">volume gotham-storefront-uploads</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="grid cols-2 mt-5">
+          <div class="callout">
+            <svg aria-hidden="true"><use href="#i-shield"></use></svg>
+            <div>
+              <h4>Thao tác file cũng đi qua agent</h4>
+              <p>API <span class="mono">/api/v1/servers/{id}/files</span> được agent thực thi trong thư mục volume; mọi lệnh ghi đều ghi vào audit log của nhóm và có thể tắt bằng cờ <span class="mono">FEATURE_FILE_BROWSER</span>.</p>
+            </div>
+          </div>
+          <div class="callout">
+            <svg aria-hidden="true"><use href="#i-info"></use></svg>
+            <div>
+              <h4>Xoá là xoá mềm</h4>
+              <p>Tệp bị xoá được giữ 7 ngày trong <span class="mono">.gotham-trash/</span> trên chính volume đó trước khi xoá vĩnh viễn — giống cơ chế giữ volume của database.</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ── Chi tiết tệp ──────────────────────────────────────────────────────── -->
+<div class="drawer" id="file-detail" hidden aria-label="Chi tiết tệp">
+  <div class="drawer-head">
+    <span class="fm-mark" data-fm-detail-mark data-kind="file"><svg aria-hidden="true"><use href="#i-file"></use></svg></span>
+    <div class="grow">
+      <h3 data-fm-detail-name>—</h3>
+      <p class="small muted" data-fm-detail-sub>—</p>
+    </div>
+    <button class="btn btn-ghost btn-icon" type="button" data-drawer-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+  </div>
+  <div class="drawer-body stack gap-4">
+    <dl class="kv" data-fm-detail-kv></dl>
+    <div>
+      <p class="stat-label mb-2">Nội dung</p>
+      <div data-fm-detail-preview></div>
+    </div>
+    <div class="row gap-2 wrap">
+      <button class="btn btn-outline" type="button" data-fm-detail-download><svg aria-hidden="true"><use href="#i-download"></use></svg>Tải xuống</button>
+      <button class="btn btn-outline" type="button" data-fm-detail-rename><svg aria-hidden="true"><use href="#i-pencil"></use></svg>Đổi tên</button>
+      <button class="btn btn-outline" type="button" data-fm-detail-link><svg aria-hidden="true"><use href="#i-link"></use></svg>Sao chép liên kết</button>
+      <button class="btn btn-danger-ghost" type="button" data-fm-detail-delete><svg aria-hidden="true"><use href="#i-trash"></use></svg>Xoá</button>
+    </div>
+    <p class="small meta">Đường dẫn: <span class="mono" data-fm-detail-path>—</span></p>
+  </div>
+</div>
+
+<!-- ── Tải lên ───────────────────────────────────────────────────────────── -->
+<div class="overlay" id="upload" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="upload-title">
+    <div class="modal-head">
+      <div><h3 id="upload-title">Tải tệp lên volume</h3><p class="small muted">Tệp được đẩy xuống node qua agent, ghi trực tiếp vào thư mục đang mở.</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-4">
+      <div class="fm-drop" data-fm-drop>
+        <svg aria-hidden="true"><use href="#i-cloud-down"></use></svg>
+        <p class="fg-2">Kéo tệp vào đây</p>
+        <p class="small muted">hoặc chọn từ máy · tối đa 512 MiB mỗi tệp</p>
+      </div>
+      <div class="field">
+        <p class="field-label">Thư mục đích</p>
+        <div class="input-affix"><svg aria-hidden="true" style="width:14px;height:14px"><use href="#i-folder"></use></svg><span data-fm-dest-label>/</span></div>
+      </div>
+      <div class="field">
+        <label class="field-label" for="up-file">Chọn tệp từ máy</label>
+        <input class="input" type="file" id="up-file" />
+        <span class="field-hint">Ghi đè tệp cùng tên sẽ tạo bản <span class="mono">.bak</span> trước khi thay.</span>
+      </div>
+      <div class="progress" data-fm-upload-progress hidden>
+        <span class="small muted nowrap" data-fm-upload-label>Đang tải…</span>
+        <span class="bar meter" data-fm-upload-meter></span>
+        <span class="mono small" data-fm-upload-pct>0%</span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow" data-fm-upload-note>Chưa có tệp nào được chọn</span>
+      <button class="btn btn-outline" type="button" data-close>Huỷ</button>
+      <button class="btn btn-primary" type="button" data-fm-upload-run>Tải lên</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Tạo thư mục ───────────────────────────────────────────────────────── -->
+<div class="overlay" id="new-folder" hidden>
+  <div class="modal modal--sm" role="dialog" aria-modal="true" aria-labelledby="folder-title">
+    <div class="modal-head">
+      <div><h3 id="folder-title">Tạo thư mục</h3><p class="small muted">Thư mục mới nằm trong <span class="mono" data-fm-dest-label>/</span></p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label class="field-label" for="nf-name">Tên thư mục</label>
+        <input class="input mono" id="nf-name" placeholder="marketing-2027" required data-pattern="^[a-z0-9][a-z0-9._-]{1,40}$" />
+        <span class="field-hint">Chỉ chữ thường, số, dấu chấm, gạch ngang và gạch dưới.</span>
+        <span class="field-error">Tên không hợp lệ.</span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">Quyền kế thừa từ volume: <span class="mono">rw</span></span>
+      <button class="btn btn-outline" type="button" data-close>Huỷ</button>
+      <button class="btn btn-primary" type="button" data-fm-folder-run>Tạo thư mục</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Đổi tên ───────────────────────────────────────────────────────────── -->
+<div class="overlay" id="rename" hidden>
+  <div class="modal modal--sm" role="dialog" aria-modal="true" aria-labelledby="rename-title">
+    <div class="modal-head">
+      <div><h3 id="rename-title">Đổi tên</h3><p class="small muted">Đang đổi <span class="mono" data-fm-rename-from>—</span></p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label class="field-label" for="rn-name">Tên mới</label>
+        <input class="input mono" id="rn-name" required data-pattern="^[^/\\\\]{1,80}$" />
+        <span class="field-error">Tên không được để trống hoặc chứa dấu /.</span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">Giữ nguyên phần mở rộng để không đổi kiểu tệp.</span>
+      <button class="btn btn-outline" type="button" data-close>Huỷ</button>
+      <button class="btn btn-primary" type="button" data-fm-rename-run>Lưu</button>
+    </div>
+  </div>
+</div>
+
+<script type="application/json" id="fm-data">
+{
+  "volume": { "name": "gotham-storefront-uploads", "node": "gotham-prod-01", "mount": "rw", "quota": "8 GiB" },
+  "items": [
+    { "dir": "", "name": "products", "kind": "folder", "size": null, "modified": "2026-09-27T09:12:00", "mount": "rw", "owner": "deploy" },
+    { "dir": "", "name": "collections", "kind": "folder", "size": null, "modified": "2026-09-24T15:40:00", "mount": "rw", "owner": "deploy" },
+    { "dir": "", "name": "banners", "kind": "folder", "size": null, "modified": "2026-09-19T08:05:00", "mount": "ro", "owner": "media-bot" },
+    { "dir": "", "name": "hero-2026.webp", "kind": "image", "size": 1887436, "modified": "2026-09-27T11:48:00", "mount": "rw", "owner": "nga.tran" },
+    { "dir": "", "name": "lookbook-01.jpg", "kind": "image", "size": 2516582, "modified": "2026-09-26T17:22:00", "mount": "rw", "owner": "nga.tran" },
+    { "dir": "", "name": "product-tee-front.jpg", "kind": "image", "size": 655360, "modified": "2026-09-25T10:03:00", "mount": "rw", "owner": "minh.pham" },
+    { "dir": "", "name": "product-tee-back.jpg", "kind": "image", "size": 626688, "modified": "2026-09-25T10:04:00", "mount": "rw", "owner": "minh.pham" },
+    { "dir": "", "name": "og-default.png", "kind": "image", "size": 98304, "modified": "2026-09-18T14:31:00", "mount": "rw", "owner": "media-bot" },
+    { "dir": "", "name": "import-template.csv", "kind": "doc", "size": 18432, "modified": "2026-09-22T09:47:00", "mount": "rw", "owner": "minh.pham", "text": "sku,name,price,stock\nTEE-001,Áo thun BASIC,199000,42\nTEE-002,Áo thun OVERSIZE,249000,18\nHD-003,Áo hoodie ZIP,459000,7\n" },
+    { "dir": "", "name": "README-uploads.md", "kind": "doc", "size": 4096, "modified": "2026-09-27T08:20:00", "mount": "rw", "owner": "nga.tran", "text": "# Volume uploads\n\nThư mục này được mount vào container storefront tại /app/public/uploads.\n\n- Ảnh sản phẩm: tối đa 2500px cạnh dài, định dạng webp hoặc jpg\n- Không đặt tệp .env hay khoá bí mật trong volume này\n- Tệp xoá được giữ 7 ngày trong .gotham-trash/\n" },
+    { "dir": "", "name": "license.txt", "kind": "doc", "size": 2048, "modified": "2026-08-30T16:10:00", "mount": "ro", "owner": "root", "text": "Media assets © Gotham Labs.\nChỉ dùng cho storefront.gotham.dev.\n" },
+    { "dir": "", "name": "backup-media-2026-09.tar.gz", "kind": "archive", "size": 432013312, "modified": "2026-09-27T02:00:00", "mount": "rw", "owner": "backup-job" },
+    { "dir": "products", "name": "tee-001-front.webp", "kind": "image", "size": 421888, "modified": "2026-09-27T09:12:00", "mount": "rw", "owner": "nga.tran" },
+    { "dir": "products", "name": "tee-001-back.webp", "kind": "image", "size": 399360, "modified": "2026-09-27T09:12:00", "mount": "rw", "owner": "nga.tran" },
+    { "dir": "products", "name": "hoodie-003-front.webp", "kind": "image", "size": 512000, "modified": "2026-09-26T11:35:00", "mount": "rw", "owner": "minh.pham" },
+    { "dir": "collections", "name": "autumn-2026.json", "kind": "doc", "size": 32768, "modified": "2026-09-24T15:40:00", "mount": "rw", "owner": "deploy", "text": "{\n  \"handle\": \"autumn-2026\",\n  \"title\": \"Bộ sưu tập Thu 2026\",\n  \"products\": [\"TEE-001\", \"TEE-002\", \"HD-003\"]\n}\n" },
+    { "dir": "collections", "name": "winter-2026.json", "kind": "doc", "size": 28672, "modified": "2026-09-20T13:02:00", "mount": "rw", "owner": "deploy", "text": "{\n  \"handle\": \"winter-2026\",\n  \"title\": \"Bộ sưu tập Đông 2026\",\n  \"products\": [\"HD-003\", \"TEE-002\"]\n}\n" }
+  ]
+}
+</script>
+
+<script src="assets/gotham-ui.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var DATA = JSON.parse(document.getElementById("fm-data").textContent);
+  var KIND = {
+    folder:  { label: "Thư mục",  icon: "i-folder",  tag: "" },
+    image:   { label: "Ảnh",      icon: "i-image",   tag: "tag--success" },
+    film:    { label: "Video",    icon: "i-film",    tag: "tag--warn" },
+    doc:     { label: "Tài liệu", icon: "i-file",    tag: "" },
+    archive: { label: "Lưu trữ",  icon: "i-archive", tag: "tag--danger" }
+  };
+
+  var state = { cwd: [""], query: "", type: "all", sort: { key: "name", dir: 1 }, view: "list", selected: {} };
+  var listEl = document.querySelector("[data-fm-list]");
+  var gridEl = document.querySelector("[data-fm-grid]");
+  var wrapEl = document.querySelector("[data-fm-list-wrap]");
+  var crumbsEl = document.querySelector("[data-fm-crumbs]");
+  var bulkEl = document.querySelector("[data-fm-bulk]");
+  var emptyEl = document.querySelector("[data-fm-empty]");
+  var statsEl = document.querySelector("[data-fm-stats]");
+  var detailId = null;
+
+  function dirPath() { return state.cwd.filter(Boolean).join("/"); }
+  function fmtSize(b) {
+    if (b === null || b === undefined) return "—";
+    if (b < 1024) return b + " B";
+    if (b < 1048576) return (b / 1024).toFixed(0) + " KiB";
+    if (b < 1073741824) return (b / 1048576).toFixed(1) + " MiB";
+    return (b / 1073741824).toFixed(2) + " GiB";
+  }
+  function fmtDate(iso) {
+    var d = new Date(iso);
+    var p = function (n) { return String(n).padStart(2, "0"); };
+    return p(d.getDate()) + "/" + p(d.getMonth() + 1) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  function rows() {
+    var q = state.query.toLowerCase();
+    var out = DATA.items.filter(function (it) {
+      if (it.dir !== dirPath()) return false;
+      if (state.type !== "all" && it.kind !== state.type) return false;
+      if (q && it.name.toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+    var k = state.sort.key, dir = state.sort.dir;
+    out.sort(function (a, b) {
+      if (a.kind === "folder" && b.kind !== "folder") return -1;
+      if (b.kind === "folder" && a.kind !== "folder") return 1;
+      var va = k === "size" ? (a.size || 0) : k === "date" ? new Date(a.modified).getTime() : a.name.toLowerCase();
+      var vb = k === "size" ? (b.size || 0) : k === "date" ? new Date(b.modified).getTime() : b.name.toLowerCase();
+      return va < vb ? -dir : va > vb ? dir : 0;
+    });
+    return out;
+  }
+  function keyOf(it) { return it.dir + "/" + it.name; }
+  function selectedCount() { return Object.keys(state.selected).filter(function (k) { return state.selected[k]; }).length; }
+  function icon(id, size) { return '<svg aria-hidden="true"' + (size ? ' style="width:' + size + 'px;height:' + size + 'px"' : "") + '><use href="#' + id + '"></use></svg>'; }
+
+  /* ── Actions per row: icon-only, revealed on hover (yêu cầu chính) ───── */
+  function actions(it) {
+    var k = keyOf(it);
+    return '<div class="fm-actions">' +
+      '<button class="btn btn-sm btn-icon btn-ghost" type="button" title="Xem chi tiết" aria-label="Xem chi tiết ' + it.name + '" data-fm-act="preview" data-key="' + k + '">' + icon("i-eye") + "</button>" +
+      '<button class="btn btn-sm btn-icon btn-ghost" type="button" title="Tải xuống" aria-label="Tải xuống ' + it.name + '" data-fm-act="download" data-key="' + k + '">' + icon("i-download") + "</button>" +
+      '<button class="btn btn-sm btn-icon btn-ghost" type="button" title="Sao chép liên kết" aria-label="Sao chép liên kết ' + it.name + '" data-fm-act="link" data-key="' + k + '">' + icon("i-link") + "</button>" +
+      '<button class="btn btn-sm btn-icon btn-ghost" type="button" title="Đổi tên" aria-label="Đổi tên ' + it.name + '" data-fm-act="rename" data-key="' + k + '">' + icon("i-pencil") + "</button>" +
+      '<button class="btn btn-sm btn-icon btn-danger-ghost" type="button" title="Xoá" aria-label="Xoá ' + it.name + '" data-fm-act="delete" data-key="' + k + '">' + icon("i-trash") + "</button>" +
+      "</div>";
+  }
+  function mark(it) {
+    return '<span class="fm-mark" data-kind="' + it.kind + '">' + icon(KIND[it.kind].icon) +
+      '<span class="fm-check"><label class="check"><input type="checkbox" aria-label="Chọn ' + it.name + '" data-fm-pick="' + keyOf(it) + '"' +
+      (state.selected[keyOf(it)] ? " checked" : "") + " /></label></span></span>";
+  }
+
+  function renderList(items) {
+    var head = '<div class="fm-row fm-head" role="row">' +
+      '<span class="fm-name"><span class="pg-headcheck"><label class="check"><input type="checkbox" aria-label="Chọn tất cả mục" data-fm-pick-all /></label></span>' +
+      '<button class="fm-sort' + (state.sort.key === "name" ? " is-active" : "") + '" type="button" data-fm-sort="name">Tên' + icon("i-chevron-down", 12) + "</button></span>" +
+      '<span>Loại</span>' +
+      '<button class="fm-sort' + (state.sort.key === "size" ? " is-active" : "") + '" type="button" data-fm-sort="size" style="justify-self:end">Kích thước' + icon("i-chevron-down", 12) + "</button>" +
+      '<button class="fm-sort' + (state.sort.key === "date" ? " is-active" : "") + '" type="button" data-fm-sort="date">Sửa đổi' + icon("i-chevron-down", 12) + "</button>" +
+      "<span>Mount</span><span style=\"text-align:right\">Thao tác</span></div>";
+    var body = items.map(function (it) {
+      var k = keyOf(it), sel = state.selected[k] ? " is-selected" : "";
+      return '<div class="fm-row' + sel + '" data-fm-type="' + it.kind + '" data-key="' + k + '" data-od-id="fm-row-' + it.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase() + '" role="row">' +
+        '<span class="fm-name">' + mark(it) +
+        '<button class="fm-label" type="button" data-fm-act="open" data-key="' + k + '">' +
+        "<b>" + it.name + "</b><span>" + (it.dir ? "/" + it.dir + "/" : "/") + KIND[it.kind].label.toLowerCase() + " · " + it.owner + "</span></button></span>" +
+        '<span class="fm-cell"><span class="tag ' + KIND[it.kind].tag + '">' + KIND[it.kind].label + "</span></span>" +
+        '<span class="fm-cell fm-cell--size">' + fmtSize(it.size) + "</span>" +
+        '<span class="fm-cell">' + fmtDate(it.modified) + "</span>" +
+        '<span class="fm-cell">' + it.mount + "</span>" +
+        actions(it) + "</div>";
+    }).join("");
+    listEl.innerHTML = head + body;
+    window.Gotham.init(listEl);
+  }
+
+  function renderGrid(items) {
+    gridEl.innerHTML = items.map(function (it) {
+      var k = keyOf(it), sel = state.selected[k] ? " is-selected" : "";
+      return '<div class="fm-tile' + sel + '" data-fm-type="' + it.kind + '" data-key="' + k + '">' +
+        actions(it) + mark(it) +
+        '<button class="fm-label" type="button" data-fm-act="open" data-key="' + k + '">' +
+        '<span class="fg-2" style="font-size:var(--text-xs)">' + it.name + "</span></button>" +
+        '<span class="fm-meta">' + fmtSize(it.size) + " · " + fmtDate(it.modified) + "</span></div>";
+    }).join("");
+    window.Gotham.init(gridEl);
+  }
+
+  function renderCrumbs() {
+    var parts = [""].concat(state.cwd.slice(1));
+    crumbsEl.innerHTML = parts.map(function (p, i) {
+      var last = i === parts.length - 1;
+      var label = i === 0 ? "gotham-storefront-uploads" : p;
+      return '<button class="fm-crumb' + (last ? " is-current" : "") + '" type="button" data-fm-crumb="' + i + '">' +
+        icon(i === 0 ? "i-server" : "i-folder", 14) + "<span>" + label + "</span></button>" +
+        (last ? "" : '<span class="sep">/</span>');
+    }).join("");
+  }
+
+  function render() {
+    var items = rows();
+    var all = DATA.items.filter(function (it) { return it.dir === dirPath(); });
+    document.querySelector("[data-fm-count-all]").textContent = all.length;
+    var folders = items.filter(function (i) { return i.kind === "folder"; }).length;
+    var bytes = items.reduce(function (a, i) { return a + (i.size || 0); }, 0);
+    statsEl.textContent = items.length + " mục · " + folders + " thư mục · " + (items.length - folders) + " tệp · " + fmtSize(bytes);
+    emptyEl.hidden = all.length !== 0;
+    if (state.view === "list") { renderList(items); gridEl.hidden = true; wrapEl.hidden = false; }
+    else { renderGrid(items); wrapEl.hidden = true; gridEl.hidden = false; }
+    renderCrumbs();
+    var n = selectedCount();
+    bulkEl.hidden = n === 0;
+    document.querySelector("[data-fm-bulk-count]").textContent = "Đã chọn " + n + " mục";
+    document.querySelectorAll("[data-fm-dest-label]").forEach(function (el) { el.textContent = "/" + (dirPath() || ""); });
+  }
+
+  /* ── Delegated interactions ───────────────────────────────────────────── */
+  document.addEventListener("click", function (e) {
+    var crumb = e.target.closest("[data-fm-crumb]");
+    if (crumb) {
+      var i = parseInt(crumb.dataset.fmCrumb, 10);
+      state.cwd = i === 0 ? [""] : state.cwd.slice(0, i + 1);
+      state.selected = {};
+      render();
+      return;
+    }
+    var sort = e.target.closest("[data-fm-sort]");
+    if (sort) {
+      var key = sort.dataset.fmSort;
+      state.sort = { key: key, dir: state.sort.key === key ? -state.sort.dir : 1 };
+      render();
+      return;
+    }
+    var act = e.target.closest("[data-fm-act]");
+    if (act) {
+      var it = DATA.items.find(function (x) { return keyOf(x) === act.dataset.key; });
+      if (!it) return;
+      if (act.dataset.fmAct === "open") {
+        if (it.kind === "folder") { state.cwd = state.cwd.concat(it.name); state.selected = {}; render(); }
+        else openDetail(it);
+      } else if (act.dataset.fmAct === "preview") openDetail(it);
+      else if (act.dataset.fmAct === "download") window.Gotham.toast("Đang tải " + it.name + " (" + fmtSize(it.size) + ") qua agent…", "info");
+      else if (act.dataset.fmAct === "link") window.Gotham.toast("Đã sao chép liên kết signed URL cho " + it.name + ".", "success");
+      else if (act.dataset.fmAct === "rename") openRename(it);
+      else if (act.dataset.fmAct === "delete") {
+        var k = keyOf(it);
+        state.selected[k] = true;
+        render();
+        bulkDelete();
+      }
+      return;
+    }
+    var view = e.target.closest("[data-fm-view] button");
+    if (view) {
+      document.querySelectorAll("[data-fm-view] button").forEach(function (b) { b.classList.remove("is-active"); });
+      view.classList.add("is-active");
+      state.view = view.dataset.view;
+      render();
+      return;
+    }
+    if (e.target.closest("[data-fm-clear]")) { state.selected = {}; render(); }
+    if (e.target.closest("[data-fm-bulk-download]")) {
+      window.Gotham.toast("Nén và tải " + selectedCount() + " mục thành gotham-selection.zip.", "info");
+    }
+    if (e.target.closest("[data-fm-bulk-delete]")) bulkDelete();
+  });
+
+  document.addEventListener("change", function (e) {
+    var pick = e.target.closest("[data-fm-pick]");
+    if (pick) {
+      state.selected[pick.dataset.fmPick] = pick.checked;
+      var row = pick.closest(".fm-row, .fm-tile");
+      if (row) row.classList.toggle("is-selected", pick.checked);
+      render();
+      return;
+    }
+    if (e.target.closest("[data-fm-pick-all]")) {
+      var on = e.target.checked, items = rows();
+      state.selected = {};
+      items.forEach(function (it) { state.selected[keyOf(it)] = on; });
+      render();
+    }
+  });
+
+  var searchEl = document.querySelector("[data-fm-search]");
+  searchEl.addEventListener("input", function () { state.query = searchEl.value.trim(); render(); });
+
+  var group = document.querySelector("[data-fm-filters]");
+  group.addEventListener("click", function (e) {
+    var chip = e.target.closest("[data-filter]");
+    if (!chip) return;
+    group.querySelectorAll("[data-filter]").forEach(function (c) { c.classList.remove("is-active"); });
+    chip.classList.add("is-active");
+    state.type = chip.dataset.filter;
+    render();
+  });
+
+  /* ── Chi tiết tệp ─────────────────────────────────────────────────────── */
+  function openDetail(it) {
+    detailId = keyOf(it);
+    document.querySelector("[data-fm-detail-name]").textContent = it.name;
+    document.querySelector("[data-fm-detail-sub]").textContent = KIND[it.kind].label + " · " + fmtSize(it.size) + " · sửa " + fmtDate(it.modified);
+    var mk = document.querySelector("[data-fm-detail-mark]");
+    mk.dataset.kind = it.kind;
+    mk.innerHTML = icon(KIND[it.kind].icon);
+    document.querySelector("[data-fm-detail-kv]").innerHTML =
+      "<dt>Đường dẫn</dt><dd class='mono'>/" + (it.dir ? it.dir + "/" : "") + it.name + "</dd>" +
+      "<dt>Kích thước</dt><dd class='mono'>" + fmtSize(it.size) + "</dd>" +
+      "<dt>Sửa đổi</dt><dd class='mono'>" + fmtDate(it.modified) + "</dd>" +
+      "<dt>Mount</dt><dd class='mono'>" + it.mount + "</dd>" +
+      "<dt>Người ghi cuối</dt><dd>" + it.owner + "</dd>" +
+      "<dt>Loại</dt><dd>" + KIND[it.kind].label + "</dd>";
+    var pv = document.querySelector("[data-fm-detail-preview]");
+    if (it.text) {
+      pv.innerHTML = '<pre class="code pg-pre"></pre>';
+      pv.querySelector("pre").textContent = it.text;
+    } else if (it.kind === "image") {
+      pv.innerHTML = '<div class="fm-preview">' + icon("i-image") +
+        "<div><p class='fg-2'>Ảnh xem trước do agent trả về</p><p class='small muted'>Bản thiết kế chưa nhúng ảnh thật; khi triển khai, khung này gọi <span class='mono'>GET /files/preview?path=…</span> và hiển thị đúng tỉ lệ ảnh gốc.</p></div></div>";
+    } else {
+      pv.innerHTML = '<div class="fm-preview">' + icon(it.kind === "archive" ? "i-archive" : "i-file") +
+        "<div><p class='fg-2'>Không xem trước trực tiếp</p><p class='small muted'>" + KIND[it.kind].label + " " + fmtSize(it.size) + " — tải xuống để mở, hoặc dùng tab Nhật ký để xem log của volume.</p></div></div>";
+    }
+    document.querySelector("[data-fm-detail-path]").textContent = "gotham-prod-01:/var/lib/gotham/volumes/gotham-storefront-uploads/" + (it.dir ? it.dir + "/" : "") + it.name;
+    var d = document.getElementById("file-detail");
+    d.hidden = false;
+    d.querySelector("[data-drawer-close]").focus();
+  }
+  function currentDetail() { return DATA.items.find(function (x) { return keyOf(x) === detailId; }); }
+  function closeDetail() { document.getElementById("file-detail").hidden = true; }
+
+  document.querySelector("[data-fm-detail-download]").addEventListener("click", function () {
+    var it = currentDetail(); if (it) window.Gotham.toast("Đang tải " + it.name + "…", "info");
+  });
+  document.querySelector("[data-fm-detail-link]").addEventListener("click", function () {
+    var it = currentDetail(); if (it) window.Gotham.toast("Đã sao chép liên kết signed URL (hết hạn sau 15 phút).", "success");
+  });
+  document.querySelector("[data-fm-detail-rename]").addEventListener("click", function () {
+    var it = currentDetail(); if (it) openRename(it);
+  });
+  document.querySelector("[data-fm-detail-delete]").addEventListener("click", function () {
+    var it = currentDetail();
+    if (!it) return;
+    state.selected[keyOf(it)] = true;
+    render();
+    bulkDelete();
+  });
+
+  /* ── Đổi tên ──────────────────────────────────────────────────────────── */
+  var renameTarget = null;
+  function openRename(it) {
+    renameTarget = it;
+    document.querySelector("[data-fm-rename-from]").textContent = it.name;
+    var input = document.getElementById("rn-name");
+    input.value = it.name;
+    input.closest(".field").classList.remove("has-error");
+    window.Gotham.open("rename");
+  }
+  document.querySelector("[data-fm-rename-run]").addEventListener("click", function () {
+    var field = document.getElementById("rn-name").closest(".field");
+    var input = document.getElementById("rn-name");
+    var value = input.value.trim();
+    var ok = value.length > 0 && value.indexOf("/") < 0;
+    field.classList.toggle("has-error", !ok);
+    if (!ok) return;
+    var it = renameTarget;
+    if (it) {
+      var old = it.name;
+      it.name = value;
+      closeDetail();
+      window.Gotham.close("rename");
+      render();
+      window.Gotham.toast("Đã đổi tên " + old + " → " + value + " và ghi vào audit log.", "success");
+    }
+  });
+
+  /* ── Xoá (xoá mềm 7 ngày) ─────────────────────────────────────────────── */
+  var trashPending = null;
+  function bulkDelete() {
+    var keys = Object.keys(state.selected).filter(function (k) { return state.selected[k]; });
+    if (!keys.length) return;
+    trashPending = keys;
+    var overlay = document.getElementById("confirm");
+    overlay.querySelector("[data-confirm-title]").textContent = "Xoá " + keys.length + " mục";
+    overlay.querySelector("[data-confirm-body]").textContent =
+      "Các mục sẽ được chuyển vào .gotham-trash/ trên volume và giữ 7 ngày trước khi xoá vĩnh viễn.";
+    window.Gotham.open("confirm");
+  }
+  document.querySelector("[data-confirm-ok]").addEventListener("click", function () {
+    if (!trashPending) return;
+    var n = trashPending.length;
+    DATA.items = DATA.items.filter(function (x) { return !state.selected[keyOf(x)]; });
+    trashPending = null;
+    state.selected = {};
+    closeDetail();
+    render();
+    window.Gotham.toast("Đã chuyển " + n + " mục vào .gotham-trash/.", "success");
+  });
+  document.querySelectorAll("#confirm [data-close]").forEach(function (b) {
+    b.addEventListener("click", function () { trashPending = null; });
+  });
+
+  /* ── Tạo thư mục ──────────────────────────────────────────────────────── */
+  document.querySelector("[data-fm-folder-run]").addEventListener("click", function () {
+    var field = document.getElementById("nf-name").closest(".field");
+    var input = document.getElementById("nf-name");
+    var value = input.value.trim();
+    var ok = /^[a-z0-9][a-z0-9._-]{1,40}$/.test(value) &&
+      !DATA.items.some(function (x) { return x.dir === dirPath() && x.name === value; });
+    field.classList.toggle("has-error", !ok);
+    if (!ok) { window.Gotham.toast("Tên thư mục không hợp lệ hoặc đã tồn tại.", "danger"); return; }
+    DATA.items.push({ dir: dirPath(), name: value, kind: "folder", size: null, modified: new Date().toISOString(), mount: "rw", owner: "nga.tran" });
+    window.Gotham.close("new-folder");
+    input.value = "";
+    render();
+    window.Gotham.toast("Đã tạo thư mục " + value + ".", "success");
+  });
+
+  /* ── Tải lên ──────────────────────────────────────────────────────────── */
+  var dropEl = document.querySelector("[data-fm-drop]");
+  var fileInput = document.getElementById("up-file");
+  var noteEl = document.querySelector("[data-fm-upload-note]");
+  var pendingFile = null;
+  function guessKind(name) {
+    var ext = (name.split(".").pop() || "").toLowerCase();
+    if (["webp", "jpg", "jpeg", "png", "gif", "svg", "avif"].indexOf(ext) >= 0) return "image";
+    if (["mp4", "mov", "webm", "mkv"].indexOf(ext) >= 0) return "film";
+    if (["zip", "gz", "tgz", "tar", "rar", "7z"].indexOf(ext) >= 0) return "archive";
+    return "doc";
+  }
+  function takeFile(file) {
+    if (!file) return;
+    pendingFile = { name: file.name, size: file.size, kind: guessKind(file.name) };
+    noteEl.textContent = file.name + " · " + fmtSize(file.size);
+  }
+  fileInput.addEventListener("change", function () { takeFile(fileInput.files && fileInput.files[0]); });
+  ["dragover", "dragenter"].forEach(function (ev) {
+    dropEl.addEventListener(ev, function (e) { e.preventDefault(); dropEl.classList.add("is-over"); });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    dropEl.addEventListener(ev, function (e) {
+      e.preventDefault();
+      dropEl.classList.remove("is-over");
+      if (ev === "drop" && e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        takeFile(e.dataTransfer.files[0]);
+        noteEl.textContent += " (kéo thả)";
+      }
+    });
+  });
+  document.querySelector("[data-fm-upload-run]").addEventListener("click", function () {
+    if (!pendingFile) { window.Gotham.toast("Chọn hoặc kéo một tệp trước khi tải lên.", "warn"); return; }
+    var box = document.querySelector("[data-fm-upload-progress]");
+    box.hidden = false;
+    var fill = box.querySelector(".meter-fill") || box.querySelector(".meter").appendChild(document.createElement("span"));
+    fill.className = "meter-fill";
+    var pct = box.querySelector("[data-fm-upload-pct]");
+    var label = box.querySelector("[data-fm-upload-label]");
+    var v = 0;
+    var timer = window.setInterval(function () {
+      v = Math.min(100, v + 7);
+      fill.style.width = v + "%";
+      pct.textContent = v + "%";
+      label.textContent = v < 40 ? "Đang đẩy tệp xuống agent…" : v < 90 ? "Agent đang ghi vào volume…" : "Đang xác minh checksum…";
+      if (v >= 100) {
+        window.clearInterval(timer);
+        DATA.items.push({ dir: dirPath(), name: pendingFile.name, kind: pendingFile.kind, size: pendingFile.size, modified: new Date().toISOString(), mount: "rw", owner: "nga.tran" });
+        window.Gotham.close("upload");
+        box.hidden = true;
+        fill.style.width = "0%";
+        render();
+        window.Gotham.toast("Đã tải lên " + pendingFile.name + " (" + fmtSize(pendingFile.size) + ").", "success");
+        pendingFile = null;
+        fileInput.value = "";
+        noteEl.textContent = "Chưa có tệp nào được chọn";
+      }
+    }, 90);
+  });
+
+  document.querySelectorAll("[data-drawer-close]").forEach(function (b) { b.addEventListener("click", closeDetail); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeDetail(); });
+
+  render();
+})();
+</script>
+</body>
+</html>

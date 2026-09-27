@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Tổng quan · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+</head>
+<body data-page="dashboard" data-nav="dashboard">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Máy chủ đang quản lý"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Gotham Labs · production</p>
+            <h1>Tổng quan</h1>
+            <p class="page-desc">Một control plane đang điều khiển 4 node, 12 ứng dụng và 5 database. Số liệu dưới đây là dữ liệu mẫu của bản thiết kế, đúng theo thực thể trong <span class="inline-code">docs/plan</span>.</p>
+          </div>
+          <div class="page-actions">
+            <a class="btn btn-outline" href="servers.html">Đồng bộ agent</a>
+            <a class="btn btn-primary" href="applications.html#wizard">Tạo ứng dụng</a>
+          </div>
+        </div>
+
+        <div class="grid cols-4" data-od-id="kpi-row">
+          <div class="stat">
+            <p class="stat-label">Ứng dụng đang chạy</p>
+            <p class="stat-value num"><span data-count="9">9</span><span class="unit">/12</span></p>
+            <p class="stat-sub"><span class="dot dot--dnd"></span>2 lỗi build · api-core, legacy-cms</p>
+            <p class="stat-sub"><span class="dot dot--idle"></span>1 tạm dừng · preview PR 482</p>
+          </div>
+          <div class="stat">
+            <p class="stat-label">Máy chủ sẵn sàng</p>
+            <p class="stat-value num"><span data-count="3">3</span><span class="unit">/4</span></p>
+            <p class="stat-sub"><span class="dot dot--dnd"></span>build-node-02 mất heartbeat</p>
+            <p class="stat-sub"><span class="dot dot--online"></span>agent v0.9.4 · heartbeat 10s</p>
+          </div>
+          <div class="stat">
+            <p class="stat-label">Deploy 24 giờ</p>
+            <p class="stat-value num"><span data-count="9">9</span></p>
+            <p class="stat-sub"><span class="tag tag--success">8 thành công</span><span class="tag tag--danger">1 thất bại</span></p>
+            <p class="stat-sub">p95 từ lúc queue → running: <span class="num">2p18s</span></p>
+          </div>
+          <div class="stat">
+            <p class="stat-label">Chứng chỉ SSL</p>
+            <p class="stat-value num"><span data-count="10">10</span></p>
+            <p class="stat-sub"><span class="dot dot--online"></span>8 đã cấp · Let's Encrypt</p>
+            <p class="stat-sub"><span class="dot dot--idle"></span>1 đang chờ · 1 lỗi gia hạn</p>
+          </div>
+        </div>
+
+        <div class="split-2 mt-6">
+          <div>
+            <div class="section-title">
+              <h2>Deploy gần đây</h2>
+              <span class="meta">nguồn: <span class="mono">deployments</span> · cập nhật realtime qua Redis</span>
+            </div>
+            <div class="card">
+              <div class="table-wrap">
+                <table class="table" data-od-id="recent-deploys">
+                  <thead>
+                    <tr>
+                      <th>Ứng dụng</th>
+                      <th>Commit</th>
+                      <th>Kích hoạt</th>
+                      <th class="num-col">Thời lượng</th>
+                      <th>Trạng thái</th>
+                      <th class="actions">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">S</span><span><span class="fg-2">storefront</span><span class="cell-sub" style="display:block">medusajs/medusa · main</span></span></div></td>
+                      <td class="mono">8f2c1ab</td>
+                      <td><span class="tag">webhook push</span></td>
+                      <td class="num-col">1p42s</td>
+                      <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span></td>
+                      <td class="actions"><a class="btn btn-sm btn-outline" href="application-detail.html">Mở log</a></td>
+                    </tr>
+                    <tr>
+                      <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">A</span><span><span class="fg-2">api-core</span><span class="cell-sub" style="display:block">justindeelux/gotham · main</span></span></div></td>
+                      <td class="mono">41d90f7</td>
+                      <td><span class="tag">thủ công</span></td>
+                      <td class="num-col">2p18s</td>
+                      <td><span class="cert cert--error"><span class="dot dot--dnd"></span>failed · building</span></td>
+                      <td class="actions"><a class="btn btn-sm btn-outline" href="application-detail.html#deployments">Xem log</a></td>
+                    </tr>
+                    <tr>
+                      <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">D</span><span><span class="fg-2">docs-site</span><span class="cell-sub" style="display:block">withastro/astro · main</span></span></div></td>
+                      <td class="mono">c77e3d1</td>
+                      <td><span class="tag">webhook push</span></td>
+                      <td class="num-col">54s</td>
+                      <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span></td>
+                      <td class="actions"><a class="btn btn-sm btn-outline" href="application-detail.html">Mở log</a></td>
+                    </tr>
+                    <tr>
+                      <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">W</span><span><span class="fg-2">worker-queue</span><span class="cell-sub" style="display:block">taskforcesh/bullmq · main</span></span></div></td>
+                      <td class="mono">1ab99e4</td>
+                      <td><span class="tag">webhook push</span></td>
+                      <td class="num-col">38s</td>
+                      <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span></td>
+                      <td class="actions"><a class="btn btn-sm btn-outline" href="application-detail.html">Mở log</a></td>
+                    </tr>
+                    <tr>
+                      <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">P</span><span><span class="fg-2">pr-482-storefront</span><span class="cell-sub" style="display:block">preview · feat/checkout-v2</span></span></div></td>
+                      <td class="mono">4d10c92</td>
+                      <td><span class="tag">pull request</span></td>
+                      <td class="num-col">1p07s</td>
+                      <td><span class="cert cert--pending"><span class="dot dot--idle"></span>tạm dừng</span></td>
+                      <td class="actions"><a class="btn btn-sm btn-outline" href="application-detail.html#previews">Chi tiết</a></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="card-foot">
+                <span class="small muted grow">Queue: 0 đang chờ · worker pool 4 · timeout build 15 phút</span>
+                <a class="btn btn-sm btn-ghost" href="applications.html">Tất cả ứng dụng</a>
+              </div>
+            </div>
+
+            <div class="section-title">
+              <h2>Sức khỏe máy chủ</h2>
+              <span class="meta">heartbeat mỗi 10 giây qua gRPC mTLS</span>
+            </div>
+            <div class="grid cols-2" data-od-id="server-health">
+              <div class="node-card">
+                <div class="node-head">
+                  <span class="avatar">P1</span>
+                  <div class="grow">
+                    <p class="fg-2 bold">gotham-prod-01</p>
+                    <p class="small muted">203.0.113.18 · Ubuntu 22.04 · Docker 27.1.1</p>
+                  </div>
+                  <span class="dot dot--online"></span>
+                </div>
+                <div class="node-metrics">
+                  <div class="node-metric"><p class="stat-label">CPU</p><p class="val">38%</p><div class="meter mt-2" data-meter="38"></div></div>
+                  <div class="node-metric"><p class="stat-label">RAM</p><p class="val">4.3 / 7 GiB</p><div class="meter mt-2" data-meter="61" data-meter-kind="success"></div></div>
+                  <div class="node-metric"><p class="stat-label">Disk</p><p class="val">30 / 68 GiB</p><div class="meter mt-2" data-meter="44" data-meter-kind="success"></div></div>
+                </div>
+                <div class="node-foot">
+                  <span class="tag">14 container</span><span class="tag">Traefik 3.1</span><span class="tag">registry nội bộ</span>
+                  <a class="btn btn-sm btn-outline" style="margin-left:auto" href="server-detail.html">Mở node</a>
+                </div>
+              </div>
+
+              <div class="node-card">
+                <div class="node-head">
+                  <span class="avatar">ES</span>
+                  <div class="grow">
+                    <p class="fg-2 bold">edge-sg-01</p>
+                    <p class="small muted">198.51.100.24 · Ubuntu 24.04 · Docker 27.1.1</p>
+                  </div>
+                  <span class="dot dot--online"></span>
+                </div>
+                <div class="node-metrics">
+                  <div class="node-metric"><p class="stat-label">CPU</p><p class="val">12%</p><div class="meter mt-2" data-meter="12"></div></div>
+                  <div class="node-metric"><p class="stat-label">RAM</p><p class="val">1.3 / 4 GiB</p><div class="meter mt-2" data-meter="33" data-meter-kind="success"></div></div>
+                  <div class="node-metric"><p class="stat-label">Disk</p><p class="val">20 / 40 GiB</p><div class="meter mt-2" data-meter="51" data-meter-kind="warn"></div></div>
+                </div>
+                <div class="node-foot">
+                  <span class="tag">6 container</span><span class="tag">Traefik 3.1</span><span class="tag">edge · Singapore</span>
+                  <a class="btn btn-sm btn-outline" style="margin-left:auto" href="server-detail.html">Mở node</a>
+                </div>
+              </div>
+
+              <div class="node-card">
+                <div class="node-head">
+                  <span class="avatar">ST</span>
+                  <div class="grow">
+                    <p class="fg-2 bold">staging-01</p>
+                    <p class="small muted">203.0.113.42 · Debian 12 · Docker 26.1.4</p>
+                  </div>
+                  <span class="dot dot--online"></span>
+                </div>
+                <div class="node-metrics">
+                  <div class="node-metric"><p class="stat-label">CPU</p><p class="val">6%</p><div class="meter mt-2" data-meter="6"></div></div>
+                  <div class="node-metric"><p class="stat-label">RAM</p><p class="val">0.9 / 4 GiB</p><div class="meter mt-2" data-meter="22" data-meter-kind="success"></div></div>
+                  <div class="node-metric"><p class="stat-label">Disk</p><p class="val">12 / 40 GiB</p><div class="meter mt-2" data-meter="30" data-meter-kind="success"></div></div>
+                </div>
+                <div class="node-foot">
+                  <span class="tag">4 container</span><span class="tag tag--warn">Docker cũ hơn khuyến nghị</span>
+                  <a class="btn btn-sm btn-outline" style="margin-left:auto" href="server-detail.html">Mở node</a>
+                </div>
+              </div>
+
+              <div class="node-card" style="border-color:color-mix(in oklab, var(--danger) 34%, transparent)">
+                <div class="node-head">
+                  <span class="avatar" style="background:var(--surface-warm);color:var(--muted)">B2</span>
+                  <div class="grow">
+                    <p class="fg-2 bold">build-node-02</p>
+                    <p class="small muted">198.51.100.77 · Ubuntu 22.04 · agent v0.9.3</p>
+                  </div>
+                  <span class="dot dot--dnd dot-pulse"></span>
+                </div>
+                <div class="node-metrics">
+                  <div class="node-metric"><p class="stat-label">CPU</p><p class="val dash">—</p><div class="meter mt-2" data-meter="0"></div></div>
+                  <div class="node-metric"><p class="stat-label">RAM</p><p class="val dash">—</p><div class="meter mt-2" data-meter="0"></div></div>
+                  <div class="node-metric"><p class="stat-label">Disk</p><p class="val dash">—</p><div class="meter mt-2" data-meter="0"></div></div>
+                </div>
+                <div class="node-foot">
+                  <span class="tag tag--danger">heartbeat trễ 42 phút</span>
+                  <button class="btn btn-sm btn-outline" style="margin-left:auto" type="button"
+                    data-toast="Đã gửi RequestUpdate tới build-node-02 khi agent kết nối lại.|info">Cập nhật agent</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <aside class="stack gap-4" data-od-id="dashboard-aside">
+            <div class="aside-card">
+              <div class="between mb-3">
+                <h4>Nhịp heartbeat</h4>
+                <span class="realtime"><span class="dot dot--online dot-pulse"></span>live</span>
+              </div>
+              <div class="stack gap-3">
+                <div class="between"><span class="small muted">gotham-prod-01</span><span class="mono small" data-heartbeat="prod">vừa xong</span></div>
+                <div class="between"><span class="small muted">edge-sg-01</span><span class="mono small" data-heartbeat="edge">2s trước</span></div>
+                <div class="between"><span class="small muted">staging-01</span><span class="mono small" data-heartbeat="staging">7s trước</span></div>
+                <div class="between"><span class="small muted">build-node-02</span><span class="mono small" style="color:var(--danger-ink)">42 phút trước</span></div>
+              </div>
+              <p class="small meta mt-3">Chu kỳ 10 giây · <span class="inline-code">Heartbeat(stream)</span> trong <span class="inline-code">agent.v1</span></p>
+            </div>
+
+            <div class="aside-card">
+              <h4 class="mb-3">Thành phần control plane</h4>
+              <div class="stack gap-3">
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow">PostgreSQL 16 · <span class="mono">gotham</span></span><span class="mono small">2ms</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow">Redis 7 · pub/sub log</span><span class="mono small">1ms</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow">gRPC gateway · :9442</span><span class="mono small">4 agent</span></div>
+                <div class="status-line"><span class="dot dot--online"></span><span class="grow">WebSocket hub</span><span class="mono small">6 client</span></div>
+                <div class="status-line"><span class="dot dot--idle"></span><span class="grow">Traefik 3.1 · edge-sg-01</span><span class="mono small">reload 5p</span></div>
+              </div>
+            </div>
+
+            <div class="aside-card">
+              <div class="between mb-3">
+                <h4>Hoạt động nhóm</h4>
+                <a class="small link" href="team-settings.html">Quản lý</a>
+              </div>
+              <div class="stack gap-1">
+                <button class="presence-row" type="button"><span class="avatar-wrap"><span class="avatar avatar--sm avatar--neutral">NA</span><span class="dot dot--online dot--ring"></span></span><span class="grow"><span class="fg-2">nga.tran</span><span class="small muted" style="display:block">đang xem deploy 1184</span></span></button>
+                <button class="presence-row" type="button"><span class="avatar-wrap"><span class="avatar avatar--sm avatar--neutral">MP</span><span class="dot dot--online dot--ring"></span></span><span class="grow"><span class="fg-2">minh.pham</span><span class="small muted" style="display:block">thêm domain api.gotham.dev</span></span></button>
+                <button class="presence-row" type="button"><span class="avatar-wrap"><span class="avatar avatar--sm avatar--neutral">LN</span><span class="dot dot--idle dot--ring"></span></span><span class="grow"><span class="fg-2">linh.nguyen</span><span class="small muted" style="display:block">read-only · xem metrics</span></span></button>
+                <button class="presence-row" type="button"><span class="avatar-wrap"><span class="avatar avatar--sm avatar--neutral">DL</span><span class="dot dot--offline dot--ring"></span></span><span class="grow"><span class="fg-2">duc.le</span><span class="small muted" style="display:block">offline 2 giờ</span></span></button>
+              </div>
+            </div>
+
+            <div class="aside-card">
+              <h4 class="mb-3">Cảnh báo cần xử lý</h4>
+              <div class="stack gap-3">
+                <div class="embed embed--danger">
+                  <div class="between"><h4>build-node-02 mất kết nối</h4><span class="small meta">42p</span></div>
+                  <p>Agent dừng heartbeat. Kiểm tra <span class="inline-code">systemctl status gotham-agent</span>.</p>
+                </div>
+                <div class="embed embed--warn">
+                  <div class="between"><h4>Build lỗi · api-core</h4><span class="small meta">1h</span></div>
+                  <p>Bước <span class="mono">building</span> dừng ở cài dependency. Log đầy đủ trong tab Deployments.</p>
+                </div>
+                <button class="btn btn-outline btn-block" type="button" data-open="alerts">Xem tất cả cảnh báo</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="assets/gotham-ui.js"></script>
+<script>
+  /* Nhịp heartbeat: đếm lại mỗi giây để cảm giác realtime đúng như hợp đồng 10s. */
+  (function () {
+    var t = { prod: 0, edge: 2, staging: 7 };
+    var nodes = document.querySelectorAll("[data-heartbeat]");
+    window.setInterval(function () {
+      nodes.forEach(function (el) {
+        var k = el.getAttribute("data-heartbeat");
+        if (!(k in t)) return;
+        t[k] = (t[k] + 1) % 10;
+        el.textContent = t[k] === 0 ? "vừa xong" : t[k] + "s trước";
+      });
+    }, 1000);
+  })();
+</script>
+</body>
+</html>

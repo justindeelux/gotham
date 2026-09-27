@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Máy chủ · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+</head>
+<body data-page="servers" data-nav="servers">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Máy chủ đang quản lý"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Vận hành · node registry</p>
+            <h1>Máy chủ</h1>
+            <p class="page-desc">Mỗi node chạy một <span class="inline-code">gotham-agent</span> kết nối tới gateway gRPC <span class="mono">:9442</span> bằng mTLS. Control plane không bao giờ gọi Docker trực tiếp — mọi lệnh đi qua agent.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-outline" type="button" data-toast="Đã chạy lại probe SSH cho 4 node.|success">Kiểm tra SSH</button>
+            <button class="btn btn-primary" type="button" data-open="wizard">Thêm máy chủ</button>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="filters" data-filter-group data-filter-target="[data-node-card]" data-filter-empty="#nodes-empty">
+            <button class="chip is-active" type="button" data-filter="all">Tất cả <span class="nav-count">4</span></button>
+            <button class="chip" type="button" data-filter="ready">Sẵn sàng <span class="nav-count">3</span></button>
+            <button class="chip" type="button" data-filter="offline">Mất kết nối <span class="nav-count">1</span></button>
+            <button class="chip" type="button" data-filter="update">Cần cập nhật agent <span class="nav-count">1</span></button>
+          </div>
+          <div class="search grow" style="margin-left:auto;max-width:280px">
+            <svg aria-hidden="true"><use href="#i-search"></use></svg>
+            <input type="search" placeholder="Tìm theo tên, IP, OS…" aria-label="Tìm máy chủ" data-search="[data-node-card]" />
+          </div>
+        </div>
+
+        <div class="grid cols-2" data-od-id="node-list">
+          <article class="node-card" data-node-card data-tag="ready">
+            <div class="node-head">
+              <span class="avatar">P1</span>
+              <div class="grow">
+                <p class="fg-2 bold">gotham-prod-01</p>
+                <p class="small muted">203.0.113.18 · Ubuntu 22.04 · amd64</p>
+              </div>
+              <span class="tag tag--success"><span class="dot dot--online"></span>ready</span>
+            </div>
+            <dl class="kv">
+              <dt>Docker</dt><dd class="mono">27.1.1 · compose v2.29</dd>
+              <dt>Tài nguyên</dt><dd class="mono">4 vCPU · 7 GiB · 68 GiB</dd>
+              <dt>Agent</dt><dd class="mono">v0.9.4 · node_id <span class="truncate">prod-01</span></dd>
+              <dt>SSH key</dt><dd><span class="inline-code">gotham-prod-ed25519</span> · user <span class="mono">root</span></dd>
+            </dl>
+            <div class="node-metrics">
+              <div class="node-metric"><p class="stat-label">CPU 5 phút</p><p class="val">38%</p><div class="meter mt-2" data-meter="38"></div></div>
+              <div class="node-metric"><p class="stat-label">RAM</p><p class="val">61%</p><div class="meter mt-2" data-meter="61" data-meter-kind="success"></div></div>
+              <div class="node-metric"><p class="stat-label">Disk</p><p class="val">44%</p><div class="meter mt-2" data-meter="44" data-meter-kind="warn"></div></div>
+            </div>
+            <div class="node-foot">
+              <span class="tag">14 container</span>
+              <span class="tag">Traefik 3.1</span>
+              <span class="tag tag--accent">registry nội bộ</span>
+              <a class="btn btn-sm btn-outline" style="margin-left:auto" href="server-detail.html">Mở node</a>
+              <button class="btn btn-sm btn-outline" type="button" data-toast="Đã chạy lại xác thực SSH cho gotham-prod-01: 5/5 probe OK.|success">Xác thực lại</button>
+            </div>
+          </article>
+
+          <article class="node-card" data-node-card data-tag="ready">
+            <div class="node-head">
+              <span class="avatar">ES</span>
+              <div class="grow">
+                <p class="fg-2 bold">edge-sg-01</p>
+                <p class="small muted">198.51.100.24 · Ubuntu 24.04 · amd64</p>
+              </div>
+              <span class="tag tag--success"><span class="dot dot--online"></span>ready</span>
+            </div>
+            <dl class="kv">
+              <dt>Docker</dt><dd class="mono">27.1.1 · compose v2.29</dd>
+              <dt>Tài nguyên</dt><dd class="mono">2 vCPU · 4 GiB · 40 GiB</dd>
+              <dt>Agent</dt><dd class="mono">v0.9.4 · node_id <span class="truncate">edge-sg-01</span></dd>
+              <dt>SSH key</dt><dd><span class="inline-code">edge-admin-ed25519</span> · user <span class="mono">ubuntu</span></dd>
+            </dl>
+            <div class="node-metrics">
+              <div class="node-metric"><p class="stat-label">CPU 5 phút</p><p class="val">12%</p><div class="meter mt-2" data-meter="12"></div></div>
+              <div class="node-metric"><p class="stat-label">RAM</p><p class="val">33%</p><div class="meter mt-2" data-meter="33" data-meter-kind="success"></div></div>
+              <div class="node-metric"><p class="stat-label">Disk</p><p class="val">51%</p><div class="meter mt-2" data-meter="51" data-meter-kind="warn"></div></div>
+            </div>
+            <div class="node-foot">
+              <span class="tag">6 container</span>
+              <span class="tag">Traefik 3.1 · edge</span>
+              <a class="btn btn-sm btn-outline" style="margin-left:auto" href="server-detail.html">Mở node</a>
+              <button class="btn btn-sm btn-outline" type="button" data-toast="Đã chạy lại xác thực SSH cho edge-sg-01: 5/5 probe OK.|success">Xác thực lại</button>
+            </div>
+          </article>
+
+          <article class="node-card" data-node-card data-tag="ready">
+            <div class="node-head">
+              <span class="avatar">ST</span>
+              <div class="grow">
+                <p class="fg-2 bold">staging-01</p>
+                <p class="small muted">203.0.113.42 · Debian 12 · amd64</p>
+              </div>
+              <span class="tag tag--success"><span class="dot dot--online"></span>ready</span>
+            </div>
+            <dl class="kv">
+              <dt>Docker</dt><dd class="mono">26.1.4 · compose v2.27</dd>
+              <dt>Tài nguyên</dt><dd class="mono">2 vCPU · 4 GiB · 40 GiB</dd>
+              <dt>Agent</dt><dd class="mono">v0.9.4 · heartbeat 7s trước</dd>
+              <dt>SSH key</dt><dd><span class="inline-code">staging-ed25519</span> · user <span class="mono">deploy</span></dd>
+            </dl>
+            <div class="node-metrics">
+              <div class="node-metric"><p class="stat-label">CPU 5 phút</p><p class="val">6%</p><div class="meter mt-2" data-meter="6"></div></div>
+              <div class="node-metric"><p class="stat-label">RAM</p><p class="val">22%</p><div class="meter mt-2" data-meter="22" data-meter-kind="success"></div></div>
+              <div class="node-metric"><p class="stat-label">Disk</p><p class="val">30%</p><div class="meter mt-2" data-meter="30" data-meter-kind="success"></div></div>
+            </div>
+            <div class="node-foot">
+              <span class="tag">4 container</span>
+              <span class="tag tag--warn">Docker cũ hơn khuyến nghị</span>
+              <a class="btn btn-sm btn-outline" style="margin-left:auto" href="server-detail.html">Mở node</a>
+            </div>
+          </article>
+
+          <article class="node-card" data-node-card data-tag="offline update" style="border-color:color-mix(in oklab, var(--danger) 34%, transparent)">
+            <div class="node-head">
+              <span class="avatar" style="background:var(--surface-warm);color:var(--muted)">B2</span>
+              <div class="grow">
+                <p class="fg-2 bold">build-node-02</p>
+                <p class="small muted">198.51.100.77 · Ubuntu 22.04 · amd64</p>
+              </div>
+              <span class="tag tag--danger"><span class="dot dot--dnd dot-pulse"></span>offline</span>
+            </div>
+            <dl class="kv">
+              <dt>Docker</dt><dd class="mono">27.1.1 · compose v2.29</dd>
+              <dt>Tài nguyên</dt><dd class="mono">8 vCPU · 16 GiB · 160 GiB</dd>
+              <dt>Agent</dt><dd class="mono" style="color:var(--danger-ink)">v0.9.3 · heartbeat trễ 42 phút</dd>
+              <dt>SSH key</dt><dd><span class="inline-code">build-ed25519</span> · user <span class="mono">root</span></dd>
+            </dl>
+            <div class="node-metrics">
+              <div class="node-metric"><p class="stat-label">CPU 5 phút</p><p class="val dash">—</p><div class="meter mt-2" data-meter="0"></div></div>
+              <div class="node-metric"><p class="stat-label">RAM</p><p class="val dash">—</p><div class="meter mt-2" data-meter="0"></div></div>
+              <div class="node-metric"><p class="stat-label">Disk</p><p class="val dash">—</p><div class="meter mt-2" data-meter="0"></div></div>
+            </div>
+            <div class="node-foot">
+              <span class="tag tag--danger">mất heartbeat</span>
+              <span class="tag tag--warn">agent v0.9.3</span>
+              <div class="row gap-2" style="margin-left:auto">
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng RequestUpdate cho build-node-02. Agent sẽ tự cập nhật khi kết nối lại.|info">Cập nhật agent</button>
+                <button class="btn btn-sm btn-danger-ghost" type="button"
+                  data-confirm="Xoá build-node-02 khỏi control plane? Container trên node không bị dừng." data-confirm-toast="Đã xoá build-node-02 khỏi registry.">Xoá</button>
+              </div>
+            </div>
+          </article>
+        </div>
+        <div class="empty" id="nodes-empty" hidden>
+          <svg aria-hidden="true"><use href="#i-server"></use></svg>
+          <h4>Không có node khớp bộ lọc</h4>
+          <p class="small">Đổi bộ lọc hoặc thêm máy chủ mới bằng SSH.</p>
+        </div>
+
+        <div class="card mt-6" data-od-id="agent-install">
+          <div class="card-head">
+            <h3>Cài agent lên node mới</h3>
+            <span class="tag">deploy/install-agent.sh</span>
+            <span class="card-actions"><button class="btn btn-sm btn-outline" type="button" data-copy="#install-cmd">Sao chép</button></span>
+          </div>
+          <div class="card-body stack gap-3">
+            <pre class="code" id="install-cmd">curl -fsSL https://get.gotham.dev/install.sh | sudo sh -s -- \
+  --cp-addr cp.gotham.dev:9442 \
+  --node-id <span class="st">build-node-03</span>
+
+<span class="cm"># script tải binary theo kiến trúc, xác minh checksum + chữ ký Ed25519,</span>
+<span class="cm"># ghi /etc/gotham/agent.crt do CA của control plane cấp, rồi bật systemd unit</span>
+systemctl status gotham-agent</pre>
+            <div class="grid cols-2">
+              <div class="callout">
+                <svg aria-hidden="true"><use href="#i-shield"></use></svg>
+                <div>
+                  <h4>mTLS hai chiều</h4>
+                  <p>CA nội bộ của control plane ký chứng chỉ riêng cho từng agent tại thời điểm <span class="inline-code">Register</span>. Agent chỉ nhận lệnh từ CP đã xác thực.</p>
+                </div>
+              </div>
+              <div class="callout">
+                <svg aria-hidden="true"><use href="#i-activity"></use></svg>
+                <div>
+                  <h4>Nhịp 10 giây</h4>
+                  <p>Mỗi heartbeat mang CPU, RAM, disk và số container. Mất 3 nhịp liên tiếp → node chuyển <span class="mono">offline</span> và phát thông báo.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ── Add-server wizard ─────────────────────────────────────────────────── -->
+<div class="overlay" id="wizard" hidden>
+  <div class="modal modal--lg" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
+    <div class="modal-head">
+      <div>
+        <h3 id="wizard-title">Thêm máy chủ</h3>
+        <p class="small muted">SSH vào node để kiểm tra Docker/CPU/RAM/disk, sau đó cài agent và cấp chứng chỉ mTLS.</p>
+      </div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+
+    <div class="wizard" data-wizard>
+      <div class="wizard-rail">
+        <ol>
+          <li class="is-active"><span class="idx">1</span>Kết nối SSH</li>
+          <li><span class="idx">2</span>Xác thực node</li>
+          <li><span class="idx">3</span>Cài agent</li>
+          <li><span class="idx">4</span>Hoàn tất</li>
+        </ol>
+        <p class="small meta mt-4">Probe chạy tối đa 15 giây. Khoá riêng được mã hoá AES-256-GCM trước khi lưu.</p>
+      </div>
+
+      <div>
+        <div class="wizard-body">
+          <section class="wstep" data-od-id="wizard-step-1">
+            <h4 class="mb-3">Thông tin kết nối</h4>
+            <div class="grid cols-2">
+              <div class="field">
+                <label class="field-label" for="w-name">Tên node</label>
+                <input class="input" id="w-name" value="build-node-03" required />
+                <span class="field-error">Nhập tên node.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="w-ip">Địa chỉ IP / hostname</label>
+                <input class="input" id="w-ip" value="203.0.113.90" required data-pattern="^[0-9a-zA-Z\.\-]+$" />
+                <span class="field-hint">Ví dụ: 203.0.113.90 hoặc node3.internal</span>
+                <span class="field-error">Địa chỉ không hợp lệ.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="w-port">Cổng SSH</label>
+                <input class="input" id="w-port" value="22" required data-pattern="^[0-9]{2,5}$" />
+                <span class="field-error">Cổng phải là số từ 2–5 chữ số.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="w-user">Người dùng SSH</label>
+                <input class="input" id="w-user" value="root" required />
+                <span class="field-error">Nhập người dùng SSH.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="w-key">Khoá riêng đã lưu</label>
+                <select class="select" id="w-key">
+                  <option>gotham-prod-ed25519</option>
+                  <option>edge-admin-ed25519</option>
+                  <option>build-ed25519</option>
+                  <option>+ Thêm khoá mới…</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="field-label" for="w-pass">Passphrase khoá (nếu có)</label>
+                <input class="input" id="w-pass" type="password" placeholder="••••••••" />
+                <span class="field-hint">Hỗ trợ khoá Ed25519/RSA có passphrase.</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="wstep" hidden data-on-enter="checkSsh" data-async="true" data-od-id="wizard-step-2">
+            <div class="between mb-3">
+              <h4>Xác thực node</h4>
+              <span class="status-line"><span class="dot dot--idle dot-pulse"></span>SSH 203.0.113.90:22 · user root</span>
+            </div>
+            <div class="check-list" id="ssh-checks">
+              <div class="check-row is-idle" data-check><span class="mark"></span><span class="grow">Kết nối SSH &amp; xác thực khoá</span><span class="detail">chờ</span></div>
+              <div class="check-row is-idle" data-check><span class="mark"></span><span class="grow">Docker Engine đã cài &amp; đang chạy</span><span class="detail">chờ</span></div>
+              <div class="check-row is-idle" data-check><span class="mark"></span><span class="grow">Kiến trúc CPU &amp; số nhân</span><span class="detail">chờ</span></div>
+              <div class="check-row is-idle" data-check><span class="mark"></span><span class="grow">RAM khả dụng</span><span class="detail">chờ</span></div>
+              <div class="check-row is-idle" data-check><span class="mark"></span><span class="grow">Dung lượng disk trống</span><span class="detail">chờ</span></div>
+            </div>
+            <p class="small muted mt-3" id="ssh-summary">Chưa chạy probe.</p>
+          </section>
+
+          <section class="wstep" hidden data-on-enter="installAgent" data-od-id="wizard-step-3">
+            <h4 class="mb-3">Cài agent &amp; cấp chứng chỉ</h4>
+            <div class="check-list mb-4">
+              <div class="check-row is-ok"><span class="mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="grow">Khoá riêng đã giải mã trong bộ nhớ</span><span class="detail">AES-256-GCM</span></div>
+              <div class="check-row is-ok"><span class="mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="grow">CA nội bộ sẵn sàng</span><span class="detail">ca.crt · 4096-bit</span></div>
+            </div>
+            <div class="progress mb-3">
+              <span class="small muted nowrap" id="install-label">Đang tải binary…</span>
+              <span class="bar meter" data-meter="0" id="install-meter"></span>
+              <span class="mono small" id="install-pct">0%</span>
+            </div>
+            <pre class="code" id="install-log">[1/4] tải gotham-agent v0.9.4 (linux/amd64)…… 18.4 MiB
+[2/4] xác minh chữ ký Ed25519 ……………………………… OK
+[3/4] ghi /etc/gotham/agent.crt (do CP cấp) ……………… OK
+[4/4] systemctl enable --now gotham-agent ……………… OK</pre>
+            <p class="small muted mt-3">Sau khi service chạy, agent gọi <span class="inline-code">Register</span> tới <span class="mono">:9442</span> và bắt đầu heartbeat 10 giây.</p>
+          </section>
+
+          <section class="wstep" hidden data-od-id="wizard-step-4">
+            <div class="empty" style="padding:var(--space-6) 0">
+              <span class="avatar avatar--lg">B3</span>
+              <h4>build-node-03 đã sẵn sàng</h4>
+              <p class="small">Node đã đăng ký, chứng chỉ hết hạn sau 365 ngày. Traefik và registry nội bộ đã được bootstrap trên node này.</p>
+              <div class="row gap-2 mt-3 wrap" style="justify-content:center">
+                <span class="tag tag--success"><span class="dot dot--online"></span>ready</span>
+                <span class="tag">Docker 27.1.1</span>
+                <span class="tag">8 vCPU · 16 GiB · 160 GiB</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="wizard-foot">
+          <button class="btn btn-outline" type="button" data-wizard-back hidden>Quay lại</button>
+          <span class="small muted" data-wizard-counter>Bước 1 / 4</span>
+          <span class="grow"></span>
+          <button class="btn btn-ghost" type="button" data-close>Huỷ</button>
+          <button class="btn btn-primary" type="button" data-wizard-next>Tiếp tục</button>
+          <button class="btn btn-primary" type="button" data-wizard-done data-close hidden>Xong</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/gotham-ui.js"></script>
+<script>
+  /* Probe SSH: mô phỏng 5 bước validate của BE-2.3 (POST /servers/{id}/validate). */
+  window.checkSsh = function () {
+    var rows = document.querySelectorAll("#ssh-checks [data-check]");
+    var results = [
+      "root@203.0.113.90 · ed25519 · 84ms",
+      "Docker 27.1.1 · API v1.45 · compose v2.29",
+      "amd64 · 8 vCPU",
+      "15.6 GiB khả dụng / 16 GiB",
+      "142 GiB trống / 160 GiB"
+    ];
+    var summary = document.getElementById("ssh-summary");
+    rows.forEach(function (row, i) {
+      row.className = "check-row is-idle";
+      row.querySelector(".mark").textContent = "";
+      row.querySelector(".detail").textContent = "chờ";
+    });
+    if (summary) summary.textContent = "Đang chạy probe…";
+    var i = 0;
+    var step = function () {
+      if (i > 0) {
+        var prev = rows[i - 1];
+        prev.className = "check-row is-ok";
+        prev.querySelector(".mark").innerHTML = window.Gotham.icon("i-check");
+      }
+      if (i >= rows.length) {
+        if (summary) summary.textContent = "5/5 probe OK trong 4.8s · node đủ điều kiện cài agent.";
+        return;
+      }
+      var row = rows[i];
+      row.className = "check-row is-running";
+      row.querySelector(".detail").textContent = "đang chạy";
+      window.setTimeout(function () {
+        row.querySelector(".detail").textContent = results[i];
+      }, 420);
+      i++;
+      window.setTimeout(step, 620);
+    };
+    step();
+  };
+
+  /* Cài agent: thanh tiến trình + log cài đặt. */
+  window.installAgent = function () {
+    var meter = document.getElementById("install-meter");
+    var pct = document.getElementById("install-pct");
+    var label = document.getElementById("install-label");
+    if (!meter) return;
+    var fill = meter.querySelector(".meter-fill") || meter.appendChild(document.createElement("span"));
+    fill.className = "meter-fill";
+    var labels = ["Đang tải binary…", "Xác minh chữ ký…", "Cấp chứng chỉ mTLS…", "Bật systemd unit…", "Chờ heartbeat đầu tiên…"];
+    var v = 0;
+    window.clearInterval(window.__installTimer);
+    window.__installTimer = window.setInterval(function () {
+      v = Math.min(100, v + 4);
+      fill.style.width = v + "%";
+      if (pct) pct.textContent = v + "%";
+      if (label) label.textContent = labels[Math.min(labels.length - 1, Math.floor(v / 20))];
+      if (v >= 100) {
+        window.clearInterval(window.__installTimer);
+        if (label) label.textContent = "Agent đã kết nối";
+        window.Gotham.toast("build-node-03 đã đăng ký và gửi heartbeat đầu tiên.", "success");
+      }
+    }, 70);
+  };
+</script>
+</body>
+</html>

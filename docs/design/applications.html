@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Ứng dụng · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+</head>
+<body data-page="applications" data-nav="applications">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Máy chủ đang quản lý"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Vận hành · deploy từ Git</p>
+            <h1>Ứng dụng</h1>
+            <p class="page-desc">Từ repo tới container: CP clone mã nguồn, agent build trên node theo 4 engine (Dockerfile, Railpack, Buildpacks, static), image được đẩy vào registry nội bộ với tag <span class="mono">gotham/{appID}:{deployID}</span>.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-outline" type="button" data-open="providers">Kết nối provider</button>
+            <button class="btn btn-primary" type="button" data-open="wizard">Tạo ứng dụng</button>
+          </div>
+        </div>
+
+        <div class="grid cols-4 mb-5">
+          <div class="stat">
+            <p class="stat-label">Ứng dụng</p>
+            <p class="stat-value num"><span data-count="9">9</span><span class="unit">/12</span></p>
+            <p class="stat-sub"><span class="dot dot--dnd"></span>2 lỗi build · api-core, legacy-cms</p>
+            <p class="stat-sub"><span class="dot dot--idle"></span>1 tạm dừng · preview PR 482</p>
+          </div>
+          <div class="stat">
+            <p class="stat-label">Build engine đang dùng</p>
+            <p class="stat-value" style="font-size:var(--text-xl)">Railpack · 7</p>
+            <p class="stat-sub">Dockerfile 3 · static 2 · Buildpacks 0</p>
+          </div>
+          <div class="stat">
+            <p class="stat-label">Image trong registry</p>
+            <p class="stat-value num"><span data-count="31">31</span></p>
+            <p class="stat-sub">giữ 5 tag gần nhất mỗi ứng dụng</p>
+          </div>
+          <div class="stat">
+            <p class="stat-label">Auto deploy</p>
+            <p class="stat-value num"><span data-count="9">9</span><span class="unit">/12</span></p>
+            <p class="stat-sub">3 ứng dụng deploy thủ công</p>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="filters" data-filter-group data-filter-target="[data-app-row]" data-filter-empty="#apps-empty">
+            <button class="chip is-active" type="button" data-filter="all">Tất cả <span class="nav-count">12</span></button>
+            <button class="chip" type="button" data-filter="running">Đang chạy <span class="nav-count">9</span></button>
+            <button class="chip" type="button" data-filter="failed">Lỗi build <span class="nav-count">2</span></button>
+            <button class="chip" type="button" data-filter="paused">Tạm dừng <span class="nav-count">1</span></button>
+          </div>
+          <div class="search grow" style="margin-left:auto;max-width:300px">
+            <svg aria-hidden="true"><use href="#i-search"></use></svg>
+            <input type="search" placeholder="Tìm theo tên, repo, tên miền…" aria-label="Tìm ứng dụng" data-search="[data-app-row]" />
+          </div>
+        </div>
+
+        <div class="card" data-od-id="app-list">
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr><th>Ứng dụng</th><th>Nguồn</th><th>Build pack</th><th>Node</th><th>Tên miền</th><th>Deploy gần nhất</th><th class="actions">Thao tác</th></tr>
+              </thead>
+              <tbody>
+                <tr data-app-row data-tag="running">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">S</span><span><a class="fg-2 link" href="application-detail.html">storefront</a><span class="cell-sub" style="display:block">production · 3 volume</span></span></div></td>
+                  <td><span class="mono">medusajs/medusa</span><span class="cell-sub" style="display:block mono">main · 8f2c1ab</span></td>
+                  <td><span class="tag">Railpack</span></td>
+                  <td class="mono muted">prod-01</td>
+                  <td><a class="link" href="domains.html">storefront.gotham.dev</a></td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span><span class="cell-sub" style="display:block">1184 · 2 giờ trước · 1p42s</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <a class="btn btn-sm btn-outline" href="application-detail.html">Mở</a>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã enqueue deploy cho storefront (commit 9a12ff0).|info">Deploy</button>
+                  </div></td>
+                </tr>
+                <tr data-app-row data-tag="failed">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">A</span><span><a class="fg-2 link" href="application-detail.html">api-core</a><span class="cell-sub" style="display:block">production · Go 1.22</span></span></div></td>
+                  <td><span class="mono">justindeelux/gotham</span><span class="cell-sub" style="display:block mono">main · 41d90f7</span></td>
+                  <td><span class="tag">Dockerfile</span></td>
+                  <td class="mono muted">prod-01</td>
+                  <td><a class="link" href="domains.html">api.gotham.dev</a></td>
+                  <td><span class="cert cert--error"><span class="dot dot--dnd"></span>failed</span><span class="cell-sub" style="display:block">1183 · 1 giờ trước · building</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <a class="btn btn-sm btn-outline" href="application-detail.html#logs">Log lỗi</a>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã enqueue deploy lại api-core sau khi sửa go.mod.|info">Deploy lại</button>
+                  </div></td>
+                </tr>
+                <tr data-app-row data-tag="running">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">D</span><span><a class="fg-2 link" href="application-detail.html">docs-site</a><span class="cell-sub" style="display:block">static · 1 volume</span></span></div></td>
+                  <td><span class="mono">withastro/astro</span><span class="cell-sub" style="display:block mono">main · c77e3d1</span></td>
+                  <td><span class="tag">Static</span></td>
+                  <td class="mono muted">prod-01</td>
+                  <td><a class="link" href="domains.html">docs.gotham.dev</a></td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span><span class="cell-sub" style="display:block">1182 · 1 ngày trước · 54s</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <a class="btn btn-sm btn-outline" href="application-detail.html">Mở</a>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã enqueue deploy cho docs-site.|info">Deploy</button>
+                  </div></td>
+                </tr>
+                <tr data-app-row data-tag="running">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">W</span><span><a class="fg-2 link" href="application-detail.html">worker-queue</a><span class="cell-sub" style="display:block">worker · không mở cổng</span></span></div></td>
+                  <td><span class="mono">taskforcesh/bullmq</span><span class="cell-sub" style="display:block mono">main · 1ab99e4</span></td>
+                  <td><span class="tag">Railpack</span></td>
+                  <td class="mono muted">prod-01</td>
+                  <td class="dash">—</td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span><span class="cell-sub" style="display:block">1180 · 3 ngày trước · 38s</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <a class="btn btn-sm btn-outline" href="application-detail.html">Mở</a>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã enqueue deploy cho worker-queue.|info">Deploy</button>
+                  </div></td>
+                </tr>
+                <tr data-app-row data-tag="running">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">B</span><span><a class="fg-2 link" href="application-detail.html">blog</a><span class="cell-sub" style="display:block">static · Hugo</span></span></div></td>
+                  <td><span class="mono">gohugoio/hugo</span><span class="cell-sub" style="display:block mono">main · 5ce1a02</span></td>
+                  <td><span class="tag">Static</span></td>
+                  <td class="mono muted">edge-sg-01</td>
+                  <td><a class="link" href="domains.html">blog.gotham.dev</a></td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span><span class="cell-sub" style="display:block">1178 · 4 ngày trước · 22s</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <a class="btn btn-sm btn-outline" href="application-detail.html">Mở</a>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã enqueue deploy cho blog.|info">Deploy</button>
+                  </div></td>
+                </tr>
+                <tr data-app-row data-tag="running">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">M</span><span><a class="fg-2 link" href="application-detail.html">analytics-api</a><span class="cell-sub" style="display:block">Elixir · Dockerfile</span></span></div></td>
+                  <td><span class="mono">plausible/analytics</span><span class="cell-sub" style="display:block mono">master · 77a0c19</span></td>
+                  <td><span class="tag">Dockerfile</span></td>
+                  <td class="mono muted">edge-sg-01</td>
+                  <td><a class="link" href="domains.html">metrics.gotham.dev</a></td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span><span class="cell-sub" style="display:block">1177 · 5 ngày trước · 3p04s</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <a class="btn btn-sm btn-outline" href="application-detail.html">Mở</a>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã enqueue deploy cho analytics-api.|info">Deploy</button>
+                  </div></td>
+                </tr>
+                <tr data-app-row data-tag="running">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">A</span><span><a class="fg-2 link" href="application-detail.html">admin-panel</a><span class="cell-sub" style="display:block">private repo · Vue 3</span></span></div></td>
+                  <td><span class="mono">gotham-labs/admin-panel</span><span class="cell-sub" style="display:block mono">main · b1e4f77</span></td>
+                  <td><span class="tag">Railpack</span></td>
+                  <td class="mono muted">prod-01</td>
+                  <td><a class="link" href="domains.html">admin.gotham.dev</a></td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span><span class="cell-sub" style="display:block">1175 · 6 ngày trước · 1p12s</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <a class="btn btn-sm btn-outline" href="application-detail.html">Mở</a>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã enqueue deploy cho admin-panel.|info">Deploy</button>
+                  </div></td>
+                </tr>
+                <tr data-app-row data-tag="running">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">N</span><span><a class="fg-2 link" href="application-detail.html">notify-bridge</a><span class="cell-sub" style="display:block">Node · webhook fan-out</span></span></div></td>
+                  <td><span class="mono">gotham-labs/notify-bridge</span><span class="cell-sub" style="display:block mono">main · 9d2c401</span></td>
+                  <td><span class="tag">Railpack</span></td>
+                  <td class="mono muted">staging-01</td>
+                  <td class="dash">—</td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span><span class="cell-sub" style="display:block">1172 · 8 ngày trước · 41s</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <a class="btn btn-sm btn-outline" href="application-detail.html">Mở</a>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã enqueue deploy cho notify-bridge.|info">Deploy</button>
+                  </div></td>
+                </tr>
+                <tr data-app-row data-tag="running">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">C</span><span><a class="fg-2 link" href="application-detail.html">cron-reports</a><span class="cell-sub" style="display:block">static + cron</span></span></div></td>
+                  <td><span class="mono">gotham-labs/cron-reports</span><span class="cell-sub" style="display:block mono">main · 3ab81d0</span></td>
+                  <td><span class="tag">Railpack</span></td>
+                  <td class="mono muted">staging-01</td>
+                  <td class="dash">—</td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span><span class="cell-sub" style="display:block">1170 · 9 ngày trước · 36s</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <a class="btn btn-sm btn-outline" href="application-detail.html">Mở</a>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã enqueue deploy cho cron-reports.|info">Deploy</button>
+                  </div></td>
+                </tr>
+                <tr data-app-row data-tag="running">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">S</span><span><a class="fg-2 link" href="application-detail.html">shop-api</a><span class="cell-sub" style="display:block">Node · REST</span></span></div></td>
+                  <td><span class="mono">gotham-labs/shop-api</span><span class="cell-sub" style="display:block mono">main · 7f10cc2</span></td>
+                  <td><span class="tag">Railpack</span></td>
+                  <td class="mono muted">prod-01</td>
+                  <td class="dash">—</td>
+                  <td><span class="cert cert--issued"><span class="dot dot--online"></span>running</span><span class="cell-sub" style="display:block">1169 · 11 ngày trước · 1p04s</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <a class="btn btn-sm btn-outline" href="application-detail.html">Mở</a>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã enqueue deploy cho shop-api.|info">Deploy</button>
+                  </div></td>
+                </tr>
+                <tr data-app-row data-tag="preview paused">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">P</span><span><a class="fg-2 link" href="application-detail.html#previews">pr-482-storefront</a><span class="cell-sub" style="display:block">preview · PR 482</span></span></div></td>
+                  <td><span class="mono">medusajs/medusa</span><span class="cell-sub" style="display:block mono">feat/checkout-v2 · 4d10c92</span></td>
+                  <td><span class="tag">Railpack</span></td>
+                  <td class="mono muted">prod-01</td>
+                  <td class="mono">pr-482-storefront.preview.gotham.dev</td>
+                  <td><span class="cert cert--pending"><span class="dot dot--idle"></span>tạm dừng</span><span class="cell-sub" style="display:block">TTL 7 ngày · xoá khi merge</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Đã khởi động lại preview PR 482.|success">Khởi động</button>
+                    <a class="btn btn-sm btn-ghost" href="application-detail.html#previews">Chi tiết</a>
+                  </div></td>
+                </tr>
+                <tr data-app-row data-tag="failed">
+                  <td><div class="cell-main"><span class="avatar avatar--sm avatar--neutral">L</span><span><a class="fg-2 link" href="application-detail.html">legacy-cms</a><span class="cell-sub" style="display:block">PHP · đang chờ migrate</span></span></div></td>
+                  <td><span class="mono">gotham-labs/legacy-cms</span><span class="cell-sub" style="display:block mono">main · e0a77b4</span></td>
+                  <td><span class="tag">Dockerfile</span></td>
+                  <td class="mono muted">build-02</td>
+                  <td class="dash">—</td>
+                  <td><span class="cert cert--error"><span class="dot dot--dnd"></span>failed</span><span class="cell-sub" style="display:block">1168 · build: composer install</span></td>
+                  <td class="actions"><div class="row-actions">
+                    <a class="btn btn-sm btn-outline" href="application-detail.html#logs">Log lỗi</a>
+                    <button class="btn btn-sm btn-icon btn-danger-ghost" type="button" data-confirm="Xoá ứng dụng legacy-cms? Volume và image vẫn được giữ 7 ngày." data-confirm-label="Xoá ứng dụng" data-remove="tr" aria-label="Xoá"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                  </div></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card-foot">
+            <span class="small muted grow">Mỗi lần deploy giữ lại tag image cũ, nên rollback chỉ là đổi tag — không build lại.</span>
+            <span class="channel-chip">4 build engine</span>
+          </div>
+        </div>
+        <div class="empty" id="apps-empty" hidden>
+          <svg aria-hidden="true"><use href="#i-box"></use></svg>
+          <h4>Không có ứng dụng khớp bộ lọc</h4>
+          <p class="small">Đổi bộ lọc hoặc tạo ứng dụng mới từ repo Git.</p>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ── Create-application wizard ─────────────────────────────────────────── -->
+<div class="overlay" id="wizard" hidden>
+  <div class="modal modal--lg" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
+    <div class="modal-head">
+      <div>
+        <h3 id="wizard-title">Tạo ứng dụng</h3>
+        <p class="small muted">Chọn nguồn, build pack, cổng/tên miền rồi deploy. Mọi bước đều có thể sửa lại sau khi tạo.</p>
+      </div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+
+    <div class="wizard" data-wizard>
+      <div class="wizard-rail">
+        <ol>
+          <li class="is-active"><span class="idx">1</span>Nguồn</li>
+          <li><span class="idx">2</span>Build pack</li>
+          <li><span class="idx">3</span>Cấu hình chạy</li>
+          <li><span class="idx">4</span>Env &amp; lưu trữ</li>
+          <li><span class="idx">5</span>Deploy</li>
+        </ol>
+        <p class="small meta mt-4">Webhook được tạo tự động sau khi ứng dụng deploy lần đầu.</p>
+      </div>
+
+      <div>
+        <div class="wizard-body">
+          <section class="wstep" data-od-id="create-step-1">
+            <h4 class="mb-3">Nguồn mã nguồn</h4>
+            <div class="grid cols-2">
+              <div class="field">
+                <label class="field-label" for="c-provider">Provider</label>
+                <select class="select" id="c-provider">
+                  <option>GitHub · nga.tran (đã kết nối)</option>
+                  <option>GitLab · chưa kết nối</option>
+                  <option>Gitea · chưa kết nối</option>
+                  <option>Repo public · dán URL</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="field-label" for="c-repo">Repository</label>
+                <select class="select" id="c-repo">
+                  <option>medusajs/medusa</option>
+                  <option>justindeelux/gotham</option>
+                  <option>withastro/astro</option>
+                  <option>taskforcesh/bullmq</option>
+                  <option>gotham-labs/admin-panel (private)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="field-label" for="c-branch">Nhánh</label>
+                <select class="select" id="c-branch"><option>main</option><option>develop</option><option>feat/checkout-v2</option></select>
+              </div>
+              <div class="field">
+                <label class="field-label" for="c-name">Tên ứng dụng</label>
+                <input class="input" id="c-name" value="storefront-v2" required data-pattern="^[a-z][a-z0-9-]{2,30}$" />
+                <span class="field-hint">Dùng cho tên container và image tag.</span>
+                <span class="field-error">Tên chỉ gồm chữ thường, số và dấu gạch ngang.</span>
+              </div>
+            </div>
+            <div class="embed embed--info mt-4">
+              <h4>Webhook tự động</h4>
+              <p>CP sẽ tạo webhook trên provider trỏ về <span class="mono">/api/v1/webhooks/github</span>, xác thực bằng secret và chống trùng theo commit SHA.</p>
+            </div>
+          </section>
+
+          <section class="wstep" hidden data-async="true" data-od-id="create-step-2">
+            <div class="between mb-3">
+              <h4>Build pack</h4>
+              <span class="status-line"><span class="dot dot--online"></span>đã phát hiện: Node 20 · pnpm-lock.yaml</span>
+            </div>
+            <div class="stack gap-3">
+              <label class="check"><input type="radio" name="bp" checked /> <span><span class="fg-2">Railpack (khuyến nghị)</span><span class="small muted" style="display:block">Tự nhận diện ngôn ngữ, không cần Dockerfile. Đang thay thế Nixpacks.</span></span></label>
+              <label class="check"><input type="radio" name="bp" /> <span><span class="fg-2">Dockerfile</span><span class="small muted" style="display:block">Dùng Dockerfile trong repo. Kiểm soát toàn bộ quá trình build.</span></span></label>
+              <label class="check"><input type="radio" name="bp" /> <span><span class="fg-2">Buildpacks (herokuish)</span><span class="small muted" style="display:block">Phù hợp app cũ cần buildpack chuẩn Heroku.</span></span></label>
+              <label class="check"><input type="radio" name="bp" /> <span><span class="fg-2">Static</span><span class="small muted" style="display:block">Build ra thư mục tĩnh rồi phục vụ qua Traefik, không chạy tiến trình.</span></span></label>
+            </div>
+            <div class="grid cols-2 mt-4">
+              <div class="field"><label class="field-label" for="c-build">Lệnh build (tuỳ chọn)</label><input class="input mono" id="c-build" placeholder="pnpm build" /></div>
+              <div class="field"><label class="field-label" for="c-start">Lệnh chạy (tuỳ chọn)</label><input class="input mono" id="c-start" placeholder="pnpm start" /></div>
+              <div class="field"><label class="field-label" for="c-base">Base directory</label><input class="input mono" id="c-base" value="/" /></div>
+              <div class="field"><label class="field-label" for="c-publish">Thư mục publish (static)</label><input class="input mono" id="c-publish" placeholder="dist" /></div>
+            </div>
+          </section>
+
+          <section class="wstep" hidden data-od-id="create-step-3">
+            <h4 class="mb-3">Cấu hình chạy</h4>
+            <div class="grid cols-2">
+              <div class="field">
+                <label class="field-label" for="c-port">Cổng nội bộ</label>
+                <input class="input" id="c-port" value="3000" required data-pattern="^[0-9]{2,5}$" />
+                <span class="field-error">Cổng phải là số từ 2–5 chữ số.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="c-domain">Tên miền</label>
+                <input class="input" id="c-domain" value="storefront-v2.gotham.dev" data-pattern="^[a-z0-9.-]+\.[a-z]{2,}$" />
+                <span class="field-hint">Để trống nếu muốn dùng cổng trực tiếp trước.</span>
+                <span class="field-error">Tên miền không hợp lệ.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="c-health">Healthcheck path</label>
+                <input class="input mono" id="c-health" value="/api/health" />
+              </div>
+              <div class="field">
+                <label class="field-label" for="c-node">Node chạy</label>
+                <select class="select" id="c-node"><option>gotham-prod-01 · 4 vCPU / 7 GiB</option><option>edge-sg-01 · 2 vCPU / 4 GiB</option><option>staging-01 · 2 vCPU / 4 GiB</option></select>
+              </div>
+            </div>
+            <div class="stack gap-3 mt-4">
+              <div class="switch-row"><button class="switch" type="button" role="switch" aria-checked="true" data-switch aria-label="Auto deploy"></button><span><span class="fg-2">Auto deploy khi push</span><span class="small muted" style="display:block">Webhook kích hoạt deploy cho nhánh đã chọn.</span></span></div>
+              <div class="switch-row"><button class="switch" type="button" role="switch" aria-checked="true" data-switch aria-label="Preview deployment"></button><span><span class="fg-2">Preview cho pull request</span><span class="small muted" style="display:block">Tạo subdomain <span class="mono">{branch}-{pr}.preview.gotham.dev</span> dùng wildcard cert.</span></span></div>
+            </div>
+          </section>
+
+          <section class="wstep" hidden data-od-id="create-step-4">
+            <h4 class="mb-3">Biến môi trường &amp; lưu trữ</h4>
+            <div class="stack gap-2" data-env-list>
+              <div class="row gap-2"><input class="input mono" style="max-width:260px" value="NODE_ENV" aria-label="Tên biến" /><input class="input mono" value="production" aria-label="Giá trị" /><button class="btn btn-icon btn-outline" type="button" data-env-remove aria-label="Xoá biến"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div>
+              <div class="row gap-2"><input class="input mono" style="max-width:260px" value="DATABASE_URL" aria-label="Tên biến" /><input class="input mono" value="secret:storefront-database-url" aria-label="Giá trị" /><button class="btn btn-icon btn-outline" type="button" data-env-remove aria-label="Xoá biến"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button></div>
+            </div>
+            <button class="btn btn-outline btn-sm mt-3" type="button" data-env-add><svg aria-hidden="true"><use href="#i-plus"></use></svg><span>Thêm biến</span></button>
+            <div class="grid cols-3 mt-4">
+              <div class="field"><label class="field-label" for="c-vol">Tên volume</label><input class="input mono" id="c-vol" value="uploads" /></div>
+              <div class="field"><label class="field-label" for="c-mount">Đường dẫn trong container</label><input class="input mono" id="c-mount" value="/app/public/uploads" /></div>
+              <div class="field"><label class="field-label" for="c-mode">Chế độ</label><select class="select" id="c-mode"><option>rw</option><option>ro</option></select></div>
+            </div>
+            <p class="small muted mt-3">Giá trị bắt đầu bằng <span class="inline-code">secret:</span> được lưu mã hoá AES-256-GCM và chỉ giải mã khi gửi xuống agent.</p>
+          </section>
+
+          <section class="wstep" hidden data-od-id="create-step-5">
+            <h4 class="mb-3">Tổng kết</h4>
+            <dl class="kv">
+              <dt>Ứng dụng</dt><dd class="mono">storefront-v2</dd>
+              <dt>Nguồn</dt><dd class="mono">medusajs/medusa · main</dd>
+              <dt>Build pack</dt><dd>Railpack · Node 20 + pnpm</dd>
+              <dt>Cổng / tên miền</dt><dd class="mono">3000 · storefront-v2.gotham.dev</dd>
+              <dt>Node</dt><dd class="mono">gotham-prod-01</dd>
+              <dt>Env / secret</dt><dd class="mono">2 biến · 1 secret</dd>
+              <dt>Volume</dt><dd class="mono">uploads → /app/public/uploads</dd>
+            </dl>
+            <div class="steps mt-4">
+              <div class="step is-done"><span class="step-mark"><svg aria-hidden="true"><use href="#i-check"></use></svg></span><span class="step-name">queued</span><span class="step-time">0.1s</span></div>
+              <div class="step is-active"><span class="step-mark"></span><span class="step-name">cloning · medusajs/medusa@9a12ff0</span><span class="step-time">đang chạy</span></div>
+              <div class="step"><span class="step-mark"></span><span class="step-name">building · Railpack</span><span class="step-time">—</span></div>
+              <div class="step"><span class="step-mark"></span><span class="step-name">pushing · gotham/storefront-v2:1</span><span class="step-time">—</span></div>
+              <div class="step"><span class="step-mark"></span><span class="step-name">starting · healthcheck /api/health</span><span class="step-time">—</span></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="wizard-foot">
+          <button class="btn btn-outline" type="button" data-wizard-back hidden>Quay lại</button>
+          <span class="small muted" data-wizard-counter>Bước 1 / 5</span>
+          <span class="grow"></span>
+          <button class="btn btn-ghost" type="button" data-close>Huỷ</button>
+          <button class="btn btn-primary" type="button" data-wizard-next>Tiếp tục</button>
+          <button class="btn btn-primary" type="button" data-wizard-done data-close hidden>Tạo &amp; deploy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Source providers ──────────────────────────────────────────────────── -->
+<div class="overlay" id="providers" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="providers-title">
+    <div class="modal-head">
+      <div><h3 id="providers-title">Nguồn mã nguồn</h3><p class="small muted">Mỗi provider dùng OAuth app riêng, lưu trong bảng <span class="mono">providers</span>.</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-3">
+      <div class="channel-card">
+        <span class="channel-mark"><svg aria-hidden="true"><use href="#i-branch"></use></svg></span>
+        <div class="grow">
+          <p class="fg-2 bold">GitHub</p>
+          <p class="small muted">Đã kết nối với <span class="mono">nga.tran</span> · thấy 34 repo, 6 repo private · webhook đã bật</p>
+        </div>
+        <button class="btn btn-sm btn-outline" type="button" data-toast="Đã làm mới danh sách repo từ GitHub.|success">Làm mới repo</button>
+      </div>
+      <div class="channel-card">
+        <span class="channel-mark"><svg aria-hidden="true"><use href="#i-branch"></use></svg></span>
+        <div class="grow">
+          <p class="fg-2 bold">GitLab</p>
+          <p class="small muted">Chưa kết nối. Cần Client ID + Client Secret của OAuth app.</p>
+        </div>
+        <button class="btn btn-sm btn-outline" type="button" data-toast="Mở luồng OAuth tới GitLab…|info">Kết nối</button>
+      </div>
+      <div class="channel-card">
+        <span class="channel-mark"><svg aria-hidden="true"><use href="#i-branch"></use></svg></span>
+        <div class="grow">
+          <p class="fg-2 bold">Gitea</p>
+          <p class="small muted">Chưa kết nối. Hỗ trợ self-host qua base URL.</p>
+        </div>
+        <button class="btn btn-sm btn-outline" type="button" data-toast="Mở form cấu hình Gitea self-host.|info">Kết nối</button>
+      </div>
+      <div class="embed embed--info">
+        <h4>Khoá triển khai cho repo private</h4>
+        <p>Repo private dùng deploy key SSH, lưu mã hoá trong bảng <span class="mono">private_keys</span> — cùng cơ chế với khoá SSH của máy chủ.</p>
+      </div>
+    </div>
+    <div class="modal-foot"><span class="small muted grow">Interface <span class="mono">SourceProvider</span> cho phép thêm provider mới mà không đụng vào luồng deploy.</span><button class="btn btn-outline" type="button" data-close>Đóng</button></div>
+  </div>
+</div>
+
+<script src="assets/gotham-ui.js"></script>
+<script>
+  /* Env editor dùng chung cho wizard tạo ứng dụng. */
+  document.addEventListener("click", function (e) {
+    var add = e.target.closest("[data-env-add]");
+    if (add) {
+      var list = document.querySelector("[data-env-list]");
+      var row = document.createElement("div");
+      row.className = "row gap-2";
+      row.innerHTML = '<input class="input mono" style="max-width:260px" placeholder="TÊN_BIẾN" aria-label="Tên biến" />' +
+        '<input class="input mono" placeholder="giá trị hoặc secret:tên-secret" aria-label="Giá trị" />' +
+        '<button class="btn btn-icon btn-outline" type="button" data-env-remove aria-label="Xoá biến"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>';
+      list.appendChild(row);
+      row.querySelector("input").focus();
+    }
+    var rm = e.target.closest("[data-env-remove]");
+    if (rm) rm.closest(".row").remove();
+  });
+</script>
+</body>
+</html>

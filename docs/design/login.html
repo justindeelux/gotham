@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Đăng nhập · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+<style>
+  /* Trang cục bộ: chỉ class mới có tiền tố pg-, không định nghĩa lại class chung. */
+  .pg-auth { overflow-y: auto; }
+  .pg-values { max-width: 48ch; }
+  .pg-value { display: flex; gap: var(--space-3); align-items: flex-start; }
+  .pg-value svg { width: 18px; height: 18px; flex: 0 0 auto; color: var(--accent-ink); margin-top: 2px; }
+</style>
+</head>
+<body class="pg-auth" data-page="login">
+<div class="auth">
+
+  <aside class="auth-aside" data-od-id="auth-aside">
+    <div class="stack gap-8">
+      <div class="brand-lockup">
+        <span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 19V11a7 7 0 0114 0v8"/><path d="M9.5 19v-6.5a2.5 2.5 0 015 0V19"/></svg></span>
+        <span class="wordmark">Gotham</span>
+      </div>
+
+      <div class="stack gap-4">
+        <p class="eyebrow">Self-hosted PaaS</p>
+        <h1>Control plane cho hạ tầng của chính bạn</h1>
+        <p class="lede">Một binary Go chạy control plane, một agent nhỏ trên mỗi node. Không dịch vụ ngoài, không tầng nào bạn không đọc được source.</p>
+      </div>
+
+      <ul class="stack gap-4 pg-values" data-od-id="auth-values">
+        <li class="pg-value">
+          <svg aria-hidden="true"><use href="#i-server"></use></svg>
+          <div>
+            <p class="fg-2">Self-hosted trên VPS ≥ 1 GB RAM</p>
+            <p class="small muted">Control plane là một binary Go cùng PostgreSQL và Redis; 1 vCPU / 1 GB là đủ để bắt đầu.</p>
+          </div>
+        </li>
+        <li class="pg-value">
+          <svg aria-hidden="true"><use href="#i-shield"></use></svg>
+          <div>
+            <p class="fg-2">Đường điều khiển qua gRPC mTLS tới agent</p>
+            <p class="small muted">Agent gọi Docker Engine trên node; CP ↔ agent dùng protobuf có version qua <span class="mono">:9442</span>, chứng chỉ do CA nội bộ cấp.</p>
+          </div>
+        </li>
+        <li class="pg-value">
+          <svg aria-hidden="true"><use href="#i-refresh"></use></svg>
+          <div>
+            <p class="fg-2">Cập nhật ký Ed25519, có rollback</p>
+            <p class="small muted">CP và agent tự cập nhật từ GitHub Releases, xác minh chữ ký trước khi thay binary và giữ bản cũ để quay lại.</p>
+          </div>
+        </li>
+        <li class="pg-value">
+          <svg aria-hidden="true"><use href="#i-rocket"></use></svg>
+          <div>
+            <p class="fg-2">4 build engine + template 1-click</p>
+            <p class="small muted">Dockerfile, Railpack, Buildpacks và static; thư viện template dựng WordPress, Nextcloud, n8n hay Uptime Kuma trong một cú nhấp.</p>
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <div class="stack gap-2" data-od-id="auth-aside-foot">
+      <p class="small muted"><span class="mono">cp.gotham.dev:8000</span> · <span class="mono">v0.9.4</span> · kênh stable</p>
+      <p class="small muted">Bản thiết kế giao diện Gotham — mọi số liệu trên màn hình là dữ liệu mẫu.</p>
+    </div>
+  </aside>
+
+  <main class="auth-main">
+    <div class="auth-card" data-od-id="auth-card">
+      <div class="auth-switch" role="tablist" aria-label="Đăng nhập hoặc tạo tài khoản">
+        <button class="is-active" type="button" role="tab" aria-selected="true" data-auth-tab="login">Đăng nhập</button>
+        <button type="button" role="tab" aria-selected="false" data-auth-tab="register">Tạo tài khoản</button>
+      </div>
+
+      <section data-auth-panel="login" role="tabpanel" data-od-id="panel-login">
+        <h2 class="mb-2">Đăng nhập</h2>
+        <p class="small muted mb-4">Dùng tài khoản của nhóm Gotham Labs. Phiên làm việc dùng JWT ngắn hạn kèm refresh token xoay vòng.</p>
+        <div class="stack gap-4">
+          <div class="field" data-login-email-field>
+            <label class="field-label" for="lg-email">Email</label>
+            <input class="input" id="lg-email" type="email" placeholder="nga.tran@gotham.dev" autocomplete="username" />
+            <span class="field-error">Email không hợp lệ.</span>
+          </div>
+          <div class="field" data-login-pass-field>
+            <label class="field-label" for="lg-pass">Mật khẩu</label>
+            <input class="input" id="lg-pass" type="password" placeholder="Mật khẩu của bạn" autocomplete="current-password" />
+            <span class="field-error"><svg aria-hidden="true"><use href="#i-alert"></use></svg>Email hoặc mật khẩu không đúng.</span>
+          </div>
+          <div class="switch-row">
+            <button class="switch" type="button" role="switch" aria-checked="false" aria-labelledby="lg-remember" data-switch data-switch-toast="Ghi nhớ phiên 30 ngày: đã {state}."></button>
+            <span class="grow">
+              <span class="fg-2" id="lg-remember">Ghi nhớ phiên 30 ngày</span>
+              <span class="cell-sub" style="display:block">Refresh token lưu trong bảng <span class="mono">sessions</span>, thu hồi được từ control plane.</span>
+            </span>
+          </div>
+          <button class="btn btn-primary btn-block" type="button" data-login-submit>Đăng nhập</button>
+          <div class="row">
+            <a class="small link" href="login.html#reset">Quên mật khẩu?</a>
+          </div>
+          <div class="row gap-3">
+            <span class="rule grow"></span><span class="small muted nowrap">hoặc</span><span class="rule grow"></span>
+          </div>
+          <button class="btn btn-outline btn-block" type="button" data-oauth><svg aria-hidden="true"><use href="#i-branch"></use></svg>Đăng nhập với GitHub</button>
+        </div>
+      </section>
+
+      <section data-auth-panel="register" role="tabpanel" hidden data-od-id="panel-register">
+        <h2 class="mb-2">Tạo tài khoản</h2>
+        <p class="small muted mb-4">Tài khoản đầu tiên trên một instance mới trở thành <span class="inline-code">owner</span> của nhóm mặc định.</p>
+        <div class="stack gap-4">
+          <div class="field" data-reg-email-field>
+            <label class="field-label" for="rg-email">Email</label>
+            <input class="input" id="rg-email" type="email" placeholder="ten@gotham.dev" autocomplete="email" />
+            <span class="field-error">Email không hợp lệ.</span>
+          </div>
+          <div class="field" data-reg-pass-field>
+            <label class="field-label" for="rg-pass">Mật khẩu</label>
+            <input class="input" id="rg-pass" type="password" placeholder="Tối thiểu 10 ký tự" autocomplete="new-password" data-strength-input />
+            <div class="row gap-3">
+              <span class="strength grow" data-strength aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+              <span class="small muted nowrap" data-strength-label>chưa nhập</span>
+            </div>
+            <span class="field-hint">Từ 10 ký tự và có ít nhất 2 nhóm ký tự: chữ thường, chữ hoa, số, ký hiệu.</span>
+            <span class="field-error">Mật khẩu quá ngắn hoặc quá đơn giản.</span>
+          </div>
+          <div class="field" data-reg-confirm-field>
+            <label class="field-label" for="rg-confirm">Xác nhận mật khẩu</label>
+            <input class="input" id="rg-confirm" type="password" placeholder="Nhập lại mật khẩu" autocomplete="new-password" />
+            <span class="field-error">Mật khẩu xác nhận không khớp.</span>
+          </div>
+          <div class="field" data-reg-terms-field>
+            <label class="check">
+              <input type="checkbox" id="rg-terms" />
+              <span>Tôi đồng ý với <a class="link" href="login.html#terms">Điều khoản sử dụng</a> và cách instance này lưu dữ liệu.</span>
+            </label>
+            <span class="field-error">Cần đồng ý điều khoản để tạo tài khoản.</span>
+          </div>
+          <button class="btn btn-primary btn-block" type="button" data-register-submit>Tạo tài khoản</button>
+        </div>
+      </section>
+
+      <p class="small muted center mt-5">Mật khẩu băm bằng <span class="mono">argon2id</span> với tham số theo OWASP · JWT access token 15 phút + refresh token 30 ngày, xoay vòng và thu hồi được · OAuth GitHub/GitLab là provider mở rộng qua interface <span class="mono">OAuthProvider</span>.</p>
+    </div>
+  </main>
+
+</div>
+
+<script src="assets/gotham-ui.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var EMAIL = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i;
+
+  /* Hai panel Đăng nhập / Tạo tài khoản: is-active cho nút, hidden cho panel. */
+  var authTabs = document.querySelectorAll("[data-auth-tab]");
+  var authPanels = document.querySelectorAll("[data-auth-panel]");
+  function showPanel(name) {
+    authTabs.forEach(function (t) {
+      var on = t.dataset.authTab === name;
+      t.classList.toggle("is-active", on);
+      t.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    authPanels.forEach(function (p) { p.hidden = p.dataset.authPanel !== name; });
+  }
+  authTabs.forEach(function (t) {
+    t.addEventListener("click", function () { showPanel(t.dataset.authTab); });
+  });
+
+  /* Đăng nhập: chỉ hiện lỗi inline khi giá trị rõ ràng sai (demo .field.has-error). */
+  var loginEmail = document.querySelector("[data-login-email-field]");
+  var loginPass = document.querySelector("[data-login-pass-field]");
+  document.querySelector("[data-login-submit]").addEventListener("click", function () {
+    var email = document.getElementById("lg-email").value.trim();
+    var pass = document.getElementById("lg-pass").value;
+    loginEmail.classList.remove("has-error");
+    loginPass.classList.remove("has-error");
+    if (!EMAIL.test(email)) {
+      loginEmail.classList.add("has-error");
+      window.Gotham.toast("Email không hợp lệ.", "danger");
+      return;
+    }
+    if (pass.length < 8) {
+      loginPass.classList.add("has-error");
+      window.Gotham.toast("Email hoặc mật khẩu không đúng.", "danger");
+      return;
+    }
+    window.Gotham.toast("Đã xác thực · access token 15 phút, refresh token 30 ngày.", "success");
+  });
+
+  document.querySelector("[data-oauth]").addEventListener("click", function () {
+    window.Gotham.toast("Đang chuyển tới GitHub OAuth · callback /auth/github/callback.", "info");
+  });
+
+  /* Đăng ký: đo độ mạnh mật khẩu trực tiếp trên 4 vạch của .strength. */
+  var strengthInput = document.querySelector("[data-strength-input]");
+  var strengthSegs = document.querySelectorAll("[data-strength] i");
+  var strengthLabel = document.querySelector("[data-strength-label]");
+  var WORDS = ["chưa nhập", "rất yếu", "yếu", "trung bình", "mạnh"];
+  function scorePassword(v) {
+    var s = 0;
+    if (v.length >= 10) s++;
+    if (v.length >= 14) s++;
+    if (/[a-z]/.test(v) && /[A-Z]/.test(v)) s++;
+    if (/[0-9]/.test(v)) s++;
+    if (/[^A-Za-z0-9]/.test(v)) s++;
+    return Math.min(4, s);
+  }
+  strengthInput.addEventListener("input", function () {
+    var v = strengthInput.value;
+    var s = v ? Math.max(1, scorePassword(v)) : 0;
+    var kind = s >= 4 ? "on" : (s === 3 ? "mid" : "weak");
+    strengthSegs.forEach(function (seg, i) { seg.className = i < s ? kind : ""; });
+    strengthLabel.textContent = WORDS[s];
+  });
+
+  var regEmail = document.querySelector("[data-reg-email-field]");
+  var regPass = document.querySelector("[data-reg-pass-field]");
+  var regConfirm = document.querySelector("[data-reg-confirm-field]");
+  var regTerms = document.querySelector("[data-reg-terms-field]");
+  document.querySelector("[data-register-submit]").addEventListener("click", function () {
+    var email = document.getElementById("rg-email").value.trim();
+    var pass = document.getElementById("rg-pass").value;
+    var confirm = document.getElementById("rg-confirm").value;
+    var terms = document.getElementById("rg-terms").checked;
+    regEmail.classList.toggle("has-error", !EMAIL.test(email));
+    regPass.classList.toggle("has-error", pass.length < 10 || scorePassword(pass) < 3);
+    regConfirm.classList.toggle("has-error", confirm !== pass || confirm.length === 0);
+    regTerms.classList.toggle("has-error", !terms);
+    if (regEmail.classList.contains("has-error") || regPass.classList.contains("has-error") ||
+        regConfirm.classList.contains("has-error") || regTerms.classList.contains("has-error")) {
+      window.Gotham.toast("Vui lòng kiểm tra lại các trường được đánh dấu.", "danger");
+      return;
+    }
+    window.Gotham.toast("Đã tạo tài khoản " + email + " · mật khẩu băm argon2id, phiên đăng nhập sẵn sàng.", "success");
+  });
+})();
+</script>
+</body>
+</html>

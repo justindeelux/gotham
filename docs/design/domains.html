@@ -1,0 +1,897 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Tên miền &amp; SSL · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+<style>
+  /* Page-local only. Every class is pg-prefixed and built from design tokens. */
+  .pg-meter { max-width: 132px; }
+  .pg-redirect-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr)); gap: var(--space-3); align-items: start; }
+  .pg-challenge { display: grid; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); gap: var(--space-3); }
+  /* .btn/.empty/.stack carry an explicit display, which outranks the UA [hidden]
+     rule. Keep the hidden attribute authoritative inside this screen only. */
+  .app [hidden], .overlay [hidden] { display: none !important; }
+</style>
+</head>
+<body data-page="domains" data-nav="domains">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Máy chủ đang quản lý"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head" data-od-id="page-head">
+          <div>
+            <p class="eyebrow">Vận hành · reverse proxy</p>
+            <h1>Tên miền &amp; SSL</h1>
+            <p class="page-desc">Traefik 3.1 chạy trên từng node dưới dạng container <span class="mono">gotham-traefik</span>. Control plane sinh cấu hình động từ state của ứng dụng, service và database qua <strong>file provider</strong> — dễ kiểm thử, idempotent và giữ 1 phiên bản trước để revert nhanh.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-outline" type="button" data-toast="Đã sinh lại cấu hình từ state CP rồi ghi qua agent — idempotent, không có thay đổi ròng.|success">Tạo lại cấu hình</button>
+            <button class="btn btn-primary" type="button" data-open="domain-wizard">Thêm tên miền</button>
+          </div>
+        </div>
+
+        <div class="grid cols-4" data-od-id="kpi-row">
+          <div class="stat" data-od-id="kpi-routers">
+            <p class="stat-label">Router</p>
+            <p class="stat-value num"><span data-count="11">11</span></p>
+            <p class="stat-sub"><span class="dot dot--online"></span>9 HTTP · 1 wildcard · 1 TCP</p>
+            <p class="stat-sub">Traefik 3.1 · file provider · 4 middleware</p>
+          </div>
+          <div class="stat" data-od-id="kpi-certs">
+            <p class="stat-label">Chứng chỉ đã cấp</p>
+            <p class="stat-value num"><span data-count="8">8</span></p>
+            <p class="stat-sub"><span class="dot dot--online"></span>Let's Encrypt · HTTP-01 7 · DNS-01 1</p>
+            <p class="stat-sub"><span class="dot dot--dnd"></span>1 lỗi gia hạn · wordpress.gotham.dev</p>
+          </div>
+          <div class="stat" data-od-id="kpi-pending">
+            <p class="stat-label">Đang chờ</p>
+            <p class="stat-value num"><span data-count="1">1</span></p>
+            <p class="stat-sub"><span class="dot dot--idle dot-pulse"></span>n8n.gotham.dev · HTTP-01 challenge</p>
+            <p class="stat-sub">resolver <span class="mono">le-http</span> · thử lại sau 30 giây</p>
+          </div>
+          <div class="stat" data-od-id="kpi-wildcard">
+            <p class="stat-label">Wildcard</p>
+            <p class="stat-value num"><span data-count="1">1</span><span class="unit">cert</span></p>
+            <p class="stat-sub"><span class="mono">*.preview.gotham.dev</span> · DNS-01 qua Cloudflare</p>
+            <p class="stat-sub">cert dùng chung cho mọi subdomain preview</p>
+          </div>
+        </div>
+
+        <div class="tabs mt-6" data-tabs="domains" data-default="routers" role="tablist" aria-label="Khu vực quản lý tên miền">
+          <button class="tab" type="button" data-tab="routers" role="tab" aria-controls="panel-routers" id="tab-routers">Router</button>
+          <button class="tab" type="button" data-tab="certs" role="tab" aria-controls="panel-certs" id="tab-certs">Chứng chỉ</button>
+          <button class="tab" type="button" data-tab="dns" role="tab" aria-controls="panel-dns" id="tab-dns">Nhà cung cấp DNS</button>
+          <button class="tab" type="button" data-tab="redirects" role="tab" aria-controls="panel-redirects" id="tab-redirects">Redirect</button>
+        </div>
+
+        <!-- ── Router ────────────────────────────────────────────────────── -->
+        <section class="tab-panel" id="panel-routers" data-panel="routers" role="tabpanel" aria-labelledby="tab-routers" data-od-id="tab-routers">
+          <div class="toolbar mt-5">
+            <div class="filters" data-filter-group data-filter-target="[data-router-row]">
+              <button class="chip is-active" type="button" data-filter="all">Tất cả <span class="nav-count">11</span></button>
+              <button class="chip" type="button" data-filter="issued">Đã cấp cert <span class="nav-count">8</span></button>
+              <button class="chip" type="button" data-filter="pending">Đang chờ <span class="nav-count">1</span></button>
+              <button class="chip" type="button" data-filter="error">Lỗi <span class="nav-count">1</span></button>
+              <button class="chip" type="button" data-filter="http">HTTP <span class="nav-count">10</span></button>
+              <button class="chip" type="button" data-filter="tcp">TCP <span class="nav-count">1</span></button>
+            </div>
+            <div class="search grow" style="margin-left:auto;max-width:300px">
+              <svg aria-hidden="true"><use href="#i-search"></use></svg>
+              <input type="search" placeholder="Tìm tên miền, đích hoặc node…" aria-label="Tìm router" data-search="[data-router-row]" />
+            </div>
+          </div>
+
+          <div class="card" data-od-id="router-table">
+            <div class="card-head">
+              <h3>Router trong cấu hình động</h3>
+              <span class="tag">traefik:v3.1</span>
+              <span class="card-actions"><span class="realtime"><span class="dot dot--online dot-pulse"></span>file provider</span></span>
+            </div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Tên miền</th><th>Nguồn</th><th>Node</th><th>Cổng vào</th>
+                    <th>Cert</th><th>Middleware</th><th class="actions">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr data-router-row data-tag="http issued">
+                    <td><div class="cell-main"><span class="dot dot--online"></span><span><span class="mono fg-2">storefront.gotham.dev</span><span class="cell-sub" style="display:block">→ storefront-8f2c1ab:3000</span></span></div></td>
+                    <td><span class="tag">Ứng dụng · <span class="mono">storefront</span></span></td>
+                    <td class="mono muted">gotham-prod-01</td><td class="mono">80/443</td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp · 25/12/2026</span></td>
+                    <td><span class="tag">rate-limit</span> <span class="tag">gzip</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="router storefront: rule khớp Host(`storefront.gotham.dev`), service healthy qua agent ping.|success">Kiểm tra lại</button> <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá router storefront.gotham.dev" data-confirm="Xoá router storefront.gotham.dev? Cert đã cấp vẫn được giữ trong volume gotham-acme tới khi hết hạn." data-confirm-label="Xoá router" data-confirm-toast="Đã xoá router và ghi lại cấu hình động." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button> </div></td>
+                  </tr>
+                  <tr data-router-row data-tag="http issued">
+                    <td><div class="cell-main"><span class="dot dot--online"></span><span><span class="mono fg-2">api.gotham.dev</span><span class="cell-sub" style="display:block">→ api-core-41d90f7:8080</span></span></div></td>
+                    <td><span class="tag">Ứng dụng · <span class="mono">api-core</span></span></td>
+                    <td class="mono muted">gotham-prod-01</td><td class="mono">80/443</td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp · 11/12/2026</span></td>
+                    <td><span class="tag">rate-limit</span> <span class="tag">gzip</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="router api-core: rule khớp, container api-core-41d90f7 đang exited — kiểm tra tiến trình.|warn">Kiểm tra lại</button> <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá router api.gotham.dev" data-confirm="Xoá router api.gotham.dev? Ứng dụng api-core sẽ không còn truy cập được qua HTTPS." data-confirm-label="Xoá router" data-confirm-toast="Đã xoá router và ghi lại cấu hình động." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button> </div></td>
+                  </tr>
+                  <tr data-router-row data-tag="http issued">
+                    <td><div class="cell-main"><span class="dot dot--online"></span><span><span class="mono fg-2">docs.gotham.dev</span><span class="cell-sub" style="display:block">→ docs-site-c77e3d1:80</span></span></div></td>
+                    <td><span class="tag">Ứng dụng · <span class="mono">docs-site</span></span></td>
+                    <td class="mono muted">gotham-prod-01</td><td class="mono">80/443</td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp · 02/12/2026</span></td>
+                    <td><span class="tag">gzip</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="router docs-site: rule khớp, static build phục vụ bình thường.|success">Kiểm tra lại</button> <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá router docs.gotham.dev" data-confirm="Xoá router docs.gotham.dev?" data-confirm-label="Xoá router" data-confirm-toast="Đã xoá router và ghi lại cấu hình động." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button> </div></td>
+                  </tr>
+                  <tr data-router-row data-tag="http issued">
+                    <td><div class="cell-main"><span class="dot dot--online"></span><span><span class="mono fg-2">blog.gotham.dev</span><span class="cell-sub" style="display:block">→ blog-6a1f2d0:3000</span></span></div></td>
+                    <td><span class="tag">Ứng dụng · <span class="mono">blog</span></span></td>
+                    <td class="mono muted">gotham-prod-01</td><td class="mono">80/443</td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp · 26/11/2026</span></td>
+                    <td><span class="tag">gzip</span> <span class="tag">redirect-https</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="router blog: rule khớp, redirect-https trả 308 về HTTPS.|success">Kiểm tra lại</button> <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá router blog.gotham.dev" data-confirm="Xoá router blog.gotham.dev?" data-confirm-label="Xoá router" data-confirm-toast="Đã xoá router và ghi lại cấu hình động." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button> </div></td>
+                  </tr>
+                  <tr data-router-row data-tag="http issued">
+                    <td><div class="cell-main"><span class="dot dot--online"></span><span><span class="mono fg-2">metrics.gotham.dev</span><span class="cell-sub" style="display:block">→ grafana-3c9de10:3000</span></span></div></td>
+                    <td><span class="tag">Service · <span class="mono">observability</span></span></td>
+                    <td class="mono muted">edge-sg-01</td><td class="mono">80/443</td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp · 19/11/2026</span></td>
+                    <td><span class="tag">redirect-https</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="router observability: rule khớp, Grafana trả 302 về trang đăng nhập.|success">Kiểm tra lại</button> <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá router metrics.gotham.dev" data-confirm="Xoá router metrics.gotham.dev?" data-confirm-label="Xoá router" data-confirm-toast="Đã xoá router và ghi lại cấu hình động." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button> </div></td>
+                  </tr>
+                  <tr data-router-row data-tag="http issued">
+                    <td><div class="cell-main"><span class="dot dot--online"></span><span><span class="mono fg-2">cdn.gotham.dev</span><span class="cell-sub" style="display:block">→ minio-9d4a0fe:9000</span></span></div></td>
+                    <td><span class="tag">Service · <span class="mono">object-store</span></span></td>
+                    <td class="mono muted">edge-sg-01</td><td class="mono">80/443</td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp · 13/11/2026</span></td>
+                    <td><span class="tag">gzip</span> <span class="tag">rate-limit</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="router object-store: rule khớp, MinIO healthy trên cổng nội bộ 9000.|success">Kiểm tra lại</button> <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá router cdn.gotham.dev" data-confirm="Xoá router cdn.gotham.dev?" data-confirm-label="Xoá router" data-confirm-toast="Đã xoá router và ghi lại cấu hình động." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button> </div></td>
+                  </tr>
+                  <tr data-router-row data-tag="http error">
+                    <td><div class="cell-main"><span class="dot dot--dnd"></span><span><span class="mono fg-2">wordpress.gotham.dev</span><span class="cell-sub" style="display:block">→ wordpress-0b7c114:80</span></span></div></td>
+                    <td><span class="tag">Ứng dụng · <span class="mono">wordpress</span></span></td>
+                    <td class="mono muted">gotham-prod-01</td><td class="mono">80/443</td>
+                    <td><span class="cert cert--error"><span class="dot dot--dnd"></span>lỗi gia hạn · HTTP-01 403</span></td>
+                    <td><span class="tag">redirect-https</span> <span class="tag">gzip</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="router wordpress: rule khớp nhưng middleware redirect-https chặn /.well-known/acme-challenge/ trên cổng 80.|warn">Kiểm tra lại</button> <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá router wordpress.gotham.dev" data-confirm="Xoá router wordpress.gotham.dev?" data-confirm-label="Xoá router" data-confirm-toast="Đã xoá router và ghi lại cấu hình động." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button> </div></td>
+                  </tr>
+                  <tr data-router-row data-tag="http issued">
+                    <td><div class="cell-main"><span class="dot dot--online"></span><span><span class="mono fg-2">cloud.gotham.dev</span><span class="cell-sub" style="display:block">→ nextcloud-2d5e7aa:8080</span></span></div></td>
+                    <td><span class="tag">Service · <span class="mono">nextcloud-team</span></span></td>
+                    <td class="mono muted">edge-sg-01</td><td class="mono">80/443</td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp · 07/11/2026</span></td>
+                    <td><span class="tag">gzip</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="router nextcloud-team: rule khớp, 6 container trong compose project đang chạy.|success">Kiểm tra lại</button> <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá router cloud.gotham.dev" data-confirm="Xoá router cloud.gotham.dev?" data-confirm-label="Xoá router" data-confirm-toast="Đã xoá router và ghi lại cấu hình động." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button> </div></td>
+                  </tr>
+                  <tr data-router-row data-tag="http pending">
+                    <td><div class="cell-main"><span class="dot dot--idle dot-pulse"></span><span><span class="mono fg-2">n8n.gotham.dev</span><span class="cell-sub" style="display:block">→ n8n-7e3a2b1:5678</span></span></div></td>
+                    <td><span class="tag">Ứng dụng · <span class="mono">n8n</span></span></td>
+                    <td class="mono muted">edge-sg-01</td><td class="mono">80/443</td>
+                    <td><span class="cert cert--pending"><span class="dot dot--idle"></span>đang chờ challenge · lần 2</span></td>
+                    <td><span class="tag">redirect-https</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="router n8n: rule khớp, đang chờ ACME HTTP-01 trả token qua /.well-known/acme-challenge/…|info">Kiểm tra lại</button> <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá router n8n.gotham.dev" data-confirm="Xoá router n8n.gotham.dev? Challenge HTTP-01 đang chạy sẽ bị huỷ." data-confirm-label="Xoá router" data-confirm-toast="Đã xoá router và ghi lại cấu hình động." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button> </div></td>
+                  </tr>
+                  <tr data-router-row data-tag="tcp nocert">
+                    <td><div class="cell-main"><span class="dot dot--online"></span><span><span class="mono fg-2">db-orders.gotham.dev</span><span class="cell-sub" style="display:block">→ pg-orders:5432 · TCP router</span></span></div></td>
+                    <td><span class="tag">Database · <span class="mono">pg-orders</span></span></td>
+                    <td class="mono muted">gotham-prod-01</td><td class="mono">15432</td>
+                    <td><span class="cert"><span class="dot dot--offline"></span>không áp dụng · TCP passthrough</span></td>
+                    <td><span class="muted">—</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="router TCP db-orders: entrypoint :15432 mở, pg-orders nhận kết nối qua TLS của Postgres.|success">Kiểm tra lại</button> <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá router db-orders.gotham.dev" data-confirm="Xoá TCP router db-orders.gotham.dev? Ứng dụng đang kết nối qua cổng 15432 sẽ mất kết nối." data-confirm-label="Xoá router" data-confirm-toast="Đã xoá TCP router và ghi lại cấu hình động." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button> </div></td>
+                  </tr>
+                  <tr data-router-row data-tag="http issued wildcard">
+                    <td><div class="cell-main"><span class="dot dot--online"></span><span><span class="mono fg-2">*.preview.gotham.dev</span><span class="cell-sub" style="display:block">→ pr-&lt;số&gt;-&lt;app&gt;:3000</span></span></div></td>
+                    <td><span class="tag">Wildcard · preview PR</span></td>
+                    <td class="mono muted">edge-sg-01</td><td class="mono">80/443</td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp · 19/12/2026</span></td>
+                    <td><span class="tag">rate-limit</span> <span class="tag">redirect-https</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="router wildcard: cert *.preview.gotham.dev dùng chung, 4 subdomain preview đang khớp rule.|success">Kiểm tra lại</button> <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá router wildcard preview" data-confirm="Xoá wildcard router *.preview.gotham.dev? Mọi subdomain preview sẽ ngừng phục vụ." data-confirm-label="Xoá router" data-confirm-toast="Đã xoá wildcard router và ghi lại cấu hình động." data-remove="tr"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button> </div></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="card-foot">
+              <span class="small muted grow">11 router = 9 HTTP + 1 wildcard + 1 TCP · 8 cert đã cấp, 1 lỗi, 1 đang chờ. Cấu hình sinh từ state CP, giữ 1 phiên bản trước để revert.</span>
+              <button class="btn btn-sm btn-ghost" type="button" data-toast="Đã mở bản xem trước dynamic.yml (chỉ đọc, không ghi vào node).|info">Xem dynamic.yml</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Chứng chỉ ─────────────────────────────────────────────────── -->
+        <section class="tab-panel" id="panel-certs" data-panel="certs" role="tabpanel" aria-labelledby="tab-certs" hidden data-od-id="tab-certs">
+          <div class="card mt-5" data-od-id="cert-table">
+            <div class="card-head">
+              <h3>Chứng chỉ ACME</h3>
+              <span class="tag">acme.json · volume gotham-acme</span>
+              <span class="card-actions"><span class="realtime"><span class="dot dot--online dot-pulse"></span>tự gia hạn trước 30 ngày</span></span>
+            </div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Tên miền</th><th>Nhà phát hành</th><th>Phương thức</th><th>Cấp ngày</th>
+                    <th>Hết hạn</th><th>Trạng thái</th><th class="actions">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="mono fg-2">storefront.gotham.dev</td>
+                    <td class="muted">Let's Encrypt</td><td class="mono">HTTP-01 · le-http</td><td class="mono">26/09/2026</td>
+                    <td><span class="mono">25/12/2026</span><div class="meter pg-meter mt-2" data-meter="99" data-meter-kind="success"></div><span class="small muted">còn 89 ngày</span></td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng gia hạn storefront.gotham.dev — chạy lại ACME ngay cả khi chưa tới hạn.|info">Gia hạn</button> <button class="btn btn-sm btn-outline" type="button" data-toast="Chuỗi cert hợp lệ · SAN khớp · OCSP staple OK.|success">Kiểm tra lại</button> </div></td>
+                  </tr>
+                  <tr>
+                    <td class="mono fg-2">api.gotham.dev</td>
+                    <td class="muted">Let's Encrypt</td><td class="mono">HTTP-01 · le-http</td><td class="mono">12/09/2026</td>
+                    <td><span class="mono">11/12/2026</span><div class="meter pg-meter mt-2" data-meter="83" data-meter-kind="success"></div><span class="small muted">còn 75 ngày</span></td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng gia hạn api.gotham.dev.|info">Gia hạn</button> <button class="btn btn-sm btn-outline" type="button" data-toast="Chuỗi cert hợp lệ · SAN khớp · OCSP staple OK.|success">Kiểm tra lại</button> </div></td>
+                  </tr>
+                  <tr>
+                    <td class="mono fg-2">docs.gotham.dev</td>
+                    <td class="muted">Let's Encrypt</td><td class="mono">HTTP-01 · le-http</td><td class="mono">03/09/2026</td>
+                    <td><span class="mono">02/12/2026</span><div class="meter pg-meter mt-2" data-meter="73" data-meter-kind="success"></div><span class="small muted">còn 66 ngày</span></td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng gia hạn docs.gotham.dev.|info">Gia hạn</button> <button class="btn btn-sm btn-outline" type="button" data-toast="Chuỗi cert hợp lệ · SAN khớp · OCSP staple OK.|success">Kiểm tra lại</button> </div></td>
+                  </tr>
+                  <tr>
+                    <td class="mono fg-2">blog.gotham.dev</td>
+                    <td class="muted">Let's Encrypt</td><td class="mono">HTTP-01 · le-http</td><td class="mono">28/08/2026</td>
+                    <td><span class="mono">26/11/2026</span><div class="meter pg-meter mt-2" data-meter="67" data-meter-kind="success"></div><span class="small muted">còn 60 ngày</span></td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng gia hạn blog.gotham.dev.|info">Gia hạn</button> <button class="btn btn-sm btn-outline" type="button" data-toast="Chuỗi cert hợp lệ · SAN khớp · OCSP staple OK.|success">Kiểm tra lại</button> </div></td>
+                  </tr>
+                  <tr>
+                    <td class="mono fg-2">metrics.gotham.dev</td>
+                    <td class="muted">Let's Encrypt</td><td class="mono">HTTP-01 · le-http</td><td class="mono">21/08/2026</td>
+                    <td><span class="mono">19/11/2026</span><div class="meter pg-meter mt-2" data-meter="59" data-meter-kind="success"></div><span class="small muted">còn 53 ngày</span></td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng gia hạn metrics.gotham.dev.|info">Gia hạn</button> <button class="btn btn-sm btn-outline" type="button" data-toast="Chuỗi cert hợp lệ · SAN khớp · OCSP staple OK.|success">Kiểm tra lại</button> </div></td>
+                  </tr>
+                  <tr>
+                    <td class="mono fg-2">cdn.gotham.dev</td>
+                    <td class="muted">Let's Encrypt</td><td class="mono">HTTP-01 · le-http</td><td class="mono">15/08/2026</td>
+                    <td><span class="mono">13/11/2026</span><div class="meter pg-meter mt-2" data-meter="52" data-meter-kind="success"></div><span class="small muted">còn 47 ngày</span></td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng gia hạn cdn.gotham.dev.|info">Gia hạn</button> <button class="btn btn-sm btn-outline" type="button" data-toast="Chuỗi cert hợp lệ · SAN khớp · OCSP staple OK.|success">Kiểm tra lại</button> </div></td>
+                  </tr>
+                  <tr>
+                    <td class="mono fg-2">cloud.gotham.dev</td>
+                    <td class="muted">Let's Encrypt</td><td class="mono">HTTP-01 · le-http</td><td class="mono">09/08/2026</td>
+                    <td><span class="mono">07/11/2026</span><div class="meter pg-meter mt-2" data-meter="46" data-meter-kind="success"></div><span class="small muted">còn 41 ngày</span></td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng gia hạn cloud.gotham.dev.|info">Gia hạn</button> <button class="btn btn-sm btn-outline" type="button" data-toast="Chuỗi cert hợp lệ · SAN khớp · OCSP staple OK.|success">Kiểm tra lại</button> </div></td>
+                  </tr>
+                  <tr>
+                    <td class="mono fg-2">*.preview.gotham.dev</td>
+                    <td class="muted">Let's Encrypt</td><td class="mono">DNS-01 · le-dns · Cloudflare</td><td class="mono">20/09/2026</td>
+                    <td><span class="mono">19/12/2026</span><div class="meter pg-meter mt-2" data-meter="92" data-meter-kind="success"></div><span class="small muted">còn 83 ngày</span></td>
+                    <td><span class="cert cert--issued"><span class="dot dot--online"></span>đã cấp · wildcard</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="Đã xếp hàng gia hạn wildcard *.preview.gotham.dev qua DNS-01.|info">Gia hạn</button> <button class="btn btn-sm btn-outline" type="button" data-toast="Kiểm tra 2 subdomain preview: cert dùng chung khớp, không cần cấp lại.|success">Kiểm tra lại</button> </div></td>
+                  </tr>
+                  <tr>
+                    <td class="mono fg-2">wordpress.gotham.dev</td>
+                    <td class="muted">Let's Encrypt</td><td class="mono">HTTP-01 · le-http</td><td class="mono">30/06/2026</td>
+                    <td><span class="mono">28/09/2026</span><div class="meter pg-meter mt-2" data-meter="2" data-meter-kind="danger"></div><span class="small muted">còn 1 ngày</span></td>
+                    <td><span class="cert cert--error"><span class="dot dot--dnd"></span>lỗi gia hạn · HTTP-01 403</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="Thử gia hạn lại wordpress.gotham.dev — cần tắt redirect-https cho /.well-known/acme-challenge/ trước.|warn">Gia hạn</button> <button class="btn btn-sm btn-outline" type="button" data-toast="ACME trả 403: middleware redirect-https chặn token trên cổng 80.|danger">Kiểm tra lại</button> </div></td>
+                  </tr>
+                  <tr>
+                    <td class="mono fg-2">n8n.gotham.dev</td>
+                    <td class="muted">Let's Encrypt</td><td class="mono">HTTP-01 · le-http</td><td class="mono dash">—</td>
+                    <td><span class="mono dash">—</span><div class="meter pg-meter mt-2" data-meter="0"></div><span class="small muted">chưa cấp</span></td>
+                    <td><span class="cert cert--pending"><span class="dot dot--idle dot-pulse"></span>đang chờ challenge</span></td>
+                    <td class="actions"><div class="row-actions"> <button class="btn btn-sm btn-outline" type="button" data-toast="Đã huỷ và xếp lại challenge cho n8n.gotham.dev.|info">Gia hạn</button> <button class="btn btn-sm btn-outline" type="button" data-toast="Order đang ở trạng thái pending · token đã ghi, chờ Let's Encrypt gọi lại.|info">Kiểm tra lại</button> </div></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="card-foot">
+              <span class="small muted grow">10 chứng chỉ: 8 đã cấp · 1 lỗi · 1 đang chờ. Router TCP <span class="mono">db-orders.gotham.dev</span> không dùng cert HTTP.</span>
+              <button class="btn btn-sm btn-outline" type="button" data-toast="Đã chạy vòng kiểm tra toàn bộ cert: 8 hợp lệ, 1 sắp hết hạn, 1 lỗi.|warn">Kiểm tra tất cả</button>
+            </div>
+          </div>
+
+          <div class="embed embed--warn mt-4" data-od-id="cert-challenge">
+            <div class="between">
+              <h4>HTTP-01 challenge đang chạy · n8n.gotham.dev</h4>
+              <span class="status-line"><span class="dot dot--idle dot-pulse"></span>lần thử 2 · bắt đầu 40 giây trước</span>
+            </div>
+            <p class="mt-2">Traefik ghi token vào volume rồi để Let's Encrypt gọi lại qua cổng 80. Không cần mở thêm cổng nào ngoài 80/443.</p>
+            <div class="pg-challenge mt-3">
+              <div class="state-cell">
+                <span class="label">Token path</span>
+                <span class="mono small">/.well-known/acme-challenge/…</span>
+              </div>
+              <div class="state-cell">
+                <span class="label">Resolver production</span>
+                <span class="mono small">le-http · HTTP-01</span>
+              </div>
+              <div class="state-cell">
+                <span class="label">Resolver staging</span>
+                <span class="mono small">le-staging · kiểm thử</span>
+              </div>
+              <div class="state-cell">
+                <span class="label">Lần gọi gần nhất</span>
+                <span class="mono small">HTTP 200 · 84ms</span>
+              </div>
+            </div>
+            <div class="row gap-3 mt-4 wrap">
+              <button class="switch" type="button" role="switch" aria-checked="false" data-switch aria-labelledby="acme-staging-label" data-when-on="#acme-staging-note" data-switch-toast="ACME staging đã {state} cho lần cấp tiếp theo."></button>
+              <span class="grow" id="acme-staging-label">
+                <span class="fg-2">Dùng ACME staging cho lần cấp tiếp theo</span>
+                <span class="small muted" style="display:block">Staging không tính vào hạn mức của Let's Encrypt production — nên dùng khi đang kiểm thử DNS hoặc firewall.</span>
+              </span>
+              <button class="btn btn-outline" type="button" data-toast="Đã gửi lệnh thử lại challenge tới gotham-traefik trên edge-sg-01.|info">Thử lại challenge</button>
+            </div>
+            <p class="small muted mt-3" id="acme-staging-note" hidden>Resolver đang dùng: <span class="mono">le-staging</span> · cert staging không được trình duyệt tin cậy, chỉ dùng để kiểm thử luồng.</p>
+          </div>
+
+          <div class="callout mt-4" data-od-id="cert-staging-note">
+            <svg aria-hidden="true"><use href="#i-info"></use></svg>
+            <div>
+              <h4>Resolver <span class="mono">le-staging</span> dùng cho kiểm thử</h4>
+              <p>Cấu hình acme khai báo 3 resolver: <span class="inline-code">le-http</span> (HTTP-01), <span class="inline-code">le-dns</span> (DNS-01 wildcard) và <span class="inline-code">le-staging</span> trỏ vào môi trường staging của Let's Encrypt. Đổi resolver trong dialog thêm tên miền khi cần thử mà không tiêu hạn mức production.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Nhà cung cấp DNS ──────────────────────────────────────────── -->
+        <section class="tab-panel" id="panel-dns" data-panel="dns" role="tabpanel" aria-labelledby="tab-dns" hidden data-od-id="tab-dns">
+          <div class="toolbar mt-5">
+            <span class="small muted grow">Bảng <span class="mono">dns_providers</span> giữ tham chiếu secret; token chỉ được giải mã trong bộ nhớ khi sinh <span class="mono">certificatesResolvers</span>.</span>
+            <button class="btn btn-outline" type="button" data-open="dns-provider">Thêm nhà cung cấp</button>
+          </div>
+
+          <div class="grid cols-2" data-od-id="dns-providers">
+            <div class="channel-card" data-od-id="dns-cloudflare">
+              <span class="channel-mark"><svg aria-hidden="true"><use href="#i-cloud"></use></svg></span>
+              <div class="grow stack gap-3">
+                <div class="between">
+                  <h4>Cloudflare</h4>
+                  <span class="status-line"><span class="dot dot--online"></span>hoạt động</span>
+                </div>
+                <dl class="kv">
+                  <dt>Zone</dt><dd class="mono">gotham.dev</dd>
+                  <dt>API token</dt>
+                  <dd class="row gap-1">
+                    <span class="mono" id="cf-token" data-value="cf_live_7Kd2mQeR9xT4pLb1Ns6Z" data-mask="••••••••••••••••">••••••••••••••••</span>
+                    <button class="btn btn-sm btn-ghost btn-icon" type="button" data-reveal="#cf-token" aria-label="Hiện token Cloudflare"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
+                    <button class="btn btn-sm btn-ghost btn-icon" type="button" data-copy="#cf-token" aria-label="Sao chép token Cloudflare"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+                  </dd>
+                  <dt>Quyền token</dt><dd class="mono">Zone:DNS:Edit · Zone:Zone:Read</dd>
+                  <dt>Wildcard phụ trách</dt><dd class="mono">*.preview.gotham.dev · *.pr.gotham.dev</dd>
+                  <dt>Dùng lần cuối</dt><dd class="mono">20/09/2026 · DNS-01 wildcard</dd>
+                </dl>
+                <div class="row gap-2 wrap">
+                  <span class="tag tag--success">DNS-01 OK</span><span class="tag">API v4</span>
+                  <button class="btn btn-sm btn-outline" type="button" data-toast="Đã kiểm tra token Cloudflare: đọc được zone gotham.dev, quyền DNS:Edit hợp lệ.|success">Kiểm tra token</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="channel-card" data-od-id="dns-digitalocean">
+              <span class="channel-mark"><svg aria-hidden="true"><use href="#i-globe"></use></svg></span>
+              <div class="grow stack gap-3">
+                <div class="between">
+                  <h4>DigitalOcean</h4>
+                  <span class="status-line"><span class="dot dot--online"></span>hoạt động</span>
+                </div>
+                <dl class="kv">
+                  <dt>Zone</dt><dd class="mono">gotham.tools</dd>
+                  <dt>API token</dt>
+                  <dd class="row gap-1">
+                    <span class="mono" id="do-token" data-value="dop_v1_3f81c0ba94e7d265ab7c19e0" data-mask="••••••••••••••••">••••••••••••••••</span>
+                    <button class="btn btn-sm btn-ghost btn-icon" type="button" data-reveal="#do-token" aria-label="Hiện token DigitalOcean"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
+                    <button class="btn btn-sm btn-ghost btn-icon" type="button" data-copy="#do-token" aria-label="Sao chép token DigitalOcean"><svg aria-hidden="true"><use href="#i-copy"></use></svg></button>
+                  </dd>
+                  <dt>Quyền token</dt><dd class="mono">domain:read · domain:update</dd>
+                  <dt>Wildcard phụ trách</dt><dd class="mono">*.gotham.tools · *.staging.gotham.tools</dd>
+                  <dt>Dùng lần cuối</dt><dd class="mono">02/09/2026 · DNS-01 wildcard</dd>
+                </dl>
+                <div class="row gap-2 wrap">
+                  <span class="tag tag--success">DNS-01 OK</span><span class="tag">API v2</span>
+                  <button class="btn btn-sm btn-outline" type="button" data-toast="Đã kiểm tra token DigitalOcean: đọc được zone gotham.tools.|success">Kiểm tra token</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="embed embed--warn mt-4" data-od-id="dns-warning">
+            <div class="between"><h4>DNS-01 cần zone được delegate cho nhà cung cấp</h4><span class="small meta">bắt buộc</span></div>
+            <p class="mt-2">Let's Encrypt xác thực bằng bản ghi TXT <span class="mono">_acme-challenge.&lt;domain&gt;</span> do provider tạo. Nếu nameserver của zone chưa trỏ về Cloudflare/DigitalOcean, order DNS-01 sẽ trả <span class="mono">NXDOMAIN</span> và wildcard không được cấp. Zone <span class="mono">gotham.dev</span> đã delegate; zone <span class="mono">gotham.com</span> thì chưa.</p>
+            <div class="row gap-2 mt-3 wrap">
+              <span class="tag tag--success">gotham.dev · đã delegate</span>
+              <span class="tag tag--success">gotham.tools · đã delegate</span>
+              <span class="tag tag--warn">gotham.com · chưa delegate</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Redirect ──────────────────────────────────────────────────── -->
+        <section class="tab-panel" id="panel-redirects" data-panel="redirects" role="tabpanel" aria-labelledby="tab-redirects" hidden data-od-id="tab-redirects">
+          <div class="card mt-5" data-od-id="redirect-list">
+            <div class="card-head">
+              <h3>Redirect rule</h3>
+              <span class="tag">middleware redirectregex</span>
+              <span class="card-actions"><span class="small muted">áp ở tầng Traefik · không cần deploy lại</span></span>
+            </div>
+            <div id="redirect-rows">
+              <div class="domain-row" data-od-id="redirect-shop">
+                <div class="row gap-2">
+                  <span class="mono fg-2">shop.gotham.com</span>
+                  <svg aria-hidden="true"><use href="#i-chevron-right"></use></svg>
+                  <span class="mono muted">storefront.gotham.dev</span>
+                </div>
+                <div class="row gap-2"><span class="tag">301</span><span class="small muted">vĩnh viễn</span></div>
+                <div class="status-line" data-pg-state><span class="dot dot--online"></span>đang bật</div>
+                <div class="row gap-2" style="justify-content:flex-end">
+                  <button class="switch" type="button" role="switch" aria-checked="true" data-switch aria-label="Bật redirect shop.gotham.com" data-switch-toast="Redirect shop.gotham.com đã {state}."></button>
+                  <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá redirect shop.gotham.com" data-confirm="Xoá redirect shop.gotham.com → storefront.gotham.dev?" data-confirm-label="Xoá redirect" data-confirm-toast="Đã xoá redirect." data-remove=".domain-row"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                </div>
+              </div>
+              <div class="domain-row" data-od-id="redirect-www">
+                <div class="row gap-2">
+                  <span class="mono fg-2">www.gotham.dev</span>
+                  <svg aria-hidden="true"><use href="#i-chevron-right"></use></svg>
+                  <span class="mono muted">gotham.dev</span>
+                </div>
+                <div class="row gap-2"><span class="tag">301</span><span class="small muted">vĩnh viễn</span></div>
+                <div class="status-line" data-pg-state><span class="dot dot--online"></span>đang bật</div>
+                <div class="row gap-2" style="justify-content:flex-end">
+                  <button class="switch" type="button" role="switch" aria-checked="true" data-switch aria-label="Bật redirect www.gotham.dev" data-switch-toast="Redirect www.gotham.dev đã {state}."></button>
+                  <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá redirect www.gotham.dev" data-confirm="Xoá redirect www.gotham.dev → gotham.dev?" data-confirm-label="Xoá redirect" data-confirm-toast="Đã xoá redirect." data-remove=".domain-row"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                </div>
+              </div>
+              <div class="domain-row" data-od-id="redirect-api-v1">
+                <div class="row gap-2">
+                  <span class="mono fg-2">api-v1.gotham.dev</span>
+                  <svg aria-hidden="true"><use href="#i-chevron-right"></use></svg>
+                  <span class="mono muted">api.gotham.dev</span>
+                </div>
+                <div class="row gap-2"><span class="tag">308</span><span class="small muted">giữ method</span></div>
+                <div class="status-line" data-pg-state><span class="dot dot--offline"></span>tạm dừng</div>
+                <div class="row gap-2" style="justify-content:flex-end">
+                  <button class="switch" type="button" role="switch" aria-checked="false" data-switch aria-label="Bật redirect api-v1.gotham.dev" data-switch-toast="Redirect api-v1.gotham.dev đã {state}."></button>
+                  <button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá redirect api-v1.gotham.dev" data-confirm="Xoá redirect api-v1.gotham.dev → api.gotham.dev?" data-confirm-label="Xoá redirect" data-confirm-toast="Đã xoá redirect." data-remove=".domain-row"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                </div>
+              </div>
+            </div>
+            <div class="card-foot">
+              <span class="small muted grow">3 redirect · 2 đang bật, 1 tạm dừng. Rule sinh cùng lúc với router nên không có bước deploy riêng.</span>
+              <span class="tag">redirectregex</span>
+            </div>
+          </div>
+
+          <div class="card mt-4" data-od-id="redirect-add">
+            <div class="card-head"><h3>Thêm redirect</h3><span class="meta">rule áp ngay sau khi ghi cấu hình động</span></div>
+            <div class="card-body">
+              <div class="pg-redirect-form">
+                <div class="field">
+                  <label class="field-label" for="rd-source">Tên miền nguồn</label>
+                  <input class="input" id="rd-source" placeholder="shop.gotham.com" />
+                  <span class="field-error">Nhập tên miền hợp lệ, ví dụ shop.gotham.com.</span>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="rd-target">Tên miền đích</label>
+                  <input class="input" id="rd-target" placeholder="storefront.gotham.dev" />
+                  <span class="field-error">Nhập tên miền hợp lệ, ví dụ storefront.gotham.dev.</span>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="rd-code">Mã chuyển</label>
+                  <select class="select" id="rd-code">
+                    <option value="301">301 · vĩnh viễn</option>
+                    <option value="302">302 · tạm thời</option>
+                    <option value="307">307 · giữ method</option>
+                    <option value="308">308 · vĩnh viễn, giữ method</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <span class="field-label" id="rd-enable-label">Trạng thái</span>
+                  <div class="row gap-3">
+                    <button class="switch" type="button" role="switch" aria-checked="true" data-switch aria-labelledby="rd-enable-label" id="rd-enable" data-switch-toast="Redirect mới sẽ được {state} ngay sau khi thêm."></button>
+                    <span class="small muted">bật ngay</span>
+                  </div>
+                </div>
+              </div>
+              <div class="row gap-3 mt-4 wrap">
+                <button class="btn btn-outline" type="button" id="rd-add">Thêm redirect</button>
+                <span class="small muted">Chấp nhận cả <span class="mono">*.domain</span>. Wildcard chỉ dùng được với cert DNS-01.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ── Add-domain wizard ─────────────────────────────────────────────────── -->
+<div class="overlay" id="domain-wizard" hidden>
+  <div class="modal modal--lg" role="dialog" aria-modal="true" aria-labelledby="domain-wizard-title" data-od-id="domain-wizard-modal">
+    <div class="modal-head">
+      <div>
+        <h3 id="domain-wizard-title">Thêm tên miền</h3>
+        <p class="small muted">Gắn tên miền vào ứng dụng, service hoặc database, chọn cách cấp cert rồi để CP ghi cấu hình và reload Traefik.</p>
+      </div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+
+    <div class="wizard" data-wizard>
+      <div class="wizard-rail">
+        <ol>
+          <li class="is-active"><span class="idx">1</span>Tên miền</li>
+          <li><span class="idx">2</span>Chứng chỉ</li>
+          <li><span class="idx">3</span>Cấp chứng chỉ</li>
+        </ol>
+        <p class="small meta mt-4">Router ghi qua file provider rồi reload bằng API ping — không cần deploy lại ứng dụng.</p>
+      </div>
+
+      <div>
+        <div class="wizard-body">
+          <section class="wstep" data-od-id="wizard-step-domain">
+            <h4 class="mb-3">Tên miền &amp; đích đến</h4>
+            <div class="grid cols-2">
+              <div class="field">
+                <label class="field-label" for="d-domain">Tên miền</label>
+                <input class="input" id="d-domain" value="shop.gotham.dev" required data-pattern="^(\*\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$" />
+                <span class="field-hint">Ví dụ: shop.gotham.dev hoặc *.preview.gotham.dev</span>
+                <span class="field-error">Tên miền không hợp lệ.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="d-target">Chọn đích</label>
+                <select class="select" id="d-target">
+                  <option value="app:storefront">Ứng dụng · storefront</option>
+                  <option value="app:api-core">Ứng dụng · api-core</option>
+                  <option value="app:docs-site">Ứng dụng · docs-site</option>
+                  <option value="service:nextcloud-team">Service · nextcloud-team</option>
+                  <option value="db:pg-orders">Database · pg-orders</option>
+                </select>
+                <span class="field-hint">Đích lấy từ state CP, đổi ở đây không ảnh hưởng container.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="d-port">Cổng nội bộ</label>
+                <input class="input" id="d-port" value="3000" required data-pattern="^[0-9]{2,5}$" />
+                <span class="field-hint">Traefik trỏ tới cổng này trong mạng Docker của node.</span>
+                <span class="field-error">Cổng phải là số từ 2–5 chữ số.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="d-node">Node chạy Traefik</label>
+                <select class="select" id="d-node">
+                  <option>gotham-prod-01</option>
+                  <option>edge-sg-01</option>
+                  <option>staging-01</option>
+                </select>
+              </div>
+            </div>
+            <div class="switch-row mt-4">
+              <button class="switch" type="button" role="switch" aria-checked="true" data-switch aria-labelledby="d-redirect-label" data-switch-toast="Middleware redirect-https đã {state} cho tên miền này."></button>
+              <span class="grow" id="d-redirect-label">
+                <span class="fg-2">Bật redirect HTTPS</span>
+                <span class="small muted" style="display:block">Thêm middleware <span class="mono">redirect-https</span> để mọi request cổng 80 chuyển sang 443.</span>
+              </span>
+            </div>
+          </section>
+
+          <section class="wstep" hidden data-od-id="wizard-step-cert">
+            <h4 class="mb-3">Cách cấp chứng chỉ</h4>
+            <div class="stack gap-3">
+              <label class="check">
+                <input type="radio" name="pg-cert-method" value="http" checked />
+                <span>
+                  <span class="fg-2">HTTP-01 · resolver <span class="mono">le-http</span></span>
+                  <span class="small muted" style="display:block">Traefik trả token tại <span class="mono">/.well-known/acme-challenge/…</span> trên cổng 80. Cần mở cổng 80/443 ra internet và tên miền phải trỏ về node này.</span>
+                </span>
+              </label>
+              <label class="check">
+                <input type="radio" name="pg-cert-method" value="dns" />
+                <span>
+                  <span class="fg-2">DNS-01 wildcard · resolver <span class="mono">le-dns</span></span>
+                  <span class="small muted" style="display:block">Tạo bản ghi TXT qua nhà cung cấp DNS đã cấu hình, cho phép cấp <span class="mono">*.domain</span> một lần và dùng chung cho mọi subdomain. Không cần mở cổng 80.</span>
+                </span>
+              </label>
+            </div>
+            <div class="grid cols-2 mt-4">
+              <div class="field">
+                <label class="field-label" for="d-acme-email">Email ACME</label>
+                <input class="input" id="d-acme-email" type="email" value="ops@gotham.dev" required />
+                <span class="field-hint">Let's Encrypt dùng để thông báo cert sắp hết hạn.</span>
+                <span class="field-error">Email không hợp lệ.</span>
+              </div>
+              <div class="field">
+                <label class="field-label" for="d-dns-provider">Nhà cung cấp DNS (khi chọn DNS-01)</label>
+                <select class="select" id="d-dns-provider">
+                  <option>Cloudflare · zone gotham.dev</option>
+                  <option>DigitalOcean · zone gotham.tools</option>
+                </select>
+                <span class="field-hint">Quản lý token ở tab Nhà cung cấp DNS.</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="wstep" hidden data-on-enter="issueCert" data-od-id="wizard-step-issue">
+            <div class="between mb-3">
+              <h4>Cấp chứng chỉ</h4>
+              <span class="status-line"><span class="dot dot--idle dot-pulse"></span>gotham-traefik · file provider</span>
+            </div>
+            <div class="steps" id="issue-steps">
+              <div class="step"><span class="step-mark"></span><span class="step-name">Tạo router trong state CP</span><span class="step-time">POST /api/v1/domains</span></div>
+              <div class="step"><span class="step-mark"></span><span class="step-name">Sinh &amp; ghi file cấu hình động</span><span class="step-time">dynamic.yml</span></div>
+              <div class="step"><span class="step-mark"></span><span class="step-name">Reload Traefik qua API ping</span><span class="step-time">không downtime</span></div>
+              <div class="step"><span class="step-mark"></span><span class="step-name">ACME challenge · <span class="mono" id="issue-acme">le-http (HTTP-01)</span></span><span class="step-time">acme order</span></div>
+              <div class="step"><span class="step-mark"></span><span class="step-name">Cert issued · lưu volume <span class="mono">gotham-acme</span></span><span class="step-time">acme.json</span></div>
+            </div>
+
+            <div class="empty mt-4" id="issue-result" hidden>
+              <span class="avatar avatar--lg avatar--neutral"><svg aria-hidden="true"><use href="#i-shield"></use></svg></span>
+              <h4 id="issue-host">shop.gotham.dev đã sẵn sàng qua HTTPS</h4>
+              <p class="small" id="issue-detail">Router đã ghi, Traefik đã reload và chứng chỉ đã được cấp.</p>
+              <div class="row gap-2 mt-3 wrap" style="justify-content:center">
+                <span class="tag tag--success"><span class="dot dot--online"></span>cert đã cấp</span>
+                <span class="tag" id="issue-expiry">hết hạn 26/12/2026</span>
+                <span class="tag">giữ 1 phiên bản cấu hình trước</span>
+              </div>
+              <button class="btn btn-outline mt-3" type="button" id="issue-verify" data-toast="Đang kiểm tra qua HTTPS…">Kiểm tra bằng HTTPS</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="wizard-foot">
+          <button class="btn btn-outline" type="button" data-wizard-back hidden>Quay lại</button>
+          <span class="small muted" data-wizard-counter>Bước 1 / 3</span>
+          <span class="grow"></span>
+          <button class="btn btn-ghost" type="button" data-close>Huỷ</button>
+          <button class="btn btn-secondary" type="button" data-wizard-next>Tiếp tục</button>
+          <button class="btn btn-secondary" type="button" data-wizard-done data-close hidden>Xong</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add DNS provider ──────────────────────────────────────────────────── -->
+<div class="overlay" id="dns-provider" hidden>
+  <div class="modal modal--sm" role="dialog" aria-modal="true" aria-labelledby="dns-provider-title" data-od-id="dns-provider-modal">
+    <div class="modal-head">
+      <svg aria-hidden="true"><use href="#i-key"></use></svg>
+      <div>
+        <h3 id="dns-provider-title">Thêm nhà cung cấp DNS</h3>
+        <p class="small muted">Token được lưu dưới dạng secret reference và chỉ giải mã khi sinh <span class="mono">certificatesResolvers</span>.</p>
+      </div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-3">
+      <div class="field">
+        <label class="field-label" for="dns-provider-select">Nhà cung cấp</label>
+        <select class="select" id="dns-provider-select">
+          <option value="cloudflare">Cloudflare</option>
+          <option value="digitalocean">DigitalOcean</option>
+        </select>
+      </div>
+      <div class="field" id="dns-token-field">
+        <label class="field-label" for="dns-token">API token</label>
+        <input class="input" id="dns-token" type="password" placeholder="••••••••••••••••••••" autocomplete="off" />
+        <span class="field-hint">Cloudflare: Zone:DNS:Edit + Zone:Zone:Read. DigitalOcean: domain:read + domain:update.</span>
+        <span class="field-error">Token API cần tối thiểu 24 ký tự.</span>
+      </div>
+      <div class="row gap-2">
+        <button class="btn btn-outline" type="button" id="dns-check">Kiểm tra token</button>
+        <span class="small muted grow" id="dns-check-state">Chưa kiểm tra. Token hợp lệ sẽ trả về danh sách zone.</span>
+      </div>
+      <div class="stack gap-2" id="dns-check-result" hidden>
+        <div class="embed embed--success" id="dns-check-ok" hidden>
+          <div class="between"><h4>Token hợp lệ · đọc được zone</h4><span class="small meta">Zone:Read</span></div>
+          <p id="dns-zone-list">—</p>
+        </div>
+        <div class="embed embed--danger" id="dns-check-fail" hidden>
+          <div class="between"><h4>Không xác thực được token</h4><span class="small meta">HTTP 403</span></div>
+          <p id="dns-check-fail-msg">—</p>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">DNS-01 chỉ dùng được khi zone đã delegate cho nhà cung cấp.</span>
+      <button class="btn btn-outline" type="button" data-close>Huỷ</button>
+      <button class="btn btn-primary" type="button" id="dns-save">Lưu</button>
+    </div>
+  </div>
+</div>
+
+<script src="assets/gotham-ui.js"></script>
+<script>
+  /* ── Trạng thái redirect: cập nhật nhãn khi switch đổi ─────────────────── */
+  (function () {
+    var list = document.getElementById("redirect-rows");
+    if (!list) return;
+    list.addEventListener("click", function (e) {
+      var sw = e.target.closest(".switch");
+      if (!sw) return;
+      var row = sw.closest(".domain-row");
+      var state = row ? row.querySelector("[data-pg-state]") : null;
+      if (!state) return;
+      var on = sw.getAttribute("aria-checked") === "true";
+      state.innerHTML = '<span class="dot dot--' + (on ? "online" : "offline") + '"></span>' + (on ? "đang bật" : "tạm dừng");
+    });
+  })();
+
+  /* ── Thêm redirect: validate pattern tên miền rồi chèn row mới ─────────── */
+  (function () {
+    var HOST = /^(\*\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i;
+    var src = document.getElementById("rd-source");
+    var tgt = document.getElementById("rd-target");
+    var code = document.getElementById("rd-code");
+    var enable = document.getElementById("rd-enable");
+    var add = document.getElementById("rd-add");
+    var rows = document.getElementById("redirect-rows");
+    if (!add) return;
+
+    function check(input, ok) {
+      var field = input.closest(".field");
+      if (field) field.classList.toggle("has-error", !ok);
+      return ok;
+    }
+
+    add.addEventListener("click", function () {
+      var s = (src.value || "").trim().toLowerCase();
+      var t = (tgt.value || "").trim().toLowerCase();
+      var okSrc = check(src, HOST.test(s));
+      var okTgt = check(tgt, HOST.test(t));
+      if (!okSrc || !okTgt) {
+        window.Gotham.toast("Tên miền nguồn hoặc đích không đúng định dạng.", "danger");
+        return;
+      }
+      var on = enable.getAttribute("aria-checked") === "true";
+      var c = code.value;
+      var row = document.createElement("div");
+      row.className = "domain-row";
+      row.innerHTML =
+        '<div class="row gap-2"><span class="mono fg-2">' + s + '</span>' +
+        '<svg aria-hidden="true"><use href="#i-chevron-right"></use></svg>' +
+        '<span class="mono muted">' + t + '</span></div>' +
+        '<div class="row gap-2"><span class="tag">' + c + '</span><span class="small muted">' + code.options[code.selectedIndex].text.split("· ")[1] + '</span></div>' +
+        '<div class="status-line" data-pg-state><span class="dot dot--' + (on ? "online" : "offline") + '"></span>' + (on ? "đang bật" : "tạm dừng") + '</div>' +
+        '<div class="row gap-2" style="justify-content:flex-end">' +
+        '<button class="switch" type="button" role="switch" aria-checked="' + (on ? "true" : "false") + '" data-switch aria-label="Bật redirect ' + s + '" data-switch-toast="Redirect ' + s + ' đã {state}."></button>' +
+        '<button class="btn btn-sm btn-icon btn-outline" type="button" aria-label="Xoá redirect ' + s + '" data-confirm="Xoá redirect ' + s + ' → ' + t + '?" data-confirm-label="Xoá redirect" data-confirm-toast="Đã xoá redirect." data-remove=".domain-row"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>' +
+        '</div>';
+      rows.appendChild(row);
+      window.Gotham.init(row);
+      window.Gotham.toast("Đã thêm redirect " + s + " → " + t + " (" + c + ") và ghi lại cấu hình động.", "success");
+      src.value = "";
+      tgt.value = "";
+      check(src, true);
+      check(tgt, true);
+    });
+  })();
+
+  /* ── Kiểm tra token DNS: trả về zone đọc được, hoặc lỗi 403 ───────────── */
+  (function () {
+    var ZONES = {
+      cloudflare: ["gotham.dev", "gotham.tools"],
+      digitalocean: ["gotham.tools", "staging.gotham.tools"]
+    };
+    var NAMES = { cloudflare: "Cloudflare", digitalocean: "DigitalOcean" };
+    var btn = document.getElementById("dns-check");
+    var save = document.getElementById("dns-save");
+    if (!btn || !save) return;
+    var provider = document.getElementById("dns-provider-select");
+    var token = document.getElementById("dns-token");
+    var field = document.getElementById("dns-token-field");
+    var wrap = document.getElementById("dns-check-result");
+    var okBox = document.getElementById("dns-check-ok");
+    var failBox = document.getElementById("dns-check-fail");
+    var zones = document.getElementById("dns-zone-list");
+    var failMsg = document.getElementById("dns-check-fail-msg");
+    var state = document.getElementById("dns-check-state");
+
+    function resolve() {
+      var value = (token.value || "").trim();
+      var key = provider.value;
+      wrap.hidden = false;
+      if (value.length < 24) {
+        field.classList.add("has-error");
+        okBox.hidden = true;
+        failBox.hidden = false;
+        failMsg.textContent = "Token trống hoặc quá ngắn. " + NAMES[key] + " trả HTTP 403 khi token thiếu quyền Zone:Read — kiểm tra lại token rồi thử lại.";
+        state.textContent = "Kiểm tra thất bại · token không hợp lệ.";
+        window.Gotham.toast("Token " + NAMES[key] + " không hợp lệ.", "danger");
+        return;
+      }
+      field.classList.remove("has-error");
+      failBox.hidden = true;
+      okBox.hidden = false;
+      zones.textContent = NAMES[key] + " trả " + ZONES[key].length + " zone: " + ZONES[key].join(", ") + ". DNS-01 dùng được cho wildcard thuộc các zone này.";
+      state.textContent = "Kiểm tra thành công · " + ZONES[key].length + " zone đọc được.";
+      window.Gotham.toast("Token " + NAMES[key] + " hợp lệ · đọc được " + ZONES[key].length + " zone.", "success");
+    }
+
+    btn.addEventListener("click", function () {
+      btn.classList.add("is-busy");
+      state.textContent = "Đang gọi API " + NAMES[provider.value] + "…";
+      window.setTimeout(function () {
+        btn.classList.remove("is-busy");
+        resolve();
+      }, 800);
+    });
+
+    save.addEventListener("click", function () {
+      var value = (token.value || "").trim();
+      if (value.length < 24) {
+        field.classList.add("has-error");
+        token.focus();
+        window.Gotham.toast("Lưu thất bại: token API cần tối thiểu 24 ký tự.", "danger");
+        return;
+      }
+      field.classList.remove("has-error");
+      window.Gotham.toast("Đã lưu " + NAMES[provider.value] + " vào bảng dns_providers (secret reference).", "success");
+      window.Gotham.close(document.getElementById("dns-provider"));
+    });
+  })();
+
+  /* ── Bước 3 của wizard: mô phỏng cấp cert từ đầu tới cuối ─────────────── */
+  window.issueCert = function () {
+    var host = (document.getElementById("d-domain") || {}).value || "shop.gotham.dev";
+    var choice = document.querySelector('input[name="pg-cert-method"]:checked');
+    var useDns = choice && choice.value === "dns";
+    var node = (document.getElementById("d-dns-provider") || {}).value || "";
+    var acme = document.getElementById("issue-acme");
+    var steps = document.querySelectorAll("#issue-steps .step");
+    var result = document.getElementById("issue-result");
+    var title = document.getElementById("issue-host");
+    var detail = document.getElementById("issue-detail");
+    var expiry = document.getElementById("issue-expiry");
+    var verify = document.getElementById("issue-verify");
+
+    if (acme) acme.textContent = useDns ? "le-dns (DNS-01) · " + node : "le-http (HTTP-01)";
+    if (result) result.hidden = true;
+    steps.forEach(function (s) {
+      s.className = "step";
+      s.querySelector(".step-mark").innerHTML = "";
+      s.querySelector(".step-time").textContent = "";
+    });
+
+    var times = ["21ms", "38ms", "112ms", useDns ? "DNS-01 · 6s" : "HTTP-01 · 4s", "còn 90 ngày"];
+    var i = 0;
+    var tick = function () {
+      if (i > 0) {
+        var prev = steps[i - 1];
+        prev.className = "step is-done";
+        prev.querySelector(".step-mark").innerHTML = window.Gotham.icon("i-check");
+        prev.querySelector(".step-time").textContent = times[i - 1];
+      }
+      if (i >= steps.length) {
+        if (title) title.textContent = host + " đã sẵn sàng qua HTTPS";
+        if (detail) {
+          detail.textContent = useDns
+            ? "Wildcard cert cấp qua DNS-01 (" + node + "), dùng chung cho mọi subdomain khớp rule. Cấu hình trước đó vẫn giữ để revert."
+            : "Router đã ghi qua file provider, Traefik reload không downtime và cert HTTP-01 đã được cấp.";
+        }
+        if (expiry) expiry.textContent = "hết hạn 26/12/2026";
+        if (verify) {
+          verify.dataset.toast = "GET https://" + host + " → 200 OK · TLS 1.3 · cert hết hạn 26/12/2026.|success";
+        }
+        if (result) result.hidden = false;
+        window.Gotham.toast("Cert đã cấp cho " + host + ".", "success");
+        return;
+      }
+      steps[i].className = "step is-active";
+      steps[i].querySelector(".step-time").textContent = "đang chạy";
+      i++;
+      window.setTimeout(tick, 620);
+    };
+    tick();
+  };
+</script>
+</body>
+</html>

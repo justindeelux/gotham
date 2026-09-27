@@ -27,9 +27,17 @@ import type { VNode } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
 import { describeApplicationError } from "../api/applications";
-import type { Deployment, DeploymentState } from "../api/applications";
+import type {
+  Application,
+  Deployment,
+  DeploymentState,
+  EnvVar,
+  StorageMapping,
+} from "../api/applications";
 import DeployLogs from "../components/DeployLogs.vue";
 import DeploymentStatusTag from "../components/DeploymentStatusTag.vue";
+import EnvEditor from "../components/EnvEditor.vue";
+import StorageEditor from "../components/StorageEditor.vue";
 import { useMediaQuery } from "../composables/useMediaQuery";
 import { useApplicationsStore } from "../stores/applications";
 import { useServersStore } from "../stores/servers";
@@ -47,6 +55,12 @@ const logServerId = ref<string>("");
 const rollbackOpen = ref(false);
 const rollbackTarget = ref<string>("");
 const rollingBack = ref(false);
+const envDraft = ref<EnvVar[]>([]);
+const envLoading = ref(false);
+const envError = ref<string | null>(null);
+const storagesDraft = ref<StorageMapping[]>([]);
+const storagesLoading = ref(false);
+const storagesError = ref<string | null>(null);
 
 /** isNarrow stacks the two-column descriptions on small screens. */
 const isNarrow = useMediaQuery("(max-width: 640px)");
@@ -55,6 +69,33 @@ const isNarrow = useMediaQuery("(max-width: 640px)");
 const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
 
 const deployments = computed<Deployment[]>(() => appsStore.deploymentsOf(appId.value));
+
+const application = computed<Application | null>(() =>
+  appsStore.applicationOf(appId.value),
+);
+
+/** displayName prefers the stored name, falling back to the id head. */
+const displayName = computed<string>(() => application.value?.name ?? shortId.value);
+
+/** hasContainer reports whether any deployment started a container. */
+const hasContainer = computed<boolean>(() =>
+  deployments.value.some((item) => item.container_id !== ""),
+);
+
+/**
+ * controlHint explains why stop/start are unavailable, if they are: an
+ * in-flight deployment owns the container right now, or no deployment ever
+ * started one (the backend would answer 404).
+ */
+const controlHint = computed<string | null>(() => {
+  if (active.value !== null) {
+    return "A deployment is in progress. Wait for it to finish.";
+  }
+  if (!hasContainer.value) {
+    return "No container to control yet. Deploy the application first.";
+  }
+  return null;
+});
 
 const latest = computed<Deployment | null>(() => appsStore.latestDeployment(appId.value));
 
@@ -76,9 +117,13 @@ const logTarget = computed<Deployment | null>(
   () => deployments.value.find((item) => item.id === logDeploymentId.value) ?? active.value ?? latest.value,
 );
 
-/** effectiveLogServerId falls back to the first known node when unset. */
+/** effectiveLogServerId prefers the application's node, then the selection. */
 const effectiveLogServerId = computed<string>(
-  () => logServerId.value || serversStore.servers[0]?.id || "",
+  () =>
+    logServerId.value ||
+    application.value?.server_id ||
+    serversStore.servers[0]?.id ||
+    "",
 );
 
 const serverOptions = computed<Array<{ label: string; value: string }>>(() =>
@@ -261,17 +306,76 @@ function rowKey(row: Deployment): string {
   return row.id;
 }
 
-/** fetchAll loads the deployment history and the node list for logs. */
+/** fetchAll loads the application, its history, config and node list. */
 async function fetchAll(): Promise<void> {
   if (!appId.value) {
     return;
+  }
+  try {
+    await appsStore.fetchApplication(appId.value);
+  } catch {
+    // The store already exposes the error; the alert renders it.
   }
   try {
     await appsStore.fetchDeployments(appId.value);
   } catch {
     // The store already exposes the error; the alert renders it.
   }
+  void loadEnv();
+  void loadStorages();
   void serversStore.fetchServers().catch(() => undefined);
+}
+
+/** loadEnv refreshes the environment draft shown in the editor. */
+async function loadEnv(): Promise<void> {
+  envLoading.value = true;
+  envError.value = null;
+  try {
+    envDraft.value = [...(await appsStore.fetchEnv(appId.value))];
+  } catch (error) {
+    envDraft.value = [];
+    envError.value = describeApplicationError(error);
+  } finally {
+    envLoading.value = false;
+  }
+}
+
+/** loadStorages refreshes the volume draft shown in the editor. */
+async function loadStorages(): Promise<void> {
+  storagesLoading.value = true;
+  storagesError.value = null;
+  try {
+    storagesDraft.value = [...(await appsStore.fetchStorages(appId.value))];
+  } catch (error) {
+    storagesDraft.value = [];
+    storagesError.value = describeApplicationError(error);
+  } finally {
+    storagesLoading.value = false;
+  }
+}
+
+/** handleSaveEnv replaces the whole environment collection. */
+async function handleSaveEnv(): Promise<void> {
+  envError.value = null;
+  try {
+    envDraft.value = [...(await appsStore.saveEnv(appId.value, envDraft.value))];
+    message.success("Environment saved. New variables apply to the next deploy.");
+  } catch (error) {
+    envError.value = describeApplicationError(error);
+  }
+}
+
+/** handleSaveStorages replaces the whole storage collection. */
+async function handleSaveStorages(): Promise<void> {
+  storagesError.value = null;
+  try {
+    storagesDraft.value = [
+      ...(await appsStore.saveStorages(appId.value, storagesDraft.value)),
+    ];
+    message.success("Volumes saved. They persist on the node across deploys.");
+  } catch (error) {
+    storagesError.value = describeApplicationError(error);
+  }
 }
 
 /** handleDeploy queues a redeploy of the current revision. */
@@ -298,6 +402,26 @@ async function handleRollback(): Promise<void> {
   }
 }
 
+/** handleStop stops the container of the newest deployment. */
+async function handleStop(): Promise<void> {
+  try {
+    await appsStore.stopApp(appId.value);
+    message.success("Stop signal sent");
+  } catch (error) {
+    message.error(describeApplicationError(error));
+  }
+}
+
+/** handleStart restarts the container of the newest deployment. */
+async function handleStart(): Promise<void> {
+  try {
+    await appsStore.startApp(appId.value);
+    message.success("Start signal sent");
+  } catch (error) {
+    message.error(describeApplicationError(error));
+  }
+}
+
 /** openRollback preselects the previous release and opens the dialog. */
 function openRollback(): void {
   const candidates = runningDeployments.value;
@@ -309,6 +433,10 @@ function openRollback(): void {
 watch(appId, () => {
   activeTab.value = "overview";
   logDeploymentId.value = "";
+  envDraft.value = [];
+  envError.value = null;
+  storagesDraft.value = [];
+  storagesError.value = null;
   appsStore.stopAllPolling();
   void fetchAll();
 });
@@ -344,7 +472,7 @@ onUnmounted(() => {
         <NAvatar round :size="48">{{ initials }}</NAvatar>
         <div class="page-head__title">
           <NSpace align="center" :size="10">
-            <NText strong style="font-size: 20px" class="mono">{{ shortId || "Application" }}</NText>
+            <NText strong style="font-size: 20px" class="mono">{{ displayName || "Application" }}</NText>
             <DeploymentStatusTag
               v-if="latest"
               :state="latest.state"
@@ -367,17 +495,29 @@ onUnmounted(() => {
           >
             Rollback
           </NButton>
-          <NTooltip trigger="hover">
+          <NTooltip trigger="hover" :disabled="controlHint === null">
             <template #trigger>
-              <NButton disabled>Stop</NButton>
+              <NButton
+                :loading="appsStore.acting"
+                :disabled="appsStore.acting || controlHint !== null"
+                @click="handleStop"
+              >
+                Stop
+              </NButton>
             </template>
-            Application stop/start is not exposed by the API yet.
+            {{ controlHint }}
           </NTooltip>
-          <NTooltip trigger="hover">
+          <NTooltip trigger="hover" :disabled="controlHint === null">
             <template #trigger>
-              <NButton disabled>Start</NButton>
+              <NButton
+                :loading="appsStore.acting"
+                :disabled="appsStore.acting || controlHint !== null"
+                @click="handleStart"
+              >
+                Start
+              </NButton>
             </template>
-            Application stop/start is not exposed by the API yet.
+            {{ controlHint }}
           </NTooltip>
         </NSpace>
       </div>
@@ -385,6 +525,28 @@ onUnmounted(() => {
       <NTabs v-model:value="activeTab" type="line" animated>
         <NTabPane name="overview" tab="Overview">
           <NSpace vertical :size="16" style="margin-top: 16px">
+            <NCard v-if="application" title="Application">
+              <NDescriptions :column="descColumns" bordered label-placement="left">
+                <NDescriptionsItem label="Name">
+                  <span class="mono">{{ application.name }}</span>
+                </NDescriptionsItem>
+                <NDescriptionsItem label="Branch">
+                  <span class="mono">{{ application.branch || "—" }}</span>
+                </NDescriptionsItem>
+                <NDescriptionsItem label="Build pack">
+                  <span class="mono">{{ application.build_pack || "auto" }}</span>
+                </NDescriptionsItem>
+                <NDescriptionsItem label="Domain">
+                  <span class="mono">{{ application.base_domain || "—" }}</span>
+                </NDescriptionsItem>
+                <NDescriptionsItem label="Port">
+                  <span class="mono">{{ application.port }}:{{ application.host_port }}</span>
+                </NDescriptionsItem>
+                <NDescriptionsItem label="Node">
+                  <span class="mono">{{ application.server_id ? application.server_id.slice(0, 8) : "unassigned" }}</span>
+                </NDescriptionsItem>
+              </NDescriptions>
+            </NCard>
             <NCard v-if="latest" :title="`Deploy ${latest.id.slice(0, 8)}`">
               <template #header-extra>
                 <DeploymentStatusTag :state="latest.state" />
@@ -514,8 +676,8 @@ onUnmounted(() => {
                 />
               </NSpace>
               <NText depth="3">
-                The application API does not expose the node yet, so pick it
-                explicitly — logs stream on
+                Logs default to the application's node and fall back to the
+                first known one — they stream on
                 <span class="mono">logs:{node}:{deployment}</span>.
               </NText>
               <DeployLogs
@@ -527,18 +689,70 @@ onUnmounted(() => {
         </NTabPane>
 
         <NTabPane name="env" tab="Environment">
-          <NCard style="margin-top: 16px">
-            <NEmpty
-              description="Environment editing ships with the applications CRUD API. Manage variables in the creation wizard for now."
-            />
+          <NCard style="margin-top: 16px" title="Environment variables">
+            <template #header-extra>
+              <NButton
+                type="primary"
+                size="small"
+                :loading="appsStore.savingEnv"
+                :disabled="envLoading"
+                @click="handleSaveEnv"
+              >
+                Save
+              </NButton>
+            </template>
+            <NSpace vertical :size="12">
+              <NAlert
+                v-if="envError"
+                type="error"
+                :show-icon="true"
+              >
+                {{ envError }}
+              </NAlert>
+              <NSpin :show="envLoading">
+                <EnvEditor v-model="envDraft" />
+              </NSpin>
+            </NSpace>
+            <template #footer>
+              <NText depth="3">
+                Saving replaces the whole collection. Sealed secrets stay
+                sealed, and new variables apply to the next deploy.
+              </NText>
+            </template>
           </NCard>
         </NTabPane>
 
         <NTabPane name="storage" tab="Storage">
-          <NCard style="margin-top: 16px">
-            <NEmpty
-              description="Volume management ships with the applications CRUD API. Declare volumes in the creation wizard for now."
-            />
+          <NCard style="margin-top: 16px" title="Volumes">
+            <template #header-extra>
+              <NButton
+                type="primary"
+                size="small"
+                :loading="appsStore.savingStorages"
+                :disabled="storagesLoading"
+                @click="handleSaveStorages"
+              >
+                Save
+              </NButton>
+            </template>
+            <NSpace vertical :size="12">
+              <NAlert
+                v-if="storagesError"
+                type="error"
+                :show-icon="true"
+              >
+                {{ storagesError }}
+              </NAlert>
+              <NSpin :show="storagesLoading">
+                <StorageEditor v-model="storagesDraft" />
+              </NSpin>
+            </NSpace>
+            <template #footer>
+              <NText depth="3">
+                Saving replaces the whole collection. Volumes live on the node,
+                so data survives redeploys and rollbacks.
+              </NText>
+            </template>
           </NCard>
         </NTabPane>
 

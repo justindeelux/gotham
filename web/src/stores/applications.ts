@@ -3,25 +3,47 @@ import { ref } from "vue";
 
 import {
   describeApplicationError,
+  getApplication,
+  getEnv,
+  getStorages,
   isActiveDeployment,
   listDeployments,
+  replaceEnv,
+  replaceStorages,
   rollbackDeployment,
+  startApplication,
+  stopApplication,
   triggerDeploy,
 } from "../api/applications";
-import type { Deployment } from "../api/applications";
+import type {
+  Application,
+  Deployment,
+  EnvVar,
+  StorageMapping,
+} from "../api/applications";
 
 /** Polling cadence for an in-flight deployment, in milliseconds. */
 const activePollIntervalMs = 3_000;
 
 export const useApplicationsStore = defineStore("applications", () => {
+  const applicationsById = ref<Record<string, Application>>({});
   const deploymentsByApp = ref<Record<string, Deployment[]>>({});
+  const envByApp = ref<Record<string, EnvVar[]>>({});
+  const storagesByApp = ref<Record<string, StorageMapping[]>>({});
   const loading = ref(false);
   const error = ref<string | null>(null);
   const acting = ref(false);
+  const savingEnv = ref(false);
+  const savingStorages = ref(false);
 
   // One poll timer per application with an in-flight deployment; the store
   // instance is a singleton so a single map is enough for the whole app.
   const pollTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+  /** applicationOf returns the cached application, if one was fetched. */
+  function applicationOf(appId: string): Application | null {
+    return applicationsById.value[appId] ?? null;
+  }
 
   /** deploymentsOf returns the cached deployments of one application. */
   function deploymentsOf(appId: string): Deployment[] {
@@ -36,6 +58,32 @@ export const useApplicationsStore = defineStore("applications", () => {
   /** latestDeployment returns the newest deployment, if any. */
   function latestDeployment(appId: string): Deployment | null {
     return deploymentsOf(appId)[0] ?? null;
+  }
+
+  /** envOf returns the cached environment rows of one application. */
+  function envOf(appId: string): EnvVar[] {
+    return envByApp.value[appId] ?? [];
+  }
+
+  /** storagesOf returns the cached storage mappings of one application. */
+  function storagesOf(appId: string): StorageMapping[] {
+    return storagesByApp.value[appId] ?? [];
+  }
+
+  /** fetchApplication loads one application by id. */
+  async function fetchApplication(appId: string): Promise<Application> {
+    loading.value = true;
+    error.value = null;
+    try {
+      const application = await getApplication(appId);
+      applicationsById.value[appId] = application;
+      return application;
+    } catch (err) {
+      error.value = describeApplicationError(err);
+      throw err;
+    } finally {
+      loading.value = false;
+    }
   }
 
   /** fetchDeployments loads the deployment history of one application. */
@@ -61,6 +109,47 @@ export const useApplicationsStore = defineStore("applications", () => {
       settlePolling(appId);
     } catch (err) {
       error.value = describeApplicationError(err);
+    }
+  }
+
+  /** fetchEnv loads the environment collection of one application. */
+  async function fetchEnv(appId: string): Promise<EnvVar[]> {
+    const env = await getEnv(appId);
+    envByApp.value[appId] = env;
+    return env;
+  }
+
+  /** saveEnv replaces the environment collection and refreshes the cache. */
+  async function saveEnv(appId: string, env: EnvVar[]): Promise<EnvVar[]> {
+    savingEnv.value = true;
+    try {
+      const saved = await replaceEnv(appId, env);
+      envByApp.value[appId] = saved;
+      return saved;
+    } finally {
+      savingEnv.value = false;
+    }
+  }
+
+  /** fetchStorages loads the storage collection of one application. */
+  async function fetchStorages(appId: string): Promise<StorageMapping[]> {
+    const storages = await getStorages(appId);
+    storagesByApp.value[appId] = storages;
+    return storages;
+  }
+
+  /** saveStorages replaces the storage collection and refreshes the cache. */
+  async function saveStorages(
+    appId: string,
+    storages: StorageMapping[],
+  ): Promise<StorageMapping[]> {
+    savingStorages.value = true;
+    try {
+      const saved = await replaceStorages(appId, storages);
+      storagesByApp.value[appId] = saved;
+      return saved;
+    } finally {
+      savingStorages.value = false;
     }
   }
 
@@ -131,19 +220,62 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
+  /**
+   * stopApp stops the container of the newest deployment, then refreshes the
+   * deployment history. The row is untouched: the deployment still describes
+   * its release.
+   */
+  async function stopApp(appId: string): Promise<Deployment> {
+    acting.value = true;
+    try {
+      const deployment = await stopApplication(appId);
+      await refreshDeployments(appId);
+      return deployment;
+    } finally {
+      acting.value = false;
+    }
+  }
+
+  /** startApp restarts the container of the newest deployment. */
+  async function startApp(appId: string): Promise<Deployment> {
+    acting.value = true;
+    try {
+      const deployment = await startApplication(appId);
+      await refreshDeployments(appId);
+      return deployment;
+    } finally {
+      acting.value = false;
+    }
+  }
+
   return {
+    applicationsById,
     deploymentsByApp,
+    envByApp,
+    storagesByApp,
     loading,
     error,
     acting,
+    savingEnv,
+    savingStorages,
+    applicationOf,
     deploymentsOf,
     activeDeployment,
     latestDeployment,
+    envOf,
+    storagesOf,
+    fetchApplication,
     fetchDeployments,
     refreshDeployments,
+    fetchEnv,
+    saveEnv,
+    fetchStorages,
+    saveStorages,
     stopPolling,
     stopAllPolling,
     deploy,
     rollback,
+    stopApp,
+    startApp,
   };
 });

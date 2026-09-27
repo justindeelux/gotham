@@ -13,10 +13,12 @@ import (
 )
 
 // syncRequest is the optional body of POST /v1/proxy/sync: with a server_id
-// only that node is synced, otherwise every node hosting a proxied
-// application is.
+// only that node is synced, otherwise every registered node and every node
+// hosting a proxied application is. revert re-pushes the node's previous
+// stored configuration version instead of generating from current state.
 type syncRequest struct {
 	ServerID string `json:"server_id"`
+	Revert   bool   `json:"revert"`
 }
 
 // syncResponse reports the per-node outcome of a sync run.
@@ -24,15 +26,19 @@ type syncResponse struct {
 	Results []syncResult `json:"results"`
 }
 
-// syncResult is one node's outcome on the wire.
+// syncResult is one node's outcome on the wire. Diagnostics carry the
+// per-application reasons a row was not routed, so a skipped application is
+// visible instead of silently absent.
 type syncResult struct {
-	ServerID string `json:"server_id"`
-	Synced   bool   `json:"synced"`
-	Error    string `json:"error,omitempty"`
+	ServerID    string       `json:"server_id"`
+	Synced      bool         `json:"synced"`
+	Error       string       `json:"error,omitempty"`
+	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
 }
 
 // Mount registers the authenticated proxy endpoints under /api. A nil service
-// or FEATURE_PROXY=false mounts nothing.
+// or FEATURE_PROXY=false mounts nothing. The caller composes the scope
+// middleware: the sync endpoint mutates every node, so it requires admin.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc ProxyService) {
 	if svc == nil || !Enabled() {
 		return
@@ -51,8 +57,9 @@ type handler struct {
 }
 
 // sync regenerates the routing configuration and pushes it to the node
-// agents. A partial failure answers 502 with the per-node results, so the
-// operator sees which node rejected the reload.
+// agents, or reverts one node to its previous stored configuration. A partial
+// result answers 200 with the per-application diagnostics (the healthy routes
+// were pushed); a whole-node failure answers the mapped error status.
 func (h *handler) sync(w http.ResponseWriter, r *http.Request) {
 	var req syncRequest
 	if !decodeOptionalBody(w, r, &req) {
@@ -63,8 +70,27 @@ func (h *handler) sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Revert {
+		if serverID == uuid.Nil {
+			writeJSON(w, http.StatusBadRequest, apiError{Message: "server_id is required to revert"})
+			return
+		}
+		h.revert(w, r, serverID)
+		return
+	}
+
 	if serverID != uuid.Nil {
-		if err := h.svc.SyncServer(r.Context(), serverID); err != nil {
+		err := h.svc.SyncServer(r.Context(), serverID)
+		var partial *PartialError
+		if errors.As(err, &partial) {
+			writeJSON(w, http.StatusOK, syncResponse{Results: []syncResult{{
+				ServerID:    serverID.String(),
+				Synced:      true,
+				Diagnostics: partial.Diagnostics,
+			}}})
+			return
+		}
+		if err != nil {
 			h.writeError(w, "sync", serverID, err)
 			return
 		}
@@ -80,9 +106,13 @@ func (h *handler) sync(w http.ResponseWriter, r *http.Request) {
 	response := syncResponse{Results: make([]syncResult, 0, len(results))}
 	failed := false
 	for _, result := range results {
-		entry := syncResult{ServerID: result.ServerID.String(), Synced: result.Error == ""}
-		if result.Error != "" {
-			entry.Error = result.Error
+		entry := syncResult{
+			ServerID:    result.ServerID.String(),
+			Synced:      result.Error == "",
+			Error:       result.Error,
+			Diagnostics: result.Diagnostics,
+		}
+		if result.Error != "" && !hasDiagnostics(result.Diagnostics) {
 			failed = true
 		}
 		response.Results = append(response.Results, entry)
@@ -94,6 +124,21 @@ func (h *handler) sync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, response)
 }
 
+// revert re-pushes a node's previous stored configuration version.
+func (h *handler) revert(w http.ResponseWriter, r *http.Request, serverID uuid.UUID) {
+	if err := h.svc.RevertServer(r.Context(), serverID); err != nil {
+		h.writeError(w, "revert", serverID, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, syncResponse{Results: []syncResult{{ServerID: serverID.String(), Synced: true}}})
+}
+
+// hasDiagnostics reports whether a per-node result is a partial success (its
+// error text is the diagnostics message, not a whole-node failure).
+func hasDiagnostics(diagnostics []Diagnostic) bool {
+	return len(diagnostics) > 0
+}
+
 // writeError maps one node's sync failure to its HTTP response.
 func (h *handler) writeError(w http.ResponseWriter, op string, serverID uuid.UUID, err error) {
 	response := syncResponse{Results: []syncResult{{ServerID: serverID.String(), Error: err.Error()}}}
@@ -101,6 +146,8 @@ func (h *handler) writeError(w http.ResponseWriter, op string, serverID uuid.UUI
 	case errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, response)
 	case errors.Is(err, ErrServerNotFound):
+		writeJSON(w, http.StatusNotFound, response)
+	case errors.Is(err, ErrVersionNotFound):
 		writeJSON(w, http.StatusNotFound, response)
 	case errors.Is(err, ErrAgentUnavailable), errors.Is(err, ErrReload):
 		writeJSON(w, http.StatusBadGateway, response)

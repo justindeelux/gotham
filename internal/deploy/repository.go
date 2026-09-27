@@ -149,14 +149,15 @@ func (r *storeRepository) CreateApplication(
 // UpdateApplication persists the mutable application fields and returns the row.
 func (r *storeRepository) UpdateApplication(ctx context.Context, app Application) (Application, error) {
 	row, err := r.store.UpdateApplication(ctx, sqlc.UpdateApplicationParams{
-		ID:         pgUUID(app.ID),
-		Name:       app.Name,
-		Branch:     app.Branch,
-		BuildPack:  app.BuildPack,
-		BaseDomain: app.BaseDomain,
-		Port:       app.Port,
-		HostPort:   app.HostPort,
-		ServerID:   pgUUID(app.ServerID),
+		ID:                 pgUUID(app.ID),
+		Name:               app.Name,
+		Branch:             app.Branch,
+		BuildPack:          app.BuildPack,
+		BaseDomain:         app.BaseDomain,
+		Port:               app.Port,
+		HostPort:           app.HostPort,
+		ServerID:           pgUUID(app.ServerID),
+		BaseDomainDisabled: app.BaseDomainDisabled,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -424,20 +425,21 @@ func (r *storeRepository) DeployKeyPrivatePEM(ctx context.Context, appID uuid.UU
 // becomes the zero UUID, which validation rejects at enqueue time.
 func applicationFromRow(row sqlc.Application) Application {
 	return Application{
-		ID:         uuidFromPG(row.ID),
-		UserID:     uuidFromPG(row.UserID),
-		ServerID:   uuidFromPG(row.ServerID),
-		Name:       row.Name,
-		Provider:   row.Provider,
-		Repo:       row.Repo,
-		CloneURL:   row.CloneUrl,
-		Branch:     row.Branch,
-		BuildPack:  row.BuildPack,
-		BaseDomain: row.BaseDomain,
-		Port:       row.Port,
-		HostPort:   row.HostPort,
-		CreatedAt:  timeFromPG(row.CreatedAt),
-		UpdatedAt:  timeFromPG(row.UpdatedAt),
+		ID:                 uuidFromPG(row.ID),
+		UserID:             uuidFromPG(row.UserID),
+		ServerID:           uuidFromPG(row.ServerID),
+		Name:               row.Name,
+		Provider:           row.Provider,
+		Repo:               row.Repo,
+		CloneURL:           row.CloneUrl,
+		Branch:             row.Branch,
+		BuildPack:          row.BuildPack,
+		BaseDomain:         row.BaseDomain,
+		BaseDomainDisabled: row.BaseDomainDisabled,
+		Port:               row.Port,
+		HostPort:           row.HostPort,
+		CreatedAt:          timeFromPG(row.CreatedAt),
+		UpdatedAt:          timeFromPG(row.UpdatedAt),
 	}
 }
 
@@ -498,11 +500,16 @@ func storageParams(storages []Storage) []sqlc.InsertStorageParams {
 	return params
 }
 
-// applicationWriteError classifies a failed application write: the unique index
-// on (user_id, name) surfaces as ErrValidation with a message the API can show,
-// every other failure is wrapped for the log.
+// applicationWriteError classifies a failed application write: the unique
+// index on (user_id, name) surfaces as ErrValidation with a message the API
+// can show, a duplicate domain binding as ErrConflict (another application on
+// the same node owns the hostname), every other failure is wrapped for the
+// log.
 func applicationWriteError(err error, name string) error {
-	if isUniqueViolation(err) {
+	if pgErr := uniqueViolation(err); pgErr != nil {
+		if pgErr.ConstraintName == "applications_server_domain_idx" {
+			return fmt.Errorf("%w: the domain is already bound to another application on this node", ErrConflict)
+		}
 		return fmt.Errorf("%w: an application named %q already exists", ErrValidation, name)
 	}
 	return fmt.Errorf("deploy: write application: %w", err)
@@ -532,8 +539,17 @@ func deploymentFromRow(row sqlc.Deployment) Deployment {
 // isUniqueViolation reports whether err is a PostgreSQL unique-constraint
 // violation (SQLSTATE 23505), which the active-deployment index raises.
 func isUniqueViolation(err error) bool {
+	return uniqueViolation(err) != nil
+}
+
+// uniqueViolation returns the PostgreSQL unique-constraint violation, if any,
+// so callers can distinguish which index fired.
+func uniqueViolation(err error) *pgconn.PgError {
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return pgErr
+	}
+	return nil
 }
 
 // pgUUID converts a domain UUID for sqlc. The zero UUID becomes an invalid

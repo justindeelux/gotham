@@ -2,56 +2,66 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justindeelux/gotham/agent"
+	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/servers"
+	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/store/sqlc"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// Phase 6 (BE-6.1) smoke tunables. The Traefik image is the one the control
-// plane bootstraps, so the test proves the pinned tag actually serves.
+// Phase 6 (BE-6.1) production acceptance. The test drives the real control
+// plane service surface (store -> proxy.SyncService -> containers.Service ->
+// mTLS agent -> Docker) against the local Docker daemon and the dev Postgres
+// database, and asserts the generated HTTP routes with real requests through
+// the bootstrapped Traefik:
+//
+//   - bootstrap with the production port specs (including the loopback ping),
+//   - pinned and ephemeral (HostPort 0) application endpoints,
+//   - pending/invalid/disabled rows isolated as diagnostics,
+//   - route update and removal (the old route stops),
+//   - configuration history and fast revert,
+//   - repair of a pre-fix container and native restart policy,
+//   - an invalid document write that must NOT be presented as accepted.
+//
+// p6BaseURL is the production gateway served by the bootstrapped Traefik.
+const p6BaseURL = "http://127.0.0.1:80/"
+
 const (
 	p6NginxImage   = "nginx:1.23"
 	p6PullTimeout  = 3 * time.Minute
-	p6PingWait     = 90 * time.Second
-	p6HTTPWait     = 30 * time.Second
+	p6HTTPWait     = 60 * time.Second
 	p6PollInterval = 500 * time.Millisecond
+	p6SyncTimeout  = 2 * time.Minute
 )
 
-// TestP6TraefikFileProviderRoutesToNginx proves the BE-6.1 exit path against a
-// real Docker daemon:
-//
-//  1. the control plane's generator renders the static + dynamic documents,
-//  2. the control plane pushes them to a real node agent over mTLS
-//     (servers.DialProxyClient → agent.ProxyServer.WriteProxyConfig),
-//  3. Traefik runs from the generated static file and watches the generated
-//     dynamic file, with an Nginx container as the backend on a user-defined
-//     network, and
-//  4. HTTP through Traefik reaches Nginx, and a generated router redirects
-//     HTTP to HTTPS.
-//
-// Ports are disposable (kernel-assigned) and every container, network and temp
-// directory is test-scoped, so the smoke never touches other services on the
-// host. Gated by GOTHAM_E2E=1; missing Docker fails (never skips as green).
-func TestP6TraefikFileProviderRoutesToNginx(t *testing.T) {
+// TestP6ProxySyncProduction is gated by GOTHAM_E2E=1. Docker must be reachable
+// (fatal, never skipped as green); Postgres follows the suite convention and
+// skips when unreachable.
+func TestP6ProxySyncProduction(t *testing.T) {
 	requireE2E(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	logger := testLogger(t)
+
 	engine, err := agent.NewDockerClient(e2eDockerSock())
 	if err != nil {
 		t.Fatalf("docker client for %s: %v", e2eDockerSock(), err)
@@ -60,192 +70,433 @@ func TestP6TraefikFileProviderRoutesToNginx(t *testing.T) {
 	version, err := engine.Version(versionCtx)
 	versionCancel()
 	if err != nil {
-		t.Fatalf("docker daemon unreachable at %s: %v (start Docker and run: docker compose -f deploy/compose.dev.yml up -d)",
-			e2eDockerSock(), err)
+		t.Fatalf("docker daemon unreachable at %s: %v", e2eDockerSock(), err)
 	}
+	t.Logf("docker %s at %s", version, e2eDockerSock())
+
+	// GOTHAM_E2E=1 is an explicit opt-in to the production acceptance run: a
+	// missing prerequisite fails the test instead of skipping it green.
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Fatalf("docker CLI not found: %v", err)
+	}
+	dsn := e2eDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("Postgres/migrations unavailable at %s: %v (run: docker compose -f deploy/compose.dev.yml up -d)", dsn, err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Postgres unavailable at %s: %v", dsn, err)
+	}
+	t.Cleanup(pool.Close)
+	st := store.New(pool)
 
 	suffix := uuid.New().String()[:8]
-	networkName := "gotham-p6-net-" + suffix
-	nginxName := "gotham-p6-nginx-" + suffix
-	traefikName := "gotham-p6-traefik-" + suffix
-	plainHost := "plain-" + suffix + ".example.test"
-	secureHost := "secure-" + suffix + ".example.test"
+	userRow, err := st.CreateUser(ctx, "p6-e2e-"+suffix+"@example.com", nil)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", userRow.ID); err != nil {
+			t.Logf("cleanup user: %v", err)
+		}
+	})
+	serverRow, err := st.CreateServer(ctx, sqlc.CreateServerParams{
+		Name:    "p6-e2e-" + suffix,
+		Ip:      "127.0.0.1",
+		Port:    22,
+		SshUser: "root",
+	})
+	if err != nil {
+		t.Fatalf("create server: %v", err)
+	}
+	serverID := uuid.UUID(serverRow.ID.Bytes)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverRow.ID); err != nil {
+			t.Logf("cleanup server: %v", err)
+		}
+	})
 
-	// 1. A dedicated bridge network lets Traefik resolve the Nginx container by
-	// name; the docker CLI (already used for e2e cleanup) creates it.
-	if output, err := runDocker(ctx, "network", "create", networkName); err != nil {
-		t.Fatalf("docker network create: %v: %s", err, output)
+	// The node agent: DockerService + the real ProxyService rooted in a temp
+	// directory that the CP mounts into Traefik (a relocated node layout using
+	// the same production code paths).
+	nodeID := "p6-e2e-" + suffix
+	configDir := t.TempDir()
+	acmeDir := configDir + "/acme"
+	if err := os.MkdirAll(acmeDir, 0o755); err != nil {
+		t.Fatalf("create acme dir: %v", err)
+	}
+	proxyAgent := agent.NewProxyServer(agent.ProxyServerConfig{Root: configDir, Logger: logger})
+	agentAddr, authority := startLocalAgentWithOptions(t, ctx, engine, nodeID,
+		agent.WithProxyService(proxyAgent))
+
+	registry := p6Registry{server: &servers.Server{ID: serverID, IP: "127.0.0.1", NodeID: &nodeID}}
+	// The proxy container has a fixed production name on this disposable node:
+	// a previous failed run may have left one pointing at a deleted config
+	// directory, so remove it before the bootstrap and always clean up.
+	if err := engine.Remove(ctx, proxy.TraefikContainerName); err != nil {
+		t.Logf("remove pre-existing traefik: %v", err)
 	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
-		for _, name := range []string{traefikName, nginxName} {
-			if output, err := runDocker(cleanupCtx, "rm", "-f", name); err != nil && !strings.Contains(output, "No such container") {
-				t.Logf("cleanup: docker rm -f %s: %v: %s", name, err, output)
-			}
-		}
-		if output, err := runDocker(cleanupCtx, "network", "rm", networkName); err != nil {
-			t.Logf("cleanup: docker network rm %s: %v: %s", networkName, err, output)
+		if err := engine.Remove(cleanupCtx, proxy.TraefikContainerName); err != nil {
+			t.Logf("cleanup traefik: %v", err)
 		}
 	})
+	containerService := containers.NewService(containers.Config{
+		Registry: registry,
+		Cache:    containers.NopCache{},
+		Dial: func(dialCtx context.Context, _ *servers.Server) (containers.DockerClient, error) {
+			return servers.DialDockerClient(dialCtx, agentAddr, authority, servers.WithDockerServerName(nodeID))
+		},
+		Logger: logger,
+	})
+	t.Cleanup(func() { _ = containerService.Close() })
 
-	// 2. The Nginx backend on the shared network.
+	// Linux nodes (production and CI) reach published ports through the
+	// bridge gateway. Docker Desktop for macOS does not route Docker-assigned
+	// (ephemeral) ports through 172.17.0.1, so the desktop equivalent is used
+	// locally; the production default stays in the generated configuration.
+	backendHost := proxy.DefaultBackendHost
+	if runtime.GOOS == "darwin" {
+		backendHost = "host.docker.internal"
+	}
+	t.Logf("E2E backend host %s (production default %s)", backendHost, proxy.DefaultBackendHost)
+	proxyService := proxy.NewService(proxy.Config{
+		Store:       st,
+		Containers:  containerService,
+		BackendHost: backendHost,
+		Dial: func(dialCtx context.Context, id uuid.UUID) (proxy.AgentClient, error) {
+			if id != serverID {
+				return nil, servers.ErrNotFound
+			}
+			return servers.DialProxyClient(dialCtx, agentAddr, authority, servers.WithDockerServerName(nodeID))
+		},
+		Logger:    logger,
+		ConfigDir: configDir,
+		AcmeDir:   acmeDir,
+	})
+
 	pullCtx, pullCancel := context.WithTimeout(ctx, p6PullTimeout)
 	if err := engine.PullImage(pullCtx, p6NginxImage); err != nil {
 		pullCancel()
 		t.Fatalf("pull %s: %v", p6NginxImage, err)
 	}
 	pullCancel()
-	nginxID, err := engine.RunImage(ctx, &agentv1.CreateContainerRequest{
-		Image:    p6NginxImage,
-		Name:     nginxName,
-		Networks: []string{networkName},
+
+	pinnedHostPort := freeTCPPort(t)
+	pinnedDomain := "pinned-" + suffix + ".example.test"
+	ephemeralDomain := "ephemeral-" + suffix + ".example.test"
+	pendingDomain := "pending-" + suffix + ".example.test"
+	invalidDomain := "invalid domain " + suffix
+	disabledDomain := "disabled-" + suffix + ".example.test"
+
+	pinnedContainer := p6RunNginx(t, ctx, engine, "p6-app-pinned-"+suffix, fmt.Sprintf("%d:80", pinnedHostPort))
+	ephemeralContainer := p6RunNginx(t, ctx, engine, "p6-app-ephemeral-"+suffix, "80")
+	invalidContainer := p6RunNginx(t, ctx, engine, "p6-app-invalid-"+suffix, "80")
+	disabledContainer := p6RunNginx(t, ctx, engine, "p6-app-disabled-"+suffix, "80")
+
+	pinnedApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "pinned-"+suffix, pinnedDomain, pinnedHostPort, false)
+	p6CreateRunningDeployment(t, ctx, pool, pinnedApp, pinnedContainer)
+	ephemeralApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "ephemeral-"+suffix, ephemeralDomain, 0, false)
+	p6CreateRunningDeployment(t, ctx, pool, ephemeralApp, ephemeralContainer)
+	// Pending: a domain without a running deployment.
+	p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "pending-"+suffix, pendingDomain, freeTCPPort(t), false)
+	// Invalid legacy domain and a migration-disabled duplicate: both must be
+	// isolated, not block the healthy rows.
+	invalidApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "invalid-"+suffix, invalidDomain, freeTCPPort(t), false)
+	p6CreateRunningDeployment(t, ctx, pool, invalidApp, invalidContainer)
+	disabledApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "disabled-"+suffix, disabledDomain, freeTCPPort(t), true)
+	p6CreateRunningDeployment(t, ctx, pool, disabledApp, disabledContainer)
+
+	syncCtx, syncCancel := context.WithTimeout(ctx, p6SyncTimeout)
+	err = proxyService.SyncServer(syncCtx, serverID)
+	syncCancel()
+	if !errors.Is(err, proxy.ErrPartialSync) {
+		t.Fatalf("first sync err = %v, want ErrPartialSync", err)
+	}
+	var partial *proxy.PartialError
+	if !errors.As(err, &partial) {
+		t.Fatalf("first sync err = %v, want diagnostics", err)
+	}
+	if len(partial.Diagnostics) != 3 {
+		t.Fatalf("diagnostics = %#v, want pending + invalid + disabled", partial.Diagnostics)
+	}
+	t.Logf("first sync diagnostics: %v", partial.Diagnostics)
+
+	traefikID := p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName)
+	// On failure, keep the diagnosis close: the proxy logs, the mounted
+	// configuration and the container's mounts are dumped before cleanup.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		if logs, err := runDocker(context.Background(), "logs", proxy.TraefikContainerName); err == nil {
+			t.Logf("traefik logs:\n%s", logs)
+		}
+		if listing, err := runDocker(context.Background(), "exec", proxy.TraefikContainerName, "ls", "-la", proxy.TraefikDynamicDir); err == nil {
+			t.Logf("container dynamic dir:\n%s", listing)
+		}
+		if data, err := os.ReadFile(configDir + "/dynamic/gotham.yml"); err == nil {
+			t.Logf("host dynamic config:\n%s", data)
+		} else {
+			t.Logf("read host dynamic config: %v", err)
+		}
+		t.Logf("mounts:\n%s", p6Inspect(t, traefikID, "{{json .Mounts}}"))
+	})
+	p6AssertTraefikBootstrap(t, traefikID)
+
+	if body := p6ExpectHTTP(t, pinnedDomain, http.StatusOK); !strings.Contains(body, "Welcome to nginx") {
+		t.Fatalf("pinned route body = %q, want nginx", body)
+	}
+	p6ExpectHTTP(t, ephemeralDomain, http.StatusOK)
+	p6ExpectHTTP(t, pendingDomain, http.StatusNotFound)
+	p6ExpectHTTP(t, disabledDomain, http.StatusNotFound)
+
+	// Route update: renaming the domain must move the route.
+	renamedDomain := "renamed-" + suffix + ".example.test"
+	if _, err := pool.Exec(ctx, "UPDATE applications SET base_domain = $2 WHERE id = $1", pgType(pinnedApp), renamedDomain); err != nil {
+		t.Fatalf("update domain: %v", err)
+	}
+	if err := p6Sync(proxyService, serverID); err != nil {
+		t.Fatalf("sync after update: %v", err)
+	}
+	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
+	p6ExpectHTTP(t, pinnedDomain, http.StatusNotFound)
+
+	// Removal: deleting the ephemeral application must stop its old route even
+	// while pending/invalid/disabled rows remain on the node.
+	if _, err := pool.Exec(ctx, "DELETE FROM applications WHERE id = $1", pgType(ephemeralApp)); err != nil {
+		t.Fatalf("delete ephemeral app: %v", err)
+	}
+	if err := p6Sync(proxyService, serverID); err != nil {
+		t.Fatalf("sync after delete: %v", err)
+	}
+	p6ExpectHTTP(t, ephemeralDomain, http.StatusNotFound)
+	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
+
+	// History and fast revert: reverting restores the version recorded before
+	// the update/removal pair, bringing the ephemeral route back and keeping
+	// the renamed one.
+	versions, err := st.LatestProxyConfigVersions(ctx, serverRow.ID, 5)
+	if err != nil {
+		t.Fatalf("list config versions: %v", err)
+	}
+	if len(versions) < 3 {
+		t.Fatalf("config versions = %d, want at least 3 recorded syncs", len(versions))
+	}
+	revertCtx, revertCancel := context.WithTimeout(ctx, p6SyncTimeout)
+	err = proxyService.RevertServer(revertCtx, serverID)
+	revertCancel()
+	if err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	p6ExpectHTTP(t, ephemeralDomain, http.StatusOK)
+	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
+
+	// Repair: a container created before the host-IP binding fix (no loopback
+	// ping) is replaced by the sync and the proxy comes back verified.
+	if err := engine.Remove(ctx, traefikID); err != nil {
+		t.Fatalf("remove traefik: %v", err)
+	}
+	legacyID, err := engine.RunImage(ctx, &agentv1.CreateContainerRequest{
+		Image:   proxy.TraefikImage,
+		Name:    proxy.TraefikContainerName,
+		Ports:   []string{"80:80", "443:443"},
+		Volumes: []string{configDir + ":" + proxy.TraefikContainerConfigDir, acmeDir + ":" + proxy.TraefikAcmeMount},
 	})
 	if err != nil {
-		t.Fatalf("run nginx: %v", err)
+		t.Fatalf("run legacy traefik: %v", err)
 	}
-	t.Logf("docker %s at %s, nginx container %s", version, e2eDockerSock(), nginxID)
+	t.Logf("legacy traefik %s without the loopback binding", legacyID)
+	if err := p6Sync(proxyService, serverID); err != nil {
+		t.Fatalf("sync must repair the legacy container: %v", err)
+	}
+	traefikID = p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName)
+	if traefikID == legacyID {
+		t.Fatal("legacy container was not recreated")
+	}
+	p6AssertTraefikBootstrap(t, traefikID)
+	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
 
-	// 3. The generated configuration: one BuildConfig route (secure router on
-	// websecure plus the HTTP→HTTPS redirect router on web) and one plain
-	// forwarding router, so the smoke can assert both 200 and the permanent redirect without a
-	// certificate.
-	appID := uuid.New()
-	cfg := proxy.BuildConfig([]proxy.Route{{
-		AppID:  appID,
-		Domain: secureHost,
-		Target: "http://" + nginxName + ":80",
-	}})
-	const plainRouter = "e2e-plain"
-	cfg.Routers[plainRouter] = proxy.Router{
-		Rule:        "Host(`" + plainHost + "`)",
-		Service:     plainRouter,
-		EntryPoints: []string{proxy.EntryPointWeb},
+	// Restart: the native policy is present and a restart serves again without
+	// any control-plane action.
+	if policy := p6Inspect(t, traefikID, "{{.HostConfig.RestartPolicy.Name}}"); policy != proxy.TraefikRestartPolicy {
+		t.Fatalf("restart policy = %q, want %q", policy, proxy.TraefikRestartPolicy)
 	}
-	cfg.Services[plainRouter] = proxy.Service{
-		LoadBalancer: proxy.LoadBalancer{Servers: []proxy.Backend{{URL: "http://" + nginxName + ":80"}}},
+	if err := engine.Restart(ctx, traefikID); err != nil {
+		t.Fatalf("restart traefik: %v", err)
 	}
-	files, err := proxy.Generate(cfg, proxy.FormatYAML)
-	if err != nil {
-		t.Fatalf("generate config: %v", err)
-	}
+	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
 
-	// 4. The node agent's ProxyService (mTLS) writes the documents into the
-	// directory Traefik mounts, and pings the published ping entrypoint.
-	configDir := t.TempDir()
-	acmeDir := configDir + "/acme"
-	if err := os.MkdirAll(acmeDir, 0o755); err != nil {
-		t.Fatalf("create acme dir: %v", err)
-	}
-	httpPort := freeTCPPort(t)
-	pingPort := freeTCPPort(t)
-	pingURL := fmt.Sprintf("http://127.0.0.1:%d/ping", pingPort)
-
-	nodeID := "p6-e2e-" + suffix
-	proxyServer := agent.NewProxyServer(agent.ProxyServerConfig{
-		Root:    configDir,
-		PingURL: pingURL,
-		Logger:  logger,
-	})
-	agentAddr, authority := startLocalAgentWithOptions(t, ctx, engine, nodeID,
-		agent.WithProxyService(proxyServer))
-	client, err := servers.DialProxyClient(ctx, agentAddr, authority,
-		servers.WithDockerServerName(nodeID),
-	)
+	// A malformed dynamic document must not be presented as accepted: the
+	// verified write only proves the ping answered, and Traefik keeps serving
+	// the last valid configuration.
+	client, err := servers.DialProxyClient(ctx, agentAddr, authority, servers.WithDockerServerName(nodeID))
 	if err != nil {
 		t.Fatalf("dial proxy service: %v", err)
 	}
-	defer func() {
-		if err := client.Close(); err != nil {
-			t.Logf("close proxy client: %v", err)
-		}
-	}()
+	badWriteCtx, badWriteCancel := context.WithTimeout(ctx, 30*time.Second)
+	badResponse, err := client.WriteProxyConfig(badWriteCtx, &agentv1.WriteProxyConfigRequest{
+		Files: []*agentv1.ProxyConfigFile{{
+			Path:    proxy.DynamicFileName(proxy.FormatYAML),
+			Content: []byte("http: [this is not valid\n"),
+		}},
+		Verify: true,
+	})
+	badWriteCancel()
+	if err != nil {
+		t.Fatalf("invalid write: %v", err)
+	}
+	_ = client.Close()
+	if !badResponse.GetReloaded() {
+		t.Fatalf("invalid write ping failed: %s", badResponse.GetPingError())
+	}
+	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
+	t.Log("invalid document kept the previous route serving; the verified write is a ping signal, not acceptance")
+	if err := p6Sync(proxyService, serverID); err != nil {
+		t.Fatalf("restore after invalid write: %v", err)
+	}
+	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
+}
 
-	write := func(verify bool) *agentv1.WriteProxyConfigResponse {
-		request := &agentv1.WriteProxyConfigRequest{Verify: verify}
-		for _, file := range files {
-			request.Files = append(request.Files, &agentv1.ProxyConfigFile{Path: file.Name, Content: file.Content})
-		}
-		writeCtx, writeCancel := context.WithTimeout(ctx, 30*time.Second)
-		defer writeCancel()
-		response, err := client.WriteProxyConfig(writeCtx, request)
-		if err != nil {
-			t.Fatalf("WriteProxyConfig(verify=%t): %v", verify, err)
-		}
-		return response
-	}
+// p6Registry resolves the one seeded node.
+type p6Registry struct {
+	server *servers.Server
+}
 
-	// The static file must exist before Traefik starts; the initial write is
-	// unverified because the proxy is not up yet.
-	initial := write(false)
-	if len(initial.GetWritten()) != 2 {
-		t.Fatalf("written = %v, want the static and dynamic documents", initial.GetWritten())
+// Get returns the seeded server or ErrNotFound.
+func (r p6Registry) Get(_ context.Context, id uuid.UUID) (*servers.Server, error) {
+	if r.server == nil || r.server.ID != id {
+		return nil, servers.ErrNotFound
 	}
-	if initial.GetReloaded() {
-		t.Fatal("unverified write reported a reload")
-	}
+	return r.server, nil
+}
 
-	// 5. Traefik from the pinned image, mounts and published entrypoints.
-	traefikPullCtx, traefikPullCancel := context.WithTimeout(ctx, p6PullTimeout)
-	if err := engine.PullImage(traefikPullCtx, proxy.TraefikImage); err != nil {
-		traefikPullCancel()
-		t.Fatalf("pull %s: %v", proxy.TraefikImage, err)
+// e2eDSN resolves the database DSN the suite uses.
+func e2eDSN() string {
+	if dsn := strings.TrimSpace(os.Getenv(e2eDSNEnv)); dsn != "" {
+		return dsn
 	}
-	traefikPullCancel()
-	traefikID, err := engine.RunImage(ctx, &agentv1.CreateContainerRequest{
-		Image:    proxy.TraefikImage,
-		Name:     traefikName,
-		Networks: []string{networkName},
-		Ports:    []string{fmt.Sprintf("%d:80", httpPort), fmt.Sprintf("%d:8080", pingPort)},
-		Volumes:  []string{configDir + ":" + proxy.TraefikContainerConfigDir, acmeDir + ":" + proxy.TraefikAcmeMount},
-		Labels:   map[string]string{"gotham.e2e": "p6-traefik"},
+	return defaultE2EDSN
+}
+
+// p6Sync runs one sync and tolerates the diagnostics of the mixed rows.
+func p6Sync(svc *proxy.SyncService, serverID uuid.UUID) error {
+	ctx, cancel := context.WithTimeout(context.Background(), p6SyncTimeout)
+	defer cancel()
+	if err := svc.SyncServer(ctx, serverID); err != nil && !errors.Is(err, proxy.ErrPartialSync) {
+		return err
+	}
+	return nil
+}
+
+// p6RunNginx starts an nginx container publishing the given spec.
+func p6RunNginx(t *testing.T, ctx context.Context, engine *agent.DockerClient, name, portSpec string) string {
+	t.Helper()
+	id, err := engine.RunImage(ctx, &agentv1.CreateContainerRequest{
+		Image: p6NginxImage,
+		Name:  name,
+		Ports: []string{portSpec},
 	})
 	if err != nil {
-		t.Fatalf("run traefik: %v", err)
+		t.Fatalf("run %s: %v", name, err)
 	}
-	t.Logf("traefik container %s on %s:%d (ping %s)", traefikID, proxy.TraefikImage, httpPort, pingURL)
-
-	// 6. The verified write doubles as the reload confirmation: poll until
-	// Traefik answers its ping, then assert the documents were accepted.
-	deadline := time.Now().Add(p6PingWait)
-	var confirmed *agentv1.WriteProxyConfigResponse
-	for {
-		confirmed = write(true)
-		if confirmed.GetReloaded() {
-			break
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if err := engine.Remove(cleanupCtx, id); err != nil {
+			t.Logf("cleanup container %s: %v", name, err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("traefik did not confirm the reload within %s: %s", p6PingWait, confirmed.GetPingError())
-		}
-		time.Sleep(p6PollInterval)
-	}
-	if pingErr := confirmed.GetPingError(); pingErr != "" {
-		t.Fatalf("confirmed reload carries a ping error: %s", pingErr)
-	}
+	})
+	return id
+}
 
-	// 7. HTTP through Traefik: the plain router forwards to Nginx, the
-	// generated redirect router answers 301 to HTTPS.
-	baseURL := fmt.Sprintf("http://127.0.0.1:%d/", httpPort)
-	status, body := getThroughProxy(t, baseURL, plainHost, p6HTTPWait)
-	if status != http.StatusOK {
-		t.Fatalf("GET %s (Host %s) = %d, body %q; want 200", baseURL, plainHost, status, body)
+// p6CreateApplication inserts an application row with a direct SQL write so
+// the test can seed legacy values (invalid domain, disabled duplicate) the
+// API validation would reject, and returns its id.
+func p6CreateApplication(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, serverID pgtype.UUID, name, domain string, hostPort int32, disabled bool) uuid.UUID {
+	t.Helper()
+	var id pgtype.UUID
+	err := pool.QueryRow(ctx,
+		`INSERT INTO applications (user_id, server_id, name, clone_url, branch, build_pack, base_domain, port, host_port, base_domain_disabled)
+		 VALUES ($1, $2, $3, 'https://github.com/acme/demo.git', 'main', 'dockerfile', $4, 80, $5, $6)
+		 RETURNING id`,
+		userID, serverID, name, domain, hostPort, disabled).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert application %s: %v", name, err)
 	}
-	if !strings.Contains(body, "Welcome to nginx") {
-		t.Fatalf("body through Traefik = %q, want the nginx welcome page", body)
-	}
+	return uuid.UUID(id.Bytes)
+}
 
-	status, location := redirectThroughProxy(t, baseURL, secureHost)
-	if status != http.StatusMovedPermanently {
-		t.Fatalf("GET (Host %s) = %d, want 301 (Traefik's permanent redirectScheme)", secureHost, status)
-	}
-	if want := "https://" + secureHost + "/"; location != want {
-		t.Fatalf("Location = %q, want %q", location, want)
+// p6CreateRunningDeployment records a running deployment with a container id.
+func p6CreateRunningDeployment(t *testing.T, ctx context.Context, pool *pgxpool.Pool, appID uuid.UUID, containerID string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO deployments (application_id, kind, state, image_tag, container_id)
+		 VALUES ($1, 'deploy', 'running', 'p6-e2e', $2)`,
+		pgType(appID), containerID); err != nil {
+		t.Fatalf("insert deployment for %s: %v", appID, err)
 	}
 }
 
-// getThroughProxy polls the proxy until it answers, then returns the status
-// and a bounded body. Traefik needs a moment after its container starts.
-func getThroughProxy(t *testing.T, url, host string, wait time.Duration) (int, string) {
+// p6WaitForContainer returns the id of a named container on the node.
+func p6WaitForContainer(t *testing.T, ctx context.Context, engine *agent.DockerClient, name string) string {
+	t.Helper()
+	deadline := time.Now().Add(p6HTTPWait)
+	for {
+		listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		listed, err := engine.ListContainers(listCtx, true)
+		cancel()
+		if err == nil {
+			for _, container := range listed {
+				if container.GetName() == name {
+					return container.GetId()
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("container %q not found on the node", name)
+		}
+		time.Sleep(p6PollInterval)
+	}
+}
+
+// p6AssertTraefikBootstrap checks the production bindings, the read-only
+// config mount and the native restart policy of a freshly bootstrapped node.
+func p6AssertTraefikBootstrap(t *testing.T, traefikID string) {
+	t.Helper()
+	ports := p6Inspect(t, traefikID, "{{range $p, $conf := .NetworkSettings.Ports}}{{$p}}={{range $conf}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}")
+	for _, want := range []string{"80/tcp", "443/tcp", "8080/tcp", "127.0.0.1:8080"} {
+		if !strings.Contains(ports, want) {
+			t.Fatalf("published ports = %q, want %s", ports, want)
+		}
+	}
+	mounts := p6Inspect(t, traefikID, "{{json .Mounts}}")
+	if !strings.Contains(mounts, `"/etc/traefik"`) || !strings.Contains(mounts, `"RW":false`) {
+		t.Fatalf("config mount not read-only: %s", mounts)
+	}
+	if policy := p6Inspect(t, traefikID, "{{.HostConfig.RestartPolicy.Name}}"); policy != proxy.TraefikRestartPolicy {
+		t.Fatalf("restart policy = %q, want %q", policy, proxy.TraefikRestartPolicy)
+	}
+}
+
+// p6Inspect renders one docker inspect template for the container.
+func p6Inspect(t *testing.T, containerID, format string) string {
+	t.Helper()
+	output, err := runDocker(context.Background(), "inspect", "--format", format, containerID)
+	if err != nil {
+		t.Fatalf("docker inspect %s: %v: %s", containerID, err, output)
+	}
+	return output
+}
+
+// p6ExpectHTTP polls a route through Traefik until it answers want (or fails).
+func p6ExpectHTTP(t *testing.T, host string, want int) string {
 	t.Helper()
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -253,65 +504,43 @@ func getThroughProxy(t *testing.T, url, host string, wait time.Duration) (int, s
 			return http.ErrUseLastResponse
 		},
 	}
-	deadline := time.Now().Add(wait)
+	deadline := time.Now().Add(p6HTTPWait)
 	var lastStatus int
 	var lastBody string
 	for {
-		request, err := http.NewRequest(http.MethodGet, url, nil)
+		request, err := http.NewRequest(http.MethodGet, p6BaseURL, nil)
 		if err != nil {
 			t.Fatalf("new request: %v", err)
 		}
 		request.Host = host
 		response, err := client.Do(request)
-		if err != nil {
-			if time.Now().After(deadline) {
-				t.Fatalf("no HTTP response from %s (Host %s) within %s: %v", url, host, wait, err)
+		if err == nil {
+			body, _ := io.ReadAll(io.LimitReader(response.Body, 8192))
+			_ = response.Body.Close()
+			lastStatus, lastBody = response.StatusCode, string(body)
+			if response.StatusCode == want || time.Now().After(deadline) {
+				break
 			}
-			time.Sleep(p6PollInterval)
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		_ = response.Body.Close()
-		lastStatus, lastBody = response.StatusCode, string(body)
-		if response.StatusCode == http.StatusOK || time.Now().After(deadline) {
-			return lastStatus, lastBody
+		} else if time.Now().After(deadline) {
+			break
 		}
 		time.Sleep(p6PollInterval)
 	}
+	if lastStatus != want {
+		t.Fatalf("GET (Host %s) = %d, want %d (body %.200s)", host, lastStatus, want, lastBody)
+	}
+	return lastBody
 }
 
-// redirectThroughProxy requests url through the proxy and returns the status
-// and Location without following the redirect.
-func redirectThroughProxy(t *testing.T, url, host string) (int, string) {
-	t.Helper()
-	request, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	request.Host = host
-	response, err := (&http.Client{
-		Timeout: 5 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}).Do(request)
-	if err != nil {
-		t.Fatalf("GET %s (Host %s): %v", url, host, err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	_, _ = io.Copy(io.Discard, response.Body)
-	return response.StatusCode, response.Header.Get("Location")
-}
-
-// freeTCPPort asks the kernel for a free port on the loopback interface.
-func freeTCPPort(t *testing.T) int {
+// freeTCPPort asks the kernel for a free loopback port.
+func freeTCPPort(t *testing.T) int32 {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserve port: %v", err)
 	}
 	defer func() { _ = listener.Close() }()
-	return listener.Addr().(*net.TCPAddr).Port
+	return int32(listener.Addr().(*net.TCPAddr).Port)
 }
 
 // runDocker runs one docker CLI command and returns its combined output.
@@ -322,4 +551,12 @@ func runDocker(ctx context.Context, args ...string) (string, error) {
 	}
 	output, err := exec.CommandContext(ctx, binary, args...).CombinedOutput()
 	return strings.TrimSpace(string(output)), err
+}
+
+// pgType converts a uuid.UUID for pgx parameters.
+func pgType(id uuid.UUID) pgtype.UUID {
+	if id == uuid.Nil {
+		return pgtype.UUID{}
+	}
+	return pgtype.UUID{Bytes: id, Valid: true}
 }

@@ -157,6 +157,19 @@ message ContainerInfo {
   string state = 5;
   google.protobuf.Timestamp created_at = 6;
   map<string, string> labels = 7;
+  // ports are the published bindings Docker reports for the container; empty
+  // for a container with no published ports or an engine that reports none.
+  repeated PortBinding ports = 8;
+}
+
+// PortBinding is one published container port as the engine reports it.
+message PortBinding {
+  // ip is the host bind address, e.g. "0.0.0.0" or "127.0.0.1".
+  string ip = 1;
+  // private_port is the container port.
+  int32 private_port = 2;
+  // public_port is the host port.
+  int32 public_port = 3;
 }
 
 message ListContainersResponse {
@@ -188,9 +201,12 @@ message CreateContainerRequest {
   repeated string command = 4;
   repeated string entrypoint = 5;
   map<string, string> labels = 6;
-  repeated string ports = 7;     // host:container
-  repeated string volumes = 8;   // host:container
+  repeated string ports = 7;     // [host-ip:]host:container (bare container port allowed)
+  repeated string volumes = 8;   // host:container[:ro]
   repeated string networks = 9;
+  // restart_policy is the native Docker restart policy name ("always",
+  // "unless-stopped", "on-failure"); empty leaves Docker's default.
+  string restart_policy = 10;
 }
 
 // StreamLogsRequest tails the logs of one container.

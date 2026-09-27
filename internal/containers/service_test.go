@@ -524,3 +524,27 @@ func TestNewDefaultServiceNilRegistry(t *testing.T) {
 
 // Compile-time assertion that the service implements its interface.
 var _ ContainerService = (*Service)(nil)
+
+func TestListFreshBypassesCache(t *testing.T) {
+	registry := newFakeRegistry()
+	server := registry.seed()
+	mock := &mockDockerClient{listResp: listResponse()}
+	cache := newFakeCache()
+	// A stale cached list must not satisfy ListFresh.
+	cache.items[server.ID] = []Container{{ID: "stale"}}
+	svc := fixture(registry, mock, cache)
+
+	fresh, err := svc.ListFresh(context.Background(), server.ID)
+	if err != nil {
+		t.Fatalf("ListFresh: %v", err)
+	}
+	if len(fresh) != 2 || fresh[0].ID != "abc123" {
+		t.Fatalf("fresh = %#v, want the agent list, not the cache", fresh)
+	}
+	if lists, _, _, _ := mock.counts(); lists != 1 {
+		t.Fatalf("agent list calls = %d, want 1", lists)
+	}
+	if cache.gets != 0 {
+		t.Fatalf("cache gets = %d, want ListFresh to bypass the cache", cache.gets)
+	}
+}

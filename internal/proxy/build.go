@@ -22,6 +22,9 @@ const (
 	// DefaultResolverName is the generated ACME certificate resolver.
 	DefaultResolverName = "letsencrypt"
 	// HTTPRedirectMiddleware is the shared http→https redirect middleware.
+	// BE-6.2 attaches it to the web router once certificates are configured
+	// and verified; emitting it earlier would break the plain-HTTP acceptance
+	// path of BE-6.1.
 	HTTPRedirectMiddleware = "gotham-https-redirect"
 	// DefaultBackendHost is the docker0 bridge gateway: application
 	// containers publish their ports on the host, and the Traefik container
@@ -74,9 +77,12 @@ func ValidateDomain(domain string) error {
 // output is a pure function of the input (map iteration is sorted at marshal
 // time), so identical state always yields identical configuration bytes.
 //
-// Each route produces one HTTPS router on websecure referencing the ACME
-// resolver and one HTTP router on web that redirects to HTTPS through the
-// shared middleware; both share a single load-balancer service.
+// Each route produces one HTTP forwarding router on the web entrypoint. The
+// HTTPS router and the HTTP→HTTPS redirect are emitted by BE-6.2 once
+// certificates are configured and verified: emitting a TLS router now would
+// have Traefik attempt ACME issuance for every domain before SSL is ready,
+// and the redirect would break the plain-HTTP acceptance path of BE-6.1
+// (F2/A1). The static resolver definition stays inert until then.
 func BuildConfig(routes []Route) ProxyConfig {
 	cfg := ProxyConfig{
 		EntryPoints: map[string]EntryPoint{
@@ -102,9 +108,6 @@ func BuildConfig(routes []Route) ProxyConfig {
 		return cfg
 	}
 
-	cfg.Middlewares[HTTPRedirectMiddleware] = Middleware{
-		RedirectScheme: &RedirectScheme{Scheme: "https", Permanent: true},
-	}
 	for _, route := range routes {
 		service := serviceName(route.AppID)
 		cfg.Services[service] = Service{
@@ -112,18 +115,10 @@ func BuildConfig(routes []Route) ProxyConfig {
 				Servers: []Backend{{URL: route.Target}},
 			},
 		}
-		rule := fmt.Sprintf("Host(`%s`)", route.Domain)
-		cfg.Routers[service] = Router{
-			Rule:        rule,
-			Service:     service,
-			EntryPoints: []string{EntryPointWebSecure},
-			TLS:         &RouterTLS{CertResolver: DefaultResolverName},
-		}
 		cfg.Routers[service+"-web"] = Router{
-			Rule:        rule,
+			Rule:        fmt.Sprintf("Host(`%s`)", route.Domain),
 			Service:     service,
 			EntryPoints: []string{EntryPointWeb},
-			Middlewares: []string{HTTPRedirectMiddleware},
 		}
 	}
 	return cfg

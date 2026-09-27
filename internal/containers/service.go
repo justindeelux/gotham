@@ -169,6 +169,31 @@ func (s *Service) List(ctx context.Context, serverID uuid.UUID) ([]Container, er
 	return containers, nil
 }
 
+// ListFresh returns the node's containers straight from the agent, bypassing
+// the List cache. Routing decisions use it: a container started by the deploy
+// orchestrator never touches this cache, so a stale UI list must not hide a
+// just-started application's published port.
+func (s *Service) ListFresh(ctx context.Context, serverID uuid.UUID) ([]Container, error) {
+	if _, err := s.resolve(ctx, serverID); err != nil {
+		return nil, err
+	}
+	client, cancel, err := s.client(ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+
+	response, err := client.ListContainers(ctx, &agentv1.ListContainersRequest{All: true})
+	if err != nil {
+		return nil, mapRPCError(err)
+	}
+	containers := make([]Container, 0, len(response.GetContainers()))
+	for _, info := range response.GetContainers() {
+		containers = append(containers, newContainer(info))
+	}
+	return containers, nil
+}
+
 // Start starts a container and invalidates the cached list.
 func (s *Service) Start(ctx context.Context, serverID uuid.UUID, containerID string) error {
 	if strings.TrimSpace(containerID) == "" {

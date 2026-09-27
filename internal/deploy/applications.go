@@ -161,7 +161,15 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		app.BuildPack = strings.TrimSpace(*in.BuildPack)
 	}
 	if in.BaseDomain != nil {
-		app.BaseDomain = proxy.NormalizeDomain(*in.BaseDomain)
+		next := proxy.NormalizeDomain(*in.BaseDomain)
+		// Only an actual domain change resolves a migration-disabled binding:
+		// a full-form update that resends the unchanged value (however
+		// cased) must not silently reactivate a legacy conflict. The stored
+		// value is normalized either way (BE-6.1 F6/F8).
+		if next != proxy.NormalizeDomain(app.BaseDomain) {
+			app.BaseDomainDisabled = false
+		}
+		app.BaseDomain = next
 	}
 	if in.Port != nil {
 		app.Port = *in.Port
@@ -180,6 +188,11 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if app.Branch == "" {
 		app.Branch = defaultBranch
 	}
+	// Legacy rows may predate normalization: normalize the resulting value so
+	// an unrelated update (rename, branch) never fails on stored casing, even
+	// with FEATURE_PROXY=false (BE-6.1 F8). An explicitly changed domain is
+	// still validated strictly below.
+	app.BaseDomain = proxy.NormalizeDomain(app.BaseDomain)
 	// The clone URL is not part of the update payload, so it is left out of
 	// validation: an application created with a development-local source must
 	// still be renameable.

@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/databases"
@@ -181,9 +182,14 @@ func (s *Server) routes() (http.Handler, error) {
 		// service provisions the gotham-traefik container and the mTLS agent
 		// dialer pushes the generated configuration. A nil service (no
 		// database, no container service, or FEATURE_PROXY=false) mounts
-		// nothing and leaves the deploy lifecycle without a proxy hook.
+		// nothing and leaves the deploy lifecycle without a proxy hook. The
+		// endpoint mutates every node, so it requires the admin scope on top
+		// of authentication (JWT sessions already hold every scope).
 		s.proxy = s.proxyService(containerService)
-		proxy.Mount(api, s.RequireAuth, s.proxy)
+		adminOnly := func(next http.Handler) http.Handler {
+			return s.RequireAuth(RequireScopes(auth.ScopeAdmin)(next))
+		}
+		proxy.Mount(api, adminOnly, s.proxy)
 
 		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
 		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger)

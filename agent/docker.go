@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -71,6 +72,18 @@ func (c *DockerClient) ListContainers(ctx context.Context, all bool) ([]*agentv1
 			Status: summary.Status,
 			State:  summary.State,
 			Labels: summary.Labels,
+		}
+		for _, port := range summary.Ports {
+			// Only published TCP bindings matter for routing; a binding
+			// without a public port is not reachable from another container.
+			if port.PublicPort <= 0 || (port.Type != "" && port.Type != "tcp") {
+				continue
+			}
+			info.Ports = append(info.Ports, &agentv1.PortBinding{
+				Ip:          port.IP,
+				PrivatePort: port.PrivatePort,
+				PublicPort:  port.PublicPort,
+			})
 		}
 		if summary.Created > 0 {
 			info.CreatedAt = timestamppb.New(time.Unix(summary.Created, 0))
@@ -164,7 +177,11 @@ func (c *DockerClient) CreateContainer(ctx context.Context, req *agentv1.CreateC
 	var out struct {
 		ID string `json:"Id"`
 	}
-	if err := c.doJSON(ctx, http.MethodPost, path, buildCreateBody(req), &out); err != nil {
+	body, err := buildCreateBody(req)
+	if err != nil {
+		return "", err
+	}
+	if err := c.doJSON(ctx, http.MethodPost, path, body, &out); err != nil {
 		return "", err
 	}
 	if out.ID == "" {
@@ -400,13 +417,22 @@ func emit(ctx context.Context, out chan<- []byte, data []byte) bool {
 
 // dockerContainerSummary is the subset of GET /containers/json we consume.
 type dockerContainerSummary struct {
-	ID      string            `json:"Id"`
-	Names   []string          `json:"Names"`
-	Image   string            `json:"Image"`
-	Status  string            `json:"Status"`
-	State   string            `json:"State"`
-	Created int64             `json:"Created"`
-	Labels  map[string]string `json:"Labels"`
+	ID      string              `json:"Id"`
+	Names   []string            `json:"Names"`
+	Image   string              `json:"Image"`
+	Status  string              `json:"Status"`
+	State   string              `json:"State"`
+	Created int64               `json:"Created"`
+	Labels  map[string]string   `json:"Labels"`
+	Ports   []dockerPortSummary `json:"Ports"`
+}
+
+// dockerPortSummary is one published port of a container summary.
+type dockerPortSummary struct {
+	IP          string `json:"IP"`
+	PrivatePort int32  `json:"PrivatePort"`
+	PublicPort  int32  `json:"PublicPort"`
+	Type        string `json:"Type"`
 }
 
 // containerName returns the first container name without its leading slash.
@@ -452,8 +478,11 @@ type dockerNetworkingCfg struct {
 	EndpointsConfig map[string]struct{} `json:"EndpointsConfig,omitempty"`
 }
 
-// buildCreateBody maps the proto request onto the Docker container-create body.
-func buildCreateBody(req *agentv1.CreateContainerRequest) *dockerCreateBody {
+// buildCreateBody maps the proto request onto the Docker container-create
+// body. A malformed port mapping is an error rather than a silently dropped
+// binding: dropping it would leave the container without a mapping the caller
+// believes exists.
+func buildCreateBody(req *agentv1.CreateContainerRequest) (*dockerCreateBody, error) {
 	body := &dockerCreateBody{
 		Image:      req.GetImage(),
 		Env:        req.GetEnv(),
@@ -464,9 +493,9 @@ func buildCreateBody(req *agentv1.CreateContainerRequest) *dockerCreateBody {
 
 	host := &dockerHostConfig{}
 	for _, spec := range req.GetPorts() {
-		hostPort, containerPort, ok := splitPortSpec(spec)
-		if !ok {
-			continue
+		hostIP, hostPort, containerPort, err := parsePortSpec(spec)
+		if err != nil {
+			return nil, err
 		}
 		key := containerPort + "/tcp"
 		if body.ExposedPorts == nil {
@@ -476,12 +505,15 @@ func buildCreateBody(req *agentv1.CreateContainerRequest) *dockerCreateBody {
 		if host.PortBindings == nil {
 			host.PortBindings = map[string][]dockerPort{}
 		}
-		host.PortBindings[key] = append(host.PortBindings[key], dockerPort{HostPort: hostPort})
+		host.PortBindings[key] = append(host.PortBindings[key], dockerPort{HostIP: hostIP, HostPort: hostPort})
 	}
 	if binds := req.GetVolumes(); len(binds) > 0 {
 		host.Binds = binds
 	}
-	if len(host.Binds) > 0 || len(host.PortBindings) > 0 {
+	if policy := strings.TrimSpace(req.GetRestartPolicy()); policy != "" {
+		host.RestartPolicy = &dockerRestartPolicy{Name: policy}
+	}
+	if len(host.Binds) > 0 || len(host.PortBindings) > 0 || host.RestartPolicy != nil {
 		body.HostConfig = host
 	}
 
@@ -496,28 +528,48 @@ func buildCreateBody(req *agentv1.CreateContainerRequest) *dockerCreateBody {
 			body.NetworkingConfig = &dockerNetworkingCfg{EndpointsConfig: endpoints}
 		}
 	}
-	return body
+	return body, nil
 }
 
-// splitPortSpec parses a "host:container" mapping. A bare "container" spec maps
-// to a Docker-assigned host port.
-func splitPortSpec(spec string) (host, container string, ok bool) {
+// parsePortSpec parses a publish mapping: "container", "host:container" or
+// "host-ip:host:container" (the production Traefik ping uses the last form to
+// bind 8080 to loopback only). A bare "container" spec maps to a
+// Docker-assigned host port. Malformed input is an error, never a dropped
+// binding.
+func parsePortSpec(spec string) (hostIP, hostPort, containerPort string, err error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
-		return "", "", false
+		return "", "", "", errors.New("docker: empty port mapping")
 	}
-	if host, container, found := strings.Cut(spec, ":"); found {
-		host = strings.TrimSpace(host)
-		container = strings.TrimSpace(container)
-		if !allDigits(container) {
-			return "", "", false
+	parts := strings.Split(spec, ":")
+	switch len(parts) {
+	case 1:
+		if !allDigits(parts[0]) {
+			return "", "", "", fmt.Errorf("docker: invalid port mapping %q", spec)
 		}
-		return host, container, true
+		return "", "", parts[0], nil
+	case 2:
+		hostPort = strings.TrimSpace(parts[0])
+		containerPort = strings.TrimSpace(parts[1])
+		if !allDigits(containerPort) || (hostPort != "" && !allDigits(hostPort)) {
+			return "", "", "", fmt.Errorf("docker: invalid port mapping %q", spec)
+		}
+		return "", hostPort, containerPort, nil
+	case 3:
+		hostIP = strings.TrimSpace(parts[0])
+		hostPort = strings.TrimSpace(parts[1])
+		containerPort = strings.TrimSpace(parts[2])
+		if hostIP == "" || hostPort == "" || containerPort == "" ||
+			!allDigits(hostPort) || !allDigits(containerPort) {
+			return "", "", "", fmt.Errorf("docker: invalid port mapping %q", spec)
+		}
+		if net.ParseIP(strings.Trim(hostIP, "[]")) == nil {
+			return "", "", "", fmt.Errorf("docker: invalid host ip in port mapping %q", spec)
+		}
+		return hostIP, hostPort, containerPort, nil
+	default:
+		return "", "", "", fmt.Errorf("docker: invalid port mapping %q", spec)
 	}
-	if !allDigits(spec) {
-		return "", "", false
-	}
-	return "", spec, true
 }
 
 // allDigits reports whether s is a non-empty string of ASCII digits.

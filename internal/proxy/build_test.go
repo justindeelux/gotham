@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/containers"
 )
 
 func TestValidateDomain(t *testing.T) {
@@ -82,46 +84,35 @@ func TestBuildConfigEmpty(t *testing.T) {
 	}
 }
 
-func TestBuildConfigRouteProducesSecureAndRedirectRouters(t *testing.T) {
+func TestBuildConfigRouteProducesHTTPForwardingRouter(t *testing.T) {
 	appID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
 	cfg := BuildConfig([]Route{{AppID: appID, Domain: "app.example.com", Target: "http://172.17.0.1:3000"}})
 
 	name := "app-" + appID.String()
-	secure, ok := cfg.Routers[name]
+	if len(cfg.Routers) != 1 {
+		t.Fatalf("routers = %#v, want only the HTTP router before BE-6.2", cfg.Routers)
+	}
+	// The HTTP router must forward to the application (BE-6.1 acceptance);
+	// the HTTPS router and redirect arrive with BE-6.2 certificates, and no
+	// TLS router may exist here or Traefik would attempt ACME issuance now.
+	forward, ok := cfg.Routers[name+"-web"]
 	if !ok {
-		t.Fatalf("missing secure router %q in %#v", name, cfg.Routers)
+		t.Fatalf("missing HTTP router %q in %#v", name+"-web", cfg.Routers)
 	}
-	if secure.Rule != "Host(`app.example.com`)" {
-		t.Errorf("secure rule = %q", secure.Rule)
+	if forward.Rule != "Host(`app.example.com`)" || forward.Service != name {
+		t.Errorf("HTTP router = %#v, want rule %q service %q", forward, "Host(`app.example.com`)", name)
 	}
-	if secure.Service != name {
-		t.Errorf("secure service = %q, want %q", secure.Service, name)
+	if len(forward.EntryPoints) != 1 || forward.EntryPoints[0] != EntryPointWeb {
+		t.Errorf("HTTP entrypoints = %#v", forward.EntryPoints)
 	}
-	if len(secure.EntryPoints) != 1 || secure.EntryPoints[0] != EntryPointWebSecure {
-		t.Errorf("secure entrypoints = %#v", secure.EntryPoints)
+	if forward.TLS != nil {
+		t.Errorf("HTTP router must not carry TLS: %#v", forward.TLS)
 	}
-	if secure.TLS == nil || secure.TLS.CertResolver != DefaultResolverName {
-		t.Errorf("secure TLS = %#v, want resolver %q", secure.TLS, DefaultResolverName)
+	if len(forward.Middlewares) != 0 {
+		t.Errorf("HTTP router must forward, not redirect, before BE-6.2: %#v", forward.Middlewares)
 	}
-	if len(secure.Middlewares) != 0 {
-		t.Errorf("secure router must not redirect: %#v", secure.Middlewares)
-	}
-
-	redirect, ok := cfg.Routers[name+"-web"]
-	if !ok {
-		t.Fatalf("missing redirect router %q", name+"-web")
-	}
-	if redirect.Rule != secure.Rule || redirect.Service != name {
-		t.Errorf("redirect router = %#v, want rule %q service %q", redirect, secure.Rule, name)
-	}
-	if len(redirect.EntryPoints) != 1 || redirect.EntryPoints[0] != EntryPointWeb {
-		t.Errorf("redirect entrypoints = %#v", redirect.EntryPoints)
-	}
-	if redirect.TLS != nil {
-		t.Errorf("redirect router must not carry TLS: %#v", redirect.TLS)
-	}
-	if len(redirect.Middlewares) != 1 || redirect.Middlewares[0] != HTTPRedirectMiddleware {
-		t.Errorf("redirect middlewares = %#v", redirect.Middlewares)
+	if len(cfg.Middlewares) != 0 {
+		t.Errorf("no middleware may be emitted before BE-6.2: %#v", cfg.Middlewares)
 	}
 
 	service, ok := cfg.Services[name]
@@ -130,14 +121,6 @@ func TestBuildConfigRouteProducesSecureAndRedirectRouters(t *testing.T) {
 	}
 	if len(service.LoadBalancer.Servers) != 1 || service.LoadBalancer.Servers[0].URL != "http://172.17.0.1:3000" {
 		t.Errorf("service backends = %#v", service.LoadBalancer.Servers)
-	}
-
-	middleware, ok := cfg.Middlewares[HTTPRedirectMiddleware]
-	if !ok || middleware.RedirectScheme == nil {
-		t.Fatalf("missing redirect middleware: %#v", cfg.Middlewares)
-	}
-	if middleware.RedirectScheme.Scheme != "https" || !middleware.RedirectScheme.Permanent {
-		t.Errorf("redirect middleware = %#v", middleware.RedirectScheme)
 	}
 
 	resolver := cfg.CertificatesResolvers[DefaultResolverName]
@@ -156,8 +139,8 @@ func TestBuildConfigKeepsRoutesIndependent(t *testing.T) {
 		{AppID: first, Domain: "one.example.com", Target: "http://172.17.0.1:3000"},
 		{AppID: second, Domain: "two.example.com", Target: "http://172.17.0.1:3001"},
 	})
-	if len(cfg.Routers) != 4 || len(cfg.Services) != 2 || len(cfg.Middlewares) != 1 {
-		t.Fatalf("routers=%d services=%d middlewares=%d, want 4/2/1",
+	if len(cfg.Routers) != 2 || len(cfg.Services) != 2 || len(cfg.Middlewares) != 0 {
+		t.Fatalf("routers=%d services=%d middlewares=%d, want 2/2/0",
 			len(cfg.Routers), len(cfg.Services), len(cfg.Middlewares))
 	}
 	if cfg.Services["app-"+first.String()].LoadBalancer.Servers[0].URL != "http://172.17.0.1:3000" ||
@@ -173,12 +156,12 @@ func TestRoutesForServer(t *testing.T) {
 	appB := uuid.MustParse("bbbbbbbb-2222-2222-2222-222222222222")
 
 	apps := []ProxiedApplication{
-		{ID: appA, ServerID: serverA, BaseDomain: "  App.Example.COM ", Port: 3000, HostPort: 18080},
-		{ID: appB, ServerID: serverB, BaseDomain: "other.example.com", Port: 3001, HostPort: 18081},
+		{ID: appA, ServerID: serverA, BaseDomain: "  App.Example.COM ", Port: 3000, HostPort: 18080, ContainerID: "c1"},
+		{ID: appB, ServerID: serverB, BaseDomain: "other.example.com", Port: 3001, HostPort: 18081, ContainerID: "c2"},
 	}
-	routes, err := routesForServer(apps, serverA, DefaultBackendHost)
-	if err != nil {
-		t.Fatalf("routesForServer: %v", err)
+	routes, diagnostics := routesForServer(apps, serverA, DefaultBackendHost, nil)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none (pinned ports fall back)", diagnostics)
 	}
 	if len(routes) != 1 {
 		t.Fatalf("routes = %#v, want only the server A route", routes)
@@ -188,27 +171,46 @@ func TestRoutesForServer(t *testing.T) {
 		t.Errorf("route = %#v", routes[0])
 	}
 
-	custom, err := routesForServer(apps, serverA, "10.0.0.1")
-	if err != nil {
-		t.Fatalf("routesForServer(custom host): %v", err)
+	custom, diagnostics := routesForServer(apps, serverA, "10.0.0.1", nil)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", diagnostics)
 	}
 	if custom[0].Target != "http://10.0.0.1:18080" {
 		t.Errorf("custom backend target = %q", custom[0].Target)
 	}
 }
 
-func TestRoutesForServerRejectsUnroutableRows(t *testing.T) {
+func TestRoutesForServerDiagnosesUnroutableRows(t *testing.T) {
 	serverID := uuid.New()
 	appID := uuid.New()
 
-	cases := map[string]ProxiedApplication{
-		"invalid domain": {ID: appID, ServerID: serverID, BaseDomain: "bad domain", Port: 80, HostPort: 8080},
-		"no port":        {ID: appID, ServerID: serverID, BaseDomain: "app.example.com", HostPort: 8080},
-		"no host port":   {ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 8080},
+	cases := map[string]struct {
+		app        ProxiedApplication
+		containers []containers.Container
+		want       string
+	}{
+		"invalid domain": {ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "bad domain", Port: 80, HostPort: 8080, ContainerID: "c"}, nil, "invalid domain"},
+		"no port":        {ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", HostPort: 8080, ContainerID: "c"}, nil, "no container port"},
+		"pending":        {ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, HostPort: 8080}, nil, "no running deployment"},
+		"container gone": {ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, ContainerID: "gone"}, nil, "no running deployment container"},
+		"not published": {
+			app:        ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, ContainerID: "c1"},
+			containers: []containers.Container{{ID: "c1", Name: "app", State: "running", Ports: []string{"8080:8081"}}},
+			want:       "container port 80 is not published",
+		},
 	}
-	for name, app := range cases {
-		if _, err := routesForServer([]ProxiedApplication{app}, serverID, DefaultBackendHost); !errors.Is(err, ErrValidation) {
-			t.Errorf("%s: err = %v, want ErrValidation", name, err)
-		}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			routes, diagnostics := routesForServer([]ProxiedApplication{tc.app}, serverID, DefaultBackendHost, tc.containers)
+			if len(routes) != 0 {
+				t.Fatalf("routes = %#v, want none", routes)
+			}
+			if len(diagnostics) != 1 || !strings.Contains(diagnostics[0].Reason, tc.want) {
+				t.Fatalf("diagnostics = %#v, want reason containing %q", diagnostics, tc.want)
+			}
+			if diagnostics[0].ApplicationID != appID || diagnostics[0].Domain != NormalizeDomain(tc.app.BaseDomain) {
+				t.Errorf("diagnostic identity = %#v", diagnostics[0])
+			}
+		})
 	}
 }

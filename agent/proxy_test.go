@@ -222,3 +222,61 @@ func TestSanitizeProxyPath(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteProxyConfigRejectsSymlinkedParents proves the confinement promise:
+// a symlinked parent (or root) is refused and nothing is written outside the
+// proxy directory (BE-6.1 F7).
+func TestWriteProxyConfigRejectsSymlinkedParents(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "dynamic")); err != nil {
+		t.Fatalf("symlink parent: %v", err)
+	}
+	server := NewProxyServer(ProxyServerConfig{
+		Root:        root,
+		PingURL:     "http://127.0.0.1:1/ping",
+		PingTimeout: time.Second,
+		Logger:      discardLogger(),
+	})
+	_, err := server.WriteProxyConfig(context.Background(), request(map[string]string{
+		"dynamic/gotham.yml": "http: {}\n",
+	}, false))
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("symlinked parent: code = %v, want InvalidArgument (err %v)", status.Code(err), err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "gotham.yml")); !os.IsNotExist(statErr) {
+		t.Errorf("write escaped the proxy directory: stat outside = %v", statErr)
+	}
+
+	rootLink := filepath.Join(t.TempDir(), "root-link")
+	if err := os.Symlink(root, rootLink); err != nil {
+		t.Fatalf("symlink root: %v", err)
+	}
+	linked := NewProxyServer(ProxyServerConfig{
+		Root:        rootLink,
+		PingURL:     "http://127.0.0.1:1/ping",
+		PingTimeout: time.Second,
+		Logger:      discardLogger(),
+	})
+	if _, err := linked.WriteProxyConfig(context.Background(), request(map[string]string{
+		"traefik.yml": "static",
+	}, false)); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("symlinked root: code = %v, want InvalidArgument (err %v)", status.Code(err), err)
+	}
+}
+
+// TestWriteProxyConfigValidatesWholeBatchBeforeWriting proves a rejected later
+// entry cannot leave an earlier document installed (BE-6.1 F7).
+func TestWriteProxyConfigValidatesWholeBatchBeforeWriting(t *testing.T) {
+	server, root := newTestProxyServer(t, "")
+	_, err := server.WriteProxyConfig(context.Background(), request(map[string]string{
+		"traefik.yml":   "static",
+		"../escape.yml": "escape",
+	}, false))
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument (err %v)", status.Code(err), err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "traefik.yml")); !os.IsNotExist(statErr) {
+		t.Errorf("first file was installed despite a rejected batch: stat err = %v", statErr)
+	}
+}

@@ -616,14 +616,17 @@ func (x *ListContainersRequest) GetAll() bool {
 
 // ContainerInfo describes one container.
 type ContainerInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Image         string                 `protobuf:"bytes,3,opt,name=image,proto3" json:"image,omitempty"`
-	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
-	State         string                 `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	Labels        map[string]string      `protobuf:"bytes,7,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name      string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Image     string                 `protobuf:"bytes,3,opt,name=image,proto3" json:"image,omitempty"`
+	Status    string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	State     string                 `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Labels    map[string]string      `protobuf:"bytes,7,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// ports are the published bindings Docker reports for the container; empty
+	// for a container with no published ports or an engine that reports none.
+	Ports         []*PortBinding `protobuf:"bytes,8,rep,name=ports,proto3" json:"ports,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -707,6 +710,77 @@ func (x *ContainerInfo) GetLabels() map[string]string {
 	return nil
 }
 
+func (x *ContainerInfo) GetPorts() []*PortBinding {
+	if x != nil {
+		return x.Ports
+	}
+	return nil
+}
+
+// PortBinding is one published container port as the engine reports it.
+type PortBinding struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// ip is the host bind address, e.g. "0.0.0.0" or "127.0.0.1".
+	Ip string `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
+	// private_port is the container port.
+	PrivatePort int32 `protobuf:"varint,2,opt,name=private_port,json=privatePort,proto3" json:"private_port,omitempty"`
+	// public_port is the host port.
+	PublicPort    int32 `protobuf:"varint,3,opt,name=public_port,json=publicPort,proto3" json:"public_port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PortBinding) Reset() {
+	*x = PortBinding{}
+	mi := &file_agent_v1_agent_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PortBinding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PortBinding) ProtoMessage() {}
+
+func (x *PortBinding) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PortBinding.ProtoReflect.Descriptor instead.
+func (*PortBinding) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *PortBinding) GetIp() string {
+	if x != nil {
+		return x.Ip
+	}
+	return ""
+}
+
+func (x *PortBinding) GetPrivatePort() int32 {
+	if x != nil {
+		return x.PrivatePort
+	}
+	return 0
+}
+
+func (x *PortBinding) GetPublicPort() int32 {
+	if x != nil {
+		return x.PublicPort
+	}
+	return 0
+}
+
 type ListContainersResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Containers    []*ContainerInfo       `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
@@ -716,7 +790,7 @@ type ListContainersResponse struct {
 
 func (x *ListContainersResponse) Reset() {
 	*x = ListContainersResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[11]
+	mi := &file_agent_v1_agent_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -728,7 +802,7 @@ func (x *ListContainersResponse) String() string {
 func (*ListContainersResponse) ProtoMessage() {}
 
 func (x *ListContainersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[11]
+	mi := &file_agent_v1_agent_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -741,7 +815,7 @@ func (x *ListContainersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListContainersResponse.ProtoReflect.Descriptor instead.
 func (*ListContainersResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{11}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ListContainersResponse) GetContainers() []*ContainerInfo {
@@ -761,7 +835,7 @@ type ContainerActionRequest struct {
 
 func (x *ContainerActionRequest) Reset() {
 	*x = ContainerActionRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[12]
+	mi := &file_agent_v1_agent_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -773,7 +847,7 @@ func (x *ContainerActionRequest) String() string {
 func (*ContainerActionRequest) ProtoMessage() {}
 
 func (x *ContainerActionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[12]
+	mi := &file_agent_v1_agent_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -786,7 +860,7 @@ func (x *ContainerActionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContainerActionRequest.ProtoReflect.Descriptor instead.
 func (*ContainerActionRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{12}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ContainerActionRequest) GetContainerId() string {
@@ -805,7 +879,7 @@ type ContainerActionResponse struct {
 
 func (x *ContainerActionResponse) Reset() {
 	*x = ContainerActionResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[13]
+	mi := &file_agent_v1_agent_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -817,7 +891,7 @@ func (x *ContainerActionResponse) String() string {
 func (*ContainerActionResponse) ProtoMessage() {}
 
 func (x *ContainerActionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[13]
+	mi := &file_agent_v1_agent_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -830,7 +904,7 @@ func (x *ContainerActionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContainerActionResponse.ProtoReflect.Descriptor instead.
 func (*ContainerActionResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{13}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ContainerActionResponse) GetContainerId() string {
@@ -850,7 +924,7 @@ type PullImageRequest struct {
 
 func (x *PullImageRequest) Reset() {
 	*x = PullImageRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[14]
+	mi := &file_agent_v1_agent_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -862,7 +936,7 @@ func (x *PullImageRequest) String() string {
 func (*PullImageRequest) ProtoMessage() {}
 
 func (x *PullImageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[14]
+	mi := &file_agent_v1_agent_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -875,7 +949,7 @@ func (x *PullImageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullImageRequest.ProtoReflect.Descriptor instead.
 func (*PullImageRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{14}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PullImageRequest) GetImage() string {
@@ -893,7 +967,7 @@ type PullImageResponse struct {
 
 func (x *PullImageResponse) Reset() {
 	*x = PullImageResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[15]
+	mi := &file_agent_v1_agent_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -905,7 +979,7 @@ func (x *PullImageResponse) String() string {
 func (*PullImageResponse) ProtoMessage() {}
 
 func (x *PullImageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[15]
+	mi := &file_agent_v1_agent_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -918,29 +992,32 @@ func (x *PullImageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullImageResponse.ProtoReflect.Descriptor instead.
 func (*PullImageResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{15}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{16}
 }
 
 // CreateContainerRequest describes a container to create and (for RunImage)
 // start immediately.
 type CreateContainerRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Image         string                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Env           []string               `protobuf:"bytes,3,rep,name=env,proto3" json:"env,omitempty"` // KEY=VALUE
-	Command       []string               `protobuf:"bytes,4,rep,name=command,proto3" json:"command,omitempty"`
-	Entrypoint    []string               `protobuf:"bytes,5,rep,name=entrypoint,proto3" json:"entrypoint,omitempty"`
-	Labels        map[string]string      `protobuf:"bytes,6,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Ports         []string               `protobuf:"bytes,7,rep,name=ports,proto3" json:"ports,omitempty"`     // host:container
-	Volumes       []string               `protobuf:"bytes,8,rep,name=volumes,proto3" json:"volumes,omitempty"` // host:container
-	Networks      []string               `protobuf:"bytes,9,rep,name=networks,proto3" json:"networks,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Image      string                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"`
+	Name       string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Env        []string               `protobuf:"bytes,3,rep,name=env,proto3" json:"env,omitempty"` // KEY=VALUE
+	Command    []string               `protobuf:"bytes,4,rep,name=command,proto3" json:"command,omitempty"`
+	Entrypoint []string               `protobuf:"bytes,5,rep,name=entrypoint,proto3" json:"entrypoint,omitempty"`
+	Labels     map[string]string      `protobuf:"bytes,6,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Ports      []string               `protobuf:"bytes,7,rep,name=ports,proto3" json:"ports,omitempty"`     // [host-ip:]host:container (bare container port allowed)
+	Volumes    []string               `protobuf:"bytes,8,rep,name=volumes,proto3" json:"volumes,omitempty"` // host:container[:ro]
+	Networks   []string               `protobuf:"bytes,9,rep,name=networks,proto3" json:"networks,omitempty"`
+	// restart_policy is the native Docker restart policy name ("always",
+	// "unless-stopped", "on-failure"); empty leaves Docker's default.
+	RestartPolicy string `protobuf:"bytes,10,opt,name=restart_policy,json=restartPolicy,proto3" json:"restart_policy,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateContainerRequest) Reset() {
 	*x = CreateContainerRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[16]
+	mi := &file_agent_v1_agent_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -952,7 +1029,7 @@ func (x *CreateContainerRequest) String() string {
 func (*CreateContainerRequest) ProtoMessage() {}
 
 func (x *CreateContainerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[16]
+	mi := &file_agent_v1_agent_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -965,7 +1042,7 @@ func (x *CreateContainerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateContainerRequest.ProtoReflect.Descriptor instead.
 func (*CreateContainerRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{16}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CreateContainerRequest) GetImage() string {
@@ -1031,6 +1108,13 @@ func (x *CreateContainerRequest) GetNetworks() []string {
 	return nil
 }
 
+func (x *CreateContainerRequest) GetRestartPolicy() string {
+	if x != nil {
+		return x.RestartPolicy
+	}
+	return ""
+}
+
 // StreamLogsRequest tails the logs of one container.
 type StreamLogsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1043,7 +1127,7 @@ type StreamLogsRequest struct {
 
 func (x *StreamLogsRequest) Reset() {
 	*x = StreamLogsRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[17]
+	mi := &file_agent_v1_agent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1055,7 +1139,7 @@ func (x *StreamLogsRequest) String() string {
 func (*StreamLogsRequest) ProtoMessage() {}
 
 func (x *StreamLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[17]
+	mi := &file_agent_v1_agent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1068,7 +1152,7 @@ func (x *StreamLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamLogsRequest.ProtoReflect.Descriptor instead.
 func (*StreamLogsRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{17}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *StreamLogsRequest) GetContainerId() string {
@@ -1102,7 +1186,7 @@ type LogChunk struct {
 
 func (x *LogChunk) Reset() {
 	*x = LogChunk{}
-	mi := &file_agent_v1_agent_proto_msgTypes[18]
+	mi := &file_agent_v1_agent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1114,7 +1198,7 @@ func (x *LogChunk) String() string {
 func (*LogChunk) ProtoMessage() {}
 
 func (x *LogChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[18]
+	mi := &file_agent_v1_agent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1127,7 +1211,7 @@ func (x *LogChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogChunk.ProtoReflect.Descriptor instead.
 func (*LogChunk) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{18}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *LogChunk) GetData() []byte {
@@ -1152,7 +1236,7 @@ type BuildImageRequest struct {
 
 func (x *BuildImageRequest) Reset() {
 	*x = BuildImageRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[19]
+	mi := &file_agent_v1_agent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1164,7 +1248,7 @@ func (x *BuildImageRequest) String() string {
 func (*BuildImageRequest) ProtoMessage() {}
 
 func (x *BuildImageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[19]
+	mi := &file_agent_v1_agent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1177,7 +1261,7 @@ func (x *BuildImageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildImageRequest.ProtoReflect.Descriptor instead.
 func (*BuildImageRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{19}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *BuildImageRequest) GetPart() isBuildImageRequest_Part {
@@ -1240,7 +1324,7 @@ type BuildMeta struct {
 
 func (x *BuildMeta) Reset() {
 	*x = BuildMeta{}
-	mi := &file_agent_v1_agent_proto_msgTypes[20]
+	mi := &file_agent_v1_agent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1252,7 +1336,7 @@ func (x *BuildMeta) String() string {
 func (*BuildMeta) ProtoMessage() {}
 
 func (x *BuildMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[20]
+	mi := &file_agent_v1_agent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1265,7 +1349,7 @@ func (x *BuildMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildMeta.ProtoReflect.Descriptor instead.
 func (*BuildMeta) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{20}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *BuildMeta) GetAppId() string {
@@ -1311,7 +1395,7 @@ type BuildImageResponse struct {
 
 func (x *BuildImageResponse) Reset() {
 	*x = BuildImageResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[21]
+	mi := &file_agent_v1_agent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1323,7 +1407,7 @@ func (x *BuildImageResponse) String() string {
 func (*BuildImageResponse) ProtoMessage() {}
 
 func (x *BuildImageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[21]
+	mi := &file_agent_v1_agent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1336,7 +1420,7 @@ func (x *BuildImageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildImageResponse.ProtoReflect.Descriptor instead.
 func (*BuildImageResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{21}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *BuildImageResponse) GetEvent() isBuildImageResponse_Event {
@@ -1392,7 +1476,7 @@ type BuildLogChunk struct {
 
 func (x *BuildLogChunk) Reset() {
 	*x = BuildLogChunk{}
-	mi := &file_agent_v1_agent_proto_msgTypes[22]
+	mi := &file_agent_v1_agent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1404,7 +1488,7 @@ func (x *BuildLogChunk) String() string {
 func (*BuildLogChunk) ProtoMessage() {}
 
 func (x *BuildLogChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[22]
+	mi := &file_agent_v1_agent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1417,7 +1501,7 @@ func (x *BuildLogChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildLogChunk.ProtoReflect.Descriptor instead.
 func (*BuildLogChunk) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{22}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *BuildLogChunk) GetData() []byte {
@@ -1446,7 +1530,7 @@ type BuildImageResult struct {
 
 func (x *BuildImageResult) Reset() {
 	*x = BuildImageResult{}
-	mi := &file_agent_v1_agent_proto_msgTypes[23]
+	mi := &file_agent_v1_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1458,7 +1542,7 @@ func (x *BuildImageResult) String() string {
 func (*BuildImageResult) ProtoMessage() {}
 
 func (x *BuildImageResult) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[23]
+	mi := &file_agent_v1_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1471,7 +1555,7 @@ func (x *BuildImageResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildImageResult.ProtoReflect.Descriptor instead.
 func (*BuildImageResult) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{23}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *BuildImageResult) GetImageTag() string {
@@ -1547,7 +1631,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x10update_available\x18\x01 \x01(\bR\x0fupdateAvailable\x12%\n" +
 	"\x0elatest_version\x18\x02 \x01(\tR\rlatestVersion\")\n" +
 	"\x15ListContainersRequest\x12\x10\n" +
-	"\x03all\x18\x01 \x01(\bR\x03all\"\xaa\x02\n" +
+	"\x03all\x18\x01 \x01(\bR\x03all\"\xd7\x02\n" +
 	"\rContainerInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -1556,10 +1640,16 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x05state\x18\x05 \x01(\tR\x05state\x129\n" +
 	"\n" +
 	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12;\n" +
-	"\x06labels\x18\a \x03(\v2#.agent.v1.ContainerInfo.LabelsEntryR\x06labels\x1a9\n" +
+	"\x06labels\x18\a \x03(\v2#.agent.v1.ContainerInfo.LabelsEntryR\x06labels\x12+\n" +
+	"\x05ports\x18\b \x03(\v2\x15.agent.v1.PortBindingR\x05ports\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"Q\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"a\n" +
+	"\vPortBinding\x12\x0e\n" +
+	"\x02ip\x18\x01 \x01(\tR\x02ip\x12!\n" +
+	"\fprivate_port\x18\x02 \x01(\x05R\vprivatePort\x12\x1f\n" +
+	"\vpublic_port\x18\x03 \x01(\x05R\n" +
+	"publicPort\"Q\n" +
 	"\x16ListContainersResponse\x127\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x17.agent.v1.ContainerInfoR\n" +
@@ -1570,7 +1660,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\"(\n" +
 	"\x10PullImageRequest\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\"\x13\n" +
-	"\x11PullImageResponse\"\xdb\x02\n" +
+	"\x11PullImageResponse\"\x82\x03\n" +
 	"\x16CreateContainerRequest\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +
@@ -1582,7 +1672,9 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06labels\x18\x06 \x03(\v2,.agent.v1.CreateContainerRequest.LabelsEntryR\x06labels\x12\x14\n" +
 	"\x05ports\x18\a \x03(\tR\x05ports\x12\x18\n" +
 	"\avolumes\x18\b \x03(\tR\avolumes\x12\x1a\n" +
-	"\bnetworks\x18\t \x03(\tR\bnetworks\x1a9\n" +
+	"\bnetworks\x18\t \x03(\tR\bnetworks\x12%\n" +
+	"\x0erestart_policy\x18\n" +
+	" \x01(\tR\rrestartPolicy\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"b\n" +
@@ -1652,7 +1744,7 @@ func file_agent_v1_agent_proto_rawDescGZIP() []byte {
 	return file_agent_v1_agent_proto_rawDescData
 }
 
-var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_agent_v1_agent_proto_goTypes = []any{
 	(*ProxyConfigFile)(nil),          // 0: agent.v1.ProxyConfigFile
 	(*WriteProxyConfigRequest)(nil),  // 1: agent.v1.WriteProxyConfigRequest
@@ -1665,69 +1757,71 @@ var file_agent_v1_agent_proto_goTypes = []any{
 	(*UpdateResponse)(nil),           // 8: agent.v1.UpdateResponse
 	(*ListContainersRequest)(nil),    // 9: agent.v1.ListContainersRequest
 	(*ContainerInfo)(nil),            // 10: agent.v1.ContainerInfo
-	(*ListContainersResponse)(nil),   // 11: agent.v1.ListContainersResponse
-	(*ContainerActionRequest)(nil),   // 12: agent.v1.ContainerActionRequest
-	(*ContainerActionResponse)(nil),  // 13: agent.v1.ContainerActionResponse
-	(*PullImageRequest)(nil),         // 14: agent.v1.PullImageRequest
-	(*PullImageResponse)(nil),        // 15: agent.v1.PullImageResponse
-	(*CreateContainerRequest)(nil),   // 16: agent.v1.CreateContainerRequest
-	(*StreamLogsRequest)(nil),        // 17: agent.v1.StreamLogsRequest
-	(*LogChunk)(nil),                 // 18: agent.v1.LogChunk
-	(*BuildImageRequest)(nil),        // 19: agent.v1.BuildImageRequest
-	(*BuildMeta)(nil),                // 20: agent.v1.BuildMeta
-	(*BuildImageResponse)(nil),       // 21: agent.v1.BuildImageResponse
-	(*BuildLogChunk)(nil),            // 22: agent.v1.BuildLogChunk
-	(*BuildImageResult)(nil),         // 23: agent.v1.BuildImageResult
-	nil,                              // 24: agent.v1.ContainerInfo.LabelsEntry
-	nil,                              // 25: agent.v1.CreateContainerRequest.LabelsEntry
-	nil,                              // 26: agent.v1.BuildMeta.BuildArgsEntry
-	(*timestamppb.Timestamp)(nil),    // 27: google.protobuf.Timestamp
+	(*PortBinding)(nil),              // 11: agent.v1.PortBinding
+	(*ListContainersResponse)(nil),   // 12: agent.v1.ListContainersResponse
+	(*ContainerActionRequest)(nil),   // 13: agent.v1.ContainerActionRequest
+	(*ContainerActionResponse)(nil),  // 14: agent.v1.ContainerActionResponse
+	(*PullImageRequest)(nil),         // 15: agent.v1.PullImageRequest
+	(*PullImageResponse)(nil),        // 16: agent.v1.PullImageResponse
+	(*CreateContainerRequest)(nil),   // 17: agent.v1.CreateContainerRequest
+	(*StreamLogsRequest)(nil),        // 18: agent.v1.StreamLogsRequest
+	(*LogChunk)(nil),                 // 19: agent.v1.LogChunk
+	(*BuildImageRequest)(nil),        // 20: agent.v1.BuildImageRequest
+	(*BuildMeta)(nil),                // 21: agent.v1.BuildMeta
+	(*BuildImageResponse)(nil),       // 22: agent.v1.BuildImageResponse
+	(*BuildLogChunk)(nil),            // 23: agent.v1.BuildLogChunk
+	(*BuildImageResult)(nil),         // 24: agent.v1.BuildImageResult
+	nil,                              // 25: agent.v1.ContainerInfo.LabelsEntry
+	nil,                              // 26: agent.v1.CreateContainerRequest.LabelsEntry
+	nil,                              // 27: agent.v1.BuildMeta.BuildArgsEntry
+	(*timestamppb.Timestamp)(nil),    // 28: google.protobuf.Timestamp
 }
 var file_agent_v1_agent_proto_depIdxs = []int32{
 	0,  // 0: agent.v1.WriteProxyConfigRequest.files:type_name -> agent.v1.ProxyConfigFile
-	27, // 1: agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
-	27, // 2: agent.v1.HeartbeatResponse.received_at:type_name -> google.protobuf.Timestamp
-	27, // 3: agent.v1.ContainerInfo.created_at:type_name -> google.protobuf.Timestamp
-	24, // 4: agent.v1.ContainerInfo.labels:type_name -> agent.v1.ContainerInfo.LabelsEntry
-	10, // 5: agent.v1.ListContainersResponse.containers:type_name -> agent.v1.ContainerInfo
-	25, // 6: agent.v1.CreateContainerRequest.labels:type_name -> agent.v1.CreateContainerRequest.LabelsEntry
-	20, // 7: agent.v1.BuildImageRequest.meta:type_name -> agent.v1.BuildMeta
-	26, // 8: agent.v1.BuildMeta.build_args:type_name -> agent.v1.BuildMeta.BuildArgsEntry
-	22, // 9: agent.v1.BuildImageResponse.log:type_name -> agent.v1.BuildLogChunk
-	23, // 10: agent.v1.BuildImageResponse.result:type_name -> agent.v1.BuildImageResult
-	3,  // 11: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
-	5,  // 12: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
-	7,  // 13: agent.v1.UpdateService.RequestUpdate:input_type -> agent.v1.UpdateRequest
-	9,  // 14: agent.v1.DockerService.ListContainers:input_type -> agent.v1.ListContainersRequest
-	12, // 15: agent.v1.DockerService.StartContainer:input_type -> agent.v1.ContainerActionRequest
-	12, // 16: agent.v1.DockerService.StopContainer:input_type -> agent.v1.ContainerActionRequest
-	12, // 17: agent.v1.DockerService.RestartContainer:input_type -> agent.v1.ContainerActionRequest
-	12, // 18: agent.v1.DockerService.RemoveContainer:input_type -> agent.v1.ContainerActionRequest
-	14, // 19: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
-	16, // 20: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
-	16, // 21: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
-	17, // 22: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
-	19, // 23: agent.v1.BuildService.BuildImage:input_type -> agent.v1.BuildImageRequest
-	1,  // 24: agent.v1.ProxyService.WriteProxyConfig:input_type -> agent.v1.WriteProxyConfigRequest
-	4,  // 25: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
-	6,  // 26: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
-	8,  // 27: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
-	11, // 28: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
-	13, // 29: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
-	13, // 30: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
-	13, // 31: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
-	13, // 32: agent.v1.DockerService.RemoveContainer:output_type -> agent.v1.ContainerActionResponse
-	15, // 33: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
-	13, // 34: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
-	13, // 35: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
-	18, // 36: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
-	21, // 37: agent.v1.BuildService.BuildImage:output_type -> agent.v1.BuildImageResponse
-	2,  // 38: agent.v1.ProxyService.WriteProxyConfig:output_type -> agent.v1.WriteProxyConfigResponse
-	25, // [25:39] is the sub-list for method output_type
-	11, // [11:25] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	28, // 1: agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
+	28, // 2: agent.v1.HeartbeatResponse.received_at:type_name -> google.protobuf.Timestamp
+	28, // 3: agent.v1.ContainerInfo.created_at:type_name -> google.protobuf.Timestamp
+	25, // 4: agent.v1.ContainerInfo.labels:type_name -> agent.v1.ContainerInfo.LabelsEntry
+	11, // 5: agent.v1.ContainerInfo.ports:type_name -> agent.v1.PortBinding
+	10, // 6: agent.v1.ListContainersResponse.containers:type_name -> agent.v1.ContainerInfo
+	26, // 7: agent.v1.CreateContainerRequest.labels:type_name -> agent.v1.CreateContainerRequest.LabelsEntry
+	21, // 8: agent.v1.BuildImageRequest.meta:type_name -> agent.v1.BuildMeta
+	27, // 9: agent.v1.BuildMeta.build_args:type_name -> agent.v1.BuildMeta.BuildArgsEntry
+	23, // 10: agent.v1.BuildImageResponse.log:type_name -> agent.v1.BuildLogChunk
+	24, // 11: agent.v1.BuildImageResponse.result:type_name -> agent.v1.BuildImageResult
+	3,  // 12: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
+	5,  // 13: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
+	7,  // 14: agent.v1.UpdateService.RequestUpdate:input_type -> agent.v1.UpdateRequest
+	9,  // 15: agent.v1.DockerService.ListContainers:input_type -> agent.v1.ListContainersRequest
+	13, // 16: agent.v1.DockerService.StartContainer:input_type -> agent.v1.ContainerActionRequest
+	13, // 17: agent.v1.DockerService.StopContainer:input_type -> agent.v1.ContainerActionRequest
+	13, // 18: agent.v1.DockerService.RestartContainer:input_type -> agent.v1.ContainerActionRequest
+	13, // 19: agent.v1.DockerService.RemoveContainer:input_type -> agent.v1.ContainerActionRequest
+	15, // 20: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
+	17, // 21: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
+	17, // 22: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
+	18, // 23: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
+	20, // 24: agent.v1.BuildService.BuildImage:input_type -> agent.v1.BuildImageRequest
+	1,  // 25: agent.v1.ProxyService.WriteProxyConfig:input_type -> agent.v1.WriteProxyConfigRequest
+	4,  // 26: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
+	6,  // 27: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
+	8,  // 28: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
+	12, // 29: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
+	14, // 30: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
+	14, // 31: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
+	14, // 32: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
+	14, // 33: agent.v1.DockerService.RemoveContainer:output_type -> agent.v1.ContainerActionResponse
+	16, // 34: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
+	14, // 35: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
+	14, // 36: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
+	19, // 37: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
+	22, // 38: agent.v1.BuildService.BuildImage:output_type -> agent.v1.BuildImageResponse
+	2,  // 39: agent.v1.ProxyService.WriteProxyConfig:output_type -> agent.v1.WriteProxyConfigResponse
+	26, // [26:40] is the sub-list for method output_type
+	12, // [12:26] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }
@@ -1735,11 +1829,11 @@ func file_agent_v1_agent_proto_init() {
 	if File_agent_v1_agent_proto != nil {
 		return
 	}
-	file_agent_v1_agent_proto_msgTypes[19].OneofWrappers = []any{
+	file_agent_v1_agent_proto_msgTypes[20].OneofWrappers = []any{
 		(*BuildImageRequest_Meta)(nil),
 		(*BuildImageRequest_ContextChunk)(nil),
 	}
-	file_agent_v1_agent_proto_msgTypes[21].OneofWrappers = []any{
+	file_agent_v1_agent_proto_msgTypes[22].OneofWrappers = []any{
 		(*BuildImageResponse_Log)(nil),
 		(*BuildImageResponse_Result)(nil),
 	}
@@ -1749,7 +1843,7 @@ func file_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_proto_rawDesc), len(file_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   27,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   5,
 		},

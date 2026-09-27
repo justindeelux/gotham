@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc/codes"
@@ -103,11 +107,17 @@ func NewProxyServer(cfg ProxyServerConfig) *ProxyServer {
 }
 
 // WriteProxyConfig writes the given Traefik configuration files under the
-// node's proxy directory. Each write is atomic (temp file + rename), so a
-// watcher never reads a half-written document. With verify set, the local
-// Traefik ping is called after the writes; a ping failure is reported in the
-// response (ping_error) rather than as an RPC error, because the files were
-// written successfully and the control plane decides whether that is fatal.
+// node's proxy directory. The whole batch is validated before the first
+// write, and each document is written atomically (temp file + rename through
+// no-follow directory handles) so a watching Traefik never reads a
+// half-written document and no symlinked parent can redirect the write
+// outside the proxy directory.
+//
+// With verify set, the local Traefik ping is called after the writes. A ping
+// proves the proxy process answered; it does not prove Traefik accepted the
+// document (the file provider reloads asynchronously and validates on its
+// own), so the response is a liveness signal, not a configuration-acceptance
+// claim.
 func (s *ProxyServer) WriteProxyConfig(ctx context.Context, req *agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error) {
 	files := req.GetFiles()
 	if len(files) == 0 {
@@ -117,7 +127,13 @@ func (s *ProxyServer) WriteProxyConfig(ctx context.Context, req *agentv1.WritePr
 		return nil, status.Errorf(codes.InvalidArgument, "too many files: %d (max %d)", len(files), maxProxyFiles)
 	}
 
-	written := make([]string, 0, len(files))
+	// Pass 1: validate every path and size, so a rejected later entry cannot
+	// leave a partially installed batch behind.
+	type document struct {
+		rel     string
+		content []byte
+	}
+	documents := make([]document, 0, len(files))
 	for _, file := range files {
 		rel, err := sanitizeProxyPath(file.GetPath())
 		if err != nil {
@@ -127,10 +143,20 @@ func (s *ProxyServer) WriteProxyConfig(ctx context.Context, req *agentv1.WritePr
 		if len(content) > maxProxyFileSize {
 			return nil, status.Errorf(codes.InvalidArgument, "file %q exceeds %d bytes", rel, maxProxyFileSize)
 		}
-		if err := writeFileAtomic(filepath.Join(s.root, rel), content); err != nil {
-			return nil, status.Errorf(codes.Internal, "write %s: %v", rel, err)
+		documents = append(documents, document{rel: rel, content: content})
+	}
+
+	// Pass 2: confine and write.
+	written := make([]string, 0, len(documents))
+	for _, document := range documents {
+		dir, name, err := s.prepareTarget(document.rel)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		written = append(written, rel)
+		if err := writeFileNoFollow(dir, name, document.content); err != nil {
+			return nil, status.Errorf(codes.Internal, "write %s: %v", document.rel, err)
+		}
+		written = append(written, document.rel)
 	}
 
 	response := &agentv1.WriteProxyConfigResponse{Written: written}
@@ -142,8 +168,90 @@ func (s *ProxyServer) WriteProxyConfig(ctx context.Context, req *agentv1.WritePr
 			response.Reloaded = true
 		}
 	}
-	s.log.Info("proxy: configuration written", "files", written, "reloaded", response.GetReloaded())
+	s.log.Info("proxy: configuration written",
+		"files", written, "ping_ok", response.GetReloaded())
 	return response, nil
+}
+
+// prepareTarget creates the document's parent directory and rejects a
+// symlinked root or parent chain: a symlink inside the proxy directory would
+// let a write escape the confinement this RPC promises.
+func (s *ProxyServer) prepareTarget(rel string) (dir, name string, err error) {
+	dir = filepath.Dir(filepath.Join(s.root, rel))
+	name = filepath.Base(rel)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", "", err
+	}
+	for _, path := range parentChain(s.root, dir) {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return "", "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", "", fmt.Errorf("%s is a symlink; refusing to write through it", path)
+		}
+		if !info.IsDir() {
+			return "", "", fmt.Errorf("%s is not a directory", path)
+		}
+	}
+	return dir, name, nil
+}
+
+// parentChain lists the root and every path component down to dir (inclusive).
+func parentChain(root, dir string) []string {
+	root = filepath.Clean(root)
+	dir = filepath.Clean(dir)
+	if dir == root {
+		return []string{root}
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	chain := []string{root}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		chain = append(chain, current)
+	}
+	return chain
+}
+
+// writeFileNoFollow writes content into dir/name through a directory file
+// descriptor opened with O_NOFOLLOW, so neither the directory nor the final
+// file can be redirected by a symlink swapped in after validation.
+func writeFileNoFollow(dir, name string, content []byte) error {
+	dirFD, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(dirFD) }()
+
+	suffix := make([]byte, 8)
+	if _, err := rand.Read(suffix); err != nil {
+		return err
+	}
+	tmpName := ".gotham-proxy-" + hex.EncodeToString(suffix)
+
+	fd, err := unix.Openat(dirFD, tmpName, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o644)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(fd), filepath.Join(dir, tmpName))
+	if _, err := file.Write(content); err != nil {
+		_ = file.Close()
+		_ = unix.Unlinkat(dirFD, tmpName, 0)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = unix.Unlinkat(dirFD, tmpName, 0)
+		return err
+	}
+	if err := unix.Renameat(dirFD, tmpName, dirFD, name); err != nil {
+		_ = unix.Unlinkat(dirFD, tmpName, 0)
+		return err
+	}
+	return nil
 }
 
 // ping calls the Traefik ping endpoint. A 200 response means the proxy is up
@@ -189,33 +297,4 @@ func sanitizeProxyPath(path string) (string, error) {
 		return "", fmt.Errorf("path %q must not contain a backslash", path)
 	}
 	return cleaned, nil
-}
-
-// writeFileAtomic writes content to path through a temporary file in the same
-// directory and renames it into place, so a watching Traefik never observes a
-// partially written document.
-func writeFileAtomic(path string, content []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".gotham-proxy-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-
-	if _, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
 }

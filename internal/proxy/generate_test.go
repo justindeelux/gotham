@@ -42,30 +42,16 @@ certificatesResolvers:
 
 const goldenDynamicYAML = `http:
   routers:
-    app-11111111-2222-3333-4444-555555555555:
-      rule: Host(§app.example.com§)
-      service: app-11111111-2222-3333-4444-555555555555
-      entryPoints:
-        - websecure
-      tls:
-        certResolver: letsencrypt
     app-11111111-2222-3333-4444-555555555555-web:
       rule: Host(§app.example.com§)
       service: app-11111111-2222-3333-4444-555555555555
       entryPoints:
         - web
-      middlewares:
-        - gotham-https-redirect
   services:
     app-11111111-2222-3333-4444-555555555555:
       loadBalancer:
         servers:
           - url: http://172.17.0.1:3000
-  middlewares:
-    gotham-https-redirect:
-      redirectScheme:
-        scheme: https
-        permanent: true
 `
 
 const goldenStaticTOML = `[entryPoints]
@@ -97,31 +83,16 @@ entryPoint = 'web'
 
 const goldenDynamicTOML = `[http]
 [http.routers]
-[http.routers.app-11111111-2222-3333-4444-555555555555]
-rule = 'Host(§app.example.com§)'
-service = 'app-11111111-2222-3333-4444-555555555555'
-entryPoints = ['websecure']
-
-[http.routers.app-11111111-2222-3333-4444-555555555555.tls]
-certResolver = 'letsencrypt'
-
 [http.routers.app-11111111-2222-3333-4444-555555555555-web]
 rule = 'Host(§app.example.com§)'
 service = 'app-11111111-2222-3333-4444-555555555555'
 entryPoints = ['web']
-middlewares = ['gotham-https-redirect']
 
 [http.services]
 [http.services.app-11111111-2222-3333-4444-555555555555]
 [http.services.app-11111111-2222-3333-4444-555555555555.loadBalancer]
 [[http.services.app-11111111-2222-3333-4444-555555555555.loadBalancer.servers]]
 url = 'http://172.17.0.1:3000'
-
-[http.middlewares]
-[http.middlewares.gotham-https-redirect]
-[http.middlewares.gotham-https-redirect.redirectScheme]
-scheme = 'https'
-permanent = true
 `
 
 // sampleConfig is the generation input the goldens above were rendered from.

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -18,31 +19,99 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// fakeSource is a canned ApplicationSource.
+// discardLogger keeps service tests quiet.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// fakeSource is a canned, mutable ApplicationSource.
 type fakeSource struct {
+	mu   sync.Mutex
 	apps []ProxiedApplication
 	err  error
 }
 
 // ListProxiedApplications returns the canned rows.
-func (f fakeSource) ListProxiedApplications(context.Context) ([]ProxiedApplication, error) {
+func (f *fakeSource) ListProxiedApplications(context.Context) ([]ProxiedApplication, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.apps, nil
+	return append([]ProxiedApplication{}, f.apps...), nil
+}
+
+// setApps replaces the canned rows.
+func (f *fakeSource) setApps(apps ...ProxiedApplication) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.apps = apps
+}
+
+// fakeNodes is a canned NodeSource.
+type fakeNodes struct {
+	nodes []uuid.UUID
+	err   error
+}
+
+// ListNodes returns the canned nodes.
+func (f fakeNodes) ListNodes(context.Context) ([]uuid.UUID, error) {
+	return f.nodes, f.err
+}
+
+// fakeHistory is an in-memory HistoryStore, newest first.
+type fakeHistory struct {
+	mu       sync.Mutex
+	versions []ConfigVersion
+	recorded []ConfigVersion
+	err      error
+}
+
+// LatestConfigVersions returns the newest versions up to limit.
+func (f *fakeHistory) LatestConfigVersions(context.Context, uuid.UUID, int32) ([]ConfigVersion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	limit := int32(2)
+	versions := append([]ConfigVersion{}, f.versions...)
+	if int32(len(versions)) > limit {
+		versions = versions[:limit]
+	}
+	return versions, nil
+}
+
+// RecordConfigVersion prepends a recorded version.
+func (f *fakeHistory) RecordConfigVersion(_ context.Context, _ uuid.UUID, files []File, contentHash string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	version := ConfigVersion{Files: append([]File{}, files...), ContentHash: contentHash}
+	f.versions = append([]ConfigVersion{version}, f.versions...)
+	f.recorded = append(f.recorded, version)
+	return nil
+}
+
+// recordedCount returns how many versions were written.
+func (f *fakeHistory) recordedCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.recorded)
 }
 
 // fakeAgent records the ProxyService calls a sync makes.
 type fakeAgent struct {
-	events *[]string
-	calls  []*agentv1.WriteProxyConfigRequest
-	// respond overrides the default response when set.
+	events  *[]string
+	calls   []*agentv1.WriteProxyConfigRequest
 	respond func(in *agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error)
 	closed  bool
 }
 
-// writeProxyConfigDefault records the call and reports a successful write;
-// the ping only succeeds for the verified call.
+// writeProxyConfigDefault records the call and reports a successful ping for
+// the verified write.
 func (f *fakeAgent) writeProxyConfigDefault(in *agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error) {
 	written := make([]string, 0, len(in.GetFiles()))
 	for _, file := range in.GetFiles() {
@@ -51,6 +120,7 @@ func (f *fakeAgent) writeProxyConfigDefault(in *agentv1.WriteProxyConfigRequest)
 	return &agentv1.WriteProxyConfigResponse{Written: written, Reloaded: in.GetVerify()}, nil
 }
 
+// WriteProxyConfig records the call and answers through respond when set.
 func (f *fakeAgent) WriteProxyConfig(_ context.Context, in *agentv1.WriteProxyConfigRequest, _ ...grpc.CallOption) (*agentv1.WriteProxyConfigResponse, error) {
 	f.calls = append(f.calls, in)
 	f.record("write-verify=" + boolString(in.GetVerify()))
@@ -60,6 +130,7 @@ func (f *fakeAgent) WriteProxyConfig(_ context.Context, in *agentv1.WriteProxyCo
 	return f.writeProxyConfigDefault(in)
 }
 
+// Close records the release.
 func (f *fakeAgent) Close() error {
 	f.closed = true
 	f.record("close")
@@ -81,11 +152,13 @@ type fakeContainers struct {
 	list    []containers.Container
 	listErr error
 	started []string
+	removed []string
 	pulled  []string
 	runs    []containers.RunOptions
 	runErr  error
 }
 
+// List returns the canned containers.
 func (f *fakeContainers) List(context.Context, uuid.UUID) ([]containers.Container, error) {
 	f.record("list")
 	if f.listErr != nil {
@@ -94,25 +167,43 @@ func (f *fakeContainers) List(context.Context, uuid.UUID) ([]containers.Containe
 	return f.list, nil
 }
 
+// Start records a container start.
 func (f *fakeContainers) Start(_ context.Context, _ uuid.UUID, containerID string) error {
 	f.record("start=" + containerID)
 	f.started = append(f.started, containerID)
 	return nil
 }
 
+// Remove records a container removal.
+func (f *fakeContainers) Remove(_ context.Context, _ uuid.UUID, containerID string) error {
+	f.record("remove=" + containerID)
+	f.removed = append(f.removed, containerID)
+	return nil
+}
+
+// Pull records an image pull.
 func (f *fakeContainers) Pull(_ context.Context, _ uuid.UUID, image string) error {
 	f.record("pull=" + image)
 	f.pulled = append(f.pulled, image)
 	return nil
 }
 
+// Run records a container create+start and adds it to the canned list, so a
+// serialized second sync observes the container the first one created.
 func (f *fakeContainers) Run(_ context.Context, _ uuid.UUID, opts containers.RunOptions) (string, error) {
 	f.record("run=" + opts.Name)
 	f.runs = append(f.runs, opts)
 	if f.runErr != nil {
 		return "", f.runErr
 	}
-	return "traefik-container-id", nil
+	id := "traefik-container-id"
+	f.list = append(f.list, containers.Container{
+		ID:    id,
+		Name:  opts.Name,
+		State: "running",
+		Ports: append([]string{}, opts.Ports...),
+	})
+	return id, nil
 }
 
 // record appends one event when the fixture shares an event log.
@@ -125,24 +216,39 @@ func (f *fakeContainers) record(event string) {
 // syncFixture wires a SyncService over the fakes.
 type syncFixture struct {
 	service    *SyncService
+	source     *fakeSource
 	containers *fakeContainers
 	agent      *fakeAgent
+	history    *fakeHistory
 	serverID   uuid.UUID
 	events     *[]string
 }
 
-// newSyncFixture builds a fixture with one running Traefik container by
-// default; tests override the container list and agent response as needed.
+// runningTraefik is the expected proxy container with its production ports.
+func runningTraefik() containers.Container {
+	return containers.Container{
+		ID:    "existing-traefik",
+		Name:  TraefikContainerName,
+		State: "running",
+		Ports: append([]string{}, TraefikPorts...),
+	}
+}
+
+// newSyncFixture builds a fixture with one running Traefik container carrying
+// the production ports; tests override the container list and agent response.
 func newSyncFixture(t *testing.T, apps []ProxiedApplication, serverID uuid.UUID) *syncFixture {
 	t.Helper()
 	events := &[]string{}
 	agent := &fakeAgent{events: events}
+	source := &fakeSource{apps: apps}
+	history := &fakeHistory{}
 	containerService := &fakeContainers{
 		events: events,
-		list:   []containers.Container{{ID: "existing-traefik", Name: TraefikContainerName, State: "running"}},
+		list:   []containers.Container{runningTraefik()},
 	}
 	service := NewService(Config{
-		Applications: fakeSource{apps: apps},
+		Applications: source,
+		History:      history,
 		Containers:   containerService,
 		Dial: func(context.Context, uuid.UUID) (AgentClient, error) {
 			return agent, nil
@@ -151,36 +257,83 @@ func newSyncFixture(t *testing.T, apps []ProxiedApplication, serverID uuid.UUID)
 	})
 	return &syncFixture{
 		service:    service,
+		source:     source,
 		containers: containerService,
 		agent:      agent,
+		history:    history,
 		serverID:   serverID,
 		events:     events,
 	}
 }
 
-// discardLogger keeps service tests quiet.
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+// runningApp builds a routable row whose deployment container is `containerID`
+// and whose published binding is `published` ("" for none).
+func runningApp(serverID uuid.UUID, domain string, containerID string, privatePort, published int32) ProxiedApplication {
+	app := ProxiedApplication{
+		ID:          uuid.New(),
+		ServerID:    serverID,
+		BaseDomain:  domain,
+		Port:        privatePort,
+		ContainerID: containerID,
+	}
+	if published > 0 {
+		app.HostPort = published
+	}
+	return app
 }
 
-// proxiedApp builds a routable row for serverID.
-func proxiedApp(serverID uuid.UUID, domain string, hostPort int32) ProxiedApplication {
-	return ProxiedApplication{
-		ID:         uuid.New(),
-		ServerID:   serverID,
-		BaseDomain: domain,
-		Port:       3000,
-		HostPort:   hostPort,
+// appContainer is an application container publishing its container port 3000
+// on the given host port.
+const appContainerPort = 3000
+
+func appContainer(id string, published int32) containers.Container {
+	return containers.Container{
+		ID:    id,
+		Name:  "gotham-app-" + id,
+		State: "running",
+		Ports: []string{fmtPort(published, appContainerPort)},
 	}
 }
 
-func TestSyncServerWritesVerifiedConfigToRunningTraefik(t *testing.T) {
+// fmtPort renders a host:container binding.
+func fmtPort(host, container int32) string {
+	return itoa(host) + ":" + itoa(container)
+}
+
+// itoa renders a small int32.
+func itoa(value int32) string {
+	return strconvItoa(int(value))
+}
+
+// strconvItoa is a local alias to keep the fixture self-contained.
+func strconvItoa(value int) string {
+	if value == 0 {
+		return "0"
+	}
+	digits := ""
+	for value > 0 {
+		digits = string(rune('0'+value%10)) + digits
+		value /= 10
+	}
+	return digits
+}
+
+func TestSyncServerWritesVerifiedConfigFromLiveEndpoints(t *testing.T) {
 	serverA := uuid.New()
 	serverB := uuid.New()
-	app := proxiedApp(serverA, "App.Example.com", 18080)
-	other := proxiedApp(serverB, "other.example.com", 18081)
+	appID := uuid.New()
+	app := ProxiedApplication{
+		ID: appID, ServerID: serverA, BaseDomain: "App.Example.com",
+		Port: 3000, HostPort: 18080, ContainerID: "app-container-1",
+	}
+	other := runningApp(serverB, "other.example.com", "other-container", 3001, 18081)
 
 	fixture := newSyncFixture(t, []ProxiedApplication{app, other}, serverA)
+	fixture.containers.list = []containers.Container{
+		runningTraefik(),
+		appContainer("app-container-1", 32768),
+	}
+
 	if err := fixture.service.SyncServer(context.Background(), serverA); err != nil {
 		t.Fatalf("SyncServer: %v", err)
 	}
@@ -196,18 +349,17 @@ func TestSyncServerWritesVerifiedConfigToRunningTraefik(t *testing.T) {
 	if len(files) != 2 || files["traefik.yml"] == "" || files["dynamic/gotham.yml"] == "" {
 		t.Fatalf("written files = %#v", files)
 	}
-	if !strings.Contains(files["dynamic/gotham.yml"], "Host(`app.example.com`)") {
-		t.Errorf("normalized domain missing from dynamic config:\n%s", files["dynamic/gotham.yml"])
+	dynamic := files["dynamic/gotham.yml"]
+	if !strings.Contains(dynamic, "Host(`app.example.com`)") {
+		t.Errorf("normalized domain missing:\n%s", dynamic)
 	}
-	if !strings.Contains(files["dynamic/gotham.yml"], "http://172.17.0.1:18080") {
-		t.Errorf("backend target missing from dynamic config:\n%s", files["dynamic/gotham.yml"])
+	// The route must use the running container's actual published port, not
+	// the stale pinned value (BE-6.1 F3).
+	if !strings.Contains(dynamic, "http://172.17.0.1:32768") {
+		t.Errorf("live published endpoint missing:\n%s", dynamic)
 	}
-	if strings.Contains(files["dynamic/gotham.yml"], "other.example.com") {
-		t.Errorf("another node's route leaked into the config:\n%s", files["dynamic/gotham.yml"])
-	}
-	if len(fixture.containers.pulled) != 0 || len(fixture.containers.runs) != 0 {
-		t.Errorf("running container was bootstrapped again: pulled=%v runs=%d",
-			fixture.containers.pulled, len(fixture.containers.runs))
+	if strings.Contains(dynamic, "other.example.com") {
+		t.Errorf("another node's route leaked:\n%s", dynamic)
 	}
 	if !fixture.agent.closed {
 		t.Error("agent client was not closed")
@@ -215,11 +367,137 @@ func TestSyncServerWritesVerifiedConfigToRunningTraefik(t *testing.T) {
 	if got := strings.Join(*fixture.events, ","); got != "list,write-verify=true,close" {
 		t.Errorf("events = %v, want [list write-verify=true close]", got)
 	}
+	if fixture.history.recordedCount() != 1 {
+		t.Errorf("history recorded = %d, want 1", fixture.history.recordedCount())
+	}
 }
 
-func TestSyncServerBootstrapsTraefikBeforeFirstVerifiedWrite(t *testing.T) {
+func TestSyncServerSupportsEphemeralHostPort(t *testing.T) {
 	serverID := uuid.New()
-	app := proxiedApp(serverID, "app.example.com", 18080)
+	app := runningApp(serverID, "ephemeral.example.com", "ephemeral-container", 3000, 0)
+	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
+	fixture.containers.list = []containers.Container{
+		runningTraefik(),
+		appContainer("ephemeral-container", 49152),
+	}
+
+	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
+		t.Fatalf("SyncServer: %v", err)
+	}
+	dynamic := filesByPath(fixture.agent.calls[0].GetFiles())["dynamic/gotham.yml"]
+	if !strings.Contains(dynamic, "http://172.17.0.1:49152") {
+		t.Errorf("ephemeral published port missing:\n%s", dynamic)
+	}
+}
+
+func TestSyncServerFallsBackToPinnedPortWhenContainerMissing(t *testing.T) {
+	serverID := uuid.New()
+	app := runningApp(serverID, "pinned.example.com", "gone-container", 3000, 18080)
+	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
+	fixture.containers.list = []containers.Container{runningTraefik()}
+
+	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
+		t.Fatalf("SyncServer: %v", err)
+	}
+	dynamic := filesByPath(fixture.agent.calls[0].GetFiles())["dynamic/gotham.yml"]
+	if !strings.Contains(dynamic, "http://172.17.0.1:18080") {
+		t.Errorf("pinned fallback missing:\n%s", dynamic)
+	}
+}
+
+func TestSyncServerIsolatesPendingAndInvalidRows(t *testing.T) {
+	serverID := uuid.New()
+	healthy := runningApp(serverID, "healthy.example.com", "healthy-container", 3000, 18080)
+	pending := runningApp(serverID, "pending.example.com", "", 3000, 18081)
+	invalid := runningApp(serverID, "not a domain", "invalid-container", 3000, 18082)
+
+	fixture := newSyncFixture(t, []ProxiedApplication{pending, invalid, healthy}, serverID)
+	fixture.containers.list = []containers.Container{
+		runningTraefik(),
+		appContainer("healthy-container", 32768),
+		appContainer("invalid-container", 32769),
+	}
+
+	err := fixture.service.SyncServer(context.Background(), serverID)
+	if !errors.Is(err, ErrPartialSync) {
+		t.Fatalf("err = %v, want ErrPartialSync", err)
+	}
+	var partial *PartialError
+	if !errors.As(err, &partial) || len(partial.Diagnostics) != 2 {
+		t.Fatalf("diagnostics = %#v, want pending and invalid", err)
+	}
+	dynamic := filesByPath(fixture.agent.calls[0].GetFiles())["dynamic/gotham.yml"]
+	if !strings.Contains(dynamic, "healthy.example.com") {
+		t.Errorf("healthy route missing despite sibling problems:\n%s", dynamic)
+	}
+	if strings.Contains(dynamic, "pending.example.com") || strings.Contains(dynamic, "not a domain") {
+		t.Errorf("unroutable rows leaked into the config:\n%s", dynamic)
+	}
+}
+
+func TestSyncServerSkipsDisabledLegacyDomainsWithNoWinner(t *testing.T) {
+	serverID := uuid.New()
+	first := runningApp(serverID, "legacy.example.com", "legacy-container-1", 3000, 18080)
+	first.Disabled = true
+	second := runningApp(serverID, "legacy.example.com", "legacy-container-2", 3000, 18081)
+	second.Disabled = true
+	healthy := runningApp(serverID, "healthy.example.com", "healthy-container", 3000, 18082)
+
+	fixture := newSyncFixture(t, []ProxiedApplication{first, second, healthy}, serverID)
+	fixture.containers.list = []containers.Container{
+		runningTraefik(),
+		appContainer("legacy-container-1", 32768),
+		appContainer("legacy-container-2", 32769),
+		appContainer("healthy-container", 32770),
+	}
+
+	err := fixture.service.SyncServer(context.Background(), serverID)
+	if !errors.Is(err, ErrPartialSync) {
+		t.Fatalf("err = %v, want ErrPartialSync", err)
+	}
+	var partial *PartialError
+	if !errors.As(err, &partial) || len(partial.Diagnostics) != 2 {
+		t.Fatalf("diagnostics = %#v, want both disabled duplicates", err)
+	}
+	for _, diagnostic := range partial.Diagnostics {
+		if diagnostic.Domain != "legacy.example.com" ||
+			!strings.Contains(diagnostic.Reason, "uniqueness migration") {
+			t.Fatalf("diagnostic = %#v, want an actionable disabled-domain reason", diagnostic)
+		}
+	}
+	dynamic := filesByPath(fixture.agent.calls[0].GetFiles())["dynamic/gotham.yml"]
+	if strings.Contains(dynamic, "legacy.example.com") {
+		t.Errorf("a disabled legacy duplicate was routed:\n%s", dynamic)
+	}
+	if !strings.Contains(dynamic, "healthy.example.com") {
+		t.Errorf("healthy route missing:\n%s", dynamic)
+	}
+}
+
+func TestSyncServerDuplicateDomainKeepsFirst(t *testing.T) {
+	serverID := uuid.New()
+	first := runningApp(serverID, "dup.example.com", "first-container", 3000, 18080)
+	second := runningApp(serverID, "dup.example.com", "second-container", 3000, 18081)
+
+	fixture := newSyncFixture(t, []ProxiedApplication{first, second}, serverID)
+	fixture.containers.list = []containers.Container{
+		runningTraefik(),
+		appContainer("first-container", 32768),
+		appContainer("second-container", 32769),
+	}
+	err := fixture.service.SyncServer(context.Background(), serverID)
+	if !errors.Is(err, ErrPartialSync) {
+		t.Fatalf("err = %v, want ErrPartialSync", err)
+	}
+	dynamic := filesByPath(fixture.agent.calls[0].GetFiles())["dynamic/gotham.yml"]
+	if !strings.Contains(dynamic, "32768") || strings.Contains(dynamic, "32769") {
+		t.Errorf("duplicate disposition wrong:\n%s", dynamic)
+	}
+}
+
+func TestSyncServerBootstrapsWithRestartPolicyAndReadOnlyConfig(t *testing.T) {
+	serverID := uuid.New()
+	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
 
 	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
 	fixture.containers.list = nil
@@ -227,7 +505,6 @@ func TestSyncServerBootstrapsTraefikBeforeFirstVerifiedWrite(t *testing.T) {
 	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
 		t.Fatalf("SyncServer: %v", err)
 	}
-
 	want := []string{
 		"list",
 		"write-verify=false",
@@ -243,54 +520,78 @@ func TestSyncServerBootstrapsTraefikBeforeFirstVerifiedWrite(t *testing.T) {
 		t.Fatalf("runs = %d, want 1", len(fixture.containers.runs))
 	}
 	run := fixture.containers.runs[0]
-	if run.Image != TraefikImage || run.Name != TraefikContainerName {
-		t.Errorf("run image/name = %q/%q", run.Image, run.Name)
+	if run.RestartPolicy != TraefikRestartPolicy {
+		t.Errorf("restart policy = %q, want %q", run.RestartPolicy, TraefikRestartPolicy)
 	}
-	if len(run.Ports) != len(TraefikPorts) || len(run.Volumes) != len(TraefikVolumes) {
-		t.Errorf("run ports/volumes = %v/%v", run.Ports, run.Volumes)
-	}
-	if run.Labels["gotham.component"] != "proxy" {
-		t.Errorf("run labels = %v", run.Labels)
-	}
-	if len(fixture.agent.calls) != 2 {
-		t.Fatalf("agent calls = %d, want 2", len(fixture.agent.calls))
-	}
-	if fixture.agent.calls[0].GetVerify() {
-		t.Error("pre-bootstrap write must be unverified")
-	}
-	if !fixture.agent.calls[1].GetVerify() {
-		t.Error("post-bootstrap write must verify")
+	if !strings.HasSuffix(run.Volumes[0], TraefikContainerConfigDir+":ro") {
+		t.Errorf("config mount = %q, want a read-only bind", run.Volumes[0])
 	}
 }
 
-func TestSyncServerStartsStoppedTraefik(t *testing.T) {
+func TestSyncServerRepairsContainerWithWrongPorts(t *testing.T) {
 	serverID := uuid.New()
-	app := proxiedApp(serverID, "app.example.com", 18080)
+	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
 
 	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
-	fixture.containers.list = []containers.Container{{ID: "stopped-traefik", Name: TraefikContainerName, State: "exited"}}
+	// A container created before the host-IP binding fix: no loopback ping.
+	fixture.containers.list = []containers.Container{{
+		ID: "legacy-traefik", Name: TraefikContainerName, State: "running",
+		Ports: []string{"80:80", "443:443"},
+	}}
 
 	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
 		t.Fatalf("SyncServer: %v", err)
 	}
-	if len(fixture.containers.started) != 1 || fixture.containers.started[0] != "stopped-traefik" {
-		t.Fatalf("started = %v, want [stopped-traefik]", fixture.containers.started)
+	if len(fixture.containers.removed) != 1 || fixture.containers.removed[0] != "legacy-traefik" {
+		t.Fatalf("removed = %v, want the legacy container", fixture.containers.removed)
 	}
-	if len(fixture.containers.pulled) != 0 || len(fixture.containers.runs) != 0 {
-		t.Errorf("stopped container was recreated: pulled=%v runs=%d",
-			fixture.containers.pulled, len(fixture.containers.runs))
+	want := []string{
+		"list",
+		"remove=legacy-traefik",
+		"write-verify=false",
+		"pull=" + TraefikImage,
+		"run=" + TraefikContainerName,
+		"write-verify=true",
+		"close",
 	}
-	want := []string{"list", "write-verify=false", "start=stopped-traefik", "write-verify=true", "close"}
 	if got := strings.Join(*fixture.events, ","); got != strings.Join(want, ",") {
 		t.Fatalf("events = %v, want %v", got, want)
 	}
 }
 
-func TestSyncServerReloadNotConfirmed(t *testing.T) {
+func TestSyncServerWaitsForFreshTraefikReadiness(t *testing.T) {
 	serverID := uuid.New()
-	app := proxiedApp(serverID, "app.example.com", 18080)
+	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
 
 	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
+	fixture.containers.list = nil
+
+	attempts := 0
+	fixture.agent.respond = func(in *agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error) {
+		if !in.GetVerify() {
+			return &agentv1.WriteProxyConfigResponse{}, nil
+		}
+		attempts++
+		if attempts < 3 {
+			return &agentv1.WriteProxyConfigResponse{PingError: "connection refused"}, nil
+		}
+		return &agentv1.WriteProxyConfigResponse{Reloaded: true}, nil
+	}
+
+	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
+		t.Fatalf("SyncServer: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("verified attempts = %d, want 3", attempts)
+	}
+}
+
+func TestSyncServerReloadNotConfirmed(t *testing.T) {
+	serverID := uuid.New()
+	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
+
+	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
+	fixture.containers.list = []containers.Container{runningTraefik(), appContainer("app-container", 32768)}
 	fixture.agent.respond = func(*agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error) {
 		return &agentv1.WriteProxyConfigResponse{PingError: "connection refused"}, nil
 	}
@@ -302,27 +603,15 @@ func TestSyncServerReloadNotConfirmed(t *testing.T) {
 	if !strings.Contains(err.Error(), "connection refused") {
 		t.Errorf("err = %v, want the ping detail", err)
 	}
-}
-
-func TestSyncServerRejectsUnroutableApplication(t *testing.T) {
-	serverID := uuid.New()
-	app := proxiedApp(serverID, "app.example.com", 0)
-
-	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
-	err := fixture.service.SyncServer(context.Background(), serverID)
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("err = %v, want ErrValidation", err)
-	}
-	if len(fixture.agent.calls) != 0 || len(*fixture.events) != 0 {
-		t.Errorf("an invalid row reached the node: agent=%d container=%v",
-			len(fixture.agent.calls), *fixture.events)
+	if fixture.history.recordedCount() != 0 {
+		t.Errorf("history recorded %d versions after a failed ping, want 0", fixture.history.recordedCount())
 	}
 }
 
 func TestSyncServerWithoutDialer(t *testing.T) {
 	serverID := uuid.New()
 	service := NewService(Config{
-		Applications: fakeSource{apps: []ProxiedApplication{proxiedApp(serverID, "app.example.com", 18080)}},
+		Applications: &fakeSource{apps: []ProxiedApplication{runningApp(serverID, "app.example.com", "c", 3000, 18080)}},
 		Containers:   &fakeContainers{},
 		Logger:       discardLogger(),
 	})
@@ -334,7 +623,7 @@ func TestSyncServerWithoutDialer(t *testing.T) {
 func TestSyncServerUnknownNode(t *testing.T) {
 	serverID := uuid.New()
 	service := NewService(Config{
-		Applications: fakeSource{apps: []ProxiedApplication{proxiedApp(serverID, "app.example.com", 18080)}},
+		Applications: &fakeSource{apps: []ProxiedApplication{runningApp(serverID, "app.example.com", "c", 3000, 18080)}},
 		Containers:   &fakeContainers{},
 		Dial: func(context.Context, uuid.UUID) (AgentClient, error) {
 			return nil, servers.ErrNotFound
@@ -348,9 +637,10 @@ func TestSyncServerUnknownNode(t *testing.T) {
 
 func TestSyncServerAgentUnavailableRPC(t *testing.T) {
 	serverID := uuid.New()
-	app := proxiedApp(serverID, "app.example.com", 18080)
+	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
 
 	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
+	fixture.containers.list = []containers.Container{runningTraefik(), appContainer("app-container", 32768)}
 	fixture.agent.respond = func(*agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error) {
 		return nil, status.Error(codes.Unavailable, "agent down")
 	}
@@ -359,13 +649,129 @@ func TestSyncServerAgentUnavailableRPC(t *testing.T) {
 	}
 }
 
+// TestSyncServerSerializesSnapshotThroughWrite proves a delayed older sync
+// cannot overwrite a newer deletion (BE-6.1 F4): the first sync is blocked
+// inside its write while the source changes and a second sync runs; the final
+// document must be the second (empty) one.
+func TestSyncServerSerializesSnapshotThroughWrite(t *testing.T) {
+	serverID := uuid.New()
+	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
+
+	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
+	fixture.containers.list = []containers.Container{runningTraefik(), appContainer("app-container", 32768)}
+
+	released := make(chan struct{})
+	started := make(chan struct{}, 1)
+	var once sync.Once
+	fixture.agent.respond = func(in *agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error) {
+		once.Do(func() {
+			started <- struct{}{}
+			<-released
+		})
+		return &agentv1.WriteProxyConfigResponse{Written: []string{"dynamic/gotham.yml"}, Reloaded: in.GetVerify()}, nil
+	}
+
+	var waitGroup sync.WaitGroup
+	var firstErr, secondErr error
+	waitGroup.Add(1)
+	go func() {
+		defer waitGroup.Done()
+		firstErr = fixture.service.SyncServer(context.Background(), serverID)
+	}()
+	<-started
+
+	// The delete lands while the first sync is inside its write.
+	fixture.source.setApps()
+	waitGroup.Add(1)
+	go func() {
+		defer waitGroup.Done()
+		secondErr = fixture.service.SyncServer(context.Background(), serverID)
+	}()
+	close(released)
+	waitGroup.Wait()
+
+	if firstErr != nil || secondErr != nil {
+		t.Fatalf("errors = %v / %v, want nil", firstErr, secondErr)
+	}
+	last := fixture.agent.calls[len(fixture.agent.calls)-1]
+	dynamic := filesByPath(last.GetFiles())["dynamic/gotham.yml"]
+	if strings.Contains(dynamic, "app.example.com") {
+		t.Fatalf("stale snapshot won over the deletion:\n%s", dynamic)
+	}
+}
+
+// TestSyncServerConcurrentBootstrapConverges proves two simultaneous first
+// syncs serialize: exactly one bootstrap runs and both calls succeed instead
+// of racing the same container name (BE-6.1 F4).
+func TestSyncServerConcurrentBootstrapConverges(t *testing.T) {
+	serverID := uuid.New()
+	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
+
+	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
+	fixture.containers.list = nil
+
+	var waitGroup sync.WaitGroup
+	errs := make([]error, 2)
+	for i := 0; i < 2; i++ {
+		waitGroup.Add(1)
+		go func(i int) {
+			defer waitGroup.Done()
+			errs[i] = fixture.service.SyncServer(context.Background(), serverID)
+		}(i)
+	}
+	waitGroup.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("sync %d err = %v, want nil", i, err)
+		}
+	}
+	if len(fixture.containers.runs) != 1 || len(fixture.containers.pulled) != 1 {
+		t.Fatalf("bootstraps = %d runs / %d pulls, want exactly one",
+			len(fixture.containers.runs), len(fixture.containers.pulled))
+	}
+}
+
+func TestSyncAllIncludesRegisteredNodesWithoutRoutes(t *testing.T) {
+	serverID := uuid.New()
+	events := &[]string{}
+	agent := &fakeAgent{events: events}
+	containerService := &fakeContainers{events: events}
+	service := NewService(Config{
+		Applications: &fakeSource{},
+		Nodes:        fakeNodes{nodes: []uuid.UUID{serverID}},
+		History:      &fakeHistory{},
+		Containers:   containerService,
+		Dial: func(context.Context, uuid.UUID) (AgentClient, error) {
+			return agent, nil
+		},
+		Logger: discardLogger(),
+	})
+
+	results, err := service.SyncAll(context.Background())
+	if err != nil {
+		t.Fatalf("SyncAll: %v", err)
+	}
+	if len(results) != 1 || results[0].ServerID != serverID || results[0].Error != "" {
+		t.Fatalf("results = %#v, want the registered node synced", results)
+	}
+	// A fresh bootstrap writes the config once before the container starts and
+	// once verified afterwards.
+	if len(agent.calls) != 2 {
+		t.Fatalf("agent calls = %d, want the zero-domain node pushed", len(agent.calls))
+	}
+	if len(containerService.runs) != 1 {
+		t.Fatalf("bootstrap runs = %d, want 1", len(containerService.runs))
+	}
+}
+
 func TestSyncAllReportsPerNodeOutcome(t *testing.T) {
 	serverA := uuid.New()
 	serverB := uuid.New()
 	apps := []ProxiedApplication{
-		proxiedApp(serverA, "one.example.com", 18080),
-		proxiedApp(serverA, "two.example.com", 18081), // second row, same node
-		proxiedApp(serverB, "three.example.com", 18082),
+		runningApp(serverA, "one.example.com", "one", 3000, 18080),
+		runningApp(serverA, "two.example.com", "two", 3000, 18081),
+		runningApp(serverB, "three.example.com", "three", 3000, 18082),
 	}
 
 	agents := map[uuid.UUID]*fakeAgent{}
@@ -383,7 +789,7 @@ func TestSyncAllReportsPerNodeOutcome(t *testing.T) {
 		return nil, status.Error(codes.Unavailable, "agent down")
 	}
 	service := NewService(Config{
-		Applications: fakeSource{apps: apps},
+		Applications: &fakeSource{apps: apps},
 		Containers:   containerService,
 		Dial:         dial,
 		Logger:       discardLogger(),
@@ -396,25 +802,94 @@ func TestSyncAllReportsPerNodeOutcome(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("results = %#v, want one per node", results)
 	}
-	if results[0].ServerID != serverA || results[0].Error != "" {
-		t.Errorf("server A result = %#v, want success", results[0])
+	byServer := make(map[uuid.UUID]SyncResult, len(results))
+	for _, result := range results {
+		byServer[result.ServerID] = result
 	}
-	if results[1].ServerID != serverB || results[1].Error == "" {
-		t.Errorf("server B result = %#v, want failure", results[1])
+	if result := byServer[serverA]; result.Error != "" {
+		t.Errorf("server A result = %#v, want success", result)
 	}
-	if agents[serverA].closed != true {
-		t.Error("server A client was not closed")
+	if result := byServer[serverB]; result.Error == "" {
+		t.Errorf("server B result = %#v, want failure", result)
 	}
 }
 
 func TestSyncAllSourceFailure(t *testing.T) {
 	service := NewService(Config{
-		Applications: fakeSource{err: errors.New("db down")},
+		Applications: &fakeSource{err: errors.New("db down")},
 		Containers:   &fakeContainers{},
 		Logger:       discardLogger(),
 	})
 	if _, err := service.SyncAll(context.Background()); err == nil {
 		t.Fatal("SyncAll = nil error, want lookup failure")
+	}
+}
+
+func TestRevertServerRepushesPreviousVersion(t *testing.T) {
+	serverID := uuid.New()
+	previous := []File{{Name: "dynamic/gotham.yml", Content: []byte("previous")}}
+	current := []File{{Name: "dynamic/gotham.yml", Content: []byte("current")}}
+
+	fixture := newSyncFixture(t, nil, serverID)
+	// history is newest first: current, then previous.
+	fixture.history.versions = []ConfigVersion{
+		{Files: current, ContentHash: "current"},
+		{Files: previous, ContentHash: "previous"},
+	}
+
+	if err := fixture.service.RevertServer(context.Background(), serverID); err != nil {
+		t.Fatalf("RevertServer: %v", err)
+	}
+	if len(fixture.agent.calls) != 1 {
+		t.Fatalf("agent calls = %d, want 1", len(fixture.agent.calls))
+	}
+	if got := string(fixture.agent.calls[0].GetFiles()[0].GetContent()); got != "previous" {
+		t.Fatalf("reverted content = %q, want previous", got)
+	}
+	if fixture.history.recordedCount() != 1 {
+		t.Fatalf("recorded = %d, want the reverted version recorded", fixture.history.recordedCount())
+	}
+}
+
+func TestRevertServerWithoutPreviousVersion(t *testing.T) {
+	serverID := uuid.New()
+	fixture := newSyncFixture(t, nil, serverID)
+	fixture.history.versions = []ConfigVersion{{Files: []File{{Name: "a", Content: []byte("b")}}}}
+
+	if err := fixture.service.RevertServer(context.Background(), serverID); !errors.Is(err, ErrVersionNotFound) {
+		t.Fatalf("err = %v, want ErrVersionNotFound", err)
+	}
+	if len(fixture.agent.calls) != 0 {
+		t.Fatal("revert pushed without a previous version")
+	}
+}
+
+func TestRecordHistorySkipsIdenticalContent(t *testing.T) {
+	serverID := uuid.New()
+	fixture := newSyncFixture(t, nil, serverID)
+
+	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+	if fixture.history.recordedCount() != 1 {
+		t.Fatalf("recorded = %d, want identical content recorded once", fixture.history.recordedCount())
+	}
+}
+
+func TestPortsMatch(t *testing.T) {
+	if !portsMatch(TraefikPorts, TraefikPorts) {
+		t.Error("identical port sets must match")
+	}
+	legacy := []string{"80:80", "443:443"}
+	if portsMatch(legacy, TraefikPorts) {
+		t.Error("a container missing the loopback ping binding must be repaired")
+	}
+	extra := append(append([]string{}, TraefikPorts...), "9999:9999")
+	if portsMatch(extra, TraefikPorts) {
+		t.Error("unexpected extra bindings must not count as a match")
 	}
 }
 

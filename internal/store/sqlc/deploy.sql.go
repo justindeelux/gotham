@@ -44,7 +44,7 @@ INSERT INTO applications (
     branch, build_pack, base_domain, port, host_port
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled
 `
 
 type CreateApplicationParams struct {
@@ -91,6 +91,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.HostPort,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BaseDomainDisabled,
 	)
 	return i, err
 }
@@ -206,7 +207,7 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 }
 
 const getApplication = `-- name: GetApplication :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at FROM applications WHERE id = $1
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled FROM applications WHERE id = $1
 `
 
 func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Application, error) {
@@ -227,6 +228,7 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 		&i.HostPort,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BaseDomainDisabled,
 	)
 	return i, err
 }
@@ -355,7 +357,7 @@ func (q *Queries) InsertStorage(ctx context.Context, arg InsertStorageParams) (S
 }
 
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled FROM applications
 WHERE user_id = $1
 ORDER BY created_at DESC, id DESC
 `
@@ -384,6 +386,7 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 			&i.HostPort,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.BaseDomainDisabled,
 		); err != nil {
 			return nil, err
 		}
@@ -543,20 +546,22 @@ SET name = $2,
     port = $6,
     host_port = $7,
     server_id = $8,
+    base_domain_disabled = $9,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled
 `
 
 type UpdateApplicationParams struct {
-	ID         pgtype.UUID `json:"id"`
-	Name       string      `json:"name"`
-	Branch     string      `json:"branch"`
-	BuildPack  string      `json:"build_pack"`
-	BaseDomain string      `json:"base_domain"`
-	Port       int32       `json:"port"`
-	HostPort   int32       `json:"host_port"`
-	ServerID   pgtype.UUID `json:"server_id"`
+	ID                 pgtype.UUID `json:"id"`
+	Name               string      `json:"name"`
+	Branch             string      `json:"branch"`
+	BuildPack          string      `json:"build_pack"`
+	BaseDomain         string      `json:"base_domain"`
+	Port               int32       `json:"port"`
+	HostPort           int32       `json:"host_port"`
+	ServerID           pgtype.UUID `json:"server_id"`
+	BaseDomainDisabled bool        `json:"base_domain_disabled"`
 }
 
 func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (Application, error) {
@@ -569,6 +574,7 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		arg.Port,
 		arg.HostPort,
 		arg.ServerID,
+		arg.BaseDomainDisabled,
 	)
 	var i Application
 	err := row.Scan(
@@ -586,6 +592,7 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		&i.HostPort,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BaseDomainDisabled,
 	)
 	return i, err
 }

@@ -39,6 +39,10 @@ const (
 	TraefikContainerName = "gotham-traefik"
 	// TraefikImage is the pinned Traefik 3.x image the bootstrap pulls.
 	TraefikImage = "traefik:v3.7"
+	// TraefikRestartPolicy is the native Docker restart policy for the
+	// long-lived proxy container, so a node reboot or proxy crash recovers
+	// without a custom supervisor (BE-6.1 A3).
+	TraefikRestartPolicy = "unless-stopped"
 	// PingURL is the loopback-only Traefik ping endpoint the agent verifies
 	// reloads with. Port 8080 is published on 127.0.0.1 only.
 	PingURL = "http://127.0.0.1:8080/ping"
@@ -54,16 +58,26 @@ var TraefikLabels = map[string]string{
 
 // Port and volume specs passed to the container service when bootstrapping
 // the Traefik container. The internal entrypoint is bound to loopback so the
-// ping endpoint is reachable from the agent but never from the network.
+// ping endpoint is reachable from the agent but never from the network; the
+// configuration directory is mounted read-only inside Traefik, which only
+// reads it (the writable state is the separate ACME volume).
 var (
 	// TraefikPorts publishes the gateway (80/443) and the loopback ping port.
 	TraefikPorts = []string{"80:80", "443:443", "127.0.0.1:8080:8080"}
-	// TraefikVolumes mounts the node config directory and the ACME volume.
-	TraefikVolumes = []string{
-		TraefikDir + ":" + TraefikContainerConfigDir,
-		TraefikAcmeDir + ":" + TraefikAcmeMount,
-	}
+	// TraefikVolumes mounts the node config directory read-only and the ACME
+	// volume writable (BE-6.1 F7).
+	TraefikVolumes = TraefikVolumesFor(TraefikDir, TraefikAcmeDir)
 )
+
+// TraefikVolumesFor renders the mount specs for a config/ACME directory pair:
+// the configuration directory is read-only inside Traefik, which only reads
+// it, while the ACME volume stays writable (BE-6.1 F7).
+func TraefikVolumesFor(configDir, acmeDir string) []string {
+	return []string{
+		configDir + ":" + TraefikContainerConfigDir + ":ro",
+		acmeDir + ":" + TraefikAcmeMount,
+	}
+}
 
 // staticDocument is the rendered static configuration (traefik.yml).
 type staticDocument struct {

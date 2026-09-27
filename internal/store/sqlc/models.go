@@ -20,20 +20,21 @@ type ApiToken struct {
 }
 
 type Application struct {
-	ID         pgtype.UUID        `json:"id"`
-	UserID     pgtype.UUID        `json:"user_id"`
-	ServerID   pgtype.UUID        `json:"server_id"`
-	Name       string             `json:"name"`
-	Provider   string             `json:"provider"`
-	Repo       string             `json:"repo"`
-	CloneUrl   string             `json:"clone_url"`
-	Branch     string             `json:"branch"`
-	BuildPack  string             `json:"build_pack"`
-	BaseDomain string             `json:"base_domain"`
-	Port       int32              `json:"port"`
-	HostPort   int32              `json:"host_port"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	ID                 pgtype.UUID        `json:"id"`
+	UserID             pgtype.UUID        `json:"user_id"`
+	ServerID           pgtype.UUID        `json:"server_id"`
+	Name               string             `json:"name"`
+	Provider           string             `json:"provider"`
+	Repo               string             `json:"repo"`
+	CloneUrl           string             `json:"clone_url"`
+	Branch             string             `json:"branch"`
+	BuildPack          string             `json:"build_pack"`
+	BaseDomain         string             `json:"base_domain"`
+	Port               int32              `json:"port"`
+	HostPort           int32              `json:"host_port"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	BaseDomainDisabled bool               `json:"base_domain_disabled"`
 }
 
 type ApplicationDeployKey struct {
@@ -180,6 +181,14 @@ type Provider struct {
 	Scopes         string             `json:"scopes"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ProxyConfigVersion struct {
+	ID          pgtype.UUID        `json:"id"`
+	ServerID    pgtype.UUID        `json:"server_id"`
+	Files       []byte             `json:"files"`
+	ContentHash string             `json:"content_hash"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type ReposCache struct {

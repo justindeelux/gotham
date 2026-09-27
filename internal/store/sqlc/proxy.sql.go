@@ -7,39 +7,65 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const listProxiedApplications = `-- name: ListProxiedApplications :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at FROM applications WHERE base_domain <> '' ORDER BY id
+const insertProxyConfigVersion = `-- name: InsertProxyConfigVersion :one
+INSERT INTO proxy_config_versions (server_id, files, content_hash)
+VALUES ($1, $2, $3)
+RETURNING id, server_id, files, content_hash, created_at
 `
 
-// ProxiedApplications feeds the Traefik config generator (Phase 6, BE-6.1):
-// every application that declares a base_domain must be routed, on the node
-// that hosts it. Ordered by id so generation input is deterministic.
-func (q *Queries) ListProxiedApplications(ctx context.Context) ([]Application, error) {
-	rows, err := q.db.Query(ctx, listProxiedApplications)
+type InsertProxyConfigVersionParams struct {
+	ServerID    pgtype.UUID `json:"server_id"`
+	Files       []byte      `json:"files"`
+	ContentHash string      `json:"content_hash"`
+}
+
+// InsertProxyConfigVersion records one successfully pushed configuration.
+func (q *Queries) InsertProxyConfigVersion(ctx context.Context, arg InsertProxyConfigVersionParams) (ProxyConfigVersion, error) {
+	row := q.db.QueryRow(ctx, insertProxyConfigVersion, arg.ServerID, arg.Files, arg.ContentHash)
+	var i ProxyConfigVersion
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Files,
+		&i.ContentHash,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const latestProxyConfigVersions = `-- name: LatestProxyConfigVersions :many
+SELECT id, server_id, files, content_hash, created_at FROM proxy_config_versions
+WHERE server_id = $1
+ORDER BY created_at DESC, id DESC
+LIMIT $2
+`
+
+type LatestProxyConfigVersionsParams struct {
+	ServerID pgtype.UUID `json:"server_id"`
+	Limit    int32       `json:"limit"`
+}
+
+// LatestProxyConfigVersions returns a node's pushed configuration versions,
+// newest first. Revert uses the second entry when two exist.
+func (q *Queries) LatestProxyConfigVersions(ctx context.Context, arg LatestProxyConfigVersionsParams) ([]ProxyConfigVersion, error) {
+	rows, err := q.db.Query(ctx, latestProxyConfigVersions, arg.ServerID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Application{}
+	items := []ProxyConfigVersion{}
 	for rows.Next() {
-		var i Application
+		var i ProxyConfigVersion
 		if err := rows.Scan(
 			&i.ID,
-			&i.UserID,
 			&i.ServerID,
-			&i.Name,
-			&i.Provider,
-			&i.Repo,
-			&i.CloneUrl,
-			&i.Branch,
-			&i.BuildPack,
-			&i.BaseDomain,
-			&i.Port,
-			&i.HostPort,
+			&i.Files,
+			&i.ContentHash,
 			&i.CreatedAt,
-			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -49,4 +75,77 @@ func (q *Queries) ListProxiedApplications(ctx context.Context) ([]Application, e
 		return nil, err
 	}
 	return items, nil
+}
+
+const listProxiedApplications = `-- name: ListProxiedApplications :many
+SELECT a.id, a.server_id, a.base_domain, a.base_domain_disabled, a.port, a.host_port,
+       COALESCE(d.container_id, '')::text AS container_id
+FROM applications a
+LEFT JOIN LATERAL (
+    SELECT container_id FROM deployments
+    WHERE application_id = a.id AND state = 'running' AND container_id <> ''
+    ORDER BY created_at DESC
+    LIMIT 1
+) d ON true
+WHERE a.base_domain <> ''
+ORDER BY a.created_at, a.id
+`
+
+type ListProxiedApplicationsRow struct {
+	ID                 pgtype.UUID `json:"id"`
+	ServerID           pgtype.UUID `json:"server_id"`
+	BaseDomain         string      `json:"base_domain"`
+	BaseDomainDisabled bool        `json:"base_domain_disabled"`
+	Port               int32       `json:"port"`
+	HostPort           int32       `json:"host_port"`
+	ContainerID        string      `json:"container_id"`
+}
+
+// ProxiedApplications feeds the Traefik config generator (Phase 6, BE-6.1):
+// every application that declares a base_domain must be routed, on the node
+// that hosts it, from the endpoint of its newest running deployment. Rows are
+// ordered by creation time so duplicate-domain dispositions and generation
+// input stay deterministic.
+func (q *Queries) ListProxiedApplications(ctx context.Context) ([]ListProxiedApplicationsRow, error) {
+	rows, err := q.db.Query(ctx, listProxiedApplications)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProxiedApplicationsRow{}
+	for rows.Next() {
+		var i ListProxiedApplicationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ServerID,
+			&i.BaseDomain,
+			&i.BaseDomainDisabled,
+			&i.Port,
+			&i.HostPort,
+			&i.ContainerID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pruneProxyConfigVersions = `-- name: PruneProxyConfigVersions :exec
+DELETE FROM proxy_config_versions
+WHERE server_id = $1 AND created_at < $2
+`
+
+type PruneProxyConfigVersionsParams struct {
+	ServerID  pgtype.UUID        `json:"server_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// PruneProxyConfigVersions drops versions older than the retention window.
+func (q *Queries) PruneProxyConfigVersions(ctx context.Context, arg PruneProxyConfigVersionsParams) error {
+	_, err := q.db.Exec(ctx, pruneProxyConfigVersions, arg.ServerID, arg.CreatedAt)
+	return err
 }

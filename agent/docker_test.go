@@ -279,15 +279,16 @@ func TestDockerClientPullImageError(t *testing.T) {
 // createContainerRequestForTest builds a request exercising every mapped field.
 func createContainerRequestForTest() *agentv1.CreateContainerRequest {
 	return &agentv1.CreateContainerRequest{
-		Image:      "nginx:latest",
-		Name:       "web",
-		Env:        []string{"K=V"},
-		Command:    []string{"run"},
-		Entrypoint: []string{"/entry"},
-		Labels:     map[string]string{"app": "web"},
-		Ports:      []string{"8080:80"},
-		Volumes:    []string{"/data:/var/lib/data"},
-		Networks:   []string{"gotham"},
+		Image:         "nginx:latest",
+		Name:          "web",
+		Env:           []string{"K=V"},
+		Command:       []string{"run"},
+		Entrypoint:    []string{"/entry"},
+		Labels:        map[string]string{"app": "web"},
+		Ports:         []string{"8080:80", "127.0.0.1:9090:90"},
+		Volumes:       []string{"/data:/var/lib/data"},
+		Networks:      []string{"gotham"},
+		RestartPolicy: "unless-stopped",
 	}
 }
 
@@ -327,6 +328,9 @@ func TestDockerClientCreateContainer(t *testing.T) {
 	if _, ok := body.ExposedPorts["80/tcp"]; !ok {
 		t.Errorf("ExposedPorts = %v; want 80/tcp", body.ExposedPorts)
 	}
+	if _, ok := body.ExposedPorts["90/tcp"]; !ok {
+		t.Errorf("ExposedPorts = %v; want 90/tcp", body.ExposedPorts)
+	}
 	if body.HostConfig == nil {
 		t.Fatal("HostConfig = nil; want bind mounts and port bindings")
 	}
@@ -334,8 +338,15 @@ func TestDockerClientCreateContainer(t *testing.T) {
 		t.Errorf("Binds = %v; want [/data:/var/lib/data]", body.HostConfig.Binds)
 	}
 	portBindings := body.HostConfig.PortBindings["80/tcp"]
-	if len(portBindings) != 1 || portBindings[0].HostPort != "8080" {
-		t.Errorf("PortBindings = %v; want 8080", portBindings)
+	if len(portBindings) != 1 || portBindings[0].HostPort != "8080" || portBindings[0].HostIP != "" {
+		t.Errorf("PortBindings[80/tcp] = %v; want host port 8080 without a host ip", portBindings)
+	}
+	loopback := body.HostConfig.PortBindings["90/tcp"]
+	if len(loopback) != 1 || loopback[0].HostIP != "127.0.0.1" || loopback[0].HostPort != "9090" {
+		t.Errorf("PortBindings[90/tcp] = %v; want 127.0.0.1:9090", loopback)
+	}
+	if body.HostConfig.RestartPolicy == nil || body.HostConfig.RestartPolicy.Name != "unless-stopped" {
+		t.Errorf("RestartPolicy = %v; want unless-stopped", body.HostConfig.RestartPolicy)
 	}
 	if _, ok := body.NetworkingConfig.EndpointsConfig["gotham"]; !ok {
 		t.Errorf("NetworkingConfig = %v; want network gotham", body.NetworkingConfig)
@@ -389,25 +400,35 @@ func TestDockerClientLogs(t *testing.T) {
 	}
 }
 
-func TestSplitPortSpec(t *testing.T) {
+func TestParsePortSpec(t *testing.T) {
 	tests := []struct {
 		name      string
 		spec      string
+		hostIP    string
 		host      string
 		container string
-		ok        bool
+		wantErr   bool
 	}{
-		{"host and container", "8080:80", "8080", "80", true},
-		{"container only", "80", "", "80", true},
-		{"empty", "", "", "", false},
-		{"non numeric", "abc:def", "", "", false},
+		{name: "host and container", spec: "8080:80", host: "8080", container: "80"},
+		{name: "host ip, host and container", spec: "127.0.0.1:8080:8080", hostIP: "127.0.0.1", host: "8080", container: "8080"},
+		{name: "container only", spec: "80", container: "80"},
+		{name: "empty", spec: "", wantErr: true},
+		{name: "non numeric", spec: "abc:def", wantErr: true},
+		{name: "non numeric host", spec: "http:80", wantErr: true},
+		{name: "invalid host ip", spec: "not-an-ip:8080:80", wantErr: true},
+		{name: "empty host ip", spec: ":8080:80", wantErr: true},
+		{name: "empty host port", spec: "127.0.0.1::80", wantErr: true},
+		{name: "too many parts", spec: "127.0.0.1:8080:80:1", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			host, container, ok := splitPortSpec(tt.spec)
-			if ok != tt.ok || host != tt.host || container != tt.container {
-				t.Errorf("splitPortSpec(%q) = (%q, %q, %v); want (%q, %q, %v)",
-					tt.spec, host, container, ok, tt.host, tt.container, tt.ok)
+			hostIP, host, container, err := parsePortSpec(tt.spec)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parsePortSpec(%q) error = %v, wantErr %v", tt.spec, err, tt.wantErr)
+			}
+			if err == nil && (hostIP != tt.hostIP || host != tt.host || container != tt.container) {
+				t.Errorf("parsePortSpec(%q) = (%q, %q, %q); want (%q, %q, %q)",
+					tt.spec, hostIP, host, container, tt.hostIP, tt.host, tt.container)
 			}
 		})
 	}

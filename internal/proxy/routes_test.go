@@ -15,10 +15,12 @@ import (
 
 // fakeProxyService records the route calls and returns canned outcomes.
 type fakeProxyService struct {
-	syncCalls  []uuid.UUID
-	syncErr    error
-	allResults []SyncResult
-	allErr     error
+	syncCalls   []uuid.UUID
+	syncErr     error
+	allResults  []SyncResult
+	allErr      error
+	revertCalls []uuid.UUID
+	revertErr   error
 }
 
 func (f *fakeProxyService) SyncServer(_ context.Context, serverID uuid.UUID) error {
@@ -28,6 +30,11 @@ func (f *fakeProxyService) SyncServer(_ context.Context, serverID uuid.UUID) err
 
 func (f *fakeProxyService) SyncAll(context.Context) ([]SyncResult, error) {
 	return f.allResults, f.allErr
+}
+
+func (f *fakeProxyService) RevertServer(_ context.Context, serverID uuid.UUID) error {
+	f.revertCalls = append(f.revertCalls, serverID)
+	return f.revertErr
 }
 
 // newRoutes returns a router with the proxy routes mounted behind a no-op
@@ -151,5 +158,83 @@ func TestEnabled(t *testing.T) {
 	t.Setenv(FeatureEnv, "false")
 	if Enabled() {
 		t.Error("Enabled() = true with the flag false")
+	}
+}
+
+func TestSyncRouteReportsPartialDiagnostics(t *testing.T) {
+	serverID := uuid.New()
+	appID := uuid.New()
+	svc := &fakeProxyService{syncErr: &PartialError{Diagnostics: []Diagnostic{{
+		ApplicationID: appID,
+		Domain:        "pending.example.com",
+		Reason:        "no running deployment yet",
+	}}}}
+	recorder := postSync(t, newRoutes(svc), `{"server_id":"`+serverID.String()+`"}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200 with diagnostics", recorder.Code, recorder.Body.String())
+	}
+	var response syncResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Results) != 1 || !response.Results[0].Synced {
+		t.Fatalf("results = %#v, want one synced node", response.Results)
+	}
+	diagnostics := response.Results[0].Diagnostics
+	if len(diagnostics) != 1 || diagnostics[0].ApplicationID != appID ||
+		diagnostics[0].Reason != "no running deployment yet" {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+}
+
+func TestSyncRouteRevert(t *testing.T) {
+	serverID := uuid.New()
+	svc := &fakeProxyService{}
+	recorder := postSync(t, newRoutes(svc), `{"server_id":"`+serverID.String()+`","revert":true}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if len(svc.revertCalls) != 1 || svc.revertCalls[0] != serverID {
+		t.Fatalf("revert calls = %v, want [%s]", svc.revertCalls, serverID)
+	}
+	if len(svc.syncCalls) != 0 {
+		t.Fatalf("sync calls = %v, want none for a revert", svc.syncCalls)
+	}
+}
+
+func TestSyncRouteRevertRequiresServerID(t *testing.T) {
+	recorder := postSync(t, newRoutes(&fakeProxyService{}), `{"revert":true}`)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", recorder.Code)
+	}
+}
+
+func TestSyncRouteRevertNoVersion(t *testing.T) {
+	serverID := uuid.New()
+	svc := &fakeProxyService{revertErr: ErrVersionNotFound}
+	recorder := postSync(t, newRoutes(svc), `{"server_id":"`+serverID.String()+`","revert":true}`)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+}
+
+func TestSyncRouteAllNodesPartialDiagnostics(t *testing.T) {
+	serverID := uuid.New()
+	appID := uuid.New()
+	svc := &fakeProxyService{allResults: []SyncResult{{
+		ServerID:    serverID,
+		Error:       "proxy: partial sync: application x",
+		Diagnostics: []Diagnostic{{ApplicationID: appID, Reason: "pending"}},
+	}}}
+	recorder := postSync(t, newRoutes(svc), "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200 for a partial result", recorder.Code, recorder.Body.String())
+	}
+	var response syncResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Results) != 1 || len(response.Results[0].Diagnostics) != 1 {
+		t.Fatalf("results = %#v, want the per-app diagnostics", response.Results)
 	}
 }

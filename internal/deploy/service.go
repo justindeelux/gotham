@@ -156,12 +156,40 @@ func (s *Service) Close() error {
 
 // Deploy queues a deployment of the application's current revision.
 func (s *Service) Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployment, error) {
-	if !Enabled() {
-		return Deployment{}, ErrDisabled
-	}
 	app, err := s.application(ctx, userID, appID)
 	if err != nil {
 		return Deployment{}, err
+	}
+	return s.deployApplication(ctx, app)
+}
+
+// DeploySystem queues a deployment for a system trigger (a push webhook) that
+// has no authenticated caller: the application is addressed by ID because
+// ownership was established when its webhook was installed. Everything else —
+// validation, the active-deployment guard, the state machine — is exactly what
+// Deploy does.
+func (s *Service) DeploySystem(ctx context.Context, appID uuid.UUID) (Deployment, error) {
+	if !Enabled() {
+		return Deployment{}, ErrDisabled
+	}
+	if s == nil || s.repo == nil {
+		return Deployment{}, errors.New("deploy: repository is not configured")
+	}
+	if appID == uuid.Nil {
+		return Deployment{}, fmt.Errorf("%w: invalid application id", ErrValidation)
+	}
+	app, err := s.repo.GetApplication(ctx, appID)
+	if err != nil {
+		return Deployment{}, err
+	}
+	return s.deployApplication(ctx, app)
+}
+
+// deployApplication validates a loaded application and runs it on the worker
+// pool. It is the shared tail of Deploy and DeploySystem.
+func (s *Service) deployApplication(ctx context.Context, app Application) (Deployment, error) {
+	if !Enabled() {
+		return Deployment{}, ErrDisabled
 	}
 	if err := validateDeployTarget(app); err != nil {
 		return Deployment{}, err

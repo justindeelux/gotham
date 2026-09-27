@@ -30,10 +30,6 @@ var (
 	ErrUnsupported = errors.New("providers: unsupported provider")
 	// ErrValidation is returned when user-supplied input fails validation.
 	ErrValidation = errors.New("providers: validation failed")
-	// ErrNotWired is returned by CreateWebhook until the BE-4.4 webhook wiring
-	// lands. The provider API clients are real; only the webhook call is stubbed
-	// so no caller mistakes it for a working integration.
-	ErrNotWired = errors.New("providers: webhook creation is not wired until BE-4.4")
 )
 
 // Repo is the provider-neutral repository representation.
@@ -55,17 +51,29 @@ type Branch struct {
 	Protected bool
 }
 
-// Webhook is a webhook to install on a repository.
+// Webhook is a webhook to install on a repository. Secret is the shared secret
+// the Git host signs every delivery with; URL is the public control-plane
+// endpoint that receives them.
 type Webhook struct {
 	URL    string
 	Secret string
 	Events []string
 }
 
+// HookTarget names the repository a hook is installed on, together with the
+// caller whose stored connection authenticates the call. CloneURL selects
+// between several connections of the same provider (two self-hosted Gitea
+// instances, for example).
+type HookTarget struct {
+	UserID   uuid.UUID
+	Provider string
+	CloneURL string
+	Repo     string
+}
+
 // SourceProvider is the API surface of a Git host. It mirrors the Phase-1
-// OAuthProvider for the token exchange and adds source access. CreateWebhook is
-// declared here so the interface is complete, but implementations return
-// ErrNotWired until BE-4.4.
+// OAuthProvider for the token exchange and adds source access plus the webhook
+// lifecycle the auto-deploy flow needs.
 //
 // repo identifies a repository in the provider's own notation: "owner/name" for
 // GitHub and Gitea, "group/project" (possibly nested) for GitLab.
@@ -80,8 +88,12 @@ type SourceProvider interface {
 	ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo, error)
 	// ListBranches returns the branches of repo.
 	ListBranches(ctx context.Context, tok *oauth2.Token, repo string) ([]Branch, error)
-	// CreateWebhook installs hook on repo.
-	CreateWebhook(ctx context.Context, tok *oauth2.Token, repo string, hook Webhook) error
+	// CreateWebhook installs hook on repo and returns the provider's own hook
+	// ID, which DeleteWebhook needs to remove it later.
+	CreateWebhook(ctx context.Context, tok *oauth2.Token, repo string, hook Webhook) (string, error)
+	// DeleteWebhook removes the hook identified by hookID from repo. A hook
+	// that is already gone is a success, so deleting is idempotent.
+	DeleteWebhook(ctx context.Context, tok *oauth2.Token, repo, hookID string) error
 }
 
 // Provider is a stored source-provider connection. ClientSecret, AccessToken

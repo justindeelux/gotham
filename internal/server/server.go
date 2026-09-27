@@ -21,6 +21,7 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/server/ws"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/webhooks"
 )
 
 // shutdownTimeout bounds graceful shutdown after the context is cancelled.
@@ -168,7 +169,8 @@ func (s *Server) routes() (http.Handler, error) {
 		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger)
 
 		// Source providers (GitHub/GitLab/Gitea): list connections and repos.
-		providers.Mount(api, s.RequireAuth, UserIDFromContext, providers.NewDefaultService(s.persistence, s.cfg.Snapshot().SecretKey, s.logger))
+		providerSvc := providers.NewDefaultService(s.persistence, s.cfg.Snapshot().SecretKey, s.logger)
+		providers.Mount(api, s.RequireAuth, UserIDFromContext, providerSvc)
 
 		// Application deploy orchestration (BE-4.3): a nil service (no
 		// database) or FEATURE_APPLICATIONS=false mounts nothing, so Phases
@@ -176,6 +178,11 @@ func (s *Server) routes() (http.Handler, error) {
 		// closer can stop its worker pool and publisher on shutdown.
 		s.deploy = s.deployService()
 		deploy.Mount(api, s.RequireAuth, UserIDFromContext, s.deploy)
+
+		// Push webhooks (BE-4.4): the public, signature-verified delivery
+		// endpoint plus authenticated hook management. It reuses the deploy
+		// service instance above so both share one worker pool.
+		webhooks.Mount(api, s.RequireAuth, UserIDFromContext, s.webhookService(providerSvc))
 	})
 
 	spa, err := newSPAHandler()
@@ -207,6 +214,33 @@ func (s *Server) deployService() deploy.DeployService {
 		cfg.Dial = deploy.AgentDial(dialer)
 	}
 	return deploy.NewDefaultService(cfg)
+}
+
+// webhookService builds the webhook domain service for the HTTP wiring from
+// the deploy and provider services routes() already built: a delivery needs a
+// deploy service to queue with (nil when there is no database or
+// FEATURE_APPLICATIONS=false) and hook management needs a provider service
+// that can reach the Git host. Either missing, it returns nil so
+// webhooks.Mount registers nothing.
+func (s *Server) webhookService(providerSvc providers.ProviderService) *webhooks.Service {
+	if s.deploy == nil || providerSvc == nil {
+		return nil
+	}
+	deployer, ok := s.deploy.(webhooks.Deployer)
+	if !ok {
+		return nil
+	}
+	installer, ok := providerSvc.(webhooks.Installer)
+	if !ok {
+		return nil
+	}
+	return webhooks.NewDefaultService(webhooks.Config{
+		Store:     s.persistence,
+		Installer: installer,
+		Deployer:  deployer,
+		Secret:    s.cfg.Snapshot().SecretKey,
+		Logger:    s.logger,
+	})
 }
 
 // apiError is the JSON body returned for API failures.

@@ -3,6 +3,8 @@ package providers
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"strconv"
 	"strings"
 
 	"golang.org/x/oauth2"
@@ -145,7 +147,50 @@ func (p *gitLabSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo
 	}
 }
 
-// CreateWebhook is deferred to BE-4.4.
-func (p *gitLabSource) CreateWebhook(context.Context, *oauth2.Token, string, Webhook) error {
-	return fmt.Errorf("%w: %s", ErrNotWired, NameGitLab)
+// CreateWebhook installs a push hook on repo ("group/project", nested allowed)
+// and returns the hook ID GitLab assigned to it. GitLab takes the secret in a
+// token field and selects events with booleans rather than an event list.
+func (p *gitLabSource) CreateWebhook(ctx context.Context, tok *oauth2.Token, repo string, hook Webhook) (string, error) {
+	if err := validateRepo(repo, 1); err != nil {
+		return "", err
+	}
+	client := p.config.Client(ctx, tok)
+	payload := map[string]any{
+		"url":                     hook.URL,
+		"token":                   hook.Secret,
+		"push_events":             wantsEvent(hook.Events, "push"),
+		"enable_ssl_verification": true,
+	}
+
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	endpoint := fmt.Sprintf("%s/projects/%s/hooks", p.apiBase, escapeProjectPath(repo))
+	if err := doJSON(ctx, client, NameGitLab, http.MethodPost, endpoint, "application/json", payload, &created); err != nil {
+		return "", err
+	}
+	if created.ID <= 0 {
+		return "", fmt.Errorf("providers: %s: webhook response has no id", NameGitLab)
+	}
+	return strconv.FormatInt(created.ID, 10), nil
+}
+
+// DeleteWebhook removes the hook identified by hookID from repo. A hook that
+// is already gone (404) counts as deleted so the caller stays idempotent.
+func (p *gitLabSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, repo, hookID string) error {
+	if err := validateRepo(repo, 1); err != nil {
+		return err
+	}
+	if err := validateHookID(hookID); err != nil {
+		return err
+	}
+	client := p.config.Client(ctx, tok)
+	endpoint := fmt.Sprintf("%s/projects/%s/hooks/%s", p.apiBase, escapeProjectPath(repo), hookID)
+	if err := doJSON(ctx, client, NameGitLab, http.MethodDelete, endpoint, "application/json", nil, nil); err != nil {
+		if isStatus(err, http.StatusNotFound) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }

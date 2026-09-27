@@ -21,3 +21,14 @@ var (
 	// ErrDisabled — FEATURE_DATABASES=false disables the whole feature (503).
 	ErrDisabled = errors.New("databases: feature disabled")
 )
+
+// Backup-surface sentinels, mapped to HTTP statuses by the backup routes.
+var (
+	// ErrBackupInFlight — a backup or restore is already running for this
+	// database; the dump stops the container, so only one job may hold it
+	// (409).
+	ErrBackupInFlight = errors.New("databases: a backup or restore is already running")
+	// ErrBackupNotCompleted — only a completed backup can be restored, and a
+	// completed one always has its bytes (409).
+	ErrBackupNotCompleted = errors.New("databases: backup cannot be restored")
+)

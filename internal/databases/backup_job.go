@@ -1,0 +1,277 @@
+package databases
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
+)
+
+// Framing of a temporary job's output. The container writes:
+//
+//	GOTHAM-BACKUP-START <run id>\n
+//	GOTHAM-BACKUP-PAYLOAD <run id> <byte count>\n
+//	<raw payload bytes>
+//	GOTHAM-BACKUP-END <run id> ok\n
+//
+// a failed job omits the payload line and ends with "fail <status>" plus the
+// tail of the engine log. The payload is length-prefixed rather than
+// delimited so binary dumps pass through the log stream untouched, and the
+// markers carry the run id so output of an earlier container can never be
+// mistaken for this one.
+const (
+	jobStartPrefix   = "GOTHAM-BACKUP-START "
+	jobPayloadPrefix = "GOTHAM-BACKUP-PAYLOAD "
+	jobEndPrefix     = "GOTHAM-BACKUP-END "
+
+	// jobMarkerLimit bounds a candidate marker: a line longer than this
+	// cannot be a marker, so binary noise can never grow the buffer.
+	jobMarkerLimit = 4 << 10
+	// jobNoiseLimit bounds the diagnostic tail kept from output outside the
+	// frame (engine chatter before the start marker, tool output after the
+	// end marker).
+	jobNoiseLimit = 8 << 10
+	// jobDiagLimit bounds the diagnostic text embedded in an error message.
+	jobDiagLimit = 600
+)
+
+// jobState is the position of the collector inside the frame.
+type jobState int
+
+const (
+	// jobSeekStart — reading lines until the start marker appears.
+	jobSeekStart jobState = iota
+	// jobSeekPayload — start marker seen, awaiting the payload header.
+	jobSeekPayload
+	// jobReadPayload — copying exactly the announced byte count to dst.
+	jobReadPayload
+	// jobSeekEnd — payload complete, awaiting the end marker.
+	jobSeekEnd
+	// jobDone — the frame is complete (ok or failed).
+	jobDone
+)
+
+// jobCollector frames one temporary container's log stream. It is an io.Writer
+// so the job runner can feed it straight from the log channel, and it never
+// buffers more than a marker-sized line plus the payload currently in flight
+// — a multi-gigabyte dump streams straight through to dst.
+type jobCollector struct {
+	runID string
+	dst   io.Writer
+
+	state   jobState
+	buf     []byte
+	remain  int64
+	written int64
+
+	ok     bool
+	status string
+	diag   []byte
+	err    error
+}
+
+// newJobCollector returns a collector that writes the framed payload of runID
+// into dst. A nil dst discards the payload (restore jobs only need the
+// markers).
+func newJobCollector(runID string, dst io.Writer) *jobCollector {
+	return &jobCollector{runID: runID, dst: dst, state: jobSeekStart}
+}
+
+// Write feeds the next slice of the log stream into the state machine. It
+// never fails on framing problems: a broken frame is reported by Result, so a
+// caller can always drain the channel to the end.
+func (c *jobCollector) Write(p []byte) (int, error) {
+	if c.err != nil {
+		return len(p), nil
+	}
+	c.buf = append(c.buf, p...)
+	for c.step() {
+		// Advance the state machine until it needs more bytes.
+	}
+	return len(p), nil
+}
+
+// step advances the state machine by one unit and reports whether it moved.
+func (c *jobCollector) step() bool {
+	switch c.state {
+	case jobSeekStart:
+		line, ok := c.takeLine()
+		if !ok {
+			return false
+		}
+		if strings.TrimSuffix(line, "\r") == jobStartPrefix+c.runID {
+			c.state = jobSeekPayload
+		} else if line != "" {
+			c.keepNoise(line)
+		}
+		return true
+
+	case jobSeekPayload:
+		line, ok := c.takeLine()
+		if !ok {
+			return false
+		}
+		switch {
+		case strings.HasPrefix(line, jobPayloadPrefix+c.runID):
+			size := strings.TrimSpace(strings.TrimPrefix(line, jobPayloadPrefix+c.runID))
+			n, err := strconv.ParseInt(size, 10, 64)
+			if err != nil || n < 0 {
+				c.err = fmt.Errorf("databases: job reported an invalid payload size %q", size)
+				c.state = jobDone
+				return true
+			}
+			c.remain = n
+			c.state = jobReadPayload
+		case strings.HasPrefix(line, jobEndPrefix+c.runID):
+			c.readEnd(line)
+		case line != "":
+			// Anything else between the markers is engine chatter; keep it
+			// for diagnostics and keep waiting for the payload header.
+			c.keepNoise(line)
+		}
+		return true
+
+	case jobReadPayload:
+		if len(c.buf) == 0 {
+			return false
+		}
+		n := int64(len(c.buf))
+		if n > c.remain {
+			n = c.remain
+		}
+		if c.dst != nil && n > 0 {
+			if _, err := c.dst.Write(c.buf[:n]); err != nil {
+				c.err = fmt.Errorf("databases: write job payload: %w", err)
+				c.state = jobDone
+				c.buf = c.buf[n:]
+				c.remain -= n
+				return true
+			}
+		}
+		c.buf = c.buf[n:]
+		c.remain -= n
+		c.written += n
+		if c.remain == 0 {
+			c.state = jobSeekEnd
+		}
+		return true
+
+	case jobSeekEnd:
+		line, ok := c.takeLine()
+		if !ok {
+			return false
+		}
+		if strings.HasPrefix(line, jobEndPrefix+c.runID) {
+			c.readEnd(line)
+		} else if line != "" {
+			c.keepNoise(line)
+		}
+		return true
+
+	case jobDone:
+		if len(c.buf) > 0 {
+			c.keepNoise(string(c.buf))
+			c.buf = nil
+		}
+		return false
+	}
+	return false
+}
+
+// takeLine removes the first complete line from the buffer. ok is false when
+// no line is available yet; runs longer than jobMarkerLimit are treated as
+// noise so binary output cannot pin memory.
+func (c *jobCollector) takeLine() (line string, ok bool) {
+	if i := bytes.IndexByte(c.buf, '\n'); i >= 0 {
+		line = string(c.buf[:i])
+		c.buf = c.buf[i+1:]
+		return line, true
+	}
+	if len(c.buf) > jobMarkerLimit {
+		// Not a marker (markers are far shorter than the limit): treat the
+		// whole run as noise instead of waiting for a newline that may be
+		// megabytes away.
+		c.keepNoise(string(c.buf))
+		c.buf = c.buf[:0]
+	}
+	return "", false
+}
+
+// readEnd parses a complete end marker line.
+func (c *jobCollector) readEnd(line string) {
+	rest := strings.TrimSpace(strings.TrimPrefix(line, jobEndPrefix+c.runID))
+	switch {
+	case strings.HasPrefix(rest, "ok"):
+		c.ok = true
+	case strings.HasPrefix(rest, "fail"):
+		c.ok = false
+		fields := strings.Fields(rest)
+		if len(fields) > 1 {
+			c.status = fields[1]
+		}
+	default:
+		c.ok = false
+		c.status = "unknown"
+	}
+	c.state = jobDone
+}
+
+// keepNoise appends text to the bounded diagnostic tail.
+func (c *jobCollector) keepNoise(text string) {
+	c.diag = append(c.diag, text...)
+	c.diag = append(c.diag, '\n')
+	if len(c.diag) > jobNoiseLimit {
+		c.diag = c.diag[len(c.diag)-jobNoiseLimit:]
+	}
+}
+
+// Diagnostics returns the bounded tail of output outside the frame.
+func (c *jobCollector) Diagnostics() string {
+	return strings.TrimSpace(string(c.diag))
+}
+
+// Written reports how many payload bytes were written to dst.
+func (c *jobCollector) Written() int64 { return c.written }
+
+// Result validates the frame and reports the job's outcome: nil when the end
+// marker says ok, an error carrying the diagnostics otherwise.
+func (c *jobCollector) Result() error {
+	if c.err != nil {
+		return c.err
+	}
+	diag := c.Diagnostics()
+	switch {
+	case c.state != jobDone:
+		if diag == "" {
+			return fmt.Errorf("databases: temporary container exited without a completion marker")
+		}
+		return fmt.Errorf("databases: temporary container exited without a completion marker: %s",
+			boundedDiag(diag))
+	case !c.ok:
+		if c.status != "" && diag != "" {
+			return fmt.Errorf("databases: temporary container failed with status %s: %s",
+				c.status, boundedDiag(diag))
+		}
+		if c.status != "" {
+			return fmt.Errorf("databases: temporary container failed with status %s", c.status)
+		}
+		if diag != "" {
+			return fmt.Errorf("databases: temporary container failed: %s", boundedDiag(diag))
+		}
+		return fmt.Errorf("databases: temporary container failed")
+	default:
+		return nil
+	}
+}
+
+// boundedDiag trims a diagnostic tail to jobDiagLimit characters so an error
+// stays usable in a log line, an API message and a database column.
+func boundedDiag(diag string) string {
+	diag = strings.ReplaceAll(diag, "\x00", "")
+	diag = strings.TrimSpace(diag)
+	if len(diag) <= jobDiagLimit {
+		return diag
+	}
+	return "…" + diag[len(diag)-jobDiagLimit:]
+}

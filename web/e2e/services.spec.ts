@@ -39,6 +39,7 @@ test.describe("services & templates", () => {
   test("gallery → dynamic form → compose preview → create service", async ({
     page,
     request,
+    guardrails,
   }) => {
     const account = loadAccount();
     const headers = { Authorization: `Bearer ${account.accessToken}` };
@@ -194,5 +195,12 @@ test.describe("services & templates", () => {
     expect(browserStorage).not.toContain(rootPassword);
     expect(await page.content()).not.toContain(dbPassword);
     expect(await page.content()).not.toContain(rootPassword);
+
+    // The guardrail fixture asserts console errors and 5xx responses at
+    // teardown; the happy path must also leave no failed API request behind.
+    expect(
+      guardrails.apiFailures,
+      `unexpected failed API requests:\n${guardrails.apiFailures.join("\n")}`,
+    ).toEqual([]);
   });
 });

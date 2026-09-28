@@ -15,7 +15,7 @@ import {
   useMessage,
 } from "naive-ui";
 import type { DataTableColumns } from "naive-ui";
-import { computed, h, onMounted, ref } from "vue";
+import { computed, h, onMounted, ref, watch } from "vue";
 import type { VNode } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
@@ -47,8 +47,13 @@ import { relativeTime } from "../utils/format";
  * an explicit backend-pending stub.
  */
 
-/** One editable environment row. Values are masked (see the template note). */
+/**
+ * One editable environment row. Values are masked (see the template note).
+ * Rows carry a stable id so add/remove keeps focus and input state attached to
+ * the row it belongs to instead of its position.
+ */
 interface EnvRow {
+  id: number;
   key: string;
   value: string;
 }
@@ -61,6 +66,9 @@ const serversStore = useServersStore();
 
 /** envReference is the compose `${VAR}` substitution form shown in copy. */
 const envReference = "${VAR}";
+
+/** Monotonic env-row id for stable list keys. */
+let nextEnvRowId = 0;
 
 const serviceId = computed<string>(() => String(route.params.id ?? ""));
 
@@ -89,6 +97,15 @@ const deploys = computed<ServiceDeploy[]>(() =>
   servicesStore.deploysOf(serviceId.value),
 );
 const latestDeploy = computed<ServiceDeploy | null>(() => deploys.value[0] ?? null);
+
+/**
+ * history is the per-service deploy-history state. A missing entry means the
+ * history was never read: the UI must not claim it is empty then, and only
+ * `loaded` (set by a successful read) allows the empty/zero copy.
+ */
+const history = computed(() => servicesStore.historyOf(serviceId.value));
+const historyLoaded = computed<boolean>(() => history.value?.loaded ?? false);
+const historyUnavailable = computed<string | null>(() => history.value?.error ?? null);
 
 const serverName = computed<string>(() => {
   const current = service.value;
@@ -218,13 +235,26 @@ const containerColumns: DataTableColumns<ComposeServiceContainer> = [
 
 /** envRows converts the API's environment map into editable rows. */
 function envRows(env: Record<string, string>): EnvRow[] {
-  return Object.entries(env).map(([key, value]) => ({ key, value }));
+  return Object.entries(env).map(([key, value]) => ({
+    id: ++nextEnvRowId,
+    key,
+    value,
+  }));
 }
 
 /** load fetches the service, its history and the node list. */
 async function load(): Promise<void> {
   error.value = null;
   notFound.value = false;
+  actionError.value = null;
+  composeError.value = null;
+  composeEditing.value = false;
+  envError.value = null;
+  containers.value = [];
+  containersError.value = null;
+  containersLoaded.value = false;
+  composeYaml.value = "";
+  envDraft.value = [];
   try {
     const fetched = await servicesStore.fetchService(serviceId.value);
     composeYaml.value = fetched.compose_yaml ?? "";
@@ -235,6 +265,11 @@ async function load(): Promise<void> {
   }
   await servicesStore.fetchDeploys(serviceId.value).catch(() => undefined);
   void serversStore.fetchServers().catch(() => undefined);
+}
+
+/** retryHistory re-reads the deploy history after an unavailable result. */
+async function retryHistory(): Promise<void> {
+  await servicesStore.fetchDeploys(serviceId.value).catch(() => undefined);
 }
 
 /** handleSaveCompose persists the edited document (PATCH → 200). */
@@ -257,19 +292,22 @@ async function handleSaveCompose(text: string): Promise<void> {
 
 /** addEnvRow appends an empty variable row. */
 function addEnvRow(): void {
-  envDraft.value = [...envDraft.value, { key: "", value: "" }];
+  envDraft.value = [
+    ...envDraft.value,
+    { id: ++nextEnvRowId, key: "", value: "" },
+  ];
 }
 
-/** updateEnvRow replaces one row immutably. */
-function updateEnvRow(index: number, patch: Partial<EnvRow>): void {
-  envDraft.value = envDraft.value.map((row, rowIndex) =>
-    rowIndex === index ? { ...row, ...patch } : row,
+/** updateEnvRow replaces one row immutably, addressed by its stable id. */
+function updateEnvRow(id: number, patch: Partial<EnvRow>): void {
+  envDraft.value = envDraft.value.map((row) =>
+    row.id === id ? { ...row, ...patch } : row,
   );
 }
 
-/** removeEnvRow drops one row. */
-function removeEnvRow(index: number): void {
-  envDraft.value = envDraft.value.filter((_, rowIndex) => rowIndex !== index);
+/** removeEnvRow drops one row, addressed by its stable id. */
+function removeEnvRow(id: number): void {
+  envDraft.value = envDraft.value.filter((row) => row.id !== id);
 }
 
 /** handleSaveEnv replaces the whole environment map (PATCH → 200). */
@@ -367,6 +405,12 @@ async function handleDelete(): Promise<void> {
 }
 
 onMounted(() => {
+  void load();
+});
+
+// The detail route is reused when navigating between services: reload when the
+// id changes so the page never shows the previous service's data.
+watch(serviceId, () => {
   void load();
 });
 </script>
@@ -544,13 +588,13 @@ onMounted(() => {
             the deploy history.
           </p>
           <div v-if="envDraft.length > 0" class="env-rows">
-            <div v-for="(row, index) in envDraft" :key="index" class="env-row">
+            <div v-for="row in envDraft" :key="row.id" class="env-row">
               <NInput
                 :value="row.key"
                 class="mono"
                 placeholder="MYSQL_PASSWORD"
                 aria-label="Variable name"
-                @update:value="(value: string) => updateEnvRow(index, { key: value })"
+                @update:value="(value: string) => updateEnvRow(row.id, { key: value })"
               />
               <NInput
                 :value="row.value"
@@ -560,13 +604,13 @@ onMounted(() => {
                 class="mono"
                 placeholder="value"
                 aria-label="Variable value"
-                @update:value="(value: string) => updateEnvRow(index, { value })"
+                @update:value="(value: string) => updateEnvRow(row.id, { value })"
               />
               <NButton
                 quaternary
                 type="error"
                 aria-label="Remove variable"
-                @click="removeEnvRow(index)"
+                @click="removeEnvRow(row.id)"
               >
                 Remove
               </NButton>
@@ -644,10 +688,35 @@ onMounted(() => {
 
       <NCard title="Deploy history">
         <template #header-extra>
-          <NText depth="3" class="small">
+          <NText v-if="historyLoaded" depth="3" class="small">
             {{ deploys.length }} attempts · newest first
           </NText>
+          <NText v-else-if="historyUnavailable" depth="3" class="small">
+            unavailable
+          </NText>
         </template>
+        <NAlert
+          v-if="historyUnavailable"
+          type="warning"
+          :show-icon="true"
+          data-testid="history-unavailable"
+        >
+          <div class="history-error">
+            <span>
+              Deploy history unavailable: {{ historyUnavailable }}
+              <template v-if="deploys.length > 0">
+                — showing the last successful read.
+              </template>
+            </span>
+            <NButton
+              size="small"
+              :loading="history?.loading ?? false"
+              @click="retryHistory"
+            >
+              Retry
+            </NButton>
+          </div>
+        </NAlert>
         <NDataTable
           v-if="deploys.length > 0"
           :data="deploys"
@@ -656,7 +725,11 @@ onMounted(() => {
           :bordered="false"
           :scroll-x="900"
         />
-        <NEmpty v-else description="No deploys yet.">
+        <NEmpty
+          v-else-if="historyLoaded"
+          description="No deploys yet."
+          data-testid="history-empty"
+        >
           <template #extra>
             <p class="empty-hint">
               Deploy renders the stored document on the node and records the
@@ -665,6 +738,14 @@ onMounted(() => {
             </p>
           </template>
         </NEmpty>
+        <NEmpty
+          v-else-if="history?.loading"
+          description="Reading deploy history…"
+        />
+        <NEmpty
+          v-else
+          description="Deploy history not loaded."
+        />
         <template #footer>
           <NText depth="3" class="small">
             <template v-if="latestDeploy">
@@ -672,8 +753,15 @@ onMounted(() => {
               <span class="mono">{{ latestDeploy.id.slice(0, 8) }}</span> ·
               {{ latestDeploy.state }} · {{ relativeTime(latestDeploy.created_at) }}.
             </template>
-            <template v-else>
+            <template v-else-if="historyLoaded">
               Nothing has been deployed yet.
+            </template>
+            <template v-else-if="historyUnavailable">
+              The history could not be read, so nothing is claimed about earlier
+              attempts.
+            </template>
+            <template v-else>
+              Reading the history…
             </template>
             The API does not expose a per-deploy log or a step timeline; logs
             stream from the running project instead.
@@ -750,6 +838,13 @@ onMounted(() => {
   font-size: var(--text-xs);
   color: var(--muted);
   max-width: 80ch;
+}
+
+.history-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .env-rows {

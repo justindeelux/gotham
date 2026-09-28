@@ -105,6 +105,13 @@ const serverOptions = computed<Array<{ label: string; value: string }>>(() =>
   })),
 );
 
+/** failedHistories lists services whose deploy history could not be read. */
+const failedHistories = computed<Service[]>(() =>
+  servicesStore.services.filter(
+    (service) => servicesStore.historyOf(service.id)?.error,
+  ),
+);
+
 const importNameError = computed<string>(() =>
   importAttempted.value && importName.value.trim() === ""
     ? "Enter a service name."
@@ -127,15 +134,40 @@ function serverNameOf(service: Service): string {
   return server ? server.name : "unknown node";
 }
 
-/** deploySummary renders the newest deploy attempt as a short tag. */
+/**
+ * deploySummary describes the newest deploy attempt. A history that was never
+ * read or failed to read is labelled as such: "no deploys yet" is only claimed
+ * after a successful empty read, and cached rows keep their summary with a
+ * stale marker when a refresh fails.
+ */
 function deploySummary(service: Service): string {
-  const attempts = servicesStore.deploysOf(service.id);
-  if (attempts.length === 0) {
+  const history = servicesStore.historyOf(service.id);
+  const attempts = history?.deploys ?? [];
+  if (attempts.length > 0) {
+    const latest = attempts[0];
+    const finished = latest.finished_at
+      ? ` · ${relativeTime(latest.finished_at)}`
+      : "";
+    const stale = history?.error ? " · stale" : "";
+    return `deploy #${attempts.length} · ${latest.state}${finished}${stale}`;
+  }
+  if (history?.error) {
+    return "deploy history unavailable";
+  }
+  if (history?.loaded) {
     return "no deploys yet";
   }
-  const latest = attempts[0];
-  const finished = latest.finished_at ? ` · ${relativeTime(latest.finished_at)}` : "";
-  return `deploy #${attempts.length} · ${latest.state}${finished}`;
+  return "deploy history loading…";
+}
+
+/** deployTagType marks the summary tag when its history is unavailable. */
+function deployTagType(service: Service): "default" | "warning" {
+  return servicesStore.historyOf(service.id)?.error ? "warning" : "default";
+}
+
+/** retryHistories re-reads every failed deploy history. */
+async function retryHistories(): Promise<void> {
+  await servicesStore.fetchAllDeploys();
 }
 
 /** load refreshes services, deploys, templates and the node list. */
@@ -255,6 +287,24 @@ onMounted(() => {
         </div>
 
         <NSpin :show="servicesStore.loading && servicesStore.services.length === 0">
+          <NAlert
+            v-if="failedHistories.length > 0"
+            type="warning"
+            :show-icon="true"
+            class="history-alert"
+            data-testid="list-history-unavailable"
+          >
+            <div class="history-alert__body">
+              <span>
+                Deploy history could not be read for
+                {{ failedHistories.length }}
+                service{{ failedHistories.length === 1 ? "" : "s" }}. The cards
+                mark those histories as unavailable instead of reporting them as
+                empty.
+              </span>
+              <NButton size="small" @click="retryHistories">Retry</NButton>
+            </div>
+          </NAlert>
           <div v-if="filteredServices.length > 0" class="svc-grid">
             <article
               v-for="service in filteredServices"
@@ -284,7 +334,13 @@ onMounted(() => {
 
               <div class="svc-card__body">
                 <div class="tagrow">
-                  <NTag size="small">{{ deploySummary(service) }}</NTag>
+                  <NTag
+                    size="small"
+                    :type="deployTagType(service)"
+                    :data-history="deploySummary(service)"
+                  >
+                    {{ deploySummary(service) }}
+                  </NTag>
                   <NTag
                     v-for="route in service.domains"
                     :key="route.domain"
@@ -650,6 +706,17 @@ onMounted(() => {
 
 .empty {
   padding: var(--space-6) 0;
+}
+
+.history-alert {
+  margin-bottom: var(--space-4);
+}
+
+.history-alert__body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .empty-hint {

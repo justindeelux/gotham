@@ -137,6 +137,17 @@ interface ContainerListEnvelope {
   containers: ComposeServiceContainer[];
 }
 
+/**
+ * Lifecycle calls run synchronously on the control plane: deploy renders,
+ * validates and starts the project through the node agent (image pulls
+ * included) and the backend allows up to 15 minutes for one attempt (see
+ * `defaultDeployTimeout` in internal/services/service.go). The shared 15s
+ * read timeout would abort a healthy cold start and, because the agent calls
+ * inherit the HTTP request context, cancelling can cancel node work. Lifecycle
+ * requests therefore get their own budget; short reads keep the shared one.
+ */
+const lifecycleTimeoutMs = 15 * 60_000;
+
 /** listServices returns the caller's services, newest first (GET → 200). */
 export async function listServices(): Promise<Service[]> {
   const response = await http.get<ServiceListEnvelope>("/services");
@@ -175,29 +186,49 @@ export async function updateService(
 
 /**
  * deleteService stops the project (named volumes stay) and soft-deletes the
- * row (DELETE → 204, no body).
+ * row (DELETE → 204, no body). Stopping is synchronous node work, so the call
+ * uses the lifecycle budget.
  */
 export async function deleteService(id: string): Promise<void> {
-  await http.delete(`/services/${id}`);
+  await http.delete(`/services/${id}`, { timeout: lifecycleTimeoutMs });
 }
 
-/** deployService renders, validates and starts the project (POST → 200). */
+/**
+ * deployService renders, validates and starts the project (POST → 200). It
+ * blocks until the node agent's compose run finished, hence the lifecycle
+ * timeout.
+ */
 export async function deployService(id: string): Promise<DeployOutcome> {
-  const response = await http.post<DeployEnvelope>(`/services/${id}/deploy`, {});
+  const response = await http.post<DeployEnvelope>(
+    `/services/${id}/deploy`,
+    {},
+    { timeout: lifecycleTimeoutMs },
+  );
   return { service: response.data.service, deploy: response.data.deploy };
 }
 
-/** stopService takes the project down; named volumes keep their data. */
+/**
+ * stopService takes the project down; named volumes keep their data. Compose
+ * down also runs synchronously on the node.
+ */
 export async function stopService(id: string): Promise<Service> {
-  const response = await http.post<ServiceEnvelope>(`/services/${id}/stop`, {});
+  const response = await http.post<ServiceEnvelope>(
+    `/services/${id}/stop`,
+    {},
+    { timeout: lifecycleTimeoutMs },
+  );
   return response.data.service;
 }
 
-/** restartService restarts a running project in place, or starts a stopped one. */
+/**
+ * restartService restarts a running project in place, or starts a stopped one.
+ * A start is a synchronous compose up, so it shares the lifecycle budget.
+ */
 export async function restartService(id: string): Promise<Service> {
   const response = await http.post<ServiceEnvelope>(
     `/services/${id}/restart`,
     {},
+    { timeout: lifecycleTimeoutMs },
   );
   return response.data.service;
 }

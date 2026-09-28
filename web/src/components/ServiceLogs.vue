@@ -2,8 +2,9 @@
 import { NButton, NSelect, NTooltip } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 
+import { refreshSession } from "../api/http";
 import { describeServiceError, serviceLogsPath } from "../api/services";
-import { getAccessToken } from "../api/token";
+import { clearSession, getAccessToken } from "../api/token";
 
 /**
  * Live log terminal for one compose service.
@@ -13,6 +14,10 @@ import { getAccessToken } from "../api/token";
  * hub, so this reader consumes the response body directly. Nothing is
  * invented: only bytes the API sends are rendered, and the stream starts when
  * the operator asks for it.
+ *
+ * Because the reader bypasses the axios instance, it honours the same
+ * refresh-once contract itself: a 401 triggers the shared session refresh and
+ * one retry before the error is surfaced as "session expired".
  *
  * Known gap, rendered as an explicit stub below: the API has no stored log
  * artifact, so "Download" cannot export anything that is not already on
@@ -40,10 +45,18 @@ type StreamStatus =
   | "closed"
   | "error";
 
+/** One rendered log line with a stable identity for the list key. */
+interface LogLine {
+  id: number;
+  text: string;
+}
+
+const sessionExpiredMessage = "Your session expired. Please sign in again.";
+
 const status = ref<StreamStatus>("idle");
 const error = ref<string | null>(null);
-const lines = ref<string[]>([]);
-const pending = ref<string[]>([]);
+const lines = ref<LogLine[]>([]);
+const pending = ref<LogLine[]>([]);
 const isPaused = ref(false);
 const isFollowing = ref(true);
 const selectedService = ref<string>("");
@@ -51,6 +64,12 @@ const logBody = ref<HTMLElement | null>(null);
 
 /** The in-flight request; aborted by Stop and on unmount. */
 let controller: AbortController | null = null;
+
+/** Monotonic line id so appended lines never reuse a list key. */
+let nextLineId = 0;
+
+/** Coalesces tail-scroll work across a burst of chunks. */
+let scrollQueued = false;
 
 const serviceOptions = computed<Array<{ label: string; value: string }>>(() => [
   { label: "All services", value: "" },
@@ -92,17 +111,7 @@ async function start(): Promise<void> {
   const abort = new AbortController();
   controller = abort;
   try {
-    const response = await fetch(
-      serviceLogsPath(props.serviceId, {
-        service: selectedService.value || undefined,
-        tail: 200,
-        follow: true,
-      }),
-      {
-        headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
-        signal: abort.signal,
-      },
-    );
+    const response = await openStream(abort.signal);
     if (!response.ok || response.body === null) {
       error.value = describeServiceError(
         await toApiError(response),
@@ -126,6 +135,40 @@ async function start(): Promise<void> {
       controller = null;
     }
   }
+}
+
+/**
+ * openStream issues the log request, refreshing the session once on 401. The
+ * reader cannot use the axios instance (it consumes a chunked body), so it
+ * wires the shared refresh flow manually. A failed refresh clears the stored
+ * session and surfaces the session-expired message; a second 401 is mapped by
+ * describeServiceError to the same message.
+ */
+async function openStream(signal: AbortSignal): Promise<Response> {
+  const request = (): Promise<Response> =>
+    fetch(
+      serviceLogsPath(props.serviceId, {
+        service: selectedService.value || undefined,
+        tail: 200,
+        follow: true,
+      }),
+      {
+        headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
+        signal,
+      },
+    );
+
+  let response = await request();
+  if (response.status === 401) {
+    try {
+      await refreshSession();
+    } catch {
+      clearSession();
+      throw new Error(sessionExpiredMessage);
+    }
+    response = await request();
+  }
+  return response;
 }
 
 /** stop aborts the stream; safe to call when idle. */
@@ -160,19 +203,24 @@ async function readBody(
         appendLine(line);
       }
     }
+    // Flush the decoder: a trailing multi-byte character may still be held.
+    buffer += decoder.decode();
     if (buffer !== "") {
       appendLine(buffer);
     }
   } finally {
-    reader.releaseLock();
     if (abort.signal.aborted) {
+      // Cancel the body before releasing the lock: a released reader can no
+      // longer cancel the stream, so the abort would leak the connection.
       await reader.cancel().catch(() => undefined);
     }
+    reader.releaseLock();
   }
 }
 
 /** appendLine adds a line to the view, or queues it while paused. */
-function appendLine(line: string): void {
+function appendLine(text: string): void {
+  const line: LogLine = { id: ++nextLineId, text };
   const target = isPaused.value ? pending : lines;
   target.value.push(line);
   if (target.value.length > props.maxLines) {
@@ -183,10 +231,12 @@ function appendLine(line: string): void {
 
 /** scheduleScroll coalesces tail-scroll work across a burst of chunks. */
 function scheduleScroll(): void {
-  if (!isFollowing.value) {
+  if (!isFollowing.value || scrollQueued) {
     return;
   }
+  scrollQueued = true;
   void nextTick(() => {
+    scrollQueued = false;
     const element = logBody.value;
     if (element && isFollowing.value) {
       element.scrollTop = element.scrollHeight;
@@ -316,8 +366,8 @@ onBeforeUnmount(() => {
             : "Waiting for log output…"
         }}
       </p>
-      <div v-for="(line, index) in lines" :key="index" class="log-line">
-        {{ line }}
+      <div v-for="line in lines" :key="line.id" class="log-line">
+        {{ line.text }}
       </div>
     </div>
 

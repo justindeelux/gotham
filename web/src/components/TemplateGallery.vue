@@ -25,7 +25,12 @@ const emit = defineEmits<{
   select: [slug: string];
 }>();
 
-/** cardMark derives the card mark from the template name. */
+/**
+ * cardMark derives the card mark from the template name. The API `icon` key
+ * is carried as `data-icon` for traceability but not rendered as a glyph: the
+ * app's stroke icon set has no brand glyphs, and the mockup's own gallery uses
+ * the letter mark (`.tpl-mark`).
+ */
 function cardMark(name: string): string {
   const first = name.trim()[0];
   return first ? first.toUpperCase() : "?";
@@ -44,6 +49,7 @@ function cardMark(name: string): string {
           type="button"
           class="tpl-card"
           :data-template="template.slug"
+          :data-icon="template.icon"
           @click="emit('select', template.slug)"
         >
           <span class="tpl-mark" aria-hidden="true">{{ cardMark(template.name) }}</span>

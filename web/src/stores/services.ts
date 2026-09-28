@@ -21,18 +21,33 @@ import type {
   UpdateServiceInput,
 } from "../api/services";
 
+/** Per-service deploy history: cached rows plus load and failure state. */
+export interface ServiceHistory {
+  deploys: ServiceDeploy[];
+  loading: boolean;
+  /** True only after a successful read; failures never count as loaded. */
+  loaded: boolean;
+  /** Redacted failure message of the last read; null when it succeeded. */
+  error: string | null;
+}
+
 /**
  * Compose services: the list plus a per-service deploy history cache.
+ *
+ * History state is tracked per service so an unavailable read can never be
+ * rendered as a confirmed-empty history: `loaded` is only set by a successful
+ * response, a failure keeps the previously cached rows and records `error`,
+ * and a service whose history was never read is distinguishable from one
+ * whose history is genuinely empty.
  *
  * Containers are deliberately not cached here: reading them dials the node
  * agent (502 without one), so the detail page loads them on demand.
  */
 export const useServicesStore = defineStore("services", () => {
   const services = ref<Service[]>([]);
-  const deploys = ref<Record<string, ServiceDeploy[]>>({});
+  const histories = ref<Record<string, ServiceHistory>>({});
   const loading = ref(false);
   const error = ref<string | null>(null);
-  const deploysError = ref<string | null>(null);
 
   /** applyService merges one service into the in-memory list in place. */
   function applyService(updated: Service): void {
@@ -70,9 +85,17 @@ export const useServicesStore = defineStore("services", () => {
     return service;
   }
 
-  /** deploysOf returns the cached deploy history of one service. */
+  /**
+   * historyOf returns one service's history state, or null when it was never
+   * read. Callers must not render an empty result unless `loaded` is true.
+   */
+  function historyOf(id: string): ServiceHistory | null {
+    return histories.value[id] ?? null;
+  }
+
+  /** deploysOf returns the cached deploy rows of one service. */
   function deploysOf(id: string): ServiceDeploy[] {
-    return deploys.value[id] ?? [];
+    return histories.value[id]?.deploys ?? [];
   }
 
   /** latestDeployOf returns the newest deploy attempt, if any. */
@@ -80,13 +103,38 @@ export const useServicesStore = defineStore("services", () => {
     return deploysOf(id)[0] ?? null;
   }
 
-  /** fetchDeploys refreshes one service's deploy history. */
+  /**
+   * fetchDeploys refreshes one service's deploy history. A failure keeps the
+   * previously cached rows (flagged stale through `error`) and rethrows for
+   * the caller's own UI state.
+   */
   async function fetchDeploys(id: string): Promise<void> {
-    deploysError.value = null;
+    const previous = histories.value[id];
+    histories.value = {
+      ...histories.value,
+      [id]: {
+        deploys: previous?.deploys ?? [],
+        loading: true,
+        loaded: previous?.loaded ?? false,
+        error: null,
+      },
+    };
     try {
-      deploys.value = { ...deploys.value, [id]: await listServiceDeploys(id) };
+      const deploys = await listServiceDeploys(id);
+      histories.value = {
+        ...histories.value,
+        [id]: { deploys, loading: false, loaded: true, error: null },
+      };
     } catch (err) {
-      deploysError.value = describeServiceError(err);
+      histories.value = {
+        ...histories.value,
+        [id]: {
+          deploys: previous?.deploys ?? [],
+          loading: false,
+          loaded: previous?.loaded ?? false,
+          error: describeServiceError(err),
+        },
+      };
       throw err;
     }
   }
@@ -119,9 +167,9 @@ export const useServicesStore = defineStore("services", () => {
   async function remove(id: string): Promise<void> {
     await deleteService(id);
     services.value = services.value.filter((item) => item.id !== id);
-    const remaining = { ...deploys.value };
+    const remaining = { ...histories.value };
     delete remaining[id];
-    deploys.value = remaining;
+    histories.value = remaining;
   }
 
   /** deploy starts the project and records the attempt. */
@@ -148,13 +196,13 @@ export const useServicesStore = defineStore("services", () => {
 
   return {
     services,
-    deploys,
+    histories,
     loading,
     error,
-    deploysError,
     fetchServices,
     serviceOf,
     fetchService,
+    historyOf,
     deploysOf,
     latestDeployOf,
     fetchDeploys,

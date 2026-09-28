@@ -121,6 +121,16 @@ function refreshAccessToken(): Promise<string> {
   return refreshPromise;
 }
 
+/**
+ * refreshSession rotates the session through the same single-flight refresh
+ * the 401 interceptor uses. It exists for callers that cannot go through the
+ * axios instance — the log stream reads a chunked response with `fetch` — so
+ * they can honour the same refresh-once contract before surfacing a failure.
+ */
+export function refreshSession(): Promise<string> {
+  return refreshAccessToken();
+}
+
 /** redirectToLogin sends the browser to the login page after a dead session. */
 function redirectToLogin(): void {
   if (typeof window === "undefined" || window.location.pathname === "/login") {

@@ -92,6 +92,13 @@ const deploying = ref(false);
 const deployError = ref<string | null>(null);
 const deployed = ref(false);
 
+/**
+ * renderToken invalidates obsolete renders: every request captures the token
+ * it started with, and a completion whose token no longer matches (a newer
+ * render, or a reset/close) is dropped instead of overwriting the state.
+ */
+let renderToken = 0;
+
 const fields = computed<TemplateField[]>(() => detail.value?.fields ?? []);
 
 /** allErrors is the full field validation result; see showErrors below. */
@@ -144,6 +151,9 @@ async function open(): Promise<void> {
 
 /** reset drops every wizard value, including the secret-bearing ones. */
 function reset(): void {
+  // Invalidate any in-flight render first: its response must not land in a
+  // wizard that has been closed or reopened for another template.
+  renderToken += 1;
   step.value = 1;
   detail.value = null;
   detailError.value = null;
@@ -163,23 +173,40 @@ function reset(): void {
   deployed.value = false;
 }
 
-/** loadRender renders the form values and shows the preview document. */
+/**
+ * loadRender renders the form values and shows the preview document. The
+ * previous preview is invalidated immediately, so nothing can be created from
+ * an obsolete document while this request is in flight; navigation and create
+ * are blocked on `renderLoading` instead. A completion that lost its token is
+ * ignored.
+ */
 async function loadRender(): Promise<void> {
   if (!detail.value) {
     return;
   }
-  renderLoading.value = true;
+  const token = ++renderToken;
+  render.value = null;
   renderError.value = null;
+  renderLoading.value = true;
   try {
-    render.value = await templatesStore.render(
+    const rendered = await templatesStore.render(
       detail.value.slug,
       buildTemplateRenderValues(values.value),
     );
+    if (token !== renderToken) {
+      return;
+    }
+    render.value = rendered;
   } catch (error) {
+    if (token !== renderToken) {
+      return;
+    }
     render.value = null;
     renderError.value = describeTemplateError(error);
   } finally {
-    renderLoading.value = false;
+    if (token === renderToken) {
+      renderLoading.value = false;
+    }
   }
 }
 
@@ -194,7 +221,11 @@ function next(): void {
     void loadRender();
     return;
   }
-  if (step.value === 2 && render.value !== null) {
+  if (
+    step.value === 2 &&
+    !renderLoading.value &&
+    render.value !== null
+  ) {
     step.value = 3;
   }
 }
@@ -203,7 +234,12 @@ function next(): void {
 async function handleCreate(): Promise<void> {
   createAttempted.value = true;
   const rendered = render.value;
-  if (rendered === null || name.value.trim() === "" || serverId.value === "") {
+  if (
+    renderLoading.value ||
+    rendered === null ||
+    name.value.trim() === "" ||
+    serverId.value === ""
+  ) {
     return;
   }
   creating.value = true;
@@ -448,7 +484,7 @@ watch(
             v-if="step < 3"
             size="small"
             type="primary"
-            :disabled="step === 2 && render === null"
+            :disabled="step === 2 && (renderLoading || render === null)"
             @click="next"
           >
             Next
@@ -458,6 +494,7 @@ watch(
             size="small"
             type="primary"
             :loading="creating"
+            :disabled="renderLoading || render === null"
             @click="handleCreate"
           >
             Create service

@@ -131,6 +131,10 @@ type ACMEConfig struct {
 	// Email is the ACME registration contact. Omitted when empty (Let's
 	// Encrypt accepts accounts without a contact address).
 	Email string `yaml:"email,omitempty" toml:"email,omitempty"`
+	// CAServer overrides the ACME directory endpoint, e.g. the Let's Encrypt
+	// staging URL for iteration. Omitted when empty so Traefik's production
+	// default (Let's Encrypt) stays in effect.
+	CAServer string `yaml:"caServer,omitempty" toml:"caServer,omitempty"`
 	// Storage is the path of the certificate storage file inside the
 	// Traefik container.
 	Storage string `yaml:"storage" toml:"storage"`

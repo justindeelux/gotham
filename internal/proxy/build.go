@@ -99,9 +99,10 @@ func ValidateDomain(domain string) error {
 }
 
 // BuildConfig renders the routing model for a node from its routes, the
-// configured DNS providers and the optional ACME contact address. The output
-// is a pure function of the input (map iteration is sorted at marshal time),
-// so identical state always yields identical configuration bytes.
+// configured DNS providers, the optional ACME contact address and the
+// optional ACME directory endpoint. The output is a pure function of the
+// input (map iteration is sorted at marshal time), so identical state always
+// yields identical configuration bytes.
 //
 // Every route produces one HTTP forwarding router on the web entrypoint. A
 // route whose certificate configuration is active additionally produces an
@@ -109,8 +110,9 @@ func ValidateDomain(domain string) error {
 // gotham-https-redirect middleware; routes without one keep the BE-6.1
 // plain-HTTP behavior. The static resolvers are one HTTP-01 resolver plus one
 // DNS-01 resolver per enabled provider; credentials never appear here, they
-// travel to the Traefik container as environment variables only.
-func BuildConfig(routes []Route, providers []DNSProvider, acmeEmail string) ProxyConfig {
+// travel to the Traefik container as environment variables only. caServer
+// renders into every resolver; empty keeps the production default.
+func BuildConfig(routes []Route, providers []DNSProvider, acmeEmail, caServer string) ProxyConfig {
 	cfg := ProxyConfig{
 		EntryPoints: map[string]EntryPoint{
 			EntryPointWeb:       {Address: ":80"},
@@ -120,8 +122,9 @@ func BuildConfig(routes []Route, providers []DNSProvider, acmeEmail string) Prox
 		CertificatesResolvers: map[string]CertificatesResolver{
 			DefaultResolverName: {
 				ACME: ACMEConfig{
-					Email:   acmeEmail,
-					Storage: TraefikAcmeStorage,
+					Email:    acmeEmail,
+					CAServer: caServer,
+					Storage:  TraefikAcmeStorage,
 					HTTPChallenge: &HTTPChallenge{
 						EntryPoint: EntryPointWeb,
 					},
@@ -152,8 +155,9 @@ func BuildConfig(routes []Route, providers []DNSProvider, acmeEmail string) Prox
 		}
 		cfg.CertificatesResolvers[name] = CertificatesResolver{
 			ACME: ACMEConfig{
-				Email:   acmeEmail,
-				Storage: TraefikAcmeStorage,
+				Email:    acmeEmail,
+				CAServer: caServer,
+				Storage:  TraefikAcmeStorage,
 				DNSChallenge: &DNSChallenge{
 					Provider: string(providerType),
 				},

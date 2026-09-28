@@ -254,6 +254,120 @@ scheme = 'https'
 permanent = true
 `
 
+// TestGenerateCAServerGolden pins the optional ACME directory override: the
+// staging endpoint renders into every resolver, and an empty value keeps the
+// production default (no caServer key at all).
+func TestGenerateCAServerGolden(t *testing.T) {
+	const staging = "https://acme-staging-v02.api.letsencrypt.org/directory"
+	cases := []struct {
+		format Format
+		golden string
+	}{
+		{format: FormatYAML, golden: goldenSSLStagingStaticYAML},
+		{format: FormatTOML, golden: goldenSSLStagingStaticTOML},
+	}
+	for _, tc := range cases {
+		files, err := Generate(BuildConfig(nil, sslGoldenProviders(), "ops@example.com", staging), tc.format)
+		if err != nil {
+			t.Fatalf("%s: Generate: %v", tc.format, err)
+		}
+		got := string(files[0].Content)
+		if got != expandGolden(tc.golden) {
+			t.Errorf("%s: staging static mismatch\n--- got ---\n%s\n--- want ---\n%s", tc.format, got, expandGolden(tc.golden))
+		}
+	}
+	// An empty caServer keeps every resolver on Traefik's production default.
+	for name, resolver := range BuildConfig(nil, sslGoldenProviders(), "ops@example.com", "").CertificatesResolvers {
+		if resolver.ACME.CAServer != "" {
+			t.Errorf("resolver %s: caServer = %q, want empty", name, resolver.ACME.CAServer)
+		}
+	}
+}
+
+const goldenSSLStagingStaticYAML = `entryPoints:
+  traefik:
+    address: :8080
+  web:
+    address: :80
+  websecure:
+    address: :443
+ping:
+  entryPoint: traefik
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: ops@example.com
+      caServer: https://acme-staging-v02.api.letsencrypt.org/directory
+      storage: /acme/acme.json
+      httpChallenge:
+        entryPoint: web
+  letsencrypt-dns-cloudflare:
+    acme:
+      email: ops@example.com
+      caServer: https://acme-staging-v02.api.letsencrypt.org/directory
+      storage: /acme/acme.json
+      dnsChallenge:
+        provider: cloudflare
+  letsencrypt-dns-digitalocean:
+    acme:
+      email: ops@example.com
+      caServer: https://acme-staging-v02.api.letsencrypt.org/directory
+      storage: /acme/acme.json
+      dnsChallenge:
+        provider: digitalocean
+`
+
+const goldenSSLStagingStaticTOML = `[entryPoints]
+[entryPoints.traefik]
+address = ':8080'
+
+[entryPoints.web]
+address = ':80'
+
+[entryPoints.websecure]
+address = ':443'
+
+[ping]
+entryPoint = 'traefik'
+
+[providers]
+[providers.file]
+directory = '/etc/traefik/dynamic'
+watch = true
+
+[certificatesResolvers]
+[certificatesResolvers.letsencrypt]
+[certificatesResolvers.letsencrypt.acme]
+email = 'ops@example.com'
+caServer = 'https://acme-staging-v02.api.letsencrypt.org/directory'
+storage = '/acme/acme.json'
+
+[certificatesResolvers.letsencrypt.acme.httpChallenge]
+entryPoint = 'web'
+
+[certificatesResolvers.letsencrypt-dns-cloudflare]
+[certificatesResolvers.letsencrypt-dns-cloudflare.acme]
+email = 'ops@example.com'
+caServer = 'https://acme-staging-v02.api.letsencrypt.org/directory'
+storage = '/acme/acme.json'
+
+[certificatesResolvers.letsencrypt-dns-cloudflare.acme.dnsChallenge]
+provider = 'cloudflare'
+
+[certificatesResolvers.letsencrypt-dns-digitalocean]
+[certificatesResolvers.letsencrypt-dns-digitalocean.acme]
+email = 'ops@example.com'
+caServer = 'https://acme-staging-v02.api.letsencrypt.org/directory'
+storage = '/acme/acme.json'
+
+[certificatesResolvers.letsencrypt-dns-digitalocean.acme.dnsChallenge]
+provider = 'digitalocean'
+`
+
 // TestGenerateStaticResolverGoldens pins every resolver shape: the HTTP-01
 // default plus one DNS-01 resolver per enabled provider, with the shared
 // storage/email and the credential never rendered.
@@ -266,7 +380,7 @@ func TestGenerateStaticResolverGoldens(t *testing.T) {
 		{format: FormatTOML, golden: goldenSSLStaticTOML},
 	}
 	for _, tc := range cases {
-		files, err := Generate(BuildConfig(nil, sslGoldenProviders(), "ops@example.com"), tc.format)
+		files, err := Generate(BuildConfig(nil, sslGoldenProviders(), "ops@example.com", ""), tc.format)
 		if err != nil {
 			t.Fatalf("%s: Generate: %v", tc.format, err)
 		}
@@ -302,7 +416,7 @@ func TestGenerateHTTPSActivationGoldens(t *testing.T) {
 		{format: FormatTOML, golden: goldenSSLHTTP01DynamicTOML},
 	}
 	for _, tc := range cases {
-		files, err := Generate(BuildConfig([]Route{route}, nil, ""), tc.format)
+		files, err := Generate(BuildConfig([]Route{route}, nil, "", ""), tc.format)
 		if err != nil {
 			t.Fatalf("%s: Generate: %v", tc.format, err)
 		}
@@ -402,7 +516,7 @@ func TestGenerateWildcardActivationGoldens(t *testing.T) {
 		{format: FormatTOML, golden: goldenSSLWildcardDynamicTOML},
 	}
 	for _, tc := range cases {
-		files, err := Generate(BuildConfig([]Route{route}, sslGoldenProviders(), "ops@example.com"), tc.format)
+		files, err := Generate(BuildConfig([]Route{route}, sslGoldenProviders(), "ops@example.com", ""), tc.format)
 		if err != nil {
 			t.Fatalf("%s: Generate: %v", tc.format, err)
 		}
@@ -432,7 +546,7 @@ func TestGenerateWildcardMultiLevelHostGolden(t *testing.T) {
 		{format: FormatTOML, golden: goldenSSLWildcardSubDynamicTOML},
 	}
 	for _, tc := range cases {
-		files, err := Generate(BuildConfig([]Route{route}, sslGoldenProviders(), "ops@example.com"), tc.format)
+		files, err := Generate(BuildConfig([]Route{route}, sslGoldenProviders(), "ops@example.com", ""), tc.format)
 		if err != nil {
 			t.Fatalf("%s: Generate: %v", tc.format, err)
 		}
@@ -451,7 +565,7 @@ func TestGenerateInactiveCertificateKeepsHTTPOnly(t *testing.T) {
 		Domain: "app.example.com",
 		Target: "http://172.17.0.1:3000",
 	}
-	cfg := BuildConfig([]Route{route}, sslGoldenProviders(), "ops@example.com")
+	cfg := BuildConfig([]Route{route}, sslGoldenProviders(), "ops@example.com", "")
 	if _, ok := cfg.Routers[serviceName(route.AppID)+"-websecure"]; ok {
 		t.Fatal("inactive certificate emitted an HTTPS router")
 	}
@@ -482,11 +596,11 @@ func TestGenerateResolverDeterminism(t *testing.T) {
 	providers := sslGoldenProviders()
 	reversed := []DNSProvider{providers[1], providers[0]}
 	for _, format := range []Format{FormatYAML, FormatTOML} {
-		first, err := Generate(BuildConfig(nil, providers, "ops@example.com"), format)
+		first, err := Generate(BuildConfig(nil, providers, "ops@example.com", ""), format)
 		if err != nil {
 			t.Fatalf("%s: %v", format, err)
 		}
-		second, err := Generate(BuildConfig(nil, reversed, "ops@example.com"), format)
+		second, err := Generate(BuildConfig(nil, reversed, "ops@example.com", ""), format)
 		if err != nil {
 			t.Fatalf("%s: %v", format, err)
 		}
@@ -504,7 +618,7 @@ func TestGenerateSkipsDisabledAndUnknownProviders(t *testing.T) {
 		{ID: uuid.New(), Provider: ProviderCloudflare, Zones: []string{"example.com"}, Enabled: false},
 		{ID: uuid.New(), Provider: DNSProviderType("route53"), Zones: []string{"example.net"}, Enabled: true},
 	}
-	cfg := BuildConfig(nil, providers, "")
+	cfg := BuildConfig(nil, providers, "", "")
 	if len(cfg.CertificatesResolvers) != 1 {
 		t.Fatalf("resolvers = %#v, want only the HTTP-01 default", cfg.CertificatesResolvers)
 	}

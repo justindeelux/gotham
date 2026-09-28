@@ -432,7 +432,12 @@ func p6Sync(svc *proxy.SyncService, serverID uuid.UUID) error {
 	return nil
 }
 
-// p6RunNginx starts an nginx container publishing the given spec.
+// p6RunNginx starts an nginx container publishing the given spec. The agent
+// creates the container before starting it and returns the created ID together
+// with a start error (a port conflict, for example), so cleanup is registered
+// for any returned ID before the error is handled and a failed start cannot
+// leak the container. Removal of this owned container fails the test, like
+// every other owned-resource cleanup.
 func p6RunNginx(t *testing.T, ctx context.Context, engine *agent.DockerClient, name, portSpec string) string {
 	t.Helper()
 	id, err := engine.RunImage(ctx, &agentv1.CreateContainerRequest{
@@ -440,16 +445,18 @@ func p6RunNginx(t *testing.T, ctx context.Context, engine *agent.DockerClient, n
 		Name:  name,
 		Ports: []string{portSpec},
 	})
+	if id != "" {
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			if err := engine.Remove(cleanupCtx, id); err != nil {
+				t.Errorf("cleanup container %s: %v", name, err)
+			}
+		})
+	}
 	if err != nil {
 		t.Fatalf("run %s: %v", name, err)
 	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		if err := engine.Remove(cleanupCtx, id); err != nil {
-			t.Logf("cleanup container %s: %v", name, err)
-		}
-	})
 	return id
 }
 

@@ -291,13 +291,18 @@ func (s *ProxyServer) ping(ctx context.Context) error {
 }
 
 // sanitizeProxyPath validates a document path: it must be relative, must not
-// escape the proxy directory (no "..", no absolute path) and must not contain
-// a backslash (a Windows separator that is a plain filename character on
-// Linux and would make the path ambiguous between the two sides).
+// escape the proxy directory (no "..", no absolute path), must not contain a
+// backslash (a Windows separator that is a plain filename character on Linux
+// and would make the path ambiguous between the two sides) and must not
+// contain a NUL byte (the kernel rejects NUL in a filename, which would fail
+// the write pass only after earlier documents of the batch were replaced).
 func sanitizeProxyPath(path string) (string, error) {
 	raw := strings.TrimSpace(path)
 	if raw == "" {
 		return "", errors.New("path is required")
+	}
+	if strings.ContainsRune(raw, 0) {
+		return "", fmt.Errorf("path %q must not contain a NUL byte", path)
 	}
 	if filepath.IsAbs(raw) || strings.HasPrefix(raw, "/") {
 		return "", fmt.Errorf("path %q must be relative", path)

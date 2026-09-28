@@ -159,6 +159,10 @@ type Config struct {
 	// ACMEEmail is the optional ACME contact address rendered into every
 	// generated certificate resolver; empty omits it.
 	ACMEEmail string
+	// CAServer is the optional ACME directory endpoint rendered into every
+	// generated certificate resolver (e.g. the Let's Encrypt staging URL);
+	// empty keeps the production default.
+	CAServer string
 	// ConfigDir and AcmeDir are the node directories mounted into the
 	// Traefik container; they default to the agent's production layout
 	// (TraefikDir / TraefikAcmeDir) and only need overriding for a relocated
@@ -232,6 +236,7 @@ type SyncService struct {
 	acmeDir     string
 	secret      string
 	acmeEmail   string
+	caServer    string
 	timeout     time.Duration
 
 	// mu serializes one node's snapshot read through bootstrap and write, so
@@ -283,6 +288,7 @@ func NewService(cfg Config) *SyncService {
 		acmeDir:     acmeDir,
 		secret:      cfg.Secret,
 		acmeEmail:   cfg.ACMEEmail,
+		caServer:    cfg.CAServer,
 		timeout:     timeout,
 	}
 }
@@ -339,7 +345,7 @@ func (s *SyncService) SyncServer(ctx context.Context, serverID uuid.UUID) error 
 	}
 	access := s.openProviders(providers)
 	routes, diagnostics := routesForServer(apps, serverID, s.backendHost, nodeList, access)
-	files, err := Generate(BuildConfig(routes, providers, s.acmeEmail), s.format)
+	files, err := Generate(BuildConfig(routes, providers, s.acmeEmail, s.caServer), s.format)
 	if err != nil {
 		return err
 	}

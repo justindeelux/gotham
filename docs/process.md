@@ -98,3 +98,9 @@ existing symbols and `detect_changes` before committing (see `AGENTS.md`).
   no plaintext token logging; dev-mode plaintext agent transport when no CA.
 - Migration numbering: `00009` reserved for Traefik/domains, `00010` deploy
   keys, `00011` backups. Never reuse a number.
+- BE-6.2 acceptance (2026-09-28): the ACME resolver gains a `caServer` knob
+  (empty = Traefik's Let's Encrypt production default) so iteration happens
+  against the Let's Encrypt staging directory; the production acceptance is a
+  single, explicitly opted-in issuance (`GOTHAM_E2E_ACME_CA=production`).
+  Gated acceptance test defaults to staging, so an ambient run cannot consume
+  production rate limits.

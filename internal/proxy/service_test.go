@@ -179,10 +179,11 @@ func (f *fakeHistory) activeHash() string {
 
 // fakeAgent records the ProxyService calls a sync makes.
 type fakeAgent struct {
-	events  *[]string
-	calls   []*agentv1.WriteProxyConfigRequest
-	respond func(in *agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error)
-	closed  bool
+	events   *[]string
+	calls    []*agentv1.WriteProxyConfigRequest
+	respond  func(in *agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error)
+	closeErr error
+	closed   bool
 }
 
 // writeProxyConfigDefault records the call and reports a successful ping for
@@ -209,7 +210,7 @@ func (f *fakeAgent) WriteProxyConfig(_ context.Context, in *agentv1.WriteProxyCo
 func (f *fakeAgent) Close() error {
 	f.closed = true
 	f.record("close")
-	return nil
+	return f.closeErr
 }
 
 // record appends one event when the fixture shares an event log.
@@ -223,14 +224,17 @@ func (f *fakeAgent) record(event string) {
 type fakeContainers struct {
 	containers.ContainerService
 
-	events  *[]string
-	list    []containers.Container
-	listErr error
-	started []string
-	removed []string
-	pulled  []string
-	runs    []containers.RunOptions
-	runErr  error
+	events    *[]string
+	list      []containers.Container
+	listErr   error
+	startErr  error
+	pullErr   error
+	removeErr error
+	started   []string
+	removed   []string
+	pulled    []string
+	runs      []containers.RunOptions
+	runErr    error
 }
 
 // List returns the canned containers.
@@ -246,21 +250,21 @@ func (f *fakeContainers) List(context.Context, uuid.UUID) ([]containers.Containe
 func (f *fakeContainers) Start(_ context.Context, _ uuid.UUID, containerID string) error {
 	f.record("start=" + containerID)
 	f.started = append(f.started, containerID)
-	return nil
+	return f.startErr
 }
 
 // Remove records a container removal.
 func (f *fakeContainers) Remove(_ context.Context, _ uuid.UUID, containerID string) error {
 	f.record("remove=" + containerID)
 	f.removed = append(f.removed, containerID)
-	return nil
+	return f.removeErr
 }
 
 // Pull records an image pull.
 func (f *fakeContainers) Pull(_ context.Context, _ uuid.UUID, image string) error {
 	f.record("pull=" + image)
 	f.pulled = append(f.pulled, image)
-	return nil
+	return f.pullErr
 }
 
 // Run records a container create+start and adds it to the canned list, so a

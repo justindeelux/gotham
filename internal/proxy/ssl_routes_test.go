@@ -290,6 +290,35 @@ func TestCertificateCRUDRoutes(t *testing.T) {
 	}
 }
 
+// TestStrictDecodingBodyLimitEdges pins the exact size boundary: trailing
+// whitespace padding up to and including the limit is accepted, one byte above
+// is rejected.
+func TestStrictDecodingBodyLimitEdges(t *testing.T) {
+	base := `{"enabled":false}`
+	padded := func(size int) string {
+		return base + strings.Repeat(" ", size-len(base))
+	}
+	cases := []struct {
+		name   string
+		body   string
+		status int
+	}{
+		{name: "one byte below the limit", body: padded(maxSSLBodyBytes - 1), status: http.StatusOK},
+		{name: "exactly at the limit", body: padded(maxSSLBodyBytes), status: http.StatusOK},
+		{name: "one byte above the limit", body: padded(maxSSLBodyBytes + 1), status: http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := newSSLRoutes(&fakeDNSProviderService{provider: sampleProvider()}, nil)
+			recorder := doJSON(t, handler, http.MethodPatch,
+				"/v1/proxy/dns-providers/"+sampleProvider().ID.String(), tc.body)
+			if recorder.Code != tc.status {
+				t.Fatalf("status = %d, want %d (body %s)", recorder.Code, tc.status, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestSSLErrorMapping(t *testing.T) {
 	serverProviderID := sampleProvider().ID.String()
 	cases := []struct {

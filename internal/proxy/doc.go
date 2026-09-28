@@ -85,14 +85,18 @@
 //
 // DNS-01 credentials travel to the gotham-traefik container as environment
 // variables only, and only for providers referenced by an active certificate
-// on that node. They never enter the generated documents, the configuration
-// history, the API responses or the logs. Because the engine does not report a
-// running container's environment back through the agent contract, environment
-// drift is detected against a recorded fingerprint label (a keyed, non-
-// reversible HMAC of the desired KEY=VALUE pairs): a credential rotation or a
-// provider change alters the fingerprint and recreates the container, while an
-// environment changed out-of-band under Gotham is invisible until the next
-// recorded change.
+// on that node. They never enter the generated documents or the configuration
+// history, and every error and log line produced while the node's credential
+// environment is known passes through one redaction boundary (the push path:
+// container lifecycle, agent writes, reload verification, revert and the
+// deferred agent close log) that replaces every credential value with
+// "<redacted>" before it can reach the API or the logs. Because the engine
+// does not report a running container's environment back through the agent
+// contract, environment drift is detected against a recorded fingerprint
+// label (a keyed, non-reversible HMAC of the desired KEY=VALUE pairs): a
+// credential rotation or a provider change alters the fingerprint and
+// recreates the container, while an environment changed out-of-band under
+// Gotham is invisible until the next recorded change.
 //
 // FEATURE_PROXY=false disables the whole surface: no routes are mounted, no
 // deploy hook is wired and no configuration is pushed.

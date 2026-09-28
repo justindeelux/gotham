@@ -866,14 +866,29 @@ func findContainer(byID map[string]*containers.Container, containerID string) *c
 //
 // A failure never invalidates the caller's pending history record: the caller
 // retains it for every failure, including a dial error (R2).
-func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, desired desiredState) error {
+//
+// Credential redaction boundary: this is the one place where the node's
+// credential environment is known, so every error and every log line produced
+// here passes through redactEnvValues — container lifecycle failures
+// (Start/Pull/Remove/Run), agent write failures, reload verification
+// failures, the dial error and the deferred Close log alike. Callers
+// (SyncServer, RevertServer) can therefore propagate push errors to the API
+// and the logs without a second scrub.
+func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, desired desiredState) (err error) {
+	// The single redaction boundary of the push path: every return below is
+	// scrubbed, including any added later.
+	defer func() {
+		err = redactEnvValues(err, desired.env)
+	}()
+
 	client, err := s.dialAgent(ctx, serverID)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if closeErr := client.Close(); closeErr != nil {
-			s.logger.Debug("proxy: close agent connection", "server_id", serverID, "error", closeErr)
+			s.logger.Debug("proxy: close agent connection", "server_id", serverID,
+				"error", redactEnvValues(closeErr, desired.env))
 		}
 	}()
 
@@ -995,7 +1010,8 @@ func findTraefik(nodeList []containers.Container) containerState {
 // creates the container when it is missing. Creation is safe only after the
 // static configuration exists (the caller writes it first). The DNS-01
 // credentials travel in env and are recorded on the container only as the
-// non-reversible fingerprint inside traefikLabels.
+// non-reversible fingerprint inside traefikLabels; errors are returned raw
+// and scrubbed at the caller's push boundary.
 func (s *SyncService) bootstrapContainer(ctx context.Context, serverID uuid.UUID, state containerState, env []string) error {
 	if state.exists {
 		return s.containers.Start(ctx, serverID, state.container.ID)
@@ -1012,15 +1028,32 @@ func (s *SyncService) bootstrapContainer(ctx context.Context, serverID uuid.UUID
 		Volumes:       TraefikVolumesFor(s.configDir, s.acmeDir),
 		RestartPolicy: TraefikRestartPolicy,
 	})
-	// A backend error must never surface a credential that travelled in env:
-	// the error text is sanitized before it reaches push, the API or the logs.
-	return redactEnvValues(err, env)
+	// The caller (push) owns the credential-redaction boundary: the error is
+	// returned raw so the original classification survives, and the push
+	// defer scrubs every env value before the error reaches the API or the
+	// logs.
+	return err
 }
+
+// redactedError carries sanitized error text while preserving the original
+// error chain, so errors.Is/errors.As classification (mapNodeError and the
+// HTTP status mapping) survives redaction.
+type redactedError struct {
+	message string
+	err     error
+}
+
+// Error returns the sanitized message.
+func (e *redactedError) Error() string { return e.message }
+
+// Unwrap exposes the original error to errors.Is/errors.As.
+func (e *redactedError) Unwrap() error { return e.err }
 
 // redactEnvValues replaces every credential value from env in the error text
 // with "<redacted>", so a backend error that echoes its request cannot leak a
 // DNS-01 token into logs or API error text. Variable names and the rest of the
-// message stay readable for diagnosis; an error that does not mention any
+// message stay readable for diagnosis. The returned error keeps the original
+// error chain (errors.Is/errors.As), and an error that does not mention any
 // value is returned unchanged.
 func redactEnvValues(err error, env []string) error {
 	if err == nil || len(env) == 0 {
@@ -1041,7 +1074,7 @@ func redactEnvValues(err error, env []string) error {
 	if !redacted {
 		return err
 	}
-	return errors.New(message)
+	return &redactedError{message: message, err: err}
 }
 
 // traefikMatches verifies an existing container against the managed proxy's

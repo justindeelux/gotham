@@ -636,8 +636,8 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 //   - duplicate sources hold every conflicting rule back (row order does not
 //     prove ownership, and the unique index only prevents new duplicates),
 //   - a rule that forms a chain with an earlier enabled rule is held back
-//     (see the no-chain net below), so no redirect chain — and therefore no
-//     loop — is ever generated.
+//     (see the no-chain net below), so the generated per-snapshot selection
+//     is chain-free.
 func redirectsForServer(apps []ProxiedApplication, rules []RedirectRule, serverID uuid.UUID) ([]Redirect, []Diagnostic) {
 	if len(rules) == 0 {
 		return nil, nil
@@ -697,13 +697,18 @@ func redirectsForServer(apps []ProxiedApplication, rules []RedirectRule, serverI
 		}
 	}
 
-	// No-chain net. The service rejects a chain at write time in both
-	// directions, so this only catches racing writes (the guard is a
+	// No-chain net. The service rejects a sequential chain at write time in
+	// both directions; this net catches racing writes (the guard is a
 	// check-then-write, not a database constraint). It runs against every
 	// enabled rule, not just this node's candidates, because a chain can span
-	// nodes: holding back the later-created rule of a pair mirrors the
-	// write-time rejection of the second write, while an earlier rule that was
-	// valid on its own keeps serving.
+	// nodes: for a single committed snapshot it holds back a chain's later-
+	// *created* rule (the order of ListRedirectRules: created_at, id — not the
+	// rule whose update committed last), while an earlier rule that was valid
+	// on its own keeps serving. This is a per-snapshot selection, not an
+	// atomic fleet replacement: SyncServer writes one node and SyncAll applies
+	// nodes separately, so a node that has not converged yet can still serve a
+	// chain until its own sync runs (an unreachable or failing node prolongs
+	// the window).
 	for i := range candidates {
 		entry := &candidates[i]
 		if entry.reason != "" {

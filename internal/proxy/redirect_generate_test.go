@@ -30,8 +30,8 @@ const goldenRedirectYAML = `http:
   middlewares:
     gotham-redirect-dddddddd-1111-2222-3333-444444444444:
       redirectRegex:
-        regex: (?i)^http://old\.example\.com\.?(?::[^/]*)?/(.*)
-        replacement: https://new.example.com/${1}
+        regex: (?i)^https?://[^/?#]*(.*)$
+        replacement: https://new.example.com${1}
         permanent: true
 `
 
@@ -52,8 +52,8 @@ servers = []
 [http.middlewares]
 [http.middlewares.gotham-redirect-dddddddd-1111-2222-3333-444444444444]
 [http.middlewares.gotham-redirect-dddddddd-1111-2222-3333-444444444444.redirectRegex]
-regex = '(?i)^http://old\.example\.com\.?(?::[^/]*)?/(.*)'
-replacement = 'https://new.example.com/${1}'
+regex = '(?i)^https?://[^/?#]*(.*)$'
+replacement = 'https://new.example.com${1}'
 permanent = true
 `
 
@@ -153,14 +153,14 @@ func TestBuildConfigRedirectPathAndCodeMapping(t *testing.T) {
 		{
 			name:          "preserve path, temporary",
 			redirect:      Redirect{ID: id, Source: "a.example.com", Target: "b.example.com", Code: RedirectCodeTemporary, PreservePath: true},
-			wantRegex:     `(?i)^http://a\.example\.com\.?(?::[^/]*)?/(.*)`,
-			wantReplace:   "https://b.example.com/${1}",
+			wantRegex:     `(?i)^https?://[^/?#]*(.*)$`,
+			wantReplace:   "https://b.example.com${1}",
 			wantPermanent: false,
 		},
 		{
 			name:          "drop path, permanent",
 			redirect:      Redirect{ID: id, Source: "a.example.com", Target: "b.example.com", Code: RedirectCodePermanent, PreservePath: false},
-			wantRegex:     `(?i)^http://a\.example\.com\.?(?::[^/]*)?/.*`,
+			wantRegex:     `(?i)^https?://.*$`,
 			wantReplace:   "https://b.example.com/",
 			wantPermanent: true,
 		},
@@ -221,25 +221,18 @@ func TestGenerateRedirectsDeterministic(t *testing.T) {
 	}
 }
 
-// TestRedirectRegexEscapesHost proves a host with regex metacharacters can
-// never escape the match expression (the domain validator already forbids
-// them, and the generator quotes defensively).
-func TestRedirectRegexEscapesHost(t *testing.T) {
-	pattern := RedirectRegexPattern("a.b.example.com", true)
-	if !strings.Contains(pattern, `a\.b\.example\.com`) {
-		t.Fatalf("pattern = %q, want quoted host dots", pattern)
+// TestRedirectRegexIsAuthorityAgnostic proves the match expression never
+// re-encodes the source host: the middleware is only attached to the matching
+// Host(source) router, so the router's canonicalization (case, one
+// fully-qualified trailing dot, bracketed authorities, numeric/empty/
+// non-numeric ports) is the single source of truth. A form the router accepts
+// but the regex misses falls through to the backend-less service and violates
+// the always-terminates guarantee, so the pattern must match every authority.
+func TestRedirectRegexIsAuthorityAgnostic(t *testing.T) {
+	pattern := regexp.MustCompile(RedirectRegexPattern(true))
+	if strings.Contains(pattern.String(), "example.com") {
+		t.Fatalf("pattern %q encodes the host; the router rule is the only host authority", pattern)
 	}
-}
-
-// TestRedirectRegexMatchesEveryRouterHostForm proves the match expression
-// terminates for every host form Traefik's Host(source) router accepts but the
-// raw URL retains: an optional port (numeric, empty or otherwise, because the
-// router strips it with net.SplitHostPort which accepts non-numeric ports), one
-// optional fully-qualified trailing dot, and any case. A form the router
-// accepts but the regex misses would fall through to the backend-less service,
-// violating the always-terminates guarantee.
-func TestRedirectRegexMatchesEveryRouterHostForm(t *testing.T) {
-	pattern := regexp.MustCompile(RedirectRegexPattern("old.example.com", true))
 
 	matches := []string{
 		"http://old.example.com/path?q=1",
@@ -250,6 +243,15 @@ func TestRedirectRegexMatchesEveryRouterHostForm(t *testing.T) {
 		"http://old.example.com./path",
 		"http://old.example.com.:80/path",
 		"http://Old.Example.Com:8080/path",
+		"http://[old.example.com]:80/path",
+		"http://[old.example.com]/path",
+		"http://[OLD.EXAMPLE.COM.]:abc/path",
+		// Absolute-form request targets keep their URI scheme in the raw URL.
+		"https://old.example.com/path?q=1",
+		// An authority without a path still terminates.
+		"http://old.example.com",
+		// A query-only remainder is preserved, not dropped.
+		"http://old.example.com?q=1",
 	}
 	for _, rawURL := range matches {
 		if !pattern.MatchString(rawURL) {
@@ -257,34 +259,43 @@ func TestRedirectRegexMatchesEveryRouterHostForm(t *testing.T) {
 		}
 	}
 
-	// Forms the router does not route to this rule must not be redirected by
-	// the regex either: a different host, a longer host, an extra label, or
-	// more than one trailing dot.
+	// Only full http(s) URLs reach the middleware; anything else must not be
+	// rewritten by it.
 	nonMatches := []string{
-		"http://elsewhere.example.com/path",
-		"http://old.example.comx/path",
-		"http://old.example.com.evil/path",
-		"http://old.example.com../path",
-		"http://sub.old.example.com/path",
+		"ftp://old.example.com/path",
+		"old.example.com/path",
+		"http:/old.example.com/path",
+		"//old.example.com/path",
 	}
 	for _, rawURL := range nonMatches {
 		if pattern.MatchString(rawURL) {
 			t.Errorf("pattern %q unexpectedly matches %q", pattern, rawURL)
 		}
 	}
+
+	// The drop-path variant matches the same authority class and discards the
+	// remainder.
+	dropPath := regexp.MustCompile(RedirectRegexPattern(false))
+	for _, rawURL := range matches {
+		if !dropPath.MatchString(rawURL) {
+			t.Errorf("drop-path pattern %q does not match %q", dropPath, rawURL)
+		}
+	}
 }
 
 // TestRedirectRegexCapturesPathAndQuery proves the captured group keeps the
-// path and query, including for the ported and dotted host forms.
+// whole remainder after the authority (path and query) for every host form.
 func TestRedirectRegexCapturesPathAndQuery(t *testing.T) {
-	pattern := regexp.MustCompile(RedirectRegexPattern("old.example.com", true))
+	pattern := regexp.MustCompile(RedirectRegexPattern(true))
 	for _, rawURL := range []string{
 		"http://old.example.com/a/b?q=1",
 		"http://old.example.com:80/a/b?q=1",
 		"http://old.example.com./a/b?q=1",
+		"http://[old.example.com]:80/a/b?q=1",
+		"https://OLD.EXAMPLE.COM./a/b?q=1",
 	} {
 		match := pattern.FindStringSubmatch(rawURL)
-		if len(match) != 2 || match[1] != "a/b?q=1" {
+		if len(match) != 2 || match[1] != "/a/b?q=1" {
 			t.Errorf("capture of %q = %#v, want the path and query", rawURL, match)
 		}
 	}

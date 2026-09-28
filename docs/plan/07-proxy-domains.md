@@ -183,36 +183,46 @@ without releasing the host — and must not shadow **any** application's
 `base_domain` (any node, including the owning application and migration-disabled
 rows). The target must not equal another enabled rule's source **and** the
 source must not equal another enabled rule's target: the no-chain guard is
-two-directional, so neither insertion order (create, update or enable) can
-complete a chain, and it reads every enabled rule in the database rather than
-only the rule's node, so a chain across nodes is rejected too. Source and
-target must differ. Write-time guards answer 409/400. The guard is a
-check-then-write, not a database constraint: concurrent racing writes are
-caught by the generator, which holds the later-created rule of a chain back
-(global candidate set, not node-local) and reports it as a per-application
-diagnostic. The generator also holds back duplicate sources, sources shadowing
-a routed host, domain-disabled owners and invalid codes instead of freezing the
-node. Deleting an application cascades its rules; a domain-disabled application
-does not emit its redirects and cannot own a rule, because its route is already
+two-directional, so a sequential conflicting write (create, update or enable)
+is rejected regardless of insertion order, and it reads every enabled rule in
+the database rather than only the rule's node. Source and target must differ.
+Write-time guards answer 409/400.
+
+Honest limits of the no-chain guarantee: the guard is a check-then-write, not a
+database constraint, so two racing writes can both pass and persist a chain; and
+the generator is not an atomic fleet replacement — `SyncServer` reads and writes
+one node and `SyncAll` applies nodes separately, so a chain can still be served
+by a node until that node converges successfully (an unreachable or failing node
+prolongs the window). Within any single committed snapshot the generator selects
+a chain-free rule set by holding back a chain's later-**created** rule
+(`created_at, id` — creation order, not the rule whose update committed last),
+plus duplicate sources, sources shadowing a routed host, domain-disabled owners
+and invalid codes, as per-application diagnostics instead of freezing the node.
+Deleting an application cascades its rules; a domain-disabled application does
+not emit its redirects and cannot own a rule, because its route is already
 excluded by the uniqueness conflict.
 
 **Generation** emits one `redirectRegex` middleware and one web-entrypoint
 router per enabled rule: rule ``Host(`source`)``, middleware
-`(?i)^http://source\.?(?::[^/]*)?/(.*) → https://target/${1}` when the path is
-preserved (path and query kept) or `.../.* → https://target/` when it is not.
-The host part of the regex deliberately accepts every form Traefik's
-`Host(source)` router matches while the raw URL retains it — any case, one
-fully-qualified trailing dot, and any port form (the router strips ports with
-`net.SplitHostPort`, which accepts non-numeric and empty ports) — so the
-middleware always terminates for the requests the router sends it and can never
-fall through to the backend-less service. Every redirect router references one
-shared `gotham-redirect-noop` service with `servers: []`: Traefik v3 rejects a
-router without a service, and the `redirectRegex` middleware terminates the
-request before a backend is consulted, so the service is never a proxy target
-(asserted by golden/unit tests and exercised per host form in the gated e2e).
-The router never carries the shared `gotham-https-redirect` middleware; the
-HTTP→HTTPS redirect stays a separate concern, and the target scheme is always
-`https`.
+`(?i)^https?://[^/?#]*(.*) → https://target${1}` when the path is preserved
+(path and query kept, including a query-only remainder) or
+`(?i)^https?://.* → https://target/` when it is not. The pattern deliberately
+does not re-encode the source host: it is attached only to the `Host(source)`
+router, so the router's own canonicalization — case, one fully-qualified
+trailing dot, bracketed authorities, and numeric/empty/non-numeric ports (its
+decorator strips ports with `net.SplitHostPort`) — is the single host authority
+and every router-accepted request terminates in the redirect. A host-encoding
+pattern missed the bracketed and non-numeric-port authorities, which fell
+through to the backend-less service. The pattern also accepts an `https` scheme
+because an absolute-form request target can carry an https URI over the
+plain-HTTP entrypoint while the Host header still routes it. Every redirect
+router references one shared `gotham-redirect-noop` service with `servers: []`:
+Traefik v3 rejects a router without a service, and the `redirectRegex`
+middleware terminates the request before a backend is consulted, so the service
+is never a proxy target (asserted by golden/unit tests and exercised per
+authority form in the gated e2e). The router never carries the shared
+`gotham-https-redirect` middleware; the HTTP→HTTPS redirect stays a separate
+concern, and the target scheme is always `https`.
 
 **Codes:** Traefik's `redirectRegex` only distinguishes permanent from
 temporary, and it special-cases only `GET`: the `301` intent answers `301` to
@@ -256,9 +266,10 @@ filter.
 **Verification evidence**
 
 - Unit: generator goldens (YAML + TOML), the no-backends /
-  terminating-middleware assertions and the regex host-form matrix (port,
-  empty/non-numeric port, trailing dot, case; with non-matching neighbours)
-  (`internal/proxy/redirect_generate_test.go`); CRUD validation, both no-chain
+  terminating-middleware assertions and the authority-agnostic regex matrix
+  (bare/uppercase/ported/empty-port/non-numeric-port/trailing-dot/bracketed
+  forms, plus the scheme requirement) (`internal/proxy/redirect_generate_test.go`);
+  CRUD validation, both no-chain
   directions across create/update/enable and the later-rule hold-back filter
   (`redirects_test.go`); status mapping including wildcard main and SANs,
   apex/multi-label rejection and unreachable nodes
@@ -275,7 +286,8 @@ filter.
   `TestP6RedirectsAndCertificateStatus` in `internal/e2e/p6_redirects_test.go` —
   a real store-backed rule answers `HTTP 301` for its source host through the
   bootstrapped Traefik with path+query preserved **for the bare, ported,
-  dot-suffixed and uppercase host forms**, `HEAD`/`POST` answer `308` for the
+  empty-port, non-numeric-port, dot-suffixed, bracketed (with port) and
+  uppercase authority forms the router accepts**, `HEAD`/`POST` answer `308` for the
   permanent intent and `307` for the temporary one, pausing removes the route
   and re-enabling restores it, a proxy restart keeps serving it, and certificate
   status walks empty → absent, unreadable → unknown, missing → absent,

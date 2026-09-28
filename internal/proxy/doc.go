@@ -105,18 +105,26 @@
 // a web-entrypoint redirectRegex middleware plus a router that references a
 // shared service with no servers — Traefik requires a service on a router, and
 // the middleware terminates the request before a backend is consulted, so a
-// redirect router can never proxy anywhere. The regex accepts every host form
-// the Host(source) router matches while the raw URL keeps it (port, trailing
-// dot, case), so the redirect always terminates instead of falling through to
+// redirect router can never proxy anywhere. The middleware pattern is
+// authority-agnostic: it is attached only to the matching Host(source) router,
+// so the router's canonicalization (case, one trailing dot, bracketed
+// authorities, numeric/empty/non-numeric ports) is the single host authority
+// and every router-accepted request terminates instead of falling through to
 // that service. Redirect routers never carry the shared HTTP→HTTPS middleware.
 // The source host is globally unique and never shadows any application's base
 // domain; a target is never another enabled rule's source and a source is never
-// another enabled rule's target, so no chain (and no loop) can be written.
-// Conflicts that slip past a write (racing check-then-write) are held back at
-// generation time — the later-created rule of a chain, duplicate sources,
-// invalid rows — as per-application diagnostics, exactly like unroutable
-// application rows. A rule of a domain-disabled application is held back with
-// its application.
+// another enabled rule's target. Those are committed-state checks: sequential
+// conflicting writes are rejected, but a racing check-then-write can still
+// persist a chain (no database constraint enforces it), and the generator is
+// not an atomic fleet replacement — SyncServer writes one node and SyncAll
+// applies nodes separately, so live fleet-wide chain-freedom requires the
+// affected nodes to converge successfully. Within one committed snapshot the
+// generator selects a chain-free rule set by holding back a chain's
+// later-created rule (created_at, id — creation order, not the rule whose
+// update committed last), plus duplicate sources, sources shadowing a routed
+// host, domain-disabled owners and invalid codes, as per-application
+// diagnostics exactly like unroutable application rows. A rule of a
+// domain-disabled application is held back with its application.
 //
 // Certificate status is computed on read, never stored: the CP's status
 // service maps each certificate intent to its node's ACME storage through the

@@ -332,9 +332,12 @@ func NewDefaultRedirectService(cfg RedirectConfig) RedirectService {
 // source must be a valid exact host that shadows no application base domain
 // and no other rule; the target must be a valid exact host that neither points
 // at another enabled rule's source nor is the target of one (the no-chain
-// guard checks both directions, globally), so no redirect chain — and
-// therefore no loop — can be written. Redirect rules are emitted only for
-// enabled rules of domain-healthy applications on their node.
+// guard checks both directions, globally), so a sequential conflicting write
+// cannot complete a chain. The guard is committed-state check-then-write, not
+// a database constraint: a racing write can still persist a chain, which the
+// generator then holds back per snapshot (see checkRedirectWrites and
+// redirectsForServer for the exact limits). Redirect rules are emitted only
+// for enabled rules of domain-healthy applications on their node.
 func (s *redirectService) CreateRedirect(ctx context.Context, in CreateRedirectInput) (DomainRedirect, error) {
 	if in.ApplicationID == uuid.Nil {
 		return DomainRedirect{}, fmt.Errorf("%w: application_id is required", ErrValidation)
@@ -488,10 +491,13 @@ func (s *redirectService) DeleteRedirect(ctx context.Context, id uuid.UUID) erro
 // node, because the generated per-node routers are not the only way a source
 // could be claimed. The no-chain guard is two-directional: a proposed target
 // may not be another enabled rule's source, and a proposed source may not be
-// another enabled rule's target, so neither insertion order (create, update or
-// enable) can complete a chain. It is a check-then-write against committed
-// state; a concurrent racing write is caught by the generator's hold-back
-// instead (see redirectsForServer), never by a database constraint.
+// another enabled rule's target, so a sequential conflicting write (create,
+// update or enable) is rejected regardless of insertion order. It is a
+// check-then-write against committed state: a concurrent racing write is
+// caught by the generator's hold-back instead (see redirectsForServer), never
+// by a database constraint, and live fleet-wide chain-freedom additionally
+// requires every affected node to converge — SyncServer writes one node and
+// SyncAll applies nodes separately, with no atomic fleet replacement.
 func (s *redirectService) checkRedirectWrites(ctx context.Context, excludeID uuid.UUID, source, target string, enabled bool) error {
 	claimed, err := s.store.GetRedirectBySource(ctx, source)
 	if err != nil && !errors.Is(err, ErrNotFound) {

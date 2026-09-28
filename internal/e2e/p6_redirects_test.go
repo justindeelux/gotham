@@ -40,7 +40,8 @@ import (
 //
 //   - a per-application redirect rule answers the source host through the
 //     bootstrapped Traefik with the configured code, target and preserved
-//     path, and disappears when the rule is disabled,
+//     path for every authority the router accepts (ports, trailing dot,
+//     brackets, case), and disappears when the rule is disabled,
 //   - a restarted proxy keeps serving the redirect without a control-plane
 //     action,
 //   - certificate status/expiry are read from the node's real acme.json
@@ -237,14 +238,20 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 		t.Fatalf("redirect location = %q, want %q", location, want)
 	}
 
-	// Host variants the Host(source) router accepts while the raw URL keeps
-	// them: a port (numeric or otherwise), an empty port, a fully-qualified
-	// trailing dot and any case must still terminate in the redirect, never
-	// fall through to the backend-less noop service.
+	// Every authority the Host(source) router accepts must terminate in the
+	// redirect, never fall through to the backend-less noop service: numeric,
+	// empty and non-numeric ports, one fully-qualified trailing dot, bracketed
+	// authorities (with the router's port-stripping net.SplitHostPort), and
+	// any case. The middleware deliberately does not re-encode the host; these
+	// requests are the request-level proof.
 	for _, variant := range []string{
 		sourceDomain + ":80",
 		sourceDomain + ":",
+		sourceDomain + ":abc",
 		sourceDomain + ".",
+		sourceDomain + ".:80",
+		"[" + sourceDomain + "]:80",
+		"[" + strings.ToUpper(sourceDomain) + ".]" + ":abc",
 	} {
 		location := p6ExpectHostStatus(t, http.MethodGet, variant, http.StatusMovedPermanently)
 		if want := "https://" + targetDomain + p6RedirectProbePath; location != want {

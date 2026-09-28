@@ -5,10 +5,11 @@
 -- router/middleware pair; deleting the application cascades the rules away).
 -- `source_domain` is the host the redirect answers for — it is globally
 -- unique, must not shadow any application's base domain and must not equal
--- another enabled rule's target (no redirect chains, so no loops); the service
--- enforces those rules and the generator holds conflicting rows back as
--- diagnostics. Domains are stored normalized (lowercase, trimmed) and exact:
--- wildcard sources are a follow-up.
+-- another enabled rule's target (the service rejects sequential conflicting
+-- writes both ways; the generator additionally holds a racing chain's
+-- later-created rule back as a diagnostic per committed snapshot). Domains are
+-- stored normalized (lowercase, trimmed) and exact: wildcard sources are a
+-- follow-up.
 --
 -- `code` records the operator's intent: 301 (permanent) or 302 (temporary).
 -- Traefik's redirectRegex middleware only distinguishes permanent from

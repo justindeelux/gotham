@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -29,7 +30,7 @@ const goldenRedirectYAML = `http:
   middlewares:
     gotham-redirect-dddddddd-1111-2222-3333-444444444444:
       redirectRegex:
-        regex: (?i)^http://old\.example\.com/(.*)
+        regex: (?i)^http://old\.example\.com\.?(?::[^/]*)?/(.*)
         replacement: https://new.example.com/${1}
         permanent: true
 `
@@ -51,7 +52,7 @@ servers = []
 [http.middlewares]
 [http.middlewares.gotham-redirect-dddddddd-1111-2222-3333-444444444444]
 [http.middlewares.gotham-redirect-dddddddd-1111-2222-3333-444444444444.redirectRegex]
-regex = '(?i)^http://old\.example\.com/(.*)'
+regex = '(?i)^http://old\.example\.com\.?(?::[^/]*)?/(.*)'
 replacement = 'https://new.example.com/${1}'
 permanent = true
 `
@@ -152,14 +153,14 @@ func TestBuildConfigRedirectPathAndCodeMapping(t *testing.T) {
 		{
 			name:          "preserve path, temporary",
 			redirect:      Redirect{ID: id, Source: "a.example.com", Target: "b.example.com", Code: RedirectCodeTemporary, PreservePath: true},
-			wantRegex:     `(?i)^http://a\.example\.com/(.*)`,
+			wantRegex:     `(?i)^http://a\.example\.com\.?(?::[^/]*)?/(.*)`,
 			wantReplace:   "https://b.example.com/${1}",
 			wantPermanent: false,
 		},
 		{
 			name:          "drop path, permanent",
 			redirect:      Redirect{ID: id, Source: "a.example.com", Target: "b.example.com", Code: RedirectCodePermanent, PreservePath: false},
-			wantRegex:     `(?i)^http://a\.example\.com/.*`,
+			wantRegex:     `(?i)^http://a\.example\.com\.?(?::[^/]*)?/.*`,
 			wantReplace:   "https://b.example.com/",
 			wantPermanent: true,
 		},
@@ -227,5 +228,64 @@ func TestRedirectRegexEscapesHost(t *testing.T) {
 	pattern := RedirectRegexPattern("a.b.example.com", true)
 	if !strings.Contains(pattern, `a\.b\.example\.com`) {
 		t.Fatalf("pattern = %q, want quoted host dots", pattern)
+	}
+}
+
+// TestRedirectRegexMatchesEveryRouterHostForm proves the match expression
+// terminates for every host form Traefik's Host(source) router accepts but the
+// raw URL retains: an optional port (numeric, empty or otherwise, because the
+// router strips it with net.SplitHostPort which accepts non-numeric ports), one
+// optional fully-qualified trailing dot, and any case. A form the router
+// accepts but the regex misses would fall through to the backend-less service,
+// violating the always-terminates guarantee.
+func TestRedirectRegexMatchesEveryRouterHostForm(t *testing.T) {
+	pattern := regexp.MustCompile(RedirectRegexPattern("old.example.com", true))
+
+	matches := []string{
+		"http://old.example.com/path?q=1",
+		"http://OLD.EXAMPLE.COM/path",
+		"http://old.example.com:80/path",
+		"http://old.example.com:/path",
+		"http://old.example.com:abc/path",
+		"http://old.example.com./path",
+		"http://old.example.com.:80/path",
+		"http://Old.Example.Com:8080/path",
+	}
+	for _, rawURL := range matches {
+		if !pattern.MatchString(rawURL) {
+			t.Errorf("pattern %q does not match router-accepted URL %q", pattern, rawURL)
+		}
+	}
+
+	// Forms the router does not route to this rule must not be redirected by
+	// the regex either: a different host, a longer host, an extra label, or
+	// more than one trailing dot.
+	nonMatches := []string{
+		"http://elsewhere.example.com/path",
+		"http://old.example.comx/path",
+		"http://old.example.com.evil/path",
+		"http://old.example.com../path",
+		"http://sub.old.example.com/path",
+	}
+	for _, rawURL := range nonMatches {
+		if pattern.MatchString(rawURL) {
+			t.Errorf("pattern %q unexpectedly matches %q", pattern, rawURL)
+		}
+	}
+}
+
+// TestRedirectRegexCapturesPathAndQuery proves the captured group keeps the
+// path and query, including for the ported and dotted host forms.
+func TestRedirectRegexCapturesPathAndQuery(t *testing.T) {
+	pattern := regexp.MustCompile(RedirectRegexPattern("old.example.com", true))
+	for _, rawURL := range []string{
+		"http://old.example.com/a/b?q=1",
+		"http://old.example.com:80/a/b?q=1",
+		"http://old.example.com./a/b?q=1",
+	} {
+		match := pattern.FindStringSubmatch(rawURL)
+		if len(match) != 2 || match[1] != "a/b?q=1" {
+			t.Errorf("capture of %q = %#v, want the path and query", rawURL, match)
+		}
 	}
 }

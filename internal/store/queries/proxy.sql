@@ -220,10 +220,13 @@ DELETE FROM domain_redirects WHERE id = $1;
 -- the two routers can never match the same host.
 SELECT id, base_domain FROM applications WHERE base_domain <> '';
 
--- name: ListEnabledRedirectSources :many
--- ListEnabledRedirectSources feeds the no-chain guard: a redirect target must
--- not equal another enabled rule's source.
-SELECT id, source_domain FROM domain_redirects WHERE enabled;
+-- name: ListEnabledRedirects :many
+-- ListEnabledRedirects returns the endpoints of every enabled redirect rule.
+-- It feeds the no-chain guard in both directions (a proposed target must not
+-- be another enabled rule's source, and a proposed source must not be another
+-- enabled rule's target), so a chain can never be introduced by a create,
+-- update or enable.
+SELECT id, source_domain, target_domain FROM domain_redirects WHERE enabled;
 
 -- name: ListRedirectRules :many
 -- ListRedirectRules joins every redirect rule to its application's node state

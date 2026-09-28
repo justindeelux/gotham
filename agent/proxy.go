@@ -217,6 +217,15 @@ func (s *ProxyServer) WriteProxyConfig(ctx context.Context, req *agentv1.WritePr
 		written = append(written, document.rel)
 	}
 
+	// The ACME storage file is prepared before Traefik can ever start (the
+	// static configuration must exist first), so the agent owns a readable
+	// storage file from the beginning. Best effort: a node whose ACME
+	// directory is not writable still gets its configuration, and the status
+	// read reports unknown instead of fabricating a value.
+	if err := s.ensureACMEStorage(); err != nil {
+		s.log.Warn("proxy: cannot prepare acme storage", "error", err)
+	}
+
 	response := &agentv1.WriteProxyConfigResponse{Written: written}
 	if req.GetVerify() {
 		if err := s.ping(ctx); err != nil {
@@ -438,6 +447,36 @@ func writeFileInDir(dir *os.File, name string, content []byte) error {
 		return err
 	}
 	return nil
+}
+
+// ensureACMEStorage creates the node's ACME storage file when it does not
+// exist yet, before the Traefik container is ever started. Traefik writes the
+// file with mode 0600 and os.WriteFile keeps an existing file's mode and
+// ownership, so a storage file the agent created stays readable by the agent
+// after Traefik writes certificates into it; without it, a root-owned 0600
+// file would make every status read fail (unknown, never fabricated). The
+// creation is confined by the same no-follow traversal as the writes, never
+// truncates or replaces an existing file (O_EXCL), and keeps the tight 0600
+// mode: the storage file holds private keys, so no other local user may read
+// it.
+func (s *ProxyServer) ensureACMEStorage() error {
+	dir, err := openTrustedDir(s.acmeDir, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+
+	fd, err := unix.Openat(int(dir.Fd()), "acme.json",
+		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if errors.Is(err, unix.EEXIST) {
+		// An existing storage file is never touched: it may already hold
+		// certificates (and, on a legacy node, may be owned by another user).
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("create %s/acme.json: %w", s.acmeDir, err)
+	}
+	return unix.Close(fd)
 }
 
 // ping calls the Traefik ping endpoint. A 200 response means the proxy

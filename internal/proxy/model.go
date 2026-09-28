@@ -116,8 +116,9 @@ type RedirectScheme struct {
 
 // RedirectRegex is the redirectRegex middleware definition. The request URL is
 // matched against Regex and the matched part replaced with Replacement;
-// Permanent selects Traefik's permanent semantics (301 for GET/HEAD, 308 for
-// other methods) instead of temporary (302/307).
+// Permanent selects Traefik's permanent semantics: GET answers 301 instead of
+// the temporary 302, while HEAD and every other method answer 308 instead of
+// 307 (Traefik special-cases only GET).
 type RedirectRegex struct {
 	// Regex is the anchored match expression, e.g.
 	// "(?i)^http://old\\.example\\.com/(.*)".

@@ -16,8 +16,9 @@ import (
 
 // DomainRedirect is one domain_redirects row as this package uses it: a rule
 // that sends one exact source host to one exact target host over HTTPS. Code
-// is the operator's intent (301 permanent or 302 temporary); Traefik answers
-// non-GET/HEAD requests with 308/307 respectively.
+// is the operator's intent (301 permanent or 302 temporary); Traefik
+// special-cases only GET, so GET answers 301/302 while HEAD and every other
+// method answer 308/307.
 type DomainRedirect struct {
 	ID            uuid.UUID
 	ApplicationID uuid.UUID
@@ -81,11 +82,14 @@ type ApplicationDomain struct {
 	Domain string
 }
 
-// RedirectSourceRef identifies one enabled redirect rule's source host, used
-// by the no-chain guard.
-type RedirectSourceRef struct {
+// RedirectEndpoint is one enabled redirect rule's source and target hosts,
+// used by the two-directional no-chain guard: a proposed target must not be
+// another enabled rule's source, and a proposed source must not be another
+// enabled rule's target.
+type RedirectEndpoint struct {
 	ID     uuid.UUID
 	Source string
+	Target string
 }
 
 // RedirectStore is the persistence seam of the redirect surface. The
@@ -101,7 +105,7 @@ type RedirectStore interface {
 	UpdateRedirect(ctx context.Context, id uuid.UUID, in RedirectWrite) (DomainRedirect, error)
 	DeleteRedirect(ctx context.Context, id uuid.UUID) error
 	ListApplicationBaseDomains(ctx context.Context) ([]ApplicationDomain, error)
-	ListEnabledRedirectSources(ctx context.Context) ([]RedirectSourceRef, error)
+	ListEnabledRedirects(ctx context.Context) ([]RedirectEndpoint, error)
 }
 
 // storeRedirect adapts the shared store to the RedirectStore seam.
@@ -215,15 +219,21 @@ func (s storeRedirect) ListApplicationBaseDomains(ctx context.Context) ([]Applic
 	return out, nil
 }
 
-// ListEnabledRedirectSources returns the source hosts of every enabled rule.
-func (s storeRedirect) ListEnabledRedirectSources(ctx context.Context) ([]RedirectSourceRef, error) {
-	rows, err := s.store.ListEnabledRedirectSources(ctx)
+// ListEnabledRedirects returns the endpoints of every enabled rule, across
+// every node: the no-chain guard is global, not node-local, so a chain cannot
+// be introduced even when its two rules live on different nodes.
+func (s storeRedirect) ListEnabledRedirects(ctx context.Context) ([]RedirectEndpoint, error) {
+	rows, err := s.store.ListEnabledRedirects(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]RedirectSourceRef, 0, len(rows))
+	out := make([]RedirectEndpoint, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, RedirectSourceRef{ID: uuidFromPG(row.ID), Source: row.SourceDomain})
+		out = append(out, RedirectEndpoint{
+			ID:     uuidFromPG(row.ID),
+			Source: row.SourceDomain,
+			Target: row.TargetDomain,
+		})
 	}
 	return out, nil
 }
@@ -320,9 +330,11 @@ func NewDefaultRedirectService(cfg RedirectConfig) RedirectService {
 // CreateRedirect validates and stores one rule: the application must exist, be
 // assigned to a node and not be held back by a domain-uniqueness conflict; the
 // source must be a valid exact host that shadows no application base domain
-// and no other rule; the target must be a valid exact host that is not another
-// enabled rule's source (no chains, so no loops). Redirect rules are emitted
-// only for enabled rules of domain-healthy applications on their node.
+// and no other rule; the target must be a valid exact host that neither points
+// at another enabled rule's source nor is the target of one (the no-chain
+// guard checks both directions, globally), so no redirect chain — and
+// therefore no loop — can be written. Redirect rules are emitted only for
+// enabled rules of domain-healthy applications on their node.
 func (s *redirectService) CreateRedirect(ctx context.Context, in CreateRedirectInput) (DomainRedirect, error) {
 	if in.ApplicationID == uuid.Nil {
 		return DomainRedirect{}, fmt.Errorf("%w: application_id is required", ErrValidation)
@@ -470,6 +482,16 @@ func (s *redirectService) DeleteRedirect(ctx context.Context, id uuid.UUID) erro
 
 // checkRedirectWrites enforces the write-time guard rails against all other
 // state. excludeID is the rule being updated (uuid.Nil on create).
+//
+// The ownership guard is global: every application's base domain and every
+// enabled rule in the database is considered, not only those on the rule's
+// node, because the generated per-node routers are not the only way a source
+// could be claimed. The no-chain guard is two-directional: a proposed target
+// may not be another enabled rule's source, and a proposed source may not be
+// another enabled rule's target, so neither insertion order (create, update or
+// enable) can complete a chain. It is a check-then-write against committed
+// state; a concurrent racing write is caught by the generator's hold-back
+// instead (see redirectsForServer), never by a database constraint.
 func (s *redirectService) checkRedirectWrites(ctx context.Context, excludeID uuid.UUID, source, target string, enabled bool) error {
 	claimed, err := s.store.GetRedirectBySource(ctx, source)
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -492,13 +514,19 @@ func (s *redirectService) checkRedirectWrites(ctx context.Context, excludeID uui
 	if !enabled {
 		return nil
 	}
-	sources, err := s.store.ListEnabledRedirectSources(ctx)
+	endpoints, err := s.store.ListEnabledRedirects(ctx)
 	if err != nil {
 		return err
 	}
-	for _, ref := range sources {
-		if ref.ID != excludeID && NormalizeDomain(ref.Source) == target {
+	for _, endpoint := range endpoints {
+		if endpoint.ID == excludeID {
+			continue
+		}
+		if NormalizeDomain(endpoint.Source) == target {
 			return fmt.Errorf("%w: the target host %q is another redirect rule's source", ErrConflict, target)
+		}
+		if NormalizeDomain(endpoint.Target) == source {
+			return fmt.Errorf("%w: the source host %q is another redirect rule's target", ErrConflict, source)
 		}
 	}
 	return nil

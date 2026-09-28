@@ -126,11 +126,11 @@ func (s *fakeRedirectStore) ListApplicationBaseDomains(_ context.Context) ([]App
 	return out, nil
 }
 
-func (s *fakeRedirectStore) ListEnabledRedirectSources(_ context.Context) ([]RedirectSourceRef, error) {
-	out := make([]RedirectSourceRef, 0)
+func (s *fakeRedirectStore) ListEnabledRedirects(_ context.Context) ([]RedirectEndpoint, error) {
+	out := make([]RedirectEndpoint, 0)
 	for _, redirect := range s.redirects {
 		if redirect.Enabled {
-			out = append(out, RedirectSourceRef{ID: redirect.ID, Source: redirect.SourceDomain})
+			out = append(out, RedirectEndpoint{ID: redirect.ID, Source: redirect.SourceDomain, Target: redirect.TargetDomain})
 		}
 	}
 	return out, nil
@@ -323,6 +323,109 @@ func TestCreateRedirectConflicts(t *testing.T) {
 		}
 	})
 
+	t.Run("source is another enabled rule's target", func(t *testing.T) {
+		store := newFakeRedirectStore()
+		store.addApp(owner)
+		svc, _ := newRedirectService(t, store)
+		if _, err := svc.CreateRedirect(context.Background(), CreateRedirectInput{
+			ApplicationID: owner.ID,
+			SourceDomain:  "first.example.com",
+			TargetDomain:  "second.example.com",
+		}); err != nil {
+			t.Fatalf("seed rule: %v", err)
+		}
+		// The reverse insertion order must be rejected too: a→b then b→c.
+		_, err := svc.CreateRedirect(context.Background(), CreateRedirectInput{
+			ApplicationID: owner.ID,
+			SourceDomain:  "second.example.com",
+			TargetDomain:  "third.example.com",
+		})
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("reverse chain err = %v, want ErrConflict", err)
+		}
+	})
+
+	t.Run("updating a source onto another rule's target", func(t *testing.T) {
+		store := newFakeRedirectStore()
+		store.addApp(owner)
+		svc, _ := newRedirectService(t, store)
+		if _, err := svc.CreateRedirect(context.Background(), CreateRedirectInput{
+			ApplicationID: owner.ID,
+			SourceDomain:  "first.example.com",
+			TargetDomain:  "second.example.com",
+		}); err != nil {
+			t.Fatalf("seed rule: %v", err)
+		}
+		other, err := svc.CreateRedirect(context.Background(), CreateRedirectInput{
+			ApplicationID: owner.ID,
+			SourceDomain:  "third.example.com",
+			TargetDomain:  "app.example.com",
+		})
+		if err != nil {
+			t.Fatalf("second rule: %v", err)
+		}
+		source := "second.example.com" // first.example.com → second.example.com already exists
+		if _, err := svc.UpdateRedirect(context.Background(), other.ID, UpdateRedirectInput{SourceDomain: &source}); !errors.Is(err, ErrConflict) {
+			t.Fatalf("update source onto an existing target err = %v, want ErrConflict", err)
+		}
+		target := "first.example.com" // third→first would complete a loop with first→second? no: third.target=first is first's source
+		if _, err := svc.UpdateRedirect(context.Background(), other.ID, UpdateRedirectInput{TargetDomain: &target}); !errors.Is(err, ErrConflict) {
+			t.Fatalf("update target onto an existing source err = %v, want ErrConflict", err)
+		}
+	})
+
+	t.Run("enabling a rule that would complete a chain", func(t *testing.T) {
+		store := newFakeRedirectStore()
+		store.addApp(owner)
+		svc, _ := newRedirectService(t, store)
+		if _, err := svc.CreateRedirect(context.Background(), CreateRedirectInput{
+			ApplicationID: owner.ID,
+			SourceDomain:  "first.example.com",
+			TargetDomain:  "second.example.com",
+		}); err != nil {
+			t.Fatalf("seed rule: %v", err)
+		}
+		// A disabled rule may claim a source that is an enabled rule's target:
+		// it is not emitted, so no chain exists yet.
+		disabled := false
+		pending, err := svc.CreateRedirect(context.Background(), CreateRedirectInput{
+			ApplicationID: owner.ID,
+			SourceDomain:  "second.example.com",
+			TargetDomain:  "third.example.com",
+			Enabled:       &disabled,
+		})
+		if err != nil {
+			t.Fatalf("disabled rule must be accepted: %v", err)
+		}
+		// Enabling it would create first→second→third, so it is rejected.
+		if _, err := svc.UpdateRedirect(context.Background(), pending.ID, UpdateRedirectInput{Enabled: boolPtr(true)}); !errors.Is(err, ErrConflict) {
+			t.Fatalf("enable chain err = %v, want ErrConflict", err)
+		}
+		// The same rule enabling after moving its source off the chain is fine.
+		source := "fresh.example.com"
+		if _, err := svc.UpdateRedirect(context.Background(), pending.ID, UpdateRedirectInput{SourceDomain: &source, Enabled: boolPtr(true)}); err != nil {
+			t.Fatalf("enable after breaking the chain: %v", err)
+		}
+	})
+
+	t.Run("updating a rule never conflicts with itself", func(t *testing.T) {
+		store := newFakeRedirectStore()
+		store.addApp(owner)
+		svc, _ := newRedirectService(t, store)
+		rule, err := svc.CreateRedirect(context.Background(), CreateRedirectInput{
+			ApplicationID: owner.ID,
+			SourceDomain:  "first.example.com",
+			TargetDomain:  "second.example.com",
+		})
+		if err != nil {
+			t.Fatalf("seed rule: %v", err)
+		}
+		code := RedirectCodeTemporary
+		if _, err := svc.UpdateRedirect(context.Background(), rule.ID, UpdateRedirectInput{Code: &code}); err != nil {
+			t.Fatalf("self-update err = %v, want success", err)
+		}
+	})
+
 	t.Run("disabled rule may target another source", func(t *testing.T) {
 		store := newFakeRedirectStore()
 		store.addApp(owner)
@@ -462,6 +565,52 @@ func TestListRedirectsByApplication(t *testing.T) {
 	mine, err := svc.ListRedirects(context.Background(), app.ID)
 	if err != nil || len(mine) != 2 {
 		t.Fatalf("mine = %d (%v), want 2", len(mine), err)
+	}
+}
+
+// TestRedirectsForServerBreaksChainsAtTheLaterRule proves the generation-side
+// no-chain net is global and deterministic: when a racing write left a chain
+// behind, the later-created rule of the pair is held back (mirroring the
+// write-time rejection of the second write) while the earlier rule keeps
+// serving, and the check spans nodes.
+func TestRedirectsForServerBreaksChainsAtTheLaterRule(t *testing.T) {
+	serverA := uuid.New()
+	serverB := uuid.New()
+	app := uuid.New()
+	apps := []ProxiedApplication{{ID: app, ServerID: serverA, BaseDomain: "app.example.com"}}
+
+	first := RedirectRule{ID: uuid.New(), ApplicationID: app, SourceDomain: "a.example.com", TargetDomain: "b.example.com", Code: 301, Enabled: true, ServerID: serverA}
+	second := RedirectRule{ID: uuid.New(), ApplicationID: app, SourceDomain: "b.example.com", TargetDomain: "c.example.com", Code: 301, Enabled: true, ServerID: serverB}
+
+	// Creation order first, second: node A keeps the first rule, node B holds
+	// the second one back.
+	redirects, diagnostics := redirectsForServer(apps, []RedirectRule{first, second}, serverA)
+	if len(redirects) != 1 || redirects[0].Source != "a.example.com" {
+		t.Fatalf("node A redirects = %#v, want the earlier rule", redirects)
+	}
+	if len(diagnostics) != 0 {
+		t.Fatalf("node A diagnostics = %#v, want none", diagnostics)
+	}
+	redirects, diagnostics = redirectsForServer(apps, []RedirectRule{first, second}, serverB)
+	if len(redirects) != 0 {
+		t.Fatalf("node B redirects = %#v, want the later rule held back", redirects)
+	}
+	if len(diagnostics) != 1 || diagnostics[0].Domain != "b.example.com" {
+		t.Fatalf("node B diagnostics = %#v, want one for the chained rule", diagnostics)
+	}
+
+	// Reversing the creation order reverses the victim: the rule created
+	// later (a→b) is held back, and the older b→c keeps serving on node B.
+	redirects, diagnostics = redirectsForServer(apps, []RedirectRule{second, first}, serverB)
+	if len(redirects) != 1 || redirects[0].Source != "b.example.com" {
+		t.Fatalf("node B reversed redirects = %#v, want the earlier rule", redirects)
+	}
+	if len(diagnostics) != 0 {
+		t.Fatalf("node B reversed diagnostics = %#v, want none", diagnostics)
+	}
+	redirects, _ = redirectsForServer(apps, []RedirectRule{second, first}, serverA)
+	if len(redirects) != 0 {
+		t.Fatalf("node A reversed redirects = %#v, want the later rule held back", redirects)
 	}
 }
 

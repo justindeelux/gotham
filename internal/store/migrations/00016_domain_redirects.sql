@@ -12,9 +12,10 @@
 --
 -- `code` records the operator's intent: 301 (permanent) or 302 (temporary).
 -- Traefik's redirectRegex middleware only distinguishes permanent from
--- temporary, so non-GET/HEAD requests answer 308 after a 301 intent and 307
--- after a 302 intent. `preserve_path` keeps the request path and query on the
--- target; when false the redirect lands on the target root.
+-- temporary and special-cases only GET, so GET answers 301 after a permanent
+-- intent and 302 after a temporary one, while HEAD and every other method
+-- answer 308/307 respectively. `preserve_path` keeps the request path and
+-- query on the target; when false the redirect lands on the target root.
 CREATE TABLE domain_redirects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     application_id uuid NOT NULL REFERENCES applications(id) ON DELETE CASCADE,

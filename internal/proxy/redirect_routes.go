@@ -10,7 +10,8 @@ import (
 
 // redirectResponse is the wire representation of one domain→domain redirect
 // rule. Code is the operator's intent (301 permanent, 302 temporary); Traefik
-// answers non-GET/HEAD requests with 308/307 respectively.
+// special-cases only GET, so GET answers 301/302 while HEAD and every other
+// method answer 308/307.
 type redirectResponse struct {
 	ID            string    `json:"id"`
 	ApplicationID string    `json:"application_id"`

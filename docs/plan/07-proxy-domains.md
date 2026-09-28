@@ -181,50 +181,73 @@ BE-6.3 (a `HostRegexp` source is a follow-up, and the FE keeps that input
 disabled). The source host is globally unique — disabling a rule pauses it
 without releasing the host — and must not shadow **any** application's
 `base_domain` (any node, including the owning application and migration-disabled
-rows). The target must not equal another enabled rule's source, so redirect
-chains (and therefore loops) are never generated; source and target must differ.
-Write-time guards answer 409/400; races fall back to the unique index and the
-generator holds conflicting rules back as per-application diagnostics (duplicate
-source, source shadowing a routed host, domain-disabled owner, invalid code)
-instead of freezing the node. Deleting an application cascades its rules; a
-domain-disabled application does not emit its redirects and cannot own a rule,
-because its route is already excluded by the uniqueness conflict.
+rows). The target must not equal another enabled rule's source **and** the
+source must not equal another enabled rule's target: the no-chain guard is
+two-directional, so neither insertion order (create, update or enable) can
+complete a chain, and it reads every enabled rule in the database rather than
+only the rule's node, so a chain across nodes is rejected too. Source and
+target must differ. Write-time guards answer 409/400. The guard is a
+check-then-write, not a database constraint: concurrent racing writes are
+caught by the generator, which holds the later-created rule of a chain back
+(global candidate set, not node-local) and reports it as a per-application
+diagnostic. The generator also holds back duplicate sources, sources shadowing
+a routed host, domain-disabled owners and invalid codes instead of freezing the
+node. Deleting an application cascades its rules; a domain-disabled application
+does not emit its redirects and cannot own a rule, because its route is already
+excluded by the uniqueness conflict.
 
 **Generation** emits one `redirectRegex` middleware and one web-entrypoint
 router per enabled rule: rule ``Host(`source`)``, middleware
-`(?i)^http://source/(.*) → https://target/${1}` when the path is preserved (path
-and query kept) or `(?i)^http://source/.* → https://target/` when it is not.
-Every redirect router references one shared `gotham-redirect-noop` service with
-`servers: []`: Traefik v3 rejects a router without a service, and the
-`redirectRegex` middleware terminates the request before a backend is consulted,
-so the service is never a proxy target (asserted by golden/unit tests). The
-router never carries the shared `gotham-https-redirect` middleware; the
+`(?i)^http://source\.?(?::[^/]*)?/(.*) → https://target/${1}` when the path is
+preserved (path and query kept) or `.../.* → https://target/` when it is not.
+The host part of the regex deliberately accepts every form Traefik's
+`Host(source)` router matches while the raw URL retains it — any case, one
+fully-qualified trailing dot, and any port form (the router strips ports with
+`net.SplitHostPort`, which accepts non-numeric and empty ports) — so the
+middleware always terminates for the requests the router sends it and can never
+fall through to the backend-less service. Every redirect router references one
+shared `gotham-redirect-noop` service with `servers: []`: Traefik v3 rejects a
+router without a service, and the `redirectRegex` middleware terminates the
+request before a backend is consulted, so the service is never a proxy target
+(asserted by golden/unit tests and exercised per host form in the gated e2e).
+The router never carries the shared `gotham-https-redirect` middleware; the
 HTTP→HTTPS redirect stays a separate concern, and the target scheme is always
 `https`.
 
 **Codes:** Traefik's `redirectRegex` only distinguishes permanent from
-temporary. The API accepts the two intents `301` and `302` and maps them to
-`permanent`; GET/HEAD requests receive 301/302, other methods receive 308/307
-(verified against `traefik:v3.7`). The mockup's four options are these two
-intents plus their method-dependent on-the-wire codes.
+temporary, and it special-cases only `GET`: the `301` intent answers `301` to
+GET while HEAD and every other method answer `308`; the `302` intent answers
+`302` to GET while HEAD and every other method answer `307` (verified against
+`traefik:v3.7`, including a request-level e2e assertion). The API accepts the
+two intents `301` and `302` and maps them to `permanent`. The mockup's four
+options are these two intents plus their method-dependent on-the-wire codes.
 
 **Certificate status is computed on read, never stored.** The additive agent RPC
 `ProxyService.ReadACMEStorage` returns one entry per stored certificate:
 `{resolver, main, sans, not_after}`. The agent reads `<acmeDir>/acme.json`
 through the same no-follow traversal as the write path, caps the file size and
-entry count, treats a missing or empty file (Traefik creates it empty at boot)
-as `present=false`, and parses it with decode structs that structurally omit the
-per-certificate `key` and the resolver `Account` (ACME account key): key
-material never enters a Go value, the response, a log line or an error string.
-The CP status service joins each certificate intent to its application's node,
-reads each node once (10s bound), and maps the intent's recorded domain to
-`present` (latest covering `notAfter`, wildcard-aware for one-label SANs),
-`absent` (the node answered and nothing covers the domain), or `unknown`
-(unreachable node, RPC/read/parse failure, unassigned application). It never
-returns an error: node state degrades to `unknown` and the certificate list
-still answers 200. `GET /v1/proxy/certificates` and `.../{id}` gain additive,
-`omitempty` `status` and `not_after` fields; `not_after` appears only for
-`present`.
+entry count, treats a missing or empty file as `present=false`, and parses it
+with decode structs that structurally omit the per-certificate `key` and the
+resolver `Account` (ACME account key): key material never enters a Go value,
+the response, a log line or an error string. Before Traefik can ever start, the
+agent also prepares the storage file itself (create-only, mode `0600`, never
+truncating) while it writes the generated configuration: Traefik writes the
+file with `os.WriteFile` and keeps an existing file's mode and ownership, so
+the agent-owned placeholder stays readable after Traefik stores certificates in
+it. Without it, a root-run Traefik would create a root-only `0600` file that the
+unprivileged agent cannot read — a genuine read failure, reported as `unknown`
+(never fabricated); a legacy file the agent cannot read stays `unknown` until
+an operator rotates it (the placeholder only fixes nodes whose ACME directory
+the agent owns). The CP status service joins each certificate intent to its
+application's node, reads each node once (10s bound), and maps the intent's
+recorded domain to `present` (latest covering `notAfter`; the one-label
+wildcard rule applies to the stored primary name and SANs, with apex and
+multi-label names rejected), `absent` (the node answered and nothing covers the
+domain), or `unknown` (unreachable node, RPC/read/parse failure, unassigned
+application). It never returns an error: node state degrades to `unknown` and
+the certificate list still answers 200. `GET /v1/proxy/certificates` and
+`.../{id}` gain additive, `omitempty` `status` and `not_after` fields;
+`not_after` appears only for `present`.
 
 **Routes:** `POST/GET/GET{id}/PATCH/DELETE /v1/proxy/redirects`, admin-scoped
 and mounted with the SSL surface; `GET` accepts an optional `application_id`
@@ -232,14 +255,18 @@ filter.
 
 **Verification evidence**
 
-- Unit: generator goldens (YAML + TOML) and the no-backends / terminating-middleware
-  assertions (`internal/proxy/redirect_generate_test.go`); CRUD
-  validation/conflict/chain guards and the per-node hold-back filter
-  (`redirects_test.go`); status mapping including wildcard, sanitized errors and
-  unreachable nodes (`certificate_status_test.go`); HTTP surface, strict
-  decoding and the additive certificate fields (`redirect_routes_test.go`);
-  metadata-only ACME read against a fixture file that really contains private
-  and account keys — no key material in the RPC response or the logs
+- Unit: generator goldens (YAML + TOML), the no-backends /
+  terminating-middleware assertions and the regex host-form matrix (port,
+  empty/non-numeric port, trailing dot, case; with non-matching neighbours)
+  (`internal/proxy/redirect_generate_test.go`); CRUD validation, both no-chain
+  directions across create/update/enable and the later-rule hold-back filter
+  (`redirects_test.go`); status mapping including wildcard main and SANs,
+  apex/multi-label rejection and unreachable nodes
+  (`certificate_status_test.go`); HTTP surface, strict decoding and the additive
+  certificate fields (`redirect_routes_test.go`); metadata-only ACME read
+  against a fixture file that really contains private and account keys — no key
+  material in the RPC response or the logs — plus the agent-owned storage
+  placeholder and the permission-denied-is-not-absent classification
   (`agent/proxy_acme_test.go`).
 - Persistence: migration + store round trip, unique-source/code/self-redirect
   constraints, application join, ownership-guard queries and the delete cascade
@@ -247,12 +274,15 @@ filter.
 - Gated e2e (`GOTHAM_E2E=1`, Docker + dev Postgres, ports 80/443 free):
   `TestP6RedirectsAndCertificateStatus` in `internal/e2e/p6_redirects_test.go` —
   a real store-backed rule answers `HTTP 301` for its source host through the
-  bootstrapped Traefik with path+query preserved, pausing removes it, a proxy
-  restart keeps serving it, and certificate status moves absent → present (with
-  the stored `notAfter`) → unknown (malformed storage) while an unreachable node
-  reports unknown in the same call. The `acme.json` is a fixture, so no ACME
-  issuance and no production/staging quota is consumed; the fixture's key
-  material is asserted absent from the RPC response.
+  bootstrapped Traefik with path+query preserved **for the bare, ported,
+  dot-suffixed and uppercase host forms**, `HEAD`/`POST` answer `308` for the
+  permanent intent and `307` for the temporary one, pausing removes the route
+  and re-enabling restores it, a proxy restart keeps serving it, and certificate
+  status walks empty → absent, unreadable → unknown, missing → absent,
+  fixture → present (with the stored `notAfter`), malformed → unknown, with an
+  unreachable node reporting unknown in the same call. The `acme.json` is a
+  fixture, so no ACME issuance and no production/staging quota is consumed; the
+  fixture's key material is asserted absent from the RPC response.
 
 Run:
 

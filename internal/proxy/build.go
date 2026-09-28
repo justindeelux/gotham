@@ -111,8 +111,9 @@ func ValidateDomain(domain string) error {
 // source host it answers for, the target host it sends requests to, and the
 // operator's redirect intent. The source must never be a host another router
 // on the node claims (an application base domain or another rule), and targets
-// are never chained (A→B and B→C are held back as diagnostics), so every
-// generated rule sends the request straight to its destination.
+// are never chained (a rule that would complete a chain with another enabled
+// rule is held back as a diagnostic), so every generated rule sends the
+// request straight to its destination.
 type Redirect struct {
 	// ID identifies the rule (kept in generated names for traceability).
 	ID uuid.UUID
@@ -122,7 +123,8 @@ type Redirect struct {
 	// Target is the exact host requests are redirected to.
 	Target string
 	// Code is the operator's intent: 301 (permanent) or 302 (temporary).
-	// Traefik answers non-GET/HEAD requests with 308/307 accordingly.
+	// Traefik only special-cases GET, so GET answers 301/302 while HEAD and
+	// every other method answer 308/307.
 	Code int
 	// PreservePath keeps the request path and query on the target.
 	PreservePath bool
@@ -266,8 +268,8 @@ func BuildConfig(routes []Route, redirects []Redirect, providers []DNSProvider, 
 }
 
 // Redirect codes are the operator's intent; Traefik's redirectRegex only
-// distinguishes permanent from temporary and selects the on-the-wire code per
-// method (GET/HEAD keep 301/302, other methods answer 308/307).
+// distinguishes permanent from temporary and special-cases GET only, so GET
+// keeps 301/302 while HEAD and every other method answer 308/307.
 const (
 	// RedirectCodePermanent is a permanent redirect intent.
 	RedirectCodePermanent = 301
@@ -275,16 +277,23 @@ const (
 	RedirectCodeTemporary = 302
 )
 
-// RedirectRegexPattern renders the anchored match expression of one redirect:
-// the scheme and the quoted source host, then either a captured path (path
-// preservation) or a discard. Case-insensitive so a request with an uppercase
-// Host still matches (the routing rule Host() is case-insensitive too).
+// RedirectRegexPattern renders the anchored match expression of one redirect.
+// It must match every request the generated `Host(source)` router accepts, not
+// just the bare hostname: Traefik's Host matcher canonicalizes case and
+// tolerates one fully-qualified trailing dot, and its request decorator strips
+// the port for matching while the redirect middleware matches the raw URL,
+// which keeps both forms. A regex that only matched `http://source/` would
+// miss those requests and let them fall through to the backend-less service
+// instead of terminating (approval condition: the redirect always terminates).
+// The expression is case-insensitive, accepts one optional trailing dot and
+// any port-form suffix Traefik may strip (numeric or otherwise), then either
+// captures the path (path preservation) or discards it.
 func RedirectRegexPattern(source string, preservePath bool) string {
 	suffix := ".*"
 	if preservePath {
 		suffix = "(.*)"
 	}
-	return "(?i)^http://" + regexp.QuoteMeta(source) + "/" + suffix
+	return "(?i)^http://" + regexp.QuoteMeta(source) + `\.?(?::[^/]*)?/` + suffix
 }
 
 // RedirectReplacement renders the target URL of one redirect: always https,

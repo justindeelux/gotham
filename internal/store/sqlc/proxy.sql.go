@@ -595,27 +595,31 @@ func (q *Queries) ListEnabledDomainCertificatesByProvider(ctx context.Context, d
 	return items, nil
 }
 
-const listEnabledRedirectSources = `-- name: ListEnabledRedirectSources :many
-SELECT id, source_domain FROM domain_redirects WHERE enabled
+const listEnabledRedirects = `-- name: ListEnabledRedirects :many
+SELECT id, source_domain, target_domain FROM domain_redirects WHERE enabled
 `
 
-type ListEnabledRedirectSourcesRow struct {
+type ListEnabledRedirectsRow struct {
 	ID           pgtype.UUID `json:"id"`
 	SourceDomain string      `json:"source_domain"`
+	TargetDomain string      `json:"target_domain"`
 }
 
-// ListEnabledRedirectSources feeds the no-chain guard: a redirect target must
-// not equal another enabled rule's source.
-func (q *Queries) ListEnabledRedirectSources(ctx context.Context) ([]ListEnabledRedirectSourcesRow, error) {
-	rows, err := q.db.Query(ctx, listEnabledRedirectSources)
+// ListEnabledRedirects returns the endpoints of every enabled redirect rule.
+// It feeds the no-chain guard in both directions (a proposed target must not
+// be another enabled rule's source, and a proposed source must not be another
+// enabled rule's target), so a chain can never be introduced by a create,
+// update or enable.
+func (q *Queries) ListEnabledRedirects(ctx context.Context) ([]ListEnabledRedirectsRow, error) {
+	rows, err := q.db.Query(ctx, listEnabledRedirects)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListEnabledRedirectSourcesRow{}
+	items := []ListEnabledRedirectsRow{}
 	for rows.Next() {
-		var i ListEnabledRedirectSourcesRow
-		if err := rows.Scan(&i.ID, &i.SourceDomain); err != nil {
+		var i ListEnabledRedirectsRow
+		if err := rows.Scan(&i.ID, &i.SourceDomain, &i.TargetDomain); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -226,6 +226,65 @@ func keyPayloadMarkers(t *testing.T, fixture []byte) []string {
 	return markers
 }
 
+// TestWriteProxyConfigPreparesACMEStorage proves the write path creates a
+// readable ACME storage file before Traefik can ever start (Traefik keeps an
+// existing file's mode and ownership on write, so this is what makes the
+// agent's later status read possible), and that it never truncates or replaces
+// a file that already holds certificates.
+func TestWriteProxyConfigPreparesACMEStorage(t *testing.T) {
+	server, root := newTestProxyServer(t, "http://127.0.0.1:1/ping")
+	if _, err := server.WriteProxyConfig(context.Background(), request(map[string]string{
+		"traefik.yml": "entryPoints: {}\n",
+	}, false)); err != nil {
+		t.Fatalf("WriteProxyConfig: %v", err)
+	}
+	path := filepath.Join(root, "acme", "acme.json")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("acme storage not prepared: %v", err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("prepared storage size = %d, want an empty file", info.Size())
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("prepared storage mode = %o, want 600 (it will hold private keys)", mode)
+	}
+
+	// An existing storage file is never touched or truncated.
+	writeACMEStorage(t, root, []byte(`{"letsencrypt": {"Certificates": []}}`))
+	if _, err := server.WriteProxyConfig(context.Background(), request(map[string]string{
+		"traefik.yml": "entryPoints: {}\n",
+	}, false)); err != nil {
+		t.Fatalf("second WriteProxyConfig: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read storage: %v", err)
+	}
+	if string(content) != `{"letsencrypt": {"Certificates": []}}` {
+		t.Fatalf("existing storage was modified: %q", content)
+	}
+}
+
+// TestReadACMEStoragePermissionDeniedIsAnError proves a storage file the agent
+// cannot read is a genuine read failure (the control plane reports unknown),
+// never a fabricated absent: only a missing or empty file means no storage.
+func TestReadACMEStoragePermissionDeniedIsAnError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission checks do not apply to root")
+	}
+	server, root := newTestProxyServer(t, "http://127.0.0.1:1/ping")
+	path := writeACMEStorage(t, root, []byte(`{"letsencrypt": {}}`))
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+
+	if _, err := server.ReadACMEStorage(context.Background(), &agentv1.ReadACMEStorageRequest{}); err == nil {
+		t.Fatal("unreadable storage = nil error, want a read failure")
+	}
+}
+
 // TestReadACMEStorageMissingFile proves a node without ACME storage answers
 // present=false instead of an error.
 func TestReadACMEStorageMissingFile(t *testing.T) {

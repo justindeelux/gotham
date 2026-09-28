@@ -232,11 +232,34 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 
 	// The redirect answers on the web entrypoint with the configured code,
 	// target and preserved path+query.
-	path := "/some/path?q=1"
-	location := p6ExpectRedirect(t, sourceDomain, path, http.StatusMovedPermanently)
-	if want := "https://" + targetDomain + path; location != want {
+	location := p6ExpectHostStatus(t, http.MethodGet, sourceDomain, http.StatusMovedPermanently)
+	if want := "https://" + targetDomain + p6RedirectProbePath; location != want {
 		t.Fatalf("redirect location = %q, want %q", location, want)
 	}
+
+	// Host variants the Host(source) router accepts while the raw URL keeps
+	// them: a port (numeric or otherwise), an empty port, a fully-qualified
+	// trailing dot and any case must still terminate in the redirect, never
+	// fall through to the backend-less noop service.
+	for _, variant := range []string{
+		sourceDomain + ":80",
+		sourceDomain + ":",
+		sourceDomain + ".",
+	} {
+		location := p6ExpectHostStatus(t, http.MethodGet, variant, http.StatusMovedPermanently)
+		if want := "https://" + targetDomain + p6RedirectProbePath; location != want {
+			t.Fatalf("redirect location for Host %q = %q, want %q", variant, location, want)
+		}
+	}
+	location = p6ExpectHostStatus(t, http.MethodGet, strings.ToUpper(sourceDomain)+":80", http.StatusMovedPermanently)
+	if want := "https://" + targetDomain + p6RedirectProbePath; location != want {
+		t.Fatalf("redirect location for an uppercase ported Host = %q, want %q", location, want)
+	}
+
+	// Traefik special-cases only GET: the permanent intent answers 301 to GET
+	// while HEAD and every other method answer 308.
+	p6ExpectHostStatus(t, http.MethodHead, sourceDomain, http.StatusPermanentRedirect)
+	p6ExpectHostStatus(t, http.MethodPost, sourceDomain, http.StatusPermanentRedirect)
 
 	// Pausing the rule removes the router; re-enabling restores it.
 	disabled := false
@@ -254,13 +277,32 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	if err := p6Sync(proxyService, serverID); err != nil {
 		t.Fatalf("sync after re-enable: %v", err)
 	}
-	p6ExpectRedirect(t, sourceDomain, path, http.StatusMovedPermanently)
+	p6ExpectHostStatus(t, http.MethodGet, sourceDomain, http.StatusMovedPermanently)
+
+	// The temporary intent answers 302 to GET and 307 to HEAD/other methods.
+	code := proxy.RedirectCodeTemporary
+	if _, err := redirectService.UpdateRedirect(ctx, redirect.ID, proxy.UpdateRedirectInput{Code: &code}); err != nil {
+		t.Fatalf("switch to temporary: %v", err)
+	}
+	if err := p6Sync(proxyService, serverID); err != nil {
+		t.Fatalf("sync after temporary switch: %v", err)
+	}
+	p6ExpectHostStatus(t, http.MethodGet, sourceDomain, http.StatusFound)
+	p6ExpectHostStatus(t, http.MethodHead, sourceDomain, http.StatusTemporaryRedirect)
+	p6ExpectHostStatus(t, http.MethodPost, sourceDomain, http.StatusTemporaryRedirect)
+	code = proxy.RedirectCodePermanent
+	if _, err := redirectService.UpdateRedirect(ctx, redirect.ID, proxy.UpdateRedirectInput{Code: &code}); err != nil {
+		t.Fatalf("restore permanent: %v", err)
+	}
+	if err := p6Sync(proxyService, serverID); err != nil {
+		t.Fatalf("sync after permanent restore: %v", err)
+	}
 
 	// A restarted proxy keeps serving the redirect without any CP action.
 	if err := engine.Restart(ctx, traefikID); err != nil {
 		t.Fatalf("restart traefik: %v", err)
 	}
-	p6ExpectRedirect(t, sourceDomain, path, http.StatusMovedPermanently)
+	p6ExpectHostStatus(t, http.MethodGet, sourceDomain, http.StatusMovedPermanently)
 
 	// Now record the certificate intent the status read reports on. No sync
 	// is needed: the status is computed from the node storage on read.
@@ -272,9 +314,15 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 		t.Fatalf("create certificate intent: %v", err)
 	}
 
-	// Certificate status: Traefik creates the storage file empty at boot and
-	// the node holds no certificate yet, so the intent is absent (never
-	// fabricated).
+	// Certificate status: the agent prepares the node's ACME storage file
+	// before Traefik starts (mode 0600, owned by the agent's user), so Traefik
+	// keeps it readable instead of creating a root-only file. The file exists
+	// and is empty, and the node holds no certificate yet: the intent is
+	// absent (never fabricated).
+	storagePath := filepath.Join(acmeDir, "acme.json")
+	if info, err := os.Stat(storagePath); err != nil || info.Size() != 0 {
+		t.Fatalf("agent-prepared acme storage = %v (%v), want an existing empty file", info, err)
+	}
 	statusService := proxy.NewDefaultCertificateStatusService(proxy.CertificateStatusConfig{
 		Store: proxy.NewStoreCertificateStatus(st),
 		Dial: func(dialCtx context.Context, id uuid.UUID) (proxy.ACMEReader, error) {
@@ -290,16 +338,39 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	}
 	statuses := statusService.CertificateStatuses(ctx, []proxy.DomainCertificate{certificate})
 	if got := statuses[certificate.ID].Status; got != proxy.CertificateStatusAbsent {
-		t.Fatalf("status without storage = %q, want absent", got)
+		t.Fatalf("status with empty storage = %q, want absent", got)
+	}
+
+	// A storage file the agent cannot read (the mode a root-run Traefik would
+	// leave behind on a node without the agent's placeholder) is a genuine
+	// read failure: unknown, never a fabricated absent. Only an unprivileged
+	// process is subject to the permission check.
+	if os.Geteuid() != 0 {
+		if err := os.Chmod(storagePath, 0); err != nil {
+			t.Fatalf("chmod acme storage: %v", err)
+		}
+		statuses = statusService.CertificateStatuses(ctx, []proxy.DomainCertificate{certificate})
+		if got := statuses[certificate.ID].Status; got != proxy.CertificateStatusUnknown {
+			t.Fatalf("status with unreadable storage = %q, want unknown", got)
+		}
+		if err := os.Chmod(storagePath, 0o600); err != nil {
+			t.Fatalf("restore mode: %v", err)
+		}
+	}
+
+	// A missing storage file is absent too (removal needs the directory, not
+	// the file, so an unreadable fixture cannot make this flaky).
+	p6RemoveACMEStorage(t, acmeDir)
+	statuses = statusService.CertificateStatuses(ctx, []proxy.DomainCertificate{certificate})
+	if got := statuses[certificate.ID].Status; got != proxy.CertificateStatusAbsent {
+		t.Fatalf("status with missing storage = %q, want absent", got)
 	}
 
 	// A real acme.json fixture for the recorded domain reports present with
 	// the stored expiry over the real agent RPC (no ACME quota burned).
 	expiry := time.Now().Add(45 * 24 * time.Hour).UTC().Truncate(time.Second)
 	fixture := p6ACMEStorage(t, certificate.Domain, expiry)
-	if err := os.WriteFile(filepath.Join(acmeDir, "acme.json"), fixture, 0o600); err != nil {
-		t.Fatalf("write acme fixture: %v", err)
-	}
+	p6WriteACMEStorage(t, acmeDir, fixture)
 	statuses = statusService.CertificateStatuses(ctx, []proxy.DomainCertificate{certificate})
 	observed := statuses[certificate.ID]
 	if observed.Status != proxy.CertificateStatusPresent {
@@ -311,9 +382,7 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 
 	// A malformed storage file is unknown, and the intent never turns into a
 	// fabricated present/absent.
-	if err := os.WriteFile(filepath.Join(acmeDir, "acme.json"), []byte(`{"letsencrypt": {"Certificates": [{"domain": {"main": "x"}, "certificate": "bad"}]}}`), 0o600); err != nil {
-		t.Fatalf("write malformed fixture: %v", err)
-	}
+	p6WriteACMEStorage(t, acmeDir, []byte(`{"letsencrypt": {"Certificates": [{"domain": {"main": "x"}, "certificate": "bad"}]}}`))
 	statuses = statusService.CertificateStatuses(ctx, []proxy.DomainCertificate{certificate})
 	if got := statuses[certificate.ID].Status; got != proxy.CertificateStatusUnknown {
 		t.Fatalf("status with malformed storage = %q, want unknown", got)
@@ -321,9 +390,7 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 
 	// A certificate on an unreachable node is unknown, while the reachable
 	// node's intent keeps its real observation in the same call.
-	if err := os.WriteFile(filepath.Join(acmeDir, "acme.json"), fixture, 0o600); err != nil {
-		t.Fatalf("restore fixture: %v", err)
-	}
+	p6WriteACMEStorage(t, acmeDir, fixture)
 	ghostDomain := "ghost-" + suffix + ".example.test"
 	ghostApp := p6CreateApplication(t, ctx, pool, userRow.ID, ghostRow.ID, "redirect-ghost-"+suffix, ghostDomain, 0, false)
 	ghostCertificate, err := certificateService.CreateCertificate(ctx, proxy.CreateCertificateInput{
@@ -368,9 +435,35 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	}
 }
 
-// p6ExpectRedirect polls a route through Traefik until it answers the wanted
-// redirect status and returns its Location header.
-func p6ExpectRedirect(t *testing.T, host, path string, wantStatus int) string {
+// p6RedirectProbePath is the path+query every redirect assertion requests, so
+// the preserved-path expectation is one constant.
+const p6RedirectProbePath = "/some/path?q=1"
+
+// p6ExpectHostStatus polls a route through Traefik with the given method and
+// Host header until it answers the wanted status and returns the Location
+// header (empty for non-redirect statuses).
+func p6ExpectHostStatus(t *testing.T, method, host string, wantStatus int) string {
+	t.Helper()
+	deadline := time.Now().Add(p6HTTPWait)
+	var lastStatus int
+	var lastLocation string
+	for {
+		status, location := p6HostRequest(t, method, host, p6RedirectProbePath)
+		lastStatus, lastLocation = status, location
+		if status == wantStatus || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(p6PollInterval)
+	}
+	if lastStatus != wantStatus {
+		t.Fatalf("%s (Host %s) = %d, want %d (location %q)", method, host, lastStatus, wantStatus, lastLocation)
+	}
+	return lastLocation
+}
+
+// p6HostRequest performs one request with the given method and Host header,
+// without following redirects, and returns the status and Location header.
+func p6HostRequest(t *testing.T, method, host, path string) (int, string) {
 	t.Helper()
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -378,36 +471,42 @@ func p6ExpectRedirect(t *testing.T, host, path string, wantStatus int) string {
 			return http.ErrUseLastResponse
 		},
 	}
-	deadline := time.Now().Add(p6HTTPWait)
-	var lastStatus int
-	var lastLocation string
-	for {
-		request, err := http.NewRequest(http.MethodGet, p6BaseURL, nil)
-		if err != nil {
-			t.Fatalf("new request: %v", err)
-		}
-		request.Host = host
-		request.URL.Path = strings.SplitN(path, "?", 2)[0]
-		if query := strings.SplitN(path, "?", 2); len(query) == 2 {
-			request.URL.RawQuery = query[1]
-		}
-		response, err := client.Do(request)
-		if err == nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 8192))
-			_ = response.Body.Close()
-			lastStatus, lastLocation = response.StatusCode, response.Header.Get("Location")
-			if response.StatusCode == wantStatus || time.Now().After(deadline) {
-				break
-			}
-		} else if time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(p6PollInterval)
+	request, err := http.NewRequest(method, p6BaseURL, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
 	}
-	if lastStatus != wantStatus {
-		t.Fatalf("GET (Host %s) = %d, want %d (location %q)", host, lastStatus, wantStatus, lastLocation)
+	request.Host = host
+	request.URL.Path = strings.SplitN(path, "?", 2)[0]
+	if query := strings.SplitN(path, "?", 2); len(query) == 2 {
+		request.URL.RawQuery = query[1]
 	}
-	return lastLocation
+	response, err := client.Do(request)
+	if err != nil {
+		return 0, ""
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 8192))
+	_ = response.Body.Close()
+	return response.StatusCode, response.Header.Get("Location")
+}
+
+// p6RemoveACMEStorage removes the node's ACME storage file if present.
+// Removal needs write permission on the directory, not on the file, so a
+// foreign-owned or unreadable file cannot make the test flaky; the directory
+// is never touched.
+func p6RemoveACMEStorage(t *testing.T, acmeDir string) {
+	t.Helper()
+	if err := os.Remove(filepath.Join(acmeDir, "acme.json")); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove acme storage: %v", err)
+	}
+}
+
+// p6WriteACMEStorage replaces the node's ACME storage file with content.
+func p6WriteACMEStorage(t *testing.T, acmeDir string, content []byte) {
+	t.Helper()
+	p6RemoveACMEStorage(t, acmeDir)
+	if err := os.WriteFile(filepath.Join(acmeDir, "acme.json"), content, 0o600); err != nil {
+		t.Fatalf("write acme storage: %v", err)
+	}
 }
 
 // p6ACMEStorage renders a Traefik-shaped acme.json body holding one

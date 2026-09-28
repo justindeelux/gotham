@@ -172,7 +172,7 @@ func TestCertificateStatusesWildcardIsOneLabel(t *testing.T) {
 	dial := func(context.Context, uuid.UUID) (ACMEReader, error) {
 		return &fakeACMEReader{response: &agentv1.ReadACMEStorageResponse{
 			Present:      true,
-			Certificates: []*agentv1.ACMECertificateInfo{storedCertificate("letsencrypt", "other.example.com", []string{"*.example.com"}, expiry)},
+			Certificates: []*agentv1.ACMECertificateInfo{storedCertificate("letsencrypt-dns-cloudflare", "other.example.com", []string{"*.example.com"}, expiry)},
 		}}, nil
 	}
 	svc := NewDefaultCertificateStatusService(CertificateStatusConfig{Store: store, Dial: dial, Logger: discardLogger()})
@@ -182,6 +182,41 @@ func TestCertificateStatusesWildcardIsOneLabel(t *testing.T) {
 	}
 	if statuses[twoLabels.ID].Status != CertificateStatusAbsent {
 		t.Fatalf("two-label status = %q, want absent (a wildcard covers exactly one label)", statuses[twoLabels.ID].Status)
+	}
+}
+
+// TestCertificateStatusesWildcardPrimaryName proves the one-label wildcard
+// rule applies to a stored certificate's main name too, not only to SANs: the
+// RPC reads every certificate the node stored, and a manually configured
+// wildcard main is a valid cover. The apex and multi-label rejections hold.
+func TestCertificateStatusesWildcardPrimaryName(t *testing.T) {
+	server := uuid.New()
+	expiry := time.Now().Add(12 * time.Hour).UTC().Truncate(time.Second)
+	covered := statusCertificate("shop.example.com")
+	apex := statusCertificate("example.com")
+	multiLabel := statusCertificate("shop.eu.example.com")
+	store := &fakeStatusStore{targets: []CertificateStatusTarget{
+		{CertificateID: covered.ID, Domain: covered.Domain, ServerID: server},
+		{CertificateID: apex.ID, Domain: apex.Domain, ServerID: server},
+		{CertificateID: multiLabel.ID, Domain: multiLabel.Domain, ServerID: server},
+	}}
+	dial := func(context.Context, uuid.UUID) (ACMEReader, error) {
+		return &fakeACMEReader{response: &agentv1.ReadACMEStorageResponse{
+			Present:      true,
+			Certificates: []*agentv1.ACMECertificateInfo{storedCertificate("letsencrypt", "*.example.com", nil, expiry)},
+		}}, nil
+	}
+	svc := NewDefaultCertificateStatusService(CertificateStatusConfig{Store: store, Dial: dial, Logger: discardLogger()})
+	statuses := svc.CertificateStatuses(context.Background(), []DomainCertificate{covered, apex, multiLabel})
+
+	if got := statuses[covered.ID]; got.Status != CertificateStatusPresent || !got.NotAfter.Equal(expiry) {
+		t.Fatalf("covered status = %#v, want present with %s", got, expiry)
+	}
+	if got := statuses[apex.ID].Status; got != CertificateStatusAbsent {
+		t.Fatalf("apex status = %q, want absent (a wildcard never covers its apex)", got)
+	}
+	if got := statuses[multiLabel.ID].Status; got != CertificateStatusAbsent {
+		t.Fatalf("multi-label status = %q, want absent (a wildcard covers exactly one label)", got)
 	}
 }
 

@@ -635,8 +635,9 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 //     back (two routers must never match the same host),
 //   - duplicate sources hold every conflicting rule back (row order does not
 //     prove ownership, and the unique index only prevents new duplicates),
-//   - a target that is another surviving rule's source is held back, so no
-//     redirect chain (and therefore no redirect loop) is ever generated.
+//   - a rule that forms a chain with an earlier enabled rule is held back
+//     (see the no-chain net below), so no redirect chain — and therefore no
+//     loop — is ever generated.
 func redirectsForServer(apps []ProxiedApplication, rules []RedirectRule, serverID uuid.UUID) ([]Redirect, []Diagnostic) {
 	if len(rules) == 0 {
 		return nil, nil
@@ -653,17 +654,19 @@ func redirectsForServer(apps []ProxiedApplication, rules []RedirectRule, serverI
 
 	type candidate struct {
 		rule   RedirectRule
+		rank   int
 		source string
 		target string
 		reason string
 	}
 	candidates := make([]candidate, 0, len(rules))
-	for _, rule := range rules {
+	for rank, rule := range rules {
 		if !rule.Enabled || rule.ServerID != serverID {
 			continue
 		}
 		entry := candidate{
 			rule:   rule,
+			rank:   rank,
 			source: NormalizeDomain(rule.SourceDomain),
 			target: NormalizeDomain(rule.TargetDomain),
 		}
@@ -693,15 +696,30 @@ func redirectsForServer(apps []ProxiedApplication, rules []RedirectRule, serverI
 			candidates[i].reason = "duplicate redirect source on this node; all conflicting rules are held back"
 		}
 	}
-	liveSources := make(map[string]bool, len(candidates))
-	for _, entry := range candidates {
-		if entry.reason == "" {
-			liveSources[entry.source] = true
-		}
-	}
+
+	// No-chain net. The service rejects a chain at write time in both
+	// directions, so this only catches racing writes (the guard is a
+	// check-then-write, not a database constraint). It runs against every
+	// enabled rule, not just this node's candidates, because a chain can span
+	// nodes: holding back the later-created rule of a pair mirrors the
+	// write-time rejection of the second write, while an earlier rule that was
+	// valid on its own keeps serving.
 	for i := range candidates {
-		if candidates[i].reason == "" && liveSources[candidates[i].target] {
-			candidates[i].reason = "the redirect target is another redirect rule's source; redirect chains are not generated"
+		entry := &candidates[i]
+		if entry.reason != "" {
+			continue
+		}
+		for j := 0; j < entry.rank; j++ {
+			earlier := rules[j]
+			if !earlier.Enabled {
+				continue
+			}
+			earlierSource := NormalizeDomain(earlier.SourceDomain)
+			earlierTarget := NormalizeDomain(earlier.TargetDomain)
+			if earlierTarget == entry.source || earlierSource == entry.target {
+				entry.reason = "the redirect chains with an earlier enabled redirect rule; redirect chains are not generated"
+				break
+			}
 		}
 	}
 

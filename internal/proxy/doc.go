@@ -105,13 +105,18 @@
 // a web-entrypoint redirectRegex middleware plus a router that references a
 // shared service with no servers — Traefik requires a service on a router, and
 // the middleware terminates the request before a backend is consulted, so a
-// redirect router can never proxy anywhere. Redirect routers never carry the
-// shared HTTP→HTTPS middleware. The source host is globally unique and never
-// shadows any application's base domain; targets are never another enabled
-// rule's source, so no chain (and no loop) is generated. Conflicts that slip
-// past a write (races) are held back as per-application diagnostics at
-// generation time, exactly like unroutable application rows. A rule of a
-// domain-disabled application is held back with its application.
+// redirect router can never proxy anywhere. The regex accepts every host form
+// the Host(source) router matches while the raw URL keeps it (port, trailing
+// dot, case), so the redirect always terminates instead of falling through to
+// that service. Redirect routers never carry the shared HTTP→HTTPS middleware.
+// The source host is globally unique and never shadows any application's base
+// domain; a target is never another enabled rule's source and a source is never
+// another enabled rule's target, so no chain (and no loop) can be written.
+// Conflicts that slip past a write (racing check-then-write) are held back at
+// generation time — the later-created rule of a chain, duplicate sources,
+// invalid rows — as per-application diagnostics, exactly like unroutable
+// application rows. A rule of a domain-disabled application is held back with
+// its application.
 //
 // Certificate status is computed on read, never stored: the CP's status
 // service maps each certificate intent to its node's ACME storage through the
@@ -119,11 +124,14 @@
 // sans, not_after}. The agent parses acme.json with decode structs that
 // structurally omit the per-certificate private key and the resolver's ACME
 // account key, so key material never enters a response, a log line or an error
-// string; a missing or empty storage file (Traefik creates it empty at boot)
-// is absent, and an unreadable storage or unreachable node is unknown. The
-// certificate API surfaces the observation as additive `status` and
-// `not_after` fields, and a node failure can never turn the certificate list
-// into an error.
+// string; the one-label wildcard rule applies to both the stored primary name
+// and its SANs. A missing or empty storage file is absent, and an unreadable
+// storage or unreachable node is unknown. Because Traefik would otherwise
+// create a root-only storage file the unprivileged agent could never read, the
+// agent prepares the file itself (create-only, mode 0600) while writing the
+// generated configuration, before Traefik ever starts. The certificate API
+// surfaces the observation as additive `status` and `not_after` fields, and a
+// node failure can never turn the certificate list into an error.
 //
 // FEATURE_PROXY=false disables the whole surface: no routes are mounted, no
 // deploy hook is wired and no configuration is pushed.

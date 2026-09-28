@@ -274,10 +274,10 @@ func (s *Store) ListApplicationBaseDomains(ctx context.Context) ([]sqlc.ListAppl
 	return s.queries.ListApplicationBaseDomains(ctx)
 }
 
-// ListEnabledRedirectSources returns the source hosts claimed by enabled
-// redirect rules, for the no-chain guard.
-func (s *Store) ListEnabledRedirectSources(ctx context.Context) ([]sqlc.ListEnabledRedirectSourcesRow, error) {
-	return s.queries.ListEnabledRedirectSources(ctx)
+// ListEnabledRedirects returns the endpoints of every enabled redirect rule,
+// for the two-directional no-chain guard.
+func (s *Store) ListEnabledRedirects(ctx context.Context) ([]sqlc.ListEnabledRedirectsRow, error) {
+	return s.queries.ListEnabledRedirects(ctx)
 }
 
 // ListRedirectRules returns every redirect rule joined to its application's

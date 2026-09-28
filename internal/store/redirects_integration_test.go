@@ -201,9 +201,9 @@ func TestDomainRedirectStorage(t *testing.T) {
 	if !sawApp {
 		t.Fatal("application base domain missing from the ownership guard query")
 	}
-	sources, err := st.ListEnabledRedirectSources(ctx)
+	sources, err := st.ListEnabledRedirects(ctx)
 	if err != nil {
-		t.Fatalf("list enabled redirect sources: %v", err)
+		t.Fatalf("list enabled redirects: %v", err)
 	}
 	enabledCount := 0
 	for _, source := range sources {

@@ -321,17 +321,20 @@ func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc
 	}
 
 	// A following stream is bounded by its client's context, not by the
-	// command timeout: a log tail may legitimately live for hours.
+	// command timeout: a log tail may legitimately live for hours. The command
+	// context is always locally cancelable, so a failed acceptance or a send
+	// failure can stop and reap the CLI even for a follow stream.
 	timeout := s.timeout
 	if req.GetFollow() {
 		timeout = 0
 	}
-	commandCtx := ctx
-	var cancel context.CancelFunc = func() {}
+	commandCtx, cancelCommand := context.WithCancel(ctx)
+	defer cancelCommand()
 	if timeout > 0 {
-		commandCtx, cancel = context.WithTimeout(ctx, timeout)
+		var cancelTimeout context.CancelFunc
+		commandCtx, cancelTimeout = context.WithTimeout(commandCtx, timeout)
+		defer cancelTimeout()
 	}
-	defer cancel()
 	command := s.newCommand(commandCtx, project, args...)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -347,9 +350,13 @@ func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc
 	// Acceptance: the request is validated and the command is running, so the
 	// control plane can commit the response before any output exists.
 	if err := stream.Send(&agentv1.ComposeLogChunk{Ready: true}); err != nil {
-		cancel()
+		// The client disappeared during acceptance. The started command must
+		// still be cancelled and reaped: returning without Wait would leave a
+		// zombie child in the long-lived agent.
+		cancelCommand()
 		_ = stdout.Close()
 		_ = stderr.Close()
+		_ = command.Wait()
 		return nil
 	}
 	// A send failure cancels the CLI immediately and closes both pipes: a
@@ -357,7 +364,7 @@ func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc
 	// grandchild of the CLI (for example one stage of a pipeline) keeps the
 	// pipe open, and closing the read ends unblocks the drain goroutines.
 	writer := &composeStreamWriter{send: stream.Send, stop: func() {
-		cancel()
+		cancelCommand()
 		_ = stdout.Close()
 		_ = stderr.Close()
 	}}

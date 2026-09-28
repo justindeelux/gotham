@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -490,6 +492,83 @@ exit 0
 	}
 	if message := status.Convert(err).Message(); len(message) > maxComposeError+200 {
 		t.Fatalf("diagnostic is unbounded: %d bytes", len(message))
+	}
+}
+
+// acceptanceFailStream fails the acceptance Send once the CLI has written its
+// pid file, so a test can prove the started command was reaped.
+type acceptanceFailStream struct {
+	grpc.ServerStream
+	ctx     context.Context
+	pidFile string
+	sendErr error
+}
+
+func (s *acceptanceFailStream) Context() context.Context { return s.ctx }
+
+func (s *acceptanceFailStream) Send(chunk *agentv1.ComposeLogChunk) error {
+	if chunk.GetReady() {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat(s.pidFile); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				return errors.New("the CLI never wrote its pid")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	return s.sendErr
+}
+
+// TestComposeLogsAcceptanceFailureReapsCLI proves a client that disappears
+// during acceptance does not leave an unreaped child in the long-lived agent:
+// the started command is cancelled and waited before the RPC returns.
+func TestComposeLogsAcceptanceFailureReapsCLI(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "cli.pid")
+	t.Setenv("FAKE_PID_FILE", pidFile)
+	fakeDockerCLI(t, `
+case "$6" in
+  logs)
+    echo $$ > "$FAKE_PID_FILE"
+    sleep 5 &
+    wait
+    ;;
+esac
+exit 0
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+	}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+
+	stream := &acceptanceFailStream{ctx: context.Background(), pidFile: pidFile, sendErr: errors.New("transport gone")}
+	if err := server.ComposeLogs(&agentv1.ComposeLogsRequest{
+		ProjectName: composeTestProject,
+		Follow:      true,
+	}, stream); err != nil {
+		t.Fatalf("ComposeLogs = %v, want nil (client gone)", err)
+	}
+
+	content, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("read the CLI pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	if err != nil {
+		t.Fatalf("parse the CLI pid %q: %v", content, err)
+	}
+	var status syscall.WaitStatus
+	waited, waitErr := syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+	if waitErr == nil && waited == pid {
+		t.Fatalf("the CLI process %d was left unreaped after the RPC returned", pid)
+	}
+	if !errors.Is(waitErr, syscall.ECHILD) {
+		t.Fatalf("Wait4(%d) = %d, %v; want ECHILD (already reaped)", pid, waited, waitErr)
 	}
 }
 

@@ -372,7 +372,15 @@ func (h *handler) logs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
+	// Commit the accepted response before waiting for output: a following
+	// stream may legitimately stay quiet for a long time, and an HTTP client
+	// must see the headers as soon as the node accepted the stream. A
+	// refused/unknown selector was already answered with its error status
+	// above, before this point.
 	flusher, _ := w.(http.Flusher)
+	if flusher != nil {
+		flusher.Flush()
+	}
 	for chunk := range stream.Chunks() {
 		if _, err := w.Write(chunk); err != nil {
 			return

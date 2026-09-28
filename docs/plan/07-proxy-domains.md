@@ -137,3 +137,32 @@ run retained in the evidence directory):
 - **Deliverables:** `DomainEditor` component (embedded in app/service detail), DNS providers settings page.
 - **Verify:** e2e: add a domain → wait for cert issued → browse via HTTPS.
 - **Depends on:** BE-6.1 + BE-6.2.
+- **Note:** the mockup's domain→domain redirects and certificate status/expiry have no backend in BE-6.1/BE-6.2; FE-6.1 ships them as explicit, non-fabricated "backend pending" stubs, and BE-6.3 below closes the gap (FE follow-up replaces the stubs).
+
+## BE-6.3 — Domain redirects + certificate status/expiry — `ws/p6-redirects-status`
+
+- **Context brief:** the two `domains.html` features the API cannot back today.
+  (1) Domain→domain redirects: a rule that sends one host to another, generated
+  as a Traefik `redirectRegex` middleware next to the existing routers and
+  middlewares; the HTTP→HTTPS redirect stays a separate concern.
+  (2) Certificate status/expiry: the CP has no issuance telemetry, so the status
+  must come from the node's Traefik ACME storage (`acme.json`) read through the
+  agent, reported per `domain_certificates` row as absent/present plus the
+  certificate `notAfter`; when the node cannot be read the status is reported as
+  unknown, never fabricated.
+- **Deliverables:** forward-only migration for the redirect rule(s); store +
+  service + `/v1/proxy` routes for redirect CRUD; generator support emitting the
+  redirect middleware/router; an agent read path for the node's ACME storage and
+  a CP service mapping it to per-domain status/expiry; tests (unit + a gated e2e
+  on the existing lifecycle).
+- **Design gate:** the redirect scope (per-application vs per-domain), the
+  redirect code (301/302), the conflict/ownership rules for the redirect target,
+  and the ACME-storage read boundary (agent RPC shape, what is redacted) MUST be
+  proposed to the coordinator (`ask`) before inventing any state/schema.
+- **Verify:** attach a domain to an Nginx app with a redirect rule → Traefik
+  answers the source host with the configured redirect to the target host; the
+  certificate status/expiry reflect the node's ACME storage (absent stays absent,
+  a real cert reports the served `notAfter`); restart/repair preserves the
+  behavior; an unreachable node reports unknown rather than a fabricated value.
+- **Depends on:** BE-6.1 + BE-6.2. FE follow-up: replace the FE-6.1 stubs with
+  the live data once this lands.

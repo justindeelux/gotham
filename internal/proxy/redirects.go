@@ -76,7 +76,8 @@ type RedirectWrite struct {
 }
 
 // ApplicationDomain is one application's base domain, used by the ownership
-// guard so a redirect source can never shadow a routed host.
+// guard: a sequential conflicting write cannot shadow a routed host, and a
+// racing write is held back by the generator per committed snapshot.
 type ApplicationDomain struct {
 	ID     uuid.UUID
 	Domain string
@@ -219,9 +220,13 @@ func (s storeRedirect) ListApplicationBaseDomains(ctx context.Context) ([]Applic
 	return out, nil
 }
 
-// ListEnabledRedirects returns the endpoints of every enabled rule, across
-// every node: the no-chain guard is global, not node-local, so a chain cannot
-// be introduced even when its two rules live on different nodes.
+// ListEnabledRedirects returns the endpoints of every enabled rule across
+// every node: the no-chain guard is global, not node-local, so a sequential
+// conflicting write (create, update or enable) is rejected even when its two
+// rules live on different nodes. The guard reads committed state, so
+// concurrent writes can still pass against old endpoints and persist a chain;
+// live fleet-wide chain-freedom then requires every affected node to converge
+// (see checkRedirectWrites and redirectsForServer for the exact limits).
 func (s storeRedirect) ListEnabledRedirects(ctx context.Context) ([]RedirectEndpoint, error) {
 	rows, err := s.store.ListEnabledRedirects(ctx)
 	if err != nil {

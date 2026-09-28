@@ -353,8 +353,10 @@ type ListApplicationBaseDomainsRow struct {
 }
 
 // ListApplicationBaseDomains feeds the redirect ownership guard: a redirect
-// source must never shadow any application's base domain (on any node), so
-// the two routers can never match the same host.
+// source must not shadow any application's base domain (on any node), so the
+// two routers must not match the same host. The guard reads committed state,
+// so a racing write can still pass against an old domain set; the generator
+// then holds the shadowing source back per committed snapshot.
 func (q *Queries) ListApplicationBaseDomains(ctx context.Context) ([]ListApplicationBaseDomainsRow, error) {
 	rows, err := q.db.Query(ctx, listApplicationBaseDomains)
 	if err != nil {
@@ -608,8 +610,10 @@ type ListEnabledRedirectsRow struct {
 // ListEnabledRedirects returns the endpoints of every enabled redirect rule.
 // It feeds the no-chain guard in both directions (a proposed target must not
 // be another enabled rule's source, and a proposed source must not be another
-// enabled rule's target), so a chain can never be introduced by a create,
-// update or enable.
+// enabled rule's target): a sequential conflicting write (create, update or
+// enable) is rejected across nodes. The guard reads committed state, so
+// concurrent writes can still pass against old endpoints and persist a chain;
+// fleet-wide chain-freedom then requires each affected node to converge.
 func (q *Queries) ListEnabledRedirects(ctx context.Context) ([]ListEnabledRedirectsRow, error) {
 	rows, err := q.db.Query(ctx, listEnabledRedirects)
 	if err != nil {

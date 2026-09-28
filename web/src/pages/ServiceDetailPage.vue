@@ -99,6 +99,26 @@ const deploys = computed<ServiceDeploy[]>(() =>
 const latestDeploy = computed<ServiceDeploy | null>(() => deploys.value[0] ?? null);
 
 /**
+ * loadedServiceId is the service whose configuration is in the editors right
+ * now. It is set only by a successful detail read for the id the load started
+ * with, so a pending or failed load can never leave another service's drafts
+ * editable — the compose/env saves are gated on it.
+ */
+const loadedServiceId = ref<string>("");
+
+/**
+ * loadToken invalidates obsolete detail loads: a newer load (route change,
+ * reload) bumps it, and a completion whose token no longer matches is dropped
+ * before it can touch a page-local draft.
+ */
+let loadToken = 0;
+
+/** canEditCurrent reports whether the drafts belong to the displayed service. */
+const canEditCurrent = computed<boolean>(
+  () => loadedServiceId.value !== "" && loadedServiceId.value === serviceId.value,
+);
+
+/**
  * history is the per-service deploy-history state. A missing entry means the
  * history was never read: the UI must not claim it is empty then, and only
  * `loaded` (set by a successful read) allows the empty/zero copy.
@@ -242,8 +262,13 @@ function envRows(env: Record<string, string>): EnvRow[] {
   }));
 }
 
-/** load fetches the service, its history and the node list. */
+/** load fetches one service, its history and the node list. */
 async function load(): Promise<void> {
+  const token = ++loadToken;
+  // Capture the id this load belongs to: the route may change while it awaits,
+  // and an obsolete completion must never write another service's drafts.
+  const id = serviceId.value;
+  loadedServiceId.value = "";
   error.value = null;
   notFound.value = false;
   actionError.value = null;
@@ -256,14 +281,24 @@ async function load(): Promise<void> {
   composeYaml.value = "";
   envDraft.value = [];
   try {
-    const fetched = await servicesStore.fetchService(serviceId.value);
+    const fetched = await servicesStore.fetchService(id);
+    if (token !== loadToken) {
+      return;
+    }
     composeYaml.value = fetched.compose_yaml ?? "";
     envDraft.value = envRows(fetched.env ?? {});
+    loadedServiceId.value = id;
   } catch (err) {
+    if (token !== loadToken) {
+      return;
+    }
     error.value = describeServiceError(err);
     notFound.value = isApiError(err) && err.status === 404;
+    return;
   }
-  await servicesStore.fetchDeploys(serviceId.value).catch(() => undefined);
+  // Dependent reads use the captured id: they belong to the service this load
+  // started for, never to whatever the route shows now.
+  await servicesStore.fetchDeploys(id).catch(() => undefined);
   void serversStore.fetchServers().catch(() => undefined);
 }
 
@@ -274,17 +309,30 @@ async function retryHistory(): Promise<void> {
 
 /** handleSaveCompose persists the edited document (PATCH → 200). */
 async function handleSaveCompose(text: string): Promise<void> {
+  // A save may only fire for the service whose configuration is displayed: the
+  // drafts are cleared while a load is pending, so an unguarded save could
+  // write an empty or foreign document onto the route's service.
+  const id = serviceId.value;
+  if (!canEditCurrent.value || id === "") {
+    return;
+  }
+  const token = loadToken;
   composeSaving.value = true;
   composeError.value = null;
   try {
-    const updated = await servicesStore.update(serviceId.value, {
-      compose_yaml: text,
-    });
+    const updated = await servicesStore.update(id, { compose_yaml: text });
+    if (token !== loadToken || id !== serviceId.value) {
+      // The route moved on while the write was in flight; the response belongs
+      // to the previous service and must not seed the new drafts.
+      return;
+    }
     composeYaml.value = updated.compose_yaml ?? text;
     composeEditing.value = false;
     message.success("Compose document saved. Deploy to apply it on the node.");
   } catch (err) {
-    composeError.value = describeServiceError(err);
+    if (token === loadToken && id === serviceId.value) {
+      composeError.value = describeServiceError(err);
+    }
   } finally {
     composeSaving.value = false;
   }
@@ -312,6 +360,11 @@ function removeEnvRow(id: number): void {
 
 /** handleSaveEnv replaces the whole environment map (PATCH → 200). */
 async function handleSaveEnv(): Promise<void> {
+  // Same draft-ownership guard as the compose save.
+  const id = serviceId.value;
+  if (!canEditCurrent.value || id === "") {
+    return;
+  }
   const env: Record<string, string> = {};
   for (const row of envDraft.value) {
     const key = row.key.trim();
@@ -319,14 +372,20 @@ async function handleSaveEnv(): Promise<void> {
       env[key] = row.value;
     }
   }
+  const token = loadToken;
   envSaving.value = true;
   envError.value = null;
   try {
-    const updated = await servicesStore.update(serviceId.value, { env });
+    const updated = await servicesStore.update(id, { env });
+    if (token !== loadToken || id !== serviceId.value) {
+      return;
+    }
     envDraft.value = envRows(updated.env ?? {});
     message.success("Environment saved. It applies to the next deploy.");
   } catch (err) {
-    envError.value = describeServiceError(err);
+    if (token === loadToken && id === serviceId.value) {
+      envError.value = describeServiceError(err);
+    }
   } finally {
     envSaving.value = false;
   }
@@ -562,12 +621,20 @@ watch(serviceId, () => {
             {{ composeError }}
           </NAlert>
           <ComposeEditor
+            v-if="canEditCurrent"
             v-model="composeYaml"
             v-model:editing="composeEditing"
             :saving="composeSaving"
             :label="`compose_yaml · ${service.name}`"
             @save="handleSaveCompose"
           />
+          <NText v-else depth="3" class="small">
+            {{
+              error
+                ? "The compose document is unavailable."
+                : "Loading the service configuration…"
+            }}
+          </NText>
         </NSpace>
       </NCard>
 
@@ -581,55 +648,64 @@ watch(serviceId, () => {
           <NAlert v-if="envError" type="error" :show-icon="true">
             {{ envError }}
           </NAlert>
-          <p class="small muted">
-            Values are masked here: a service created from a template keeps its
-            secret values in this map, and they must never be displayed in
-            clear. The control plane redacts every value from errors and from
-            the deploy history.
-          </p>
-          <div v-if="envDraft.length > 0" class="env-rows">
-            <div v-for="row in envDraft" :key="row.id" class="env-row">
-              <NInput
-                :value="row.key"
-                class="mono"
-                placeholder="MYSQL_PASSWORD"
-                aria-label="Variable name"
-                @update:value="(value: string) => updateEnvRow(row.id, { key: value })"
-              />
-              <NInput
-                :value="row.value"
-                type="password"
-                show-password-on="click"
-                :input-props="{ autocomplete: 'new-password' }"
-                class="mono"
-                placeholder="value"
-                aria-label="Variable value"
-                @update:value="(value: string) => updateEnvRow(row.id, { value })"
-              />
-              <NButton
-                quaternary
-                type="error"
-                aria-label="Remove variable"
-                @click="removeEnvRow(row.id)"
-              >
-                Remove
-              </NButton>
+          <template v-if="canEditCurrent">
+            <p class="small muted">
+              Values are masked here: a service created from a template keeps
+              its secret values in this map, and they must never be displayed in
+              clear. The control plane redacts every value from errors and from
+              the deploy history.
+            </p>
+            <div v-if="envDraft.length > 0" class="env-rows">
+              <div v-for="row in envDraft" :key="row.id" class="env-row">
+                <NInput
+                  :value="row.key"
+                  class="mono"
+                  placeholder="MYSQL_PASSWORD"
+                  aria-label="Variable name"
+                  @update:value="(value: string) => updateEnvRow(row.id, { key: value })"
+                />
+                <NInput
+                  :value="row.value"
+                  type="password"
+                  show-password-on="click"
+                  :input-props="{ autocomplete: 'new-password' }"
+                  class="mono"
+                  placeholder="value"
+                  aria-label="Variable value"
+                  @update:value="(value: string) => updateEnvRow(row.id, { value })"
+                />
+                <NButton
+                  quaternary
+                  type="error"
+                  aria-label="Remove variable"
+                  @click="removeEnvRow(row.id)"
+                >
+                  Remove
+                </NButton>
+              </div>
             </div>
-          </div>
-          <NText v-else depth="3">
-            The environment is empty. Saving an empty environment clears it.
+            <NText v-else depth="3">
+              The environment is empty. Saving an empty environment clears it.
+            </NText>
+            <NSpace :size="8" align="center">
+              <NButton size="small" @click="addEnvRow">Add variable</NButton>
+              <NButton
+                size="small"
+                type="primary"
+                :loading="envSaving"
+                @click="handleSaveEnv"
+              >
+                Save environment
+              </NButton>
+            </NSpace>
+          </template>
+          <NText v-else depth="3" class="small">
+            {{
+              error
+                ? "The environment is unavailable."
+                : "Loading the environment…"
+            }}
           </NText>
-          <NSpace :size="8" align="center">
-            <NButton size="small" @click="addEnvRow">Add variable</NButton>
-            <NButton
-              size="small"
-              type="primary"
-              :loading="envSaving"
-              @click="handleSaveEnv"
-            >
-              Save environment
-            </NButton>
-          </NSpace>
         </NSpace>
       </NCard>
 

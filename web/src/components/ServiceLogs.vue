@@ -2,9 +2,9 @@
 import { NButton, NSelect, NTooltip } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 
-import { refreshSession } from "../api/http";
+import { expireSession, refreshSession } from "../api/http";
 import { describeServiceError, serviceLogsPath } from "../api/services";
-import { clearSession, getAccessToken } from "../api/token";
+import { getAccessToken } from "../api/token";
 
 /**
  * Live log terminal for one compose service.
@@ -163,7 +163,9 @@ async function openStream(signal: AbortSignal): Promise<Response> {
     try {
       await refreshSession();
     } catch {
-      clearSession();
+      // Same exit as the axios interceptor: drop the session and redirect to
+      // the login page instead of leaving the reader on a dead session.
+      expireSession();
       throw new Error(sessionExpiredMessage);
     }
     response = await request();

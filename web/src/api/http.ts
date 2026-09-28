@@ -67,8 +67,7 @@ http.interceptors.response.use(
         config.headers.set("Authorization", `Bearer ${accessToken}`);
         return await http.request(config);
       } catch {
-        clearSession();
-        redirectToLogin();
+        expireSession();
       }
     }
 
@@ -129,6 +128,17 @@ function refreshAccessToken(): Promise<string> {
  */
 export function refreshSession(): Promise<string> {
   return refreshAccessToken();
+}
+
+/**
+ * expireSession drops the stored session and sends the browser to the login
+ * page. It is the single exit path for a dead session, shared by the axios
+ * interceptor and the fetch-based log reader (both call it after a failed
+ * refresh).
+ */
+export function expireSession(): void {
+  clearSession();
+  redirectToLogin();
 }
 
 /** redirectToLogin sends the browser to the login page after a dead session. */

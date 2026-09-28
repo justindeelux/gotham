@@ -37,20 +37,48 @@ interface SeededService {
   serverName: string;
 }
 
-/** seedServer registers a node row and returns its generated name. */
+/** seedServer registers a node row and returns its id and generated name. */
 async function seedServer(
   api: APIRequestContext,
   headers: Record<string, string>,
   suffix: string,
   prefix: string,
-): Promise<string> {
-  const serverName = `${prefix}-node-${suffix}`;
+): Promise<{ id: string; name: string }> {
+  const name = `${prefix}-node-${suffix}`;
   const response = await api.post("/api/v1/servers", {
     headers,
-    data: { name: serverName, ip: "127.0.0.1", ssh_user: "root" },
+    data: { name, ip: "127.0.0.1", ssh_user: "root" },
   });
   expect(response.status(), await response.text()).toBe(201);
-  return serverName;
+  const { server } = (await response.json()) as {
+    server: { id: string; name: string };
+  };
+  return { id: server.id, name: server.name };
+}
+
+/** createService stores one service with a distinct document and env marker. */
+async function createService(
+  api: APIRequestContext,
+  headers: Record<string, string>,
+  serverId: string,
+  name: string,
+  env: Record<string, string>,
+  domain: string,
+): Promise<{ id: string; name: string }> {
+  const response = await api.post("/api/v1/services", {
+    headers,
+    data: {
+      name,
+      server_id: serverId,
+      compose_yaml: sampleCompose.replace("fix.example.test", domain),
+      env,
+    },
+  });
+  expect(response.status(), await response.text()).toBe(201);
+  const { service } = (await response.json()) as {
+    service: { id: string; name: string };
+  };
+  return service;
 }
 
 /** seedService stores a compose service on a fresh server row. */
@@ -60,31 +88,17 @@ async function seedService(
   suffix: string,
   prefix: string,
 ): Promise<SeededService> {
-  const serverName = await seedServer(api, headers, suffix, prefix);
-  const serverList = await api.get("/api/v1/servers", { headers });
-  expect(serverList.status()).toBe(200);
-  const { servers } = (await serverList.json()) as {
-    servers: Array<{ id: string; name: string }>;
-  };
-  const server = servers.find((item) => item.name === serverName);
-  if (!server) {
-    throw new Error(`seeded server ${serverName} is not listed`);
-  }
-
+  const server = await seedServer(api, headers, suffix, prefix);
   const serviceName = `${prefix}-svc-${suffix}`;
-  const response = await api.post("/api/v1/services", {
+  const service = await createService(
+    api,
     headers,
-    data: {
-      name: serviceName,
-      server_id: server.id,
-      compose_yaml: sampleCompose,
-    },
-  });
-  expect(response.status(), await response.text()).toBe(201);
-  const { service } = (await response.json()) as {
-    service: { id: string; name: string };
-  };
-  return { serviceId: service.id, serviceName: service.name, serverName };
+    server.id,
+    serviceName,
+    {},
+    "fix.example.test",
+  );
+  return { serviceId: service.id, serviceName: service.name, serverName: server.name };
 }
 
 /** serviceDetail reads one service through the API. */
@@ -92,13 +106,13 @@ async function serviceDetail(
   api: APIRequestContext,
   headers: Record<string, string>,
   id: string,
-): Promise<{ compose_yaml?: string }> {
+): Promise<{ compose_yaml?: string; env: Record<string, string> }> {
   const response = await api.get(`/api/v1/services/${id}`, { headers });
   expect(response.status(), await response.text()).toBe(200);
   const { service } = (await response.json()) as {
-    service: { compose_yaml?: string };
+    service: { compose_yaml?: string; env?: Record<string, string> };
   };
-  return service;
+  return { compose_yaml: service.compose_yaml, env: service.env ?? {} };
 }
 
 test.describe("services fix regressions", () => {
@@ -160,7 +174,7 @@ test.describe("services fix regressions", () => {
     const account = loadAccount();
     const headers = { Authorization: `Bearer ${account.accessToken}` };
     const suffix = uniqueSuffix();
-    const serverName = await seedServer(request, headers, suffix, "fix2");
+    const server = await seedServer(request, headers, suffix, "fix2");
     const oldDomain = `fix-old-${suffix}.example.test`;
     const newDomain = `fix-new-${suffix}.example.test`;
     const serviceName = `fix2-tpl-${suffix}`;
@@ -217,7 +231,7 @@ test.describe("services fix regressions", () => {
     await step3.locator(".field-service-node .n-select").click();
     await page
       .locator(".n-base-select-option")
-      .filter({ hasText: serverName })
+      .filter({ hasText: server.name })
       .click();
     await wizard.getByRole("button", { name: "Create service" }).click();
     await expect(wizard.locator('[data-testid="wizard-created"]')).toBeVisible();
@@ -282,6 +296,116 @@ test.describe("services fix regressions", () => {
     await page.goto(`/services/${serviceId}`);
     await expect(page.locator('[data-testid="history-empty"]')).toBeVisible();
     await expect(page.getByText("Nothing has been deployed yet.")).toBeVisible();
+  });
+
+  test("R5: a late detail read cannot overwrite another service's config", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(60_000);
+
+    const account = loadAccount();
+    const headers = { Authorization: `Bearer ${account.accessToken}` };
+    const suffix = uniqueSuffix();
+    const server = await seedServer(request, headers, suffix, "fix5");
+    const domainA = `fix5-a-${suffix}.example.test`;
+    const domainB = `fix5-b-${suffix}.example.test`;
+    const serviceA = await createService(
+      request,
+      headers,
+      server.id,
+      `fix5-a-${suffix}`,
+      { MARK: "route-a" },
+      domainA,
+    );
+    const serviceB = await createService(
+      request,
+      headers,
+      server.id,
+      `fix5-b-${suffix}`,
+      { MARK: "route-b" },
+      domainB,
+    );
+
+    // Hold A's genuine detail response so A's load is still in flight when the
+    // SPA route moves to B.
+    const hold: { release: (() => void) | null } = { release: null };
+    let held = false;
+    await page.route(
+      (url) => url.pathname === `/api/v1/services/${serviceA.id}`,
+      async (route) => {
+        const response = await route.fetch();
+        const pending = new Promise<void>((resolve) => {
+          hold.release = resolve;
+        });
+        held = true;
+        await pending;
+        await route.fulfill({ response });
+      },
+    );
+
+    await page.goto(`/services/${serviceA.id}`);
+    await expect.poll(() => held).toBe(true);
+
+    // Move to B inside the SPA (no reload), so A's load keeps running in the
+    // same component instance and its completion races B's.
+    await page.evaluate((id: string) => {
+      window.history.pushState({}, "", `/services/${id}`);
+      window.dispatchEvent(new PopStateEvent("popstate", { state: {} }));
+    }, serviceB.id);
+
+    await expect(page).toHaveURL(new RegExp(`/services/${serviceB.id}$`));
+    await expect(page.getByRole("heading", { level: 1 })).toContainText(
+      serviceB.name,
+    );
+    const composeView = page.locator(".compose-editor__view");
+    const envValue = page.locator(".env-row input[type='password']");
+    await expect(composeView).toContainText(domainB);
+    await expect(envValue).toHaveValue("route-b");
+
+    // Release A's response: it must not seed B's editable drafts.
+    const release = hold.release;
+    if (release === null) {
+      throw new Error("the detail response was never held");
+    }
+    release();
+    // Let the released response land so the assertions below compare after the
+    // race settled (a stale completion would have overwritten the drafts).
+    await page.waitForTimeout(300);
+    await expect(composeView).toContainText(domainB);
+    await expect(composeView).not.toContainText(domainA);
+    await expect(envValue).toHaveValue("route-b");
+
+    // Saving B persists B's values; A's document and env never move across.
+    await page.getByRole("button", { name: "Save environment" }).click();
+    await expect(
+      page.getByText("Environment saved. It applies to the next deploy."),
+    ).toBeVisible();
+    const storedB = await serviceDetail(request, headers, serviceB.id);
+    expect(storedB.env.MARK).toBe("route-b");
+    expect(storedB.compose_yaml).toContain(domainB);
+    expect(storedB.compose_yaml).not.toContain(domainA);
+
+    const storedA = await serviceDetail(request, headers, serviceA.id);
+    expect(storedA.env.MARK).toBe("route-a");
+    expect(storedA.compose_yaml).toContain(domainA);
+
+    // The compose editor round-trips B's own document (the guarded compose
+    // save path).
+    await page.getByRole("button", { name: "Edit" }).click();
+    const editor = page.locator(".compose-editor__input textarea");
+    await expect(editor).toHaveValue(new RegExp(domainB.replace(/\./g, "\\.")));
+    await editor.fill(
+      (await editor.inputValue()).replace("nginx:1.27-alpine", "nginx:1.28-alpine"),
+    );
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(
+      page.getByText("Compose document saved. Deploy to apply it on the node."),
+    ).toBeVisible();
+    const storedB2 = await serviceDetail(request, headers, serviceB.id);
+    expect(storedB2.compose_yaml).toContain("nginx:1.28-alpine");
+    expect(storedB2.compose_yaml).toContain(domainB);
+    expect(storedB2.compose_yaml).not.toContain(domainA);
   });
 
   test("Vue: the log reader refreshes the session once on 401 and reports expiry", async ({

@@ -49,6 +49,10 @@ export const useServicesStore = defineStore("services", () => {
   const loading = ref(false);
   const error = ref<string | null>(null);
 
+  /** Monotonic token of the newest history read per service. */
+  let historyReadToken = 0;
+  const historyReadTokens = new Map<string, number>();
+
   /** applyService merges one service into the in-memory list in place. */
   function applyService(updated: Service): void {
     const index = services.value.findIndex((item) => item.id === updated.id);
@@ -107,8 +111,17 @@ export const useServicesStore = defineStore("services", () => {
    * fetchDeploys refreshes one service's deploy history. A failure keeps the
    * previously cached rows (flagged stale through `error`) and rethrows for
    * the caller's own UI state.
+   *
+   * Concurrent reads for the same service are ordered by a per-service token:
+   * only the newest read writes state, so a late failure cannot mark a history
+   * unavailable that a newer read already loaded (and a late success cannot
+   * overwrite a newer result).
    */
   async function fetchDeploys(id: string): Promise<void> {
+    const token = ++historyReadToken;
+    historyReadTokens.set(id, token);
+    const isLatest = (): boolean => historyReadTokens.get(id) === token;
+
     const previous = histories.value[id];
     histories.value = {
       ...histories.value,
@@ -121,17 +134,27 @@ export const useServicesStore = defineStore("services", () => {
     };
     try {
       const deploys = await listServiceDeploys(id);
+      if (!isLatest()) {
+        return;
+      }
       histories.value = {
         ...histories.value,
         [id]: { deploys, loading: false, loaded: true, error: null },
       };
     } catch (err) {
+      if (!isLatest()) {
+        // An obsolete failure must not touch the newer read's state.
+        throw err;
+      }
+      // Re-read at completion time: a newer call may already have replaced the
+      // entry this read started from.
+      const latest = histories.value[id] ?? previous;
       histories.value = {
         ...histories.value,
         [id]: {
-          deploys: previous?.deploys ?? [],
+          deploys: latest?.deploys ?? [],
           loading: false,
-          loaded: previous?.loaded ?? false,
+          loaded: latest?.loaded ?? false,
           error: describeServiceError(err),
         },
       };

@@ -486,6 +486,76 @@ func TestSchedulesLifecycle(t *testing.T) {
 	}
 }
 
+// TestScheduleUpdateTargetClearSemantics proves the tri-state target update:
+// an absent target_id keeps the stored target, an explicit empty string
+// clears it (runs fall back to the local directory) and an id replaces it.
+func TestScheduleUpdateTargetClearSemantics(t *testing.T) {
+	fixture := newBackupFixture(t)
+	ctx := context.Background()
+	s3 := fixture.backups.seedTarget(BackupTarget{UserID: fixture.userID, Name: "s3", Kind: TargetS3,
+		Endpoint: "https://s3.example.com", Bucket: "b"})
+	local := fixture.backups.seedTarget(BackupTarget{UserID: fixture.userID, Name: "local", Kind: TargetLocal})
+
+	s3ID := s3.ID.String()
+	schedule, err := fixture.manager.CreateSchedule(ctx, fixture.userID, fixture.database.ID, ScheduleRequest{
+		Cron:     "0 2 * * *",
+		TargetID: &s3ID,
+	})
+	if err != nil {
+		t.Fatalf("CreateSchedule: %v", err)
+	}
+	if schedule.TargetID != s3.ID {
+		t.Fatalf("created target = %s, want %s", schedule.TargetID, s3.ID)
+	}
+
+	// Absent field: the stored target survives.
+	kept, err := fixture.manager.UpdateSchedule(ctx, fixture.userID, fixture.database.ID, schedule.ID, ScheduleRequest{
+		Cron: "0 3 * * *",
+	})
+	if err != nil {
+		t.Fatalf("update without target_id: %v", err)
+	}
+	if kept.TargetID != s3.ID {
+		t.Errorf("target = %s, want the stored %s (absent must not clear)", kept.TargetID, s3.ID)
+	}
+
+	// Explicit empty string: the target is cleared.
+	clear := ""
+	cleared, err := fixture.manager.UpdateSchedule(ctx, fixture.userID, fixture.database.ID, schedule.ID, ScheduleRequest{
+		Cron:     "0 4 * * *",
+		TargetID: &clear,
+	})
+	if err != nil {
+		t.Fatalf("clear update: %v", err)
+	}
+	if cleared.TargetID != uuid.Nil {
+		t.Errorf("target = %s, want cleared to no target", cleared.TargetID)
+	}
+
+	// Explicit id: the target is replaced.
+	localID := local.ID.String()
+	replaced, err := fixture.manager.UpdateSchedule(ctx, fixture.userID, fixture.database.ID, schedule.ID, ScheduleRequest{
+		Cron:     "0 5 * * *",
+		TargetID: &localID,
+	})
+	if err != nil {
+		t.Fatalf("replace update: %v", err)
+	}
+	if replaced.TargetID != local.ID {
+		t.Errorf("target = %s, want %s", replaced.TargetID, local.ID)
+	}
+
+	// An id the caller does not own is rejected and the stored target stays.
+	foreign := fixture.backups.seedTarget(BackupTarget{UserID: uuid.New(), Name: "foreign", Kind: TargetLocal})
+	foreignID := foreign.ID.String()
+	if _, err := fixture.manager.UpdateSchedule(ctx, fixture.userID, fixture.database.ID, schedule.ID, ScheduleRequest{
+		Cron:     "0 6 * * *",
+		TargetID: &foreignID,
+	}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("foreign target err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestBackupManagerWithoutRepositoryFailsClearly(t *testing.T) {
 	manager := NewBackupService(BackupConfig{Logger: discardLogger()})
 	if _, err := manager.ListTargets(context.Background(), uuid.New()); err == nil {
@@ -598,5 +668,83 @@ func TestCreateTargetS3RequiresCredentials(t *testing.T) {
 		if _, err := fixture.manager.CreateTarget(context.Background(), fixture.userID, req); !errors.Is(err, ErrValidation) {
 			t.Errorf("CreateTarget(%s) err = %v, want ErrValidation", req.Name, err)
 		}
+	}
+}
+
+// TestUpdateTargetS3SwitchRequiresCredentials proves the update path has the
+// same credential requirement as the create path: switching a target to s3
+// without a complete pair is rejected and leaves the row untouched, while a
+// request that carries both halves switches and seals them.
+func TestUpdateTargetS3SwitchRequiresCredentials(t *testing.T) {
+	fixture := newBackupFixture(t)
+	ctx := context.Background()
+	target := fixture.backups.seedTarget(BackupTarget{UserID: fixture.userID, Name: "local", Kind: TargetLocal})
+
+	rejected := []TargetRequest{
+		{Kind: "s3", Endpoint: "https://s3.example.com", Bucket: "b"},
+		{Kind: "s3", Endpoint: "https://s3.example.com", Bucket: "b", AccessKey: "ak"},
+		{Kind: "s3", Endpoint: "https://s3.example.com", Bucket: "b", SecretKey: "sk"},
+		{Kind: "s3", Endpoint: "https://s3.example.com", Bucket: "b", AccessKey: "ak", SecretKey: "   "},
+	}
+	for _, req := range rejected {
+		if _, err := fixture.manager.UpdateTarget(ctx, fixture.userID, target.ID, req); !errors.Is(err, ErrValidation) {
+			t.Errorf("UpdateTarget(%+v) err = %v, want ErrValidation", req, err)
+		}
+	}
+	stored, err := fixture.backups.GetBackupTarget(ctx, target.ID)
+	if err != nil {
+		t.Fatalf("GetBackupTarget: %v", err)
+	}
+	if stored.Kind != TargetLocal {
+		t.Fatalf("kind = %q, want the rejected switch to leave the target local", stored.Kind)
+	}
+
+	switched, err := fixture.manager.UpdateTarget(ctx, fixture.userID, target.ID, TargetRequest{
+		Kind: "s3", Endpoint: "https://s3.example.com", Bucket: "b",
+		AccessKey: "ak", SecretKey: "sk",
+	})
+	if err != nil {
+		t.Fatalf("UpdateTarget with credentials: %v", err)
+	}
+	if switched.Kind != TargetS3 {
+		t.Fatalf("kind = %q, want s3", switched.Kind)
+	}
+	if secrets := fixture.backups.getSecrets(target.ID); len(secrets) != 2 {
+		t.Fatalf("stored %d secrets, want the supplied pair", len(secrets))
+	}
+}
+
+// TestUpdateTargetS3FieldsWithoutCredentialsKeepsStoredKeys proves a
+// non-credential update of an s3 target still works when the pair is already
+// stored, and that the stored keys survive it.
+func TestUpdateTargetS3FieldsWithoutCredentialsKeepsStoredKeys(t *testing.T) {
+	fixture := newBackupFixture(t)
+	ctx := context.Background()
+	created, err := fixture.manager.CreateTarget(ctx, fixture.userID, TargetRequest{
+		Name: "r2", Kind: "s3", Endpoint: "https://account.r2.cloudflarestorage.com",
+		Bucket: "gotham-backups", AccessKey: "R2AK7f3c9a2b51de84", SecretKey: "b7d41e90c3f5a28e6d0194bc7a3e52f0",
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+
+	updated, err := fixture.manager.UpdateTarget(ctx, fixture.userID, created.ID, TargetRequest{
+		Endpoint: "https://account2.r2.cloudflarestorage.com",
+		Bucket:   "gotham-backups-v2",
+		Prefix:   "pg-orders/",
+	})
+	if err != nil {
+		t.Fatalf("credential-less s3 update: %v", err)
+	}
+	if updated.Endpoint != "https://account2.r2.cloudflarestorage.com" ||
+		updated.Bucket != "gotham-backups-v2" || updated.Prefix != "pg-orders/" {
+		t.Errorf("updated = %+v, want the new endpoint, bucket and prefix", updated)
+	}
+	accessKey, secretKey, err := openTargetSecrets(testSecret, fixture.backups.getSecrets(created.ID))
+	if err != nil {
+		t.Fatalf("openTargetSecrets: %v", err)
+	}
+	if accessKey != "R2AK7f3c9a2b51de84" || secretKey != "b7d41e90c3f5a28e6d0194bc7a3e52f0" {
+		t.Errorf("stored keys changed: %q / %q", accessKey, secretKey)
 	}
 }

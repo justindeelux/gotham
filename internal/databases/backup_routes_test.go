@@ -425,6 +425,43 @@ func TestScheduleRoutes(t *testing.T) {
 	}
 }
 
+// TestScheduleRouteTargetClearWireSemantics pins the JSON tri-state of
+// target_id on the update endpoint: an absent field arrives as nil (keep), an
+// empty string as a pointer to "" (clear) and a uuid as that id (replace).
+func TestScheduleRouteTargetClearWireSemantics(t *testing.T) {
+	user := uuid.New()
+	id := uuid.New()
+	scheduleID := uuid.New()
+	targetID := uuid.New()
+	svc := &fakeBackupService{schedule: BackupSchedule{ID: scheduleID, DatabaseID: id, Cron: "0 2 * * *"}}
+	handler := newBackupRouter(svc, user, true)
+	path := "/v1/databases/" + id.String() + "/schedules/" + scheduleID.String()
+
+	rec := backupRequest(t, handler, http.MethodPatch, path, `{"cron":"0 2 * * *"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("absent target_id: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	if svc.createSchedule.TargetID != nil {
+		t.Fatalf("absent target_id decoded to %q, want nil (keep)", *svc.createSchedule.TargetID)
+	}
+
+	rec = backupRequest(t, handler, http.MethodPatch, path, `{"cron":"0 2 * * *","target_id":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty target_id: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	if svc.createSchedule.TargetID == nil || *svc.createSchedule.TargetID != "" {
+		t.Fatal("empty target_id did not decode as an explicit clear")
+	}
+
+	rec = backupRequest(t, handler, http.MethodPatch, path, `{"cron":"0 2 * * *","target_id":"`+targetID.String()+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("uuid target_id: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	if svc.createSchedule.TargetID == nil || *svc.createSchedule.TargetID != targetID.String() {
+		t.Fatalf("uuid target_id decoded to %v, want %s", svc.createSchedule.TargetID, targetID)
+	}
+}
+
 func TestTargetRoutesNeverExposeCredentials(t *testing.T) {
 	user := uuid.New()
 	targetID := uuid.New()

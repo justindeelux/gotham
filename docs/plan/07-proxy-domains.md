@@ -106,17 +106,20 @@ live issuance requires the owner zone and token, so the second flag is the
 explicit request for it.
 
 Observed 2026-09-28 (local Docker Desktop, dev Postgres, ports 80/443/8080,
-`gotham.deelux.dev` in `deelux.dev`; values from the hardened review-fix
-round):
+`gotham.deelux.dev` in `deelux.dev`; the staging values below are the latest
+run retained in the evidence directory):
 
-- staging: pass in 70s; one candidate TXT record was observed at
+- staging: pass in 67s; one candidate TXT record was observed at
   `_acme-challenge.gotham.deelux.dev` through the Cloudflare API and matched
   the value derived from this run's own ACME account (owned record), the
   served chain `gotham.deelux.dev` → `(STAGING) Dastardly Durum YR1` →
   `(STAGING) Yonder Yam Root YR` verified against the pinned staging roots,
   the `acme.json` leaf was byte-identical to the served leaf, and the ACME
   client removed the record (owned cleanup observed; no test deletion was
-  needed).
+  needed). Earlier hardened runs passed the same way (70s, and a 59s run that
+  drew the rotated `(STAGING) Ersatz Emmer YR2` intermediate); the staging
+  intermediate is chosen by Let's Encrypt per order, and the pinned-root
+  verification covers them.
 - production: pass in 57s with `GOTHAM_E2E_ACME_CA=production` (the second
   and final production issuance for this package); the served chain
   `gotham.deelux.dev` → `YR1` → `Root YR` → `ISRG Root X1` verified with the

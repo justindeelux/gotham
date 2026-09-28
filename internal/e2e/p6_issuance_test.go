@@ -1433,9 +1433,11 @@ func (c *cfAPI) deleteRecord(ctx context.Context, zoneID, recordID string) error
 // p6CFPreflight verifies the token, resolves the zone and proves the token can
 // create then delete a TXT record in it. Any failure (including 403) is
 // returned as-is; the caller stops instead of retrying. The created record is
-// registered for cleanup immediately, and a failed delete is retried a few
-// times before the preflight gives up, so a transient API error cannot leak
-// the preflight record.
+// registered for cleanup immediately, and both the normal and the cleanup
+// deletion re-read the record and delete it only while it still carries the
+// value this run generated (a changed record is left in place and fails the
+// test). A failed delete is retried a few times before the preflight gives
+// up, so a transient API error cannot leak the preflight record.
 func p6CFPreflight(t *testing.T, ctx context.Context, cf *cfAPI, zone string) (string, error) {
 	t.Helper()
 	if err := cf.verifyToken(ctx); err != nil {
@@ -1446,27 +1448,58 @@ func p6CFPreflight(t *testing.T, ctx context.Context, cf *cfAPI, zone string) (s
 		return "", fmt.Errorf("zone %s: %w", zone, err)
 	}
 	name := "_gotham-be62-preflight." + zone
-	recordID, err := cf.createTXT(ctx, zoneID, name, "gotham-be62-preflight-"+uuid.NewString()[:8])
+	value := "gotham-be62-preflight-" + uuid.NewString()[:8]
+	recordID, err := cf.createTXT(ctx, zoneID, name, value)
 	if err != nil {
 		return "", fmt.Errorf("create preflight TXT: %w", err)
 	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
-		if err := cf.deleteRecord(cleanupCtx, zoneID, recordID); err != nil && !errors.Is(err, errCFNotFound) {
-			t.Errorf("cleanup: delete preflight TXT %s: %v", recordID, err)
+		if err := p6DeletePreflightTXT(t, cleanupCtx, cf, zoneID, recordID, name, value); err != nil && !errors.Is(err, errPreflightOwnership) {
+			t.Errorf("cleanup: %v", err)
 		}
 	})
 	var deleteErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		if deleteErr = cf.deleteRecord(ctx, zoneID, recordID); deleteErr == nil {
+		deleteErr = p6DeletePreflightTXT(t, ctx, cf, zoneID, recordID, name, value)
+		if deleteErr == nil {
 			return zoneID, nil
 		}
-		if attempt < 3 {
-			time.Sleep(2 * time.Second)
+		if errors.Is(deleteErr, errPreflightOwnership) || attempt == 3 {
+			break
 		}
+		time.Sleep(2 * time.Second)
 	}
 	return "", fmt.Errorf("delete preflight TXT %s (%s): %w", recordID, name, deleteErr)
+}
+
+// errPreflightOwnership marks a preflight record whose content is no longer
+// the value this run created; it is left untouched and the test fails.
+var errPreflightOwnership = errors.New("preflight TXT identity changed")
+
+// p6DeletePreflightTXT deletes the preflight record only while its content
+// still equals the value this run generated, mirroring the challenge-record
+// cleanup: a missing record counts as already cleaned, a changed record is
+// left in place and fails the test, and other errors are returned so the
+// caller can retry.
+func p6DeletePreflightTXT(t *testing.T, ctx context.Context, cf *cfAPI, zoneID, recordID, name, value string) error {
+	t.Helper()
+	current, err := cf.getRecord(ctx, zoneID, recordID)
+	if errors.Is(err, errCFNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read preflight TXT %s (%s): %w", recordID, name, err)
+	}
+	if !p6TXTValueMatches(value, current.Content) {
+		t.Errorf("preflight TXT %s (%s) no longer carries this run's value; leaving it untouched", recordID, name)
+		return errPreflightOwnership
+	}
+	if err := cf.deleteRecord(ctx, zoneID, recordID); err != nil && !errors.Is(err, errCFNotFound) {
+		return fmt.Errorf("delete preflight TXT %s (%s): %w", recordID, name, err)
+	}
+	return nil
 }
 
 // --- evidence ---------------------------------------------------------------

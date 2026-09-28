@@ -46,11 +46,17 @@ func TestDomainUniquenessMigrationFailsClosedOnLegacyDuplicates(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = admin.Close() })
 	if err := admin.PingContext(ctx); err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 
 	scratch := fmt.Sprintf("p6_migration_%d", time.Now().UnixNano())
 	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+scratch); err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but a disposable database cannot be created: %v", err)
+		}
 		t.Skipf("cannot create a disposable database (needs CREATEDB): %v", err)
 	}
 	t.Cleanup(func() {

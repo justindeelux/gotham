@@ -21,11 +21,18 @@ func TestApplicationDomainUniquenessConcurrent(t *testing.T) {
 	defer cancel()
 
 	dsn := integrationDSN()
+	explicit := integrationDSNExplicit()
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		if explicit {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres/migrations are unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if explicit {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)

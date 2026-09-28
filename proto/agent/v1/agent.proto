@@ -59,8 +59,10 @@ service BuildService {
 }
 
 // ProxyService runs on the node agent: the control plane pushes generated
-// Traefik configuration to the node, and the agent writes it and verifies the
-// local Traefik instance picked it up (Phase 6, BE-6.1).
+// Traefik configuration to the node and the agent writes it and, when asked,
+// checks that the local Traefik process still answers its ping (Phase 6,
+// BE-6.1). The ping is a liveness signal only; configuration acceptance is
+// proven by observing the resulting routes, not by the ping.
 service ProxyService {
   // WriteProxyConfig writes the given Traefik configuration files under the
   // node's proxy config directory and, when verify is set, pings the local
@@ -90,7 +92,10 @@ message WriteProxyConfigRequest {
 message WriteProxyConfigResponse {
   // written lists the relative paths that were written.
   repeated string written = 1;
-  // reloaded is true when verify was set and Traefik answered the ping.
+  // reloaded is true when verify was set and Traefik answered its ping after
+  // the write. Traefik documents /ping as process liveness and reloads
+  // configuration asynchronously, so this is a health signal, not a claim
+  // that the document was accepted.
   bool reloaded = 2;
   // ping_error carries the ping failure detail when reloaded is false and
   // verify was set; empty otherwise.
@@ -160,6 +165,21 @@ message ContainerInfo {
   // ports are the published bindings Docker reports for the container; empty
   // for a container with no published ports or an engine that reports none.
   repeated PortBinding ports = 8;
+  // mounts are the container's bind mounts as the engine reports them.
+  repeated ContainerMount mounts = 9;
+  // restart_policy is the container's native Docker restart policy. The agent
+  // fills it for managed proxy containers only; empty means unknown.
+  string restart_policy = 10;
+}
+
+// ContainerMount is one bind mount of a container.
+message ContainerMount {
+  // source is the host path of the mount.
+  string source = 1;
+  // destination is the path inside the container.
+  string destination = 2;
+  // read_only is true for a read-only mount.
+  bool read_only = 3;
 }
 
 // PortBinding is one published container port as the engine reports it.

@@ -159,23 +159,28 @@ func TestRoutesForServer(t *testing.T) {
 		{ID: appA, ServerID: serverA, BaseDomain: "  App.Example.COM ", Port: 3000, HostPort: 18080, ContainerID: "c1"},
 		{ID: appB, ServerID: serverB, BaseDomain: "other.example.com", Port: 3001, HostPort: 18081, ContainerID: "c2"},
 	}
-	routes, diagnostics := routesForServer(apps, serverA, DefaultBackendHost, nil)
+	// The live endpoint is the engine-reported publication, not the declared
+	// pinned value (R1).
+	nodeContainers := []containers.Container{{ID: "c1", Name: "app", State: "running",
+		Ports: []string{"32768:3000"}, PortsReported: true}}
+
+	routes, diagnostics := routesForServer(apps, serverA, DefaultBackendHost, nodeContainers)
 	if len(diagnostics) != 0 {
-		t.Fatalf("diagnostics = %#v, want none (pinned ports fall back)", diagnostics)
+		t.Fatalf("diagnostics = %#v, want none", diagnostics)
 	}
 	if len(routes) != 1 {
 		t.Fatalf("routes = %#v, want only the server A route", routes)
 	}
 	if routes[0].AppID != appA || routes[0].Domain != "app.example.com" ||
-		routes[0].Target != "http://172.17.0.1:18080" {
+		routes[0].Target != "http://172.17.0.1:32768" {
 		t.Errorf("route = %#v", routes[0])
 	}
 
-	custom, diagnostics := routesForServer(apps, serverA, "10.0.0.1", nil)
+	custom, diagnostics := routesForServer(apps, serverA, "10.0.0.1", nodeContainers)
 	if len(diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v, want none", diagnostics)
 	}
-	if custom[0].Target != "http://10.0.0.1:18080" {
+	if custom[0].Target != "http://10.0.0.1:32768" {
 		t.Errorf("custom backend target = %q", custom[0].Target)
 	}
 }
@@ -194,9 +199,16 @@ func TestRoutesForServerDiagnosesUnroutableRows(t *testing.T) {
 		"pending":        {ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, HostPort: 8080}, nil, "no running deployment"},
 		"container gone": {ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, ContainerID: "gone"}, nil, "no running deployment container"},
 		"not published": {
-			app:        ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, ContainerID: "c1"},
-			containers: []containers.Container{{ID: "c1", Name: "app", State: "running", Ports: []string{"8080:8081"}}},
-			want:       "container port 80 is not published",
+			app: ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, ContainerID: "c1"},
+			containers: []containers.Container{{ID: "c1", Name: "app", State: "running",
+				Ports: []string{"8080:8081"}, PortsReported: true}},
+			want: "no reachable published binding",
+		},
+		"legacy agent ports": {
+			app: ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, HostPort: 8080, ContainerID: "c1"},
+			containers: []containers.Container{{ID: "c1", Name: "app", State: "running",
+				Ports: []string{"8080:80"}, PortsReported: false}},
+			want: "engine-reported",
 		},
 	}
 	for name, tc := range cases {

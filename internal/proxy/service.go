@@ -307,14 +307,67 @@ func (s *SyncService) SyncServer(ctx context.Context, serverID uuid.UUID) error 
 	if err != nil {
 		return err
 	}
-	if err := s.push(ctx, serverID, nodeList, files); err != nil {
+
+	// The configuration intent is durable before the node is touched (R2): a
+	// failed record fails the sync without a replacement, so a protected push
+	// is never advertised without its predecessor snapshot.
+	version, changed, err := s.prepareHistory(ctx, serverID, files)
+	if err != nil {
 		return err
 	}
-	s.recordHistory(ctx, serverID, files)
+	if err := s.pushAndPromote(ctx, serverID, nodeList, files, version, changed); err != nil {
+		return err
+	}
 	s.logger.Info("proxy: configuration synced",
 		"server_id", serverID.String(), "routes", len(routes), "skipped", len(diagnostics))
 	if len(diagnostics) > 0 {
 		return &PartialError{Diagnostics: diagnostics}
+	}
+	return nil
+}
+
+// prepareHistory records the configuration intent before the node write. It
+// returns the version to promote and whether the stored active snapshot
+// differs from files.
+func (s *SyncService) prepareHistory(ctx context.Context, serverID uuid.UUID, files []File) (ConfigVersion, bool, error) {
+	if s.history == nil {
+		return ConfigVersion{}, false, nil
+	}
+	version, changed, err := s.history.PrepareConfigVersion(ctx, serverID, files, configHash(files))
+	if err != nil {
+		return ConfigVersion{}, false, fmt.Errorf("%w: record configuration intent: %v", ErrHistory, err)
+	}
+	return version, changed, nil
+}
+
+// pushAndPromote pushes files and promotes the prepared version. A push that
+// provably never touched the node aborts the pending record; an ambiguous
+// failure (a write may have landed, a timeout or a ping failure) retains it
+// and reports a degraded ErrHistory so the next same-content sync reconciles.
+func (s *SyncService) pushAndPromote(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, files []File, version ConfigVersion, changed bool) error {
+	touched, pushErr := s.push(ctx, serverID, nodeList, files)
+	if pushErr != nil {
+		if s.history != nil && changed {
+			if !touched {
+				abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyTimeout)
+				if abortErr := s.history.AbortConfigVersion(abortCtx, serverID, version.ID); abortErr != nil {
+					s.logger.Warn("proxy: abort configuration intent failed",
+						"server_id", serverID.String(), "error", abortErr)
+				}
+				cancel()
+			} else {
+				// The node may already serve the new content: keep the pending
+				// record and report the degraded outcome (R2). Both sentinels
+				// stay matchable.
+				return fmt.Errorf("%w: node push failed after a write attempt: %w", ErrHistory, pushErr)
+			}
+		}
+		return pushErr
+	}
+	if s.history != nil && changed {
+		if err := s.history.PromoteConfigVersion(ctx, serverID, version.ID); err != nil {
+			return fmt.Errorf("%w: promote configuration version: %v", ErrHistory, err)
+		}
 	}
 	return nil
 }
@@ -336,22 +389,25 @@ func (s *SyncService) RevertServer(ctx context.Context, serverID uuid.UUID) erro
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	versions, err := s.history.LatestConfigVersions(ctx, serverID, 2)
+	previous, err := s.history.PreviousConfigVersion(ctx, serverID)
 	if err != nil {
-		return fmt.Errorf("proxy: load configuration history: %w", err)
-	}
-	if len(versions) < 2 {
-		return fmt.Errorf("%w for server %s", ErrVersionNotFound, serverID)
+		return err
 	}
 	nodeList, err := s.listNodeContainers(ctx, serverID)
 	if err != nil {
 		return fmt.Errorf("proxy: list node containers: %w", mapNodeError(err))
 	}
-	previous := versions[1].Files
-	if err := s.push(ctx, serverID, nodeList, previous); err != nil {
+	hash := previous.ContentHash
+	if hash == "" {
+		hash = configHash(previous.Files)
+	}
+	version, changed, err := s.history.PrepareConfigVersion(ctx, serverID, previous.Files, hash)
+	if err != nil {
+		return fmt.Errorf("%w: record revert intent: %v", ErrHistory, err)
+	}
+	if err := s.pushAndPromote(ctx, serverID, nodeList, previous.Files, version, changed); err != nil {
 		return err
 	}
-	s.recordHistory(ctx, serverID, previous)
 	s.logger.Info("proxy: configuration reverted", "server_id", serverID.String())
 	return nil
 }
@@ -410,13 +466,22 @@ func (s *SyncService) SyncAll(ctx context.Context) ([]SyncResult, error) {
 // each one's live endpoint and classifies rows that cannot be routed as
 // per-application diagnostics. Healthy rows are routed even when a sibling is
 // pending or invalid, so no single row can freeze the node's configuration
-// (BE-6.1 F3). Input rows are ordered by creation time, so the first binding
-// of a duplicate domain wins deterministically.
+// (BE-6.1 F3). Every binding of a duplicate normalized domain on this node is
+// held back: row order does not prove ownership, and the unique index already
+// prevents new active duplicates (R1).
 func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost string, nodeContainers []containers.Container) ([]Route, []Diagnostic) {
 	routes := make([]Route, 0, len(apps))
 	diagnostics := make([]Diagnostic, 0)
 	byID := indexNodeContainers(nodeContainers)
-	seen := make(map[string]uuid.UUID, len(apps))
+
+	// Count active normalized duplicates per node before routing anything.
+	domainCounts := make(map[string]int, len(apps))
+	for _, app := range apps {
+		if app.ServerID != serverID || app.Disabled {
+			continue
+		}
+		domainCounts[NormalizeDomain(app.BaseDomain)]++
+	}
 
 	for _, app := range apps {
 		if app.ServerID != serverID {
@@ -435,8 +500,8 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 			diagnostics = append(diagnostics, diagnostic)
 			continue
 		}
-		if owner, ok := seen[domain]; ok {
-			diagnostic.Reason = fmt.Sprintf("duplicate domain already routed for application %s", owner)
+		if domainCounts[domain] > 1 {
+			diagnostic.Reason = "duplicate domain on this node; all conflicting bindings are held back"
 			diagnostics = append(diagnostics, diagnostic)
 			continue
 		}
@@ -457,7 +522,6 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 			diagnostics = append(diagnostics, diagnostic)
 			continue
 		}
-		seen[domain] = app.ID
 		routes = append(routes, Route{
 			AppID:  app.ID,
 			Domain: domain,
@@ -467,23 +531,25 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 	return routes, diagnostics
 }
 
-// resolveEndpoint picks the host port Traefik must reach for an application:
-// the running container's published binding for the application port, falling
-// back to the pinned host port when the container list is stale or the
-// deployment predates port reporting (BE-6.1 F3).
+// resolveEndpoint picks the host port Traefik must reach for an application.
+// Only a positively matched, running container with an engine-reported
+// publication is routable: a missing, stopped or unusable container is
+// isolated instead of being pointed at its declared port, which another
+// workload may own by now (R1).
 func resolveEndpoint(app ProxiedApplication, container *containers.Container) (int32, string) {
-	if container != nil {
-		if hostPort := publishedHostPort(container, app.Port); hostPort > 0 {
-			return hostPort, ""
-		}
-	}
-	if app.HostPort > 0 {
-		return app.HostPort, ""
-	}
 	if container == nil {
 		return 0, "no running deployment container found on the node"
 	}
-	return 0, fmt.Sprintf("container port %d is not published on the node", app.Port)
+	if !strings.EqualFold(container.State, "running") {
+		return 0, "the deployment container is not running"
+	}
+	if !container.PortsReported {
+		return 0, "the container has no engine-reported published ports (or the node agent is too old to report them)"
+	}
+	if hostPort := publishedHostPort(container, app.Port); hostPort > 0 {
+		return hostPort, ""
+	}
+	return 0, fmt.Sprintf("container port %d has no reachable published binding", app.Port)
 }
 
 // publishedHostPort returns the host port a container publishes for
@@ -566,10 +632,14 @@ func findContainer(byID map[string]*containers.Container, containerID string) *c
 // host-IP binding fix, F1). The verified write only reports whether the proxy
 // answered its ping after the write; it is not proof that Traefik accepted
 // the document (BE-6.1 A1).
-func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, files []File) error {
+//
+// touched reports whether any node mutation was attempted: false means the
+// dial failed (or an ownership conflict was found) before anything could be
+// written, true means the node may already serve new content.
+func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, files []File) (touched bool, err error) {
 	client, err := s.dialAgent(ctx, serverID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() {
 		if closeErr := client.Close(); closeErr != nil {
@@ -578,13 +648,22 @@ func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []c
 	}()
 
 	state := findTraefik(nodeList)
-	if state.exists && !portsMatch(state.container.Ports, TraefikPorts) {
-		s.logger.Warn("proxy: recreating gotham-traefik with corrected port bindings",
-			"server_id", serverID.String(), "ports", state.container.Ports)
-		if err := s.containers.Remove(ctx, serverID, state.container.ID); err != nil {
-			return fmt.Errorf("proxy: remove stale gotham-traefik: %w", mapNodeError(err))
+	if state.exists {
+		owned, matches, reason := s.traefikMatches(state.container)
+		switch {
+		case !owned:
+			// Never remove a same-name container this service cannot prove it
+			// owns (R5); the operator resolves the conflict.
+			return false, fmt.Errorf("%w: container %s exists on the node but is not a Gotham-managed proxy (%s)",
+				ErrConflict, TraefikContainerName, reason)
+		case !matches:
+			s.logger.Warn("proxy: recreating gotham-traefik to converge managed state",
+				"server_id", serverID.String(), "reason", reason)
+			if err := s.containers.Remove(ctx, serverID, state.container.ID); err != nil {
+				return true, fmt.Errorf("proxy: remove drifted gotham-traefik: %w", mapNodeError(err))
+			}
+			state = containerState{}
 		}
-		state = containerState{}
 	}
 
 	if !state.running {
@@ -592,14 +671,14 @@ func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []c
 		// read once at boot. The write is unverified because the proxy is not
 		// up yet; the verified write below confirms the ping.
 		if _, err := client.WriteProxyConfig(ctx, &agentv1.WriteProxyConfigRequest{Files: configFiles(files)}); err != nil {
-			return mapAgentError("write proxy config", err)
+			return true, mapAgentError("write proxy config", err)
 		}
 		if err := s.bootstrapContainer(ctx, serverID, state); err != nil {
-			return fmt.Errorf("proxy: bootstrap traefik: %w", mapNodeError(err))
+			return true, fmt.Errorf("proxy: bootstrap traefik: %w", mapNodeError(err))
 		}
-		return s.writeVerified(ctx, client, files, time.Now().Add(startupReadiness))
+		return true, s.writeVerified(ctx, client, files, time.Now().Add(startupReadiness))
 	}
-	return s.writeVerified(ctx, client, files, time.Time{})
+	return true, s.writeVerified(ctx, client, files, time.Time{})
 }
 
 // writeVerified writes the documents with ping verification. A freshly
@@ -630,29 +709,6 @@ func (s *SyncService) writeVerified(ctx context.Context, client AgentClient, fil
 			return fmt.Errorf("proxy: waiting for traefik readiness: %w", ctx.Err())
 		case <-time.After(startupPoll):
 		}
-	}
-}
-
-// recordHistory stores the pushed configuration for fast revert. Best effort:
-// a history failure must never fail a sync that already reached the node.
-func (s *SyncService) recordHistory(ctx context.Context, serverID uuid.UUID, files []File) {
-	if s.history == nil {
-		return
-	}
-	hash := configHash(files)
-	historyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyTimeout)
-	defer cancel()
-
-	latest, err := s.history.LatestConfigVersions(historyCtx, serverID, 1)
-	if err != nil {
-		s.logger.Warn("proxy: read configuration history failed", "server_id", serverID.String(), "error", err)
-		return
-	}
-	if len(latest) > 0 && latest[0].ContentHash == hash {
-		return
-	}
-	if err := s.history.RecordConfigVersion(historyCtx, serverID, files, hash); err != nil {
-		s.logger.Warn("proxy: record configuration history failed", "server_id", serverID.String(), "error", err)
 	}
 }
 
@@ -718,12 +774,56 @@ func (s *SyncService) bootstrapContainer(ctx context.Context, serverID uuid.UUID
 	_, err := s.containers.Run(ctx, serverID, containers.RunOptions{
 		Image:         TraefikImage,
 		Name:          TraefikContainerName,
-		Labels:        TraefikLabels,
+		Labels:        traefikLabels(s.configDir, s.acmeDir),
 		Ports:         TraefikPorts,
 		Volumes:       TraefikVolumesFor(s.configDir, s.acmeDir),
 		RestartPolicy: TraefikRestartPolicy,
 	})
 	return err
+}
+
+// traefikMatches verifies an existing container against the managed proxy's
+// desired state: ownership labels, image, published ports, recorded proxy
+// directories, engine-reported mounts and the real Docker restart policy.
+// Unmanaged containers are reported as not owned so the caller can refuse to
+// remove them (R5).
+func (s *SyncService) traefikMatches(container containers.Container) (owned, matches bool, reason string) {
+	if container.Labels["gotham.managed"] != "true" || container.Labels["gotham.component"] != "proxy" {
+		return false, false, "missing gotham.managed/gotham.component labels"
+	}
+	if container.Image != TraefikImage {
+		return true, false, fmt.Sprintf("image %q, want %q", container.Image, TraefikImage)
+	}
+	if !portsMatch(container.Ports, TraefikPorts) {
+		return true, false, fmt.Sprintf("ports %v, want %v", container.Ports, TraefikPorts)
+	}
+	if container.Labels["gotham.proxy.config_dir"] != s.configDir || container.Labels["gotham.proxy.acme_dir"] != s.acmeDir {
+		return true, false, "the recorded proxy directories differ"
+	}
+	if container.Labels["gotham.proxy.restart_policy"] != TraefikRestartPolicy {
+		return true, false, "the recorded restart policy differs"
+	}
+	if !mountMatches(container.Mounts, s.configDir, TraefikContainerConfigDir, true) {
+		return true, false, "the config mount is missing, wrong-sourced or writable"
+	}
+	if !mountMatches(container.Mounts, s.acmeDir, TraefikAcmeMount, false) {
+		return true, false, "the ACME mount is missing or wrong-sourced"
+	}
+	if container.RestartPolicy != TraefikRestartPolicy {
+		return true, false, fmt.Sprintf("restart policy %q, want %q (empty means unknown)", container.RestartPolicy, TraefikRestartPolicy)
+	}
+	return true, true, ""
+}
+
+// mountMatches reports whether the engine reports a bind mount from source to
+// destination with the expected read-only flag.
+func mountMatches(mounts []containers.ContainerMount, source, destination string, readOnly bool) bool {
+	for _, mount := range mounts {
+		if mount.Source == source && mount.Destination == destination && mount.ReadOnly == readOnly {
+			return true
+		}
+	}
+	return false
 }
 
 // portsMatch reports whether the container publishes exactly the expected

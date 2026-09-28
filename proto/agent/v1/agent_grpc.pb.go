@@ -831,8 +831,10 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // ProxyService runs on the node agent: the control plane pushes generated
-// Traefik configuration to the node, and the agent writes it and verifies the
-// local Traefik instance picked it up (Phase 6, BE-6.1).
+// Traefik configuration to the node and the agent writes it and, when asked,
+// checks that the local Traefik process still answers its ping (Phase 6,
+// BE-6.1). The ping is a liveness signal only; configuration acceptance is
+// proven by observing the resulting routes, not by the ping.
 type ProxyServiceClient interface {
 	// WriteProxyConfig writes the given Traefik configuration files under the
 	// node's proxy config directory and, when verify is set, pings the local
@@ -863,8 +865,10 @@ func (c *proxyServiceClient) WriteProxyConfig(ctx context.Context, in *WriteProx
 // for forward compatibility.
 //
 // ProxyService runs on the node agent: the control plane pushes generated
-// Traefik configuration to the node, and the agent writes it and verifies the
-// local Traefik instance picked it up (Phase 6, BE-6.1).
+// Traefik configuration to the node and the agent writes it and, when asked,
+// checks that the local Traefik process still answers its ping (Phase 6,
+// BE-6.1). The ping is a liveness signal only; configuration acceptance is
+// proven by observing the resulting routes, not by the ping.
 type ProxyServiceServer interface {
 	// WriteProxyConfig writes the given Traefik configuration files under the
 	// node's proxy config directory and, when verify is set, pings the local

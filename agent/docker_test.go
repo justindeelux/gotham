@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -412,10 +413,18 @@ func TestParsePortSpec(t *testing.T) {
 		{name: "host and container", spec: "8080:80", host: "8080", container: "80"},
 		{name: "host ip, host and container", spec: "127.0.0.1:8080:8080", hostIP: "127.0.0.1", host: "8080", container: "8080"},
 		{name: "container only", spec: "80", container: "80"},
+		{name: "ephemeral host port", spec: "0:80", host: "0", container: "80"},
+		{name: "max ports", spec: "65535:65535", host: "65535", container: "65535"},
 		{name: "empty", spec: "", wantErr: true},
 		{name: "non numeric", spec: "abc:def", wantErr: true},
 		{name: "non numeric host", spec: "http:80", wantErr: true},
 		{name: "invalid host ip", spec: "not-an-ip:8080:80", wantErr: true},
+		{name: "bracketed ipv4", spec: "[127.0.0.1]:8080:80", wantErr: true},
+		{name: "non canonical ipv4", spec: "127.000.000.001:8080:80", wantErr: true},
+		{name: "ipv6 unsupported", spec: "::1:8080:80", wantErr: true},
+		{name: "zero container port", spec: "8080:0", wantErr: true},
+		{name: "container port too high", spec: "8080:65536", wantErr: true},
+		{name: "host port too high", spec: "65536:80", wantErr: true},
 		{name: "empty host ip", spec: ":8080:80", wantErr: true},
 		{name: "empty host port", spec: "127.0.0.1::80", wantErr: true},
 		{name: "too many parts", spec: "127.0.0.1:8080:80:1", wantErr: true},
@@ -425,6 +434,9 @@ func TestParsePortSpec(t *testing.T) {
 			hostIP, host, container, err := parsePortSpec(tt.spec)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parsePortSpec(%q) error = %v, wantErr %v", tt.spec, err, tt.wantErr)
+			}
+			if err != nil && !errors.Is(err, ErrInvalidPortMapping) {
+				t.Fatalf("parsePortSpec(%q) error = %v, want ErrInvalidPortMapping", tt.spec, err)
 			}
 			if err == nil && (hostIP != tt.hostIP || host != tt.host || container != tt.container) {
 				t.Errorf("parsePortSpec(%q) = (%q, %q, %q); want (%q, %q, %q)",

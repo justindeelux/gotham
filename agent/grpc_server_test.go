@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -272,6 +273,7 @@ func TestDockerServerErrorMapping(t *testing.T) {
 		code codes.Code
 	}{
 		{"internal", errors.New("boom"), codes.Internal},
+		{"invalid port mapping", fmt.Errorf("%w: %q", ErrInvalidPortMapping, "80:0"), codes.InvalidArgument},
 		{"canceled", context.Canceled, codes.Canceled},
 		{"deadline", context.DeadlineExceeded, codes.DeadlineExceeded},
 	}

@@ -149,7 +149,9 @@ func (h *handler) writeError(w http.ResponseWriter, op string, serverID uuid.UUI
 		writeJSON(w, http.StatusNotFound, response)
 	case errors.Is(err, ErrVersionNotFound):
 		writeJSON(w, http.StatusNotFound, response)
-	case errors.Is(err, ErrAgentUnavailable), errors.Is(err, ErrReload):
+	case errors.Is(err, ErrConflict):
+		writeJSON(w, http.StatusConflict, response)
+	case errors.Is(err, ErrAgentUnavailable), errors.Is(err, ErrReload), errors.Is(err, ErrHistory):
 		writeJSON(w, http.StatusBadGateway, response)
 	default:
 		h.logger.Error("proxy: "+op, "server_id", serverID.String(), "error", err)

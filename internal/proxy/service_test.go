@@ -3,11 +3,13 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -60,46 +62,119 @@ func (f fakeNodes) ListNodes(context.Context) ([]uuid.UUID, error) {
 }
 
 // fakeHistory is an in-memory HistoryStore, newest first.
+// fakeHistory is an in-memory HistoryStore mirroring the store's sequencing
+// semantics: one active version, at most one pending version and superseded
+// predecessors (newest first).
 type fakeHistory struct {
-	mu       sync.Mutex
-	versions []ConfigVersion
-	recorded []ConfigVersion
-	err      error
+	mu         sync.Mutex
+	active     *ConfigVersion
+	pending    *ConfigVersion
+	superseded []ConfigVersion
+	prepareErr error
+	promoteErr error
+	abortErr   error
+	prepares   int
+	promotes   int
+	aborts     int
 }
 
-// LatestConfigVersions returns the newest versions up to limit.
-func (f *fakeHistory) LatestConfigVersions(context.Context, uuid.UUID, int32) ([]ConfigVersion, error) {
+// PrepareConfigVersion mirrors the transactional preparation.
+func (f *fakeHistory) PrepareConfigVersion(_ context.Context, _ uuid.UUID, files []File, contentHash string) (ConfigVersion, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.err != nil {
-		return nil, f.err
+	f.prepares++
+	if f.prepareErr != nil {
+		return ConfigVersion{}, false, f.prepareErr
 	}
-	limit := int32(2)
-	versions := append([]ConfigVersion{}, f.versions...)
-	if int32(len(versions)) > limit {
-		versions = versions[:limit]
+	switch {
+	case f.active != nil && f.active.ContentHash == contentHash && f.pending == nil:
+		return *f.active, false, nil
+	case f.active != nil && f.active.ContentHash == contentHash:
+		// Restoration of the active content while a pending push exists.
+		return *f.active, true, nil
+	case f.pending != nil && f.pending.ContentHash == contentHash:
+		return *f.pending, true, nil
 	}
-	return versions, nil
+	f.pending = &ConfigVersion{
+		ID:          uuid.New(),
+		Files:       append([]File{}, files...),
+		ContentHash: contentHash,
+		Pending:     true,
+	}
+	return *f.pending, true, nil
 }
 
-// RecordConfigVersion prepends a recorded version.
-func (f *fakeHistory) RecordConfigVersion(_ context.Context, _ uuid.UUID, files []File, contentHash string) error {
+// PromoteConfigVersion activates a version, clears any pending record and
+// supersedes the previous active version.
+func (f *fakeHistory) PromoteConfigVersion(_ context.Context, _ uuid.UUID, versionID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.err != nil {
-		return f.err
+	if f.promoteErr != nil {
+		return f.promoteErr
 	}
-	version := ConfigVersion{Files: append([]File{}, files...), ContentHash: contentHash}
-	f.versions = append([]ConfigVersion{version}, f.versions...)
-	f.recorded = append(f.recorded, version)
+	f.promotes++
+	var target *ConfigVersion
+	switch {
+	case f.pending != nil && f.pending.ID == versionID:
+		target = f.pending
+	case f.active != nil && f.active.ID == versionID:
+		target = f.active
+	default:
+		return fmt.Errorf("fakeHistory: unknown version %s", versionID)
+	}
+	target.Pending = false
+	if f.active != nil && f.active.ID != target.ID {
+		retired := *f.active
+		retired.SupersededAt = time.Now()
+		f.superseded = append([]ConfigVersion{retired}, f.superseded...)
+	}
+	f.pending = nil
+	f.active = target
 	return nil
 }
 
-// recordedCount returns how many versions were written.
-func (f *fakeHistory) recordedCount() int {
+// AbortConfigVersion drops a pending record.
+func (f *fakeHistory) AbortConfigVersion(_ context.Context, _ uuid.UUID, versionID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.recorded)
+	f.aborts++
+	if f.abortErr != nil {
+		return f.abortErr
+	}
+	if f.pending != nil && f.pending.ID == versionID {
+		f.pending = nil
+	}
+	return nil
+}
+
+// PreviousConfigVersion mirrors the revert-target rule: a pending push means
+// the active version is the actual prior.
+func (f *fakeHistory) PreviousConfigVersion(context.Context, uuid.UUID) (ConfigVersion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pending != nil {
+		if f.active != nil {
+			return *f.active, nil
+		}
+		return ConfigVersion{}, ErrVersionNotFound
+	}
+	if len(f.superseded) > 0 {
+		return f.superseded[0], nil
+	}
+	if f.active != nil {
+		return *f.active, nil
+	}
+	return ConfigVersion{}, ErrVersionNotFound
+}
+
+// activeHash returns the active content hash (test helper).
+func (f *fakeHistory) activeHash() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.active == nil {
+		return ""
+	}
+	return f.active.ContentHash
 }
 
 // fakeAgent records the ProxyService calls a sync makes.
@@ -197,12 +272,26 @@ func (f *fakeContainers) Run(_ context.Context, _ uuid.UUID, opts containers.Run
 		return "", f.runErr
 	}
 	id := "traefik-container-id"
-	f.list = append(f.list, containers.Container{
-		ID:    id,
-		Name:  opts.Name,
-		State: "running",
-		Ports: append([]string{}, opts.Ports...),
-	})
+	created := containers.Container{
+		ID:            id,
+		Name:          opts.Name,
+		State:         "running",
+		Image:         opts.Image,
+		Ports:         append([]string{}, opts.Ports...),
+		Labels:        opts.Labels,
+		RestartPolicy: opts.RestartPolicy,
+	}
+	if configDir := opts.Labels["gotham.proxy.config_dir"]; configDir != "" {
+		created.Mounts = append(created.Mounts, containers.ContainerMount{
+			Source: configDir, Destination: TraefikContainerConfigDir, ReadOnly: true,
+		})
+	}
+	if acmeDir := opts.Labels["gotham.proxy.acme_dir"]; acmeDir != "" {
+		created.Mounts = append(created.Mounts, containers.ContainerMount{
+			Source: acmeDir, Destination: TraefikAcmeMount, ReadOnly: false,
+		})
+	}
+	f.list = append(f.list, created)
 	return id, nil
 }
 
@@ -224,13 +313,21 @@ type syncFixture struct {
 	events     *[]string
 }
 
-// runningTraefik is the expected proxy container with its production ports.
+// runningTraefik is the expected proxy container with its production ports,
+// labels, mounts and restart policy.
 func runningTraefik() containers.Container {
 	return containers.Container{
-		ID:    "existing-traefik",
-		Name:  TraefikContainerName,
-		State: "running",
-		Ports: append([]string{}, TraefikPorts...),
+		ID:            "existing-traefik",
+		Name:          TraefikContainerName,
+		State:         "running",
+		Image:         TraefikImage,
+		Ports:         append([]string{}, TraefikPorts...),
+		Labels:        traefikLabels(TraefikDir, TraefikAcmeDir),
+		RestartPolicy: TraefikRestartPolicy,
+		Mounts: []containers.ContainerMount{
+			{Source: TraefikDir, Destination: TraefikContainerConfigDir, ReadOnly: true},
+			{Source: TraefikAcmeDir, Destination: TraefikAcmeMount, ReadOnly: false},
+		},
 	}
 }
 
@@ -288,10 +385,11 @@ const appContainerPort = 3000
 
 func appContainer(id string, published int32) containers.Container {
 	return containers.Container{
-		ID:    id,
-		Name:  "gotham-app-" + id,
-		State: "running",
-		Ports: []string{fmtPort(published, appContainerPort)},
+		ID:            id,
+		Name:          "gotham-app-" + id,
+		State:         "running",
+		Ports:         []string{fmtPort(published, appContainerPort)},
+		PortsReported: true,
 	}
 }
 
@@ -367,8 +465,8 @@ func TestSyncServerWritesVerifiedConfigFromLiveEndpoints(t *testing.T) {
 	if got := strings.Join(*fixture.events, ","); got != "list,write-verify=true,close" {
 		t.Errorf("events = %v, want [list write-verify=true close]", got)
 	}
-	if fixture.history.recordedCount() != 1 {
-		t.Errorf("history recorded = %d, want 1", fixture.history.recordedCount())
+	if fixture.history.promotes != 1 {
+		t.Errorf("history promotes = %d, want 1", fixture.history.promotes)
 	}
 }
 
@@ -390,18 +488,47 @@ func TestSyncServerSupportsEphemeralHostPort(t *testing.T) {
 	}
 }
 
-func TestSyncServerFallsBackToPinnedPortWhenContainerMissing(t *testing.T) {
+// TestSyncServerIsolatesUnreachablePinnedApplications proves a declared
+// pinned port is never routed without a positively matched running container
+// with a real publication: a missing container (whose old port may already
+// belong to another workload), a stopped one and a legacy label-only binding
+// are all isolated instead (R1).
+func TestSyncServerIsolatesUnreachablePinnedApplications(t *testing.T) {
 	serverID := uuid.New()
-	app := runningApp(serverID, "pinned.example.com", "gone-container", 3000, 18080)
-	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
-	fixture.containers.list = []containers.Container{runningTraefik()}
 
-	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
-		t.Fatalf("SyncServer: %v", err)
+	cases := map[string]struct {
+		container *containers.Container
+		want      string
+	}{
+		"container missing": {nil, "no running deployment container"},
+		"container stopped": {&containers.Container{ID: "gone-container", Name: "app", State: "exited", Ports: []string{"18080:3000"}, PortsReported: true}, "not running"},
+		"legacy label only": {&containers.Container{ID: "gone-container", Name: "app", State: "running", Ports: []string{"18080:3000"}, PortsReported: false}, "engine-reported"},
+		"loopback only": {&containers.Container{ID: "gone-container", Name: "app", State: "running",
+			Ports: []string{"127.0.0.1:18080:3000"}, PortsReported: true}, "no reachable published binding"},
 	}
-	dynamic := filesByPath(fixture.agent.calls[0].GetFiles())["dynamic/gotham.yml"]
-	if !strings.Contains(dynamic, "http://172.17.0.1:18080") {
-		t.Errorf("pinned fallback missing:\n%s", dynamic)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			app := runningApp(serverID, "pinned.example.com", "gone-container", 3000, 18080)
+			fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
+			fixture.containers.list = []containers.Container{runningTraefik()}
+			if tc.container != nil {
+				fixture.containers.list = append(fixture.containers.list, *tc.container)
+			}
+
+			err := fixture.service.SyncServer(context.Background(), serverID)
+			if !errors.Is(err, ErrPartialSync) {
+				t.Fatalf("err = %v, want ErrPartialSync", err)
+			}
+			var partial *PartialError
+			if !errors.As(err, &partial) || len(partial.Diagnostics) != 1 ||
+				!strings.Contains(partial.Diagnostics[0].Reason, tc.want) {
+				t.Fatalf("diagnostics = %#v, want reason containing %q", err, tc.want)
+			}
+			dynamic := filesByPath(fixture.agent.calls[0].GetFiles())["dynamic/gotham.yml"]
+			if strings.Contains(dynamic, "pinned.example.com") {
+				t.Errorf("unverified pinned port was routed:\n%s", dynamic)
+			}
+		})
 	}
 }
 
@@ -474,7 +601,7 @@ func TestSyncServerSkipsDisabledLegacyDomainsWithNoWinner(t *testing.T) {
 	}
 }
 
-func TestSyncServerDuplicateDomainKeepsFirst(t *testing.T) {
+func TestSyncServerHoldsBackAllDuplicateBindings(t *testing.T) {
 	serverID := uuid.New()
 	first := runningApp(serverID, "dup.example.com", "first-container", 3000, 18080)
 	second := runningApp(serverID, "dup.example.com", "second-container", 3000, 18081)
@@ -489,9 +616,18 @@ func TestSyncServerDuplicateDomainKeepsFirst(t *testing.T) {
 	if !errors.Is(err, ErrPartialSync) {
 		t.Fatalf("err = %v, want ErrPartialSync", err)
 	}
+	var partial *PartialError
+	if !errors.As(err, &partial) || len(partial.Diagnostics) != 2 {
+		t.Fatalf("diagnostics = %#v, want both duplicates held back", err)
+	}
+	for _, diagnostic := range partial.Diagnostics {
+		if !strings.Contains(diagnostic.Reason, "held back") {
+			t.Fatalf("diagnostic = %#v, want a quarantine reason", diagnostic)
+		}
+	}
 	dynamic := filesByPath(fixture.agent.calls[0].GetFiles())["dynamic/gotham.yml"]
-	if !strings.Contains(dynamic, "32768") || strings.Contains(dynamic, "32769") {
-		t.Errorf("duplicate disposition wrong:\n%s", dynamic)
+	if strings.Contains(dynamic, "dup.example.com") {
+		t.Errorf("a duplicate binding was routed:\n%s", dynamic)
 	}
 }
 
@@ -500,7 +636,7 @@ func TestSyncServerBootstrapsWithRestartPolicyAndReadOnlyConfig(t *testing.T) {
 	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
 
 	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
-	fixture.containers.list = nil
+	fixture.containers.list = []containers.Container{appContainer("app-container", 32768)}
 
 	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
 		t.Fatalf("SyncServer: %v", err)
@@ -533,11 +669,12 @@ func TestSyncServerRepairsContainerWithWrongPorts(t *testing.T) {
 	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
 
 	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
-	// A container created before the host-IP binding fix: no loopback ping.
-	fixture.containers.list = []containers.Container{{
-		ID: "legacy-traefik", Name: TraefikContainerName, State: "running",
-		Ports: []string{"80:80", "443:443"},
-	}}
+	// A Gotham-owned container created before the host-IP binding fix: it
+	// carries the ownership labels but misses the loopback ping binding.
+	legacy := runningTraefik()
+	legacy.ID = "legacy-traefik"
+	legacy.Ports = []string{"80:80", "443:443"}
+	fixture.containers.list = []containers.Container{legacy, appContainer("app-container", 32768)}
 
 	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
 		t.Fatalf("SyncServer: %v", err)
@@ -564,7 +701,7 @@ func TestSyncServerWaitsForFreshTraefikReadiness(t *testing.T) {
 	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
 
 	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
-	fixture.containers.list = nil
+	fixture.containers.list = []containers.Container{appContainer("app-container", 32768)}
 
 	attempts := 0
 	fixture.agent.respond = func(in *agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error) {
@@ -586,6 +723,79 @@ func TestSyncServerWaitsForFreshTraefikReadiness(t *testing.T) {
 	}
 }
 
+// TestSyncServerRejectsUnownedSameNameContainer proves a same-name container
+// without Gotham ownership labels is never removed: the sync fails with an
+// actionable conflict instead (R5).
+func TestSyncServerRejectsUnownedSameNameContainer(t *testing.T) {
+	serverID := uuid.New()
+	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
+
+	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
+	foreign := runningTraefik()
+	foreign.ID = "foreign-traefik"
+	foreign.Labels = nil
+	fixture.containers.list = []containers.Container{foreign, appContainer("app-container", 32768)}
+
+	err := fixture.service.SyncServer(context.Background(), serverID)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrConflict", err)
+	}
+	if len(fixture.containers.removed) != 0 {
+		t.Fatalf("removed = %v, want the foreign container untouched", fixture.containers.removed)
+	}
+	if len(fixture.agent.calls) != 0 {
+		t.Fatalf("agent calls = %d, want no write before the conflict is resolved", len(fixture.agent.calls))
+	}
+}
+
+// TestSyncServerRepairsOwnedDrift proves an owned container that differs from
+// the desired image/mounts/policy/ports state is safely recreated (R5).
+func TestSyncServerRepairsOwnedDrift(t *testing.T) {
+	cases := map[string]func(*containers.Container){
+		"wrong image": func(c *containers.Container) {
+			c.Image = "traefik:v2.11"
+		},
+		"wrong mount source": func(c *containers.Container) {
+			c.Mounts[0].Source = "/somewhere/else"
+		},
+		"writable config mount": func(c *containers.Container) {
+			c.Mounts[0].ReadOnly = false
+		},
+		"missing policy label": func(c *containers.Container) {
+			delete(c.Labels, "gotham.proxy.restart_policy")
+		},
+		"unknown restart policy": func(c *containers.Container) {
+			c.RestartPolicy = ""
+		},
+		"wrong restart policy": func(c *containers.Container) {
+			c.RestartPolicy = "no"
+		},
+		"wrong ports": func(c *containers.Container) {
+			c.Ports = []string{"80:80", "443:443"}
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			serverID := uuid.New()
+			app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
+			fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
+			drifted := runningTraefik()
+			mutate(&drifted)
+			fixture.containers.list = []containers.Container{drifted, appContainer("app-container", 32768)}
+
+			if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
+				t.Fatalf("SyncServer: %v", err)
+			}
+			if len(fixture.containers.removed) != 1 || fixture.containers.removed[0] != drifted.ID {
+				t.Fatalf("removed = %v, want the drifted container recreated", fixture.containers.removed)
+			}
+			if len(fixture.containers.runs) != 1 {
+				t.Fatalf("runs = %d, want 1 recreate", len(fixture.containers.runs))
+			}
+		})
+	}
+}
+
 func TestSyncServerReloadNotConfirmed(t *testing.T) {
 	serverID := uuid.New()
 	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
@@ -603,8 +813,13 @@ func TestSyncServerReloadNotConfirmed(t *testing.T) {
 	if !strings.Contains(err.Error(), "connection refused") {
 		t.Errorf("err = %v, want the ping detail", err)
 	}
-	if fixture.history.recordedCount() != 0 {
-		t.Errorf("history recorded %d versions after a failed ping, want 0", fixture.history.recordedCount())
+	// The ping failure happened after a write attempt: the pending record is
+	// retained (ambiguous node state) and the error is a degraded ErrHistory.
+	if !errors.Is(err, ErrHistory) {
+		t.Fatalf("err = %v, want ErrHistory too", err)
+	}
+	if fixture.history.pending == nil {
+		t.Fatal("pending record was dropped after an ambiguous push failure")
 	}
 }
 
@@ -708,7 +923,7 @@ func TestSyncServerConcurrentBootstrapConverges(t *testing.T) {
 	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
 
 	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
-	fixture.containers.list = nil
+	fixture.containers.list = []containers.Container{appContainer("app-container", 32768)}
 
 	var waitGroup sync.WaitGroup
 	errs := make([]error, 2)
@@ -782,7 +997,12 @@ func TestSyncAllReportsPerNodeOutcome(t *testing.T) {
 		}
 		return agent, nil
 	}
-	containerService := &fakeContainers{}
+	containerService := &fakeContainers{list: []containers.Container{
+		runningTraefik(),
+		appContainer("one", 32768),
+		appContainer("two", 32769),
+		appContainer("three", 32770),
+	}}
 	agents[serverA] = &fakeAgent{}
 	agents[serverB] = &fakeAgent{}
 	agents[serverB].respond = func(*agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error) {
@@ -831,11 +1051,8 @@ func TestRevertServerRepushesPreviousVersion(t *testing.T) {
 	current := []File{{Name: "dynamic/gotham.yml", Content: []byte("current")}}
 
 	fixture := newSyncFixture(t, nil, serverID)
-	// history is newest first: current, then previous.
-	fixture.history.versions = []ConfigVersion{
-		{Files: current, ContentHash: "current"},
-		{Files: previous, ContentHash: "previous"},
-	}
+	fixture.history.active = &ConfigVersion{ID: uuid.New(), Files: current, ContentHash: configHash(current)}
+	fixture.history.superseded = []ConfigVersion{{ID: uuid.New(), Files: previous, ContentHash: configHash(previous)}}
 
 	if err := fixture.service.RevertServer(context.Background(), serverID); err != nil {
 		t.Fatalf("RevertServer: %v", err)
@@ -846,15 +1063,14 @@ func TestRevertServerRepushesPreviousVersion(t *testing.T) {
 	if got := string(fixture.agent.calls[0].GetFiles()[0].GetContent()); got != "previous" {
 		t.Fatalf("reverted content = %q, want previous", got)
 	}
-	if fixture.history.recordedCount() != 1 {
-		t.Fatalf("recorded = %d, want the reverted version recorded", fixture.history.recordedCount())
+	if got := fixture.history.activeHash(); got != configHash(previous) {
+		t.Fatalf("active hash = %q, want the reverted version promoted", got)
 	}
 }
 
 func TestRevertServerWithoutPreviousVersion(t *testing.T) {
 	serverID := uuid.New()
 	fixture := newSyncFixture(t, nil, serverID)
-	fixture.history.versions = []ConfigVersion{{Files: []File{{Name: "a", Content: []byte("b")}}}}
 
 	if err := fixture.service.RevertServer(context.Background(), serverID); !errors.Is(err, ErrVersionNotFound) {
 		t.Fatalf("err = %v, want ErrVersionNotFound", err)
@@ -864,18 +1080,143 @@ func TestRevertServerWithoutPreviousVersion(t *testing.T) {
 	}
 }
 
-func TestRecordHistorySkipsIdenticalContent(t *testing.T) {
+// TestSyncServerUnchangedSyncKeepsActiveSnapshot proves repeated identical
+// syncs do not lose or rewrite the active history entry (R2).
+func TestSyncServerUnchangedSyncKeepsActiveSnapshot(t *testing.T) {
 	serverID := uuid.New()
 	fixture := newSyncFixture(t, nil, serverID)
 
 	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
 		t.Fatalf("first sync: %v", err)
 	}
+	active := fixture.history.activeHash()
+	if active == "" {
+		t.Fatal("first sync did not promote an active version")
+	}
 	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
-	if fixture.history.recordedCount() != 1 {
-		t.Fatalf("recorded = %d, want identical content recorded once", fixture.history.recordedCount())
+	if got := fixture.history.activeHash(); got != active {
+		t.Fatalf("active hash = %q, want the unchanged active %q", got, active)
+	}
+	if fixture.history.promotes != 1 {
+		t.Fatalf("promotes = %d, want 1 (unchanged content records nothing)", fixture.history.promotes)
+	}
+}
+
+// TestSyncServerPrepareFailureLeavesNodeUntouched proves a history write
+// failure fails the sync before any node mutation (R2).
+func TestSyncServerPrepareFailureLeavesNodeUntouched(t *testing.T) {
+	serverID := uuid.New()
+	fixture := newSyncFixture(t, nil, serverID)
+	fixture.history.prepareErr = errors.New("db down")
+
+	err := fixture.service.SyncServer(context.Background(), serverID)
+	if !errors.Is(err, ErrHistory) {
+		t.Fatalf("err = %v, want ErrHistory", err)
+	}
+	if len(fixture.agent.calls) != 0 {
+		t.Fatalf("agent calls = %d, want the node untouched", len(fixture.agent.calls))
+	}
+	if fixture.history.aborts != 0 {
+		t.Fatalf("aborts = %d, want none (nothing was prepared)", fixture.history.aborts)
+	}
+}
+
+// TestSyncServerAmbiguousPushFailureRetainsPendingThenRepairs proves an
+// ambiguous push failure keeps the pending record and a later same-content
+// sync reconciles it by promoting the pending version (R2).
+func TestSyncServerAmbiguousPushFailureRetainsPendingThenRepairs(t *testing.T) {
+	serverID := uuid.New()
+	fixture := newSyncFixture(t, nil, serverID)
+
+	// First sync: the verified write fails ambiguously after a write attempt.
+	fixture.agent.respond = func(*agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error) {
+		return nil, status.Error(codes.Unavailable, "agent down")
+	}
+	err := fixture.service.SyncServer(context.Background(), serverID)
+	if !errors.Is(err, ErrHistory) || !errors.Is(err, ErrAgentUnavailable) {
+		t.Fatalf("err = %v, want ErrHistory and ErrAgentUnavailable", err)
+	}
+	if fixture.history.pending == nil {
+		t.Fatal("ambiguous push failure dropped the pending record")
+	}
+	if fixture.history.aborts != 0 {
+		t.Fatal("ambiguous push failure aborted a possibly-applied intent")
+	}
+	pendingHash := fixture.history.pending.ContentHash
+
+	// Second sync of the same content: the pending record is reused and
+	// promoted after the push succeeds.
+	fixture.agent.respond = nil
+	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
+		t.Fatalf("repair sync: %v", err)
+	}
+	if fixture.history.pending != nil {
+		t.Fatal("pending record survived a confirmed promotion")
+	}
+	if got := fixture.history.activeHash(); got != pendingHash {
+		t.Fatalf("active hash = %q, want the reconciled %q", got, pendingHash)
+	}
+}
+
+// TestSyncServerPromoteFailureNeverRevertsWrongVersion proves the three-version
+// failure sequence: A active, B promoted, C pushed with a promotion failure
+// keeps B active and a FRESH service reverts to B (the actual prior), never to
+// the older superseded A (R2).
+func TestSyncServerPromoteFailureNeverRevertsWrongVersion(t *testing.T) {
+	serverID := uuid.New()
+	fixture := newSyncFixture(t, nil, serverID)
+
+	// A and B are recorded and promoted normally; their generated content is
+	// empty-config identical, so use explicit history entries to force
+	// different versions.
+	versionA := []File{{Name: "dynamic/gotham.yml", Content: []byte("A")}}
+	versionB := []File{{Name: "dynamic/gotham.yml", Content: []byte("B")}}
+	versionC := []File{{Name: "dynamic/gotham.yml", Content: []byte("C")}}
+	fixture.history.active = &ConfigVersion{ID: uuid.New(), Files: versionB, ContentHash: configHash(versionB)}
+	fixture.history.superseded = []ConfigVersion{{ID: uuid.New(), Files: versionA, ContentHash: configHash(versionA)}}
+
+	// Push C with a promotion failure after the node write succeeded.
+	fixture.history.promoteErr = errors.New("db down")
+	touched, err := fixture.service.push(context.Background(), serverID, fixture.containers.list, versionC)
+	if err != nil || !touched {
+		t.Fatalf("push C: touched=%v err=%v", touched, err)
+	}
+	prepared, changed, err := fixture.service.prepareHistory(context.Background(), serverID, versionC)
+	if err != nil || !changed {
+		t.Fatalf("prepare C: changed=%v err=%v", changed, err)
+	}
+	if err := fixture.service.pushAndPromote(context.Background(), serverID, fixture.containers.list, versionC, prepared, changed); !errors.Is(err, ErrHistory) {
+		t.Fatalf("promote C err = %v, want ErrHistory", err)
+	}
+	if fixture.history.pending == nil {
+		t.Fatal("promotion failure dropped the pending record")
+	}
+
+	// A fresh service instance sharing the same history must revert to B.
+	fixture.history.promoteErr = nil
+	fresh := &SyncService{
+		source:      fixture.service.source,
+		history:     fixture.history,
+		containers:  fixture.containers,
+		dial:        fixture.service.dial,
+		logger:      discardLogger(),
+		backendHost: DefaultBackendHost,
+		configDir:   TraefikDir,
+		acmeDir:     TraefikAcmeDir,
+		timeout:     defaultSyncTimeout,
+	}
+	if err := fresh.RevertServer(context.Background(), serverID); err != nil {
+		t.Fatalf("fresh revert: %v", err)
+	}
+	last := fixture.agent.calls[len(fixture.agent.calls)-1]
+	content := filesByPath(last.GetFiles())["dynamic/gotham.yml"]
+	if content != "B" {
+		t.Fatalf("revert pushed %q, want the actual prior B (never the older superseded A)", content)
+	}
+	if fixture.history.pending != nil {
+		t.Fatal("revert did not clear the pending record")
 	}
 }
 

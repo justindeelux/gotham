@@ -16,8 +16,8 @@ const (
 	// EntryPointWebSecure serves HTTPS (port 443).
 	EntryPointWebSecure = "websecure"
 	// EntryPointInternal is the loopback-only entrypoint (port 8080) pinned
-	// to /ping so the node agent can verify reloads without exposing the
-	// endpoint to the network.
+	// to /ping so the node agent can check the proxy's health without
+	// exposing the endpoint to the network.
 	EntryPointInternal = "traefik"
 	// DefaultResolverName is the generated ACME certificate resolver.
 	DefaultResolverName = "letsencrypt"

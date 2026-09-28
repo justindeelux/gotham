@@ -184,11 +184,13 @@ type Provider struct {
 }
 
 type ProxyConfigVersion struct {
-	ID          pgtype.UUID        `json:"id"`
-	ServerID    pgtype.UUID        `json:"server_id"`
-	Files       []byte             `json:"files"`
-	ContentHash string             `json:"content_hash"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ID           pgtype.UUID        `json:"id"`
+	ServerID     pgtype.UUID        `json:"server_id"`
+	Files        []byte             `json:"files"`
+	ContentHash  string             `json:"content_hash"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	Pending      bool               `json:"pending"`
+	SupersededAt pgtype.Timestamptz `json:"superseded_at"`
 }
 
 type ReposCache struct {

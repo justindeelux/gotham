@@ -16,11 +16,23 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
+// canonicalTempDir returns a temp directory with OS-level symlinks resolved
+// (macOS /var -> /private/var), so the agent's no-follow traversal from "/"
+// sees real components only. Production roots are canonical by construction.
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp dir: %v", err)
+	}
+	return dir
+}
+
 // newTestProxyServer wires a ProxyServer rooted in a temp directory and
 // pinging the given URL.
 func newTestProxyServer(t *testing.T, pingURL string) (*ProxyServer, string) {
 	t.Helper()
-	root := t.TempDir()
+	root := canonicalTempDir(t)
 	server := NewProxyServer(ProxyServerConfig{
 		Root:        root,
 		PingURL:     pingURL,
@@ -227,7 +239,7 @@ func TestSanitizeProxyPath(t *testing.T) {
 // a symlinked parent (or root) is refused and nothing is written outside the
 // proxy directory (BE-6.1 F7).
 func TestWriteProxyConfigRejectsSymlinkedParents(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalTempDir(t)
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(root, "dynamic")); err != nil {
 		t.Fatalf("symlink parent: %v", err)
@@ -248,7 +260,7 @@ func TestWriteProxyConfigRejectsSymlinkedParents(t *testing.T) {
 		t.Errorf("write escaped the proxy directory: stat outside = %v", statErr)
 	}
 
-	rootLink := filepath.Join(t.TempDir(), "root-link")
+	rootLink := filepath.Join(canonicalTempDir(t), "root-link")
 	if err := os.Symlink(root, rootLink); err != nil {
 		t.Fatalf("symlink root: %v", err)
 	}
@@ -278,5 +290,73 @@ func TestWriteProxyConfigValidatesWholeBatchBeforeWriting(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "traefik.yml")); !os.IsNotExist(statErr) {
 		t.Errorf("first file was installed despite a rejected batch: stat err = %v", statErr)
+	}
+}
+
+// TestWriteProxyConfigRejectsSymlinkedIntermediates proves no component under
+// the root is followed: an intermediate symlink is rejected before anything is
+// created on the other side (R3 trust anchor "/").
+func TestWriteProxyConfigRejectsSymlinkedIntermediates(t *testing.T) {
+	root := canonicalTempDir(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "dynamic")); err != nil {
+		t.Fatalf("symlink intermediate: %v", err)
+	}
+	server := NewProxyServer(ProxyServerConfig{
+		Root:        root,
+		PingURL:     "http://127.0.0.1:1/ping",
+		PingTimeout: time.Second,
+		Logger:      discardLogger(),
+	})
+
+	// A missing child directory under the symlinked parent must not be created
+	// outside the root.
+	_, err := server.WriteProxyConfig(context.Background(), request(map[string]string{
+		"dynamic/sub/gotham.yml": "http: {}\n",
+	}, false))
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument (err %v)", status.Code(err), err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "sub")); !os.IsNotExist(statErr) {
+		t.Errorf("directory escaped through the symlink: stat = %v", statErr)
+	}
+}
+
+// TestWriteProxyConfigBatchRejectsSymlinkedLaterTarget proves the whole batch
+// is validated before the first replacement: a valid first document must not
+// replace existing content when a later document's parent is symlinked (R3).
+func TestWriteProxyConfigBatchRejectsSymlinkedLaterTarget(t *testing.T) {
+	root := canonicalTempDir(t)
+	outside := t.TempDir()
+	staticPath := filepath.Join(root, "traefik.yml")
+	if err := os.WriteFile(staticPath, []byte("old static"), 0o644); err != nil {
+		t.Fatalf("seed static: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "dynamic")); err != nil {
+		t.Fatalf("symlink dynamic: %v", err)
+	}
+	server := NewProxyServer(ProxyServerConfig{
+		Root:        root,
+		PingURL:     "http://127.0.0.1:1/ping",
+		PingTimeout: time.Second,
+		Logger:      discardLogger(),
+	})
+
+	_, err := server.WriteProxyConfig(context.Background(), request(map[string]string{
+		"traefik.yml":        "new static",
+		"dynamic/gotham.yml": "http: {}\n",
+	}, false))
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument (err %v)", status.Code(err), err)
+	}
+	content, readErr := os.ReadFile(staticPath)
+	if readErr != nil {
+		t.Fatalf("read static: %v", readErr)
+	}
+	if string(content) != "old static" {
+		t.Fatalf("first document was replaced despite a filesystem-invalid later entry: %q", content)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "gotham.yml")); !os.IsNotExist(statErr) {
+		t.Errorf("write escaped through the symlinked parent: stat = %v", statErr)
 	}
 }

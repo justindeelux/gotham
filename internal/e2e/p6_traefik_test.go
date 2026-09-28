@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -124,7 +125,9 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	// directory that the CP mounts into Traefik (a relocated node layout using
 	// the same production code paths).
 	nodeID := "p6-e2e-" + suffix
-	configDir := t.TempDir()
+	// macOS temp paths contain OS-level symlinks (/var -> /private/var); the
+	// agent's no-follow traversal from "/" needs canonical fixtures.
+	configDir := p6CanonicalTempDir(t)
 	acmeDir := configDir + "/acme"
 	if err := os.MkdirAll(acmeDir, 0o755); err != nil {
 		t.Fatalf("create acme dir: %v", err)
@@ -134,17 +137,26 @@ func TestP6ProxySyncProduction(t *testing.T) {
 		agent.WithProxyService(proxyAgent))
 
 	registry := p6Registry{server: &servers.Server{ID: serverID, IP: "127.0.0.1", NodeID: &nodeID}}
-	// The proxy container has a fixed production name on this disposable node:
-	// a previous failed run may have left one pointing at a deleted config
-	// directory, so remove it before the bootstrap and always clean up.
-	if err := engine.Remove(ctx, proxy.TraefikContainerName); err != nil {
-		t.Logf("remove pre-existing traefik: %v", err)
+	// R4: a pre-existing fixed-name container may be a live proxy this test
+	// cannot prove it owns, so refuse to run instead of deleting it. Only
+	// container IDs created by this run are cleaned up.
+	if existing := p6FindContainer(t, ctx, engine, proxy.TraefikContainerName); existing != "" {
+		t.Fatalf("a gotham-traefik container already exists (%s); refusing to remove a possibly live proxy", existing)
+	}
+	createdIDs := []string{}
+	trackCreated := func(id string) string {
+		if id != "" {
+			createdIDs = append(createdIDs, id)
+		}
+		return id
 	}
 	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cleanupCancel()
-		if err := engine.Remove(cleanupCtx, proxy.TraefikContainerName); err != nil {
-			t.Logf("cleanup traefik: %v", err)
+		for _, id := range createdIDs {
+			if err := engine.Remove(cleanupCtx, id); err != nil {
+				t.Logf("cleanup container %s: %v", id, err)
+			}
 		}
 	})
 	containerService := containers.NewService(containers.Config{
@@ -228,7 +240,7 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	}
 	t.Logf("first sync diagnostics: %v", partial.Diagnostics)
 
-	traefikID := p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName)
+	traefikID := trackCreated(p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName))
 	// On failure, keep the diagnosis close: the proxy logs, the mounted
 	// configuration and the container's mounts are dumped before cleanup.
 	t.Cleanup(func() {
@@ -282,12 +294,12 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	// History and fast revert: reverting restores the version recorded before
 	// the update/removal pair, bringing the ephemeral route back and keeping
 	// the renamed one.
-	versions, err := st.LatestProxyConfigVersions(ctx, serverRow.ID, 5)
-	if err != nil {
-		t.Fatalf("list config versions: %v", err)
+	var versionCount int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM proxy_config_versions WHERE server_id = $1", serverRow.ID).Scan(&versionCount); err != nil {
+		t.Fatalf("count config versions: %v", err)
 	}
-	if len(versions) < 3 {
-		t.Fatalf("config versions = %d, want at least 3 recorded syncs", len(versions))
+	if versionCount < 3 {
+		t.Fatalf("config versions = %d, want at least 3 recorded syncs", versionCount)
 	}
 	revertCtx, revertCancel := context.WithTimeout(ctx, p6SyncTimeout)
 	err = proxyService.RevertServer(revertCtx, serverID)
@@ -306,17 +318,19 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	legacyID, err := engine.RunImage(ctx, &agentv1.CreateContainerRequest{
 		Image:   proxy.TraefikImage,
 		Name:    proxy.TraefikContainerName,
+		Labels:  map[string]string{"gotham.managed": "true", "gotham.component": "proxy"},
 		Ports:   []string{"80:80", "443:443"},
 		Volumes: []string{configDir + ":" + proxy.TraefikContainerConfigDir, acmeDir + ":" + proxy.TraefikAcmeMount},
 	})
 	if err != nil {
 		t.Fatalf("run legacy traefik: %v", err)
 	}
+	trackCreated(legacyID)
 	t.Logf("legacy traefik %s without the loopback binding", legacyID)
 	if err := p6Sync(proxyService, serverID); err != nil {
 		t.Fatalf("sync must repair the legacy container: %v", err)
 	}
-	traefikID = p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName)
+	traefikID = trackCreated(p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName))
 	if traefikID == legacyID {
 		t.Fatal("legacy container was not recreated")
 	}
@@ -332,6 +346,12 @@ func TestP6ProxySyncProduction(t *testing.T) {
 		t.Fatalf("restart traefik: %v", err)
 	}
 	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
+
+	// R5 convergence: owned drift (correct ports, wrong mount / missing
+	// policy label / wrong image) is recreated, while an unowned same-name
+	// container is never removed and fails the sync with an actionable
+	// conflict.
+	p6AssertRepairsDrift(t, ctx, engine, proxyService, serverID, configDir, acmeDir, &traefikID, &createdIDs, renamedDomain)
 
 	// A malformed dynamic document must not be presented as accepted: the
 	// verified write only proves the ping answered, and Traefik keeps serving
@@ -356,6 +376,11 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	if !badResponse.GetReloaded() {
 		t.Fatalf("invalid write ping failed: %s", badResponse.GetPingError())
 	}
+	// Wait for the file provider to actually reject the malformed document
+	// before asserting the previous route survives: the verified write is a
+	// ping signal, not configuration acceptance.
+	rejection := p6WaitForLog(t, ctx, traefikID, []string{"error", "parse"}, []string{"error", "yaml"}, []string{"error", "gotham.yml"}, []string{"error", "unmarshal"})
+	t.Logf("traefik rejected the malformed document: %s", rejection)
 	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
 	t.Log("invalid document kept the previous route serving; the verified write is a ping signal, not acceptance")
 	if err := p6Sync(proxyService, serverID); err != nil {
@@ -559,4 +584,171 @@ func pgType(id uuid.UUID) pgtype.UUID {
 		return pgtype.UUID{}
 	}
 	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+// p6CanonicalTempDir returns a temp directory with OS-level symlinks resolved
+// (macOS /var -> /private/var), matching the agent's no-follow traversal from
+// the trusted root.
+func p6CanonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp dir: %v", err)
+	}
+	return dir
+}
+
+// p6FindContainer returns the id of a named container, or "" when absent.
+func p6FindContainer(t *testing.T, ctx context.Context, engine *agent.DockerClient, name string) string {
+	t.Helper()
+	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	listed, err := engine.ListContainers(listCtx, true)
+	if err != nil {
+		t.Fatalf("list containers: %v", err)
+	}
+	for _, container := range listed {
+		if container.GetName() == name {
+			return container.GetId()
+		}
+	}
+	return ""
+}
+
+// p6WaitForLog polls the proxy's logs until one line contains every keyword of
+// one group (case-insensitive), returning the matching line.
+func p6WaitForLog(t *testing.T, ctx context.Context, containerID string, groups ...[]string) string {
+	t.Helper()
+	deadline := time.Now().Add(p6HTTPWait)
+	var logs string
+	for {
+		output, err := runDocker(ctx, "logs", containerID)
+		if err == nil {
+			logs = output
+			for _, line := range strings.Split(output, "\n") {
+				lower := strings.ToLower(line)
+				for _, group := range groups {
+					matches := true
+					for _, keyword := range group {
+						if !strings.Contains(lower, keyword) {
+							matches = false
+							break
+						}
+					}
+					if matches {
+						return line
+					}
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no rejection log within %s; traefik logs:\n%s", p6HTTPWait, logs)
+		}
+		time.Sleep(p6PollInterval)
+	}
+}
+
+// p6AssertRepairsDrift proves the managed-container convergence rules (R5):
+// owned drift (wrong mount, missing policy, wrong image) is repaired by
+// recreation, and an unowned same-name container is never removed — the sync
+// fails with an actionable conflict until the operator resolves it.
+func p6AssertRepairsDrift(
+	t *testing.T,
+	ctx context.Context,
+	engine *agent.DockerClient,
+	svc *proxy.SyncService,
+	serverID uuid.UUID,
+	configDir, acmeDir string,
+	traefikID *string,
+	createdIDs *[]string,
+	domain string,
+) {
+	t.Helper()
+
+	baseRequest := func() *agentv1.CreateContainerRequest {
+		return &agentv1.CreateContainerRequest{
+			Image: proxy.TraefikImage,
+			Name:  proxy.TraefikContainerName,
+			Labels: map[string]string{
+				"gotham.managed":              "true",
+				"gotham.component":            "proxy",
+				"gotham.proxy.config_dir":     configDir,
+				"gotham.proxy.acme_dir":       acmeDir,
+				"gotham.proxy.restart_policy": proxy.TraefikRestartPolicy,
+			},
+			Ports:   append([]string{}, proxy.TraefikPorts...),
+			Volumes: []string{configDir + ":" + proxy.TraefikContainerConfigDir + ":ro", acmeDir + ":" + proxy.TraefikAcmeMount},
+		}
+	}
+	replace := func(request *agentv1.CreateContainerRequest) {
+		t.Helper()
+		if err := engine.Remove(ctx, *traefikID); err != nil {
+			t.Fatalf("remove current traefik: %v", err)
+		}
+		id, err := engine.RunImage(ctx, request)
+		if err != nil {
+			t.Fatalf("run drift fixture: %v", err)
+		}
+		*createdIDs = append(*createdIDs, id)
+		*traefikID = id
+	}
+
+	drifts := map[string]func(*agentv1.CreateContainerRequest){
+		"wrong mount": func(r *agentv1.CreateContainerRequest) {
+			r.Volumes = []string{configDir + "/elsewhere:" + proxy.TraefikContainerConfigDir + ":ro", acmeDir + ":" + proxy.TraefikAcmeMount}
+		},
+		"missing policy label": func(r *agentv1.CreateContainerRequest) {
+			delete(r.Labels, "gotham.proxy.restart_policy")
+		},
+		"wrong image": func(r *agentv1.CreateContainerRequest) {
+			r.Image = p6NginxImage
+		},
+	}
+	for name, mutate := range drifts {
+		t.Run(name, func(t *testing.T) {
+			request := baseRequest()
+			mutate(request)
+			replace(request)
+
+			if err := p6Sync(svc, serverID); err != nil {
+				t.Fatalf("sync must repair %s drift: %v", name, err)
+			}
+			newID := p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName)
+			if newID == *traefikID {
+				t.Fatalf("%s drift was not repaired", name)
+			}
+			*createdIDs = append(*createdIDs, newID)
+			*traefikID = newID
+			p6AssertTraefikBootstrap(t, newID)
+			p6ExpectHTTP(t, domain, http.StatusOK)
+		})
+	}
+
+	t.Run("unowned same-name container", func(t *testing.T) {
+		request := baseRequest()
+		request.Labels = nil
+		replace(request)
+
+		err := p6Sync(svc, serverID)
+		if !errors.Is(err, proxy.ErrConflict) {
+			t.Fatalf("unowned container sync err = %v, want ErrConflict", err)
+		}
+		if current := p6FindContainer(t, ctx, engine, proxy.TraefikContainerName); current != *traefikID {
+			t.Fatalf("unowned container was replaced (%s -> %s)", *traefikID, current)
+		}
+
+		// The fixture belongs to this run: remove it and let the managed proxy
+		// converge again.
+		if err := engine.Remove(ctx, *traefikID); err != nil {
+			t.Fatalf("remove unowned fixture: %v", err)
+		}
+		if err := p6Sync(svc, serverID); err != nil {
+			t.Fatalf("restore after unowned conflict: %v", err)
+		}
+		newID := p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName)
+		*createdIDs = append(*createdIDs, newID)
+		*traefikID = newID
+		p6AssertTraefikBootstrap(t, newID)
+		p6ExpectHTTP(t, domain, http.StatusOK)
+	})
 }

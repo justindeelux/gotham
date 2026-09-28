@@ -81,6 +81,9 @@ func NewProxyServer(cfg ProxyServerConfig) *ProxyServer {
 	if root == "" {
 		root = defaultTraefikDir
 	}
+	if absolute, err := filepath.Abs(root); err == nil {
+		root = absolute
+	}
 	pingURL := strings.TrimSpace(cfg.PingURL)
 	if pingURL == "" {
 		pingURL = defaultTraefikPingURL
@@ -108,10 +111,17 @@ func NewProxyServer(cfg ProxyServerConfig) *ProxyServer {
 
 // WriteProxyConfig writes the given Traefik configuration files under the
 // node's proxy directory. The whole batch is validated before the first
-// write, and each document is written atomically (temp file + rename through
-// no-follow directory handles) so a watching Traefik never reads a
-// half-written document and no symlinked parent can redirect the write
-// outside the proxy directory.
+// write: every path and size is checked, and every target parent directory is
+// opened relative to the trusted filesystem root with O_NOFOLLOW on each
+// component (creating missing components with mkdirat), holding the directory
+// descriptors until all writes are done. A filesystem-invalid later entry can
+// therefore never replace an earlier document.
+//
+// The trust anchor is "/", not the configured root: only an absolute root is
+// accepted, no component between / and a target may be a symlink, and each
+// document is written atomically (temp file + rename) through its held
+// directory descriptor. Limits: absolute roots only; no cross-input-directory
+// rename; the root itself and every ancestor must be real directories.
 //
 // With verify set, the local Traefik ping is called after the writes. A ping
 // proves the proxy process answered; it does not prove Traefik accepted the
@@ -127,33 +137,47 @@ func (s *ProxyServer) WriteProxyConfig(ctx context.Context, req *agentv1.WritePr
 		return nil, status.Errorf(codes.InvalidArgument, "too many files: %d (max %d)", len(files), maxProxyFiles)
 	}
 
-	// Pass 1: validate every path and size, so a rejected later entry cannot
-	// leave a partially installed batch behind.
+	// Pass 1: validate every path and size, then open (and hold) every target
+	// parent directory relative to the trusted root. Nothing is written yet.
 	type document struct {
 		rel     string
+		name    string
 		content []byte
+		dir     *os.File
 	}
 	documents := make([]document, 0, len(files))
+	closeDocuments := func() {
+		for _, document := range documents {
+			if document.dir != nil {
+				_ = document.dir.Close()
+			}
+		}
+	}
 	for _, file := range files {
 		rel, err := sanitizeProxyPath(file.GetPath())
 		if err != nil {
+			closeDocuments()
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		content := file.GetContent()
 		if len(content) > maxProxyFileSize {
+			closeDocuments()
 			return nil, status.Errorf(codes.InvalidArgument, "file %q exceeds %d bytes", rel, maxProxyFileSize)
 		}
-		documents = append(documents, document{rel: rel, content: content})
+		dir, err := openTrustedDir(filepath.Dir(filepath.Join(s.root, rel)))
+		if err != nil {
+			closeDocuments()
+			return nil, status.Errorf(codes.InvalidArgument, "confine %s: %v", rel, err)
+		}
+		documents = append(documents, document{rel: rel, name: filepath.Base(rel), content: content, dir: dir})
 	}
+	defer closeDocuments()
 
-	// Pass 2: confine and write.
+	// Pass 2: replace content only after every target parent is validated and
+	// held open.
 	written := make([]string, 0, len(documents))
 	for _, document := range documents {
-		dir, name, err := s.prepareTarget(document.rel)
-		if err != nil {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
-		}
-		if err := writeFileNoFollow(dir, name, document.content); err != nil {
+		if err := writeFileInDir(document.dir, document.name, document.content); err != nil {
 			return nil, status.Errorf(codes.Internal, "write %s: %v", document.rel, err)
 		}
 		written = append(written, document.rel)
@@ -173,60 +197,49 @@ func (s *ProxyServer) WriteProxyConfig(ctx context.Context, req *agentv1.WritePr
 	return response, nil
 }
 
-// prepareTarget creates the document's parent directory and rejects a
-// symlinked root or parent chain: a symlink inside the proxy directory would
-// let a write escape the confinement this RPC promises.
-func (s *ProxyServer) prepareTarget(rel string) (dir, name string, err error) {
-	dir = filepath.Dir(filepath.Join(s.root, rel))
-	name = filepath.Base(rel)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", "", err
+// openTrustedDir opens the absolute directory dir by walking every component
+// from the trusted root descriptor "/" with O_NOFOLLOW, creating missing
+// components with mkdirat relative to the held parent descriptor. A symlink
+// anywhere between / and dir (including dir itself) is rejected, so a
+// concurrently swapped ancestor cannot redirect a later write. The caller owns
+// the returned descriptor.
+func openTrustedDir(dir string) (*os.File, error) {
+	if !filepath.IsAbs(dir) {
+		return nil, fmt.Errorf("%s must be an absolute path", dir)
 	}
-	for _, path := range parentChain(s.root, dir) {
-		info, err := os.Lstat(path)
-		if err != nil {
-			return "", "", err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return "", "", fmt.Errorf("%s is a symlink; refusing to write through it", path)
-		}
-		if !info.IsDir() {
-			return "", "", fmt.Errorf("%s is not a directory", path)
-		}
-	}
-	return dir, name, nil
-}
-
-// parentChain lists the root and every path component down to dir (inclusive).
-func parentChain(root, dir string) []string {
-	root = filepath.Clean(root)
-	dir = filepath.Clean(dir)
-	if dir == root {
-		return []string{root}
-	}
-	rel, err := filepath.Rel(root, dir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return nil
-	}
-	chain := []string{root}
-	current := root
-	for _, part := range strings.Split(rel, string(filepath.Separator)) {
-		current = filepath.Join(current, part)
-		chain = append(chain, current)
-	}
-	return chain
-}
-
-// writeFileNoFollow writes content into dir/name through a directory file
-// descriptor opened with O_NOFOLLOW, so neither the directory nor the final
-// file can be redirected by a symlink swapped in after validation.
-func writeFileNoFollow(dir, name string, content []byte) error {
-	dirFD, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("open trust anchor: %w", err)
 	}
-	defer func() { _ = unix.Close(dirFD) }()
+	current := "/"
+	for _, component := range strings.Split(strings.TrimPrefix(filepath.Clean(dir), "/"), "/") {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		next, openErr := unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if errors.Is(openErr, unix.ENOENT) {
+			if mkErr := unix.Mkdirat(fd, component, 0o755); mkErr != nil && !errors.Is(mkErr, unix.EEXIST) {
+				_ = unix.Close(fd)
+				return nil, fmt.Errorf("create %s: %w", current, mkErr)
+			}
+			next, openErr = unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		}
+		if openErr != nil {
+			_ = unix.Close(fd)
+			return nil, fmt.Errorf("%s must be a real directory: %w", current, openErr)
+		}
+		_ = unix.Close(fd)
+		fd = next
+	}
+	return os.NewFile(uintptr(fd), dir), nil
+}
 
+// writeFileInDir writes content as name inside the held directory descriptor
+// through a fresh temporary file and renameat, so a watcher never reads a
+// half-written document and the final entry is replaced, never followed.
+func writeFileInDir(dir *os.File, name string, content []byte) error {
+	dirFD := int(dir.Fd())
 	suffix := make([]byte, 8)
 	if _, err := rand.Read(suffix); err != nil {
 		return err
@@ -237,7 +250,7 @@ func writeFileNoFollow(dir, name string, content []byte) error {
 	if err != nil {
 		return err
 	}
-	file := os.NewFile(uintptr(fd), filepath.Join(dir, tmpName))
+	file := os.NewFile(uintptr(fd), filepath.Join(dir.Name(), tmpName))
 	if _, err := file.Write(content); err != nil {
 		_ = file.Close()
 		_ = unix.Unlinkat(dirFD, tmpName, 0)
@@ -254,10 +267,10 @@ func writeFileNoFollow(dir, name string, content []byte) error {
 	return nil
 }
 
-// ping calls the Traefik ping endpoint. A 200 response means the proxy is up
-// and has loaded its configuration (Traefik serves /ping from its own
-// process, not from the file provider, so it confirms the process, while the
-// file provider's watch mode reloads the dynamic document without a restart).
+// ping calls the Traefik ping endpoint. A 200 response means the proxy
+// process is up and answering; Traefik documents /ping as process liveness,
+// and the file provider reloads and validates configuration asynchronously,
+// so this is never a claim that a particular document was accepted.
 func (s *ProxyServer) ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, s.pingTimeout)
 	defer cancel()

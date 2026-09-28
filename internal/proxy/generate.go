@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -48,12 +49,21 @@ const (
 	PingURL = "http://127.0.0.1:8080/ping"
 )
 
-// TraefikLabels mark the bootstrapped proxy container like every other
-// Gotham-managed container; the ports label feeds the container list UI.
-var TraefikLabels = map[string]string{
-	"gotham.managed":   "true",
-	"gotham.component": "proxy",
-	"gotham.ports":     "80:80,443:443,127.0.0.1:8080:8080",
+// traefikLabels mark the bootstrapped proxy container like every other
+// Gotham-managed container and record the desired convergence state: the
+// source directories mounted into it and its native restart policy. The
+// service verifies an existing container against these labels, the engine's
+// mounts and the real restart policy before reusing it (R5); the ports label
+// feeds the container list UI.
+func traefikLabels(configDir, acmeDir string) map[string]string {
+	return map[string]string{
+		"gotham.managed":              "true",
+		"gotham.component":            "proxy",
+		"gotham.ports":                strings.Join(TraefikPorts, ","),
+		"gotham.proxy.config_dir":     configDir,
+		"gotham.proxy.acme_dir":       acmeDir,
+		"gotham.proxy.restart_policy": TraefikRestartPolicy,
+	}
 }
 
 // Port and volume specs passed to the container service when bootstrapping

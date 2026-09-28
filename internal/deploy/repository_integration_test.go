@@ -29,6 +29,13 @@ func integrationDSN() string {
 	return defaultIntegrationDSN
 }
 
+// integrationDSNExplicit reports whether the operator opted in by setting
+// GOTHAM_TEST_DSN. An explicit opt-in turns a missing database into a failure
+// instead of a skip, so the acceptance lane can never pass green by skipping.
+func integrationDSNExplicit() bool {
+	return os.Getenv("GOTHAM_TEST_DSN") != ""
+}
+
 // TestStoreRepositoryDeployKeyRoundtrip exercises the deploy-key rows against a
 // real server: sealing the private half in private_keys, reading it back
 // through the Phase-2 contract, the unique one-key-per-application index and

@@ -11,21 +11,49 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const insertProxyConfigVersion = `-- name: InsertProxyConfigVersion :one
-INSERT INTO proxy_config_versions (server_id, files, content_hash)
-VALUES ($1, $2, $3)
-RETURNING id, server_id, files, content_hash, created_at
+const clearPendingProxyConfigVersions = `-- name: ClearPendingProxyConfigVersions :exec
+DELETE FROM proxy_config_versions WHERE server_id = $1 AND pending
 `
 
-type InsertProxyConfigVersionParams struct {
+// ClearPendingProxyConfigVersions drops stale pending rows (a newer intent
+// replaces an older un-promoted one).
+func (q *Queries) ClearPendingProxyConfigVersions(ctx context.Context, serverID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearPendingProxyConfigVersions, serverID)
+	return err
+}
+
+const deleteProxyConfigVersion = `-- name: DeleteProxyConfigVersion :exec
+DELETE FROM proxy_config_versions WHERE id = $1 AND server_id = $2
+`
+
+type DeleteProxyConfigVersionParams struct {
+	ID       pgtype.UUID `json:"id"`
+	ServerID pgtype.UUID `json:"server_id"`
+}
+
+// DeleteProxyConfigVersion drops one version (used to abort a pending record
+// after a failed node write).
+func (q *Queries) DeleteProxyConfigVersion(ctx context.Context, arg DeleteProxyConfigVersionParams) error {
+	_, err := q.db.Exec(ctx, deleteProxyConfigVersion, arg.ID, arg.ServerID)
+	return err
+}
+
+const insertPendingProxyConfigVersion = `-- name: InsertPendingProxyConfigVersion :one
+INSERT INTO proxy_config_versions (server_id, files, content_hash, pending)
+VALUES ($1, $2, $3, true)
+RETURNING id, server_id, files, content_hash, created_at, pending, superseded_at
+`
+
+type InsertPendingProxyConfigVersionParams struct {
 	ServerID    pgtype.UUID `json:"server_id"`
 	Files       []byte      `json:"files"`
 	ContentHash string      `json:"content_hash"`
 }
 
-// InsertProxyConfigVersion records one successfully pushed configuration.
-func (q *Queries) InsertProxyConfigVersion(ctx context.Context, arg InsertProxyConfigVersionParams) (ProxyConfigVersion, error) {
-	row := q.db.QueryRow(ctx, insertProxyConfigVersion, arg.ServerID, arg.Files, arg.ContentHash)
+// InsertPendingProxyConfigVersion durably records a configuration about to be
+// pushed to the node, before the node is touched.
+func (q *Queries) InsertPendingProxyConfigVersion(ctx context.Context, arg InsertPendingProxyConfigVersionParams) (ProxyConfigVersion, error) {
+	row := q.db.QueryRow(ctx, insertPendingProxyConfigVersion, arg.ServerID, arg.Files, arg.ContentHash)
 	var i ProxyConfigVersion
 	err := row.Scan(
 		&i.ID,
@@ -33,48 +61,10 @@ func (q *Queries) InsertProxyConfigVersion(ctx context.Context, arg InsertProxyC
 		&i.Files,
 		&i.ContentHash,
 		&i.CreatedAt,
+		&i.Pending,
+		&i.SupersededAt,
 	)
 	return i, err
-}
-
-const latestProxyConfigVersions = `-- name: LatestProxyConfigVersions :many
-SELECT id, server_id, files, content_hash, created_at FROM proxy_config_versions
-WHERE server_id = $1
-ORDER BY created_at DESC, id DESC
-LIMIT $2
-`
-
-type LatestProxyConfigVersionsParams struct {
-	ServerID pgtype.UUID `json:"server_id"`
-	Limit    int32       `json:"limit"`
-}
-
-// LatestProxyConfigVersions returns a node's pushed configuration versions,
-// newest first. Revert uses the second entry when two exist.
-func (q *Queries) LatestProxyConfigVersions(ctx context.Context, arg LatestProxyConfigVersionsParams) ([]ProxyConfigVersion, error) {
-	rows, err := q.db.Query(ctx, latestProxyConfigVersions, arg.ServerID, arg.Limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ProxyConfigVersion{}
-	for rows.Next() {
-		var i ProxyConfigVersion
-		if err := rows.Scan(
-			&i.ID,
-			&i.ServerID,
-			&i.Files,
-			&i.ContentHash,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listProxiedApplications = `-- name: ListProxiedApplications :many
@@ -134,18 +124,118 @@ func (q *Queries) ListProxiedApplications(ctx context.Context) ([]ListProxiedApp
 	return items, nil
 }
 
-const pruneProxyConfigVersions = `-- name: PruneProxyConfigVersions :exec
-DELETE FROM proxy_config_versions
-WHERE server_id = $1 AND created_at < $2
+const newestActiveProxyConfigVersion = `-- name: NewestActiveProxyConfigVersion :one
+SELECT id, server_id, files, content_hash, created_at, pending, superseded_at FROM proxy_config_versions
+WHERE server_id = $1 AND NOT pending AND superseded_at IS NULL
+ORDER BY created_at DESC, id DESC
+LIMIT 1
 `
 
-type PruneProxyConfigVersionsParams struct {
-	ServerID  pgtype.UUID        `json:"server_id"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+// NewestActiveProxyConfigVersion returns the configuration the node is
+// believed to serve: the newest promoted, not-yet-superseded version.
+func (q *Queries) NewestActiveProxyConfigVersion(ctx context.Context, serverID pgtype.UUID) (ProxyConfigVersion, error) {
+	row := q.db.QueryRow(ctx, newestActiveProxyConfigVersion, serverID)
+	var i ProxyConfigVersion
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Files,
+		&i.ContentHash,
+		&i.CreatedAt,
+		&i.Pending,
+		&i.SupersededAt,
+	)
+	return i, err
 }
 
-// PruneProxyConfigVersions drops versions older than the retention window.
-func (q *Queries) PruneProxyConfigVersions(ctx context.Context, arg PruneProxyConfigVersionsParams) error {
-	_, err := q.db.Exec(ctx, pruneProxyConfigVersions, arg.ServerID, arg.CreatedAt)
+const pendingProxyConfigVersion = `-- name: PendingProxyConfigVersion :one
+SELECT id, server_id, files, content_hash, created_at, pending, superseded_at FROM proxy_config_versions
+WHERE server_id = $1 AND pending
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+// PendingProxyConfigVersion returns the newest version recorded but not yet
+// promoted (the intent to replace the active configuration).
+func (q *Queries) PendingProxyConfigVersion(ctx context.Context, serverID pgtype.UUID) (ProxyConfigVersion, error) {
+	row := q.db.QueryRow(ctx, pendingProxyConfigVersion, serverID)
+	var i ProxyConfigVersion
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Files,
+		&i.ContentHash,
+		&i.CreatedAt,
+		&i.Pending,
+		&i.SupersededAt,
+	)
+	return i, err
+}
+
+const previousProxyConfigVersion = `-- name: PreviousProxyConfigVersion :one
+SELECT id, server_id, files, content_hash, created_at, pending, superseded_at FROM proxy_config_versions
+WHERE server_id = $1 AND NOT pending AND superseded_at IS NOT NULL
+ORDER BY superseded_at DESC, id DESC
+LIMIT 1
+`
+
+// PreviousProxyConfigVersion returns the newest replaced predecessor.
+func (q *Queries) PreviousProxyConfigVersion(ctx context.Context, serverID pgtype.UUID) (ProxyConfigVersion, error) {
+	row := q.db.QueryRow(ctx, previousProxyConfigVersion, serverID)
+	var i ProxyConfigVersion
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Files,
+		&i.ContentHash,
+		&i.CreatedAt,
+		&i.Pending,
+		&i.SupersededAt,
+	)
+	return i, err
+}
+
+const promoteProxyConfigVersion = `-- name: PromoteProxyConfigVersion :exec
+UPDATE proxy_config_versions SET pending = false WHERE id = $1
+`
+
+// PromoteProxyConfigVersion marks a pending version as the active one.
+func (q *Queries) PromoteProxyConfigVersion(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, promoteProxyConfigVersion, id)
+	return err
+}
+
+const pruneSupersededProxyConfigVersions = `-- name: PruneSupersededProxyConfigVersions :exec
+DELETE FROM proxy_config_versions
+WHERE server_id = $1 AND superseded_at IS NOT NULL AND superseded_at < $2
+`
+
+type PruneSupersededProxyConfigVersionsParams struct {
+	ServerID     pgtype.UUID        `json:"server_id"`
+	SupersededAt pgtype.Timestamptz `json:"superseded_at"`
+}
+
+// PruneSupersededProxyConfigVersions drops predecessors whose retention
+// window has elapsed; the active version is never pruned.
+func (q *Queries) PruneSupersededProxyConfigVersions(ctx context.Context, arg PruneSupersededProxyConfigVersionsParams) error {
+	_, err := q.db.Exec(ctx, pruneSupersededProxyConfigVersions, arg.ServerID, arg.SupersededAt)
+	return err
+}
+
+const supersedeActiveProxyConfigVersions = `-- name: SupersedeActiveProxyConfigVersions :exec
+UPDATE proxy_config_versions
+SET superseded_at = now()
+WHERE server_id = $1 AND NOT pending AND superseded_at IS NULL AND id <> $2
+`
+
+type SupersedeActiveProxyConfigVersionsParams struct {
+	ServerID pgtype.UUID `json:"server_id"`
+	ID       pgtype.UUID `json:"id"`
+}
+
+// SupersedeActiveProxyConfigVersions retires the previous active version the
+// moment its replacement is promoted, starting its retention window.
+func (q *Queries) SupersedeActiveProxyConfigVersions(ctx context.Context, arg SupersedeActiveProxyConfigVersionsParams) error {
+	_, err := q.db.Exec(ctx, supersedeActiveProxyConfigVersions, arg.ServerID, arg.ID)
 	return err
 }

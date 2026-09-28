@@ -32,12 +32,37 @@ type ProxiedApplication struct {
 	// ContainerID is the container of the newest running deployment, empty
 	// when no deployment is running yet (the route is pending, not broken).
 	ContainerID string
+	// Certificate is the application's certificate intent, nil when none is
+	// configured. It is a raw join of the stored state: activation is decided
+	// during generation against the routable domain and the provider.
+	Certificate *CertificateIntent
+}
+
+// CertificateIntent is the stored certificate configuration joined onto a
+// routing row (BE-6.2). The referenced provider is resolved separately from
+// the dns_providers rows during generation, so this carries the reference
+// only.
+type CertificateIntent struct {
+	// Domain records the host the configuration was made for.
+	Domain    string
+	Enabled   bool
+	Challenge ChallengeMode
+	Wildcard  bool
+	// DNSProviderID is uuid.Nil for HTTP-01.
+	DNSProviderID uuid.UUID
 }
 
 // ApplicationSource lists the routing input. The production implementation is
 // *store.Store (through storeSource); tests substitute a fake.
 type ApplicationSource interface {
 	ListProxiedApplications(ctx context.Context) ([]ProxiedApplication, error)
+}
+
+// DNSProviderSource lists the configured DNS providers for generation. The
+// production implementation is *store.Store (through storeSource); nil
+// disables DNS-01 resolvers and credentials.
+type DNSProviderSource interface {
+	ListDNSProviders(ctx context.Context) ([]DNSProvider, error)
 }
 
 // NodeSource lists every registered node. A global sync includes nodes that
@@ -60,7 +85,7 @@ func (s storeSource) ListProxiedApplications(ctx context.Context) ([]ProxiedAppl
 	}
 	apps := make([]ProxiedApplication, 0, len(rows))
 	for _, row := range rows {
-		apps = append(apps, ProxiedApplication{
+		app := ProxiedApplication{
 			ID:          uuidFromPG(row.ID),
 			ServerID:    uuidFromPG(row.ServerID),
 			BaseDomain:  row.BaseDomain,
@@ -68,9 +93,32 @@ func (s storeSource) ListProxiedApplications(ctx context.Context) ([]ProxiedAppl
 			Port:        row.Port,
 			HostPort:    row.HostPort,
 			ContainerID: row.ContainerID,
-		})
+		}
+		if row.CertificateConfigured {
+			app.Certificate = &CertificateIntent{
+				Domain:        row.CertificateDomain,
+				Enabled:       row.CertificateEnabled,
+				Challenge:     ChallengeMode(row.CertificateChallenge),
+				Wildcard:      row.CertificateWildcard,
+				DNSProviderID: uuidFromPG(row.CertificateDnsProviderID),
+			}
+		}
+		apps = append(apps, app)
 	}
 	return apps, nil
+}
+
+// ListDNSProviders maps the stored provider rows to the generation input.
+func (s storeSource) ListDNSProviders(ctx context.Context) ([]DNSProvider, error) {
+	rows, err := s.store.ListDNSProviders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	providers := make([]DNSProvider, 0, len(rows))
+	for _, row := range rows {
+		providers = append(providers, dnsProviderFromRow(row))
+	}
+	return providers, nil
 }
 
 // ListNodes maps the server registry to node ids.

@@ -152,6 +152,29 @@ type Deployment struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type DnsProvider struct {
+	ID         pgtype.UUID        `json:"id"`
+	Provider   string             `json:"provider"`
+	Name       string             `json:"name"`
+	Zones      []string           `json:"zones"`
+	Ciphertext string             `json:"ciphertext"`
+	Enabled    bool               `json:"enabled"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DomainCertificate struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	Domain        string             `json:"domain"`
+	Enabled       bool               `json:"enabled"`
+	Challenge     string             `json:"challenge"`
+	DnsProviderID pgtype.UUID        `json:"dns_provider_id"`
+	Wildcard      bool               `json:"wildcard"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type EnvVar struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`

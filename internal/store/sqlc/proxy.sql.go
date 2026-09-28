@@ -22,6 +22,128 @@ func (q *Queries) ClearPendingProxyConfigVersions(ctx context.Context, serverID 
 	return err
 }
 
+const countDomainCertificatesByProvider = `-- name: CountDomainCertificatesByProvider :one
+SELECT count(*) FROM domain_certificates
+WHERE dns_provider_id = $1
+`
+
+// CountDomainCertificatesByProvider guards provider deletion, which the
+// foreign key would otherwise reject after the fact.
+func (q *Queries) CountDomainCertificatesByProvider(ctx context.Context, dnsProviderID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countDomainCertificatesByProvider, dnsProviderID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countEnabledDomainCertificatesByProvider = `-- name: CountEnabledDomainCertificatesByProvider :one
+SELECT count(*) FROM domain_certificates
+WHERE dns_provider_id = $1 AND enabled
+`
+
+// CountEnabledDomainCertificatesByProvider guards provider disable/delete/type
+// changes: an enabled certificate config must never lose its provider
+// silently.
+func (q *Queries) CountEnabledDomainCertificatesByProvider(ctx context.Context, dnsProviderID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countEnabledDomainCertificatesByProvider, dnsProviderID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const createDNSProvider = `-- name: CreateDNSProvider :one
+INSERT INTO dns_providers (provider, name, zones, ciphertext, enabled)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, provider, name, zones, ciphertext, enabled, created_at, updated_at
+`
+
+type CreateDNSProviderParams struct {
+	Provider   string   `json:"provider"`
+	Name       string   `json:"name"`
+	Zones      []string `json:"zones"`
+	Ciphertext string   `json:"ciphertext"`
+	Enabled    bool     `json:"enabled"`
+}
+
+func (q *Queries) CreateDNSProvider(ctx context.Context, arg CreateDNSProviderParams) (DnsProvider, error) {
+	row := q.db.QueryRow(ctx, createDNSProvider,
+		arg.Provider,
+		arg.Name,
+		arg.Zones,
+		arg.Ciphertext,
+		arg.Enabled,
+	)
+	var i DnsProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.Name,
+		&i.Zones,
+		&i.Ciphertext,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createDomainCertificate = `-- name: CreateDomainCertificate :one
+INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns_provider_id, wildcard)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at
+`
+
+type CreateDomainCertificateParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	Domain        string      `json:"domain"`
+	Enabled       bool        `json:"enabled"`
+	Challenge     string      `json:"challenge"`
+	DnsProviderID pgtype.UUID `json:"dns_provider_id"`
+	Wildcard      bool        `json:"wildcard"`
+}
+
+func (q *Queries) CreateDomainCertificate(ctx context.Context, arg CreateDomainCertificateParams) (DomainCertificate, error) {
+	row := q.db.QueryRow(ctx, createDomainCertificate,
+		arg.ApplicationID,
+		arg.Domain,
+		arg.Enabled,
+		arg.Challenge,
+		arg.DnsProviderID,
+		arg.Wildcard,
+	)
+	var i DomainCertificate
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.Domain,
+		&i.Enabled,
+		&i.Challenge,
+		&i.DnsProviderID,
+		&i.Wildcard,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const deleteDNSProvider = `-- name: DeleteDNSProvider :exec
+DELETE FROM dns_providers WHERE id = $1
+`
+
+func (q *Queries) DeleteDNSProvider(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteDNSProvider, id)
+	return err
+}
+
+const deleteDomainCertificate = `-- name: DeleteDomainCertificate :exec
+DELETE FROM domain_certificates WHERE id = $1
+`
+
+func (q *Queries) DeleteDomainCertificate(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteDomainCertificate, id)
+	return err
+}
+
 const deleteProxyConfigVersion = `-- name: DeleteProxyConfigVersion :exec
 DELETE FROM proxy_config_versions WHERE id = $1 AND server_id = $2 AND pending
 `
@@ -37,6 +159,68 @@ type DeleteProxyConfigVersionParams struct {
 func (q *Queries) DeleteProxyConfigVersion(ctx context.Context, arg DeleteProxyConfigVersionParams) error {
 	_, err := q.db.Exec(ctx, deleteProxyConfigVersion, arg.ID, arg.ServerID)
 	return err
+}
+
+const getDNSProvider = `-- name: GetDNSProvider :one
+SELECT id, provider, name, zones, ciphertext, enabled, created_at, updated_at FROM dns_providers WHERE id = $1
+`
+
+func (q *Queries) GetDNSProvider(ctx context.Context, id pgtype.UUID) (DnsProvider, error) {
+	row := q.db.QueryRow(ctx, getDNSProvider, id)
+	var i DnsProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.Name,
+		&i.Zones,
+		&i.Ciphertext,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getDomainCertificate = `-- name: GetDomainCertificate :one
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at FROM domain_certificates WHERE id = $1
+`
+
+func (q *Queries) GetDomainCertificate(ctx context.Context, id pgtype.UUID) (DomainCertificate, error) {
+	row := q.db.QueryRow(ctx, getDomainCertificate, id)
+	var i DomainCertificate
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.Domain,
+		&i.Enabled,
+		&i.Challenge,
+		&i.DnsProviderID,
+		&i.Wildcard,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getDomainCertificateByApplication = `-- name: GetDomainCertificateByApplication :one
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at FROM domain_certificates WHERE application_id = $1
+`
+
+func (q *Queries) GetDomainCertificateByApplication(ctx context.Context, applicationID pgtype.UUID) (DomainCertificate, error) {
+	row := q.db.QueryRow(ctx, getDomainCertificateByApplication, applicationID)
+	var i DomainCertificate
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.Domain,
+		&i.Enabled,
+		&i.Challenge,
+		&i.DnsProviderID,
+		&i.Wildcard,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const insertPendingProxyConfigVersion = `-- name: InsertPendingProxyConfigVersion :one
@@ -68,10 +252,126 @@ func (q *Queries) InsertPendingProxyConfigVersion(ctx context.Context, arg Inser
 	return i, err
 }
 
+const listDNSProviders = `-- name: ListDNSProviders :many
+SELECT id, provider, name, zones, ciphertext, enabled, created_at, updated_at FROM dns_providers
+ORDER BY created_at DESC, id DESC
+`
+
+// ListDNSProviders returns every configured DNS provider, newest first. The
+// sealed credential is read by the proxy service to build the Traefik
+// container environment; it is never returned through the API.
+func (q *Queries) ListDNSProviders(ctx context.Context) ([]DnsProvider, error) {
+	rows, err := q.db.Query(ctx, listDNSProviders)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DnsProvider{}
+	for rows.Next() {
+		var i DnsProvider
+		if err := rows.Scan(
+			&i.ID,
+			&i.Provider,
+			&i.Name,
+			&i.Zones,
+			&i.Ciphertext,
+			&i.Enabled,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDomainCertificates = `-- name: ListDomainCertificates :many
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at FROM domain_certificates
+ORDER BY created_at DESC, id DESC
+`
+
+func (q *Queries) ListDomainCertificates(ctx context.Context) ([]DomainCertificate, error) {
+	rows, err := q.db.Query(ctx, listDomainCertificates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DomainCertificate{}
+	for rows.Next() {
+		var i DomainCertificate
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.Domain,
+			&i.Enabled,
+			&i.Challenge,
+			&i.DnsProviderID,
+			&i.Wildcard,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEnabledDomainCertificatesByProvider = `-- name: ListEnabledDomainCertificatesByProvider :many
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at FROM domain_certificates
+WHERE dns_provider_id = $1 AND enabled
+ORDER BY created_at, id
+`
+
+// ListEnabledDomainCertificatesByProvider feeds the zone-narrowing guard.
+func (q *Queries) ListEnabledDomainCertificatesByProvider(ctx context.Context, dnsProviderID pgtype.UUID) ([]DomainCertificate, error) {
+	rows, err := q.db.Query(ctx, listEnabledDomainCertificatesByProvider, dnsProviderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DomainCertificate{}
+	for rows.Next() {
+		var i DomainCertificate
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.Domain,
+			&i.Enabled,
+			&i.Challenge,
+			&i.DnsProviderID,
+			&i.Wildcard,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProxiedApplications = `-- name: ListProxiedApplications :many
 SELECT a.id, a.server_id, a.base_domain, a.base_domain_disabled, a.port, a.host_port,
-       COALESCE(d.container_id, '')::text AS container_id
+       COALESCE(d.container_id, '')::text AS container_id,
+       (c.id IS NOT NULL)::boolean AS certificate_configured,
+       COALESCE(c.domain, '')::text AS certificate_domain,
+       COALESCE(c.enabled, false) AS certificate_enabled,
+       COALESCE(c.challenge, '')::text AS certificate_challenge,
+       COALESCE(c.wildcard, false) AS certificate_wildcard,
+       c.dns_provider_id AS certificate_dns_provider_id
 FROM applications a
+LEFT JOIN domain_certificates c ON c.application_id = a.id
 LEFT JOIN LATERAL (
     SELECT container_id FROM deployments
     WHERE application_id = a.id AND state = 'running' AND container_id <> ''
@@ -83,13 +383,19 @@ ORDER BY a.created_at, a.id
 `
 
 type ListProxiedApplicationsRow struct {
-	ID                 pgtype.UUID `json:"id"`
-	ServerID           pgtype.UUID `json:"server_id"`
-	BaseDomain         string      `json:"base_domain"`
-	BaseDomainDisabled bool        `json:"base_domain_disabled"`
-	Port               int32       `json:"port"`
-	HostPort           int32       `json:"host_port"`
-	ContainerID        string      `json:"container_id"`
+	ID                       pgtype.UUID `json:"id"`
+	ServerID                 pgtype.UUID `json:"server_id"`
+	BaseDomain               string      `json:"base_domain"`
+	BaseDomainDisabled       bool        `json:"base_domain_disabled"`
+	Port                     int32       `json:"port"`
+	HostPort                 int32       `json:"host_port"`
+	ContainerID              string      `json:"container_id"`
+	CertificateConfigured    bool        `json:"certificate_configured"`
+	CertificateDomain        string      `json:"certificate_domain"`
+	CertificateEnabled       bool        `json:"certificate_enabled"`
+	CertificateChallenge     string      `json:"certificate_challenge"`
+	CertificateWildcard      bool        `json:"certificate_wildcard"`
+	CertificateDnsProviderID pgtype.UUID `json:"certificate_dns_provider_id"`
 }
 
 // ProxiedApplications feeds the Traefik config generator (Phase 6, BE-6.1):
@@ -97,6 +403,11 @@ type ListProxiedApplicationsRow struct {
 // that hosts it, from the endpoint of its newest running deployment. Rows are
 // ordered by creation time so duplicate-domain dispositions and generation
 // input stay deterministic.
+//
+// The certificate columns (BE-6.2) carry the per-application certificate
+// intent. They are NULL-joined as empty values: certificate_configured tells
+// the generator whether an intent exists at all, and the recorded domain
+// lets it refuse to activate a certificate whose host no longer matches.
 func (q *Queries) ListProxiedApplications(ctx context.Context) ([]ListProxiedApplicationsRow, error) {
 	rows, err := q.db.Query(ctx, listProxiedApplications)
 	if err != nil {
@@ -114,6 +425,12 @@ func (q *Queries) ListProxiedApplications(ctx context.Context) ([]ListProxiedApp
 			&i.Port,
 			&i.HostPort,
 			&i.ContainerID,
+			&i.CertificateConfigured,
+			&i.CertificateDomain,
+			&i.CertificateEnabled,
+			&i.CertificateChallenge,
+			&i.CertificateWildcard,
+			&i.CertificateDnsProviderID,
 		); err != nil {
 			return nil, err
 		}
@@ -239,4 +556,137 @@ type SupersedeActiveProxyConfigVersionsParams struct {
 func (q *Queries) SupersedeActiveProxyConfigVersions(ctx context.Context, arg SupersedeActiveProxyConfigVersionsParams) error {
 	_, err := q.db.Exec(ctx, supersedeActiveProxyConfigVersions, arg.ServerID, arg.ID)
 	return err
+}
+
+const updateDNSProvider = `-- name: UpdateDNSProvider :one
+UPDATE dns_providers
+SET provider = $2,
+    name = $3,
+    zones = $4,
+    ciphertext = $5,
+    enabled = $6,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, provider, name, zones, ciphertext, enabled, created_at, updated_at
+`
+
+type UpdateDNSProviderParams struct {
+	ID         pgtype.UUID `json:"id"`
+	Provider   string      `json:"provider"`
+	Name       string      `json:"name"`
+	Zones      []string    `json:"zones"`
+	Ciphertext string      `json:"ciphertext"`
+	Enabled    bool        `json:"enabled"`
+}
+
+func (q *Queries) UpdateDNSProvider(ctx context.Context, arg UpdateDNSProviderParams) (DnsProvider, error) {
+	row := q.db.QueryRow(ctx, updateDNSProvider,
+		arg.ID,
+		arg.Provider,
+		arg.Name,
+		arg.Zones,
+		arg.Ciphertext,
+		arg.Enabled,
+	)
+	var i DnsProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.Name,
+		&i.Zones,
+		&i.Ciphertext,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateDNSProviderMeta = `-- name: UpdateDNSProviderMeta :one
+UPDATE dns_providers
+SET provider = $2,
+    name = $3,
+    zones = $4,
+    enabled = $5,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, provider, name, zones, ciphertext, enabled, created_at, updated_at
+`
+
+type UpdateDNSProviderMetaParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Provider string      `json:"provider"`
+	Name     string      `json:"name"`
+	Zones    []string    `json:"zones"`
+	Enabled  bool        `json:"enabled"`
+}
+
+// UpdateDNSProviderMeta writes everything but the sealed credential, so an
+// update that does not rotate can never restore an older ciphertext after a
+// concurrent rotation.
+func (q *Queries) UpdateDNSProviderMeta(ctx context.Context, arg UpdateDNSProviderMetaParams) (DnsProvider, error) {
+	row := q.db.QueryRow(ctx, updateDNSProviderMeta,
+		arg.ID,
+		arg.Provider,
+		arg.Name,
+		arg.Zones,
+		arg.Enabled,
+	)
+	var i DnsProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.Name,
+		&i.Zones,
+		&i.Ciphertext,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateDomainCertificate = `-- name: UpdateDomainCertificate :one
+UPDATE domain_certificates
+SET domain = $2,
+    enabled = $3,
+    challenge = $4,
+    dns_provider_id = $5,
+    wildcard = $6,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at
+`
+
+type UpdateDomainCertificateParams struct {
+	ID            pgtype.UUID `json:"id"`
+	Domain        string      `json:"domain"`
+	Enabled       bool        `json:"enabled"`
+	Challenge     string      `json:"challenge"`
+	DnsProviderID pgtype.UUID `json:"dns_provider_id"`
+	Wildcard      bool        `json:"wildcard"`
+}
+
+func (q *Queries) UpdateDomainCertificate(ctx context.Context, arg UpdateDomainCertificateParams) (DomainCertificate, error) {
+	row := q.db.QueryRow(ctx, updateDomainCertificate,
+		arg.ID,
+		arg.Domain,
+		arg.Enabled,
+		arg.Challenge,
+		arg.DnsProviderID,
+		arg.Wildcard,
+	)
+	var i DomainCertificate
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.Domain,
+		&i.Enabled,
+		&i.Challenge,
+		&i.DnsProviderID,
+		&i.Wildcard,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

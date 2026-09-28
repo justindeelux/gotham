@@ -38,21 +38,40 @@ type syncResult struct {
 
 // Mount registers the authenticated proxy endpoints under /api. A nil service
 // or FEATURE_PROXY=false mounts nothing. The caller composes the scope
-// middleware: the sync endpoint mutates every node, so it requires admin.
-func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc ProxyService) {
+// middleware: the sync endpoint mutates every node and the SSL endpoints
+// manage DNS credentials, so all of them require admin. The SSL services are
+// optional: nil mounts only the sync endpoint (tests, or a build without the
+// SSL surface).
+func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc ProxyService, dns DNSProviderService, certs CertificateService) {
 	if svc == nil || !Enabled() {
 		return
 	}
-	h := &handler{svc: svc, logger: slog.Default()}
+	h := &handler{svc: svc, dns: dns, certs: certs, logger: slog.Default()}
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
 		protected.Post("/v1/proxy/sync", h.sync)
+		if dns != nil {
+			protected.Post("/v1/proxy/dns-providers", h.createDNSProvider)
+			protected.Get("/v1/proxy/dns-providers", h.listDNSProviders)
+			protected.Get("/v1/proxy/dns-providers/{id}", h.getDNSProvider)
+			protected.Patch("/v1/proxy/dns-providers/{id}", h.updateDNSProvider)
+			protected.Delete("/v1/proxy/dns-providers/{id}", h.deleteDNSProvider)
+		}
+		if certs != nil {
+			protected.Post("/v1/proxy/certificates", h.createCertificate)
+			protected.Get("/v1/proxy/certificates", h.listCertificates)
+			protected.Get("/v1/proxy/certificates/{id}", h.getCertificate)
+			protected.Patch("/v1/proxy/certificates/{id}", h.updateCertificate)
+			protected.Delete("/v1/proxy/certificates/{id}", h.deleteCertificate)
+		}
 	})
 }
 
-// handler serves the proxy routes.
+// handler serves the proxy routes: sync/revert plus the SSL CRUD surface.
 type handler struct {
 	svc    ProxyService
+	dns    DNSProviderService
+	certs  CertificateService
 	logger *slog.Logger
 }
 

@@ -101,7 +101,7 @@ func sampleConfig() ProxyConfig {
 		AppID:  uuid.MustParse(goldenAppID),
 		Domain: "app.example.com",
 		Target: "http://172.17.0.1:3000",
-	}})
+	}}, nil, "")
 }
 
 func TestGenerateGolden(t *testing.T) {
@@ -149,11 +149,11 @@ func TestGenerateIsDeterministic(t *testing.T) {
 	reversed := []Route{routes[1], routes[0]}
 
 	for _, format := range []Format{FormatYAML, FormatTOML} {
-		firstRun, err := Generate(BuildConfig(routes), format)
+		firstRun, err := Generate(BuildConfig(routes, nil, ""), format)
 		if err != nil {
 			t.Fatalf("%s: %v", format, err)
 		}
-		secondRun, err := Generate(BuildConfig(reversed), format)
+		secondRun, err := Generate(BuildConfig(reversed, nil, ""), format)
 		if err != nil {
 			t.Fatalf("%s: %v", format, err)
 		}
@@ -173,7 +173,7 @@ func TestGenerateIsDeterministic(t *testing.T) {
 }
 
 func TestGenerateEmptyConfigIsValidDocument(t *testing.T) {
-	files, err := Generate(BuildConfig(nil), FormatYAML)
+	files, err := Generate(BuildConfig(nil, nil, ""), FormatYAML)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}

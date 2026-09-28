@@ -144,3 +144,89 @@ func (s *Store) PendingProxyConfigVersion(ctx context.Context, serverID pgtype.U
 func (s *Store) PreviousProxyConfigVersion(ctx context.Context, serverID pgtype.UUID) (sqlc.ProxyConfigVersion, error) {
 	return s.queries.PreviousProxyConfigVersion(ctx, serverID)
 }
+
+// CreateDNSProvider stores one sealed DNS provider credential and returns the
+// row. The ciphertext is opened by the proxy service, never here.
+func (s *Store) CreateDNSProvider(ctx context.Context, params sqlc.CreateDNSProviderParams) (sqlc.DnsProvider, error) {
+	return s.queries.CreateDNSProvider(ctx, params)
+}
+
+// GetDNSProvider returns one DNS provider row.
+func (s *Store) GetDNSProvider(ctx context.Context, id pgtype.UUID) (sqlc.DnsProvider, error) {
+	return s.queries.GetDNSProvider(ctx, id)
+}
+
+// ListDNSProviders returns every configured DNS provider, newest first.
+func (s *Store) ListDNSProviders(ctx context.Context) ([]sqlc.DnsProvider, error) {
+	return s.queries.ListDNSProviders(ctx)
+}
+
+// UpdateDNSProvider persists the mutable provider fields and returns the row.
+func (s *Store) UpdateDNSProvider(ctx context.Context, params sqlc.UpdateDNSProviderParams) (sqlc.DnsProvider, error) {
+	return s.queries.UpdateDNSProvider(ctx, params)
+}
+
+// UpdateDNSProviderMeta persists the mutable provider fields without touching
+// the sealed credential, so a non-rotation update cannot restore a stale
+// ciphertext over a concurrent rotation.
+func (s *Store) UpdateDNSProviderMeta(ctx context.Context, params sqlc.UpdateDNSProviderMetaParams) (sqlc.DnsProvider, error) {
+	return s.queries.UpdateDNSProviderMeta(ctx, params)
+}
+
+// DeleteDNSProvider removes a provider row. Foreign keys keep certificate
+// configs from dangling, but the service checks references first so the API
+// can answer a clear conflict.
+func (s *Store) DeleteDNSProvider(ctx context.Context, id pgtype.UUID) error {
+	return s.queries.DeleteDNSProvider(ctx, id)
+}
+
+// CountEnabledDomainCertificatesByProvider counts enabled certificate configs
+// still referencing a provider (the disable/delete/type-change guard).
+func (s *Store) CountEnabledDomainCertificatesByProvider(ctx context.Context, providerID pgtype.UUID) (int64, error) {
+	return s.queries.CountEnabledDomainCertificatesByProvider(ctx, providerID)
+}
+
+// CountDomainCertificatesByProvider counts every certificate config
+// referencing a provider (the delete guard, including disabled configs).
+func (s *Store) CountDomainCertificatesByProvider(ctx context.Context, providerID pgtype.UUID) (int64, error) {
+	return s.queries.CountDomainCertificatesByProvider(ctx, providerID)
+}
+
+// ListEnabledDomainCertificatesByProvider returns the enabled certificate
+// configs referencing a provider (the zone-narrowing guard).
+func (s *Store) ListEnabledDomainCertificatesByProvider(ctx context.Context, providerID pgtype.UUID) ([]sqlc.DomainCertificate, error) {
+	return s.queries.ListEnabledDomainCertificatesByProvider(ctx, providerID)
+}
+
+// CreateDomainCertificate stores one per-application certificate config.
+func (s *Store) CreateDomainCertificate(ctx context.Context, params sqlc.CreateDomainCertificateParams) (sqlc.DomainCertificate, error) {
+	return s.queries.CreateDomainCertificate(ctx, params)
+}
+
+// GetDomainCertificate returns one certificate config row.
+func (s *Store) GetDomainCertificate(ctx context.Context, id pgtype.UUID) (sqlc.DomainCertificate, error) {
+	return s.queries.GetDomainCertificate(ctx, id)
+}
+
+// GetDomainCertificateByApplication returns the certificate config of an
+// application, or pgx.ErrNoRows.
+func (s *Store) GetDomainCertificateByApplication(ctx context.Context, applicationID pgtype.UUID) (sqlc.DomainCertificate, error) {
+	return s.queries.GetDomainCertificateByApplication(ctx, applicationID)
+}
+
+// ListDomainCertificates returns every certificate config, newest first.
+func (s *Store) ListDomainCertificates(ctx context.Context) ([]sqlc.DomainCertificate, error) {
+	return s.queries.ListDomainCertificates(ctx)
+}
+
+// UpdateDomainCertificate persists the mutable certificate fields and returns
+// the row.
+func (s *Store) UpdateDomainCertificate(ctx context.Context, params sqlc.UpdateDomainCertificateParams) (sqlc.DomainCertificate, error) {
+	return s.queries.UpdateDomainCertificate(ctx, params)
+}
+
+// DeleteDomainCertificate removes one certificate config; the application
+// routing itself is untouched.
+func (s *Store) DeleteDomainCertificate(ctx context.Context, id pgtype.UUID) error {
+	return s.queries.DeleteDomainCertificate(ctx, id)
+}

@@ -30,4 +30,11 @@ var (
 	// ErrConflict — a same-name container exists that this service cannot
 	// prove it owns, or another routing conflict needs operator action (409).
 	ErrConflict = errors.New("proxy: conflict")
+	// ErrNotFound — a DNS provider, certificate config or application the
+	// request targets does not exist (404).
+	ErrNotFound = errors.New("proxy: not found")
+	// ErrSecret — the deployment secret that seals and opens DNS provider
+	// credentials is not configured. Credential writes are refused instead of
+	// falling back to the public empty-string key (503).
+	ErrSecret = errors.New("proxy: the deployment secret is not configured (set GOTHAM_SECRET_KEY)")
 )

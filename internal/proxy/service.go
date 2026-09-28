@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -136,6 +137,9 @@ type Config struct {
 	// History overrides the configuration-version store (tests). nil (and no
 	// Store) disables history and revert.
 	History HistoryStore
+	// DNSProviders overrides the DNS provider source (tests). nil (and no
+	// Store) disables DNS-01 resolvers and credentials.
+	DNSProviders DNSProviderSource
 	// Containers provisions the gotham-traefik container on the node.
 	Containers containers.ContainerService
 	// Dial opens the node agent's ProxyService; nil fails a sync with
@@ -148,6 +152,13 @@ type Config struct {
 	// BackendHost is the address Traefik uses to reach published container
 	// ports; default DefaultBackendHost (the docker0 bridge gateway).
 	BackendHost string
+	// Secret opens the sealed DNS provider credentials. An empty (or
+	// whitespace-only) key is refused: no credential is placed in a node's
+	// environment, and the affected routes stay HTTP-only with a diagnostic.
+	Secret string
+	// ACMEEmail is the optional ACME contact address rendered into every
+	// generated certificate resolver; empty omits it.
+	ACMEEmail string
 	// ConfigDir and AcmeDir are the node directories mounted into the
 	// Traefik container; they default to the agent's production layout
 	// (TraefikDir / TraefikAcmeDir) and only need overriding for a relocated
@@ -180,6 +191,17 @@ func (c Config) nodes() NodeSource {
 	return nil
 }
 
+// providers resolves the configured DNS provider list.
+func (c Config) providers() DNSProviderSource {
+	if c.DNSProviders != nil {
+		return c.DNSProviders
+	}
+	if c.Store != nil {
+		return storeSource{store: c.Store}
+	}
+	return nil
+}
+
 // history resolves the configured configuration history.
 func (c Config) history() HistoryStore {
 	if c.History != nil {
@@ -200,6 +222,7 @@ type SyncService struct {
 	source      ApplicationSource
 	nodes       NodeSource
 	history     HistoryStore
+	providers   DNSProviderSource
 	containers  containers.ContainerService
 	dial        DialFunc
 	logger      *slog.Logger
@@ -207,6 +230,8 @@ type SyncService struct {
 	backendHost string
 	configDir   string
 	acmeDir     string
+	secret      string
+	acmeEmail   string
 	timeout     time.Duration
 
 	// mu serializes one node's snapshot read through bootstrap and write, so
@@ -248,6 +273,7 @@ func NewService(cfg Config) *SyncService {
 		source:      cfg.source(),
 		nodes:       cfg.nodes(),
 		history:     cfg.history(),
+		providers:   cfg.providers(),
 		containers:  cfg.Containers,
 		dial:        cfg.Dial,
 		logger:      logger,
@@ -255,6 +281,8 @@ func NewService(cfg Config) *SyncService {
 		backendHost: backendHost,
 		configDir:   configDir,
 		acmeDir:     acmeDir,
+		secret:      cfg.Secret,
+		acmeEmail:   cfg.ACMEEmail,
 		timeout:     timeout,
 	}
 }
@@ -275,10 +303,15 @@ func NewDefaultService(cfg Config) ProxyService {
 
 // SyncServer regenerates the node's routing configuration from a state
 // snapshot taken under the service lock, ensures the gotham-traefik container
-// is running (repairing a container whose published ports do not match the
-// production bindings), writes the files and confirms them through the agent.
-// Rows that cannot be routed become diagnostics instead of failing the whole
-// node.
+// is running (repairing a container whose published ports or credential
+// environment do not match the production bindings), writes the files and
+// confirms them through the agent. Rows that cannot be routed become
+// diagnostics instead of failing the whole node.
+//
+// The container environment carries the DNS-01 credentials of the providers
+// referenced by an active certificate on this node, and only those: a
+// credential never enters the generated documents and is identified in the
+// convergence labels by a non-reversible HMAC fingerprint.
 func (s *SyncService) SyncServer(ctx context.Context, serverID uuid.UUID) error {
 	if s == nil || s.source == nil {
 		return errors.New("proxy: application source is not configured")
@@ -300,11 +333,21 @@ func (s *SyncService) SyncServer(ctx context.Context, serverID uuid.UUID) error 
 	if err != nil {
 		return fmt.Errorf("proxy: list node containers: %w", mapNodeError(err))
 	}
-	routes, diagnostics := routesForServer(apps, serverID, s.backendHost, nodeList)
-	files, err := Generate(BuildConfig(routes), s.format)
+	providers, err := s.listProviders(ctx)
+	if err != nil {
+		return fmt.Errorf("proxy: list dns providers: %w", err)
+	}
+	access := s.openProviders(providers)
+	routes, diagnostics := routesForServer(apps, serverID, s.backendHost, nodeList, access)
+	files, err := Generate(BuildConfig(routes, providers, s.acmeEmail), s.format)
 	if err != nil {
 		return err
 	}
+	desired := desiredState{
+		files: files,
+		env:   traefikEnv(routes, access),
+	}
+	desired.envHash = envFingerprint(s.secret, desired.env)
 
 	// The configuration intent is durable before the node is touched (R2): a
 	// failed record fails the sync without a replacement, so a protected push
@@ -313,11 +356,11 @@ func (s *SyncService) SyncServer(ctx context.Context, serverID uuid.UUID) error 
 	if err != nil {
 		return err
 	}
-	if err := s.pushAndPromote(ctx, serverID, nodeList, files, version, changed); err != nil {
+	if err := s.pushAndPromote(ctx, serverID, nodeList, desired, version, changed); err != nil {
 		return err
 	}
 	s.logger.Info("proxy: configuration synced",
-		"server_id", serverID.String(), "routes", len(routes), "skipped", len(diagnostics))
+		"server_id", serverID.String(), "routes", len(routes), "skipped", len(diagnostics), "dns_credentials", len(desired.env))
 	if len(diagnostics) > 0 {
 		return &PartialError{Diagnostics: diagnostics}
 	}
@@ -338,14 +381,15 @@ func (s *SyncService) prepareHistory(ctx context.Context, serverID uuid.UUID, fi
 	return version, changed, nil
 }
 
-// pushAndPromote pushes files and promotes the prepared version. EVERY push
-// failure retains the pending record: a failure can land after a partial
-// write, a timeout or a ping, and even a dial failure leaves the durable
-// intent harmless — revert targets the active snapshot while a pending record
-// exists and a later same-content sync reuses the record and retries. Only a
-// successful promotion (or the explicit restoration path) clears it.
-func (s *SyncService) pushAndPromote(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, files []File, version ConfigVersion, changed bool) error {
-	if pushErr := s.push(ctx, serverID, nodeList, files); pushErr != nil {
+// pushAndPromote pushes the desired state and promotes the prepared version.
+// EVERY push failure retains the pending record: a failure can land after a
+// partial write, a timeout or a ping, and even a dial failure leaves the
+// durable intent harmless — revert targets the active snapshot while a
+// pending record exists and a later same-content sync reuses the record and
+// retries. Only a successful promotion (or the explicit restoration path)
+// clears it.
+func (s *SyncService) pushAndPromote(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, desired desiredState, version ConfigVersion, changed bool) error {
+	if pushErr := s.push(ctx, serverID, nodeList, desired); pushErr != nil {
 		if s.history != nil && changed {
 			// Both sentinels stay matchable: the caller sees the underlying
 			// transport/conflict error and the degraded history outcome.
@@ -364,7 +408,9 @@ func (s *SyncService) pushAndPromote(ctx context.Context, serverID uuid.UUID, no
 // RevertServer re-pushes the node's previous stored configuration version and
 // records the reverted configuration as the newest version, so the timeline
 // stays append-only. It fails with ErrVersionNotFound when there is no second
-// version to fall back to.
+// version to fall back to. Only the documents are reverted: the container
+// environment is converged to the current DNS provider state, because
+// credentials are deliberately not part of the stored history.
 func (s *SyncService) RevertServer(ctx context.Context, serverID uuid.UUID) error {
 	if s == nil || s.history == nil {
 		return errHistoryNotConfigured
@@ -386,6 +432,21 @@ func (s *SyncService) RevertServer(ctx context.Context, serverID uuid.UUID) erro
 	if err != nil {
 		return fmt.Errorf("proxy: list node containers: %w", mapNodeError(err))
 	}
+	desired := desiredState{files: previous.Files}
+	if s.source != nil {
+		apps, err := s.source.ListProxiedApplications(ctx)
+		if err != nil {
+			return fmt.Errorf("proxy: list proxied applications: %w", err)
+		}
+		providers, err := s.listProviders(ctx)
+		if err != nil {
+			return fmt.Errorf("proxy: list dns providers: %w", err)
+		}
+		access := s.openProviders(providers)
+		routes, _ := routesForServer(apps, serverID, s.backendHost, nodeList, access)
+		desired.env = traefikEnv(routes, access)
+	}
+	desired.envHash = envFingerprint(s.secret, desired.env)
 	hash := previous.ContentHash
 	if hash == "" {
 		hash = configHash(previous.Files)
@@ -394,7 +455,7 @@ func (s *SyncService) RevertServer(ctx context.Context, serverID uuid.UUID) erro
 	if err != nil {
 		return fmt.Errorf("%w: record revert intent: %v", ErrHistory, err)
 	}
-	if err := s.pushAndPromote(ctx, serverID, nodeList, previous.Files, version, changed); err != nil {
+	if err := s.pushAndPromote(ctx, serverID, nodeList, desired, version, changed); err != nil {
 		return err
 	}
 	s.logger.Info("proxy: configuration reverted", "server_id", serverID.String())
@@ -458,7 +519,13 @@ func (s *SyncService) SyncAll(ctx context.Context) ([]SyncResult, error) {
 // (BE-6.1 F3). Every binding of a duplicate normalized domain on this node is
 // held back: row order does not prove ownership, and the unique index already
 // prevents new active duplicates (R1).
-func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost string, nodeContainers []containers.Container) ([]Route, []Diagnostic) {
+//
+// Certificate activation (BE-6.2) is resolved per route: a route whose
+// certificate configuration is active gets an HTTPS route and the redirect,
+// while a configured-but-inactive one stays plain HTTP exactly as in BE-6.1
+// and explains itself through a diagnostic (an entry can therefore accompany
+// a routed row, not only a skipped one).
+func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost string, nodeContainers []containers.Container, providers map[uuid.UUID]providerAccess) ([]Route, []Diagnostic) {
 	routes := make([]Route, 0, len(apps))
 	diagnostics := make([]Diagnostic, 0)
 	byID := indexNodeContainers(nodeContainers)
@@ -511,13 +578,187 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 			diagnostics = append(diagnostics, diagnostic)
 			continue
 		}
-		routes = append(routes, Route{
+		route := Route{
 			AppID:  app.ID,
 			Domain: domain,
 			Target: fmt.Sprintf("http://%s:%d", backendHost, hostPort),
-		})
+		}
+		certificate, certReason := resolveRouteCertificate(app, domain, providers)
+		route.Certificate = certificate
+		if certReason != "" {
+			diagnostic.Reason = certReason
+			diagnostics = append(diagnostics, diagnostic)
+		}
+		routes = append(routes, route)
 	}
 	return routes, diagnostics
+}
+
+// resolveRouteCertificate decides whether one application's certificate
+// configuration activates the HTTPS route. It returns the resolved TLS
+// section, or nil plus a reason when the configuration is configured but
+// cannot be activated (the route then stays plain HTTP). An explicitly
+// disabled configuration activates nothing and is not a diagnostic: it is
+// operator intent, not a failure.
+func resolveRouteCertificate(app ProxiedApplication, domain string, providers map[uuid.UUID]providerAccess) (*RouteCertificate, string) {
+	intent := app.Certificate
+	if intent == nil || !intent.Enabled {
+		return nil, ""
+	}
+	// The recorded host guards against issuing for a stale domain: changing
+	// the application's base_domain never silently re-targets the
+	// certificate; the configuration must be updated explicitly.
+	if intent.Domain != domain {
+		return nil, fmt.Sprintf("certificate configuration is recorded for %q; update it to certify %q", intent.Domain, domain)
+	}
+
+	switch intent.Challenge {
+	case ChallengeHTTP01:
+		if intent.Wildcard {
+			return nil, "wildcard certificates require the dns-01 challenge"
+		}
+		return &RouteCertificate{Resolver: DefaultResolverName}, ""
+	case ChallengeDNS01:
+		access, ok := providers[intent.DNSProviderID]
+		if !ok || !access.provider.Enabled {
+			return nil, "the configured DNS provider is disabled"
+		}
+		if access.err != nil {
+			if errors.Is(access.err, ErrSecret) {
+				return nil, "the deployment secret is not configured, so DNS provider credentials cannot be used"
+			}
+			return nil, "the DNS provider credentials could not be opened"
+		}
+		zone := MatchZone(access.provider.Zones, domain)
+		if zone == "" {
+			return nil, "the domain is not under any zone served by the DNS provider"
+		}
+		resolver := DNSResolverName(access.provider.Provider)
+		if resolver == "" {
+			return nil, "the configured DNS provider type is not supported"
+		}
+		certificate := &RouteCertificate{
+			Resolver:        resolver,
+			DNSProviderID:   access.provider.ID,
+			DNSProviderType: access.provider.Provider,
+		}
+		if intent.Wildcard {
+			// The wildcard must cover the routed host: keep the host as the
+			// main name and request `*.base` for a base inside the provider's
+			// zones.
+			base, ok := wildcardBase(domain, access.provider.Zones)
+			if !ok {
+				return nil, "the wildcard base is not inside any zone served by the DNS provider"
+			}
+			certificate.WildcardBase = base
+		}
+		return certificate, ""
+	default:
+		return nil, "the certificate configuration has an unknown challenge"
+	}
+}
+
+// providerAccess is the in-memory view of one DNS provider for a sync: the
+// sealed row plus its opened credential. A credential that cannot be opened
+// stays as an error on the entry so generation can keep the affected routes
+// HTTP-only with a diagnostic instead of failing the whole node.
+type providerAccess struct {
+	provider   DNSProvider
+	credential string
+	err        error
+}
+
+// desiredState is one node's fully resolved desired proxy state: the rendered
+// documents plus the DNS credential environment delivered to the container.
+// The environment never enters the history (credentials are not part of the
+// generated configuration); envHash identifies it for convergence.
+type desiredState struct {
+	files   []File
+	env     []string
+	envHash string
+}
+
+// listProviders resolves the configured DNS providers, nil when the service
+// has no provider source.
+func (s *SyncService) listProviders(ctx context.Context) ([]DNSProvider, error) {
+	if s.providers == nil {
+		return nil, nil
+	}
+	return s.providers.ListDNSProviders(ctx)
+}
+
+// openProviders opens the sealed credentials of the configured providers.
+func (s *SyncService) openProviders(providers []DNSProvider) map[uuid.UUID]providerAccess {
+	access := make(map[uuid.UUID]providerAccess, len(providers))
+	for _, provider := range providers {
+		entry := providerAccess{provider: provider}
+		if provider.Enabled {
+			credential, err := openCredential(s.secret, provider.SealedCredential)
+			if err != nil {
+				entry.err = err
+			} else {
+				entry.credential = credential
+			}
+		}
+		access[provider.ID] = entry
+	}
+	return access
+}
+
+// traefikEnv renders the credential environment of the DNS providers actually
+// referenced by an active certificate on this node, sorted by variable name.
+// Values are passed to the container runtime only and are never logged,
+// rendered into configuration or returned through the API.
+func traefikEnv(routes []Route, providers map[uuid.UUID]providerAccess) []string {
+	env := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, route := range routes {
+		if route.Certificate == nil || route.Certificate.DNSProviderID == uuid.Nil {
+			continue
+		}
+		access, ok := providers[route.Certificate.DNSProviderID]
+		if !ok || access.err != nil {
+			continue
+		}
+		name := DNSProviderEnvVar(access.provider.Provider)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		env = append(env, name+"="+access.credential)
+	}
+	sort.Strings(env)
+	return env
+}
+
+// envFingerprint is the container label value used to detect environment
+// drift. It is an HMAC over the sorted KEY=VALUE pairs with a
+// deployment-derived key, so the value is non-reversible: reading the label
+// cannot reveal or cheaply brute-force a credential, while rotating one still
+// changes the fingerprint (which is what recreates the container).
+//
+// An unusable deployment secret never keys an HMAC: no credential can be
+// placed in the environment without one (openCredential refuses it), so the
+// environment is necessarily empty and gets a fixed marker instead of a
+// publicly derivable digest.
+//
+// Limitation, documented deliberately: the engine does not report a running
+// container's environment to the agent, so drift can only be detected against
+// this recorded fingerprint — an environment changed out-of-band under Gotham
+// is invisible until the next recorded change.
+func envFingerprint(secret string, env []string) string {
+	if !secretUsable(secret) {
+		return "unconfigured"
+	}
+	key := sha256.Sum256([]byte("gotham:proxy:env:" + secret))
+	mac := hmac.New(sha256.New, key[:])
+	pairs := append([]string{}, env...)
+	sort.Strings(pairs)
+	for _, pair := range pairs {
+		mac.Write([]byte(pair))
+		mac.Write([]byte{0})
+	}
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // resolveEndpoint picks the host port Traefik must reach for an application.
@@ -616,28 +857,45 @@ func findContainer(byID map[string]*containers.Container, containerID string) *c
 // endpoint resolution and the proxy-container inspection.
 
 // push writes the documents to one node. It bootstraps Traefik when it is not
-// running and replaces a container whose published bindings do not match the
-// production specifications (repairing containers created before the
-// host-IP binding fix, F1). The verified write only reports whether the proxy
-// answered its ping after the write; it is not proof that Traefik accepted
-// the document (BE-6.1 A1).
+// running and replaces a container whose published bindings or credential
+// environment do not match the production specifications (repairing
+// containers created before the host-IP binding fix, F1, and containers whose
+// DNS-01 credentials changed). The verified write only reports whether the
+// proxy answered its ping after the write; it is not proof that Traefik
+// accepted the document (BE-6.1 A1).
 //
 // A failure never invalidates the caller's pending history record: the caller
 // retains it for every failure, including a dial error (R2).
-func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, files []File) error {
+//
+// Credential redaction boundary: this is the one place where the node's
+// credential environment is known, so every error and every log line it
+// produces is scrubbed while the env is available — container lifecycle
+// failures (Start/Pull/Remove/Run), agent write failures, reload verification
+// failures, the dial error, the convergence warning's node-reported drift
+// reason and the deferred Close log alike. Callers (SyncServer, RevertServer)
+// can therefore propagate push errors to the API and the logs without a
+// second scrub.
+func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, desired desiredState) (err error) {
+	// The single redaction boundary of the push path: every return below is
+	// scrubbed, including any added later.
+	defer func() {
+		err = redactEnvValues(err, desired.env)
+	}()
+
 	client, err := s.dialAgent(ctx, serverID)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if closeErr := client.Close(); closeErr != nil {
-			s.logger.Debug("proxy: close agent connection", "server_id", serverID, "error", closeErr)
+			s.logger.Debug("proxy: close agent connection", "server_id", serverID,
+				"error", redactEnvValues(closeErr, desired.env))
 		}
 	}()
 
 	state := findTraefik(nodeList)
 	if state.exists {
-		owned, matches, reason := s.traefikMatches(state.container)
+		owned, matches, reason := s.traefikMatches(state.container, desired.envHash)
 		switch {
 		case !owned:
 			// Never remove a same-name container this service cannot prove it
@@ -645,8 +903,12 @@ func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []c
 			return fmt.Errorf("%w: container %s exists on the node but is not a Gotham-managed proxy (%s)",
 				ErrConflict, TraefikContainerName, reason)
 		case !matches:
+			// The drift reason is built from node-reported values (image,
+			// ports, policy), so it is scrubbed before logging even though a
+			// successful repair returns nil.
+			redactedReason, _ := redactEnvText(reason, desired.env)
 			s.logger.Warn("proxy: recreating gotham-traefik to converge managed state",
-				"server_id", serverID.String(), "reason", reason)
+				"server_id", serverID.String(), "reason", redactedReason)
 			if err := s.containers.Remove(ctx, serverID, state.container.ID); err != nil {
 				return fmt.Errorf("proxy: remove drifted gotham-traefik: %w", mapNodeError(err))
 			}
@@ -658,15 +920,15 @@ func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []c
 		// The static configuration must exist before Traefik starts: it is
 		// read once at boot. The write is unverified because the proxy is not
 		// up yet; the verified write below confirms the ping.
-		if _, err := client.WriteProxyConfig(ctx, &agentv1.WriteProxyConfigRequest{Files: configFiles(files)}); err != nil {
+		if _, err := client.WriteProxyConfig(ctx, &agentv1.WriteProxyConfigRequest{Files: configFiles(desired.files)}); err != nil {
 			return mapAgentError("write proxy config", err)
 		}
-		if err := s.bootstrapContainer(ctx, serverID, state); err != nil {
+		if err := s.bootstrapContainer(ctx, serverID, state, desired.env); err != nil {
 			return fmt.Errorf("proxy: bootstrap traefik: %w", mapNodeError(err))
 		}
-		return s.writeVerified(ctx, client, files, time.Now().Add(startupReadiness))
+		return s.writeVerified(ctx, client, desired.files, time.Now().Add(startupReadiness))
 	}
-	return s.writeVerified(ctx, client, files, time.Time{})
+	return s.writeVerified(ctx, client, desired.files, time.Time{})
 }
 
 // writeVerified writes the documents with ping verification. A freshly
@@ -751,8 +1013,11 @@ func findTraefik(nodeList []containers.Container) containerState {
 // bootstrapContainer brings the proxy container up with its native restart
 // policy: it starts an existing stopped container, or pulls the image and
 // creates the container when it is missing. Creation is safe only after the
-// static configuration exists (the caller writes it first).
-func (s *SyncService) bootstrapContainer(ctx context.Context, serverID uuid.UUID, state containerState) error {
+// static configuration exists (the caller writes it first). The DNS-01
+// credentials travel in env and are recorded on the container only as the
+// non-reversible fingerprint inside traefikLabels; errors are returned raw
+// and scrubbed at the caller's push boundary.
+func (s *SyncService) bootstrapContainer(ctx context.Context, serverID uuid.UUID, state containerState, env []string) error {
 	if state.exists {
 		return s.containers.Start(ctx, serverID, state.container.ID)
 	}
@@ -762,20 +1027,76 @@ func (s *SyncService) bootstrapContainer(ctx context.Context, serverID uuid.UUID
 	_, err := s.containers.Run(ctx, serverID, containers.RunOptions{
 		Image:         TraefikImage,
 		Name:          TraefikContainerName,
-		Labels:        traefikLabels(s.configDir, s.acmeDir),
+		Env:           env,
+		Labels:        traefikLabels(s.configDir, s.acmeDir, envFingerprint(s.secret, env)),
 		Ports:         TraefikPorts,
 		Volumes:       TraefikVolumesFor(s.configDir, s.acmeDir),
 		RestartPolicy: TraefikRestartPolicy,
 	})
+	// The caller (push) owns the credential-redaction boundary: the error is
+	// returned raw so the original classification survives, and the push
+	// defer scrubs every env value before the error reaches the API or the
+	// logs.
 	return err
+}
+
+// redactedError carries sanitized error text while preserving the original
+// error chain, so errors.Is/errors.As classification (mapNodeError and the
+// HTTP status mapping) survives redaction.
+type redactedError struct {
+	message string
+	err     error
+}
+
+// Error returns the sanitized message.
+func (e *redactedError) Error() string { return e.message }
+
+// Unwrap exposes the original error to errors.Is/errors.As.
+func (e *redactedError) Unwrap() error { return e.err }
+
+// redactEnvText replaces every credential value from env in text with
+// "<redacted>" and reports whether anything was replaced. It is the string
+// form shared by redactEnvValues and the convergence warning, so node-reported
+// values logged while the credential environment is known can never carry a
+// credential.
+func redactEnvText(text string, env []string) (string, bool) {
+	redacted := false
+	for _, pair := range env {
+		_, value, ok := strings.Cut(pair, "=")
+		if !ok || value == "" {
+			continue
+		}
+		if strings.Contains(text, value) {
+			text = strings.ReplaceAll(text, value, "<redacted>")
+			redacted = true
+		}
+	}
+	return text, redacted
+}
+
+// redactEnvValues replaces every credential value from env in the error text
+// with "<redacted>", so a backend error that echoes its request cannot leak a
+// DNS-01 token into logs or API error text. Variable names and the rest of the
+// message stay readable for diagnosis. The returned error keeps the original
+// error chain (errors.Is/errors.As), and an error that does not mention any
+// value is returned unchanged.
+func redactEnvValues(err error, env []string) error {
+	if err == nil || len(env) == 0 {
+		return err
+	}
+	message, redacted := redactEnvText(err.Error(), env)
+	if !redacted {
+		return err
+	}
+	return &redactedError{message: message, err: err}
 }
 
 // traefikMatches verifies an existing container against the managed proxy's
 // desired state: ownership labels, image, published ports, recorded proxy
-// directories, engine-reported mounts and the real Docker restart policy.
-// Unmanaged containers are reported as not owned so the caller can refuse to
-// remove them (R5).
-func (s *SyncService) traefikMatches(container containers.Container) (owned, matches bool, reason string) {
+// directories, the recorded credential environment fingerprint, engine-
+// reported mounts and the real Docker restart policy. Unmanaged containers
+// are reported as not owned so the caller can refuse to remove them (R5).
+func (s *SyncService) traefikMatches(container containers.Container, envHash string) (owned, matches bool, reason string) {
 	if container.Labels["gotham.managed"] != "true" || container.Labels["gotham.component"] != "proxy" {
 		return false, false, "missing gotham.managed/gotham.component labels"
 	}
@@ -790,6 +1111,9 @@ func (s *SyncService) traefikMatches(container containers.Container) (owned, mat
 	}
 	if container.Labels["gotham.proxy.restart_policy"] != TraefikRestartPolicy {
 		return true, false, "the recorded restart policy differs"
+	}
+	if container.Labels[TraefikEnvHashLabel] != envHash {
+		return true, false, "the recorded credential environment fingerprint differs"
 	}
 	if !mountMatches(container.Mounts, s.configDir, TraefikContainerConfigDir, true) {
 		return true, false, "the config mount is missing, wrong-sourced or writable"

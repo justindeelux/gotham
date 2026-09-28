@@ -179,10 +179,11 @@ func (f *fakeHistory) activeHash() string {
 
 // fakeAgent records the ProxyService calls a sync makes.
 type fakeAgent struct {
-	events  *[]string
-	calls   []*agentv1.WriteProxyConfigRequest
-	respond func(in *agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error)
-	closed  bool
+	events   *[]string
+	calls    []*agentv1.WriteProxyConfigRequest
+	respond  func(in *agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error)
+	closeErr error
+	closed   bool
 }
 
 // writeProxyConfigDefault records the call and reports a successful ping for
@@ -209,7 +210,7 @@ func (f *fakeAgent) WriteProxyConfig(_ context.Context, in *agentv1.WriteProxyCo
 func (f *fakeAgent) Close() error {
 	f.closed = true
 	f.record("close")
-	return nil
+	return f.closeErr
 }
 
 // record appends one event when the fixture shares an event log.
@@ -223,14 +224,17 @@ func (f *fakeAgent) record(event string) {
 type fakeContainers struct {
 	containers.ContainerService
 
-	events  *[]string
-	list    []containers.Container
-	listErr error
-	started []string
-	removed []string
-	pulled  []string
-	runs    []containers.RunOptions
-	runErr  error
+	events    *[]string
+	list      []containers.Container
+	listErr   error
+	startErr  error
+	pullErr   error
+	removeErr error
+	started   []string
+	removed   []string
+	pulled    []string
+	runs      []containers.RunOptions
+	runErr    error
 }
 
 // List returns the canned containers.
@@ -246,21 +250,21 @@ func (f *fakeContainers) List(context.Context, uuid.UUID) ([]containers.Containe
 func (f *fakeContainers) Start(_ context.Context, _ uuid.UUID, containerID string) error {
 	f.record("start=" + containerID)
 	f.started = append(f.started, containerID)
-	return nil
+	return f.startErr
 }
 
 // Remove records a container removal.
 func (f *fakeContainers) Remove(_ context.Context, _ uuid.UUID, containerID string) error {
 	f.record("remove=" + containerID)
 	f.removed = append(f.removed, containerID)
-	return nil
+	return f.removeErr
 }
 
 // Pull records an image pull.
 func (f *fakeContainers) Pull(_ context.Context, _ uuid.UUID, image string) error {
 	f.record("pull=" + image)
 	f.pulled = append(f.pulled, image)
-	return nil
+	return f.pullErr
 }
 
 // Run records a container create+start and adds it to the canned list, so a
@@ -314,7 +318,9 @@ type syncFixture struct {
 }
 
 // runningTraefik is the expected proxy container with its production ports,
-// labels, mounts and restart policy.
+// labels, mounts and restart policy. The fingerprint matches an empty
+// credential environment, which is what the fixture's secret and provider
+// state produce.
 func runningTraefik() containers.Container {
 	return containers.Container{
 		ID:            "existing-traefik",
@@ -322,7 +328,7 @@ func runningTraefik() containers.Container {
 		State:         "running",
 		Image:         TraefikImage,
 		Ports:         append([]string{}, TraefikPorts...),
-		Labels:        traefikLabels(TraefikDir, TraefikAcmeDir),
+		Labels:        traefikLabels(TraefikDir, TraefikAcmeDir, envFingerprint("", nil)),
 		RestartPolicy: TraefikRestartPolicy,
 		Mounts: []containers.ContainerMount{
 			{Source: TraefikDir, Destination: TraefikContainerConfigDir, ReadOnly: true},
@@ -1300,14 +1306,15 @@ func TestSyncServerPromoteFailureNeverRevertsWrongVersion(t *testing.T) {
 
 	// Push C with a promotion failure after the node write succeeded.
 	fixture.history.promoteErr = errors.New("db down")
-	if err := fixture.service.push(context.Background(), serverID, fixture.containers.list, versionC); err != nil {
+	desiredC := desiredState{files: versionC, envHash: envFingerprint("", nil)}
+	if err := fixture.service.push(context.Background(), serverID, fixture.containers.list, desiredC); err != nil {
 		t.Fatalf("push C: %v", err)
 	}
 	prepared, changed, err := fixture.service.prepareHistory(context.Background(), serverID, versionC)
 	if err != nil || !changed {
 		t.Fatalf("prepare C: changed=%v err=%v", changed, err)
 	}
-	if err := fixture.service.pushAndPromote(context.Background(), serverID, fixture.containers.list, versionC, prepared, changed); !errors.Is(err, ErrHistory) {
+	if err := fixture.service.pushAndPromote(context.Background(), serverID, fixture.containers.list, desiredC, prepared, changed); !errors.Is(err, ErrHistory) {
 		t.Fatalf("promote C err = %v, want ErrHistory", err)
 	}
 	if fixture.history.pending == nil {

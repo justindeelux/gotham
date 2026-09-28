@@ -211,7 +211,7 @@ func (s *ProxyServer) WriteProxyConfig(ctx context.Context, req *agentv1.WritePr
 	// held open.
 	written := make([]string, 0, len(documents))
 	for _, document := range documents {
-		if err := writeFileInDir(document.dir, document.name, document.content); err != nil {
+		if err := writeFileInDir(document.dir, document.name, document.content, 0o644); err != nil {
 			return nil, status.Errorf(codes.Internal, "write %s: %v", document.rel, err)
 		}
 		written = append(written, document.rel)
@@ -419,8 +419,11 @@ func openTrustedDir(dir string, create bool) (*os.File, error) {
 
 // writeFileInDir writes content as name inside the held directory descriptor
 // through a fresh temporary file and renameat, so a watcher never reads a
-// half-written document and the final entry is replaced, never followed.
-func writeFileInDir(dir *os.File, name string, content []byte) error {
+// half-written document and the final entry is replaced, never followed. The
+// requested mode is subject to the process umask, so a document is never
+// created more permissively than asked (the compose path asks for 0600 because
+// a rendered compose document carries environment values).
+func writeFileInDir(dir *os.File, name string, content []byte, mode os.FileMode) error {
 	dirFD := int(dir.Fd())
 	suffix := make([]byte, 8)
 	if _, err := rand.Read(suffix); err != nil {
@@ -428,7 +431,7 @@ func writeFileInDir(dir *os.File, name string, content []byte) error {
 	}
 	tmpName := ".gotham-proxy-" + hex.EncodeToString(suffix)
 
-	fd, err := unix.Openat(dirFD, tmpName, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o644)
+	fd, err := unix.Openat(dirFD, tmpName, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(mode))
 	if err != nil {
 		return err
 	}

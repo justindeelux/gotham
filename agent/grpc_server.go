@@ -192,6 +192,14 @@ func WithProxyService(proxy agentv1.ProxyServiceServer) ServerOption {
 	}
 }
 
+// WithComposeService registers compose so the control plane can run compose
+// service projects on this node. Pass it to NewServer.
+func WithComposeService(compose agentv1.ComposeServiceServer) ServerOption {
+	return func(server *grpc.Server) {
+		agentv1.RegisterComposeServiceServer(server, compose)
+	}
+}
+
 // Server wraps a gRPC server exposing DockerService over TLS.
 type Server struct {
 	grpc *grpc.Server

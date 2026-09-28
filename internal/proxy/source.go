@@ -75,6 +75,59 @@ type ApplicationSource interface {
 	ListProxiedApplications(ctx context.Context) ([]ProxiedApplication, error)
 }
 
+// Compose container labels used to resolve a service project's containers on
+// the node. They are Docker Compose's own labels (set by the CLI on every
+// container it creates), so no Gotham label has to be injected into the
+// document.
+const (
+	// ComposeProjectLabel carries the compose project name.
+	ComposeProjectLabel = "com.docker.compose.project"
+	// ComposeServiceLabel carries the compose service name.
+	ComposeServiceLabel = "com.docker.compose.service"
+)
+
+// ServiceDomain is one host a compose service declares through the Gotham
+// label convention (internal/services owns the label names and validation).
+type ServiceDomain struct {
+	// Service is the compose service name the route must target.
+	Service string
+	// Host is the declared host; it is normalized and validated during
+	// generation.
+	Host string
+	// Port is the container port the backend must reach.
+	Port int32
+}
+
+// ProxiedService is one compose service routing input row: a service with at
+// least one declared host, the node it runs on, its compose project name and
+// its container-port mappings.
+type ProxiedService struct {
+	// ID identifies the service (kept in generated names for traceability).
+	ID uuid.UUID
+	// ServerID is the node hosting the project; uuid.Nil means unassigned.
+	ServerID uuid.UUID
+	// Name is the user-facing service name, used in diagnostics.
+	Name string
+	// Project is the compose project name ("gotham-<id>"), matched against
+	// the containers' com.docker.compose.project label.
+	Project string
+	// Domains are the declared host mappings.
+	Domains []ServiceDomain
+	// Unroutable explains why a row that declares routing cannot be served
+	// (for example a stored document that no longer renders); empty for a
+	// healthy row.
+	Unroutable string
+}
+
+// ServiceSource lists compose services with declared domains for generation.
+// The production implementation is internal/services.ProxySource, which
+// renders each stored document through the services package (the proxy cannot
+// import it without a cycle); nil disables service routing, so every existing
+// application-only wiring keeps working unchanged.
+type ServiceSource interface {
+	ListProxiedServices(ctx context.Context) ([]ProxiedService, error)
+}
+
 // RedirectSource lists the redirect rules joined to their application's node.
 // The production implementation is *store.Store (through storeSource); nil
 // disables redirect generation.

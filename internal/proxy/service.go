@@ -85,23 +85,26 @@ type SyncResult struct {
 	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
 }
 
-// Diagnostic explains why one application row was not routed. The sync still
-// pushes the healthy routes, so a single pending or malformed row cannot
-// freeze a node's configuration (BE-6.1 F3).
+// Diagnostic explains why one application or compose service row was not
+// routed. The sync still pushes the healthy routes, so a single pending or
+// malformed row cannot freeze a node's configuration (BE-6.1 F3).
 type Diagnostic struct {
 	ApplicationID uuid.UUID `json:"application_id"`
-	Domain        string    `json:"domain,omitempty"`
-	Reason        string    `json:"reason"`
+	// Kind names the owning row: "application" (the default, empty) or
+	// "service". It only changes how the diagnostic is phrased.
+	Kind   string `json:"kind,omitempty"`
+	Domain string `json:"domain,omitempty"`
+	Reason string `json:"reason"`
 }
 
 // PartialError reports a sync that pushed the healthy routes but skipped some
-// application rows. Errors.Is(err, ErrPartialSync) is true and Diagnostics
-// carries the per-application reasons.
+// application or service rows. Errors.Is(err, ErrPartialSync) is true and
+// Diagnostics carries the per-row reasons.
 type PartialError struct {
 	Diagnostics []Diagnostic
 }
 
-// Error lists the skipped applications, bounded to keep one runaway node from
+// Error lists the skipped rows, bounded to keep one runaway node from
 // producing an unbounded message.
 func (e *PartialError) Error() string {
 	const maxReasons = 10
@@ -115,7 +118,11 @@ func (e *PartialError) Error() string {
 		if diagnostic.Domain != "" {
 			reason = diagnostic.Domain + ": " + reason
 		}
-		parts = append(parts, fmt.Sprintf("application %s (%s)", diagnostic.ApplicationID, reason))
+		owner := "application"
+		if diagnostic.Kind == "service" {
+			owner = "service"
+		}
+		parts = append(parts, fmt.Sprintf("%s %s (%s)", owner, diagnostic.ApplicationID, reason))
 	}
 	return ErrPartialSync.Error() + ": " + strings.Join(parts, "; ")
 }
@@ -132,6 +139,13 @@ type Config struct {
 	Store *store.Store
 	// Applications overrides the routing input (tests).
 	Applications ApplicationSource
+	// Services supplies compose service domains (BE-7.1). The production
+	// implementation is internal/services.ProxySource, passed by the HTTP
+	// wiring; nil (and no explicit source) leaves service routing off, so
+	// application-only nodes are unaffected. There is deliberately no store
+	// fallback: rendering a compose document belongs to internal/services,
+	// which this package cannot import without a cycle.
+	Services ServiceSource
 	// Redirects overrides the redirect input (tests). nil (and no Store)
 	// disables redirect generation.
 	Redirects RedirectSource
@@ -187,6 +201,12 @@ func (c Config) source() ApplicationSource {
 	return nil
 }
 
+// services resolves the configured compose service source. It has no store
+// fallback on purpose (see Config.Services).
+func (c Config) services() ServiceSource {
+	return c.Services
+}
+
 // nodes resolves the configured node list.
 func (c Config) nodes() NodeSource {
 	if c.Nodes != nil {
@@ -238,6 +258,7 @@ func (c Config) history() HistoryStore {
 // configuration in place.
 type SyncService struct {
 	source      ApplicationSource
+	services    ServiceSource
 	redirects   RedirectSource
 	nodes       NodeSource
 	history     HistoryStore
@@ -291,6 +312,7 @@ func NewService(cfg Config) *SyncService {
 	}
 	return &SyncService{
 		source:      cfg.source(),
+		services:    cfg.services(),
 		redirects:   cfg.redirects(),
 		nodes:       cfg.nodes(),
 		history:     cfg.history(),
@@ -351,6 +373,10 @@ func (s *SyncService) SyncServer(ctx context.Context, serverID uuid.UUID) error 
 	if err != nil {
 		return fmt.Errorf("proxy: list proxied applications: %w", err)
 	}
+	proxiedServices, err := s.listServices(ctx)
+	if err != nil {
+		return fmt.Errorf("proxy: list proxied services: %w", err)
+	}
 	rules, err := s.listRedirectRules(ctx)
 	if err != nil {
 		return fmt.Errorf("proxy: list redirect rules: %w", err)
@@ -365,7 +391,14 @@ func (s *SyncService) SyncServer(ctx context.Context, serverID uuid.UUID) error 
 	}
 	access := s.openProviders(providers)
 	routes, diagnostics := routesForServer(apps, serverID, s.backendHost, nodeList, access)
-	redirects, redirectDiagnostics := redirectsForServer(apps, rules, serverID)
+	serviceRoutes, serviceDiagnostics, serviceHosts := serviceRoutesForServer(
+		proxiedServices, serverID, s.backendHost, nodeList, applicationHosts(apps, serverID))
+	routes = append(routes, serviceRoutes...)
+	diagnostics = append(diagnostics, serviceDiagnostics...)
+	// Redirect sources must never shadow a compose service host either, so
+	// the declared service hosts join the application domains the redirect
+	// generator already protects.
+	redirects, redirectDiagnostics := redirectsForServer(apps, rules, serverID, serviceHosts...)
 	diagnostics = append(diagnostics, redirectDiagnostics...)
 	files, err := Generate(BuildConfig(routes, redirects, providers, s.acmeEmail, s.caServer), s.format)
 	if err != nil {
@@ -540,6 +573,153 @@ func (s *SyncService) SyncAll(ctx context.Context) ([]SyncResult, error) {
 	return results, nil
 }
 
+// listServices lists the compose service routing input. A nil source leaves
+// service routing off without failing the sync.
+func (s *SyncService) listServices(ctx context.Context) ([]ProxiedService, error) {
+	if s.services == nil {
+		return nil, nil
+	}
+	services, err := s.services.ListProxiedServices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return services, nil
+}
+
+// applicationHosts returns every application base domain claimed on the node,
+// normalized, mirroring the redirect generator's node-domain set: the wider
+// claim (not only routable rows) is what keeps two routers from ever matching
+// the same host.
+func applicationHosts(apps []ProxiedApplication, serverID uuid.UUID) map[string]bool {
+	hosts := make(map[string]bool, len(apps))
+	for _, app := range apps {
+		if app.ServerID != serverID {
+			continue
+		}
+		if domain := NormalizeDomain(app.BaseDomain); domain != "" {
+			hosts[domain] = true
+		}
+	}
+	return hosts
+}
+
+// serviceRouteName is the deterministic Traefik name of one compose service
+// host: "svc-<service id>-<host index>".
+func serviceRouteName(id uuid.UUID, index int) string {
+	return "svc-" + id.String() + "-" + strconv.Itoa(index)
+}
+
+// serviceRoutesForServer filters the proxied compose services down to one
+// node, resolves each declared host's live backend from the project's
+// containers and classifies rows that cannot be routed as diagnostics.
+//
+// Conflict rule: an application on the node wins a shared host (the service
+// route is held back), and a host declared by two compose services holds both
+// back — row order never proves ownership, exactly like duplicate application
+// domains. The returned hosts are every declared service host (routable or
+// not), so the redirect generator can never emit a source that shadows one.
+func serviceRoutesForServer(proxied []ProxiedService, serverID uuid.UUID, backendHost string, nodeContainers []containers.Container, claimed map[string]bool) ([]Route, []Diagnostic, []string) {
+	routes := make([]Route, 0, len(proxied))
+	diagnostics := make([]Diagnostic, 0)
+	hosts := []string{}
+
+	// Count normalized duplicates across the node's services before routing
+	// anything.
+	hostCounts := make(map[string]int)
+	for _, service := range proxied {
+		if service.ServerID != serverID {
+			continue
+		}
+		for _, domain := range service.Domains {
+			hostCounts[NormalizeDomain(domain.Host)]++
+		}
+	}
+
+	for _, service := range proxied {
+		if service.ServerID != serverID {
+			continue
+		}
+		diagnostic := Diagnostic{ApplicationID: service.ID, Kind: "service"}
+		if service.Unroutable != "" {
+			diagnostic.Reason = service.Unroutable
+			diagnostics = append(diagnostics, diagnostic)
+			continue
+		}
+		for index, domain := range service.Domains {
+			host := NormalizeDomain(domain.Host)
+			hosts = append(hosts, host)
+			diagnostic.Domain = host
+			switch {
+			case ValidateDomain(host) != nil:
+				diagnostic.Reason = "invalid domain"
+				diagnostics = append(diagnostics, diagnostic)
+				continue
+			case claimed[host]:
+				diagnostic.Reason = "domain is already routed by an application on this node"
+				diagnostics = append(diagnostics, diagnostic)
+				continue
+			}
+			if hostCounts[host] > 1 {
+				diagnostic.Reason = "duplicate domain across compose services on this node; all conflicting bindings are held back"
+				diagnostics = append(diagnostics, diagnostic)
+				continue
+			}
+			if domain.Port <= 0 {
+				diagnostic.Reason = "the routing label declares no container port"
+				diagnostics = append(diagnostics, diagnostic)
+				continue
+			}
+			container := findComposeContainer(nodeContainers, service.Project, domain.Service)
+			hostPort, reason := resolveServiceEndpoint(container, domain.Port)
+			if reason != "" {
+				diagnostic.Reason = reason
+				diagnostics = append(diagnostics, diagnostic)
+				continue
+			}
+			routes = append(routes, Route{
+				Name:   serviceRouteName(service.ID, index),
+				AppID:  service.ID,
+				Domain: host,
+				Target: fmt.Sprintf("http://%s:%d", backendHost, hostPort),
+			})
+		}
+	}
+	return routes, diagnostics, hosts
+}
+
+// findComposeContainer returns the project's running container for one
+// compose service, matched through Docker Compose's own labels.
+func findComposeContainer(list []containers.Container, project, composeService string) *containers.Container {
+	for i := range list {
+		labels := list[i].Labels
+		if labels[ComposeProjectLabel] != project || labels[ComposeServiceLabel] != composeService {
+			continue
+		}
+		if !strings.EqualFold(list[i].State, "running") {
+			continue
+		}
+		return &list[i]
+	}
+	return nil
+}
+
+// resolveServiceEndpoint picks the host port Traefik must reach for one
+// compose service host. Only a positively matched, running container with an
+// engine-reported publication is routable: the document must publish the
+// container port for the node's proxy to reach it.
+func resolveServiceEndpoint(container *containers.Container, port int32) (int32, string) {
+	if container == nil {
+		return 0, "no running container for the compose service found on the node"
+	}
+	if !container.PortsReported {
+		return 0, "the container has no engine-reported published ports (or the node agent is too old to report them)"
+	}
+	if hostPort := publishedHostPort(container, port); hostPort > 0 {
+		return hostPort, ""
+	}
+	return 0, fmt.Sprintf("container port %d is not published; add it to the compose service ports", port)
+}
+
 // routesForServer filters the proxied applications down to one node, resolves
 // each one's live endpoint and classifies rows that cannot be routed as
 // per-application diagnostics. Healthy rows are routed even when a sibling is
@@ -638,16 +818,25 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 //   - a rule that forms a chain with an earlier enabled rule is held back
 //     (see the no-chain net below), so the generated per-snapshot selection
 //     is chain-free.
-func redirectsForServer(apps []ProxiedApplication, rules []RedirectRule, serverID uuid.UUID) ([]Redirect, []Diagnostic) {
+//
+// extraDomains are hosts claimed by compose services on the node (BE-7.1);
+// they join the application domains a redirect source must never shadow, so a
+// redirect can never claim a host a service router answers for.
+func redirectsForServer(apps []ProxiedApplication, rules []RedirectRule, serverID uuid.UUID, extraDomains ...string) ([]Redirect, []Diagnostic) {
 	if len(rules) == 0 {
 		return nil, nil
 	}
-	nodeDomains := make(map[string]bool, len(apps))
+	nodeDomains := make(map[string]bool, len(apps)+len(extraDomains))
 	for _, app := range apps {
 		if app.ServerID != serverID {
 			continue
 		}
 		if domain := NormalizeDomain(app.BaseDomain); domain != "" {
+			nodeDomains[domain] = true
+		}
+	}
+	for _, domain := range extraDomains {
+		if domain = NormalizeDomain(domain); domain != "" {
 			nodeDomains[domain] = true
 		}
 	}

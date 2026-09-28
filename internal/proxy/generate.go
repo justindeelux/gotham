@@ -122,9 +122,13 @@ type fileProvider struct {
 }
 
 // dynamicDocument is the rendered dynamic configuration served by the file
-// provider (dynamic/gotham.yml).
+// provider (dynamic/gotham.yml). HTTP is a pointer on purpose: Traefik rejects
+// a standalone empty `http:` element ("http cannot be a standalone element"),
+// so a node whose last route was removed must render a document with no http
+// section at all — otherwise the file provider keeps the previous document and
+// the removed route stays served.
 type dynamicDocument struct {
-	HTTP httpSection `yaml:"http" toml:"http"`
+	HTTP *httpSection `yaml:"http,omitempty" toml:"http,omitempty"`
 }
 
 type httpSection struct {
@@ -169,12 +173,13 @@ func Generate(cfg ProxyConfig, format Format) ([]File, error) {
 		},
 		CertificatesResolvers: cfg.CertificatesResolvers,
 	}
-	dynamic := dynamicDocument{
-		HTTP: httpSection{
+	dynamic := dynamicDocument{}
+	if len(cfg.Routers)+len(cfg.Services)+len(cfg.Middlewares) > 0 {
+		dynamic.HTTP = &httpSection{
 			Routers:     cfg.Routers,
 			Services:    cfg.Services,
 			Middlewares: cfg.Middlewares,
-		},
+		}
 	}
 
 	staticContent, err := marshalDocument(static, format)

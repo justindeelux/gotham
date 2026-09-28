@@ -25,6 +25,7 @@ import (
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/server/ws"
 	"github.com/justindeelux/gotham/internal/servers"
+	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/webhooks"
 )
@@ -255,6 +256,14 @@ func (s *Server) routes() (http.Handler, error) {
 		// by the closer above.
 		s.backups = s.backupService(containerService)
 		databases.MountBackups(api, s.RequireAuth, UserIDFromContext, s.backups)
+
+		// Compose services (BE-7.1): one docker-compose project per service,
+		// run by the node agent's compose CLI. Like the proxy group, the
+		// whole surface mutates node state with user-supplied compose, so it
+		// requires the admin scope on top of authentication (JWT sessions
+		// already hold every scope). A nil service (no database, no agent
+		// dialer, or FEATURE_SERVICES=false) mounts nothing.
+		services.Mount(api, adminOnly, UserIDFromContext, s.composeService())
 	})
 
 	spa, err := newSPAHandler()
@@ -377,6 +386,10 @@ func (s *Server) proxyService(containerService containers.ContainerService) prox
 		Containers: containerService,
 		Logger:     s.logger,
 		Secret:     s.cfg.Snapshot().SecretKey,
+		// Compose service hosts (BE-7.1) join the generated routing model
+		// through the same generator; the adapter renders each stored
+		// document, which this package cannot do without a cycle.
+		Services: services.NewProxySource(s.persistence),
 	}
 	if dialer, ok := s.servers.(proxyDialer); ok {
 		cfg.Dial = func(ctx context.Context, serverID uuid.UUID) (proxy.AgentClient, error) {
@@ -442,6 +455,45 @@ func (s *Server) backupService(containerService containers.ContainerService) dat
 		Secret:     s.cfg.Snapshot().SecretKey,
 		Logger:     s.logger,
 	})
+}
+
+// composeDialer is the mTLS ComposeService dial implemented by
+// *servers.ServerService. The HTTP layer type-asserts its server registry to
+// this interface, so tests that pass a fake registry simply leave the dialer
+// unwired instead of forcing a wider interface change (containerDialer and
+// proxyDialer declare the same pattern).
+type composeDialer interface {
+	DialComposeClient(ctx context.Context, id uuid.UUID, opts ...servers.DockerDialOption) (*servers.ComposeClient, error)
+}
+
+// composeService builds the compose-service domain service for the HTTP
+// wiring: the database plus the mTLS dialer that reaches each node's compose
+// service. It returns nil (no database, no dialer, or FEATURE_SERVICES=false)
+// so services.Mount is a no-op.
+func (s *Server) composeService() services.ServiceService {
+	if s.persistence == nil {
+		return nil
+	}
+	cfg := services.Config{
+		Store:  s.persistence,
+		Logger: s.logger,
+	}
+	if dialer, ok := s.servers.(composeDialer); ok {
+		cfg.Dial = func(ctx context.Context, serverID uuid.UUID) (services.ComposeAgent, error) {
+			client, err := dialer.DialComposeClient(ctx, serverID)
+			if err != nil {
+				return nil, err
+			}
+			return services.NewGRPCComposeAgent(client), nil
+		}
+	}
+	// Lifecycle changes resync the node's Phase 6 routing configuration, so a
+	// deploy/stop/restart/delete is reflected in Traefik through the same
+	// generator applications use.
+	if s.proxy != nil {
+		cfg.Proxy = s.proxy
+	}
+	return services.NewDefaultService(cfg)
 }
 
 // apiError is the JSON body returned for API failures.

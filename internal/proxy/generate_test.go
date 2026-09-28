@@ -172,14 +172,30 @@ func TestGenerateIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestGenerateEmptyConfigIsValidDocument proves a node with no routes renders
+// a document with no http section at all: Traefik rejects a standalone empty
+// `http:` element ("http cannot be a standalone element") and would then keep
+// serving the previous document, so a removed last route would never
+// disappear. The live Phase 7 acceptance asserts the removal through Traefik.
 func TestGenerateEmptyConfigIsValidDocument(t *testing.T) {
 	files, err := Generate(BuildConfig(nil, nil, nil, "", ""), FormatYAML)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	dynamic := string(files[1].Content)
-	if !strings.Contains(dynamic, "http: {}") {
-		t.Errorf("empty dynamic document = %q, want empty http section", dynamic)
+	if strings.Contains(dynamic, "http") {
+		t.Errorf("empty dynamic document = %q, want no http section", dynamic)
+	}
+	if strings.TrimSpace(dynamic) != "{}" {
+		t.Errorf("empty dynamic document = %q, want an empty document", dynamic)
+	}
+
+	files, err = Generate(BuildConfig(nil, nil, nil, "", ""), FormatTOML)
+	if err != nil {
+		t.Fatalf("Generate(toml): %v", err)
+	}
+	if dynamic := string(files[1].Content); strings.Contains(dynamic, "http") {
+		t.Errorf("empty TOML document = %q, want no http section", dynamic)
 	}
 }
 

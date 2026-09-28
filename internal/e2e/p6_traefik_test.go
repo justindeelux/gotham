@@ -240,7 +240,7 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	}
 	t.Logf("first sync diagnostics: %v", partial.Diagnostics)
 
-	traefikID := trackCreated(p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName))
+	traefikID := trackCreated(p6WaitForContainer(t, ctx, engine))
 	// On failure, keep the diagnosis close: the proxy logs, the mounted
 	// configuration and the container's mounts are dumped before cleanup.
 	t.Cleanup(func() {
@@ -330,7 +330,7 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	if err := p6Sync(proxyService, serverID); err != nil {
 		t.Fatalf("sync must repair the legacy container: %v", err)
 	}
-	traefikID = trackCreated(p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName))
+	traefikID = trackCreated(p6WaitForContainer(t, ctx, engine))
 	if traefikID == legacyID {
 		t.Fatal("legacy container was not recreated")
 	}
@@ -469,8 +469,9 @@ func p6CreateRunningDeployment(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 }
 
-// p6WaitForContainer returns the id of a named container on the node.
-func p6WaitForContainer(t *testing.T, ctx context.Context, engine *agent.DockerClient, name string) string {
+// p6WaitForContainer returns the id of the managed proxy container on the
+// node.
+func p6WaitForContainer(t *testing.T, ctx context.Context, engine *agent.DockerClient) string {
 	t.Helper()
 	deadline := time.Now().Add(p6HTTPWait)
 	for {
@@ -479,13 +480,13 @@ func p6WaitForContainer(t *testing.T, ctx context.Context, engine *agent.DockerC
 		cancel()
 		if err == nil {
 			for _, container := range listed {
-				if container.GetName() == name {
+				if container.GetName() == proxy.TraefikContainerName {
 					return container.GetId()
 				}
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("container %q not found on the node", name)
+			t.Fatalf("container %q not found on the node", proxy.TraefikContainerName)
 		}
 		time.Sleep(p6PollInterval)
 	}
@@ -713,7 +714,7 @@ func p6AssertRepairsDrift(
 			if err := p6Sync(svc, serverID); err != nil {
 				t.Fatalf("sync must repair %s drift: %v", name, err)
 			}
-			newID := p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName)
+			newID := p6WaitForContainer(t, ctx, engine)
 			if newID == *traefikID {
 				t.Fatalf("%s drift was not repaired", name)
 			}
@@ -745,7 +746,7 @@ func p6AssertRepairsDrift(
 		if err := p6Sync(svc, serverID); err != nil {
 			t.Fatalf("restore after unowned conflict: %v", err)
 		}
-		newID := p6WaitForContainer(t, ctx, engine, proxy.TraefikContainerName)
+		newID := p6WaitForContainer(t, ctx, engine)
 		*createdIDs = append(*createdIDs, newID)
 		*traefikID = newID
 		p6AssertTraefikBootstrap(t, newID)

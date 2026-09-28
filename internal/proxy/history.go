@@ -50,8 +50,10 @@ type HistoryStore interface {
 	// push: pending records are cleared, the version becomes active, the
 	// previous active version is superseded and expired predecessors pruned.
 	PromoteConfigVersion(ctx context.Context, serverID, versionID uuid.UUID) error
-	// AbortConfigVersion drops a pending record after a push that provably
-	// never touched the node.
+	// AbortConfigVersion drops a pending record. The sync never calls it: every
+	// failed push retains the pending record (R2), and only a successful
+	// promotion or the restoration path clears it. It remains available for
+	// explicit operator cleanup.
 	AbortConfigVersion(ctx context.Context, serverID, versionID uuid.UUID) error
 	// PreviousConfigVersion returns the configuration to revert to. While a
 	// pending push exists the node may already serve it, so the actual prior

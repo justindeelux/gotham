@@ -43,9 +43,6 @@ func Enabled() bool {
 // pull and the reload ping.
 const defaultSyncTimeout = 5 * time.Minute
 
-// historyTimeout bounds the best-effort history write that follows a push.
-const historyTimeout = 10 * time.Second
-
 // startupReadiness bounds how long a freshly started proxy container gets to
 // answer its ping before the sync gives up; startupPoll is the retry interval.
 const (
@@ -341,30 +338,18 @@ func (s *SyncService) prepareHistory(ctx context.Context, serverID uuid.UUID, fi
 	return version, changed, nil
 }
 
-// pushAndPromote pushes files and promotes the prepared version. A push that
-// provably never touched the node aborts the pending record; an ambiguous
-// failure (a write may have landed, a timeout or a ping failure) retains it
-// and reports a degraded ErrHistory so the next same-content sync reconciles.
+// pushAndPromote pushes files and promotes the prepared version. EVERY push
+// failure retains the pending record: a failure can land after a partial
+// write, a timeout or a ping, and even a dial failure leaves the durable
+// intent harmless — revert targets the active snapshot while a pending record
+// exists and a later same-content sync reuses the record and retries. Only a
+// successful promotion (or the explicit restoration path) clears it.
 func (s *SyncService) pushAndPromote(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, files []File, version ConfigVersion, changed bool) error {
-	touched, pushErr := s.push(ctx, serverID, nodeList, files)
-	if pushErr != nil {
+	if pushErr := s.push(ctx, serverID, nodeList, files); pushErr != nil {
 		if s.history != nil && changed {
-			// Only a pending record may be aborted; the restoration path
-			// returns the ACTIVE row and deleting it would lose the durable
-			// snapshot (R2).
-			if !touched && version.Pending {
-				abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyTimeout)
-				if abortErr := s.history.AbortConfigVersion(abortCtx, serverID, version.ID); abortErr != nil {
-					s.logger.Warn("proxy: abort configuration intent failed",
-						"server_id", serverID.String(), "error", abortErr)
-				}
-				cancel()
-			} else {
-				// The node may already serve the new content: keep the pending
-				// record and report the degraded outcome (R2). Both sentinels
-				// stay matchable.
-				return fmt.Errorf("%w: node push failed after a write attempt: %w", ErrHistory, pushErr)
-			}
+			// Both sentinels stay matchable: the caller sees the underlying
+			// transport/conflict error and the degraded history outcome.
+			return fmt.Errorf("%w: node push failed, pending record retained: %w", ErrHistory, pushErr)
 		}
 		return pushErr
 	}
@@ -637,13 +622,12 @@ func findContainer(byID map[string]*containers.Container, containerID string) *c
 // answered its ping after the write; it is not proof that Traefik accepted
 // the document (BE-6.1 A1).
 //
-// touched reports whether any node mutation was attempted: false means the
-// dial failed (or an ownership conflict was found) before anything could be
-// written, true means the node may already serve new content.
-func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, files []File) (touched bool, err error) {
+// A failure never invalidates the caller's pending history record: the caller
+// retains it for every failure, including a dial error (R2).
+func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, files []File) error {
 	client, err := s.dialAgent(ctx, serverID)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer func() {
 		if closeErr := client.Close(); closeErr != nil {
@@ -658,13 +642,13 @@ func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []c
 		case !owned:
 			// Never remove a same-name container this service cannot prove it
 			// owns (R5); the operator resolves the conflict.
-			return false, fmt.Errorf("%w: container %s exists on the node but is not a Gotham-managed proxy (%s)",
+			return fmt.Errorf("%w: container %s exists on the node but is not a Gotham-managed proxy (%s)",
 				ErrConflict, TraefikContainerName, reason)
 		case !matches:
 			s.logger.Warn("proxy: recreating gotham-traefik to converge managed state",
 				"server_id", serverID.String(), "reason", reason)
 			if err := s.containers.Remove(ctx, serverID, state.container.ID); err != nil {
-				return true, fmt.Errorf("proxy: remove drifted gotham-traefik: %w", mapNodeError(err))
+				return fmt.Errorf("proxy: remove drifted gotham-traefik: %w", mapNodeError(err))
 			}
 			state = containerState{}
 		}
@@ -675,14 +659,14 @@ func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []c
 		// read once at boot. The write is unverified because the proxy is not
 		// up yet; the verified write below confirms the ping.
 		if _, err := client.WriteProxyConfig(ctx, &agentv1.WriteProxyConfigRequest{Files: configFiles(files)}); err != nil {
-			return true, mapAgentError("write proxy config", err)
+			return mapAgentError("write proxy config", err)
 		}
 		if err := s.bootstrapContainer(ctx, serverID, state); err != nil {
-			return true, fmt.Errorf("proxy: bootstrap traefik: %w", mapNodeError(err))
+			return fmt.Errorf("proxy: bootstrap traefik: %w", mapNodeError(err))
 		}
-		return true, s.writeVerified(ctx, client, files, time.Now().Add(startupReadiness))
+		return s.writeVerified(ctx, client, files, time.Now().Add(startupReadiness))
 	}
-	return true, s.writeVerified(ctx, client, files, time.Time{})
+	return s.writeVerified(ctx, client, files, time.Time{})
 }
 
 // writeVerified writes the documents with ping verification. A freshly

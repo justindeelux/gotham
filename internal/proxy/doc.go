@@ -53,11 +53,11 @@
 // replace the active snapshot is recorded durably before the node is touched,
 // an unchanged sync records nothing, the active snapshot is never pruned, and
 // a replaced predecessor stays revertable for one day measured from the
-// replacement. An ambiguous push failure (a write, timeout or ping failure
-// that may have landed) keeps the pending record and reports a degraded
-// outcome instead of a silent success, and revert targets the active snapshot
-// while a pending push exists so it can never fall back to an older
-// predecessor. A global sync covers every registered node — including nodes
+// replacement. Every failed push keeps the pending record — a failure can
+// land after a partial write, a timeout, a ping or even a dial error — and
+// reports a degraded outcome instead of a silent success; only a successful
+// promotion clears it. Revert targets the active snapshot while a pending
+// push exists so it can never fall back to an older predecessor. A global sync covers every registered node — including nodes
 // whose last domain was just removed — plus every node hosting a proxied
 // application.
 //

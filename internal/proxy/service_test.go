@@ -1164,6 +1164,76 @@ func TestSyncServerAmbiguousPushFailureRetainsPendingThenRepairs(t *testing.T) {
 // failure sequence: A active, B promoted, C pushed with a promotion failure
 // keeps B active and a FRESH service reverts to B (the actual prior), never to
 // the older superseded A (R2).
+// TestSyncServerPendingRetainedAcrossFailuresRevertsToActive proves the
+// approved R2 rule: an ambiguous push of B (a write may have landed) followed
+// by a pre-write/dial failure while preparing C retains the pending record,
+// and a FRESH service reverts to the durable active A — never the older
+// superseded Z.
+func TestSyncServerPendingRetainedAcrossFailuresRevertsToActive(t *testing.T) {
+	serverID := uuid.New()
+	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
+	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
+	fixture.containers.list = []containers.Container{runningTraefik(), appContainer("app-container", 32768)}
+
+	// Durable active A and an older superseded Z.
+	versionA := []File{{Name: "dynamic/gotham.yml", Content: []byte("A")}}
+	versionZ := []File{{Name: "dynamic/gotham.yml", Content: []byte("Z")}}
+	fixture.history.active = &ConfigVersion{ID: uuid.New(), Files: versionA, ContentHash: configHash(versionA)}
+	fixture.history.superseded = []ConfigVersion{{ID: uuid.New(), Files: versionZ, ContentHash: configHash(versionZ)}}
+
+	// Push B: the write attempt fails ambiguously.
+	fixture.agent.respond = func(*agentv1.WriteProxyConfigRequest) (*agentv1.WriteProxyConfigResponse, error) {
+		return nil, status.Error(codes.Unavailable, "agent down")
+	}
+	err := fixture.service.SyncServer(context.Background(), serverID)
+	if !errors.Is(err, ErrHistory) || !errors.Is(err, ErrAgentUnavailable) {
+		t.Fatalf("push B err = %v, want ErrHistory + ErrAgentUnavailable", err)
+	}
+	if fixture.history.pending == nil {
+		t.Fatal("ambiguous push B dropped the pending record")
+	}
+
+	// Push C: the dial fails before any write.
+	fixture.agent.respond = nil
+	fixture.service.dial = func(context.Context, uuid.UUID) (AgentClient, error) {
+		return nil, servers.ErrNotFound
+	}
+	err = fixture.service.SyncServer(context.Background(), serverID)
+	if !errors.Is(err, ErrHistory) || !errors.Is(err, ErrServerNotFound) {
+		t.Fatalf("push C err = %v, want ErrHistory + ErrServerNotFound", err)
+	}
+	if fixture.history.aborts != 0 {
+		t.Fatalf("aborts = %d, want no failure path to abort the pending record", fixture.history.aborts)
+	}
+	if fixture.history.pending == nil {
+		t.Fatal("pre-write failure dropped the pending record")
+	}
+
+	// A fresh service must revert to the durable active A, never Z.
+	fresh := &SyncService{
+		source:      fixture.service.source,
+		history:     fixture.history,
+		containers:  fixture.containers,
+		dial:        func(context.Context, uuid.UUID) (AgentClient, error) { return fixture.agent, nil },
+		logger:      discardLogger(),
+		backendHost: DefaultBackendHost,
+		configDir:   TraefikDir,
+		acmeDir:     TraefikAcmeDir,
+		timeout:     defaultSyncTimeout,
+	}
+	if err := fresh.RevertServer(context.Background(), serverID); err != nil {
+		t.Fatalf("fresh revert: %v", err)
+	}
+	last := fixture.agent.calls[len(fixture.agent.calls)-1]
+	content := filesByPath(last.GetFiles())["dynamic/gotham.yml"]
+	if content != "A" {
+		t.Fatalf("revert pushed %q, want the durable active A (never superseded Z)", content)
+	}
+	if fixture.history.pending != nil {
+		t.Fatal("revert did not clear the pending record")
+	}
+}
+
 // TestSyncServerRestorationPushFailureKeepsActive proves the restoration path
 // never aborts the active snapshot: when the stored active matches the desired
 // content while an ambiguous pending push exists, a push that provably never
@@ -1216,9 +1286,8 @@ func TestSyncServerPromoteFailureNeverRevertsWrongVersion(t *testing.T) {
 
 	// Push C with a promotion failure after the node write succeeded.
 	fixture.history.promoteErr = errors.New("db down")
-	touched, err := fixture.service.push(context.Background(), serverID, fixture.containers.list, versionC)
-	if err != nil || !touched {
-		t.Fatalf("push C: touched=%v err=%v", touched, err)
+	if err := fixture.service.push(context.Background(), serverID, fixture.containers.list, versionC); err != nil {
+		t.Fatalf("push C: %v", err)
 	}
 	prepared, changed, err := fixture.service.prepareHistory(context.Background(), serverID, versionC)
 	if err != nil || !changed {

@@ -41,7 +41,13 @@ const stageChunkBytes = 90_000
 // BackupEngine builds the temporary-container jobs of one engine. The control
 // plane never runs a dump tool itself: it stops the database container, runs
 // the job on the same node with the database volume mounted, and reads the
-// framed payload back from the container's log stream.
+// framed payload back from the container's log stream. The payload travels
+// base64-encoded (see backup_job.go): the Docker log pipeline replaces
+// invalid UTF-8 bytes, so raw dump bytes would be corrupted before the
+// control plane could read them. A restore job decompresses the staged
+// artifact with a checked status and only then invokes the engine tool, so a
+// truncated or corrupt artifact can never be reported as a successful
+// restore.
 //
 // Implementations are stateless and shared; every method must be safe for
 // concurrent use.
@@ -113,9 +119,10 @@ if pg_isready -q -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"; then
   status=$?
 fi
 if [ "$status" -eq 0 ]; then
-  size=$(wc -c <"$tmp" | tr -d ' ')
-  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD %s %s\n' "$id" "$id" "$size"
-  cat "$tmp"
+  raw=$(wc -c <"$tmp" | tr -d ' ')
+  size=$(( (raw + 2) / 3 * 4 ))
+  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD-B64 %s %s\n' "$id" "$id" "$size"
+  base64 "$tmp" | tr -d '\n'
   printf 'GOTHAM-BACKUP-END %s ok\n' "$id"
 else
   printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-END %s fail %s\n' "$id" "$id" "$status"
@@ -130,6 +137,7 @@ id="$GOTHAM_RUN_ID"
 staged="$GOTHAM_STAGED"
 log=/tmp/gotham-engine.log
 payload=/tmp/gotham-restore.dump
+archive=/tmp/gotham-restore.bin
 status=0
 mkdir -p /tmp
 if [ -f "$staged" ]; then
@@ -148,8 +156,12 @@ if [ "$status" -eq 0 ]; then
   done
   if pg_isready -q -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"; then
     export PGPASSWORD="$POSTGRES_PASSWORD"
-    gunzip -c "$payload" 2>>"$log" | pg_restore -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner - 2>>"$log"
-    status=$?
+    if gunzip -c "$payload" >"$archive" 2>>"$log"; then
+      pg_restore -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner --single-transaction "$archive" 2>>"$log"
+      status=$?
+    else
+      status=5
+    fi
   else
     status=4
   fi
@@ -199,9 +211,10 @@ if mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/n
   status=$?
 fi
 if [ "$status" -eq 0 ]; then
-  size=$(wc -c <"$tmp" | tr -d ' ')
-  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD %s %s\n' "$id" "$id" "$size"
-  cat "$tmp"
+  raw=$(wc -c <"$tmp" | tr -d ' ')
+  size=$(( (raw + 2) / 3 * 4 ))
+  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD-B64 %s %s\n' "$id" "$id" "$size"
+  base64 "$tmp" | tr -d '\n'
   printf 'GOTHAM-BACKUP-END %s ok\n' "$id"
 else
   printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-END %s fail %s\n' "$id" "$id" "$status"
@@ -216,6 +229,7 @@ id="$GOTHAM_RUN_ID"
 staged="$GOTHAM_STAGED"
 log=/tmp/gotham-engine.log
 payload=/tmp/gotham-restore.dump
+archive=/tmp/gotham-restore.bin
 status=0
 mkdir -p /tmp
 if [ -f "$staged" ]; then
@@ -233,8 +247,12 @@ if [ "$status" -eq 0 ]; then
     sleep 1
   done
   if mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/null 2>&1; then
-    gunzip -c "$payload" 2>>"$log" | mysql -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" 2>>"$log"
-    status=$?
+    if gunzip -c "$payload" >"$archive" 2>>"$log"; then
+      mysql -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" <"$archive" 2>>"$log"
+      status=$?
+    else
+      status=5
+    fi
   else
     status=4
   fi
@@ -283,9 +301,10 @@ if mongosh --quiet --host 127.0.0.1 --username "$MONGO_INITDB_ROOT_USERNAME" --p
   status=$?
 fi
 if [ "$status" -eq 0 ]; then
-  size=$(wc -c <"$tmp" | tr -d ' ')
-  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD %s %s\n' "$id" "$id" "$size"
-  cat "$tmp"
+  raw=$(wc -c <"$tmp" | tr -d ' ')
+  size=$(( (raw + 2) / 3 * 4 ))
+  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD-B64 %s %s\n' "$id" "$id" "$size"
+  base64 "$tmp" | tr -d '\n'
   printf 'GOTHAM-BACKUP-END %s ok\n' "$id"
 else
   printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-END %s fail %s\n' "$id" "$id" "$status"
@@ -300,6 +319,7 @@ id="$GOTHAM_RUN_ID"
 staged="$GOTHAM_STAGED"
 log=/tmp/gotham-engine.log
 payload=/tmp/gotham-restore.dump
+archive=/tmp/gotham-restore.bin
 status=0
 mkdir -p /tmp
 if [ -f "$staged" ]; then
@@ -317,8 +337,12 @@ if [ "$status" -eq 0 ]; then
     sleep 1
   done
   if mongosh --quiet --host 127.0.0.1 --username "$MONGO_INITDB_ROOT_USERNAME" --password "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval 'db.runCommand({ping: 1})' >/dev/null 2>&1; then
-    gunzip -c "$payload" 2>>"$log" | mongorestore --host 127.0.0.1 --username "$MONGO_INITDB_ROOT_USERNAME" --password "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --archive --drop 2>>"$log"
-    status=$?
+    if gunzip -c "$payload" >"$archive" 2>>"$log"; then
+      mongorestore --host 127.0.0.1 --username "$MONGO_INITDB_ROOT_USERNAME" --password "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --archive="$archive" --drop 2>>"$log"
+      status=$?
+    else
+      status=5
+    fi
   else
     status=4
   fi
@@ -360,9 +384,10 @@ status=1
 tar -cf - -C /data . >"$tmp" 2>>"$log"
 status=$?
 if [ "$status" -eq 0 ]; then
-  size=$(wc -c <"$tmp" | tr -d ' ')
-  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD %s %s\n' "$id" "$id" "$size"
-  cat "$tmp"
+  raw=$(wc -c <"$tmp" | tr -d ' ')
+  size=$(( (raw + 2) / 3 * 4 ))
+  printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD-B64 %s %s\n' "$id" "$id" "$size"
+  base64 "$tmp" | tr -d '\n'
   printf 'GOTHAM-BACKUP-END %s ok\n' "$id"
 else
   printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-END %s fail %s\n' "$id" "$id" "$status"
@@ -377,6 +402,7 @@ id="$GOTHAM_RUN_ID"
 staged="$GOTHAM_STAGED"
 log=/tmp/gotham-engine.log
 payload=/tmp/gotham-restore.dump
+archive=/tmp/gotham-restore.bin
 status=0
 mkdir -p /tmp
 : >"$log"
@@ -387,8 +413,12 @@ else
   status=3
 fi
 if [ "$status" -eq 0 ]; then
-  gunzip -c "$payload" 2>>"$log" | tar -xf - -C /data 2>>"$log"
-  status=$?
+  if gunzip -c "$payload" >"$archive" 2>>"$log"; then
+    tar -xf "$archive" -C /data 2>>"$log"
+    status=$?
+  else
+    status=5
+  fi
 fi
 if [ "$status" -eq 0 ]; then
   printf 'GOTHAM-BACKUP-START %s\nGOTHAM-BACKUP-PAYLOAD %s 0\nGOTHAM-BACKUP-END %s ok\n' "$id" "$id" "$id"

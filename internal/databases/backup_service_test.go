@@ -551,6 +551,40 @@ func TestStageChunkFitsArgumentLimit(t *testing.T) {
 	}
 }
 
+// TestStageChunkDecodesBase64IntoStagedFile guards the staging contract: the
+// command argument carries base64, but the file the restore job reads must be
+// the decoded artifact bytes. Truncate on the first chunk, append after it.
+func TestStageChunkDecodesBase64IntoStagedFile(t *testing.T) {
+	fixture := newBackupFixture(t)
+	runID := fixture.database.ID
+	fixture.containers.logFn = func(containers.RunOptions) [][]byte {
+		return [][]byte{[]byte(
+			jobStartPrefix + runID.String() + "\n" +
+				jobPayloadPrefix + runID.String() + " 0\n" +
+				jobEndPrefix + runID.String() + " ok\n")}
+	}
+	staged := "/var/lib/postgresql/data/.gotham-restore/x.part"
+	if err := fixture.manager.stageChunk(context.Background(), fixture.database, runID, []byte("chunk-0"), staged, 0); err != nil {
+		t.Fatalf("stageChunk index 0: %v", err)
+	}
+	if err := fixture.manager.stageChunk(context.Background(), fixture.database, runID, []byte("chunk-1"), staged, 1); err != nil {
+		t.Fatalf("stageChunk index 1: %v", err)
+	}
+	if len(fixture.containers.runs) != 2 {
+		t.Fatalf("staging runs = %d, want 2", len(fixture.containers.runs))
+	}
+	first, second := fixture.containers.runs[0].Command[2], fixture.containers.runs[1].Command[2]
+	if !strings.Contains(first, "base64 -d > '"+staged+"'") {
+		t.Errorf("first chunk does not decode into the staged file:\n%s", first)
+	}
+	if !strings.Contains(second, "base64 -d >> '"+staged+"'") {
+		t.Errorf("later chunks do not decode with append:\n%s", second)
+	}
+	if !strings.Contains(first, base64.StdEncoding.EncodeToString([]byte("chunk-0"))) {
+		t.Error("first chunk script does not carry the encoded bytes")
+	}
+}
+
 // TestCreateTargetS3RequiresCredentials guards the target API: an s3 target
 // missing either key is rejected at create time instead of failing on the
 // first backup run.

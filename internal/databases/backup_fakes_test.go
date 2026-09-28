@@ -86,7 +86,7 @@ func defaultJobLogs(opts containers.RunOptions) [][]byte {
 				jobPayloadPrefix + runID + " 0\n" +
 				jobEndPrefix + runID + " ok\n")}
 	default:
-		return [][]byte{jobFrame(runID, []byte(dumpPayload))}
+		return [][]byte{jobFrameB64(runID, []byte(dumpPayload))}
 	}
 }
 

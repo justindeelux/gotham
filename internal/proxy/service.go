@@ -868,12 +868,13 @@ func findContainer(byID map[string]*containers.Container, containerID string) *c
 // retains it for every failure, including a dial error (R2).
 //
 // Credential redaction boundary: this is the one place where the node's
-// credential environment is known, so every error and every log line produced
-// here passes through redactEnvValues — container lifecycle failures
-// (Start/Pull/Remove/Run), agent write failures, reload verification
-// failures, the dial error and the deferred Close log alike. Callers
-// (SyncServer, RevertServer) can therefore propagate push errors to the API
-// and the logs without a second scrub.
+// credential environment is known, so every error and every log line it
+// produces is scrubbed while the env is available — container lifecycle
+// failures (Start/Pull/Remove/Run), agent write failures, reload verification
+// failures, the dial error, the convergence warning's node-reported drift
+// reason and the deferred Close log alike. Callers (SyncServer, RevertServer)
+// can therefore propagate push errors to the API and the logs without a
+// second scrub.
 func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []containers.Container, desired desiredState) (err error) {
 	// The single redaction boundary of the push path: every return below is
 	// scrubbed, including any added later.
@@ -902,8 +903,12 @@ func (s *SyncService) push(ctx context.Context, serverID uuid.UUID, nodeList []c
 			return fmt.Errorf("%w: container %s exists on the node but is not a Gotham-managed proxy (%s)",
 				ErrConflict, TraefikContainerName, reason)
 		case !matches:
+			// The drift reason is built from node-reported values (image,
+			// ports, policy), so it is scrubbed before logging even though a
+			// successful repair returns nil.
+			redactedReason, _ := redactEnvText(reason, desired.env)
 			s.logger.Warn("proxy: recreating gotham-traefik to converge managed state",
-				"server_id", serverID.String(), "reason", reason)
+				"server_id", serverID.String(), "reason", redactedReason)
 			if err := s.containers.Remove(ctx, serverID, state.container.ID); err != nil {
 				return fmt.Errorf("proxy: remove drifted gotham-traefik: %w", mapNodeError(err))
 			}
@@ -1049,6 +1054,26 @@ func (e *redactedError) Error() string { return e.message }
 // Unwrap exposes the original error to errors.Is/errors.As.
 func (e *redactedError) Unwrap() error { return e.err }
 
+// redactEnvText replaces every credential value from env in text with
+// "<redacted>" and reports whether anything was replaced. It is the string
+// form shared by redactEnvValues and the convergence warning, so node-reported
+// values logged while the credential environment is known can never carry a
+// credential.
+func redactEnvText(text string, env []string) (string, bool) {
+	redacted := false
+	for _, pair := range env {
+		_, value, ok := strings.Cut(pair, "=")
+		if !ok || value == "" {
+			continue
+		}
+		if strings.Contains(text, value) {
+			text = strings.ReplaceAll(text, value, "<redacted>")
+			redacted = true
+		}
+	}
+	return text, redacted
+}
+
 // redactEnvValues replaces every credential value from env in the error text
 // with "<redacted>", so a backend error that echoes its request cannot leak a
 // DNS-01 token into logs or API error text. Variable names and the rest of the
@@ -1059,18 +1084,7 @@ func redactEnvValues(err error, env []string) error {
 	if err == nil || len(env) == 0 {
 		return err
 	}
-	message := err.Error()
-	redacted := false
-	for _, pair := range env {
-		_, value, ok := strings.Cut(pair, "=")
-		if !ok || value == "" {
-			continue
-		}
-		if strings.Contains(message, value) {
-			message = strings.ReplaceAll(message, value, "<redacted>")
-			redacted = true
-		}
-	}
+	message, redacted := redactEnvText(err.Error(), env)
 	if !redacted {
 		return err
 	}

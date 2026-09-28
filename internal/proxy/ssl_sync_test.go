@@ -378,6 +378,41 @@ func TestRedactionPreservesErrorClassificationAndStatus(t *testing.T) {
 	}
 }
 
+// TestConvergenceWarningRedactsNodeReportedValues covers the WARN sink: a
+// managed proxy reporting an image whose tag contains the credential takes the
+// image-drift repair branch, and the logged reason must carry the redaction
+// marker and the drift context instead of the raw node-reported value.
+func TestConvergenceWarningRedactsNodeReportedValues(t *testing.T) {
+	serverID := uuid.New()
+	fixture := dnsEnvSyncFixture(t, serverID)
+	drifted := matchingTraefik()
+	drifted.Image = "traefik:" + dnsEnvToken
+	fixture.containers.list = []containers.Container{drifted, appContainer("app-container", 32768)}
+	var logs bytes.Buffer
+	fixture.service.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
+		t.Fatalf("SyncServer: %v", err)
+	}
+	output := logs.String()
+	if strings.Contains(output, dnsEnvToken) {
+		t.Fatalf("convergence warning leaked the credential into logs: %s", output)
+	}
+	if !strings.Contains(output, "<redacted>") {
+		t.Fatalf("convergence warning was not redacted: %s", output)
+	}
+	if !strings.Contains(output, "recreating gotham-traefik") {
+		t.Fatalf("convergence warning missing: %s", output)
+	}
+	// Drift context survives: which field drifted and the expected value.
+	if !strings.Contains(output, "image") || !strings.Contains(output, TraefikImage) {
+		t.Fatalf("convergence warning lost its drift context: %s", output)
+	}
+	if !strings.Contains(output, "level=WARN") {
+		t.Fatalf("drift repair must stay a WARN: %s", output)
+	}
+}
+
 // TestPushRedactsCloseErrorInLogs proves the deferred agent Close error is
 // scrubbed before it reaches the logs.
 func TestPushRedactsCloseErrorInLogs(t *testing.T) {

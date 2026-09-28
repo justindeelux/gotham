@@ -38,8 +38,12 @@
 
 The generator, the CRUD services and the bootstrap are covered by unit tests
 and by the BE-6.1 e2e suite; the unmet acceptance step was a real certificate
-obtained through a real DNS provider. It now runs as a gated test,
-`TestP6DNS01Issuance` in `internal/e2e/p6_issuance_test.go`:
+obtained through a real DNS provider. It now runs as a doubly gated test,
+`TestP6DNS01Issuance` in `internal/e2e/p6_issuance_test.go`: `GOTHAM_E2E=1`
+(shared Docker-backed suite) plus `GOTHAM_E2E_DNS01=1` (explicit live-zone
+opt-in). The shared CI E2E job sets only `GOTHAM_E2E=1`, so it skips this test
+instead of failing; once the live opt-in is present, missing credentials fail
+instead of skipping.
 
 - The Cloudflare token is preflighted (create + delete a TXT record, fatal on
   403, delete retried and registered for cleanup), the provider and the
@@ -87,16 +91,19 @@ Run:
 ```sh
 set -a; . "$HOME/.config/gotham/cf-test.env"; set +a
 export PATH=/usr/local/go/bin:$PATH
-GOTHAM_E2E=1 GOTHAM_E2E_ACME_CA=staging go test ./internal/e2e/ \
+GOTHAM_E2E=1 GOTHAM_E2E_DNS01=1 GOTHAM_E2E_ACME_CA=staging go test ./internal/e2e/ \
   -run TestP6DNS01Issuance -count=1 -timeout 15m -v
 # production burns one real, rate-limited issuance — explicit opt-in only:
-GOTHAM_E2E=1 GOTHAM_E2E_ACME_CA=production go test ./internal/e2e/ \
+GOTHAM_E2E=1 GOTHAM_E2E_DNS01=1 GOTHAM_E2E_ACME_CA=production go test ./internal/e2e/ \
   -run TestP6DNS01Issuance -count=1 -timeout 15m -v
 ```
 
-`GOTHAM_E2E_ACME_CA` defaults to `staging`, so a plain `GOTHAM_E2E=1` run can
-never consume production quota; a token without DNS edit permission stops the
-test at the preflight (403, no blind retries).
+`GOTHAM_E2E_ACME_CA` defaults to `staging`, so a live run without the CA
+selection can never consume production quota; a token without DNS edit
+permission stops the test at the preflight (403, no blind retries). The CI
+E2E job (`.github/workflows/e2e.yml`, `GOTHAM_E2E=1` only) skips this test:
+live issuance requires the owner zone and token, so the second flag is the
+explicit request for it.
 
 Observed 2026-09-28 (local Docker Desktop, dev Postgres, ports 80/443/8080,
 `gotham.deelux.dev` in `deelux.dev`; values from the hardened review-fix

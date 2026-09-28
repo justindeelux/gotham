@@ -85,6 +85,7 @@ const (
 	p6IssuanceCAEnv     = "GOTHAM_E2E_ACME_CA"
 	p6IssuanceOutEnv    = "GOTHAM_E2E_EVIDENCE_DIR"
 	p6StagingRootEnv    = "GOTHAM_E2E_STAGING_ROOT_PEM"
+	p6IssuanceOptInEnv  = "GOTHAM_E2E_DNS01"
 
 	// p6LEStagingDirectory is the Let's Encrypt staging ACME directory the
 	// caServer knob renders for staging runs; the production run leaves the
@@ -97,11 +98,16 @@ const (
 	p6TXTNamePrefix       = "_acme-challenge."
 )
 
-// TestP6DNS01Issuance is gated by GOTHAM_E2E=1 like the rest of the suite.
-// With the gate on, the credential environment is required: a missing token,
-// domain or zone fails the test instead of skipping it green.
+// TestP6DNS01Issuance is the live DNS-01 issuance acceptance. It needs two
+// explicit opt-ins: GOTHAM_E2E=1 for the Docker-backed suite and
+// GOTHAM_E2E_DNS01=1 for a real public zone and real ACME server, because the
+// CI E2E job sets only GOTHAM_E2E=1 and must skip green. Once both are set,
+// a missing credential, domain or zone fails the test instead of skipping.
 func TestP6DNS01Issuance(t *testing.T) {
 	requireE2E(t)
+	if !p6IssuanceOptIn() {
+		t.Skipf("set %s=1 (with GOTHAM_E2E=1) to run live DNS-01 issuance against the Cloudflare test zone", p6IssuanceOptInEnv)
+	}
 
 	token, domain, zone := p6IssuanceEnv(t)
 	caName, caServer := p6IssuanceCA(t)
@@ -463,14 +469,23 @@ func TestP6DNS01Issuance(t *testing.T) {
 	}, servedChain)
 }
 
-// p6IssuanceEnv reads the credential environment. GOTHAM_E2E=1 is an explicit
-// opt-in, so a missing value is a failure, never a green skip.
+// p6IssuanceOptIn reports whether live DNS-01 issuance was explicitly
+// requested. Only the exact value "1" opts in (mirroring requireE2E), so the
+// shared CI E2E job — which sets GOTHAM_E2E=1 without owner credentials —
+// skips this test instead of failing.
+func p6IssuanceOptIn() bool {
+	return os.Getenv(p6IssuanceOptInEnv) == "1"
+}
+
+// p6IssuanceEnv reads the credential environment. The GOTHAM_E2E_DNS01 opt-in
+// is an explicit request for a live issuance, so a missing value is a failure,
+// never a green skip.
 func p6IssuanceEnv(t *testing.T) (token, domain, zone string) {
 	t.Helper()
 	read := func(env string) string {
 		value := strings.TrimSpace(os.Getenv(env))
 		if value == "" {
-			t.Fatalf("GOTHAM_E2E=1 requires %s (load the owner credential file, e.g. `set -a; . $HOME/.config/gotham/cf-test.env; set +a`)", env)
+			t.Fatalf("GOTHAM_E2E_DNS01=1 requires %s (load the owner credential file, e.g. `set -a; . $HOME/.config/gotham/cf-test.env; set +a`)", env)
 		}
 		return value
 	}

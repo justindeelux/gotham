@@ -3,10 +3,10 @@
 **Goal:** automatic HTTP + HTTPS routing via Traefik with domain management.
 
 **Exit criteria (Milestone M6):**
-- [ ] Attach any domain to an application/service → reachable via domain.
-- [ ] Automatic Let's Encrypt HTTPS (HTTP-01).
-- [ ] Wildcard certs via DNS-01 (Cloudflare + 1 other provider).
-- [ ] Redirects work; cert status shown in the UI.
+- Attach any domain to an application/service → reachable via domain.
+- Automatic Let's Encrypt HTTPS (HTTP-01).
+- Wildcard certs via DNS-01 (Cloudflare + 1 other provider).
+- Redirects work; cert status shown in the UI.
 
 **Rollback:** Traefik config is generated from CP state — on error, just regenerate the config + restart Traefik (idempotent). Keep the previous config version 1 day in the DB for fast revert. Traefik itself runs as a `gotham-traefik` container on the node — upgrade by switching image tags.
 

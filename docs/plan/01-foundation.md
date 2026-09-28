@@ -3,12 +3,12 @@
 **Goal:** set up the Gotham repo foundation per the `README.md` structure, so all later phases can develop in parallel.
 
 **Exit criteria (Milestone M0):**
-- [ ] `make build` produces 2 binaries: `bin/gotham`, `bin/gotham-agent` (agent is a stub, see task 0.1).
-- [ ] `./bin/gotham serve` → `GET /healthz` returns 200 (DB check OK).
-- [ ] `make migrate` runs goose, creating the schema on local Postgres.
-- [ ] UI opens: Vue SPA served from `embed.FS`.
-- [ ] GitHub Actions CI: lint + test + build green.
-- [ ] **Gate G0**: subagent `code-reviewer` approves the whole phase before the foundation is locked.
+- `make build` produces 2 binaries: `bin/gotham`, `bin/gotham-agent` (agent is a stub, see task 0.1).
+- `./bin/gotham serve` → `GET /healthz` returns 200 (DB check OK).
+- `make migrate` runs goose, creating the schema on local Postgres.
+- UI opens: Vue SPA served from `embed.FS`.
+- GitHub Actions CI: lint + test + build green.
+- **Gate G0**: subagent `code-reviewer` approves the whole phase before the foundation is locked.
 
 **Rollback:** this phase is the starting point — if anything breaks, fix directly on main (no users, no data yet). No rollback mechanism needed.
 

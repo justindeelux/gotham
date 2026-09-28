@@ -11,24 +11,24 @@ their backend phase lands, not here. No new backend route is required by any
 package in this phase; backend-dependent widgets ship as explicit stubs.
 
 **Exit criteria:**
-- [ ] Dark-theme token layer from `assets/gotham-ui.css` ported into `web/`;
+- Dark-theme token layer from `assets/gotham-ui.css` ported into `web/`;
   Naive UI renders the dark theme everywhere (no light-theme remnants).
-- [ ] Auth screens match `login.html`: two-column shell with brand aside,
+- Auth screens match `login.html`: two-column shell with brand aside,
   tab switch, divider, GitHub outline button, 10-char/2-class password rule
   with strength meter, terms checkbox.
-- [ ] App shell matches the 72/260/48 geometry: server rail, grouped sidebar
+- App shell matches the 72/260/48 geometry: server rail, grouped sidebar
   with counts, brand lockup + version chip, composed topbar.
-- [ ] Dashboard matches `dashboard.html` structure; widgets without backend
+- Dashboard matches `dashboard.html` structure; widgets without backend
   data render as explicit empty states (never fabricated numbers).
-- [ ] Servers list matches `servers.html`: filter chips, search, threshold
+- Servers list matches `servers.html`: filter chips, search, threshold
   meters, metadata columns, empty state; status tag gains dot/pulse semantics.
-- [ ] Wizard matches `servers.html` steps: 4th Finish step, Back + step
+- Wizard matches `servers.html` steps: 4th Finish step, Back + step
   counter, passphrase field, install progress area.
-- [ ] New `/servers/:id` route renders header + Overview/Settings from the
+- New `/servers/:id` route renders header + Overview/Settings from the
   existing `getServer` API; Containers/Metrics/Proxy tabs stay stubbed until
   Phases 3/8/6.
-- [ ] All UI copy in English; no Vietnamese strings remain in `web/src`.
-- [ ] CI green on every PR (including the webdist dist-drift check).
+- All UI copy in English; no Vietnamese strings remain in `web/src`.
+- CI green on every PR (including the webdist dist-drift check).
 
 **Rollback:** pure frontend — revert the PR. `internal/server/webdist` is
 committed, so rollback is a single revert with no migration involved.

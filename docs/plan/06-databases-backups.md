@@ -3,10 +3,10 @@
 **Goal:** managed databases: create, access, backup/restore.
 
 **Exit criteria (Milestone M5):**
-- [ ] Create databases: PostgreSQL, MySQL/MariaDB, MongoDB, Redis (image map, standard env, persistent volume).
-- [ ] Optional public access (open port for external clients).
-- [ ] Manual + scheduled automatic backups, stored locally + S3-compatible (AWS S3, Cloudflare R2, MinIO).
-- [ ] Restore from backup works (delete DB → restore → data is back).
+- Create databases: PostgreSQL, MySQL/MariaDB, MongoDB, Redis (image map, standard env, persistent volume).
+- Optional public access (open port for external clients).
+- Manual + scheduled automatic backups, stored locally + S3-compatible (AWS S3, Cloudflare R2, MinIO).
+- Restore from backup works (delete DB → restore → data is back).
 
 **Rollback:** a DB is a container with its own volume — deleting a database only removes the container; the volume is kept 7 days (soft delete) before permanent removal. Backup/restore is the primary rollback mechanism.
 

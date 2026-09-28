@@ -1,0 +1,33 @@
+name: WordPress
+icon: wordpress
+description: WordPress with a MySQL database, persistent named volumes and a routed domain.
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: blog.example.com
+    help: The public host served by the node's Traefik proxy.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: db_name
+    label: Database name
+    type: text
+    default: wordpress
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: wordpress
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+    help: Used by WordPress and MySQL; choose a strong value.
+  - key: db_root_password
+    label: MySQL root password
+    type: secret
+    required: true

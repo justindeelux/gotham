@@ -1,0 +1,20 @@
+name: Uptime Kuma
+icon: uptime-kuma
+description: Uptime Kuma monitoring with a persistent named volume and a routed domain.
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: status.example.com
+    help: The public host served by the node's Traefik proxy.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: tz
+    label: Timezone
+    type: text
+    default: UTC
+    placeholder: Europe/Berlin
+    pattern: ^[A-Za-z0-9_/+-]+$
+    max_length: 64
+    help: IANA timezone name used by the container clock and notifications.

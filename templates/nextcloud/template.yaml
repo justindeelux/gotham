@@ -1,0 +1,44 @@
+name: Nextcloud
+icon: nextcloud
+description: Nextcloud with PostgreSQL and Redis, persistent named volumes and a routed domain.
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: cloud.example.com
+    help: The public host served by the node's Traefik proxy.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: admin_user
+    label: Admin user
+    type: text
+    default: admin
+    pattern: ^[A-Za-z0-9_.@-]{1,64}$
+    max_length: 64
+  - key: admin_password
+    label: Admin password
+    type: secret
+    required: true
+    help: The initial Nextcloud administrator password.
+  - key: db_name
+    label: Database name
+    type: text
+    default: nextcloud
+    pattern: ^[A-Za-z0-9_]{1,64}$
+    max_length: 64
+  - key: db_user
+    label: Database user
+    type: text
+    default: nextcloud
+    pattern: ^[A-Za-z0-9_]{1,32}$
+    max_length: 32
+  - key: db_password
+    label: Database password
+    type: secret
+    required: true
+  - key: redis_password
+    label: Redis password
+    type: secret
+    required: true
+    help: Nextcloud always ships with Redis; this protects the cache instance.

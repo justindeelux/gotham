@@ -1,0 +1,31 @@
+services:
+  wordpress:
+    image: wordpress:6-apache
+    restart: unless-stopped
+    labels:
+      gotham.domain: "{{ .domain }}"
+      gotham.domain.port: "80"
+    ports:
+      - "80"
+    environment:
+      WORDPRESS_DB_HOST: mysql:3306
+      WORDPRESS_DB_NAME: "{{ .db_name }}"
+      WORDPRESS_DB_USER: "{{ .db_user }}"
+      WORDPRESS_DB_PASSWORD: "{{ .db_password }}"
+    volumes:
+      - wordpress_data:/var/www/html
+    depends_on:
+      - mysql
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: "{{ .db_name }}"
+      MYSQL_USER: "{{ .db_user }}"
+      MYSQL_PASSWORD: "{{ .db_password }}"
+      MYSQL_ROOT_PASSWORD: "{{ .db_root_password }}"
+    volumes:
+      - mysql_data:/var/lib/mysql
+volumes:
+  wordpress_data:
+  mysql_data:

@@ -27,6 +27,7 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/templates"
 	"github.com/justindeelux/gotham/internal/webhooks"
 )
 
@@ -264,6 +265,14 @@ func (s *Server) routes() (http.Handler, error) {
 		// already hold every scope). A nil service (no database, no agent
 		// dialer, or FEATURE_SERVICES=false) mounts nothing.
 		services.Mount(api, adminOnly, UserIDFromContext, s.composeService())
+
+		// One-click templates (BE-7.2): the built-in catalog (embedded in
+		// the binary) and the render engine. The surface is read-only and
+		// stateless; a rendered document is created and deployed through
+		// the services routes above, so it shares their admin scope and
+		// rides the same FEATURE_SERVICES kill switch (a nil catalog
+		// mounts nothing).
+		templates.Mount(api, adminOnly, templates.NewDefaultService(s.logger))
 	})
 
 	spa, err := newSPAHandler()

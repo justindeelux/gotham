@@ -43,9 +43,10 @@ const (
 	deployHistoryLimit = 50
 )
 
-// maxComposeServices bounds one document's service count, matching the
-// agent's validation bound.
-const maxComposeServices = 256
+// MaxComposeServices bounds one compose document's service count, matching the
+// agent's validation bound. The template engine's load-time check reuses it so
+// a catalog entry cannot declare more services than the deploy path accepts.
+const MaxComposeServices = 256
 
 // composeServiceNamePattern is the compose service identifier alphabet.
 var composeServiceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
@@ -386,8 +387,8 @@ func Parse(document string) (ComposeSpec, error) {
 	if len(doc.Services) == 0 {
 		return ComposeSpec{}, fmt.Errorf("%w: compose document declares no services", ErrValidation)
 	}
-	if len(doc.Services) > maxComposeServices {
-		return ComposeSpec{}, fmt.Errorf("%w: compose document declares more than %d services", ErrValidation, maxComposeServices)
+	if len(doc.Services) > MaxComposeServices {
+		return ComposeSpec{}, fmt.Errorf("%w: compose document declares more than %d services", ErrValidation, MaxComposeServices)
 	}
 
 	spec := ComposeSpec{Mounts: []StorageMount{}, Domains: []DomainRoute{}}

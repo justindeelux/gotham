@@ -39,11 +39,13 @@ const applicationBody = `{
 	]
 }`
 
-// applicationWireKeys are the fields of the FE's `Application` interface; the
-// envelope must carry exactly these, or the SPA reads undefined values.
+// applicationWireKeys are the fields of the FE's `Application` interface plus
+// the additive `base_domain_disabled` visibility flag; the envelope must carry
+// exactly these, or the SPA reads undefined values.
 var applicationWireKeys = []string{
 	"id", "name", "provider", "repo", "clone_url", "branch", "build_pack",
-	"base_domain", "port", "host_port", "server_id", "created_at", "updated_at",
+	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
+	"created_at", "updated_at",
 }
 
 // assertJSONKeys fails unless body is an object with exactly the given keys.

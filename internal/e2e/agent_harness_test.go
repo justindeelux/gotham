@@ -23,6 +23,13 @@ import (
 // never outlive the run.
 func startLocalAgent(t *testing.T, ctx context.Context, engine *agent.DockerClient, nodeID string) (string, *servers.Authority) {
 	t.Helper()
+	return startLocalAgentWithOptions(t, ctx, engine, nodeID)
+}
+
+// startLocalAgentWithOptions is startLocalAgent with extra service options,
+// such as WithProxyService for the Phase 6 proxy smoke.
+func startLocalAgentWithOptions(t *testing.T, ctx context.Context, engine *agent.DockerClient, nodeID string, options ...agent.ServerOption) (string, *servers.Authority) {
+	t.Helper()
 
 	// 1. The throwaway CA and the agent's key/CSR/certificate.
 	authority, err := servers.LoadOrCreateAuthority(t.TempDir())
@@ -55,10 +62,10 @@ func startLocalAgent(t *testing.T, ctx context.Context, engine *agent.DockerClie
 		t.Fatalf("agent server credentials: %v", err)
 	}
 
-	// 2. Serve both agent services over mTLS on loopback.
+	// 2. Serve the requested agent services over mTLS on loopback.
 	logger := testLogger(t)
-	grpcServer, err := agent.NewServer("127.0.0.1:0", serverCreds, agent.NewDockerServer(engine, logger), logger,
-		agent.WithBuildService(agent.NewBuildServer(engine, logger)))
+	services := append([]agent.ServerOption{agent.WithBuildService(agent.NewBuildServer(engine, logger))}, options...)
+	grpcServer, err := agent.NewServer("127.0.0.1:0", serverCreds, agent.NewDockerServer(engine, logger), logger, services...)
 	if err != nil {
 		t.Fatalf("agent server: %v", err)
 	}

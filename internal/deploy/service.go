@@ -89,6 +89,11 @@ type Config struct {
 	// KeyRegistrar registers and removes deploy keys on the Git host; nil
 	// disables deploy-key creation (the routes answer a clear error).
 	KeyRegistrar KeyRegistrar
+	// Proxy is notified after application mutations and successful
+	// deployments so the node's Traefik configuration follows the
+	// application state. Best effort: a sync failure is logged, never
+	// returned. nil disables the notifications.
+	Proxy ProxySync
 	// Source clones the repository; nil selects git on the control plane.
 	Source Source
 	// Emitter overrides the publisher-based realtime emitter (tests).

@@ -25,6 +25,13 @@ func testDSN() string {
 	return defaultTestDSN
 }
 
+// testDSNExplicit reports whether the operator opted in by setting
+// GOTHAM_TEST_DSN: an explicit opt-in turns a missing database into a failure
+// instead of a skip.
+func testDSNExplicit() bool {
+	return os.Getenv("GOTHAM_TEST_DSN") != ""
+}
+
 // TestStoreUserRoundtrip runs the embedded migrations and verifies an insert and
 // fetch roundtrip against a real PostgreSQL server. It skips when no database is
 // reachable so CI stays green without one.

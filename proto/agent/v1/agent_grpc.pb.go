@@ -821,3 +821,123 @@ var BuildService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "agent/v1/agent.proto",
 }
+
+const (
+	ProxyService_WriteProxyConfig_FullMethodName = "/agent.v1.ProxyService/WriteProxyConfig"
+)
+
+// ProxyServiceClient is the client API for ProxyService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ProxyService runs on the node agent: the control plane pushes generated
+// Traefik configuration to the node and the agent writes it and, when asked,
+// checks that the local Traefik process still answers its ping (Phase 6,
+// BE-6.1). The ping is a liveness signal only; configuration acceptance is
+// proven by observing the resulting routes, not by the ping.
+type ProxyServiceClient interface {
+	// WriteProxyConfig writes the given Traefik configuration files under the
+	// node's proxy config directory and, when verify is set, pings the local
+	// Traefik API to confirm the proxy answered after the write.
+	WriteProxyConfig(ctx context.Context, in *WriteProxyConfigRequest, opts ...grpc.CallOption) (*WriteProxyConfigResponse, error)
+}
+
+type proxyServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewProxyServiceClient(cc grpc.ClientConnInterface) ProxyServiceClient {
+	return &proxyServiceClient{cc}
+}
+
+func (c *proxyServiceClient) WriteProxyConfig(ctx context.Context, in *WriteProxyConfigRequest, opts ...grpc.CallOption) (*WriteProxyConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WriteProxyConfigResponse)
+	err := c.cc.Invoke(ctx, ProxyService_WriteProxyConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ProxyServiceServer is the server API for ProxyService service.
+// All implementations must embed UnimplementedProxyServiceServer
+// for forward compatibility.
+//
+// ProxyService runs on the node agent: the control plane pushes generated
+// Traefik configuration to the node and the agent writes it and, when asked,
+// checks that the local Traefik process still answers its ping (Phase 6,
+// BE-6.1). The ping is a liveness signal only; configuration acceptance is
+// proven by observing the resulting routes, not by the ping.
+type ProxyServiceServer interface {
+	// WriteProxyConfig writes the given Traefik configuration files under the
+	// node's proxy config directory and, when verify is set, pings the local
+	// Traefik API to confirm the proxy answered after the write.
+	WriteProxyConfig(context.Context, *WriteProxyConfigRequest) (*WriteProxyConfigResponse, error)
+	mustEmbedUnimplementedProxyServiceServer()
+}
+
+// UnimplementedProxyServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedProxyServiceServer struct{}
+
+func (UnimplementedProxyServiceServer) WriteProxyConfig(context.Context, *WriteProxyConfigRequest) (*WriteProxyConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WriteProxyConfig not implemented")
+}
+func (UnimplementedProxyServiceServer) mustEmbedUnimplementedProxyServiceServer() {}
+func (UnimplementedProxyServiceServer) testEmbeddedByValue()                      {}
+
+// UnsafeProxyServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ProxyServiceServer will
+// result in compilation errors.
+type UnsafeProxyServiceServer interface {
+	mustEmbedUnimplementedProxyServiceServer()
+}
+
+func RegisterProxyServiceServer(s grpc.ServiceRegistrar, srv ProxyServiceServer) {
+	// If the following call panics, it indicates UnimplementedProxyServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ProxyService_ServiceDesc, srv)
+}
+
+func _ProxyService_WriteProxyConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WriteProxyConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyServiceServer).WriteProxyConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProxyService_WriteProxyConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyServiceServer).WriteProxyConfig(ctx, req.(*WriteProxyConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ProxyService_ServiceDesc is the grpc.ServiceDesc for ProxyService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ProxyService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "agent.v1.ProxyService",
+	HandlerType: (*ProxyServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "WriteProxyConfig",
+			Handler:    _ProxyService_WriteProxyConfig_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "agent/v1/agent.proto",
+}

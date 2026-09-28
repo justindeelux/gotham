@@ -21,10 +21,14 @@ type Application struct {
 	Branch     string
 	BuildPack  string
 	BaseDomain string
-	Port       int32
-	HostPort   int32
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	// BaseDomainDisabled marks a binding the domain-uniqueness migration had
+	// to disable because another application owned the domain first. The
+	// value is preserved; an explicit domain update re-enables it.
+	BaseDomainDisabled bool
+	Port               int32
+	HostPort           int32
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // Deployment is one attempt to run an application revision (kind "deploy" or

@@ -157,9 +157,13 @@ func (s *DockerServer) containerAction(
 	return &agentv1.ContainerActionResponse{ContainerId: id}, nil
 }
 
-// dockerError maps a Docker client error onto a gRPC status error.
+// dockerError maps a Docker client error onto a gRPC status error. A
+// malformed port mapping is invalid input for every caller, not an internal
+// failure.
 func dockerError(action string, err error) error {
 	switch {
+	case errors.Is(err, ErrInvalidPortMapping):
+		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, action+": context canceled")
 	case errors.Is(err, context.DeadlineExceeded):
@@ -177,6 +181,14 @@ type ServerOption func(*grpc.Server)
 func WithBuildService(build agentv1.BuildServiceServer) ServerOption {
 	return func(server *grpc.Server) {
 		agentv1.RegisterBuildServiceServer(server, build)
+	}
+}
+
+// WithProxyService registers proxy so the control plane can push generated
+// Traefik configuration to this node. Pass it to NewServer.
+func WithProxyService(proxy agentv1.ProxyServiceServer) ServerOption {
+	return func(server *grpc.Server) {
+		agentv1.RegisterProxyServiceServer(server, proxy)
 	}
 }
 

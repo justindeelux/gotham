@@ -766,10 +766,11 @@ func testApplication(userID uuid.UUID) Application {
 }
 
 // testEnv returns the standard environment fixture: one plain variable and a
-// secret sealed with providers.SealSecret, the single crypto helper.
-func testEnv(t *testing.T, secretKey string) ([]EnvVar, []Secret) {
+// secret sealed with providers.SealSecret, the single crypto helper. It always
+// seals with testSecretKey, the key newTestService wires the services with.
+func testEnv(t *testing.T) ([]EnvVar, []Secret) {
 	t.Helper()
-	sealed, err := providers.SealSecret(secretKey, "hunter2")
+	sealed, err := providers.SealSecret(testSecretKey, "hunter2")
 	if err != nil {
 		t.Fatalf("seal secret: %v", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -21,6 +22,11 @@ import (
 
 // maxLogFrame bounds the allocation for a single multiplexed log frame.
 const maxLogFrame = 16 << 20
+
+// ErrInvalidPortMapping marks a malformed port mapping. The DockerService
+// error mapper turns it into InvalidArgument so every caller sees bad input
+// as bad input instead of an internal failure.
+var ErrInvalidPortMapping = errors.New("docker: invalid port mapping")
 
 // DockerClient talks to the Docker Engine API over a unix socket or TCP
 // endpoint. It implements the subset of the engine API the agent exposes to
@@ -72,12 +78,55 @@ func (c *DockerClient) ListContainers(ctx context.Context, all bool) ([]*agentv1
 			State:  summary.State,
 			Labels: summary.Labels,
 		}
+		for _, port := range summary.Ports {
+			// Only published TCP bindings matter for routing; a binding
+			// without a public port is not reachable from another container.
+			if port.PublicPort <= 0 || (port.Type != "" && port.Type != "tcp") {
+				continue
+			}
+			info.Ports = append(info.Ports, &agentv1.PortBinding{
+				Ip:          port.IP,
+				PrivatePort: port.PrivatePort,
+				PublicPort:  port.PublicPort,
+			})
+		}
+		for _, mount := range summary.Mounts {
+			info.Mounts = append(info.Mounts, &agentv1.ContainerMount{
+				Source:      mount.Source,
+				Destination: mount.Destination,
+				ReadOnly:    !mount.RW,
+			})
+		}
+		// The restart policy is not part of the container summary; only the
+		// managed proxy container needs it, so it is inspected on demand
+		// (bounded to one container) and left empty when the engine cannot
+		// answer.
+		if summary.Labels["gotham.component"] == "proxy" {
+			info.RestartPolicy = c.restartPolicy(ctx, summary.ID)
+		}
 		if summary.Created > 0 {
 			info.CreatedAt = timestamppb.New(time.Unix(summary.Created, 0))
 		}
 		containers = append(containers, info)
 	}
 	return containers, nil
+}
+
+// restartPolicy reads a container's native Docker restart policy. It is used
+// only for the managed proxy container; an engine error yields an empty policy
+// (unknown) rather than failing the whole listing.
+func (c *DockerClient) restartPolicy(ctx context.Context, id string) string {
+	var out struct {
+		HostConfig struct {
+			RestartPolicy struct {
+				Name string `json:"Name"`
+			} `json:"RestartPolicy"`
+		} `json:"HostConfig"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/json", nil, &out); err != nil {
+		return ""
+	}
+	return out.HostConfig.RestartPolicy.Name
 }
 
 // Start starts the container with the given id.
@@ -164,7 +213,11 @@ func (c *DockerClient) CreateContainer(ctx context.Context, req *agentv1.CreateC
 	var out struct {
 		ID string `json:"Id"`
 	}
-	if err := c.doJSON(ctx, http.MethodPost, path, buildCreateBody(req), &out); err != nil {
+	body, err := buildCreateBody(req)
+	if err != nil {
+		return "", err
+	}
+	if err := c.doJSON(ctx, http.MethodPost, path, body, &out); err != nil {
 		return "", err
 	}
 	if out.ID == "" {
@@ -400,13 +453,31 @@ func emit(ctx context.Context, out chan<- []byte, data []byte) bool {
 
 // dockerContainerSummary is the subset of GET /containers/json we consume.
 type dockerContainerSummary struct {
-	ID      string            `json:"Id"`
-	Names   []string          `json:"Names"`
-	Image   string            `json:"Image"`
-	Status  string            `json:"Status"`
-	State   string            `json:"State"`
-	Created int64             `json:"Created"`
-	Labels  map[string]string `json:"Labels"`
+	ID      string               `json:"Id"`
+	Names   []string             `json:"Names"`
+	Image   string               `json:"Image"`
+	Status  string               `json:"Status"`
+	State   string               `json:"State"`
+	Created int64                `json:"Created"`
+	Labels  map[string]string    `json:"Labels"`
+	Ports   []dockerPortSummary  `json:"Ports"`
+	Mounts  []dockerMountSummary `json:"Mounts"`
+}
+
+// dockerMountSummary is one bind mount of a container summary.
+type dockerMountSummary struct {
+	Source      string `json:"Source"`
+	Destination string `json:"Destination"`
+	Mode        string `json:"Mode"`
+	RW          bool   `json:"RW"`
+}
+
+// dockerPortSummary is one published port of a container summary.
+type dockerPortSummary struct {
+	IP          string `json:"IP"`
+	PrivatePort int32  `json:"PrivatePort"`
+	PublicPort  int32  `json:"PublicPort"`
+	Type        string `json:"Type"`
 }
 
 // containerName returns the first container name without its leading slash.
@@ -452,8 +523,11 @@ type dockerNetworkingCfg struct {
 	EndpointsConfig map[string]struct{} `json:"EndpointsConfig,omitempty"`
 }
 
-// buildCreateBody maps the proto request onto the Docker container-create body.
-func buildCreateBody(req *agentv1.CreateContainerRequest) *dockerCreateBody {
+// buildCreateBody maps the proto request onto the Docker container-create
+// body. A malformed port mapping is an error rather than a silently dropped
+// binding: dropping it would leave the container without a mapping the caller
+// believes exists.
+func buildCreateBody(req *agentv1.CreateContainerRequest) (*dockerCreateBody, error) {
 	body := &dockerCreateBody{
 		Image:      req.GetImage(),
 		Env:        req.GetEnv(),
@@ -464,9 +538,9 @@ func buildCreateBody(req *agentv1.CreateContainerRequest) *dockerCreateBody {
 
 	host := &dockerHostConfig{}
 	for _, spec := range req.GetPorts() {
-		hostPort, containerPort, ok := splitPortSpec(spec)
-		if !ok {
-			continue
+		hostIP, hostPort, containerPort, err := parsePortSpec(spec)
+		if err != nil {
+			return nil, err
 		}
 		key := containerPort + "/tcp"
 		if body.ExposedPorts == nil {
@@ -476,12 +550,15 @@ func buildCreateBody(req *agentv1.CreateContainerRequest) *dockerCreateBody {
 		if host.PortBindings == nil {
 			host.PortBindings = map[string][]dockerPort{}
 		}
-		host.PortBindings[key] = append(host.PortBindings[key], dockerPort{HostPort: hostPort})
+		host.PortBindings[key] = append(host.PortBindings[key], dockerPort{HostIP: hostIP, HostPort: hostPort})
 	}
 	if binds := req.GetVolumes(); len(binds) > 0 {
 		host.Binds = binds
 	}
-	if len(host.Binds) > 0 || len(host.PortBindings) > 0 {
+	if policy := strings.TrimSpace(req.GetRestartPolicy()); policy != "" {
+		host.RestartPolicy = &dockerRestartPolicy{Name: policy}
+	}
+	if len(host.Binds) > 0 || len(host.PortBindings) > 0 || host.RestartPolicy != nil {
 		body.HostConfig = host
 	}
 
@@ -496,28 +573,88 @@ func buildCreateBody(req *agentv1.CreateContainerRequest) *dockerCreateBody {
 			body.NetworkingConfig = &dockerNetworkingCfg{EndpointsConfig: endpoints}
 		}
 	}
-	return body
+	return body, nil
 }
 
-// splitPortSpec parses a "host:container" mapping. A bare "container" spec maps
-// to a Docker-assigned host port.
-func splitPortSpec(spec string) (host, container string, ok bool) {
+// parsePortSpec parses a publish mapping: "container", "host:container" or
+// "host-ip:host:container" (the production Traefik ping uses the last form to
+// bind 8080 to loopback only). A bare "container" spec maps to a
+// Docker-assigned host port, and an explicit host port of 0 asks Docker for an
+// ephemeral one. Container ports must be 1..65535, host ports 0..65535 and a
+// host IP must be a canonical unbracketed IPv4 literal (IPv6 literals cannot
+// be expressed unambiguously in this colon-separated form). Malformed input is
+// an error, never a dropped binding.
+func parsePortSpec(spec string) (hostIP, hostPort, containerPort string, err error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
-		return "", "", false
+		return "", "", "", fmt.Errorf("%w: empty mapping", ErrInvalidPortMapping)
 	}
-	if host, container, found := strings.Cut(spec, ":"); found {
-		host = strings.TrimSpace(host)
-		container = strings.TrimSpace(container)
-		if !allDigits(container) {
-			return "", "", false
+	parts := strings.Split(spec, ":")
+	switch len(parts) {
+	case 1:
+		if err := validatePort(parts[0], false); err != nil {
+			return "", "", "", fmt.Errorf("%w: %q", ErrInvalidPortMapping, spec)
 		}
-		return host, container, true
+		return "", "", parts[0], nil
+	case 2:
+		hostPort = strings.TrimSpace(parts[0])
+		containerPort = strings.TrimSpace(parts[1])
+		if err := validatePort(containerPort, false); err != nil {
+			return "", "", "", fmt.Errorf("%w: %q", ErrInvalidPortMapping, spec)
+		}
+		if hostPort != "" {
+			if err := validatePort(hostPort, true); err != nil {
+				return "", "", "", fmt.Errorf("%w: %q", ErrInvalidPortMapping, spec)
+			}
+		}
+		return "", hostPort, containerPort, nil
+	case 3:
+		hostIP = strings.TrimSpace(parts[0])
+		hostPort = strings.TrimSpace(parts[1])
+		containerPort = strings.TrimSpace(parts[2])
+		if err := validatePort(containerPort, false); err != nil {
+			return "", "", "", fmt.Errorf("%w: %q", ErrInvalidPortMapping, spec)
+		}
+		if err := validatePort(hostPort, true); err != nil {
+			return "", "", "", fmt.Errorf("%w: %q", ErrInvalidPortMapping, spec)
+		}
+		if !canonicalIPv4(hostIP) {
+			return "", "", "", fmt.Errorf("%w: %q has no canonical IPv4 host ip", ErrInvalidPortMapping, spec)
+		}
+		return hostIP, hostPort, containerPort, nil
+	default:
+		return "", "", "", fmt.Errorf("%w: %q", ErrInvalidPortMapping, spec)
 	}
-	if !allDigits(spec) {
-		return "", "", false
+}
+
+// validatePort enforces 1..65535 (0..65535 when allowZeroHost is set: a host
+// port of 0 asks Docker for an ephemeral publication).
+func validatePort(raw string, allowZeroHost bool) error {
+	if !allDigits(raw) {
+		return ErrInvalidPortMapping
 	}
-	return "", spec, true
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return ErrInvalidPortMapping
+	}
+	minimum := 1
+	if allowZeroHost {
+		minimum = 0
+	}
+	if value < minimum || value > 65535 {
+		return ErrInvalidPortMapping
+	}
+	return nil
+}
+
+// canonicalIPv4 reports whether ip is a plain IPv4 literal in canonical form
+// (rejecting bracketed and zero-padded spellings).
+func canonicalIPv4(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil {
+		return false
+	}
+	return parsed.String() == ip
 }
 
 // allDigits reports whether s is a non-empty string of ASCII digits.

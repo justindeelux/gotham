@@ -58,6 +58,50 @@ service BuildService {
   rpc BuildImage(stream BuildImageRequest) returns (stream BuildImageResponse);
 }
 
+// ProxyService runs on the node agent: the control plane pushes generated
+// Traefik configuration to the node and the agent writes it and, when asked,
+// checks that the local Traefik process still answers its ping (Phase 6,
+// BE-6.1). The ping is a liveness signal only; configuration acceptance is
+// proven by observing the resulting routes, not by the ping.
+service ProxyService {
+  // WriteProxyConfig writes the given Traefik configuration files under the
+  // node's proxy config directory and, when verify is set, pings the local
+  // Traefik API to confirm the proxy answered after the write.
+  rpc WriteProxyConfig(WriteProxyConfigRequest) returns (WriteProxyConfigResponse);
+}
+
+// ProxyConfigFile is one generated Traefik configuration document.
+message ProxyConfigFile {
+  // path is relative to the node's proxy config directory, e.g. "traefik.yml"
+  // or "dynamic/gotham.yml". Absolute paths and paths containing ".." are
+  // rejected so a compromised control plane cannot escape the config dir.
+  string path = 1;
+  // content is the rendered document (YAML or TOML).
+  bytes content = 2;
+}
+
+// WriteProxyConfigRequest carries the files to write.
+message WriteProxyConfigRequest {
+  repeated ProxyConfigFile files = 1;
+  // verify asks the agent to ping Traefik after the write. When false the
+  // agent only writes (used before the Traefik container exists).
+  bool verify = 2;
+}
+
+// WriteProxyConfigResponse reports what the agent did.
+message WriteProxyConfigResponse {
+  // written lists the relative paths that were written.
+  repeated string written = 1;
+  // reloaded is true when verify was set and Traefik answered its ping after
+  // the write. Traefik documents /ping as process liveness and reloads
+  // configuration asynchronously, so this is a health signal, not a claim
+  // that the document was accepted.
+  bool reloaded = 2;
+  // ping_error carries the ping failure detail when reloaded is false and
+  // verify was set; empty otherwise.
+  string ping_error = 3;
+}
+
 // RegisterRequest carries the node's static identity and capabilities.
 message RegisterRequest {
   string node_id = 1;
@@ -118,6 +162,34 @@ message ContainerInfo {
   string state = 5;
   google.protobuf.Timestamp created_at = 6;
   map<string, string> labels = 7;
+  // ports are the published bindings Docker reports for the container; empty
+  // for a container with no published ports or an engine that reports none.
+  repeated PortBinding ports = 8;
+  // mounts are the container's bind mounts as the engine reports them.
+  repeated ContainerMount mounts = 9;
+  // restart_policy is the container's native Docker restart policy. The agent
+  // fills it for managed proxy containers only; empty means unknown.
+  string restart_policy = 10;
+}
+
+// ContainerMount is one bind mount of a container.
+message ContainerMount {
+  // source is the host path of the mount.
+  string source = 1;
+  // destination is the path inside the container.
+  string destination = 2;
+  // read_only is true for a read-only mount.
+  bool read_only = 3;
+}
+
+// PortBinding is one published container port as the engine reports it.
+message PortBinding {
+  // ip is the host bind address, e.g. "0.0.0.0" or "127.0.0.1".
+  string ip = 1;
+  // private_port is the container port.
+  int32 private_port = 2;
+  // public_port is the host port.
+  int32 public_port = 3;
 }
 
 message ListContainersResponse {
@@ -149,9 +221,12 @@ message CreateContainerRequest {
   repeated string command = 4;
   repeated string entrypoint = 5;
   map<string, string> labels = 6;
-  repeated string ports = 7;     // host:container
-  repeated string volumes = 8;   // host:container
+  repeated string ports = 7;     // [host-ip:]host:container (bare container port allowed)
+  repeated string volumes = 8;   // host:container[:ro]
   repeated string networks = 9;
+  // restart_policy is the native Docker restart policy name ("always",
+  // "unless-stopped", "on-failure"); empty leaves Docker's default.
+  string restart_policy = 10;
 }
 
 // StreamLogsRequest tails the logs of one container.

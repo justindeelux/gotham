@@ -212,6 +212,25 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A validated node gets its proxy bootstrapped so the first domain attach
+	// does not depend on a manual sync. The sync is idempotent (it only
+	// creates the container when missing and rewrites byte-identical files
+	// otherwise) and runs in the background: pulling the Traefik image can
+	// take a minute, and the validation response must not wait for it. A
+	// failure is logged and retried by the next domain change or a manual
+	// POST /v1/proxy/sync.
+	if s.proxy != nil {
+		// The context is detached from the request before the goroutine
+		// starts, because a Request's context is invalidated when the handler
+		// returns.
+		bootstrapCtx := context.WithoutCancel(r.Context())
+		go func() {
+			if err := s.proxy.SyncServer(bootstrapCtx, id); err != nil {
+				s.logger.Warn("servers: traefik bootstrap failed", "server_id", id.String(), "error", err)
+			}
+		}()
+	}
+
 	writeJSON(w, http.StatusOK, validateResponse{
 		Checks: result.Checks,
 		Server: serverDTOPtr(result.Server),

@@ -66,7 +66,8 @@ type dockerDialConfig struct {
 	dialOpts   []grpc.DialOption
 }
 
-// DockerDialOption customizes DialDockerClient.
+// DockerDialOption customizes an agent dial (DialDockerClient, DialProxyClient
+// and their registry-resolved variants).
 type DockerDialOption func(*dockerDialConfig)
 
 // WithDockerServerName overrides the TLS server name used to verify the
@@ -97,6 +98,21 @@ func WithDockerDialOptions(opts ...grpc.DialOption) DockerDialOption {
 // server certificate against Authority.Pool. No cert logic is duplicated here.
 // A nil authority selects insecure transport for local development only.
 func DialDockerClient(ctx context.Context, target string, authority *Authority, opts ...DockerDialOption) (*DockerClient, error) {
+	conn, err := dialAgentConn(ctx, target, authority, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &DockerClient{
+		DockerServiceClient: agentv1.NewDockerServiceClient(conn),
+		conn:                conn,
+	}, nil
+}
+
+// dialAgentConn opens a gRPC connection to an agent endpoint over the shared
+// transport configuration: target normalization, TLS server name, the Phase 2
+// credentials and the caller's raw dial options. The caller owns the returned
+// connection.
+func dialAgentConn(ctx context.Context, target string, authority *Authority, opts ...DockerDialOption) (*grpc.ClientConn, error) {
 	if ctx == nil {
 		return nil, errors.New("servers: context is nil")
 	}
@@ -133,10 +149,7 @@ func DialDockerClient(ctx context.Context, target string, authority *Authority, 
 	if err != nil {
 		return nil, fmt.Errorf("servers: dial agent %s: %w", target, err)
 	}
-	return &DockerClient{
-		DockerServiceClient: agentv1.NewDockerServiceClient(conn),
-		conn:                conn,
-	}, nil
+	return conn, nil
 }
 
 // dockerTransportCredentials builds the dial credentials from the Phase 2
@@ -232,7 +245,14 @@ func (s *ServerService) DialDockerClient(ctx context.Context, id uuid.UUID, opts
 	if err != nil {
 		return nil, err
 	}
-	return s.dialResolved(ctx, target, serverName, opts)
+	conn, err := s.dialResolved(ctx, target, serverName, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &DockerClient{
+		DockerServiceClient: agentv1.NewDockerServiceClient(conn),
+		conn:                conn,
+	}, nil
 }
 
 // DialDockerClientByNodeID dials the agent for the node id. The caller must
@@ -242,19 +262,26 @@ func (s *ServerService) DialDockerClientByNodeID(ctx context.Context, nodeID str
 	if err != nil {
 		return nil, err
 	}
-	return s.dialResolved(ctx, target, serverName, opts)
+	conn, err := s.dialResolved(ctx, target, serverName, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &DockerClient{
+		DockerServiceClient: agentv1.NewDockerServiceClient(conn),
+		conn:                conn,
+	}, nil
 }
 
 // dialResolved dials a registry-resolved target, injecting the resolved
 // server name unless the caller overrode it explicitly.
-func (s *ServerService) dialResolved(ctx context.Context, target, serverName string, opts []DockerDialOption) (*DockerClient, error) {
+func (s *ServerService) dialResolved(ctx context.Context, target, serverName string, opts []DockerDialOption) (*grpc.ClientConn, error) {
 	if s == nil {
 		return nil, errors.New("servers: service is nil")
 	}
 	if !hasServerNameOverride(opts) && serverName != "" {
 		opts = append([]DockerDialOption{WithDockerServerName(serverName)}, opts...)
 	}
-	return DialDockerClient(ctx, target, s.authority, opts...)
+	return dialAgentConn(ctx, target, s.authority, opts...)
 }
 
 // hasServerNameOverride reports whether opts carry an explicit server name.

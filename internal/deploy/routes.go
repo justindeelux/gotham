@@ -63,19 +63,23 @@ type rollbackRequest struct {
 // `Application` in web/src/api/applications.ts field for field: server_id is
 // null while no node is assigned.
 type applicationResponse struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Provider   string    `json:"provider"`
-	Repo       string    `json:"repo"`
-	CloneURL   string    `json:"clone_url"`
-	Branch     string    `json:"branch"`
-	BuildPack  string    `json:"build_pack"`
-	BaseDomain string    `json:"base_domain"`
-	Port       int32     `json:"port"`
-	HostPort   int32     `json:"host_port"`
-	ServerID   *string   `json:"server_id"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Provider   string `json:"provider"`
+	Repo       string `json:"repo"`
+	CloneURL   string `json:"clone_url"`
+	Branch     string `json:"branch"`
+	BuildPack  string `json:"build_pack"`
+	BaseDomain string `json:"base_domain"`
+	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
+	// migration (legacy duplicate); the value is preserved and an explicit
+	// domain update re-enables it.
+	BaseDomainDisabled bool      `json:"base_domain_disabled"`
+	Port               int32     `json:"port"`
+	HostPort           int32     `json:"host_port"`
+	ServerID           *string   `json:"server_id"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // applicationEnvelope wraps a single application.
@@ -720,18 +724,19 @@ func wireStorages(storages []Storage) []storageRequest {
 // newApplicationResponse maps a domain application to its wire representation.
 func newApplicationResponse(application Application) applicationResponse {
 	response := applicationResponse{
-		ID:         application.ID.String(),
-		Name:       application.Name,
-		Provider:   application.Provider,
-		Repo:       application.Repo,
-		CloneURL:   application.CloneURL,
-		Branch:     application.Branch,
-		BuildPack:  application.BuildPack,
-		BaseDomain: application.BaseDomain,
-		Port:       application.Port,
-		HostPort:   application.HostPort,
-		CreatedAt:  application.CreatedAt,
-		UpdatedAt:  application.UpdatedAt,
+		ID:                 application.ID.String(),
+		Name:               application.Name,
+		Provider:           application.Provider,
+		Repo:               application.Repo,
+		CloneURL:           application.CloneURL,
+		Branch:             application.Branch,
+		BuildPack:          application.BuildPack,
+		BaseDomain:         application.BaseDomain,
+		BaseDomainDisabled: application.BaseDomainDisabled,
+		Port:               application.Port,
+		HostPort:           application.HostPort,
+		CreatedAt:          application.CreatedAt,
+		UpdatedAt:          application.UpdatedAt,
 	}
 	if application.ServerID != uuid.Nil {
 		serverID := application.ServerID.String()

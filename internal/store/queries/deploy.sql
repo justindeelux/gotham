@@ -23,6 +23,7 @@ SET name = $2,
     port = $6,
     host_port = $7,
     server_id = $8,
+    base_domain_disabled = $9,
     updated_at = now()
 WHERE id = $1
 RETURNING *;

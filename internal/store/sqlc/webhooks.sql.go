@@ -123,7 +123,7 @@ func (q *Queries) DeleteWebhookEvent(ctx context.Context, id pgtype.UUID) error 
 }
 
 const getApplicationForUser = `-- name: GetApplicationForUser :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled FROM applications
 WHERE id = $1 AND user_id = $2
 `
 
@@ -150,6 +150,7 @@ func (q *Queries) GetApplicationForUser(ctx context.Context, arg GetApplicationF
 		&i.HostPort,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BaseDomainDisabled,
 	)
 	return i, err
 }

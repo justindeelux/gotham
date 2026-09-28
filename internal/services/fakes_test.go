@@ -121,17 +121,41 @@ func (r *fakeRepository) ListServicesByUser(_ context.Context, userID uuid.UUID)
 	return services, nil
 }
 
-// UpdateService implements Repository.
-func (r *fakeRepository) UpdateService(_ context.Context, service Service) (Service, error) {
+// UpdateServiceConfig implements Repository. Only the configuration fields
+// are written; the status column is left alone.
+func (r *fakeRepository) UpdateServiceConfig(_ context.Context, service Service) (Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.updateErr != nil {
 		return Service{}, r.updateErr
 	}
-	if _, ok := r.services[service.ID]; !ok || !r.live(r.services[service.ID]) {
+	existing, ok := r.services[service.ID]
+	if !ok || !r.live(existing) {
 		return Service{}, ErrNotFound
 	}
-	r.services[service.ID] = service
+	for _, id := range r.order {
+		other := r.services[id]
+		if other.UserID == service.UserID && other.Name == service.Name && other.ID != service.ID && r.live(other) {
+			return Service{}, ErrConflict
+		}
+	}
+	existing.Name = service.Name
+	existing.ComposeYAML = service.ComposeYAML
+	existing.Env = service.Env
+	r.services[service.ID] = existing
+	return existing, nil
+}
+
+// UpdateServiceStatus implements Repository. Only the status is written.
+func (r *fakeRepository) UpdateServiceStatus(_ context.Context, serviceID uuid.UUID, status Status) (Service, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	service, ok := r.services[serviceID]
+	if !ok || !r.live(service) {
+		return Service{}, ErrNotFound
+	}
+	service.Status = status
+	r.services[serviceID] = service
 	return service, nil
 }
 
@@ -213,18 +237,29 @@ type fakeAgent struct {
 	logsErr     error
 
 	services  []string
+	streamErr error
 	validated []string
 	ups       []fakeUp
-	downs     []string
+	downs     []fakeDown
 	psCalls   []string
 	logCalls  []fakeLogs
 	chunks    [][]byte
+	// closes counts Close calls; ups may block on upGate so tests can set up
+	// an interleaving.
+	closes int
+	upGate chan struct{}
 }
 
 type fakeUp struct {
 	project string
 	yaml    string
 	restart bool
+}
+
+// fakeDown records one Down call.
+type fakeDown struct {
+	project string
+	yaml    string
 }
 
 type fakeLogs struct {
@@ -252,15 +287,20 @@ func (a *fakeAgent) Validate(_ context.Context, project string, composeYAML []by
 
 func (a *fakeAgent) Up(_ context.Context, project string, composeYAML []byte, restart bool) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.ups = append(a.ups, fakeUp{project: project, yaml: string(composeYAML), restart: restart})
-	return a.upErr
+	gate := a.upGate
+	err := a.upErr
+	a.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	return err
 }
 
 func (a *fakeAgent) Down(_ context.Context, project string, composeYAML []byte) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.downs = append(a.downs, project)
+	a.downs = append(a.downs, fakeDown{project: project, yaml: string(composeYAML)})
 	return a.downErr
 }
 
@@ -274,7 +314,7 @@ func (a *fakeAgent) Ps(_ context.Context, project string) ([]ComposeContainer, e
 	return []ComposeContainer{{Service: "web", State: "running"}}, nil
 }
 
-func (a *fakeAgent) Logs(_ context.Context, project, service string, tail int64, follow bool) (<-chan []byte, error) {
+func (a *fakeAgent) Logs(_ context.Context, project, service string, tail int64, follow bool) (LogStream, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.logCalls = append(a.logCalls, fakeLogs{project: project, service: service, tail: tail, follow: follow})
@@ -286,7 +326,44 @@ func (a *fakeAgent) Logs(_ context.Context, project, service string, tail int64,
 		chunks <- chunk
 	}
 	close(chunks)
-	return chunks, nil
+	stream := &fakeLogStream{chunks: chunks, streamErr: a.streamErr, close: func() {
+		a.mu.Lock()
+		a.closes++
+		a.mu.Unlock()
+	}}
+	return stream, nil
+}
+
+// Close implements ComposeAgent.
+func (a *fakeAgent) Close() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.closes++
+	return nil
+}
+
+// currentCloses returns the number of Close calls recorded so far.
+func (a *fakeAgent) currentCloses() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.closes
+}
+
+// fakeLogStream is the fake LogStream with a scriptable terminal error and
+// close callback.
+type fakeLogStream struct {
+	chunks    <-chan []byte
+	streamErr error
+	close     func()
+}
+
+func (s *fakeLogStream) Chunks() <-chan []byte { return s.chunks }
+func (s *fakeLogStream) Err() error            { return s.streamErr }
+func (s *fakeLogStream) Close() error {
+	if s.close != nil {
+		s.close()
+	}
+	return nil
 }
 
 // lastUp returns the most recent Up call.
@@ -298,6 +375,28 @@ func (a *fakeAgent) lastUp(t *testing.T) fakeUp {
 		t.Fatalf("no Up call recorded")
 	}
 	return a.ups[len(a.ups)-1]
+}
+
+// fakeRouteSync records the proxy resyncs a lifecycle change triggers.
+type fakeRouteSync struct {
+	mu        sync.Mutex
+	serverIDs []uuid.UUID
+	err       error
+}
+
+// SyncServer implements RouteSync.
+func (f *fakeRouteSync) SyncServer(_ context.Context, serverID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.serverIDs = append(f.serverIDs, serverID)
+	return f.err
+}
+
+// calls returns the recorded server ids.
+func (f *fakeRouteSync) calls() []uuid.UUID {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]uuid.UUID{}, f.serverIDs...)
 }
 
 // nowUTC is a tiny indirection so tests do not import time just for a

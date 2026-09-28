@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
@@ -86,6 +88,68 @@ func seedUserAndServer(t *testing.T, st *store.Store) (uuid.UUID, uuid.UUID) {
 	return uuidFromPG(user.ID), uuidFromPG(server.ID)
 }
 
+// TestProxySourceRendersDomainMap proves the proxy adapter derives the routing
+// input from the stored document and environment (no stored copy), reports an
+// unrenderable routing document as unroutable, and skips services without
+// domains.
+func TestProxySourceRendersDomainMap(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+
+	routed, err := repo.CreateService(ctx, Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, Name: "routed", Status: StatusRunning,
+		ComposeYAML: testDocument, Env: testEnv,
+	})
+	if err != nil {
+		t.Fatalf("CreateService(routed): %v", err)
+	}
+	unrouted, err := repo.CreateService(ctx, Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, Name: "plain", Status: StatusRunning,
+		ComposeYAML: "services:\n  web:\n    image: nginx:1.23\n", Env: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("CreateService(plain): %v", err)
+	}
+	broken, err := repo.CreateService(ctx, Service{
+		ID: uuid.New(), UserID: ownerID, ServerID: serverID, Name: "broken", Status: StatusRunning,
+		ComposeYAML: testDocument, Env: map[string]string{}, // DOMAIN/PASSWORD unresolved
+	})
+	if err != nil {
+		t.Fatalf("CreateService(broken): %v", err)
+	}
+
+	proxied, err := NewProxySource(st).ListProxiedServices(ctx)
+	if err != nil {
+		t.Fatalf("ListProxiedServices: %v", err)
+	}
+	byID := map[uuid.UUID]proxy.ProxiedService{}
+	for _, entry := range proxied {
+		byID[entry.ID] = entry
+	}
+	if _, ok := byID[unrouted.ID]; ok {
+		t.Errorf("a service without routing labels must not be listed: %+v", byID[unrouted.ID])
+	}
+	routedEntry, ok := byID[routed.ID]
+	if !ok {
+		t.Fatalf("the routed service is missing from %+v", proxied)
+	}
+	if routedEntry.Project != ProjectName(routed.ID) || routedEntry.ServerID != serverID {
+		t.Errorf("entry = %+v", routedEntry)
+	}
+	if len(routedEntry.Domains) != 1 || routedEntry.Domains[0].Host != "app.example.com" ||
+		routedEntry.Domains[0].Service != "web" || routedEntry.Domains[0].Port != 80 {
+		t.Errorf("domains = %+v", routedEntry.Domains)
+	}
+	brokenEntry, ok := byID[broken.ID]
+	if !ok || brokenEntry.Unroutable == "" {
+		t.Fatalf("an unrenderable routing document must be reported unroutable: %+v", byID[broken.ID])
+	}
+	if strings.Contains(brokenEntry.Unroutable, "hunter2-secret") {
+		t.Errorf("the unroutable reason leaked an environment value: %q", brokenEntry.Unroutable)
+	}
+}
+
 // TestRepositoryRoundTrip exercises the SQL behind the repository: the
 // migrations, ownership reads, the unique-name index, the jsonb environment,
 // the deploy history and the soft delete that keeps the volumes.
@@ -141,13 +205,23 @@ func TestRepositoryRoundTrip(t *testing.T) {
 
 	// Status vocabulary is enforced by the CHECK constraint.
 	created.Status = "not-a-status"
-	if _, err := repo.UpdateService(ctx, created); err == nil {
+	if _, err := repo.UpdateServiceStatus(ctx, created.ID, created.Status); err == nil {
 		t.Error("an unknown status must be rejected by the CHECK constraint")
 	}
 	created.Status = StatusRunning
 	created.Name = "renamed"
-	if _, err := repo.UpdateService(ctx, created); err != nil {
-		t.Fatalf("UpdateService: %v", err)
+	updated, err := repo.UpdateServiceConfig(ctx, created)
+	if err != nil {
+		t.Fatalf("UpdateServiceConfig: %v", err)
+	}
+	if updated.Status != StatusCreating {
+		t.Errorf("a configuration write must not change the status, got %q", updated.Status)
+	}
+	if _, err := repo.UpdateServiceStatus(ctx, created.ID, StatusRunning); err != nil {
+		t.Fatalf("UpdateServiceStatus: %v", err)
+	}
+	if _, err := repo.UpdateServiceStatus(ctx, created.ID, StatusRunning); err != nil {
+		t.Fatalf("UpdateServiceStatus (again): %v", err)
 	}
 
 	// Deploy history: newest first, snapshot preserved, error recorded.

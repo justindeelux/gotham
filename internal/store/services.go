@@ -25,10 +25,23 @@ func (s *Store) ListServicesByUser(ctx context.Context, userID pgtype.UUID) ([]s
 	return s.queries.ListServicesByUser(ctx, userID)
 }
 
-// UpdateService persists the mutable service fields (name, document,
-// environment, status) and returns the row.
-func (s *Store) UpdateService(ctx context.Context, params sqlc.UpdateServiceParams) (sqlc.Service, error) {
-	return s.queries.UpdateService(ctx, params)
+// UpdateServiceConfig persists the mutable service configuration (name,
+// document, environment) without touching the status column, so a lifecycle
+// completion and a configuration edit cannot overwrite each other.
+func (s *Store) UpdateServiceConfig(ctx context.Context, params sqlc.UpdateServiceConfigParams) (sqlc.Service, error) {
+	return s.queries.UpdateServiceConfig(ctx, params)
+}
+
+// UpdateServiceStatus writes only the status column of a live service.
+func (s *Store) UpdateServiceStatus(ctx context.Context, params sqlc.UpdateServiceStatusParams) (sqlc.Service, error) {
+	return s.queries.UpdateServiceStatus(ctx, params)
+}
+
+// ListRoutableServices returns every live service in creation order. The
+// proxy source renders each row's domain map from its current document and
+// environment; no rendered state is stored twice.
+func (s *Store) ListRoutableServices(ctx context.Context) ([]sqlc.Service, error) {
+	return s.queries.ListRoutableServices(ctx)
 }
 
 // SoftDeleteService marks a service deleted without touching its named

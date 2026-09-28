@@ -47,11 +47,6 @@ const (
 // agent's validation bound.
 const maxComposeServices = 256
 
-// minRedactValue is the shortest environment value Redact replaces. Shorter
-// values ("80", "1") are common enough in CLI messages that replacing them
-// would destroy the message without protecting anything meaningful.
-const minRedactValue = 3
-
 // composeServiceNamePattern is the compose service identifier alphabet.
 var composeServiceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 
@@ -133,7 +128,11 @@ func Interpolate(document string, env map[string]string) (string, error) {
 	if err := yaml.Unmarshal([]byte(document), &node); err != nil {
 		return "", fmt.Errorf("%w: compose document is not valid YAML: %v", ErrValidation, err)
 	}
-	if err := interpolateNode(&node, env); err != nil {
+	// The rendered size is enforced while the document is built, not after:
+	// a small document with repeated references would otherwise expand to
+	// allocate an unbounded string before any limit applies.
+	remaining := MaxComposeYAML
+	if err := interpolateNode(&node, env, &remaining); err != nil {
 		return "", err
 	}
 	var buf bytes.Buffer
@@ -149,20 +148,24 @@ func Interpolate(document string, env map[string]string) (string, error) {
 }
 
 // interpolateNode walks a YAML node tree and substitutes every string scalar.
-func interpolateNode(node *yaml.Node, env map[string]string) error {
+// remaining is the rendered-size budget shared by every scalar; it is
+// decremented as values are rendered so a document of repeated references
+// stops at the document limit instead of expanding without bound.
+func interpolateNode(node *yaml.Node, env map[string]string, remaining *int) error {
 	switch node.Kind {
 	case yaml.DocumentNode, yaml.SequenceNode, yaml.MappingNode:
 		for _, child := range node.Content {
-			if err := interpolateNode(child, env); err != nil {
+			if err := interpolateNode(child, env, remaining); err != nil {
 				return err
 			}
 		}
 	case yaml.ScalarNode:
 		if node.Tag == "" || node.Tag == "!!str" {
-			rendered, err := interpolateString(node.Value, env)
+			rendered, err := interpolateString(node.Value, env, *remaining)
 			if err != nil {
 				return err
 			}
+			*remaining -= len(rendered)
 			node.Value = rendered
 			node.Tag = "!!str"
 			node.Style = 0
@@ -172,22 +175,42 @@ func interpolateNode(node *yaml.Node, env map[string]string) error {
 }
 
 // interpolateString resolves one scalar value. See Interpolate for the
-// supported forms.
-func interpolateString(value string, env map[string]string) (string, error) {
+// supported forms. limit is the remaining rendered-size budget: a value that
+// would exceed it fails before the oversized string is built.
+func interpolateString(value string, env map[string]string, limit int) (string, error) {
 	var out strings.Builder
+	appendValue := func(resolved string) error {
+		if len(resolved) > limit-out.Len() {
+			return fmt.Errorf("%w: rendered compose document exceeds %d bytes", ErrValidation, MaxComposeYAML)
+		}
+		out.WriteString(escapeDollar(resolved))
+		return nil
+	}
+	tooLarge := func() error {
+		return fmt.Errorf("%w: rendered compose document exceeds %d bytes", ErrValidation, MaxComposeYAML)
+	}
 	for i := 0; i < len(value); {
 		if value[i] != '$' {
+			if out.Len()+1 > limit {
+				return "", tooLarge()
+			}
 			out.WriteByte(value[i])
 			i++
 			continue
 		}
 		if i+1 >= len(value) {
+			if out.Len()+2 > limit {
+				return "", tooLarge()
+			}
 			out.WriteString("$$")
 			i++
 			continue
 		}
 		switch next := value[i+1]; next {
 		case '$':
+			if out.Len()+2 > limit {
+				return "", tooLarge()
+			}
 			out.WriteString("$$")
 			i += 2
 		case '{':
@@ -199,12 +222,17 @@ func interpolateString(value string, env map[string]string) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			out.WriteString(escapeDollar(resolved))
+			if err := appendValue(resolved); err != nil {
+				return "", err
+			}
 			i += 2 + end + 1
 		default:
 			// A short reference must start with a name character; "$5" is a
 			// literal dollar, exactly like compose treats it.
 			if !isEnvKeyStart(value[i+1]) {
+				if out.Len()+2 > limit {
+					return "", tooLarge()
+				}
 				out.WriteString("$$")
 				i++
 				continue
@@ -218,7 +246,9 @@ func interpolateString(value string, env map[string]string) (string, error) {
 			if !ok {
 				return "", fmt.Errorf("%w: %s is required", ErrValidation, name)
 			}
-			out.WriteString(escapeDollar(resolved))
+			if err := appendValue(resolved); err != nil {
+				return "", err
+			}
 			i = end
 		}
 	}
@@ -232,13 +262,8 @@ func resolveReference(expression string, env map[string]string) (string, error) 
 	if name == "" {
 		return "", fmt.Errorf("%w: empty ${...} reference", ErrValidation)
 	}
-	if strings.Contains(name, ":") {
-		return "", fmt.Errorf("%w: unsupported reference modifier in ${%s}", ErrValidation, name)
-	}
-	for i := 0; i < len(name); i++ {
-		if !isEnvKeyChar(name[i]) {
-			return "", fmt.Errorf("%w: invalid variable name %q", ErrValidation, name)
-		}
+	if modifier == "" && argument != "" {
+		return "", fmt.Errorf("%w: unsupported reference modifier in ${%s}", ErrValidation, expression)
 	}
 	value, set := env[name]
 	nonEmpty := set && value != ""
@@ -290,16 +315,27 @@ func resolveReference(expression string, env map[string]string) (string, error) 
 	}
 }
 
-// splitReference splits "NAME", "NAME:-arg" and friends. The two-character
-// modifiers are checked before the one-character ones so ":-" is never read as
-// "-" with an argument of ":".
+// splitReference parses a `${...}` body: the variable name first (its full
+// run of name characters), then the operator immediately at the name's end,
+// with everything after the operator treated as the argument. Scanning the
+// name first is what keeps operator characters inside an argument from being
+// mistaken for the operator: `${UNSET-http://host:-fallback}` is the unset
+// default `http://host:-fallback`, not a nested `:-`.
 func splitReference(expression string) (name, modifier, argument string) {
+	end := 0
+	for end < len(expression) && isEnvKeyChar(expression[end]) {
+		end++
+	}
+	name = expression[:end]
+	rest := expression[end:]
+	// Two-character operators come first so ":-" is never read as "-" with a
+	// ":"-prefixed argument.
 	for _, candidate := range []string{":-", ":?", ":+", "-", "?", "+"} {
-		if index := strings.Index(expression, candidate); index > 0 {
-			return expression[:index], candidate, expression[index+len(candidate):]
+		if strings.HasPrefix(rest, candidate) {
+			return name, candidate, rest[len(candidate):]
 		}
 	}
-	return expression, "", ""
+	return name, "", rest
 }
 
 // isEnvKeyChar reports whether c may appear in an environment variable name.
@@ -348,9 +384,22 @@ func Parse(document string) (ComposeSpec, error) {
 
 	spec := ComposeSpec{Mounts: []StorageMount{}, Domains: []DomainRoute{}}
 	declaredVolumes := make(map[string]bool, len(doc.Volumes))
-	for name := range doc.Volumes {
+	for name, definition := range doc.Volumes {
+		// The alias a service references is validated, and so is the
+		// effective Docker volume name the definition resolves to: `name:`
+		// (with or without `external`) can point an innocent-looking alias at
+		// a managed database volume.
 		if err := validateNamedVolume(name); err != nil {
 			return ComposeSpec{}, err
+		}
+		effective, err := effectiveVolumeNames(name, definition)
+		if err != nil {
+			return ComposeSpec{}, err
+		}
+		for _, candidate := range effective {
+			if err := validateNamedVolume(candidate); err != nil {
+				return ComposeSpec{}, err
+			}
 		}
 		declaredVolumes[name] = true
 	}
@@ -639,17 +688,61 @@ func validateNamedVolume(name string) error {
 	return nil
 }
 
+// effectiveVolumeNames returns every Docker volume name a top-level volume
+// definition can resolve to: the alias key itself, a `name:` override and the
+// `external:` name forms (`external: true` uses the key; `external: {name: …}`
+// names another volume). Compose resolves the definition this way, so guarding
+// only the key would let an alias mount a managed database volume.
+func effectiveVolumeNames(key string, definition any) ([]string, error) {
+	names := []string{key}
+	if definition == nil {
+		return names, nil
+	}
+	mapping, ok := definition.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%w: volume %q definition must be a mapping", ErrValidation, key)
+	}
+	if rawName, ok := mapping["name"]; ok {
+		name, ok := rawName.(string)
+		if !ok || strings.TrimSpace(name) == "" {
+			return nil, fmt.Errorf("%w: volume %q declares an invalid name", ErrValidation, key)
+		}
+		names = append(names, strings.TrimSpace(name))
+	}
+	switch external := mapping["external"].(type) {
+	case nil, bool:
+		// `external: true` resolves to the key, already covered.
+	case map[string]any:
+		if rawName, ok := external["name"]; ok {
+			name, ok := rawName.(string)
+			if !ok || strings.TrimSpace(name) == "" {
+				return nil, fmt.Errorf("%w: volume %q declares an invalid external name", ErrValidation, key)
+			}
+			names = append(names, strings.TrimSpace(name))
+		}
+	default:
+		return nil, fmt.Errorf("%w: volume %q declares an invalid external flag", ErrValidation, key)
+	}
+	return names, nil
+}
+
 // Redact replaces every environment value of env in message with
-// "<redacted>", longest first, so a CLI error that quotes a substituted value
-// never reaches an API response, a deploy row or a log line. Values shorter
-// than minRedactValue are left alone (redacting them would mangle ordinary
-// numbers without protecting anything meaningful); a secret the user typed
+// "<redacted>", longest first, so an error that quotes a substituted value
+// never reaches an API response, a deploy row or a log line. Both the raw
+// value and its dollar-escaped rendering (`x$y` is written as `x$$y` into the
+// rendered document) are replaced, and no value is treated as too short to
+// protect: the environment map carries no secret/non-secret distinction, so a
+// short value is redacted exactly like a long one. A secret the user typed
 // inline into the compose YAML is their own content and is out of scope here.
 func Redact(message string, env map[string]string) string {
-	values := make([]string, 0, len(env))
+	values := make([]string, 0, len(env)*2)
 	for _, value := range env {
-		if len(value) >= minRedactValue {
-			values = append(values, value)
+		if value == "" {
+			continue
+		}
+		values = append(values, value)
+		if escaped := escapeDollar(value); escaped != value {
+			values = append(values, escaped)
 		}
 	}
 	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })

@@ -1013,9 +1013,13 @@ const (
 // container RPCs), but the input is confined and bounded. The project name is
 // derived by the control plane from the service id ("gotham-<uuid>") and
 // re-validated here against a strict pattern; absolute paths and ".." are
-// rejected, the compose document is size-capped, written under the agent's
-// compose root and never echoes environment values in a log line or an error
-// string.
+// rejected, the compose document is size-capped and written under the agent's
+// compose root, and every failure carries at most a bounded fragment of the
+// CLI's own output. Secret responsibility is split: the agent never logs
+// command output and never reads the caller's environment, while the control
+// plane redacts the environment values it substituted into the document from
+// every message it stores, returns or logs. A document-inline literal the user
+// typed is user content and is not redacted on either side.
 type ComposeServiceClient interface {
 	// ComposeValidate writes the project's compose file under the agent compose
 	// root and validates it with `docker compose config`, starting nothing. It
@@ -1122,9 +1126,13 @@ func (c *composeServiceClient) ComposePs(ctx context.Context, in *ComposePsReque
 // container RPCs), but the input is confined and bounded. The project name is
 // derived by the control plane from the service id ("gotham-<uuid>") and
 // re-validated here against a strict pattern; absolute paths and ".." are
-// rejected, the compose document is size-capped, written under the agent's
-// compose root and never echoes environment values in a log line or an error
-// string.
+// rejected, the compose document is size-capped and written under the agent's
+// compose root, and every failure carries at most a bounded fragment of the
+// CLI's own output. Secret responsibility is split: the agent never logs
+// command output and never reads the caller's environment, while the control
+// plane redacts the environment values it substituted into the document from
+// every message it stores, returns or logs. A document-inline literal the user
+// typed is user content and is not redacted on either side.
 type ComposeServiceServer interface {
 	// ComposeValidate writes the project's compose file under the agent compose
 	// root and validates it with `docker compose config`, starting nothing. It

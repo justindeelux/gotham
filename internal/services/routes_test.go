@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,11 +16,12 @@ import (
 
 // fakeRouteService is a scriptable ServiceService for the route tests.
 type fakeRouteService struct {
-	service Service
-	deploy  Deploy
-	deploys []Deploy
-	items   []ComposeContainer
-	chunks  [][]byte
+	service   Service
+	deploy    Deploy
+	deploys   []Deploy
+	items     []ComposeContainer
+	chunks    [][]byte
+	streamErr error
 
 	err error
 }
@@ -92,7 +94,7 @@ func (f *fakeRouteService) Containers(context.Context, uuid.UUID, uuid.UUID) ([]
 }
 
 // Logs implements ServiceService.
-func (f *fakeRouteService) Logs(context.Context, uuid.UUID, uuid.UUID, string, int64, bool) (<-chan []byte, error) {
+func (f *fakeRouteService) Logs(context.Context, uuid.UUID, uuid.UUID, string, int64, bool) (LogStream, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -101,7 +103,7 @@ func (f *fakeRouteService) Logs(context.Context, uuid.UUID, uuid.UUID, string, i
 		chunks <- chunk
 	}
 	close(chunks)
-	return chunks, nil
+	return &fakeLogStream{chunks: chunks, streamErr: f.streamErr}, nil
 }
 
 // Deploys implements ServiceService.
@@ -283,6 +285,39 @@ func TestRoutesErrorMapping(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", recorder.Code, want, recorder.Body)
 			}
 		})
+	}
+}
+
+// TestRoutesLogsFirstReadFailure proves a node that refuses the log stream is
+// answered with its error status instead of an empty 200.
+func TestRoutesLogsFirstReadFailure(t *testing.T) {
+	service := sampleService()
+	router := routeTestServer(t, &fakeRouteService{service: service, err: ErrAgentUnavailable}, service.UserID)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/services/"+service.ID.String()+"/logs", nil))
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", recorder.Code, recorder.Body)
+	}
+}
+
+// TestRoutesLogsTerminalFailureKeepsBody proves a failure after the response
+// started still returns the output that was received (the status is already
+// sent and cannot be corrected).
+func TestRoutesLogsTerminalFailureKeepsBody(t *testing.T) {
+	service := sampleService()
+	fake := &fakeRouteService{
+		service:   service,
+		chunks:    [][]byte{[]byte("partial\n")},
+		streamErr: errors.New("stream died"),
+	}
+	router := routeTestServer(t, fake, service.UserID)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/services/"+service.ID.String()+"/logs", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if body := recorder.Body.String(); body != "partial\n" {
+		t.Fatalf("body = %q", body)
 	}
 }
 

@@ -43,10 +43,16 @@ const (
 	DefaultBackendHost = "172.17.0.1"
 )
 
-// Route is one domain binding derived from an application row: the router
-// name comes from AppID, the rule from Domain, and the backend from Target.
+// Route is one domain binding derived from an application row or a compose
+// service domain: the router name comes from Name (or the application
+// convention when empty), the rule from Domain, and the backend from Target.
 type Route struct {
-	// AppID identifies the application (stays in generated names for traceability).
+	// Name is the Traefik router/service base name. Empty keeps the
+	// application convention "app-<AppID>"; compose service routes set
+	// "svc-<id>-<n>" because one service can declare several hosts.
+	Name string
+	// AppID identifies the owning row (an application or a compose service;
+	// stays in generated names for traceability).
 	AppID uuid.UUID
 	// Domain is the exact hostname to route, already lowercased and trimmed.
 	Domain string
@@ -204,15 +210,18 @@ func BuildConfig(routes []Route, redirects []Redirect, providers []DNSProvider, 
 	}
 
 	for _, route := range routes {
-		service := serviceName(route.AppID)
-		cfg.Services[service] = Service{
+		name := route.Name
+		if name == "" {
+			name = serviceName(route.AppID)
+		}
+		cfg.Services[name] = Service{
 			LoadBalancer: LoadBalancer{
 				Servers: []Backend{{URL: route.Target}},
 			},
 		}
 		web := Router{
 			Rule:        fmt.Sprintf("Host(`%s`)", route.Domain),
-			Service:     service,
+			Service:     name,
 			EntryPoints: []string{EntryPointWeb},
 		}
 		if route.Certificate != nil {
@@ -230,14 +239,14 @@ func BuildConfig(routes []Route, redirects []Redirect, providers []DNSProvider, 
 					SANs: []string{"*." + route.Certificate.WildcardBase},
 				}}
 			}
-			cfg.Routers[service+"-websecure"] = Router{
+			cfg.Routers[name+"-websecure"] = Router{
 				Rule:        fmt.Sprintf("Host(`%s`)", route.Domain),
-				Service:     service,
+				Service:     name,
 				EntryPoints: []string{EntryPointWebSecure},
 				TLS:         tls,
 			}
 		}
-		cfg.Routers[service+"-web"] = web
+		cfg.Routers[name+"-web"] = web
 	}
 
 	// One service-less-backend service shared by every redirect router:

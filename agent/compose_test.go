@@ -2,10 +2,14 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
@@ -458,6 +462,360 @@ exit 1
 	if !strings.Contains(message, "undefined volume") {
 		t.Errorf("error lost the CLI diagnosis: %q", message)
 	}
+}
+
+// TestComposeOperationsAreSerializedPerProject proves a concurrent request
+// cannot replace the document between another request's write and its CLI run:
+// the agent serializes complete document-dependent operations per project.
+func TestComposeOperationsAreSerializedPerProject(t *testing.T) {
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	resume := filepath.Join(dir, "resume")
+	t.Setenv("FAKE_STARTED", started)
+	t.Setenv("FAKE_RESUME", resume)
+
+	// The script re-reads the compose file after the gate, so it reports the
+	// document that is on disk when its command actually runs.
+	fakeDockerCLI(t, `
+doc=$(cat "$3")
+case "$doc" in
+  *first*)
+    touch "$FAKE_STARTED"
+    i=0
+    while [ ! -f "$FAKE_RESUME" ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done
+    ;;
+esac
+case "$doc" in
+  *first*) printf 'first\n' ;;
+  *second*) printf 'second\n' ;;
+esac
+exit 0
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+
+	firstDone := make(chan []string, 1)
+	firstErr := make(chan error, 1)
+	go func() {
+		response, err := server.ComposeValidate(context.Background(), &agentv1.ComposeValidateRequest{
+			ProjectName: composeTestProject,
+			ComposeYaml: []byte("services:\n  first:\n    image: nginx:1.23\n"),
+		})
+		if err != nil {
+			firstErr <- err
+			return
+		}
+		firstDone <- response.GetServices()
+	}()
+
+	// Wait until request A's CLI is running against its own document.
+	waitForFile(t, started)
+
+	secondDone := make(chan []string, 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		response, err := server.ComposeValidate(context.Background(), &agentv1.ComposeValidateRequest{
+			ProjectName: composeTestProject,
+			ComposeYaml: []byte("services:\n  second:\n    image: nginx:1.23\n"),
+		})
+		if err != nil {
+			secondErr <- err
+			return
+		}
+		secondDone <- response.GetServices()
+	}()
+
+	// Request B must not have replaced the document while A holds the
+	// project lock.
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case services := <-secondDone:
+		t.Fatalf("a concurrent request completed while another operation was in flight: %v", services)
+	default:
+	}
+	if err := os.WriteFile(resume, []byte("go"), 0o600); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	select {
+	case err := <-firstErr:
+		t.Fatalf("first validate: %v", err)
+	case services := <-firstDone:
+		if strings.Join(services, ",") != "first" {
+			t.Fatalf("the first operation executed another request's document: %v", services)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("first validate did not finish")
+	}
+	select {
+	case err := <-secondErr:
+		t.Fatalf("second validate: %v", err)
+	case services := <-secondDone:
+		if strings.Join(services, ",") != "second" {
+			t.Fatalf("the second operation executed another request's document: %v", services)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("second validate did not finish")
+	}
+}
+
+// TestComposeValidateAndUpAreSerialized proves a validate overlapping an up
+// cannot have its document replaced between the write and the CLI run either.
+func TestComposeValidateAndUpAreSerialized(t *testing.T) {
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	resume := filepath.Join(dir, "resume")
+	t.Setenv("FAKE_STARTED", started)
+	t.Setenv("FAKE_RESUME", resume)
+
+	fakeDockerCLI(t, `
+doc=$(cat "$3")
+case "$doc" in
+  *first*)
+    touch "$FAKE_STARTED"
+    i=0
+    while [ ! -f "$FAKE_RESUME" ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done
+    ;;
+esac
+case "$doc" in
+  *first*) printf 'first\n' ;;
+  *second*) printf 'second\n' ;;
+esac
+exit 0
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+
+	firstDone := make(chan []string, 1)
+	go func() {
+		response, err := server.ComposeValidate(context.Background(), &agentv1.ComposeValidateRequest{
+			ProjectName: composeTestProject,
+			ComposeYaml: []byte("services:\n  first:\n    image: nginx:1.23\n"),
+		})
+		if err != nil {
+			firstDone <- []string{"error: " + err.Error()}
+			return
+		}
+		firstDone <- response.GetServices()
+	}()
+	waitForFile(t, started)
+
+	upDone := make(chan error, 1)
+	go func() {
+		_, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+			ProjectName: composeTestProject,
+			ComposeYaml: []byte("services:\n  second:\n    image: nginx:1.23\n"),
+		})
+		upDone <- err
+	}()
+
+	// The up must not replace the document while the validate holds the
+	// project lock.
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case err := <-upDone:
+		t.Fatalf("a concurrent up completed while a validate was in flight: %v", err)
+	default:
+	}
+	if err := os.WriteFile(resume, []byte("go"), 0o600); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	select {
+	case services := <-firstDone:
+		if strings.Join(services, ",") != "first" {
+			t.Fatalf("the validate executed another request's document: %v", services)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the validate did not finish")
+	}
+	select {
+	case err := <-upDone:
+		if err != nil {
+			t.Fatalf("up: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the up did not finish")
+	}
+}
+
+// waitForFile polls until path exists.
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("file %s never appeared", path)
+}
+
+// TestComposeLogsDrainsSlowConsumer proves the full CLI output is delivered
+// even when the consumer is slow: the pipes are drained to EOF before Wait,
+// and a send failure cancels the CLI promptly.
+func TestComposeLogsDrainsSlowConsumer(t *testing.T) {
+	// ~2 MiB of output, far past the pipe buffer, so a Wait-first order would
+	// discard the tail. Only the logs subcommand produces the payload.
+	const totalBytes = 2 << 20
+	fakeDockerCLI(t, `
+case "$6" in
+  config) printf 'web\n' ;;
+  logs) head -c `+fmt.Sprint(totalBytes)+` /dev/zero | tr '\0' 'x' ;;
+esac
+exit 0
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+	}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	stream := &slowComposeStream{ctx: context.Background(), delay: 2 * time.Millisecond}
+	if err := server.ComposeLogs(&agentv1.ComposeLogsRequest{ProjectName: composeTestProject}, stream); err != nil {
+		t.Fatalf("ComposeLogs: %v", err)
+	}
+	if stream.received != totalBytes {
+		t.Fatalf("delivered %d bytes of %d: the tail was truncated", stream.received, totalBytes)
+	}
+
+	// A consumer that fails cancels the CLI and the drain returns instead of
+	// hanging.
+	stream = &slowComposeStream{ctx: context.Background(), failAfter: 1, sendErr: errors.New("client gone")}
+	done := make(chan error, 1)
+	go func() {
+		done <- server.ComposeLogs(&agentv1.ComposeLogsRequest{ProjectName: composeTestProject}, stream)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ComposeLogs after a send failure = %v, want nil (client gone)", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("a failing consumer did not stop the log stream")
+	}
+}
+
+// TestComposeLogsFollowCancellation proves a follow stream ends cleanly when
+// the client cancels and does not leave the CLI running.
+func TestComposeLogsFollowCancellation(t *testing.T) {
+	fakeDockerCLI(t, `
+case "$6" in
+  config) printf 'web\n' ;;
+  logs)
+    i=0
+    while [ $i -lt 4000 ]; do
+      printf 'tick\n'
+      sleep 0.05
+      i=$((i+1))
+    done
+    ;;
+esac
+exit 0
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+	}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &slowComposeStream{ctx: ctx}
+	done := make(chan error, 1)
+	go func() {
+		done <- server.ComposeLogs(&agentv1.ComposeLogsRequest{ProjectName: composeTestProject, Follow: true}, stream)
+	}()
+	waitForBytes(t, stream, 1)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cancelled follow stream = %v, want nil", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("a cancelled follow stream did not return")
+	}
+}
+
+// TestComposeOutputCaptureIsBounded proves the CLI diagnostic capture is
+// capped while it is written: a failing CLI writing megabytes retains only the
+// bound, and a parsed output that exceeds its cap fails instead of being
+// truncated.
+func TestComposeOutputCaptureIsBounded(t *testing.T) {
+	fakeDockerCLI(t, `
+head -c 4194304 /dev/zero | tr '\0' 'x' 1>&2
+printf 'undefined volume\n' 1>&2
+exit 1
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, err := server.ComposeValidate(context.Background(), &agentv1.ComposeValidateRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+	})
+	runtime.ReadMemStats(&after)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("code = %v, want Internal", status.Code(err))
+	}
+	if grown := after.TotalAlloc - before.TotalAlloc; grown > 1<<20 {
+		t.Fatalf("the CLI diagnostic capture allocated %d bytes for a 4 MiB stream", grown)
+	}
+
+	// A parsed output beyond the cap fails instead of producing a wrong list.
+	fakeDockerCLI(t, `
+head -c 2097152 /dev/zero | tr '\0' 'y'
+exit 0
+`)
+	server = newTestComposeServer(t, ComposeServerConfig{})
+	_, err = server.ComposeValidate(context.Background(), &agentv1.ComposeValidateRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+	})
+	if status.Code(err) != codes.Internal || !strings.Contains(status.Convert(err).Message(), "exceeds") {
+		t.Fatalf("oversized parsed output = %v, want an Internal exceeds error", err)
+	}
+}
+
+// slowComposeStream is a fake ComposeLogs stream with a controllable consumer:
+// an optional per-chunk delay, a byte counter and a scripted send failure.
+type slowComposeStream struct {
+	grpc.ServerStream
+	ctx       context.Context
+	delay     time.Duration
+	failAfter int
+	sendErr   error
+	sends     int
+	received  int
+}
+
+func (s *slowComposeStream) Context() context.Context { return s.ctx }
+
+func (s *slowComposeStream) Send(chunk *agentv1.ComposeLogChunk) error {
+	if s.delay > 0 {
+		time.Sleep(s.delay)
+	}
+	s.sends++
+	if s.failAfter > 0 && s.sends > s.failAfter {
+		return s.sendErr
+	}
+	s.received += len(chunk.GetData())
+	return nil
+}
+
+// waitForBytes polls until the stream received at least want bytes.
+func waitForBytes(t *testing.T, stream *slowComposeStream, want int) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if stream.received >= want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("stream received %d bytes, want at least %d", stream.received, want)
 }
 
 // joinChunks flattens streamed chunks.

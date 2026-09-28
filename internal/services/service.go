@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -83,10 +84,18 @@ type ServiceService interface {
 	Restart(ctx context.Context, userID, serviceID uuid.UUID) (Service, error)
 	// Containers lists the project's containers from the node.
 	Containers(ctx context.Context, userID, serviceID uuid.UUID) ([]ComposeContainer, error)
-	// Logs streams the project's or one compose service's logs.
-	Logs(ctx context.Context, userID, serviceID uuid.UUID, composeService string, tail int64, follow bool) (<-chan []byte, error)
+	// Logs streams the project's or one compose service's logs. The returned
+	// stream owns the node connection and closes it when it ends.
+	Logs(ctx context.Context, userID, serviceID uuid.UUID, composeService string, tail int64, follow bool) (LogStream, error)
 	// Deploys returns the deploy history, newest first.
 	Deploys(ctx context.Context, userID, serviceID uuid.UUID) ([]Deploy, error)
+}
+
+// RouteSync re-synchronizes one node's Phase 6 proxy configuration. It is
+// satisfied by proxy.ProxyService and called best effort after a lifecycle
+// change that affects what a domain routes to (or whether it routes at all).
+type RouteSync interface {
+	SyncServer(ctx context.Context, serverID uuid.UUID) error
 }
 
 // DialFunc opens the node agent's ComposeService for one server.
@@ -103,6 +112,10 @@ type Config struct {
 	// Dial opens the compose service on the target node; it is plugged in by
 	// the HTTP wiring with the servers package's mTLS dialer.
 	Dial DialFunc
+	// Proxy receives a best-effort resync after a deploy, stop, restart or
+	// delete so the node's Traefik configuration follows the service's
+	// routing state. nil disables the notifications.
+	Proxy RouteSync
 	// Logger defaults to slog.Default.
 	Logger *slog.Logger
 	// DeployTimeout overrides how long one deploy's agent calls may take.
@@ -126,8 +139,10 @@ func (c Config) repository() Repository {
 type service struct {
 	repo          Repository
 	dial          DialFunc
+	proxy         RouteSync
 	logger        *slog.Logger
 	deployTimeout time.Duration
+	locks         keyedLocks
 }
 
 // Compile-time guarantee that service satisfies the route-level contract.
@@ -148,8 +163,51 @@ func NewService(cfg Config) ServiceService {
 	return &service{
 		repo:          cfg.repository(),
 		dial:          cfg.Dial,
+		proxy:         cfg.Proxy,
 		logger:        logger,
 		deployTimeout: timeout,
+	}
+}
+
+// keyedLocks serializes work per key (one service id) with a refcounted entry
+// per key, so the map stays bounded by the operations in flight. It is the
+// in-process lock the single control plane process uses for lifecycle
+// serialization (the proxy service relies on the same single-process
+// assumption).
+type keyedLocks struct {
+	mu      sync.Mutex
+	entries map[uuid.UUID]*keyedLock
+}
+
+// keyedLock is one key's mutex plus its holder/waiter count.
+type keyedLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// acquire takes the key's lock and returns its release function.
+func (l *keyedLocks) acquire(key uuid.UUID) func() {
+	l.mu.Lock()
+	if l.entries == nil {
+		l.entries = make(map[uuid.UUID]*keyedLock)
+	}
+	entry, ok := l.entries[key]
+	if !ok {
+		entry = &keyedLock{}
+		l.entries[key] = entry
+	}
+	entry.refs++
+	l.mu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		l.mu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(l.entries, key)
+		}
+		l.mu.Unlock()
+		entry.mu.Unlock()
 	}
 }
 
@@ -235,7 +293,9 @@ func (s *service) Get(ctx context.Context, userID, serviceID uuid.UUID) (Service
 
 // Update patches a service the caller owns and re-validates the result. The
 // stored document is always the renderable one: a patch that introduces an
-// unresolvable environment reference is rejected.
+// unresolvable environment reference is rejected. The write touches only the
+// config columns, so it can never clobber a lifecycle status a concurrent
+// deploy/stop is writing.
 func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req UpdateRequest) (Service, error) {
 	service, err := s.service(ctx, userID, serviceID)
 	if err != nil {
@@ -261,38 +321,76 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 	if err := Validate(service.ComposeYAML, service.Env); err != nil {
 		return Service{}, RedactError(err, service.Env)
 	}
-	return s.repo.UpdateService(ctx, service)
+	return s.repo.UpdateServiceConfig(ctx, service)
 }
 
 // Delete stops the project and soft-deletes the row. Named volumes are never
 // touched: they are the project's data and outlive both the containers and the
 // row's visibility.
+//
+// When the stored document no longer renders, the newest successfully
+// deployed snapshot is used to stop the project instead of skipping the node
+// call: soft-deleting a row must never hide a project that may still be
+// running. If no snapshot exists either, the row is retained with an error so
+// an operator can fix or redeploy the service.
 func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) error {
 	service, err := s.service(ctx, userID, serviceID)
 	if err != nil {
 		return err
 	}
+	release := s.lifecycleLock(service.ID)
+	defer release()
+
 	rendered, renderErr := Render(service.ComposeYAML, service.Env)
-	if renderErr != nil {
-		// The row exists but its document no longer renders (an environment
-		// value changed after the last deploy). The delete still proceeds:
-		// failing it would make a broken service undeletable. The node keeps
-		// the containers until an operator cleans them up.
-		s.logger.Warn("services: deleting a service whose document does not render; running project may need manual cleanup",
-			"service_id", service.ID.String(), "error", Redact(renderErr.Error(), service.Env))
-	} else if err := s.down(ctx, service, rendered); err != nil {
-		return err
+	if renderErr == nil {
+		if err := s.down(ctx, service, []byte(rendered.ComposeYAML)); err != nil {
+			return err
+		}
+	} else {
+		snapshot, snapshotErr := s.latestRunningSnapshot(ctx, service)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		if snapshot == nil {
+			return fmt.Errorf(
+				"%w: the stored document no longer renders (%s) and there is no successful deploy snapshot to stop it; fix the document or redeploy first",
+				ErrValidation, Redact(renderErr.Error(), service.Env))
+		}
+		s.logger.Warn("services: stopping from the newest deployed snapshot because the stored document no longer renders",
+			"service_id", service.ID.String(), "deploy_id", snapshot.ID.String())
+		if err := s.down(ctx, service, []byte(snapshot.ComposeYAML)); err != nil {
+			return err
+		}
 	}
 	if _, err := s.repo.SoftDeleteService(ctx, service.ID); err != nil {
 		return err
 	}
 	s.logger.Info("services: deleted; named volumes retained",
 		"service_id", service.ID.String(), "project", ProjectName(service.ID))
+	s.syncProxy(ctx, service.ServerID)
 	return nil
+}
+
+// latestRunningSnapshot returns the newest successfully deployed rendered
+// document, or nil when the service was never deployed successfully.
+func (s *service) latestRunningSnapshot(ctx context.Context, service Service) (*Deploy, error) {
+	deploys, err := s.repo.ListServiceDeploys(ctx, service.ID, deployHistoryLimit)
+	if err != nil {
+		return nil, err
+	}
+	for i := range deploys {
+		if deploys[i].State == DeployRunning && deploys[i].ComposeYAML != "" {
+			return &deploys[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // Deploy renders the stored document, validates it on the node and starts the
 // project, recording one deploy row whose snapshot is the rendered document.
+// It is serialized with the other lifecycle operations of the same service and
+// writes only the status column on completion, so a concurrent configuration
+// edit is never overwritten.
 func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Service, Deploy, error) {
 	if !Enabled() {
 		return Service{}, Deploy{}, ErrDisabled
@@ -304,6 +402,9 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 	if err != nil {
 		return Service{}, Deploy{}, err
 	}
+	release := s.lifecycleLock(service.ID)
+	defer release()
+
 	rendered, err := Render(service.ComposeYAML, service.Env)
 	if err != nil {
 		return Service{}, Deploy{}, RedactError(err, service.Env)
@@ -312,6 +413,7 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 	if err != nil {
 		return Service{}, Deploy{}, err
 	}
+	defer func() { _ = agent.Close() }()
 	project := ProjectName(service.ID)
 	now := time.Now().UTC()
 	deploy, err := s.repo.CreateServiceDeploy(ctx, Deploy{
@@ -342,11 +444,11 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 	if deploy, err = s.repo.UpdateServiceDeploy(ctx, deploy); err != nil {
 		return Service{}, Deploy{}, err
 	}
-	service.Status = StatusRunning
-	if service, err = s.repo.UpdateService(ctx, service); err != nil {
+	if service, err = s.setStatus(ctx, service, StatusRunning); err != nil {
 		return Service{}, Deploy{}, err
 	}
 	s.logger.Info("services: deployed", "service_id", service.ID.String(), "project", project)
+	s.syncProxy(ctx, service.ServerID)
 	return service, deploy, nil
 }
 
@@ -357,15 +459,22 @@ func (s *service) Stop(ctx context.Context, userID, serviceID uuid.UUID) (Servic
 	if err != nil {
 		return Service{}, err
 	}
+	release := s.lifecycleLock(service.ID)
+	defer release()
+
 	rendered, err := Render(service.ComposeYAML, service.Env)
 	if err != nil {
 		return Service{}, RedactError(err, service.Env)
 	}
-	if err := s.down(ctx, service, rendered); err != nil {
+	if err := s.down(ctx, service, []byte(rendered.ComposeYAML)); err != nil {
 		return Service{}, err
 	}
-	service.Status = StatusStopped
-	return s.repo.UpdateService(ctx, service)
+	service, err = s.setStatus(ctx, service, StatusStopped)
+	if err != nil {
+		return Service{}, err
+	}
+	s.syncProxy(ctx, service.ServerID)
+	return service, nil
 }
 
 // Restart restarts a running project in place and starts a stopped one.
@@ -374,6 +483,9 @@ func (s *service) Restart(ctx context.Context, userID, serviceID uuid.UUID) (Ser
 	if err != nil {
 		return Service{}, err
 	}
+	release := s.lifecycleLock(service.ID)
+	defer release()
+
 	rendered, err := Render(service.ComposeYAML, service.Env)
 	if err != nil {
 		return Service{}, RedactError(err, service.Env)
@@ -382,6 +494,7 @@ func (s *service) Restart(ctx context.Context, userID, serviceID uuid.UUID) (Ser
 	if err != nil {
 		return Service{}, err
 	}
+	defer func() { _ = agent.Close() }()
 	deployCtx, cancel := context.WithTimeout(ctx, s.deployTimeout)
 	defer cancel()
 	project := ProjectName(service.ID)
@@ -392,10 +505,14 @@ func (s *service) Restart(ctx context.Context, userID, serviceID uuid.UUID) (Ser
 		err = agent.Up(deployCtx, project, composeYAML, false)
 	}
 	if err != nil {
+		return Service{}, RedactError(err, service.Env)
+	}
+	service, err = s.setStatus(ctx, service, StatusRunning)
+	if err != nil {
 		return Service{}, err
 	}
-	service.Status = StatusRunning
-	return s.repo.UpdateService(ctx, service)
+	s.syncProxy(ctx, service.ServerID)
+	return service, nil
 }
 
 // Containers lists the project's containers as the node reports them.
@@ -408,9 +525,10 @@ func (s *service) Containers(ctx context.Context, userID, serviceID uuid.UUID) (
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = agent.Close() }()
 	containers, err := agent.Ps(ctx, ProjectName(service.ID))
 	if err != nil {
-		return nil, err
+		return nil, RedactError(err, service.Env)
 	}
 	if containers == nil {
 		return []ComposeContainer{}, nil
@@ -419,7 +537,8 @@ func (s *service) Containers(ctx context.Context, userID, serviceID uuid.UUID) (
 }
 
 // Logs streams the project's logs (or one compose service's) from the node.
-func (s *service) Logs(ctx context.Context, userID, serviceID uuid.UUID, composeService string, tail int64, follow bool) (<-chan []byte, error) {
+// The returned stream owns the agent connection and closes it when it ends.
+func (s *service) Logs(ctx context.Context, userID, serviceID uuid.UUID, composeService string, tail int64, follow bool) (LogStream, error) {
 	service, err := s.service(ctx, userID, serviceID)
 	if err != nil {
 		return nil, err
@@ -435,7 +554,12 @@ func (s *service) Logs(ctx context.Context, userID, serviceID uuid.UUID, compose
 	if err != nil {
 		return nil, err
 	}
-	return agent.Logs(ctx, ProjectName(service.ID), composeService, tail, follow)
+	stream, err := agent.Logs(ctx, ProjectName(service.ID), composeService, tail, follow)
+	if err != nil {
+		_ = agent.Close()
+		return nil, RedactError(err, service.Env)
+	}
+	return stream, nil
 }
 
 // Deploys returns the deploy history, newest first.
@@ -454,19 +578,53 @@ func (s *service) Deploys(ctx context.Context, userID, serviceID uuid.UUID) ([]D
 	return deploys, nil
 }
 
-// down renders-then-stops helper: it dials the node and runs compose down,
-// mapping every failure to a sentinel.
-func (s *service) down(ctx context.Context, service Service, rendered RenderedSpec) error {
+// down dials the node and runs compose down with the given rendered document,
+// mapping every failure to a sentinel and redacting the service environment
+// values from the message.
+func (s *service) down(ctx context.Context, service Service, composeYAML []byte) error {
 	agent, err := s.dialAgent(ctx, service.ServerID)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = agent.Close() }()
 	downCtx, cancel := context.WithTimeout(ctx, s.deployTimeout)
 	defer cancel()
-	if err := agent.Down(downCtx, ProjectName(service.ID), []byte(rendered.ComposeYAML)); err != nil {
-		return err
+	if err := agent.Down(downCtx, ProjectName(service.ID), composeYAML); err != nil {
+		return RedactError(err, service.Env)
 	}
 	return nil
+}
+
+// setStatus writes only the status column, so a lifecycle completion can never
+// overwrite a concurrent configuration edit with a stale row.
+func (s *service) setStatus(ctx context.Context, service Service, status Status) (Service, error) {
+	updated, err := s.repo.UpdateServiceStatus(ctx, service.ID, status)
+	if err != nil {
+		return Service{}, err
+	}
+	return updated, nil
+}
+
+// lifecycleLock serializes the lifecycle operations (deploy, stop, restart,
+// delete) of one service so two actions cannot interleave and report
+// contradictory outcomes. A single control plane process makes an in-process
+// lock sufficient, matching the proxy service's single-process assumption.
+func (s *service) lifecycleLock(serviceID uuid.UUID) func() {
+	return s.locks.acquire(serviceID)
+}
+
+// syncProxy asks the Phase 6 proxy to re-synchronize the node's routing
+// configuration after a lifecycle change. It is best effort by contract: the
+// mutation is already durable, a failed sync is logged and the next sync
+// converges the node.
+func (s *service) syncProxy(ctx context.Context, serverID uuid.UUID) {
+	if s.proxy == nil || serverID == uuid.Nil {
+		return
+	}
+	if err := s.proxy.SyncServer(ctx, serverID); err != nil {
+		s.logger.Warn("services: proxy resync after a lifecycle change failed",
+			"server_id", serverID.String(), "error", err)
+	}
 }
 
 // failDeploy records a failed attempt (error redacted) and returns the
@@ -484,8 +642,7 @@ func (s *service) failDeploy(ctx context.Context, service Service, deploy Deploy
 		return Service{}, Deploy{}, err
 	}
 	if status != "" {
-		service.Status = status
-		if service, updateErr = s.repo.UpdateService(ctx, service); updateErr != nil {
+		if service, updateErr = s.setStatus(ctx, service, status); updateErr != nil {
 			return Service{}, Deploy{}, err
 		}
 	}

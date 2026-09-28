@@ -343,7 +343,9 @@ func (h *handler) containers(w http.ResponseWriter, r *http.Request) {
 
 // logs serves GET .../services/{id}/logs as a plain-text chunked stream, with
 // ?service= selecting one compose service, ?tail= bounding the history and
-// ?follow=true keeping it open.
+// ?follow=true keeping it open. A node that refuses the stream is answered
+// with its error status before any body byte is written; a failure after the
+// stream started closes the body and is logged (the status is already sent).
 func (h *handler) logs(w http.ResponseWriter, r *http.Request) {
 	userID, serviceID, ok := h.serviceParams(w, r)
 	if !ok {
@@ -361,22 +363,27 @@ func (h *handler) logs(w http.ResponseWriter, r *http.Request) {
 	}
 	follow := strings.EqualFold(strings.TrimSpace(query.Get("follow")), "true")
 
-	chunks, err := h.svc.Logs(r.Context(), userID, serviceID, query.Get("service"), tail, follow)
+	stream, err := h.svc.Logs(r.Context(), userID, serviceID, query.Get("service"), tail, follow)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
+	defer func() { _ = stream.Close() }()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
-	for chunk := range chunks {
+	for chunk := range stream.Chunks() {
 		if _, err := w.Write(chunk); err != nil {
 			return
 		}
 		if flusher != nil {
 			flusher.Flush()
 		}
+	}
+	if err := stream.Err(); err != nil {
+		h.logger.Warn("services: log stream failed after the response started",
+			"service_id", serviceID.String(), "error", err)
 	}
 }
 

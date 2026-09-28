@@ -112,6 +112,47 @@ func (q *Queries) GetService(ctx context.Context, id pgtype.UUID) (Service, erro
 	return i, err
 }
 
+const listRoutableServices = `-- name: ListRoutableServices :many
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at FROM services
+WHERE deleted_at IS NULL
+ORDER BY created_at ASC, id ASC
+`
+
+// ListRoutableServices returns every live service with its document and
+// environment, in creation order, so the proxy source can render each one's
+// current domain map (a service that no longer renders is reported as
+// unroutable rather than failing the node's sync).
+func (q *Queries) ListRoutableServices(ctx context.Context) ([]Service, error) {
+	rows, err := q.db.Query(ctx, listRoutableServices)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Service{}
+	for rows.Next() {
+		var i Service
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ServerID,
+			&i.Name,
+			&i.Status,
+			&i.ComposeYaml,
+			&i.Env,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listServiceDeploys = `-- name: ListServiceDeploys :many
 SELECT id, service_id, state, compose_yaml, error, created_at, updated_at, finished_at FROM service_deploys
 WHERE service_id = $1
@@ -217,32 +258,29 @@ func (q *Queries) SoftDeleteService(ctx context.Context, id pgtype.UUID) (Servic
 	return i, err
 }
 
-const updateService = `-- name: UpdateService :one
+const updateServiceConfig = `-- name: UpdateServiceConfig :one
 UPDATE services
 SET name = $2,
     compose_yaml = $3,
     env = $4,
-    status = $5,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at
 `
 
-type UpdateServiceParams struct {
+type UpdateServiceConfigParams struct {
 	ID          pgtype.UUID `json:"id"`
 	Name        string      `json:"name"`
 	ComposeYaml string      `json:"compose_yaml"`
 	Env         []byte      `json:"env"`
-	Status      string      `json:"status"`
 }
 
-func (q *Queries) UpdateService(ctx context.Context, arg UpdateServiceParams) (Service, error) {
-	row := q.db.QueryRow(ctx, updateService,
+func (q *Queries) UpdateServiceConfig(ctx context.Context, arg UpdateServiceConfigParams) (Service, error) {
+	row := q.db.QueryRow(ctx, updateServiceConfig,
 		arg.ID,
 		arg.Name,
 		arg.ComposeYaml,
 		arg.Env,
-		arg.Status,
 	)
 	var i Service
 	err := row.Scan(
@@ -294,6 +332,37 @@ func (q *Queries) UpdateServiceDeploy(ctx context.Context, arg UpdateServiceDepl
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const updateServiceStatus = `-- name: UpdateServiceStatus :one
+UPDATE services
+SET status = $2,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at
+`
+
+type UpdateServiceStatusParams struct {
+	ID     pgtype.UUID `json:"id"`
+	Status string      `json:"status"`
+}
+
+func (q *Queries) UpdateServiceStatus(ctx context.Context, arg UpdateServiceStatusParams) (Service, error) {
+	row := q.db.QueryRow(ctx, updateServiceStatus, arg.ID, arg.Status)
+	var i Service
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ServerID,
+		&i.Name,
+		&i.Status,
+		&i.ComposeYaml,
+		&i.Env,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }

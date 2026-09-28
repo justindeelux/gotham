@@ -386,6 +386,10 @@ func (s *Server) proxyService(containerService containers.ContainerService) prox
 		Containers: containerService,
 		Logger:     s.logger,
 		Secret:     s.cfg.Snapshot().SecretKey,
+		// Compose service hosts (BE-7.1) join the generated routing model
+		// through the same generator; the adapter renders each stored
+		// document, which this package cannot do without a cycle.
+		Services: services.NewProxySource(s.persistence),
 	}
 	if dialer, ok := s.servers.(proxyDialer); ok {
 		cfg.Dial = func(ctx context.Context, serverID uuid.UUID) (proxy.AgentClient, error) {
@@ -482,6 +486,12 @@ func (s *Server) composeService() services.ServiceService {
 			}
 			return services.NewGRPCComposeAgent(client), nil
 		}
+	}
+	// Lifecycle changes resync the node's Phase 6 routing configuration, so a
+	// deploy/stop/restart/delete is reflected in Traefik through the same
+	// generator applications use.
+	if s.proxy != nil {
+		cfg.Proxy = s.proxy
 	}
 	return services.NewDefaultService(cfg)
 }

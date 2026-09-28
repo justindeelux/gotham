@@ -249,7 +249,7 @@ func TestStopAndRestart(t *testing.T) {
 	if stopped.Status != StatusStopped {
 		t.Errorf("status = %q, want stopped", stopped.Status)
 	}
-	if len(agent.downs) != 1 || agent.downs[0] != ProjectName(created.ID) {
+	if len(agent.downs) != 1 || agent.downs[0].project != ProjectName(created.ID) {
 		t.Errorf("downs = %v", agent.downs)
 	}
 
@@ -268,8 +268,10 @@ func TestStopAndRestart(t *testing.T) {
 }
 
 // TestDeleteStopsThenSoftDeletes proves delete brings the project down and
-// keeps the row when the node cannot be reached, and that a document which no
-// longer renders does not make the service undeletable.
+// keeps the row when the node cannot be reached; when the stored document no
+// longer renders, the newest successful deploy snapshot is used to stop the
+// project, and no snapshot at all retains the row instead of hiding a
+// possibly running project.
 func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 	repo := newFakeRepository()
 	agent := &fakeAgent{}
@@ -293,19 +295,352 @@ func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 		t.Fatalf("Get after delete = %v, want ErrNotFound", err)
 	}
 
-	// A document whose environment no longer resolves deletes anyway: the
-	// rename + env removal in one patch makes the stored document
-	// unrenderable.
+	// A document that no longer renders with no successful snapshot retains
+	// the row: soft-deleting would hide a project that may still be running.
 	broken := createService(t, svc, repo, userID)
 	broken.Env = map[string]string{}
 	repo.mu.Lock()
 	repo.services[broken.ID] = broken
 	repo.mu.Unlock()
+	if err := svc.Delete(context.Background(), userID, broken.ID); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Delete(unrenderable, no snapshot) = %v, want ErrValidation", err)
+	}
+	if _, err := svc.Get(context.Background(), userID, broken.ID); err != nil {
+		t.Fatalf("the row must survive an unconfirmed shutdown: %v", err)
+	}
+
+	// With a running deploy snapshot the delete stops the project from that
+	// snapshot instead of failing.
+	snapshot := "services:\n  web:\n    image: nginx:1.23\n    environment:\n      DOMAIN: app.example.com\n"
+	if _, err := repo.CreateServiceDeploy(context.Background(), Deploy{
+		ID: uuid.New(), ServiceID: broken.ID, State: DeployRunning, ComposeYAML: snapshot,
+	}); err != nil {
+		t.Fatalf("CreateServiceDeploy: %v", err)
+	}
 	if err := svc.Delete(context.Background(), userID, broken.ID); err != nil {
-		t.Fatalf("Delete(unrenderable) = %v", err)
+		t.Fatalf("Delete(snapshot fallback) = %v", err)
 	}
 	if _, err := svc.Get(context.Background(), userID, broken.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Get after delete = %v, want ErrNotFound", err)
+	}
+
+	// The node was driven with the snapshot document, not skipped.
+	agent.mu.Lock()
+	lastDown := agent.downs[len(agent.downs)-1]
+	agent.mu.Unlock()
+	if lastDown.project != ProjectName(broken.ID) || lastDown.yaml != snapshot {
+		t.Errorf("last down = %+v, want the running deploy snapshot", lastDown)
+	}
+}
+
+// TestDeployDoesNotClobberConcurrentEdit proves a lifecycle completion writes
+// only the status: a successful rename that lands while a deploy is in flight
+// must survive the deploy's completion.
+func TestDeployDoesNotClobberConcurrentEdit(t *testing.T) {
+	repo := newFakeRepository()
+	gate := make(chan struct{})
+	agent := &fakeAgent{upGate: gate}
+	svc := newTestService(t, repo, agent)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+
+	deployDone := make(chan error, 1)
+	go func() {
+		_, _, err := svc.Deploy(context.Background(), userID, created.ID)
+		deployDone <- err
+	}()
+	waitForUp(t, agent)
+
+	name := "updated-during-deploy"
+	if _, err := svc.Update(context.Background(), userID, created.ID, UpdateRequest{Name: &name}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	close(gate)
+	if err := <-deployDone; err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	after, err := svc.Get(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.Name != name {
+		t.Fatalf("the concurrent rename was overwritten by the deploy completion: %q", after.Name)
+	}
+	if after.Status != StatusRunning {
+		t.Fatalf("status = %q, want running", after.Status)
+	}
+}
+
+// TestConcurrentLifecycleOpsSerialize proves a deploy and a stop on the same
+// service cannot interleave: the stop waits for the deploy to finish and the
+// final status is the last action's, never a contradictory mix.
+func TestConcurrentLifecycleOpsSerialize(t *testing.T) {
+	repo := newFakeRepository()
+	gate := make(chan struct{})
+	agent := &fakeAgent{upGate: gate}
+	svc := newTestService(t, repo, agent)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+
+	deployDone := make(chan error, 1)
+	go func() {
+		_, _, err := svc.Deploy(context.Background(), userID, created.ID)
+		deployDone <- err
+	}()
+	waitForUp(t, agent)
+
+	stopDone := make(chan error, 1)
+	go func() {
+		_, err := svc.Stop(context.Background(), userID, created.ID)
+		stopDone <- err
+	}()
+
+	// The stop must wait for the deploy to release the lifecycle lock.
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case err := <-stopDone:
+		t.Fatalf("a stop completed while a deploy was in flight: %v", err)
+	default:
+	}
+	close(gate)
+	if err := <-deployDone; err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if err := <-stopDone; err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	after, err := svc.Get(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.Status != StatusStopped {
+		t.Fatalf("final status = %q, want the last action's stopped", after.Status)
+	}
+}
+
+// waitForUp waits until the fake agent recorded an Up call.
+func waitForUp(t *testing.T, agent *fakeAgent) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		agent.mu.Lock()
+		calls := len(agent.ups)
+		agent.mu.Unlock()
+		if calls > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the deploy never reached the agent")
+}
+
+// TestNodeOperationErrorsRedactEnvironment proves every node operation, not
+// only a failed deploy, redacts the service environment values from the error
+// it returns (and keeps the sentinel chain matchable).
+func TestNodeOperationErrorsRedactEnvironment(t *testing.T) {
+	secret := testEnv["PASSWORD"]
+	cases := map[string]struct {
+		prime func(*fakeAgent)
+		call  func(ServiceService, uuid.UUID, uuid.UUID) error
+		want  error
+	}{
+		"stop": {
+			prime: func(a *fakeAgent) { a.downErr = fmt.Errorf("%w: down: bad %s", ErrDeployFailed, secret) },
+			call: func(svc ServiceService, userID, id uuid.UUID) error {
+				_, err := svc.Stop(context.Background(), userID, id)
+				return err
+			},
+			want: ErrDeployFailed,
+		},
+		"delete": {
+			prime: func(a *fakeAgent) { a.downErr = fmt.Errorf("%w: down: bad %s", ErrDeployFailed, secret) },
+			call: func(svc ServiceService, userID, id uuid.UUID) error {
+				return svc.Delete(context.Background(), userID, id)
+			},
+			want: ErrDeployFailed,
+		},
+		"restart": {
+			prime: func(a *fakeAgent) { a.upErr = fmt.Errorf("%w: up: bad %s", ErrDeployFailed, secret) },
+			call: func(svc ServiceService, userID, id uuid.UUID) error {
+				_, err := svc.Restart(context.Background(), userID, id)
+				return err
+			},
+			want: ErrDeployFailed,
+		},
+		"containers": {
+			prime: func(a *fakeAgent) { a.psErr = fmt.Errorf("%w: ps: bad %s", ErrDeployFailed, secret) },
+			call: func(svc ServiceService, userID, id uuid.UUID) error {
+				_, err := svc.Containers(context.Background(), userID, id)
+				return err
+			},
+			want: ErrDeployFailed,
+		},
+		"logs": {
+			prime: func(a *fakeAgent) { a.logsErr = fmt.Errorf("%w: logs: bad %s", ErrDeployFailed, secret) },
+			call: func(svc ServiceService, userID, id uuid.UUID) error {
+				_, err := svc.Logs(context.Background(), userID, id, "", 10, false)
+				return err
+			},
+			want: ErrDeployFailed,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			repo := newFakeRepository()
+			agent := &fakeAgent{}
+			tc.prime(agent)
+			svc := newTestService(t, repo, agent)
+			userID := uuid.New()
+			created := createService(t, svc, repo, userID)
+
+			err := tc.call(svc, userID, created.ID)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("the error leaked the environment value: %v", err)
+			}
+			if !strings.Contains(err.Error(), "<redacted>") {
+				t.Fatalf("the error does not show the redaction: %v", err)
+			}
+		})
+	}
+}
+
+// TestAgentConnectionsAreClosed proves each unary operation closes its dialed
+// client and a log stream closes its connection when it ends.
+func TestAgentConnectionsAreClosed(t *testing.T) {
+	steps := []struct {
+		name string
+		call func(*testing.T, ServiceService, uuid.UUID, uuid.UUID)
+	}{
+		{"deploy", func(t *testing.T, svc ServiceService, userID, id uuid.UUID) {
+			if _, _, err := svc.Deploy(context.Background(), userID, id); err != nil {
+				t.Fatalf("Deploy: %v", err)
+			}
+		}},
+		{"stop", func(t *testing.T, svc ServiceService, userID, id uuid.UUID) {
+			if _, err := svc.Stop(context.Background(), userID, id); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+		}},
+		{"restart", func(t *testing.T, svc ServiceService, userID, id uuid.UUID) {
+			if _, err := svc.Restart(context.Background(), userID, id); err != nil {
+				t.Fatalf("Restart: %v", err)
+			}
+		}},
+		{"containers", func(t *testing.T, svc ServiceService, userID, id uuid.UUID) {
+			if _, err := svc.Containers(context.Background(), userID, id); err != nil {
+				t.Fatalf("Containers: %v", err)
+			}
+		}},
+		{"delete", func(t *testing.T, svc ServiceService, userID, id uuid.UUID) {
+			if err := svc.Delete(context.Background(), userID, id); err != nil {
+				t.Fatalf("Delete: %v", err)
+			}
+		}},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			repo := newFakeRepository()
+			agent := &fakeAgent{chunks: [][]byte{[]byte("line\n")}}
+			svc := newTestService(t, repo, agent)
+			userID := uuid.New()
+			created := createService(t, svc, repo, userID)
+
+			before := agent.currentCloses()
+			step.call(t, svc, userID, created.ID)
+			if after := agent.currentCloses(); after <= before {
+				t.Fatalf("the %s operation did not close its client (%d -> %d)", step.name, before, after)
+			}
+		})
+	}
+
+	// Logs hands ownership to the stream; reading it to the end closes the
+	// connection.
+	repo := newFakeRepository()
+	agent := &fakeAgent{chunks: [][]byte{[]byte("line\n")}}
+	svc := newTestService(t, repo, agent)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+	before := agent.currentCloses()
+	stream, err := svc.Logs(context.Background(), userID, created.ID, "worker", 10, false)
+	if err != nil {
+		t.Fatalf("Logs: %v", err)
+	}
+	for range stream.Chunks() {
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream.Close: %v", err)
+	}
+	if after := agent.currentCloses(); after <= before {
+		t.Fatalf("the log stream did not close its client (%d -> %d)", before, after)
+	}
+}
+
+// TestLifecycleChangesResyncTheProxy proves every routing-relevant lifecycle
+// change asks the Phase 6 proxy to reconcile the node, that a sync failure is
+// best effort (logged, never returned) and that a nil hook is harmless.
+func TestLifecycleChangesResyncTheProxy(t *testing.T) {
+	repo := newFakeRepository()
+	agent := &fakeAgent{}
+	proxySync := &fakeRouteSync{}
+	svc := NewService(Config{
+		Repository:    repo,
+		Logger:        discardLogger(),
+		DeployTimeout: 5 * time.Second,
+		Dial:          func(context.Context, uuid.UUID) (ComposeAgent, error) { return agent, nil },
+		Proxy:         proxySync,
+	})
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+
+	for _, step := range []struct {
+		name string
+		call func() error
+	}{
+		{"deploy", func() error {
+			_, _, err := svc.Deploy(context.Background(), userID, created.ID)
+			return err
+		}},
+		{"stop", func() error {
+			_, err := svc.Stop(context.Background(), userID, created.ID)
+			return err
+		}},
+		{"restart", func() error {
+			_, err := svc.Restart(context.Background(), userID, created.ID)
+			return err
+		}},
+		{"delete", func() error { return svc.Delete(context.Background(), userID, created.ID) }},
+	} {
+		if err := step.call(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+	}
+	calls := proxySync.calls()
+	if len(calls) != 4 {
+		t.Fatalf("proxy resyncs = %v, want one per lifecycle change", calls)
+	}
+	for _, serverID := range calls {
+		if serverID != created.ServerID {
+			t.Fatalf("resync target = %s, want %s", serverID, created.ServerID)
+		}
+	}
+
+	// A failing resync never fails the mutation.
+	proxySync.err = fmt.Errorf("proxy down")
+	repo2 := newFakeRepository()
+	svc2 := NewService(Config{
+		Repository: repo2,
+		Logger:     discardLogger(),
+		Dial:       func(context.Context, uuid.UUID) (ComposeAgent, error) { return agent, nil },
+		Proxy:      proxySync,
+	})
+	second := createService(t, svc2, repo2, userID)
+	if _, _, err := svc2.Deploy(context.Background(), userID, second.ID); err != nil {
+		t.Fatalf("a failed resync must not fail the deploy: %v", err)
 	}
 }
 
@@ -329,11 +664,11 @@ func TestOwnershipAndLogs(t *testing.T) {
 		t.Fatalf("Delete(other user) = %v, want ErrNotFound", err)
 	}
 
-	chunks, err := svc.Logs(context.Background(), ownerID, created.ID, "worker", 25, true)
+	stream, err := svc.Logs(context.Background(), ownerID, created.ID, "worker", 25, true)
 	if err != nil {
 		t.Fatalf("Logs: %v", err)
 	}
-	if got := string(<-chunks); got != "alive\n" {
+	if got := string(<-stream.Chunks()); got != "alive\n" {
 		t.Errorf("chunk = %q", got)
 	}
 	if len(agent.logCalls) != 1 || agent.logCalls[0].service != "worker" ||

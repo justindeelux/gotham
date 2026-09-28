@@ -2,6 +2,8 @@ package services
 
 import (
 	"errors"
+	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -99,7 +101,7 @@ func TestInterpolateErrors(t *testing.T) {
 		},
 		"invalid name": {
 			document: "services:\n  web:\n    image: nginx\n    environment:\n      A: ${bad name}\n",
-			want:     "invalid variable name",
+			want:     "unsupported reference modifier",
 		},
 		"unsupported modifier": {
 			document: "services:\n  web:\n    image: nginx\n    environment:\n      A: ${A:1}\n",
@@ -345,10 +347,15 @@ func TestRenderRedaction(t *testing.T) {
 	if redacted := Redact(message, env); strings.Contains(redacted, "hunter2-secret") {
 		t.Fatalf("Redact = %q, want the value removed", redacted)
 	}
-	// A short value is left alone on purpose: replacing it would mangle
-	// ordinary numbers.
-	if redacted := Redact("port 80 is in use", map[string]string{"PORT": "80"}); redacted != "port 80 is in use" {
+	// Even a short value is redacted: the environment map carries no
+	// secret/non-secret distinction.
+	if redacted := Redact("port 80 is in use", map[string]string{"PORT": "80"}); redacted != "port <redacted> is in use" {
 		t.Fatalf("Redact short value = %q", redacted)
+	}
+	// The dollar-escaped rendering of a value is redacted too: an error may
+	// quote the rendered document, where `x$y` was written as `x$$y`.
+	if redacted := Redact("value x$$y failed and x$y too", map[string]string{"PASSWORD": "x$y"}); strings.Contains(redacted, "x$y") || strings.Contains(redacted, "x$$y") {
+		t.Fatalf("Redact escaped value = %q", redacted)
 	}
 	// The error chain survives redaction so sentinel mapping keeps working.
 	err := RedactError(errors.Join(ErrValidation, errors.New(message)), env)
@@ -357,6 +364,123 @@ func TestRenderRedaction(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "hunter2-secret") {
 		t.Fatalf("redacted error leaked the value: %v", err)
+	}
+}
+
+// TestInterpolateModifierArguments proves the operator is selected at the end
+// of the variable name, so operator characters inside an argument stay part of
+// the argument.
+func TestInterpolateModifierArguments(t *testing.T) {
+	document := `services:
+  web:
+    image: nginx
+    environment:
+      A: ${UNSET-http://host:-fallback}
+      B: ${SET+http://host?q=1}
+      C: ${EMPTY:-http://host:8080/path}
+`
+	rendered, err := Interpolate(document, map[string]string{"SET": "present"})
+	if err != nil {
+		t.Fatalf("Interpolate: %v", err)
+	}
+	for _, want := range []string{
+		"A: http://host:-fallback",
+		"B: http://host?q=1",
+		"C: http://host:8080/path",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered document is missing %q:\n%s", want, rendered)
+		}
+	}
+
+	// An unset-only error message may contain hyphens and operator-looking
+	// characters without changing the operator.
+	document = "services:\n  web:\n    image: nginx\n    environment:\n      A: ${MISSING?set -- the port first}\n"
+	if _, err := Interpolate(document, nil); !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "set -- the port first") {
+		t.Fatalf("Interpolate = %v, want the -? error message", err)
+	}
+}
+
+// TestRenderGrowthIsBounded proves the rendered-document limit is enforced
+// while the document is built: a small document whose repeated references
+// would expand past the cap must fail without allocating the expanded string.
+func TestRenderGrowthIsBounded(t *testing.T) {
+	value := strings.Repeat("x", 8<<10)
+	var builder strings.Builder
+	builder.WriteString("services:\n  web:\n    image: nginx\n    environment:\n")
+	for i := 0; i < 2048; i++ {
+		fmt.Fprintf(&builder, "      K%d: ${BIG}\n", i)
+	}
+	document := builder.String()
+	env := map[string]string{"BIG": value}
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, err := Interpolate(document, env)
+	runtime.ReadMemStats(&after)
+	if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Interpolate = %v, want the rendered-size rejection", err)
+	}
+	// The expanded document would be ~16 MiB; the bound must stop the builder
+	// near the 1 MiB cap.
+	if grown := after.TotalAlloc - before.TotalAlloc; grown > 4<<20 {
+		t.Fatalf("Interpolate allocated %d bytes for a bounded render", grown)
+	}
+}
+
+// TestParseEffectiveVolumeNames proves an alias cannot point at a managed
+// database volume through a definition name or an external-name form.
+func TestParseEffectiveVolumeNames(t *testing.T) {
+	reserved := "gotham-db-11111111-1111-1111-1111-111111111111"
+	cases := map[string]string{
+		"definition name": `services:
+  web:
+    image: nginx:1.23
+    volumes: [safe:/data]
+volumes:
+  safe:
+    name: ` + reserved + "\n",
+		"external true with name": `services:
+  web:
+    image: nginx:1.23
+    volumes: [safe:/data]
+volumes:
+  safe:
+    external: true
+    name: ` + reserved + "\n",
+		"external name mapping": `services:
+  web:
+    image: nginx:1.23
+    volumes: [safe:/data]
+volumes:
+  safe:
+    external:
+      name: ` + reserved + "\n",
+	}
+	for name, document := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse(document)
+			if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "reserved for managed databases") {
+				t.Fatalf("Parse = %v, want the reserved-volume rejection", err)
+			}
+		})
+	}
+
+	// A non-reserved name override is accepted and the alias is reported.
+	spec, err := Parse(`services:
+  web:
+    image: nginx:1.23
+    volumes: [safe:/data]
+volumes:
+  safe:
+    name: shop-data
+`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(spec.NamedVolumes) != 1 || spec.NamedVolumes[0] != "safe" {
+		t.Fatalf("named volumes = %v", spec.NamedVolumes)
 	}
 }
 

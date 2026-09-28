@@ -28,9 +28,13 @@ type Repository interface {
 	GetService(ctx context.Context, serviceID uuid.UUID) (Service, error)
 	// ListServicesByUser returns a user's live services, newest first.
 	ListServicesByUser(ctx context.Context, userID uuid.UUID) ([]Service, error)
-	// UpdateService persists the mutable fields, or ErrNotFound when the row
-	// is gone or already deleted.
-	UpdateService(ctx context.Context, service Service) (Service, error)
+	// UpdateServiceConfig persists the mutable configuration fields (name,
+	// document, environment) without touching the status, so a concurrent
+	// lifecycle completion cannot clobber an edit (and an edit cannot clobber
+	// a status).
+	UpdateServiceConfig(ctx context.Context, service Service) (Service, error)
+	// UpdateServiceStatus writes only the status column of a live service.
+	UpdateServiceStatus(ctx context.Context, serviceID uuid.UUID, status Status) (Service, error)
 	// SoftDeleteService marks the row deleted without touching any volume.
 	SoftDeleteService(ctx context.Context, serviceID uuid.UUID) (Service, error)
 	// CreateServiceDeploy stores one deploy attempt.
@@ -112,18 +116,18 @@ func (r *storeRepository) ListServicesByUser(ctx context.Context, userID uuid.UU
 	return services, nil
 }
 
-// UpdateService implements Repository, mapping a missing row to ErrNotFound.
-func (r *storeRepository) UpdateService(ctx context.Context, service Service) (Service, error) {
+// UpdateServiceConfig implements Repository, mapping a missing row to
+// ErrNotFound. Only the name, document and environment columns are written.
+func (r *storeRepository) UpdateServiceConfig(ctx context.Context, service Service) (Service, error) {
 	env, err := marshalEnv(service.Env)
 	if err != nil {
 		return Service{}, err
 	}
-	row, err := r.store.UpdateService(ctx, sqlc.UpdateServiceParams{
+	row, err := r.store.UpdateServiceConfig(ctx, sqlc.UpdateServiceConfigParams{
 		ID:          pgUUID(service.ID),
 		Name:        service.Name,
 		ComposeYaml: service.ComposeYAML,
 		Env:         env,
-		Status:      string(service.Status),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -132,7 +136,23 @@ func (r *storeRepository) UpdateService(ctx context.Context, service Service) (S
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Service{}, ErrNotFound
 		}
-		return Service{}, fmt.Errorf("services: update service: %w", err)
+		return Service{}, fmt.Errorf("services: update service config: %w", err)
+	}
+	return serviceFromRow(row)
+}
+
+// UpdateServiceStatus implements Repository, mapping a missing row to
+// ErrNotFound. Only the status column is written.
+func (r *storeRepository) UpdateServiceStatus(ctx context.Context, serviceID uuid.UUID, status Status) (Service, error) {
+	row, err := r.store.UpdateServiceStatus(ctx, sqlc.UpdateServiceStatusParams{
+		ID:     pgUUID(serviceID),
+		Status: string(status),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Service{}, ErrNotFound
+		}
+		return Service{}, fmt.Errorf("services: update service status: %w", err)
 	}
 	return serviceFromRow(row)
 }

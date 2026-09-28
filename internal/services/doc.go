@@ -31,13 +31,16 @@
 //	      gotham.domain.port: "80"         # container port, default 80
 //
 // The map is computed from the rendered document (a label value may itself be
-// a `${VAR}` reference) and returned with every service read and deploy. The
-// generated Traefik route reuses the Phase 6 file provider: the proxy
-// generator consumes service domains through the same generated router/service
-// documents. NOTE: the generator that consumes this map is not wired yet in
-// BE-7.1 — the domains are stored and reported, but no router is pushed for
-// them until the proxy source learns about services (tracked as the BE-7.1
-// residual gap in the phase notes).
+// a `${VAR}` reference) and returned with every service read and deploy. It
+// also feeds the Phase 6 proxy generator through the same path applications
+// use: the HTTP wiring supplies internal/services.ProxySource as the proxy's
+// service source, the sync resolves each declared host against the project's
+// running containers (matched through Docker Compose's own project/service
+// labels) and writes one router per host into the generated Traefik documents.
+// An application base domain on the same node wins a shared host; a host two
+// services declare is held back for both; a redirect source may never shadow a
+// service host. Deploy, stop, restart and delete ask the proxy to reconcile
+// the node, so a removed project loses its routes.
 //
 // # Storage mounts
 //
@@ -46,9 +49,9 @@
 // never passes --volumes, so a stop or a delete keeps every byte. A document
 // may not declare or reference a `gotham-db-` volume: those are the managed
 // database volumes Phase 5 guarantees, and a compose project must not be able
-// to mount (or a down ever delete) them. An anonymous volume (a bare container
-// path) is removed with its container by compose down: data that must survive
-// a stop belongs in a named volume.
+// to mount (or a down ever delete) them. Compose keeps an anonymous volume
+// across a down, but a later up does not reattach it (the data becomes
+// orphaned), so data that must survive a stop belongs in a named volume.
 //
 // # Trust boundary
 //

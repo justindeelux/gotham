@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -54,9 +53,13 @@ const (
 	maxComposeYAML = 1 << 20 // 1 MiB
 	// maxComposeError caps how much compose CLI output one error message
 	// carries. Compose errors are line-oriented and the control plane only
-	// needs the first few lines; the bound stops a runaway node from
-	// producing an unbounded gRPC status.
+	// needs the first few lines; the bound is enforced while the output is
+	// read, so a failing CLI cannot make the agent buffer its whole stream.
 	maxComposeError = 4 << 10 // 4 KiB
+	// maxComposeOutput caps a parsed CLI output (config listings, ps JSON).
+	// A parsed output that exceeds it fails the operation instead of being
+	// truncated into a wrong answer.
+	maxComposeOutput = 1 << 20 // 1 MiB
 	// maxComposeLogChunk caps one streamed log chunk.
 	maxComposeLogChunk = 32 << 10 // 32 KiB
 	// maxComposeServices caps a validated document's service count, so a
@@ -115,6 +118,52 @@ type ComposeServer struct {
 	binary     string
 	timeout    time.Duration
 	log        *slog.Logger
+	locks      projectLocks
+}
+
+// projectLocks serializes the document-dependent operations of one compose
+// project. Complete operations hold the lock from the document write through
+// the CLI run, so a concurrent request for the same project cannot make a
+// command execute another request's document. Read-only operations (ps, logs)
+// do not take it: atomic renames already give them a consistent file, and a
+// following log stream holding the lock would block deploys indefinitely.
+type projectLocks struct {
+	mu      sync.Mutex
+	entries map[string]*projectLock
+}
+
+// projectLock is one project's mutex plus the number of holders/waiters.
+type projectLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// acquire takes the project's lock and returns its release function. The
+// refcount removes an entry once the last holder releases it, so the map stays
+// bounded by the projects in flight rather than by every project ever used.
+func (l *projectLocks) acquire(project string) func() {
+	l.mu.Lock()
+	if l.entries == nil {
+		l.entries = make(map[string]*projectLock)
+	}
+	entry, ok := l.entries[project]
+	if !ok {
+		entry = &projectLock{}
+		l.entries[project] = entry
+	}
+	entry.refs++
+	l.mu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		l.mu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(l.entries, project)
+		}
+		l.mu.Unlock()
+		entry.mu.Unlock()
+	}
 }
 
 // Compile-time guarantee that ComposeServer satisfies the agent service.
@@ -154,11 +203,16 @@ func NewComposeServer(cfg ComposeServerConfig) *ComposeServer {
 // `docker compose config`, starting nothing. It returns the service names in
 // the CLI's dependency order and the declared named volumes, both read back
 // from the CLI's own rendering rather than from a second YAML parser.
+//
+// The whole operation holds the project's operation lock, so a concurrent
+// request for the same project cannot replace the document between the write
+// and the CLI run.
 func (s *ComposeServer) ComposeValidate(ctx context.Context, req *agentv1.ComposeValidateRequest) (*agentv1.ComposeValidateResponse, error) {
-	project, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml())
+	project, release, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml())
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	services, err := s.configList(ctx, project, "--services")
 	if err != nil {
 		return nil, composeError("validate", err)
@@ -178,10 +232,11 @@ func (s *ComposeServer) ComposeValidate(ctx context.Context, req *agentv1.Compos
 // runs `docker compose restart` instead of a create/recreate pass, restarting
 // only the project's existing containers.
 func (s *ComposeServer) ComposeUp(ctx context.Context, req *agentv1.ComposeUpRequest) (*agentv1.ComposeUpResponse, error) {
-	project, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml())
+	project, release, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml())
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	// Validate before touching the running project so a malformed document
 	// cannot bring a healthy project down.
 	if _, err := s.configList(ctx, project, "--services"); err != nil {
@@ -207,10 +262,11 @@ func (s *ComposeServer) ComposeUp(ctx context.Context, req *agentv1.ComposeUpReq
 // never passes --volumes: named volumes survive a down, so a stop is always
 // recoverable and data safety does not depend on the caller.
 func (s *ComposeServer) ComposeDown(ctx context.Context, req *agentv1.ComposeDownRequest) (*agentv1.ComposeDownResponse, error) {
-	project, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml())
+	project, release, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml())
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	if _, err := s.run(ctx, project, "down", "--remove-orphans"); err != nil {
 		return nil, composeError("down", err)
 	}
@@ -264,30 +320,55 @@ func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc
 	if err := command.Start(); err != nil {
 		return composeError("logs", err)
 	}
-	writer := &composeStreamWriter{send: stream.Send}
+	// A send failure cancels the CLI immediately and closes both pipes: a
+	// stream whose consumer disappeared must not stay blocked while a
+	// grandchild of the CLI (for example one stage of a pipeline) keeps the
+	// pipe open, and closing the read ends unblocks the drain goroutines.
+	writer := &composeStreamWriter{send: stream.Send, stop: func() {
+		cancel()
+		_ = stdout.Close()
+		_ = stderr.Close()
+	}}
 	// Both pipes write through one mutex-guarded sender: gRPC streams do not
 	// allow concurrent Send calls.
-	var copies sync.WaitGroup
+	var (
+		copies    sync.WaitGroup
+		copyMutex sync.Mutex
+		copyErr   error
+	)
 	copies.Add(2)
 	copyPipe := func(pipe io.Reader) {
 		defer copies.Done()
-		_, _ = io.Copy(writer, pipe)
+		if _, err := io.Copy(writer, pipe); err != nil {
+			copyMutex.Lock()
+			copyErr = err
+			copyMutex.Unlock()
+		}
 	}
 	go copyPipe(stdout)
 	go copyPipe(stderr)
-	waitErr := command.Wait()
+	// Drain both pipes to EOF before Wait: Wait closes the pipe readers, so
+	// waiting first can discard buffered tail data.
 	copies.Wait()
+	waitErr := command.Wait()
+	copyMutex.Lock()
+	drainErr := copyErr
+	copyMutex.Unlock()
+
 	if writer.failed() != nil {
-		// The client went away or the stream broke; the context cancel above
-		// already stops the CLI.
+		// The client went away or the stream broke; cancel above already
+		// stopped the CLI.
+		return nil
+	}
+	if ctx.Err() != nil {
+		// A follow stream ends when the client cancels; that is not a failure.
 		return nil
 	}
 	if waitErr != nil {
-		// A follow stream ends when the client cancels; that is not a failure.
-		if ctx.Err() != nil {
-			return nil
-		}
 		return composeError("logs", waitErr)
+	}
+	if drainErr != nil {
+		return status.Errorf(codes.Internal, "logs: read compose output: %v", drainErr)
 	}
 	return nil
 }
@@ -313,34 +394,58 @@ func (s *ComposeServer) ComposePs(ctx context.Context, req *agentv1.ComposePsReq
 	return &agentv1.ComposePsResponse{Containers: containers}, nil
 }
 
-// prepare validates a project name, checks the document size and writes the
-// compose file atomically inside the project directory. Every command that
-// needs the document calls it, so the node always runs the file the control
-// plane last sent. The file is mode 0600: a rendered compose document carries
-// the service's environment values.
-func (s *ComposeServer) prepare(ctx context.Context, projectName string, composeYAML []byte) (string, error) {
+// prepare validates a project name, checks the document size, acquires the
+// project's operation lock and writes the compose file atomically inside the
+// project directory. Every document-dependent op proves through the lock that
+// no concurrent request can replace the file between the write and the CLI
+// run, so a command always executes its own request's document. The returned
+// release function must be called after the operation's commands complete.
+//
+// The file is mode 0600: a rendered compose document carries the service's
+// environment values.
+func (s *ComposeServer) prepare(ctx context.Context, projectName string, composeYAML []byte) (string, func(), error) {
+	project, composeYAML, err := validateComposeInput(ctx, projectName, composeYAML)
+	if err != nil {
+		return "", nil, err
+	}
+	release := s.locks.acquire(project)
+	if err := s.writeDocument(project, composeYAML); err != nil {
+		release()
+		return "", nil, err
+	}
+	return project, release, nil
+}
+
+// validateComposeInput validates the project name and the document bounds
+// without touching the filesystem or taking a lock.
+func validateComposeInput(ctx context.Context, projectName string, composeYAML []byte) (string, []byte, error) {
 	if err := ctx.Err(); err != nil {
-		return "", status.FromContextError(err).Err()
+		return "", nil, status.FromContextError(err).Err()
 	}
 	project, err := validateComposeProject(projectName)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if len(composeYAML) == 0 {
-		return "", status.Error(codes.InvalidArgument, "compose document is required")
+		return "", nil, status.Error(codes.InvalidArgument, "compose document is required")
 	}
 	if len(composeYAML) > maxComposeYAML {
-		return "", status.Errorf(codes.InvalidArgument, "compose document exceeds %d bytes", maxComposeYAML)
+		return "", nil, status.Errorf(codes.InvalidArgument, "compose document exceeds %d bytes", maxComposeYAML)
 	}
+	return project, composeYAML, nil
+}
+
+// writeDocument replaces the project's compose file atomically.
+func (s *ComposeServer) writeDocument(project string, composeYAML []byte) error {
 	dir, err := openTrustedDir(filepath.Join(s.root, project), true)
 	if err != nil {
-		return "", status.Errorf(codes.Internal, "compose directory: %v", err)
+		return status.Errorf(codes.Internal, "compose directory: %v", err)
 	}
 	defer func() { _ = dir.Close() }()
 	if err := writeFileInDir(dir, composeFileName, composeYAML, 0o600); err != nil {
-		return "", status.Errorf(codes.Internal, "write compose file: %v", err)
+		return status.Errorf(codes.Internal, "write compose file: %v", err)
 	}
-	return project, nil
+	return nil
 }
 
 // requireProject reports a clear error when the project was never written (a
@@ -368,14 +473,17 @@ func (s *ComposeServer) configList(ctx context.Context, project string, flag str
 // run executes one compose subcommand in the project's directory and returns
 // its stdout, bounded by the configured timeout. stderr is captured separately
 // so a CLI warning (compose prints them on stderr) can never corrupt a
-// parsed output such as `ps --format json`; on failure both streams are
-// bounded into the error message.
+// parsed output such as `ps --format json`; both streams are capped while
+// they are read, so a hostile or runaway CLI cannot make the agent buffer
+// arbitrary output. A parsed output that exceeds the cap fails instead of
+// being truncated into a wrong answer.
 func (s *ComposeServer) run(ctx context.Context, project string, args ...string) ([]byte, error) {
 	command, cancel := s.command(ctx, project, s.timeout, args...)
 	defer cancel()
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
+	stdout := &boundedBuffer{limit: maxComposeOutput}
+	stderr := &boundedBuffer{limit: maxComposeError}
+	command.Stdout = stdout
+	command.Stderr = stderr
 	if err := command.Run(); err != nil {
 		// The caller's context is the authority on cancellation: a killed CLI
 		// reports an exit signal, not the context error.
@@ -385,8 +493,52 @@ func (s *ComposeServer) run(ctx context.Context, project string, args ...string)
 		output := append(append([]byte{}, stderr.Bytes()...), stdout.Bytes()...)
 		return nil, &composeCommandError{err: err, output: output}
 	}
+	if stdout.Overflowed() {
+		return nil, status.Errorf(codes.Internal,
+			"compose %s output exceeds %d bytes", firstArg(args), maxComposeOutput)
+	}
 	return stdout.Bytes(), nil
 }
+
+// firstArg returns the compose subcommand for diagnostics; args is never empty
+// at the call sites.
+func firstArg(args []string) string {
+	if len(args) == 0 {
+		return "command"
+	}
+	return args[0]
+}
+
+// boundedBuffer accumulates at most limit bytes and remembers whether more
+// arrived. Writes always report success, so the CLI keeps running while the
+// agent discards the excess instead of blocking on a full pipe.
+type boundedBuffer struct {
+	buf      []byte
+	limit    int
+	overflow bool
+}
+
+// Write appends p, keeping at most limit bytes.
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if len(b.buf) >= b.limit {
+		b.overflow = true
+		return len(p), nil
+	}
+	room := b.limit - len(b.buf)
+	if len(p) > room {
+		b.buf = append(b.buf, p[:room]...)
+		b.overflow = true
+		return len(p), nil
+	}
+	b.buf = append(b.buf, p...)
+	return len(p), nil
+}
+
+// Bytes returns the retained bytes.
+func (b *boundedBuffer) Bytes() []byte { return b.buf }
+
+// Overflowed reports whether more than limit bytes arrived.
+func (b *boundedBuffer) Overflowed() bool { return b.overflow }
 
 // command builds one compose invocation: the CLI, the project's compose file,
 // the fixed project name, the caller's arguments, the agent's Docker endpoint
@@ -470,9 +622,13 @@ func composeError(action string, err error) error {
 // composeStreamWriter forwards log output to the gRPC send function in bounded
 // chunks. It is safe for the stdout and stderr copy goroutines to share it: a
 // mutex serializes Send calls, which is what a gRPC server stream requires.
+// The first send failure runs stop (cancel the CLI and close its pipes), so a
+// blocked pipe cannot keep the drain goroutines (and the RPC) alive after the
+// consumer disappeared.
 type composeStreamWriter struct {
 	mu   sync.Mutex
 	send func(*agentv1.ComposeLogChunk) error
+	stop func()
 	err  error
 }
 
@@ -491,6 +647,9 @@ func (w *composeStreamWriter) Write(p []byte) (int, error) {
 		}
 		if err := w.send(&agentv1.ComposeLogChunk{Data: p[:size]}); err != nil {
 			w.err = err
+			if w.stop != nil {
+				w.stop()
+			}
 			return written, err
 		}
 		written += size

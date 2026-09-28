@@ -14,12 +14,18 @@ SELECT * FROM services
 WHERE user_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC;
 
--- name: UpdateService :one
+-- name: UpdateServiceConfig :one
 UPDATE services
 SET name = $2,
     compose_yaml = $3,
     env = $4,
-    status = $5,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;
+
+-- name: UpdateServiceStatus :one
+UPDATE services
+SET status = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
@@ -31,6 +37,15 @@ SET status = 'deleting',
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
+
+-- name: ListRoutableServices :many
+-- ListRoutableServices returns every live service with its document and
+-- environment, in creation order, so the proxy source can render each one's
+-- current domain map (a service that no longer renders is reported as
+-- unroutable rather than failing the node's sync).
+SELECT * FROM services
+WHERE deleted_at IS NULL
+ORDER BY created_at ASC, id ASC;
 
 -- name: CreateServiceDeploy :one
 INSERT INTO service_deploys (id, service_id, state, compose_yaml)

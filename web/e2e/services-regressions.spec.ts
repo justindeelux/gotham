@@ -283,4 +283,43 @@ test.describe("services fix regressions", () => {
     await expect(page.locator('[data-testid="history-empty"]')).toBeVisible();
     await expect(page.getByText("Nothing has been deployed yet.")).toBeVisible();
   });
+
+  test("Vue: the log reader refreshes the session once on 401 and reports expiry", async ({
+    page,
+    request,
+  }) => {
+    const account = loadAccount();
+    const headers = { Authorization: `Bearer ${account.accessToken}` };
+    const { serviceId } = await seedService(
+      request,
+      headers,
+      uniqueSuffix(),
+      "fix4",
+    );
+
+    // The log endpoint answers 401 on every call (the first try and the retry
+    // after a real refresh), so the reader's own refresh path runs against the
+    // live refresh endpoint.
+    await page.route("**/api/v1/services/*/logs*", (route) =>
+      route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "unauthorized" }),
+      }),
+    );
+    let refreshes = 0;
+    page.on("request", (tracked) => {
+      if (tracked.url().includes("/api/v1/auth/refresh")) {
+        refreshes += 1;
+      }
+    });
+
+    await page.goto(`/services/${serviceId}`);
+    await page.getByRole("button", { name: "Stream logs" }).click();
+    await expect(
+      page.getByText("Your session expired. Please sign in again."),
+    ).toBeVisible();
+    // Exactly one refresh attempt: the reader retries once, never in a loop.
+    expect(refreshes).toBe(1);
+  });
 });

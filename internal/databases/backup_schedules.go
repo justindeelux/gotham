@@ -40,9 +40,11 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID u
 	if err != nil {
 		return BackupSchedule{}, err
 	}
-	targetID, err := m.ownedTargetID(ctx, userID, req.TargetID)
-	if err != nil {
-		return BackupSchedule{}, err
+	targetID := uuid.Nil
+	if req.TargetID != nil {
+		if targetID, err = m.ownedTargetID(ctx, userID, *req.TargetID); err != nil {
+			return BackupSchedule{}, err
+		}
 	}
 	enabled := true
 	if req.Enabled != nil {
@@ -71,7 +73,9 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID u
 
 // UpdateSchedule implements BackupService. The cron expression and the
 // computed next run are always recomputed, so a schedule cannot drift from
-// its expression.
+// its expression. TargetID is tri-state: nil keeps the stored target, an
+// empty string clears it (runs go to the local backup directory) and an id
+// replaces it with an owned target.
 func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, scheduleID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
 	if _, err := m.database(ctx, userID, databaseID); err != nil {
 		return BackupSchedule{}, err
@@ -89,8 +93,14 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, 
 		return BackupSchedule{}, err
 	}
 	targetID := schedule.TargetID
-	if strings.TrimSpace(req.TargetID) != "" {
-		if targetID, err = m.ownedTargetID(ctx, userID, req.TargetID); err != nil {
+	switch {
+	case req.TargetID == nil:
+		// Field absent: keep the stored target. nil can never clear.
+	case strings.TrimSpace(*req.TargetID) == "":
+		// Explicit clear: scheduled runs return to the local directory.
+		targetID = uuid.Nil
+	default:
+		if targetID, err = m.ownedTargetID(ctx, userID, *req.TargetID); err != nil {
 			return BackupSchedule{}, err
 		}
 	}

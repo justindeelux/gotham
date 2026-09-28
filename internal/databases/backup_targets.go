@@ -46,9 +46,8 @@ func (m *BackupManager) CreateTarget(ctx context.Context, userID uuid.UUID, req 
 	if err := applyTargetRequest(&target, req); err != nil {
 		return BackupTarget{}, err
 	}
-	if target.Kind == TargetS3 && (strings.TrimSpace(req.AccessKey) == "" || strings.TrimSpace(req.SecretKey) == "") {
-		return BackupTarget{}, fmt.Errorf(
-			"%w: s3 targets need both an access key and a secret key", ErrValidation)
+	if target.Kind == TargetS3 && !requestCarriesCredentials(req) {
+		return BackupTarget{}, s3CredentialsRequired()
 	}
 	now := m.now()
 	target.CreatedAt, target.UpdatedAt = now, now
@@ -64,7 +63,9 @@ func (m *BackupManager) CreateTarget(ctx context.Context, userID uuid.UUID, req 
 
 // UpdateTarget implements BackupService. Credentials are replaced only when
 // the request carries new ones, so a UI that resends the masked value cannot
-// wipe a stored key.
+// wipe a stored key. Switching the target to s3 has the same requirement as
+// CreateTarget: the request must carry a complete pair or the target must
+// already hold one, so an s3 target can never end up without keys.
 func (m *BackupManager) UpdateTarget(ctx context.Context, userID, targetID uuid.UUID, req TargetRequest) (BackupTarget, error) {
 	target, err := m.ownedTarget(ctx, userID, targetID)
 	if err != nil {
@@ -72,6 +73,15 @@ func (m *BackupManager) UpdateTarget(ctx context.Context, userID, targetID uuid.
 	}
 	if err := applyTargetRequest(target, req); err != nil {
 		return BackupTarget{}, err
+	}
+	if target.Kind == TargetS3 && !requestCarriesCredentials(req) {
+		stored, err := m.targetHasStoredCredentials(ctx, targetID)
+		if err != nil {
+			return BackupTarget{}, err
+		}
+		if !stored {
+			return BackupTarget{}, s3CredentialsRequired()
+		}
 	}
 	target.UpdatedAt = m.now()
 	updated, err := m.backups.UpdateBackupTarget(ctx, *target)
@@ -215,8 +225,34 @@ func (m *BackupManager) openTarget(ctx context.Context, target BackupTarget) (s3
 	}, nil
 }
 
+// requestCarriesCredentials reports whether the request carries a complete
+// non-blank credential pair.
+func requestCarriesCredentials(req TargetRequest) bool {
+	return strings.TrimSpace(req.AccessKey) != "" && strings.TrimSpace(req.SecretKey) != ""
+}
+
+// s3CredentialsRequired is the shared create/update rejection: an s3 target
+// must always hold a complete access/secret pair.
+func s3CredentialsRequired() error {
+	return fmt.Errorf("%w: s3 targets need both an access key and a secret key", ErrValidation)
+}
+
+// targetHasStoredCredentials reports whether a target already holds an
+// openable, non-blank access/secret pair.
+func (m *BackupManager) targetHasStoredCredentials(ctx context.Context, targetID uuid.UUID) (bool, error) {
+	secrets, err := m.backups.ListTargetSecrets(ctx, targetID)
+	if err != nil {
+		return false, err
+	}
+	accessKey, secretKey, err := openTargetSecrets(m.secret, secrets)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(accessKey) != "" && strings.TrimSpace(secretKey) != "", nil
+}
+
 // sealTargetSecrets seals the halves of an S3 login with AES-256-GCM
-// (providers.SealSecret). Empty values are skipped so a partial update
+// (providers.SealSecret). Blank values are skipped so a partial update
 // replaces only what it carries.
 func sealTargetSecrets(secret string, targetID uuid.UUID, accessKey, secretKey string) ([]TargetSecret, error) {
 	pairs := [][2]string{
@@ -225,7 +261,7 @@ func sealTargetSecrets(secret string, targetID uuid.UUID, accessKey, secretKey s
 	}
 	sealed := make([]TargetSecret, 0, len(pairs))
 	for _, pair := range pairs {
-		if pair[1] == "" {
+		if strings.TrimSpace(pair[1]) == "" {
 			continue
 		}
 		ciphertext, err := providers.SealSecret(secret, pair[1])
@@ -261,10 +297,11 @@ func openTargetSecrets(secret string, secrets []TargetSecret) (string, string, e
 }
 
 // sealTargetCredentials writes the credentials a request carried, replacing
-// whatever is stored under the same key. A request without credentials is a
-// no-op, so resending a masked value cannot wipe a stored key.
+// whatever is stored under the same key. A request without non-blank
+// credentials is a no-op, so resending a masked value cannot wipe a stored
+// key.
 func (m *BackupManager) sealTargetCredentials(ctx context.Context, target BackupTarget, req TargetRequest) error {
-	if req.AccessKey == "" && req.SecretKey == "" {
+	if strings.TrimSpace(req.AccessKey) == "" && strings.TrimSpace(req.SecretKey) == "" {
 		return nil
 	}
 	sealed, err := sealTargetSecrets(m.secret, target.ID, req.AccessKey, req.SecretKey)

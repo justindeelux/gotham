@@ -111,6 +111,8 @@ type restoreRequest struct {
 }
 
 // scheduleRequest is the body of the schedule create and update endpoints.
+// On update, target_id is tri-state: absent or null keeps the stored target,
+// an empty string clears it and an id replaces it (see ScheduleRequest).
 type scheduleRequest = ScheduleRequest
 
 // targetRequest is the body of the target create and update endpoints.

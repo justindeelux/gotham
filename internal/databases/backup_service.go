@@ -98,7 +98,8 @@ type BackupService interface {
 	// CreateTarget stores a target and seals the credentials it was given.
 	CreateTarget(ctx context.Context, userID uuid.UUID, req TargetRequest) (BackupTarget, error)
 	// UpdateTarget changes a target the caller owns; credentials are only
-	// replaced when the request carries new ones.
+	// replaced when the request carries new ones, and an s3 target must keep
+	// a complete access/secret pair.
 	UpdateTarget(ctx context.Context, userID, targetID uuid.UUID, req TargetRequest) (BackupTarget, error)
 	// DeleteTarget removes a target the caller owns.
 	DeleteTarget(ctx context.Context, userID, targetID uuid.UUID) error
@@ -132,16 +133,29 @@ type RestoreResult struct {
 }
 
 // ScheduleRequest creates or updates a backup schedule. Enabled is optional:
-// nil means "enabled" on create and "unchanged" on update.
+// nil means "enabled" on create and "unchanged" on update. TargetID uses the
+// same optional pattern, and makes clearing explicit:
+//
+//   - nil (field absent or null): create stores no target; update leaves the
+//     stored target unchanged.
+//   - pointer to "": create stores no target; update clears the target, so
+//     scheduled runs land in the local backup directory again.
+//   - pointer to a target id: create/update store that target (it must be
+//     owned by the caller).
+//
+// A client can therefore never clear a target by omitting the field, and an
+// empty string is never silently ignored.
 type ScheduleRequest struct {
-	Cron     string `json:"cron"`
-	TargetID string `json:"target_id,omitempty"`
-	Enabled  *bool  `json:"enabled,omitempty"`
+	Cron     string  `json:"cron"`
+	TargetID *string `json:"target_id,omitempty"`
+	Enabled  *bool   `json:"enabled,omitempty"`
 }
 
 // TargetRequest creates or updates a storage target. AccessKey and SecretKey
-// are sealed on write and never returned; empty leaves stored credentials
-// untouched.
+// are sealed on write and never returned; blank values leave stored
+// credentials untouched. An s3 target must always hold both halves: create
+// requires them in the request, and update requires them in the request or
+// already stored.
 type TargetRequest struct {
 	Name      string `json:"name"`
 	Kind      string `json:"kind"`

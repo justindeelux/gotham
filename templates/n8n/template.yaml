@@ -1,0 +1,46 @@
+name: n8n
+icon: n8n
+description: n8n workflow automation with a persistent named volume and a routed domain.
+fields:
+  - key: domain
+    label: Domain
+    type: text
+    required: true
+    placeholder: n8n.example.com
+    help: The public host served by the node's Traefik proxy.
+    pattern: ^[A-Za-z0-9][A-Za-z0-9.-]*$
+    max_length: 253
+  - key: encryption_key
+    label: Encryption key
+    type: secret
+    required: true
+    help: Encrypts stored credentials; keep it safe, losing it locks the credentials.
+  - key: timezone
+    label: Timezone
+    type: text
+    default: UTC
+    placeholder: Europe/Berlin
+    pattern: ^[A-Za-z0-9_/+-]+$
+    max_length: 64
+    help: IANA timezone name used for schedules and the container clock.
+  - key: log_level
+    label: Log level
+    type: select
+    default: info
+    options:
+      - debug
+      - info
+      - warn
+      - error
+  - key: diagnostics
+    label: Send diagnostics
+    type: bool
+    default: true
+    help: Allow n8n to send anonymous usage diagnostics.
+  - key: executions_retention_hours
+    label: Execution retention (hours)
+    type: number
+    default: 336
+    min: 1
+    max: 8760
+    help: Executions older than this are pruned; 336 hours is 14 days.

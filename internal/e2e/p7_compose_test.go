@@ -4,23 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/justindeelux/gotham/agent"
-	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/proxy"
-	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/services"
-	"github.com/justindeelux/gotham/internal/store"
-	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
 // Phase 7 (BE-7.1) production acceptance. The test drives the real control
@@ -52,193 +43,13 @@ func TestP7ComposeServiceProduction(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	logger := testLogger(t)
-
-	engine, err := agent.NewDockerClient(e2eDockerSock())
-	if err != nil {
-		t.Fatalf("docker client for %s: %v", e2eDockerSock(), err)
-	}
-	versionCtx, versionCancel := context.WithTimeout(ctx, 10*time.Second)
-	version, err := engine.Version(versionCtx)
-	versionCancel()
-	if err != nil {
-		t.Fatalf("docker daemon unreachable at %s: %v", e2eDockerSock(), err)
-	}
-	t.Logf("docker %s at %s", version, e2eDockerSock())
-
-	// The compose plugin is the feature's only node prerequisite.
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Fatalf("docker CLI not found: %v", err)
-	}
-	if output, err := runDocker(ctx, "compose", "version"); err != nil {
-		t.Fatalf("docker compose plugin unavailable (%v): %s", err, output)
-	}
-
-	dsn := e2eDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Fatalf("Postgres/migrations unavailable at %s: %v", dsn, err)
-	}
-	pool, err := store.Open(ctx, dsn)
-	if err != nil {
-		t.Fatalf("Postgres unavailable at %s: %v", dsn, err)
-	}
-	t.Cleanup(pool.Close)
-	st := store.New(pool)
-
-	suffix := uuid.New().String()[:8]
-	userRow, err := st.CreateUser(ctx, "p7-e2e-"+suffix+"@example.com", nil)
-	if err != nil {
-		t.Fatalf("create user: %v", err)
-	}
-	userID := uuid.UUID(userRow.ID.Bytes)
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", userRow.ID); err != nil {
-			t.Logf("cleanup user: %v", err)
-		}
-	})
-	serverRow, err := st.CreateServer(ctx, sqlc.CreateServerParams{
-		Name:    "p7-e2e-" + suffix,
-		Ip:      "127.0.0.1",
-		Port:    22,
-		SshUser: "root",
-	})
-	if err != nil {
-		t.Fatalf("create server: %v", err)
-	}
-	serverID := uuid.UUID(serverRow.ID.Bytes)
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverRow.ID); err != nil {
-			t.Logf("cleanup server: %v", err)
-		}
-	})
-
-	// The node agent with the real ComposeServer rooted in a temp directory
-	// (macOS temp paths carry /var -> /private/var symlinks the agent's
-	// no-follow traversal rejects, so the fixture is canonicalized).
-	nodeID := "p7-e2e-" + suffix
-	composeRoot, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatalf("canonical temp dir: %v", err)
-	}
-	composeAgent := agent.NewComposeServer(agent.ComposeServerConfig{
-		Root:       composeRoot,
-		DockerHost: e2eDockerSock(),
-		Logger:     logger,
-	})
-	// The node also serves the Phase 6 proxy service: the service domains are
-	// routed through the real Traefik on this node.
-	proxyConfigDir := p6CanonicalTempDir(t)
-	proxyAcmeDir := proxyConfigDir + "/acme"
-	if err := os.MkdirAll(proxyAcmeDir, 0o755); err != nil {
-		t.Fatalf("create acme dir: %v", err)
-	}
-	proxyAgent := agent.NewProxyServer(agent.ProxyServerConfig{Root: proxyConfigDir, Logger: logger})
-	agentAddr, authority := startLocalAgentWithOptions(t, ctx, engine, nodeID,
-		agent.WithProxyService(proxyAgent),
-		agent.WithComposeService(composeAgent))
-
-	// R4 convention from the Phase 6 test: a pre-existing fixed-name proxy
-	// container may be live state this run cannot prove it owns.
-	if existing := p6FindContainer(t, ctx, engine); existing != "" {
-		t.Fatalf("a gotham-traefik container already exists (%s); refusing to remove a possibly live proxy", existing)
-	}
-	createdIDs := []string{}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cleanupCancel()
-		for _, id := range createdIDs {
-			if err := engine.Remove(cleanupCtx, id); err != nil {
-				t.Logf("cleanup container %s: %v", id, err)
-			}
-		}
-	})
-	// On failure, keep the diagnosis close: the mounted configuration and the
-	// proxy logs are dumped before cleanup (the Phase 6 convention).
-	t.Cleanup(func() {
-		if !t.Failed() {
-			return
-		}
-		current := p6FindContainer(t, context.Background(), engine)
-		if current == "" {
-			t.Log("traefik container no longer exists for the failure dump")
-			return
-		}
-		if logs, err := runDocker(context.Background(), "logs", current); err == nil {
-			t.Logf("traefik logs:\n%s", logs)
-		}
-		if listing, err := runDocker(context.Background(), "exec", current, "ls", "-la", proxy.TraefikDynamicDir); err == nil {
-			t.Logf("container dynamic dir:\n%s", listing)
-		}
-		if data, err := os.ReadFile(proxyConfigDir + "/dynamic/gotham.yml"); err == nil {
-			t.Logf("host dynamic config:\n%s", data)
-		} else {
-			t.Logf("read host dynamic config: %v", err)
-		}
-	})
-	registry := p6Registry{server: &servers.Server{ID: serverID, IP: "127.0.0.1", NodeID: &nodeID}}
-	containerService := containers.NewService(containers.Config{
-		Registry: registry,
-		Cache:    containers.NopCache{},
-		Dial: func(dialCtx context.Context, _ *servers.Server) (containers.DockerClient, error) {
-			return servers.DialDockerClient(dialCtx, agentAddr, authority, servers.WithDockerServerName(nodeID))
-		},
-		Logger: logger,
-	})
-	t.Cleanup(func() { _ = containerService.Close() })
-
-	// Linux nodes reach published ports through the bridge gateway; Docker
-	// Desktop for macOS needs host.docker.internal (the Phase 6 convention).
-	backendHost := proxy.DefaultBackendHost
-	if runtime.GOOS == "darwin" {
-		backendHost = "host.docker.internal"
-	}
-	proxyService := proxy.NewService(proxy.Config{
-		Store:       st,
-		Containers:  containerService,
-		Services:    services.NewProxySource(st),
-		BackendHost: backendHost,
-		Dial: func(dialCtx context.Context, id uuid.UUID) (proxy.AgentClient, error) {
-			if id != serverID {
-				return nil, servers.ErrNotFound
-			}
-			return servers.DialProxyClient(dialCtx, agentAddr, authority, servers.WithDockerServerName(nodeID))
-		},
-		Logger:    logger,
-		ConfigDir: proxyConfigDir,
-		AcmeDir:   proxyAcmeDir,
-	})
-	traefikPullCtx, traefikPullCancel := context.WithTimeout(ctx, p7PollTimeout)
-	if err := engine.PullImage(traefikPullCtx, proxy.TraefikImage); err != nil {
-		traefikPullCancel()
-		t.Fatalf("pull %s: %v", proxy.TraefikImage, err)
-	}
-	traefikPullCancel()
-
-	composeService := services.NewService(services.Config{
-		Store:  st,
-		Logger: logger,
-		Proxy:  proxyService,
-		Dial: func(dialCtx context.Context, id uuid.UUID) (services.ComposeAgent, error) {
-			if id != serverID {
-				return nil, servers.ErrNotFound
-			}
-			client, err := servers.DialComposeClient(dialCtx, agentAddr, authority, servers.WithDockerServerName(nodeID))
-			if err != nil {
-				return nil, err
-			}
-			return services.NewGRPCComposeAgent(client), nil
-		},
-	})
+	h := newP7Harness(t, ctx)
 
 	// The document exercises the label convention, env substitution and a
 	// named volume. `$${MESSAGE}` escapes this control plane's interpolation
 	// so the container's shell expands the substituted value at runtime.
-	domain := "p7-" + suffix + ".example.test"
-	message := "p7-alive-" + suffix
+	domain := "p7-" + h.suffix + ".example.test"
+	message := "p7-alive-" + h.suffix
 	document := fmt.Sprintf(`services:
   web:
     image: %s
@@ -272,16 +83,16 @@ volumes:
 
 	pullCtx, pullCancel := context.WithTimeout(ctx, p7PollTimeout)
 	for _, image := range []string{p7NginxImage, p7BusyboxImage} {
-		if err := engine.PullImage(pullCtx, image); err != nil {
+		if err := h.engine.PullImage(pullCtx, image); err != nil {
 			pullCancel()
 			t.Fatalf("pull %s: %v", image, err)
 		}
 	}
 	pullCancel()
 
-	created, err := composeService.Create(ctx, userID, services.CreateRequest{
-		Name:        "p7-" + suffix,
-		ServerID:    serverID,
+	created, err := h.compose.Create(ctx, h.userID, services.CreateRequest{
+		Name:        "p7-" + h.suffix,
+		ServerID:    h.serverID,
 		ComposeYAML: document,
 		Env:         map[string]string{"DOMAIN": domain, "MESSAGE": message},
 	})
@@ -300,7 +111,7 @@ volumes:
 		}
 	})
 
-	deployed, deploy, err := composeService.Deploy(ctx, userID, created.ID)
+	deployed, deploy, err := h.compose.Deploy(ctx, h.userID, created.ID)
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
@@ -309,29 +120,29 @@ volumes:
 	}
 
 	// ps reports both compose services running.
-	containerList := p7WaitForRunning(t, ctx, composeService, userID, created.ID, 2)
+	containerList := p7WaitForRunning(t, ctx, h.compose, h.userID, created.ID)
 	t.Logf("containers: %+v", containerList)
 
 	// The domain label becomes a real Traefik route on this node: the
 	// generated router points at the project's published backend port and a
 	// Host-header request serves the nginx page.
-	p7Sync(t, ctx, proxyService, serverID)
-	if traefikID := p6FindContainer(t, ctx, engine); traefikID != "" {
-		createdIDs = append(createdIDs, traefikID)
+	p7Sync(t, ctx, h.proxy, h.serverID)
+	if traefikID := p6FindContainer(t, ctx, h.engine); traefikID != "" {
+		h.trackContainer(traefikID)
 	}
 	if body := p6ExpectHTTP(t, domain, 200); !strings.Contains(body, "Welcome to nginx") {
 		t.Fatalf("the service domain served %q, want nginx", body)
 	}
 
 	// Per-service logs carry the substituted environment value.
-	logs := p7ReadLogs(t, ctx, composeService, userID, created.ID, "worker")
+	logs := p7ReadLogs(t, ctx, h.compose, h.userID, created.ID, "worker")
 	if !strings.Contains(logs, message) {
 		t.Fatalf("worker logs do not contain %q:\n%s", message, logs)
 	}
 
 	// Data written into the named volume must survive stop and redeploy.
-	p7WriteMarker(t, ctx, volume, "marker-"+suffix)
-	stopped, err := composeService.Stop(ctx, userID, created.ID)
+	p7WriteMarker(t, ctx, volume, "marker-"+h.suffix)
+	stopped, err := h.compose.Stop(ctx, h.userID, created.ID)
 	if err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
@@ -341,25 +152,25 @@ volumes:
 	if !p7VolumeExists(t, ctx, volume) {
 		t.Fatalf("down removed the named volume %s", volume)
 	}
-	if containers := p7ListContainers(t, ctx, composeService, userID, created.ID); len(containers) != 0 {
+	if containers := p7ListContainers(t, ctx, h.compose, h.userID, created.ID); len(containers) != 0 {
 		t.Fatalf("down left containers behind: %+v", containers)
 	}
 	// Stop removes the route: the same host now answers 404 through Traefik.
-	p7Sync(t, ctx, proxyService, serverID)
+	p7Sync(t, ctx, h.proxy, h.serverID)
 	p6ExpectHTTP(t, domain, 404)
 
-	if _, _, err := composeService.Deploy(ctx, userID, created.ID); err != nil {
+	if _, _, err := h.compose.Deploy(ctx, h.userID, created.ID); err != nil {
 		t.Fatalf("redeploy: %v", err)
 	}
-	p7WaitForRunning(t, ctx, composeService, userID, created.ID, 2)
-	if marker := p7ReadMarker(t, ctx, volume); !strings.Contains(marker, "marker-"+suffix) {
+	p7WaitForRunning(t, ctx, h.compose, h.userID, created.ID)
+	if marker := p7ReadMarker(t, ctx, volume); !strings.Contains(marker, "marker-"+h.suffix) {
 		t.Fatalf("volume data did not survive the redeploy: %q", marker)
 	}
-	p7Sync(t, ctx, proxyService, serverID)
+	p7Sync(t, ctx, h.proxy, h.serverID)
 	p6ExpectHTTP(t, domain, 200)
 
 	// The deploy history snapshots every attempt.
-	deploys, err := composeService.Deploys(ctx, userID, created.ID)
+	deploys, err := h.compose.Deploys(ctx, h.userID, created.ID)
 	if err != nil {
 		t.Fatalf("Deploys: %v", err)
 	}
@@ -369,30 +180,30 @@ volumes:
 
 	// Restart restarts the running project in place and keeps the volume
 	// data.
-	restarted, err := composeService.Restart(ctx, userID, created.ID)
+	restarted, err := h.compose.Restart(ctx, h.userID, created.ID)
 	if err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
 	if restarted.Status != services.StatusRunning {
 		t.Fatalf("restarted status = %q", restarted.Status)
 	}
-	p7WaitForRunning(t, ctx, composeService, userID, created.ID, 2)
-	if marker := p7ReadMarker(t, ctx, volume); !strings.Contains(marker, "marker-"+suffix) {
+	p7WaitForRunning(t, ctx, h.compose, h.userID, created.ID)
+	if marker := p7ReadMarker(t, ctx, volume); !strings.Contains(marker, "marker-"+h.suffix) {
 		t.Fatalf("volume data did not survive the restart: %q", marker)
 	}
 
 	// Delete stops the project and keeps the data.
-	if err := composeService.Delete(ctx, userID, created.ID); err != nil {
+	if err := h.compose.Delete(ctx, h.userID, created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if !p7VolumeExists(t, ctx, volume) {
 		t.Fatalf("delete removed the named volume %s", volume)
 	}
-	if _, err := composeService.Get(ctx, userID, created.ID); err == nil {
+	if _, err := h.compose.Get(ctx, h.userID, created.ID); err == nil {
 		t.Fatal("deleted service is still readable")
 	}
 	// The deleted service's host is no longer claimed.
-	p7Sync(t, ctx, proxyService, serverID)
+	p7Sync(t, ctx, h.proxy, h.serverID)
 	p6ExpectHTTP(t, domain, 404)
 }
 
@@ -419,10 +230,20 @@ func p7ListContainers(t *testing.T, ctx context.Context, svc services.ServiceSer
 	return containers
 }
 
-// p7WaitForRunning polls ps until the project reports the expected number of
-// running containers.
-func p7WaitForRunning(t *testing.T, ctx context.Context, svc services.ServiceService, userID, serviceID uuid.UUID, want int) []services.ComposeContainer {
+// p7WaitForRunning polls ps until every compose service of the project is
+// running. The expected count comes from the stored document, so a project
+// that declares more services cannot pass the wait with one still down.
+func p7WaitForRunning(t *testing.T, ctx context.Context, svc services.ServiceService, userID, serviceID uuid.UUID) []services.ComposeContainer {
 	t.Helper()
+	service, err := svc.Get(ctx, userID, serviceID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	spec, err := services.Render(service.ComposeYAML, service.Env)
+	if err != nil {
+		t.Fatalf("render the stored document: %v", err)
+	}
+	want := len(spec.Spec.Services)
 	deadline := time.Now().Add(p7PollTimeout)
 	var last []services.ComposeContainer
 	for {

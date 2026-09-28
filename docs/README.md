@@ -35,6 +35,12 @@ invariants, rollback, dev environment, decision log, and how to resume work.
 (CP + Postgres + Redis + node agent): connection, provisioning, test
 workflow, Playwright UI smoke, and what has been verified on real hardware.
 
+## One-click service templates
+
+[`../templates/README.md`](../templates/README.md) — the template format
+(`template.yaml` + `compose.yaml`), the field types and validation rules, the
+render guarantees, and the HTTP contract the services gallery consumes.
+
 ## UI design
 
 [`design/`](design/) is the UI source of truth: one `*.html` mockup per page

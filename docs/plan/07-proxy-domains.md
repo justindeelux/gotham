@@ -39,13 +39,37 @@
 The generator, the CRUD services and the bootstrap are covered by unit tests
 and by the BE-6.1 e2e suite; the unmet acceptance step was a real certificate
 obtained through a real DNS provider. It now runs as a gated test,
-`TestP6DNS01Issuance` in `internal/e2e/p6_issuance_test.go`: it preflights the
-Cloudflare token (create + delete a TXT record), creates the provider and the
-DNS-01 certificate intent through the real service surface, bootstraps
-Traefik with the DNS-01 resolver and asserts the certificate served for
-`SNI=$GOTHAM_TEST_DOMAIN` on the local gateway chains to the selected CA. The
-challenge TXT record is observed created and cleaned through the Cloudflare
-API in the same run.
+`TestP6DNS01Issuance` in `internal/e2e/p6_issuance_test.go`:
+
+- The Cloudflare token is preflighted (create + delete a TXT record, fatal on
+  403, delete retried and registered for cleanup), the provider and the
+  DNS-01 certificate intent are created through the real service surface, and
+  Traefik is bootstrapped with the DNS-01 resolver.
+- Challenge-record ownership is proven, not inferred: every TXT record seen at
+  the challenge name is only a candidate, and a record becomes owned only when
+  its content equals the DNS-01 value recomputed from this run's own ACME
+  account key and the challenge token of the authorization the CA reused
+  after validation (RFC 8555 §7.1.4). Only owned records are awaited and
+  deleted; a record that cannot be matched is left in place and the test
+  reports failure.
+- The certificate served for `SNI=$GOTHAM_TEST_DOMAIN` on the local gateway is
+  verified with real signature validation (`x509.Verify`: signatures, validity
+  and DNSName) against the system roots for production or the pinned Let's
+  Encrypt staging roots for staging
+  (`GOTHAM_E2E_STAGING_ROOT_PEM` can add a replacement staging anchor), and
+  the leaf decoded from Traefik's `acme.json` must be byte-identical to the
+  served leaf.
+- Cleanup of everything owned fails the test when it fails; the proxy
+  container is removed only when its per-run config-dir label proves
+  ownership (a pre-existing `gotham-traefik` is always refused), and
+  failure-path log dumps are redacted.
+
+Offline regressions run under a plain `go test ./internal/e2e/`:
+`TestP6IssuanceTXTValueOwnership` (no record is owned without a derived
+value; a forged value never matches), `TestP6IssuanceChainVerificationRejectsForgery`
+(a forged chain with the right issuer names is rejected by both the staging
+anchors and the system roots) and `TestP6IssuanceACMENewOrder` (the signed
+new-order request and the 200/201 order-reuse responses).
 
 Prerequisites (owner-supplied, never committed):
 
@@ -75,16 +99,22 @@ never consume production quota; a token without DNS edit permission stops the
 test at the preflight (403, no blind retries).
 
 Observed 2026-09-28 (local Docker Desktop, dev Postgres, ports 80/443/8080,
-`gotham.deelux.dev` in `deelux.dev`):
+`gotham.deelux.dev` in `deelux.dev`; values from the hardened review-fix
+round):
 
-- staging: pass in 56s; TXT `_acme-challenge.gotham.deelux.dev` observed
-  created and cleaned through the Cloudflare API; Traefik served a chain
-  `gotham.deelux.dev` → `(STAGING) Dastardly Durum YR1` →
-  `(STAGING) Yonder Yam Root YR` for SNI=gotham.deelux.dev, and the
-  certificate was present in `acme.json`.
-- production: pass in 39s with `GOTHAM_E2E_ACME_CA=production` (one
-  issuance); the served chain was `gotham.deelux.dev` → `YR2` →
-  `Root YR` → `ISRG Root X1`.
+- staging: pass in 70s; one candidate TXT record was observed at
+  `_acme-challenge.gotham.deelux.dev` through the Cloudflare API and matched
+  the value derived from this run's own ACME account (owned record), the
+  served chain `gotham.deelux.dev` → `(STAGING) Dastardly Durum YR1` →
+  `(STAGING) Yonder Yam Root YR` verified against the pinned staging roots,
+  the `acme.json` leaf was byte-identical to the served leaf, and the ACME
+  client removed the record (owned cleanup observed; no test deletion was
+  needed).
+- production: pass in 57s with `GOTHAM_E2E_ACME_CA=production` (the second
+  and final production issuance for this package); the served chain
+  `gotham.deelux.dev` → `YR1` → `Root YR` → `ISRG Root X1` verified with the
+  system roots, the owned challenge record was observed created and cleaned,
+  and the `acme.json` leaf matched the served leaf byte for byte.
 - Scope: this run covers the exact-host DNS-01 path; the wildcard
   `tls.domains main/sans` variant is covered by generator goldens only and was
   not part of this live issuance.

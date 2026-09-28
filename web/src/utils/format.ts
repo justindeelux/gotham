@@ -91,3 +91,41 @@ export function relativeTime(iso: string | null | undefined): string {
 
   return `${Math.round(months / 12)}y ago`;
 }
+
+/** formatDate renders an ISO timestamp as a short absolute date ("28 Sep 2026"). */
+export function formatDate(iso: string | null | undefined): string {
+  if (!iso) {
+    return emptyPlaceholder;
+  }
+  const time = new Date(iso);
+  if (Number.isNaN(time.getTime())) {
+    return "unknown";
+  }
+  return time.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+/** expiryLabel renders how far away (or past) an expiry timestamp is. */
+export function expiryLabel(iso: string | null | undefined): string {
+  if (!iso) {
+    return emptyPlaceholder;
+  }
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) {
+    return "unknown";
+  }
+
+  const now = Date.now();
+  const days = Math.round((then - now) / 86_400_000);
+  if (days > 0) {
+    return `expires in ${days} day${days === 1 ? "" : "s"}`;
+  }
+  if (days < 0) {
+    const overdue = -days;
+    return `expired ${overdue} day${overdue === 1 ? "" : "s"} ago`;
+  }
+  return then >= now ? "expires today" : "expired today";
+}

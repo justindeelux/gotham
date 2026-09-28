@@ -15,14 +15,21 @@ import { isApiError } from "./servers";
  *   GET    /proxy/certificates/{id}
  *   PATCH  /proxy/certificates/{id}
  *   DELETE /proxy/certificates/{id}
+ *   POST   /proxy/redirects
+ *   GET    /proxy/redirects
+ *   GET    /proxy/redirects/{id}
+ *   PATCH  /proxy/redirects/{id}
+ *   DELETE /proxy/redirects/{id}
  *
  * Paths are relative to the shared axios instance (`baseURL: /api/v1`), so the
  * auth header and refresh-on-401 behaviour come from `./http` unchanged.
  *
  * Credentials are write-only: the API never returns a sealed credential, only
  * `credentials_set`. The SPA may set or rotate one and must never render,
- * log or persist it. Certificate responses carry no issuance status and no
- * expiry — the API records the desired configuration only.
+ * log or persist it. Certificate responses carry the node-observed `status`
+ * and, when a certificate is present, its `not_after` expiry; a missing status
+ * means the control plane has no status service configured and must be
+ * rendered as not reported.
  */
 
 /** DNS provider types accepted by the control plane (see ssl.go allowlist). */
@@ -67,6 +74,18 @@ export interface UpdateDNSProviderInput {
   enabled?: boolean;
 }
 
+/**
+ * Node-observed state of one certificate intent (see certificate_status.go):
+ *
+ *   present — the node's ACME storage holds a certificate covering the domain
+ *   absent  — the storage was read and holds no such certificate
+ *   unknown — the node or its storage could not be read; no claim possible
+ *
+ * The field is omitted when the control plane has no status service, which
+ * the UI renders as "not reported" rather than inventing a value.
+ */
+export type CertificateStatus = "present" | "absent" | "unknown";
+
 /** One certificate configuration as returned by the API. */
 export interface Certificate {
   id: string;
@@ -78,6 +97,10 @@ export interface Certificate {
   /** Empty for http-01. */
   dns_provider_id: string;
   wildcard: boolean;
+  /** Observed on read; omitted when no status service is configured. */
+  status?: CertificateStatus;
+  /** Covering certificate expiry; only present when status is "present". */
+  not_after?: string;
   created_at: string;
   updated_at: string;
 }
@@ -114,6 +137,45 @@ export interface CertificateDraft {
   enabled: boolean;
 }
 
+/**
+ * Redirect code intent accepted by the API (see redirects.go): 301 permanent
+ * or 302 temporary. Traefik special-cases only GET, so GET answers the stored
+ * code while HEAD and every other method answer 308/307 to keep the method.
+ */
+export type RedirectCode = 301 | 302;
+
+/** One domain→domain redirect rule as returned by the API. */
+export interface DomainRedirect {
+  id: string;
+  application_id: string;
+  source_domain: string;
+  target_domain: string;
+  code: RedirectCode;
+  preserve_path: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Body of POST /proxy/redirects. code defaults to 301 server-side. */
+export interface CreateRedirectInput {
+  application_id: string;
+  source_domain: string;
+  target_domain: string;
+  code?: RedirectCode;
+  preserve_path?: boolean;
+  enabled?: boolean;
+}
+
+/** Body of PATCH /proxy/redirects/{id}. Omitted fields stay unchanged. */
+export interface UpdateRedirectInput {
+  source_domain?: string;
+  target_domain?: string;
+  code?: RedirectCode;
+  preserve_path?: boolean;
+  enabled?: boolean;
+}
+
 /** Wire envelopes (see ssl_routes.go). */
 interface DNSProviderEnvelope {
   provider: DNSProvider;
@@ -129,6 +191,14 @@ interface CertificateEnvelope {
 
 interface CertificateListEnvelope {
   certificates: Certificate[];
+}
+
+interface RedirectEnvelope {
+  redirect: DomainRedirect;
+}
+
+interface RedirectListEnvelope {
+  redirects: DomainRedirect[];
 }
 
 /** listDNSProviders returns every configured provider, newest first. */
@@ -200,6 +270,44 @@ export async function deleteCertificate(id: string): Promise<void> {
 }
 
 /**
+ * listRedirects returns every redirect rule, newest first, or one
+ * application's rules when applicationId is given.
+ */
+export async function listRedirects(
+  applicationId?: string,
+): Promise<DomainRedirect[]> {
+  const response = await http.get<RedirectListEnvelope>("/proxy/redirects", {
+    params: applicationId ? { application_id: applicationId } : undefined,
+  });
+  return response.data.redirects ?? [];
+}
+
+/** createRedirect stores one rule (POST → 201). */
+export async function createRedirect(
+  input: CreateRedirectInput,
+): Promise<DomainRedirect> {
+  const response = await http.post<RedirectEnvelope>("/proxy/redirects", input);
+  return response.data.redirect;
+}
+
+/** updateRedirect applies a partial update (PATCH → 200). */
+export async function updateRedirect(
+  id: string,
+  input: UpdateRedirectInput,
+): Promise<DomainRedirect> {
+  const response = await http.patch<RedirectEnvelope>(
+    `/proxy/redirects/${id}`,
+    input,
+  );
+  return response.data.redirect;
+}
+
+/** deleteRedirect removes one rule (DELETE → 204). */
+export async function deleteRedirect(id: string): Promise<void> {
+  await http.delete(`/proxy/redirects/${id}`);
+}
+
+/**
  * toCertificateInput maps a draft onto the wire body. http-01 never names a
  * provider and never asks for a wildcard; dns-01 always names one.
  */
@@ -231,6 +339,39 @@ export function draftFromCertificate(certificate: Certificate): CertificateDraft
 /** providerLabel renders the human name of a provider type. */
 export function providerLabel(provider: DNSProviderName): string {
   return provider === "cloudflare" ? "Cloudflare" : "DigitalOcean";
+}
+
+/**
+ * certificateStatusLabel renders the observed status; undefined means the
+ * API reported none (no status service configured) and is never invented.
+ */
+export function certificateStatusLabel(
+  status: CertificateStatus | undefined,
+): string {
+  switch (status) {
+    case "present":
+      return "present";
+    case "absent":
+      return "no certificate";
+    case "unknown":
+      return "unknown";
+    default:
+      return "not reported";
+  }
+}
+
+/** certificateStatusTagType maps the observed status onto a tag style. */
+export function certificateStatusTagType(
+  status: CertificateStatus | undefined,
+): "success" | "warning" | "default" {
+  switch (status) {
+    case "present":
+      return "success";
+    case "unknown":
+      return "warning";
+    default:
+      return "default";
+  }
 }
 
 /**

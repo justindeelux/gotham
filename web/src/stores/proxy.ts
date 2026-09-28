@@ -6,31 +6,41 @@ import type { Application } from "../api/applications";
 import {
   createCertificate,
   createDNSProvider,
+  createRedirect,
   deleteCertificate,
   deleteDNSProvider,
+  deleteRedirect,
   describeProxyError,
   listCertificates,
   listDNSProviders,
+  listRedirects,
   updateCertificate,
   updateDNSProvider,
+  updateRedirect,
 } from "../api/proxy";
 import type {
   Certificate,
   CreateCertificateInput,
   CreateDNSProviderInput,
+  CreateRedirectInput,
   DNSProvider,
+  DomainRedirect,
   UpdateCertificateInput,
   UpdateDNSProviderInput,
+  UpdateRedirectInput,
 } from "../api/proxy";
 
 export const useProxyStore = defineStore("proxy", () => {
   const providers = ref<DNSProvider[]>([]);
   const certificates = ref<Certificate[]>([]);
+  const redirects = ref<DomainRedirect[]>([]);
   const applications = ref<Application[]>([]);
   const loading = ref(false);
   const certificatesLoading = ref(false);
+  const redirectsLoading = ref(false);
   const error = ref<string | null>(null);
   const certificatesError = ref<string | null>(null);
+  const redirectsError = ref<string | null>(null);
 
   /** fetchProviders loads every DNS provider (credentials never returned). */
   async function fetchProviders(): Promise<void> {
@@ -67,6 +77,20 @@ export const useProxyStore = defineStore("proxy", () => {
     } catch (err) {
       error.value = describeProxyError(err);
       throw err;
+    }
+  }
+
+  /** fetchRedirects loads every domain redirect rule. */
+  async function fetchRedirects(): Promise<void> {
+    redirectsLoading.value = true;
+    redirectsError.value = null;
+    try {
+      redirects.value = await listRedirects();
+    } catch (err) {
+      redirectsError.value = describeProxyError(err);
+      throw err;
+    } finally {
+      redirectsLoading.value = false;
     }
   }
 
@@ -138,16 +162,45 @@ export const useProxyStore = defineStore("proxy", () => {
     await fetchCertificates();
   }
 
+  /** createRedirectRule stores a rule and refreshes the list. */
+  async function createRedirectRule(
+    input: CreateRedirectInput,
+  ): Promise<DomainRedirect> {
+    const created = await createRedirect(input);
+    await fetchRedirects();
+    return created;
+  }
+
+  /** updateRedirectRule patches a rule and refreshes the list. */
+  async function updateRedirectRule(
+    id: string,
+    input: UpdateRedirectInput,
+  ): Promise<DomainRedirect> {
+    const updated = await updateRedirect(id, input);
+    await fetchRedirects();
+    return updated;
+  }
+
+  /** removeRedirectRule deletes a rule and refreshes the list. */
+  async function removeRedirectRule(id: string): Promise<void> {
+    await deleteRedirect(id);
+    await fetchRedirects();
+  }
+
   return {
     providers,
     certificates,
+    redirects,
     applications,
     loading,
     certificatesLoading,
+    redirectsLoading,
     error,
     certificatesError,
+    redirectsError,
     fetchProviders,
     fetchCertificates,
+    fetchRedirects,
     fetchApplications,
     providerOf,
     certificateOf,
@@ -158,5 +211,8 @@ export const useProxyStore = defineStore("proxy", () => {
     createCertificateConfig,
     updateCertificateConfig,
     removeCertificate,
+    createRedirectRule,
+    updateRedirectRule,
+    removeRedirectRule,
   };
 });

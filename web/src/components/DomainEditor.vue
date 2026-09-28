@@ -20,6 +20,8 @@ import { RouterLink } from "vue-router";
 import { describeApplicationError, updateApplication } from "../api/applications";
 import type { Application } from "../api/applications";
 import {
+  certificateStatusLabel,
+  certificateStatusTagType,
   describeProxyError,
   draftFromCertificate,
   providerLabel,
@@ -29,7 +31,7 @@ import type { CertificateDraft, Certificate, DNSProvider } from "../api/proxy";
 import CertificateForm from "./CertificateForm.vue";
 import { useApplicationsStore } from "../stores/applications";
 import { useProxyStore } from "../stores/proxy";
-import { relativeTime } from "../utils/format";
+import { expiryLabel, formatDate, relativeTime } from "../utils/format";
 
 /**
  * Domain and certificate editor of one application (the Domains tab of the
@@ -318,6 +320,21 @@ onMounted(() => {
                 {{ certificate.enabled ? "enabled" : "disabled" }}
               </NTag>
             </NDescriptionsItem>
+            <NDescriptionsItem label="Status">
+              <NTag size="small" :type="certificateStatusTagType(certificate.status)">
+                {{ certificateStatusLabel(certificate.status) }}
+              </NTag>
+            </NDescriptionsItem>
+            <NDescriptionsItem label="Expires">
+              <template v-if="certificate.status === 'present' && certificate.not_after">
+                <span class="mono">{{ formatDate(certificate.not_after) }}</span>
+                <span class="small hint"> · {{ expiryLabel(certificate.not_after) }}</span>
+              </template>
+              <NText v-else-if="certificate.status === 'present'" depth="3">
+                not reported
+              </NText>
+              <NText v-else depth="3">—</NText>
+            </NDescriptionsItem>
             <NDescriptionsItem label="Updated">
               {{ relativeTime(certificate.updated_at) }}
             </NDescriptionsItem>
@@ -338,8 +355,9 @@ onMounted(() => {
             </NPopconfirm>
           </NSpace>
           <NText depth="3" class="small">
-            The API records the desired configuration; ACME issuance status and
-            expiry are not exposed yet.
+            Status and expiry are observed from the node's ACME storage on
+            read. unknown means the node could not be read — never a
+            fabricated status.
           </NText>
         </template>
 
@@ -408,5 +426,9 @@ onMounted(() => {
 <style scoped>
 .small {
   font-size: var(--text-xs);
+}
+
+.hint {
+  color: var(--muted);
 }
 </style>

@@ -17,14 +17,16 @@ function tab(page: Page, name: string) {
 }
 
 /**
- * FE-6.1: drives the real Domains & SSL surface against the control plane.
+ * FE-6.x: drives the real Domains & SSL surface against the control plane.
  *
  * Covers the DNS-provider lifecycle (create, list, edit with credential
- * rotation, delete), certificate configuration create/edit/delete, the
- * application base-domain edit with certificate re-record, the API validation
- * error path, and the explicit backend-pending stubs (no fabricated status,
- * expiry or redirect data). No ACME issuance is triggered: certificate rows
- * are intent records and no node consumes them in this run.
+ * rotation, delete), certificate configuration create/edit/delete, the live
+ * certificate status/expiry rendering (observed node states), the redirect
+ * rule lifecycle (create, toggle, edit, conflict error, delete), the
+ * application base-domain edit with certificate re-record, and the API
+ * validation error path. The router list has no API and stays a labeled
+ * stub. No ACME issuance is triggered: certificate rows are intent records
+ * and no node consumes them in this run.
  */
 test.describe("domains", () => {
   test("manages DNS providers, certificates and the application domain", async ({
@@ -131,14 +133,14 @@ test.describe("domains", () => {
       page.getByRole("heading", { name: "Domains & SSL", level: 1 }),
     ).toBeVisible();
 
-    // Honest stubs: the certificates pane labels the missing status/expiry
-    // instead of rendering values, and no redirect surface exists.
+    // The router list is the only surface left without an API (BE-6.3 added
+    // no router-list endpoint); certificates and redirects render live data.
+    await tab(page, "Routers").click();
+    await expect(page.getByText(/not exposed by the API yet/i)).toBeVisible();
+    await tab(page, "Certificates").click();
     await expect(
-      page.getByText("Issuance status & expiry — backend pending"),
+      page.getByText("No certificate configurations yet."),
     ).toBeVisible();
-    await expect(page.getByRole("columnheader", { name: "Expires" })).toHaveCount(0);
-    await expect(page.getByRole("columnheader", { name: "Status" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Add redirect" })).toHaveCount(0);
 
     // ── error path: the API rejects a certificate for a domainless app ────
     await page.getByRole("button", { name: "Add certificate" }).first().click();
@@ -308,15 +310,152 @@ test.describe("domains", () => {
     await expect(certRow).toContainText(rotatedName);
     await expect(certRow).toContainText("wildcard");
 
-    // ── stub tabs: no fabricated router or redirect data ─────────────────
-    await tab(page, "Routers").click();
+    // ── certificate status/expiry: live unknown from this control plane ───
+    // No node agent is reachable in this run, so the control plane observes
+    // the certificate as unknown and the view shows no expiry for it.
     await expect(
-      page.getByText(/not exposed by the API yet/i),
+      page.getByRole("columnheader", { name: "Status" }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("columnheader", { name: "Expires" }),
+    ).toBeVisible();
+    certRow = page.getByRole("row").filter({ hasText: domain });
+    await expect(certRow).toContainText("unknown");
+
+    // present/absent cannot be produced by a local CP without a connected
+    // node, so the list response is rewritten in the browser: the SPA must
+    // render exactly what the API reports and never invent a status.
+    const notAfter = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000);
+    const expectedExpiryDate = notAfter.toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+    await page.route("**/api/v1/proxy/certificates", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      const body = (await response.json()) as {
+        certificates: Array<Record<string, unknown>>;
+      };
+      const certificates = (body.certificates ?? []).map((certificate) => ({
+        ...certificate,
+        status: "present",
+        not_after: notAfter.toISOString(),
+      }));
+      certificates.push(
+        {
+          ...certificates[0],
+          id: `fixture-absent-${suffix}`,
+          application_id: blankApp.id,
+          domain: `absent-${zone}`,
+          status: "absent",
+          not_after: undefined,
+        },
+        {
+          ...certificates[0],
+          id: `fixture-unknown-${suffix}`,
+          application_id: blankApp.id,
+          domain: `unknown-${zone}`,
+          status: "unknown",
+          not_after: undefined,
+        },
+      );
+      await route.fulfill({ response, json: { ...body, certificates } });
+    });
+
+    await page.reload();
+    await tab(page, "Certificates").click();
+    certRow = page.getByRole("row").filter({ hasText: domain });
+    await expect(certRow).toContainText("present");
+    await expect(certRow).toContainText(expectedExpiryDate);
+    await expect(certRow).toContainText("expires in 45 days");
+    await expect(
+      page.getByRole("row").filter({ hasText: `absent-${zone}` }),
+    ).toContainText("no certificate");
+    await expect(
+      page.getByRole("row").filter({ hasText: `unknown-${zone}` }),
+    ).toContainText("unknown");
+    await page.unroute("**/api/v1/proxy/certificates");
+
+    // ── redirects: create, toggle, edit, conflict error, delete ───────────
     await tab(page, "Redirects").click();
+    await expect(page.getByText("No redirect rules yet.")).toBeVisible();
+    const createRedirectCard = page
+      .locator(".n-card")
+      .filter({ hasText: "Add redirect" })
+      .first();
+    const redirectSource = `go-${zone}`;
+    const redirectTarget = `checkout-${zone}`;
+    const redirectTargetChanged = `storefront-${zone}`;
+
+    await createRedirectCard.locator(".field-application .n-select").click();
+    await page
+      .locator(".n-base-select-option")
+      .filter({ hasText: app.name })
+      .click();
+    await createRedirectCard.locator(".field-source input").fill(redirectSource);
+    await createRedirectCard.locator(".field-target input").fill(redirectTarget);
+    await createRedirectCard.locator(".field-code .n-select").click();
+    await page
+      .locator(".n-base-select-option")
+      .filter({ hasText: "302" })
+      .click();
+    await createRedirectCard
+      .getByRole("button", { name: "Add redirect" })
+      .click();
+
+    let redirectRow = page
+      .locator(".domain-row")
+      .filter({ hasText: redirectSource });
+    await expect(redirectRow).toHaveCount(1);
+    await expect(redirectRow).toContainText(redirectTarget);
+    await expect(redirectRow).toContainText("302");
+    await expect(redirectRow).toContainText("enabled");
+    await expect(redirectRow).toContainText("keeps the path");
+
+    await redirectRow.getByRole("switch").click();
+    await expect(redirectRow).toContainText("paused");
+    await redirectRow.getByRole("switch").click();
+    await expect(redirectRow).toContainText("enabled");
+
+    await redirectRow.getByRole("button", { name: "Edit" }).click();
+    const editRedirectModal = page
+      .locator(".n-modal")
+      .filter({ hasText: "Edit redirect rule" })
+      .first();
+    await expect(editRedirectModal.getByText(app.name)).toBeVisible();
+    const editItem = (label: string) =>
+      editRedirectModal.locator(".n-form-item").filter({ hasText: label });
+    await editItem("Target domain").locator("input").fill(redirectTargetChanged);
+    await editItem("Redirect code").locator(".n-select").click();
+    // Keyboard selection avoids ambiguity with the add form's mounted menu.
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("Enter");
+    await editItem("Preserve path").getByRole("switch").click();
+    await editRedirectModal.getByRole("button", { name: "Save" }).click();
+    await expect(editRedirectModal).toBeHidden();
+
+    redirectRow = page.locator(".domain-row").filter({ hasText: redirectSource });
+    await expect(redirectRow).toContainText(redirectTargetChanged);
+    await expect(redirectRow).toContainText("301");
+    await expect(redirectRow).not.toContainText("keeps the path");
+
+    // A duplicate source is rejected with the API's actionable 409 message.
+    await createRedirectCard.locator(".field-source input").fill(redirectSource);
+    await createRedirectCard.locator(".field-target input").fill(`other-${zone}`);
+    await createRedirectCard
+      .getByRole("button", { name: "Add redirect" })
+      .click();
     await expect(
-      page.getByText(/not implemented in the backend yet/i),
+      createRedirectCard.getByText(/already used by another redirect rule/i),
     ).toBeVisible();
+
+    await redirectRow.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(redirectRow).toHaveCount(0);
 
     // ── application detail: change the domain and re-record the cert ─────
     await page.goto(`/applications/${app.id}`);

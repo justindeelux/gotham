@@ -24,22 +24,32 @@ import { computed, h, onMounted, ref } from "vue";
 import type { VNode } from "vue";
 import { RouterLink } from "vue-router";
 
-import { describeProxyError, draftFromCertificate, providerLabel, toCertificateInput } from "../api/proxy";
+import {
+  certificateStatusLabel,
+  certificateStatusTagType,
+  describeProxyError,
+  draftFromCertificate,
+  providerLabel,
+  toCertificateInput,
+} from "../api/proxy";
 import type {
   Certificate,
   CertificateDraft,
   DNSProvider,
   DNSProviderName,
+  DomainRedirect,
+  RedirectCode,
 } from "../api/proxy";
 import CertificateForm from "../components/CertificateForm.vue";
 import { useProxyStore } from "../stores/proxy";
-import { relativeTime } from "../utils/format";
+import { expiryLabel, formatDate, relativeTime } from "../utils/format";
 
 /**
- * Domains & SSL page: DNS provider credentials and certificate
- * configurations, both backed by the proxy SSL API. Router listings and
- * domain redirect rules have no backend endpoints yet and are rendered as
- * explicitly labeled stubs — never with invented data.
+ * Domains & SSL page: DNS provider credentials, certificate configurations
+ * and domain redirect rules, all backed by the proxy API. Certificate
+ * status/expiry is observed live from the owning node; a router listing still
+ * has no API and is rendered as an explicitly labeled stub — never with
+ * invented data.
  */
 
 const message = useMessage();
@@ -68,6 +78,37 @@ const certificateSaving = ref(false);
 const certificateError = ref<string | null>(null);
 const editingCertificate = ref<Certificate | null>(null);
 const certificateDraft = ref<CertificateDraft>(emptyCertificateDraft());
+
+/** Redirect create form and edit dialog state. */
+interface RedirectForm {
+  application_id: string;
+  source_domain: string;
+  target_domain: string;
+  code: RedirectCode;
+  preserve_path: boolean;
+  enabled: boolean;
+}
+
+const redirectForm = ref<RedirectForm>(emptyRedirectForm());
+const redirectSaving = ref(false);
+const redirectError = ref<string | null>(null);
+const editingRedirect = ref<DomainRedirect | null>(null);
+const redirectEditOpen = ref(false);
+const redirectEditSaving = ref(false);
+const redirectEditError = ref<string | null>(null);
+const redirectEditForm = ref<RedirectForm>(emptyRedirectForm());
+
+/** emptyRedirectForm returns a create-mode redirect draft. */
+function emptyRedirectForm(): RedirectForm {
+  return {
+    application_id: "",
+    source_domain: "",
+    target_domain: "",
+    code: 301,
+    preserve_path: true,
+    enabled: true,
+  };
+}
 
 /** emptyProviderForm returns a create-mode provider draft. */
 function emptyProviderForm(): ProviderForm {
@@ -122,6 +163,24 @@ const wildcardCertificates = computed<number>(
   () => proxyStore.certificates.filter((item) => item.wildcard).length,
 );
 
+const enabledRedirects = computed<number>(
+  () => proxyStore.redirects.filter((item) => item.enabled).length,
+);
+
+const applicationOptions = computed(() =>
+  proxyStore.applications.map((application) => ({
+    label: application.base_domain
+      ? `${application.name} · ${application.base_domain}`
+      : `${application.name} · no base domain`,
+    value: application.id,
+  })),
+);
+
+const redirectCodeOptions = [
+  { label: "301 · permanent", value: 301 },
+  { label: "302 · temporary", value: 302 },
+];
+
 /** providerName resolves a provider id to its display label. */
 function providerName(providerId: string): string {
   if (!providerId) {
@@ -155,6 +214,32 @@ function domainCell(certificate: Certificate): VNode {
         ? `${applicationName(certificate.application_id)} · base domain changed to ${domain} — re-save to re-record`
         : applicationName(certificate.application_id),
     ),
+  ]);
+}
+
+/** statusCell renders the node-observed certificate status. */
+function statusCell(certificate: Certificate): VNode {
+  return h(
+    NTag,
+    {
+      size: "small",
+      type: certificateStatusTagType(certificate.status),
+    },
+    { default: () => certificateStatusLabel(certificate.status) },
+  );
+}
+
+/** expiryCell renders the live expiry, only ever for a present certificate. */
+function expiryCell(certificate: Certificate): VNode {
+  if (certificate.status !== "present") {
+    return h(NText, { depth: 3 }, { default: () => "—" });
+  }
+  if (!certificate.not_after) {
+    return h(NText, { depth: 3 }, { default: () => "not reported" });
+  }
+  return h("div", { class: "cell-main" }, [
+    h("span", { class: "mono" }, formatDate(certificate.not_after)),
+    h("span", { class: "cell-sub" }, expiryLabel(certificate.not_after)),
   ]);
 }
 
@@ -228,6 +313,18 @@ const certificateColumns: DataTableColumns<Certificate> = [
       ),
   },
   {
+    title: "Status",
+    key: "status",
+    width: 150,
+    render: (row) => statusCell(row),
+  },
+  {
+    title: "Expires",
+    key: "not_after",
+    minWidth: 180,
+    render: (row) => expiryCell(row),
+  },
+  {
     title: "Updated",
     key: "updated_at",
     width: 120,
@@ -246,11 +343,12 @@ function certificateRowKey(row: Certificate): string {
   return row.id;
 }
 
-/** load refreshes providers, certificates and the application name map. */
+/** load refreshes providers, certificates, redirects and the name map. */
 async function load(): Promise<void> {
   await Promise.allSettled([
     proxyStore.fetchProviders(),
     proxyStore.fetchCertificates(),
+    proxyStore.fetchRedirects(),
     proxyStore.fetchApplications(),
   ]);
 }
@@ -406,6 +504,97 @@ async function handleDeleteCertificate(certificate: Certificate): Promise<void> 
   }
 }
 
+/** openRedirectEdit seeds the dialog from a stored rule. */
+function openRedirectEdit(redirect: DomainRedirect): void {
+  editingRedirect.value = redirect;
+  redirectEditForm.value = {
+    application_id: redirect.application_id,
+    source_domain: redirect.source_domain,
+    target_domain: redirect.target_domain,
+    code: redirect.code,
+    preserve_path: redirect.preserve_path,
+    enabled: redirect.enabled,
+  };
+  redirectEditError.value = null;
+  redirectEditOpen.value = true;
+}
+
+/** handleCreateRedirect stores one rule from the add-redirect form. */
+async function handleCreateRedirect(): Promise<void> {
+  redirectError.value = null;
+  redirectSaving.value = true;
+  try {
+    const form = redirectForm.value;
+    await proxyStore.createRedirectRule({
+      application_id: form.application_id,
+      source_domain: form.source_domain,
+      target_domain: form.target_domain,
+      code: form.code,
+      preserve_path: form.preserve_path,
+      enabled: form.enabled,
+    });
+    message.success("Redirect rule created.");
+    // Keep the application so a second rule can be added quickly.
+    redirectForm.value = {
+      ...emptyRedirectForm(),
+      application_id: form.application_id,
+    };
+  } catch (error) {
+    redirectError.value = describeProxyError(error);
+  } finally {
+    redirectSaving.value = false;
+  }
+}
+
+/** handleSaveRedirect patches one rule from the edit dialog. */
+async function handleSaveRedirect(): Promise<void> {
+  const existing = editingRedirect.value;
+  if (!existing) {
+    return;
+  }
+  redirectEditError.value = null;
+  redirectEditSaving.value = true;
+  try {
+    const form = redirectEditForm.value;
+    await proxyStore.updateRedirectRule(existing.id, {
+      source_domain: form.source_domain,
+      target_domain: form.target_domain,
+      code: form.code,
+      preserve_path: form.preserve_path,
+      enabled: form.enabled,
+    });
+    message.success("Redirect rule saved.");
+    redirectEditOpen.value = false;
+  } catch (error) {
+    redirectEditError.value = describeProxyError(error);
+  } finally {
+    redirectEditSaving.value = false;
+  }
+}
+
+/** handleToggleRedirect enables or pauses one rule. */
+async function handleToggleRedirect(
+  redirect: DomainRedirect,
+  enabled: boolean,
+): Promise<void> {
+  try {
+    await proxyStore.updateRedirectRule(redirect.id, { enabled });
+    message.success(enabled ? "Redirect rule enabled." : "Redirect rule paused.");
+  } catch (error) {
+    message.error(describeProxyError(error));
+  }
+}
+
+/** handleDeleteRedirect removes one rule. */
+async function handleDeleteRedirect(redirect: DomainRedirect): Promise<void> {
+  try {
+    await proxyStore.removeRedirectRule(redirect.id);
+    message.success("Redirect rule deleted.");
+  } catch (error) {
+    message.error(describeProxyError(error));
+  }
+}
+
 onMounted(() => {
   void load();
 });
@@ -516,12 +705,14 @@ onMounted(() => {
               </template>
             </NEmpty>
             <div class="embed">
-              <h4>Issuance status &amp; expiry — backend pending</h4>
+              <h4>Status is observed live from the owning node</h4>
               <p>
-                The certificates API records the desired configuration only: it
-                exposes no issuance status, no expiry date and no renewal state.
-                This view therefore never renders them; status display arrives
-                when a later backend package exposes it.
+                <span class="mono">present</span> means the node's ACME storage
+                holds a certificate for the recorded domain and its expiry is
+                shown; <span class="mono">absent</span> means the storage was
+                read and holds none; <span class="mono">unknown</span> means the
+                node could not be read. The status is computed on read — the
+                control plane stores the desired configuration only.
               </p>
             </div>
           </NSpace>
@@ -638,17 +829,168 @@ onMounted(() => {
       </NTabPane>
 
       <NTabPane name="redirects" tab="Redirects">
-        <NCard style="margin-top: 16px" title="Redirect rules — backend pending">
-          <NEmpty description="Domain redirect rules are not implemented in the backend yet.">
-            <template #extra>
-              <p class="empty-hint">
-                There is no endpoint for domain→domain redirect rules, so the
-                mockup's “Redirect rule” list and “Add redirect” form are not
-                rendered with placeholder data. The feature arrives in a later
-                package.
-              </p>
-            </template>
-          </NEmpty>
+        <NCard style="margin-top: 16px" title="Redirect rules">
+          <template #header-extra>
+            <span class="card-tag mono">middleware redirectregex</span>
+          </template>
+          <NSpace vertical :size="12">
+            <NAlert v-if="proxyStore.redirectsError" type="error" :show-icon="true">
+              {{ proxyStore.redirectsError }}
+            </NAlert>
+            <div v-if="proxyStore.redirects.length > 0" class="redirect-rows">
+              <div
+                v-for="redirect in proxyStore.redirects"
+                :key="redirect.id"
+                class="domain-row"
+              >
+                <div class="redirect-route">
+                  <span class="mono cell-name">{{ redirect.source_domain }}</span>
+                  <span class="redirect-arrow" aria-hidden="true">→</span>
+                  <span class="mono cell-sub">{{ redirect.target_domain }}</span>
+                </div>
+                <div class="redirect-code">
+                  <NTag size="small">{{ redirect.code }}</NTag>
+                  <span class="cell-sub">
+                    {{ redirect.code === 301 ? "permanent" : "temporary" }}
+                  </span>
+                </div>
+                <div class="redirect-state">
+                  <span
+                    class="state-dot"
+                    :class="redirect.enabled ? 'state-dot--on' : 'state-dot--off'"
+                    aria-hidden="true"
+                  ></span>
+                  <span class="cell-sub">
+                    {{ redirect.enabled ? "enabled" : "paused" }}
+                  </span>
+                  <span v-if="redirect.preserve_path" class="cell-sub">
+                    · keeps the path
+                  </span>
+                </div>
+                <NSpace
+                  class="redirect-actions"
+                  :size="8"
+                  align="center"
+                  justify="end"
+                >
+                  <NSwitch
+                    :value="redirect.enabled"
+                    :aria-label="`Enable redirect ${redirect.source_domain}`"
+                    @update:value="(value: boolean) => handleToggleRedirect(redirect, value)"
+                  />
+                  <NButton size="small" @click="openRedirectEdit(redirect)">
+                    Edit
+                  </NButton>
+                  <NPopconfirm
+                    :positive-button-props="{ type: 'error' }"
+                    @positive-click="handleDeleteRedirect(redirect)"
+                  >
+                    <template #trigger>
+                      <NButton size="small" type="error" ghost>Delete</NButton>
+                    </template>
+                    Delete the redirect
+                    {{ redirect.source_domain }} → {{ redirect.target_domain }}?
+                    Requests to the source stop redirecting.
+                  </NPopconfirm>
+                </NSpace>
+              </div>
+            </div>
+            <NEmpty
+              v-else-if="!proxyStore.redirectsLoading"
+              description="No redirect rules yet."
+            >
+              <template #extra>
+                <p class="empty-hint">
+                  A rule sends one exact source host to one exact target host.
+                  The target must serve its own certificate.
+                </p>
+              </template>
+            </NEmpty>
+            <p v-if="proxyStore.redirects.length > 0" class="cell-sub">
+              {{ proxyStore.redirects.length }} rule{{
+                proxyStore.redirects.length === 1 ? "" : "s"
+              }}
+              · {{ enabledRedirects }} enabled. GET answers the stored code;
+              other methods answer 308/307 so they keep their method.
+            </p>
+          </NSpace>
+          <template #footer>
+            <NText depth="3" class="small">
+              Rules are applied by Traefik's redirectRegex middleware on the
+              next dynamic configuration sync — no redeploy is needed.
+            </NText>
+          </template>
+        </NCard>
+
+        <NCard style="margin-top: 16px" title="Add redirect">
+          <template #header-extra>
+            <NText depth="3" class="small">
+              applies after the next config sync
+            </NText>
+          </template>
+          <NSpace vertical :size="12">
+            <NAlert v-if="redirectError" type="error" :show-icon="true">
+              {{ redirectError }}
+            </NAlert>
+            <NForm label-placement="top" :show-feedback="false">
+              <div class="redirect-form">
+                <NFormItem label="Application" class="field-application">
+                  <NSelect
+                    v-model:value="redirectForm.application_id"
+                    :options="applicationOptions"
+                    placeholder="Select an application"
+                    aria-label="Redirect application"
+                  />
+                </NFormItem>
+                <NFormItem label="Source domain" class="field-source">
+                  <NInput
+                    v-model:value="redirectForm.source_domain"
+                    placeholder="shop.example.com"
+                    aria-label="Redirect source domain"
+                  />
+                </NFormItem>
+                <NFormItem label="Target domain" class="field-target">
+                  <NInput
+                    v-model:value="redirectForm.target_domain"
+                    placeholder="storefront.example.com"
+                    aria-label="Redirect target domain"
+                  />
+                </NFormItem>
+                <NFormItem label="Redirect code" class="field-code">
+                  <NSelect
+                    v-model:value="redirectForm.code"
+                    :options="redirectCodeOptions"
+                    aria-label="Redirect code"
+                  />
+                </NFormItem>
+                <NFormItem label="Preserve path" class="field-preserve">
+                  <NSwitch
+                    v-model:value="redirectForm.preserve_path"
+                    aria-label="Redirect preserve path"
+                  />
+                </NFormItem>
+                <NFormItem label="Enabled" class="field-enabled">
+                  <NSwitch
+                    v-model:value="redirectForm.enabled"
+                    aria-label="Redirect enabled now"
+                  />
+                </NFormItem>
+              </div>
+            </NForm>
+            <div class="redirect-submit">
+              <NButton
+                type="primary"
+                :loading="redirectSaving"
+                @click="handleCreateRedirect"
+              >
+                Add redirect
+              </NButton>
+              <NText depth="3" class="small">
+                Source and target must differ. The code applies to GET; HEAD
+                and every other method answer 308/307, keeping the method.
+              </NText>
+            </div>
+          </NSpace>
         </NCard>
       </NTabPane>
     </NTabs>
@@ -765,6 +1107,70 @@ onMounted(() => {
             type="primary"
             :loading="certificateSaving"
             @click="handleSaveCertificate"
+          >
+            Save
+          </NButton>
+        </NSpace>
+      </template>
+    </NModal>
+    <NModal
+      v-model:show="redirectEditOpen"
+      preset="card"
+      title="Edit redirect rule"
+      style="width: 560px; max-width: 94vw"
+    >
+      <NSpace vertical :size="12">
+        <NAlert v-if="redirectEditError" type="error" :show-icon="true">
+          {{ redirectEditError }}
+        </NAlert>
+        <NText depth="3" class="small">
+          Application:
+          <span class="mono">
+            {{ applicationName(redirectEditForm.application_id) }}
+          </span>
+          — the owning application cannot be moved after creation.
+        </NText>
+        <NForm label-placement="top" :show-feedback="false">
+          <NFormItem label="Source domain">
+            <NInput
+              v-model:value="redirectEditForm.source_domain"
+              aria-label="Edit redirect source domain"
+            />
+          </NFormItem>
+          <NFormItem label="Target domain">
+            <NInput
+              v-model:value="redirectEditForm.target_domain"
+              aria-label="Edit redirect target domain"
+            />
+          </NFormItem>
+          <NFormItem label="Redirect code">
+            <NSelect
+              v-model:value="redirectEditForm.code"
+              :options="redirectCodeOptions"
+              aria-label="Edit redirect code"
+            />
+          </NFormItem>
+          <NFormItem label="Preserve path">
+            <NSwitch
+              v-model:value="redirectEditForm.preserve_path"
+              aria-label="Edit redirect preserve path"
+            />
+          </NFormItem>
+          <NFormItem label="Enabled">
+            <NSwitch
+              v-model:value="redirectEditForm.enabled"
+              aria-label="Edit redirect enabled"
+            />
+          </NFormItem>
+        </NForm>
+      </NSpace>
+      <template #footer>
+        <NSpace justify="end" :size="8">
+          <NButton @click="redirectEditOpen = false">Cancel</NButton>
+          <NButton
+            type="primary"
+            :loading="redirectEditSaving"
+            @click="handleSaveRedirect"
           >
             Save
           </NButton>
@@ -982,6 +1388,88 @@ onMounted(() => {
   max-width: 60ch;
 }
 
+.card-tag {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.redirect-rows {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.domain-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: 10px var(--space-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-xs);
+}
+
+.domain-row:last-child {
+  border-bottom: 0;
+}
+
+.redirect-route {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.redirect-arrow {
+  color: var(--muted);
+}
+
+.redirect-code,
+.redirect-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.redirect-actions {
+  flex-wrap: wrap;
+}
+
+.state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  flex: 0 0 auto;
+}
+
+.state-dot--on {
+  background: var(--success);
+}
+
+.state-dot--off {
+  background: var(--muted);
+}
+
+.redirect-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.redirect-submit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
 @media (max-width: 1024px) {
   .cols-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -990,6 +1478,10 @@ onMounted(() => {
 
 @media (max-width: 860px) {
   .cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .domain-row {
     grid-template-columns: minmax(0, 1fr);
   }
 

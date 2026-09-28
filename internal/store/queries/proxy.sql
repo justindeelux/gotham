@@ -175,3 +175,74 @@ RETURNING *;
 
 -- name: DeleteDomainCertificate :exec
 DELETE FROM domain_certificates WHERE id = $1;
+
+-- name: ListDomainRedirects :many
+-- ListDomainRedirects returns every redirect rule, newest first.
+SELECT * FROM domain_redirects
+ORDER BY created_at DESC, id DESC;
+
+-- name: ListDomainRedirectsByApplication :many
+-- ListDomainRedirectsByApplication returns one application's rules, newest
+-- first.
+SELECT * FROM domain_redirects
+WHERE application_id = $1
+ORDER BY created_at DESC, id DESC;
+
+-- name: GetDomainRedirect :one
+SELECT * FROM domain_redirects WHERE id = $1;
+
+-- name: GetDomainRedirectBySource :one
+-- GetDomainRedirectBySource resolves the unique source-host claim.
+SELECT * FROM domain_redirects WHERE source_domain = $1;
+
+-- name: CreateDomainRedirect :one
+INSERT INTO domain_redirects (application_id, source_domain, target_domain, code, preserve_path, enabled)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING *;
+
+-- name: UpdateDomainRedirect :one
+UPDATE domain_redirects
+SET source_domain = $2,
+    target_domain = $3,
+    code = $4,
+    preserve_path = $5,
+    enabled = $6,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeleteDomainRedirect :exec
+DELETE FROM domain_redirects WHERE id = $1;
+
+-- name: ListApplicationBaseDomains :many
+-- ListApplicationBaseDomains feeds the redirect ownership guard: a redirect
+-- source must never shadow any application's base domain (on any node), so
+-- the two routers can never match the same host.
+SELECT id, base_domain FROM applications WHERE base_domain <> '';
+
+-- name: ListEnabledRedirectSources :many
+-- ListEnabledRedirectSources feeds the no-chain guard: a redirect target must
+-- not equal another enabled rule's source.
+SELECT id, source_domain FROM domain_redirects WHERE enabled;
+
+-- name: ListRedirectRules :many
+-- ListRedirectRules joins every redirect rule to its application's node state
+-- for the proxy generator: the owning node decides which Traefik instance
+-- serves the rule, and the domain-disabled flag holds back rules of an
+-- application whose route is already excluded by the uniqueness conflict.
+SELECT r.id, r.application_id, r.source_domain, r.target_domain, r.code,
+       r.preserve_path, r.enabled, r.created_at, r.updated_at,
+       a.server_id, a.base_domain_disabled
+FROM domain_redirects r
+JOIN applications a ON a.id = r.application_id
+ORDER BY r.created_at, r.id;
+
+-- name: ListCertificateStatusTargets :many
+-- ListCertificateStatusTargets joins every certificate intent to the node
+-- hosting its application, so the status service can read each node's ACME
+-- storage once and map certificates to it. Disabled intents are included:
+-- status is a fact about the node's storage, not about the intent.
+SELECT c.id AS certificate_id, c.domain, a.server_id
+FROM domain_certificates c
+JOIN applications a ON a.id = c.application_id
+ORDER BY c.id;

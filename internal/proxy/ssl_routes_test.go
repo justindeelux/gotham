@@ -144,7 +144,7 @@ func sampleCertificate() DomainCertificate {
 // endpoints behind a no-op auth middleware.
 func newSSLRoutes(dns DNSProviderService, certs CertificateService) http.Handler {
 	r := chi.NewRouter()
-	Mount(r, func(next http.Handler) http.Handler { return next }, &fakeProxyService{}, dns, certs)
+	Mount(r, func(next http.Handler) http.Handler { return next }, &fakeProxyService{}, dns, certs, nil, nil)
 	return r
 }
 
@@ -374,7 +374,7 @@ func TestSSLRoutesShareTheSyncAuthBoundary(t *testing.T) {
 			}
 			next.ServeHTTP(w, req)
 		})
-	}, &fakeProxyService{}, &fakeDNSProviderService{provider: sampleProvider()}, &fakeCertificateService{certificate: sampleCertificate()})
+	}, &fakeProxyService{}, &fakeDNSProviderService{provider: sampleProvider()}, &fakeCertificateService{certificate: sampleCertificate()}, nil, nil)
 
 	id := sampleProvider().ID.String()
 	certificateID := sampleCertificate().ID.String()

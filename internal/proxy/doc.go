@@ -99,6 +99,32 @@
 // and recreates the container, while an environment changed out-of-band under
 // Gotham is invisible until the next recorded change.
 //
+// BE-6.3 adds domain→domain redirects and certificate status. domain_redirects
+// stores per-application rules from one exact source host to one exact target
+// host (301/302 intent, optional path preservation). Each rule is generated as
+// a web-entrypoint redirectRegex middleware plus a router that references a
+// shared service with no servers — Traefik requires a service on a router, and
+// the middleware terminates the request before a backend is consulted, so a
+// redirect router can never proxy anywhere. Redirect routers never carry the
+// shared HTTP→HTTPS middleware. The source host is globally unique and never
+// shadows any application's base domain; targets are never another enabled
+// rule's source, so no chain (and no loop) is generated. Conflicts that slip
+// past a write (races) are held back as per-application diagnostics at
+// generation time, exactly like unroutable application rows. A rule of a
+// domain-disabled application is held back with its application.
+//
+// Certificate status is computed on read, never stored: the CP's status
+// service maps each certificate intent to its node's ACME storage through the
+// additive agent RPC ReadACMEStorage, which returns only {resolver, main,
+// sans, not_after}. The agent parses acme.json with decode structs that
+// structurally omit the per-certificate private key and the resolver's ACME
+// account key, so key material never enters a response, a log line or an error
+// string; a missing or empty storage file (Traefik creates it empty at boot)
+// is absent, and an unreadable storage or unreachable node is unknown. The
+// certificate API surfaces the observation as additive `status` and
+// `not_after` fields, and a node failure can never turn the certificate list
+// into an error.
+//
 // FEATURE_PROXY=false disables the whole surface: no routes are mounted, no
 // deploy hook is wired and no configuration is pushed.
 package proxy

@@ -267,7 +267,7 @@ func TestGenerateCAServerGolden(t *testing.T) {
 		{format: FormatTOML, golden: goldenSSLStagingStaticTOML},
 	}
 	for _, tc := range cases {
-		files, err := Generate(BuildConfig(nil, sslGoldenProviders(), "ops@example.com", staging), tc.format)
+		files, err := Generate(BuildConfig(nil, nil, sslGoldenProviders(), "ops@example.com", staging), tc.format)
 		if err != nil {
 			t.Fatalf("%s: Generate: %v", tc.format, err)
 		}
@@ -277,7 +277,7 @@ func TestGenerateCAServerGolden(t *testing.T) {
 		}
 	}
 	// An empty caServer keeps every resolver on Traefik's production default.
-	for name, resolver := range BuildConfig(nil, sslGoldenProviders(), "ops@example.com", "").CertificatesResolvers {
+	for name, resolver := range BuildConfig(nil, nil, sslGoldenProviders(), "ops@example.com", "").CertificatesResolvers {
 		if resolver.ACME.CAServer != "" {
 			t.Errorf("resolver %s: caServer = %q, want empty", name, resolver.ACME.CAServer)
 		}
@@ -380,7 +380,7 @@ func TestGenerateStaticResolverGoldens(t *testing.T) {
 		{format: FormatTOML, golden: goldenSSLStaticTOML},
 	}
 	for _, tc := range cases {
-		files, err := Generate(BuildConfig(nil, sslGoldenProviders(), "ops@example.com", ""), tc.format)
+		files, err := Generate(BuildConfig(nil, nil, sslGoldenProviders(), "ops@example.com", ""), tc.format)
 		if err != nil {
 			t.Fatalf("%s: Generate: %v", tc.format, err)
 		}
@@ -416,7 +416,7 @@ func TestGenerateHTTPSActivationGoldens(t *testing.T) {
 		{format: FormatTOML, golden: goldenSSLHTTP01DynamicTOML},
 	}
 	for _, tc := range cases {
-		files, err := Generate(BuildConfig([]Route{route}, nil, "", ""), tc.format)
+		files, err := Generate(BuildConfig([]Route{route}, nil, nil, "", ""), tc.format)
 		if err != nil {
 			t.Fatalf("%s: Generate: %v", tc.format, err)
 		}
@@ -516,7 +516,7 @@ func TestGenerateWildcardActivationGoldens(t *testing.T) {
 		{format: FormatTOML, golden: goldenSSLWildcardDynamicTOML},
 	}
 	for _, tc := range cases {
-		files, err := Generate(BuildConfig([]Route{route}, sslGoldenProviders(), "ops@example.com", ""), tc.format)
+		files, err := Generate(BuildConfig([]Route{route}, nil, sslGoldenProviders(), "ops@example.com", ""), tc.format)
 		if err != nil {
 			t.Fatalf("%s: Generate: %v", tc.format, err)
 		}
@@ -546,7 +546,7 @@ func TestGenerateWildcardMultiLevelHostGolden(t *testing.T) {
 		{format: FormatTOML, golden: goldenSSLWildcardSubDynamicTOML},
 	}
 	for _, tc := range cases {
-		files, err := Generate(BuildConfig([]Route{route}, sslGoldenProviders(), "ops@example.com", ""), tc.format)
+		files, err := Generate(BuildConfig([]Route{route}, nil, sslGoldenProviders(), "ops@example.com", ""), tc.format)
 		if err != nil {
 			t.Fatalf("%s: Generate: %v", tc.format, err)
 		}
@@ -565,7 +565,7 @@ func TestGenerateInactiveCertificateKeepsHTTPOnly(t *testing.T) {
 		Domain: "app.example.com",
 		Target: "http://172.17.0.1:3000",
 	}
-	cfg := BuildConfig([]Route{route}, sslGoldenProviders(), "ops@example.com", "")
+	cfg := BuildConfig([]Route{route}, nil, sslGoldenProviders(), "ops@example.com", "")
 	if _, ok := cfg.Routers[serviceName(route.AppID)+"-websecure"]; ok {
 		t.Fatal("inactive certificate emitted an HTTPS router")
 	}
@@ -596,11 +596,11 @@ func TestGenerateResolverDeterminism(t *testing.T) {
 	providers := sslGoldenProviders()
 	reversed := []DNSProvider{providers[1], providers[0]}
 	for _, format := range []Format{FormatYAML, FormatTOML} {
-		first, err := Generate(BuildConfig(nil, providers, "ops@example.com", ""), format)
+		first, err := Generate(BuildConfig(nil, nil, providers, "ops@example.com", ""), format)
 		if err != nil {
 			t.Fatalf("%s: %v", format, err)
 		}
-		second, err := Generate(BuildConfig(nil, reversed, "ops@example.com", ""), format)
+		second, err := Generate(BuildConfig(nil, nil, reversed, "ops@example.com", ""), format)
 		if err != nil {
 			t.Fatalf("%s: %v", format, err)
 		}
@@ -618,7 +618,7 @@ func TestGenerateSkipsDisabledAndUnknownProviders(t *testing.T) {
 		{ID: uuid.New(), Provider: ProviderCloudflare, Zones: []string{"example.com"}, Enabled: false},
 		{ID: uuid.New(), Provider: DNSProviderType("route53"), Zones: []string{"example.net"}, Enabled: true},
 	}
-	cfg := BuildConfig(nil, providers, "", "")
+	cfg := BuildConfig(nil, nil, providers, "", "")
 	if len(cfg.CertificatesResolvers) != 1 {
 		t.Fatalf("resolvers = %#v, want only the HTTP-01 default", cfg.CertificatesResolvers)
 	}

@@ -230,3 +230,64 @@ func (s *Store) UpdateDomainCertificate(ctx context.Context, params sqlc.UpdateD
 func (s *Store) DeleteDomainCertificate(ctx context.Context, id pgtype.UUID) error {
 	return s.queries.DeleteDomainCertificate(ctx, id)
 }
+
+// CreateDomainRedirect stores one per-application redirect rule.
+func (s *Store) CreateDomainRedirect(ctx context.Context, params sqlc.CreateDomainRedirectParams) (sqlc.DomainRedirect, error) {
+	return s.queries.CreateDomainRedirect(ctx, params)
+}
+
+// GetDomainRedirect returns one redirect rule row.
+func (s *Store) GetDomainRedirect(ctx context.Context, id pgtype.UUID) (sqlc.DomainRedirect, error) {
+	return s.queries.GetDomainRedirect(ctx, id)
+}
+
+// GetDomainRedirectBySource returns the rule claiming a source host, or
+// pgx.ErrNoRows.
+func (s *Store) GetDomainRedirectBySource(ctx context.Context, source string) (sqlc.DomainRedirect, error) {
+	return s.queries.GetDomainRedirectBySource(ctx, source)
+}
+
+// ListDomainRedirects returns every redirect rule, newest first.
+func (s *Store) ListDomainRedirects(ctx context.Context) ([]sqlc.DomainRedirect, error) {
+	return s.queries.ListDomainRedirects(ctx)
+}
+
+// ListDomainRedirectsByApplication returns one application's redirect rules.
+func (s *Store) ListDomainRedirectsByApplication(ctx context.Context, applicationID pgtype.UUID) ([]sqlc.DomainRedirect, error) {
+	return s.queries.ListDomainRedirectsByApplication(ctx, applicationID)
+}
+
+// UpdateDomainRedirect persists the mutable redirect fields and returns the
+// row.
+func (s *Store) UpdateDomainRedirect(ctx context.Context, params sqlc.UpdateDomainRedirectParams) (sqlc.DomainRedirect, error) {
+	return s.queries.UpdateDomainRedirect(ctx, params)
+}
+
+// DeleteDomainRedirect removes one redirect rule.
+func (s *Store) DeleteDomainRedirect(ctx context.Context, id pgtype.UUID) error {
+	return s.queries.DeleteDomainRedirect(ctx, id)
+}
+
+// ListApplicationBaseDomains returns every application's base domain
+// (id + raw value) for the redirect ownership guard.
+func (s *Store) ListApplicationBaseDomains(ctx context.Context) ([]sqlc.ListApplicationBaseDomainsRow, error) {
+	return s.queries.ListApplicationBaseDomains(ctx)
+}
+
+// ListEnabledRedirectSources returns the source hosts claimed by enabled
+// redirect rules, for the no-chain guard.
+func (s *Store) ListEnabledRedirectSources(ctx context.Context) ([]sqlc.ListEnabledRedirectSourcesRow, error) {
+	return s.queries.ListEnabledRedirectSources(ctx)
+}
+
+// ListRedirectRules returns every redirect rule joined to its application's
+// node state, for the proxy generator.
+func (s *Store) ListRedirectRules(ctx context.Context) ([]sqlc.ListRedirectRulesRow, error) {
+	return s.queries.ListRedirectRules(ctx)
+}
+
+// ListCertificateStatusTargets joins certificate intents to their
+// application's node for the certificate status service.
+func (s *Store) ListCertificateStatusTargets(ctx context.Context) ([]sqlc.ListCertificateStatusTargetsRow, error) {
+	return s.queries.ListCertificateStatusTargets(ctx)
+}

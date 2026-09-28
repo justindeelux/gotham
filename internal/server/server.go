@@ -199,7 +199,26 @@ func (s *Server) routes() (http.Handler, error) {
 		if s.persistence != nil {
 			sslConfig.Store = proxy.NewStoreSSL(s.persistence)
 		}
-		proxy.Mount(api, adminOnly, s.proxy, proxy.NewDefaultProviderService(sslConfig), proxy.NewDefaultCertificateService(sslConfig))
+		// Redirect rules (BE-6.3) and the certificate status read path share
+		// the same store, the same admin scope and the same best-effort
+		// resync as the SSL surface; the status service dials the node agent
+		// lazily per read.
+		redirectConfig := proxy.RedirectConfig{Logger: s.logger, Resync: s.resyncProxyNodes}
+		statusConfig := proxy.CertificateStatusConfig{Logger: s.logger}
+		if s.persistence != nil {
+			redirectConfig.Store = proxy.NewStoreRedirect(s.persistence)
+			statusConfig.Store = proxy.NewStoreCertificateStatus(s.persistence)
+		}
+		if dialer, ok := s.servers.(proxyDialer); ok {
+			statusConfig.Dial = func(ctx context.Context, serverID uuid.UUID) (proxy.ACMEReader, error) {
+				return dialer.DialProxyClient(ctx, serverID)
+			}
+		}
+		proxy.Mount(api, adminOnly, s.proxy,
+			proxy.NewDefaultProviderService(sslConfig),
+			proxy.NewDefaultCertificateService(sslConfig),
+			proxy.NewDefaultRedirectService(redirectConfig),
+			proxy.NewDefaultCertificateStatusService(statusConfig))
 
 		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
 		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger)

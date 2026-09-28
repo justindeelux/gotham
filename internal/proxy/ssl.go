@@ -177,11 +177,15 @@ type DomainCertificate struct {
 }
 
 // ApplicationInfo is the application state the certificate service validates
-// a configuration against.
+// a configuration against, and the redirect service validates ownership
+// against.
 type ApplicationInfo struct {
 	ID             uuid.UUID
 	BaseDomain     string
 	DomainDisabled bool
+	// ServerID is the node hosting the application; uuid.Nil when none is
+	// assigned (a redirect rule cannot be generated then).
+	ServerID uuid.UUID
 }
 
 // DNSProviderWrite is the repository-level provider write shape.
@@ -421,16 +425,20 @@ func (s storeSSL) DeleteCertificate(ctx context.Context, id uuid.UUID) error {
 func (s storeSSL) GetApplication(ctx context.Context, id uuid.UUID) (ApplicationInfo, error) {
 	row, err := s.store.GetApplication(ctx, pgUUID(id))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ApplicationInfo{}, ErrNotFound
-		}
-		return ApplicationInfo{}, err
+		return ApplicationInfo{}, mapSSLReadError(err)
 	}
+	return applicationInfoFromRow(row), nil
+}
+
+// applicationInfoFromRow maps a stored application row into the validation
+// view shared by the certificate and redirect services.
+func applicationInfoFromRow(row sqlc.Application) ApplicationInfo {
 	return ApplicationInfo{
 		ID:             uuidFromPG(row.ID),
 		BaseDomain:     row.BaseDomain,
 		DomainDisabled: row.BaseDomainDisabled,
-	}, nil
+		ServerID:       uuidFromPG(row.ServerID),
+	}
 }
 
 // dnsProviderFromRow maps a stored provider row into the domain model.

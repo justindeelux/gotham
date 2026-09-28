@@ -56,6 +56,10 @@ jobs:
       # Applications are enabled by default; pinned explicitly so the smoke
       # would catch an accidental default flip.
       FEATURE_APPLICATIONS: "true"
+      # Compose services + template gallery (BE-7.1/BE-7.2) are enabled by
+      # default too; pinned explicitly, and the services smoke skips when the
+      # flag is off (404 on the template surface).
+      FEATURE_SERVICES: "true"
       # The SSL surface (BE-6.2) refuses credential writes without a secret
       # key; the domains smoke exercises the DNS-provider CRUD path.
       GOTHAM_SECRET_KEY: "ui-e2e-secret-key-not-for-production"

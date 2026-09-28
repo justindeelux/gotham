@@ -2,7 +2,9 @@ package templates
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"regexp"
 	"strconv"
@@ -142,9 +144,15 @@ func parseTemplate(slug string, document []byte) (Template, error) {
 	if err := decoder.Decode(&raw); err != nil {
 		return Template{}, fmt.Errorf("%w: template %s: template.yaml: %v", ErrValidation, slug, err)
 	}
+	// The metadata is exactly one document: a null document, malformed
+	// trailing YAML or an extra document is rejected, and only a clean EOF
+	// after the first document passes.
 	var extra any
-	if err := decoder.Decode(&extra); err == nil && extra != nil {
+	switch err := decoder.Decode(&extra); {
+	case err == nil:
 		return Template{}, fmt.Errorf("%w: template %s: template.yaml must contain exactly one document", ErrValidation, slug)
+	case !errors.Is(err, io.EOF):
+		return Template{}, fmt.Errorf("%w: template %s: template.yaml must contain exactly one document: %v", ErrValidation, slug, err)
 	}
 
 	name := strings.TrimSpace(raw.Name)

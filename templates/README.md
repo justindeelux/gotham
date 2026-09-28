@@ -102,18 +102,34 @@ Rendering is strict, non-executing string substitution:
 - The compose YAML is re-encoded after substitution, so a value can never
   inject YAML structure. Comments in `compose.yaml` are not preserved by the
   re-encode.
-- Every literal `$` in a substituted value is doubled (`$` -> `$$`) so the
-  value survives the service pipeline's own `${VAR}` interpolation untouched
-  and reaches the container literally. `${VAR}` references left in
+- **Secret fields are never written into the document.** A `secret` placeholder
+  renders as a `${field}` reference, and the value is returned in the render
+  response's `env` map. That keeps the BE-7.1 contract: the services pipeline
+  substitutes the value at deploy time and redacts it from every error, log
+  line and deploy-history row. Put secrets in value positions (environment
+  variables, command arguments). A secret used as a service name or a domain
+  label is rejected at render, because the parser cannot resolve the reference
+  there; a secret used as a mount source is *not* rejected - the parser reads
+  the reference as a bind path - so never place one there.
+- Every literal `$` in a non-secret substituted value is doubled (`$` -> `$$`)
+  so the value survives the service pipeline's own `${VAR}` interpolation
+  untouched and reaches the container literally. `${VAR}` references left in
   `compose.yaml` outside a placeholder are interpolated by the services
   pipeline at create/deploy time, exactly as for a hand-written document.
 - Rendering is deterministic: the same values produce the same bytes.
 
+The loader also applies the value-independent structural subset at load time:
+services must be image-only (no `build`, `extends`, `env_file` or `include`).
+Value-dependent checks (domains, volume names, mount paths) run in
+`services.Parse` after rendering, because only a render has the values.
+
 ## HTTP contract (FE-7.1)
 
 All routes require authentication with the admin scope, like the services
-routes they feed. `FEATURE_SERVICES=false` disables them together with the
-services surface.
+routes they feed. `FEATURE_SERVICES=false` set before startup mounts nothing
+(`404`, like the service routes); set while running, every call answers
+`503 {"message":"services are disabled"}`, exactly like the service
+operations.
 
 `GET /api/v1/templates` — the catalog, metadata only:
 
@@ -141,17 +157,25 @@ A `secret` field never carries a `default`. `number` fields carry `min`/`max`,
 ```json
 { "slug": "wordpress",
   "compose_yaml": "services:\n  ...",
+  "env": { "db_password": "...", "db_root_password": "..." },
   "spec": { "services": ["mysql", "wordpress"],
             "domains": [ { "service": "wordpress", "domain": "blog.example.com", "port": 80 } ],
             "named_volumes": ["mysql_data", "wordpress_data"],
             "mounts": [ { "service": "wordpress", "source": "wordpress_data", "target": "/var/www/html", "named": true } ] } }
 ```
 
-Validation failures answer `400` with `{"message": "..."}`; an unknown slug
-answers `404`. The gallery flow is: render, then create a service with
-`compose_yaml` (and no env) through `POST /api/v1/services`, then deploy it
-through `POST /api/v1/services/{id}/deploy`. The rendered document has already
-passed the services schema check, so the create cannot fail on the document.
+`compose_yaml` references every secret field as `${field}`; `env` carries the
+values, keyed by field key. Validation failures answer `400` with
+`{"message": "..."}`, an over-limit body answers `413`, an unknown slug
+answers `404`.
+
+The gallery flow is: render, then create a service with `compose_yaml` **and
+`env`** through `POST /api/v1/services`, then deploy it through
+`POST /api/v1/services/{id}/deploy`. Pass the render response's `env` through
+unchanged: it is what resolves the secret references, and it is the value set
+the services pipeline redacts from every error and deploy-history row. The
+rendered document has already passed the services schema check, so the create
+cannot fail on the document.
 
 ## Adding a template
 

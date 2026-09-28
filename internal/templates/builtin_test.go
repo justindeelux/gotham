@@ -94,10 +94,20 @@ func TestBuiltinRender(t *testing.T) {
 					t.Errorf("mount %+v is not a named volume", mount)
 				}
 			}
-			// The deploy path's own render must accept the document and
-			// change nothing but the dollar escaping (there is none left).
-			if _, err := services.Render(result.ComposeYAML, nil); err != nil {
+			// The deploy path's own render must accept the document with the
+			// returned environment and resolve every secret reference.
+			if _, err := services.Render(result.ComposeYAML, result.Env); err != nil {
 				t.Fatalf("services.Render: %v", err)
+			}
+			// No secret value may appear in the document: every secret field
+			// is a ${field} reference and its value travels in Env.
+			for key, value := range result.Env {
+				if strings.Contains(result.ComposeYAML, value) {
+					t.Errorf("secret %q leaked into the rendered document", key)
+				}
+				if !strings.Contains(result.ComposeYAML, "${"+key+"}") {
+					t.Errorf("secret %q is not referenced as ${%s}", key, key)
+				}
 			}
 		})
 	}
@@ -126,14 +136,20 @@ func TestBuiltinExpectedValues(t *testing.T) {
 			t.Errorf("volumes = %s", got)
 		}
 		doc := decodeMap(t, result.ComposeYAML)
-		if got := envValue(t, doc, "wordpress", "WORDPRESS_DB_PASSWORD"); got != "wp$$secret" {
-			t.Errorf("WORDPRESS_DB_PASSWORD = %q", got)
+		if got := envValue(t, doc, "wordpress", "WORDPRESS_DB_PASSWORD"); got != "${db_password}" {
+			t.Errorf("WORDPRESS_DB_PASSWORD = %q, want the reference", got)
 		}
-		if got := envValue(t, doc, "mysql", "MYSQL_ROOT_PASSWORD"); got != "root-secret" {
-			t.Errorf("MYSQL_ROOT_PASSWORD = %q", got)
+		if got := envValue(t, doc, "mysql", "MYSQL_ROOT_PASSWORD"); got != "${db_root_password}" {
+			t.Errorf("MYSQL_ROOT_PASSWORD = %q, want the reference", got)
 		}
 		if got := envValue(t, doc, "mysql", "MYSQL_DATABASE"); got != "wordpress" {
 			t.Errorf("MYSQL_DATABASE = %q", got)
+		}
+		if got := result.Env["db_password"]; got != "wp$secret" {
+			t.Errorf("Env[db_password] = %q", got)
+		}
+		if got := result.Env["db_root_password"]; got != "root-secret" {
+			t.Errorf("Env[db_root_password] = %q", got)
 		}
 	})
 
@@ -153,8 +169,11 @@ func TestBuiltinExpectedValues(t *testing.T) {
 			t.Errorf("NEXTCLOUD_TRUSTED_DOMAINS = %q", got)
 		}
 		command, ok := serviceMap(t, doc, "redis")["command"].([]any)
-		if !ok || len(command) != 3 || command[2] != "redis-secret" {
-			t.Errorf("redis command = %v, want the rendered password", serviceMap(t, doc, "redis")["command"])
+		if !ok || len(command) != 3 || command[2] != "${redis_password}" {
+			t.Errorf("redis command = %v, want the password reference", serviceMap(t, doc, "redis")["command"])
+		}
+		if got := result.Env["redis_password"]; got != "redis-secret" {
+			t.Errorf("Env[redis_password] = %q", got)
 		}
 	})
 
@@ -174,11 +193,14 @@ func TestBuiltinExpectedValues(t *testing.T) {
 			"N8N_DIAGNOSTICS_ENABLED": "true",
 			"EXECUTIONS_DATA_MAX_AGE": "336",
 			"GENERIC_TIMEZONE":        "UTC",
-			"N8N_ENCRYPTION_KEY":      "enc-secret",
+			"N8N_ENCRYPTION_KEY":      "${encryption_key}",
 		} {
 			if got := envValue(t, doc, "n8n", key); got != want {
 				t.Errorf("%s = %q, want %q", key, got, want)
 			}
+		}
+		if got := result.Env["encryption_key"]; got != "enc-secret" {
+			t.Errorf("Env[encryption_key] = %q", got)
 		}
 	})
 

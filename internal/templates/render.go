@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strconv"
@@ -23,6 +24,13 @@ type RenderResult struct {
 	// ComposeYAML is the document with every placeholder resolved, ready to
 	// be created and deployed through the services surface unchanged.
 	ComposeYAML string
+	// Env carries the values of the template's secret fields, keyed by field
+	// key. Secret values are never written into the document: it references
+	// them as ${field}, so the services pipeline's interpolation and
+	// redaction boundary (BE-7.1) covers them from create through deploy,
+	// including every error and the deploy history. The caller must pass Env
+	// to services.Create alongside ComposeYAML.
+	Env map[string]string
 	// Spec is the services view of ComposeYAML.
 	Spec services.ComposeSpec
 }
@@ -42,6 +50,14 @@ func (c *Catalog) Render(slug string, values map[string]any) (RenderResult, erro
 // into the compose document. Validation is strict: an unknown field, a missing
 // required value, a wrong type or a value failing its own rules is an error,
 // and the result is parsed with services.Parse before it is returned.
+//
+// Secret fields are rendered as ${field} references and returned in Env, so a
+// secret never enters the document, an error message or the deploy history;
+// the services pipeline substitutes and redacts it exactly like a service
+// environment value. Every error this method returns is additionally passed
+// through services.RedactError with the supplied secret values (raw and
+// dollar-escaped forms), so no error can echo a secret even if a future
+// change places one in a parse-visible position.
 func (t Template) Render(values map[string]any) (RenderResult, error) {
 	known := make(map[string]bool, len(t.Fields))
 	for _, field := range t.Fields {
@@ -58,18 +74,27 @@ func (t Template) Render(values map[string]any) (RenderResult, error) {
 		return RenderResult{}, fmt.Errorf("%w: template %s: unknown field %q", ErrValidation, t.Slug, unknown[0])
 	}
 
+	env := make(map[string]string)
+	secrets := make(map[string]string)
+	secretFields := make(map[string]bool)
 	resolved := make(map[string]string, len(t.Fields))
 	for _, field := range t.Fields {
 		value, err := field.resolve(values)
 		if err != nil {
-			return RenderResult{}, fmt.Errorf("template %s: %w", t.Slug, err)
+			return RenderResult{}, services.RedactError(fmt.Errorf("template %s: %w", t.Slug, err), secrets)
 		}
 		resolved[field.Key] = value
+		if field.Type == FieldSecret {
+			env[field.Key] = value
+			secrets[field.Key] = value
+			secretFields[field.Key] = true
+		}
 	}
 
 	node, err := decodeDocument(t.compose)
 	if err != nil {
-		return RenderResult{}, fmt.Errorf("%w: template %s: compose.yaml: %v", ErrValidation, t.Slug, err)
+		return RenderResult{}, services.RedactError(
+			fmt.Errorf("%w: template %s: compose.yaml: %v", ErrValidation, t.Slug, err), secrets)
 	}
 	// The rendered size is enforced while the document is built, not after:
 	// a small document with repeated references would otherwise allocate an
@@ -89,6 +114,11 @@ func (t Template) Render(values map[string]any) (RenderResult, error) {
 			if !ok {
 				return "", fmt.Errorf("%w: unknown field %q", ErrValidation, key)
 			}
+			if secretFields[key] {
+				// A secret never enters the document: the reference is
+				// resolved (and redacted) by the services pipeline.
+				return "${" + key + "}", nil
+			}
 			// Escape for the services pipeline's own ${VAR} interpolation:
 			// the literal value reaches the container unchanged, and a value
 			// can never be read as a reference.
@@ -96,27 +126,27 @@ func (t Template) Render(values map[string]any) (RenderResult, error) {
 		})
 	})
 	if err != nil {
-		return RenderResult{}, fmt.Errorf("template %s: %w", t.Slug, err)
+		return RenderResult{}, services.RedactError(fmt.Errorf("template %s: %w", t.Slug, err), secrets)
 	}
 
 	var buffer bytes.Buffer
 	encoder := yaml.NewEncoder(&buffer)
 	encoder.SetIndent(2)
 	if err := encoder.Encode(node); err != nil {
-		return RenderResult{}, fmt.Errorf("template %s: render compose document: %w", t.Slug, err)
+		return RenderResult{}, services.RedactError(fmt.Errorf("template %s: render compose document: %w", t.Slug, err), secrets)
 	}
 	if err := encoder.Close(); err != nil {
-		return RenderResult{}, fmt.Errorf("template %s: render compose document: %w", t.Slug, err)
+		return RenderResult{}, services.RedactError(fmt.Errorf("template %s: render compose document: %w", t.Slug, err), secrets)
 	}
 	document := buffer.String()
 	if len(document) > services.MaxComposeYAML {
-		return RenderResult{}, fmt.Errorf("template %s: %w", t.Slug, documentTooLarge())
+		return RenderResult{}, services.RedactError(fmt.Errorf("template %s: %w", t.Slug, documentTooLarge()), secrets)
 	}
 	spec, err := services.Parse(document)
 	if err != nil {
-		return RenderResult{}, fmt.Errorf("template %s: %w", t.Slug, err)
+		return RenderResult{}, services.RedactError(fmt.Errorf("template %s: %w", t.Slug, err), secrets)
 	}
-	return RenderResult{ComposeYAML: document, Spec: spec}, nil
+	return RenderResult{ComposeYAML: document, Env: env, Spec: spec}, nil
 }
 
 // resolve returns the effective value of one field: the supplied value, or the
@@ -214,11 +244,18 @@ func scalarValue(raw any) (string, error) {
 	}
 }
 
-// decodeDocument parses a compose document into its YAML node tree.
+// decodeDocument parses a compose document into its YAML node tree. The input
+// must contain exactly one YAML document: a second document (or a null
+// trailing one) would otherwise be dropped silently by the re-encode.
 func decodeDocument(document string) (*yaml.Node, error) {
+	decoder := yaml.NewDecoder(strings.NewReader(document))
 	var node yaml.Node
-	if err := yaml.Unmarshal([]byte(document), &node); err != nil {
+	if err := decoder.Decode(&node); err != nil {
 		return nil, err
+	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, errors.New("compose document must contain exactly one document")
 	}
 	return &node, nil
 }

@@ -79,7 +79,7 @@ func TestRoutesGet(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if detail.Template.Slug != "demo" || len(detail.Template.Fields) != 5 {
+	if detail.Template.Slug != "demo" || len(detail.Template.Fields) != 6 {
 		t.Fatalf("template = %+v", detail.Template)
 	}
 	secret := detail.Template.Fields[4]
@@ -119,8 +119,9 @@ func TestRoutesRender(t *testing.T) {
 		t.Fatalf("render = %d: %s", recorder.Code, recorder.Body)
 	}
 	var response struct {
-		Slug        string `json:"slug"`
-		ComposeYAML string `json:"compose_yaml"`
+		Slug        string            `json:"slug"`
+		ComposeYAML string            `json:"compose_yaml"`
+		Env         map[string]string `json:"env"`
 		Spec        struct {
 			Services []string `json:"services"`
 			Domains  []struct {
@@ -146,9 +147,16 @@ func TestRoutesRender(t *testing.T) {
 	if len(response.Spec.NamedVolumes) != 1 || response.Spec.NamedVolumes[0] != "data" {
 		t.Errorf("named volumes = %v", response.Spec.NamedVolumes)
 	}
-	// The document survives the services pipeline as-is, which is what the
-	// gallery forwards to POST /v1/services.
-	if _, err := services.Render(response.ComposeYAML, nil); err != nil {
+	// Secrets travel in env, never in the document.
+	if got := response.Env["password"]; got != "p$ss" {
+		t.Errorf("env[password] = %q", got)
+	}
+	if strings.Contains(response.ComposeYAML, "p$ss") {
+		t.Fatalf("the response document contains the secret:\n%s", response.ComposeYAML)
+	}
+	// The document survives the services pipeline with the returned
+	// environment, which is what the gallery forwards to POST /v1/services.
+	if _, err := services.Render(response.ComposeYAML, response.Env); err != nil {
 		t.Fatalf("services.Render: %v", err)
 	}
 }
@@ -200,6 +208,57 @@ func TestRoutesRequireAuth(t *testing.T) {
 		recorder := doRequest(t, router, tc.method, tc.path, `{}`)
 		if recorder.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s = %d, want 401", tc.method, tc.path, recorder.Code)
+		}
+	}
+}
+
+// TestRoutesRenderBodyStrictness proves the endpoint consumes exactly one JSON
+// object and rejects over-limit bodies: trailing garbage, a second document
+// and an oversized body are all refused (only trailing whitespace is fine).
+func TestRoutesRenderBodyStrictness(t *testing.T) {
+	router := routeTestServer(t, mustCatalog(t, sampleFiles()))
+	valid := `{"values":{"domain":"app.example.com","password":"x"}}`
+	cases := map[string]struct {
+		body string
+		want int
+	}{
+		"trailing garbage": {body: valid + "garbage", want: http.StatusBadRequest},
+		"second document":  {body: valid + `{"unknown":true}`, want: http.StatusBadRequest},
+		"second null":      {body: valid + "null", want: http.StatusBadRequest},
+		"oversized body":   {body: valid + strings.Repeat(" ", maxBodyBytes), want: http.StatusRequestEntityTooLarge},
+		"trailing space":   {body: valid + "\n\t  ", want: http.StatusOK},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			recorder := doRequest(t, router, http.MethodPost, "/v1/templates/demo/render", tc.body)
+			if recorder.Code != tc.want {
+				t.Fatalf("render = %d, want %d: %s", recorder.Code, tc.want, recorder.Body)
+			}
+		})
+	}
+}
+
+// TestRoutesDisabledAtRuntime proves FEATURE_SERVICES=false after mounting
+// answers 503 on every endpoint, exactly like the service operations; the
+// startup-time flag instead unmounts the routes (404, see TestMountDisabled).
+func TestRoutesDisabledAtRuntime(t *testing.T) {
+	t.Setenv(services.FeatureEnv, "")
+	router := routeTestServer(t, mustCatalog(t, sampleFiles()))
+	if recorder := doRequest(t, router, http.MethodGet, "/v1/templates", ""); recorder.Code != http.StatusOK {
+		t.Fatalf("enabled status = %d, want 200", recorder.Code)
+	}
+	t.Setenv(services.FeatureEnv, "false")
+	for _, tc := range []struct{ method, path, body string }{
+		{http.MethodGet, "/v1/templates", ""},
+		{http.MethodGet, "/v1/templates/demo", ""},
+		{http.MethodPost, "/v1/templates/demo/render", `{"values":{"domain":"app.example.com","password":"x"}}`},
+	} {
+		recorder := doRequest(t, router, tc.method, tc.path, tc.body)
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s %s = %d, want 503: %s", tc.method, tc.path, recorder.Code, recorder.Body)
+		}
+		if !strings.Contains(recorder.Body.String(), "services are disabled") {
+			t.Errorf("%s %s body = %s", tc.method, tc.path, recorder.Body)
 		}
 	}
 }

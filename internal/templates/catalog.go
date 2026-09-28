@@ -6,6 +6,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	builtin "github.com/justindeelux/gotham/templates"
 
@@ -37,8 +40,10 @@ var _ Service = (*Catalog)(nil)
 // NewDefaultService loads the catalog embedded in the binary: the repository's
 // templates/ directory. It returns nil when the services feature is off (the
 // rendered documents would have nowhere to deploy) or when a built-in template
-// fails validation, which is a build bug the load-time tests catch; the
-// failure is logged so it cannot pass silently in production.
+// fails validation. A failed load is logged and leaves the surface unmounted
+// (the routes are absent), it does not stop control-plane startup: a shipped
+// template that fails validation is a build defect the load-time catalog tests
+// catch before release, and at runtime the rest of the platform keeps working.
 func NewDefaultService(logger *slog.Logger) Service {
 	if !services.Enabled() {
 		return nil
@@ -89,9 +94,12 @@ func Load(fsys fs.FS) (*Catalog, error) {
 	return catalog, nil
 }
 
-// loadTemplate reads and validates one template directory, including the
-// placeholder scan of compose.yaml: every placeholder must name a declared
-// field and every declared field must be referenced at least once.
+// loadTemplate reads and validates one template directory: the metadata, the
+// placeholder scan of compose.yaml (every placeholder names a declared field,
+// every declared field is referenced) and the structural compose subset the
+// deploy path requires (image-only services, no build/extends/env_file/
+// include). Value-dependent checks (domains, volume names, paths) stay in the
+// runtime services.Parse call, because only a render has the values.
 func loadTemplate(fsys fs.FS, slug string) (Template, error) {
 	metadata, err := fs.ReadFile(fsys, slug+"/template.yaml")
 	if err != nil {
@@ -111,7 +119,14 @@ func loadTemplate(fsys fs.FS, slug string) (Template, error) {
 	if len(compose) > services.MaxComposeYAML {
 		return Template{}, fmt.Errorf("%w: template %s: compose.yaml exceeds %d bytes", ErrValidation, slug, services.MaxComposeYAML)
 	}
-	if err := validatePlaceholders(slug, template, string(compose)); err != nil {
+	node, err := decodeDocument(string(compose))
+	if err != nil {
+		return Template{}, fmt.Errorf("%w: template %s: compose.yaml: %v", ErrValidation, slug, err)
+	}
+	if err := validatePlaceholders(slug, template, node); err != nil {
+		return Template{}, err
+	}
+	if err := validateComposeStructure(slug, node); err != nil {
 		return Template{}, err
 	}
 	template.compose = string(compose)
@@ -121,18 +136,14 @@ func loadTemplate(fsys fs.FS, slug string) (Template, error) {
 // validatePlaceholders walks every string scalar of the raw compose document
 // without substituting anything: it proves that each {{ .field }} names a
 // declared field and that no declared field is dead metadata.
-func validatePlaceholders(slug string, template Template, document string) error {
+func validatePlaceholders(slug string, template Template, node *yaml.Node) error {
 	known := make(map[string]bool, len(template.Fields))
 	for _, field := range template.Fields {
 		known[field.Key] = true
 	}
-	node, err := decodeDocument(document)
-	if err != nil {
-		return fmt.Errorf("%w: template %s: compose.yaml: %v", ErrValidation, slug, err)
-	}
 	used := make(map[string]bool, len(template.Fields))
 	budget := services.MaxComposeYAML
-	err = walkScalars(node, func(value string) (string, error) {
+	err := walkScalars(node, func(value string) (string, error) {
 		if _, err := substitute(value, &budget, func(key string) (string, error) {
 			if !known[key] {
 				return "", fmt.Errorf("%w: unknown field %q", ErrValidation, key)
@@ -150,6 +161,63 @@ func validatePlaceholders(slug string, template Template, document string) error
 	for _, field := range template.Fields {
 		if !used[field.Key] {
 			return fmt.Errorf("%w: template %s: field %q is never referenced in compose.yaml", ErrValidation, slug, field.Key)
+		}
+	}
+	return nil
+}
+
+// composeStructure is the value-independent subset of a compose document a
+// template must satisfy at load: services are image-only (no build context,
+// no file includes, no extends, no external env files). The rules mirror
+// services.Parse, which re-checks them after substitution together with the
+// value-dependent ones; a template that cannot deploy is rejected before it
+// enters the gallery instead of failing on every render.
+type composeStructure struct {
+	Include  any                       `yaml:"include"`
+	Services map[string]composeService `yaml:"services"`
+}
+
+// composeService is the subset of one service definition the structural check
+// inspects.
+type composeService struct {
+	Image   string `yaml:"image"`
+	Build   any    `yaml:"build"`
+	Extends any    `yaml:"extends"`
+	EnvFile any    `yaml:"env_file"`
+}
+
+// validateComposeStructure applies the deploy-path structural rules to the raw
+// template document. Placeholders are allowed anywhere a value may carry them:
+// service names, images and the forbidden keys are only checked for presence,
+// never against substituted values, so a field-driven image is fine.
+func validateComposeStructure(slug string, node *yaml.Node) error {
+	var document composeStructure
+	if err := node.Decode(&document); err != nil {
+		return fmt.Errorf("%w: template %s: compose.yaml: %v", ErrValidation, slug, err)
+	}
+	if document.Include != nil {
+		return fmt.Errorf("%w: template %s: include is not supported: the agent only receives this document", ErrValidation, slug)
+	}
+	if len(document.Services) == 0 {
+		return fmt.Errorf("%w: template %s: compose document declares no services", ErrValidation, slug)
+	}
+	if len(document.Services) > services.MaxComposeServices {
+		return fmt.Errorf("%w: template %s: compose document declares more than %d services",
+			ErrValidation, slug, services.MaxComposeServices)
+	}
+	for name, service := range document.Services {
+		if service.Build != nil {
+			return fmt.Errorf("%w: template %s: service %q uses build, which needs a build context the control plane cannot ship; push an image instead",
+				ErrValidation, slug, name)
+		}
+		if service.Extends != nil {
+			return fmt.Errorf("%w: template %s: service %q uses extends, which references a file the node does not have", ErrValidation, slug, name)
+		}
+		if service.EnvFile != nil {
+			return fmt.Errorf("%w: template %s: service %q uses env_file, which references a file the node does not have", ErrValidation, slug, name)
+		}
+		if strings.TrimSpace(service.Image) == "" {
+			return fmt.Errorf("%w: template %s: service %q declares no image", ErrValidation, slug, name)
 		}
 	}
 	return nil

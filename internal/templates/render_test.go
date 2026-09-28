@@ -88,8 +88,29 @@ func TestRenderSample(t *testing.T) {
 	if got := envValue(t, doc, "web", "DEBUG"); got != "false" {
 		t.Errorf("DEBUG = %q", got)
 	}
-	if got := envValue(t, doc, "web", "PASSWORD"); got != "p$$ss" {
-		t.Errorf("PASSWORD = %q, want the dollar escaped for the service pipeline", got)
+	if got := envValue(t, doc, "web", "NOTE"); got != "hello" {
+		t.Errorf("NOTE = %q", got)
+	}
+	// A secret never enters the document: it is a reference the services
+	// pipeline resolves from Env (and redacts from every error).
+	if got := envValue(t, doc, "web", "PASSWORD"); got != "${password}" {
+		t.Errorf("PASSWORD = %q, want the ${password} reference", got)
+	}
+	if got := result.Env["password"]; got != "p$ss" {
+		t.Errorf("Env[password] = %q", got)
+	}
+	if strings.Contains(result.ComposeYAML, "p$ss") {
+		t.Fatalf("the rendered document contains the secret:\n%s", result.ComposeYAML)
+	}
+	// The services pipeline resolves the reference and escapes it exactly
+	// like a service environment value.
+	rendered, err := services.Render(result.ComposeYAML, result.Env)
+	if err != nil {
+		t.Fatalf("services.Render: %v", err)
+	}
+	final := decodeMap(t, rendered.ComposeYAML)
+	if got := envValue(t, final, "web", "PASSWORD"); got != "p$$ss" {
+		t.Errorf("deployed PASSWORD = %q, want the dollar escaped for compose", got)
 	}
 
 	again := renderDemo(t, values)
@@ -166,12 +187,13 @@ func TestRenderRejectsOversizedDocument(t *testing.T) {
 	repeats := services.MaxComposeYAML/MaxFieldValue + 2
 	files := sampleFiles()
 	files["demo/compose.yaml"] = strings.Replace(sampleComposeYAML,
-		`      PASSWORD: "{{ .password }}"`,
-		`      PASSWORD: "`+strings.Repeat("{{ .password }}", repeats)+`"`, 1)
+		`      NOTE: "{{ .note }}"`,
+		`      NOTE: "`+strings.Repeat("{{ .note }}", repeats)+`"`, 1)
 	catalog := mustCatalog(t, files)
 	_, err := catalog.Render("demo", map[string]any{
 		"domain":   "app.example.com",
-		"password": strings.Repeat("x", MaxFieldValue),
+		"password": "secret",
+		"note":     strings.Repeat("x", MaxFieldValue),
 	})
 	if err == nil {
 		t.Fatal("Render succeeded, want an oversized-document error")
@@ -189,12 +211,12 @@ func TestRenderUnknownSlug(t *testing.T) {
 	}
 }
 
-// TestRenderEscapesValuesForServices proves a value can never be read as a
-// ${VAR} reference by the service pipeline and can never inject YAML
+// TestRenderEscapesValuesForServices proves a non-secret value can never be
+// read as a ${VAR} reference by the service pipeline and can never inject YAML
 // structure: quotes, newlines, colons and dollars stay one scalar.
 func TestRenderEscapesValuesForServices(t *testing.T) {
-	secret := "p$a$$b\n  injected: yes\n  - list\n${SECRET}\"quote\\\""
-	result := renderDemo(t, map[string]any{"domain": "app.example.com", "password": secret})
+	note := "p$a$$b\n  injected: yes\n  - list\n${SECRET}\"quote\\\""
+	result := renderDemo(t, map[string]any{"domain": "app.example.com", "password": "x", "note": note})
 
 	// The render output is valid YAML: no injected top-level key, no second
 	// service, exactly one volume.
@@ -205,21 +227,21 @@ func TestRenderEscapesValuesForServices(t *testing.T) {
 	if _, ok := serviceMap(t, doc, "web")["injected"]; ok {
 		t.Fatalf("the value injected a service key: %s", result.ComposeYAML)
 	}
-	if got := envValue(t, doc, "web", "PASSWORD"); got != escapeDollar(secret) {
-		t.Fatalf("PASSWORD = %q, want %q", got, escapeDollar(secret))
+	if got := envValue(t, doc, "web", "NOTE"); got != escapeDollar(note) {
+		t.Fatalf("NOTE = %q, want %q", got, escapeDollar(note))
 	}
 
 	// The services pipeline renders the document without resolving anything
 	// out of the value: every dollar is already escaped.
-	rendered, err := services.Render(result.ComposeYAML, nil)
+	rendered, err := services.Render(result.ComposeYAML, result.Env)
 	if err != nil {
 		t.Fatalf("services.Render: %v", err)
 	}
 	// The node's compose run unescapes $$ back to $, so the escaped form is
 	// exactly what must arrive on disk.
 	final := decodeMap(t, rendered.ComposeYAML)
-	deployed := envValue(t, final, "web", "PASSWORD")
-	if deployed != escapeDollar(secret) {
+	deployed := envValue(t, final, "web", "NOTE")
+	if deployed != escapeDollar(note) {
 		t.Fatalf("the deployed document lost the value:\n%s", rendered.ComposeYAML)
 	}
 	if !strings.Contains(deployed, "$${SECRET}") {
@@ -227,13 +249,67 @@ func TestRenderEscapesValuesForServices(t *testing.T) {
 	}
 }
 
+// TestRenderSecretBecomesEnvReference proves the secret boundary: the value
+// travels in Env, the document carries only the reference, and the services
+// pipeline resolves and escapes it exactly like a service environment value.
+func TestRenderSecretBecomesEnvReference(t *testing.T) {
+	secret := "p$a$$b\n${SECRET}\"quote"
+	result := renderDemo(t, map[string]any{"domain": "app.example.com", "password": secret})
+
+	if got := result.Env["password"]; got != secret {
+		t.Fatalf("Env[password] = %q, want the raw value", got)
+	}
+	if len(result.Env) != 1 {
+		t.Fatalf("Env = %v, want only the secret fields", result.Env)
+	}
+	doc := decodeMap(t, result.ComposeYAML)
+	if got := envValue(t, doc, "web", "PASSWORD"); got != "${password}" {
+		t.Fatalf("PASSWORD = %q, want the reference", got)
+	}
+	if strings.Contains(result.ComposeYAML, "p$a") {
+		t.Fatalf("the secret leaked into the document:\n%s", result.ComposeYAML)
+	}
+
+	rendered, err := services.Render(result.ComposeYAML, result.Env)
+	if err != nil {
+		t.Fatalf("services.Render: %v", err)
+	}
+	final := decodeMap(t, rendered.ComposeYAML)
+	if got := envValue(t, final, "web", "PASSWORD"); got != escapeDollar(secret) {
+		t.Fatalf("deployed PASSWORD = %q, want the escaped value", got)
+	}
+}
+
+// TestRenderSecretNeverInErrors proves no error the renderer returns echoes a
+// secret, even when the template places the placeholder in a parse-visible
+// position (a service name) and the parser rejects the reference.
+func TestRenderSecretNeverInErrors(t *testing.T) {
+	files := sampleFiles()
+	files["demo/compose.yaml"] = strings.Replace(sampleComposeYAML, "  web:", "  \"{{ .password }}\":", 1)
+	catalog := mustCatalog(t, files)
+	_, err := catalog.Render("demo", map[string]any{"domain": "app.example.com", "password": "private-password!"})
+	if err == nil {
+		t.Fatal("Render succeeded, want a parser error")
+	}
+	// A parse failure is a validation-class error for the routes either way.
+	if !errors.Is(err, ErrValidation) && !errors.Is(err, services.ErrValidation) {
+		t.Errorf("error = %v, want a validation sentinel", err)
+	}
+	if strings.Contains(err.Error(), "private-password!") {
+		t.Fatalf("the parser error echoed the secret: %v", err)
+	}
+	if !strings.Contains(err.Error(), "${password}") {
+		t.Fatalf("error = %v, want the unresolved reference to be named", err)
+	}
+}
+
 // TestRenderIsNotRecursive proves a value that itself looks like a placeholder
 // is inserted literally once; the engine never re-scans its own output.
 func TestRenderIsNotRecursive(t *testing.T) {
-	result := renderDemo(t, map[string]any{"domain": "app.example.com", "password": "{{ .domain }}"})
+	result := renderDemo(t, map[string]any{"domain": "app.example.com", "password": "x", "note": "{{ .domain }}"})
 	doc := decodeMap(t, result.ComposeYAML)
-	if got := envValue(t, doc, "web", "PASSWORD"); got != "{{ .domain }}" {
-		t.Fatalf("PASSWORD = %q, want the literal value", got)
+	if got := envValue(t, doc, "web", "NOTE"); got != "{{ .domain }}" {
+		t.Fatalf("NOTE = %q, want the literal value", got)
 	}
 }
 

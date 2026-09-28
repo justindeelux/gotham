@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/justindeelux/gotham/internal/auth"
@@ -51,7 +52,8 @@ func TestTemplatesRoutesWiring(t *testing.T) {
 		t.Fatalf("render = %d: %s", recorder.Code, recorder.Body)
 	}
 	var rendered struct {
-		ComposeYAML string `json:"compose_yaml"`
+		ComposeYAML string            `json:"compose_yaml"`
+		Env         map[string]string `json:"env"`
 		Spec        struct {
 			Domains []struct {
 				Domain string `json:"domain"`
@@ -63,6 +65,14 @@ func TestTemplatesRoutesWiring(t *testing.T) {
 	}
 	if len(rendered.Spec.Domains) != 1 || rendered.Spec.Domains[0].Domain != "blog.example.test" {
 		t.Fatalf("rendered domains = %+v", rendered.Spec.Domains)
+	}
+	// The secret boundary the gallery depends on: the value travels in env,
+	// the document only references it.
+	if got := rendered.Env["db_password"]; got != "wp-secret" {
+		t.Errorf("env[db_password] = %q", got)
+	}
+	if strings.Contains(rendered.ComposeYAML, "wp-secret") {
+		t.Fatalf("the rendered document contains the secret:\n%s", rendered.ComposeYAML)
 	}
 }
 

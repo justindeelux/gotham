@@ -77,6 +77,15 @@ func TestP7TemplateCatalogComposeConfig(t *testing.T) {
 			if err != nil {
 				t.Fatalf("render: %v", err)
 			}
+			// Secret values travel in Env; the document references them, so
+			// the compose CLI needs the environment to resolve them (exactly
+			// as the services pipeline supplies it at deploy time).
+			for key, value := range rendered.Env {
+				if strings.Contains(rendered.ComposeYAML, value) {
+					t.Fatalf("secret %q leaked into the rendered document", key)
+				}
+				t.Setenv(key, value)
+			}
 			path := filepath.Join(t.TempDir(), "compose.yaml")
 			if err := os.WriteFile(path, []byte(rendered.ComposeYAML), 0o600); err != nil {
 				t.Fatalf("write document: %v", err)
@@ -111,9 +120,9 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 		"db_root_password": "root-" + h.suffix,
 	}
 
-	// 1. The render: the document carries the requested domain, the supplied
-	// environment and the template's named volumes, and it already passed the
-	// BE-7.1 schema check.
+	// 1. The render: the document carries the requested domain and the
+	// template's named volumes, references the secrets as ${field}, and has
+	// already passed the BE-7.1 schema check.
 	rendered, err := catalog.Render("wordpress", values)
 	if err != nil {
 		t.Fatalf("render wordpress: %v", err)
@@ -123,14 +132,23 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"gotham.domain: " + domain,
-		"WORDPRESS_DB_PASSWORD",
-		"MYSQL_ROOT_PASSWORD",
+		"WORDPRESS_DB_PASSWORD: ${db_password}",
+		"MYSQL_ROOT_PASSWORD: ${db_root_password}",
 		"wordpress_data",
 		"mysql_data",
 	} {
 		if !strings.Contains(rendered.ComposeYAML, expected) {
 			t.Fatalf("the rendered document does not contain %q:\n%s", expected, rendered.ComposeYAML)
 		}
+	}
+	// The secrets travel in the returned environment, never in the document.
+	for key, value := range rendered.Env {
+		if strings.Contains(rendered.ComposeYAML, value) {
+			t.Fatalf("secret %q leaked into the rendered document", key)
+		}
+	}
+	if rendered.Env["db_password"] != values["db_password"] || rendered.Env["db_root_password"] != values["db_root_password"] {
+		t.Fatalf("Env = %v, want both supplied secrets", rendered.Env)
 	}
 
 	// 2. Pull first with a generous timeout: the deploy below runs compose up.
@@ -144,11 +162,12 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	pullCancel()
 
 	// 3. The gallery flow: a service is created from the rendered document and
-	// deployed through the existing services surface.
+	// its environment, then deployed through the existing services surface.
 	created, err := h.compose.Create(ctx, h.userID, services.CreateRequest{
 		Name:        "p7-wp-" + h.suffix,
 		ServerID:    h.serverID,
 		ComposeYAML: rendered.ComposeYAML,
+		Env:         rendered.Env,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -197,36 +216,29 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	}
 }
 
-// p7WaitForWordPress polls the routed domain until WordPress answers. An
-// uninstalled instance redirects to the installer (302); once the database is
-// reachable the installer page itself is served (200 with the WordPress
-// markup). Anything else - including the 500 of an unreachable database - is
-// retried until the deadline.
+// p7WaitForWordPress polls the routed domain until it proves WordPress is the
+// backend: the root request either serves the installer markup directly (200
+// with the WordPress page) or redirects to the WordPress installer
+// (/wp-admin/install.php), whose page must then carry the WordPress markup.
+// A bare 302 to anywhere else, or any other status - including the 500 of an
+// unreachable database - is retried until the deadline.
 func p7WaitForWordPress(t *testing.T, domain string) {
 	t.Helper()
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
 	deadline := time.Now().Add(5 * time.Minute)
 	var lastStatus int
 	var lastBody string
 	for {
-		request, err := http.NewRequest(http.MethodGet, p6BaseURL, nil)
-		if err != nil {
-			t.Fatalf("new request: %v", err)
-		}
-		request.Host = domain
-		response, err := client.Do(request)
-		if err == nil {
-			body, _ := io.ReadAll(io.LimitReader(response.Body, 8192))
-			_ = response.Body.Close()
-			lastStatus, lastBody = response.StatusCode, string(body)
-			if response.StatusCode == http.StatusFound ||
-				(response.StatusCode == http.StatusOK && strings.Contains(lastBody, "WordPress")) {
-				t.Logf("the WordPress domain answered %d through Traefik", response.StatusCode)
+		status, location, body := p7GetRouted(t, domain, "/")
+		lastStatus, lastBody = status, body
+		switch {
+		case status == http.StatusOK && strings.Contains(body, "WordPress"):
+			t.Logf("the WordPress domain served the installer page (200) through Traefik")
+			return
+		case status == http.StatusFound && strings.Contains(location, "/wp-admin/install.php"):
+			installerStatus, _, installerBody := p7GetRouted(t, domain, "/wp-admin/install.php")
+			lastStatus, lastBody = installerStatus, installerBody
+			if installerStatus == http.StatusOK && strings.Contains(installerBody, "WordPress") {
+				t.Logf("the WordPress domain redirected to the installer (%s) and served it (200) through Traefik", location)
 				return
 			}
 		}
@@ -235,5 +247,30 @@ func p7WaitForWordPress(t *testing.T, domain string) {
 		}
 		time.Sleep(time.Second)
 	}
-	t.Fatalf("the WordPress domain never answered: last status %d (body %.300s)", lastStatus, lastBody)
+	t.Fatalf("the WordPress domain never proved the installer: last status %d (body %.300s)", lastStatus, lastBody)
+}
+
+// p7GetRouted performs one GET through the local Traefik gateway with the
+// domain as the Host header, without following redirects. It returns the
+// status, the Location header and the bounded body.
+func p7GetRouted(t *testing.T, domain, path string) (int, string, string) {
+	t.Helper()
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	request, err := http.NewRequest(http.MethodGet, p6BaseURL+strings.TrimPrefix(path, "/"), nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	request.Host = domain
+	response, err := client.Do(request)
+	if err != nil {
+		return 0, "", ""
+	}
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 8192))
+	_ = response.Body.Close()
+	return response.StatusCode, response.Header.Get("Location"), string(body)
 }

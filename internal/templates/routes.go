@@ -59,13 +59,15 @@ type renderRequest struct {
 	Values map[string]any `json:"values"`
 }
 
-// renderResponse is the FE-7.1 contract: the validated compose document plus
-// its parsed view. Deployment creates a service with compose_yaml and env {}
-// through the existing services endpoints (see the package README).
+// renderResponse is the FE-7.1 contract: the validated compose document, the
+// environment its secret references resolve against, and the parsed view.
+// Deployment creates a service with compose_yaml and env through the existing
+// services endpoints (see the package README).
 type renderResponse struct {
-	Slug        string       `json:"slug"`
-	ComposeYAML string       `json:"compose_yaml"`
-	Spec        specResponse `json:"spec"`
+	Slug        string            `json:"slug"`
+	ComposeYAML string            `json:"compose_yaml"`
+	Env         map[string]string `json:"env"`
+	Spec        specResponse      `json:"spec"`
 }
 
 // errorBody is the JSON body returned for failures.
@@ -89,8 +91,12 @@ type handler struct {
 // services routes use, because a rendered document is deployed through the
 // service surface and mutates node state there. The surface itself is
 // stateless and read-only (a render touches no user row and executes nothing),
-// so no user accessor is needed. A nil service or FEATURE_SERVICES=false
-// mounts nothing, so the control plane can call Mount unconditionally.
+// so no user accessor is needed.
+//
+// FEATURE_SERVICES=false mounts nothing (404), matching services.Mount; when
+// the flag is flipped off after mounting, every call answers 503 through the
+// per-request check, matching the service operations. A nil service mounts
+// nothing either, so the control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc Service) {
 	if svc == nil || !services.Enabled() {
 		return
@@ -104,8 +110,23 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc Service) {
 	})
 }
 
+// enabled reports whether the services feature (and with it the template
+// surface) is on, answering 503 when it is not: a runtime
+// FEATURE_SERVICES=false behaves like the service operations, while the flag
+// already off at startup unmounted the routes entirely (404).
+func (h *handler) enabled(w http.ResponseWriter) bool {
+	if services.Enabled() {
+		return true
+	}
+	h.writeError(w, ErrDisabled)
+	return false
+}
+
 // list serves GET .../templates: the catalog metadata.
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
+	if !h.enabled(w) {
+		return
+	}
 	listed := h.svc.List()
 	response := make([]templateSummary, 0, len(listed))
 	for _, template := range listed {
@@ -121,6 +142,9 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 
 // get serves GET .../templates/{slug}: metadata plus the field schema.
 func (h *handler) get(w http.ResponseWriter, r *http.Request) {
+	if !h.enabled(w) {
+		return
+	}
 	template, ok := h.svc.Get(chi.URLParam(r, "slug"))
 	if !ok {
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
@@ -131,6 +155,9 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 
 // render serves POST .../templates/{slug}/render.
 func (h *handler) render(w http.ResponseWriter, r *http.Request) {
+	if !h.enabled(w) {
+		return
+	}
 	slug := chi.URLParam(r, "slug")
 	var req renderRequest
 	if !decodeBody(w, r, &req) {
@@ -141,9 +168,14 @@ func (h *handler) render(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
+	env := result.Env
+	if env == nil {
+		env = map[string]string{}
+	}
 	writeJSON(w, http.StatusOK, renderResponse{
 		Slug:        slug,
 		ComposeYAML: result.ComposeYAML,
+		Env:         env,
 		Spec: specResponse{
 			Services:     result.Spec.Services,
 			Domains:      result.Spec.Domains,
@@ -174,18 +206,27 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
 	case errors.Is(err, ErrValidation), errors.Is(err, services.ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrDisabled):
+		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "services are disabled"})
 	default:
 		h.logger.Error("templates: request failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error"})
 	}
 }
 
-// decodeBody decodes a required JSON body into dst. An empty or malformed
-// body answers 400.
+// decodeBody decodes a required JSON body into dst. An empty or malformed body
+// answers 400, a body over the limit answers 413, and trailing content after
+// the single JSON value is rejected: the endpoint consumes exactly one object.
 func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	// Read one byte past the limit so an over-limit body is detected instead
+	// of being silently truncated into a valid prefix.
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+		return false
+	}
+	if len(body) > maxBodyBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Message: "request body is too large"})
 		return false
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
@@ -195,6 +236,13 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+		return false
+	}
+	// Require EOF after the single JSON value: trailing garbage or a second
+	// document is not a valid request.
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
 		return false
 	}

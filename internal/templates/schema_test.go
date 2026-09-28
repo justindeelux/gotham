@@ -2,9 +2,12 @@ package templates
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/justindeelux/gotham/internal/services"
 )
 
 // sampleTemplateYAML exercises every field type: text with a pattern, number
@@ -38,6 +41,10 @@ fields:
     label: Password
     type: secret
     required: true
+  - key: note
+    label: Note
+    type: text
+    default: hello
 `
 
 // sampleComposeYAML references every field of sampleTemplateYAML.
@@ -51,6 +58,7 @@ const sampleComposeYAML = `services:
       MODE: "{{ .mode }}"
       DEBUG: "{{ .debug }}"
       PASSWORD: "{{ .password }}"
+      NOTE: "{{ .note }}"
     volumes:
       - data:/data
 volumes:
@@ -99,8 +107,8 @@ func TestLoadSample(t *testing.T) {
 	if template.Name != "Demo" || template.Icon != "demo" || template.Description != "A demo template." {
 		t.Fatalf("metadata = %+v", template)
 	}
-	if len(template.Fields) != 5 {
-		t.Fatalf("fields = %d, want 5", len(template.Fields))
+	if len(template.Fields) != 6 {
+		t.Fatalf("fields = %d, want 6", len(template.Fields))
 	}
 	if field := template.Fields[0]; field.Key != "domain" || field.Type != FieldText || !field.Required || field.Pattern == "" || field.MaxLength != 253 {
 		t.Errorf("domain field = %+v", field)
@@ -265,6 +273,46 @@ func TestLoadRejectsBadDefinitions(t *testing.T) {
 			files: map[string]string{"README.md": "not a template"},
 			want:  "no templates found",
 		},
+		"null trailing document": {
+			files: map[string]string{"demo/template.yaml": sampleTemplateYAML + "---\nnull\n", "demo/compose.yaml": sampleComposeYAML},
+			want:  "must contain exactly one document",
+		},
+		"malformed trailing document": {
+			files: map[string]string{"demo/template.yaml": sampleTemplateYAML + "---\n[broken\n", "demo/compose.yaml": sampleComposeYAML},
+			want:  "must contain exactly one document",
+		},
+		"extra trailing document": {
+			files: map[string]string{"demo/template.yaml": sampleTemplateYAML + "---\nnull\n---\nignored: true\n", "demo/compose.yaml": sampleComposeYAML},
+			want:  "must contain exactly one document",
+		},
+		"build service": {
+			files: map[string]string{"demo/template.yaml": sampleTemplateYAML, "demo/compose.yaml": strings.Replace(sampleComposeYAML, "image: nginx:1.27", "build: .", 1)},
+			want:  "uses build",
+		},
+		"extends service": {
+			files: map[string]string{"demo/template.yaml": sampleTemplateYAML, "demo/compose.yaml": strings.Replace(sampleComposeYAML, "image: nginx:1.27", "image: nginx:1.27\n    extends:\n      service: base", 1)},
+			want:  "uses extends",
+		},
+		"env_file service": {
+			files: map[string]string{"demo/template.yaml": sampleTemplateYAML, "demo/compose.yaml": strings.Replace(sampleComposeYAML, "image: nginx:1.27", "image: nginx:1.27\n    env_file: .env", 1)},
+			want:  "uses env_file",
+		},
+		"empty image": {
+			files: map[string]string{"demo/template.yaml": sampleTemplateYAML, "demo/compose.yaml": strings.Replace(sampleComposeYAML, "image: nginx:1.27", `image: ""`, 1)},
+			want:  "declares no image",
+		},
+		"include document": {
+			files: map[string]string{"demo/template.yaml": sampleTemplateYAML, "demo/compose.yaml": "include:\n  - other.yaml\n" + sampleComposeYAML},
+			want:  "include is not supported",
+		},
+		"extra compose document": {
+			files: map[string]string{"demo/template.yaml": sampleTemplateYAML, "demo/compose.yaml": sampleComposeYAML + "---\nnull\n"},
+			want:  "exactly one document",
+		},
+		"no services": {
+			files: map[string]string{"demo/template.yaml": sampleTemplateYAML, "demo/compose.yaml": "name: \"{{ .domain }}\"\ncount: \"{{ .count }}\"\nmode: \"{{ .mode }}\"\ndebug: \"{{ .debug }}\"\npassword: \"{{ .password }}\"\nnote: \"{{ .note }}\"\n"},
+			want:  "declares no services",
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -279,6 +327,40 @@ func TestLoadRejectsBadDefinitions(t *testing.T) {
 				t.Errorf("error = %v, want it to contain %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestLoadRejectsTooManyServices proves the load-time structural check reuses
+// the deploy path's service-count bound, so an oversized catalog entry cannot
+// enter the gallery and fail on every render.
+func TestLoadRejectsTooManyServices(t *testing.T) {
+	var compose strings.Builder
+	compose.WriteString("services:\n")
+	for i := 0; i <= services.MaxComposeServices; i++ {
+		fmt.Fprintf(&compose, "  svc%d:\n    image: nginx:1.27\n", i)
+	}
+	compose.WriteString("name: \"{{ .domain }}\"\ncount: \"{{ .count }}\"\nmode: \"{{ .mode }}\"\ndebug: \"{{ .debug }}\"\npassword: \"{{ .password }}\"\nnote: \"{{ .note }}\"\n")
+	files := map[string]string{"demo/template.yaml": sampleTemplateYAML, "demo/compose.yaml": compose.String()}
+	_, err := catalogFrom(files)
+	if err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("Load = %v, want the service-count bound", err)
+	}
+}
+
+// TestLoadAllowsValueDrivenStructure proves the load-time structural check
+// stays value-independent: a placeholder in a service name or image position
+// is allowed, because only the render's services.Parse can judge the
+// substituted value.
+func TestLoadAllowsValueDrivenStructure(t *testing.T) {
+	files := sampleFiles()
+	files["demo/compose.yaml"] = strings.Replace(sampleComposeYAML, "image: nginx:1.27", `image: "{{ .note }}"`, 1)
+	catalog := mustCatalog(t, files)
+	result, err := catalog.Render("demo", map[string]any{"domain": "app.example.com", "password": "x", "note": "nginx:1.27"})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if got := serviceMap(t, decodeMap(t, result.ComposeYAML), "web")["image"]; got != "nginx:1.27" {
+		t.Errorf("image = %v", got)
 	}
 }
 

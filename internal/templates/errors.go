@@ -12,6 +12,10 @@ var (
 	// ErrValidation — invalid template metadata, an invalid field value or
 	// a document that does not render (400).
 	ErrValidation = errors.New("templates: validation")
+	// ErrDisabled — FEATURE_SERVICES=false disables the template surface at
+	// runtime, exactly like the service operations (503). Set before startup,
+	// Mount is a no-op instead and the routes are absent (404).
+	ErrDisabled = errors.New("templates: feature disabled")
 )
 
 // notFound reports an absent template slug.

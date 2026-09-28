@@ -3,10 +3,10 @@
 **Goal:** raw container management on every node — the base layer for Applications, Databases, Services.
 
 **Exit criteria (Milestone M3):**
-- [ ] List containers on any node (added in Phase 2).
-- [ ] Start / stop / restart containers via UI.
-- [ ] Realtime log streaming via WebSocket; dead containers → live status update.
-- [ ] Pull image + run raw container (preparation for deploy).
+- List containers on any node (added in Phase 2).
+- Start / stop / restart containers via UI.
+- Realtime log streaming via WebSocket; dead containers → live status update.
+- Pull image + run raw container (preparation for deploy).
 
 **Rollback:** container operations via the agent are control commands — if the UI breaks, only display is affected, no data is touched. Redis pub/sub can be disabled with the env flag `REALTIME_ENABLED=false` (5s poll fallback).
 

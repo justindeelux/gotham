@@ -3,12 +3,12 @@
 **Goal:** the core deploy flow — from Git repo to running container. The biggest phase; orchestration (4.3) needs `code-reviewer` design review.
 
 **Exit criteria (Milestone M4):**
-- [ ] Connect GitHub/GitLab/Gitea, list repos/branches.
-- [ ] Deploy an app from a public GitHub repo (e.g. a sample Next.js app) → build → run container → reachable via port.
-- [ ] Build without a Dockerfile (Railpack/Nixpacks or Buildpacks auto-detect).
-- [ ] Persistent storage, env vars, secrets work.
-- [ ] Push code → webhook → auto deploy, build logs visible realtime in the UI.
-- [ ] **Gate G1**: `code-reviewer` + `e2e-runner` run the e2e deploy scenario before merge.
+- Connect GitHub/GitLab/Gitea, list repos/branches.
+- Deploy an app from a public GitHub repo (e.g. a sample Next.js app) → build → run container → reachable via port.
+- Build without a Dockerfile (Railpack/Nixpacks or Buildpacks auto-detect).
+- Persistent storage, env vars, secrets work.
+- Push code → webhook → auto deploy, build logs visible realtime in the UI.
+- **Gate G1**: `code-reviewer` + `e2e-runner` run the e2e deploy scenario before merge.
 
 **Rollback:** deploy is a state machine persisted in the DB (`deployments` table) — each new deploy keeps the old image tag; the "Rollback" button in FE-4.1 points back at the old container. If the phase breaks: disable with the env flag `FEATURE_APPLICATIONS=false`, Phases 0–3 unaffected.
 

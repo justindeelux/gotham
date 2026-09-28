@@ -3,9 +3,9 @@
 **Goal:** `docker-compose` service deploys + a "one-click" template system (WordPress, Nextcloud...).
 
 **Exit criteria (Milestone M7):**
-- [ ] Deploy any compose file (parse + validate + run via agent).
-- [ ] YAML templates in `templates/` render to compose with user-supplied variables.
-- [ ] Gallery in the UI: pick WordPress → fill domain/admin → 1-click deploy → reachable.
+- Deploy any compose file (parse + validate + run via agent).
+- YAML templates in `templates/` render to compose with user-supplied variables.
+- Gallery in the UI: pick WordPress → fill domain/admin → 1-click deploy → reachable.
 
 **Rollback:** a service is a compose project — rollback = redeploy the old compose (compose file versioned per deploy). Templates are static renders — editing a template does not affect already-deployed services.
 

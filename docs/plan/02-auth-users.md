@@ -3,11 +3,11 @@
 **Goal:** a complete authentication system — the foundation for all API and UI access control.
 
 **Exit criteria (Milestone M1):**
-- [ ] Sign up (email + password), sign in, sign out via UI.
-- [ ] Login with GitHub OAuth.
-- [ ] Access token (JWT) expiry → refresh token issues a new token.
-- [ ] API returns 401 when the token is missing; auth middleware works correctly.
-- [ ] API tokens (scoped) can be created / rotated / deleted.
+- Sign up (email + password), sign in, sign out via UI.
+- Login with GitHub OAuth.
+- Access token (JWT) expiry → refresh token issues a new token.
+- API returns 401 when the token is missing; auth middleware works correctly.
+- API tokens (scoped) can be created / rotated / deleted.
 
 **Rollback:** if something breaks midway: the `users/sessions` migrations are forward-only; run `goose down` on the dev environment (no real data yet) and revert the code. No other flow is affected since every later phase is the one depending on auth.
 

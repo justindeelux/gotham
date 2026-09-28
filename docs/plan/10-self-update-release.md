@@ -3,10 +3,10 @@
 **Goal:** signed automatic updates + the official release pipeline — completing design priority #3 of the project.
 
 **Exit criteria (Milestone M9):**
-- [ ] `gotham update` downloads the new version from GitHub Releases, verifies the Ed25519 signature, replaces the binary itself, rolls back to the old version on failure.
-- [ ] Agents self-update remotely via the CP (new binary pushed over gRPC).
-- [ ] GoReleaser publishes: linux amd64/arm64 binaries, checksums, signatures; a one-line install script sets up a clean VPS.
-- [ ] **Gate G2**: `code-reviewer` + `security-reviewer` approve the whole update chain (signatures, distribution channel, runtime privileges).
+- `gotham update` downloads the new version from GitHub Releases, verifies the Ed25519 signature, replaces the binary itself, rolls back to the old version on failure.
+- Agents self-update remotely via the CP (new binary pushed over gRPC).
+- GoReleaser publishes: linux amd64/arm64 binaries, checksums, signatures; a one-line install script sets up a clean VPS.
+- **Gate G2**: `code-reviewer` + `security-reviewer` approve the whole update chain (signatures, distribution channel, runtime privileges).
 
 **Rollback:** rollback IS the feature — the old binary is kept as `<binary>.old`, `update rollback` switches back. If a release is broken: publish a fixed release, users update again; no extra mechanism needed.
 

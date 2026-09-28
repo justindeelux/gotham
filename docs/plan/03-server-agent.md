@@ -3,10 +3,10 @@
 **Goal:** node management infrastructure — the CP controls remote machines via a gRPC mTLS agent. This is a **contract-design** phase; the proto part needs `code-reviewer` design review.
 
 **Exit criteria (Milestone M2):**
-- [ ] `buf lint && buf generate` clean; the `proto/agent/v1` contract is versioned.
-- [ ] Run the agent on 1 machine (local Docker) → CP receives heartbeats, shows `ready` in the UI.
-- [ ] Add-server wizard: enter IP + SSH key → validate (Docker version, CPU, RAM, disk) → show results.
-- [ ] Install script `deploy/install-agent.sh` installs the agent + systemd unit on the target machine.
+- `buf lint && buf generate` clean; the `proto/agent/v1` contract is versioned.
+- Run the agent on 1 machine (local Docker) → CP receives heartbeats, shows `ready` in the UI.
+- Add-server wizard: enter IP + SSH key → validate (Docker version, CPU, RAM, disk) → show results.
+- Install script `deploy/install-agent.sh` installs the agent + systemd unit on the target machine.
 
 **Rollback:** everything new is an add-on (server registry, agent). If it breaks: the agent exits on its own when it loses the CP connection (safe), the `servers` table can be wiped on dev. Phases 0–1 are unaffected.
 

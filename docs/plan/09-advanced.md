@@ -3,10 +3,10 @@
 **Goal:** complete the core feature set: preview deployments, teams/RBAC, notifications, metrics.
 
 **Exit criteria (Milestone M8):**
-- [ ] Open a PR → preview app auto-deploys on a temporary subdomain.
-- [ ] Teams with roles (owner/admin/read-only) + invites.
-- [ ] Deploy success/fail notifications via Discord/Slack/Telegram/email.
-- [ ] Server CPU/RAM/disk/network metrics shown as charts in the UI.
+- Open a PR → preview app auto-deploys on a temporary subdomain.
+- Teams with roles (owner/admin/read-only) + invites.
+- Deploy success/fail notifications via Discord/Slack/Telegram/email.
+- Server CPU/RAM/disk/network metrics shown as charts in the UI.
 
 **Rollback:** all add-on features — each has its own env flag to disable. The core deploy flow is untouched.
 

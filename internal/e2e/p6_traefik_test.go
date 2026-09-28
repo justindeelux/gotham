@@ -140,7 +140,7 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	// R4: a pre-existing fixed-name container may be a live proxy this test
 	// cannot prove it owns, so refuse to run instead of deleting it. Only
 	// container IDs created by this run are cleaned up.
-	if existing := p6FindContainer(t, ctx, engine, proxy.TraefikContainerName); existing != "" {
+	if existing := p6FindContainer(t, ctx, engine); existing != "" {
 		t.Fatalf("a gotham-traefik container already exists (%s); refusing to remove a possibly live proxy", existing)
 	}
 	createdIDs := []string{}
@@ -247,10 +247,15 @@ func TestP6ProxySyncProduction(t *testing.T) {
 		if !t.Failed() {
 			return
 		}
-		if logs, err := runDocker(context.Background(), "logs", proxy.TraefikContainerName); err == nil {
+		current := p6FindContainer(t, context.Background(), engine)
+		if current == "" {
+			t.Log("traefik container no longer exists for the failure dump")
+			return
+		}
+		if logs, err := runDocker(context.Background(), "logs", current); err == nil {
 			t.Logf("traefik logs:\n%s", logs)
 		}
-		if listing, err := runDocker(context.Background(), "exec", proxy.TraefikContainerName, "ls", "-la", proxy.TraefikDynamicDir); err == nil {
+		if listing, err := runDocker(context.Background(), "exec", current, "ls", "-la", proxy.TraefikDynamicDir); err == nil {
 			t.Logf("container dynamic dir:\n%s", listing)
 		}
 		if data, err := os.ReadFile(configDir + "/dynamic/gotham.yml"); err == nil {
@@ -258,7 +263,9 @@ func TestP6ProxySyncProduction(t *testing.T) {
 		} else {
 			t.Logf("read host dynamic config: %v", err)
 		}
-		t.Logf("mounts:\n%s", p6Inspect(t, traefikID, "{{json .Mounts}}"))
+		if mounts, err := runDocker(context.Background(), "inspect", "--format", "{{json .Mounts}}", current); err == nil {
+			t.Logf("mounts:\n%s", mounts)
+		}
 	})
 	p6AssertTraefikBootstrap(t, traefikID)
 
@@ -312,6 +319,11 @@ func TestP6ProxySyncProduction(t *testing.T) {
 
 	// Repair: a container created before the host-IP binding fix (no loopback
 	// ping) is replaced by the sync and the proxy comes back verified.
+	currentID := p6FindContainer(t, ctx, engine)
+	if currentID == "" {
+		t.Fatal("managed proxy container disappeared before the repair step")
+	}
+	traefikID = currentID
 	if err := engine.Remove(ctx, traefikID); err != nil {
 		t.Fatalf("remove traefik: %v", err)
 	}
@@ -599,8 +611,8 @@ func p6CanonicalTempDir(t *testing.T) string {
 	return dir
 }
 
-// p6FindContainer returns the id of a named container, or "" when absent.
-func p6FindContainer(t *testing.T, ctx context.Context, engine *agent.DockerClient, name string) string {
+// p6FindContainer returns the managed proxy container's id, or "" when absent.
+func p6FindContainer(t *testing.T, ctx context.Context, engine *agent.DockerClient) string {
 	t.Helper()
 	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -609,7 +621,7 @@ func p6FindContainer(t *testing.T, ctx context.Context, engine *agent.DockerClie
 		t.Fatalf("list containers: %v", err)
 	}
 	for _, container := range listed {
-		if container.GetName() == name {
+		if container.GetName() == proxy.TraefikContainerName {
 			return container.GetId()
 		}
 	}
@@ -734,7 +746,7 @@ func p6AssertRepairsDrift(
 		if !errors.Is(err, proxy.ErrConflict) {
 			t.Fatalf("unowned container sync err = %v, want ErrConflict", err)
 		}
-		if current := p6FindContainer(t, ctx, engine, proxy.TraefikContainerName); current != *traefikID {
+		if current := p6FindContainer(t, ctx, engine); current != *traefikID {
 			t.Fatalf("unowned container was replaced (%s -> %s)", *traefikID, current)
 		}
 

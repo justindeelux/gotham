@@ -1250,3 +1250,20 @@ func boolString(value bool) string {
 	}
 	return "false"
 }
+
+func TestMountMatchesNormalizesDockerDesktopSources(t *testing.T) {
+	mounts := []containers.ContainerMount{{
+		Source:      "/host_mnt/private/var/proxy",
+		Destination: "/etc/traefik",
+		ReadOnly:    true,
+	}}
+	if !mountMatches(mounts, "/private/var/proxy", "/etc/traefik", true) {
+		t.Error("Docker Desktop /host_mnt source must compare equal to the host path")
+	}
+	if mountMatches(mounts, "/private/var/other", "/etc/traefik", true) {
+		t.Error("a different source must not match")
+	}
+	if mountMatches(mounts, "/private/var/proxy", "/etc/traefik", false) {
+		t.Error("a read-only mount must not satisfy a writable expectation")
+	}
+}

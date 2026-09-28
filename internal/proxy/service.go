@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -816,10 +817,14 @@ func (s *SyncService) traefikMatches(container containers.Container) (owned, mat
 }
 
 // mountMatches reports whether the engine reports a bind mount from source to
-// destination with the expected read-only flag.
+// destination with the expected read-only flag. Docker Desktop reports host
+// bind sources under its /host_mnt prefix, so the source is normalized before
+// comparison (no-op on a Linux node).
 func mountMatches(mounts []containers.ContainerMount, source, destination string, readOnly bool) bool {
+	want := strings.TrimPrefix(filepath.Clean(source), "/host_mnt")
 	for _, mount := range mounts {
-		if mount.Source == source && mount.Destination == destination && mount.ReadOnly == readOnly {
+		got := strings.TrimPrefix(filepath.Clean(mount.Source), "/host_mnt")
+		if got == want && mount.Destination == destination && mount.ReadOnly == readOnly {
 			return true
 		}
 	}

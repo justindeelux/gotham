@@ -49,11 +49,23 @@
 // so syncs are idempotent: running them twice yields byte-identical files and
 // the bootstrap starts an existing container instead of recreating it.
 //
-// Each successfully pushed configuration is retained for one day
-// (proxy_config_versions) and can be re-pushed with the same API's revert
-// flag, which is the phase plan's fast-revert path for a bad rollout. A global
-// sync covers every registered node — including nodes whose last domain was
-// just removed — plus every node hosting a proxied application.
+// Configuration history is sequenced (proxy_config_versions): the intent to
+// replace the active snapshot is recorded durably before the node is touched,
+// an unchanged sync records nothing, the active snapshot is never pruned, and
+// a replaced predecessor stays revertable for one day measured from the
+// replacement. An ambiguous push failure (a write, timeout or ping failure
+// that may have landed) keeps the pending record and reports a degraded
+// outcome instead of a silent success, and revert targets the active snapshot
+// while a pending push exists so it can never fall back to an older
+// predecessor. A global sync covers every registered node — including nodes
+// whose last domain was just removed — plus every node hosting a proxied
+// application.
+//
+// The managed gotham-traefik container is converged, not blindly reused: its
+// ownership labels, image, published ports, engine-reported mounts and the
+// real Docker restart policy are verified before reuse. Owned drift is
+// repaired by recreation; a same-name container without ownership labels
+// fails the sync with an actionable conflict and is never deleted.
 //
 // FEATURE_PROXY=false disables the whole surface: no routes are mounted, no
 // deploy hook is wired and no configuration is pushed.

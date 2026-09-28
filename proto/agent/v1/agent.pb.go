@@ -1845,6 +1845,647 @@ func (x *BuildImageResult) GetRegistryAddr() string {
 	return ""
 }
 
+// ComposeValidateRequest carries one project's compose document for
+// validation. The document is the control-plane rendered compose file (the
+// control plane resolves ${VAR} substitutions before sending), so the agent
+// only writes and inspects it.
+type ComposeValidateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project_name is the compose project name: "gotham-<service uuid>". The
+	// agent rejects anything outside that strict pattern, so a compromised
+	// control plane cannot direct writes at another directory.
+	ProjectName string `protobuf:"bytes,1,opt,name=project_name,json=projectName,proto3" json:"project_name,omitempty"`
+	// compose_yaml is the complete compose document, capped at 1 MiB. Nothing
+	// is started by a validate.
+	ComposeYaml   []byte `protobuf:"bytes,2,opt,name=compose_yaml,json=composeYaml,proto3" json:"compose_yaml,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeValidateRequest) Reset() {
+	*x = ComposeValidateRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeValidateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeValidateRequest) ProtoMessage() {}
+
+func (x *ComposeValidateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeValidateRequest.ProtoReflect.Descriptor instead.
+func (*ComposeValidateRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *ComposeValidateRequest) GetProjectName() string {
+	if x != nil {
+		return x.ProjectName
+	}
+	return ""
+}
+
+func (x *ComposeValidateRequest) GetComposeYaml() []byte {
+	if x != nil {
+		return x.ComposeYaml
+	}
+	return nil
+}
+
+// ComposeValidateResponse reports what a valid document declares.
+type ComposeValidateResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// services are the compose service names, in the CLI's dependency order.
+	Services []string `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty"`
+	// volumes are the named volumes the document declares, sorted.
+	Volumes       []string `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeValidateResponse) Reset() {
+	*x = ComposeValidateResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeValidateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeValidateResponse) ProtoMessage() {}
+
+func (x *ComposeValidateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeValidateResponse.ProtoReflect.Descriptor instead.
+func (*ComposeValidateResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ComposeValidateResponse) GetServices() []string {
+	if x != nil {
+		return x.Services
+	}
+	return nil
+}
+
+func (x *ComposeValidateResponse) GetVolumes() []string {
+	if x != nil {
+		return x.Volumes
+	}
+	return nil
+}
+
+// ComposeUpRequest starts (or restarts) a project's compose document.
+type ComposeUpRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project_name is the compose project name: "gotham-<service uuid>".
+	ProjectName string `protobuf:"bytes,1,opt,name=project_name,json=projectName,proto3" json:"project_name,omitempty"`
+	// compose_yaml is the rendered compose document, capped at 1 MiB. It
+	// replaces the project's previous file before the deploy runs, so every
+	// deploy is versioned on the node by the file it ran.
+	ComposeYaml []byte `protobuf:"bytes,2,opt,name=compose_yaml,json=composeYaml,proto3" json:"compose_yaml,omitempty"`
+	// restart requests `docker compose restart` of the project's existing
+	// containers instead of a `docker compose up -d` create/recreate pass. The
+	// document is still written and validated first.
+	Restart       bool `protobuf:"varint,3,opt,name=restart,proto3" json:"restart,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeUpRequest) Reset() {
+	*x = ComposeUpRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeUpRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeUpRequest) ProtoMessage() {}
+
+func (x *ComposeUpRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeUpRequest.ProtoReflect.Descriptor instead.
+func (*ComposeUpRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ComposeUpRequest) GetProjectName() string {
+	if x != nil {
+		return x.ProjectName
+	}
+	return ""
+}
+
+func (x *ComposeUpRequest) GetComposeYaml() []byte {
+	if x != nil {
+		return x.ComposeYaml
+	}
+	return nil
+}
+
+func (x *ComposeUpRequest) GetRestart() bool {
+	if x != nil {
+		return x.Restart
+	}
+	return false
+}
+
+// ComposeUpResponse is empty: the observable result of an up is the project's
+// container list, read back with ComposePs.
+type ComposeUpResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeUpResponse) Reset() {
+	*x = ComposeUpResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeUpResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeUpResponse) ProtoMessage() {}
+
+func (x *ComposeUpResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeUpResponse.ProtoReflect.Descriptor instead.
+func (*ComposeUpResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{32}
+}
+
+// ComposeDownRequest tears one project down.
+type ComposeDownRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project_name is the compose project name: "gotham-<service uuid>".
+	ProjectName string `protobuf:"bytes,1,opt,name=project_name,json=projectName,proto3" json:"project_name,omitempty"`
+	// compose_yaml is the rendered compose document the project was last
+	// deployed with, capped at 1 MiB. The CLI needs it to resolve the project;
+	// the named volumes it declares are kept (down never passes --volumes).
+	ComposeYaml   []byte `protobuf:"bytes,2,opt,name=compose_yaml,json=composeYaml,proto3" json:"compose_yaml,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeDownRequest) Reset() {
+	*x = ComposeDownRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeDownRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeDownRequest) ProtoMessage() {}
+
+func (x *ComposeDownRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeDownRequest.ProtoReflect.Descriptor instead.
+func (*ComposeDownRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *ComposeDownRequest) GetProjectName() string {
+	if x != nil {
+		return x.ProjectName
+	}
+	return ""
+}
+
+func (x *ComposeDownRequest) GetComposeYaml() []byte {
+	if x != nil {
+		return x.ComposeYaml
+	}
+	return nil
+}
+
+// ComposeDownResponse is empty.
+type ComposeDownResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeDownResponse) Reset() {
+	*x = ComposeDownResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeDownResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeDownResponse) ProtoMessage() {}
+
+func (x *ComposeDownResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeDownResponse.ProtoReflect.Descriptor instead.
+func (*ComposeDownResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{34}
+}
+
+// ComposeLogsRequest tails one project's logs.
+type ComposeLogsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project_name is the compose project name: "gotham-<service uuid>".
+	ProjectName string `protobuf:"bytes,1,opt,name=project_name,json=projectName,proto3" json:"project_name,omitempty"`
+	// service selects one compose service of the project; empty means the whole
+	// project.
+	Service string `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"`
+	// follow keeps the stream open; false returns the tail and closes.
+	Follow bool `protobuf:"varint,3,opt,name=follow,proto3" json:"follow,omitempty"`
+	// tail is the number of lines to read from the end before following;
+	// 0 selects the CLI default (all available lines).
+	Tail          int64 `protobuf:"varint,4,opt,name=tail,proto3" json:"tail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeLogsRequest) Reset() {
+	*x = ComposeLogsRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeLogsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeLogsRequest) ProtoMessage() {}
+
+func (x *ComposeLogsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeLogsRequest.ProtoReflect.Descriptor instead.
+func (*ComposeLogsRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *ComposeLogsRequest) GetProjectName() string {
+	if x != nil {
+		return x.ProjectName
+	}
+	return ""
+}
+
+func (x *ComposeLogsRequest) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+func (x *ComposeLogsRequest) GetFollow() bool {
+	if x != nil {
+		return x.Follow
+	}
+	return false
+}
+
+func (x *ComposeLogsRequest) GetTail() int64 {
+	if x != nil {
+		return x.Tail
+	}
+	return 0
+}
+
+// ComposeLogChunk is one chunk of merged compose output. Output is raw bytes:
+// compose logs carry no framing, so the control plane forwards them as-is.
+type ComposeLogChunk struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeLogChunk) Reset() {
+	*x = ComposeLogChunk{}
+	mi := &file_agent_v1_agent_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeLogChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeLogChunk) ProtoMessage() {}
+
+func (x *ComposeLogChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeLogChunk.ProtoReflect.Descriptor instead.
+func (*ComposeLogChunk) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *ComposeLogChunk) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// ComposePsRequest lists one project's containers.
+type ComposePsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project_name is the compose project name: "gotham-<service uuid>".
+	ProjectName   string `protobuf:"bytes,1,opt,name=project_name,json=projectName,proto3" json:"project_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposePsRequest) Reset() {
+	*x = ComposePsRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposePsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposePsRequest) ProtoMessage() {}
+
+func (x *ComposePsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposePsRequest.ProtoReflect.Descriptor instead.
+func (*ComposePsRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *ComposePsRequest) GetProjectName() string {
+	if x != nil {
+		return x.ProjectName
+	}
+	return ""
+}
+
+// ComposeContainer is one container of a compose project as the CLI reports
+// it.
+type ComposeContainer struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// service is the compose service name the container belongs to.
+	Service string `protobuf:"bytes,1,opt,name=service,proto3" json:"service,omitempty"`
+	// container_id is the Docker container id.
+	ContainerId string `protobuf:"bytes,2,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	// name is the container name (project-prefixed by compose).
+	Name string `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	// image is the image reference the container runs.
+	Image string `protobuf:"bytes,4,opt,name=image,proto3" json:"image,omitempty"`
+	// state is the Docker state, e.g. "running", "exited", "created".
+	State string `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"`
+	// status is the human-readable status line, e.g. "Up 2 minutes".
+	Status string `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
+	// health is the healthcheck result ("healthy", "unhealthy", "starting") or
+	// empty when the service defines no healthcheck.
+	Health string `protobuf:"bytes,7,opt,name=health,proto3" json:"health,omitempty"`
+	// ports are the port mappings as the CLI reports them, e.g.
+	// "0.0.0.0:8080->80/tcp". They are passed through unparsed on purpose: the
+	// control plane only displays them.
+	Ports         []string `protobuf:"bytes,8,rep,name=ports,proto3" json:"ports,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposeContainer) Reset() {
+	*x = ComposeContainer{}
+	mi := &file_agent_v1_agent_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposeContainer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposeContainer) ProtoMessage() {}
+
+func (x *ComposeContainer) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposeContainer.ProtoReflect.Descriptor instead.
+func (*ComposeContainer) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *ComposeContainer) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+func (x *ComposeContainer) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *ComposeContainer) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ComposeContainer) GetImage() string {
+	if x != nil {
+		return x.Image
+	}
+	return ""
+}
+
+func (x *ComposeContainer) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *ComposeContainer) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ComposeContainer) GetHealth() string {
+	if x != nil {
+		return x.Health
+	}
+	return ""
+}
+
+func (x *ComposeContainer) GetPorts() []string {
+	if x != nil {
+		return x.Ports
+	}
+	return nil
+}
+
+// ComposePsResponse lists a project's containers.
+type ComposePsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Containers    []*ComposeContainer    `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ComposePsResponse) Reset() {
+	*x = ComposePsResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ComposePsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ComposePsResponse) ProtoMessage() {}
+
+func (x *ComposePsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ComposePsResponse.ProtoReflect.Descriptor instead.
+func (*ComposePsResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *ComposePsResponse) GetContainers() []*ComposeContainer {
+	if x != nil {
+		return x.Containers
+	}
+	return nil
+}
+
 var File_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_agent_v1_agent_proto_rawDesc = "" +
@@ -1984,7 +2625,44 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\timage_tag\x18\x01 \x01(\tR\bimageTag\x12%\n" +
 	"\x0eregistry_image\x18\x02 \x01(\tR\rregistryImage\x12\x16\n" +
 	"\x06digest\x18\x03 \x01(\tR\x06digest\x12#\n" +
-	"\rregistry_addr\x18\x04 \x01(\tR\fregistryAddr2\x99\x01\n" +
+	"\rregistry_addr\x18\x04 \x01(\tR\fregistryAddr\"^\n" +
+	"\x16ComposeValidateRequest\x12!\n" +
+	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12!\n" +
+	"\fcompose_yaml\x18\x02 \x01(\fR\vcomposeYaml\"O\n" +
+	"\x17ComposeValidateResponse\x12\x1a\n" +
+	"\bservices\x18\x01 \x03(\tR\bservices\x12\x18\n" +
+	"\avolumes\x18\x02 \x03(\tR\avolumes\"r\n" +
+	"\x10ComposeUpRequest\x12!\n" +
+	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12!\n" +
+	"\fcompose_yaml\x18\x02 \x01(\fR\vcomposeYaml\x12\x18\n" +
+	"\arestart\x18\x03 \x01(\bR\arestart\"\x13\n" +
+	"\x11ComposeUpResponse\"Z\n" +
+	"\x12ComposeDownRequest\x12!\n" +
+	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12!\n" +
+	"\fcompose_yaml\x18\x02 \x01(\fR\vcomposeYaml\"\x15\n" +
+	"\x13ComposeDownResponse\"}\n" +
+	"\x12ComposeLogsRequest\x12!\n" +
+	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12\x18\n" +
+	"\aservice\x18\x02 \x01(\tR\aservice\x12\x16\n" +
+	"\x06follow\x18\x03 \x01(\bR\x06follow\x12\x12\n" +
+	"\x04tail\x18\x04 \x01(\x03R\x04tail\"%\n" +
+	"\x0fComposeLogChunk\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\"5\n" +
+	"\x10ComposePsRequest\x12!\n" +
+	"\fproject_name\x18\x01 \x01(\tR\vprojectName\"\xd5\x01\n" +
+	"\x10ComposeContainer\x12\x18\n" +
+	"\aservice\x18\x01 \x01(\tR\aservice\x12!\n" +
+	"\fcontainer_id\x18\x02 \x01(\tR\vcontainerId\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x14\n" +
+	"\x05image\x18\x04 \x01(\tR\x05image\x12\x14\n" +
+	"\x05state\x18\x05 \x01(\tR\x05state\x12\x16\n" +
+	"\x06status\x18\x06 \x01(\tR\x06status\x12\x16\n" +
+	"\x06health\x18\a \x01(\tR\x06health\x12\x14\n" +
+	"\x05ports\x18\b \x03(\tR\x05ports\"O\n" +
+	"\x11ComposePsResponse\x12:\n" +
+	"\n" +
+	"containers\x18\x01 \x03(\v2\x1a.agent.v1.ComposeContainerR\n" +
+	"containers2\x99\x01\n" +
 	"\fAgentService\x12A\n" +
 	"\bRegister\x12\x19.agent.v1.RegisterRequest\x1a\x1a.agent.v1.RegisterResponse\x12F\n" +
 	"\tHeartbeat\x12\x1a.agent.v1.HeartbeatRequest\x1a\x1b.agent.v1.HeartbeatResponse(\x012S\n" +
@@ -2006,7 +2684,13 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"BuildImage\x12\x1b.agent.v1.BuildImageRequest\x1a\x1c.agent.v1.BuildImageResponse(\x010\x012\xc1\x01\n" +
 	"\fProxyService\x12Y\n" +
 	"\x10WriteProxyConfig\x12!.agent.v1.WriteProxyConfigRequest\x1a\".agent.v1.WriteProxyConfigResponse\x12V\n" +
-	"\x0fReadACMEStorage\x12 .agent.v1.ReadACMEStorageRequest\x1a!.agent.v1.ReadACMEStorageResponseB7Z5github.com/justindeelux/gotham/proto/agent/v1;agentv1b\x06proto3"
+	"\x0fReadACMEStorage\x12 .agent.v1.ReadACMEStorageRequest\x1a!.agent.v1.ReadACMEStorageResponse2\x8a\x03\n" +
+	"\x0eComposeService\x12V\n" +
+	"\x0fComposeValidate\x12 .agent.v1.ComposeValidateRequest\x1a!.agent.v1.ComposeValidateResponse\x12D\n" +
+	"\tComposeUp\x12\x1a.agent.v1.ComposeUpRequest\x1a\x1b.agent.v1.ComposeUpResponse\x12J\n" +
+	"\vComposeDown\x12\x1c.agent.v1.ComposeDownRequest\x1a\x1d.agent.v1.ComposeDownResponse\x12H\n" +
+	"\vComposeLogs\x12\x1c.agent.v1.ComposeLogsRequest\x1a\x19.agent.v1.ComposeLogChunk0\x01\x12D\n" +
+	"\tComposePs\x12\x1a.agent.v1.ComposePsRequest\x1a\x1b.agent.v1.ComposePsResponseB7Z5github.com/justindeelux/gotham/proto/agent/v1;agentv1b\x06proto3"
 
 var (
 	file_agent_v1_agent_proto_rawDescOnce sync.Once
@@ -2020,7 +2704,7 @@ func file_agent_v1_agent_proto_rawDescGZIP() []byte {
 	return file_agent_v1_agent_proto_rawDescData
 }
 
-var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
 var file_agent_v1_agent_proto_goTypes = []any{
 	(*ProxyConfigFile)(nil),          // 0: agent.v1.ProxyConfigFile
 	(*WriteProxyConfigRequest)(nil),  // 1: agent.v1.WriteProxyConfigRequest
@@ -2051,62 +2735,84 @@ var file_agent_v1_agent_proto_goTypes = []any{
 	(*BuildImageResponse)(nil),       // 26: agent.v1.BuildImageResponse
 	(*BuildLogChunk)(nil),            // 27: agent.v1.BuildLogChunk
 	(*BuildImageResult)(nil),         // 28: agent.v1.BuildImageResult
-	nil,                              // 29: agent.v1.ContainerInfo.LabelsEntry
-	nil,                              // 30: agent.v1.CreateContainerRequest.LabelsEntry
-	nil,                              // 31: agent.v1.BuildMeta.BuildArgsEntry
-	(*timestamppb.Timestamp)(nil),    // 32: google.protobuf.Timestamp
+	(*ComposeValidateRequest)(nil),   // 29: agent.v1.ComposeValidateRequest
+	(*ComposeValidateResponse)(nil),  // 30: agent.v1.ComposeValidateResponse
+	(*ComposeUpRequest)(nil),         // 31: agent.v1.ComposeUpRequest
+	(*ComposeUpResponse)(nil),        // 32: agent.v1.ComposeUpResponse
+	(*ComposeDownRequest)(nil),       // 33: agent.v1.ComposeDownRequest
+	(*ComposeDownResponse)(nil),      // 34: agent.v1.ComposeDownResponse
+	(*ComposeLogsRequest)(nil),       // 35: agent.v1.ComposeLogsRequest
+	(*ComposeLogChunk)(nil),          // 36: agent.v1.ComposeLogChunk
+	(*ComposePsRequest)(nil),         // 37: agent.v1.ComposePsRequest
+	(*ComposeContainer)(nil),         // 38: agent.v1.ComposeContainer
+	(*ComposePsResponse)(nil),        // 39: agent.v1.ComposePsResponse
+	nil,                              // 40: agent.v1.ContainerInfo.LabelsEntry
+	nil,                              // 41: agent.v1.CreateContainerRequest.LabelsEntry
+	nil,                              // 42: agent.v1.BuildMeta.BuildArgsEntry
+	(*timestamppb.Timestamp)(nil),    // 43: google.protobuf.Timestamp
 }
 var file_agent_v1_agent_proto_depIdxs = []int32{
 	0,  // 0: agent.v1.WriteProxyConfigRequest.files:type_name -> agent.v1.ProxyConfigFile
-	32, // 1: agent.v1.ACMECertificateInfo.not_after:type_name -> google.protobuf.Timestamp
+	43, // 1: agent.v1.ACMECertificateInfo.not_after:type_name -> google.protobuf.Timestamp
 	4,  // 2: agent.v1.ReadACMEStorageResponse.certificates:type_name -> agent.v1.ACMECertificateInfo
-	32, // 3: agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
-	32, // 4: agent.v1.HeartbeatResponse.received_at:type_name -> google.protobuf.Timestamp
-	32, // 5: agent.v1.ContainerInfo.created_at:type_name -> google.protobuf.Timestamp
-	29, // 6: agent.v1.ContainerInfo.labels:type_name -> agent.v1.ContainerInfo.LabelsEntry
+	43, // 3: agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
+	43, // 4: agent.v1.HeartbeatResponse.received_at:type_name -> google.protobuf.Timestamp
+	43, // 5: agent.v1.ContainerInfo.created_at:type_name -> google.protobuf.Timestamp
+	40, // 6: agent.v1.ContainerInfo.labels:type_name -> agent.v1.ContainerInfo.LabelsEntry
 	15, // 7: agent.v1.ContainerInfo.ports:type_name -> agent.v1.PortBinding
 	14, // 8: agent.v1.ContainerInfo.mounts:type_name -> agent.v1.ContainerMount
 	13, // 9: agent.v1.ListContainersResponse.containers:type_name -> agent.v1.ContainerInfo
-	30, // 10: agent.v1.CreateContainerRequest.labels:type_name -> agent.v1.CreateContainerRequest.LabelsEntry
+	41, // 10: agent.v1.CreateContainerRequest.labels:type_name -> agent.v1.CreateContainerRequest.LabelsEntry
 	25, // 11: agent.v1.BuildImageRequest.meta:type_name -> agent.v1.BuildMeta
-	31, // 12: agent.v1.BuildMeta.build_args:type_name -> agent.v1.BuildMeta.BuildArgsEntry
+	42, // 12: agent.v1.BuildMeta.build_args:type_name -> agent.v1.BuildMeta.BuildArgsEntry
 	27, // 13: agent.v1.BuildImageResponse.log:type_name -> agent.v1.BuildLogChunk
 	28, // 14: agent.v1.BuildImageResponse.result:type_name -> agent.v1.BuildImageResult
-	6,  // 15: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
-	8,  // 16: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
-	10, // 17: agent.v1.UpdateService.RequestUpdate:input_type -> agent.v1.UpdateRequest
-	12, // 18: agent.v1.DockerService.ListContainers:input_type -> agent.v1.ListContainersRequest
-	17, // 19: agent.v1.DockerService.StartContainer:input_type -> agent.v1.ContainerActionRequest
-	17, // 20: agent.v1.DockerService.StopContainer:input_type -> agent.v1.ContainerActionRequest
-	17, // 21: agent.v1.DockerService.RestartContainer:input_type -> agent.v1.ContainerActionRequest
-	17, // 22: agent.v1.DockerService.RemoveContainer:input_type -> agent.v1.ContainerActionRequest
-	19, // 23: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
-	21, // 24: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
-	21, // 25: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
-	22, // 26: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
-	24, // 27: agent.v1.BuildService.BuildImage:input_type -> agent.v1.BuildImageRequest
-	1,  // 28: agent.v1.ProxyService.WriteProxyConfig:input_type -> agent.v1.WriteProxyConfigRequest
-	3,  // 29: agent.v1.ProxyService.ReadACMEStorage:input_type -> agent.v1.ReadACMEStorageRequest
-	7,  // 30: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
-	9,  // 31: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
-	11, // 32: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
-	16, // 33: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
-	18, // 34: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
-	18, // 35: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
-	18, // 36: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
-	18, // 37: agent.v1.DockerService.RemoveContainer:output_type -> agent.v1.ContainerActionResponse
-	20, // 38: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
-	18, // 39: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
-	18, // 40: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
-	23, // 41: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
-	26, // 42: agent.v1.BuildService.BuildImage:output_type -> agent.v1.BuildImageResponse
-	2,  // 43: agent.v1.ProxyService.WriteProxyConfig:output_type -> agent.v1.WriteProxyConfigResponse
-	5,  // 44: agent.v1.ProxyService.ReadACMEStorage:output_type -> agent.v1.ReadACMEStorageResponse
-	30, // [30:45] is the sub-list for method output_type
-	15, // [15:30] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	38, // 15: agent.v1.ComposePsResponse.containers:type_name -> agent.v1.ComposeContainer
+	6,  // 16: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
+	8,  // 17: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
+	10, // 18: agent.v1.UpdateService.RequestUpdate:input_type -> agent.v1.UpdateRequest
+	12, // 19: agent.v1.DockerService.ListContainers:input_type -> agent.v1.ListContainersRequest
+	17, // 20: agent.v1.DockerService.StartContainer:input_type -> agent.v1.ContainerActionRequest
+	17, // 21: agent.v1.DockerService.StopContainer:input_type -> agent.v1.ContainerActionRequest
+	17, // 22: agent.v1.DockerService.RestartContainer:input_type -> agent.v1.ContainerActionRequest
+	17, // 23: agent.v1.DockerService.RemoveContainer:input_type -> agent.v1.ContainerActionRequest
+	19, // 24: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
+	21, // 25: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
+	21, // 26: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
+	22, // 27: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
+	24, // 28: agent.v1.BuildService.BuildImage:input_type -> agent.v1.BuildImageRequest
+	1,  // 29: agent.v1.ProxyService.WriteProxyConfig:input_type -> agent.v1.WriteProxyConfigRequest
+	3,  // 30: agent.v1.ProxyService.ReadACMEStorage:input_type -> agent.v1.ReadACMEStorageRequest
+	29, // 31: agent.v1.ComposeService.ComposeValidate:input_type -> agent.v1.ComposeValidateRequest
+	31, // 32: agent.v1.ComposeService.ComposeUp:input_type -> agent.v1.ComposeUpRequest
+	33, // 33: agent.v1.ComposeService.ComposeDown:input_type -> agent.v1.ComposeDownRequest
+	35, // 34: agent.v1.ComposeService.ComposeLogs:input_type -> agent.v1.ComposeLogsRequest
+	37, // 35: agent.v1.ComposeService.ComposePs:input_type -> agent.v1.ComposePsRequest
+	7,  // 36: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
+	9,  // 37: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
+	11, // 38: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
+	16, // 39: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
+	18, // 40: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
+	18, // 41: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
+	18, // 42: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
+	18, // 43: agent.v1.DockerService.RemoveContainer:output_type -> agent.v1.ContainerActionResponse
+	20, // 44: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
+	18, // 45: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
+	18, // 46: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
+	23, // 47: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
+	26, // 48: agent.v1.BuildService.BuildImage:output_type -> agent.v1.BuildImageResponse
+	2,  // 49: agent.v1.ProxyService.WriteProxyConfig:output_type -> agent.v1.WriteProxyConfigResponse
+	5,  // 50: agent.v1.ProxyService.ReadACMEStorage:output_type -> agent.v1.ReadACMEStorageResponse
+	30, // 51: agent.v1.ComposeService.ComposeValidate:output_type -> agent.v1.ComposeValidateResponse
+	32, // 52: agent.v1.ComposeService.ComposeUp:output_type -> agent.v1.ComposeUpResponse
+	34, // 53: agent.v1.ComposeService.ComposeDown:output_type -> agent.v1.ComposeDownResponse
+	36, // 54: agent.v1.ComposeService.ComposeLogs:output_type -> agent.v1.ComposeLogChunk
+	39, // 55: agent.v1.ComposeService.ComposePs:output_type -> agent.v1.ComposePsResponse
+	36, // [36:56] is the sub-list for method output_type
+	16, // [16:36] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }
@@ -2128,9 +2834,9 @@ func file_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_proto_rawDesc), len(file_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   32,
+			NumMessages:   43,
 			NumExtensions: 0,
-			NumServices:   5,
+			NumServices:   6,
 		},
 		GoTypes:           file_agent_v1_agent_proto_goTypes,
 		DependencyIndexes: file_agent_v1_agent_proto_depIdxs,

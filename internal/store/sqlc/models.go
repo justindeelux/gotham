@@ -273,6 +273,30 @@ type Server struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Service struct {
+	ID          pgtype.UUID        `json:"id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	ServerID    pgtype.UUID        `json:"server_id"`
+	Name        string             `json:"name"`
+	Status      string             `json:"status"`
+	ComposeYaml string             `json:"compose_yaml"`
+	Env         []byte             `json:"env"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
+}
+
+type ServiceDeploy struct {
+	ID          pgtype.UUID        `json:"id"`
+	ServiceID   pgtype.UUID        `json:"service_id"`
+	State       string             `json:"state"`
+	ComposeYaml string             `json:"compose_yaml"`
+	Error       string             `json:"error"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+}
+
 type Session struct {
 	ID          pgtype.UUID        `json:"id"`
 	UserID      pgtype.UUID        `json:"user_id"`

@@ -100,6 +100,10 @@ Environment prerequisites installed for the current feature set:
 - `railpack` 0.40 on PATH and a `buildkit` container with
   `BUILDKIT_HOST=docker-container://buildkit` in
   `/etc/systemd/system/gotham.service.d/buildkit.conf` (Railpack apps).
+- `docker-compose-plugin` (Compose v2+) on the node's PATH: the agent shells
+  out to `docker compose` for Phase 7 services and writes each project's
+  compose file under `GOTHAM_AGENT_COMPOSE_ROOT` (default
+  `/var/lib/gotham-agent/compose`).
 - `servers.ip = 127.0.0.1` for `test-node-1` (the all-in-one registration has
   no operator address; the CP dials the agent on the node port 9443).
 - Dev mode: no CA configured, so CP and agent speak plaintext.

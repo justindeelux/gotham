@@ -11,14 +11,15 @@ import (
 
 // Environment variables understood by the agent.
 const (
-	envCPAddr     = "GOTHAM_AGENT_CP_ADDR"
-	envNodeID     = "GOTHAM_AGENT_NODE_ID"
-	envListenAddr = "GOTHAM_AGENT_LISTEN_ADDR"
-	envCA         = "GOTHAM_AGENT_CA"
-	envCertDir    = "GOTHAM_AGENT_CERT_DIR"
-	envKey        = "GOTHAM_AGENT_KEY"
-	envDockerSock = "GOTHAM_AGENT_DOCKER_SOCK"
-	envLogLevel   = "GOTHAM_AGENT_LOG_LEVEL"
+	envCPAddr      = "GOTHAM_AGENT_CP_ADDR"
+	envNodeID      = "GOTHAM_AGENT_NODE_ID"
+	envListenAddr  = "GOTHAM_AGENT_LISTEN_ADDR"
+	envCA          = "GOTHAM_AGENT_CA"
+	envCertDir     = "GOTHAM_AGENT_CERT_DIR"
+	envKey         = "GOTHAM_AGENT_KEY"
+	envDockerSock  = "GOTHAM_AGENT_DOCKER_SOCK"
+	envComposeRoot = "GOTHAM_AGENT_COMPOSE_ROOT"
+	envLogLevel    = "GOTHAM_AGENT_LOG_LEVEL"
 
 	envDockerHost = "DOCKER_HOST"
 )
@@ -50,6 +51,9 @@ type Config struct {
 	KeyFile string
 	// DockerSock is the Docker Engine endpoint (a unix path or a tcp:// URL).
 	DockerSock string
+	// ComposeRoot is the directory that holds one subdirectory per compose
+	// service project. It must be writable by the agent user.
+	ComposeRoot string
 	// LogLevel is the slog level name (debug, info, warn, error).
 	LogLevel string
 }
@@ -59,14 +63,15 @@ type Config struct {
 // used, such as an invalid CP address or log level.
 func Load() (Config, error) {
 	cfg := Config{
-		CPAddr:     envOr(envCPAddr, defaultCPAddr),
-		NodeID:     envOr(envNodeID, hostname()),
-		ListenAddr: envOr(envListenAddr, defaultListenAddr),
-		CA:         os.Getenv(envCA),
-		CertDir:    envOr(envCertDir, defaultCertDir),
-		KeyFile:    os.Getenv(envKey),
-		DockerSock: dockerSock(),
-		LogLevel:   envOr(envLogLevel, defaultLogLevel),
+		CPAddr:      envOr(envCPAddr, defaultCPAddr),
+		NodeID:      envOr(envNodeID, hostname()),
+		ListenAddr:  envOr(envListenAddr, defaultListenAddr),
+		CA:          os.Getenv(envCA),
+		CertDir:     envOr(envCertDir, defaultCertDir),
+		KeyFile:     os.Getenv(envKey),
+		DockerSock:  dockerSock(),
+		ComposeRoot: envOr(envComposeRoot, defaultComposeRoot),
+		LogLevel:    envOr(envLogLevel, defaultLogLevel),
 	}
 
 	if _, _, err := net.SplitHostPort(cfg.CPAddr); err != nil {

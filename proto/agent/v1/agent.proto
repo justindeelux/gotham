@@ -77,6 +77,44 @@ service ProxyService {
   rpc ReadACMEStorage(ReadACMEStorageRequest) returns (ReadACMEStorageResponse);
 }
 
+// ComposeService runs on the node agent. The control plane dials it to run one
+// docker-compose project per Gotham service, using the node's compose CLI so
+// compose semantics (interpolation, networks, dependencies, volumes) are
+// exactly the CLI's — the control plane never re-implements them.
+//
+// Trust boundary: a service runs user-supplied compose by design (like the
+// container RPCs), but the input is confined and bounded. The project name is
+// derived by the control plane from the service id ("gotham-<uuid>") and
+// re-validated here against a strict pattern; absolute paths and ".." are
+// rejected, the compose document is size-capped, written under the agent's
+// compose root and never echoes environment values in a log line or an error
+// string.
+service ComposeService {
+  // ComposeValidate writes the project's compose file under the agent compose
+  // root and validates it with `docker compose config`, starting nothing. It
+  // returns the compose service names and named volumes the document declares
+  // so the control plane can check what a deploy would run.
+  rpc ComposeValidate(ComposeValidateRequest) returns (ComposeValidateResponse);
+  // ComposeUp writes the compose file and starts the project with
+  // `docker compose up -d`. Named volumes are never removed or recreated:
+  // recreating a service keeps its volume data. With restart set the agent
+  // runs `docker compose restart` instead and only restarts the project's
+  // existing containers.
+  rpc ComposeUp(ComposeUpRequest) returns (ComposeUpResponse);
+  // ComposeDown stops and removes the project's containers and networks with
+  // `docker compose down`. It never passes --volumes: named volumes survive a
+  // down, so a stop is always recoverable and volume data is never deleted
+  // (Phase 5 relies on the same guarantee for database volumes).
+  rpc ComposeDown(ComposeDownRequest) returns (ComposeDownResponse);
+  // ComposeLogs streams the merged stdout/stderr of one compose service (or
+  // the whole project when service is empty), following until the client
+  // cancels.
+  rpc ComposeLogs(ComposeLogsRequest) returns (stream ComposeLogChunk);
+  // ComposePs lists the project's containers with their compose service name
+  // and observed state.
+  rpc ComposePs(ComposePsRequest) returns (ComposePsResponse);
+}
+
 // ProxyConfigFile is one generated Traefik configuration document.
 message ProxyConfigFile {
   // path is relative to the node's proxy config directory, e.g. "traefik.yml"
@@ -330,4 +368,112 @@ message BuildImageResult {
   // registry_addr is the node-local registry the image was pushed to, e.g.
   // "127.0.0.1:5000". It is returned so the control plane can persist it.
   string registry_addr = 4;
+}
+
+// ComposeValidateRequest carries one project's compose document for
+// validation. The document is the control-plane rendered compose file (the
+// control plane resolves ${VAR} substitutions before sending), so the agent
+// only writes and inspects it.
+message ComposeValidateRequest {
+  // project_name is the compose project name: "gotham-<service uuid>". The
+  // agent rejects anything outside that strict pattern, so a compromised
+  // control plane cannot direct writes at another directory.
+  string project_name = 1;
+  // compose_yaml is the complete compose document, capped at 1 MiB. Nothing
+  // is started by a validate.
+  bytes compose_yaml = 2;
+}
+
+// ComposeValidateResponse reports what a valid document declares.
+message ComposeValidateResponse {
+  // services are the compose service names, in the CLI's dependency order.
+  repeated string services = 1;
+  // volumes are the named volumes the document declares, sorted.
+  repeated string volumes = 2;
+}
+
+// ComposeUpRequest starts (or restarts) a project's compose document.
+message ComposeUpRequest {
+  // project_name is the compose project name: "gotham-<service uuid>".
+  string project_name = 1;
+  // compose_yaml is the rendered compose document, capped at 1 MiB. It
+  // replaces the project's previous file before the deploy runs, so every
+  // deploy is versioned on the node by the file it ran.
+  bytes compose_yaml = 2;
+  // restart requests `docker compose restart` of the project's existing
+  // containers instead of a `docker compose up -d` create/recreate pass. The
+  // document is still written and validated first.
+  bool restart = 3;
+}
+
+// ComposeUpResponse is empty: the observable result of an up is the project's
+// container list, read back with ComposePs.
+message ComposeUpResponse {}
+
+// ComposeDownRequest tears one project down.
+message ComposeDownRequest {
+  // project_name is the compose project name: "gotham-<service uuid>".
+  string project_name = 1;
+  // compose_yaml is the rendered compose document the project was last
+  // deployed with, capped at 1 MiB. The CLI needs it to resolve the project;
+  // the named volumes it declares are kept (down never passes --volumes).
+  bytes compose_yaml = 2;
+}
+
+// ComposeDownResponse is empty.
+message ComposeDownResponse {}
+
+// ComposeLogsRequest tails one project's logs.
+message ComposeLogsRequest {
+  // project_name is the compose project name: "gotham-<service uuid>".
+  string project_name = 1;
+  // service selects one compose service of the project; empty means the whole
+  // project.
+  string service = 2;
+  // follow keeps the stream open; false returns the tail and closes.
+  bool follow = 3;
+  // tail is the number of lines to read from the end before following;
+  // 0 selects the CLI default (all available lines).
+  int64 tail = 4;
+}
+
+// ComposeLogChunk is one chunk of merged compose output. Output is raw bytes:
+// compose logs carry no framing, so the control plane forwards them as-is.
+message ComposeLogChunk {
+  bytes data = 1;
+}
+
+// ComposePsRequest lists one project's containers.
+message ComposePsRequest {
+  // project_name is the compose project name: "gotham-<service uuid>".
+  string project_name = 1;
+}
+
+// ComposeContainer is one container of a compose project as the CLI reports
+// it.
+message ComposeContainer {
+  // service is the compose service name the container belongs to.
+  string service = 1;
+  // container_id is the Docker container id.
+  string container_id = 2;
+  // name is the container name (project-prefixed by compose).
+  string name = 3;
+  // image is the image reference the container runs.
+  string image = 4;
+  // state is the Docker state, e.g. "running", "exited", "created".
+  string state = 5;
+  // status is the human-readable status line, e.g. "Up 2 minutes".
+  string status = 6;
+  // health is the healthcheck result ("healthy", "unhealthy", "starting") or
+  // empty when the service defines no healthcheck.
+  string health = 7;
+  // ports are the port mappings as the CLI reports them, e.g.
+  // "0.0.0.0:8080->80/tcp". They are passed through unparsed on purpose: the
+  // control plane only displays them.
+  repeated string ports = 8;
+}
+
+// ComposePsResponse lists a project's containers.
+message ComposePsResponse {
+  repeated ComposeContainer containers = 1;
 }

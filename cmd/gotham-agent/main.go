@@ -120,7 +120,12 @@ func runServe() int {
 			}
 			server, err := agent.NewServer(cfg.ListenAddr, creds, agent.NewDockerServer(docker, log), log,
 				agent.WithBuildService(agent.NewBuildServer(docker, log)),
-				agent.WithProxyService(agent.NewProxyServer(agent.ProxyServerConfig{Logger: log})))
+				agent.WithProxyService(agent.NewProxyServer(agent.ProxyServerConfig{Logger: log})),
+				agent.WithComposeService(agent.NewComposeServer(agent.ComposeServerConfig{
+					Root:       cfg.ComposeRoot,
+					DockerHost: cfg.DockerSock,
+					Logger:     log,
+				})))
 			if err != nil {
 				startErr = err
 				return

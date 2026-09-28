@@ -991,3 +991,323 @@ var ProxyService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "agent/v1/agent.proto",
 }
+
+const (
+	ComposeService_ComposeValidate_FullMethodName = "/agent.v1.ComposeService/ComposeValidate"
+	ComposeService_ComposeUp_FullMethodName       = "/agent.v1.ComposeService/ComposeUp"
+	ComposeService_ComposeDown_FullMethodName     = "/agent.v1.ComposeService/ComposeDown"
+	ComposeService_ComposeLogs_FullMethodName     = "/agent.v1.ComposeService/ComposeLogs"
+	ComposeService_ComposePs_FullMethodName       = "/agent.v1.ComposeService/ComposePs"
+)
+
+// ComposeServiceClient is the client API for ComposeService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ComposeService runs on the node agent. The control plane dials it to run one
+// docker-compose project per Gotham service, using the node's compose CLI so
+// compose semantics (interpolation, networks, dependencies, volumes) are
+// exactly the CLI's — the control plane never re-implements them.
+//
+// Trust boundary: a service runs user-supplied compose by design (like the
+// container RPCs), but the input is confined and bounded. The project name is
+// derived by the control plane from the service id ("gotham-<uuid>") and
+// re-validated here against a strict pattern; absolute paths and ".." are
+// rejected, the compose document is size-capped, written under the agent's
+// compose root and never echoes environment values in a log line or an error
+// string.
+type ComposeServiceClient interface {
+	// ComposeValidate writes the project's compose file under the agent compose
+	// root and validates it with `docker compose config`, starting nothing. It
+	// returns the compose service names and named volumes the document declares
+	// so the control plane can check what a deploy would run.
+	ComposeValidate(ctx context.Context, in *ComposeValidateRequest, opts ...grpc.CallOption) (*ComposeValidateResponse, error)
+	// ComposeUp writes the compose file and starts the project with
+	// `docker compose up -d`. Named volumes are never removed or recreated:
+	// recreating a service keeps its volume data. With restart set the agent
+	// runs `docker compose restart` instead and only restarts the project's
+	// existing containers.
+	ComposeUp(ctx context.Context, in *ComposeUpRequest, opts ...grpc.CallOption) (*ComposeUpResponse, error)
+	// ComposeDown stops and removes the project's containers and networks with
+	// `docker compose down`. It never passes --volumes: named volumes survive a
+	// down, so a stop is always recoverable and volume data is never deleted
+	// (Phase 5 relies on the same guarantee for database volumes).
+	ComposeDown(ctx context.Context, in *ComposeDownRequest, opts ...grpc.CallOption) (*ComposeDownResponse, error)
+	// ComposeLogs streams the merged stdout/stderr of one compose service (or
+	// the whole project when service is empty), following until the client
+	// cancels.
+	ComposeLogs(ctx context.Context, in *ComposeLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ComposeLogChunk], error)
+	// ComposePs lists the project's containers with their compose service name
+	// and observed state.
+	ComposePs(ctx context.Context, in *ComposePsRequest, opts ...grpc.CallOption) (*ComposePsResponse, error)
+}
+
+type composeServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewComposeServiceClient(cc grpc.ClientConnInterface) ComposeServiceClient {
+	return &composeServiceClient{cc}
+}
+
+func (c *composeServiceClient) ComposeValidate(ctx context.Context, in *ComposeValidateRequest, opts ...grpc.CallOption) (*ComposeValidateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ComposeValidateResponse)
+	err := c.cc.Invoke(ctx, ComposeService_ComposeValidate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *composeServiceClient) ComposeUp(ctx context.Context, in *ComposeUpRequest, opts ...grpc.CallOption) (*ComposeUpResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ComposeUpResponse)
+	err := c.cc.Invoke(ctx, ComposeService_ComposeUp_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *composeServiceClient) ComposeDown(ctx context.Context, in *ComposeDownRequest, opts ...grpc.CallOption) (*ComposeDownResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ComposeDownResponse)
+	err := c.cc.Invoke(ctx, ComposeService_ComposeDown_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *composeServiceClient) ComposeLogs(ctx context.Context, in *ComposeLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ComposeLogChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ComposeService_ServiceDesc.Streams[0], ComposeService_ComposeLogs_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ComposeLogsRequest, ComposeLogChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ComposeService_ComposeLogsClient = grpc.ServerStreamingClient[ComposeLogChunk]
+
+func (c *composeServiceClient) ComposePs(ctx context.Context, in *ComposePsRequest, opts ...grpc.CallOption) (*ComposePsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ComposePsResponse)
+	err := c.cc.Invoke(ctx, ComposeService_ComposePs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ComposeServiceServer is the server API for ComposeService service.
+// All implementations must embed UnimplementedComposeServiceServer
+// for forward compatibility.
+//
+// ComposeService runs on the node agent. The control plane dials it to run one
+// docker-compose project per Gotham service, using the node's compose CLI so
+// compose semantics (interpolation, networks, dependencies, volumes) are
+// exactly the CLI's — the control plane never re-implements them.
+//
+// Trust boundary: a service runs user-supplied compose by design (like the
+// container RPCs), but the input is confined and bounded. The project name is
+// derived by the control plane from the service id ("gotham-<uuid>") and
+// re-validated here against a strict pattern; absolute paths and ".." are
+// rejected, the compose document is size-capped, written under the agent's
+// compose root and never echoes environment values in a log line or an error
+// string.
+type ComposeServiceServer interface {
+	// ComposeValidate writes the project's compose file under the agent compose
+	// root and validates it with `docker compose config`, starting nothing. It
+	// returns the compose service names and named volumes the document declares
+	// so the control plane can check what a deploy would run.
+	ComposeValidate(context.Context, *ComposeValidateRequest) (*ComposeValidateResponse, error)
+	// ComposeUp writes the compose file and starts the project with
+	// `docker compose up -d`. Named volumes are never removed or recreated:
+	// recreating a service keeps its volume data. With restart set the agent
+	// runs `docker compose restart` instead and only restarts the project's
+	// existing containers.
+	ComposeUp(context.Context, *ComposeUpRequest) (*ComposeUpResponse, error)
+	// ComposeDown stops and removes the project's containers and networks with
+	// `docker compose down`. It never passes --volumes: named volumes survive a
+	// down, so a stop is always recoverable and volume data is never deleted
+	// (Phase 5 relies on the same guarantee for database volumes).
+	ComposeDown(context.Context, *ComposeDownRequest) (*ComposeDownResponse, error)
+	// ComposeLogs streams the merged stdout/stderr of one compose service (or
+	// the whole project when service is empty), following until the client
+	// cancels.
+	ComposeLogs(*ComposeLogsRequest, grpc.ServerStreamingServer[ComposeLogChunk]) error
+	// ComposePs lists the project's containers with their compose service name
+	// and observed state.
+	ComposePs(context.Context, *ComposePsRequest) (*ComposePsResponse, error)
+	mustEmbedUnimplementedComposeServiceServer()
+}
+
+// UnimplementedComposeServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedComposeServiceServer struct{}
+
+func (UnimplementedComposeServiceServer) ComposeValidate(context.Context, *ComposeValidateRequest) (*ComposeValidateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ComposeValidate not implemented")
+}
+func (UnimplementedComposeServiceServer) ComposeUp(context.Context, *ComposeUpRequest) (*ComposeUpResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ComposeUp not implemented")
+}
+func (UnimplementedComposeServiceServer) ComposeDown(context.Context, *ComposeDownRequest) (*ComposeDownResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ComposeDown not implemented")
+}
+func (UnimplementedComposeServiceServer) ComposeLogs(*ComposeLogsRequest, grpc.ServerStreamingServer[ComposeLogChunk]) error {
+	return status.Error(codes.Unimplemented, "method ComposeLogs not implemented")
+}
+func (UnimplementedComposeServiceServer) ComposePs(context.Context, *ComposePsRequest) (*ComposePsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ComposePs not implemented")
+}
+func (UnimplementedComposeServiceServer) mustEmbedUnimplementedComposeServiceServer() {}
+func (UnimplementedComposeServiceServer) testEmbeddedByValue()                        {}
+
+// UnsafeComposeServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ComposeServiceServer will
+// result in compilation errors.
+type UnsafeComposeServiceServer interface {
+	mustEmbedUnimplementedComposeServiceServer()
+}
+
+func RegisterComposeServiceServer(s grpc.ServiceRegistrar, srv ComposeServiceServer) {
+	// If the following call panics, it indicates UnimplementedComposeServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ComposeService_ServiceDesc, srv)
+}
+
+func _ComposeService_ComposeValidate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ComposeValidateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ComposeServiceServer).ComposeValidate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ComposeService_ComposeValidate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ComposeServiceServer).ComposeValidate(ctx, req.(*ComposeValidateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ComposeService_ComposeUp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ComposeUpRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ComposeServiceServer).ComposeUp(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ComposeService_ComposeUp_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ComposeServiceServer).ComposeUp(ctx, req.(*ComposeUpRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ComposeService_ComposeDown_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ComposeDownRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ComposeServiceServer).ComposeDown(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ComposeService_ComposeDown_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ComposeServiceServer).ComposeDown(ctx, req.(*ComposeDownRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ComposeService_ComposeLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ComposeLogsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ComposeServiceServer).ComposeLogs(m, &grpc.GenericServerStream[ComposeLogsRequest, ComposeLogChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ComposeService_ComposeLogsServer = grpc.ServerStreamingServer[ComposeLogChunk]
+
+func _ComposeService_ComposePs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ComposePsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ComposeServiceServer).ComposePs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ComposeService_ComposePs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ComposeServiceServer).ComposePs(ctx, req.(*ComposePsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ComposeService_ServiceDesc is the grpc.ServiceDesc for ComposeService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ComposeService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "agent.v1.ComposeService",
+	HandlerType: (*ComposeServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ComposeValidate",
+			Handler:    _ComposeService_ComposeValidate_Handler,
+		},
+		{
+			MethodName: "ComposeUp",
+			Handler:    _ComposeService_ComposeUp_Handler,
+		},
+		{
+			MethodName: "ComposeDown",
+			Handler:    _ComposeService_ComposeDown_Handler,
+		},
+		{
+			MethodName: "ComposePs",
+			Handler:    _ComposeService_ComposePs_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ComposeLogs",
+			Handler:       _ComposeService_ComposeLogs_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "agent/v1/agent.proto",
+}

@@ -9,7 +9,7 @@ func clearAgentEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		envCPAddr, envNodeID, envListenAddr, envCA, envCertDir,
-		envKey, envDockerSock, envLogLevel, envDockerHost,
+		envKey, envDockerSock, envComposeRoot, envLogLevel, envDockerHost,
 	} {
 		t.Setenv(key, "")
 	}
@@ -54,6 +54,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(envCertDir, "/var/lib/gotham-agent")
 	t.Setenv(envKey, "/etc/gotham/agent.key")
 	t.Setenv(envDockerSock, "unix:///run/docker.sock")
+	t.Setenv(envComposeRoot, "/srv/gotham/compose")
 	t.Setenv(envLogLevel, "debug")
 
 	cfg, err := Load()
@@ -80,6 +81,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.DockerSock != "unix:///run/docker.sock" {
 		t.Errorf("DockerSock = %q", cfg.DockerSock)
+	}
+	if cfg.ComposeRoot != "/srv/gotham/compose" {
+		t.Errorf("ComposeRoot = %q", cfg.ComposeRoot)
 	}
 	if cfg.LogLevel != "debug" {
 		t.Errorf("LogLevel = %q", cfg.LogLevel)

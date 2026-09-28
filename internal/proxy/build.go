@@ -27,6 +27,15 @@ const (
 	// and verified; emitting it earlier would break the plain-HTTP acceptance
 	// path of BE-6.1.
 	HTTPRedirectMiddleware = "gotham-https-redirect"
+	// RedirectServiceName is the shared backend-less service every
+	// domain→domain redirect router references: Traefik v3 rejects a router
+	// without a service, and the redirectRegex middleware terminates the
+	// request before a backend is consulted, so this service declares no
+	// servers and is never used to proxy (BE-6.3).
+	RedirectServiceName = "gotham-redirect-noop"
+	// RedirectNamePrefix names the generated redirect router and middleware
+	// pair for one rule (the rule id is appended).
+	RedirectNamePrefix = "gotham-redirect-"
 	// DefaultBackendHost is the docker0 bridge gateway: application
 	// containers publish their ports on the host, and the Traefik container
 	// reaches those published ports through the bridge gateway. Operators on
@@ -98,11 +107,34 @@ func ValidateDomain(domain string) error {
 	return nil
 }
 
+// Redirect is one domain→domain redirect rule resolved for one node: the
+// source host it answers for, the target host it sends requests to, and the
+// operator's redirect intent. The source must never be a host another router
+// on the node claims (an application base domain or another rule), and targets
+// are never chained (a rule that would complete a chain with another enabled
+// rule is held back as a diagnostic), so every generated rule sends the
+// request straight to its destination.
+type Redirect struct {
+	// ID identifies the rule (kept in generated names for traceability).
+	ID uuid.UUID
+	// Source is the exact host the rule answers for, already normalized and
+	// validated.
+	Source string
+	// Target is the exact host requests are redirected to.
+	Target string
+	// Code is the operator's intent: 301 (permanent) or 302 (temporary).
+	// Traefik only special-cases GET, so GET answers 301/302 while HEAD and
+	// every other method answer 308/307.
+	Code int
+	// PreservePath keeps the request path and query on the target.
+	PreservePath bool
+}
+
 // BuildConfig renders the routing model for a node from its routes, the
-// configured DNS providers, the optional ACME contact address and the
-// optional ACME directory endpoint. The output is a pure function of the
-// input (map iteration is sorted at marshal time), so identical state always
-// yields identical configuration bytes.
+// configured domain→domain redirect rules, the configured DNS providers, the
+// optional ACME contact address and the optional ACME directory endpoint. The
+// output is a pure function of the input (map iteration is sorted at marshal
+// time), so identical state always yields identical configuration bytes.
 //
 // Every route produces one HTTP forwarding router on the web entrypoint. A
 // route whose certificate configuration is active additionally produces an
@@ -112,7 +144,13 @@ func ValidateDomain(domain string) error {
 // DNS-01 resolver per enabled provider; credentials never appear here, they
 // travel to the Traefik container as environment variables only. caServer
 // renders into every resolver; empty keeps the production default.
-func BuildConfig(routes []Route, providers []DNSProvider, acmeEmail, caServer string) ProxyConfig {
+//
+// Every redirect rule produces one web-entrypoint router plus its
+// redirectRegex middleware. The routers carry only their own middleware (never
+// the shared HTTP→HTTPS redirect) and reference a shared service with no
+// servers, which Traefik requires even though the middleware terminates the
+// request before any backend is consulted.
+func BuildConfig(routes []Route, redirects []Redirect, providers []DNSProvider, acmeEmail, caServer string) ProxyConfig {
 	cfg := ProxyConfig{
 		EntryPoints: map[string]EntryPoint{
 			EntryPointWeb:       {Address: ":80"},
@@ -201,7 +239,79 @@ func BuildConfig(routes []Route, providers []DNSProvider, acmeEmail, caServer st
 		}
 		cfg.Routers[service+"-web"] = web
 	}
+
+	// One service-less-backend service shared by every redirect router:
+	// Traefik requires a service on a router, and this one is never reached
+	// because the redirectRegex middleware terminates the request first.
+	if len(redirects) > 0 {
+		cfg.Services[RedirectServiceName] = Service{
+			LoadBalancer: LoadBalancer{Servers: []Backend{}},
+		}
+	}
+	for _, redirect := range redirects {
+		name := RedirectNamePrefix + redirect.ID.String()
+		cfg.Middlewares[name] = Middleware{
+			RedirectRegex: &RedirectRegex{
+				Regex:       RedirectRegexPattern(redirect.PreservePath),
+				Replacement: RedirectReplacement(redirect.Target, redirect.PreservePath),
+				Permanent:   redirect.Code == RedirectCodePermanent,
+			},
+		}
+		cfg.Routers[name] = Router{
+			Rule:        fmt.Sprintf("Host(`%s`)", redirect.Source),
+			Service:     RedirectServiceName,
+			EntryPoints: []string{EntryPointWeb},
+			Middlewares: []string{name},
+		}
+	}
 	return cfg
+}
+
+// Redirect codes are the operator's intent; Traefik's redirectRegex only
+// distinguishes permanent from temporary and special-cases GET only, so GET
+// keeps 301/302 while HEAD and every other method answer 308/307.
+const (
+	// RedirectCodePermanent is a permanent redirect intent.
+	RedirectCodePermanent = 301
+	// RedirectCodeTemporary is a temporary redirect intent.
+	RedirectCodeTemporary = 302
+)
+
+// RedirectRegexPattern renders the anchored match expression of one redirect.
+// It deliberately does NOT re-encode the source host: the middleware is only
+// ever attached to the generated `Host(source)` router, so every request that
+// reaches it has already been accepted by Traefik's Host matcher, whose
+// canonicalization (case, one fully-qualified trailing dot, bracketed
+// authorities, and numeric/empty/non-numeric ports that its request decorator
+// strips for matching) is broader than any host-encoding expression this
+// function could duplicate faithfully. A host-encoding pattern missed the
+// bracketed and non-numeric-port authorities, letting those router-matched
+// requests fall through to the backend-less service; an authority-agnostic
+// pattern terminates every authority the router accepts (approval condition:
+// the redirect always terminates). The scheme is `https?` because an
+// absolute-form request target can carry an https URI over the plain-HTTP
+// entrypoint while the Host header still routes it here. With preservePath the
+// remainder after the authority (path and query, or just a query) is captured
+// for the replacement; without it the remainder is discarded.
+//
+// Do not attach a middleware generated by this function to any router other
+// than the matching `Host(source)` router: the pattern intentionally accepts
+// any authority.
+func RedirectRegexPattern(preservePath bool) string {
+	if preservePath {
+		return `(?i)^https?://[^/?#]*(.*)$`
+	}
+	return `(?i)^https?://.*$`
+}
+
+// RedirectReplacement renders the target URL of one redirect: always https,
+// with the captured remainder (path and query) re-appended when the path is
+// preserved.
+func RedirectReplacement(target string, preservePath bool) string {
+	if preservePath {
+		return "https://" + target + "${1}"
+	}
+	return "https://" + target + "/"
 }
 
 // serviceName is the deterministic Traefik name shared by an application's

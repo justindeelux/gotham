@@ -132,6 +132,9 @@ type Config struct {
 	Store *store.Store
 	// Applications overrides the routing input (tests).
 	Applications ApplicationSource
+	// Redirects overrides the redirect input (tests). nil (and no Store)
+	// disables redirect generation.
+	Redirects RedirectSource
 	// Nodes overrides the registered-node list (tests).
 	Nodes NodeSource
 	// History overrides the configuration-version store (tests). nil (and no
@@ -206,6 +209,17 @@ func (c Config) providers() DNSProviderSource {
 	return nil
 }
 
+// redirects resolves the configured redirect input.
+func (c Config) redirects() RedirectSource {
+	if c.Redirects != nil {
+		return c.Redirects
+	}
+	if c.Store != nil {
+		return storeSource{store: c.Store}
+	}
+	return nil
+}
+
 // history resolves the configured configuration history.
 func (c Config) history() HistoryStore {
 	if c.History != nil {
@@ -224,6 +238,7 @@ func (c Config) history() HistoryStore {
 // configuration in place.
 type SyncService struct {
 	source      ApplicationSource
+	redirects   RedirectSource
 	nodes       NodeSource
 	history     HistoryStore
 	providers   DNSProviderSource
@@ -276,6 +291,7 @@ func NewService(cfg Config) *SyncService {
 	}
 	return &SyncService{
 		source:      cfg.source(),
+		redirects:   cfg.redirects(),
 		nodes:       cfg.nodes(),
 		history:     cfg.history(),
 		providers:   cfg.providers(),
@@ -335,6 +351,10 @@ func (s *SyncService) SyncServer(ctx context.Context, serverID uuid.UUID) error 
 	if err != nil {
 		return fmt.Errorf("proxy: list proxied applications: %w", err)
 	}
+	rules, err := s.listRedirectRules(ctx)
+	if err != nil {
+		return fmt.Errorf("proxy: list redirect rules: %w", err)
+	}
 	nodeList, err := s.listNodeContainers(ctx, serverID)
 	if err != nil {
 		return fmt.Errorf("proxy: list node containers: %w", mapNodeError(err))
@@ -345,7 +365,9 @@ func (s *SyncService) SyncServer(ctx context.Context, serverID uuid.UUID) error 
 	}
 	access := s.openProviders(providers)
 	routes, diagnostics := routesForServer(apps, serverID, s.backendHost, nodeList, access)
-	files, err := Generate(BuildConfig(routes, providers, s.acmeEmail, s.caServer), s.format)
+	redirects, redirectDiagnostics := redirectsForServer(apps, rules, serverID)
+	diagnostics = append(diagnostics, redirectDiagnostics...)
+	files, err := Generate(BuildConfig(routes, redirects, providers, s.acmeEmail, s.caServer), s.format)
 	if err != nil {
 		return err
 	}
@@ -366,7 +388,7 @@ func (s *SyncService) SyncServer(ctx context.Context, serverID uuid.UUID) error 
 		return err
 	}
 	s.logger.Info("proxy: configuration synced",
-		"server_id", serverID.String(), "routes", len(routes), "skipped", len(diagnostics), "dns_credentials", len(desired.env))
+		"server_id", serverID.String(), "routes", len(routes), "redirects", len(redirects), "skipped", len(diagnostics), "dns_credentials", len(desired.env))
 	if len(diagnostics) > 0 {
 		return &PartialError{Diagnostics: diagnostics}
 	}
@@ -600,6 +622,134 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 	return routes, diagnostics
 }
 
+// redirectsForServer filters the redirect rules down to one node and holds
+// back every rule that cannot be generated safely, reporting it as a
+// per-application diagnostic instead of freezing the node (BE-6.1 F3). The
+// rules that survive are emitted as web-entrypoint redirect routers:
+//
+//   - a rule of a domain-disabled application is held back (its route is
+//     already excluded by the uniqueness conflict; the redirect is held back
+//     with it so an excluded application cannot claim another host),
+//   - invalid or self-referential hosts are held back,
+//   - a source that shadows an application base domain on this node is held
+//     back (two routers must never match the same host),
+//   - duplicate sources hold every conflicting rule back (row order does not
+//     prove ownership, and the unique index only prevents new duplicates),
+//   - a rule that forms a chain with an earlier enabled rule is held back
+//     (see the no-chain net below), so the generated per-snapshot selection
+//     is chain-free.
+func redirectsForServer(apps []ProxiedApplication, rules []RedirectRule, serverID uuid.UUID) ([]Redirect, []Diagnostic) {
+	if len(rules) == 0 {
+		return nil, nil
+	}
+	nodeDomains := make(map[string]bool, len(apps))
+	for _, app := range apps {
+		if app.ServerID != serverID {
+			continue
+		}
+		if domain := NormalizeDomain(app.BaseDomain); domain != "" {
+			nodeDomains[domain] = true
+		}
+	}
+
+	type candidate struct {
+		rule   RedirectRule
+		rank   int
+		source string
+		target string
+		reason string
+	}
+	candidates := make([]candidate, 0, len(rules))
+	for rank, rule := range rules {
+		if !rule.Enabled || rule.ServerID != serverID {
+			continue
+		}
+		entry := candidate{
+			rule:   rule,
+			rank:   rank,
+			source: NormalizeDomain(rule.SourceDomain),
+			target: NormalizeDomain(rule.TargetDomain),
+		}
+		switch {
+		case rule.DomainDisabled:
+			entry.reason = "the application's domain is disabled by the uniqueness migration; its redirects are held back"
+		case rule.Code != RedirectCodePermanent && rule.Code != RedirectCodeTemporary:
+			entry.reason = "the redirect code is not 301 or 302"
+		case ValidateDomain(entry.source) != nil:
+			entry.reason = "invalid redirect source"
+		case ValidateDomain(entry.target) != nil:
+			entry.reason = "invalid redirect target"
+		case entry.source == entry.target:
+			entry.reason = "the redirect source and target are the same host"
+		case nodeDomains[entry.source]:
+			entry.reason = "the redirect source is an application's base domain on this node"
+		}
+		candidates = append(candidates, entry)
+	}
+
+	sourceCounts := make(map[string]int, len(candidates))
+	for _, entry := range candidates {
+		sourceCounts[entry.source]++
+	}
+	for i := range candidates {
+		if candidates[i].reason == "" && sourceCounts[candidates[i].source] > 1 {
+			candidates[i].reason = "duplicate redirect source on this node; all conflicting rules are held back"
+		}
+	}
+
+	// No-chain net. The service rejects a sequential chain at write time in
+	// both directions; this net catches racing writes (the guard is a
+	// check-then-write, not a database constraint). It runs against every
+	// enabled rule, not just this node's candidates, because a chain can span
+	// nodes: for a single committed snapshot it holds back a chain's later-
+	// *created* rule (the order of ListRedirectRules: created_at, id — not the
+	// rule whose update committed last), while an earlier rule that was valid
+	// on its own keeps serving. This is a per-snapshot selection, not an
+	// atomic fleet replacement: SyncServer writes one node and SyncAll applies
+	// nodes separately, so a node that has not converged yet can still serve a
+	// chain until its own sync runs (an unreachable or failing node prolongs
+	// the window).
+	for i := range candidates {
+		entry := &candidates[i]
+		if entry.reason != "" {
+			continue
+		}
+		for j := 0; j < entry.rank; j++ {
+			earlier := rules[j]
+			if !earlier.Enabled {
+				continue
+			}
+			earlierSource := NormalizeDomain(earlier.SourceDomain)
+			earlierTarget := NormalizeDomain(earlier.TargetDomain)
+			if earlierTarget == entry.source || earlierSource == entry.target {
+				entry.reason = "the redirect chains with an earlier enabled redirect rule; redirect chains are not generated"
+				break
+			}
+		}
+	}
+
+	redirects := make([]Redirect, 0, len(candidates))
+	diagnostics := make([]Diagnostic, 0)
+	for _, entry := range candidates {
+		if entry.reason != "" {
+			diagnostics = append(diagnostics, Diagnostic{
+				ApplicationID: entry.rule.ApplicationID,
+				Domain:        entry.source,
+				Reason:        entry.reason,
+			})
+			continue
+		}
+		redirects = append(redirects, Redirect{
+			ID:           entry.rule.ID,
+			Source:       entry.source,
+			Target:       entry.target,
+			Code:         entry.rule.Code,
+			PreservePath: entry.rule.PreservePath,
+		})
+	}
+	return redirects, diagnostics
+}
+
 // resolveRouteCertificate decides whether one application's certificate
 // configuration activates the HTTPS route. It returns the resolved TLS
 // section, or nil plus a reason when the configuration is configured but
@@ -691,6 +841,15 @@ func (s *SyncService) listProviders(ctx context.Context) ([]DNSProvider, error) 
 		return nil, nil
 	}
 	return s.providers.ListDNSProviders(ctx)
+}
+
+// listRedirectRules resolves the configured redirect rules, nil when the
+// service has no redirect source.
+func (s *SyncService) listRedirectRules(ctx context.Context) ([]RedirectRule, error) {
+	if s.redirects == nil {
+		return nil, nil
+	}
+	return s.redirects.ListRedirectRules(ctx)
 }
 
 // openProviders opens the sealed credentials of the configured providers.

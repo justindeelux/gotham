@@ -1,15 +1,21 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +24,7 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Node-side proxy layout defaults. The control plane's internal/proxy package
@@ -26,7 +33,9 @@ import (
 // side without the other leaves Traefik reading an empty mount.
 const (
 	// defaultTraefikDir is the host directory the agent writes generated
-	// Traefik configuration into (internal/proxy.TraefikDir).
+	// Traefik configuration into (internal/proxy.TraefikDir). The ACME
+	// storage defaults to its "acme" subdirectory
+	// (internal/proxy.TraefikAcmeDir).
 	defaultTraefikDir = "/var/lib/gotham-agent/traefik"
 	// defaultTraefikPingURL is the loopback-only Traefik ping endpoint
 	// (internal/proxy.PingURL).
@@ -40,14 +49,26 @@ const (
 	defaultProxyPingTimeout = 5 * time.Second
 	maxProxyFileSize        = 1 << 20 // 1 MiB per document
 	maxProxyFiles           = 16
+	// maxACMEStorageSize bounds the ACME storage file the agent is willing to
+	// read into memory. acme.json holds every certificate and key the node
+	// ever stored; a node with thousands of certificates still stays far
+	// below this.
+	maxACMEStorageSize = 16 << 20 // 16 MiB
+	// maxACMECertificates bounds one read so a hostile or corrupt file cannot
+	// turn the response into an unbounded message.
+	maxACMECertificates = 4096
 )
 
 // ProxyServerConfig wires a ProxyServer. Every field falls back to the node
 // default when empty, so production passes a bare configuration and tests
-// override Root and PingURL.
+// override Root, AcmeDir and PingURL.
 type ProxyServerConfig struct {
 	// Root is the directory Traefik configuration is written under.
 	Root string
+	// AcmeDir is the directory holding the ACME storage (acme.json) that
+	// ReadACMEStorage reads; it defaults to Root + "/acme" (the production
+	// layout where internal/proxy.AcmeDir sits under TraefikDir).
+	AcmeDir string
 	// PingURL is the Traefik ping endpoint a write is verified against.
 	PingURL string
 	// Client overrides the HTTP client used for pings (tests).
@@ -60,11 +81,13 @@ type ProxyServerConfig struct {
 
 // ProxyServer implements agentv1.ProxyServiceServer: it writes the
 // control-plane generated Traefik files on the node and, when asked, verifies
-// the local Traefik instance answered its ping after the write.
+// the local Traefik instance answered its ping after the write. It also reads
+// the node's ACME storage and reports certificate metadata only (BE-6.3).
 type ProxyServer struct {
 	agentv1.UnimplementedProxyServiceServer
 
 	root        string
+	acmeDir     string
 	pingURL     string
 	client      *http.Client
 	pingTimeout time.Duration
@@ -84,6 +107,16 @@ func NewProxyServer(cfg ProxyServerConfig) *ProxyServer {
 	if absolute, err := filepath.Abs(root); err == nil {
 		root = absolute
 	}
+	acmeDir := strings.TrimSpace(cfg.AcmeDir)
+	if acmeDir == "" {
+		// The production layout keeps the ACME storage at TraefikDir/acme, so
+		// a relocated root keeps its ACME state under the relocated root
+		// (BE-6.3); an explicit AcmeDir overrides the derivation.
+		acmeDir = filepath.Join(root, "acme")
+	}
+	if absolute, err := filepath.Abs(acmeDir); err == nil {
+		acmeDir = absolute
+	}
 	pingURL := strings.TrimSpace(cfg.PingURL)
 	if pingURL == "" {
 		pingURL = defaultTraefikPingURL
@@ -102,6 +135,7 @@ func NewProxyServer(cfg ProxyServerConfig) *ProxyServer {
 	}
 	return &ProxyServer{
 		root:        root,
+		acmeDir:     acmeDir,
 		pingURL:     pingURL,
 		client:      client,
 		pingTimeout: pingTimeout,
@@ -164,7 +198,7 @@ func (s *ProxyServer) WriteProxyConfig(ctx context.Context, req *agentv1.WritePr
 			closeDocuments()
 			return nil, status.Errorf(codes.InvalidArgument, "file %q exceeds %d bytes", rel, maxProxyFileSize)
 		}
-		dir, err := openTrustedDir(filepath.Dir(filepath.Join(s.root, rel)))
+		dir, err := openTrustedDir(filepath.Dir(filepath.Join(s.root, rel)), true)
 		if err != nil {
 			closeDocuments()
 			return nil, status.Errorf(codes.InvalidArgument, "confine %s: %v", rel, err)
@@ -183,6 +217,15 @@ func (s *ProxyServer) WriteProxyConfig(ctx context.Context, req *agentv1.WritePr
 		written = append(written, document.rel)
 	}
 
+	// The ACME storage file is prepared before Traefik can ever start (the
+	// static configuration must exist first), so the agent owns a readable
+	// storage file from the beginning. Best effort: a node whose ACME
+	// directory is not writable still gets its configuration, and the status
+	// read reports unknown instead of fabricating a value.
+	if err := s.ensureACMEStorage(); err != nil {
+		s.log.Warn("proxy: cannot prepare acme storage", "error", err)
+	}
+
 	response := &agentv1.WriteProxyConfigResponse{Written: written}
 	if req.GetVerify() {
 		if err := s.ping(ctx); err != nil {
@@ -197,13 +240,152 @@ func (s *ProxyServer) WriteProxyConfig(ctx context.Context, req *agentv1.WritePr
 	return response, nil
 }
 
+// ReadACMEStorage reads the node's Traefik ACME storage and reports one entry
+// per stored certificate: the resolver it belongs to, the primary domain, the
+// subject alternative names and the leaf's expiry.
+//
+// Security boundary: acme.json holds private certificate keys and the ACME
+// account key. The file is parsed with decode structs that structurally omit
+// every key field, so key material never enters the response, a log line or an
+// error string; only the certificate's expiry is decoded from the stored
+// certificate bytes, and those bytes never leave this function. The read
+// walks every path component from "/" with O_NOFOLLOW (creating nothing) and
+// opens the file itself with O_NOFOLLOW, so a symlink swapped in on the node
+// cannot redirect the read outside the ACME directory. A missing file is
+// present=false, not an error; an oversized file, a symlinked path or a
+// malformed entry is an error (the control plane then reports "unknown"
+// instead of fabricating a status).
+func (s *ProxyServer) ReadACMEStorage(ctx context.Context, _ *agentv1.ReadACMEStorageRequest) (*agentv1.ReadACMEStorageResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	dir, err := openTrustedDir(s.acmeDir, false)
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return &agentv1.ReadACMEStorageResponse{}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "read acme storage: %v", err)
+	}
+	defer func() { _ = dir.Close() }()
+
+	fd, err := unix.Openat(int(dir.Fd()), "acme.json", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return &agentv1.ReadACMEStorageResponse{}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "read acme storage: %v", err)
+	}
+	file := os.NewFile(uintptr(fd), "acme.json")
+	defer func() { _ = file.Close() }()
+
+	// The size cap is enforced while reading, so a hostile file cannot make
+	// the agent allocate without bound.
+	content, err := io.ReadAll(io.LimitReader(file, maxACMEStorageSize+1))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read acme storage: %v", err)
+	}
+	if len(content) > maxACMEStorageSize {
+		return nil, status.Errorf(codes.Internal, "read acme storage: file exceeds %d bytes", maxACMEStorageSize)
+	}
+	// Traefik creates the storage file empty at boot and fills it on the
+	// first issuance; an empty (or whitespace-only) file means no storage
+	// content yet, not a malformed one.
+	if len(bytes.TrimSpace(content)) == 0 {
+		return &agentv1.ReadACMEStorageResponse{}, nil
+	}
+
+	storage := acmeStorage{}
+	if err := json.Unmarshal(content, &storage); err != nil {
+		// The decoder reports offsets and type names only; the content is
+		// never echoed.
+		return nil, status.Errorf(codes.Internal, "read acme storage: malformed storage: %v", err)
+	}
+	response := &agentv1.ReadACMEStorageResponse{Present: true}
+	resolvers := make([]string, 0, len(storage))
+	for resolver := range storage {
+		resolvers = append(resolvers, resolver)
+	}
+	sort.Strings(resolvers)
+	for _, resolver := range resolvers {
+		for _, stored := range storage[resolver].Certificates {
+			if len(response.Certificates) >= maxACMECertificates {
+				return nil, status.Errorf(codes.Internal, "read acme storage: more than %d certificates", maxACMECertificates)
+			}
+			info, err := certificateInfo(resolver, stored)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "read acme storage: %v", err)
+			}
+			response.Certificates = append(response.Certificates, info)
+		}
+	}
+	s.log.Info("proxy: acme storage read",
+		"present", true, "certificates", len(response.Certificates))
+	return response, nil
+}
+
+// acmeStorage is the subset of Traefik's acme.json the agent decodes. Key
+// fields (the per-certificate "key" and the resolver's "Account" including
+// its private key) are deliberately absent from these structs: encoding/json
+// ignores unknown fields, so key material is never decoded into a Go value
+// here, let alone returned or logged.
+type acmeStorage map[string]acmeResolver
+
+// acmeResolver is one resolver section of the storage file.
+type acmeResolver struct {
+	Certificates []acmeStoredCertificate `json:"Certificates"`
+}
+
+// acmeStoredCertificate is one stored certificate entry reduced to the
+// non-secret fields: the recorded names and the certificate chain bytes.
+type acmeStoredCertificate struct {
+	Domain struct {
+		Main string   `json:"main"`
+		SANs []string `json:"sans"`
+	} `json:"domain"`
+	// Certificate is the base64-encoded PEM leaf chain Traefik stored.
+	Certificate []byte `json:"certificate"`
+}
+
+// certificateInfo reduces one stored certificate to its non-secret metadata:
+// the expiry comes from parsing the leaf, the names from the stored domain
+// record.
+func certificateInfo(resolver string, stored acmeStoredCertificate) (*agentv1.ACMECertificateInfo, error) {
+	leaf, err := parseLeafCertificate(stored.Certificate)
+	if err != nil {
+		return nil, err
+	}
+	return &agentv1.ACMECertificateInfo{
+		Resolver: resolver,
+		Main:     stored.Domain.Main,
+		Sans:     append([]string{}, stored.Domain.SANs...),
+		NotAfter: timestamppb.New(leaf.NotAfter),
+	}, nil
+}
+
+// parseLeafCertificate decodes the stored certificate bytes (base64-PEM as
+// Traefik writes them, raw DER tolerated) and parses the leaf. The error text
+// never contains certificate bytes.
+func parseLeafCertificate(stored []byte) (*x509.Certificate, error) {
+	der := stored
+	if block, _ := pem.Decode(stored); block != nil {
+		der = block.Bytes
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, fmt.Errorf("stored certificate is not parseable: %w", err)
+	}
+	return leaf, nil
+}
+
 // openTrustedDir opens the absolute directory dir by walking every component
-// from the trusted root descriptor "/" with O_NOFOLLOW, creating missing
-// components with mkdirat relative to the held parent descriptor. A symlink
+// from the trusted root descriptor "/" with O_NOFOLLOW. With create set,
+// missing components are created with mkdirat relative to the held parent
+// descriptor (the write path); without it the walk is strictly read-only and
+// a missing component is an ENOENT error (the ACME read path). A symlink
 // anywhere between / and dir (including dir itself) is rejected, so a
-// concurrently swapped ancestor cannot redirect a later write. The caller owns
-// the returned descriptor.
-func openTrustedDir(dir string) (*os.File, error) {
+// concurrently swapped ancestor cannot redirect a later write or read. The
+// caller owns the returned descriptor.
+func openTrustedDir(dir string, create bool) (*os.File, error) {
 	if !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("%s must be an absolute path", dir)
 	}
@@ -218,7 +400,7 @@ func openTrustedDir(dir string) (*os.File, error) {
 		}
 		current = filepath.Join(current, component)
 		next, openErr := unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		if errors.Is(openErr, unix.ENOENT) {
+		if create && errors.Is(openErr, unix.ENOENT) {
 			if mkErr := unix.Mkdirat(fd, component, 0o755); mkErr != nil && !errors.Is(mkErr, unix.EEXIST) {
 				_ = unix.Close(fd)
 				return nil, fmt.Errorf("create %s: %w", current, mkErr)
@@ -265,6 +447,36 @@ func writeFileInDir(dir *os.File, name string, content []byte) error {
 		return err
 	}
 	return nil
+}
+
+// ensureACMEStorage creates the node's ACME storage file when it does not
+// exist yet, before the Traefik container is ever started. Traefik writes the
+// file with mode 0600 and os.WriteFile keeps an existing file's mode and
+// ownership, so a storage file the agent created stays readable by the agent
+// after Traefik writes certificates into it; without it, a root-owned 0600
+// file would make every status read fail (unknown, never fabricated). The
+// creation is confined by the same no-follow traversal as the writes, never
+// truncates or replaces an existing file (O_EXCL), and keeps the tight 0600
+// mode: the storage file holds private keys, so no other local user may read
+// it.
+func (s *ProxyServer) ensureACMEStorage() error {
+	dir, err := openTrustedDir(s.acmeDir, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+
+	fd, err := unix.Openat(int(dir.Fd()), "acme.json",
+		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if errors.Is(err, unix.EEXIST) {
+		// An existing storage file is never touched: it may already hold
+		// certificates (and, on a legacy node, may be owned by another user).
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("create %s/acme.json: %w", s.acmeDir, err)
+	}
+	return unix.Close(fd)
 }
 
 // ping calls the Traefik ping endpoint. A 200 response means the proxy

@@ -41,7 +41,7 @@ func (f *fakeProxyService) RevertServer(_ context.Context, serverID uuid.UUID) e
 // auth middleware.
 func newRoutes(svc ProxyService) http.Handler {
 	r := chi.NewRouter()
-	Mount(r, func(next http.Handler) http.Handler { return next }, svc, nil, nil)
+	Mount(r, func(next http.Handler) http.Handler { return next }, svc, nil, nil, nil, nil)
 	return r
 }
 

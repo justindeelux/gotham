@@ -99,6 +99,48 @@
 // and recreates the container, while an environment changed out-of-band under
 // Gotham is invisible until the next recorded change.
 //
+// BE-6.3 adds domain→domain redirects and certificate status. domain_redirects
+// stores per-application rules from one exact source host to one exact target
+// host (301/302 intent, optional path preservation). Each rule is generated as
+// a web-entrypoint redirectRegex middleware plus a router that references a
+// shared service with no servers — Traefik requires a service on a router, and
+// the middleware terminates the request before a backend is consulted, so a
+// redirect router can never proxy anywhere. The middleware pattern is
+// authority-agnostic: it is attached only to the matching Host(source) router,
+// so the router's canonicalization (case, one trailing dot, bracketed
+// authorities, numeric/empty/non-numeric ports) is the single host authority
+// and every router-accepted request terminates instead of falling through to
+// that service. Redirect routers never carry the shared HTTP→HTTPS middleware.
+// The source host is globally unique and never shadows any application's base
+// domain; a target is never another enabled rule's source and a source is never
+// another enabled rule's target. Those are committed-state checks: sequential
+// conflicting writes are rejected, but a racing check-then-write can still
+// persist a chain (no database constraint enforces it), and the generator is
+// not an atomic fleet replacement — SyncServer writes one node and SyncAll
+// applies nodes separately, so live fleet-wide chain-freedom requires the
+// affected nodes to converge successfully. Within one committed snapshot the
+// generator selects a chain-free rule set by holding back a chain's
+// later-created rule (created_at, id — creation order, not the rule whose
+// update committed last), plus duplicate sources, sources shadowing a routed
+// host, domain-disabled owners and invalid codes, as per-application
+// diagnostics exactly like unroutable application rows. A rule of a
+// domain-disabled application is held back with its application.
+//
+// Certificate status is computed on read, never stored: the CP's status
+// service maps each certificate intent to its node's ACME storage through the
+// additive agent RPC ReadACMEStorage, which returns only {resolver, main,
+// sans, not_after}. The agent parses acme.json with decode structs that
+// structurally omit the per-certificate private key and the resolver's ACME
+// account key, so key material never enters a response, a log line or an error
+// string; the one-label wildcard rule applies to both the stored primary name
+// and its SANs. A missing or empty storage file is absent, and an unreadable
+// storage or unreachable node is unknown. Because Traefik would otherwise
+// create a root-only storage file the unprivileged agent could never read, the
+// agent prepares the file itself (create-only, mode 0600) while writing the
+// generated configuration, before Traefik ever starts. The certificate API
+// surfaces the observation as additive `status` and `not_after` fields, and a
+// node failure can never turn the certificate list into an error.
+//
 // FEATURE_PROXY=false disables the whole surface: no routes are mounted, no
 // deploy hook is wired and no configuration is pushed.
 package proxy

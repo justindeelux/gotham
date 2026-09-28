@@ -824,6 +824,7 @@ var BuildService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	ProxyService_WriteProxyConfig_FullMethodName = "/agent.v1.ProxyService/WriteProxyConfig"
+	ProxyService_ReadACMEStorage_FullMethodName  = "/agent.v1.ProxyService/ReadACMEStorage"
 )
 
 // ProxyServiceClient is the client API for ProxyService service.
@@ -840,6 +841,13 @@ type ProxyServiceClient interface {
 	// node's proxy config directory and, when verify is set, pings the local
 	// Traefik API to confirm the proxy answered after the write.
 	WriteProxyConfig(ctx context.Context, in *WriteProxyConfigRequest, opts ...grpc.CallOption) (*WriteProxyConfigResponse, error)
+	// ReadACMEStorage reads the node's Traefik ACME storage (acme.json) and
+	// returns certificate metadata only (Phase 6, BE-6.3). Key material —
+	// private keys and ACME account keys — is decoded into the agent's memory
+	// only as far as the certificate's expiry requires and never appears in the
+	// response, in logs or in error strings. A missing storage file is reported
+	// as present=false, not as an error.
+	ReadACMEStorage(ctx context.Context, in *ReadACMEStorageRequest, opts ...grpc.CallOption) (*ReadACMEStorageResponse, error)
 }
 
 type proxyServiceClient struct {
@@ -860,6 +868,16 @@ func (c *proxyServiceClient) WriteProxyConfig(ctx context.Context, in *WriteProx
 	return out, nil
 }
 
+func (c *proxyServiceClient) ReadACMEStorage(ctx context.Context, in *ReadACMEStorageRequest, opts ...grpc.CallOption) (*ReadACMEStorageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadACMEStorageResponse)
+	err := c.cc.Invoke(ctx, ProxyService_ReadACMEStorage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ProxyServiceServer is the server API for ProxyService service.
 // All implementations must embed UnimplementedProxyServiceServer
 // for forward compatibility.
@@ -874,6 +892,13 @@ type ProxyServiceServer interface {
 	// node's proxy config directory and, when verify is set, pings the local
 	// Traefik API to confirm the proxy answered after the write.
 	WriteProxyConfig(context.Context, *WriteProxyConfigRequest) (*WriteProxyConfigResponse, error)
+	// ReadACMEStorage reads the node's Traefik ACME storage (acme.json) and
+	// returns certificate metadata only (Phase 6, BE-6.3). Key material —
+	// private keys and ACME account keys — is decoded into the agent's memory
+	// only as far as the certificate's expiry requires and never appears in the
+	// response, in logs or in error strings. A missing storage file is reported
+	// as present=false, not as an error.
+	ReadACMEStorage(context.Context, *ReadACMEStorageRequest) (*ReadACMEStorageResponse, error)
 	mustEmbedUnimplementedProxyServiceServer()
 }
 
@@ -886,6 +911,9 @@ type UnimplementedProxyServiceServer struct{}
 
 func (UnimplementedProxyServiceServer) WriteProxyConfig(context.Context, *WriteProxyConfigRequest) (*WriteProxyConfigResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method WriteProxyConfig not implemented")
+}
+func (UnimplementedProxyServiceServer) ReadACMEStorage(context.Context, *ReadACMEStorageRequest) (*ReadACMEStorageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadACMEStorage not implemented")
 }
 func (UnimplementedProxyServiceServer) mustEmbedUnimplementedProxyServiceServer() {}
 func (UnimplementedProxyServiceServer) testEmbeddedByValue()                      {}
@@ -926,6 +954,24 @@ func _ProxyService_WriteProxyConfig_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProxyService_ReadACMEStorage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadACMEStorageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyServiceServer).ReadACMEStorage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProxyService_ReadACMEStorage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyServiceServer).ReadACMEStorage(ctx, req.(*ReadACMEStorageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ProxyService_ServiceDesc is the grpc.ServiceDesc for ProxyService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -936,6 +982,10 @@ var ProxyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "WriteProxyConfig",
 			Handler:    _ProxyService_WriteProxyConfig_Handler,
+		},
+		{
+			MethodName: "ReadACMEStorage",
+			Handler:    _ProxyService_ReadACMEStorage_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

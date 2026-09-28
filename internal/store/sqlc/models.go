@@ -175,6 +175,18 @@ type DomainCertificate struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type DomainRedirect struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	SourceDomain  string             `json:"source_domain"`
+	TargetDomain  string             `json:"target_domain"`
+	Code          int16              `json:"code"`
+	PreservePath  bool               `json:"preserve_path"`
+	Enabled       bool               `json:"enabled"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type EnvVar struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`

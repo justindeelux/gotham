@@ -52,10 +52,34 @@ type CertificateIntent struct {
 	DNSProviderID uuid.UUID
 }
 
+// RedirectRule is one redirect rule joined with its application's node state
+// for generation: the owning node decides which Traefik instance serves the
+// rule, and DomainDisabled marks an application whose route is already held
+// back by the domain-uniqueness conflict (its redirects are held back with
+// it).
+type RedirectRule struct {
+	ID             uuid.UUID
+	ApplicationID  uuid.UUID
+	SourceDomain   string
+	TargetDomain   string
+	Code           int
+	PreservePath   bool
+	Enabled        bool
+	ServerID       uuid.UUID
+	DomainDisabled bool
+}
+
 // ApplicationSource lists the routing input. The production implementation is
 // *store.Store (through storeSource); tests substitute a fake.
 type ApplicationSource interface {
 	ListProxiedApplications(ctx context.Context) ([]ProxiedApplication, error)
+}
+
+// RedirectSource lists the redirect rules joined to their application's node.
+// The production implementation is *store.Store (through storeSource); nil
+// disables redirect generation.
+type RedirectSource interface {
+	ListRedirectRules(ctx context.Context) ([]RedirectRule, error)
 }
 
 // DNSProviderSource lists the configured DNS providers for generation. The
@@ -134,6 +158,30 @@ func (s storeSource) ListNodes(ctx context.Context) ([]uuid.UUID, error) {
 		}
 	}
 	return nodes, nil
+}
+
+// ListRedirectRules maps the stored redirect rows joined to their
+// application's node state.
+func (s storeSource) ListRedirectRules(ctx context.Context) ([]RedirectRule, error) {
+	rows, err := s.store.ListRedirectRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rules := make([]RedirectRule, 0, len(rows))
+	for _, row := range rows {
+		rules = append(rules, RedirectRule{
+			ID:             uuidFromPG(row.ID),
+			ApplicationID:  uuidFromPG(row.ApplicationID),
+			SourceDomain:   row.SourceDomain,
+			TargetDomain:   row.TargetDomain,
+			Code:           int(row.Code),
+			PreservePath:   row.PreservePath,
+			Enabled:        row.Enabled,
+			ServerID:       uuidFromPG(row.ServerID),
+			DomainDisabled: row.BaseDomainDisabled,
+		})
+	}
+	return rules, nil
 }
 
 // uuidFromPG converts a pgx UUID to uuid.UUID.

@@ -67,7 +67,7 @@ func TestNormalizeDomain(t *testing.T) {
 }
 
 func TestBuildConfigEmpty(t *testing.T) {
-	cfg := BuildConfig(nil, nil, "", "")
+	cfg := BuildConfig(nil, nil, nil, "", "")
 	if len(cfg.Routers) != 0 || len(cfg.Services) != 0 {
 		t.Fatalf("empty route set produced routers=%d services=%d, want 0/0", len(cfg.Routers), len(cfg.Services))
 	}
@@ -86,7 +86,7 @@ func TestBuildConfigEmpty(t *testing.T) {
 
 func TestBuildConfigRouteProducesHTTPForwardingRouter(t *testing.T) {
 	appID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
-	cfg := BuildConfig([]Route{{AppID: appID, Domain: "app.example.com", Target: "http://172.17.0.1:3000"}}, nil, "", "")
+	cfg := BuildConfig([]Route{{AppID: appID, Domain: "app.example.com", Target: "http://172.17.0.1:3000"}}, nil, nil, "", "")
 
 	name := "app-" + appID.String()
 	if len(cfg.Routers) != 1 {
@@ -138,7 +138,7 @@ func TestBuildConfigKeepsRoutesIndependent(t *testing.T) {
 	cfg := BuildConfig([]Route{
 		{AppID: first, Domain: "one.example.com", Target: "http://172.17.0.1:3000"},
 		{AppID: second, Domain: "two.example.com", Target: "http://172.17.0.1:3001"},
-	}, nil, "", "")
+	}, nil, nil, "", "")
 	if len(cfg.Routers) != 2 || len(cfg.Services) != 2 || len(cfg.Middlewares) != 0 {
 		t.Fatalf("routers=%d services=%d middlewares=%d, want 2/2/0",
 			len(cfg.Routers), len(cfg.Services), len(cfg.Middlewares))

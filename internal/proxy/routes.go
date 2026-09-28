@@ -39,14 +39,14 @@ type syncResult struct {
 // Mount registers the authenticated proxy endpoints under /api. A nil service
 // or FEATURE_PROXY=false mounts nothing. The caller composes the scope
 // middleware: the sync endpoint mutates every node and the SSL endpoints
-// manage DNS credentials, so all of them require admin. The SSL services are
-// optional: nil mounts only the sync endpoint (tests, or a build without the
-// SSL surface).
-func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc ProxyService, dns DNSProviderService, certs CertificateService) {
+// manage DNS credentials, redirect rules and certificate status, so all of
+// them require admin. The SSL services are optional: nil mounts only the sync
+// endpoint (tests, or a build without the SSL surface).
+func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc ProxyService, dns DNSProviderService, certs CertificateService, redirects RedirectService, status CertificateStatusService) {
 	if svc == nil || !Enabled() {
 		return
 	}
-	h := &handler{svc: svc, dns: dns, certs: certs, logger: slog.Default()}
+	h := &handler{svc: svc, dns: dns, certs: certs, redirects: redirects, status: status, logger: slog.Default()}
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
 		protected.Post("/v1/proxy/sync", h.sync)
@@ -64,15 +64,25 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc ProxyService,
 			protected.Patch("/v1/proxy/certificates/{id}", h.updateCertificate)
 			protected.Delete("/v1/proxy/certificates/{id}", h.deleteCertificate)
 		}
+		if redirects != nil {
+			protected.Post("/v1/proxy/redirects", h.createRedirect)
+			protected.Get("/v1/proxy/redirects", h.listRedirects)
+			protected.Get("/v1/proxy/redirects/{id}", h.getRedirect)
+			protected.Patch("/v1/proxy/redirects/{id}", h.updateRedirect)
+			protected.Delete("/v1/proxy/redirects/{id}", h.deleteRedirect)
+		}
 	})
 }
 
-// handler serves the proxy routes: sync/revert plus the SSL CRUD surface.
+// handler serves the proxy routes: sync/revert plus the SSL and redirect CRUD
+// surface.
 type handler struct {
-	svc    ProxyService
-	dns    DNSProviderService
-	certs  CertificateService
-	logger *slog.Logger
+	svc       ProxyService
+	dns       DNSProviderService
+	certs     CertificateService
+	redirects RedirectService
+	status    CertificateStatusService
+	logger    *slog.Logger
 }
 
 // sync regenerates the routing configuration and pushes it to the node

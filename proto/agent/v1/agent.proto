@@ -68,6 +68,13 @@ service ProxyService {
   // node's proxy config directory and, when verify is set, pings the local
   // Traefik API to confirm the proxy answered after the write.
   rpc WriteProxyConfig(WriteProxyConfigRequest) returns (WriteProxyConfigResponse);
+  // ReadACMEStorage reads the node's Traefik ACME storage (acme.json) and
+  // returns certificate metadata only (Phase 6, BE-6.3). Key material —
+  // private keys and ACME account keys — is decoded into the agent's memory
+  // only as far as the certificate's expiry requires and never appears in the
+  // response, in logs or in error strings. A missing storage file is reported
+  // as present=false, not as an error.
+  rpc ReadACMEStorage(ReadACMEStorageRequest) returns (ReadACMEStorageResponse);
 }
 
 // ProxyConfigFile is one generated Traefik configuration document.
@@ -100,6 +107,37 @@ message WriteProxyConfigResponse {
   // ping_error carries the ping failure detail when reloaded is false and
   // verify was set; empty otherwise.
   string ping_error = 3;
+}
+
+// ReadACMEStorageRequest is empty: the storage path is a node-local layout
+// constant and is never supplied by the control plane.
+message ReadACMEStorageRequest {}
+
+// ACMECertificateInfo is one stored certificate, reduced to the metadata the
+// control plane reports: the resolver section that stored it, the primary
+// domain, its subject alternative names and the leaf's expiry. The private
+// key, the ACME account key and the certificate bytes themselves are never
+// part of this message.
+message ACMECertificateInfo {
+  // resolver is the ACME resolver section of the storage file the entry came
+  // from, e.g. "letsencrypt" or "letsencrypt-dns-cloudflare".
+  string resolver = 1;
+  // main is the certificate's primary domain as stored by Traefik.
+  string main = 2;
+  // sans are the certificate's subject alternative names as stored by
+  // Traefik.
+  repeated string sans = 3;
+  // not_after is the leaf certificate's expiry time.
+  google.protobuf.Timestamp not_after = 4;
+}
+
+// ReadACMEStorageResponse reports the node's stored certificate metadata.
+message ReadACMEStorageResponse {
+  // present is false when the node has no ACME storage file yet; the
+  // certificate list is empty then.
+  bool present = 1;
+  // certificates are the stored certificate metadata entries.
+  repeated ACMECertificateInfo certificates = 2;
 }
 
 // RegisterRequest carries the node's static identity and capabilities.

@@ -126,6 +126,45 @@ func (q *Queries) CreateDomainCertificate(ctx context.Context, arg CreateDomainC
 	return i, err
 }
 
+const createDomainRedirect = `-- name: CreateDomainRedirect :one
+INSERT INTO domain_redirects (application_id, source_domain, target_domain, code, preserve_path, enabled)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, application_id, source_domain, target_domain, code, preserve_path, enabled, created_at, updated_at
+`
+
+type CreateDomainRedirectParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	SourceDomain  string      `json:"source_domain"`
+	TargetDomain  string      `json:"target_domain"`
+	Code          int16       `json:"code"`
+	PreservePath  bool        `json:"preserve_path"`
+	Enabled       bool        `json:"enabled"`
+}
+
+func (q *Queries) CreateDomainRedirect(ctx context.Context, arg CreateDomainRedirectParams) (DomainRedirect, error) {
+	row := q.db.QueryRow(ctx, createDomainRedirect,
+		arg.ApplicationID,
+		arg.SourceDomain,
+		arg.TargetDomain,
+		arg.Code,
+		arg.PreservePath,
+		arg.Enabled,
+	)
+	var i DomainRedirect
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.SourceDomain,
+		&i.TargetDomain,
+		&i.Code,
+		&i.PreservePath,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const deleteDNSProvider = `-- name: DeleteDNSProvider :exec
 DELETE FROM dns_providers WHERE id = $1
 `
@@ -141,6 +180,15 @@ DELETE FROM domain_certificates WHERE id = $1
 
 func (q *Queries) DeleteDomainCertificate(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteDomainCertificate, id)
+	return err
+}
+
+const deleteDomainRedirect = `-- name: DeleteDomainRedirect :exec
+DELETE FROM domain_redirects WHERE id = $1
+`
+
+func (q *Queries) DeleteDomainRedirect(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteDomainRedirect, id)
 	return err
 }
 
@@ -223,6 +271,49 @@ func (q *Queries) GetDomainCertificateByApplication(ctx context.Context, applica
 	return i, err
 }
 
+const getDomainRedirect = `-- name: GetDomainRedirect :one
+SELECT id, application_id, source_domain, target_domain, code, preserve_path, enabled, created_at, updated_at FROM domain_redirects WHERE id = $1
+`
+
+func (q *Queries) GetDomainRedirect(ctx context.Context, id pgtype.UUID) (DomainRedirect, error) {
+	row := q.db.QueryRow(ctx, getDomainRedirect, id)
+	var i DomainRedirect
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.SourceDomain,
+		&i.TargetDomain,
+		&i.Code,
+		&i.PreservePath,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getDomainRedirectBySource = `-- name: GetDomainRedirectBySource :one
+SELECT id, application_id, source_domain, target_domain, code, preserve_path, enabled, created_at, updated_at FROM domain_redirects WHERE source_domain = $1
+`
+
+// GetDomainRedirectBySource resolves the unique source-host claim.
+func (q *Queries) GetDomainRedirectBySource(ctx context.Context, sourceDomain string) (DomainRedirect, error) {
+	row := q.db.QueryRow(ctx, getDomainRedirectBySource, sourceDomain)
+	var i DomainRedirect
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.SourceDomain,
+		&i.TargetDomain,
+		&i.Code,
+		&i.PreservePath,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const insertPendingProxyConfigVersion = `-- name: InsertPendingProxyConfigVersion :one
 INSERT INTO proxy_config_versions (server_id, files, content_hash, pending)
 VALUES ($1, $2, $3, true)
@@ -250,6 +341,77 @@ func (q *Queries) InsertPendingProxyConfigVersion(ctx context.Context, arg Inser
 		&i.SupersededAt,
 	)
 	return i, err
+}
+
+const listApplicationBaseDomains = `-- name: ListApplicationBaseDomains :many
+SELECT id, base_domain FROM applications WHERE base_domain <> ''
+`
+
+type ListApplicationBaseDomainsRow struct {
+	ID         pgtype.UUID `json:"id"`
+	BaseDomain string      `json:"base_domain"`
+}
+
+// ListApplicationBaseDomains feeds the redirect ownership guard: a redirect
+// source must not shadow any application's base domain (on any node), so the
+// two routers must not match the same host. The guard reads committed state,
+// so a racing write can still pass against an old domain set; the generator
+// then holds the shadowing source back per committed snapshot.
+func (q *Queries) ListApplicationBaseDomains(ctx context.Context) ([]ListApplicationBaseDomainsRow, error) {
+	rows, err := q.db.Query(ctx, listApplicationBaseDomains)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListApplicationBaseDomainsRow{}
+	for rows.Next() {
+		var i ListApplicationBaseDomainsRow
+		if err := rows.Scan(&i.ID, &i.BaseDomain); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCertificateStatusTargets = `-- name: ListCertificateStatusTargets :many
+SELECT c.id AS certificate_id, c.domain, a.server_id
+FROM domain_certificates c
+JOIN applications a ON a.id = c.application_id
+ORDER BY c.id
+`
+
+type ListCertificateStatusTargetsRow struct {
+	CertificateID pgtype.UUID `json:"certificate_id"`
+	Domain        string      `json:"domain"`
+	ServerID      pgtype.UUID `json:"server_id"`
+}
+
+// ListCertificateStatusTargets joins every certificate intent to the node
+// hosting its application, so the status service can read each node's ACME
+// storage once and map certificates to it. Disabled intents are included:
+// status is a fact about the node's storage, not about the intent.
+func (q *Queries) ListCertificateStatusTargets(ctx context.Context) ([]ListCertificateStatusTargetsRow, error) {
+	rows, err := q.db.Query(ctx, listCertificateStatusTargets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCertificateStatusTargetsRow{}
+	for rows.Next() {
+		var i ListCertificateStatusTargetsRow
+		if err := rows.Scan(&i.CertificateID, &i.Domain, &i.ServerID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listDNSProviders = `-- name: ListDNSProviders :many
@@ -324,6 +486,80 @@ func (q *Queries) ListDomainCertificates(ctx context.Context) ([]DomainCertifica
 	return items, nil
 }
 
+const listDomainRedirects = `-- name: ListDomainRedirects :many
+SELECT id, application_id, source_domain, target_domain, code, preserve_path, enabled, created_at, updated_at FROM domain_redirects
+ORDER BY created_at DESC, id DESC
+`
+
+// ListDomainRedirects returns every redirect rule, newest first.
+func (q *Queries) ListDomainRedirects(ctx context.Context) ([]DomainRedirect, error) {
+	rows, err := q.db.Query(ctx, listDomainRedirects)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DomainRedirect{}
+	for rows.Next() {
+		var i DomainRedirect
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.SourceDomain,
+			&i.TargetDomain,
+			&i.Code,
+			&i.PreservePath,
+			&i.Enabled,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDomainRedirectsByApplication = `-- name: ListDomainRedirectsByApplication :many
+SELECT id, application_id, source_domain, target_domain, code, preserve_path, enabled, created_at, updated_at FROM domain_redirects
+WHERE application_id = $1
+ORDER BY created_at DESC, id DESC
+`
+
+// ListDomainRedirectsByApplication returns one application's rules, newest
+// first.
+func (q *Queries) ListDomainRedirectsByApplication(ctx context.Context, applicationID pgtype.UUID) ([]DomainRedirect, error) {
+	rows, err := q.db.Query(ctx, listDomainRedirectsByApplication, applicationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DomainRedirect{}
+	for rows.Next() {
+		var i DomainRedirect
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.SourceDomain,
+			&i.TargetDomain,
+			&i.Code,
+			&i.PreservePath,
+			&i.Enabled,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEnabledDomainCertificatesByProvider = `-- name: ListEnabledDomainCertificatesByProvider :many
 SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at FROM domain_certificates
 WHERE dns_provider_id = $1 AND enabled
@@ -351,6 +587,43 @@ func (q *Queries) ListEnabledDomainCertificatesByProvider(ctx context.Context, d
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEnabledRedirects = `-- name: ListEnabledRedirects :many
+SELECT id, source_domain, target_domain FROM domain_redirects WHERE enabled
+`
+
+type ListEnabledRedirectsRow struct {
+	ID           pgtype.UUID `json:"id"`
+	SourceDomain string      `json:"source_domain"`
+	TargetDomain string      `json:"target_domain"`
+}
+
+// ListEnabledRedirects returns the endpoints of every enabled redirect rule.
+// It feeds the no-chain guard in both directions (a proposed target must not
+// be another enabled rule's source, and a proposed source must not be another
+// enabled rule's target): a sequential conflicting write (create, update or
+// enable) is rejected across nodes. The guard reads committed state, so
+// concurrent writes can still pass against old endpoints and persist a chain;
+// fleet-wide chain-freedom then requires each affected node to converge.
+func (q *Queries) ListEnabledRedirects(ctx context.Context) ([]ListEnabledRedirectsRow, error) {
+	rows, err := q.db.Query(ctx, listEnabledRedirects)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListEnabledRedirectsRow{}
+	for rows.Next() {
+		var i ListEnabledRedirectsRow
+		if err := rows.Scan(&i.ID, &i.SourceDomain, &i.TargetDomain); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -431,6 +704,65 @@ func (q *Queries) ListProxiedApplications(ctx context.Context) ([]ListProxiedApp
 			&i.CertificateChallenge,
 			&i.CertificateWildcard,
 			&i.CertificateDnsProviderID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRedirectRules = `-- name: ListRedirectRules :many
+SELECT r.id, r.application_id, r.source_domain, r.target_domain, r.code,
+       r.preserve_path, r.enabled, r.created_at, r.updated_at,
+       a.server_id, a.base_domain_disabled
+FROM domain_redirects r
+JOIN applications a ON a.id = r.application_id
+ORDER BY r.created_at, r.id
+`
+
+type ListRedirectRulesRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	ApplicationID      pgtype.UUID        `json:"application_id"`
+	SourceDomain       string             `json:"source_domain"`
+	TargetDomain       string             `json:"target_domain"`
+	Code               int16              `json:"code"`
+	PreservePath       bool               `json:"preserve_path"`
+	Enabled            bool               `json:"enabled"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	ServerID           pgtype.UUID        `json:"server_id"`
+	BaseDomainDisabled bool               `json:"base_domain_disabled"`
+}
+
+// ListRedirectRules joins every redirect rule to its application's node state
+// for the proxy generator: the owning node decides which Traefik instance
+// serves the rule, and the domain-disabled flag holds back rules of an
+// application whose route is already excluded by the uniqueness conflict.
+func (q *Queries) ListRedirectRules(ctx context.Context) ([]ListRedirectRulesRow, error) {
+	rows, err := q.db.Query(ctx, listRedirectRules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRedirectRulesRow{}
+	for rows.Next() {
+		var i ListRedirectRulesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.SourceDomain,
+			&i.TargetDomain,
+			&i.Code,
+			&i.PreservePath,
+			&i.Enabled,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ServerID,
+			&i.BaseDomainDisabled,
 		); err != nil {
 			return nil, err
 		}
@@ -685,6 +1017,51 @@ func (q *Queries) UpdateDomainCertificate(ctx context.Context, arg UpdateDomainC
 		&i.Challenge,
 		&i.DnsProviderID,
 		&i.Wildcard,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateDomainRedirect = `-- name: UpdateDomainRedirect :one
+UPDATE domain_redirects
+SET source_domain = $2,
+    target_domain = $3,
+    code = $4,
+    preserve_path = $5,
+    enabled = $6,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, application_id, source_domain, target_domain, code, preserve_path, enabled, created_at, updated_at
+`
+
+type UpdateDomainRedirectParams struct {
+	ID           pgtype.UUID `json:"id"`
+	SourceDomain string      `json:"source_domain"`
+	TargetDomain string      `json:"target_domain"`
+	Code         int16       `json:"code"`
+	PreservePath bool        `json:"preserve_path"`
+	Enabled      bool        `json:"enabled"`
+}
+
+func (q *Queries) UpdateDomainRedirect(ctx context.Context, arg UpdateDomainRedirectParams) (DomainRedirect, error) {
+	row := q.db.QueryRow(ctx, updateDomainRedirect,
+		arg.ID,
+		arg.SourceDomain,
+		arg.TargetDomain,
+		arg.Code,
+		arg.PreservePath,
+		arg.Enabled,
+	)
+	var i DomainRedirect
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.SourceDomain,
+		&i.TargetDomain,
+		&i.Code,
+		&i.PreservePath,
+		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

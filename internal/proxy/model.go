@@ -94,12 +94,15 @@ type Backend struct {
 	URL string `yaml:"url" toml:"url"`
 }
 
-// Middleware is a Traefik middleware (http.middlewares.<name>). Only the
-// redirect scheme middleware is generated today; the struct is shaped so more
-// middleware kinds can be added without renaming the section.
+// Middleware is a Traefik middleware (http.middlewares.<name>): the shared
+// scheme redirect that terminates plain HTTP, and one host→host redirect per
+// configured rule (BE-6.3).
 type Middleware struct {
 	// RedirectScheme redirects requests to another scheme (http → https).
 	RedirectScheme *RedirectScheme `yaml:"redirectScheme,omitempty" toml:"redirectScheme,omitempty"`
+	// RedirectRegex redirects one host to another, optionally preserving the
+	// request path and query.
+	RedirectRegex *RedirectRegex `yaml:"redirectRegex,omitempty" toml:"redirectRegex,omitempty"`
 }
 
 // RedirectScheme is the redirectScheme middleware definition.
@@ -108,6 +111,21 @@ type RedirectScheme struct {
 	Scheme string `yaml:"scheme" toml:"scheme"`
 	// Permanent emits a 301 instead of a 302 redirect (Traefik's
 	// redirectScheme middleware semantics).
+	Permanent bool `yaml:"permanent,omitempty" toml:"permanent,omitempty"`
+}
+
+// RedirectRegex is the redirectRegex middleware definition. The request URL is
+// matched against Regex and the matched part replaced with Replacement;
+// Permanent selects Traefik's permanent semantics: GET answers 301 instead of
+// the temporary 302, while HEAD and every other method answer 308 instead of
+// 307 (Traefik special-cases only GET).
+type RedirectRegex struct {
+	// Regex is the anchored match expression, e.g.
+	// "(?i)^http://old\\.example\\.com/(.*)".
+	Regex string `yaml:"regex" toml:"regex"`
+	// Replacement is the target URL; "${1}" expands the captured path.
+	Replacement string `yaml:"replacement" toml:"replacement"`
+	// Permanent enables Traefik's permanent redirection semantics.
 	Permanent bool `yaml:"permanent,omitempty" toml:"permanent,omitempty"`
 }
 

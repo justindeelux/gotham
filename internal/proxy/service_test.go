@@ -1160,15 +1160,11 @@ func TestSyncServerAmbiguousPushFailureRetainsPendingThenRepairs(t *testing.T) {
 	}
 }
 
-// TestSyncServerPromoteFailureNeverRevertsWrongVersion proves the three-version
-// failure sequence: A active, B promoted, C pushed with a promotion failure
-// keeps B active and a FRESH service reverts to B (the actual prior), never to
-// the older superseded A (R2).
 // TestSyncServerPendingRetainedAcrossFailuresRevertsToActive proves the
 // approved R2 rule: an ambiguous push of B (a write may have landed) followed
-// by a pre-write/dial failure while preparing C retains the pending record,
-// and a FRESH service reverts to the durable active A — never the older
-// superseded Z.
+// by a pre-write/dial failure while preparing genuinely distinct C content
+// retains the pending record, and a FRESH service reverts to the durable
+// active A — never the older superseded Z.
 func TestSyncServerPendingRetainedAcrossFailuresRevertsToActive(t *testing.T) {
 	serverID := uuid.New()
 	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
@@ -1192,8 +1188,12 @@ func TestSyncServerPendingRetainedAcrossFailuresRevertsToActive(t *testing.T) {
 	if fixture.history.pending == nil {
 		t.Fatal("ambiguous push B dropped the pending record")
 	}
+	pendingB := *fixture.history.pending
 
-	// Push C: the dial fails before any write.
+	// The node keeps changing before the next sync: a new domain makes the
+	// generated content genuinely distinct (C, not a same-hash retry of B),
+	// and the dial then fails before any write.
+	fixture.source.setApps(runningApp(serverID, "app2.example.com", "app-container", 3000, 18080))
 	fixture.agent.respond = nil
 	fixture.service.dial = func(context.Context, uuid.UUID) (AgentClient, error) {
 		return nil, servers.ErrNotFound
@@ -1205,8 +1205,18 @@ func TestSyncServerPendingRetainedAcrossFailuresRevertsToActive(t *testing.T) {
 	if fixture.history.aborts != 0 {
 		t.Fatalf("aborts = %d, want no failure path to abort the pending record", fixture.history.aborts)
 	}
-	if fixture.history.pending == nil {
+	pendingC := fixture.history.pending
+	if pendingC == nil {
 		t.Fatal("pre-write failure dropped the pending record")
+	}
+	if pendingC.ContentHash == pendingB.ContentHash {
+		t.Fatal("second sync reused the pending B record: C content was not distinct")
+	}
+	if pendingC.ID == pendingB.ID {
+		t.Fatalf("pending C id = %s, want a new record distinct from B (%s)", pendingC.ID, pendingB.ID)
+	}
+	if got := fixture.history.activeHash(); got != configHash(versionA) {
+		t.Fatalf("active hash = %q, want the durable active A %q", got, configHash(versionA))
 	}
 
 	// A fresh service must revert to the durable active A, never Z.
@@ -1271,6 +1281,10 @@ func TestSyncServerRestorationPushFailureKeepsActive(t *testing.T) {
 	}
 }
 
+// TestSyncServerPromoteFailureNeverRevertsWrongVersion proves the three-version
+// failure sequence: A active, B promoted, C pushed with a promotion failure
+// keeps B active and a FRESH service reverts to B (the actual prior), never to
+// the older superseded A (R2).
 func TestSyncServerPromoteFailureNeverRevertsWrongVersion(t *testing.T) {
 	serverID := uuid.New()
 	fixture := newSyncFixture(t, nil, serverID)

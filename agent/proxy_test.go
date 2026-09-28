@@ -293,6 +293,45 @@ func TestWriteProxyConfigValidatesWholeBatchBeforeWriting(t *testing.T) {
 	}
 }
 
+// TestWriteProxyConfigNULPathPreservesEarlierDocuments proves a later entry
+// whose filename contains a NUL byte is rejected during path validation, so an
+// earlier document in the same batch keeps its existing content instead of
+// being replaced before the write pass fails (L2).
+func TestWriteProxyConfigNULPathPreservesEarlierDocuments(t *testing.T) {
+	server, root := newTestProxyServer(t, "")
+	target := filepath.Join(root, "dynamic", "gotham.yml")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("old content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	batch := &agentv1.WriteProxyConfigRequest{
+		Files: []*agentv1.ProxyConfigFile{
+			{Path: "dynamic/gotham.yml", Content: []byte("new content")},
+			{Path: "dynamic/bad\x00.yml", Content: []byte("x")},
+		},
+	}
+	if _, err := server.WriteProxyConfig(context.Background(), batch); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument (err %v)", status.Code(err), err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "old content" {
+		t.Fatalf("earlier document = %q, want the previous content preserved", data)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "dynamic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "gotham.yml" {
+		t.Fatalf("dynamic entries = %v, want only the preserved gotham.yml", entries)
+	}
+}
+
 // TestWriteProxyConfigRejectsSymlinkedIntermediates proves no component under
 // the root is followed: an intermediate symlink is rejected before anything is
 // created on the other side (R3 trust anchor "/").

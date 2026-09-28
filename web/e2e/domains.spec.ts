@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { cloneURL, loadAccount, storageStatePath, uniqueSuffix } from "./support";
 
 // Reuse the authenticated session so the page starts signed in; the seed
@@ -41,6 +41,33 @@ test.describe("domains", () => {
     const rotatedName = `e2e-cf-x-${suffix}`;
     const credential = `e2e-token-${suffix}-0123456789abcdef`;
     const rotatedCredential = `e2e-rotated-${suffix}-0123456789abcdef`;
+    const throwawayCredential = `discard-me-${suffix}-0123456789abcdef`;
+
+    // No API response may ever echo a credential back (the API returns only
+    // `credentials_set`); response bodies are collected and asserted below.
+    const credentialEchoes: string[] = [];
+    const responseChecks: Promise<void>[] = [];
+    page.on("response", (response) => {
+      if (!response.url().includes("/api/v1/proxy/")) {
+        return;
+      }
+      responseChecks.push(
+        response
+          .text()
+          .then((body) => {
+            if (
+              body.includes(credential) ||
+              body.includes(rotatedCredential) ||
+              body.includes(throwawayCredential)
+            ) {
+              credentialEchoes.push(
+                `${response.status()} ${response.request().method()} ${response.url()}`,
+              );
+            }
+          })
+          .catch(() => undefined),
+      );
+    });
 
     // A server row is required before an application can be stored. No agent
     // is connected, so nothing deploys and no certificate is issued.
@@ -151,6 +178,69 @@ test.describe("domains", () => {
     // The write-only credential must never be rendered back.
     await expect(page.getByText(credential)).toHaveCount(0);
 
+    // ── credential lifecycle: every dismissal clears the secret ───────────
+    // The credential input renders the page's form state, so a retained
+    // secret would reappear in a reopened dialog. Each path types a throwaway
+    // token, dismisses, reopens and requires a blank field.
+    const credentialInput = (modal: Locator) => modal.locator(".field-credential input");
+    const openEditDialog = async (): Promise<Locator> => {
+      await providerCard
+        .getByRole("button", { name: "Edit & rotate credential" })
+        .click();
+      return page
+        .locator(".n-modal")
+        .filter({ hasText: "Edit DNS provider" })
+        .first();
+    };
+    const checkDismissalClears = async (
+      dismiss: (modal: Locator) => Promise<void>,
+    ): Promise<void> => {
+      const modal = await openEditDialog();
+      await credentialInput(modal).fill(throwawayCredential);
+      await dismiss(modal);
+      await expect(page.locator(".n-modal")).toHaveCount(0);
+      const reopened = await openEditDialog();
+      await expect(credentialInput(reopened)).toHaveValue("");
+      await reopened.getByRole("button", { name: "Cancel" }).click();
+      await expect(page.locator(".n-modal")).toHaveCount(0);
+    };
+
+    await checkDismissalClears((modal) =>
+      modal.getByRole("button", { name: "Cancel" }).click(),
+    );
+    await checkDismissalClears((modal) =>
+      modal.locator(".n-card-header__close").click(),
+    );
+    await checkDismissalClears(() => page.keyboard.press("Escape"));
+    // Mask click: the overlay's outside-click handler closes the dialog.
+    await checkDismissalClears(() => page.mouse.click(5, 5));
+
+    // A failed write followed by Cancel: the rejected secret is dropped too.
+    await page.getByRole("button", { name: "Add provider" }).first().click();
+    let createProviderModal = page
+      .locator(".n-modal")
+      .filter({ hasText: "Add DNS provider" })
+      .first();
+    await createProviderModal.locator(".field-name input").fill(`e2e-dup-${suffix}`);
+    await createProviderModal.locator(".field-zones .n-select").click();
+    await page.keyboard.type(zone);
+    await page.keyboard.press("Enter");
+    await credentialInput(createProviderModal).fill(throwawayCredential);
+    await createProviderModal.getByRole("button", { name: "Save" }).click();
+    // A second enabled Cloudflare provider conflicts with the first.
+    await expect(createProviderModal.getByText(/already exists/i)).toBeVisible();
+    await createProviderModal.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.locator(".n-modal")).toHaveCount(0);
+    await page.getByRole("button", { name: "Add provider" }).first().click();
+    createProviderModal = page
+      .locator(".n-modal")
+      .filter({ hasText: "Add DNS provider" })
+      .first();
+    await expect(credentialInput(createProviderModal)).toHaveValue("");
+    await createProviderModal.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.locator(".n-modal")).toHaveCount(0);
+    await expect(page.getByText(throwawayCredential)).toHaveCount(0);
+
     // ── DNS provider: edit with credential rotation ──────────────────────
     await providerCard
       .getByRole("button", { name: "Edit & rotate credential" })
@@ -159,6 +249,8 @@ test.describe("domains", () => {
       .locator(".n-modal")
       .filter({ hasText: "Edit DNS provider" })
       .first();
+    // A reopened dialog must never prepopulate the previous secret.
+    await expect(credentialInput(editProviderModal)).toHaveValue("");
     await editProviderModal.locator(".field-name input").fill(rotatedName);
     await editProviderModal
       .locator(".field-credential input")
@@ -170,6 +262,13 @@ test.describe("domains", () => {
     await expect(providerCard).toContainText("set");
     await expect(page.getByText(credential)).toHaveCount(0);
     await expect(page.getByText(rotatedCredential)).toHaveCount(0);
+
+    // A successful write also clears the field (checked on reopen).
+    await expect(page.locator(".n-modal")).toHaveCount(0);
+    const afterWriteModal = await openEditDialog();
+    await expect(credentialInput(afterWriteModal)).toHaveValue("");
+    await afterWriteModal.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.locator(".n-modal")).toHaveCount(0);
 
     // ── certificate: create with http-01 ─────────────────────────────────
     await tab(page, "Certificates").click();
@@ -249,5 +348,18 @@ test.describe("domains", () => {
     await providerCard.getByRole("button", { name: "Delete" }).click();
     await page.getByRole("button", { name: "Confirm", exact: true }).click();
     await expect(providerCard).toHaveCount(0);
+
+    // ── credential hygiene: no echo, no browser storage ──────────────────
+    await Promise.all(responseChecks);
+    expect(
+      credentialEchoes,
+      `responses echoed a credential:\n${credentialEchoes.join("\n")}`,
+    ).toEqual([]);
+    const browserStorage = await page.evaluate(() =>
+      [JSON.stringify(localStorage), JSON.stringify(sessionStorage)].join("\n"),
+    );
+    expect(browserStorage).not.toContain(credential);
+    expect(browserStorage).not.toContain(rotatedCredential);
+    expect(browserStorage).not.toContain(throwawayCredential);
   });
 });

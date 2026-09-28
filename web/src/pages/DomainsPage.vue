@@ -91,6 +91,16 @@ function emptyCertificateDraft(): CertificateDraft {
   };
 }
 
+/**
+ * clearProviderCredential drops the plaintext API token from component
+ * memory. The credential is write-only: it is cleared after a successful
+ * write and on after-leave, which covers Cancel, the close icon, Escape, the
+ * mask and a failed write followed by dismissal.
+ */
+function clearProviderCredential(): void {
+  providerForm.value = { ...providerForm.value, credential: "" };
+}
+
 const providerTypeOptions = [
   { label: "Cloudflare", value: "cloudflare" },
   { label: "DigitalOcean", value: "digitalocean" },
@@ -245,23 +255,37 @@ async function load(): Promise<void> {
   ]);
 }
 
-/** openProviderCreate resets the dialog for a new provider. */
+/**
+ * openProviderCreate resets the dialog for a new provider. The credential
+ * field is deliberately not touched: after-leave (every dismissal path) and a
+ * successful write are the only clearing points, so it is blank whenever the
+ * dialog can be opened again — the smoke asserts exactly that.
+ */
 function openProviderCreate(): void {
   editingProvider.value = null;
-  providerForm.value = emptyProviderForm();
+  providerForm.value = {
+    ...providerForm.value,
+    provider: "cloudflare",
+    name: "",
+    zones: [],
+    enabled: true,
+  };
   providerError.value = null;
   providerOpen.value = true;
 }
 
-/** openProviderEdit seeds the dialog from a stored provider. */
+/**
+ * openProviderEdit seeds the dialog from a stored provider. The credential
+ * field keeps its current (blank, see openProviderCreate) value; empty means
+ * "keep the stored credential" and is never read back.
+ */
 function openProviderEdit(provider: DNSProvider): void {
   editingProvider.value = provider;
   providerForm.value = {
+    ...providerForm.value,
     provider: provider.provider,
     name: provider.name,
     zones: [...provider.zones],
-    // Empty means "keep the stored credential"; it is never read back.
-    credential: "",
     enabled: provider.enabled,
   };
   providerError.value = null;
@@ -295,6 +319,8 @@ async function handleSaveProvider(): Promise<void> {
       });
       message.success("DNS provider created.");
     }
+    // The plaintext token must not outlive the write (or the dialog).
+    clearProviderCredential();
     providerOpen.value = false;
   } catch (error) {
     providerError.value = describeProxyError(error);
@@ -632,6 +658,7 @@ onMounted(() => {
       preset="card"
       :title="editingProvider ? 'Edit DNS provider' : 'Add DNS provider'"
       style="width: 560px; max-width: 94vw"
+      @after-leave="clearProviderCredential"
     >
       <NSpace vertical :size="12">
         <NAlert v-if="providerError" type="error" :show-icon="true">

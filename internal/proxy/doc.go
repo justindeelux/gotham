@@ -15,12 +15,17 @@
 //
 //   - traefik.yml — static configuration: entrypoints (web/websecure plus a
 //     loopback-only traefik entrypoint for /ping), the file provider and the
-//     ACME certificatesResolvers (HTTP-01 on web; DNS-01 arrives with BE-6.2).
+//     ACME certificatesResolvers (HTTP-01 on web plus one DNS-01 resolver per
+//     enabled DNS provider).
 //   - dynamic/gotham.yml — dynamic configuration: one HTTP forwarding router
-//     and one HTTPS router per application domain, and the load-balancer
-//     service targeting the application's live published host port. The
-//     HTTP→HTTPS redirect is emitted by BE-6.2 once certificates are
-//     configured and verified; BE-6.1 must serve plain HTTP.
+//     per application domain, and, for routes whose certificate
+//     configuration is active, an HTTPS router (with the resolved resolver,
+//     and a wildcard tls.domains section where requested) plus the shared
+//     gotham-https-redirect middleware on the HTTP router.
+//
+// Credentials never appear in either document: DNS-01 tokens reach the
+// gotham-traefik container as environment variables only (see the SSL
+// paragraph below).
 //
 // A gotham-traefik container is bootstrapped on the node during server
 // validation and repaired whenever its published bindings do not match the
@@ -66,6 +71,28 @@
 // real Docker restart policy are verified before reuse. Owned drift is
 // repaired by recreation; a same-name container without ownership labels
 // fails the sync with an actionable conflict and is never deleted.
+//
+// BE-6.2 adds the SSL surface. dns_providers stores one sealed API token per
+// configured DNS provider (Cloudflare, DigitalOcean) with the zones it serves;
+// domain_certificates stores one certificate intent per application. The
+// generator renders one DNS-01 resolver per enabled provider next to the
+// default HTTP-01 resolver, and activates the HTTPS router plus the shared
+// gotham-https-redirect middleware only for a route whose certificate intent
+// is explicit, enabled, still recorded for the application's current
+// base_domain and backed by a usable provider. Every other route keeps the
+// BE-6.1 plain-HTTP behavior. A configured-but-inactive certificate is
+// reported as a per-application diagnostic instead of failing the node.
+//
+// DNS-01 credentials travel to the gotham-traefik container as environment
+// variables only, and only for providers referenced by an active certificate
+// on that node. They never enter the generated documents, the configuration
+// history, the API responses or the logs. Because the engine does not report a
+// running container's environment back through the agent contract, environment
+// drift is detected against a recorded fingerprint label (a keyed, non-
+// reversible HMAC of the desired KEY=VALUE pairs): a credential rotation or a
+// provider change alters the fingerprint and recreates the container, while an
+// environment changed out-of-band under Gotham is invisible until the next
+// recorded change.
 //
 // FEATURE_PROXY=false disables the whole surface: no routes are mounted, no
 // deploy hook is wired and no configuration is pushed.

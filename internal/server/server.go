@@ -178,18 +178,28 @@ func (s *Server) routes() (http.Handler, error) {
 		containerService := s.containerService()
 		containers.Mount(api, s.RequireAuth, containerService)
 
-		// Traefik proxy synchronization (BE-6.1): the shared container
-		// service provisions the gotham-traefik container and the mTLS agent
-		// dialer pushes the generated configuration. A nil service (no
-		// database, no container service, or FEATURE_PROXY=false) mounts
-		// nothing and leaves the deploy lifecycle without a proxy hook. The
-		// endpoint mutates every node, so it requires the admin scope on top
-		// of authentication (JWT sessions already hold every scope).
+		// Traefik proxy synchronization (BE-6.1) and the SSL surface
+		// (BE-6.2): the shared container service provisions the
+		// gotham-traefik container and the mTLS agent dialer pushes the
+		// generated configuration. A nil service (no database, no container
+		// service, or FEATURE_PROXY=false) mounts nothing and leaves the
+		// deploy lifecycle without a proxy hook. Every endpoint under this
+		// group mutates node state or holds DNS credentials, so it requires
+		// the admin scope on top of authentication (JWT sessions already
+		// hold every scope).
 		s.proxy = s.proxyService(containerService)
 		adminOnly := func(next http.Handler) http.Handler {
 			return s.RequireAuth(RequireScopes(auth.ScopeAdmin)(next))
 		}
-		proxy.Mount(api, adminOnly, s.proxy)
+		sslConfig := proxy.SSLConfig{
+			Secret: s.cfg.Snapshot().SecretKey,
+			Logger: s.logger,
+			Resync: s.resyncProxyNodes,
+		}
+		if s.persistence != nil {
+			sslConfig.Store = proxy.NewStoreSSL(s.persistence)
+		}
+		proxy.Mount(api, adminOnly, s.proxy, proxy.NewDefaultProviderService(sslConfig), proxy.NewDefaultCertificateService(sslConfig))
 
 		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
 		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger)
@@ -334,10 +344,11 @@ type proxyDialer interface {
 
 // proxyService builds the proxy domain service for the HTTP wiring: the
 // routing input from the database, the shared container service that
-// provisions the gotham-traefik container and the mTLS agent dialer that
-// pushes the generated configuration. It returns nil (no database, no
-// container service, or FEATURE_PROXY=false) so proxy.Mount is a no-op and
-// the deploy lifecycle receives no resync hook.
+// provisions the gotham-traefik container, the mTLS agent dialer that pushes
+// the generated configuration and the key that opens sealed DNS provider
+// credentials. It returns nil (no database, no container service, or
+// FEATURE_PROXY=false) so proxy.Mount is a no-op and the deploy lifecycle
+// receives no resync hook.
 func (s *Server) proxyService(containerService containers.ContainerService) proxy.ProxyService {
 	if s.persistence == nil || containerService == nil {
 		return nil
@@ -346,6 +357,7 @@ func (s *Server) proxyService(containerService containers.ContainerService) prox
 		Store:      s.persistence,
 		Containers: containerService,
 		Logger:     s.logger,
+		Secret:     s.cfg.Snapshot().SecretKey,
 	}
 	if dialer, ok := s.servers.(proxyDialer); ok {
 		cfg.Dial = func(ctx context.Context, serverID uuid.UUID) (proxy.AgentClient, error) {
@@ -353,6 +365,31 @@ func (s *Server) proxyService(containerService containers.ContainerService) prox
 		}
 	}
 	return proxy.NewDefaultService(cfg)
+}
+
+// resyncProxyNodes pushes the current desired proxy state to every node after
+// an SSL mutation. It is best effort by contract: the mutation is already
+// durable, and a failed node is reported as an error only so the mutation's
+// caller can log it — the next sync (manual or deploy-driven) converges the
+// node. Per-node failures are summarized without touching credentials.
+func (s *Server) resyncProxyNodes(ctx context.Context) error {
+	if s.proxy == nil {
+		return nil
+	}
+	results, err := s.proxy.SyncAll(ctx)
+	if err != nil {
+		return err
+	}
+	failed := 0
+	for _, result := range results {
+		if result.Error != "" {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("proxy: SSL resync failed on %d of %d node(s)", failed, len(results))
+	}
+	return nil
 }
 
 // databaseService builds the databases domain service for the HTTP wiring: the

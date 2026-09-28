@@ -30,4 +30,7 @@ var (
 	// ErrConflict — a same-name container exists that this service cannot
 	// prove it owns, or another routing conflict needs operator action (409).
 	ErrConflict = errors.New("proxy: conflict")
+	// ErrNotFound — a DNS provider, certificate config or application the
+	// request targets does not exist (404).
+	ErrNotFound = errors.New("proxy: not found")
 )

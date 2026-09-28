@@ -314,7 +314,9 @@ type syncFixture struct {
 }
 
 // runningTraefik is the expected proxy container with its production ports,
-// labels, mounts and restart policy.
+// labels, mounts and restart policy. The fingerprint matches an empty
+// credential environment, which is what the fixture's secret and provider
+// state produce.
 func runningTraefik() containers.Container {
 	return containers.Container{
 		ID:            "existing-traefik",
@@ -322,7 +324,7 @@ func runningTraefik() containers.Container {
 		State:         "running",
 		Image:         TraefikImage,
 		Ports:         append([]string{}, TraefikPorts...),
-		Labels:        traefikLabels(TraefikDir, TraefikAcmeDir),
+		Labels:        traefikLabels(TraefikDir, TraefikAcmeDir, envFingerprint("", nil)),
 		RestartPolicy: TraefikRestartPolicy,
 		Mounts: []containers.ContainerMount{
 			{Source: TraefikDir, Destination: TraefikContainerConfigDir, ReadOnly: true},
@@ -1300,14 +1302,15 @@ func TestSyncServerPromoteFailureNeverRevertsWrongVersion(t *testing.T) {
 
 	// Push C with a promotion failure after the node write succeeded.
 	fixture.history.promoteErr = errors.New("db down")
-	if err := fixture.service.push(context.Background(), serverID, fixture.containers.list, versionC); err != nil {
+	desiredC := desiredState{files: versionC, envHash: envFingerprint("", nil)}
+	if err := fixture.service.push(context.Background(), serverID, fixture.containers.list, desiredC); err != nil {
 		t.Fatalf("push C: %v", err)
 	}
 	prepared, changed, err := fixture.service.prepareHistory(context.Background(), serverID, versionC)
 	if err != nil || !changed {
 		t.Fatalf("prepare C: changed=%v err=%v", changed, err)
 	}
-	if err := fixture.service.pushAndPromote(context.Background(), serverID, fixture.containers.list, versionC, prepared, changed); !errors.Is(err, ErrHistory) {
+	if err := fixture.service.pushAndPromote(context.Background(), serverID, fixture.containers.list, desiredC, prepared, changed); !errors.Is(err, ErrHistory) {
 		t.Fatalf("promote C err = %v, want ErrHistory", err)
 	}
 	if fixture.history.pending == nil {

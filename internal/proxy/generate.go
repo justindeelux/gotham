@@ -38,6 +38,11 @@ const (
 	TraefikAcmeStorage = TraefikAcmeMount + "/acme.json"
 	// TraefikContainerName is the fixed name of the node's proxy container.
 	TraefikContainerName = "gotham-traefik"
+	// TraefikEnvHashLabel records the non-reversible fingerprint (envFingerprint)
+	// of the DNS credential environment on the managed container, so a
+	// credential change recreates it. The values themselves never leave the
+	// container environment.
+	TraefikEnvHashLabel = "gotham.proxy.env_hash"
 	// TraefikImage is the pinned Traefik 3.x image the bootstrap pulls.
 	TraefikImage = "traefik:v3.7"
 	// TraefikRestartPolicy is the native Docker restart policy for the
@@ -51,11 +56,13 @@ const (
 
 // traefikLabels mark the bootstrapped proxy container like every other
 // Gotham-managed container and record the desired convergence state: the
-// source directories mounted into it and its native restart policy. The
-// service verifies an existing container against these labels, the engine's
-// mounts and the real restart policy before reusing it (R5); the ports label
-// feeds the container list UI.
-func traefikLabels(configDir, acmeDir string) map[string]string {
+// source directories mounted into it, its native restart policy and a
+// non-reversible fingerprint of its credential environment (the values stay
+// in the container environment only, never in a label). The service verifies
+// an existing container against these labels, the engine's mounts and the
+// real restart policy before reusing it (R5); the ports label feeds the
+// container list UI.
+func traefikLabels(configDir, acmeDir, envHash string) map[string]string {
 	return map[string]string{
 		"gotham.managed":              "true",
 		"gotham.component":            "proxy",
@@ -63,6 +70,7 @@ func traefikLabels(configDir, acmeDir string) map[string]string {
 		"gotham.proxy.config_dir":     configDir,
 		"gotham.proxy.acme_dir":       acmeDir,
 		"gotham.proxy.restart_policy": TraefikRestartPolicy,
+		TraefikEnvHashLabel:           envHash,
 	}
 }
 

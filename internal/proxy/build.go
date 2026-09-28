@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -42,6 +43,28 @@ type Route struct {
 	Domain string
 	// Target is the backend URL, e.g. http://172.17.0.1:3000.
 	Target string
+	// Certificate, when non-nil, activates the HTTPS router and the
+	// HTTP→HTTPS redirect for this route. It is resolved from the
+	// application's certificate configuration during generation, never from
+	// the raw row: an inactive configuration leaves the route HTTP-only.
+	Certificate *RouteCertificate
+}
+
+// RouteCertificate is the resolved certificate activation of one route.
+type RouteCertificate struct {
+	// Resolver names the certificate resolver from the static config: the
+	// shared HTTP-01 default, or the DNS-01 resolver of the configured
+	// provider.
+	Resolver string
+	// DNSProviderID identifies the provider whose credential the node
+	// container needs; uuid.Nil for HTTP-01.
+	DNSProviderID uuid.UUID
+	// DNSProviderType selects the credential environment variable; empty for
+	// HTTP-01.
+	DNSProviderType DNSProviderType
+	// WildcardMain, when set, requests a wildcard certificate for the zone:
+	// Traefik tls.domains main=WildcardMain, sans=["*.WildcardMain"].
+	WildcardMain string
 }
 
 // domainPattern matches a DNS hostname: lowercase labels of letters, digits
@@ -73,17 +96,19 @@ func ValidateDomain(domain string) error {
 	return nil
 }
 
-// BuildConfig renders the routing model for a node from its routes. The
-// output is a pure function of the input (map iteration is sorted at marshal
-// time), so identical state always yields identical configuration bytes.
+// BuildConfig renders the routing model for a node from its routes, the
+// configured DNS providers and the optional ACME contact address. The output
+// is a pure function of the input (map iteration is sorted at marshal time),
+// so identical state always yields identical configuration bytes.
 //
-// Each route produces one HTTP forwarding router on the web entrypoint. The
-// HTTPS router and the HTTP→HTTPS redirect are emitted by BE-6.2 once
-// certificates are configured and verified: emitting a TLS router now would
-// have Traefik attempt ACME issuance for every domain before SSL is ready,
-// and the redirect would break the plain-HTTP acceptance path of BE-6.1
-// (F2/A1). The static resolver definition stays inert until then.
-func BuildConfig(routes []Route) ProxyConfig {
+// Every route produces one HTTP forwarding router on the web entrypoint. A
+// route whose certificate configuration is active additionally produces an
+// HTTPS router on the websecure entrypoint and carries the shared
+// gotham-https-redirect middleware; routes without one keep the BE-6.1
+// plain-HTTP behavior. The static resolvers are one HTTP-01 resolver plus one
+// DNS-01 resolver per enabled provider; credentials never appear here, they
+// travel to the Traefik container as environment variables only.
+func BuildConfig(routes []Route, providers []DNSProvider, acmeEmail string) ProxyConfig {
 	cfg := ProxyConfig{
 		EntryPoints: map[string]EntryPoint{
 			EntryPointWeb:       {Address: ":80"},
@@ -93,6 +118,7 @@ func BuildConfig(routes []Route) ProxyConfig {
 		CertificatesResolvers: map[string]CertificatesResolver{
 			DefaultResolverName: {
 				ACME: ACMEConfig{
+					Email:   acmeEmail,
 					Storage: TraefikAcmeStorage,
 					HTTPChallenge: &HTTPChallenge{
 						EntryPoint: EntryPointWeb,
@@ -104,8 +130,33 @@ func BuildConfig(routes []Route) ProxyConfig {
 		Services:    map[string]Service{},
 		Middlewares: map[string]Middleware{},
 	}
-	if len(routes) == 0 {
-		return cfg
+
+	// One DNS-01 resolver per enabled provider type, sorted by type so the
+	// result never depends on input order.
+	types := make([]DNSProviderType, 0, len(providers))
+	seenTypes := make(map[DNSProviderType]bool, len(providers))
+	for _, provider := range providers {
+		if !provider.Enabled || seenTypes[provider.Provider] {
+			continue
+		}
+		seenTypes[provider.Provider] = true
+		types = append(types, provider.Provider)
+	}
+	sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
+	for _, providerType := range types {
+		name := DNSResolverName(providerType)
+		if name == "" {
+			continue
+		}
+		cfg.CertificatesResolvers[name] = CertificatesResolver{
+			ACME: ACMEConfig{
+				Email:   acmeEmail,
+				Storage: TraefikAcmeStorage,
+				DNSChallenge: &DNSChallenge{
+					Provider: string(providerType),
+				},
+			},
+		}
 	}
 
 	for _, route := range routes {
@@ -115,11 +166,31 @@ func BuildConfig(routes []Route) ProxyConfig {
 				Servers: []Backend{{URL: route.Target}},
 			},
 		}
-		cfg.Routers[service+"-web"] = Router{
+		web := Router{
 			Rule:        fmt.Sprintf("Host(`%s`)", route.Domain),
 			Service:     service,
 			EntryPoints: []string{EntryPointWeb},
 		}
+		if route.Certificate != nil {
+			web.Middlewares = []string{HTTPRedirectMiddleware}
+			cfg.Middlewares[HTTPRedirectMiddleware] = Middleware{
+				RedirectScheme: &RedirectScheme{Scheme: "https", Permanent: true},
+			}
+			tls := &RouterTLS{CertResolver: route.Certificate.Resolver}
+			if route.Certificate.WildcardMain != "" {
+				tls.Domains = []TLSDomain{{
+					Main: route.Certificate.WildcardMain,
+					SANs: []string{"*." + route.Certificate.WildcardMain},
+				}}
+			}
+			cfg.Routers[service+"-websecure"] = Router{
+				Rule:        fmt.Sprintf("Host(`%s`)", route.Domain),
+				Service:     service,
+				EntryPoints: []string{EntryPointWebSecure},
+				TLS:         tls,
+			}
+		}
+		cfg.Routers[service+"-web"] = web
 	}
 	return cfg
 }

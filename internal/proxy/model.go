@@ -59,7 +59,20 @@ type Router struct {
 // RouterTLS is the tls: section of a router.
 type RouterTLS struct {
 	// CertResolver names a certificate resolver from the static config.
-	CertResolver string `yaml:"certResolver" toml:"certResolver"`
+	CertResolver string `yaml:"certResolver,omitempty" toml:"certResolver,omitempty"`
+	// Domains requests specific certificate names (used for wildcards). It is
+	// omitted for the default single-host request, where the router rule's
+	// host is the certificate name.
+	Domains []TLSDomain `yaml:"domains,omitempty" toml:"domains,omitempty"`
+}
+
+// TLSDomain is one entry of tls.domains: the main certificate name plus its
+// subject alternative names (Traefik requests main + sans in one order).
+type TLSDomain struct {
+	// Main is the primary name, e.g. example.com.
+	Main string `yaml:"main" toml:"main"`
+	// SANs are the additional names, e.g. ["*.example.com"].
+	SANs []string `yaml:"sans,omitempty" toml:"sans,omitempty"`
 }
 
 // Service is a Traefik service (http.services.<name>).
@@ -111,9 +124,9 @@ type CertificatesResolver struct {
 	ACME ACMEConfig `yaml:"acme" toml:"acme"`
 }
 
-// ACMEConfig is the acme: section of a certificate resolver. The challenge
-// type is HTTP-01 on the web entrypoint today; BE-6.2 extends this with DNS
-// providers for wildcard certificates.
+// ACMEConfig is the acme: section of a certificate resolver. The default
+// resolver answers HTTP-01 on the web entrypoint; BE-6.2 adds one DNS-01
+// resolver per enabled DNS provider for wildcard certificates.
 type ACMEConfig struct {
 	// Email is the ACME registration contact. Omitted when empty (Let's
 	// Encrypt accepts accounts without a contact address).
@@ -123,6 +136,11 @@ type ACMEConfig struct {
 	Storage string `yaml:"storage" toml:"storage"`
 	// HTTPChallenge selects the HTTP-01 challenge on an entrypoint.
 	HTTPChallenge *HTTPChallenge `yaml:"httpChallenge,omitempty" toml:"httpChallenge,omitempty"`
+	// DNSChallenge selects the DNS-01 challenge answered by a lego DNS
+	// provider. The provider credential is delivered to the Traefik
+	// container as an environment variable only, never through this
+	// document.
+	DNSChallenge *DNSChallenge `yaml:"dnsChallenge,omitempty" toml:"dnsChallenge,omitempty"`
 }
 
 // HTTPChallenge is the httpChallenge: section of an ACME resolver.
@@ -130,4 +148,10 @@ type HTTPChallenge struct {
 	// EntryPoint is the entrypoint the challenge is answered on; it must be
 	// reachable from the internet on port 80.
 	EntryPoint string `yaml:"entryPoint" toml:"entryPoint"`
+}
+
+// DNSChallenge is the dnsChallenge: section of an ACME resolver.
+type DNSChallenge struct {
+	// Provider is the lego provider name, e.g. "cloudflare".
+	Provider string `yaml:"provider" toml:"provider"`
 }

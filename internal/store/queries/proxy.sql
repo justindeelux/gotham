@@ -4,9 +4,21 @@
 -- that hosts it, from the endpoint of its newest running deployment. Rows are
 -- ordered by creation time so duplicate-domain dispositions and generation
 -- input stay deterministic.
+--
+-- The certificate columns (BE-6.2) carry the per-application certificate
+-- intent. They are NULL-joined as empty values: certificate_configured tells
+-- the generator whether an intent exists at all, and the recorded domain
+-- lets it refuse to activate a certificate whose host no longer matches.
 SELECT a.id, a.server_id, a.base_domain, a.base_domain_disabled, a.port, a.host_port,
-       COALESCE(d.container_id, '')::text AS container_id
+       COALESCE(d.container_id, '')::text AS container_id,
+       (c.id IS NOT NULL)::boolean AS certificate_configured,
+       COALESCE(c.domain, '')::text AS certificate_domain,
+       COALESCE(c.enabled, false) AS certificate_enabled,
+       COALESCE(c.challenge, '')::text AS certificate_challenge,
+       COALESCE(c.wildcard, false) AS certificate_wildcard,
+       c.dns_provider_id AS certificate_dns_provider_id
 FROM applications a
+LEFT JOIN domain_certificates c ON c.application_id = a.id
 LEFT JOIN LATERAL (
     SELECT container_id FROM deployments
     WHERE application_id = a.id AND state = 'running' AND container_id <> ''
@@ -73,3 +85,80 @@ WHERE server_id = $1 AND superseded_at IS NOT NULL AND superseded_at < $2;
 -- after a push that provably never touched the node). The active snapshot can
 -- never be deleted through this query.
 DELETE FROM proxy_config_versions WHERE id = $1 AND server_id = $2 AND pending;
+
+-- name: ListDNSProviders :many
+-- ListDNSProviders returns every configured DNS provider, newest first. The
+-- sealed credential is read by the proxy service to build the Traefik
+-- container environment; it is never returned through the API.
+SELECT * FROM dns_providers
+ORDER BY created_at DESC, id DESC;
+
+-- name: GetDNSProvider :one
+SELECT * FROM dns_providers WHERE id = $1;
+
+-- name: CreateDNSProvider :one
+INSERT INTO dns_providers (provider, name, zones, ciphertext, enabled)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;
+
+-- name: UpdateDNSProvider :one
+UPDATE dns_providers
+SET provider = $2,
+    name = $3,
+    zones = $4,
+    ciphertext = $5,
+    enabled = $6,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeleteDNSProvider :exec
+DELETE FROM dns_providers WHERE id = $1;
+
+-- name: CountEnabledDomainCertificatesByProvider :one
+-- CountEnabledDomainCertificatesByProvider guards provider disable/delete/type
+-- changes: an enabled certificate config must never lose its provider
+-- silently.
+SELECT count(*) FROM domain_certificates
+WHERE dns_provider_id = $1 AND enabled;
+
+-- name: CountDomainCertificatesByProvider :one
+-- CountDomainCertificatesByProvider guards provider deletion, which the
+-- foreign key would otherwise reject after the fact.
+SELECT count(*) FROM domain_certificates
+WHERE dns_provider_id = $1;
+
+-- name: ListEnabledDomainCertificatesByProvider :many
+-- ListEnabledDomainCertificatesByProvider feeds the zone-narrowing guard.
+SELECT * FROM domain_certificates
+WHERE dns_provider_id = $1 AND enabled
+ORDER BY created_at, id;
+
+-- name: ListDomainCertificates :many
+SELECT * FROM domain_certificates
+ORDER BY created_at DESC, id DESC;
+
+-- name: GetDomainCertificate :one
+SELECT * FROM domain_certificates WHERE id = $1;
+
+-- name: GetDomainCertificateByApplication :one
+SELECT * FROM domain_certificates WHERE application_id = $1;
+
+-- name: CreateDomainCertificate :one
+INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns_provider_id, wildcard)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING *;
+
+-- name: UpdateDomainCertificate :one
+UPDATE domain_certificates
+SET domain = $2,
+    enabled = $3,
+    challenge = $4,
+    dns_provider_id = $5,
+    wildcard = $6,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeleteDomainCertificate :exec
+DELETE FROM domain_certificates WHERE id = $1;

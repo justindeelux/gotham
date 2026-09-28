@@ -140,6 +140,16 @@ func TestProxyConfigHistorySequencing(t *testing.T) {
 		t.Fatalf("active = %q (err %v), want C", active.ContentHash, err)
 	}
 
+	// Aborting the ACTIVE row is a no-op: only pending records can be
+	// deleted, so the durable snapshot can never be lost through the abort
+	// path.
+	if err := st.AbortProxyConfigVersion(ctx, server.ID, active.ID); err != nil {
+		t.Fatalf("abort active: %v", err)
+	}
+	if _, err := st.NewestActiveProxyConfigVersion(ctx, server.ID); err != nil {
+		t.Fatalf("active row disappeared after an abort attempt: %v", err)
+	}
+
 	// Abort drops the pending intent; B is the predecessor again.
 	if err := st.AbortProxyConfigVersion(ctx, server.ID, pending.ID); err != nil {
 		t.Fatalf("abort D: %v", err)

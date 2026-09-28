@@ -349,7 +349,10 @@ func (s *SyncService) pushAndPromote(ctx context.Context, serverID uuid.UUID, no
 	touched, pushErr := s.push(ctx, serverID, nodeList, files)
 	if pushErr != nil {
 		if s.history != nil && changed {
-			if !touched {
+			// Only a pending record may be aborted; the restoration path
+			// returns the ACTIVE row and deleting it would lose the durable
+			// snapshot (R2).
+			if !touched && version.Pending {
 				abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyTimeout)
 				if abortErr := s.history.AbortConfigVersion(abortCtx, serverID, version.ID); abortErr != nil {
 					s.logger.Warn("proxy: abort configuration intent failed",

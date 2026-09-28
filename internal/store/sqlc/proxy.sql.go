@@ -23,7 +23,7 @@ func (q *Queries) ClearPendingProxyConfigVersions(ctx context.Context, serverID 
 }
 
 const deleteProxyConfigVersion = `-- name: DeleteProxyConfigVersion :exec
-DELETE FROM proxy_config_versions WHERE id = $1 AND server_id = $2
+DELETE FROM proxy_config_versions WHERE id = $1 AND server_id = $2 AND pending
 `
 
 type DeleteProxyConfigVersionParams struct {
@@ -31,8 +31,9 @@ type DeleteProxyConfigVersionParams struct {
 	ServerID pgtype.UUID `json:"server_id"`
 }
 
-// DeleteProxyConfigVersion drops one version (used to abort a pending record
-// after a failed node write).
+// DeleteProxyConfigVersion drops one PENDING version (used to abort a record
+// after a push that provably never touched the node). The active snapshot can
+// never be deleted through this query.
 func (q *Queries) DeleteProxyConfigVersion(ctx context.Context, arg DeleteProxyConfigVersionParams) error {
 	_, err := q.db.Exec(ctx, deleteProxyConfigVersion, arg.ID, arg.ServerID)
 	return err

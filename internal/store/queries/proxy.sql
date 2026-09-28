@@ -69,6 +69,7 @@ DELETE FROM proxy_config_versions
 WHERE server_id = $1 AND superseded_at IS NOT NULL AND superseded_at < $2;
 
 -- name: DeleteProxyConfigVersion :exec
--- DeleteProxyConfigVersion drops one version (used to abort a pending record
--- after a failed node write).
-DELETE FROM proxy_config_versions WHERE id = $1 AND server_id = $2;
+-- DeleteProxyConfigVersion drops one PENDING version (used to abort a record
+-- after a push that provably never touched the node). The active snapshot can
+-- never be deleted through this query.
+DELETE FROM proxy_config_versions WHERE id = $1 AND server_id = $2 AND pending;

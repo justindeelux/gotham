@@ -1164,6 +1164,43 @@ func TestSyncServerAmbiguousPushFailureRetainsPendingThenRepairs(t *testing.T) {
 // failure sequence: A active, B promoted, C pushed with a promotion failure
 // keeps B active and a FRESH service reverts to B (the actual prior), never to
 // the older superseded A (R2).
+// TestSyncServerRestorationPushFailureKeepsActive proves the restoration path
+// never aborts the active snapshot: when the stored active matches the desired
+// content while an ambiguous pending push exists, a push that provably never
+// touched the node leaves both records untouched (R2).
+func TestSyncServerRestorationPushFailureKeepsActive(t *testing.T) {
+	serverID := uuid.New()
+	fixture := newSyncFixture(t, nil, serverID)
+
+	if err := fixture.service.SyncServer(context.Background(), serverID); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	activeHash := fixture.history.activeHash()
+	fixture.history.pending = &ConfigVersion{
+		ID:          uuid.New(),
+		Files:       []File{{Name: "dynamic/gotham.yml", Content: []byte("ambiguous")}},
+		ContentHash: "ambiguous",
+		Pending:     true,
+	}
+
+	fixture.service.dial = func(context.Context, uuid.UUID) (AgentClient, error) {
+		return nil, servers.ErrNotFound
+	}
+	err := fixture.service.SyncServer(context.Background(), serverID)
+	if !errors.Is(err, ErrServerNotFound) {
+		t.Fatalf("err = %v, want the dial failure", err)
+	}
+	if fixture.history.aborts != 0 {
+		t.Fatal("restoration failure aborted the active snapshot")
+	}
+	if got := fixture.history.activeHash(); got != activeHash {
+		t.Fatalf("active hash = %q, want unchanged %q", got, activeHash)
+	}
+	if fixture.history.pending == nil {
+		t.Fatal("pending record was dropped")
+	}
+}
+
 func TestSyncServerPromoteFailureNeverRevertsWrongVersion(t *testing.T) {
 	serverID := uuid.New()
 	fixture := newSyncFixture(t, nil, serverID)

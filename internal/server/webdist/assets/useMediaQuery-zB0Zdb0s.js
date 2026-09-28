@@ -1,0 +1,1 @@
+import{g as d,ad as i,q as r}from"./index-C7ux50fm.js";function u(t){const n=r(!1);let e=null;const a=o=>{n.value=o.matches};return d(()=>{typeof window>"u"||!window.matchMedia||(e=window.matchMedia(t),n.value=e.matches,e.addEventListener("change",a))}),i(()=>{e?.removeEventListener("change",a),e=null}),n}export{u};

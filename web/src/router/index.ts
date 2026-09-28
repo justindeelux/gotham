@@ -90,6 +90,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/DatabaseDetailPage.vue"),
         meta: { title: "Database detail", requiresAuth: true },
       },
+      {
+        path: "domains",
+        name: "domains",
+        component: () => import("../pages/DomainsPage.vue"),
+        meta: { title: "Domains & SSL", requiresAuth: true },
+      },
     ],
   },
   { path: "/:pathMatch(.*)*", redirect: { name: "dashboard" } },

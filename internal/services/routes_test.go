@@ -1,9 +1,12 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -318,6 +321,42 @@ func TestRoutesLogsTerminalFailureKeepsBody(t *testing.T) {
 	}
 	if body := recorder.Body.String(); body != "partial\n" {
 		t.Fatalf("body = %q", body)
+	}
+}
+
+// TestRoutesLogsTerminalErrorIsRedactedInLogs proves a terminal stream failure
+// is redacted in the handler's log line (the HTTP status is already sent, so
+// the log is where it surfaces) and that the received body is untouched.
+func TestRoutesLogsTerminalErrorIsRedactedInLogs(t *testing.T) {
+	secret := testEnv["PASSWORD"]
+	repo := newFakeRepository()
+	agent := &fakeAgent{
+		chunks:    [][]byte{[]byte("partial\n")},
+		streamErr: fmt.Errorf("%w: logs: invalid value %s", ErrDeployFailed, secret),
+	}
+	svc := newTestService(t, repo, agent)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&captured, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	router := routeTestServer(t, svc, userID)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/services/"+created.ID.String()+"/logs", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body)
+	}
+	if body := recorder.Body.String(); body != "partial\n" {
+		t.Fatalf("body = %q, want the application log content untouched", body)
+	}
+	if strings.Contains(captured.String(), secret) {
+		t.Fatalf("the handler log leaked the environment value: %s", captured.String())
+	}
+	if !strings.Contains(captured.String(), "<redacted>") {
+		t.Fatalf("the handler log does not show the redaction: %s", captured.String())
 	}
 }
 

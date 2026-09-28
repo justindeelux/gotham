@@ -444,7 +444,16 @@ message ComposeLogsRequest {
 // ComposeLogChunk is one chunk of merged compose output. Output is raw bytes:
 // compose logs carry no framing, so the control plane forwards them as-is.
 message ComposeLogChunk {
+  // data is a slice of the command's merged stdout/stderr. Empty on the
+  // acceptance frame.
   bytes data = 1;
+  // ready acknowledges that the agent accepted the request and is about to
+  // start the command; it is sent exactly once, before any output. It exists
+  // so the control plane can commit a stream response before the first line
+  // (a following stream may legitimately stay quiet) while still failing
+  // fast when the agent refuses the request (unknown project or compose
+  // service). Consumers must not treat it as log content.
+  bool ready = 2;
 }
 
 // ComposePsRequest lists one project's containers.

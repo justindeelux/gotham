@@ -367,6 +367,26 @@ func TestRenderRedaction(t *testing.T) {
 	}
 }
 
+// TestInterpolateEscapedBudgetIsExact proves the remaining-budget check counts
+// the escaped form of a value, not only its raw length: a dollar-rich value
+// whose rendered form exceeds the budget is refused before it is appended.
+func TestInterpolateEscapedBudgetIsExact(t *testing.T) {
+	env := map[string]string{"V": "$$$$"} // renders as 8 bytes
+	if _, err := interpolateString("${V}", env, 4); !errors.Is(err, ErrValidation) {
+		t.Fatalf("interpolateString = %v, want the budget rejection", err)
+	}
+	// Exactly at the budget passes: "$$" renders as four bytes.
+	if rendered, err := interpolateString("${V}", map[string]string{"V": "$$"}, 4); err != nil || rendered != "$$$$" {
+		t.Fatalf("interpolateString = %q, %v; want %q", rendered, err, "$$$$")
+	}
+	// A long dollar-rich value inside a real document is rejected without
+	// exceeding the rendered limit.
+	document := "services:\n  web:\n    image: ${BIG}\n"
+	if _, err := Interpolate(document, map[string]string{"BIG": strings.Repeat("$", 2<<20)}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Interpolate = %v, want the rendered-size rejection", err)
+	}
+}
+
 // TestInterpolateModifierArguments proves the operator is selected at the end
 // of the variable name, so operator characters inside an argument stay part of
 // the argument.

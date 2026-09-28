@@ -277,6 +277,12 @@ func (s *ComposeServer) ComposeDown(ctx context.Context, req *agentv1.ComposeDow
 // ComposeLogs streams the merged stdout/stderr of one compose service (or of
 // the whole project when service is empty) until the client cancels or the
 // CLI exits.
+//
+// The request is fully validated before the CLI starts — project file, service
+// name shape and membership in the document's declared services — and the
+// first frame is an acceptance (`ready`) frame. A refusal therefore fails the
+// client's first receive, and a following stream that legitimately stays quiet
+// still opens promptly.
 func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc.ServerStreamingServer[agentv1.ComposeLogChunk]) error {
 	project, err := validateComposeProject(req.GetProjectName())
 	if err != nil {
@@ -290,6 +296,19 @@ func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc
 		return err
 	}
 	ctx := stream.Context()
+	if service != "" {
+		// A syntactically valid but unknown selector must be refused here,
+		// before the CLI runs: otherwise compose's own refusal would be
+		// forwarded as the first output chunk and the control plane would
+		// commit a successful stream response for a failed command.
+		declared, err := s.configList(ctx, project, "--services")
+		if err != nil {
+			return composeError("logs", err)
+		}
+		if !containsLine(declared, service) {
+			return status.Errorf(codes.InvalidArgument, "no such compose service %q in this project", service)
+		}
+	}
 	args := []string{"logs", "--no-color"}
 	if req.GetTail() > 0 {
 		args = append(args, "--tail", strconv.FormatInt(req.GetTail(), 10))
@@ -307,8 +326,13 @@ func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc
 	if req.GetFollow() {
 		timeout = 0
 	}
-	command, cancel := s.command(ctx, project, timeout, args...)
+	commandCtx := ctx
+	var cancel context.CancelFunc = func() {}
+	if timeout > 0 {
+		commandCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
 	defer cancel()
+	command := s.newCommand(commandCtx, project, args...)
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return status.Errorf(codes.Internal, "logs: %v", err)
@@ -320,6 +344,14 @@ func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc
 	if err := command.Start(); err != nil {
 		return composeError("logs", err)
 	}
+	// Acceptance: the request is validated and the command is running, so the
+	// control plane can commit the response before any output exists.
+	if err := stream.Send(&agentv1.ComposeLogChunk{Ready: true}); err != nil {
+		cancel()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return nil
+	}
 	// A send failure cancels the CLI immediately and closes both pipes: a
 	// stream whose consumer disappeared must not stay blocked while a
 	// grandchild of the CLI (for example one stage of a pipeline) keeps the
@@ -329,6 +361,19 @@ func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc
 		_ = stdout.Close()
 		_ = stderr.Close()
 	}}
+	// Cancellation (client gone or the command timeout) closes the pipes
+	// independently of send failures: a quiet descendant holding an inherited
+	// pipe open must not keep the drain blocked before Wait.
+	drainDone := make(chan struct{})
+	defer close(drainDone)
+	go func() {
+		select {
+		case <-commandCtx.Done():
+			_ = stdout.Close()
+			_ = stderr.Close()
+		case <-drainDone:
+		}
+	}()
 	// Both pipes write through one mutex-guarded sender: gRPC streams do not
 	// allow concurrent Send calls.
 	var (
@@ -371,6 +416,16 @@ func (s *ComposeServer) ComposeLogs(req *agentv1.ComposeLogsRequest, stream grpc
 		return status.Errorf(codes.Internal, "logs: read compose output: %v", drainErr)
 	}
 	return nil
+}
+
+// containsLine reports whether lines contains value exactly.
+func containsLine(lines []string, value string) bool {
+	for _, line := range lines {
+		if line == value {
+			return true
+		}
+	}
+	return false
 }
 
 // ComposePs lists the project's containers with their compose service name,
@@ -475,12 +530,20 @@ func (s *ComposeServer) configList(ctx context.Context, project string, flag str
 // so a CLI warning (compose prints them on stderr) can never corrupt a
 // parsed output such as `ps --format json`; both streams are capped while
 // they are read, so a hostile or runaway CLI cannot make the agent buffer
-// arbitrary output. A parsed output that exceeds the cap fails instead of
-// being truncated into a wrong answer.
+// arbitrary output. A parsed output (config/ps) that exceeds its cap fails
+// instead of being truncated into a wrong answer; a verb whose stdout is only
+// ever quoted into a bounded diagnostic (up/down/restart) is capped at that
+// diagnostic size.
 func (s *ComposeServer) run(ctx context.Context, project string, args ...string) ([]byte, error) {
 	command, cancel := s.command(ctx, project, s.timeout, args...)
 	defer cancel()
-	stdout := &boundedBuffer{limit: maxComposeOutput}
+	verb := firstArg(args)
+	parsed := verb == "config" || verb == "ps"
+	stdoutLimit := maxComposeError
+	if parsed {
+		stdoutLimit = maxComposeOutput
+	}
+	stdout := &boundedBuffer{limit: stdoutLimit}
 	stderr := &boundedBuffer{limit: maxComposeError}
 	command.Stdout = stdout
 	command.Stderr = stderr
@@ -493,9 +556,9 @@ func (s *ComposeServer) run(ctx context.Context, project string, args ...string)
 		output := append(append([]byte{}, stderr.Bytes()...), stdout.Bytes()...)
 		return nil, &composeCommandError{err: err, output: output}
 	}
-	if stdout.Overflowed() {
+	if parsed && stdout.Overflowed() {
 		return nil, status.Errorf(codes.Internal,
-			"compose %s output exceeds %d bytes", firstArg(args), maxComposeOutput)
+			"compose %s output exceeds %d bytes", verb, maxComposeOutput)
 	}
 	return stdout.Bytes(), nil
 }

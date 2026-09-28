@@ -420,6 +420,214 @@ func TestConcurrentLifecycleOpsSerialize(t *testing.T) {
 	}
 }
 
+// waitForDown waits until the fake agent recorded a Down call.
+func waitForDown(t *testing.T, agent *fakeAgent) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		agent.mu.Lock()
+		calls := len(agent.downs)
+		agent.mu.Unlock()
+		if calls > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the operation never reached the agent's Down")
+}
+
+// TestQueuedRestartAfterDeleteDoesNotResurrect proves a restart queued behind a
+// delete re-reads the row under the lifecycle lock: the deleted service is
+// refused instead of starting containers for a project the control plane can no
+// longer see.
+func TestQueuedRestartAfterDeleteDoesNotResurrect(t *testing.T) {
+	repo := newFakeRepository()
+	gate := make(chan struct{})
+	agent := &fakeAgent{downGate: gate}
+	svc := newTestService(t, repo, agent)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- svc.Delete(context.Background(), userID, created.ID) }()
+	waitForDown(t, agent)
+
+	restartDone := make(chan error, 1)
+	go func() {
+		_, err := svc.Restart(context.Background(), userID, created.ID)
+		restartDone <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	close(gate)
+
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := <-restartDone; !errors.Is(err, ErrNotFound) {
+		t.Fatalf("queued Restart = %v, want ErrNotFound", err)
+	}
+	agent.mu.Lock()
+	ups := len(agent.ups)
+	agent.mu.Unlock()
+	if ups != 0 {
+		t.Fatalf("the queued restart resurrected the deleted project (%d Up calls)", ups)
+	}
+}
+
+// TestQueuedDeployAfterDeleteDoesNotResurrect proves the same for a deploy: it
+// must not record a deploy attempt or start the deleted project.
+func TestQueuedDeployAfterDeleteDoesNotResurrect(t *testing.T) {
+	repo := newFakeRepository()
+	gate := make(chan struct{})
+	agent := &fakeAgent{downGate: gate}
+	svc := newTestService(t, repo, agent)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- svc.Delete(context.Background(), userID, created.ID) }()
+	waitForDown(t, agent)
+
+	deployDone := make(chan error, 1)
+	go func() {
+		_, _, err := svc.Deploy(context.Background(), userID, created.ID)
+		deployDone <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	close(gate)
+
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := <-deployDone; !errors.Is(err, ErrNotFound) {
+		t.Fatalf("queued Deploy = %v, want ErrNotFound", err)
+	}
+	agent.mu.Lock()
+	ups := len(agent.ups)
+	agent.mu.Unlock()
+	if ups != 0 {
+		t.Fatalf("the queued deploy resurrected the deleted project (%d Up calls)", ups)
+	}
+	deploys, err := repo.ListServiceDeploys(context.Background(), created.ID, 10)
+	if err != nil {
+		t.Fatalf("ListServiceDeploys: %v", err)
+	}
+	if len(deploys) != 0 {
+		t.Fatalf("the queued deploy recorded attempts for a deleted service: %+v", deploys)
+	}
+}
+
+// TestQueuedRestartUsesThePostDeployState proves a queued lifecycle action
+// re-reads the row under the lock and picks the verb for the state it finds:
+// a restart queued behind a deploy restarts the now-running project instead of
+// starting it again.
+func TestQueuedRestartUsesThePostDeployState(t *testing.T) {
+	repo := newFakeRepository()
+	gate := make(chan struct{})
+	agent := &fakeAgent{upGate: gate}
+	svc := newTestService(t, repo, agent)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID) // status creating
+
+	deployDone := make(chan error, 1)
+	go func() {
+		_, _, err := svc.Deploy(context.Background(), userID, created.ID)
+		deployDone <- err
+	}()
+	waitForUp(t, agent)
+
+	restartDone := make(chan error, 1)
+	go func() {
+		_, err := svc.Restart(context.Background(), userID, created.ID)
+		restartDone <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	close(gate)
+
+	if err := <-deployDone; err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if err := <-restartDone; err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	if !agent.lastUp(t).restart {
+		t.Fatal("a restart queued behind a deploy must restart the now-running project, not start it again")
+	}
+}
+
+// TestTerminalLogErrorIsRedacted proves the stream's terminal error goes
+// through the same environment-aware boundary as every other node error, while
+// the log content itself passes through untouched.
+func TestTerminalLogErrorIsRedacted(t *testing.T) {
+	secret := testEnv["PASSWORD"]
+	repo := newFakeRepository()
+	agent := &fakeAgent{
+		chunks:    [][]byte{[]byte("partial output\n")},
+		streamErr: fmt.Errorf("%w: logs: invalid value %s", ErrDeployFailed, secret),
+	}
+	svc := newTestService(t, repo, agent)
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID)
+
+	stream, err := svc.Logs(context.Background(), userID, created.ID, "worker", 10, false)
+	if err != nil {
+		t.Fatalf("Logs: %v", err)
+	}
+	var body strings.Builder
+	for chunk := range stream.Chunks() {
+		body.Write(chunk)
+	}
+	if body.String() != "partial output\n" {
+		t.Fatalf("log content = %q, want it untouched", body.String())
+	}
+	terminal := stream.Err()
+	if !errors.Is(terminal, ErrDeployFailed) {
+		t.Fatalf("terminal error = %v, want ErrDeployFailed", terminal)
+	}
+	if strings.Contains(terminal.Error(), secret) {
+		t.Fatalf("terminal error leaked the environment value: %v", terminal)
+	}
+	if !strings.Contains(terminal.Error(), "<redacted>") {
+		t.Fatalf("terminal error does not show the redaction: %v", terminal)
+	}
+}
+
+// TestLogsRejectsUnknownComposeServiceBeforeDialing proves the selector is
+// validated against the stored document on the control plane, so an unknown
+// service is a validation error instead of a node round trip whose CLI refusal
+// would arrive as the first output.
+func TestLogsRejectsUnknownComposeServiceBeforeDialing(t *testing.T) {
+	repo := newFakeRepository()
+	agent := &fakeAgent{}
+	dials := 0
+	svc := NewService(Config{
+		Repository: repo,
+		Logger:     discardLogger(),
+		Dial: func(context.Context, uuid.UUID) (ComposeAgent, error) {
+			dials++
+			return agent, nil
+		},
+	})
+	userID := uuid.New()
+	created := createService(t, svc, repo, userID) // document declares web + worker
+
+	if _, err := svc.Logs(context.Background(), userID, created.ID, "missing", 10, false); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Logs(unknown) = %v, want ErrValidation", err)
+	}
+	if dials != 0 {
+		t.Fatalf("an unknown selector reached the node (%d dials)", dials)
+	}
+	stream, err := svc.Logs(context.Background(), userID, created.ID, "web", 10, false)
+	if err != nil {
+		t.Fatalf("Logs(web): %v", err)
+	}
+	for range stream.Chunks() {
+	}
+	if dials != 1 {
+		t.Fatalf("a declared selector dialed %d times, want 1", dials)
+	}
+}
+
 // waitForUp waits until the fake agent recorded an Up call.
 func waitForUp(t *testing.T, agent *fakeAgent) {
 	t.Helper()

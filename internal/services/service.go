@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -334,11 +335,10 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 // running. If no snapshot exists either, the row is retained with an error so
 // an operator can fix or redeploy the service.
 func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) error {
-	service, err := s.service(ctx, userID, serviceID)
+	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
 		return err
 	}
-	release := s.lifecycleLock(service.ID)
 	defer release()
 
 	rendered, renderErr := Render(service.ComposeYAML, service.Env)
@@ -395,14 +395,10 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 	if !Enabled() {
 		return Service{}, Deploy{}, ErrDisabled
 	}
-	if err := s.ready(); err != nil {
-		return Service{}, Deploy{}, err
-	}
-	service, err := s.service(ctx, userID, serviceID)
+	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
 		return Service{}, Deploy{}, err
 	}
-	release := s.lifecycleLock(service.ID)
 	defer release()
 
 	rendered, err := Render(service.ComposeYAML, service.Env)
@@ -455,11 +451,10 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 // Stop takes the project down. The named volumes keep every byte, so a stopped
 // service is fully recoverable by a deploy or a restart.
 func (s *service) Stop(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
-	service, err := s.service(ctx, userID, serviceID)
+	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
 		return Service{}, err
 	}
-	release := s.lifecycleLock(service.ID)
 	defer release()
 
 	rendered, err := Render(service.ComposeYAML, service.Env)
@@ -479,11 +474,10 @@ func (s *service) Stop(ctx context.Context, userID, serviceID uuid.UUID) (Servic
 
 // Restart restarts a running project in place and starts a stopped one.
 func (s *service) Restart(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
-	service, err := s.service(ctx, userID, serviceID)
+	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
 		return Service{}, err
 	}
-	release := s.lifecycleLock(service.ID)
 	defer release()
 
 	rendered, err := Render(service.ComposeYAML, service.Env)
@@ -538,6 +532,12 @@ func (s *service) Containers(ctx context.Context, userID, serviceID uuid.UUID) (
 
 // Logs streams the project's logs (or one compose service's) from the node.
 // The returned stream owns the agent connection and closes it when it ends.
+//
+// The compose service selector is validated against the stored document before
+// the node is dialed, so an unknown selector is a validation error instead of
+// a CLI refusal that would arrive as the stream's first output. The terminal
+// stream error is redacted like every other node error: only application log
+// content is passed through untouched.
 func (s *service) Logs(ctx context.Context, userID, serviceID uuid.UUID, composeService string, tail int64, follow bool) (LogStream, error) {
 	service, err := s.service(ctx, userID, serviceID)
 	if err != nil {
@@ -550,6 +550,16 @@ func (s *service) Logs(ctx context.Context, userID, serviceID uuid.UUID, compose
 	if tail < 0 {
 		return nil, fmt.Errorf("%w: tail must not be negative", ErrValidation)
 	}
+	if composeService != "" {
+		// A document that no longer renders is not fatal for a log read (the
+		// node may still have the project's file); the selector check simply
+		// cannot run and the agent validates instead.
+		if rendered, renderErr := Render(service.ComposeYAML, service.Env); renderErr == nil {
+			if !slices.Contains(rendered.Spec.Services, composeService) {
+				return nil, fmt.Errorf("%w: no compose service %q in this project", ErrValidation, composeService)
+			}
+		}
+	}
 	agent, err := s.dialAgent(ctx, service.ServerID)
 	if err != nil {
 		return nil, err
@@ -559,8 +569,29 @@ func (s *service) Logs(ctx context.Context, userID, serviceID uuid.UUID, compose
 		_ = agent.Close()
 		return nil, RedactError(err, service.Env)
 	}
-	return stream, nil
+	return &redactingLogStream{inner: stream, env: service.Env}, nil
 }
+
+// redactingLogStream applies the service environment's redaction boundary to a
+// node log stream's terminal error, which is stored and logged after the HTTP
+// response has already started. Chunks (actual application log content) pass
+// through untouched, and the error chain stays matchable through Unwrap.
+type redactingLogStream struct {
+	inner LogStream
+	env   map[string]string
+}
+
+// Compile-time guarantee.
+var _ LogStream = (*redactingLogStream)(nil)
+
+// Chunks implements LogStream.
+func (s *redactingLogStream) Chunks() <-chan []byte { return s.inner.Chunks() }
+
+// Err implements LogStream.
+func (s *redactingLogStream) Err() error { return RedactError(s.inner.Err(), s.env) }
+
+// Close implements LogStream.
+func (s *redactingLogStream) Close() error { return s.inner.Close() }
 
 // Deploys returns the deploy history, newest first.
 func (s *service) Deploys(ctx context.Context, userID, serviceID uuid.UUID) ([]Deploy, error) {
@@ -611,6 +642,28 @@ func (s *service) setStatus(ctx context.Context, service Service, status Status)
 // lock sufficient, matching the proxy service's single-process assumption.
 func (s *service) lifecycleLock(serviceID uuid.UUID) func() {
 	return s.locks.acquire(serviceID)
+}
+
+// lifecycle loads a service the caller owns while holding its lifecycle lock.
+// The authoritative row read happens after the lock is acquired, so a queued
+// operation always acts on the state its predecessor left behind: a Restart
+// queued behind a Delete reads the deleted row and refuses instead of
+// resurrecting containers. The returned release function must be deferred by
+// the caller.
+func (s *service) lifecycle(ctx context.Context, userID, serviceID uuid.UUID) (Service, func(), error) {
+	if err := s.ready(); err != nil {
+		return Service{}, nil, err
+	}
+	if serviceID == uuid.Nil {
+		return Service{}, nil, fmt.Errorf("%w: invalid service id", ErrValidation)
+	}
+	release := s.lifecycleLock(serviceID)
+	service, err := s.service(ctx, userID, serviceID)
+	if err != nil {
+		release()
+		return Service{}, nil, err
+	}
+	return service, release, nil
 }
 
 // syncProxy asks the Phase 6 proxy to re-synchronize the node's routing

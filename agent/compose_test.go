@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -363,6 +364,7 @@ type fakeComposeStream struct {
 	grpc.ServerStream
 	ctx     context.Context
 	chunks  [][]byte
+	frames  []*agentv1.ComposeLogChunk
 	sendErr error
 }
 
@@ -372,16 +374,136 @@ func (s *fakeComposeStream) Send(chunk *agentv1.ComposeLogChunk) error {
 	if s.sendErr != nil {
 		return s.sendErr
 	}
+	s.frames = append(s.frames, chunk)
 	s.chunks = append(s.chunks, chunk.GetData())
 	return nil
 }
 
-// TestComposeLogsStreams proves logs stream chunk by chunk and that a service
-// selector is passed through.
+// TestComposeLogsRefusesUnknownServiceBeforeCLI proves a syntactically valid
+// but unknown selector is rejected before the logs command runs: otherwise
+// compose's stderr refusal would be forwarded as the first output chunk and the
+// control plane would commit a successful stream for a failed command.
+func TestComposeLogsRefusesUnknownServiceBeforeCLI(t *testing.T) {
+	logPath := fakeDockerCLI(t, `
+case "$6" in
+  config) printf 'web\n' ;;
+  logs) printf 'no such service: missing\n' 1>&2; exit 1 ;;
+esac
+exit 0
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+	}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	err := server.ComposeLogs(&agentv1.ComposeLogsRequest{
+		ProjectName: composeTestProject,
+		Service:     "missing",
+	}, &fakeComposeStream{ctx: context.Background()})
+	if status.Code(err) != codes.InvalidArgument || !strings.Contains(status.Convert(err).Message(), "no such compose service") {
+		t.Fatalf("ComposeLogs(unknown) = %v, want InvalidArgument", err)
+	}
+	for _, call := range composeCalls(t, logPath) {
+		if strings.Contains(call, "logs") {
+			t.Fatalf("the logs command ran for an unknown selector: %q", call)
+		}
+	}
+}
+
+// TestComposeLogsQuietDescendantCancellation proves context cancellation ends
+// a stream even when a quiet descendant of the CLI keeps the inherited pipes
+// open: the drain must not wait for it before reaping the command.
+func TestComposeLogsQuietDescendantCancellation(t *testing.T) {
+	fakeDockerCLI(t, `
+case "$6" in
+  config) printf 'web\n' ;;
+  logs)
+    printf 'first line\n'
+    sleep 8 &
+    wait
+    ;;
+esac
+exit 0
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+	}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &slowComposeStream{ctx: ctx}
+	done := make(chan error, 1)
+	go func() {
+		done <- server.ComposeLogs(&agentv1.ComposeLogsRequest{ProjectName: composeTestProject, Follow: true}, stream)
+	}()
+	waitForBytes(t, stream, 1)
+	start := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cancelled stream = %v, want nil", err)
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Fatalf("cancellation took %s; a quiet descendant kept the pipes open", elapsed)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("a cancelled stream with a quiet descendant did not return")
+	}
+}
+
+// TestComposeFailedVerbOutputIsDiagnosticBounded proves a verb whose stdout is
+// only ever quoted into a diagnostic (up/down) does not retain the parsed
+// output budget: a failing up writing megabytes stays bounded.
+func TestComposeFailedVerbOutputIsDiagnosticBounded(t *testing.T) {
+	fakeDockerCLI(t, `
+case "$6" in
+  config) printf 'web\n' ;;
+  up)
+    head -c 4194304 /dev/zero | tr '\0' 'u'
+    printf 'up failed\n' 1>&2
+    exit 1
+    ;;
+esac
+exit 0
+`)
+	server := newTestComposeServer(t, ComposeServerConfig{})
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: []byte(composeTestDocument),
+	})
+	runtime.ReadMemStats(&after)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("code = %v, want Internal", status.Code(err))
+	}
+	if grown := after.TotalAlloc - before.TotalAlloc; grown > 1<<20 {
+		t.Fatalf("a failed up retained %d bytes of stdout", grown)
+	}
+	if message := status.Convert(err).Message(); len(message) > maxComposeError+200 {
+		t.Fatalf("diagnostic is unbounded: %d bytes", len(message))
+	}
+}
+
+// TestComposeLogsStreams proves logs stream chunk by chunk, that a service
+// selector is passed through and that the first frame is the acceptance frame.
 func TestComposeLogsStreams(t *testing.T) {
 	logPath := fakeDockerCLI(t, `
-printf 'worker-1  | alive\n'
-printf 'worker-1  | alive again\n'
+case "$6" in
+  config) printf 'web\nworker\n' ;;
+  logs)
+    printf 'worker-1  | alive\n'
+    printf 'worker-1  | alive again\n'
+    ;;
+esac
 exit 0
 `)
 	server := newTestComposeServer(t, ComposeServerConfig{})
@@ -402,6 +524,14 @@ exit 0
 	joined := string(joinChunks(stream.chunks))
 	if !strings.Contains(joined, "alive again") {
 		t.Errorf("logs = %q", joined)
+	}
+	if len(stream.frames) == 0 || !stream.frames[0].GetReady() {
+		t.Fatalf("the first frame must be the acceptance frame: %+v", stream.frames)
+	}
+	for _, frame := range stream.frames {
+		if frame.GetReady() && len(frame.GetData()) > 0 {
+			t.Errorf("an acceptance frame must carry no data: %+v", frame)
+		}
 	}
 	calls := composeCalls(t, logPath)
 	if !strings.Contains(strings.Join(calls, "\n"), "--tail 50") {
@@ -674,8 +804,8 @@ exit 0
 	if err := server.ComposeLogs(&agentv1.ComposeLogsRequest{ProjectName: composeTestProject}, stream); err != nil {
 		t.Fatalf("ComposeLogs: %v", err)
 	}
-	if stream.received != totalBytes {
-		t.Fatalf("delivered %d bytes of %d: the tail was truncated", stream.received, totalBytes)
+	if received := stream.receivedBytes(); received != totalBytes {
+		t.Fatalf("delivered %d bytes of %d: the tail was truncated", received, totalBytes)
 	}
 
 	// A consumer that fails cancels the CLI and the drain returns instead of
@@ -787,8 +917,12 @@ type slowComposeStream struct {
 	delay     time.Duration
 	failAfter int
 	sendErr   error
-	sends     int
-	received  int
+
+	// mu guards the counters: Send runs on the agent's copy goroutines while
+	// the test polls from its own goroutine (go test -race).
+	mu       sync.Mutex
+	sends    int
+	received int
 }
 
 func (s *slowComposeStream) Context() context.Context { return s.ctx }
@@ -797,6 +931,8 @@ func (s *slowComposeStream) Send(chunk *agentv1.ComposeLogChunk) error {
 	if s.delay > 0 {
 		time.Sleep(s.delay)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.sends++
 	if s.failAfter > 0 && s.sends > s.failAfter {
 		return s.sendErr
@@ -805,17 +941,24 @@ func (s *slowComposeStream) Send(chunk *agentv1.ComposeLogChunk) error {
 	return nil
 }
 
+// receivedBytes returns the number of data bytes sent so far.
+func (s *slowComposeStream) receivedBytes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.received
+}
+
 // waitForBytes polls until the stream received at least want bytes.
 func waitForBytes(t *testing.T, stream *slowComposeStream, want int) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if stream.received >= want {
+		if stream.receivedBytes() >= want {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("stream received %d bytes, want at least %d", stream.received, want)
+	t.Fatalf("stream received %d bytes, want at least %d", stream.receivedBytes(), want)
 }
 
 // joinChunks flattens streamed chunks.

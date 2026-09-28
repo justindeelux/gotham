@@ -244,10 +244,11 @@ type fakeAgent struct {
 	psCalls   []string
 	logCalls  []fakeLogs
 	chunks    [][]byte
-	// closes counts Close calls; ups may block on upGate so tests can set up
-	// an interleaving.
-	closes int
-	upGate chan struct{}
+	// closes counts Close calls; ups and downs may block on their gate so
+	// tests can set up an interleaving.
+	closes   int
+	upGate   chan struct{}
+	downGate chan struct{}
 }
 
 type fakeUp struct {
@@ -299,9 +300,14 @@ func (a *fakeAgent) Up(_ context.Context, project string, composeYAML []byte, re
 
 func (a *fakeAgent) Down(_ context.Context, project string, composeYAML []byte) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.downs = append(a.downs, fakeDown{project: project, yaml: string(composeYAML)})
-	return a.downErr
+	gate := a.downGate
+	err := a.downErr
+	a.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	return err
 }
 
 func (a *fakeAgent) Ps(_ context.Context, project string) ([]ComposeContainer, error) {

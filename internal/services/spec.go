@@ -180,7 +180,9 @@ func interpolateNode(node *yaml.Node, env map[string]string, remaining *int) err
 func interpolateString(value string, env map[string]string, limit int) (string, error) {
 	var out strings.Builder
 	appendValue := func(resolved string) error {
-		if len(resolved) > limit-out.Len() {
+		// The budget counts the escaped form that is actually written: a
+		// dollar-rich value can double in size.
+		if escapedLen(resolved) > limit-out.Len() {
 			return fmt.Errorf("%w: rendered compose document exceeds %d bytes", ErrValidation, MaxComposeYAML)
 		}
 		out.WriteString(escapeDollar(resolved))
@@ -352,6 +354,12 @@ func isEnvKeyStart(c byte) bool {
 // renders it unchanged.
 func escapeDollar(value string) string {
 	return strings.ReplaceAll(value, "$", "$$")
+}
+
+// escapedLen returns the length of value's escaped rendering without building
+// it.
+func escapedLen(value string) int {
+	return len(value) + strings.Count(value, "$")
 }
 
 // Parse validates the schema subset this package must understand and returns

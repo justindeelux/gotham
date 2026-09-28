@@ -143,10 +143,12 @@ func (a *GRPCComposeAgent) Ps(ctx context.Context, projectName string) ([]Compos
 	return containers, nil
 }
 
-// Logs implements ComposeAgent. The first receive happens synchronously, so a
-// node that refuses the stream (unavailable, missing project, bad selector)
-// fails the opening call with its own code instead of turning into a
-// successful empty stream.
+// Logs implements ComposeAgent. The first receive happens synchronously and
+// must be the agent's acceptance frame: a node that refuses the request
+// (unavailable, missing project, unknown compose service) fails the opening
+// call with its own code, while an accepted stream — even one that stays quiet
+// for a long time — opens immediately. Older agents that send data first are
+// still supported: the first frame is treated as output.
 func (a *GRPCComposeAgent) Logs(ctx context.Context, projectName, service string, tail int64, follow bool) (LogStream, error) {
 	stream, err := a.client.ComposeLogs(ctx, &agentv1.ComposeLogsRequest{
 		ProjectName: projectName,
@@ -168,22 +170,37 @@ func (a *GRPCComposeAgent) Logs(ctx context.Context, projectName, service string
 		}
 		return nil, mapAgentError("logs", err)
 	}
+	firstChunk := first.GetData()
+	if first.GetReady() {
+		// Acceptance only: no output exists yet.
+		firstChunk = nil
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
 	logStream := &grpcLogStream{
 		agent:      a,
 		chunks:     make(chan []byte, 64),
-		firstChunk: first.GetData(),
+		firstChunk: firstChunk,
+		ctx:        streamCtx,
+		cancel:     cancel,
 	}
-	go logStream.drain(ctx, stream)
+	go logStream.drain(stream)
 	return logStream, nil
 }
 
 // grpcLogStream delivers one agent log stream. drain owns the receive loop and
 // the agent's connection; Err is safe to read after Chunks is closed (the
 // channel close happens after the error is stored).
+//
+// The stream owns a cancellation context so Close can unblock both the receive
+// and the channel-send paths: a caller that stops reading and closes the
+// stream must not leave the drain goroutine retained on a full chunk channel.
 type grpcLogStream struct {
 	agent      *GRPCComposeAgent
 	chunks     chan []byte
 	firstChunk []byte
+	ctx        context.Context
+	cancel     context.CancelFunc
+	closeOnce  sync.Once
 	err        error
 }
 
@@ -196,8 +213,14 @@ func (s *grpcLogStream) Chunks() <-chan []byte { return s.chunks }
 // Err implements LogStream.
 func (s *grpcLogStream) Err() error { return s.err }
 
-// Close implements LogStream.
+// Close implements LogStream. It cancels the stream (unblocking the drain) and
+// releases the connection; it is safe to call more than once.
 func (s *grpcLogStream) Close() error {
+	s.closeOnce.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+	})
 	if s.agent == nil {
 		return nil
 	}
@@ -206,8 +229,8 @@ func (s *grpcLogStream) Close() error {
 
 // drain receives chunks until the stream ends, then closes the channel and the
 // connection. A terminal failure is stored unless the stream ended because the
-// caller canceled it (which needs no error).
-func (s *grpcLogStream) drain(ctx context.Context, stream grpc.ServerStreamingClient[agentv1.ComposeLogChunk]) {
+// caller canceled it or closed it (neither needs an error).
+func (s *grpcLogStream) drain(stream grpc.ServerStreamingClient[agentv1.ComposeLogChunk]) {
 	defer func() {
 		close(s.chunks)
 		_ = s.Close()
@@ -216,7 +239,7 @@ func (s *grpcLogStream) drain(ctx context.Context, stream grpc.ServerStreamingCl
 		select {
 		case s.chunks <- chunk:
 			return true
-		case <-ctx.Done():
+		case <-s.ctx.Done():
 			return false
 		}
 	}
@@ -226,10 +249,14 @@ func (s *grpcLogStream) drain(ctx context.Context, stream grpc.ServerStreamingCl
 	for {
 		chunk, err := stream.Recv()
 		if err != nil {
-			if !errors.Is(err, io.EOF) && ctx.Err() == nil {
+			if !errors.Is(err, io.EOF) && s.ctx.Err() == nil {
 				s.err = mapAgentError("logs", err)
 			}
 			return
+		}
+		if chunk.GetReady() {
+			// A duplicate acceptance frame carries no output.
+			continue
 		}
 		if !send(chunk.GetData()) {
 			return

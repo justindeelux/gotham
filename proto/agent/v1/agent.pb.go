@@ -2239,8 +2239,17 @@ func (x *ComposeLogsRequest) GetTail() int64 {
 // ComposeLogChunk is one chunk of merged compose output. Output is raw bytes:
 // compose logs carry no framing, so the control plane forwards them as-is.
 type ComposeLogChunk struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// data is a slice of the command's merged stdout/stderr. Empty on the
+	// acceptance frame.
+	Data []byte `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	// ready acknowledges that the agent accepted the request and is about to
+	// start the command; it is sent exactly once, before any output. It exists
+	// so the control plane can commit a stream response before the first line
+	// (a following stream may legitimately stay quiet) while still failing
+	// fast when the agent refuses the request (unknown project or compose
+	// service). Consumers must not treat it as log content.
+	Ready         bool `protobuf:"varint,2,opt,name=ready,proto3" json:"ready,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2280,6 +2289,13 @@ func (x *ComposeLogChunk) GetData() []byte {
 		return x.Data
 	}
 	return nil
+}
+
+func (x *ComposeLogChunk) GetReady() bool {
+	if x != nil {
+		return x.Ready
+	}
+	return false
 }
 
 // ComposePsRequest lists one project's containers.
@@ -2645,9 +2661,10 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x16\n" +
 	"\x06follow\x18\x03 \x01(\bR\x06follow\x12\x12\n" +
-	"\x04tail\x18\x04 \x01(\x03R\x04tail\"%\n" +
+	"\x04tail\x18\x04 \x01(\x03R\x04tail\";\n" +
 	"\x0fComposeLogChunk\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\"5\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x12\x14\n" +
+	"\x05ready\x18\x02 \x01(\bR\x05ready\"5\n" +
 	"\x10ComposePsRequest\x12!\n" +
 	"\fproject_name\x18\x01 \x01(\tR\vprojectName\"\xd5\x01\n" +
 	"\x10ComposeContainer\x12\x18\n" +

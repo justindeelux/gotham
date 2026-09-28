@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
@@ -40,14 +41,24 @@ func (c *fakeComposeClient) Close() error {
 type scriptedComposeStream struct {
 	grpc.ClientStream
 	chunks [][]byte
+	ready  bool
 	errs   []error
-	index  int
+	// block, when set, makes Recv block after the scripted results until it is
+	// closed (a quiet stream that stays open).
+	block <-chan struct{}
+	index int
 }
 
 // Recv returns the next scripted chunk or error.
 func (s *scriptedComposeStream) Recv() (*agentv1.ComposeLogChunk, error) {
 	index := s.index
 	s.index++
+	if index == 0 && s.ready {
+		return &agentv1.ComposeLogChunk{Ready: true}, nil
+	}
+	if s.ready {
+		index--
+	}
 	if index < len(s.chunks) {
 		return &agentv1.ComposeLogChunk{Data: s.chunks[index]}, nil
 	}
@@ -58,7 +69,100 @@ func (s *scriptedComposeStream) Recv() (*agentv1.ComposeLogChunk, error) {
 		}
 		return nil, err
 	}
+	if s.block != nil {
+		<-s.block
+	}
 	return nil, io.EOF
+}
+
+// TestGRPCComposeAgentQuietFollowOpensOnAcceptance proves the acceptance frame
+// lets a following stream that produces no output open promptly: the caller
+// gets a stream before any log line exists.
+func TestGRPCComposeAgentQuietFollowOpensOnAcceptance(t *testing.T) {
+	block := make(chan struct{})
+	client := &fakeComposeClient{stream: &scriptedComposeStream{ready: true, block: block}}
+	agent := NewGRPCComposeAgent(client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opened := make(chan LogStream, 1)
+	openErr := make(chan error, 1)
+	go func() {
+		stream, err := agent.Logs(ctx, "gotham-x", "web", 10, true)
+		if err != nil {
+			openErr <- err
+			return
+		}
+		opened <- stream
+	}()
+	select {
+	case err := <-openErr:
+		t.Fatalf("Logs: %v", err)
+	case <-opened:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a quiet follow stream did not open without its first log line")
+	}
+	close(block)
+}
+
+// TestGRPCComposeAgentRefusalFailsBeforeAnyOutput proves a refusal carried by
+// the first receive maps to the caller's sentinel, so the HTTP layer never
+// commits a successful stream for a refused command.
+func TestGRPCComposeAgentRefusalFailsBeforeAnyOutput(t *testing.T) {
+	client := &fakeComposeClient{stream: &scriptedComposeStream{
+		errs: []error{status.Error(codes.InvalidArgument, "no such compose service \"missing\" in this project")},
+	}}
+	agent := NewGRPCComposeAgent(client)
+	stream, err := agent.Logs(context.Background(), "gotham-x", "missing", 10, false)
+	if stream != nil {
+		t.Fatalf("stream = %v, want nil for a refused command", stream)
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("error = %v, want ErrValidation", err)
+	}
+}
+
+// TestGRPCComposeAgentCloseUnblocksBackpressuredStream proves Close ends a
+// drain blocked on its full chunk channel without the caller consuming the
+// channel or canceling the original context.
+func TestGRPCComposeAgentCloseUnblocksBackpressuredStream(t *testing.T) {
+	chunks := make([][]byte, 200)
+	for i := range chunks {
+		chunks[i] = []byte("line\n")
+	}
+	client := &fakeComposeClient{stream: &scriptedComposeStream{ready: true, chunks: chunks}}
+	agent := NewGRPCComposeAgent(client)
+	stream, err := agent.Logs(context.Background(), "gotham-x", "", 0, true)
+	if err != nil {
+		t.Fatalf("Logs: %v", err)
+	}
+	// Read one chunk, then stop: the drain fills the 64-chunk buffer and
+	// blocks on the next send.
+	if _, ok := <-stream.Chunks(); !ok {
+		t.Fatal("stream closed before any chunk")
+	}
+	time.Sleep(200 * time.Millisecond)
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	// The drain must finish on its own now.
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case _, ok := <-stream.Chunks():
+			if !ok {
+				if err := stream.Err(); err != nil {
+					t.Fatalf("Err after a caller Close = %v, want nil", err)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("Close did not unblock the backpressured drain")
+		}
+	}
 }
 
 // TestGRPCComposeAgentFirstReadFailure proves a stream the node refuses fails

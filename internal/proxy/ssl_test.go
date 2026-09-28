@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/providers"
 )
 
 func TestMatchZone(t *testing.T) {
@@ -265,31 +267,96 @@ func TestResolveRouteCertificate(t *testing.T) {
 	}
 }
 
-func TestResolveRouteCertificateWildcardUsesMatchedZone(t *testing.T) {
+// wildcardCoversHost reports whether requesting main=host plus `*.base` covers
+// host, mirroring certificate name matching: a wildcard SAN covers exactly one
+// label.
+func wildcardCoversHost(host, base string) bool {
+	if host == base {
+		return true
+	}
+	prefix, suffix, ok := strings.Cut(host, ".")
+	if !ok {
+		return false
+	}
+	return suffix == base && prefix != ""
+}
+
+func TestWildcardBase(t *testing.T) {
+	cases := []struct {
+		name  string
+		host  string
+		zones []string
+		want  string
+		ok    bool
+	}{
+		{name: "one level", host: "app.example.com", zones: []string{"example.com"}, want: "example.com", ok: true},
+		{name: "multi level uses the parent", host: "app.sub.example.com", zones: []string{"example.com"}, want: "sub.example.com", ok: true},
+		{name: "most specific parent", host: "a.b.sub.example.com", zones: []string{"example.com", "sub.example.com"}, want: "b.sub.example.com", ok: true},
+		{name: "apex uses itself", host: "example.com", zones: []string{"example.com"}, want: "example.com", ok: true},
+		{name: "zone apex uses itself", host: "sub.example.com", zones: []string{"sub.example.com"}, want: "sub.example.com", ok: true},
+		{name: "outside every zone", host: "app.other.example", zones: []string{"example.com"}, ok: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base, ok := wildcardBase(tc.host, tc.zones)
+			if ok != tc.ok || base != tc.want {
+				t.Fatalf("wildcardBase(%q, %v) = (%q, %v), want (%q, %v)", tc.host, tc.zones, base, ok, tc.want, tc.ok)
+			}
+			if ok && MatchZone(tc.zones, base) == "" {
+				t.Fatalf("base %q is not inside a configured zone %v", base, tc.zones)
+			}
+			if ok && !wildcardCoversHost(tc.host, base) {
+				t.Fatalf("base %q does not cover host %q", base, tc.host)
+			}
+		})
+	}
+}
+
+// TestResolveRouteCertificateWildcardCoversRoutedHost proves the generated
+// wildcard request actually covers the routed host: for a multi-level host the
+// old zone-level wildcard (example.com + *.example.com) covered neither
+// app.sub.example.com nor its siblings.
+func TestResolveRouteCertificateWildcardCoversRoutedHost(t *testing.T) {
 	providerID := uuid.New()
 	providers := map[uuid.UUID]providerAccess{
 		providerID: {
 			provider: DNSProvider{
 				ID: providerID, Provider: ProviderCloudflare, Enabled: true,
-				Zones: []string{"example.com", "sub.example.com"},
+				Zones: []string{"example.com"},
 			},
 			credential: "token",
 		},
 	}
-	app := ProxiedApplication{
-		ID:         uuid.New(),
-		BaseDomain: "app.sub.example.com",
-		Certificate: &CertificateIntent{
-			Domain: "app.sub.example.com", Enabled: true, Challenge: ChallengeDNS01, Wildcard: true,
-			DNSProviderID: providerID,
-		},
+	cases := []struct {
+		host string
+		want string
+	}{
+		{host: "app.example.com", want: "example.com"},
+		{host: "app.sub.example.com", want: "sub.example.com"},
+		{host: "a.b.example.com", want: "b.example.com"},
+		{host: "example.com", want: "example.com"},
 	}
-	certificate, reason := resolveRouteCertificate(app, "app.sub.example.com", providers)
-	if reason != "" {
-		t.Fatalf("reason = %q, want an active certificate", reason)
-	}
-	if certificate.WildcardMain != "sub.example.com" {
-		t.Fatalf("wildcard main = %q, want the most specific matching zone", certificate.WildcardMain)
+	for _, tc := range cases {
+		t.Run(tc.host, func(t *testing.T) {
+			app := ProxiedApplication{
+				ID:         uuid.New(),
+				BaseDomain: tc.host,
+				Certificate: &CertificateIntent{
+					Domain: tc.host, Enabled: true, Challenge: ChallengeDNS01, Wildcard: true,
+					DNSProviderID: providerID,
+				},
+			}
+			certificate, reason := resolveRouteCertificate(app, tc.host, providers)
+			if reason != "" {
+				t.Fatalf("reason = %q, want an active certificate", reason)
+			}
+			if certificate.WildcardBase != tc.want {
+				t.Fatalf("wildcard base = %q, want %q", certificate.WildcardBase, tc.want)
+			}
+			if !wildcardCoversHost(tc.host, certificate.WildcardBase) {
+				t.Fatalf("wildcard base %q does not cover host %q (and the main name is the host only)", certificate.WildcardBase, tc.host)
+			}
+		})
 	}
 }
 
@@ -304,5 +371,51 @@ func TestOpenCredentialRejectsForeignKey(t *testing.T) {
 	plain, err := openCredential("right-key", sealed)
 	if err != nil || plain != "token" {
 		t.Fatalf("openCredential = (%q, %v), want the token", plain, err)
+	}
+}
+
+// TestCredentialCryptographyRefusesEmptySecret proves the public empty-string
+// key is never used: neither to seal a new token nor to open one (even a value
+// sealed with that public key), so stored DNS credentials are only readable
+// under a configured deployment secret.
+func TestCredentialCryptographyRefusesEmptySecret(t *testing.T) {
+	if _, err := sealCredential("", "cf-token"); !errors.Is(err, ErrSecret) {
+		t.Fatalf("sealCredential with an empty secret = %v, want ErrSecret", err)
+	}
+	if _, err := sealCredential("   ", "cf-token"); !errors.Is(err, ErrSecret) {
+		t.Fatalf("sealCredential with a whitespace secret = %v, want ErrSecret", err)
+	}
+	// A legacy row could have been sealed with the public empty key before
+	// this guard existed; it must not be opened under it either.
+	weak, err := providers.SealSecret("", "legacy-token")
+	if err != nil {
+		t.Fatalf("providers.SealSecret: %v", err)
+	}
+	if _, err := openCredential("", weak); !errors.Is(err, ErrSecret) {
+		t.Fatalf("openCredential with an empty secret = %v, want ErrSecret", err)
+	}
+	sealed, err := sealCredential("real-key", "cf-token")
+	if err != nil {
+		t.Fatalf("sealCredential: %v", err)
+	}
+	if plain, err := openCredential("real-key", sealed); err != nil || plain != "cf-token" {
+		t.Fatalf("openCredential = (%q, %v), want the token", plain, err)
+	}
+}
+
+// TestEnvFingerprintEmptySecretIsNotDerivable proves an empty deployment
+// secret never keys the HMAC: the fingerprint is a fixed marker that cannot be
+// brute-forced against a candidate value, and a configured secret produces a
+// keyed digest that differs from it.
+func TestEnvFingerprintEmptySecretIsNotDerivable(t *testing.T) {
+	env := []string{"CF_DNS_API_TOKEN=secret-token"}
+	if got := envFingerprint("", env); got != "unconfigured" {
+		t.Fatalf("empty-secret fingerprint = %q, want the fixed unconfigured marker", got)
+	}
+	if envFingerprint("   ", env) != "unconfigured" {
+		t.Fatal("whitespace-only secret must behave like an empty one")
+	}
+	if envFingerprint("real-key", env) == envFingerprint("", env) {
+		t.Fatal("a keyed fingerprint must differ from the unconfigured marker")
 	}
 }

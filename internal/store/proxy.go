@@ -166,6 +166,13 @@ func (s *Store) UpdateDNSProvider(ctx context.Context, params sqlc.UpdateDNSProv
 	return s.queries.UpdateDNSProvider(ctx, params)
 }
 
+// UpdateDNSProviderMeta persists the mutable provider fields without touching
+// the sealed credential, so a non-rotation update cannot restore a stale
+// ciphertext over a concurrent rotation.
+func (s *Store) UpdateDNSProviderMeta(ctx context.Context, params sqlc.UpdateDNSProviderMetaParams) (sqlc.DnsProvider, error) {
+	return s.queries.UpdateDNSProviderMeta(ctx, params)
+}
+
 // DeleteDNSProvider removes a provider row. Foreign keys keep certificate
 // configs from dangling, but the service checks references first so the API
 // can answer a clear conflict.

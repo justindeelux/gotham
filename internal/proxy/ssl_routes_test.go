@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -206,6 +207,8 @@ func TestDNSProviderCRUDRoutes(t *testing.T) {
 }
 
 func TestSSLRouteMappingsAndValidation(t *testing.T) {
+	providerPath := "/v1/proxy/dns-providers/" + sampleProvider().ID.String()
+	oversized := `{"enabled":false}` + strings.Repeat(" ", maxSSLBodyBytes)
 	cases := []struct {
 		name   string
 		method string
@@ -214,13 +217,18 @@ func TestSSLRouteMappingsAndValidation(t *testing.T) {
 		status int
 	}{
 		{name: "create provider unknown field", method: http.MethodPost, path: "/v1/proxy/dns-providers", body: `{"provider":"cloudflare","zones":["example.com"],"credential":"t","sealed":"x"}`, status: http.StatusBadRequest},
-		{name: "create provider unknown field", method: http.MethodPost, path: "/v1/proxy/dns-providers", body: `{"provider":"cloudflare","zones":["example.com"],"credential":"t","sealed":"x"}`, status: http.StatusBadRequest},
 		{name: "create provider empty body", method: http.MethodPost, path: "/v1/proxy/dns-providers", body: "", status: http.StatusBadRequest},
 		{name: "bad provider id", method: http.MethodGet, path: "/v1/proxy/dns-providers/not-a-uuid", body: "", status: http.StatusBadRequest},
 		{name: "certificate missing application id", method: http.MethodPost, path: "/v1/proxy/certificates", body: `{"challenge":"http-01"}`, status: http.StatusBadRequest},
 		{name: "certificate bad application id", method: http.MethodPost, path: "/v1/proxy/certificates", body: `{"application_id":"nope"}`, status: http.StatusBadRequest},
 		{name: "certificate bad provider id", method: http.MethodPost, path: "/v1/proxy/certificates", body: `{"application_id":"dddddddd-0000-0000-0000-000000000004","challenge":"dns-01","dns_provider_id":"nope"}`, status: http.StatusBadRequest},
 		{name: "bad certificate id", method: http.MethodPatch, path: "/v1/proxy/certificates/not-a-uuid", body: `{"enabled":false}`, status: http.StatusBadRequest},
+		{name: "whitespace only body", method: http.MethodPatch, path: providerPath, body: "   \n\t ", status: http.StatusBadRequest},
+		{name: "json null body", method: http.MethodPatch, path: providerPath, body: `null`, status: http.StatusBadRequest},
+		{name: "trailing second value", method: http.MethodPatch, path: providerPath, body: `{"enabled":false}{"enabled":true}`, status: http.StatusBadRequest},
+		{name: "trailing garbage", method: http.MethodPatch, path: providerPath, body: `{"enabled":false} oops`, status: http.StatusBadRequest},
+		{name: "body over the limit", method: http.MethodPatch, path: providerPath, body: oversized, status: http.StatusBadRequest},
+		{name: "valid body with surrounding whitespace", method: http.MethodPatch, path: providerPath, body: "\n {\"enabled\":false} \n", status: http.StatusOK},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -291,6 +299,7 @@ func TestSSLErrorMapping(t *testing.T) {
 	}{
 		{name: "not found", err: ErrNotFound, status: http.StatusNotFound},
 		{name: "conflict", err: ErrConflict, status: http.StatusConflict},
+		{name: "missing deployment secret", err: fmt.Errorf("%w: refusing to store DNS provider credentials", ErrSecret), status: http.StatusServiceUnavailable},
 		{name: "internal", err: errors.New("boom"), status: http.StatusInternalServerError},
 	}
 	for _, tc := range cases {

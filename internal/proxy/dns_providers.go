@@ -42,31 +42,41 @@ type DNSProviderService interface {
 	DeleteProvider(ctx context.Context, id uuid.UUID) error
 }
 
-// CreateProvider validates and stores one DNS provider.
+// CreateProvider validates and stores one DNS provider inside the shared
+// mutation boundary, so an enabled certificate cannot be created against a
+// provider this write is about to change.
 func (s *sslService) CreateProvider(ctx context.Context, in CreateDNSProviderInput) (DNSProvider, error) {
 	enabled := true
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
-	write, err := s.providerWrite(in.Provider, in.Name, in.Zones, in.Credential, enabled)
-	if err != nil {
-		return DNSProvider{}, err
-	}
-	if enabled {
-		// The partial unique index is the enforcement; this pre-check answers
-		// a clear conflict in the common case (the index still catches the
-		// racing create).
-		existing, err := s.store.ListProviders(ctx)
+	var provider DNSProvider
+	err := s.mutate(ctx, func(ctx context.Context) error {
+		write, err := s.providerWrite(in.Provider, in.Name, in.Zones, in.Credential, enabled)
 		if err != nil {
-			return DNSProvider{}, err
+			return err
 		}
-		for _, provider := range existing {
-			if provider.Enabled && provider.Provider == write.Provider {
-				return DNSProvider{}, fmt.Errorf("%w: an enabled %s provider already exists", ErrConflict, write.Provider)
+		if enabled {
+			// The partial unique index is the enforcement; this pre-check
+			// answers a clear conflict in the common case (the index still
+			// catches a racing create).
+			existing, err := s.store.ListProviders(ctx)
+			if err != nil {
+				return err
+			}
+			for _, provider := range existing {
+				if provider.Enabled && provider.Provider == write.Provider {
+					return fmt.Errorf("%w: an enabled %s provider already exists", ErrConflict, write.Provider)
+				}
 			}
 		}
-	}
-	provider, err := s.store.CreateProvider(ctx, write)
+		created, err := s.store.CreateProvider(ctx, write)
+		if err != nil {
+			return err
+		}
+		provider = created
+		return nil
+	})
 	if err != nil {
 		return DNSProvider{}, err
 	}
@@ -87,62 +97,85 @@ func (s *sslService) GetProvider(ctx context.Context, id uuid.UUID) (DNSProvider
 	return s.store.GetProvider(ctx, id)
 }
 
-// UpdateProvider applies a partial update and enforces the reference guards:
-// while an enabled certificate config references the provider, it cannot be
-// disabled, retyped or narrowed to zones that no longer cover the configured
-// domains. Credential rotation is always allowed.
+// UpdateProvider applies a partial update inside the shared mutation
+// boundary and enforces the reference guards: while an enabled certificate
+// config references the provider, it cannot be disabled, retyped or narrowed
+// to zones that no longer cover the configured domains. Credential rotation
+// is always allowed.
+//
+// The whole read-modify-write is serialized, and an update that does not
+// rotate the credential writes only the non-credential columns, so a
+// concurrent rotation can never be overwritten by a name-only edit.
 func (s *sslService) UpdateProvider(ctx context.Context, id uuid.UUID, in UpdateDNSProviderInput) (DNSProvider, error) {
 	if id == uuid.Nil {
 		return DNSProvider{}, fmt.Errorf("%w: provider id is required", ErrValidation)
 	}
-	existing, err := s.store.GetProvider(ctx, id)
-	if err != nil {
-		return DNSProvider{}, err
-	}
-
-	next := existing
-	if in.Provider != nil {
-		next.Provider = *in.Provider
-	}
-	if in.Name != nil {
-		next.Name = strings.TrimSpace(*in.Name)
-	}
-	if in.Zones != nil {
-		zones, err := normalizeZones(*in.Zones)
+	var updated DNSProvider
+	err := s.mutate(ctx, func(ctx context.Context) error {
+		existing, err := s.store.GetProvider(ctx, id)
 		if err != nil {
-			return DNSProvider{}, err
+			return err
 		}
-		next.Zones = zones
-	}
-	if in.Enabled != nil {
-		next.Enabled = *in.Enabled
-	}
 
-	sealed := existing.SealedCredential
-	if in.Credential != nil {
-		credential, err := validateCredential(*in.Credential)
+		next := existing
+		if in.Provider != nil {
+			next.Provider = *in.Provider
+		}
+		if in.Name != nil {
+			next.Name = strings.TrimSpace(*in.Name)
+		}
+		if in.Zones != nil {
+			zones, err := normalizeZones(*in.Zones)
+			if err != nil {
+				return err
+			}
+			next.Zones = zones
+		}
+		if in.Enabled != nil {
+			next.Enabled = *in.Enabled
+		}
+
+		rotate := in.Credential != nil
+		sealed := existing.SealedCredential
+		if rotate {
+			credential, err := validateCredential(*in.Credential)
+			if err != nil {
+				return err
+			}
+			sealed, err = sealCredential(s.secret, credential)
+			if err != nil {
+				return err
+			}
+		}
+
+		if err := s.validateProviderState(next); err != nil {
+			return err
+		}
+		if err := s.guardProviderChange(ctx, existing, next); err != nil {
+			return err
+		}
+
+		write := DNSProviderWrite{
+			Provider:         next.Provider,
+			Name:             next.Name,
+			Zones:            next.Zones,
+			SealedCredential: sealed,
+			Enabled:          next.Enabled,
+		}
+		if rotate {
+			row, err := s.store.UpdateProvider(ctx, id, write)
+			if err != nil {
+				return err
+			}
+			updated = row
+			return nil
+		}
+		row, err := s.store.UpdateProviderMeta(ctx, id, write)
 		if err != nil {
-			return DNSProvider{}, err
+			return err
 		}
-		sealed, err = sealCredential(s.secret, credential)
-		if err != nil {
-			return DNSProvider{}, err
-		}
-	}
-
-	if err := s.validateProviderState(next); err != nil {
-		return DNSProvider{}, err
-	}
-	if err := s.guardProviderChange(ctx, existing, next); err != nil {
-		return DNSProvider{}, err
-	}
-
-	updated, err := s.store.UpdateProvider(ctx, id, DNSProviderWrite{
-		Provider:         next.Provider,
-		Name:             next.Name,
-		Zones:            next.Zones,
-		SealedCredential: sealed,
-		Enabled:          next.Enabled,
+		updated = row
+		return nil
 	})
 	if err != nil {
 		return DNSProvider{}, err
@@ -151,24 +184,28 @@ func (s *sslService) UpdateProvider(ctx context.Context, id uuid.UUID, in Update
 	return updated, nil
 }
 
-// DeleteProvider removes a provider that no certificate config references. A
-// referenced provider is a conflict (including disabled certificate configs,
-// whose foreign key would otherwise reject the delete after the fact).
+// DeleteProvider removes a provider that no certificate config references,
+// inside the shared mutation boundary. A referenced provider is a conflict
+// (including disabled certificate configs, whose foreign key would otherwise
+// reject the delete after the fact).
 func (s *sslService) DeleteProvider(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return fmt.Errorf("%w: provider id is required", ErrValidation)
 	}
-	if _, err := s.store.GetProvider(ctx, id); err != nil {
-		return err
-	}
-	count, err := s.store.CountCertificatesByProvider(ctx, id)
+	err := s.mutate(ctx, func(ctx context.Context) error {
+		if _, err := s.store.GetProvider(ctx, id); err != nil {
+			return err
+		}
+		count, err := s.store.CountCertificatesByProvider(ctx, id)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("%w: provider is referenced by %d certificate configuration(s); remove or re-point them first", ErrConflict, count)
+		}
+		return s.store.DeleteProvider(ctx, id)
+	})
 	if err != nil {
-		return err
-	}
-	if count > 0 {
-		return fmt.Errorf("%w: provider is referenced by %d certificate configuration(s); remove or re-point them first", ErrConflict, count)
-	}
-	if err := s.store.DeleteProvider(ctx, id); err != nil {
 		return err
 	}
 	s.notifyResync(ctx)

@@ -152,8 +152,9 @@ type Config struct {
 	// BackendHost is the address Traefik uses to reach published container
 	// ports; default DefaultBackendHost (the docker0 bridge gateway).
 	BackendHost string
-	// Secret opens the sealed DNS provider credentials. An empty key keeps
-	// the documented development fallback of providers.SealSecret.
+	// Secret opens the sealed DNS provider credentials. An empty (or
+	// whitespace-only) key is refused: no credential is placed in a node's
+	// environment, and the affected routes stay HTTP-only with a diagnostic.
 	Secret string
 	// ACMEEmail is the optional ACME contact address rendered into every
 	// generated certificate resolver; empty omits it.
@@ -623,6 +624,9 @@ func resolveRouteCertificate(app ProxiedApplication, domain string, providers ma
 			return nil, "the configured DNS provider is disabled"
 		}
 		if access.err != nil {
+			if errors.Is(access.err, ErrSecret) {
+				return nil, "the deployment secret is not configured, so DNS provider credentials cannot be used"
+			}
 			return nil, "the DNS provider credentials could not be opened"
 		}
 		zone := MatchZone(access.provider.Zones, domain)
@@ -639,7 +643,14 @@ func resolveRouteCertificate(app ProxiedApplication, domain string, providers ma
 			DNSProviderType: access.provider.Provider,
 		}
 		if intent.Wildcard {
-			certificate.WildcardMain = zone
+			// The wildcard must cover the routed host: keep the host as the
+			// main name and request `*.base` for a base inside the provider's
+			// zones.
+			base, ok := wildcardBase(domain, access.provider.Zones)
+			if !ok {
+				return nil, "the wildcard base is not inside any zone served by the DNS provider"
+			}
+			certificate.WildcardBase = base
 		}
 		return certificate, ""
 	default:
@@ -726,11 +737,19 @@ func traefikEnv(routes []Route, providers map[uuid.UUID]providerAccess) []string
 // cannot reveal or cheaply brute-force a credential, while rotating one still
 // changes the fingerprint (which is what recreates the container).
 //
+// An unusable deployment secret never keys an HMAC: no credential can be
+// placed in the environment without one (openCredential refuses it), so the
+// environment is necessarily empty and gets a fixed marker instead of a
+// publicly derivable digest.
+//
 // Limitation, documented deliberately: the engine does not report a running
 // container's environment to the agent, so drift can only be detected against
 // this recorded fingerprint — an environment changed out-of-band under Gotham
 // is invisible until the next recorded change.
 func envFingerprint(secret string, env []string) string {
+	if !secretUsable(secret) {
+		return "unconfigured"
+	}
 	key := sha256.Sum256([]byte("gotham:proxy:env:" + secret))
 	mac := hmac.New(sha256.New, key[:])
 	pairs := append([]string{}, env...)
@@ -993,7 +1012,36 @@ func (s *SyncService) bootstrapContainer(ctx context.Context, serverID uuid.UUID
 		Volumes:       TraefikVolumesFor(s.configDir, s.acmeDir),
 		RestartPolicy: TraefikRestartPolicy,
 	})
-	return err
+	// A backend error must never surface a credential that travelled in env:
+	// the error text is sanitized before it reaches push, the API or the logs.
+	return redactEnvValues(err, env)
+}
+
+// redactEnvValues replaces every credential value from env in the error text
+// with "<redacted>", so a backend error that echoes its request cannot leak a
+// DNS-01 token into logs or API error text. Variable names and the rest of the
+// message stay readable for diagnosis; an error that does not mention any
+// value is returned unchanged.
+func redactEnvValues(err error, env []string) error {
+	if err == nil || len(env) == 0 {
+		return err
+	}
+	message := err.Error()
+	redacted := false
+	for _, pair := range env {
+		_, value, ok := strings.Cut(pair, "=")
+		if !ok || value == "" {
+			continue
+		}
+		if strings.Contains(message, value) {
+			message = strings.ReplaceAll(message, value, "<redacted>")
+			redacted = true
+		}
+	}
+	if !redacted {
+		return err
+	}
+	return errors.New(message)
 }
 
 // traefikMatches verifies an existing container against the managed proxy's

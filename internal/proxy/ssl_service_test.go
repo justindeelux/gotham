@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -27,8 +28,15 @@ type fakeSSLStore struct {
 	certDeleteErr error
 	getAppErr     error
 
+	// countHook runs after CountEnabledCertificatesByProvider computes its
+	// result, outside the store lock: tests use it to hold a mutation inside
+	// its critical section.
+	countHook func()
+
 	lastProviderWrite DNSProviderWrite
 	lastCertWrite     CertificateWrite
+	metaUpdates       int
+	rotations         int
 }
 
 func newFakeSSLStore() *fakeSSLStore {
@@ -85,6 +93,7 @@ func (f *fakeSSLStore) UpdateProvider(_ context.Context, id uuid.UUID, in DNSPro
 		return DNSProvider{}, f.updateErr
 	}
 	f.lastProviderWrite = in
+	f.rotations++
 	for i, provider := range f.providers {
 		if provider.ID != id {
 			continue
@@ -97,6 +106,31 @@ func (f *fakeSSLStore) UpdateProvider(_ context.Context, id uuid.UUID, in DNSPro
 			Enabled:          in.Enabled,
 			SealedCredential: in.SealedCredential,
 		}
+		f.providers[i] = updated
+		return updated, nil
+	}
+	return DNSProvider{}, ErrNotFound
+}
+
+// UpdateProviderMeta mirrors the credential-preserving production write: every
+// mutable field except the sealed credential is replaced.
+func (f *fakeSSLStore) UpdateProviderMeta(_ context.Context, id uuid.UUID, in DNSProviderWrite) (DNSProvider, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.updateErr != nil {
+		return DNSProvider{}, f.updateErr
+	}
+	f.lastProviderWrite = in
+	f.metaUpdates++
+	for i, provider := range f.providers {
+		if provider.ID != id {
+			continue
+		}
+		updated := provider
+		updated.Provider = in.Provider
+		updated.Name = in.Name
+		updated.Zones = append([]string{}, in.Zones...)
+		updated.Enabled = in.Enabled
 		f.providers[i] = updated
 		return updated, nil
 	}
@@ -132,12 +166,15 @@ func (f *fakeSSLStore) CountCertificatesByProvider(_ context.Context, providerID
 
 func (f *fakeSSLStore) CountEnabledCertificatesByProvider(_ context.Context, providerID uuid.UUID) (int64, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	var count int64
 	for _, cert := range f.certificates {
 		if cert.DNSProviderID == providerID && cert.Enabled {
 			count++
 		}
+	}
+	f.mu.Unlock()
+	if f.countHook != nil {
+		f.countHook()
 	}
 	return count, nil
 }
@@ -356,6 +393,219 @@ func TestProviderCreateValidation(t *testing.T) {
 				t.Fatalf("err = %v, want ErrValidation", err)
 			}
 		})
+	}
+}
+
+// TestProviderCreateRefusesEmptySecret proves a DNS credential write is
+// refused when no deployment secret is configured, and that nothing is
+// persisted under the public empty-string key.
+func TestProviderCreateRefusesEmptySecret(t *testing.T) {
+	store := newFakeSSLStore()
+	service := newSSLService(SSLConfig{Store: store, Logger: discardLogger()})
+
+	_, err := service.CreateProvider(context.Background(), CreateDNSProviderInput{
+		Provider:   ProviderCloudflare,
+		Zones:      []string{"example.com"},
+		Credential: "cf-token",
+	})
+	if !errors.Is(err, ErrSecret) {
+		t.Fatalf("CreateProvider err = %v, want ErrSecret", err)
+	}
+	stored, listErr := store.ListProviders(context.Background())
+	if listErr != nil {
+		t.Fatalf("ListProviders: %v", listErr)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("credential row persisted without a deployment secret: %#v", stored)
+	}
+}
+
+// TestProviderRotationRefusesEmptySecret proves a rotation through a service
+// without a deployment secret is refused and leaves the previously sealed
+// value (sealed with the real key) untouched.
+func TestProviderRotationRefusesEmptySecret(t *testing.T) {
+	_, store := newSSLServiceFixture(t, nil)
+	provider := enableProvider(t, store, "example.com")
+
+	empty := newSSLService(SSLConfig{Store: store, Logger: discardLogger()})
+	if _, err := empty.UpdateProvider(context.Background(), provider.ID, UpdateDNSProviderInput{
+		Credential: ptr("replacement"),
+	}); !errors.Is(err, ErrSecret) {
+		t.Fatalf("rotation err = %v, want ErrSecret", err)
+	}
+	stored, err := store.GetProvider(context.Background(), provider.ID)
+	if err != nil {
+		t.Fatalf("GetProvider: %v", err)
+	}
+	plain, err := openCredential("test-key", stored.SealedCredential)
+	if err != nil || plain != "token-cloudflare" {
+		t.Fatalf("stored credential = (%q, %v), want the untouched original", plain, err)
+	}
+}
+
+// TestProviderUpdateWithoutCredentialPreservesSealedCredential proves a
+// name-only update uses the credential-preserving write, so it can never
+// restore an older sealed value over a rotation.
+func TestProviderUpdateWithoutCredentialPreservesSealedCredential(t *testing.T) {
+	service, store := newSSLServiceFixture(t, nil)
+	provider := enableProvider(t, store, "example.com")
+	if _, err := service.UpdateProvider(context.Background(), provider.ID, UpdateDNSProviderInput{
+		Credential: ptr("rotated-token"),
+	}); err != nil {
+		t.Fatalf("rotation: %v", err)
+	}
+
+	updated, err := service.UpdateProvider(context.Background(), provider.ID, UpdateDNSProviderInput{
+		Name: ptr("renamed"),
+	})
+	if err != nil {
+		t.Fatalf("name-only update: %v", err)
+	}
+	if store.rotations != 1 || store.metaUpdates != 1 {
+		t.Fatalf("writes: rotations=%d meta=%d, want 1/1", store.rotations, store.metaUpdates)
+	}
+	if updated.Name != "renamed" {
+		t.Fatalf("name = %q, want the update applied", updated.Name)
+	}
+	plain, err := openCredential("test-key", updated.SealedCredential)
+	if err != nil || plain != "rotated-token" {
+		t.Fatalf("sealed credential = (%q, %v), want the rotated value preserved", plain, err)
+	}
+}
+
+// TestSSLProviderAndCertificateMutationsAreSerialized is the controlled
+// interleaving regression for the reference invariant: while a provider
+// disable holds the shared mutation boundary (paused inside its reference
+// guard), a concurrent certificate create must not slip between the guard read
+// and the provider write. Without the shared boundary the create would see an
+// enabled provider, commit an enabled certificate, and then the disable would
+// commit — leaving an enabled certificate referencing a disabled provider.
+func TestSSLProviderAndCertificateMutationsAreSerialized(t *testing.T) {
+	service, store := newSSLServiceFixture(t, nil)
+	provider := enableProvider(t, store, "example.com")
+	appID := uuid.New()
+	store.applications[appID] = ApplicationInfo{ID: appID, BaseDomain: "app.example.com"}
+
+	guardRead := make(chan struct{})
+	releaseGuard := make(chan struct{})
+	var once sync.Once
+	store.countHook = func() {
+		once.Do(func() {
+			close(guardRead)
+			<-releaseGuard
+		})
+	}
+	t.Cleanup(func() { once.Do(func() { close(releaseGuard) }) })
+
+	disableDone := make(chan error, 1)
+	go func() {
+		_, err := service.UpdateProvider(context.Background(), provider.ID, UpdateDNSProviderInput{Enabled: ptr(false)})
+		disableDone <- err
+	}()
+	select {
+	case <-guardRead:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider disable never reached its reference guard")
+	}
+
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := service.CreateCertificate(context.Background(), CreateCertificateInput{
+			ApplicationID: appID,
+			Challenge:     ChallengeDNS01,
+			DNSProviderID: provider.ID,
+		})
+		createDone <- err
+	}()
+	select {
+	case err := <-createDone:
+		close(releaseGuard)
+		<-disableDone
+		t.Fatalf("certificate create interleaved with the provider guard (err=%v); the shared mutation boundary is missing", err)
+	case <-time.After(200 * time.Millisecond):
+		// Serialized as required: the create is blocked behind the provider
+		// mutation's critical section.
+	}
+
+	close(releaseGuard)
+	if err := <-disableDone; err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if err := <-createDone; !errors.Is(err, ErrValidation) {
+		t.Fatalf("create after the disable = %v, want ErrValidation (provider disabled)", err)
+	}
+	certificates, err := store.ListCertificates(context.Background())
+	if err != nil {
+		t.Fatalf("ListCertificates: %v", err)
+	}
+	if len(certificates) != 0 {
+		t.Fatalf("inconsistent state: %d enabled certificate(s) reference a disabled provider", len(certificates))
+	}
+}
+
+// TestCertificateUpdateEnablingIsSerializedWithProviderGuard proves the same
+// boundary covers PATCH: enabling a certificate config validates the provider
+// inside the critical section.
+func TestCertificateUpdateEnablingIsSerializedWithProviderGuard(t *testing.T) {
+	service, store := newSSLServiceFixture(t, nil)
+	provider := enableProvider(t, store, "example.com")
+	appID := uuid.New()
+	store.applications[appID] = ApplicationInfo{ID: appID, BaseDomain: "app.example.com"}
+	certificate, err := service.CreateCertificate(context.Background(), CreateCertificateInput{
+		ApplicationID: appID,
+		Enabled:       ptr(false),
+		Challenge:     ChallengeDNS01,
+		DNSProviderID: provider.ID,
+	})
+	if err != nil {
+		t.Fatalf("create disabled certificate: %v", err)
+	}
+
+	guardRead := make(chan struct{})
+	releaseGuard := make(chan struct{})
+	var once sync.Once
+	store.countHook = func() {
+		once.Do(func() {
+			close(guardRead)
+			<-releaseGuard
+		})
+	}
+	t.Cleanup(func() { once.Do(func() { close(releaseGuard) }) })
+
+	disableDone := make(chan error, 1)
+	go func() {
+		_, err := service.UpdateProvider(context.Background(), provider.ID, UpdateDNSProviderInput{Enabled: ptr(false)})
+		disableDone <- err
+	}()
+	select {
+	case <-guardRead:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider disable never reached its reference guard")
+	}
+
+	enableDone := make(chan error, 1)
+	go func() {
+		_, err := service.UpdateCertificate(context.Background(), certificate.ID, UpdateCertificateInput{Enabled: ptr(true)})
+		enableDone <- err
+	}()
+	select {
+	case err := <-enableDone:
+		close(releaseGuard)
+		<-disableDone
+		t.Fatalf("certificate enable interleaved with the provider guard (err=%v)", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(releaseGuard)
+	if err := <-disableDone; err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if err := <-enableDone; !errors.Is(err, ErrValidation) {
+		t.Fatalf("enable after the disable = %v, want ErrValidation", err)
+	}
+	certificates, _ := store.ListCertificates(context.Background())
+	if certificates[0].Enabled {
+		t.Fatal("inconsistent state: enabled certificate references a disabled provider")
 	}
 }
 

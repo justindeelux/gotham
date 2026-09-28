@@ -112,6 +112,19 @@ SET provider = $2,
 WHERE id = $1
 RETURNING *;
 
+-- name: UpdateDNSProviderMeta :one
+-- UpdateDNSProviderMeta writes everything but the sealed credential, so an
+-- update that does not rotate can never restore an older ciphertext after a
+-- concurrent rotation.
+UPDATE dns_providers
+SET provider = $2,
+    name = $3,
+    zones = $4,
+    enabled = $5,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: DeleteDNSProvider :exec
 DELETE FROM dns_providers WHERE id = $1;
 

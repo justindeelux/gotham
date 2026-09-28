@@ -602,6 +602,50 @@ func (q *Queries) UpdateDNSProvider(ctx context.Context, arg UpdateDNSProviderPa
 	return i, err
 }
 
+const updateDNSProviderMeta = `-- name: UpdateDNSProviderMeta :one
+UPDATE dns_providers
+SET provider = $2,
+    name = $3,
+    zones = $4,
+    enabled = $5,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, provider, name, zones, ciphertext, enabled, created_at, updated_at
+`
+
+type UpdateDNSProviderMetaParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Provider string      `json:"provider"`
+	Name     string      `json:"name"`
+	Zones    []string    `json:"zones"`
+	Enabled  bool        `json:"enabled"`
+}
+
+// UpdateDNSProviderMeta writes everything but the sealed credential, so an
+// update that does not rotate can never restore an older ciphertext after a
+// concurrent rotation.
+func (q *Queries) UpdateDNSProviderMeta(ctx context.Context, arg UpdateDNSProviderMetaParams) (DnsProvider, error) {
+	row := q.db.QueryRow(ctx, updateDNSProviderMeta,
+		arg.ID,
+		arg.Provider,
+		arg.Name,
+		arg.Zones,
+		arg.Enabled,
+	)
+	var i DnsProvider
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.Name,
+		&i.Zones,
+		&i.Ciphertext,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateDomainCertificate = `-- name: UpdateDomainCertificate :one
 UPDATE domain_certificates
 SET domain = $2,

@@ -213,6 +213,86 @@ func TestSSLCertificateStorage(t *testing.T) {
 	}
 }
 
+// TestSSLProviderMetaUpdatePreservesCredential proves the credential-
+// preserving provider update against a real database: a non-rotation update
+// changes every mutable field without touching the sealed ciphertext, while an
+// explicit rotation replaces it. This is the lost-update guard for concurrent
+// name-only edits versus credential rotation.
+func TestSSLProviderMetaUpdatePreservesCredential(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	dsn := testDSN()
+	explicit := testDSNExplicit()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		if explicit {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres/migrations are unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		if explicit {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	st := store.New(pool)
+
+	sealed, err := providers.SealSecret("integration-key", "cf-token")
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	provider, err := st.CreateDNSProvider(ctx, sqlc.CreateDNSProviderParams{
+		Provider:   "cloudflare",
+		Name:       "original",
+		Zones:      []string{"example.com"},
+		Ciphertext: sealed,
+		Enabled:    true,
+	})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_, _ = pool.Exec(cleanupCtx, "DELETE FROM dns_providers WHERE id = $1", provider.ID)
+	})
+
+	updated, err := st.UpdateDNSProviderMeta(ctx, sqlc.UpdateDNSProviderMetaParams{
+		ID:       provider.ID,
+		Provider: "digitalocean",
+		Name:     "renamed",
+		Zones:    []string{"example.org"},
+		Enabled:  false,
+	})
+	if err != nil {
+		t.Fatalf("UpdateDNSProviderMeta: %v", err)
+	}
+	if updated.Ciphertext != sealed {
+		t.Fatalf("meta update touched the sealed credential: %q", updated.Ciphertext)
+	}
+	if updated.Provider != "digitalocean" || updated.Name != "renamed" || updated.Enabled {
+		t.Fatalf("meta update did not apply the mutable fields: %#v", updated)
+	}
+
+	rotated, err := st.UpdateDNSProvider(ctx, sqlc.UpdateDNSProviderParams{
+		ID:         provider.ID,
+		Provider:   "digitalocean",
+		Name:       "renamed",
+		Zones:      []string{"example.org"},
+		Ciphertext: "sealed-rotated",
+		Enabled:    false,
+	})
+	if err != nil {
+		t.Fatalf("UpdateDNSProvider: %v", err)
+	}
+	if rotated.Ciphertext != "sealed-rotated" {
+		t.Fatalf("rotation did not replace the sealed credential: %q", rotated.Ciphertext)
+	}
+}
+
 // uuidFromPGType renders a pgtype.UUID for comparison without importing the
 // proxy package.
 func uuidFromPGType(id pgtype.UUID) string {

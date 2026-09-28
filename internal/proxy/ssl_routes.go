@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -318,23 +319,52 @@ func (h *handler) writeSSLError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, apiError{Message: "not found"})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, apiError{Message: err.Error()})
+	case errors.Is(err, ErrSecret):
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: err.Error()})
 	default:
 		h.logger.Error("proxy: SSL request failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
 	}
 }
 
-// decodeRequiredBody decodes a required JSON body, rejecting unknown fields
-// and oversized payloads with 400.
+// decodeRequiredBody decodes a required JSON object body into dst. It enforces
+// the request size bound over the whole body, rejects an empty body and JSON
+// null, rejects any content after the first JSON value (a second value or
+// garbage), and keeps strict unknown-field rejection.
 func decodeRequiredBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if r.Body == nil {
 		writeJSON(w, http.StatusBadRequest, apiError{Message: "request body is required"})
 		return false
 	}
-	decoder := json.NewDecoder(io.LimitReader(r.Body, maxSSLBodyBytes))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxSSLBodyBytes+1))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid request body"})
+		return false
+	}
+	if len(body) > maxSSLBodyBytes {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "request body is too large"})
+		return false
+	}
+	trimmed := bytes.TrimSpace(body)
+	switch {
+	case len(trimmed) == 0:
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "request body is required"})
+		return false
+	case bytes.Equal(trimmed, []byte("null")):
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "request body must be a JSON object"})
+		return false
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid request body"})
+		return false
+	}
+	// Only trailing whitespace may follow the first value; anything else is a
+	// second value or garbage and fails the request.
+	if err := decoder.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "request body must contain a single JSON value"})
 		return false
 	}
 	return true

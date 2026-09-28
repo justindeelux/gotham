@@ -117,7 +117,18 @@ func wildcardCertificate() *RouteCertificate {
 		Resolver:        DNSResolverName(ProviderCloudflare),
 		DNSProviderID:   uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001"),
 		DNSProviderType: ProviderCloudflare,
-		WildcardMain:    "example.com",
+		WildcardBase:    "example.com",
+	}
+}
+
+// wildcardSubCertificate requests the wildcard of the parent domain for a
+// multi-level host: the main name is still the exact routed host.
+func wildcardSubCertificate() *RouteCertificate {
+	return &RouteCertificate{
+		Resolver:        DNSResolverName(ProviderCloudflare),
+		DNSProviderID:   uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001"),
+		DNSProviderType: ProviderCloudflare,
+		WildcardBase:    "sub.example.com",
 	}
 }
 
@@ -195,7 +206,7 @@ const goldenSSLWildcardDynamicYAML = `http:
       tls:
         certResolver: letsencrypt-dns-cloudflare
         domains:
-          - main: example.com
+          - main: app.example.com
             sans:
               - '*.example.com'
   services:
@@ -227,7 +238,7 @@ entryPoints = ['websecure']
 certResolver = 'letsencrypt-dns-cloudflare'
 
 [[http.routers.app-11111111-2222-3333-4444-555555555555-websecure.tls.domains]]
-main = 'example.com'
+main = 'app.example.com'
 sans = ['*.example.com']
 
 [http.services]
@@ -305,6 +316,74 @@ func TestGenerateHTTPSActivationGoldens(t *testing.T) {
 	}
 }
 
+// Multi-level host goldens: the main name is the exact routed host and the
+// wildcard SAN belongs to its most specific parent domain, so the requested
+// names cover app.sub.example.com (a single `*.example.com` would not).
+const goldenSSLWildcardSubDynamicYAML = `http:
+  routers:
+    app-11111111-2222-3333-4444-555555555555-web:
+      rule: Host(§app.sub.example.com§)
+      service: app-11111111-2222-3333-4444-555555555555
+      entryPoints:
+        - web
+      middlewares:
+        - gotham-https-redirect
+    app-11111111-2222-3333-4444-555555555555-websecure:
+      rule: Host(§app.sub.example.com§)
+      service: app-11111111-2222-3333-4444-555555555555
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt-dns-cloudflare
+        domains:
+          - main: app.sub.example.com
+            sans:
+              - '*.sub.example.com'
+  services:
+    app-11111111-2222-3333-4444-555555555555:
+      loadBalancer:
+        servers:
+          - url: http://172.17.0.1:3000
+  middlewares:
+    gotham-https-redirect:
+      redirectScheme:
+        scheme: https
+        permanent: true
+`
+
+const goldenSSLWildcardSubDynamicTOML = `[http]
+[http.routers]
+[http.routers.app-11111111-2222-3333-4444-555555555555-web]
+rule = 'Host(§app.sub.example.com§)'
+service = 'app-11111111-2222-3333-4444-555555555555'
+entryPoints = ['web']
+middlewares = ['gotham-https-redirect']
+
+[http.routers.app-11111111-2222-3333-4444-555555555555-websecure]
+rule = 'Host(§app.sub.example.com§)'
+service = 'app-11111111-2222-3333-4444-555555555555'
+entryPoints = ['websecure']
+
+[http.routers.app-11111111-2222-3333-4444-555555555555-websecure.tls]
+certResolver = 'letsencrypt-dns-cloudflare'
+
+[[http.routers.app-11111111-2222-3333-4444-555555555555-websecure.tls.domains]]
+main = 'app.sub.example.com'
+sans = ['*.sub.example.com']
+
+[http.services]
+[http.services.app-11111111-2222-3333-4444-555555555555]
+[http.services.app-11111111-2222-3333-4444-555555555555.loadBalancer]
+[[http.services.app-11111111-2222-3333-4444-555555555555.loadBalancer.servers]]
+url = 'http://172.17.0.1:3000'
+
+[http.middlewares]
+[http.middlewares.gotham-https-redirect]
+[http.middlewares.gotham-https-redirect.redirectScheme]
+scheme = 'https'
+permanent = true
+`
+
 // TestGenerateWildcardActivationGoldens pins the DNS-01 wildcard shape: the
 // route resolves through the provider's resolver and requests the zone
 // wildcard via tls.domains main/sans.
@@ -329,6 +408,35 @@ func TestGenerateWildcardActivationGoldens(t *testing.T) {
 		}
 		dynamic := files[1]
 		if got := string(dynamic.Content); got != expandGolden(tc.golden) {
+			t.Errorf("%s: dynamic mismatch\n--- got ---\n%s\n--- want ---\n%s", tc.format, got, expandGolden(tc.golden))
+		}
+	}
+}
+
+// TestGenerateWildcardMultiLevelHostGolden pins the coverage fix: for
+// app.sub.example.com the request is main=exact host plus `*.sub.example.com`
+// (the old `example.com` + `*.example.com` shape covered neither the host nor
+// its siblings).
+func TestGenerateWildcardMultiLevelHostGolden(t *testing.T) {
+	route := Route{
+		AppID:       uuid.MustParse(goldenAppID),
+		Domain:      "app.sub.example.com",
+		Target:      "http://172.17.0.1:3000",
+		Certificate: wildcardSubCertificate(),
+	}
+	cases := []struct {
+		format Format
+		golden string
+	}{
+		{format: FormatYAML, golden: goldenSSLWildcardSubDynamicYAML},
+		{format: FormatTOML, golden: goldenSSLWildcardSubDynamicTOML},
+	}
+	for _, tc := range cases {
+		files, err := Generate(BuildConfig([]Route{route}, sslGoldenProviders(), "ops@example.com"), tc.format)
+		if err != nil {
+			t.Fatalf("%s: Generate: %v", tc.format, err)
+		}
+		if got := string(files[1].Content); got != expandGolden(tc.golden) {
 			t.Errorf("%s: dynamic mismatch\n--- got ---\n%s\n--- want ---\n%s", tc.format, got, expandGolden(tc.golden))
 		}
 	}

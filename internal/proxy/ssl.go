@@ -211,6 +211,10 @@ type SSLStore interface {
 	GetProvider(ctx context.Context, id uuid.UUID) (DNSProvider, error)
 	ListProviders(ctx context.Context) ([]DNSProvider, error)
 	UpdateProvider(ctx context.Context, id uuid.UUID, in DNSProviderWrite) (DNSProvider, error)
+	// UpdateProviderMeta writes the mutable non-credential fields and leaves
+	// the stored ciphertext untouched, so an update that does not rotate the
+	// credential can never restore an older sealed value.
+	UpdateProviderMeta(ctx context.Context, id uuid.UUID, in DNSProviderWrite) (DNSProvider, error)
 	DeleteProvider(ctx context.Context, id uuid.UUID) error
 	CountCertificatesByProvider(ctx context.Context, providerID uuid.UUID) (int64, error)
 	CountEnabledCertificatesByProvider(ctx context.Context, providerID uuid.UUID) (int64, error)
@@ -283,6 +287,21 @@ func (s storeSSL) UpdateProvider(ctx context.Context, id uuid.UUID, in DNSProvid
 		Zones:      in.Zones,
 		Ciphertext: in.SealedCredential,
 		Enabled:    in.Enabled,
+	})
+	if err != nil {
+		return DNSProvider{}, mapSSLWriteError(err)
+	}
+	return dnsProviderFromRow(row), nil
+}
+
+// UpdateProviderMeta persists everything but the sealed credential.
+func (s storeSSL) UpdateProviderMeta(ctx context.Context, id uuid.UUID, in DNSProviderWrite) (DNSProvider, error) {
+	row, err := s.store.UpdateDNSProviderMeta(ctx, sqlc.UpdateDNSProviderMetaParams{
+		ID:       pgUUID(id),
+		Provider: string(in.Provider),
+		Name:     in.Name,
+		Zones:    in.Zones,
+		Enabled:  in.Enabled,
 	})
 	if err != nil {
 		return DNSProvider{}, mapSSLWriteError(err)
@@ -485,8 +504,22 @@ func mapSSLWriteError(err error) error {
 	return err
 }
 
-// sealCredential encrypts a plaintext DNS API token for storage.
+// secretUsable reports whether a deployment secret can key credential
+// cryptography. An empty (or whitespace-only) secret is refused: the AES key
+// would be SHA-256(""), a public value that gives stored tokens no
+// confidentiality, and the environment fingerprint HMAC would be publicly
+// derivable.
+func secretUsable(secret string) bool {
+	return strings.TrimSpace(secret) != ""
+}
+
+// sealCredential encrypts a plaintext DNS API token for storage. It refuses
+// an unusable deployment secret instead of falling back to the well-known
+// empty-string key.
 func sealCredential(secret, plain string) (string, error) {
+	if !secretUsable(secret) {
+		return "", fmt.Errorf("%w: refusing to store DNS provider credentials", ErrSecret)
+	}
 	sealed, err := providers.SealSecret(secret, plain)
 	if err != nil {
 		return "", fmt.Errorf("proxy: seal DNS credential: %w", err)
@@ -494,8 +527,13 @@ func sealCredential(secret, plain string) (string, error) {
 	return sealed, nil
 }
 
-// openCredential reverses sealCredential.
+// openCredential reverses sealCredential. An unusable deployment secret is
+// refused as well, so a stored value can never be opened under the public
+// empty key even if a legacy row was sealed with it.
 func openCredential(secret, sealed string) (string, error) {
+	if !secretUsable(secret) {
+		return "", fmt.Errorf("%w: refusing to open DNS provider credentials", ErrSecret)
+	}
 	plain, err := providers.OpenSecret(secret, sealed)
 	if err != nil {
 		return "", fmt.Errorf("proxy: open DNS credential: %w", err)

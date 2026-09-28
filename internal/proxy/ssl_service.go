@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -11,14 +12,33 @@ import (
 // exceed it; the manual POST /v1/proxy/sync completes it then.
 const defaultResyncTimeout = time.Minute
 
+// sslMutationMu serializes every SSL reference-guard critical section in this
+// process. The provider and certificate services are built by separate
+// constructors from the same core, so the boundary must be shared rather than
+// per-service: the reference invariant (an enabled certificate never
+// references a disabled, retyped or zone-narrowed provider) spans both tables,
+// and a control plane is a single process (the same scope as
+// SyncService.mu).
+var sslMutationMu sync.Mutex
+
+// mutate runs fn inside the shared SSL mutation boundary. Callers must keep
+// the critical section free of resyncs and other slow work.
+func (s *sslService) mutate(ctx context.Context, fn func(context.Context) error) error {
+	sslMutationMu.Lock()
+	defer sslMutationMu.Unlock()
+	return fn(ctx)
+}
+
 // SSLConfig wires the DNS provider and certificate services. Store is
 // required; Resync is optional and receives a best-effort trigger after every
 // successful mutation (a failed resync never fails the mutation).
 type SSLConfig struct {
 	// Store is the SSL persistence seam.
 	Store SSLStore
-	// Secret opens and seals DNS provider credentials. An empty key keeps the
-	// documented development fallback (a well-known key) used elsewhere.
+	// Secret opens and seals DNS provider credentials. An empty (or
+	// whitespace-only) key is refused for every credential write and open, so
+	// tokens are never stored under the public empty-string key; reads and the
+	// HTTP-01 surface stay available without it.
 	Secret string
 	// Logger defaults to slog.Default.
 	Logger *slog.Logger

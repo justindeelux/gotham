@@ -62,9 +62,11 @@ type RouteCertificate struct {
 	// DNSProviderType selects the credential environment variable; empty for
 	// HTTP-01.
 	DNSProviderType DNSProviderType
-	// WildcardMain, when set, requests a wildcard certificate for the zone:
-	// Traefik tls.domains main=WildcardMain, sans=["*.WildcardMain"].
-	WildcardMain string
+	// WildcardBase, when set, requests a wildcard certificate for that base:
+	// Traefik tls.domains main = the routed host (always covered), sans =
+	// ["*."+WildcardBase]. A wildcard matches exactly one label, so the exact
+	// host must be one of the requested names.
+	WildcardBase string
 }
 
 // domainPattern matches a DNS hostname: lowercase labels of letters, digits
@@ -177,10 +179,13 @@ func BuildConfig(routes []Route, providers []DNSProvider, acmeEmail string) Prox
 				RedirectScheme: &RedirectScheme{Scheme: "https", Permanent: true},
 			}
 			tls := &RouterTLS{CertResolver: route.Certificate.Resolver}
-			if route.Certificate.WildcardMain != "" {
+			if route.Certificate.WildcardBase != "" {
+				// The exact routed host is always the main name: a wildcard
+				// SAN covers one label only, so `*.parent` alone would not
+				// cover a multi-level host such as app.sub.example.com.
 				tls.Domains = []TLSDomain{{
-					Main: route.Certificate.WildcardMain,
-					SANs: []string{"*." + route.Certificate.WildcardMain},
+					Main: route.Domain,
+					SANs: []string{"*." + route.Certificate.WildcardBase},
 				}}
 			}
 			cfg.Routers[service+"-websecure"] = Router{
@@ -205,4 +210,30 @@ func serviceName(id uuid.UUID) string {
 // so Host() rules stay canonical.
 func NormalizeDomain(domain string) string {
 	return strings.ToLower(strings.TrimSpace(domain))
+}
+
+// wildcardBase derives the wildcard base that covers the routed host. A
+// wildcard certificate name matches exactly one label, so the generated
+// request keeps the exact host as the main name and adds `*.base` as a SAN:
+//
+//   - app.example.com      → base example.com (covers the host and siblings)
+//   - app.sub.example.com  → base sub.example.com (the most specific parent
+//     inside a configured zone; `*.example.com` would not cover the host)
+//   - example.com (apex)   → base example.com (the host itself; the wildcard
+//     then covers its subdomains)
+//
+// ok is false only when neither the parent nor the host sits inside a
+// configured zone.
+func wildcardBase(host string, zones []string) (string, bool) {
+	labels := strings.Split(host, ".")
+	if len(labels) >= 2 {
+		parent := strings.Join(labels[1:], ".")
+		if strings.Contains(parent, ".") && MatchZone(zones, parent) != "" {
+			return parent, true
+		}
+	}
+	if MatchZone(zones, host) != "" {
+		return host, true
+	}
+	return "", false
 }

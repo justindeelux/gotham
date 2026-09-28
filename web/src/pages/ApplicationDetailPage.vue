@@ -36,6 +36,7 @@ import type {
 } from "../api/applications";
 import DeployLogs from "../components/DeployLogs.vue";
 import DeploymentStatusTag from "../components/DeploymentStatusTag.vue";
+import DomainEditor from "../components/DomainEditor.vue";
 import EnvEditor from "../components/EnvEditor.vue";
 import StorageEditor from "../components/StorageEditor.vue";
 import { useMediaQuery } from "../composables/useMediaQuery";
@@ -757,9 +758,12 @@ onUnmounted(() => {
         </NTabPane>
 
         <NTabPane name="domains" tab="Domains">
-          <NCard style="margin-top: 16px">
-            <NEmpty description="Domains & SSL ships in Phase 6." />
-          </NCard>
+          <div style="margin-top: 16px">
+            <DomainEditor v-if="application" :application="application" />
+            <NCard v-else>
+              <NEmpty description="Loading the application…" />
+            </NCard>
+          </div>
         </NTabPane>
       </NTabs>
     </NSpin>

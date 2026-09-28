@@ -12,7 +12,7 @@ Plan: [`plan/00-roadmap.md`](plan/00-roadmap.md).
 - [x] Phase 4 — Applications (PRs #31–#50; gate G1 passed with waivers)
 - [x] Phase 5 core — Database engines + CRUD (#39), databases UI (#43), backups + S3 + restore (#46), backups UI (#50)
 - [ ] Phase 5 residuals — live smoke, chunk-scale e2e and S3 smoke are proven (below); the deferred backups LOWs keep this umbrella open
-- [ ] Phase 6 — Proxy, Domains & SSL (BE-6.1 paused on `feat/p6-traefik`; BE-6.2 and FE-6.1 not started)
+- [ ] Phase 6 — Proxy, Domains & SSL (BE-6.1 #51 and BE-6.2 #55/#56 merged; FE-6.1 in review; phase gate pending)
 - [ ] Phase 7 — Services & Templates
 - [ ] Phase 8 — Advanced
 - [ ] Phase 9 — Self-update & Release (gate G2)
@@ -42,13 +42,13 @@ Plan: [`plan/00-roadmap.md`](plan/00-roadmap.md).
 
 ## Phase 6
 
-- [ ] **BE-6.1 resume** (`feat/p6-traefik` @ `884b1ed`, no PR): sqlc generate +
-  store wrapper, agent RPC handler, control-plane sync + `gotham-traefik`
-  bootstrap, `server.go` wiring, tests, then PR.
-- [ ] BE-6.2 SSL: Let's Encrypt HTTP-01 + DNS-01 (Cloudflare + one more),
-  `dns_providers` table, acme generator.
-- [ ] FE-6.1 domains UI: domain editor in app detail, redirects, cert status,
-  DNS provider settings.
+- [x] BE-6.1 Traefik file provider: control-plane sync, `gotham-traefik`
+  bootstrap and the agent proxy RPC (#51).
+- [x] BE-6.2 SSL: `dns_providers` + certificate intents, HTTP-01/DNS-01
+  resolvers, HTTPS activation (#55, #56).
+- [x] FE-6.1 domains UI: `/domains` page (DNS provider + certificate CRUD),
+  domain editor in app detail, honest backend-pending stubs for router list,
+  redirects and cert status/expiry (in review, `feat/p6-domains-ui`).
 
 ## Phase 4 residuals
 

@@ -56,6 +56,9 @@ jobs:
       # Applications are enabled by default; pinned explicitly so the smoke
       # would catch an accidental default flip.
       FEATURE_APPLICATIONS: "true"
+      # The SSL surface (BE-6.2) refuses credential writes without a secret
+      # key; the domains smoke exercises the DNS-provider CRUD path.
+      GOTHAM_SECRET_KEY: "ui-e2e-secret-key-not-for-production"
       GOTHAM_E2E_BASE_URL: http://127.0.0.1:8099
 
     steps:

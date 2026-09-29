@@ -3,6 +3,7 @@ package notifications
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ type webhookCall struct {
 	mu          sync.Mutex
 	method      string
 	path        string
+	escapedPath string
 	contentType string
 	body        []byte
 }
@@ -27,6 +29,13 @@ func (c *webhookCall) snapshot() (method, path, contentType string, body []byte)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.method, c.path, c.contentType, append([]byte(nil), c.body...)
+}
+
+// rawPath returns the request path exactly as sent, before URL decoding.
+func (c *webhookCall) rawPath() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.escapedPath
 }
 
 // newWebhookServer starts a mock endpoint answering status and recording the
@@ -39,6 +48,7 @@ func newWebhookServer(t *testing.T, status int) (*httptest.Server, *webhookCall)
 		call.mu.Lock()
 		call.method = r.Method
 		call.path = r.URL.Path
+		call.escapedPath = r.URL.EscapedPath()
 		call.contentType = r.Header.Get("Content-Type")
 		call.body = body
 		call.mu.Unlock()
@@ -196,6 +206,152 @@ func TestNotifierFailureIsReported(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret-token") {
 		t.Errorf("error %q leaks the webhook URL", err)
+	}
+}
+
+// TestNotifierConnectionRefusedHidesSecret proves a refused connection never
+// puts the credential-bearing endpoint into the error.
+func TestNotifierConnectionRefusedHidesSecret(t *testing.T) {
+	server, _ := newWebhookServer(t, http.StatusOK)
+	endpoint := server.URL + "/webhook/refused-secret-token"
+	server.Close() // the port is free again: connections are refused
+
+	err := newDiscordNotifier(endpoint, &http.Client{Timeout: time.Second}).Notify(context.Background(), fixedEvent())
+	if err == nil {
+		t.Fatal("Notify = nil error, want a connection failure")
+	}
+	assertNoSecret(t, err, "refused-secret-token", "/webhook")
+	if !strings.Contains(err.Error(), "connection failed") {
+		t.Errorf("error = %q, want the transport category", err)
+	}
+}
+
+// TestNotifierTimeoutHidesSecret proves a timeout is classified without the
+// credential-bearing URL (Telegram keeps its token in the path).
+func TestNotifierTimeoutHidesSecret(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		// Hold the request until the client gives up. The bounded fallback
+		// keeps httptest.Server.Close from waiting on a request the client
+		// already abandoned.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(500 * time.Millisecond):
+		}
+	}))
+	defer server.Close()
+	client := &http.Client{Timeout: 50 * time.Millisecond}
+	notifier := newTelegramNotifier("7184:AAH-timeout-secret-token", "-100", server.URL, client)
+
+	err := notifier.Notify(context.Background(), fixedEvent())
+	if err == nil {
+		t.Fatal("Notify = nil error, want a timeout")
+	}
+	assertNoSecret(t, err, "AAH-timeout-secret-token", "/bot")
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("error = %q, want the timeout category", err)
+	}
+}
+
+// TestNotifierNon2xxHidesRemoteBody proves a non-2xx answer reports the status
+// but never the remote body (a server may reflect the request path) and never
+// the URL.
+func TestNotifierNon2xxHidesRemoteBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, "reflected: "+r.URL.Path+" and some diagnosis")
+	}))
+	defer server.Close()
+	notifier := newSlackNotifier(server.URL+"/services/T04/reflected-secret-token", server.Client())
+
+	err := notifier.Notify(context.Background(), fixedEvent())
+	if err == nil {
+		t.Fatal("Notify = nil error, want a failure")
+	}
+	assertNoSecret(t, err, "reflected-secret-token", "reflected:", "diagnosis")
+	if !strings.Contains(err.Error(), "400 Bad Request") {
+		t.Errorf("error = %q, want the HTTP status", err)
+	}
+}
+
+// assertNoSecret fails when err text mentions any credential fragment.
+func assertNoSecret(t *testing.T, err error, fragments ...string) {
+	t.Helper()
+	message := err.Error()
+	for _, fragment := range fragments {
+		if strings.Contains(message, fragment) {
+			t.Errorf("error %q leaks %q", message, fragment)
+		}
+	}
+}
+
+// TestTelegramTokenValidation rejects tokens that could smuggle path/query
+// syntax into the sendMessage URL.
+func TestTelegramTokenValidation(t *testing.T) {
+	invalid := map[string]string{
+		"path slash": "7184:AAH/secret",
+		"query":      "7184:AAH?x=1",
+		"missing id": ":AAH-secret",
+		"spaces":     "7184:AAH secret",
+	}
+	for name, token := range invalid {
+		t.Run(name, func(t *testing.T) {
+			config := ChannelConfig{BotToken: token, ChatID: "-100"}
+			if err := config.validate(KindTelegram); !errors.Is(err, ErrValidation) {
+				t.Errorf("validate(%q) = %v, want ErrValidation", token, err)
+			}
+		})
+	}
+	valid := ChannelConfig{BotToken: "7184:AAH-abc_123", ChatID: "-100"}
+	if err := valid.validate(KindTelegram); err != nil {
+		t.Errorf("validate(valid token) = %v, want nil", err)
+	}
+}
+
+// TestTelegramNotifierEscapesTokenPath keeps the URL path well-formed even for
+// a token that predates validation.
+func TestTelegramNotifierEscapesTokenPath(t *testing.T) {
+	server, call := newWebhookServer(t, http.StatusOK)
+	notifier := newTelegramNotifier("12/3?x", "-100", server.URL, server.Client())
+
+	if err := notifier.Notify(context.Background(), fixedEvent()); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if want := "/bot12%2F3%3Fx/sendMessage"; call.rawPath() != want {
+		t.Errorf("path = %q, want %q", call.rawPath(), want)
+	}
+}
+
+// TestOutboundHostValidation refuses literal link-local/metadata destinations
+// while keeping private/self-hosted ranges allowed.
+func TestOutboundHostValidation(t *testing.T) {
+	blocked := []string{
+		"http://169.254.169.254/latest/meta-data/",
+		"http://[fe80::1]/hook",
+		"http://[::ffff:169.254.169.254]/hook",
+	}
+	for _, raw := range blocked {
+		if err := validateWebhookURL(raw); !errors.Is(err, ErrValidation) {
+			t.Errorf("validateWebhookURL(%q) = %v, want ErrValidation", raw, err)
+		}
+	}
+	allowed := []string{
+		"https://discord.com/api/webhooks/1/abc",
+		"http://localhost:8080/hook",
+		"http://10.1.2.3/hook",
+		"http://172.16.4.4:9000/hook",
+		"http://192.168.1.10/hook",
+		"http://hooks.internal/hook",
+	}
+	for _, raw := range allowed {
+		if err := validateWebhookURL(raw); err != nil {
+			t.Errorf("validateWebhookURL(%q) = %v, want nil", raw, err)
+		}
+	}
+	if err := (ChannelConfig{Host: "169.254.169.254", From: "a@example.com", To: []string{"b@example.com"}}).validate(KindEmail); !errors.Is(err, ErrValidation) {
+		t.Errorf("email host 169.254.169.254 = %v, want ErrValidation", err)
+	}
+	if err := (ChannelConfig{Host: "10.0.0.5", From: "a@example.com", To: []string{"b@example.com"}}).validate(KindEmail); err != nil {
+		t.Errorf("email host 10.0.0.5 = %v, want nil", err)
 	}
 }
 

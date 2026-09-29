@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
@@ -9,7 +10,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -202,5 +205,86 @@ func TestNotificationChannelPersistence(t *testing.T) {
 	}
 	if len(remaining) != 0 {
 		t.Errorf("channels after team delete = %d, want 0 (ON DELETE CASCADE)", len(remaining))
+	}
+}
+
+// TestNotificationChannelResourceConstraint applies the migrations on a
+// disposable database and proves the resource-pair CHECK rejects both half
+// pairs, including the NULL-type/non-NULL-id case a plain IN test would let
+// through as SQL NULL.
+func TestNotificationChannelResourceConstraint(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	base := testDSN()
+	admin, err := sql.Open("pgx", dsnForDatabase(base, "postgres"))
+	if err != nil {
+		t.Fatalf("open maintenance connection: %v", err)
+	}
+	t.Cleanup(func() { _ = admin.Close() })
+	if err := admin.PingContext(ctx); err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+
+	scratch := fmt.Sprintf("be_8_3_notify_%d", time.Now().UnixNano())
+	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+scratch); err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but a disposable database cannot be created: %v", err)
+		}
+		t.Skipf("cannot create a disposable database (needs CREATEDB): %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if _, err := admin.ExecContext(cleanupCtx, "DROP DATABASE IF EXISTS "+scratch+" WITH (FORCE)"); err != nil {
+			t.Logf("drop scratch database: %v", err)
+		}
+	})
+
+	scratchDSN := dsnForDatabase(base, scratch)
+	if err := store.Migrate(ctx, scratchDSN, store.MigrateUp); err != nil {
+		t.Fatalf("migrate scratch database: %v", err)
+	}
+	pool, err := store.Open(ctx, scratchDSN)
+	if err != nil {
+		t.Fatalf("open scratch pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	var teamID pgtype.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO teams (name) VALUES ('be-8.3 constraint') RETURNING id`).Scan(&teamID); err != nil {
+		t.Fatalf("insert team: %v", err)
+	}
+
+	insert := func(name string, resourceType any, resourceID any) error {
+		t.Helper()
+		_, err := pool.Exec(ctx, `
+			INSERT INTO notification_channels (team_id, name, kind, config, resource_type, resource_id)
+			VALUES ($1, $2, 'discord', 'sealed', $3, $4)`, teamID, name, resourceType, resourceID)
+		return err
+	}
+	assertCheckViolation := func(label string, err error) {
+		t.Helper()
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+			t.Fatalf("%s: err = %v, want a CHECK violation (23514)", label, err)
+		}
+	}
+
+	// Half pairs are rejected: the NULL-type case is the regression this test
+	// guards (the arm must be FALSE, not SQL NULL).
+	assertCheckViolation("type NULL with id set", insert("null type", nil, pgtype.UUID{Bytes: uuid.New(), Valid: true}))
+	assertCheckViolation("type set with id NULL", insert("null id", "application", nil))
+	assertCheckViolation("unknown type with id", insert("unknown type", "service", pgtype.UUID{Bytes: uuid.New(), Valid: true}))
+
+	// Complete pairs stay valid.
+	if err := insert("team wide", nil, nil); err != nil {
+		t.Fatalf("team-wide insert: %v", err)
+	}
+	if err := insert("override", "database", pgtype.UUID{Bytes: uuid.New(), Valid: true}); err != nil {
+		t.Fatalf("override insert: %v", err)
 	}
 }

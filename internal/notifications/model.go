@@ -3,9 +3,11 @@ package notifications
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/mail"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -239,15 +241,23 @@ func (c ChannelConfig) validate(kind Kind) error {
 			return err
 		}
 	case KindTelegram:
-		if strings.TrimSpace(c.BotToken) == "" {
+		token := strings.TrimSpace(c.BotToken)
+		if token == "" {
 			return fmt.Errorf("%w: config.bot_token is required for telegram", ErrValidation)
+		}
+		if !telegramTokenPattern.MatchString(token) {
+			return fmt.Errorf("%w: config.bot_token is not a valid telegram bot token", ErrValidation)
 		}
 		if strings.TrimSpace(c.ChatID) == "" {
 			return fmt.Errorf("%w: config.chat_id is required for telegram", ErrValidation)
 		}
 	case KindEmail:
-		if strings.TrimSpace(c.Host) == "" {
+		host := strings.TrimSpace(c.Host)
+		if host == "" {
 			return fmt.Errorf("%w: config.host is required for email", ErrValidation)
+		}
+		if err := validateOutboundHost(host); err != nil {
+			return err
 		}
 		if c.Port < 0 || c.Port > 65535 {
 			return fmt.Errorf("%w: config.port must be between 0 and 65535", ErrValidation)
@@ -269,9 +279,15 @@ func (c ChannelConfig) validate(kind Kind) error {
 	return nil
 }
 
-// validateWebhookURL accepts an absolute http(s) URL. It deliberately does not
-// restrict private addresses: channels are configured by team owners, exactly
-// like backup targets' S3 endpoints.
+// telegramTokenPattern is the BotFather token shape: "<numeric id>:<chars>".
+// Pinning it keeps a token from smuggling path syntax into the sendMessage
+// URL.
+var telegramTokenPattern = regexp.MustCompile(`^[0-9]+:[A-Za-z0-9_-]+$`)
+
+// validateWebhookURL accepts an absolute http(s) URL. Private/self-hosted
+// ranges stay allowed (channels are configured by team owners, exactly like
+// backup targets' S3 endpoints), but link-local/metadata destinations are
+// refused.
 func validateWebhookURL(raw string) error {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -280,6 +296,26 @@ func validateWebhookURL(raw string) error {
 	parsed, err := url.Parse(trimmed)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return fmt.Errorf("%w: config.webhook_url must be an http(s) URL", ErrValidation)
+	}
+	return validateOutboundHost(parsed.Hostname())
+}
+
+// validateOutboundHost refuses literal link-local addresses, which cover the
+// cloud metadata services (169.254.169.254) and IPv6 fe80::/10. A hostname is
+// left to DNS at send time: resolving during validation would make config
+// writes depend on the resolver. Private ranges (10/8, 172.16/12, 192.168/16)
+// stay allowed on purpose.
+func validateOutboundHost(host string) error {
+	host = strings.TrimSpace(host)
+	if split, _, err := net.SplitHostPort(host); err == nil {
+		host = split
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return nil
+	}
+	if ip.IsLinkLocalUnicast() {
+		return fmt.Errorf("%w: link-local and metadata addresses are not allowed", ErrValidation)
 	}
 	return nil
 }
@@ -290,15 +326,17 @@ func (c ChannelConfig) isZero() bool {
 		c.Port == 0 && c.Username == "" && c.Password == "" && c.From == "" && c.To == nil
 }
 
-// merged applies the non-empty fields of an update over the stored config, so
-// a UI that resends a masked secret cannot wipe it and a partial update only
-// touches what it names.
+// merged applies the non-empty fields of an update over the stored config. A
+// submitted value equal to the stored field's masked representation is a
+// client echoing back the read DTO, so the stored secret is retained instead
+// of being overwritten with the mask; any other non-empty value is a
+// deliberate replacement.
 func (c ChannelConfig) merged(update ChannelConfig) ChannelConfig {
 	merged := c
-	if update.WebhookURL != "" {
+	if update.WebhookURL != "" && update.WebhookURL != maskSecret(c.WebhookURL) {
 		merged.WebhookURL = update.WebhookURL
 	}
-	if update.BotToken != "" {
+	if update.BotToken != "" && update.BotToken != maskSecret(c.BotToken) {
 		merged.BotToken = update.BotToken
 	}
 	if update.ChatID != "" {
@@ -313,7 +351,7 @@ func (c ChannelConfig) merged(update ChannelConfig) ChannelConfig {
 	if update.Username != "" {
 		merged.Username = update.Username
 	}
-	if update.Password != "" {
+	if update.Password != "" && update.Password != maskSecret(c.Password) {
 		merged.Password = update.Password
 	}
 	if update.From != "" {

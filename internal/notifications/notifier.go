@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -79,7 +81,7 @@ func newTelegramNotifier(token, chatID, baseURL string, client *http.Client) *te
 // Notify implements Notifier. The token travels in the URL path (the Bot API
 // contract), so a failed call never reports the endpoint, only the host.
 func (n *telegramNotifier) Notify(ctx context.Context, event Event) error {
-	endpoint := n.baseURL + "/bot" + n.token + "/sendMessage"
+	endpoint := n.baseURL + "/bot" + url.PathEscape(n.token) + "/sendMessage"
 	return postJSON(ctx, n.client, endpoint, map[string]string{
 		"chat_id": n.chatID,
 		"text":    event.Message(),
@@ -119,8 +121,12 @@ const defaultSubjectPrefix = "[Gotham] "
 
 // postJSON sends one JSON document and treats only a 2xx answer as success.
 // The response body is drained (bounded) so the connection can be reused.
-// Error messages never contain the request URL: a webhook URL and a Telegram
-// bot token live inside it.
+//
+// Errors are classified, never forwarded: a webhook URL and a Telegram bot
+// token live inside the request URL, and a remote body could echo them, so
+// neither the transport error text nor the response body may reach a log line
+// or an API response. Only the endpoint host plus a category or HTTP status
+// survives.
 func postJSON(ctx context.Context, client *http.Client, endpoint string, payload any) error {
 	if client == nil {
 		client = http.DefaultClient
@@ -131,21 +137,45 @@ func postJSON(ctx context.Context, client *http.Client, endpoint string, payload
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("notifications: build request: %w", err)
+		// The underlying parse error echoes the endpoint, which may carry a
+		// credential.
+		return fmt.Errorf("notifications: build request for %s: invalid endpoint", endpointHost(endpoint))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("notifications: post to %s: %w", endpointHost(endpoint), err)
+		return fmt.Errorf("notifications: post to %s: %s", endpointHost(endpoint), transportCategory(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("notifications: %s answered %s: %s",
-			endpointHost(endpoint), resp.Status, strings.TrimSpace(string(detail)))
-	}
+	// Drain a bounded prefix so the connection can be reused; the body is
+	// never echoed because a remote server may reflect the request path.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("notifications: %s answered %s", endpointHost(endpoint), resp.Status)
+	}
 	return nil
+}
+
+// transportCategory classifies a transport failure without forwarding its
+// text: a *url.Error stringifies the full request URL (and so the channel's
+// credential), and remote text must never travel either.
+func transportCategory(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timed out"
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timed out"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "connection failed"
+	}
 }
 
 // endpointHost renders "scheme://host" of an endpoint for error messages.

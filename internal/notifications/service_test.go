@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
+	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
@@ -282,12 +284,23 @@ func TestDeployFinishedMapsTerminalOutcome(t *testing.T) {
 }
 
 // TestBackupFinishedMapsTerminalOutcome proves the backup hook derives the
-// event from the backup status.
+// event from the backup status. It runs a single worker and asserts by
+// subscription key: the production pool has several workers, so completion
+// order is unspecified.
 func TestBackupFinishedMapsTerminalOutcome(t *testing.T) {
 	teamID, databaseID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
 	channel := repo.seed(sampleChannel(t, teamID))
-	service := newTestService(t, repo)
+	service := NewService(Config{
+		Repository:  repo,
+		Secret:      testSecret,
+		Logger:      discardLogger(),
+		Mailer:      &fakeMailer{},
+		Workers:     1,
+		QueueSize:   8,
+		SendTimeout: time.Second,
+	})
+	t.Cleanup(func() { _ = service.Close() })
 	notifier := newFakeNotifier()
 	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
 
@@ -308,12 +321,22 @@ func TestBackupFinishedMapsTerminalOutcome(t *testing.T) {
 	})
 
 	waitFor(t, "both backup events", func() bool { return len(notifier.delivered()) == 2 })
-	events := notifier.delivered()
-	if events[0].Key() != EventBackupFailure || events[1].Key() != EventBackupSuccess {
-		t.Errorf("keys = %s/%s, want backup_failure/backup_success", events[0].Key(), events[1].Key())
+	byKey := map[EventKey]Event{}
+	for _, event := range notifier.delivered() {
+		byKey[event.Key()] = event
 	}
-	if events[0].ResourceType != ResourceDatabase || events[0].ResourceID != databaseID {
-		t.Errorf("resource = %s/%s, want database/%s", events[0].ResourceType, events[0].ResourceID, databaseID)
+	failure, ok := byKey[EventBackupFailure]
+	if !ok {
+		t.Fatalf("events = %v, want a backup_failure", byKey)
+	}
+	if _, ok := byKey[EventBackupSuccess]; !ok {
+		t.Fatalf("events = %v, want a backup_success", byKey)
+	}
+	if failure.ResourceType != ResourceDatabase || failure.ResourceID != databaseID {
+		t.Errorf("resource = %s/%s, want database/%s", failure.ResourceType, failure.ResourceID, databaseID)
+	}
+	if failure.Error != "dump exited 1" {
+		t.Errorf("error = %q, want the failure text", failure.Error)
 	}
 }
 
@@ -617,5 +640,175 @@ func TestServiceWithoutRepositoryFailsClearly(t *testing.T) {
 	}
 	if _, err := service.CreateChannel(context.Background(), uuid.New(), ChannelRequest{}); err == nil {
 		t.Error("CreateChannel = nil error without a repository")
+	}
+}
+
+// TestMaskedResendKeepsStoredSecrets proves a client echoing back the redacted
+// read DTO (the masked secret values) cannot overwrite the stored credentials,
+// while a deliberate new credential still replaces them.
+func TestMaskedResendKeepsStoredSecrets(t *testing.T) {
+	userID, teamID := uuid.New(), uuid.New()
+	ctx := scopedCtx(userID, teamID, teams.RoleOwner)
+	repo := newFakeRepository()
+	service := newTestService(t, repo)
+
+	const telegramToken = "7184:AAH-real-token"
+	telegram, err := service.CreateChannel(ctx, userID, ChannelRequest{
+		Name: "telegram", Kind: KindTelegram,
+		Config: ChannelConfig{BotToken: telegramToken, ChatID: "-1001"},
+	})
+	if err != nil {
+		t.Fatalf("create telegram: %v", err)
+	}
+	if telegram.Config.BotToken == telegramToken {
+		t.Fatal("the create view leaks the token")
+	}
+	updated, err := service.UpdateChannel(ctx, userID, telegram.ID, ChannelRequest{
+		Name: "telegram renamed", Config: telegram.Config,
+	})
+	if err != nil {
+		t.Fatalf("masked telegram resend: %v", err)
+	}
+	stored, _ := repo.get(telegram.ID)
+	opened, err := openConfig(testSecret, stored.SealedConfig)
+	if err != nil {
+		t.Fatalf("openConfig: %v", err)
+	}
+	if opened.BotToken != telegramToken {
+		t.Errorf("token = %q, want the stored one after a masked resend", opened.BotToken)
+	}
+	if opened.ChatID != "-1001" {
+		t.Errorf("chat id = %q, want the stored one", opened.ChatID)
+	}
+	if strings.Contains(updated.Config.BotToken, "AAH") {
+		t.Errorf("view token = %q, want the mask", updated.Config.BotToken)
+	}
+
+	const webhook = "https://discord.com/api/webhooks/1184/8f2c-secret-value"
+	discord, err := service.CreateChannel(ctx, userID, ChannelRequest{
+		Name: "discord", Kind: KindDiscord, Config: ChannelConfig{WebhookURL: webhook},
+	})
+	if err != nil {
+		t.Fatalf("create discord: %v", err)
+	}
+	// The masked webhook is not a valid URL: retaining the stored value is
+	// what keeps this update from failing validation.
+	if _, err := service.UpdateChannel(ctx, userID, discord.ID, ChannelRequest{
+		Name: "discord renamed", Config: discord.Config,
+	}); err != nil {
+		t.Fatalf("masked discord resend: %v", err)
+	}
+	storedDiscord, _ := repo.get(discord.ID)
+	openedDiscord, err := openConfig(testSecret, storedDiscord.SealedConfig)
+	if err != nil {
+		t.Fatalf("openConfig discord: %v", err)
+	}
+	if openedDiscord.WebhookURL != webhook {
+		t.Errorf("webhook = %q, want the stored one", openedDiscord.WebhookURL)
+	}
+
+	const smtpPassword = "smtp-secret-password"
+	email, err := service.CreateChannel(ctx, userID, ChannelRequest{
+		Name: "email", Kind: KindEmail,
+		Config: ChannelConfig{
+			Host: "smtp.gotham.dev", Port: 587, Username: "ops@gotham.dev",
+			Password: smtpPassword, From: "ops@gotham.dev", To: []string{"oncall@gotham.dev"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create email: %v", err)
+	}
+	if _, err := service.UpdateChannel(ctx, userID, email.ID, ChannelRequest{
+		Config: ChannelConfig{Password: email.Config.Password},
+	}); err != nil {
+		t.Fatalf("masked password resend: %v", err)
+	}
+	storedEmail, _ := repo.get(email.ID)
+	openedEmail, err := openConfig(testSecret, storedEmail.SealedConfig)
+	if err != nil {
+		t.Fatalf("openConfig email: %v", err)
+	}
+	if openedEmail.Password != smtpPassword {
+		t.Errorf("password = %q, want the stored one", openedEmail.Password)
+	}
+
+	// A deliberate new credential is still a replacement.
+	if _, err := service.UpdateChannel(ctx, userID, telegram.ID, ChannelRequest{
+		Config: ChannelConfig{BotToken: "999:AAH-new-token", ChatID: "-2002"},
+	}); err != nil {
+		t.Fatalf("deliberate telegram replacement: %v", err)
+	}
+	stored, _ = repo.get(telegram.ID)
+	opened, err = openConfig(testSecret, stored.SealedConfig)
+	if err != nil {
+		t.Fatalf("openConfig after replacement: %v", err)
+	}
+	if opened.BotToken != "999:AAH-new-token" || opened.ChatID != "-2002" {
+		t.Errorf("token/chat = %q/%q, want the deliberate replacement", opened.BotToken, opened.ChatID)
+	}
+}
+
+// TestDispatcherLogHidesTransportSecret proves the delivery-failure log line
+// never carries the credential-bearing endpoint.
+func TestDispatcherLogHidesTransportSecret(t *testing.T) {
+	teamID := uuid.New()
+	server, _ := newWebhookServer(t, http.StatusOK)
+	endpoint := server.URL + "/webhook/log-secret-token"
+	server.Close() // connections are refused
+
+	repo := newFakeRepository()
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: endpoint})
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	repo.seed(Channel{
+		ID: uuid.New(), TeamID: teamID, Name: "discord", Kind: KindDiscord,
+		Enabled: true, Events: AllEvents, SealedConfig: sealed,
+	})
+
+	logs := &syncBuffer{}
+	service := NewService(Config{
+		Repository: repo, Secret: testSecret,
+		Logger: slog.New(slog.NewTextHandler(logs, nil)),
+		Mailer: &fakeMailer{}, Workers: 1, QueueSize: 4, SendTimeout: time.Second,
+	})
+	t.Cleanup(func() { _ = service.Close() })
+
+	service.Dispatch(sampleEvent(teamID))
+	waitFor(t, "the delivery failure log", func() bool { return strings.Contains(logs.String(), "delivery failed") })
+	if strings.Contains(logs.String(), "log-secret-token") {
+		t.Fatalf("log leaks the webhook URL: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "connection failed") {
+		t.Errorf("log = %q, want the transport category", logs.String())
+	}
+}
+
+// TestEmptySecretKeyUsesEphemeralSecret mirrors providers/servers: an empty
+// GOTHAM_SECRET_KEY must never seal under SHA-256("").
+func TestEmptySecretKeyUsesEphemeralSecret(t *testing.T) {
+	logs := &syncBuffer{}
+	service := NewService(Config{
+		Repository: newFakeRepository(),
+		Logger:     slog.New(slog.NewTextHandler(logs, nil)),
+		Mailer:     &fakeMailer{},
+	})
+	t.Cleanup(func() { _ = service.Close() })
+
+	if service.secret == "" {
+		t.Fatal("secret is empty, want an ephemeral key")
+	}
+	if !strings.Contains(logs.String(), "GOTHAM_SECRET_KEY is empty") {
+		t.Errorf("log = %q, want the ephemeral-key warning", logs.String())
+	}
+	sealed, err := sealConfig(service.secret, ChannelConfig{WebhookURL: "https://discord.com/api/webhooks/1/abc"})
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	if _, err := providers.OpenSecret("", sealed); err == nil {
+		t.Error("the sealed config opens under an empty key")
+	}
+	if _, err := providers.OpenSecret(service.secret, sealed); err != nil {
+		t.Errorf("OpenSecret(ephemeral) = %v, want a roundtrip", err)
 	}
 }

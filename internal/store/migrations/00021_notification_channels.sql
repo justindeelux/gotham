@@ -27,10 +27,12 @@ CREATE TABLE notification_channels (
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT notification_channels_kind_check CHECK (kind IN ('discord', 'slack', 'telegram', 'email')),
     -- A channel is either team-wide (both NULL) or a resource override (both
-    -- set); one half alone can never resolve to an event.
+    -- set); one half alone can never resolve to an event. The IS NOT NULL on
+    -- the second arm matters: without it the arm evaluates to SQL NULL for a
+    -- NULL type and the constraint would accept (NULL, id).
     CONSTRAINT notification_channels_resource_check CHECK (
         (resource_type IS NULL AND resource_id IS NULL)
-        OR (resource_type IN ('application', 'database') AND resource_id IS NOT NULL)
+        OR (resource_type IS NOT NULL AND resource_type IN ('application', 'database') AND resource_id IS NOT NULL)
     )
 );
 

@@ -267,6 +267,81 @@ func TestChannelRouteTestDeliversMail(t *testing.T) {
 	}
 }
 
+// TestChannelRouteTestHidesTransportSecret proves the authenticated send-test
+// response never carries the endpoint credential.
+func TestChannelRouteTestHidesTransportSecret(t *testing.T) {
+	userID, teamID := uuid.New(), uuid.New()
+	server, _ := newWebhookServer(t, http.StatusOK)
+	endpoint := server.URL + "/webhook/route-secret-token"
+	server.Close() // connections are refused
+
+	repo := newFakeRepository()
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: endpoint})
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	channel := repo.seed(Channel{
+		ID: uuid.New(), TeamID: teamID, Name: "discord", Kind: KindDiscord,
+		Enabled: true, Events: AllEvents, SealedConfig: sealed,
+	})
+	service := newTestService(t, repo)
+	handler := newRouteServer(userID, teamID, teams.RoleOwner, service)
+
+	rec := doRequest(handler, http.MethodPost, "/v1/notification-channels/"+channel.ID.String()+"/test", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test = %d (body %s), want 200", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "route-secret-token") {
+		t.Fatalf("test response leaks the webhook: %s", rec.Body.String())
+	}
+	var envelope testEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode test result: %v", err)
+	}
+	if envelope.Check.OK {
+		t.Errorf("check = %+v, want a failed delivery", envelope.Check)
+	}
+	if !strings.Contains(envelope.Check.Message, "connection failed") {
+		t.Errorf("message = %q, want the transport category", envelope.Check.Message)
+	}
+}
+
+// TestChannelRouteMaskedConfigPatch proves a UI round-trip (GET, then PATCH
+// with the returned config) cannot wipe the stored secret.
+func TestChannelRouteMaskedConfigPatch(t *testing.T) {
+	userID, teamID := uuid.New(), uuid.New()
+	repo := newFakeRepository()
+	service := newTestService(t, repo)
+	handler := newRouteServer(userID, teamID, teams.RoleOwner, service)
+	const webhook = "https://discord.com/api/webhooks/1184/8f2c-secret-value"
+
+	rec := doRequest(handler, http.MethodPost, "/v1/notification-channels", discordBody(webhook))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	created := decodeChannel(t, rec)
+
+	patch, err := json.Marshal(map[string]any{"name": "renamed", "config": created.Config})
+	if err != nil {
+		t.Fatalf("marshal patch: %v", err)
+	}
+	rec = doRequest(handler, http.MethodPatch, "/v1/notification-channels/"+created.ID.String(), string(patch))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("masked patch = %d (body %s), want 200", rec.Code, rec.Body.String())
+	}
+	stored, ok := repo.get(created.ID)
+	if !ok {
+		t.Fatal("the channel disappeared")
+	}
+	opened, err := openConfig(testSecret, stored.SealedConfig)
+	if err != nil {
+		t.Fatalf("openConfig: %v", err)
+	}
+	if opened.WebhookURL != webhook {
+		t.Errorf("webhook = %q, want the stored one after a masked resend", opened.WebhookURL)
+	}
+}
+
 // TestChannelRoutesUnmountWhenDisabled proves the feature flag and a nil
 // service mount no routes.
 func TestChannelRoutesUnmountWhenDisabled(t *testing.T) {

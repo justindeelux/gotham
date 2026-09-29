@@ -2,6 +2,8 @@ package notifications
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -151,11 +153,18 @@ func NewService(cfg Config) *Service {
 	if now == nil {
 		now = time.Now
 	}
+	secret := strings.TrimSpace(cfg.Secret)
+	if secret == "" {
+		// Mirror providers/servers: never seal under SHA-256(""). The cost is
+		// that stored configs do not survive a restart.
+		secret = randomSecret()
+		logger.Warn("notifications: GOTHAM_SECRET_KEY is empty; channel configs are sealed with an ephemeral key and will not survive a restart")
+	}
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 
 	service := &Service{
 		repo:        cfg.repository(),
-		secret:      cfg.Secret,
+		secret:      secret,
 		logger:      logger,
 		client:      client,
 		mailer:      mailer,
@@ -168,6 +177,18 @@ func NewService(cfg Config) *Service {
 	}
 	service.factory = service.notifierFor
 	return service
+}
+
+// randomSecret returns a base64-encoded 32-byte random secret, the
+// GOTHAM_SECRET_KEY fallback for a deployment that configured none.
+func randomSecret() string {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		// crypto/rand.Read only fails on a broken system RNG; there is no
+		// safe fallback for key material.
+		panic(fmt.Sprintf("notifications: generate secret: %v", err))
+	}
+	return base64.StdEncoding.EncodeToString(buf)
 }
 
 // NewDefaultService builds the production service for the HTTP wiring and

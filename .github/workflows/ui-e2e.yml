@@ -64,6 +64,11 @@ jobs:
       # key; the domains smoke exercises the DNS-provider CRUD path.
       GOTHAM_SECRET_KEY: "ui-e2e-secret-key-not-for-production"
       GOTHAM_E2E_BASE_URL: http://127.0.0.1:8099
+      # The smoke account is a platform operator so the platform-global DNS
+      # surface (BE-8.2) is reachable; per-application cert/redirect management
+      # stays team-scoped.
+      GOTHAM_E2E_EMAIL: ui-e2e-admin@example.com
+      PLATFORM_ADMINS: ui-e2e-admin@example.com
 
     steps:
       - name: Checkout

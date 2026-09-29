@@ -156,9 +156,13 @@ func (p *gitLabSource) CreateWebhook(ctx context.Context, tok *oauth2.Token, rep
 	}
 	client := p.config.Client(ctx, tok)
 	payload := map[string]any{
-		"url":                     hook.URL,
-		"token":                   hook.Secret,
-		"push_events":             wantsEvent(hook.Events, "push"),
+		"url":         hook.URL,
+		"token":       hook.Secret,
+		"push_events": wantsEvent(hook.Events, "push"),
+		// Merge-request events are the GitLab shape of pull_request: a
+		// previews-enabled hook (events include "pull_request") must subscribe
+		// to them or the installed hook never delivers an MR notification.
+		"merge_requests_events":   eventSelected(hook.Events, "pull_request"),
 		"enable_ssl_verification": true,
 	}
 
@@ -193,6 +197,22 @@ func (p *gitLabSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, rep
 		return err
 	}
 	return nil
+}
+
+// CreatePullRequestComment posts a note on merge request number of repo
+// ("group/project", nested allowed) — GitLab's name for a PR conversation
+// comment.
+func (p *gitLabSource) CreatePullRequestComment(ctx context.Context, tok *oauth2.Token, repo string, number int, body string) error {
+	if err := validateRepo(repo, 1); err != nil {
+		return err
+	}
+	if err := validateComment(number, body); err != nil {
+		return err
+	}
+	client := p.config.Client(ctx, tok)
+	endpoint := fmt.Sprintf("%s/projects/%s/merge_requests/%d/notes", p.apiBase, escapeProjectPath(repo), number)
+	payload := map[string]string{"body": body}
+	return doJSON(ctx, client, NameGitLab, http.MethodPost, endpoint, "application/json", payload, nil)
 }
 
 // AddDeployKey registers the public key on repo ("group/project", nested

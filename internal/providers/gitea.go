@@ -182,6 +182,22 @@ func (p *giteaSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, repo
 	return nil
 }
 
+// CreatePullRequestComment posts a comment on pull request number of repo
+// ("owner/name") through the issues API, which is where Gitea stores PR
+// conversation.
+func (p *giteaSource) CreatePullRequestComment(ctx context.Context, tok *oauth2.Token, repo string, number int, body string) error {
+	if err := validateRepo(repo, 2); err != nil {
+		return err
+	}
+	if err := validateComment(number, body); err != nil {
+		return err
+	}
+	client := p.config.Client(ctx, tok)
+	endpoint := fmt.Sprintf("%s/repos/%s/issues/%d/comments", p.apiBase, repo, number)
+	payload := map[string]string{"body": body}
+	return doJSON(ctx, client, NameGitea, http.MethodPost, endpoint, "application/json", payload, nil)
+}
+
 // AddDeployKey registers the public key on repo ("owner/name") as a read-only
 // deploy key and returns the key ID the Gitea instance assigned to it.
 func (p *giteaSource) AddDeployKey(ctx context.Context, tok *oauth2.Token, repo string, key DeployKey) (string, error) {

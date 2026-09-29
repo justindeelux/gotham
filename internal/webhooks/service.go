@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
@@ -38,6 +40,8 @@ const (
 	// StatusSkipped means the delivery verified but the deploy service refused
 	// it without failing (a deployment is already running).
 	StatusSkipped = "skipped"
+	// StatusDeleted means a closed pull request tore its preview down.
+	StatusDeleted = "deleted"
 )
 
 // Installer is the slice of providers.ProviderService the hook lifecycle
@@ -64,6 +68,8 @@ type Delivery struct {
 	Status       string `json:"status"`
 	Reason       string `json:"reason,omitempty"`
 	DeploymentID string `json:"deployment_id,omitempty"`
+	// Host is the preview host a pull request delivery created or removed.
+	Host string `json:"host,omitempty"`
 }
 
 // Config wires a Service. Store (or an explicit Repository) plus Installer and
@@ -80,6 +86,13 @@ type Config struct {
 	Installer Installer
 	// Deployer queues deployments for verified deliveries.
 	Deployer Deployer
+	// Provisioner clones a preview sibling from a base application and tears
+	// it down. nil (or FEATURE_PREVIEWS=false) makes every pull request
+	// delivery a no-op.
+	Provisioner PreviewProvisioner
+	// Commenter posts the preview badge comment on the pull request. Best
+	// effort; nil disables comments only.
+	Commenter Commenter
 	// Secret is the key providers.SealSecret seals hook secrets with.
 	Secret string
 	// Logger defaults to slog.Default.
@@ -87,17 +100,33 @@ type Config struct {
 	// Limit is the delivery refill rate per client IP, Burst its bucket size.
 	Limit rate.Limit
 	Burst int
+	// Now overrides the clock (tests). Defaults to time.Now.
+	Now func() time.Time
+	// SweepInterval is the orphan sweep period. Zero selects
+	// defaultPreviewSweepInterval. The sweep is orphan-only: it never deletes
+	// a preview that is still bound to a live sibling application.
+	SweepInterval time.Duration
 }
 
 // Service is the webhook domain service: it installs and removes hooks and
 // turns verified push deliveries into deployments. It is safe for concurrent
 // use.
 type Service struct {
-	repo      Repository
-	installer Installer
-	deployer  Deployer
-	logger    *slog.Logger
-	limiter   *deliveryLimiter
+	repo        Repository
+	installer   Installer
+	deployer    Deployer
+	provisioner PreviewProvisioner
+	commenter   Commenter
+	logger      *slog.Logger
+	limiter     *deliveryLimiter
+	now         func() time.Time
+	sweepEvery  time.Duration
+
+	// Sweep lifecycle (StartPreviews/Close).
+	sweepOnce sync.Once
+	sweepStop context.CancelFunc
+	sweepDone chan struct{}
+	closeOnce sync.Once
 }
 
 // NewService builds a Service from cfg.
@@ -110,12 +139,24 @@ func NewService(cfg Config) *Service {
 	if repo == nil && cfg.Store != nil {
 		repo = newStoreRepository(cfg.Store, cfg.Secret)
 	}
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
+	interval := cfg.SweepInterval
+	if interval <= 0 {
+		interval = defaultPreviewSweepInterval
+	}
 	return &Service{
-		repo:      repo,
-		installer: cfg.Installer,
-		deployer:  cfg.Deployer,
-		logger:    logger,
-		limiter:   newDeliveryLimiter(cfg.Limit, cfg.Burst),
+		repo:        repo,
+		installer:   cfg.Installer,
+		deployer:    cfg.Deployer,
+		provisioner: cfg.Provisioner,
+		commenter:   cfg.Commenter,
+		logger:      logger,
+		limiter:     newDeliveryLimiter(cfg.Limit, cfg.Burst),
+		now:         now,
+		sweepEvery:  interval,
 	}
 }
 
@@ -148,7 +189,7 @@ func (s *Service) CreateWebhook(ctx context.Context, userID, appID uuid.UUID, ca
 		return Hook{}, err
 	}
 
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Hook{}, err
 	}
@@ -180,7 +221,7 @@ func (s *Service) CreateWebhook(ctx context.Context, userID, appID uuid.UUID, ca
 	}, providers.Webhook{
 		URL:    callbackURL,
 		Secret: secret,
-		Events: []string{"push"},
+		Events: s.hookEvents(),
 	})
 	if err != nil {
 		return Hook{}, mapProviderError(app.Provider, err)
@@ -211,7 +252,7 @@ func (s *Service) DeleteWebhook(ctx context.Context, userID, appID uuid.UUID) (b
 		return false, errors.New("webhooks: service is not configured")
 	}
 
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return false, err
 	}
@@ -239,12 +280,13 @@ func (s *Service) DeleteWebhook(ctx context.Context, userID, appID uuid.UUID) (b
 	return true, nil
 }
 
-// application loads an application the caller may manage through its active
+// application loads an application the caller may access through its active
 // team: a row of another team answers ErrNotFound so application IDs cannot be
 // probed, and a write needs an owner/admin role (a creator who was demoted to
-// read_only or removed from the team is refused). Management is a mutation of
-// the application's hosting, hence write=true.
-func (s *Service) application(ctx context.Context, userID, appID uuid.UUID) (Application, error) {
+// read_only or removed from the team is refused). Hook management is a
+// mutation of the application's hosting, hence write=true there; the preview
+// list is a read.
+func (s *Service) application(ctx context.Context, userID, appID uuid.UUID, write bool) (Application, error) {
 	if appID == uuid.Nil {
 		return Application{}, fmt.Errorf("%w: application id is required", ErrValidation)
 	}
@@ -252,7 +294,7 @@ func (s *Service) application(ctx context.Context, userID, appID uuid.UUID) (App
 	if err != nil {
 		return Application{}, err
 	}
-	if err := teams.ScopeFor(ctx, userID).AuthorizeResource(app.TeamID, app.UserID, true); err != nil {
+	if err := teams.ScopeFor(ctx, userID).AuthorizeResource(app.TeamID, app.UserID, write); err != nil {
 		if errors.Is(err, teams.ErrForbidden) {
 			return Application{}, ErrForbidden
 		}
@@ -300,6 +342,9 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 		return Delivery{}, ErrUnauthorized
 	}
 
+	if isPullRequestEvent(provider, parsed.Event) {
+		return s.receivePullRequest(ctx, provider, target, parsed)
+	}
 	if !isPushEvent(provider, parsed.Event) {
 		return Delivery{Status: StatusIgnored, Reason: "event"}, nil
 	}
@@ -392,6 +437,19 @@ func mapProviderError(provider string, err error) error {
 	default:
 		return fmt.Errorf("%w: %s: %v", ErrProvider, provider, err)
 	}
+}
+
+// hookEvents returns the events a newly installed hook subscribes to. Previews
+// add pull_request deliveries; with the feature off the hook stays push-only.
+// Hooks installed before previews existed keep their push-only subscription
+// until they are deleted and re-installed — the plan's documented re-install
+// path, chosen over silently re-creating a hook (which would lose the secret
+// deliveries are signed with).
+func (s *Service) hookEvents() []string {
+	if !Enabled() {
+		return []string{"push"}
+	}
+	return []string{"push", "pull_request"}
 }
 
 // isSupported reports whether a provider name has webhook implementations.

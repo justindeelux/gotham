@@ -123,7 +123,7 @@ func (q *Queries) DeleteWebhookEvent(ctx context.Context, id pgtype.UUID) error 
 }
 
 const getApplicationForUser = `-- name: GetApplicationForUser :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview FROM applications
 WHERE id = $1 AND user_id = $2
 `
 
@@ -152,6 +152,7 @@ func (q *Queries) GetApplicationForUser(ctx context.Context, arg GetApplicationF
 		&i.UpdatedAt,
 		&i.BaseDomainDisabled,
 		&i.TeamID,
+		&i.IsPreview,
 	)
 	return i, err
 }
@@ -180,7 +181,8 @@ func (q *Queries) GetApplicationWebhookByApp(ctx context.Context, applicationID 
 
 const listWebhookTargetsForRepo = `-- name: ListWebhookTargetsForRepo :many
 SELECT w.application_id, w.hook_id, w.secret, w.url,
-       a.provider, a.repo, a.branch, a.clone_url
+       a.user_id, a.team_id, a.provider, a.repo, a.branch, a.clone_url,
+       a.name, a.base_domain
 FROM application_webhooks w
 JOIN applications a ON a.id = w.application_id
 WHERE w.provider = $1 AND lower(w.repo) = $2
@@ -196,10 +198,14 @@ type ListWebhookTargetsForRepoRow struct {
 	HookID        string      `json:"hook_id"`
 	Secret        string      `json:"secret"`
 	Url           string      `json:"url"`
+	UserID        pgtype.UUID `json:"user_id"`
+	TeamID        pgtype.UUID `json:"team_id"`
 	Provider      string      `json:"provider"`
 	Repo          string      `json:"repo"`
 	Branch        string      `json:"branch"`
 	CloneUrl      string      `json:"clone_url"`
+	Name          string      `json:"name"`
+	BaseDomain    string      `json:"base_domain"`
 }
 
 func (q *Queries) ListWebhookTargetsForRepo(ctx context.Context, arg ListWebhookTargetsForRepoParams) ([]ListWebhookTargetsForRepoRow, error) {
@@ -216,10 +222,14 @@ func (q *Queries) ListWebhookTargetsForRepo(ctx context.Context, arg ListWebhook
 			&i.HookID,
 			&i.Secret,
 			&i.Url,
+			&i.UserID,
+			&i.TeamID,
 			&i.Provider,
 			&i.Repo,
 			&i.Branch,
 			&i.CloneUrl,
+			&i.Name,
+			&i.BaseDomain,
 		); err != nil {
 			return nil, err
 		}

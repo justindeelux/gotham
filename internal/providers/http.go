@@ -161,6 +161,19 @@ func validateProviderID(id, what string) error {
 	return nil
 }
 
+// validateComment rejects a comment the Git host would refuse anyway: a pull
+// request number must be positive and the body must not be blank. The number
+// is rendered with strconv.Itoa, so it can never escape the intended path.
+func validateComment(number int, body string) error {
+	if number <= 0 {
+		return fmt.Errorf("%w: invalid pull request number", ErrValidation)
+	}
+	if strings.TrimSpace(body) == "" {
+		return fmt.Errorf("%w: comment body is empty", ErrValidation)
+	}
+	return nil
+}
+
 // validateDeployKey rejects a public key the Git host would refuse anyway, so
 // the API answers with a clear validation error instead of a provider body.
 func validateDeployKey(key DeployKey) error {
@@ -188,6 +201,13 @@ func wantsEvent(events []string, name string) bool {
 	if len(events) == 0 {
 		return true
 	}
+	return eventSelected(events, name)
+}
+
+// eventSelected reports whether events explicitly selects name. Unlike
+// wantsEvent, an empty list selects nothing: optional event families
+// (pull_request / merge requests) are opt-in, never part of the push default.
+func eventSelected(events []string, name string) bool {
 	for _, event := range events {
 		if strings.EqualFold(event, name) {
 			return true

@@ -26,10 +26,15 @@ type Application struct {
 	// to disable because another application owned the domain first. The
 	// value is preserved; an explicit domain update re-enables it.
 	BaseDomainDisabled bool
-	Port               int32
-	HostPort           int32
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// IsPreview marks an application created by the preview controller
+	// (BE-8.1). A preview reuses its base application's remote deploy key, so
+	// deleting one must never remove the key from the Git host; the marker is
+	// also what lets the orphan sweep find a preview whose binding is gone.
+	IsPreview bool
+	Port      int32
+	HostPort  int32
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Deployment is one attempt to run an application revision (kind "deploy" or

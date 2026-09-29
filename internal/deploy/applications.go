@@ -239,7 +239,25 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 	if err != nil {
 		return err
 	}
-	if err := s.detachDeployKey(ctx, app); err != nil {
+	// Preview siblings hang off this application outside the deploy schema
+	// (preview_deploys is keyed by the base application and cascades); they
+	// must be torn down before the base row disappears, or the cascade would
+	// erase the only record of them. A cleanup failure aborts the delete: the
+	// container stop inside the teardown is best effort, but the durable
+	// binding must not be lost while a sibling still exists.
+	if s.previewCleanup != nil {
+		if err := s.previewCleanup(ctx, app.ID); err != nil {
+			return err
+		}
+	}
+	// A preview sibling reuses its base application's remote deploy key:
+	// removing it from the Git host would break the base (and every other
+	// sibling). Only the local rows go; the remote key stays registered.
+	if app.IsPreview {
+		if _, err := s.repo.DeleteDeployKey(ctx, app.ID); err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+	} else if err := s.detachDeployKey(ctx, app); err != nil {
 		return err
 	}
 	s.stopBestEffort(ctx, app)

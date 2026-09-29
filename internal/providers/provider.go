@@ -103,6 +103,11 @@ type SourceProvider interface {
 	// DeleteWebhook removes the hook identified by hookID from repo. A hook
 	// that is already gone is a success, so deleting is idempotent.
 	DeleteWebhook(ctx context.Context, tok *oauth2.Token, repo, hookID string) error
+	// CreatePullRequestComment posts body as a comment on pull request number
+	// of repo (GitLab calls it a merge request note). It is best-effort from
+	// the caller's point of view: a failure is reported but never rolls back
+	// the work the comment reports on.
+	CreatePullRequestComment(ctx context.Context, tok *oauth2.Token, repo string, number int, body string) error
 	// AddDeployKey registers the public key on repo and returns the
 	// provider's own key ID, which RemoveDeployKey needs to remove it later.
 	AddDeployKey(ctx context.Context, tok *oauth2.Token, repo string, key DeployKey) (string, error)

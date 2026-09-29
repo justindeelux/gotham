@@ -193,6 +193,22 @@ func (p *gitHubSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, rep
 	return nil
 }
 
+// CreatePullRequestComment posts a comment on pull request number of repo
+// ("owner/name") through the issues API, which is where GitHub stores PR
+// conversation.
+func (p *gitHubSource) CreatePullRequestComment(ctx context.Context, tok *oauth2.Token, repo string, number int, body string) error {
+	if err := validateRepo(repo, 2); err != nil {
+		return err
+	}
+	if err := validateComment(number, body); err != nil {
+		return err
+	}
+	client := p.config.Client(ctx, tok)
+	endpoint := fmt.Sprintf("%s/repos/%s/issues/%d/comments", p.apiBase, repo, number)
+	payload := map[string]string{"body": body}
+	return doJSON(ctx, client, NameGitHub, http.MethodPost, endpoint, gitHubAccept, payload, nil)
+}
+
 // AddDeployKey registers the public key on repo ("owner/name") as a read-only
 // deploy key and returns the key ID GitHub assigned to it.
 func (p *gitHubSource) AddDeployKey(ctx context.Context, tok *oauth2.Token, repo string, key DeployKey) (string, error) {

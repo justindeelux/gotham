@@ -102,6 +102,13 @@ type Config struct {
 	Notifier Notifier
 	// Source clones the repository; nil selects git on the control plane.
 	Source Source
+	// PreviewCleanup tears down resources that hang off an application
+	// outside the deploy schema before the application row is deleted
+	// (BE-8.1 preview siblings). A returned error aborts the delete: deleting
+	// the base application would cascade the preview bindings away while the
+	// siblings survive, leaving them untracked. Container stops inside the
+	// callback stay best effort. nil disables the hook.
+	PreviewCleanup func(ctx context.Context, appID uuid.UUID) error
 	// Emitter overrides the publisher-based realtime emitter (tests).
 	Emitter *Emitter
 	// Logger defaults to slog.Default.
@@ -140,6 +147,9 @@ type Service struct {
 	// service is wired (creation then answers a clear error instead of a nil
 	// dereference).
 	registrar KeyRegistrar
+	// previewCleanup, when set, runs before an application row is deleted (see
+	// Config.PreviewCleanup).
+	previewCleanup func(ctx context.Context, appID uuid.UUID) error
 }
 
 // Compile-time guarantee that Service satisfies the route-level contract.
@@ -152,7 +162,7 @@ var _ DeployService = (*Service)(nil)
 func NewService(cfg Config) *Service {
 	o := newOrchestrator(cfg)
 	o.recoverStale()
-	return &Service{Orchestrator: o, registrar: cfg.KeyRegistrar}
+	return &Service{Orchestrator: o, registrar: cfg.KeyRegistrar, previewCleanup: cfg.PreviewCleanup}
 }
 
 // recoverStale marks deployments abandoned by a previous control plane

@@ -41,6 +41,30 @@ type hookEnvelope struct {
 	Hook hookResponse `json:"hook"`
 }
 
+// previewResponse is the wire representation of one preview binding. It
+// carries no secrets: the sibling application is referenced by ID, and the
+// branch/host are the operator-facing facts of the preview.
+type previewResponse struct {
+	ID                   string     `json:"id"`
+	ApplicationID        string     `json:"application_id"`
+	PreviewApplicationID string     `json:"preview_application_id,omitempty"`
+	Provider             string     `json:"provider"`
+	Repo                 string     `json:"repo"`
+	PRNumber             int        `json:"pr_number"`
+	Branch               string     `json:"branch"`
+	HeadSHA              string     `json:"head_sha"`
+	Host                 string     `json:"host"`
+	State                string     `json:"state"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+	DeletedAt            *time.Time `json:"deleted_at,omitempty"`
+}
+
+// previewListEnvelope wraps an application's previews.
+type previewListEnvelope struct {
+	Previews []previewResponse `json:"previews"`
+}
+
 // deleteEnvelope reports an idempotent delete.
 type deleteEnvelope struct {
 	Deleted bool `json:"deleted"`
@@ -63,6 +87,7 @@ type handler struct {
 //	POST   /v1/webhooks/{provider}          (public: signature-verified)
 //	POST   /v1/applications/{id}/webhooks   (authenticated, idempotent)
 //	DELETE /v1/applications/{id}/webhooks   (authenticated, idempotent)
+//	GET    /v1/applications/{id}/previews   (authenticated; previews enabled)
 //
 // auth wraps the management group: the server passes its team chain
 // (RequireAuth + RequireTeam + the write gate), and the service additionally
@@ -83,6 +108,11 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Use(auth)
 		protected.Post("/v1/applications/{id}/webhooks", h.create)
 		protected.Delete("/v1/applications/{id}/webhooks", h.delete)
+		if Enabled() {
+			// The preview surface does not exist with FEATURE_PREVIEWS=false:
+			// no listing route, no delivery handling, no sweep.
+			protected.Get("/v1/applications/{id}/previews", h.listPreviews)
+		}
 	})
 }
 
@@ -145,6 +175,31 @@ func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, deleteEnvelope{Deleted: deleted})
 }
 
+// listPreviews serves GET /v1/applications/{id}/previews: the application's
+// preview bindings, newest first, for callers whose team may read the
+// application.
+func (h *handler) listPreviews(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	appID, ok := applicationIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	previews, err := h.svc.ListPreviews(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	response := make([]previewResponse, 0, len(previews))
+	for _, preview := range previews {
+		response = append(response, newPreviewResponse(preview))
+	}
+	writeJSON(w, http.StatusOK, previewListEnvelope{Previews: response})
+}
+
 // callbackBaseURL derives the public origin of the delivery route from the
 // management request: scheme from the TLS-terminating proxy's
 // X-Forwarded-Proto (or the connection itself), host from the request. A proxy
@@ -195,6 +250,13 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrRateLimited):
 		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrRetryable):
+		// 503: the delivery was not acted on (a conflicting deployment is
+		// running, or a transient dependency failed). The message names the
+		// condition without leaking provider or database detail, and the Git
+		// host can redeliver the same event.
+		h.logger.Warn("webhooks: retryable delivery failure", "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "delivery can be retried"})
 	case errors.Is(err, ErrNotFound):
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
 	case errors.Is(err, ErrForbidden):
@@ -210,6 +272,29 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		h.logger.Error("webhooks: request failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error"})
 	}
+}
+
+// newPreviewResponse maps a stored preview binding to its wire form.
+func newPreviewResponse(p Preview) previewResponse {
+	response := previewResponse{
+		ID:                   p.ID.String(),
+		ApplicationID:        p.ApplicationID.String(),
+		PreviewApplicationID: p.PreviewApplicationID.String(),
+		Provider:             p.Provider,
+		Repo:                 p.Repo,
+		PRNumber:             p.PRNumber,
+		Branch:               p.Branch,
+		HeadSHA:              p.HeadSHA,
+		Host:                 p.Host,
+		State:                p.State,
+		CreatedAt:            p.CreatedAt,
+		UpdatedAt:            p.UpdatedAt,
+	}
+	if !p.DeletedAt.IsZero() {
+		deleted := p.DeletedAt
+		response.DeletedAt = &deleted
+	}
+	return response
 }
 
 // newHookResponse maps a stored hook to its wire representation.

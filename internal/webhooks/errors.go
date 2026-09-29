@@ -39,4 +39,11 @@ var (
 	// removing a hook). Handlers answer it with a gateway status instead of
 	// leaking the provider's response.
 	ErrProvider = errors.New("webhooks: provider call failed")
+	// ErrRetryable is returned when a delivery could not be acted on because a
+	// conflicting deployment is running or a transient dependency failed, and
+	// the delivery was NOT recorded as handled. The route answers 503 so the
+	// revision stays visible as a failed delivery and the Git host can
+	// redeliver it; the preview reservation is released first, so the retry
+	// can reserve again.
+	ErrRetryable = errors.New("webhooks: delivery can be retried")
 )

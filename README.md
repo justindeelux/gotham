@@ -30,7 +30,7 @@ Design priorities (in order):
 | UI kit | Naive UI | Flat design style |
 | Auth | JWT + OAuth2 (GitHub, GitLab) | argon2id password hashing, TOTP 2FA later |
 | Config | viper | YAML / ENV, hot reload |
-| Self-update | minio/selfupdate + Ed25519 signing | GitHub Releases as the update channel |
+| Self-update | Built-in atomic swap + Ed25519 signed manifest | GitHub Releases as the update channel |
 | CI/CD | GitHub Actions + GoReleaser | Build, sign, publish, attach checksums |
 
 ---

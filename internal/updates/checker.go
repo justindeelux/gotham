@@ -282,7 +282,7 @@ func defaultHTTPClient(timeout time.Duration) *http.Client {
 			}
 			var previous *url.URL
 			if len(via) > 0 {
-				previous = via[0].URL
+				previous = via[len(via)-1].URL
 			}
 			return validateRedirect(previous, req.URL)
 		},

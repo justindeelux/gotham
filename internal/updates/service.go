@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -42,6 +44,8 @@ type Service interface {
 	Apply(ctx context.Context, channel Channel) (*ApplyResult, error)
 	// Rollback restores the retained previous binary.
 	Rollback() error
+	// Reset clears a stale pending marker (operator reset path).
+	Reset() error
 	// LastStatus returns the durable outcome of the most recent update attempt.
 	LastStatus() (*Status, error)
 	// StartAuto launches the scheduled check/apply loop when enabled.
@@ -60,6 +64,7 @@ type Config struct {
 	LockPath     string
 	UpdateScript string
 	StatusPath   string
+	PendingPath  string
 	Timeout      time.Duration
 	MaxBytes     int64
 	Logger       *slog.Logger
@@ -72,7 +77,7 @@ type Config struct {
 	Client *http.Client
 	// Restart overrides the restart wrapper (tests). When nil a default that
 	// runs the fixed root-owned wrapper through sudo is used.
-	Restart func(ctx context.Context) error
+	Restart RestartFunc
 }
 
 type service struct {
@@ -80,6 +85,7 @@ type service struct {
 	checker  *Checker
 	applier  *Applier
 	status   *StatusStore
+	pending  *StatusStore
 	logger   *slog.Logger
 	auto     bool
 	interval time.Duration
@@ -87,11 +93,20 @@ type service struct {
 
 // NewService builds a self-update Service. It does not fail when no public key
 // is configured: Check still works, Apply stays disabled (fail closed). It
-// recovers an interrupted swap at startup and logs the last recorded outcome.
+// resolves the fixed binary path once, recovers an interrupted swap at startup
+// and logs the last recorded outcome.
 func NewService(cfg Config) (Service, error) {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+
+	binPath := strings.TrimSpace(cfg.BinaryPath)
+	if binPath == "" {
+		binPath = BinaryPathFromEnv()
+	}
+	if !filepath.IsAbs(binPath) {
+		return nil, fmt.Errorf("updates: binary path must be absolute: %s", binPath)
 	}
 
 	checker := &Checker{
@@ -103,11 +118,13 @@ func NewService(cfg Config) (Service, error) {
 		GOARCH:  cfg.GOARCH,
 	}
 	status := NewStatusStore(defaultString(cfg.StatusPath, ""))
+	pending := NewStatusStore(defaultString(cfg.PendingPath, ""))
 	applier := &Applier{
 		Client:     cfg.Client,
-		BinaryPath: cfg.BinaryPath,
+		BinaryPath: binPath,
 		OldPath:    cfg.OldPath,
-		LockPath:   cfg.LockPath,
+		LockPath:   defaultString(cfg.LockPath, ""),
+		Pending:    pending,
 		Status:     status,
 		Timeout:    cfg.Timeout,
 		MaxBytes:   cfg.MaxBytes,
@@ -129,7 +146,7 @@ func NewService(cfg Config) (Service, error) {
 	} else if restored {
 		logger.Warn("updates: restored the previous binary after an interrupted update")
 	}
-	if last, err := status.Read(); err != nil {
+	if last, err := lastStatusOf(pending, status); err != nil {
 		logger.Warn("updates: could not read the update status", "error", err)
 	} else if last != nil {
 		if last.Result == StatusOK {
@@ -149,6 +166,7 @@ func NewService(cfg Config) (Service, error) {
 		checker:  checker,
 		applier:  applier,
 		status:   status,
+		pending:  pending,
 		logger:   logger,
 		auto:     cfg.Auto,
 		interval: interval,
@@ -190,12 +208,33 @@ func (s *service) Apply(ctx context.Context, channel Channel) (*ApplyResult, err
 	return result, nil
 }
 
-// Rollback restores the retained previous binary.
+// Rollback restores the retained previous binary and clears the pending marker.
 func (s *service) Rollback() error { return s.applier.Rollback() }
 
-// LastStatus returns the durable outcome of the most recent update attempt, or
-// nil when no update has run.
-func (s *service) LastStatus() (*Status, error) { return s.status.Read() }
+// Reset clears a stale pending marker so a new apply can proceed. It does not
+// touch the binary; an operator uses it only after confirming no wrapper is
+// running.
+func (s *service) Reset() error { return s.pending.Remove() }
+
+// LastStatus returns the current durable outcome: the pending marker while an
+// update is staged or its launcher failed, otherwise the authoritative
+// root-owned status.
+func (s *service) LastStatus() (*Status, error) {
+	return lastStatusOf(s.pending, s.status)
+}
+
+// lastStatusOf prefers the pending marker (staged/in-progress or a
+// control-plane launch failure) over the authoritative status.
+func lastStatusOf(pending, status *StatusStore) (*Status, error) {
+	if pending != nil {
+		if p, err := pending.Read(); err != nil {
+			return nil, err
+		} else if p != nil {
+			return p, nil
+		}
+	}
+	return status.Read()
+}
 
 // StartAuto runs the scheduled check/apply loop until ctx is cancelled. It is
 // a no-op unless auto-update is enabled.
@@ -226,26 +265,27 @@ func (s *service) StartAuto(ctx context.Context) {
 	}()
 }
 
-// defaultRestart runs the fixed, root-owned wrapper through sudo, detached, so
-// it survives the restart of this process. The wrapper takes no arguments: it
-// restarts the fixed service, health-checks it, rolls back on failure and
-// records the outcome in its status file. sudoers grants exactly this command
-// with no arguments.
+// defaultRestart runs the fixed, root-owned wrapper through sudo and returns a
+// waiter for its exit. The wrapper takes no arguments: it restarts the fixed
+// service, health-checks it, rolls back on failure and records the outcome.
+// sudoers grants exactly this command with no arguments.
+//
+// The unit must keep KillMode=process so the wrapper is not killed when
+// `systemctl restart gotham` tears down the service cgroup.
 //
 // NoNewPrivileges must remain disabled in the unit because this call needs
 // setuid sudo; the only privileged action granted is the fixed wrapper.
-func defaultRestart(script string) func(ctx context.Context) error {
-	return func(_ context.Context) error {
+func defaultRestart(script string) RestartFunc {
+	return func(_ context.Context) (func() error, error) {
 		path := defaultString(script, DefaultUpdateScript)
 		if _, err := os.Stat(path); err != nil {
-			return fmt.Errorf("updates: restart wrapper %s: %w", path, err)
+			return nil, fmt.Errorf("updates: restart wrapper %s: %w", path, err)
 		}
 		cmd := exec.Command("sudo", "-n", path)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("updates: start restart wrapper: %w", err)
+			return nil, fmt.Errorf("updates: start restart wrapper: %w", err)
 		}
-		go func() { _ = cmd.Wait() }()
-		return nil
+		return cmd.Wait, nil
 	}
 }

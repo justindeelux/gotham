@@ -15,8 +15,12 @@ import (
 // TestApplierPathHelpers covers the default/custom path and bound resolution.
 func TestApplierPathHelpers(t *testing.T) {
 	applier := &Applier{}
-	if _, err := applier.binaryPath(); err != nil {
-		t.Fatalf("binaryPath (executable): %v", err)
+	if _, err := applier.binaryPath(); err == nil {
+		t.Fatal("binaryPath with no configured path = nil error, want failure")
+	}
+	applier.BinaryPath = "relative/gotham"
+	if _, err := applier.binaryPath(); err == nil {
+		t.Fatal("binaryPath(relative) = nil error, want failure")
 	}
 	applier.BinaryPath = "/opt/gotham/gotham"
 	if got, _ := applier.binaryPath(); got != "/opt/gotham/gotham" {
@@ -40,6 +44,19 @@ func TestApplierPathHelpers(t *testing.T) {
 	if applier.maxBytes() != 5 {
 		t.Errorf("maxBytes custom = %d", applier.maxBytes())
 	}
+	if !isSymlink(linkTo(t, "/nonexistent-target")) {
+		t.Error("isSymlink did not detect a planted symlink")
+	}
+}
+
+// linkTo creates a symlink in a temp dir and returns its path.
+func linkTo(t *testing.T, target string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	return path
 }
 
 // TestApplierFetchErrors covers a non-2xx response and an over-size body.
@@ -114,10 +131,12 @@ func TestServiceLastStatus(t *testing.T) {
 	}
 
 	svc, err := NewService(Config{
-		Current:    "v1.2.0",
-		BinaryPath: filepath.Join(dir, "gotham"),
-		StatusPath: path,
-		Restart:    func(context.Context) error { return nil },
+		Current:     "v1.2.0",
+		BinaryPath:  filepath.Join(dir, "gotham"),
+		LockPath:    filepath.Join(dir, "update.lock"),
+		StatusPath:  path,
+		PendingPath: filepath.Join(dir, "update.pending"),
+		Restart:     noopRestart,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -128,6 +147,35 @@ func TestServiceLastStatus(t *testing.T) {
 	}
 	if status == nil || status.Result != StatusOK {
 		t.Fatalf("LastStatus = %+v, want ok", status)
+	}
+}
+
+// TestServiceReset clears a stale pending marker.
+func TestServiceReset(t *testing.T) {
+	dir := t.TempDir()
+	pendingPath := filepath.Join(dir, "update.pending")
+	if err := NewStatusStore(pendingPath).Write(Status{Result: StatusStaged, Version: "v1.2.0"}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+	svc, err := NewService(Config{
+		Current:     "v1.0.0",
+		BinaryPath:  filepath.Join(dir, "gotham"),
+		LockPath:    filepath.Join(dir, "update.lock"),
+		StatusPath:  filepath.Join(dir, "status", "update.status"),
+		PendingPath: pendingPath,
+		Restart:     noopRestart,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if last, _ := svc.LastStatus(); last == nil || last.Result != StatusStaged {
+		t.Fatalf("LastStatus = %+v, want staged", last)
+	}
+	if err := svc.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if last, _ := svc.LastStatus(); last != nil && last.Result == StatusStaged {
+		t.Fatalf("LastStatus after reset = %+v, want no pending", last)
 	}
 }
 
@@ -155,7 +203,7 @@ func TestSafeDialContext(t *testing.T) {
 }
 
 // TestDefaultRestartSuccess proves the wrapper is launched (detached) when it
-// exists.
+// exists and a waiter is returned.
 func TestDefaultRestartSuccess(t *testing.T) {
 	dir := t.TempDir()
 	fakeBin := filepath.Join(dir, "fakebin")
@@ -171,7 +219,14 @@ func TestDefaultRestartSuccess(t *testing.T) {
 	}
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if err := defaultRestart(script)(context.Background()); err != nil {
-		t.Fatalf("defaultRestart = %v", err)
+	wait, err := defaultRestart(script)(context.Background())
+	if err != nil {
+		t.Fatalf("defaultRestart: %v", err)
+	}
+	if wait == nil {
+		t.Fatal("defaultRestart returned no waiter")
+	}
+	if err := wait(); err != nil {
+		t.Fatalf("wait: %v", err)
 	}
 }

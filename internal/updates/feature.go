@@ -28,8 +28,18 @@ const (
 	BaseURLEnv = "GOTHAM_UPDATE_BASE_URL"
 	// ScriptEnv overrides the installed restart/healthcheck wrapper path.
 	ScriptEnv = "GOTHAM_UPDATE_SCRIPT"
-	// StatusPathEnv overrides the update status file the wrapper writes.
+	// StatusPathEnv points at the authoritative, root-owned status file the
+	// wrapper writes (read-only for the control plane).
 	StatusPathEnv = "GOTHAM_UPDATE_STATUS"
+	// PendingPathEnv points at the control-plane-owned pending marker used to
+	// gate a second apply while an update is staged.
+	PendingPathEnv = "GOTHAM_UPDATE_PENDING"
+	// BinaryPathEnv pins the target executable. It must match the unit's
+	// ExecStart: the target is resolved once at startup and never from the
+	// live inode, so a rename cannot drift it.
+	BinaryPathEnv = "GOTHAM_UPDATE_BINARY"
+	// LockPathEnv overrides the process-external update lock.
+	LockPathEnv = "GOTHAM_UPDATE_LOCK"
 	// CurrentEnv overrides the running version (useful for wrappers and
 	// tests). When unset the version reported by the node registry is used.
 	CurrentEnv = "GOTHAM_UPDATE_CURRENT"
@@ -97,12 +107,36 @@ func ScriptFromEnv() string {
 	return DefaultUpdateScript
 }
 
-// StatusPathFromEnv returns the configured update status file path.
+// StatusPathFromEnv returns the configured authoritative status file path.
 func StatusPathFromEnv() string {
 	if raw := strings.TrimSpace(os.Getenv(StatusPathEnv)); raw != "" {
 		return raw
 	}
 	return DefaultStatusPath
+}
+
+// PendingPathFromEnv returns the configured pending-marker path.
+func PendingPathFromEnv() string {
+	if raw := strings.TrimSpace(os.Getenv(PendingPathEnv)); raw != "" {
+		return raw
+	}
+	return DefaultPendingPath
+}
+
+// BinaryPathFromEnv returns the configured target executable path.
+func BinaryPathFromEnv() string {
+	if raw := strings.TrimSpace(os.Getenv(BinaryPathEnv)); raw != "" {
+		return raw
+	}
+	return DefaultBinaryPath
+}
+
+// LockPathFromEnv returns the configured update lock path.
+func LockPathFromEnv() string {
+	if raw := strings.TrimSpace(os.Getenv(LockPathEnv)); raw != "" {
+		return raw
+	}
+	return DefaultLockPath
 }
 
 // CurrentFromEnv returns the configured running version, or "" when unset.
@@ -121,6 +155,9 @@ func FromEnv(current string, logger *slog.Logger) (Config, error) {
 		Channel:      ChannelFromEnv(),
 		UpdateScript: ScriptFromEnv(),
 		StatusPath:   StatusPathFromEnv(),
+		PendingPath:  PendingPathFromEnv(),
+		BinaryPath:   BinaryPathFromEnv(),
+		LockPath:     LockPathFromEnv(),
 		Logger:       logger,
 		Auto:         AutoUpdateEnabled(),
 		AutoInterval: AutoIntervalFromEnv(),

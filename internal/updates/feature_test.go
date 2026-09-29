@@ -58,9 +58,21 @@ func TestFeatureGetters(t *testing.T) {
 	if got := ScriptFromEnv(); got != "/opt/gotham-update" {
 		t.Errorf("ScriptFromEnv() = %q", got)
 	}
-	t.Setenv(StatusPathEnv, "/run/gotham/status")
-	if got := StatusPathFromEnv(); got != "/run/gotham/status" {
+	t.Setenv(StatusPathEnv, "/var/lib/gotham-updater/status")
+	if got := StatusPathFromEnv(); got != "/var/lib/gotham-updater/status" {
 		t.Errorf("StatusPathFromEnv() = %q", got)
+	}
+	t.Setenv(PendingPathEnv, "/var/lib/gotham/pending")
+	if got := PendingPathFromEnv(); got != "/var/lib/gotham/pending" {
+		t.Errorf("PendingPathFromEnv() = %q", got)
+	}
+	t.Setenv(BinaryPathEnv, "/opt/gotham/bin/gotham")
+	if got := BinaryPathFromEnv(); got != "/opt/gotham/bin/gotham" {
+		t.Errorf("BinaryPathFromEnv() = %q", got)
+	}
+	t.Setenv(LockPathEnv, "/var/lib/gotham/lock")
+	if got := LockPathFromEnv(); got != "/var/lib/gotham/lock" {
+		t.Errorf("LockPathFromEnv() = %q", got)
 	}
 	t.Setenv(CurrentEnv, "v9.9.9")
 	if got := CurrentFromEnv(); got != "v9.9.9" {
@@ -71,8 +83,14 @@ func TestFeatureGetters(t *testing.T) {
 	t.Setenv(BaseURLEnv, "")
 	t.Setenv(ScriptEnv, "")
 	t.Setenv(StatusPathEnv, "")
+	t.Setenv(PendingPathEnv, "")
+	t.Setenv(BinaryPathEnv, "")
+	t.Setenv(LockPathEnv, "")
 	t.Setenv(CurrentEnv, "")
-	if RepoFromEnv() != DefaultRepo || BaseURLFromEnv() != DefaultBaseURL || ScriptFromEnv() != DefaultUpdateScript || StatusPathFromEnv() != DefaultStatusPath || CurrentFromEnv() != "" {
+	if RepoFromEnv() != DefaultRepo || BaseURLFromEnv() != DefaultBaseURL ||
+		ScriptFromEnv() != DefaultUpdateScript || StatusPathFromEnv() != DefaultStatusPath ||
+		PendingPathFromEnv() != DefaultPendingPath || BinaryPathFromEnv() != DefaultBinaryPath ||
+		LockPathFromEnv() != DefaultLockPath || CurrentFromEnv() != "" {
 		t.Error("defaults not applied")
 	}
 }
@@ -121,7 +139,10 @@ func TestFromEnv(t *testing.T) {
 	t.Setenv(BaseURLEnv, "https://ghe.example.com")
 	t.Setenv(ChannelEnv, "beta")
 	t.Setenv(ScriptEnv, "/opt/gotham-update")
-	t.Setenv(StatusPathEnv, "/run/gotham/status")
+	t.Setenv(StatusPathEnv, "/var/lib/gotham-updater/status")
+	t.Setenv(PendingPathEnv, "/var/lib/gotham/pending")
+	t.Setenv(BinaryPathEnv, "/opt/gotham/bin/gotham")
+	t.Setenv(LockPathEnv, "/var/lib/gotham/lock")
 	t.Setenv(AutoUpdateEnv, "true")
 	t.Setenv(AutoIntervalEnv, "90m")
 
@@ -130,7 +151,9 @@ func TestFromEnv(t *testing.T) {
 		t.Fatalf("FromEnv: %v", err)
 	}
 	if cfg.Current != "v1.0.0" || cfg.Repo != "acme/gotham" || cfg.BaseURL != "https://ghe.example.com" ||
-		cfg.Channel != ChannelBeta || cfg.UpdateScript != "/opt/gotham-update" || cfg.StatusPath != "/run/gotham/status" ||
+		cfg.Channel != ChannelBeta || cfg.UpdateScript != "/opt/gotham-update" ||
+		cfg.StatusPath != "/var/lib/gotham-updater/status" || cfg.PendingPath != "/var/lib/gotham/pending" ||
+		cfg.BinaryPath != "/opt/gotham/bin/gotham" || cfg.LockPath != "/var/lib/gotham/lock" ||
 		!cfg.Auto || cfg.AutoInterval != 90*time.Minute || cfg.PublicKey == nil {
 		t.Fatalf("FromEnv = %+v", cfg)
 	}

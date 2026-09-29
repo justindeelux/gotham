@@ -51,8 +51,9 @@ type errorBody struct {
 
 // handler serves the self-update routes for one Service.
 type handler struct {
-	svc    Service
-	logger *slog.Logger
+	svc     Service
+	isAdmin func(*http.Request) bool
+	logger  *slog.Logger
 }
 
 // Mount registers the self-update endpoints on r:
@@ -62,14 +63,19 @@ type handler struct {
 //
 // auth is the server's RequireAuth chain; adminAuth is the server's
 // RequireAuth + RequirePlatformAdmin chain, because applying an update replaces
-// the whole runtime and must not be reachable from a plain session. A nil svc
-// or FEATURE_UPDATES=false mounts nothing, so the control plane can call Mount
-// unconditionally.
-func Mount(r chi.Router, auth func(http.Handler) http.Handler, adminAuth func(http.Handler) http.Handler, svc Service) {
+// the whole runtime and must not be reachable from a plain session. isAdmin
+// reports whether the (already authenticated) caller is a platform operator, so
+// release notes and filesystem-path details are only exposed to operators. A
+// nil svc or FEATURE_UPDATES=false mounts nothing, so the control plane can call
+// Mount unconditionally.
+func Mount(r chi.Router, auth func(http.Handler) http.Handler, adminAuth func(http.Handler) http.Handler, isAdmin func(*http.Request) bool, svc Service) {
 	if svc == nil || !Enabled() {
 		return
 	}
-	h := &handler{svc: svc, logger: slog.Default()}
+	if isAdmin == nil {
+		isAdmin = func(*http.Request) bool { return false }
+	}
+	h := &handler{svc: svc, isAdmin: isAdmin, logger: slog.Default()}
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
 		protected.Get("/v1/updates/check", h.check)
@@ -91,15 +97,26 @@ func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 	if release != nil {
 		response.Version = release.Version
 		response.Channel = release.Channel
-		response.Notes = release.Notes
 		response.Asset = release.AssetName
 		published := release.PublishedAt
 		response.PublishedAt = &published
 	}
-	if last, err := h.svc.LastStatus(); err != nil {
+	last, err := h.svc.LastStatus()
+	if err != nil {
 		h.logger.Warn("updates: could not read the update status", "error", err)
-	} else {
-		response.LastUpdate = last
+	}
+	admin := h.isAdmin(r)
+	if release != nil && admin {
+		response.Notes = release.Notes
+	}
+	if last != nil {
+		status := *last
+		if !admin {
+			// Never expose filesystem paths (the wrapper's detail) or other
+			// operator-only context to a plain session.
+			status.Detail = ""
+		}
+		response.LastUpdate = &status
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -130,6 +147,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNoPublicKey):
 		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "self-update is not configured"})
+	case errors.Is(err, ErrUpdatePending):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "a previous update is still pending; confirm or reset it before applying another"})
 	case errors.Is(err, context.DeadlineExceeded):
 		writeJSON(w, http.StatusGatewayTimeout, errorBody{Message: "release server timed out"})
 	case errors.Is(err, ErrHTTP),

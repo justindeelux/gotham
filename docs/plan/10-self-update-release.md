@@ -16,7 +16,25 @@
 
 ## BE-9.1 — Self-update CP — `ws/p9-update`
 
-- **Context brief:** use `minio/selfupdate` + Ed25519 signatures. Flow: query the GitHub Releases API (`stable`/`beta` channels) → download binary → verify signature with the public key **embedded in the binary** → selfupdate (swap file, keep `.old`) → restart service. Must work when Gotham is installed via systemd (`deploy/gotham.service`). A "check update" button in the UI + `AUTO_UPDATE=true` env.
+- **Context brief:** signed self-update with a built-in atomic swap + Ed25519
+  signed manifest. Flow: query the GitHub Releases API (`stable`/`beta`
+  channels) → download the signed manifest → verify it with the public key
+  **embedded in the binary** → download the artifact → verify its digest against
+  the manifest → hardlink-swap the binary (keep `.old`) → restart service. Must
+  work when Gotham is installed via systemd (`deploy/gotham.service`). A "check
+  update" button in the UI + `AUTO_UPDATE=true` env.
+  - **Deviation (owner-approved, fix round 1/2):** the brief named
+    `minio/selfupdate`; its fixed staging path and two-rename commit interleave
+    and can lose the target on a crash, so the swap is implemented in
+    `internal/updates` instead (flock-serialized, unique staging, hardlink
+    backup, startup recovery). The plan's intent — a signed, verifiable,
+    rollback-capable swap — is met without that dependency.
+  - **Deployment:** the binary lives in `/var/lib/gotham/bin/gotham`, the
+    privileged wrapper is root-owned at `/usr/libexec/gotham/gotham-update`
+    (argument-free, config in `/etc/gotham/updater.conf`), the authoritative
+    status is root-owned under `/var/lib/gotham-updater/`, and the staged gate
+    is the control-plane-owned `/var/lib/gotham/update.pending`. See
+    `deploy/README.md`.
 - **Deliverables:**
   - `internal/updates/`: `Checker`, `Applier`, `Signer` (dedicated `cmd/signer` CLI tool for signing releases), rollback.
   - systemd unit + safe restart script (healthcheck after update, auto-rollback on failure).

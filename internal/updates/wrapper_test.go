@@ -16,6 +16,7 @@ type wrapperResult struct {
 	target   string
 	backup   string
 	status   string
+	pending  string
 	output   string
 }
 
@@ -26,10 +27,19 @@ const (
 	healthAfterBackup = "after-rollback" // healthy only once the old binary is back
 )
 
+// wrapperEnv describes one wrapper run.
+type wrapperEnv struct {
+	systemctlExit int
+	health        string
+	// setup runs after the default files are created, to plant symlinks etc.
+	setup func(dir, target, statusPath string)
+}
+
 // runWrapper runs the deployed wrapper with fake systemctl/curl shims. It
-// reproduces the reviewer's repro: a restart that exits nonzero must still
-// restore the previous binary.
-func runWrapper(t *testing.T, systemctlExit int, health string) wrapperResult {
+// reproduces the reviewers' repros: a restart that exits nonzero must still
+// restore the previous binary, and a pre-planted symlink must not redirect the
+// root status write.
+func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("gotham-update.sh targets POSIX")
@@ -40,10 +50,13 @@ func runWrapper(t *testing.T, systemctlExit int, health string) wrapperResult {
 	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
 		t.Fatalf("mkdir fakebin: %v", err)
 	}
-	writeShim(t, filepath.Join(fakeBin, "systemctl"), systemctlExit)
-	writeCurlShim(t, filepath.Join(fakeBin, "curl"), health)
+	writeShim(t, filepath.Join(fakeBin, "systemctl"), env.systemctlExit)
+	writeCurlShim(t, filepath.Join(fakeBin, "curl"), env.health)
 
-	target := filepath.Join(dir, "gotham")
+	target := filepath.Join(dir, "bin", "gotham")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
 	if err := os.WriteFile(target, []byte("new"), 0o755); err != nil {
 		t.Fatalf("write target: %v", err)
 	}
@@ -51,7 +64,16 @@ func runWrapper(t *testing.T, systemctlExit int, health string) wrapperResult {
 	if err := os.WriteFile(backup, []byte("old"), 0o755); err != nil {
 		t.Fatalf("write backup: %v", err)
 	}
-	status := filepath.Join(dir, "run", "update.status")
+	statusDir := filepath.Join(dir, "statusdir")
+	if err := os.MkdirAll(statusDir, 0o755); err != nil {
+		t.Fatalf("mkdir statusdir: %v", err)
+	}
+	status := filepath.Join(statusDir, "update.status")
+	pending := filepath.Join(dir, "update.pending")
+	if err := os.WriteFile(pending, []byte("result=staged\nversion=v1.2.0\n"), 0o644); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+	lock := filepath.Join(dir, "update.lock")
 	conf := filepath.Join(dir, "updater.conf")
 	confBody := strings.Join([]string{
 		"GOTHAM_BINARY=" + target,
@@ -59,10 +81,15 @@ func runWrapper(t *testing.T, systemctlExit int, health string) wrapperResult {
 		"GOTHAM_HEALTH=http://127.0.0.1:1/healthz",
 		"GOTHAM_TIMEOUT=1",
 		"GOTHAM_STATUS=" + status,
+		"GOTHAM_PENDING=" + pending,
+		"GOTHAM_LOCK=" + lock,
 		"GOTHAM_GRACE=0",
 	}, "\n") + "\n"
 	if err := os.WriteFile(conf, []byte(confBody), 0o644); err != nil {
 		t.Fatalf("write conf: %v", err)
+	}
+	if env.setup != nil {
+		env.setup(dir, target, status)
 	}
 
 	script, err := filepath.Abs(filepath.Join("..", "..", "deploy", "gotham-update.sh"))
@@ -93,6 +120,9 @@ func runWrapper(t *testing.T, systemctlExit int, health string) wrapperResult {
 	}
 	if data, err := os.ReadFile(status); err == nil {
 		result.status = string(data)
+	}
+	if data, err := os.ReadFile(pending); err == nil {
+		result.pending = string(data)
 	}
 	return result
 }
@@ -131,7 +161,7 @@ func writeCurlShim(t *testing.T, path, health string) {
 // failing systemctl restart must still restore the old binary and exit
 // nonzero.
 func TestWrapperRollsBackWhenRestartFails(t *testing.T) {
-	result := runWrapper(t, 1, healthAlwaysOK)
+	result := runWrapper(t, wrapperEnv{systemctlExit: 1, health: healthAlwaysOK})
 
 	if result.exitCode == 0 {
 		t.Fatalf("exit = 0, want nonzero (output %q)", result.output)
@@ -145,12 +175,15 @@ func TestWrapperRollsBackWhenRestartFails(t *testing.T) {
 	if !strings.Contains(result.status, "result=rolled_back") {
 		t.Errorf("status = %q, want rolled_back", result.status)
 	}
+	if result.pending != "" {
+		t.Errorf("pending marker not released: %q", result.pending)
+	}
 }
 
 // TestWrapperRollsBackWhenHealthFails proves a restarted-but-unhealthy new
 // binary is rolled back to the (healthy) previous one.
 func TestWrapperRollsBackWhenHealthFails(t *testing.T) {
-	result := runWrapper(t, 0, healthAfterBackup)
+	result := runWrapper(t, wrapperEnv{systemctlExit: 0, health: healthAfterBackup})
 
 	if result.exitCode == 0 {
 		t.Fatalf("exit = 0, want nonzero (output %q)", result.output)
@@ -166,7 +199,7 @@ func TestWrapperRollsBackWhenHealthFails(t *testing.T) {
 // TestWrapperReportsRollbackFailed proves that when neither binary is healthy
 // the outcome is recorded as rollback_failed rather than a false ok.
 func TestWrapperReportsRollbackFailed(t *testing.T) {
-	result := runWrapper(t, 0, healthAlwaysFail)
+	result := runWrapper(t, wrapperEnv{systemctlExit: 0, health: healthAlwaysFail})
 
 	if result.exitCode == 0 {
 		t.Fatalf("exit = 0, want nonzero (output %q)", result.output)
@@ -179,7 +212,7 @@ func TestWrapperReportsRollbackFailed(t *testing.T) {
 // TestWrapperKeepsHealthyBinary proves a healthy new binary is kept and the
 // backup is retained.
 func TestWrapperKeepsHealthyBinary(t *testing.T) {
-	result := runWrapper(t, 0, healthAlwaysOK)
+	result := runWrapper(t, wrapperEnv{systemctlExit: 0, health: healthAlwaysOK})
 
 	if result.exitCode != 0 {
 		t.Fatalf("exit = %d, want 0 (output %q)", result.exitCode, result.output)
@@ -192,5 +225,123 @@ func TestWrapperKeepsHealthyBinary(t *testing.T) {
 	}
 	if !strings.Contains(result.status, "result=ok") {
 		t.Errorf("status = %q, want ok", result.status)
+	}
+}
+
+// TestWrapperRecoversMissingTarget proves the wrapper restores the backup when
+// the target is missing (an older crash layout), so ExecStart always finds a
+// binary.
+func TestWrapperRecoversMissingTarget(t *testing.T) {
+	result := runWrapper(t, wrapperEnv{
+		systemctlExit: 0,
+		health:        healthAlwaysOK,
+		setup: func(_ string, target, _ string) {
+			if err := os.Remove(target); err != nil {
+				t.Fatalf("remove target: %v", err)
+			}
+		},
+	})
+
+	if result.exitCode == 0 {
+		t.Fatalf("exit = 0, want nonzero (recovered, output %q)", result.output)
+	}
+	if result.target != "old" {
+		t.Fatalf("binary = %q, want the recovered old binary (output %q)", result.target, result.output)
+	}
+	if !strings.Contains(result.output, "restoring") {
+		t.Errorf("output = %q, want a recovery message", result.output)
+	}
+}
+
+// TestWrapperRefusesSymlinkedStatus reproduces the reviewer's root-file clobber:
+// a symlinked status path planted by the service user must not be followed.
+func TestWrapperRefusesSymlinkedStatus(t *testing.T) {
+	victimDir := t.TempDir()
+	victim := filepath.Join(victimDir, "victim")
+	if err := os.WriteFile(victim, []byte("original"), 0o644); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+
+	result := runWrapper(t, wrapperEnv{
+		systemctlExit: 1,
+		health:        healthAlwaysOK,
+		setup: func(_ string, _ string, statusPath string) {
+			if err := os.Remove(statusPath); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("remove status placeholder: %v", err)
+			}
+			if err := os.Symlink(victim, statusPath); err != nil {
+				t.Fatalf("plant symlink: %v", err)
+			}
+		},
+	})
+
+	if got := readFile(t, victim); got != "original" {
+		t.Fatalf("victim = %q, want it untouched", got)
+	}
+	if !strings.Contains(result.output, "refusing symlinked status") {
+		t.Errorf("output = %q, want a refusal message", result.output)
+	}
+}
+
+// TestWrapperStatusWriteIsSafe is a static guard: the status temp file must be
+// created with mktemp (O_EXCL), never a predictable `${STATUS}.tmp.$$`.
+func TestWrapperStatusWriteIsSafe(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join("..", "..", "deploy", "gotham-update.sh"))
+	if err != nil {
+		t.Fatalf("read wrapper: %v", err)
+	}
+	body := string(script)
+	if !strings.Contains(body, "mktemp") {
+		t.Error("wrapper does not create the status temp file with mktemp")
+	}
+	if strings.Contains(body, ".tmp.$$") {
+		t.Error("wrapper still uses the predictable ${STATUS}.tmp.$$ path")
+	}
+	if !strings.Contains(body, `[ "$#" -ne 0 ]`) {
+		t.Error("wrapper does not reject arguments")
+	}
+	if !strings.Contains(body, "SUDO_USER") {
+		t.Error("wrapper does not refuse environment overrides under sudo")
+	}
+}
+
+// TestWrapperRejectsArguments proves the no-argument contract.
+func TestWrapperRejectsArguments(t *testing.T) {
+	script, err := filepath.Abs(filepath.Join("..", "..", "deploy", "gotham-update.sh"))
+	if err != nil {
+		t.Fatalf("resolve script: %v", err)
+	}
+	cmd := exec.Command("sh", script, "unexpected")
+	output, runErr := cmd.CombinedOutput()
+	exitErr, ok := runErr.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 2 {
+		t.Fatalf("exit = %v, want 2 (output %q)", runErr, output)
+	}
+	if !strings.Contains(string(output), "takes no arguments") {
+		t.Errorf("output = %q, want a no-arguments message", output)
+	}
+}
+
+// TestWrapperIgnoresEnvUnderSudo proves a GOTHAM_* override cannot change the
+// wrapper's configuration when it runs through sudo.
+func TestWrapperIgnoresEnvUnderSudo(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "evil.conf")
+	if err := os.WriteFile(conf, []byte("GOTHAM_HEALTH=http://evil.example.com/healthz\n"), 0o644); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	script, err := filepath.Abs(filepath.Join("..", "..", "deploy", "gotham-update.sh"))
+	if err != nil {
+		t.Fatalf("resolve script: %v", err)
+	}
+	cmd := exec.Command("sh", script)
+	cmd.Env = append(os.Environ(),
+		"SUDO_USER=root",
+		"SUDO_UID=0",
+		"GOTHAM_UPDATER_CONF="+conf,
+	)
+	output, _ := cmd.CombinedOutput()
+	if strings.Contains(string(output), "must be a loopback") {
+		t.Fatalf("wrapper honoured the GOTHAM_UPDATER_CONF override under sudo: %q", output)
 	}
 }

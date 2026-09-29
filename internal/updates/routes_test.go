@@ -19,6 +19,7 @@ type fakeService struct {
 	applied    []Channel
 	applyErr   error
 	lastStatus *Status
+	resets     int
 }
 
 func (f *fakeService) Current() string { return "v1.0.0" }
@@ -38,6 +39,8 @@ func (f *fakeService) Apply(_ context.Context, channel Channel) (*ApplyResult, e
 
 func (f *fakeService) Rollback() error { return nil }
 
+func (f *fakeService) Reset() error { f.resets++; return nil }
+
 func (f *fakeService) LastStatus() (*Status, error) { return f.lastStatus, nil }
 
 func (f *fakeService) StartAuto(context.Context) {}
@@ -52,6 +55,9 @@ func deniedAuthMiddleware(_ http.Handler) http.Handler {
 	})
 }
 
+func allowAdmin(*http.Request) bool { return true }
+func denyAdmin(*http.Request) bool  { return false }
+
 // TestMountRoutes covers routing, the apply admin boundary and the disabled
 // feature.
 func TestMountRoutes(t *testing.T) {
@@ -63,7 +69,7 @@ func TestMountRoutes(t *testing.T) {
 			PublishedAt: time.Unix(0, 0),
 		}}
 		router := chi.NewRouter()
-		Mount(router, identityAuth, identityAuth, svc)
+		Mount(router, identityAuth, identityAuth, allowAdmin, svc)
 
 		check := httptest.NewRecorder()
 		router.ServeHTTP(check, httptest.NewRequest(http.MethodGet, "/v1/updates/check", nil))
@@ -98,7 +104,7 @@ func TestMountRoutes(t *testing.T) {
 	t.Run("apply uses the admin chain", func(t *testing.T) {
 		svc := &fakeService{}
 		router := chi.NewRouter()
-		Mount(router, identityAuth, deniedAuthMiddleware, svc)
+		Mount(router, identityAuth, deniedAuthMiddleware, denyAdmin, svc)
 
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/updates/apply", nil))
@@ -110,13 +116,13 @@ func TestMountRoutes(t *testing.T) {
 		}
 	})
 
-	t.Run("check surfaces the durable outcome", func(t *testing.T) {
+	t.Run("check hides notes and detail from non-admins", func(t *testing.T) {
 		svc := &fakeService{
-			release:    &Release{Version: "v1.2.0", Channel: "stable", AssetName: "gotham-linux-amd64"},
-			lastStatus: &Status{Result: StatusRolledBack, Version: "v1.2.0", Detail: "new binary unhealthy"},
+			release:    &Release{Version: "v1.2.0", Channel: "stable", AssetName: "gotham-linux-amd64", Notes: "release notes"},
+			lastStatus: &Status{Result: StatusRolledBack, Version: "v1.2.0", Detail: "/var/lib/gotham/bin/gotham unhealthy"},
 		}
 		router := chi.NewRouter()
-		Mount(router, identityAuth, identityAuth, svc)
+		Mount(router, identityAuth, identityAuth, denyAdmin, svc)
 
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/updates/check", nil))
@@ -127,15 +133,40 @@ func TestMountRoutes(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatalf("decode check: %v", err)
 		}
+		if body.Notes != "" {
+			t.Errorf("non-admin saw notes %q", body.Notes)
+		}
 		if body.LastUpdate == nil || body.LastUpdate.Result != StatusRolledBack {
 			t.Fatalf("last_update = %+v, want rolled_back", body.LastUpdate)
+		}
+		if body.LastUpdate.Detail != "" {
+			t.Errorf("non-admin saw detail %q", body.LastUpdate.Detail)
+		}
+	})
+
+	t.Run("check shows notes and detail to admins", func(t *testing.T) {
+		svc := &fakeService{
+			release:    &Release{Version: "v1.2.0", Channel: "stable", AssetName: "gotham-linux-amd64", Notes: "release notes"},
+			lastStatus: &Status{Result: StatusRolledBack, Version: "v1.2.0", Detail: "health failed"},
+		}
+		router := chi.NewRouter()
+		Mount(router, identityAuth, identityAuth, allowAdmin, svc)
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/updates/check", nil))
+		var body checkResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode check: %v", err)
+		}
+		if body.Notes != "release notes" || body.LastUpdate == nil || body.LastUpdate.Detail != "health failed" {
+			t.Fatalf("admin body = %+v", body)
 		}
 	})
 
 	t.Run("apply accepts a channel body", func(t *testing.T) {
 		svc := &fakeService{}
 		router := chi.NewRouter()
-		Mount(router, identityAuth, identityAuth, svc)
+		Mount(router, identityAuth, identityAuth, allowAdmin, svc)
 
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/updates/apply", strings.NewReader(`{"channel":"beta"}`)))
@@ -149,7 +180,7 @@ func TestMountRoutes(t *testing.T) {
 
 	t.Run("apply rejects a malformed body", func(t *testing.T) {
 		router := chi.NewRouter()
-		Mount(router, identityAuth, identityAuth, &fakeService{})
+		Mount(router, identityAuth, identityAuth, allowAdmin, &fakeService{})
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/updates/apply", strings.NewReader(`{"unknown":true}`)))
 		if rec.Code != http.StatusBadRequest {
@@ -160,7 +191,7 @@ func TestMountRoutes(t *testing.T) {
 	t.Run("feature disabled unmounts", func(t *testing.T) {
 		t.Setenv(FeatureEnv, "false")
 		router := chi.NewRouter()
-		Mount(router, identityAuth, identityAuth, &fakeService{})
+		Mount(router, identityAuth, identityAuth, allowAdmin, &fakeService{})
 
 		for _, req := range []*http.Request{
 			httptest.NewRequest(http.MethodGet, "/v1/updates/check", nil),
@@ -176,7 +207,7 @@ func TestMountRoutes(t *testing.T) {
 
 	t.Run("nil service unmounts", func(t *testing.T) {
 		router := chi.NewRouter()
-		Mount(router, identityAuth, identityAuth, nil)
+		Mount(router, identityAuth, identityAuth, allowAdmin, nil)
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/updates/check", nil))
 		if rec.Code != http.StatusNotFound {
@@ -185,8 +216,8 @@ func TestMountRoutes(t *testing.T) {
 	})
 }
 
-// TestCheckErrorMapping proves upstream failures surface as bad gateway and a
-// missing key as unavailable.
+// TestCheckErrorMapping proves upstream failures surface as bad gateway, a
+// missing key as unavailable and a pending update as a conflict.
 func TestCheckErrorMapping(t *testing.T) {
 	cases := []struct {
 		err  error
@@ -197,11 +228,12 @@ func TestCheckErrorMapping(t *testing.T) {
 		{ErrManifest, http.StatusBadGateway},
 		{ErrChecksumMismatch, http.StatusBadGateway},
 		{ErrNoPublicKey, http.StatusServiceUnavailable},
+		{ErrUpdatePending, http.StatusConflict},
 		{context.DeadlineExceeded, http.StatusGatewayTimeout},
 	}
 	for _, tc := range cases {
 		router := chi.NewRouter()
-		Mount(router, identityAuth, identityAuth, &fakeService{checkErr: tc.err})
+		Mount(router, identityAuth, identityAuth, allowAdmin, &fakeService{checkErr: tc.err})
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/updates/check", nil))
 		if rec.Code != tc.want {

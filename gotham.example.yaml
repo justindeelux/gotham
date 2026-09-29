@@ -23,7 +23,10 @@
 #   GOTHAM_UPDATE_PUBLIC_KEY  release public key (PEM or base64); release
 #                          builds embed it with -ldflags instead
 #   GOTHAM_UPDATE_SCRIPT   restart wrapper (default /usr/libexec/gotham/gotham-update)
-#   GOTHAM_UPDATE_STATUS   update status file (default /run/gotham/update.status)
+#   GOTHAM_UPDATE_STATUS   root-owned status file (default /var/lib/gotham-updater/update.status)
+#   GOTHAM_UPDATE_PENDING  staged gate marker (default /var/lib/gotham/update.pending)
+#   GOTHAM_UPDATE_BINARY   fixed target binary (default /var/lib/gotham/bin/gotham)
+#   GOTHAM_UPDATE_LOCK     update lock shared with the wrapper (default /var/lib/gotham/update.lock)
 #   GOTHAM_UPDATE_CURRENT  override the running version (wrappers/tests)
 #
 # The restart wrapper (fixed, root-owned, no arguments) and its sudoers rule

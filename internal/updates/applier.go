@@ -39,7 +39,16 @@ var (
 	ErrNoBackup = errors.New("updates: no previous binary to roll back to")
 	// ErrNoUpdate is returned when Apply is called without a release.
 	ErrNoUpdate = errors.New("updates: no update available")
+	// ErrUpdatePending is returned when a previous update is staged and has
+	// not been confirmed healthy or rolled back.
+	ErrUpdatePending = errors.New("updates: a previous update is still pending")
 )
+
+// RestartFunc launches the privileged restart/healthcheck wrapper and returns a
+// waiter for its exit. The launch error is for an immediate failure; the waiter
+// error is observed asynchronously (the wrapper normally restarts this
+// process, so it cannot be awaited inline).
+type RestartFunc func(ctx context.Context) (wait func() error, err error)
 
 // ApplyOutcome reports what Apply did.
 type ApplyOutcome struct {
@@ -55,25 +64,29 @@ type ApplyOutcome struct {
 // The signed manifest authenticates the release identity and artifact digest;
 // the artifact is never touched before those checks pass. Installation is
 // serialized by a process-external lock, uses a unique staging file, keeps the
-// previous binary as <binary>.old until the new one is proven healthy, and is
-// recoverable after a crash (Recover).
+// previous binary as a hard-linked <binary>.old so the target is never absent,
+// gates a second apply while one is staged, and is recoverable after a crash.
 type Applier struct {
 	// Client is the HTTP client; a bounded default is used when nil.
 	Client *http.Client
 	// Verifier holds the release public key. When nil, Apply fails closed.
 	Verifier *Verifier
-	// BinaryPath is the target executable; empty means the running executable.
+	// BinaryPath is the fixed target executable. It is resolved once by the
+	// service and must never come from the live inode after a swap.
 	BinaryPath string
 	// OldPath is where the previous binary is retained; empty means
 	// <BinaryPath>.old.
 	OldPath string
 	// LockPath is the serialization lock; empty means <BinaryPath>.lock.
 	LockPath string
-	// Restart activates the new binary (restart + healthcheck + rollback
-	// wrapper). Empty means the swap succeeds without an automatic restart.
-	Restart func(ctx context.Context) error
-	// Status records the durable outcome. Optional.
+	// Pending records the staged/pending marker (control-plane-owned) that
+	// gates a second apply.
+	Pending *StatusStore
+	// Status is the authoritative root-owned status, read only to reconcile a
+	// stale pending marker.
 	Status *StatusStore
+	// Restart launches the restart/healthcheck wrapper.
+	Restart RestartFunc
 	// Timeout bounds each download when Client is nil.
 	Timeout time.Duration
 	// MaxBytes bounds the artifact download.
@@ -131,66 +144,98 @@ func (a *Applier) Apply(ctx context.Context, rel *Release) (*ApplyOutcome, error
 		if err := a.recoverLocked(binPath); err != nil {
 			return err
 		}
-		return a.installLocked(binPath, data)
+		if a.pendingStaged() {
+			return ErrUpdatePending
+		}
+		// Mark the update pending before touching the binary so a crash at any
+		// point leaves the staged gate set (fail closed) rather than an
+		// unconfirmed swap.
+		if a.Pending != nil {
+			if err := a.Pending.Write(Status{Result: StatusStaged, Version: manifest.Version}); err != nil {
+				return fmt.Errorf("%w: record pending: %v", ErrApply, err)
+			}
+		}
+		if err := a.installLocked(binPath, data); err != nil {
+			if a.Pending != nil {
+				_ = a.Pending.Remove()
+			}
+			return err
+		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
 
-	if a.Status != nil {
-		_ = a.Status.Write(Status{Result: StatusStaged, Version: manifest.Version})
+	if a.Restart == nil {
+		return &ApplyOutcome{Version: manifest.Version}, nil
 	}
 
-	staged := a.Restart != nil
-	if a.Restart != nil {
-		if err := a.Restart(ctx); err != nil {
-			rollbackErr := a.Rollback()
-			detail := err.Error()
-			if rollbackErr != nil {
-				detail = fmt.Sprintf("%s (rollback: %v)", detail, rollbackErr)
-				if a.Status != nil {
-					_ = a.Status.Write(Status{Result: StatusRollbackFailed, Version: manifest.Version, Detail: detail})
-				}
-				return nil, fmt.Errorf("%w: restart failed and rollback failed: %s", ErrApply, detail)
-			}
-			if a.Status != nil {
-				_ = a.Status.Write(Status{Result: StatusRolledBack, Version: manifest.Version, Detail: detail})
-			}
-			return nil, fmt.Errorf("%w: restart failed: %v", ErrApply, err)
+	wait, err := a.Restart(ctx)
+	if err != nil {
+		detail := err.Error()
+		result := StatusRolledBack
+		if rollbackErr := a.Rollback(); rollbackErr != nil {
+			result = StatusRollbackFailed
+			detail = fmt.Sprintf("%s (rollback: %v)", detail, rollbackErr)
 		}
+		if a.Pending != nil {
+			_ = a.Pending.Write(Status{Result: result, Version: manifest.Version, Detail: detail})
+		}
+		return nil, fmt.Errorf("%w: wrapper launch failed: %s", ErrApply, detail)
 	}
-	return &ApplyOutcome{Version: manifest.Version, Staged: staged}, nil
+	go a.monitorRestart(wait, manifest.Version)
+	return &ApplyOutcome{Version: manifest.Version, Staged: true}, nil
 }
 
-// Rollback restores the retained previous binary over the current one. It is
-// serialized with Apply.
+// monitorRestart records wrapper_failed when a launched wrapper exits without
+// recording its own result (for example a denied sudo), so the pending marker
+// does not sit at "staged" forever.
+func (a *Applier) monitorRestart(wait func() error, version string) {
+	if wait == nil {
+		return
+	}
+	if err := wait(); err == nil {
+		return
+	}
+	if a.Pending == nil {
+		return
+	}
+	pending, err := a.Pending.Read()
+	if err != nil || pending == nil || pending.Result != StatusStaged {
+		return
+	}
+	_ = a.Pending.Write(Status{Result: StatusWrapperFailed, Version: version, Detail: "the restart wrapper exited before recording an outcome"})
+}
+
+// Rollback restores the retained previous binary over the current one and
+// clears the pending marker. It is serialized with Apply.
 func (a *Applier) Rollback() error {
 	binPath, err := a.binaryPath()
 	if err != nil {
 		return err
 	}
 	return withFileLock(a.lockPath(binPath), func() error {
-		backup := a.oldPath(binPath)
-		if _, err := os.Stat(backup); err != nil {
-			return fmt.Errorf("%w: %s", ErrNoBackup, backup)
+		if err := a.restoreLocked(binPath); err != nil {
+			return err
 		}
-		if err := os.Rename(backup, binPath); err != nil {
-			return fmt.Errorf("updates: rollback: %w", err)
+		if a.Pending != nil {
+			_ = a.Pending.Remove()
 		}
-		syncDir(filepath.Dir(binPath))
 		return nil
 	})
 }
 
-// Recover repairs a crash-interrupted swap and removes stale staging files. It
-// reports whether it restored a missing target from its backup. It is safe to
-// call at startup.
+// Recover repairs a crash-interrupted swap, cleans stale staging files and
+// reconciles a stale pending marker. It reports whether it restored a missing
+// target from its backup. It is safe to call at startup and skips while the
+// privileged wrapper holds the lock.
 func (a *Applier) Recover() (bool, error) {
 	binPath, err := a.binaryPath()
 	if err != nil {
 		return false, err
 	}
 	restored := false
-	err = withFileLock(a.lockPath(binPath), func() error {
+	acquired, err := tryFileLock(a.lockPath(binPath), func() error {
 		before := fileExists(binPath)
 		if err := a.recoverLocked(binPath); err != nil {
 			return err
@@ -198,11 +243,19 @@ func (a *Applier) Recover() (bool, error) {
 		restored = !before && fileExists(binPath)
 		return nil
 	})
-	return restored, err
+	if err != nil {
+		return false, err
+	}
+	if !acquired {
+		// The wrapper owns the transaction; it will finish recovery.
+		return false, nil
+	}
+	return restored, nil
 }
 
-// recoverLocked cleans stale staging files and restores the backup when the
-// target is missing. The caller must hold the lock.
+// recoverLocked cleans stale staging files, restores the backup when the target
+// is missing, and clears a pending marker the wrapper already superseded. The
+// caller must hold the lock.
 func (a *Applier) recoverLocked(binPath string) error {
 	dir := filepath.Dir(binPath)
 	pattern := filepath.Join(dir, "."+filepath.Base(binPath)+".new.*")
@@ -211,26 +264,52 @@ func (a *Applier) recoverLocked(binPath string) error {
 			_ = os.Remove(match)
 		}
 	}
-	if fileExists(binPath) {
-		return nil
+	if !fileExists(binPath) {
+		backup := a.oldPath(binPath)
+		if fileExists(backup) {
+			if err := os.Rename(backup, binPath); err != nil {
+				return fmt.Errorf("updates: recover: %w", err)
+			}
+			syncDir(dir)
+		}
 	}
-	backup := a.oldPath(binPath)
-	if !fileExists(backup) {
-		return nil
-	}
-	if err := os.Rename(backup, binPath); err != nil {
-		return fmt.Errorf("updates: recover: %w", err)
-	}
-	syncDir(dir)
+	a.reconcilePending()
 	return nil
 }
 
+// reconcilePending clears a staged pending marker when the authoritative status
+// is at least as new (the wrapper finished but could not remove it).
+func (a *Applier) reconcilePending() {
+	if a.Pending == nil || a.Status == nil {
+		return
+	}
+	pending, err := a.Pending.Read()
+	if err != nil || pending == nil || pending.Result != StatusStaged {
+		return
+	}
+	status, err := a.Status.Read()
+	if err != nil || status == nil {
+		return
+	}
+	if !status.At.Before(pending.At) {
+		_ = a.Pending.Remove()
+	}
+}
+
 // installLocked writes data to a unique staging file, fsyncs it, and swaps it
-// into place, moving the current binary to the backup. The caller must hold the
-// lock.
+// into place. The current binary is first hard-linked to the backup, so the
+// target path is never absent at any instant. The caller must hold the lock.
 func (a *Applier) installLocked(binPath string, data []byte) error {
 	dir := filepath.Dir(binPath)
 	base := filepath.Base(binPath)
+
+	if isSymlink(binPath) {
+		return fmt.Errorf("%w: refusing symlinked target %s", ErrApply, binPath)
+	}
+	backup := a.oldPath(binPath)
+	if isSymlink(backup) {
+		return fmt.Errorf("%w: refusing symlinked backup %s", ErrApply, backup)
+	}
 
 	staging, err := os.CreateTemp(dir, "."+base+".new.*")
 	if err != nil {
@@ -258,17 +337,48 @@ func (a *Applier) installLocked(binPath string, data []byte) error {
 		return fmt.Errorf("%w: chmod: %v", ErrApply, err)
 	}
 
-	backup := a.oldPath(binPath)
-	if err := os.Rename(binPath, backup); err != nil {
-		return fmt.Errorf("%w: move current binary: %v", ErrApply, err)
+	// Replace the previous backup and hardlink the current (known-good) binary
+	// to it. os.Link never removes the target, so a crash here leaves both the
+	// target and the backup in place.
+	if err := os.Remove(backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: replace backup: %v", ErrApply, err)
+	}
+	if err := os.Link(binPath, backup); err != nil {
+		return fmt.Errorf("%w: hardlink backup: %v", ErrApply, err)
 	}
 	if err := os.Rename(stagingName, binPath); err != nil {
-		_ = os.Rename(backup, binPath)
+		_ = os.Remove(backup)
 		return fmt.Errorf("%w: activate: %v", ErrApply, err)
 	}
 	stagingName = ""
 	syncDir(dir)
 	return nil
+}
+
+// restoreLocked renames the backup over the target. The rename is atomic, so
+// the target is never absent. The caller must hold the lock.
+func (a *Applier) restoreLocked(binPath string) error {
+	backup := a.oldPath(binPath)
+	if isSymlink(backup) {
+		return fmt.Errorf("%w: refusing symlinked backup %s", ErrNoBackup, backup)
+	}
+	if _, err := os.Stat(backup); err != nil {
+		return fmt.Errorf("%w: %s", ErrNoBackup, backup)
+	}
+	if err := os.Rename(backup, binPath); err != nil {
+		return fmt.Errorf("updates: rollback: %w", err)
+	}
+	syncDir(filepath.Dir(binPath))
+	return nil
+}
+
+// pendingStaged reports whether a staged update is awaiting its outcome.
+func (a *Applier) pendingStaged() bool {
+	if a.Pending == nil {
+		return false
+	}
+	pending, err := a.Pending.Read()
+	return err == nil && pending != nil && pending.Result == StatusStaged
 }
 
 // fetch downloads rawURL into memory, bounded by maxBytes.
@@ -320,14 +430,15 @@ func bindManifest(manifest Manifest, rel *Release) error {
 	return nil
 }
 
-// binaryPath resolves the target executable.
+// binaryPath returns the fixed target path resolved at construction. It never
+// consults the live inode, so a rename cannot drift it.
 func (a *Applier) binaryPath() (string, error) {
-	if strings.TrimSpace(a.BinaryPath) != "" {
-		return a.BinaryPath, nil
+	path := strings.TrimSpace(a.BinaryPath)
+	if path == "" {
+		return "", errors.New("updates: binary path is not configured")
 	}
-	path, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("updates: resolve executable: %w", err)
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("updates: binary path must be absolute: %s", path)
 	}
 	return path, nil
 }
@@ -360,6 +471,12 @@ func (a *Applier) maxBytes() int64 {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// isSymlink reports whether path is a symbolic link.
+func isSymlink(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode()&os.ModeSymlink != 0
 }
 
 // syncDir best-effort fsyncs a directory so a rename is durable. Some

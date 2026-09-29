@@ -10,7 +10,8 @@ import (
 	"time"
 )
 
-// Status results recorded by the restart/healthcheck wrapper.
+// Status results recorded by the restart/healthcheck wrapper and the control
+// plane's pending marker.
 const (
 	// StatusStaged means the swap succeeded and the restart is pending.
 	StatusStaged = "staged"
@@ -24,15 +25,29 @@ const (
 	StatusRollbackFailed = "rollback_failed"
 	// StatusNoBackup means activation failed and no previous binary existed.
 	StatusNoBackup = "no_backup"
+	// StatusWrapperFailed means the privileged wrapper could not be launched
+	// (or exited before it could record a result).
+	StatusWrapperFailed = "wrapper_failed"
 )
 
-// DefaultStatusPath is where the privileged wrapper records the outcome of an
-// update. It lives under the unit's RuntimeDirectory so the unprivileged
-// control plane can read it.
-const DefaultStatusPath = "/run/gotham/update.status"
-
-// DefaultUpdaterConf is the root-owned wrapper configuration.
-const DefaultUpdaterConf = "/etc/gotham/updater.conf"
+// Deployment paths.
+const (
+	// DefaultBinaryPath is the fixed target executable. It must match the
+	// unit's ExecStart and is never resolved from the live inode.
+	DefaultBinaryPath = "/var/lib/gotham/bin/gotham"
+	// DefaultStatusPath is the authoritative status file, written by the
+	// root-owned wrapper in a root-owned directory the control plane can only
+	// read.
+	DefaultStatusPath = "/var/lib/gotham-updater/update.status"
+	// DefaultPendingPath is the control-plane-owned pending marker (in the
+	// service StateDirectory) that gates a second apply while one is staged.
+	DefaultPendingPath = "/var/lib/gotham/update.pending"
+	// DefaultLockPath serializes Apply/Rollback between the control plane and
+	// the privileged wrapper.
+	DefaultLockPath = "/var/lib/gotham/update.lock"
+	// DefaultUpdaterConf is the root-owned wrapper configuration.
+	DefaultUpdaterConf = "/etc/gotham/updater.conf"
+)
 
 // Status is the durable outcome of the most recent update attempt.
 type Status struct {
@@ -128,6 +143,18 @@ func (s *StatusStore) Write(status Status) error {
 		return err
 	}
 	return os.Rename(tmpName, s.Path)
+}
+
+// Remove deletes the store file, ignoring a missing file. It is used to clear
+// the pending marker once an update is confirmed.
+func (s *StatusStore) Remove() error {
+	if s == nil {
+		return nil
+	}
+	if err := os.Remove(s.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // singleLine keeps a detail value on one line in the status file.

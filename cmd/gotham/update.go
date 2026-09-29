@@ -53,6 +53,13 @@ func runUpdate(args []string) int {
 		}
 		fmt.Println("rolled back to the previous binary")
 		return exitOK
+	case "reset":
+		if err := svc.Reset(); err != nil {
+			fmt.Fprintf(os.Stderr, "update reset: %v\n", err)
+			return exitError
+		}
+		fmt.Println("cleared the pending update marker")
+		return exitOK
 	case "help", "-h", "--help":
 		updateUsage(os.Stdout)
 		return exitOK
@@ -112,6 +119,7 @@ Commands:
   check                 Report whether a newer release is available
   apply [-channel ...]  Download, verify and swap in the newest release
   rollback              Restore the previous binary (kept as <binary>.old)
+  reset                 Clear a stale pending-update marker (operator reset)
 
 Configuration is read from the environment (see gotham.example.yaml).
 `)

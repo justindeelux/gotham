@@ -7,13 +7,14 @@
 #   sudo deploy/install-sudoers.sh [service-user]
 #
 # The wrapper restarts the fixed service, health-checks it, rolls back on
-# failure and records the outcome; granting the bare command is what lets an
-# unprivileged control plane apply a self-update without a blanket systemctl or
-# arbitrary-argument rule.
+# failure and records the outcome; granting the bare command with an empty
+# argument list is what lets an unprivileged control plane apply a self-update
+# without a blanket systemctl or arbitrary-argument rule.
 set -eu
 
 SERVICE_USER="${1:-gotham}"
 WRAPPER="/usr/libexec/gotham/gotham-update"
+CONF="/etc/gotham/updater.conf"
 SUDOERS_FILE="/etc/sudoers.d/gotham-update"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -21,16 +22,37 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+case "${SERVICE_USER}" in
+    "" | *[!A-Za-z0-9_-]*)
+        echo "install-sudoers.sh: invalid service user: ${SERVICE_USER}" >&2
+        exit 2
+        ;;
+esac
+
 if [ ! -x "${WRAPPER}" ]; then
     echo "install-sudoers.sh: ${WRAPPER} is missing or not executable" >&2
     exit 1
 fi
+if [ ! -f "${CONF}" ]; then
+    echo "install-sudoers.sh: ${CONF} is missing" >&2
+    exit 1
+fi
+if [ "$(stat -c '%U' "${WRAPPER}" 2>/dev/null || echo unknown)" != "root" ]; then
+    echo "install-sudoers.sh: ${WRAPPER} must be owned by root" >&2
+    exit 1
+fi
+if [ "$(stat -c '%U' "${CONF}" 2>/dev/null || echo unknown)" != "root" ]; then
+    echo "install-sudoers.sh: ${CONF} must be owned by root" >&2
+    exit 1
+fi
 
+# sudoers(5): a command with no argument list permits any arguments. The empty
+# string "" pins the invocation to zero arguments.
 cat >"${SUDOERS_FILE}" <<EOF
 # Allow the Gotham control plane to trigger its own update restart wrapper.
-# The wrapper is root-owned and outside every writable path; no arguments are
-# permitted, so sudoers grants exactly the fixed command.
-${SERVICE_USER} ALL=(root) NOPASSWD: ${WRAPPER}
+# The wrapper is root-owned and outside every writable path; "" pins it to zero
+# arguments, so sudoers grants exactly the fixed command.
+${SERVICE_USER} ALL=(root) NOPASSWD: ${WRAPPER} ""
 EOF
 chmod 0440 "${SUDOERS_FILE}"
 

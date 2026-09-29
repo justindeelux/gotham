@@ -279,7 +279,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// be able to swap the binary). A nil service (FEATURE_UPDATES=false,
 		// or unusable configuration) mounts nothing.
 		s.updates = s.updatesService()
-		updates.Mount(api, s.RequireAuth, platformOnly, s.updates)
+		updates.Mount(api, s.RequireAuth, platformOnly, s.isPlatformOperator, s.updates)
 
 		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
 		// Log subscriptions are authorized against the node's team before the

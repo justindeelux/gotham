@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -44,10 +45,16 @@ func fakeReleasesServer(t *testing.T) *httptest.Server {
 // local release API and a fixed running version.
 func newUpdateTestServer(t *testing.T, releasesURL string) (*Server, *fakeTokenService) {
 	t.Helper()
+	dir := t.TempDir()
 	t.Setenv("FEATURE_UPDATES", "true")
 	t.Setenv("GOTHAM_UPDATE_BASE_URL", releasesURL)
 	t.Setenv("GOTHAM_UPDATE_CURRENT", "v1.0.0")
 	t.Setenv("GOTHAM_UPDATE_PUBLIC_KEY", "")
+	t.Setenv("GOTHAM_UPDATE_BINARY", filepath.Join(dir, "gotham"))
+	t.Setenv("GOTHAM_UPDATE_LOCK", filepath.Join(dir, "update.lock"))
+	t.Setenv("GOTHAM_UPDATE_STATUS", filepath.Join(dir, "status", "update.status"))
+	t.Setenv("GOTHAM_UPDATE_PENDING", filepath.Join(dir, "update.pending"))
+	t.Setenv("GOTHAM_UPDATE_SCRIPT", filepath.Join(dir, "gotham-update"))
 
 	cfg := &config.Config{
 		Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}},
@@ -85,12 +92,16 @@ func TestUpdateRoutesGating(t *testing.T) {
 		Current   string `json:"current"`
 		Available bool   `json:"available"`
 		Version   string `json:"version"`
+		Notes     string `json:"notes"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &checkBody); err != nil {
 		t.Fatalf("decode check: %v", err)
 	}
 	if !checkBody.Available || checkBody.Version != "v1.2.0" || checkBody.Current != "v1.0.0" {
 		t.Fatalf("check body = %+v", checkBody)
+	}
+	if checkBody.Notes != "" {
+		t.Errorf("plain session saw release notes %q", checkBody.Notes)
 	}
 
 	// Apply requires a platform operator.
@@ -118,6 +129,21 @@ func TestUpdateRoutesGating(t *testing.T) {
 	}
 	if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", "Bearer "+adminToken.Token); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("admin apply status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// A platform operator sees the release notes on the check response.
+	adminCheck := doRequest(t, s, http.MethodGet, "/api/v1/updates/check", "", "Bearer "+adminToken.Token)
+	if adminCheck.Code != http.StatusOK {
+		t.Fatalf("admin check status = %d, want 200", adminCheck.Code)
+	}
+	var adminBody struct {
+		Notes string `json:"notes"`
+	}
+	if err := json.Unmarshal(adminCheck.Body.Bytes(), &adminBody); err != nil {
+		t.Fatalf("decode admin check: %v", err)
+	}
+	if adminBody.Notes != "notes" {
+		t.Fatalf("admin notes = %q, want the release notes", adminBody.Notes)
 	}
 }
 

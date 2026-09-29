@@ -17,16 +17,18 @@ func newTestService(t *testing.T, server *httptest.Server, current string, cfg f
 	t.Helper()
 	dir := t.TempDir()
 	config := Config{
-		Current:    current,
-		Repo:       "owner/name",
-		BaseURL:    server.URL,
-		Channel:    ChannelStable,
-		Client:     server.Client(),
-		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Restart:    func(context.Context) error { return nil },
-		GOARCH:     "amd64",
-		BinaryPath: filepath.Join(dir, "gotham"),
-		StatusPath: filepath.Join(dir, "run", "update.status"),
+		Current:     current,
+		Repo:        "owner/name",
+		BaseURL:     server.URL,
+		Channel:     ChannelStable,
+		Client:      server.Client(),
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Restart:     noopRestart,
+		GOARCH:      "amd64",
+		BinaryPath:  filepath.Join(dir, "gotham"),
+		LockPath:    filepath.Join(dir, "update.lock"),
+		StatusPath:  filepath.Join(dir, "status", "update.status"),
+		PendingPath: filepath.Join(dir, "update.pending"),
 	}
 	if cfg != nil {
 		cfg(&config)
@@ -125,8 +127,8 @@ func TestServiceCurrentAndRollback(t *testing.T) {
 // TestDefaultRestartMissingScript proves a missing wrapper is reported rather
 // than silently skipping the restart.
 func TestDefaultRestartMissingScript(t *testing.T) {
-	restart := defaultRestart("/nonexistent/gotham-update")
-	if err := restart(context.Background()); err == nil {
+	_, err := defaultRestart("/nonexistent/gotham-update")(context.Background())
+	if err == nil {
 		t.Fatal("defaultRestart(missing script) = nil error, want failure")
 	}
 }

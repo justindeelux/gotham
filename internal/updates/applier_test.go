@@ -81,7 +81,25 @@ func newTestSigner(t *testing.T) (*Signer, *Verifier) {
 	return signer, verifier
 }
 
-// writeTarget creates an "old" binary and returns its path.
+// noopRestart is a RestartFunc that reports the wrapper exited cleanly.
+func noopRestart(context.Context) (func() error, error) {
+	return func() error { return nil }, nil
+}
+
+// newTestApplier builds an Applier whose pending/status/lock live in dir.
+func newTestApplier(t *testing.T, dir, target string, verifier *Verifier, restart RestartFunc) *Applier {
+	t.Helper()
+	return &Applier{
+		Verifier:   verifier,
+		BinaryPath: target,
+		LockPath:   filepath.Join(dir, "update.lock"),
+		Pending:    NewStatusStore(filepath.Join(dir, "update.pending")),
+		Status:     NewStatusStore(filepath.Join(dir, "update.status")),
+		Restart:    restart,
+	}
+}
+
+// writeTarget creates an "old" binary and returns its path and dir.
 func writeTarget(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "gotham")
@@ -110,19 +128,16 @@ func TestApplierApplyAndRollback(t *testing.T) {
 	fake := defaultFakeRelease(t, signer, newBinary)
 
 	target := writeTarget(t, "gotham v1.0.0 binary")
-	applier := &Applier{
-		Client:     fake.server.Client(),
-		Verifier:   verifier,
-		BinaryPath: target,
-		Restart:    func(context.Context) error { return nil },
-	}
+	dir := filepath.Dir(target)
+	applier := newTestApplier(t, dir, target, verifier, noopRestart)
+	applier.Client = fake.server.Client()
 
 	outcome, err := applier.Apply(context.Background(), fake.release)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if outcome.Version != "v1.2.0" || !outcome.Staged {
-		t.Fatalf("outcome = %+v, want v1.2.0 staged (restart configured)", outcome)
+		t.Fatalf("outcome = %+v, want v1.2.0 staged", outcome)
 	}
 	if got := readFile(t, target); got != string(newBinary) {
 		t.Errorf("target = %q, want the new binary", got)
@@ -140,6 +155,9 @@ func TestApplierApplyAndRollback(t *testing.T) {
 	if _, err := os.Stat(target + OldSuffix); !os.IsNotExist(err) {
 		t.Errorf("old binary still present after rollback: %v", err)
 	}
+	if pending, _ := applier.Pending.Read(); pending != nil {
+		t.Errorf("pending marker not cleared after rollback: %+v", pending)
+	}
 }
 
 // TestApplierRefusesWrongManifestKey proves an artifact whose manifest was
@@ -150,7 +168,8 @@ func TestApplierRefusesWrongManifestKey(t *testing.T) {
 	fake := defaultFakeRelease(t, otherSigner, []byte("payload"))
 
 	target := writeTarget(t, "original")
-	applier := &Applier{Client: fake.server.Client(), Verifier: verifier, BinaryPath: target}
+	applier := newTestApplier(t, filepath.Dir(target), target, verifier, nil)
+	applier.Client = fake.server.Client()
 
 	if _, err := applier.Apply(context.Background(), fake.release); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("Apply = %v, want ErrBadSignature", err)
@@ -167,8 +186,6 @@ func TestApplierRefusesWrongManifestKey(t *testing.T) {
 // manifest digest.
 func TestApplierRejectsDigestMismatch(t *testing.T) {
 	signer, verifier := newTestSigner(t)
-	// The manifest describes the signed payload but the server serves other
-	// bytes.
 	manifest := BuildManifest("v1.2.0", "stable", "amd64", testAssetName, []byte("signed payload"))
 	manifestBytes := manifest.Marshal()
 	sig := signer.SignBase64(manifestBytes)
@@ -195,7 +212,8 @@ func TestApplierRejectsDigestMismatch(t *testing.T) {
 	}
 
 	target := writeTarget(t, "original")
-	applier := &Applier{Client: server.Client(), Verifier: verifier, BinaryPath: target}
+	applier := newTestApplier(t, filepath.Dir(target), target, verifier, nil)
+	applier.Client = server.Client()
 	if _, err := applier.Apply(context.Background(), release); !errors.Is(err, ErrChecksumMismatch) {
 		t.Fatalf("Apply = %v, want ErrChecksumMismatch", err)
 	}
@@ -209,13 +227,12 @@ func TestApplierRejectsDigestMismatch(t *testing.T) {
 func TestApplierRejectsTagMismatch(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	fake := defaultFakeRelease(t, signer, []byte("payload"))
-	// The release metadata claims v99.0.0 while the signed manifest says
-	// v1.2.0.
 	release := *fake.release
 	release.Version = "v99.0.0"
 
 	target := writeTarget(t, "original")
-	applier := &Applier{Client: fake.server.Client(), Verifier: verifier, BinaryPath: target}
+	applier := newTestApplier(t, filepath.Dir(target), target, verifier, nil)
+	applier.Client = fake.server.Client()
 	if _, err := applier.Apply(context.Background(), &release); !errors.Is(err, ErrManifest) {
 		t.Fatalf("Apply = %v, want ErrManifest", err)
 	}
@@ -234,7 +251,8 @@ func TestApplierRejectsMissingManifest(t *testing.T) {
 	release.ManifestSignatureURL = ""
 
 	target := writeTarget(t, "original")
-	applier := &Applier{Client: fake.server.Client(), Verifier: verifier, BinaryPath: target}
+	applier := newTestApplier(t, filepath.Dir(target), target, verifier, nil)
+	applier.Client = fake.server.Client()
 	if _, err := applier.Apply(context.Background(), &release); err == nil {
 		t.Fatal("Apply without a manifest = nil error, want failure")
 	}
@@ -243,32 +261,10 @@ func TestApplierRejectsMissingManifest(t *testing.T) {
 	}
 }
 
-// TestApplierRestartFailureRollsBack simulates a wrapper that reports an
-// immediate failure: the previous binary must be restored.
-func TestApplierRestartFailureRollsBack(t *testing.T) {
-	signer, verifier := newTestSigner(t)
-	fake := defaultFakeRelease(t, signer, []byte("v1.2.0 binary"))
-
-	target := writeTarget(t, "v1.0.0 binary")
-	applier := &Applier{
-		Client:     fake.server.Client(),
-		Verifier:   verifier,
-		BinaryPath: target,
-		Restart:    func(context.Context) error { return errors.New("wrapper failed") },
-	}
-
-	if _, err := applier.Apply(context.Background(), fake.release); !errors.Is(err, ErrApply) {
-		t.Fatalf("Apply = %v, want ErrApply", err)
-	}
-	if got := readFile(t, target); got != "v1.0.0 binary" {
-		t.Errorf("target = %q, want the restored old binary", got)
-	}
-}
-
-// TestApplierConcurrentApply proves two overlapping applies cannot interleave
-// their staging: the lock serializes installs and the result is always one of
-// the two verified payloads with no leftover staging files.
-func TestApplierConcurrentApply(t *testing.T) {
+// TestApplierRefusesSecondApplyWhileStaged is the reviewer's two-apply
+// interleave: once an update is staged, a second apply is refused and the last
+// known good backup is preserved.
+func TestApplierRefusesSecondApplyWhileStaged(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	payloadA := []byte("payload A")
 	payloadB := []byte("payload B")
@@ -276,8 +272,49 @@ func TestApplierConcurrentApply(t *testing.T) {
 	fakeB := defaultFakeRelease(t, signer, payloadB)
 
 	target := writeTarget(t, "original")
-	applierA := &Applier{Client: fakeA.server.Client(), Verifier: verifier, BinaryPath: target, LockPath: filepath.Join(filepath.Dir(target), "update.lock")}
-	applierB := &Applier{Client: fakeB.server.Client(), Verifier: verifier, BinaryPath: target, LockPath: filepath.Join(filepath.Dir(target), "update.lock")}
+	dir := filepath.Dir(target)
+	applierA := newTestApplier(t, dir, target, verifier, noopRestart)
+	applierA.Client = fakeA.server.Client()
+	applierB := newTestApplier(t, dir, target, verifier, noopRestart)
+	applierB.Client = fakeB.server.Client()
+
+	if _, err := applierA.Apply(context.Background(), fakeA.release); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+	if got := readFile(t, target); got != string(payloadA) {
+		t.Fatalf("target = %q, want payload A", got)
+	}
+	if got := readFile(t, target+OldSuffix); got != "original" {
+		t.Fatalf("backup = %q, want the original known-good", got)
+	}
+
+	if _, err := applierB.Apply(context.Background(), fakeB.release); !errors.Is(err, ErrUpdatePending) {
+		t.Fatalf("second Apply = %v, want ErrUpdatePending", err)
+	}
+	if got := readFile(t, target); got != string(payloadA) {
+		t.Errorf("target = %q, want payload A unchanged", got)
+	}
+	if got := readFile(t, target+OldSuffix); got != "original" {
+		t.Errorf("backup = %q, want the original known-good preserved", got)
+	}
+}
+
+// TestApplierConcurrentApplySerialized proves two overlapping applies cannot
+// both install: exactly one wins and the other is refused as pending, while the
+// known-good backup is preserved.
+func TestApplierConcurrentApplySerialized(t *testing.T) {
+	signer, verifier := newTestSigner(t)
+	payloadA := []byte("payload A")
+	payloadB := []byte("payload B")
+	fakeA := defaultFakeRelease(t, signer, payloadA)
+	fakeB := defaultFakeRelease(t, signer, payloadB)
+
+	target := writeTarget(t, "original")
+	dir := filepath.Dir(target)
+	applierA := newTestApplier(t, dir, target, verifier, noopRestart)
+	applierA.Client = fakeA.server.Client()
+	applierB := newTestApplier(t, dir, target, verifier, noopRestart)
+	applierB.Client = fakeB.server.Client()
 
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
@@ -286,26 +323,66 @@ func TestApplierConcurrentApply(t *testing.T) {
 	go func() { defer wg.Done(); _, errs[1] = applierB.Apply(context.Background(), fakeB.release) }()
 	wg.Wait()
 
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("apply %d: %v", i, err)
+	successes, pending := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrUpdatePending):
+			pending++
+		default:
+			t.Fatalf("unexpected apply error: %v", err)
 		}
+	}
+	if successes != 1 || pending != 1 {
+		t.Fatalf("successes=%d pending=%d, want exactly one of each", successes, pending)
 	}
 	final := readFile(t, target)
 	if final != string(payloadA) && final != string(payloadB) {
-		t.Fatalf("final binary = %q, want one of the verified payloads", final)
+		t.Fatalf("final binary = %q, want one verified payload", final)
 	}
-	backup := readFile(t, target+OldSuffix)
-	if backup != string(payloadA) && backup != string(payloadB) && backup != "original" {
-		t.Fatalf("backup = %q, want a verified payload or the original", backup)
-	}
-	if matches, _ := filepath.Glob(filepath.Join(filepath.Dir(target), ".gotham.new.*")); len(matches) != 0 {
-		t.Fatalf("leftover staging files: %v", matches)
+	if backup := readFile(t, target+OldSuffix); backup != "original" {
+		t.Fatalf("backup = %q, want the original preserved", backup)
 	}
 }
 
-// TestApplierRecoverRestoresMissingTarget proves startup recovery restores the
-// backup when a crash left the target missing.
+// TestApplierCrashLayout proves the activation layout keeps the target present
+// on both sides of the commit rename.
+func TestApplierCrashLayout(t *testing.T) {
+	t.Run("before commit", func(t *testing.T) {
+		target := writeTarget(t, "old")
+		if err := os.Link(target, target+OldSuffix); err != nil {
+			t.Fatalf("hardlink: %v", err)
+		}
+		applier := newTestApplier(t, filepath.Dir(target), target, nil, nil)
+		restored, err := applier.Recover()
+		if err != nil {
+			t.Fatalf("Recover: %v", err)
+		}
+		if restored {
+			t.Error("Recover restored although the target was present")
+		}
+		if got := readFile(t, target); got != "old" {
+			t.Errorf("target = %q, want old", got)
+		}
+	})
+	t.Run("after commit", func(t *testing.T) {
+		target := writeTarget(t, "new")
+		if err := os.WriteFile(target+OldSuffix, []byte("old"), 0o755); err != nil {
+			t.Fatalf("write backup: %v", err)
+		}
+		applier := newTestApplier(t, filepath.Dir(target), target, nil, nil)
+		if _, err := applier.Recover(); err != nil {
+			t.Fatalf("Recover: %v", err)
+		}
+		if got := readFile(t, target); got != "new" {
+			t.Errorf("target = %q, want new", got)
+		}
+	})
+}
+
+// TestApplierRecoverRestoresMissingTarget proves recovery restores the backup
+// when a crash left the target missing.
 func TestApplierRecoverRestoresMissingTarget(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "gotham")
 	if err := os.WriteFile(target+OldSuffix, []byte("last known good"), 0o755); err != nil {
@@ -315,7 +392,7 @@ func TestApplierRecoverRestoresMissingTarget(t *testing.T) {
 		t.Fatalf("write stale staging: %v", err)
 	}
 
-	applier := &Applier{BinaryPath: target}
+	applier := newTestApplier(t, filepath.Dir(target), target, nil, nil)
 	restored, err := applier.Recover()
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
@@ -334,16 +411,112 @@ func TestApplierRecoverRestoresMissingTarget(t *testing.T) {
 	}
 }
 
+// TestApplierWrapperLaunchErrorRollsBack proves an immediate wrapper launch
+// failure restores the previous binary and records the outcome.
+func TestApplierWrapperLaunchErrorRollsBack(t *testing.T) {
+	signer, verifier := newTestSigner(t)
+	fake := defaultFakeRelease(t, signer, []byte("v1.2.0 binary"))
+
+	target := writeTarget(t, "v1.0.0 binary")
+	applier := newTestApplier(t, filepath.Dir(target), target, verifier, func(context.Context) (func() error, error) {
+		return nil, errors.New("sudo: a password is required")
+	})
+	applier.Client = fake.server.Client()
+
+	if _, err := applier.Apply(context.Background(), fake.release); !errors.Is(err, ErrApply) {
+		t.Fatalf("Apply = %v, want ErrApply", err)
+	}
+	if got := readFile(t, target); got != "v1.0.0 binary" {
+		t.Errorf("target = %q, want the restored old binary", got)
+	}
+	pending, err := applier.Pending.Read()
+	if err != nil {
+		t.Fatalf("read pending: %v", err)
+	}
+	if pending == nil || pending.Result != StatusRolledBack {
+		t.Fatalf("pending = %+v, want rolled_back", pending)
+	}
+}
+
+// TestMonitorRestartRecordsWrapperFailed proves a wrapper that exits without
+// recording a result surfaces as wrapper_failed rather than staged forever.
+func TestMonitorRestartRecordsWrapperFailed(t *testing.T) {
+	dir := t.TempDir()
+	applier := newTestApplier(t, dir, filepath.Join(dir, "gotham"), nil, nil)
+	if err := applier.Pending.Write(Status{Result: StatusStaged, Version: "v1.2.0"}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+
+	applier.monitorRestart(func() error { return errors.New("wrapper exited 1") }, "v1.2.0")
+
+	pending, err := applier.Pending.Read()
+	if err != nil {
+		t.Fatalf("read pending: %v", err)
+	}
+	if pending == nil || pending.Result != StatusWrapperFailed {
+		t.Fatalf("pending = %+v, want wrapper_failed", pending)
+	}
+}
+
 // TestApplierFailClosed covers the missing key and no-backup rollback.
 func TestApplierFailClosed(t *testing.T) {
 	signer, _ := newTestSigner(t)
 	fake := defaultFakeRelease(t, signer, []byte("binary"))
 
 	target := writeTarget(t, "original")
-	if _, err := (&Applier{Client: fake.server.Client(), BinaryPath: target}).Apply(context.Background(), fake.release); !errors.Is(err, ErrNoPublicKey) {
+	applier := newTestApplier(t, filepath.Dir(target), target, nil, nil)
+	applier.Client = fake.server.Client()
+	if _, err := applier.Apply(context.Background(), fake.release); !errors.Is(err, ErrNoPublicKey) {
 		t.Fatalf("Apply = %v, want ErrNoPublicKey", err)
 	}
-	if err := (&Applier{BinaryPath: target}).Rollback(); !errors.Is(err, ErrNoBackup) {
+	if err := applier.Rollback(); !errors.Is(err, ErrNoBackup) {
 		t.Fatalf("Rollback = %v, want ErrNoBackup", err)
+	}
+}
+
+// TestBinaryPathStableAcrossRename proves the target comes from fixed
+// configuration and does not drift to <binary>.old after a rename (the
+// /proc/self/exe problem).
+func TestBinaryPathStableAcrossRename(t *testing.T) {
+	target := writeTarget(t, "v1")
+	applier := newTestApplier(t, filepath.Dir(target), target, nil, nil)
+	before, err := applier.binaryPath()
+	if err != nil {
+		t.Fatalf("binaryPath: %v", err)
+	}
+	if err := os.Rename(target, target+OldSuffix); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	after, err := applier.binaryPath()
+	if err != nil {
+		t.Fatalf("binaryPath after rename: %v", err)
+	}
+	if before != after || after != target {
+		t.Fatalf("binary path drifted: %q -> %q", before, after)
+	}
+}
+
+// TestApplierRefusesSymlinkedPaths proves a planted symlink at the target or
+// backup cannot redirect a swap.
+func TestApplierRefusesSymlinkedPaths(t *testing.T) {
+	signer, verifier := newTestSigner(t)
+	fake := defaultFakeRelease(t, signer, []byte("payload"))
+
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("victim"), 0o644); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+	target := filepath.Join(dir, "gotham")
+	if err := os.Symlink(victim, target); err != nil {
+		t.Fatalf("symlink target: %v", err)
+	}
+	applier := newTestApplier(t, dir, target, verifier, noopRestart)
+	applier.Client = fake.server.Client()
+	if _, err := applier.Apply(context.Background(), fake.release); !errors.Is(err, ErrApply) {
+		t.Fatalf("Apply with symlinked target = %v, want ErrApply", err)
+	}
+	if got := readFile(t, victim); got != "victim" {
+		t.Errorf("victim = %q, want it untouched", got)
 	}
 }

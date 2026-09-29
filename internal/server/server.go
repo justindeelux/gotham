@@ -66,6 +66,7 @@ type Server struct {
 	deploy      deploy.DeployService
 	proxy       proxy.ProxyService
 	backups     databases.BackupService
+	metrics     *servers.MetricsSweeper
 	authLimiter *ipRateLimiter
 	router      http.Handler
 	closer      func()
@@ -114,9 +115,13 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		// The deploy service owns its worker pool and realtime publisher;
 		// shutting it down first stops in-flight deployments before the
 		// shared Redis pinger goes away. The backup service stops its cron
-		// scheduler for the same reason.
+		// scheduler for the same reason, and the metrics retention stops its
+		// sweep.
 		if s.backups != nil {
 			_ = s.backups.Close()
+		}
+		if s.metrics != nil {
+			s.metrics.Close()
 		}
 		if closer, ok := s.deploy.(interface{ Close() error }); ok {
 			_ = closer.Close()
@@ -173,6 +178,15 @@ func (s *Server) routes() (http.Handler, error) {
 		// Node registry and SSH validation require an authenticated caller.
 		if s.servers != nil {
 			s.mountServerRoutes(api)
+		}
+
+		// Server time series (BE-8.4): the 30-day retention sweep runs beside
+		// the routes. A nil retention (no database, or FEATURE_METRICS=false)
+		// leaves the heartbeat path without persistence, and a nil store
+		// never fails the heartbeat.
+		s.metrics = s.metricsRetention()
+		if s.metrics != nil {
+			s.metrics.Start()
 		}
 
 		// Teams (BE-8.2): the team service backs the teams/invites routes
@@ -489,6 +503,16 @@ func (s *Server) backupService(containerService containers.ContainerService) dat
 		Secret:     s.cfg.Snapshot().SecretKey,
 		Logger:     s.logger,
 	})
+}
+
+// metricsRetention builds the retention sweep for the server time series. It
+// returns nil (no database, or FEATURE_METRICS=false) so the sweep and the
+// metrics route stay off without affecting the rest of the servers surface.
+func (s *Server) metricsRetention() *servers.MetricsSweeper {
+	if s.persistence == nil || !servers.MetricsEnabled() {
+		return nil
+	}
+	return servers.NewMetricsSweeper(s.persistence, s.logger)
 }
 
 // composeDialer is the mTLS ComposeService dial implemented by

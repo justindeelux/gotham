@@ -23,6 +23,7 @@ type ServerService interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	Validate(ctx context.Context, id uuid.UUID, auth servers.ValidateAuth) (*servers.ValidationResult, error)
 	AddPrivateKey(ctx context.Context, name, privateKeyPEM string) (*servers.PrivateKey, error)
+	Metrics(ctx context.Context, id uuid.UUID, from, to time.Time, step string) ([]servers.MetricPoint, error)
 }
 
 // createServerRequest is the body of POST /api/v1/servers.
@@ -95,6 +96,28 @@ type privateKeyResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// metricPointDTO is one aggregated bucket of a server's time series on the
+// wire. Buckets are UTC, epoch-aligned and carry the average of the samples
+// that fell into them.
+type metricPointDTO struct {
+	Bucket         time.Time `json:"bucket"`
+	CPUUsage       float64   `json:"cpu_usage"`
+	MemUsage       float64   `json:"mem_usage"`
+	DiskUsage      float64   `json:"disk_usage"`
+	NetRxBps       float64   `json:"net_rx_bps"`
+	NetTxBps       float64   `json:"net_tx_bps"`
+	DiskReadBps    float64   `json:"disk_read_bps"`
+	DiskWriteBps   float64   `json:"disk_write_bps"`
+	ContainerCount float64   `json:"container_count"`
+}
+
+// metricsEnvelope wraps a metrics series. Buckets without samples are omitted
+// rather than returned as zeros, so a gap in the series is a gap on the chart.
+type metricsEnvelope struct {
+	Step   string           `json:"step"`
+	Points []metricPointDTO `json:"points"`
+}
+
 // mountServerRoutes registers the authenticated node-management endpoints under
 // /api.
 func (s *Server) mountServerRoutes(api chi.Router) {
@@ -106,6 +129,11 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 		protected.Delete("/v1/servers/{id}", s.handleDeleteServer)
 		protected.Post("/v1/servers/{id}/validate", s.handleValidateServer)
 		protected.Post("/v1/private-keys", s.handleCreatePrivateKey)
+		// The metrics range route is part of the servers surface but rides its
+		// own kill switch: FEATURE_METRICS=false mounts nothing here.
+		if servers.MetricsEnabled() {
+			protected.Get("/v1/servers/{id}/metrics", s.handleServerMetrics)
+		}
 	})
 }
 
@@ -257,6 +285,67 @@ func (s *Server) handleCreatePrivateKey(w http.ResponseWriter, r *http.Request) 
 		Name:      created.Name,
 		CreatedAt: created.CreatedAt,
 	})
+}
+
+// handleServerMetrics returns the aggregated time series of one server as JSON:
+// GET /v1/servers/{id}/metrics?from&to&step. from and to are RFC 3339
+// timestamps and step is one of 1m, 1h, 1d (default 1m).
+func (s *Server) handleServerMetrics(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	query := r.URL.Query()
+	from, ok := parseMetricTime(w, query.Get("from"), "from")
+	if !ok {
+		return
+	}
+	to, ok := parseMetricTime(w, query.Get("to"), "to")
+	if !ok {
+		return
+	}
+
+	step := query.Get("step")
+	if step == "" {
+		step = servers.DefaultMetricStep
+	}
+	points, err := s.servers.Metrics(r.Context(), id, from, to, step)
+	if err != nil {
+		s.writeServerError(w, "metrics", err)
+		return
+	}
+
+	response := metricsEnvelope{Step: step, Points: make([]metricPointDTO, 0, len(points))}
+	for _, point := range points {
+		response.Points = append(response.Points, metricPointDTO{
+			Bucket:         point.Bucket,
+			CPUUsage:       point.CPUUsage,
+			MemUsage:       point.MemUsage,
+			DiskUsage:      point.DiskUsage,
+			NetRxBps:       point.NetRxBps,
+			NetTxBps:       point.NetTxBps,
+			DiskReadBps:    point.DiskReadBps,
+			DiskWriteBps:   point.DiskWriteBps,
+			ContainerCount: point.ContainerCount,
+		})
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// parseMetricTime parses one required RFC 3339 query timestamp, answering 400
+// when it is missing or malformed.
+func parseMetricTime(w http.ResponseWriter, raw, field string) (time.Time, bool) {
+	if raw == "" {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: field + " is required (RFC 3339)"})
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid " + field + " timestamp (want RFC 3339)"})
+		return time.Time{}, false
+	}
+	return parsed, true
 }
 
 // writeServerError maps a servers domain error to its HTTP response.

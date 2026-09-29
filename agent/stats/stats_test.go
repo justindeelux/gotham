@@ -2,7 +2,9 @@ package stats
 
 import (
 	"math"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestSample(t *testing.T) {
@@ -41,6 +43,124 @@ func TestHelpers(t *testing.T) {
 	}
 	// OSVersion is best-effort; it must not panic.
 	_ = OSVersion()
+}
+
+// netDevFixture is a /proc/net/dev document with loopback, two Ethernet
+// interfaces and the two header lines the kernel emits.
+const netDevFixture = `Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 5000000    1000    0    0    0     0          0         0  5000000    1000    0    0    0     0       0          0
+  eth0: 2048   20    0    0    0     0          0         0     1024   10    0    0    0     0       0          0
+  eth1: 100    1    0    0    0     0          0         0      200    2    0    0    0     0       0          0
+`
+
+func TestParseNetDev(t *testing.T) {
+	rx, tx, err := parseNetDev(strings.NewReader(netDevFixture))
+	if err != nil {
+		t.Fatalf("parseNetDev: %v", err)
+	}
+	// Loopback is excluded: it never leaves the host.
+	if rx != 2148 {
+		t.Errorf("rx = %d; want 2148", rx)
+	}
+	if tx != 1224 {
+		t.Errorf("tx = %d; want 1224", tx)
+	}
+
+	if _, _, err := parseNetDev(strings.NewReader("")); err == nil {
+		t.Error("parseNetDev(empty) = nil error; want a no-interfaces error")
+	}
+
+	malformed := netDevFixture + "  eth2: not-a-number\n"
+	if _, _, err := parseNetDev(strings.NewReader(malformed)); err == nil {
+		t.Error("parseNetDev(malformed) = nil error; want a parse error")
+	}
+}
+
+// diskStatsFixture is a /proc/diskstats document with a disk, its partition, a
+// loop device and a second disk.
+const diskStatsFixture = `   8       0 sda 100 0 2048 30 200 0 4096 40 0 0 0 0 0 0
+   8       1 sda1 50 0 1024 15 100 0 2048 20 0 0 0 0 0 0
+   7       0 loop0 10 0 100 0 10 0 100 0 0 0 0 0 0 0
+   8      16 sdb 1 0 8 0 2 0 16 0 0 0 0 0 0 0
+`
+
+func TestParseDiskStats(t *testing.T) {
+	// The caller passes only real whole devices: sda1 is a partition of sda and
+	// loop0 is a pseudo device, so neither must contribute bytes.
+	devices := map[string]struct{}{"sda": {}, "sdb": {}}
+	read, write, err := parseDiskStats(strings.NewReader(diskStatsFixture), devices)
+	if err != nil {
+		t.Fatalf("parseDiskStats: %v", err)
+	}
+	const sector = 512
+	wantRead := uint64((2048 + 8) * sector)
+	wantWrite := uint64((4096 + 16) * sector)
+	if read != wantRead {
+		t.Errorf("read = %d; want %d", read, wantRead)
+	}
+	if write != wantWrite {
+		t.Errorf("write = %d; want %d", write, wantWrite)
+	}
+
+	if _, _, err := parseDiskStats(strings.NewReader(diskStatsFixture), map[string]struct{}{"nvme0n1": {}}); err == nil {
+		t.Error("parseDiskStats(no matching device) = nil error; want a no-devices error")
+	}
+}
+
+func TestByteRate(t *testing.T) {
+	tests := []struct {
+		name     string
+		current  uint64
+		previous uint64
+		elapsed  time.Duration
+		want     float64
+	}{
+		{"one second", 2048, 1024, time.Second, 1024},
+		{"half second", 2048, 1024, 500 * time.Millisecond, 2048},
+		{"unchanged counter", 1024, 1024, time.Second, 0},
+		{"counter reset", 512, 1024, time.Second, 0},
+		{"zero elapsed", 2048, 1024, 0, 0},
+		{"negative elapsed", 2048, 1024, -time.Second, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := byteRate(tt.current, tt.previous, tt.elapsed); got != tt.want {
+				t.Errorf("byteRate(%d, %d, %s) = %v; want %v", tt.current, tt.previous, tt.elapsed, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSampleIORatesStartAtZero(t *testing.T) {
+	sampler := New()
+
+	first, err := sampler.Sample()
+	if err != nil {
+		t.Fatalf("Sample: %v", err)
+	}
+	// The first sample has no previous counters to compare against, so every
+	// rate is zero on every platform (a platform that cannot read a counter
+	// keeps reporting zero).
+	if first.NetRxBps != 0 || first.NetTxBps != 0 || first.DiskReadBps != 0 || first.DiskWriteBps != 0 {
+		t.Errorf("first sample I/O rates = net %v/%v disk %v/%v; want all zero",
+			first.NetRxBps, first.NetTxBps, first.DiskReadBps, first.DiskWriteBps)
+	}
+
+	second, err := sampler.Sample()
+	if err != nil {
+		t.Fatalf("second Sample: %v", err)
+	}
+	for name, value := range map[string]float64{
+		"net rx":     second.NetRxBps,
+		"net tx":     second.NetTxBps,
+		"disk read":  second.DiskReadBps,
+		"disk write": second.DiskWriteBps,
+	} {
+		if math.IsNaN(value) || value < 0 {
+			t.Errorf("%s rate = %v; want a finite, non-negative rate", name, value)
+		}
+	}
 }
 
 func TestClampFraction(t *testing.T) {

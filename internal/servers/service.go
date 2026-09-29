@@ -423,6 +423,11 @@ func (s *ServerService) RecordHeartbeat(ctx context.Context, nodeID string, req 
 		return fmt.Errorf("record heartbeat: %w", err)
 	}
 
+	// The time series is appended after the snapshot update: the row already
+	// carries the latest values, so a failed append must not fail the
+	// heartbeat.
+	s.recordMetric(ctx, row.ID, req)
+
 	s.logger.Debug("servers: heartbeat",
 		"node_id", nodeID,
 		"server_id", updated.ID.String(),

@@ -533,8 +533,16 @@ type HeartbeatRequest struct {
 	DiskUsage      float64                `protobuf:"fixed64,3,opt,name=disk_usage,json=diskUsage,proto3" json:"disk_usage,omitempty"` // fraction 0..1
 	ContainerCount int64                  `protobuf:"varint,4,opt,name=container_count,json=containerCount,proto3" json:"container_count,omitempty"`
 	SentAt         *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=sent_at,json=sentAt,proto3" json:"sent_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// net_rx_bps, net_tx_bps, disk_read_bps and disk_write_bps are host I/O
+	// rates in bytes per second, computed by the agent from consecutive counter
+	// samples. They are zero on a platform that cannot report them (for example
+	// Darwin) and on the agent's first sample.
+	NetRxBps      float64 `protobuf:"fixed64,6,opt,name=net_rx_bps,json=netRxBps,proto3" json:"net_rx_bps,omitempty"`
+	NetTxBps      float64 `protobuf:"fixed64,7,opt,name=net_tx_bps,json=netTxBps,proto3" json:"net_tx_bps,omitempty"`
+	DiskReadBps   float64 `protobuf:"fixed64,8,opt,name=disk_read_bps,json=diskReadBps,proto3" json:"disk_read_bps,omitempty"`
+	DiskWriteBps  float64 `protobuf:"fixed64,9,opt,name=disk_write_bps,json=diskWriteBps,proto3" json:"disk_write_bps,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HeartbeatRequest) Reset() {
@@ -600,6 +608,34 @@ func (x *HeartbeatRequest) GetSentAt() *timestamppb.Timestamp {
 		return x.SentAt
 	}
 	return nil
+}
+
+func (x *HeartbeatRequest) GetNetRxBps() float64 {
+	if x != nil {
+		return x.NetRxBps
+	}
+	return 0
+}
+
+func (x *HeartbeatRequest) GetNetTxBps() float64 {
+	if x != nil {
+		return x.NetTxBps
+	}
+	return 0
+}
+
+func (x *HeartbeatRequest) GetDiskReadBps() float64 {
+	if x != nil {
+		return x.DiskReadBps
+	}
+	return 0
+}
+
+func (x *HeartbeatRequest) GetDiskWriteBps() float64 {
+	if x != nil {
+		return x.DiskWriteBps
+	}
+	return 0
 }
 
 // HeartbeatResponse acknowledges the stream once it closes.
@@ -2539,14 +2575,20 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x10RegisterResponse\x12\x12\n" +
 	"\x04cert\x18\x01 \x01(\fR\x04cert\x12\x1d\n" +
 	"\n" +
-	"cp_version\x18\x02 \x01(\tR\tcpVersion\"\xc9\x01\n" +
+	"cp_version\x18\x02 \x01(\tR\tcpVersion\"\xcf\x02\n" +
 	"\x10HeartbeatRequest\x12\x1b\n" +
 	"\tcpu_usage\x18\x01 \x01(\x01R\bcpuUsage\x12\x1b\n" +
 	"\tmem_usage\x18\x02 \x01(\x01R\bmemUsage\x12\x1d\n" +
 	"\n" +
 	"disk_usage\x18\x03 \x01(\x01R\tdiskUsage\x12'\n" +
 	"\x0fcontainer_count\x18\x04 \x01(\x03R\x0econtainerCount\x123\n" +
-	"\asent_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x06sentAt\"P\n" +
+	"\asent_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x06sentAt\x12\x1c\n" +
+	"\n" +
+	"net_rx_bps\x18\x06 \x01(\x01R\bnetRxBps\x12\x1c\n" +
+	"\n" +
+	"net_tx_bps\x18\a \x01(\x01R\bnetTxBps\x12\"\n" +
+	"\rdisk_read_bps\x18\b \x01(\x01R\vdiskReadBps\x12$\n" +
+	"\x0edisk_write_bps\x18\t \x01(\x01R\fdiskWriteBps\"P\n" +
 	"\x11HeartbeatResponse\x12;\n" +
 	"\vreceived_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"receivedAt\"4\n" +

@@ -66,3 +66,16 @@ func osVersion() string {
 	}
 	return strings.Trim(strings.TrimSpace(release), "\x00")
 }
+
+// readNetwork is unsupported on Darwin: per-interface byte counters live in the
+// Mach interface statistics, which golang.org/x/sys/unix does not wrap. The
+// heartbeat reports zero, matching readCPUTimes. Linux is the production
+// target.
+func readNetwork() (rx, tx uint64, err error) {
+	return 0, 0, errUnsupported
+}
+
+// readDiskIO is unsupported on Darwin for the same reason as readNetwork.
+func readDiskIO() (read, write uint64, err error) {
+	return 0, 0, errUnsupported
+}

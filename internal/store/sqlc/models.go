@@ -288,6 +288,19 @@ type Server struct {
 	TeamID         pgtype.UUID        `json:"team_id"`
 }
 
+type ServerMetric struct {
+	ServerID       pgtype.UUID        `json:"server_id"`
+	RecordedAt     pgtype.Timestamptz `json:"recorded_at"`
+	CpuUsage       float64            `json:"cpu_usage"`
+	MemUsage       float64            `json:"mem_usage"`
+	DiskUsage      float64            `json:"disk_usage"`
+	NetRxBps       float64            `json:"net_rx_bps"`
+	NetTxBps       float64            `json:"net_tx_bps"`
+	DiskReadBps    float64            `json:"disk_read_bps"`
+	DiskWriteBps   float64            `json:"disk_write_bps"`
+	ContainerCount int64              `json:"container_count"`
+}
+
 type Service struct {
 	ID          pgtype.UUID        `json:"id"`
 	UserID      pgtype.UUID        `json:"user_id"`

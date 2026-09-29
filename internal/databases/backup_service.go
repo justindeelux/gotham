@@ -65,6 +65,11 @@ type BackupConfig struct {
 	// DisableScheduler keeps the cron loop from starting; the production
 	// constructor starts it.
 	DisableScheduler bool
+	// Notifier receives one terminal backup result (completed or failed).
+	// Best effort: delivery runs asynchronously and can never fail a backup.
+	// nil disables notifications, which is also the
+	// FEATURE_NOTIFICATIONS=false path.
+	Notifier BackupNotifier
 }
 
 // BackupService is the control-plane surface the HTTP layer depends on. It is
@@ -188,6 +193,7 @@ type BackupManager struct {
 	now          func() time.Time
 	logger       *slog.Logger
 	schedulerInt time.Duration
+	notifier     BackupNotifier
 
 	// inflight holds one job per database: a dump stops the container, so a
 	// second job must never race it. The scheduler reads it as well.
@@ -245,6 +251,7 @@ func NewBackupService(cfg BackupConfig) *BackupManager {
 		now:          func() time.Time { return time.Now().UTC() },
 		logger:       logger,
 		schedulerInt: interval,
+		notifier:     cfg.Notifier,
 		inflight:     make(map[uuid.UUID]bool),
 	}
 	manager.scheduler = newBackupScheduler(manager, interval)

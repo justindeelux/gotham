@@ -44,6 +44,10 @@ type Repository interface {
 	// false, like a missing one, so node IDs cannot be probed (F6); a legacy
 	// node without a team stays shared.
 	ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error)
+	// ServerTeam reports the team a registered node belongs to (uuid.Nil for a
+	// legacy shared node) and whether it exists. It backs the stored
+	// application→node invariant checked at the queue boundary.
+	ServerTeam(ctx context.Context, serverID uuid.UUID) (uuid.UUID, bool, error)
 	// CreateDeployment stores a new deployment row.
 	CreateDeployment(ctx context.Context, dep Deployment) (Deployment, error)
 	// GetDeployment returns one deployment of an application, or ErrNotFound.
@@ -224,6 +228,22 @@ func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID, 
 		return false, nil
 	}
 	return true, nil
+}
+
+// ServerTeam reports the team of a registered node (the zero UUID for a legacy
+// shared node) and whether it exists at all.
+func (r *storeRepository) ServerTeam(ctx context.Context, serverID uuid.UUID) (uuid.UUID, bool, error) {
+	if serverID == uuid.Nil {
+		return uuid.Nil, false, nil
+	}
+	row, err := r.store.GetServerByID(ctx, pgUUID(serverID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, nil
+		}
+		return uuid.Nil, false, fmt.Errorf("deploy: get server team: %w", err)
+	}
+	return uuidFromPG(row.TeamID), true, nil
 }
 
 // CreateDeployment stores a queued deployment. The partial unique index on

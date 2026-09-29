@@ -373,3 +373,36 @@ func TestRequireScopes(t *testing.T) {
 		})
 	}
 }
+
+// TestAdminScopeIssuanceIsPlatformGated is the fix-round-2 A regression: an
+// admin-scoped API token unlocks the platform-global surface, so minting one
+// must itself require platform-operator access. A plain session can still mint
+// read/deploy tokens.
+func TestAdminScopeIssuanceIsPlatformGated(t *testing.T) {
+	s, _ := newTestTokenServer(t)
+	const bearer = "Bearer valid-token"
+
+	// A plain session cannot mint the admin scope...
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens",
+		`{"name":"sneaky","scopes":["admin"]}`, bearer)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("plain session admin token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+	// ...but may still mint a read/deploy token, including a mixed request
+	// that asks for admin alongside them.
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens",
+		`{"name":"ci","scopes":["read","deploy"]}`, bearer); rec.Code != http.StatusCreated {
+		t.Fatalf("plain session read/deploy token = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens",
+		`{"name":"mixed","scopes":["read","admin"]}`, bearer); rec.Code != http.StatusForbidden {
+		t.Fatalf("plain session mixed token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// An operator-listed session may mint it.
+	t.Setenv(PlatformAdminsEnv, "user@example.com")
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens",
+		`{"name":"operator","scopes":["admin"]}`, bearer); rec.Code != http.StatusCreated {
+		t.Fatalf("operator session admin token = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+}

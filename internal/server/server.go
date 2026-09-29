@@ -241,7 +241,9 @@ func (s *Server) routes() (http.Handler, error) {
 			proxy.NewDefaultCertificateStatusService(statusConfig))
 
 		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
-		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger)
+		// Log subscriptions are authorized against the node's team before the
+		// client joins the room.
+		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger, s.authorizeLogSubscription)
 
 		// Source providers (GitHub/GitLab/Gitea): list connections and repos.
 		providerSvc := providers.NewDefaultService(s.persistence, s.cfg.Snapshot().SecretKey, s.logger)

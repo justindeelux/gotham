@@ -188,9 +188,45 @@ func (s *Store) UpdateTeam(ctx context.Context, params sqlc.UpdateTeamParams) (s
 	return s.queries.UpdateTeam(ctx, params)
 }
 
-// DeleteTeam removes a team; its memberships, invites and resources cascade.
+// DeleteTeam removes a team row; memberships and invites cascade. Resource
+// rows are protected by ON DELETE RESTRICT, so a team that still owns one
+// cannot be removed here — use DeleteTeamIfEmpty for the guarded path.
 func (s *Store) DeleteTeam(ctx context.Context, id pgtype.UUID) error {
 	return s.queries.DeleteTeam(ctx, id)
+}
+
+// DeleteTeamIfEmpty removes a team that owns no resources or nodes, atomically:
+// it locks the team row (SELECT ... FOR UPDATE), counts the owned rows and
+// deletes inside one transaction. A concurrent resource insert takes a foreign
+// key share lock on the same team row, so it either commits before the count
+// (the delete is refused) or blocks until the team is gone and then fails its
+// foreign key. It returns the owned row count when the delete was refused and 0
+// when the team was removed. A missing team answers pgx.ErrNoRows.
+func (s *Store) DeleteTeamIfEmpty(ctx context.Context, id pgtype.UUID) (int64, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if _, err := queries.GetTeamForUpdate(ctx, id); err != nil {
+		return 0, err
+	}
+	count, err := queries.CountTeamResources(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	if count > 0 {
+		return int64(count), nil
+	}
+	if err := queries.DeleteTeam(ctx, id); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return 0, nil
 }
 
 // CreateTeamMember adds one membership and returns it.

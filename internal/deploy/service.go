@@ -231,11 +231,7 @@ func (s *Service) DeploySystem(ctx context.Context, appID uuid.UUID) (Deployment
 }
 
 // deployApplication validates a loaded application and runs it on the worker
-// pool. It is the shared tail of Deploy and DeploySystem. The node assignment
-// is re-checked against the caller's active team before any agent is dialed, so
-// an application stored before the F6 check existed can never execute on
-// another team's node; a system-triggered deploy (a webhook, no scope) keeps
-// its stored authorization.
+// pool. It is the shared tail of Deploy and DeploySystem.
 func (s *Service) deployApplication(ctx context.Context, app Application) (Deployment, error) {
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
@@ -243,16 +239,33 @@ func (s *Service) deployApplication(ctx context.Context, app Application) (Deplo
 	if err := validateDeployTarget(app); err != nil {
 		return Deployment{}, err
 	}
-	if app.ServerID != uuid.Nil {
-		known, err := s.repo.ServerExists(ctx, app.ServerID, teams.ScopeFor(ctx, uuid.Nil))
-		if err != nil {
-			return Deployment{}, err
-		}
-		if !known {
-			return Deployment{}, ErrServerNotFound
-		}
-	}
 	return s.submit(ctx, app, Deployment{Kind: KindDeploy, State: StateQueued})
+}
+
+// checkStoredTarget enforces the stored application→node invariant at the queue
+// boundary: an application may only run on a node of its own team, or on a
+// legacy node without a team. It compares the application's STORED team with
+// the node's team — not the caller's active team — so every queue path is
+// covered, including rollback and signature-verified system deploys whose
+// worker context carries no team scope at all. Caller membership and role stay
+// enforced at the entry points (application()). The refusal is ErrNotFound, so
+// a foreign node cannot be probed through the deploy surface.
+func (s *Service) checkStoredTarget(ctx context.Context, app Application) error {
+	if app.ServerID == uuid.Nil {
+		// validateDeployTarget reports the missing node with its own message.
+		return nil
+	}
+	teamID, found, err := s.repo.ServerTeam(ctx, app.ServerID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrServerNotFound
+	}
+	if teamID != uuid.Nil && teamID != app.TeamID {
+		return ErrServerNotFound
+	}
+	return nil
 }
 
 // Rollback queues a deployment of a previous release's image. The stored
@@ -383,9 +396,15 @@ func (s *Service) previousContainer(ctx context.Context, appID uuid.UUID) string
 }
 
 // submit persists a queued deployment, enqueues its run and returns the row.
-// When the queue rejects the job the row is marked failed immediately, so it
-// never sits in a non-terminal state and blocks the active-deployment index.
+// It is the single queue boundary of deploy, rollback and system deploys, so
+// the stored application→node check runs here: no queue path can hand the
+// worker an application bound to another team's node. When the queue rejects
+// the job the row is marked failed immediately, so it never sits in a
+// non-terminal state and blocks the active-deployment index.
 func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (Deployment, error) {
+	if err := s.checkStoredTarget(ctx, app); err != nil {
+		return Deployment{}, err
+	}
 	dep.ApplicationID = app.ID
 	created, err := s.repo.CreateDeployment(ctx, dep)
 	if err != nil {

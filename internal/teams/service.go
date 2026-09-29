@@ -217,8 +217,9 @@ func (s *Service) Rename(ctx context.Context, userID, teamID uuid.UUID, name str
 // team can never be deleted (it is the account's default scope), and a team
 // that still owns resources or nodes is refused (409) — its workloads would
 // otherwise lose their control-plane records, and a node must never fall back
-// to the shared legacy state. The servers FK is ON DELETE RESTRICT as the
-// backstop for the same rule.
+// to the shared legacy state. Every resource team_id FK is ON DELETE RESTRICT
+// and the check runs under the team row lock, so a concurrent insert is never
+// cascaded away.
 func (s *Service) Delete(ctx context.Context, userID, teamID uuid.UUID) error {
 	team, err := s.member(ctx, userID, teamID)
 	if err != nil {
@@ -230,15 +231,10 @@ func (s *Service) Delete(ctx context.Context, userID, teamID uuid.UUID) error {
 	if team.IsPersonal {
 		return ErrPersonalTeam
 	}
-	owned, err := s.repo.CountTeamResources(ctx, teamID)
-	if err != nil {
-		return err
-	}
-	if owned > 0 {
-		return fmt.Errorf("%w: %d resource(s) still belong to this team; delete or move them first",
-			ErrTeamNotEmpty, owned)
-	}
-	if err := s.repo.DeleteTeam(ctx, teamID); err != nil {
+	// The emptiness check and the delete are one locked transaction
+	// (Repository.DeleteTeamIfEmpty): a resource inserted concurrently cannot
+	// slip between them and be cascaded away.
+	if err := s.repo.DeleteTeamIfEmpty(ctx, teamID); err != nil {
 		return err
 	}
 	s.logger.Info("teams: deleted; it owned no resources",

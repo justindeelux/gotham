@@ -30,12 +30,10 @@ type Repository interface {
 	ListTeamsByUser(ctx context.Context, userID uuid.UUID) ([]Team, error)
 	// RenameTeam updates a team's name and returns the row, or ErrNotFound.
 	RenameTeam(ctx context.Context, teamID uuid.UUID, name string) (Team, error)
-	// DeleteTeam removes a team; memberships, invites and team resources
-	// cascade.
-	DeleteTeam(ctx context.Context, teamID uuid.UUID) error
-	// CountTeamResources reports how many resources (applications, databases,
-	// compose services, nodes) still belong to the team.
-	CountTeamResources(ctx context.Context, teamID uuid.UUID) (int64, error)
+	// DeleteTeamIfEmpty removes a team that owns no resources or nodes,
+	// atomically (the team row is locked while the owned rows are counted and
+	// the delete runs), or answers ErrTeamNotEmpty.
+	DeleteTeamIfEmpty(ctx context.Context, teamID uuid.UUID) error
 	// MutateMembership runs fn inside one transaction that locks the team row,
 	// handing it the locked team and its current memberships. fn may mutate
 	// through the MembershipTx and returns any policy error, which rolls the
@@ -157,21 +155,26 @@ func (r *storeRepository) RenameTeam(ctx context.Context, teamID uuid.UUID, name
 	return teamFromRow(row), nil
 }
 
-// DeleteTeam implements Repository.
-func (r *storeRepository) DeleteTeam(ctx context.Context, teamID uuid.UUID) error {
-	if err := r.store.DeleteTeam(ctx, pgUUID(teamID)); err != nil {
+// DeleteTeamIfEmpty implements Repository. A refused delete (the team still
+// owns rows) and a foreign-key violation from a racing insert both map to
+// ErrTeamNotEmpty, so the HTTP layer always answers 409 and never silently
+// cascades a resource.
+func (r *storeRepository) DeleteTeamIfEmpty(ctx context.Context, teamID uuid.UUID) error {
+	owned, err := r.store.DeleteTeamIfEmpty(ctx, pgUUID(teamID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if isForeignKeyViolation(err) {
+			return ErrTeamNotEmpty
+		}
 		return fmt.Errorf("teams: delete team: %w", err)
 	}
-	return nil
-}
-
-// CountTeamResources implements Repository.
-func (r *storeRepository) CountTeamResources(ctx context.Context, teamID uuid.UUID) (int64, error) {
-	count, err := r.store.CountTeamResources(ctx, pgUUID(teamID))
-	if err != nil {
-		return 0, fmt.Errorf("teams: count team resources: %w", err)
+	if owned > 0 {
+		return fmt.Errorf("%w: %d resource(s) still belong to this team; delete or move them first",
+			ErrTeamNotEmpty, owned)
 	}
-	return count, nil
+	return nil
 }
 
 // MutateMembership implements Repository over the store's locking transaction.
@@ -382,6 +385,14 @@ func inviteFromRow(row sqlc.Invite) Invite {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// isForeignKeyViolation reports whether err is a PostgreSQL foreign-key
+// violation (SQLSTATE 23503), raised by the resource team_id RESTRICT
+// constraints when a team is deleted while a racing insert committed.
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
 // pgUUID converts a uuid.UUID for sqlc. The zero UUID becomes an invalid

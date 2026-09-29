@@ -316,6 +316,17 @@ func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, sco
 	return true, nil
 }
 
+// ServerTeam implements Repository: the registered node's team (zero for a
+// legacy shared node).
+func (r *fakeRepository) ServerTeam(_ context.Context, serverID uuid.UUID) (uuid.UUID, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if serverID == uuid.Nil || r.unknownServers[serverID] {
+		return uuid.Nil, false, nil
+	}
+	return r.serverTeams[serverID], true, nil
+}
+
 // seedServerForTeam registers a node owned by teamID (the zero UUID seeds a
 // legacy shared node).
 func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {

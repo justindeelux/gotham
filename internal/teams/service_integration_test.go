@@ -136,3 +136,78 @@ func TestSetMemberRoleSerializesConcurrentDemotions(t *testing.T) {
 		t.Fatalf("owners after concurrent demotions = %d, want at least 1", owners)
 	}
 }
+
+// TestDeleteTeamSerializesWithConcurrentInsert is the R2 regression: a resource
+// committed by a concurrent transaction must never be cascaded away by a team
+// delete. The insert transaction holds the team row's foreign-key share lock,
+// so the delete waits for it and then counts the committed row; with
+// ON DELETE RESTRICT no resource can be lost even if the delete wins the race.
+func TestDeleteTeamSerializesWithConcurrentInsert(t *testing.T) {
+	st := newTestStore(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	suffix := time.Now().UnixNano()
+	user, err := st.CreateUser(ctx, fmt.Sprintf("be-8.2-r2-%d@example.com", suffix), nil)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	team, err := st.CreateTeamWithOwner(ctx, sqlc.CreateTeamParams{
+		ID:   pgUUID(uuid.New()),
+		Name: fmt.Sprintf("r2-%d", suffix),
+	}, user.ID)
+	if err != nil {
+		t.Fatalf("create team: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM applications WHERE team_id = $1", team.ID); err != nil {
+			t.Logf("cleanup applications: %v", err)
+		}
+		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID); err != nil {
+			t.Logf("cleanup team: %v", err)
+		}
+		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup user: %v", err)
+		}
+	})
+
+	svc := NewService(Config{Store: st, Logger: discardLogger()})
+
+	// The racing insert is uncommitted when the delete starts; its foreign-key
+	// share lock makes the delete's SELECT ... FOR UPDATE wait.
+	tx, err := st.DB.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin insert tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO applications (user_id, team_id, name, clone_url, branch, build_pack, port, host_port)
+		 VALUES ($1, $2, $3, '', 'main', 'dockerfile', 0, 0)`,
+		user.ID, team.ID, "race-app"); err != nil {
+		t.Fatalf("insert racing application: %v", err)
+	}
+
+	deleted := make(chan error, 1)
+	go func() { deleted <- svc.Delete(ctx, uuid.UUID(user.ID.Bytes), uuid.UUID(team.ID.Bytes)) }()
+
+	// Let the delete reach the locked team row, then commit the insert.
+	time.Sleep(200 * time.Millisecond)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit racing insert: %v", err)
+	}
+
+	if err := <-deleted; !errors.Is(err, ErrTeamNotEmpty) {
+		t.Fatalf("delete during a concurrent insert = %v, want ErrTeamNotEmpty", err)
+	}
+
+	var rows int
+	if err := st.DB.QueryRow(ctx, `SELECT count(*) FROM applications WHERE team_id = $1`, team.ID).Scan(&rows); err != nil {
+		t.Fatalf("count applications: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("application rows after the refused delete = %d, want 1 (never cascaded)", rows)
+	}
+}

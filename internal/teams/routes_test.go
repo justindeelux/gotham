@@ -220,6 +220,25 @@ func TestRoutesInviteAndAccept(t *testing.T) {
 	}
 }
 
+// TestRoutesNonEmptyTeamDeleteIsRefused is the R2 HTTP contract: a team that
+// still owns resources answers 409, never a silent cascade.
+func TestRoutesNonEmptyTeamDeleteIsRefused(t *testing.T) {
+	repo := newFakeRepository()
+	owner := uuid.New()
+	teamID := seedTeam(t, repo, owner, nil)
+	repo.seedResourceCount(teamID, 2)
+	svc := newTestService(repo)
+	h := testRouter(svc, owner)
+
+	rec := request(t, h, http.MethodDelete, "/v1/teams/"+teamID.String(), nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("delete a nonempty team = %d, want 409, body %s", rec.Code, rec.Body)
+	}
+	if _, err := repo.GetTeam(context.Background(), teamID); err != nil {
+		t.Fatalf("the team must survive the refused delete: %v", err)
+	}
+}
+
 func TestRoutesPersonalTeamDeleteIsRefused(t *testing.T) {
 	repo := newFakeRepository()
 	userID := uuid.New()

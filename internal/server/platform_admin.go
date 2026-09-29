@@ -30,30 +30,40 @@ const PlatformAdminsEnv = "PLATFORM_ADMINS"
 // re-synchronize every node or read DNS credentials.
 func (s *Server) RequirePlatformAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if scopes, isAPIToken := ScopesFromContext(r.Context()); isAPIToken {
-			if auth.ScopesContain(scopes, auth.ScopeAdmin) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			writeJSON(w, http.StatusForbidden, apiError{Message: "insufficient scope"})
+		if !s.isPlatformOperator(r) {
+			writeJSON(w, http.StatusForbidden, apiError{Message: "platform operator access is required"})
 			return
 		}
-
-		if role, ok := RoleFromContext(r.Context()); ok && strings.EqualFold(role, "admin") {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		if userID, ok := UserIDFromContext(r.Context()); ok && s.auth != nil {
-			if user, err := s.auth.Me(r.Context(), userID); err == nil && s.isPlatformAdminEmail(user.Email) {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
-
-		writeJSON(w, http.StatusForbidden, apiError{Message: "platform operator access is required"})
+		next.ServeHTTP(w, r)
 	})
 }
+
+// isPlatformOperator reports whether the request's caller is a platform
+// operator: an API token holding the admin scope, a session whose role claim is
+// "admin", or a session whose account email is listed in PLATFORM_ADMINS.
+// RequirePlatformAdmin and the admin-scope issuance gate in handleCreateToken
+// share it, so the operator boundary can never be widened by one path and
+// narrowed by the other.
+func (s *Server) isPlatformOperator(r *http.Request) bool {
+	if scopes, isAPIToken := ScopesFromContext(r.Context()); isAPIToken {
+		return auth.ScopesContain(scopes, auth.ScopeAdmin)
+	}
+
+	if role, ok := RoleFromContext(r.Context()); ok && strings.EqualFold(role, "admin") {
+		return true
+	}
+
+	if userID, ok := UserIDFromContext(r.Context()); ok && s.auth != nil {
+		if user, err := s.auth.Me(r.Context(), userID); err == nil && s.isPlatformAdminEmail(user.Email) {
+			return true
+		}
+	}
+	return false
+}
+
+// platformAdminScopeDenied is the 403 body returned when a caller tries to
+// mint the platform admin scope without being a platform operator.
+const platformAdminScopeDenied = "requesting the admin scope requires platform operator access"
 
 // isPlatformAdminEmail reports whether email is listed in PLATFORM_ADMINS.
 func (s *Server) isPlatformAdminEmail(email string) bool {

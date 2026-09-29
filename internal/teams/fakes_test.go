@@ -91,7 +91,22 @@ func (f *fakeRepository) member(teamID, userID uuid.UUID) (Member, bool) {
 	return member, ok
 }
 
-// CountTeamResources implements Repository.
+// DeleteTeamIfEmpty implements Repository: the mutex makes the count and the
+// delete one critical section, exactly like the SQL transaction's team-row
+// lock.
+func (f *fakeRepository) DeleteTeamIfEmpty(_ context.Context, teamID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.teams[teamID]; !ok {
+		return ErrNotFound
+	}
+	if f.resourceCounts[teamID] > 0 {
+		return ErrTeamNotEmpty
+	}
+	return f.deleteTeam(teamID)
+}
+
+// CountTeamResources reports how many resources a team owns (test helper).
 func (f *fakeRepository) CountTeamResources(_ context.Context, teamID uuid.UUID) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -216,14 +231,21 @@ func (f *fakeRepository) RenameTeam(_ context.Context, teamID uuid.UUID, name st
 	return team, nil
 }
 
-// DeleteTeam implements Repository.
+// DeleteTeam removes a team and its memberships/invites (test helper: the
+// service always goes through DeleteTeamIfEmpty).
 func (f *fakeRepository) DeleteTeam(_ context.Context, teamID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.teams[teamID]; !ok {
 		return ErrNotFound
 	}
+	return f.deleteTeam(teamID)
+}
+
+// deleteTeam removes the team rows (caller must hold the lock).
+func (f *fakeRepository) deleteTeam(teamID uuid.UUID) error {
 	delete(f.teams, teamID)
+	delete(f.resourceCounts, teamID)
 	delete(f.members, teamID)
 	for id, invite := range f.invites {
 		if invite.invite.TeamID == teamID {

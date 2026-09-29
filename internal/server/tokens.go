@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -100,6 +101,16 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 
 	var req createTokenRequest
 	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+
+	// Minting the admin scope is the platform-operator boundary: an
+	// admin-scoped token unlocks the platform-global proxy surface
+	// (RequirePlatformAdmin), so any authenticated user could otherwise
+	// self-service that boundary. Plain read/deploy tokens stay available to
+	// every account.
+	if slices.Contains(req.Scopes, auth.ScopeAdmin) && !s.isPlatformOperator(r) {
+		writeJSON(w, http.StatusForbidden, apiError{Message: platformAdminScopeDenied})
 		return
 	}
 

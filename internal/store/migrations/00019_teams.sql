@@ -62,9 +62,13 @@ SELECT u.id, u.id, 'owner' FROM users u;
 -- and only then made NOT NULL, so the migration is safe on a populated
 -- database. user_id stays: it records the creator, which is also what the
 -- per-creator name indexes still key on.
-ALTER TABLE applications ADD COLUMN team_id uuid REFERENCES teams(id) ON DELETE CASCADE;
-ALTER TABLE databases ADD COLUMN team_id uuid REFERENCES teams(id) ON DELETE CASCADE;
-ALTER TABLE services ADD COLUMN team_id uuid REFERENCES teams(id) ON DELETE CASCADE;
+-- ON DELETE RESTRICT on all four resource tables: deleting a team can never
+-- silently cascade a resource away (a concurrent insert could otherwise slip
+-- between the service's emptiness check and the delete). The service refuses a
+-- nonempty delete with 409; the constraint is the backstop.
+ALTER TABLE applications ADD COLUMN team_id uuid REFERENCES teams(id) ON DELETE RESTRICT;
+ALTER TABLE databases ADD COLUMN team_id uuid REFERENCES teams(id) ON DELETE RESTRICT;
+ALTER TABLE services ADD COLUMN team_id uuid REFERENCES teams(id) ON DELETE RESTRICT;
 
 UPDATE applications SET team_id = user_id;
 UPDATE databases SET team_id = user_id;

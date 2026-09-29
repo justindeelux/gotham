@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"slices"
@@ -99,6 +100,29 @@ func (s *Server) teamWriteGate(next http.Handler) http.Handler {
 		}
 		write.ServeHTTP(w, r)
 	})
+}
+
+// authorizeLogSubscription authorizes one WebSocket container-log subscription:
+// the node must exist and, when it belongs to a team, the caller must be a
+// member of that team (every role may read logs). A legacy node without a team
+// stays shared, matching the rest of the node surface. A nil team service (no
+// database) leaves the subscription open, like the other pre-teams
+// compatibility paths.
+func (s *Server) authorizeLogSubscription(ctx context.Context, serverID, userID uuid.UUID) error {
+	if s.servers == nil {
+		return errors.New("ws: server registry is not configured")
+	}
+	server, err := s.servers.Get(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	if server.TeamID == uuid.Nil || s.teamService == nil {
+		return nil
+	}
+	if _, err := s.teamService.Membership(ctx, server.TeamID, userID); err != nil {
+		return err
+	}
+	return nil
 }
 
 // withTeam builds the middleware chain of a team-scoped resource group:

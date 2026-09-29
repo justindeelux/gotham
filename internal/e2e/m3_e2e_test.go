@@ -199,7 +199,7 @@ func TestM3EndToEnd(t *testing.T) {
 
 	// Mount the production WS endpoint, hub and Redis bridge.
 	api := chi.NewRouter()
-	hub := ws.Mount(api, acceptAnyToken{}, redisAddr, logger)
+	hub := ws.Mount(api, acceptAnyToken{}, redisAddr, logger, nil)
 	t.Cleanup(hub.Close)
 	httpServer := httptest.NewServer(api)
 	t.Cleanup(httpServer.Close)

@@ -239,6 +239,14 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 	if err != nil {
 		return err
 	}
+	// Preview siblings hang off this application outside the deploy schema
+	// (preview_deploys is keyed by the base application and cascades); they
+	// must be torn down before the base row disappears. Best effort: their
+	// controller is a different package and a failure there must not block
+	// the delete.
+	if s.previewCleanup != nil {
+		s.previewCleanup(ctx, app.ID)
+	}
 	if err := s.detachDeployKey(ctx, app); err != nil {
 		return err
 	}

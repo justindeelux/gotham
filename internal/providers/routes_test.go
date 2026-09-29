@@ -25,6 +25,8 @@ type fakeService struct {
 	webhook       Webhook
 	webhookTarget HookTarget
 	deletedHookID string
+	commentNumber int
+	commentBody   string
 }
 
 func (f *fakeService) List(context.Context, uuid.UUID) ([]Provider, error) {
@@ -48,6 +50,12 @@ func (f *fakeService) CreateWebhook(_ context.Context, target HookTarget, hook W
 // DeleteWebhook implements ProviderService.
 func (f *fakeService) DeleteWebhook(_ context.Context, target HookTarget, hookID string) error {
 	f.webhookTarget, f.deletedHookID = target, hookID
+	return f.webhookErr
+}
+
+// CreatePullRequestComment implements ProviderService.
+func (f *fakeService) CreatePullRequestComment(_ context.Context, target HookTarget, number int, body string) error {
+	f.webhookTarget, f.commentNumber, f.commentBody = target, number, body
 	return f.webhookErr
 }
 

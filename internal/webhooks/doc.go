@@ -15,8 +15,15 @@
 //   - The hook lifecycle: installing the hook when an application is created
 //     and removing it when the application is deleted, exposed to the HTTP
 //     layer as authenticated management routes.
+//   - Preview deployments (BE-8.1, FEATURE_PREVIEWS): a verified
+//     pull_request delivery creates (or refreshes) a sibling application
+//     cloned from the base application, deploys the PR head branch through
+//     the same deploy service, records the binding in preview_deploys, and
+//     tears the sibling down when the PR closes. An hourly sweep removes
+//     previews left behind by a lost close delivery. The surface is disabled
+//     by FEATURE_PREVIEWS=false without touching push handling.
 //
-// The package depends on narrow seams (Repository, Installer, Deployer) rather
-// than on the HTTP server, so the route tests drive a real Service with fakes
-// behind it.
+// The package depends on narrow seams (Repository, Installer, Deployer,
+// PreviewProvisioner, Commenter) rather than on the HTTP server, so the route
+// tests drive a real Service with fakes behind it.
 package webhooks

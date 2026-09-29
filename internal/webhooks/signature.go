@@ -48,6 +48,21 @@ type signedDelivery struct {
 	// Deleted marks the zero commit Git hosts send when the ref was removed:
 	// there is nothing left to build.
 	Deleted bool
+	// PullRequest is set when the delivery is a pull_request (GitLab: merge
+	// request) notification. It is routing data read before the signature is
+	// checked, so it must not be acted on until verifySignature accepts the
+	// body. nil for every other event.
+	PullRequest *pullRequest
+}
+
+// pullRequest is the routing information of one pull request delivery: which
+// PR, what happened, and the head/base branches the preview decision needs.
+type pullRequest struct {
+	Number     int
+	Action     string
+	HeadBranch string
+	BaseBranch string
+	HeadSHA    string
 }
 
 // pushPayload is the subset of a push body shared by GitHub, GitLab and Gitea.
@@ -70,11 +85,76 @@ type pushPayload struct {
 	} `json:"head_commit"`
 }
 
+// pullRequestPayload is the subset of a pull_request (GitLab: merge request)
+// body shared by GitHub, GitLab and Gitea. Missing fields stay empty, so one
+// tolerant struct reads all three; pullRequestPayload.info decides whether the
+// body actually is a pull request delivery.
+type pullRequestPayload struct {
+	Action string `json:"action"`
+	Number int    `json:"number"`
+	// GitHub and Gitea nest the pull request under pull_request; GitLab names
+	// the merge request's fields directly under object_attributes.
+	PullRequest *struct {
+		Number int `json:"number"`
+		Head   struct {
+			Ref string `json:"ref"`
+			SHA string `json:"sha"`
+		} `json:"head"`
+		Base struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+	} `json:"pull_request"`
+	ObjectAttributes *struct {
+		IID          int    `json:"iid"`
+		Action       string `json:"action"`
+		SourceBranch string `json:"source_branch"`
+		TargetBranch string `json:"target_branch"`
+		LastCommit   *struct {
+			ID string `json:"id"`
+		} `json:"last_commit"`
+	} `json:"object_attributes"`
+}
+
+// info turns a parsed body into the pull request routing facts, or nil when
+// the body carries no pull request. A missing or non-positive number means the
+// delivery cannot address a preview and is reported as "not a pull request".
+func (p pullRequestPayload) info() *pullRequest {
+	if attrs := p.ObjectAttributes; attrs != nil && attrs.IID > 0 {
+		pr := &pullRequest{
+			Number:     attrs.IID,
+			Action:     strings.ToLower(strings.TrimSpace(attrs.Action)),
+			HeadBranch: strings.TrimSpace(attrs.SourceBranch),
+			BaseBranch: strings.TrimSpace(attrs.TargetBranch),
+		}
+		if attrs.LastCommit != nil {
+			pr.HeadSHA = strings.TrimSpace(attrs.LastCommit.ID)
+		}
+		return pr
+	}
+	if p.PullRequest == nil {
+		return nil
+	}
+	number := p.PullRequest.Number
+	if number == 0 {
+		number = p.Number
+	}
+	if number <= 0 {
+		return nil
+	}
+	return &pullRequest{
+		Number:     number,
+		Action:     strings.ToLower(strings.TrimSpace(p.Action)),
+		HeadBranch: strings.TrimSpace(p.PullRequest.Head.Ref),
+		BaseBranch: strings.TrimSpace(p.PullRequest.Base.Ref),
+		HeadSHA:    strings.TrimSpace(p.PullRequest.Head.SHA),
+	}
+}
+
 // parseDelivery reads the routing facts of a delivery from its headers and
 // body. It never validates the signature — that is verifySignature's job — and
 // fails only when the body is not JSON at all or names no repository.
 func parseDelivery(provider string, header http.Header, body []byte) (signedDelivery, error) {
-	event, _, deliveryHeader := deliveryHeaders(provider)
+	event, deliveryHeader := deliveryHeaders(provider)
 	delivery := signedDelivery{
 		Event:      strings.ToLower(strings.TrimSpace(header.Get(event))),
 		DeliveryID: strings.TrimSpace(header.Get(deliveryHeader)),
@@ -83,6 +163,13 @@ func parseDelivery(provider string, header http.Header, body []byte) (signedDeli
 	var payload pushPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return signedDelivery{}, fmt.Errorf("%w: body is not a JSON object", ErrBadRequest)
+	}
+	// The push and pull_request shapes overlap only in repository/project, so
+	// the pull request facts are decoded from the same bounded body. A push
+	// body leaves PullRequest nil.
+	var prPayload pullRequestPayload
+	if err := json.Unmarshal(body, &prPayload); err == nil {
+		delivery.PullRequest = prPayload.info()
 	}
 
 	delivery.Ref = strings.TrimSpace(payload.Ref)
@@ -118,18 +205,19 @@ func parseDelivery(provider string, header http.Header, body []byte) (signedDeli
 	return delivery, nil
 }
 
-// deliveryHeaders returns the event, signature and delivery-ID header names a
-// provider uses, in that order.
-func deliveryHeaders(provider string) (event, signature, delivery string) {
+// deliveryHeaders returns the event and delivery-ID header names a provider
+// uses. The signature header is deliberately not returned: verification reads
+// it directly so the mapping lives next to the digest rules.
+func deliveryHeaders(provider string) (event, delivery string) {
 	switch provider {
 	case providers.NameGitHub:
-		return headerGitHubEvent, headerGitHubSignature, headerGitHubDelivery
+		return headerGitHubEvent, headerGitHubDelivery
 	case providers.NameGitLab:
-		return headerGitLabEvent, headerGitLabToken, headerGitLabDelivery
+		return headerGitLabEvent, headerGitLabDelivery
 	case providers.NameGitea:
-		return headerGiteaEvent, headerGiteaSignature, headerGiteaDelivery
+		return headerGiteaEvent, headerGiteaDelivery
 	default:
-		return "", "", ""
+		return "", ""
 	}
 }
 
@@ -168,6 +256,20 @@ func isPushEvent(provider, event string) bool {
 		return event == "push"
 	case providers.NameGitLab:
 		return event == "push hook"
+	default:
+		return false
+	}
+}
+
+// isPullRequestEvent reports whether a verified delivery asks for preview
+// handling. GitLab calls the event "Merge Request Hook"; GitHub and Gitea use
+// "pull_request".
+func isPullRequestEvent(provider, event string) bool {
+	switch provider {
+	case providers.NameGitHub, providers.NameGitea:
+		return event == "pull_request"
+	case providers.NameGitLab:
+		return event == "merge request hook"
 	default:
 		return false
 	}

@@ -161,6 +161,19 @@ func validateProviderID(id, what string) error {
 	return nil
 }
 
+// validateComment rejects a comment the Git host would refuse anyway: a pull
+// request number must be positive and the body must not be blank. The number
+// is rendered with strconv.Itoa, so it can never escape the intended path.
+func validateComment(number int, body string) error {
+	if number <= 0 {
+		return fmt.Errorf("%w: invalid pull request number", ErrValidation)
+	}
+	if strings.TrimSpace(body) == "" {
+		return fmt.Errorf("%w: comment body is empty", ErrValidation)
+	}
+	return nil
+}
+
 // validateDeployKey rejects a public key the Git host would refuse anyway, so
 // the API answers with a clear validation error instead of a provider body.
 func validateDeployKey(key DeployKey) error {

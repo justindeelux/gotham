@@ -63,28 +63,30 @@ type p4Harness struct {
 
 // p4CreateApplication is the POST /v1/applications payload.
 type p4CreateApplication struct {
-	Name      string `json:"name"`
-	Provider  string `json:"provider"`
-	Repo      string `json:"repo"`
-	CloneURL  string `json:"clone_url"`
-	Branch    string `json:"branch"`
-	BuildPack string `json:"build_pack"`
-	Port      int32  `json:"port"`
-	HostPort  int32  `json:"host_port"`
-	ServerID  string `json:"server_id"`
+	Name       string `json:"name"`
+	Provider   string `json:"provider"`
+	Repo       string `json:"repo"`
+	CloneURL   string `json:"clone_url"`
+	Branch     string `json:"branch"`
+	BuildPack  string `json:"build_pack"`
+	BaseDomain string `json:"base_domain"`
+	Port       int32  `json:"port"`
+	HostPort   int32  `json:"host_port"`
+	ServerID   string `json:"server_id"`
 }
 
 // p4Application is the application half of the API wire format.
 type p4Application struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Repo      string `json:"repo"`
-	CloneURL  string `json:"clone_url"`
-	Branch    string `json:"branch"`
-	BuildPack string `json:"build_pack"`
-	Port      int32  `json:"port"`
-	HostPort  int32  `json:"host_port"`
-	ServerID  string `json:"server_id"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Repo       string `json:"repo"`
+	CloneURL   string `json:"clone_url"`
+	Branch     string `json:"branch"`
+	BuildPack  string `json:"build_pack"`
+	BaseDomain string `json:"base_domain"`
+	Port       int32  `json:"port"`
+	HostPort   int32  `json:"host_port"`
+	ServerID   string `json:"server_id"`
 }
 
 // p4ApplicationEnvelope wraps a single application.
@@ -292,12 +294,19 @@ func newP4Harness(t *testing.T) *p4Harness {
 	})
 	t.Cleanup(func() { _ = deploySvc.Close() })
 
+	// The preview surface (BE-8.1) is wired exactly like production: the
+	// deploy service provisions and tears down the sibling applications, and
+	// the provider service would post the badge comment (absent here: the
+	// suite never talks to a Git host). The flag is forced on so an ambient
+	// FEATURE_PREVIEWS=false cannot disable the surface under test.
+	t.Setenv(webhooks.FeatureEnv, "true")
 	hookSvc := webhooks.NewService(webhooks.Config{
-		Store:     st,
-		Installer: stubInstaller{},
-		Deployer:  deploySvc,
-		Secret:    p4Secret,
-		Logger:    testLogger(t),
+		Store:       st,
+		Installer:   stubInstaller{},
+		Deployer:    deploySvc,
+		Provisioner: deploySvc,
+		Secret:      p4Secret,
+		Logger:      testLogger(t),
 	})
 
 	// 7. The HTTP surface: authenticated application routes and the public,

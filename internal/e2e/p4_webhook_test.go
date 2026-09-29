@@ -16,11 +16,12 @@ import (
 )
 
 // p4Delivery is the webhook route's response body: why a delivery did or did
-// not start a build.
+// not start a build, plus the preview host a pull request delivery acted on.
 type p4Delivery struct {
 	Status       string `json:"status"`
 	Reason       string `json:"reason"`
 	DeploymentID string `json:"deployment_id"`
+	Host         string `json:"host"`
 }
 
 // TestP4WebhookAutoDeploy proves the push → deploy path without touching a

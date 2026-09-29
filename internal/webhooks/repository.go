@@ -28,16 +28,43 @@ type Hook struct {
 }
 
 // Target is an installed hook joined with the application watching it — the
-// record an incoming delivery is matched against.
+// record an incoming delivery is matched against. UserID is the application's
+// creator, whose stored provider connection authenticates the API calls a
+// delivery triggers (the preview comment); TeamID and the name/domain are what
+// the preview decision and the sibling clone are derived from.
 type Target struct {
 	ApplicationID uuid.UUID
+	UserID        uuid.UUID
+	TeamID        uuid.UUID
 	Provider      string
 	Repo          string
 	Branch        string
 	CloneURL      string
+	Name          string
+	BaseDomain    string
 	HookID        string
 	Secret        string
 	URL           string
+}
+
+// Preview is the binding between a pull request and the sibling application
+// that serves its preview (preview_deploys). The base application is the row
+// whose webhook watched the PR; PreviewApplicationID is the clone.
+type Preview struct {
+	ID                   uuid.UUID
+	ApplicationID        uuid.UUID
+	TeamID               uuid.UUID
+	Provider             string
+	Repo                 string
+	PRNumber             int
+	Branch               string
+	HeadSHA              string
+	PreviewApplicationID uuid.UUID
+	Host                 string
+	State                string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	DeletedAt            time.Time
 }
 
 // Event is one claimed delivery: the anti-spam ledger row that makes a
@@ -80,17 +107,33 @@ type Repository interface {
 	ReleaseEvent(ctx context.Context, eventID uuid.UUID) error
 	// LinkEventDeployment attaches the queued deployment to a claimed event.
 	LinkEventDeployment(ctx context.Context, eventID, deploymentID uuid.UUID) error
+	// GetPreview returns the preview binding of one pull request, or
+	// ErrNotFound when the PR has no preview yet.
+	GetPreview(ctx context.Context, appID uuid.UUID, prNumber int) (Preview, error)
+	// UpsertPreview stores or refreshes the binding of one pull request. The
+	// unique (application_id, pr_number) pair keeps a redelivered event
+	// idempotent.
+	UpsertPreview(ctx context.Context, preview Preview) (Preview, error)
+	// ListPreviews returns an application's preview bindings, newest first.
+	ListPreviews(ctx context.Context, appID uuid.UUID) ([]Preview, error)
+	// MarkPreviewDeleted marks a preview torn down and returns the row.
+	MarkPreviewDeleted(ctx context.Context, previewID uuid.UUID) (Preview, error)
+	// ListStalePreviews returns live previews whose last activity is older
+	// than before — the orphan sweep's work list.
+	ListStalePreviews(ctx context.Context, before time.Time) ([]Preview, error)
 }
 
 // Application is the slice of an application the hook lifecycle needs.
 type Application struct {
-	ID       uuid.UUID
-	UserID   uuid.UUID
-	TeamID   uuid.UUID
-	Provider string
-	Repo     string
-	Branch   string
-	CloneURL string
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	TeamID     uuid.UUID
+	Provider   string
+	Repo       string
+	Branch     string
+	CloneURL   string
+	Name       string
+	BaseDomain string
 }
 
 // storeRepository adapts *store.Store to Repository, sealing hook secrets at
@@ -118,13 +161,15 @@ func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (
 		return Application{}, err
 	}
 	return Application{
-		ID:       uuidFromPG(row.ID),
-		UserID:   uuidFromPG(row.UserID),
-		TeamID:   uuidFromPG(row.TeamID),
-		Provider: row.Provider,
-		Repo:     row.Repo,
-		Branch:   row.Branch,
-		CloneURL: row.CloneUrl,
+		ID:         uuidFromPG(row.ID),
+		UserID:     uuidFromPG(row.UserID),
+		TeamID:     uuidFromPG(row.TeamID),
+		Provider:   row.Provider,
+		Repo:       row.Repo,
+		Branch:     row.Branch,
+		CloneURL:   row.CloneUrl,
+		Name:       row.Name,
+		BaseDomain: row.BaseDomain,
 	}, nil
 }
 
@@ -192,10 +237,14 @@ func (r *storeRepository) Targets(ctx context.Context, provider, repo string) ([
 		}
 		targets = append(targets, Target{
 			ApplicationID: uuidFromPG(row.ApplicationID),
+			UserID:        uuidFromPG(row.UserID),
+			TeamID:        uuidFromPG(row.TeamID),
 			Provider:      row.Provider,
 			Repo:          row.Repo,
 			Branch:        row.Branch,
 			CloneURL:      row.CloneUrl,
+			Name:          row.Name,
+			BaseDomain:    row.BaseDomain,
 			HookID:        row.HookID,
 			Secret:        secret,
 			URL:           row.Url,
@@ -242,6 +291,96 @@ func (r *storeRepository) LinkEventDeployment(ctx context.Context, eventID, depl
 // success: releasing twice must not fail.
 func (r *storeRepository) ReleaseEvent(ctx context.Context, eventID uuid.UUID) error {
 	return r.store.DeleteWebhookEvent(ctx, pgUUID(eventID))
+}
+
+// GetPreview loads the preview binding of one (application, pull request).
+func (r *storeRepository) GetPreview(ctx context.Context, appID uuid.UUID, prNumber int) (Preview, error) {
+	row, err := r.store.GetPreviewDeploy(ctx, pgUUID(appID), int32(prNumber))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Preview{}, ErrNotFound
+		}
+		return Preview{}, err
+	}
+	return previewFromRow(row), nil
+}
+
+// UpsertPreview stores or refreshes the binding of one pull request.
+func (r *storeRepository) UpsertPreview(ctx context.Context, preview Preview) (Preview, error) {
+	row, err := r.store.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
+		ApplicationID:        pgUUID(preview.ApplicationID),
+		TeamID:               pgUUID(preview.TeamID),
+		Provider:             preview.Provider,
+		Repo:                 preview.Repo,
+		PrNumber:             int32(preview.PRNumber),
+		Branch:               preview.Branch,
+		HeadSha:              preview.HeadSHA,
+		PreviewApplicationID: pgUUID(preview.PreviewApplicationID),
+		Host:                 preview.Host,
+		State:                preview.State,
+	})
+	if err != nil {
+		return Preview{}, err
+	}
+	return previewFromRow(row), nil
+}
+
+// ListPreviews returns an application's preview bindings, newest first.
+func (r *storeRepository) ListPreviews(ctx context.Context, appID uuid.UUID) ([]Preview, error) {
+	rows, err := r.store.ListPreviewDeploysByApplication(ctx, pgUUID(appID))
+	if err != nil {
+		return nil, err
+	}
+	previews := make([]Preview, 0, len(rows))
+	for _, row := range rows {
+		previews = append(previews, previewFromRow(row))
+	}
+	return previews, nil
+}
+
+// MarkPreviewDeleted marks a preview torn down and returns the row.
+func (r *storeRepository) MarkPreviewDeleted(ctx context.Context, previewID uuid.UUID) (Preview, error) {
+	row, err := r.store.MarkPreviewDeployDeleted(ctx, pgUUID(previewID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Preview{}, ErrNotFound
+		}
+		return Preview{}, err
+	}
+	return previewFromRow(row), nil
+}
+
+// ListStalePreviews returns live previews idle since before.
+func (r *storeRepository) ListStalePreviews(ctx context.Context, before time.Time) ([]Preview, error) {
+	rows, err := r.store.ListStalePreviewDeploys(ctx, pgtype.Timestamptz{Time: before, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	previews := make([]Preview, 0, len(rows))
+	for _, row := range rows {
+		previews = append(previews, previewFromRow(row))
+	}
+	return previews, nil
+}
+
+// previewFromRow maps a stored preview row to the domain type.
+func previewFromRow(row sqlc.PreviewDeploy) Preview {
+	return Preview{
+		ID:                   uuidFromPG(row.ID),
+		ApplicationID:        uuidFromPG(row.ApplicationID),
+		TeamID:               uuidFromPG(row.TeamID),
+		Provider:             row.Provider,
+		Repo:                 row.Repo,
+		PRNumber:             int(row.PrNumber),
+		Branch:               row.Branch,
+		HeadSHA:              row.HeadSha,
+		PreviewApplicationID: uuidFromPG(row.PreviewApplicationID),
+		Host:                 row.Host,
+		State:                row.State,
+		CreatedAt:            timeFromPG(row.CreatedAt),
+		UpdatedAt:            timeFromPG(row.UpdatedAt),
+		DeletedAt:            timeFromPG(row.DeletedAt),
+	}
 }
 
 // hookFromRow maps a stored hook row to the domain type, opening the secret.

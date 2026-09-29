@@ -68,6 +68,7 @@ type Server struct {
 	proxy       proxy.ProxyService
 	backups     databases.BackupService
 	notify      notifications.NotificationService
+	webhooks    *webhooks.Service
 	metrics     *servers.MetricsSweeper
 	authLimiter *ipRateLimiter
 	router      http.Handler
@@ -127,6 +128,9 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		}
 		if closer, ok := s.notify.(interface{ Close() error }); ok {
 			_ = closer.Close()
+		}
+		if s.webhooks != nil {
+			_ = s.webhooks.Close()
 		}
 		if closer, ok := s.deploy.(interface{ Close() error }); ok {
 			_ = closer.Close()
@@ -287,12 +291,18 @@ func (s *Server) routes() (http.Handler, error) {
 		s.deploy = s.deployService(providerSvc, s.proxy)
 		deploy.Mount(api, s.withTeam(false), UserIDFromContext, s.deploy)
 
-		// Push webhooks (BE-4.4): the public, signature-verified delivery
-		// endpoint plus authenticated hook management. It reuses the deploy
-		// service instance above so both share one worker pool. The management
-		// routes run through the team chain, so a demoted or removed creator
-		// can no longer install or remove a team application's hook.
-		webhooks.Mount(api, s.withTeam(false), UserIDFromContext, s.webhookService(providerSvc))
+		// Push webhooks (BE-4.4) and preview deployments (BE-8.1): the public,
+		// signature-verified delivery endpoint plus authenticated hook and
+		// preview listing. It reuses the deploy service instance above so both
+		// share one worker pool, and the same provider service posts the
+		// preview badge comment. The management routes run through the team
+		// chain, so a demoted or removed creator can no longer install or
+		// remove a team application's hook. The preview surface (pull_request
+		// handling, the orphan sweep, the listing route) is gated by
+		// FEATURE_PREVIEWS; push deliveries are untouched by that flag.
+		s.webhooks = s.webhookService(providerSvc)
+		webhooks.Mount(api, s.withTeam(false), UserIDFromContext, s.webhooks)
+		s.webhooks.StartPreviews()
 
 		// Managed databases (BE-5.1): same container service as above, so a
 		// database container is created through the shared container service
@@ -370,6 +380,15 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 	if notifier, ok := s.notify.(deploy.Notifier); ok {
 		cfg.Notifier = notifier
 	}
+	// Preview siblings hang off the base application outside the deploy
+	// schema; they are torn down before the base row is deleted (BE-8.1). The
+	// closure reads s.webhooks lazily: the webhook service is built after the
+	// deploy service, and the hook only fires once the server is serving.
+	cfg.PreviewCleanup = func(ctx context.Context, appID uuid.UUID) {
+		if s.webhooks != nil {
+			s.webhooks.DeletePreviews(ctx, appID)
+		}
+	}
 	return deploy.NewDefaultService(cfg)
 }
 
@@ -391,13 +410,24 @@ func (s *Server) webhookService(providerSvc providers.ProviderService) *webhooks
 	if !ok {
 		return nil
 	}
-	return webhooks.NewDefaultService(webhooks.Config{
+	cfg := webhooks.Config{
 		Store:     s.persistence,
 		Installer: installer,
 		Deployer:  deployer,
 		Secret:    s.cfg.Snapshot().SecretKey,
 		Logger:    s.logger,
-	})
+	}
+	// Preview siblings are provisioned through the deploy service (clone +
+	// system delete) and the badge comment through the provider service. Both
+	// are optional seams: without them the preview path answers ignored and
+	// push deliveries keep working.
+	if provisioner, ok := s.deploy.(webhooks.PreviewProvisioner); ok {
+		cfg.Provisioner = provisioner
+	}
+	if commenter, ok := providerSvc.(webhooks.Commenter); ok {
+		cfg.Commenter = commenter
+	}
+	return webhooks.NewDefaultService(cfg)
 }
 
 // containerDialer is the mTLS dial implemented by *servers.ServerService. The

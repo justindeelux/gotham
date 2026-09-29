@@ -25,6 +25,9 @@ type ProviderService interface {
 	// DeleteWebhook removes the hook identified by hookID from target.Repo.
 	// A hook the provider no longer knows about is a success.
 	DeleteWebhook(ctx context.Context, target HookTarget, hookID string) error
+	// CreatePullRequestComment posts body as a comment on pull request number
+	// of target.Repo, using the caller's stored connection for that provider.
+	CreatePullRequestComment(ctx context.Context, target HookTarget, number int, body string) error
 }
 
 // Factory builds a SourceProvider for a stored connection.
@@ -158,6 +161,16 @@ func (s *Service) DeleteWebhook(ctx context.Context, target HookTarget, hookID s
 		return err
 	}
 	return source.DeleteWebhook(ctx, connection.token(), target.Repo, hookID)
+}
+
+// CreatePullRequestComment posts a comment on a pull request (merge request
+// on GitLab) of target.Repo using the caller's stored connection.
+func (s *Service) CreatePullRequestComment(ctx context.Context, target HookTarget, number int, body string) error {
+	source, connection, err := s.sourceForTarget(ctx, target)
+	if err != nil {
+		return err
+	}
+	return source.CreatePullRequestComment(ctx, connection.token(), target.Repo, number, body)
 }
 
 // AddDeployKey registers a public key on target.Repo using the caller's stored

@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -28,12 +29,21 @@ type fakeRepository struct {
 	claims   map[string]Event
 	released []uuid.UUID
 
+	// previews keys a binding by "appID/prNumber" the way the unique index
+	// does.
+	previews       map[string]Preview
+	previewListErr error
+
 	getAppErr    error
 	createErr    error
 	targetsErr   error
 	claimErr     error
 	linkErr      error
 	releaseErr   error
+	upsertErr    error
+	getPrevErr   error
+	markErr      error
+	staleErr     error
 	createCalls  int
 	deleteCalls  int
 	targetsCalls int
@@ -50,14 +60,18 @@ func newFakeRepository() *fakeRepository {
 func newFakeRepositoryFor(provider string) *fakeRepository {
 	return &fakeRepository{
 		app: Application{
-			ID:       uuid.New(),
-			UserID:   uuid.New(),
-			Provider: provider,
-			Repo:     "octo/gotham",
-			Branch:   "main",
-			CloneURL: "https://github.com/octo/gotham.git",
+			ID:         uuid.New(),
+			UserID:     uuid.New(),
+			TeamID:     uuid.New(),
+			Provider:   provider,
+			Repo:       "octo/gotham",
+			Branch:     "main",
+			CloneURL:   "https://github.com/octo/gotham.git",
+			Name:       "gotham",
+			BaseDomain: "apps.example.com",
 		},
-		claims: make(map[string]Event),
+		claims:   make(map[string]Event),
+		previews: make(map[string]Preview),
 	}
 }
 
@@ -82,10 +96,14 @@ func (r *fakeRepository) withTarget() *fakeRepository {
 	}
 	r.target = &Target{
 		ApplicationID: r.app.ID,
+		UserID:        r.app.UserID,
+		TeamID:        r.app.TeamID,
 		Provider:      r.app.Provider,
 		Repo:          r.app.Repo,
 		Branch:        r.app.Branch,
 		CloneURL:      r.app.CloneURL,
+		Name:          r.app.Name,
+		BaseDomain:    r.app.BaseDomain,
 		HookID:        r.hook.HookID,
 		Secret:        secret,
 		URL:           r.hook.URL,
@@ -135,10 +153,14 @@ func (r *fakeRepository) CreateWebhook(_ context.Context, hook Hook, secret stri
 	r.secret = secret
 	r.target = &Target{
 		ApplicationID: hook.ApplicationID,
+		UserID:        r.app.UserID,
+		TeamID:        r.app.TeamID,
 		Provider:      hook.Provider,
 		Repo:          hook.Repo,
 		Branch:        r.app.Branch,
 		CloneURL:      r.app.CloneURL,
+		Name:          r.app.Name,
+		BaseDomain:    r.app.BaseDomain,
 		HookID:        hook.HookID,
 		Secret:        secret,
 		URL:           hook.URL,
@@ -236,6 +258,102 @@ func (r *fakeRepository) claimCount() int {
 	return len(r.claims)
 }
 
+// previewKey is the fake's unique (application, PR) key.
+func previewKey(appID uuid.UUID, prNumber int) string {
+	return fmt.Sprintf("%s/%d", appID, prNumber)
+}
+
+// GetPreview implements Repository.
+func (r *fakeRepository) GetPreview(_ context.Context, appID uuid.UUID, prNumber int) (Preview, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.getPrevErr != nil {
+		return Preview{}, r.getPrevErr
+	}
+	preview, ok := r.previews[previewKey(appID, prNumber)]
+	if !ok {
+		return Preview{}, ErrNotFound
+	}
+	return preview, nil
+}
+
+// UpsertPreview implements Repository with the unique-key semantics of the
+// database.
+func (r *fakeRepository) UpsertPreview(_ context.Context, preview Preview) (Preview, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.upsertErr != nil {
+		return Preview{}, r.upsertErr
+	}
+	key := previewKey(preview.ApplicationID, preview.PRNumber)
+	if existing, ok := r.previews[key]; ok {
+		preview.ID = existing.ID
+		preview.CreatedAt = existing.CreatedAt
+	} else {
+		preview.ID = uuid.New()
+		preview.CreatedAt = time.Now().UTC()
+	}
+	preview.UpdatedAt = time.Now().UTC()
+	preview.DeletedAt = time.Time{}
+	r.previews[key] = preview
+	return preview, nil
+}
+
+// ListPreviews implements Repository.
+func (r *fakeRepository) ListPreviews(_ context.Context, appID uuid.UUID) ([]Preview, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.previewListErr != nil {
+		return nil, r.previewListErr
+	}
+	previews := make([]Preview, 0, len(r.previews))
+	for _, preview := range r.previews {
+		if preview.ApplicationID == appID {
+			previews = append(previews, preview)
+		}
+	}
+	return previews, nil
+}
+
+// MarkPreviewDeleted implements Repository.
+func (r *fakeRepository) MarkPreviewDeleted(_ context.Context, previewID uuid.UUID) (Preview, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.markErr != nil {
+		return Preview{}, r.markErr
+	}
+	for key, preview := range r.previews {
+		if preview.ID != previewID {
+			continue
+		}
+		preview.State = PreviewDeleted
+		preview.DeletedAt = time.Now().UTC()
+		preview.UpdatedAt = preview.DeletedAt
+		r.previews[key] = preview
+		return preview, nil
+	}
+	return Preview{}, ErrNotFound
+}
+
+// ListStalePreviews implements Repository.
+func (r *fakeRepository) ListStalePreviews(_ context.Context, before time.Time) ([]Preview, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.staleErr != nil {
+		return nil, r.staleErr
+	}
+	stale := make([]Preview, 0, len(r.previews))
+	for _, preview := range r.previews {
+		if preview.State == PreviewDeleted {
+			continue
+		}
+		if preview.UpdatedAt.Before(before) {
+			stale = append(stale, preview)
+		}
+	}
+	return stale, nil
+}
+
 // fakeInstaller records hook installations instead of calling a Git host.
 type fakeInstaller struct {
 	mu sync.Mutex
@@ -271,12 +389,22 @@ func (f *fakeInstaller) DeleteWebhook(_ context.Context, _ providers.HookTarget,
 }
 
 // fakeDeployer records queued deployments instead of running the state
-// machine.
+// machine, and implements PreviewProvisioner so the preview path can be
+// driven end to end without a database.
 type fakeDeployer struct {
 	mu sync.Mutex
 
 	deployed []uuid.UUID
 	err      error
+	// missing marks sibling applications DeploySystem must answer ErrNotFound
+	// for (a preview deleted out of band).
+	missing map[uuid.UUID]bool
+
+	provisioned  []deploy.PreviewApplicationInput
+	provisionID  uuid.UUID
+	provisionErr error
+	deleted      []uuid.UUID
+	deleteErr    error
 }
 
 // DeploySystem implements Deployer.
@@ -285,6 +413,9 @@ func (f *fakeDeployer) DeploySystem(_ context.Context, appID uuid.UUID) (deploy.
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return deploy.Deployment{}, f.err
+	}
+	if f.missing[appID] {
+		return deploy.Deployment{}, deploy.ErrNotFound
 	}
 	f.deployed = append(f.deployed, appID)
 	return deploy.Deployment{
@@ -295,6 +426,29 @@ func (f *fakeDeployer) DeploySystem(_ context.Context, appID uuid.UUID) (deploy.
 	}, nil
 }
 
+// CreatePreviewApplication implements PreviewProvisioner.
+func (f *fakeDeployer) CreatePreviewApplication(_ context.Context, _ uuid.UUID, in deploy.PreviewApplicationInput) (deploy.Application, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.provisionErr != nil {
+		return deploy.Application{}, f.provisionErr
+	}
+	f.provisioned = append(f.provisioned, in)
+	f.provisionID = uuid.New()
+	return deploy.Application{ID: f.provisionID, Name: in.Name, Branch: in.Branch, BaseDomain: in.BaseDomain}, nil
+}
+
+// DeleteSystemApplication implements PreviewProvisioner.
+func (f *fakeDeployer) DeleteSystemApplication(_ context.Context, appID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	f.deleted = append(f.deleted, appID)
+	return nil
+}
+
 // deployCount reports how many deployments were queued.
 func (f *fakeDeployer) deployCount() int {
 	f.mu.Lock()
@@ -302,15 +456,65 @@ func (f *fakeDeployer) deployCount() int {
 	return len(f.deployed)
 }
 
+// provisionCount reports how many siblings were created.
+func (f *fakeDeployer) provisionCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.provisioned)
+}
+
+// deleteCount reports how many siblings were torn down.
+func (f *fakeDeployer) deleteCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.deleted)
+}
+
+// fakeCommenter records PR comments instead of calling a Git host.
+type fakeCommenter struct {
+	mu sync.Mutex
+
+	numbers []int
+	bodies  []string
+	targets []providers.HookTarget
+	err     error
+}
+
+// CreatePullRequestComment implements Commenter.
+func (f *fakeCommenter) CreatePullRequestComment(_ context.Context, target providers.HookTarget, number int, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.numbers = append(f.numbers, number)
+	f.bodies = append(f.bodies, body)
+	f.targets = append(f.targets, target)
+	return f.err
+}
+
+// commentCount reports how many comments were posted.
+func (f *fakeCommenter) commentCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.numbers)
+}
+
 // newTestService builds a Service over the given seams with a generous rate
 // limit; tests that care about the limit build their own.
 func newTestService(repo *fakeRepository, installer *fakeInstaller, deployer *fakeDeployer) *Service {
-	return NewService(Config{
-		Repository: repo,
-		Installer:  installer,
-		Deployer:   deployer,
-		Logger:     discardLogger(),
+	return newTestServiceWith(Config{
+		Repository:  repo,
+		Installer:   installer,
+		Deployer:    deployer,
+		Provisioner: deployer,
+		Logger:      discardLogger(),
 	})
+}
+
+// newTestServiceWith builds a Service from a config, defaulting the logger.
+func newTestServiceWith(cfg Config) *Service {
+	if cfg.Logger == nil {
+		cfg.Logger = discardLogger()
+	}
+	return NewService(cfg)
 }
 
 // discardLogger keeps operational logging out of the test output.

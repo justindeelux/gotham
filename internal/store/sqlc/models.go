@@ -223,6 +223,23 @@ type NotificationChannel struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
+type PreviewDeploy struct {
+	ID                   pgtype.UUID        `json:"id"`
+	ApplicationID        pgtype.UUID        `json:"application_id"`
+	TeamID               pgtype.UUID        `json:"team_id"`
+	Provider             string             `json:"provider"`
+	Repo                 string             `json:"repo"`
+	PrNumber             int32              `json:"pr_number"`
+	Branch               string             `json:"branch"`
+	HeadSha              string             `json:"head_sha"`
+	PreviewApplicationID pgtype.UUID        `json:"preview_application_id"`
+	Host                 string             `json:"host"`
+	State                string             `json:"state"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt            pgtype.Timestamptz `json:"deleted_at"`
+}
+
 type PrivateKey struct {
 	ID           pgtype.UUID        `json:"id"`
 	Name         string             `json:"name"`

@@ -180,7 +180,8 @@ func (q *Queries) GetApplicationWebhookByApp(ctx context.Context, applicationID 
 
 const listWebhookTargetsForRepo = `-- name: ListWebhookTargetsForRepo :many
 SELECT w.application_id, w.hook_id, w.secret, w.url,
-       a.provider, a.repo, a.branch, a.clone_url
+       a.user_id, a.team_id, a.provider, a.repo, a.branch, a.clone_url,
+       a.name, a.base_domain
 FROM application_webhooks w
 JOIN applications a ON a.id = w.application_id
 WHERE w.provider = $1 AND lower(w.repo) = $2
@@ -196,10 +197,14 @@ type ListWebhookTargetsForRepoRow struct {
 	HookID        string      `json:"hook_id"`
 	Secret        string      `json:"secret"`
 	Url           string      `json:"url"`
+	UserID        pgtype.UUID `json:"user_id"`
+	TeamID        pgtype.UUID `json:"team_id"`
 	Provider      string      `json:"provider"`
 	Repo          string      `json:"repo"`
 	Branch        string      `json:"branch"`
 	CloneUrl      string      `json:"clone_url"`
+	Name          string      `json:"name"`
+	BaseDomain    string      `json:"base_domain"`
 }
 
 func (q *Queries) ListWebhookTargetsForRepo(ctx context.Context, arg ListWebhookTargetsForRepoParams) ([]ListWebhookTargetsForRepoRow, error) {
@@ -216,10 +221,14 @@ func (q *Queries) ListWebhookTargetsForRepo(ctx context.Context, arg ListWebhook
 			&i.HookID,
 			&i.Secret,
 			&i.Url,
+			&i.UserID,
+			&i.TeamID,
 			&i.Provider,
 			&i.Repo,
 			&i.Branch,
 			&i.CloneUrl,
+			&i.Name,
+			&i.BaseDomain,
 		); err != nil {
 			return nil, err
 		}

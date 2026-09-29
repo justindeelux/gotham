@@ -210,6 +210,14 @@ message HeartbeatRequest {
   double disk_usage = 3;   // fraction 0..1
   int64 container_count = 4;
   google.protobuf.Timestamp sent_at = 5;
+  // net_rx_bps, net_tx_bps, disk_read_bps and disk_write_bps are host I/O
+  // rates in bytes per second, computed by the agent from consecutive counter
+  // samples. They are zero on a platform that cannot report them (for example
+  // Darwin) and on the agent's first sample.
+  double net_rx_bps = 6;
+  double net_tx_bps = 7;
+  double disk_read_bps = 8;
+  double disk_write_bps = 9;
 }
 
 // HeartbeatResponse acknowledges the stream once it closes.

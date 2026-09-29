@@ -24,6 +24,8 @@ type fakeServerService struct {
 	failAdd        error
 	validateResult *servers.ValidationResult
 	validateErr    error
+	metrics        []servers.MetricPoint
+	metricsErr     error
 }
 
 func newFakeServerService() *fakeServerService {
@@ -119,6 +121,19 @@ func (f *fakeServerService) AddPrivateKey(_ context.Context, name, privateKeyPEM
 		return nil, fmt.Errorf("%w: name and private_key are required", servers.ErrValidation)
 	}
 	return &servers.PrivateKey{ID: uuid.New(), Name: name, CreatedAt: time.Now().UTC()}, nil
+}
+
+// Metrics returns the canned series, or the canned error, of the fake.
+func (f *fakeServerService) Metrics(_ context.Context, id uuid.UUID, _, _ time.Time, _ string) ([]servers.MetricPoint, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.metricsErr != nil {
+		return nil, f.metricsErr
+	}
+	if _, ok := f.items[id]; !ok {
+		return nil, servers.ErrNotFound
+	}
+	return f.metrics, nil
 }
 
 // newServerRoutesTestServer builds a Server backed by the fake server service.
@@ -348,3 +363,125 @@ func (f *fakeServerService) setTeam(id uuid.UUID, teamID uuid.UUID) {
 
 // compile-time assertion that the fake satisfies the interface.
 var _ ServerService = (*fakeServerService)(nil)
+
+func TestServerMetricsRoute(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "metrics-1")
+
+	bucket := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	fake.metrics = []servers.MetricPoint{{
+		Bucket:         bucket,
+		CPUUsage:       0.25,
+		MemUsage:       0.5,
+		DiskUsage:      0.75,
+		NetRxBps:       1024,
+		NetTxBps:       512,
+		DiskReadBps:    2048,
+		DiskWriteBps:   4096,
+		ContainerCount: 2,
+	}}
+
+	rec := doRequest(t, s, http.MethodGet,
+		"/api/v1/servers/"+id.String()+"/metrics?from=2026-09-29T11:00:00Z&to=2026-09-29T13:00:00Z&step=1m",
+		"", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var body metricsEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Step != "1m" {
+		t.Errorf("step = %q, want 1m", body.Step)
+	}
+	if len(body.Points) != 1 {
+		t.Fatalf("points = %d, want 1", len(body.Points))
+	}
+	point := body.Points[0]
+	if !point.Bucket.Equal(bucket) {
+		t.Errorf("bucket = %s, want %s", point.Bucket, bucket)
+	}
+	if point.CPUUsage != 0.25 || point.MemUsage != 0.5 || point.DiskUsage != 0.75 {
+		t.Errorf("usage = %+v", point)
+	}
+	if point.NetRxBps != 1024 || point.DiskWriteBps != 4096 || point.ContainerCount != 2 {
+		t.Errorf("io = %+v", point)
+	}
+
+	// The step defaults to 1m when the query names none.
+	rec = doRequest(t, s, http.MethodGet,
+		"/api/v1/servers/"+id.String()+"/metrics?from=2026-09-29T11:00:00Z&to=2026-09-29T13:00:00Z",
+		"", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("default step status = %d, want 200", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Step != "1m" {
+		t.Errorf("default step = %q, want 1m", body.Step)
+	}
+}
+
+func TestServerMetricsRouteValidation(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "metrics-2")
+	base := "/api/v1/servers/" + id.String() + "/metrics"
+
+	tests := []struct {
+		name   string
+		target string
+		want   int
+	}{
+		{"missing from", base + "?to=2026-09-29T13:00:00Z", http.StatusBadRequest},
+		{"missing to", base + "?from=2026-09-29T11:00:00Z", http.StatusBadRequest},
+		{"invalid from", base + "?from=yesterday&to=2026-09-29T13:00:00Z", http.StatusBadRequest},
+		{"invalid to", base + "?from=2026-09-29T11:00:00Z&to=soon", http.StatusBadRequest},
+		{"bad id", "/api/v1/servers/not-a-uuid/metrics?from=2026-09-29T11:00:00Z&to=2026-09-29T13:00:00Z", http.StatusBadRequest},
+		{"unknown server", "/api/v1/servers/" + uuid.New().String() + "/metrics?from=2026-09-29T11:00:00Z&to=2026-09-29T13:00:00Z", http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := doRequest(t, s, http.MethodGet, tt.target, "", authHeader)
+			if rec.Code != tt.want {
+				t.Errorf("status = %d, want %d (body %s)", rec.Code, tt.want, rec.Body.String())
+			}
+		})
+	}
+
+	// A domain validation failure (bad step, inverted or oversized range) maps
+	// to 400.
+	fake.metricsErr = fmt.Errorf("%w: step must be one of 1m, 1h or 1d", servers.ErrValidation)
+	rec := doRequest(t, s, http.MethodGet, base+"?from=2026-09-29T11:00:00Z&to=2026-09-29T13:00:00Z&step=7m", "", authHeader)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("domain validation status = %d, want 400", rec.Code)
+	}
+
+	// The route requires authentication.
+	if rec := doRequest(t, s, http.MethodGet, base+"?from=2026-09-29T11:00:00Z&to=2026-09-29T13:00:00Z", "", ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated status = %d, want 401", rec.Code)
+	}
+}
+
+func TestServerMetricsRouteDisabled(t *testing.T) {
+	t.Setenv(servers.FeatureEnv, "false")
+
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "metrics-3")
+
+	rec := doRequest(t, s, http.MethodGet,
+		"/api/v1/servers/"+id.String()+"/metrics?from=2026-09-29T11:00:00Z&to=2026-09-29T13:00:00Z",
+		"", authHeader)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("metrics status = %d, want 404 when FEATURE_METRICS=false", rec.Code)
+	}
+
+	// The rest of the servers surface stays mounted.
+	if rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/"+id.String(), "", authHeader); rec.Code != http.StatusOK {
+		t.Errorf("server detail status = %d, want 200 with metrics disabled", rec.Code)
+	}
+}

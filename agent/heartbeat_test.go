@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -242,6 +243,18 @@ func assertHeartbeat(t *testing.T, heartbeat *agentv1.HeartbeatRequest, wantCont
 	} {
 		if value < 0 || value > 1 {
 			t.Errorf("%s usage = %v; want 0..1", name, value)
+		}
+	}
+	// The I/O rates are zero on the first sample and on platforms that cannot
+	// report them; they must never be negative or NaN.
+	for name, value := range map[string]float64{
+		"net rx":     heartbeat.GetNetRxBps(),
+		"net tx":     heartbeat.GetNetTxBps(),
+		"disk read":  heartbeat.GetDiskReadBps(),
+		"disk write": heartbeat.GetDiskWriteBps(),
+	} {
+		if math.IsNaN(value) || value < 0 {
+			t.Errorf("%s rate = %v; want a finite, non-negative rate", name, value)
 		}
 	}
 	if heartbeat.GetContainerCount() != wantContainers {

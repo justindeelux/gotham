@@ -109,3 +109,57 @@ func osVersion() string {
 	}
 	return strings.TrimSpace(string(data))
 }
+
+// readNetwork reads the host's cumulative network byte counters. It sums every
+// non-loopback interface, so container and bridge interfaces (veth*, docker0,
+// br-*) are counted in addition to the physical NIC and container traffic can
+// appear roughly twice. That is an accepted ceiling: the value is a host-level
+// indicator, not a unique wire throughput.
+func readNetwork() (rx, tx uint64, err error) {
+	file, err := os.Open("/proc/net/dev")
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = file.Close() }()
+	return parseNetDev(file)
+}
+
+// readDiskIO reads the host's cumulative disk I/O byte counters, counting the
+// whole block devices /sys/block lists. Partition entries in /proc/diskstats
+// are skipped so a disk and its partitions are not counted twice; loop, ram
+// and zram (RAM-backed swap) pseudo devices have no real I/O. A stacked setup
+// (dm/md over its member disks) is counted once per layer, which is an accepted
+// ceiling for a host-level indicator.
+func readDiskIO() (read, write uint64, err error) {
+	devices, err := wholeBlockDevices()
+	if err != nil {
+		return 0, 0, err
+	}
+	file, err := os.Open("/proc/diskstats")
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = file.Close() }()
+	return parseDiskStats(file, devices)
+}
+
+// wholeBlockDevices returns the names of the real whole block devices the
+// kernel lists under /sys/block.
+func wholeBlockDevices() (map[string]struct{}, error) {
+	entries, err := os.ReadDir("/sys/block")
+	if err != nil {
+		return nil, err
+	}
+	devices := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if pseudoBlockDevice(name) {
+			continue
+		}
+		devices[name] = struct{}{}
+	}
+	if len(devices) == 0 {
+		return nil, errUnsupported
+	}
+	return devices, nil
+}

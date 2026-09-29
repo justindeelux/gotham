@@ -271,6 +271,10 @@ func (a *Agent) heartbeatRequest(ctx context.Context) *agentv1.HeartbeatRequest 
 		DiskUsage:      sample.Disk,
 		ContainerCount: a.containerCount(ctx),
 		SentAt:         timestamppb.Now(),
+		NetRxBps:       sample.NetRxBps,
+		NetTxBps:       sample.NetTxBps,
+		DiskReadBps:    sample.DiskReadBps,
+		DiskWriteBps:   sample.DiskWriteBps,
 	}
 }
 

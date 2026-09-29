@@ -20,6 +20,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // defaultGatewayTestDSN points at the dev database from deploy/compose.dev.yml.
@@ -267,10 +268,33 @@ func TestGatewayHeartbeatUpdatesMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	if err := stream.Send(&agentv1.HeartbeatRequest{CpuUsage: 0.25, MemUsage: 0.5, DiskUsage: 0.75, ContainerCount: 3}); err != nil {
+	base := time.Now().UTC().Truncate(time.Second)
+	first := &agentv1.HeartbeatRequest{
+		CpuUsage:       0.25,
+		MemUsage:       0.5,
+		DiskUsage:      0.75,
+		ContainerCount: 3,
+		NetRxBps:       2048,
+		NetTxBps:       1024,
+		DiskReadBps:    4096,
+		DiskWriteBps:   8192,
+		SentAt:         timestamppb.New(base),
+	}
+	second := &agentv1.HeartbeatRequest{
+		CpuUsage:       0.3,
+		MemUsage:       0.6,
+		DiskUsage:      0.8,
+		ContainerCount: 4,
+		NetRxBps:       4096,
+		NetTxBps:       2048,
+		DiskReadBps:    8192,
+		DiskWriteBps:   16384,
+		SentAt:         timestamppb.New(base.Add(10 * time.Second)),
+	}
+	if err := stream.Send(first); err != nil {
 		t.Fatalf("send heartbeat: %v", err)
 	}
-	if err := stream.Send(&agentv1.HeartbeatRequest{CpuUsage: 0.3, MemUsage: 0.6, DiskUsage: 0.8, ContainerCount: 4}); err != nil {
+	if err := stream.Send(second); err != nil {
 		t.Fatalf("send heartbeat: %v", err)
 	}
 
@@ -297,6 +321,29 @@ func TestGatewayHeartbeatUpdatesMetrics(t *testing.T) {
 	}
 	if !updated.LastSeen.Valid || updated.LastSeen.Time.IsZero() {
 		t.Errorf("last_seen = %+v, want a set timestamp", updated.LastSeen)
+	}
+
+	// Each heartbeat message appends exactly one time-series sample, stamped
+	// with the message's sent_at and carrying the reported I/O rates.
+	var count int
+	if err := st.DB.QueryRow(ctx,
+		"SELECT count(*) FROM server_metrics WHERE server_id = $1", row.ID).Scan(&count); err != nil {
+		t.Fatalf("count server_metrics: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("server_metrics rows = %d, want one per heartbeat (2)", count)
+	}
+	var (
+		cpu float64
+		rx  float64
+	)
+	if err := st.DB.QueryRow(ctx,
+		"SELECT cpu_usage, net_rx_bps FROM server_metrics WHERE server_id = $1 AND recorded_at = $2",
+		row.ID, base).Scan(&cpu, &rx); err != nil {
+		t.Fatalf("read the first sample: %v", err)
+	}
+	if cpu != 0.25 || rx != 2048 {
+		t.Errorf("first sample = cpu %v net_rx %v, want 0.25 / 2048", cpu, rx)
 	}
 }
 

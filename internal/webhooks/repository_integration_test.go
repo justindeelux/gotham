@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -775,6 +777,259 @@ func TestStoreClosedBindingCannotBeResurrected(t *testing.T) {
 	}
 	if binding.State != "deleted" {
 		t.Fatalf("binding state = %q, want deleted (never resurrected)", binding.State)
+	}
+}
+
+// TestStoreCloseSerializesWithPromotion is the real-concurrent R-1 regression:
+// a close that starts while a promotion is inside its write waits for the
+// base-application lock, so the promotion cannot be overwritten after the
+// fence's reads; the close then wins and the binding stays deleted. A BEFORE
+// INSERT trigger on the test's application pauses the promotion inside the
+// write while holding that lock.
+func TestStoreCloseSerializesWithPromotion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openClaimFixture(t, ctx)
+	userID, baseID := claimFixture(t, ctx, st)
+
+	// Seed the existing binding (head-a) so the close has a row to update.
+	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
+		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
+		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
+		Host: "pr-7.example.com", State: "active",
+	}); err != nil {
+		t.Fatalf("UpsertPreviewDeploy: %v", err)
+	}
+	claim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-b", LiveLimit: 5,
+	})
+	if err != nil || !claim.Approved {
+		t.Fatalf("claim = %+v / %v, want approved", claim, err)
+	}
+
+	// Pause the promotion inside its upsert, after the app lock is held.
+	appLiteral := baseID.String()
+	if _, err := st.DB.Exec(ctx, `
+		DROP TRIGGER IF EXISTS be81_fence_gate_trg ON preview_deploys;
+		CREATE OR REPLACE FUNCTION be81_fence_gate_fn() RETURNS trigger AS $$
+		BEGIN
+			IF TG_OP = 'INSERT' THEN
+				PERFORM pg_sleep(0.8);
+			END IF;
+			RETURN NEW;
+		END $$ LANGUAGE plpgsql;
+		CREATE TRIGGER be81_fence_gate_trg BEFORE INSERT OR UPDATE ON preview_deploys
+			FOR EACH ROW WHEN (NEW.application_id = '`+appLiteral+`'::uuid AND NEW.state <> 'deleted')
+			EXECUTE FUNCTION be81_fence_gate_fn();`); err != nil {
+		t.Fatalf("install the fence gate: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := st.DB.Exec(cleanupCtx, `
+			DROP TRIGGER IF EXISTS be81_fence_gate_trg ON preview_deploys;
+			DROP FUNCTION IF EXISTS be81_fence_gate_fn();`); err != nil {
+			t.Logf("cleanup fence gate: %v", err)
+		}
+	})
+
+	promoted := make(chan store.PreviewBindingWriteResult, 1)
+	promoteErr := make(chan error, 1)
+	go func() {
+		result, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
+			ApplicationID: pgUUID(baseID), PrNumber: 7, ReservationID: claim.Reservation.ID,
+			LeaseHeadSHA: "head-b", HeadSHA: "head-b", TeamID: pgUUID(userID),
+			State: "active", ConsumeLease: true,
+		})
+		promoted <- result
+		promoteErr <- err
+	}()
+
+	// Wait until the promotion is inside the gate (sleeping in the trigger
+	// while holding the app lock).
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var entered int
+		if err := st.DB.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event = 'PgSleep' AND query LIKE '%preview_deploys%'`).Scan(&entered); err != nil {
+			t.Fatalf("poll the fence gate: %v", err)
+		}
+		if entered > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the promotion never entered the fence gate")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The close starts while the promotion holds the lock: it must wait, not
+	// complete underneath it.
+	closed := make(chan error, 1)
+	go func() {
+		_, err := st.MarkPreviewClosed(context.Background(), pgUUID(baseID), 7)
+		closed <- err
+	}()
+	select {
+	case err := <-closed:
+		t.Fatalf("close completed during the promotion (%v): it must serialize on the application lock", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if err := <-promoteErr; err != nil {
+		t.Fatalf("promotion: %v", err)
+	}
+	if result := <-promoted; result.Refused != "" || result.Binding.State != "active" {
+		t.Fatalf("promotion = %+v, want written active", result)
+	}
+	// The close now wins: its completion must land after (and over) the
+	// promotion, leaving the binding deleted.
+	if err := <-closed; err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	binding, err := st.GetPreviewDeploy(ctx, pgUUID(baseID), 7)
+	if err != nil {
+		t.Fatalf("GetPreviewDeploy: %v", err)
+	}
+	if binding.State != "deleted" {
+		t.Fatalf("binding state = %q, want deleted (the close is never overwritten)", binding.State)
+	}
+	var leases int
+	if err := st.DB.QueryRow(ctx,
+		"SELECT count(*) FROM preview_deliveries WHERE application_id = $1 AND pr_number = 7",
+		pgUUID(baseID),
+	).Scan(&leases); err != nil {
+		t.Fatalf("count leases: %v", err)
+	}
+	if leases != 0 {
+		t.Fatalf("leases = %d, want the close completion to clear them", leases)
+	}
+}
+
+// TestStoreLeaseExpiryDuringLockWait is the N6 regression: a lease that
+// expires while the writer waits for the base-application lock must be
+// refused, because lease validity is evaluated with the actual current time
+// after the lock is granted, not the transaction-start time.
+func TestStoreLeaseExpiryDuringLockWait(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openClaimFixture(t, ctx)
+	userID, baseID := claimFixture(t, ctx, st)
+
+	claim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-b", LiveLimit: 5,
+	})
+	if err != nil || !claim.Approved {
+		t.Fatalf("claim = %+v / %v, want approved", claim, err)
+	}
+	if _, err := st.DB.Exec(ctx,
+		"UPDATE preview_deliveries SET expires_at = clock_timestamp() + interval '700 milliseconds' WHERE id = $1",
+		claim.Reservation.ID,
+	); err != nil {
+		t.Fatalf("shorten the lease: %v", err)
+	}
+
+	// Hold the application lock on a separate connection so the writer waits.
+	holder, err := st.DB.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire lock holder: %v", err)
+	}
+	defer holder.Release()
+	holdTx, err := holder.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin holder tx: %v", err)
+	}
+	defer func() { _ = holdTx.Rollback(ctx) }()
+	var locked pgtype.UUID
+	if err := holdTx.QueryRow(ctx, "SELECT id FROM applications WHERE id = $1 FOR UPDATE", pgUUID(baseID)).Scan(&locked); err != nil {
+		t.Fatalf("hold the application lock: %v", err)
+	}
+
+	written := make(chan store.PreviewBindingWriteResult, 1)
+	writeErr := make(chan error, 1)
+	go func() {
+		result, err := st.WritePreviewBinding(context.Background(), store.PreviewBindingWriteParams{
+			ApplicationID: pgUUID(baseID), PrNumber: 7, ReservationID: claim.Reservation.ID,
+			LeaseHeadSHA: "head-b", HeadSHA: "head-b", TeamID: pgUUID(userID),
+			State: "active", ConsumeLease: true,
+		})
+		written <- result
+		writeErr <- err
+	}()
+	// Let the lease lapse while the writer waits for the lock, then release it.
+	time.Sleep(1200 * time.Millisecond)
+	if err := holdTx.Commit(ctx); err != nil {
+		t.Fatalf("release the application lock: %v", err)
+	}
+
+	if err := <-writeErr; err != nil {
+		t.Fatalf("WritePreviewBinding: %v", err)
+	}
+	result := <-written
+	if result.Refused != store.PreviewWriteLeaseRefused {
+		t.Fatalf("expired-during-wait write = %+v, want refused lease", result)
+	}
+	if _, err := st.GetPreviewDeploy(ctx, pgUUID(baseID), 7); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("binding after the refused write = %+v / %v, want none", err, err)
+	}
+}
+
+// TestStoreSiblingDeleteClearsLedger is the LOW regression: deleting a
+// preview sibling closes its binding and clears the pull request's ledger, so
+// no lease survives to authorize a stale promotion.
+func TestStoreSiblingDeleteClearsLedger(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openClaimFixture(t, ctx)
+	userID, baseID := claimFixture(t, ctx, st)
+
+	sibling, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		UserID: pgUUID(userID), Name: "octo-gotham-pr-7", Provider: "github",
+		Repo: "octo/gotham", CloneUrl: "https://github.com/octo/gotham.git",
+		Branch: "feat/x", BuildPack: "auto", BaseDomain: "pr-7.example.com", IsPreview: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication(sibling): %v", err)
+	}
+	siblingID := uuid.UUID(sibling.ID.Bytes)
+	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
+		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
+		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
+		Host: "pr-7.example.com", State: "active", PreviewApplicationID: pgUUID(siblingID),
+	}); err != nil {
+		t.Fatalf("UpsertPreviewDeploy: %v", err)
+	}
+	// A live lease a stale worker could still use to promote.
+	claim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-b", LiveLimit: 5,
+	})
+	if err != nil || !claim.Approved {
+		t.Fatalf("claim = %+v / %v, want approved", claim, err)
+	}
+
+	if err := st.MarkPreviewDeploysDeletedForSibling(ctx, pgUUID(siblingID)); err != nil {
+		t.Fatalf("MarkPreviewDeploysDeletedForSibling: %v", err)
+	}
+	binding, err := st.GetPreviewDeploy(ctx, pgUUID(baseID), 7)
+	if err != nil {
+		t.Fatalf("GetPreviewDeploy: %v", err)
+	}
+	if binding.State != "deleted" {
+		t.Fatalf("binding state = %q, want deleted", binding.State)
+	}
+	var leases int
+	if err := st.DB.QueryRow(ctx,
+		"SELECT count(*) FROM preview_deliveries WHERE application_id = $1 AND pr_number = 7",
+		pgUUID(baseID),
+	).Scan(&leases); err != nil {
+		t.Fatalf("count leases: %v", err)
+	}
+	if leases != 0 {
+		t.Fatalf("leases = %d, want the sibling delete to clear the ledger", leases)
 	}
 }
 

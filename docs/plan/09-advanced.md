@@ -86,15 +86,19 @@ never gates a delivery by itself.
 Binding promotions are **fenced** (`Store.WritePreviewBinding`): the worker's
 binding write runs under the same base-application lock and verifies its claim
 lease still exists and is unexpired, refuses a `closing` binding, and re-checks
-the quota when the write would make the binding live. A worker whose lease
-lapsed while it provisioned therefore cannot promote a sixth live preview, and
-a close that completed in the meantime can never be overwritten back to active
-(the `ErrNotFound` recreate branch included); the refused worker compensates
-its freshly provisioned sibling and answers 503. The commit-based SHA ledger of
-the push path is untouched. A start persists the binding before queueing; a
-failed queue or a conflicting active deployment releases the lease and answers
-503 (retryable). Quota allocation rides the same claim, so concurrent
-distinct-PR deliveries cannot overshoot the cap.
+the quota when the write would make the binding live. Lease and quota validity
+use `clock_timestamp()`, so a lease that lapses while the writer waits for the
+lock is refused rather than accepted on the transaction-start clock. A worker
+whose lease lapsed while it provisioned therefore cannot promote a sixth live
+preview, and a close that completed in the meantime can never be overwritten
+back to active (the `ErrNotFound` recreate branch included); the refused worker
+compensates its freshly provisioned sibling and answers 503. A failed final
+promotion is surfaced as a non-2xx (retryable) rather than a 200 with the
+revision unrecorded. The commit-based SHA ledger of the push path is untouched.
+A start persists the binding before queueing; a failed queue or a conflicting
+active deployment releases the lease and answers 503 (retryable). Quota
+allocation rides the same claim, so concurrent distinct-PR deliveries cannot
+overshoot the cap.
 
 Hooks are installed with `Events: ["push","pull_request"]` (GitLab:
 `push_events` + `merge_requests_events`). Hooks installed before the preview
@@ -115,8 +119,15 @@ host redirects to HTTPS; without one the HTTP URL is what works).
 the sibling (route/container gone, local deploy-key rows removed) and finally
 completes atomically: binding deleted and the PR's ledger cleared in one
 transaction (`MarkPreviewClosed`, idempotent and used on the already-deleted
-retry path too, so a stale reservation can never block a reopen). A teardown
-failure leaves the binding `closing` and returns an error. Teardown never
+retry path too, so a stale reservation can never block a reopen). Every close
+path — intent, completion, the no-binding ledger clear, the sweep's retry and
+the user-facing sibling delete — takes the **same base-application row lock**
+as the claim and the promotion, so a close that starts while a promotion is
+writing waits for it and then wins: a completed close can never be overwritten
+back to active, and a promotion that wins first is closed by the transition
+that follows. The lock is never held across provisioning or teardown network
+work. A teardown failure leaves the binding `closing` and returns an error.
+Teardown never
 removes a deploy key from the Git host: a preview reuses its base
 application's remote key, and deleting it (user or system path) would break
 the base; the system path additionally refuses a non-preview application.
@@ -173,10 +184,14 @@ subscription and the deploy clone/system-delete seam; repository integration
 tests against PostgreSQL for the unique pair, `is_preview`, the atomic claim
 (current-head dedupe, in-flight duplicate, second PR, historical head approved,
 expired-lease purge), the fenced promotion (closing refusal, expired-lease
-refusal, closed-binding non-resurrection), the closing list, the orphan
-queries, the deleted→reopened transition and both cascades, a concurrent claim
-test proving the cap holds under real transactions, plus a DB-backed teardown
-removing the preview's local private-key row while the base key survives. Gated e2e (`GOTHAM_E2E=1`): `TestP8PreviewLifecycle` opens a PR
+refusal including a lease that lapses while waiting for the application lock,
+closed-binding non-resurrection, and a **real-concurrent close that starts
+while the promotion is inside its write** — the close waits for the lock and
+wins, the promotion is never overwritten), the closing list, the orphan
+queries, the sibling delete clearing the ledger, the deleted→reopened
+transition and both cascades, a concurrent claim test proving the cap holds
+under real transactions, plus a DB-backed teardown removing the preview's
+local private-key row while the base key survives. Gated e2e (`GOTHAM_E2E=1`): `TestP8PreviewLifecycle` opens a PR
 over the real delivery route, deploys the head branch through the agent,
 proves the anti-spam redelivery and deletes the sibling on close. A real
 GitHub PR, a wildcard certificate and the live comment were **not** exercised

@@ -422,11 +422,13 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 			State:                PreviewActive,
 			ConsumeLease:         true,
 		}); err != nil {
-			// The deployment is queued and tracked by the sibling; the lease
-			// lapses on its own (bounded) and the next delivery repairs the
-			// binding revision.
+			// The deployment is queued, but the fenced write did not record
+			// the revision: surface it as retryable so the host redelivers
+			// instead of losing the revision behind a 200. The next delivery
+			// repairs the binding revision.
 			s.logger.Warn("webhooks: could not record the queued preview revision",
 				"application_id", target.ApplicationID, "pr_number", pr.Number, "error", err)
+			return Delivery{}, err
 		}
 		s.previewComment(ctx, target, pr.Number, startedComment(host))
 		return Delivery{Status: StatusQueued, Reason: "preview", DeploymentID: deployment.ID.String(), Host: host}, nil

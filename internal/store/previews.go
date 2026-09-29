@@ -74,10 +74,9 @@ func (s *Store) ClaimPreviewDelivery(ctx context.Context, params PreviewClaimPar
 	defer func() { _ = tx.Rollback(ctx) }()
 	queries := s.queries.WithTx(tx)
 
-	// Lock the base application row: the quota allocation and the head
-	// transition are one critical section per application.
-	var locked pgtype.UUID
-	if err := tx.QueryRow(ctx, "SELECT id FROM applications WHERE id = $1 FOR UPDATE", params.ApplicationID).Scan(&locked); err != nil {
+	// Lock the base application row: the quota allocation, the head transition
+	// and every close path are one critical section per application.
+	if err := lockApplication(ctx, tx, params.ApplicationID); err != nil {
 		return result, err
 	}
 
@@ -237,9 +236,9 @@ func (s *Store) WritePreviewBinding(ctx context.Context, params PreviewBindingWr
 	defer func() { _ = tx.Rollback(ctx) }()
 	queries := s.queries.WithTx(tx)
 
-	// The same lock the claim takes: promotion serializes with allocation.
-	var locked pgtype.UUID
-	if err := tx.QueryRow(ctx, "SELECT id FROM applications WHERE id = $1 FOR UPDATE", params.ApplicationID).Scan(&locked); err != nil {
+	// The same lock the claim takes: promotion serializes with allocation and
+	// with every close path, so a completed close can never be overwritten.
+	if err := lockApplication(ctx, tx, params.ApplicationID); err != nil {
 		return result, err
 	}
 
@@ -319,16 +318,49 @@ func (s *Store) WritePreviewBinding(ctx context.Context, params PreviewBindingWr
 	return result, nil
 }
 
-// MarkPreviewClosing persists a close intent on one binding, so a teardown
-// that fails (or is never retried by the host) is re-attempted by the sweep.
-func (s *Store) MarkPreviewClosing(ctx context.Context, previewID pgtype.UUID) (sqlc.PreviewDeploy, error) {
-	return s.queries.MarkPreviewDeployClosing(ctx, previewID)
+// lockApplication takes the per-application row lock every preview transition
+// serializes on (claim, promotion, close intent, close completion, ledger
+// clear). It is always the only lock a transition takes before writing, so the
+// ordering is consistent and deadlock-free.
+func lockApplication(ctx context.Context, tx pgx.Tx, applicationID pgtype.UUID) error {
+	var locked pgtype.UUID
+	return tx.QueryRow(ctx, "SELECT id FROM applications WHERE id = $1 FOR UPDATE", applicationID).Scan(&locked)
 }
 
-// MarkPreviewClosed completes a close atomically: the binding becomes deleted
-// and the pull request's delivery ledger is cleared in one transaction. It is
-// idempotent and runs on every close path — including the already-deleted
-// retry — so a stale reservation can never poison a reopen.
+// MarkPreviewClosing persists a close intent on one binding, under the
+// base-application lock: a promotion that won the lock first is then closed by
+// this transition, and one that follows is refused by the closing state.
+func (s *Store) MarkPreviewClosing(ctx context.Context, previewID pgtype.UUID) (sqlc.PreviewDeploy, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.PreviewDeploy{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := s.queries.WithTx(tx)
+
+	var applicationID pgtype.UUID
+	if err := tx.QueryRow(ctx, "SELECT application_id FROM preview_deploys WHERE id = $1", previewID).Scan(&applicationID); err != nil {
+		return sqlc.PreviewDeploy{}, err
+	}
+	if err := lockApplication(ctx, tx, applicationID); err != nil {
+		return sqlc.PreviewDeploy{}, err
+	}
+	row, err := queries.MarkPreviewDeployClosing(ctx, previewID)
+	if err != nil {
+		return sqlc.PreviewDeploy{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.PreviewDeploy{}, err
+	}
+	return row, nil
+}
+
+// MarkPreviewClosed completes a close atomically under the base-application
+// lock: the binding becomes deleted and the pull request's delivery ledger is
+// cleared in one transaction. It is idempotent and runs on every close path —
+// including the already-deleted retry — so a stale reservation can never
+// poison a reopen, and a concurrent promotion can never overwrite the
+// completed close (it either waits, or is refused by the deleted state).
 func (s *Store) MarkPreviewClosed(ctx context.Context, applicationID pgtype.UUID, prNumber int32) (sqlc.PreviewDeploy, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -337,6 +369,9 @@ func (s *Store) MarkPreviewClosed(ctx context.Context, applicationID pgtype.UUID
 	defer func() { _ = tx.Rollback(ctx) }()
 	queries := s.queries.WithTx(tx)
 
+	if err := lockApplication(ctx, tx, applicationID); err != nil {
+		return sqlc.PreviewDeploy{}, err
+	}
 	row, err := queries.MarkPreviewDeployClosed(ctx, sqlc.MarkPreviewDeployClosedParams{
 		ApplicationID: applicationID,
 		PrNumber:      prNumber,
@@ -396,10 +431,53 @@ func (s *Store) ListOrphanedPreviewDeploys(ctx context.Context) ([]sqlc.PreviewD
 	return s.queries.ListOrphanedPreviewDeploys(ctx)
 }
 
-// MarkPreviewDeploysDeletedForSibling marks the bindings that point at a
-// sibling application being deleted.
+// MarkPreviewDeploysDeletedForSibling closes the bindings that point at a
+// sibling application being deleted (the user-facing delete path): each
+// binding is marked deleted and its pull request's ledger cleared, under the
+// base-application lock. Clearing the ledger is what keeps the fence premise
+// intact — a lease left behind could otherwise authorize a stale promotion.
 func (s *Store) MarkPreviewDeploysDeletedForSibling(ctx context.Context, previewApplicationID pgtype.UUID) error {
-	return s.queries.MarkPreviewDeploysDeletedForSibling(ctx, previewApplicationID)
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := s.queries.WithTx(tx)
+
+	rows, err := queries.ListLivePreviewDeploysForSibling(ctx, previewApplicationID)
+	if err != nil {
+		return err
+	}
+	// Lock every affected base application in a stable order (a preview
+	// sibling normally backs one binding; the ordering keeps concurrent calls
+	// deadlock-free when it does not).
+	locked := make(map[[16]byte]bool, len(rows))
+	for _, row := range rows {
+		var key [16]byte
+		copy(key[:], row.ApplicationID.Bytes[:])
+		if locked[key] {
+			continue
+		}
+		if err := lockApplication(ctx, tx, row.ApplicationID); err != nil {
+			return err
+		}
+		locked[key] = true
+	}
+	for _, row := range rows {
+		if _, err := queries.MarkPreviewDeployClosed(ctx, sqlc.MarkPreviewDeployClosedParams{
+			ApplicationID: row.ApplicationID,
+			PrNumber:      row.PrNumber,
+		}); err != nil {
+			return err
+		}
+		if err := queries.ClearPreviewDeliveries(ctx, sqlc.ClearPreviewDeliveriesParams{
+			ApplicationID: row.ApplicationID,
+			PrNumber:      row.PrNumber,
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // ListOrphanedPreviewApplications returns preview applications with no
@@ -416,8 +494,19 @@ func (s *Store) ReleasePreviewDelivery(ctx context.Context, id pgtype.UUID) erro
 
 // ClearPreviewDeliveries removes every reservation of one pull request.
 func (s *Store) ClearPreviewDeliveries(ctx context.Context, applicationID pgtype.UUID, prNumber int32) error {
-	return s.queries.ClearPreviewDeliveries(ctx, sqlc.ClearPreviewDeliveriesParams{
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockApplication(ctx, tx, applicationID); err != nil {
+		return err
+	}
+	if err := s.queries.WithTx(tx).ClearPreviewDeliveries(ctx, sqlc.ClearPreviewDeliveriesParams{
 		ApplicationID: applicationID,
 		PrNumber:      prNumber,
-	})
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

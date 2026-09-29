@@ -34,7 +34,7 @@ SELECT count(*) FROM (
     WHERE p.application_id = $1 AND p.pr_number <> $2 AND p.state <> 'deleted'
     UNION
     SELECT d.pr_number AS pr_number FROM preview_deliveries d
-    WHERE d.application_id = $1 AND d.pr_number <> $2 AND d.kind = 'start' AND d.expires_at > now()
+    WHERE d.application_id = $1 AND d.pr_number <> $2 AND d.kind = 'start' AND d.expires_at > clock_timestamp()
 ) AS live
 `
 
@@ -57,7 +57,7 @@ func (q *Queries) CountLivePreviews(ctx context.Context, arg CountLivePreviewsPa
 }
 
 const getPreviewDelivery = `-- name: GetPreviewDelivery :one
-SELECT id, application_id, pr_number, kind, head_sha, delivery_id, received_at, expires_at FROM preview_deliveries WHERE id = $1 AND expires_at > now()
+SELECT id, application_id, pr_number, kind, head_sha, delivery_id, received_at, expires_at FROM preview_deliveries WHERE id = $1 AND expires_at > clock_timestamp()
 `
 
 // Loads one UNEXPIRED ledger row by id: the promotion fence verifies the
@@ -144,6 +144,42 @@ func (q *Queries) ListClosingPreviewDeploys(ctx context.Context, updatedAt pgtyp
 			&i.UpdatedAt,
 			&i.DeletedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLivePreviewDeploysForSibling = `-- name: ListLivePreviewDeploysForSibling :many
+SELECT id, application_id, pr_number FROM preview_deploys
+WHERE preview_application_id = $1 AND state <> 'deleted'
+ORDER BY application_id, pr_number
+`
+
+type ListLivePreviewDeploysForSiblingRow struct {
+	ID            pgtype.UUID `json:"id"`
+	ApplicationID pgtype.UUID `json:"application_id"`
+	PrNumber      int32       `json:"pr_number"`
+}
+
+// The bindings that point at a sibling application being deleted (the
+// user-facing delete path): the binding is the audit trail, not the owner.
+// Store.MarkPreviewDeploysDeletedForSibling closes each of them and clears
+// their ledgers under the base-application lock.
+func (q *Queries) ListLivePreviewDeploysForSibling(ctx context.Context, previewApplicationID pgtype.UUID) ([]ListLivePreviewDeploysForSiblingRow, error) {
+	rows, err := q.db.Query(ctx, listLivePreviewDeploysForSibling, previewApplicationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLivePreviewDeploysForSiblingRow{}
+	for rows.Next() {
+		var i ListLivePreviewDeploysForSiblingRow
+		if err := rows.Scan(&i.ID, &i.ApplicationID, &i.PrNumber); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -345,21 +381,8 @@ func (q *Queries) MarkPreviewDeployClosing(ctx context.Context, id pgtype.UUID) 
 	return i, err
 }
 
-const markPreviewDeploysDeletedForSibling = `-- name: MarkPreviewDeploysDeletedForSibling :exec
-UPDATE preview_deploys
-SET state = 'deleted', deleted_at = now(), updated_at = now()
-WHERE preview_application_id = $1 AND state <> 'deleted'
-`
-
-// Marks the bindings that point at a sibling application being deleted (the
-// user-facing delete path): the binding is the audit trail, not the owner.
-func (q *Queries) MarkPreviewDeploysDeletedForSibling(ctx context.Context, previewApplicationID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, markPreviewDeploysDeletedForSibling, previewApplicationID)
-	return err
-}
-
 const purgeExpiredPreviewDeliveries = `-- name: PurgeExpiredPreviewDeliveries :execrows
-DELETE FROM preview_deliveries WHERE expires_at <= now()
+DELETE FROM preview_deliveries WHERE expires_at <= clock_timestamp()
 `
 
 // Removes every expired reservation — the sweep's housekeeping pass.
@@ -373,7 +396,7 @@ func (q *Queries) PurgeExpiredPreviewDeliveries(ctx context.Context) (int64, err
 
 const purgeExpiredPreviewDeliveriesFor = `-- name: PurgeExpiredPreviewDeliveriesFor :exec
 DELETE FROM preview_deliveries
-WHERE application_id = $1 AND pr_number = $2 AND expires_at <= now()
+WHERE application_id = $1 AND pr_number = $2 AND expires_at <= clock_timestamp()
 `
 
 type PurgeExpiredPreviewDeliveriesForParams struct {

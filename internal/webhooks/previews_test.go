@@ -1172,6 +1172,17 @@ func TestCleanupApplicationMarksSiblingBindingDeleted(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertPreview: %v", err)
 	}
+	// A live lease a stale worker could still use to promote: the sibling
+	// delete must clear it with the binding.
+	repo.mu.Lock()
+	repo.reservations[ReservationKey(DeliveryReservation{
+		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "stale-head",
+	})] = DeliveryReservation{
+		ID: uuid.New(), ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart,
+		HeadSHA: "stale-head", ExpiresAt: time.Now().Add(time.Hour),
+	}
+	repo.mu.Unlock()
+
 	if err := svc.CleanupApplication(context.Background(), sibling); err != nil {
 		t.Fatalf("CleanupApplication(sibling): %v", err)
 	}
@@ -1184,6 +1195,9 @@ func TestCleanupApplicationMarksSiblingBindingDeleted(t *testing.T) {
 	}
 	if preview.PreviewApplicationID != sibling {
 		t.Errorf("binding sibling link = %s, want the (row-level) link kept for the FK", preview.PreviewApplicationID)
+	}
+	if got := repo.reservationCount(); got != 0 {
+		t.Errorf("reservations = %d, want the sibling delete to clear the ledger", got)
 	}
 	if got := deployer.deleteCount(); got != 0 {
 		t.Errorf("siblings deleted = %d, want 0 (the sibling is being deleted by its owner)", got)
@@ -1810,6 +1824,48 @@ func TestOwnLeaseDoesNotDenyTheCap(t *testing.T) {
 	}
 	if delivery.Status != StatusIgnored || delivery.Reason != "preview limit reached" {
 		t.Fatalf("PR 10 = %+v, want ignored at the cap", delivery)
+	}
+}
+
+// TestFinalPromotionFailureIsRetryable pins the LOW fix: when the final
+// (active) fenced write fails, the delivery must not answer 200 with the
+// revision unrecorded; it surfaces the error so the host redelivers, and the
+// lease is released for that retry.
+func TestFinalPromotionFailureIsRetryable(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	repo.mu.Lock()
+	repo.promoteErr = errors.New("database down")
+	repo.promoteErrAt = 2 // the intermediate promotion succeeds; the final one fails
+	repo.mu.Unlock()
+
+	body := githubPRBody("opened", 7, "feat/x", "main", "head-a")
+	if _, err := receive(t, svc, body); err == nil {
+		t.Fatal("final promotion failure: no error, want a non-2xx so the host retries")
+	}
+	if got := repo.reservationCount(); got != 0 {
+		t.Errorf("reservations = %d, want the failed lease released", got)
+	}
+	if got := deployer.deployCount(); got != 1 {
+		t.Errorf("deployments = %d, want the deployment still queued", got)
+	}
+
+	// A redelivery after the transient failure converges.
+	repo.mu.Lock()
+	repo.promoteErr = nil
+	repo.promoteErrAt = 0
+	repo.mu.Unlock()
+	delivery, err := receive(t, svc, body)
+	if err != nil {
+		t.Fatalf("Receive(retry): %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("retry = %+v, want queued", delivery)
+	}
+	if preview, _ := repo.GetPreview(context.Background(), repo.app.ID, 7); preview.State != PreviewActive {
+		t.Errorf("binding after the retry = %q, want active", preview.State)
 	}
 }
 

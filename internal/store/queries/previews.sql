@@ -59,12 +59,14 @@ LEFT JOIN applications a ON a.id = p.preview_application_id
 WHERE p.state <> 'deleted'
   AND (p.preview_application_id IS NULL OR a.id IS NULL);
 
--- name: MarkPreviewDeploysDeletedForSibling :exec
--- Marks the bindings that point at a sibling application being deleted (the
+-- name: ListLivePreviewDeploysForSibling :many
+-- The bindings that point at a sibling application being deleted (the
 -- user-facing delete path): the binding is the audit trail, not the owner.
-UPDATE preview_deploys
-SET state = 'deleted', deleted_at = now(), updated_at = now()
-WHERE preview_application_id = $1 AND state <> 'deleted';
+-- Store.MarkPreviewDeploysDeletedForSibling closes each of them and clears
+-- their ledgers under the base-application lock.
+SELECT id, application_id, pr_number FROM preview_deploys
+WHERE preview_application_id = $1 AND state <> 'deleted'
+ORDER BY application_id, pr_number;
 
 -- name: ListOrphanedPreviewApplications :many
 -- Preview siblings without a LIVE binding, older than the sweep grace period:
@@ -93,14 +95,14 @@ SELECT count(*) FROM (
     WHERE p.application_id = $1 AND p.pr_number <> $2 AND p.state <> 'deleted'
     UNION
     SELECT d.pr_number AS pr_number FROM preview_deliveries d
-    WHERE d.application_id = $1 AND d.pr_number <> $2 AND d.kind = 'start' AND d.expires_at > now()
+    WHERE d.application_id = $1 AND d.pr_number <> $2 AND d.kind = 'start' AND d.expires_at > clock_timestamp()
 ) AS live;
 
 -- name: GetPreviewDelivery :one
 -- Loads one UNEXPIRED ledger row by id: the promotion fence verifies the
 -- lease it was issued still exists and has not lapsed. An expired lease is
 -- reported as missing, so a stale worker cannot promote a binding.
-SELECT * FROM preview_deliveries WHERE id = $1 AND expires_at > now();
+SELECT * FROM preview_deliveries WHERE id = $1 AND expires_at > clock_timestamp();
 
 -- name: ReservePreviewDelivery :one
 -- Insert a delivery reservation (in-flight lease for a start, teardown marker
@@ -128,8 +130,8 @@ WHERE application_id = $1 AND pr_number = $2;
 -- delivery (a crash) must never suppress a later delivery of the same
 -- revision.
 DELETE FROM preview_deliveries
-WHERE application_id = $1 AND pr_number = $2 AND expires_at <= now();
+WHERE application_id = $1 AND pr_number = $2 AND expires_at <= clock_timestamp();
 
 -- name: PurgeExpiredPreviewDeliveries :execrows
 -- Removes every expired reservation — the sweep's housekeeping pass.
-DELETE FROM preview_deliveries WHERE expires_at <= now();
+DELETE FROM preview_deliveries WHERE expires_at <= clock_timestamp();

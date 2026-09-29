@@ -36,9 +36,13 @@ type fakeRepository struct {
 
 	// reservations mirrors preview_deliveries: keyed by the partial unique
 	// index the database enforces (start: app/pr/sha, close: app/pr).
-	reservations   map[string]DeliveryReservation
-	claimStoreErr  error
+	reservations  map[string]DeliveryReservation
+	claimStoreErr error
+	// promoteErr fails a promotion; promoteErrAt selects the 1-based call that
+	// fails (0 = every call while promoteErr is set).
 	promoteErr     error
+	promoteErrAt   int
+	promoteCalls   int
 	unreserveErr   error
 	clearErr       error
 	orphanErr      error
@@ -538,7 +542,8 @@ func (r *fakeRepository) liveCountLocked(appID uuid.UUID, now time.Time, exclude
 func (r *fakeRepository) WritePreviewBinding(_ context.Context, write PreviewBindingWrite) (PreviewBindingWriteResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.promoteErr != nil {
+	r.promoteCalls++
+	if r.promoteErr != nil && (r.promoteErrAt == 0 || r.promoteCalls == r.promoteErrAt) {
 		return PreviewBindingWriteResult{}, r.promoteErr
 	}
 	now := r.clock()
@@ -684,6 +689,13 @@ func (r *fakeRepository) MarkPreviewsDeletedForSibling(_ context.Context, previe
 		preview.DeletedAt = time.Now().UTC()
 		preview.UpdatedAt = preview.DeletedAt
 		r.previews[key] = preview
+		// The store clears the ledger with the close; leaving a lease behind
+		// would authorize a stale promotion.
+		for reservationKey, reservation := range r.reservations {
+			if reservation.ApplicationID == preview.ApplicationID && reservation.PRNumber == preview.PRNumber {
+				delete(r.reservations, reservationKey)
+			}
+		}
 	}
 	return nil
 }

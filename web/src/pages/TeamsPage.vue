@@ -466,17 +466,17 @@ async function handleDelete(): Promise<void> {
   const subject = `team:${teamId}`;
   const token = beginMutation(subject);
   /**
-   * A delete may legitimately move the selection (the deleted team was the
-   * selected one), so its own outcome is judged by the team being gone from
-   * the store; otherwise the context must be unchanged. A failure can never
-   * move the selection, so a changed generation means the operator switched
-   * away while the delete was pending and its alert is stale. The mutation
-   * token keeps a superseded double-delete from writing the newer spinner.
+   * A successful delete removes the team from the store and moves the
+   * selection, which clears the mutation token, so the real outcome (the team
+   * is gone) is checked first and its success is still reported. Otherwise the
+   * delete must own the context: a failure can never move the selection, so a
+   * changed generation or a superseded token means the feedback belongs to an
+   * earlier operation and must not touch the newer one's state.
    */
   const ownsFeedback = (): boolean =>
-    mutationTokens.get(subject) === token &&
-    (generation === selectionGeneration ||
-      !teamsStore.teams.some((item) => item.id === teamId));
+    !teamsStore.teams.some((item) => item.id === teamId) ||
+    (mutationTokens.get(subject) === token &&
+      generation === selectionGeneration);
   deleting.value = true;
   teamActionError.value = null;
   try {

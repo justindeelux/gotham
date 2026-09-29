@@ -257,6 +257,8 @@ test.describe("teams", () => {
     // ── delete the team ───────────────────────────────────────────────────
     await teamRow.getByRole("button", { name: "Delete" }).click();
     await page.locator(".n-popconfirm").getByRole("button", { name: "Confirm" }).click();
+    // The success feedback survives the selection fallback the delete causes.
+    await expect(page.getByText(`Deleted team ${teamName}`)).toBeVisible();
     await expect(page.locator(`[data-team="${teamName}"]`)).toHaveCount(0);
 
     expect(
@@ -757,6 +759,12 @@ test.describe("team context races", () => {
  * invite creation/revocation and the team delete.
  */
 test.describe("team mutation races", () => {
+  // The superseded-delete scenario fails one request on purpose; the browser
+  // logs the transport failure, the app must render its own state.
+  test.use({
+    expectedConsoleErrors: ["Failed to load resource: net::ERR_FAILED"],
+  });
+
   test("an old role response cannot overwrite a newer mutation after A → B → A", async ({
     page,
     request,
@@ -997,6 +1005,87 @@ test.describe("team mutation races", () => {
     expect(
       guardrails.apiFailures,
       `unexpected failed API requests:\n${guardrails.apiFailures.join("\n")}`,
+    ).toEqual([]);
+  });
+
+  test("a superseded delete cannot clear the newer spinner and the newer success still reports", async ({
+    page,
+    request,
+    guardrails,
+  }) => {
+    test.setTimeout(60_000);
+
+    const suffix = uniqueSuffix();
+    const teamA = await seedTeam(request, `ui-e2e-del-a-${suffix}`);
+    const teamB = await seedTeam(request, `ui-e2e-del-b-${suffix}`);
+
+    // The first delete of A fails late; the second one succeeds late.
+    let releaseFirst: () => void = () => undefined;
+    let releaseSecond: () => void = () => undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    let deletes = 0;
+    await page.route("**/api/v1/teams/*", async (route) => {
+      if (route.request().method() !== "DELETE") {
+        await route.continue();
+        return;
+      }
+      deletes += 1;
+      if (deletes === 1) {
+        await firstGate;
+        await route.abort("failed");
+        return;
+      }
+      await secondGate;
+      await route.fulfill({ status: 204, body: "" });
+    });
+
+    await page.goto("/teams");
+    const rowA = page.locator(`[data-team="${teamA.name}"]`);
+    const rowB = page.locator(`[data-team="${teamB.name}"]`);
+    const deleteButtonA = (): Locator =>
+      rowA.getByRole("button", { name: "Delete" });
+
+    // First delete of A: held, so A's Delete button is pending.
+    await rowA.getByRole("button", { name: teamA.name }).click();
+    await deleteButtonA().click();
+    await page.locator(".n-popconfirm").getByRole("button", { name: "Confirm" }).click();
+    await expect(deleteButtonA()).toHaveClass(/n-button--loading/);
+
+    // Leave A and come back; the second delete is the newest operation.
+    await rowB.getByRole("button", { name: teamB.name }).click();
+    await rowA.getByRole("button", { name: teamA.name }).click();
+    await deleteButtonA().click();
+    await page
+      .locator(".n-popconfirm")
+      .getByRole("button", { name: "Confirm" })
+      .last()
+      .click();
+    await expect(deleteButtonA()).toHaveClass(/n-button--loading/);
+
+    // The superseded failure must not clear the newer spinner or surface.
+    releaseFirst();
+    await settle(page);
+    await expect(deleteButtonA()).toHaveClass(/n-button--loading/);
+    await expect(page.locator('[data-testid="team-action-error"]')).toHaveCount(0);
+
+    // The newer delete succeeds: its toast fires and A leaves the list.
+    releaseSecond();
+    await expect(page.getByText(`Deleted team ${teamA.name}`)).toBeVisible();
+    await expect(page.locator(`[data-team="${teamA.name}"]`)).toHaveCount(0);
+    expect(deletes).toBe(2);
+
+    const unexpected = guardrails.apiFailures.filter(
+      (line) =>
+        !(line.includes(`/teams/${teamA.id}`) && line.includes("requestfailed")),
+    );
+    expect(
+      unexpected,
+      `unexpected failed API requests:\n${unexpected.join("\n")}`,
     ).toEqual([]);
   });
 });

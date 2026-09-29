@@ -1,1 +1,0 @@
-function i(t){return typeof t!="string"?null:t.startsWith("/")&&!t.startsWith("//")?t:null}function n(t,r){const e=i(t.query.redirect);return e?{name:r,query:{redirect:e}}:{name:r}}export{n as a,i as s};

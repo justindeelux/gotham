@@ -379,14 +379,17 @@ async function handleDelete(): Promise<void> {
 
 watch(serverId, () => {
   activeTab.value = "overview";
+  // Invalidate an in-flight read for the previous node: its guarded
+  // completion can no longer clear the spinner, so release it here too, or
+  // the metrics tab's lazy load would stay blocked until a manual refresh.
+  metricsRequestToken += 1;
+  metricsLoading.value = false;
   metricStep.value = "1m";
   metricSeriesStep.value = "1m";
   metricPoints.value = [];
   metricsLoaded.value = false;
   metricsError.value = null;
   metricsAvailable.value = true;
-  // The in-flight read's own guard compares the server id, so a response for
-  // the previous node can never land on this one.
   void fetchServer();
 });
 

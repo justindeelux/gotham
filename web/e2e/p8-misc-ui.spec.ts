@@ -1,4 +1,4 @@
-import type { APIRequestContext, Page, Route } from "@playwright/test";
+import type { APIRequestContext, Locator, Page, Route } from "@playwright/test";
 
 import { expect, test } from "./fixtures";
 import { loadAccount, storageStatePath, uniqueSuffix } from "./support";
@@ -476,12 +476,13 @@ async function acceptInviteAs(
  * One extra account shared by the race scenarios. Registering is rate-limited
  * per IP, so the account is created once per run and reused.
  */
-let sharedInvitee: { email: string; accessToken: string } | null = null;
+let sharedInvitee: { email: string; accessToken: string; userId: string } | null =
+  null;
 
 /** ensureInvitee registers (once) the account used as a second team member. */
 async function ensureInvitee(
   request: APIRequestContext,
-): Promise<{ email: string; accessToken: string }> {
+): Promise<{ email: string; accessToken: string; userId: string }> {
   if (sharedInvitee) {
     return sharedInvitee;
   }
@@ -490,9 +491,54 @@ async function ensureInvitee(
     data: { email, password: "Gotham-E2E-Password1" },
   });
   expect(response.status(), await response.text()).toBe(200);
-  const body = (await response.json()) as { access_token: string };
-  sharedInvitee = { email, accessToken: body.access_token };
+  const body = (await response.json()) as {
+    access_token: string;
+    user: { id: string };
+  };
+  sharedInvitee = { email, accessToken: body.access_token, userId: body.user.id };
   return sharedInvitee;
+}
+
+/** joinTeam invites the shared invitee into a team and accepts the token. */
+async function joinTeam(
+  request: APIRequestContext,
+  teamId: string,
+  role: "admin" | "read_only",
+): Promise<void> {
+  const invitee = await ensureInvitee(request);
+  await acceptInviteAs(
+    request,
+    invitee.accessToken,
+    await seedInvite(request, teamId, invitee.email, role),
+  );
+}
+
+/** memberBody is the wire shape a member-mutation response carries. */
+function memberBody(
+  member: { userId: string; email: string },
+  role: string,
+): Record<string, string> {
+  return {
+    user_id: member.userId,
+    email: member.email,
+    role,
+    created_at: new Date().toISOString(),
+  };
+}
+
+/** memberRow locates one member's row in the active members pane. */
+function memberRow(page: Page, email: string): Locator {
+  return page.locator(".n-tab-pane tr").filter({ hasText: email });
+}
+
+/** setMemberRoleViaUi drives one member row's role select. */
+async function setMemberRoleViaUi(
+  page: Page,
+  email: string,
+  role: string,
+): Promise<void> {
+  await memberRow(page, email).locator(".n-select").click();
+  await page.locator(".n-base-select-option").filter({ hasText: role }).click();
 }
 
 /** seedChannel stores a Discord channel in one team. */
@@ -697,6 +743,184 @@ test.describe("team context races", () => {
     expect(
       unexpected,
       `unexpected failed API requests:\n${unexpected.join("\n")}`,
+    ).toEqual([]);
+  });
+});
+
+/**
+ * R1 (fix round 2) — mutation ownership, not just the team ID.
+ *
+ * A role change captures the selection generation and a per-member mutation
+ * token, so a response from an earlier visit to the same team (A → B → A) can
+ * never overwrite the newer applied state, and an older completion can never
+ * clear a newer mutation's pending indicator. The same rule covers removal,
+ * invite creation/revocation and the team delete.
+ */
+test.describe("team mutation races", () => {
+  test("an old role response cannot overwrite a newer mutation after A → B → A", async ({
+    page,
+    request,
+    guardrails,
+  }) => {
+    test.setTimeout(60_000);
+
+    const suffix = uniqueSuffix();
+    const teamA = await seedTeam(request, `ui-e2e-mut-a-${suffix}`);
+    const teamB = await seedTeam(request, `ui-e2e-mut-b-${suffix}`);
+    const invitee = await ensureInvitee(request);
+    await joinTeam(request, teamA.id, "admin");
+    await joinTeam(request, teamB.id, "admin");
+
+    // The first role PATCH is held; later ones answer with the submitted role.
+    let releaseStale: () => void = () => undefined;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    let patchCount = 0;
+    await page.route("**/api/v1/teams/*/members/*", async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.continue();
+        return;
+      }
+      patchCount += 1;
+      const role = (route.request().postDataJSON() as { role: string }).role;
+      if (patchCount === 1) {
+        await staleGate;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ member: memberBody(invitee, "read_only") }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ member: memberBody(invitee, role) }),
+      });
+    });
+
+    await page.goto("/teams");
+    const rowA = page.locator(`[data-team="${teamA.name}"]`);
+    const rowB = page.locator(`[data-team="${teamB.name}"]`);
+    await rowA.getByRole("button", { name: teamA.name }).click();
+    await expect(memberRow(page, invitee.email)).toBeVisible();
+
+    // In A, submit read-only and hold its response.
+    await setMemberRoleViaUi(page, invitee.email, "read-only");
+    await expect(
+      memberRow(page, invitee.email).locator(".n-base-loading__container").first(),
+    ).toBeVisible();
+
+    // Leave A and come back: this visit is new, the held response is old.
+    await rowB.getByRole("button", { name: teamB.name }).click();
+    await rowA.getByRole("button", { name: teamA.name }).click();
+    await expect(memberRow(page, invitee.email)).toBeVisible();
+
+    // The newer submission completes first and owns the row.
+    await setMemberRoleViaUi(page, invitee.email, "owner");
+    await expect(memberRow(page, invitee.email).locator(".n-select")).toContainText(
+      "owner",
+    );
+
+    // Release the stale read-only response.
+    releaseStale();
+    await settle(page);
+
+    await expect(memberRow(page, invitee.email).locator(".n-select")).toContainText(
+      "owner",
+    );
+    await expect(
+      page.getByText(`${invitee.email} is now read-only`),
+    ).toHaveCount(0);
+    expect(patchCount).toBe(2);
+
+    expect(
+      guardrails.apiFailures,
+      `unexpected failed API requests:\n${guardrails.apiFailures.join("\n")}`,
+    ).toEqual([]);
+  });
+
+  test("a pending mutation's spinner is not inherited across teams and survives an old completion", async ({
+    page,
+    request,
+    guardrails,
+  }) => {
+    test.setTimeout(60_000);
+
+    const suffix = uniqueSuffix();
+    const teamA = await seedTeam(request, `ui-e2e-spin-a-${suffix}`);
+    const teamB = await seedTeam(request, `ui-e2e-spin-b-${suffix}`);
+    const invitee = await ensureInvitee(request);
+    await joinTeam(request, teamA.id, "admin");
+    await joinTeam(request, teamB.id, "admin");
+
+    let releaseA: () => void = () => undefined;
+    let releaseB: () => void = () => undefined;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const gateB = new Promise<void>((resolve) => {
+      releaseB = resolve;
+    });
+    await page.route("**/api/v1/teams/*/members/*", async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.continue();
+        return;
+      }
+      const role = (route.request().postDataJSON() as { role: string }).role;
+      if (route.request().url().includes(`/teams/${teamA.id}/`)) {
+        await gateA;
+      } else {
+        await gateB;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ member: memberBody(invitee, role) }),
+      });
+    });
+
+    await page.goto("/teams");
+    const rowA = page.locator(`[data-team="${teamA.name}"]`);
+    const rowB = page.locator(`[data-team="${teamB.name}"]`);
+
+    // A: start a role update and leave it pending.
+    await rowA.getByRole("button", { name: teamA.name }).click();
+    await setMemberRoleViaUi(page, invitee.email, "read-only");
+    await expect(
+      memberRow(page, invitee.email).locator(".n-base-loading__container").first(),
+    ).toBeVisible();
+
+    // B must not inherit A's pending indicator.
+    await rowB.getByRole("button", { name: teamB.name }).click();
+    await expect(memberRow(page, invitee.email)).toBeVisible();
+    await expect(memberRow(page, invitee.email).locator(".n-base-loading__container")).toHaveCount(
+      0,
+    );
+
+    // B's own update is pending; A's completion must not clear its spinner.
+    await setMemberRoleViaUi(page, invitee.email, "read-only");
+    await expect(
+      memberRow(page, invitee.email).locator(".n-base-loading__container").first(),
+    ).toBeVisible();
+    releaseA();
+    await settle(page);
+    await expect(
+      memberRow(page, invitee.email).locator(".n-base-loading__container").first(),
+    ).toBeVisible();
+
+    releaseB();
+    await expect(memberRow(page, invitee.email).locator(".n-select")).toContainText(
+      "read-only",
+    );
+    await expect(memberRow(page, invitee.email).locator(".n-base-loading__container")).toHaveCount(
+      0,
+    );
+
+    expect(
+      guardrails.apiFailures,
+      `unexpected failed API requests:\n${guardrails.apiFailures.join("\n")}`,
     ).toEqual([]);
   });
 });
@@ -988,8 +1212,13 @@ test.describe("invite redirect across registration", () => {
     await page.getByRole("button", { name: "Create account", exact: true }).click();
 
     await expect(page.getByText(`You joined ${team.name}`)).toBeVisible();
-    // The spent token is scrubbed from the address bar.
+    // The spent token is scrubbed from the address bar and never persisted.
     await expect(page).not.toHaveURL(/token=/);
+    expect(
+      await page.evaluate(() =>
+        [JSON.stringify(localStorage), JSON.stringify(sessionStorage)].join("\n"),
+      ),
+    ).not.toContain(token);
 
     // The account really joined the team.
     const members = await request.get(`/api/v1/teams/${team.id}/members`, {
@@ -1005,5 +1234,16 @@ test.describe("invite redirect across registration", () => {
       guardrails.apiFailures,
       `unexpected failed API requests:\n${guardrails.apiFailures.join("\n")}`,
     ).toEqual([]);
+  });
+
+  test("the auth switch refuses a backslash-spelled protocol-relative redirect", async ({
+    page,
+  }) => {
+    // Browsers treat `/\evil.example.com` like `//evil.example.com`, so the
+    // value must never be carried into an auth redirect.
+    await page.goto(`/login?redirect=${encodeURIComponent("/\\evil.example.com")}`);
+    const registerTab = page.getByRole("tab", { name: "Create account" });
+    await expect(registerTab).toBeVisible();
+    await expect(registerTab).toHaveAttribute("href", "/register");
   });
 });

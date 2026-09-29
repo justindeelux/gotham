@@ -67,9 +67,10 @@ const members = ref<TeamMember[]>([]);
 const membersLoading = ref(false);
 const membersError = ref<string | null>(null);
 const memberActionError = ref<string | null>(null);
-const busyMemberId = ref("");
 /** Token of the newest members read; a stale response never writes state. */
 let membersReadToken = 0;
+/** Members with an in-flight mutation, keyed by user id, for the row spinner. */
+const pendingMemberIds = ref<Record<string, boolean>>({});
 
 // Invites.
 const invites = ref<TeamInvite[]>([]);
@@ -78,6 +79,65 @@ const invitesError = ref<string | null>(null);
 const inviteActionError = ref<string | null>(null);
 /** Token of the newest invites read; a stale response never writes state. */
 let invitesReadToken = 0;
+
+// Mutation ownership.
+/**
+ * Selection generation: incremented whenever the selected team changes. A
+ * mutation captures it at start and may only write page state while it still
+ * matches, so a stale response from an earlier visit to the same team
+ * (A → B → A) can never overwrite the newer visit's applied result.
+ */
+let selectionGeneration = 0;
+
+/**
+ * Latest mutation token per subject (a member id, an invite id, the invite
+ * form). Only the newest mutation of one subject may write page state, so an
+ * overlapping older submission cannot regress to its response or clear the
+ * newer one's pending indicator.
+ */
+const mutationTokens = new Map<string, number>();
+
+/** beginMutation registers a mutation of one subject and returns its token. */
+function beginMutation(subject: string): number {
+  const token = (mutationTokens.get(subject) ?? 0) + 1;
+  mutationTokens.set(subject, token);
+  return token;
+}
+
+/**
+ * ownsMutation reports whether a mutation may still write page state: the
+ * selection must not have changed since it started, it must still target the
+ * selected team, and no newer mutation of the same subject may have started.
+ */
+function ownsMutation(
+  subject: string,
+  token: number,
+  teamId: string,
+  generation: number,
+): boolean {
+  return (
+    generation === selectionGeneration &&
+    teamsStore.activeTeamId === teamId &&
+    mutationTokens.get(subject) === token
+  );
+}
+
+/** setMemberPending tracks one member's in-flight mutation. */
+function setMemberPending(userId: string, pending: boolean): void {
+  const next = { ...pendingMemberIds.value };
+  if (pending) {
+    next[userId] = true;
+  } else {
+    delete next[userId];
+  }
+  pendingMemberIds.value = next;
+}
+
+/** memberPending reports whether a member row awaits its mutation. */
+function memberPending(userId: string): boolean {
+  return pendingMemberIds.value[userId] === true;
+}
+
 const inviteOpen = ref(false);
 const inviteEmail = ref("");
 const inviteRole = ref<TeamRole>("read_only");
@@ -166,7 +226,7 @@ const memberColumns = computed<DataTableColumns<TeamMember>>(() => [
         size: "small",
         options: roleOptions,
         "aria-label": `Role of ${row.email}`,
-        loading: busyMemberId.value === row.user_id,
+        loading: memberPending(row.user_id),
         "onUpdate:value": (role: TeamRole) => void changeMemberRole(row, role),
       });
     },
@@ -197,7 +257,7 @@ const memberColumns = computed<DataTableColumns<TeamMember>>(() => [
                     size: "small",
                     ghost: true,
                     type: "error",
-                    loading: busyMemberId.value === row.user_id,
+                    loading: memberPending(row.user_id),
                   },
                   { default: () => "Remove" },
                 ),
@@ -255,13 +315,16 @@ const inviteColumns = computed<DataTableColumns<TeamInvite>>(() => [
 ]);
 
 /**
- * resetCollections drops the previous team's members and invites and
- * invalidates every read still in flight for it. It runs before the selection
- * changes are acted on, so rows of one team can never render under another.
+ * resetTeamContext drops the previous team's members and invites, invalidates
+ * every read and mutation still in flight for it, and clears its pending
+ * indicators. It runs before a selection change is acted on, so rows, errors,
+ * spinners and late responses of one team can never surface under another.
  */
-function resetCollections(): void {
+function resetTeamContext(): void {
+  selectionGeneration += 1;
   membersReadToken += 1;
   invitesReadToken += 1;
+  mutationTokens.clear();
   members.value = [];
   invites.value = [];
   membersError.value = null;
@@ -270,6 +333,9 @@ function resetCollections(): void {
   inviteActionError.value = null;
   membersLoading.value = false;
   invitesLoading.value = false;
+  pendingMemberIds.value = {};
+  deleting.value = false;
+  teamActionError.value = null;
 }
 
 async function loadMembers(): Promise<void> {
@@ -384,19 +450,38 @@ async function handleDelete(): Promise<void> {
   if (!team) {
     return;
   }
+  const generation = selectionGeneration;
+  const teamId = team.id;
+  /**
+   * A delete may legitimately move the selection (the deleted team was the
+   * selected one), so its own outcome is judged by the team being gone from
+   * the store; otherwise the context must be unchanged. A failure can never
+   * move the selection, so a changed generation means the operator switched
+   * away while the delete was pending and its alert is stale.
+   */
+  const ownsFeedback = (): boolean =>
+    generation === selectionGeneration ||
+    !teamsStore.teams.some((item) => item.id === teamId);
   deleting.value = true;
   teamActionError.value = null;
   try {
-    await teamsStore.remove(team.id);
-    message.success(`Deleted team ${team.name}`);
+    await teamsStore.remove(teamId);
+    if (ownsFeedback()) {
+      message.success(`Deleted team ${team.name}`);
+    }
     // The store falls back to the personal team, whose selection change
     // reloads the collections through the watcher.
   } catch (error) {
     // The backend message is the actionable part: personal teams and teams
     // that still own resources are refused with 409.
+    if (!ownsFeedback()) {
+      return;
+    }
     teamActionError.value = describeTeamError(error);
   } finally {
-    deleting.value = false;
+    if (ownsFeedback()) {
+      deleting.value = false;
+    }
   }
 }
 
@@ -405,13 +490,16 @@ async function changeMemberRole(member: TeamMember, role: TeamRole): Promise<voi
   if (!teamId || role === member.role) {
     return;
   }
-  busyMemberId.value = member.user_id;
+  const generation = selectionGeneration;
+  const token = beginMutation(member.user_id);
+  const owns = (): boolean => ownsMutation(member.user_id, token, teamId, generation);
+  setMemberPending(member.user_id, true);
   memberActionError.value = null;
   try {
     const updated = await updateMemberRole(teamId, member.user_id, role);
-    if (teamsStore.activeTeamId !== teamId) {
-      // The operator moved to another team: the row belongs to the team the
-      // mutation was issued for, never to the one now selected.
+    if (!owns()) {
+      // A newer visit or a newer submission owns this row now: the response
+      // and its success message belong to an earlier state.
       return;
     }
     members.value = members.value.map((item) =>
@@ -419,12 +507,14 @@ async function changeMemberRole(member: TeamMember, role: TeamRole): Promise<voi
     );
     message.success(`${member.email} is now ${roleLabel(role)}`);
   } catch (error) {
-    if (teamsStore.activeTeamId !== teamId) {
+    if (!owns()) {
       return;
     }
     memberActionError.value = describeTeamError(error);
   } finally {
-    busyMemberId.value = "";
+    if (owns()) {
+      setMemberPending(member.user_id, false);
+    }
   }
 }
 
@@ -433,22 +523,27 @@ async function handleRemoveMember(member: TeamMember): Promise<void> {
   if (!teamId) {
     return;
   }
-  busyMemberId.value = member.user_id;
+  const generation = selectionGeneration;
+  const token = beginMutation(member.user_id);
+  const owns = (): boolean => ownsMutation(member.user_id, token, teamId, generation);
+  setMemberPending(member.user_id, true);
   memberActionError.value = null;
   try {
     await removeMember(teamId, member.user_id);
-    if (teamsStore.activeTeamId !== teamId) {
+    if (!owns()) {
       return;
     }
     members.value = members.value.filter((item) => item.user_id !== member.user_id);
     message.success(`Removed ${member.email}`);
   } catch (error) {
-    if (teamsStore.activeTeamId !== teamId) {
+    if (!owns()) {
       return;
     }
     memberActionError.value = describeTeamError(error);
   } finally {
-    busyMemberId.value = "";
+    if (owns()) {
+      setMemberPending(member.user_id, false);
+    }
   }
 }
 
@@ -465,6 +560,10 @@ async function handleCreateInvite(): Promise<void> {
   if (!team) {
     return;
   }
+  const generation = selectionGeneration;
+  const token = beginMutation("invite:create");
+  const owns = (): boolean =>
+    ownsMutation("invite:create", token, team.id, generation);
   inviteBusy.value = true;
   inviteError.value = null;
   try {
@@ -473,9 +572,10 @@ async function handleCreateInvite(): Promise<void> {
       inviteEmail.value.trim(),
       inviteRole.value,
     );
-    if (teamsStore.activeTeamId !== team.id) {
-      // The operator moved on; the one-time token belongs to the team the
-      // invite was created for and must not surface under another one.
+    if (!owns()) {
+      // The operator moved on, or a newer submission owns the form; the
+      // one-time token belongs to the team the invite was created for and
+      // must not surface under another one.
       return;
     }
     createdInvite.value = invite;
@@ -483,12 +583,14 @@ async function handleCreateInvite(): Promise<void> {
     inviteOpen.value = false;
     await loadInvites();
   } catch (error) {
-    if (teamsStore.activeTeamId !== team.id) {
+    if (!owns()) {
       return;
     }
     inviteError.value = describeTeamError(error);
   } finally {
-    inviteBusy.value = false;
+    if (owns()) {
+      inviteBusy.value = false;
+    }
   }
 }
 
@@ -497,16 +599,20 @@ async function handleRevokeInvite(invite: TeamInvite): Promise<void> {
   if (!teamId) {
     return;
   }
+  const generation = selectionGeneration;
+  const subject = `invite:${invite.id}`;
+  const token = beginMutation(subject);
+  const owns = (): boolean => ownsMutation(subject, token, teamId, generation);
   inviteActionError.value = null;
   try {
     await revokeInvite(teamId, invite.id);
-    if (teamsStore.activeTeamId !== teamId) {
+    if (!owns()) {
       return;
     }
     invites.value = invites.value.filter((item) => item.id !== invite.id);
     message.success(`Revoked the invite to ${invite.email}`);
   } catch (error) {
-    if (teamsStore.activeTeamId !== teamId) {
+    if (!owns()) {
       return;
     }
     inviteActionError.value = describeTeamError(error);
@@ -539,7 +645,7 @@ watch(
   () => {
     // Drop and invalidate the previous team's collections before the new
     // reads start: no late response may render under the new selection.
-    resetCollections();
+    resetTeamContext();
     closeInviteToken();
     teamActionError.value = null;
     void loadTeam();

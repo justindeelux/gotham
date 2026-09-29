@@ -108,7 +108,7 @@ jobs:
 
       - name: Install Playwright Chromium
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
       - name: Run Playwright smoke
         working-directory: web

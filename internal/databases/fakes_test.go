@@ -41,6 +41,8 @@ type fakeRepository struct {
 	order     []uuid.UUID
 	secrets   map[uuid.UUID][]Secret
 	servers   map[uuid.UUID]bool
+	// serverTeams maps a registered server to its team (zero = legacy node).
+	serverTeams map[uuid.UUID]uuid.UUID
 
 	createErr     error
 	getErr        error
@@ -218,17 +220,34 @@ func (r *fakeRepository) ListSecrets(_ context.Context, databaseID uuid.UUID) ([
 	return secrets, nil
 }
 
-// ServerExists implements Repository.
-func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID) (bool, error) {
+// ServerExists implements Repository: the node must be known and actionable by
+// the caller's active team.
+func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.serverErr != nil {
 		return false, r.serverErr
 	}
-	if r.serverMissing {
+	if r.serverMissing || !r.servers[serverID] {
 		return false, nil
 	}
-	return r.servers[serverID], nil
+	if err := scope.AuthorizeOptionalTeam(r.serverTeams[serverID], true); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+// seedServerForTeam registers a node owned by teamID (the zero UUID seeds a
+// legacy shared node).
+func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
+	id := r.seedServer()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.serverTeams == nil {
+		r.serverTeams = map[uuid.UUID]uuid.UUID{}
+	}
+	r.serverTeams[id] = teamID
+	return id
 }
 
 // fakeContainers is a scriptable containers.ContainerService: it records every

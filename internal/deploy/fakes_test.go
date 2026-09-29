@@ -57,6 +57,9 @@ type fakeRepository struct {
 
 	// unknownServers names servers ServerExists must report as missing.
 	unknownServers map[uuid.UUID]bool
+	// serverTeams maps a registered server to its team; an entry without a
+	// team (missing or zero) is a legacy shared node.
+	serverTeams map[uuid.UUID]uuid.UUID
 
 	getErr       error
 	createErr    error
@@ -296,14 +299,34 @@ func (r *fakeRepository) ReplaceStorages(_ context.Context, appID uuid.UUID, sto
 	return nil
 }
 
-// ServerExists implements Repository.
-func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID) (bool, error) {
+// ServerExists implements Repository: the node must be known and actionable by
+// the caller's active team.
+func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if serverID == uuid.Nil {
 		return false, nil
 	}
-	return !r.unknownServers[serverID], nil
+	if r.unknownServers[serverID] {
+		return false, nil
+	}
+	if err := scope.AuthorizeOptionalTeam(r.serverTeams[serverID], true); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+// seedServerForTeam registers a node owned by teamID (the zero UUID seeds a
+// legacy shared node).
+func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.serverTeams == nil {
+		r.serverTeams = map[uuid.UUID]uuid.UUID{}
+	}
+	id := uuid.New()
+	r.serverTeams[id] = teamID
+	return id
 }
 
 // ownedApplications returns every application the fake holds (seed first).

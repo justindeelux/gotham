@@ -4,16 +4,35 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-// TestProxySyncRequiresAdminScope proves the global proxy mutation is guarded
-// by the real authentication and scope middleware chain: a missing token gets
-// 401, a read/deploy API token gets 403 without reaching the service, and a
-// session token (which holds every scope in Phase 1) passes.
-func TestProxySyncRequiresAdminScope(t *testing.T) {
+// unsetPlatformAdmins clears the env var even when another test set it.
+func unsetPlatformAdmins(t *testing.T) error {
+	t.Helper()
+	previous, had := os.LookupEnv(PlatformAdminsEnv)
+	if err := os.Unsetenv(PlatformAdminsEnv); err != nil {
+		return err
+	}
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv(PlatformAdminsEnv, previous)
+			return
+		}
+		_ = os.Unsetenv(PlatformAdminsEnv)
+	})
+	return nil
+}
+
+// TestPlatformAdminBoundary proves the platform-global proxy surface (node-wide
+// sync, DNS-provider CRUD) is guarded by a real operator boundary instead of
+// "any JWT": an admin-scoped API token passes, an operator-listed session email
+// passes, and a plain session or a read/deploy token is refused without
+// reaching the service.
+func TestPlatformAdminBoundary(t *testing.T) {
 	s, tokens := newTestTokenServer(t)
 
 	calls := 0
@@ -22,7 +41,7 @@ func TestProxySyncRequiresAdminScope(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	// The exact chain internal/server mounts for POST /v1/proxy/sync.
-	handler := s.RequireAuth(RequireScopes(auth.ScopeAdmin)(next))
+	handler := s.RequireAuth(s.RequirePlatformAdmin(next))
 
 	do := func(authorization string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPost, "/api/v1/proxy/sync", nil)
@@ -41,28 +60,40 @@ func TestProxySyncRequiresAdminScope(t *testing.T) {
 		t.Fatalf("service called %d times without a token", calls)
 	}
 
-	readToken, err := tokens.Create(context.Background(), testUserID, "read-only", []string{auth.ScopeRead})
-	if err != nil {
-		t.Fatalf("create read token: %v", err)
-	}
-	if recorder := do("Bearer " + readToken.Token); recorder.Code != http.StatusForbidden {
-		t.Fatalf("read token status = %d, want 403", recorder.Code)
-	}
-	if calls != 0 {
-		t.Fatalf("service called %d times for a read-scoped token", calls)
-	}
-
-	deployToken, err := tokens.Create(context.Background(), testUserID, "deploy-only", []string{auth.ScopeDeploy})
-	if err != nil {
-		t.Fatalf("create deploy token: %v", err)
-	}
-	if recorder := do("Bearer " + deployToken.Token); recorder.Code != http.StatusForbidden {
-		t.Fatalf("deploy token status = %d, want 403", recorder.Code)
-	}
-	if calls != 0 {
-		t.Fatalf("service called %d times for a deploy-scoped token", calls)
+	for _, scope := range []string{auth.ScopeRead, auth.ScopeDeploy} {
+		token, err := tokens.Create(context.Background(), testUserID, "scoped", []string{scope})
+		if err != nil {
+			t.Fatalf("create %s token: %v", scope, err)
+		}
+		if recorder := do("Bearer " + token.Token); recorder.Code != http.StatusForbidden {
+			t.Fatalf("%s token status = %d, want 403", scope, recorder.Code)
+		}
+		if calls != 0 {
+			t.Fatalf("service called %d times for a %s-scoped token", calls, scope)
+		}
 	}
 
+	// A plain session (role "user") is refused by default: secure by default.
+	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusForbidden {
+		t.Fatalf("plain session status = %d, want 403", recorder.Code)
+	}
+	if calls != 0 {
+		t.Fatalf("service called %d times for a plain session", calls)
+	}
+
+	// An operator-listed session email passes.
+	t.Setenv(PlatformAdminsEnv, "someone@example.com, User@Example.com ")
+	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusOK {
+		t.Fatalf("listed session status = %d, want 200", recorder.Code)
+	}
+	if calls != 1 {
+		t.Fatalf("service calls = %d, want 1 after the listed session", calls)
+	}
+
+	// An admin-scoped API token passes regardless of the list.
+	if err := unsetPlatformAdmins(t); err != nil {
+		t.Fatalf("unset %s: %v", PlatformAdminsEnv, err)
+	}
 	adminToken, err := tokens.Create(context.Background(), testUserID, "admin", []string{auth.ScopeAdmin})
 	if err != nil {
 		t.Fatalf("create admin token: %v", err)
@@ -70,15 +101,7 @@ func TestProxySyncRequiresAdminScope(t *testing.T) {
 	if recorder := do("Bearer " + adminToken.Token); recorder.Code != http.StatusOK {
 		t.Fatalf("admin token status = %d, want 200", recorder.Code)
 	}
-	if calls != 1 {
-		t.Fatalf("service calls = %d, want 1 for the admin token", calls)
-	}
-
-	// A session token carries every scope in Phase 1.
-	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusOK {
-		t.Fatalf("session token status = %d, want 200", recorder.Code)
-	}
 	if calls != 2 {
-		t.Fatalf("service calls = %d, want 2 after the session token", calls)
+		t.Fatalf("service calls = %d, want 2 after the admin token", calls)
 	}
 }

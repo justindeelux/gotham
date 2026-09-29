@@ -37,26 +37,40 @@ type syncResult struct {
 }
 
 // Mount registers the authenticated proxy endpoints under /api. A nil service
-// or FEATURE_PROXY=false mounts nothing. The caller composes the scope
-// middleware: the sync endpoint mutates every node and the SSL endpoints
-// manage DNS credentials, redirect rules and certificate status, so all of
-// them require admin. The SSL services are optional: nil mounts only the sync
-// endpoint (tests, or a build without the SSL surface).
-func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc ProxyService, dns DNSProviderService, certs CertificateService, redirects RedirectService, status CertificateStatusService) {
+// or FEATURE_PROXY=false mounts nothing.
+//
+// The surface is split by blast radius:
+//
+//   - Per-application resources (certificates, redirects) are mounted under
+//     teamAuth: the server passes its team chain, and every operation
+//     authorizes the owning application's team and the caller's role (foreign
+//     team ⇒ 404, read_only write ⇒ 403). Lists are filtered to the caller's
+//     teams.
+//   - Platform-global operations (POST /v1/proxy/sync and the DNS-provider
+//     CRUD) are mounted under platformAuth: the server passes its
+//     RequirePlatformAdmin, because they act on every node and hold DNS
+//     credentials.
+//
+// The SSL services are optional: nil mounts only the sync endpoint (tests, or
+// a build without the SSL surface).
+func Mount(r chi.Router, teamAuth func(http.Handler) http.Handler, platformAuth func(http.Handler) http.Handler, svc ProxyService, dns DNSProviderService, certs CertificateService, redirects RedirectService, status CertificateStatusService) {
 	if svc == nil || !Enabled() {
 		return
 	}
 	h := &handler{svc: svc, dns: dns, certs: certs, redirects: redirects, status: status, logger: slog.Default()}
-	r.Group(func(protected chi.Router) {
-		protected.Use(auth)
-		protected.Post("/v1/proxy/sync", h.sync)
+	r.Group(func(global chi.Router) {
+		global.Use(platformAuth)
+		global.Post("/v1/proxy/sync", h.sync)
 		if dns != nil {
-			protected.Post("/v1/proxy/dns-providers", h.createDNSProvider)
-			protected.Get("/v1/proxy/dns-providers", h.listDNSProviders)
-			protected.Get("/v1/proxy/dns-providers/{id}", h.getDNSProvider)
-			protected.Patch("/v1/proxy/dns-providers/{id}", h.updateDNSProvider)
-			protected.Delete("/v1/proxy/dns-providers/{id}", h.deleteDNSProvider)
+			global.Post("/v1/proxy/dns-providers", h.createDNSProvider)
+			global.Get("/v1/proxy/dns-providers", h.listDNSProviders)
+			global.Get("/v1/proxy/dns-providers/{id}", h.getDNSProvider)
+			global.Patch("/v1/proxy/dns-providers/{id}", h.updateDNSProvider)
+			global.Delete("/v1/proxy/dns-providers/{id}", h.deleteDNSProvider)
 		}
+	})
+	r.Group(func(protected chi.Router) {
+		protected.Use(teamAuth)
 		if certs != nil {
 			protected.Post("/v1/proxy/certificates", h.createCertificate)
 			protected.Get("/v1/proxy/certificates", h.listCertificates)

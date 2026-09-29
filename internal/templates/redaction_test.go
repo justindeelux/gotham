@@ -100,7 +100,9 @@ func (f *fakeRepository) ListServiceDeploys(_ context.Context, _ uuid.UUID, _ in
 }
 
 // ServerExists implements services.Repository.
-func (f *fakeRepository) ServerExists(_ context.Context, _ uuid.UUID) (bool, error) { return true, nil }
+func (f *fakeRepository) ServerExists(_ context.Context, _ uuid.UUID, _ teams.Scope) (bool, error) {
+	return true, nil
+}
 
 // failingAgent is a node whose compose up fails while quoting the secret.
 type failingAgent struct {

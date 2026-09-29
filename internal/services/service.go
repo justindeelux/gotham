@@ -251,7 +251,7 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if err := Validate(req.ComposeYAML, req.Env); err != nil {
 		return Service{}, RedactError(err, req.Env)
 	}
-	exists, err := s.repo.ServerExists(ctx, req.ServerID)
+	exists, err := s.repo.ServerExists(ctx, req.ServerID, teams.ScopeFor(ctx, userID))
 	if err != nil {
 		return Service{}, err
 	}

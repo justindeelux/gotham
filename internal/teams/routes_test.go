@@ -171,7 +171,7 @@ func TestRoutesInviteAndAccept(t *testing.T) {
 	if token == "" {
 		t.Fatalf("invite response carries no token: %+v", invite)
 	}
-	if acceptURL, _ := invite["accept_url"].(string); acceptURL != "/v1/invites/"+token+"/accept" {
+	if acceptURL, _ := invite["accept_url"].(string); acceptURL != "/v1/invites/accept" {
 		t.Fatalf("accept_url = %q", acceptURL)
 	}
 	if _, leaked := invite["token_hash"]; leaked {
@@ -188,13 +188,13 @@ func TestRoutesInviteAndAccept(t *testing.T) {
 	}
 
 	// A different account cannot accept it.
-	rec = request(t, ownerRouter, http.MethodPost, "/v1/invites/"+token+"/accept", nil)
+	rec = request(t, ownerRouter, http.MethodPost, "/v1/invites/accept", map[string]string{"token": token})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("foreign accept = %d, want 403", rec.Code)
 	}
 
 	// The invited account joins with the invited role.
-	rec = request(t, inviteeRouter, http.MethodPost, "/v1/invites/"+token+"/accept", nil)
+	rec = request(t, inviteeRouter, http.MethodPost, "/v1/invites/accept", map[string]string{"token": token})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("accept = %d, body %s", rec.Code, rec.Body)
 	}
@@ -202,9 +202,13 @@ func TestRoutesInviteAndAccept(t *testing.T) {
 		t.Fatalf("accepted team = %+v", team)
 	}
 	// A replay is refused.
-	rec = request(t, inviteeRouter, http.MethodPost, "/v1/invites/"+token+"/accept", nil)
+	rec = request(t, inviteeRouter, http.MethodPost, "/v1/invites/accept", map[string]string{"token": token})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("replayed accept = %d, want 409", rec.Code)
+	}
+	// The token travels in the body only: the path never carries it.
+	if rec := request(t, inviteeRouter, http.MethodPost, "/v1/invites/"+token+"/accept", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("token-in-path accept = %d, want 404 (route removed)", rec.Code)
 	}
 	// The membership is visible to the owner.
 	rec = request(t, ownerRouter, http.MethodGet, "/v1/teams/"+teamID.String()+"/members", nil)
@@ -245,7 +249,7 @@ func TestRoutesAreUnmountedWhenTheFeatureIsOff(t *testing.T) {
 	}{
 		{method: http.MethodPost, path: "/v1/teams"},
 		{method: http.MethodGet, path: "/v1/teams"},
-		{method: http.MethodPost, path: "/v1/invites/sometoken/accept"},
+		{method: http.MethodPost, path: "/v1/invites/accept"},
 	} {
 		if rec := request(t, h, tc.method, tc.path, map[string]string{"name": "x"}); rec.Code != http.StatusNotFound {
 			t.Errorf("%s %s = %d, want the routes unmounted (404)", tc.method, tc.path, rec.Code)

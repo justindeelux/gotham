@@ -94,13 +94,13 @@ func (r *fakeRepository) withTarget() *fakeRepository {
 }
 
 // GetApplication implements Repository.
-func (r *fakeRepository) GetApplication(_ context.Context, appID, userID uuid.UUID) (Application, error) {
+func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.getAppErr != nil {
 		return Application{}, r.getAppErr
 	}
-	if appID != r.app.ID || userID != r.app.UserID {
+	if appID != r.app.ID {
 		return Application{}, ErrNotFound
 	}
 	return r.app, nil

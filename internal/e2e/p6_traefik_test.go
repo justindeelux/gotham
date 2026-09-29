@@ -462,13 +462,14 @@ func p6RunNginx(t *testing.T, ctx context.Context, engine *agent.DockerClient, n
 
 // p6CreateApplication inserts an application row with a direct SQL write so
 // the test can seed legacy values (invalid domain, disabled duplicate) the
-// API validation would reject, and returns its id.
+// API validation would reject, and returns its id. The row is attributed to the
+// creator's personal team (team_id = user_id, see migration 00019).
 func p6CreateApplication(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, serverID pgtype.UUID, name, domain string, hostPort int32, disabled bool) uuid.UUID {
 	t.Helper()
 	var id pgtype.UUID
 	err := pool.QueryRow(ctx,
-		`INSERT INTO applications (user_id, server_id, name, clone_url, branch, build_pack, base_domain, port, host_port, base_domain_disabled)
-		 VALUES ($1, $2, $3, 'https://github.com/acme/demo.git', 'main', 'dockerfile', $4, 80, $5, $6)
+		`INSERT INTO applications (user_id, team_id, server_id, name, clone_url, branch, build_pack, base_domain, port, host_port, base_domain_disabled)
+		 VALUES ($1, $1, $2, $3, 'https://github.com/acme/demo.git', 'main', 'dockerfile', $4, 80, $5, $6)
 		 RETURNING id`,
 		userID, serverID, name, domain, hostPort, disabled).Scan(&id)
 	if err != nil {

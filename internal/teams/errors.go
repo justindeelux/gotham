@@ -22,6 +22,12 @@ var (
 	ErrLastOwner = errors.New("teams: the last owner cannot be removed or demoted")
 	// ErrPersonalTeam marks an attempt to delete a personal team.
 	ErrPersonalTeam = errors.New("teams: personal teams cannot be deleted")
+	// ErrPersonalOwner marks an attempt to demote or remove the owner of a
+	// personal team, whose membership is immutable.
+	ErrPersonalOwner = errors.New("teams: the personal team's owner membership cannot be changed")
+	// ErrTeamNotEmpty marks an attempt to delete a team that still owns
+	// resources or nodes.
+	ErrTeamNotEmpty = errors.New("teams: this team still owns resources")
 	// ErrInviteExpired marks an invite past its expiry.
 	ErrInviteExpired = errors.New("teams: this invite has expired")
 	// ErrInviteUsed marks an invite that was already accepted.

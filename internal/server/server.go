@@ -188,23 +188,27 @@ func (s *Server) routes() (http.Handler, error) {
 		// Container management routes to the node agent; a nil service (no
 		// registry) mounts nothing. The mTLS agent dialer is plugged in here
 		// (the P3-CONN seam) so the container routes and the databases
-		// provisioning path both reach a node agent.
+		// provisioning path both reach a node agent. The routes run through
+		// the team chain and the service authorizes the target node's team and
+		// role before any agent or cache access, so a stranger cannot list or
+		// mutate a team's containers (and a missing vs foreign node is
+		// indistinguishable).
 		containerService := s.containerService()
-		containers.Mount(api, s.RequireAuth, containerService)
+		containers.Mount(api, s.withTeam(false), containerService)
 
 		// Traefik proxy synchronization (BE-6.1) and the SSL surface
 		// (BE-6.2): the shared container service provisions the
 		// gotham-traefik container and the mTLS agent dialer pushes the
 		// generated configuration. A nil service (no database, no container
 		// service, or FEATURE_PROXY=false) mounts nothing and leaves the
-		// deploy lifecycle without a proxy hook. Every endpoint under this
-		// group mutates node state or holds DNS credentials, so it requires
-		// the admin scope on top of authentication (JWT sessions already
-		// hold every scope).
+		// deploy lifecycle without a proxy hook. The surface is split by
+		// blast radius: per-application certificates and redirects run
+		// through the team chain (their handlers authorize the owning
+		// application's team), while the node-wide sync and the DNS-provider
+		// CRUD require a real platform operator (RequirePlatformAdmin: an
+		// admin-scoped API token, an admin-role session, or an email listed
+		// in PLATFORM_ADMINS).
 		s.proxy = s.proxyService(containerService)
-		adminOnly := func(next http.Handler) http.Handler {
-			return s.RequireAuth(RequireScopes(auth.ScopeAdmin)(next))
-		}
 		sslConfig := proxy.SSLConfig{
 			Secret: s.cfg.Snapshot().SecretKey,
 			Logger: s.logger,
@@ -214,9 +218,8 @@ func (s *Server) routes() (http.Handler, error) {
 			sslConfig.Store = proxy.NewStoreSSL(s.persistence)
 		}
 		// Redirect rules (BE-6.3) and the certificate status read path share
-		// the same store, the same admin scope and the same best-effort
-		// resync as the SSL surface; the status service dials the node agent
-		// lazily per read.
+		// the same store and the same best-effort resync as the SSL surface;
+		// the status service dials the node agent lazily per read.
 		redirectConfig := proxy.RedirectConfig{Logger: s.logger, Resync: s.resyncProxyNodes}
 		statusConfig := proxy.CertificateStatusConfig{Logger: s.logger}
 		if s.persistence != nil {
@@ -228,7 +231,10 @@ func (s *Server) routes() (http.Handler, error) {
 				return dialer.DialProxyClient(ctx, serverID)
 			}
 		}
-		proxy.Mount(api, adminOnly, s.proxy,
+		platformOnly := func(next http.Handler) http.Handler {
+			return s.RequireAuth(s.RequirePlatformAdmin(next))
+		}
+		proxy.Mount(api, s.withTeam(false), platformOnly, s.proxy,
 			proxy.NewDefaultProviderService(sslConfig),
 			proxy.NewDefaultCertificateService(sslConfig),
 			proxy.NewDefaultRedirectService(redirectConfig),
@@ -254,8 +260,10 @@ func (s *Server) routes() (http.Handler, error) {
 
 		// Push webhooks (BE-4.4): the public, signature-verified delivery
 		// endpoint plus authenticated hook management. It reuses the deploy
-		// service instance above so both share one worker pool.
-		webhooks.Mount(api, s.RequireAuth, UserIDFromContext, s.webhookService(providerSvc))
+		// service instance above so both share one worker pool. The management
+		// routes run through the team chain, so a demoted or removed creator
+		// can no longer install or remove a team application's hook.
+		webhooks.Mount(api, s.withTeam(false), UserIDFromContext, s.webhookService(providerSvc))
 
 		// Managed databases (BE-5.1): same container service as above, so a
 		// database container is created through the shared container service
@@ -268,7 +276,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// service owns the internal cron scheduler, started here and stopped
 		// by the closer above.
 		s.backups = s.backupService(containerService)
-		databases.MountBackups(api, s.RequireAuth, UserIDFromContext, s.backups)
+		databases.MountBackups(api, s.withTeam(false), s.RequireAuth, UserIDFromContext, s.backups)
 
 		// Compose services (BE-7.1): one docker-compose project per service,
 		// run by the node agent's compose CLI. Like the proxy group, the
@@ -284,6 +292,9 @@ func (s *Server) routes() (http.Handler, error) {
 		// the services routes above, so it shares their admin scope and
 		// rides the same FEATURE_SERVICES kill switch (a nil catalog
 		// mounts nothing).
+		adminOnly := func(next http.Handler) http.Handler {
+			return s.RequireAuth(RequireScopes(auth.ScopeAdmin)(next))
+		}
 		templates.Mount(api, adminOnly, templates.NewDefaultService(s.logger))
 	})
 

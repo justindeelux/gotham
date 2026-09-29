@@ -48,6 +48,24 @@ func (q *Queries) CountTeamOwners(ctx context.Context, teamID pgtype.UUID) (int6
 	return count, err
 }
 
+const countTeamResources = `-- name: CountTeamResources :one
+SELECT
+    (SELECT count(*) FROM applications WHERE applications.team_id = $1) +
+    (SELECT count(*) FROM databases WHERE databases.team_id = $1) +
+    (SELECT count(*) FROM services WHERE services.team_id = $1) +
+    (SELECT count(*) FROM servers WHERE servers.team_id = $1) AS count
+`
+
+// CountTeamResources reports how many resources (applications, databases,
+// compose services, nodes) still belong to a team. Deleting a team is refused
+// while this is non-zero.
+func (q *Queries) CountTeamResources(ctx context.Context, teamID pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countTeamResources, teamID)
+	var count int32
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createInvite = `-- name: CreateInvite :one
 INSERT INTO invites (team_id, email, role, token_hash, invited_by, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -200,6 +218,26 @@ SELECT id, name, is_personal, created_at, updated_at FROM teams WHERE id = $1
 
 func (q *Queries) GetTeam(ctx context.Context, id pgtype.UUID) (Team, error) {
 	row := q.db.QueryRow(ctx, getTeam, id)
+	var i Team
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.IsPersonal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTeamForUpdate = `-- name: GetTeamForUpdate :one
+SELECT id, name, is_personal, created_at, updated_at FROM teams WHERE id = $1 FOR UPDATE
+`
+
+// GetTeamForUpdate locks the team row for the duration of a membership
+// mutation transaction, so concurrent role changes of one team serialize and
+// the last-owner invariant cannot be raced.
+func (q *Queries) GetTeamForUpdate(ctx context.Context, id pgtype.UUID) (Team, error) {
+	row := q.db.QueryRow(ctx, getTeamForUpdate, id)
 	var i Team
 	err := row.Scan(
 		&i.ID,

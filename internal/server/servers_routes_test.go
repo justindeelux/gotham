@@ -333,5 +333,18 @@ func seedServer(t *testing.T, fake *fakeServerService, name string) uuid.UUID {
 	return server.ID
 }
 
+// setTeam stamps a seeded server with a team, which is what the container
+// routes authorize against.
+func (f *fakeServerService) setTeam(id uuid.UUID, teamID uuid.UUID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	server, ok := f.items[id]
+	if !ok {
+		panic("server not found")
+	}
+	server.TeamID = teamID
+	f.items[id] = server
+}
+
 // compile-time assertion that the fake satisfies the interface.
 var _ ServerService = (*fakeServerService)(nil)

@@ -213,8 +213,12 @@ func (s *Service) Rename(ctx context.Context, userID, teamID uuid.UUID, name str
 	return team, nil
 }
 
-// Delete implements TeamService: only an owner may delete a team, and a
-// personal team can never be deleted (it is the account's default scope).
+// Delete implements TeamService: only an owner may delete a team, a personal
+// team can never be deleted (it is the account's default scope), and a team
+// that still owns resources or nodes is refused (409) — its workloads would
+// otherwise lose their control-plane records, and a node must never fall back
+// to the shared legacy state. The servers FK is ON DELETE RESTRICT as the
+// backstop for the same rule.
 func (s *Service) Delete(ctx context.Context, userID, teamID uuid.UUID) error {
 	team, err := s.member(ctx, userID, teamID)
 	if err != nil {
@@ -226,13 +230,18 @@ func (s *Service) Delete(ctx context.Context, userID, teamID uuid.UUID) error {
 	if team.IsPersonal {
 		return ErrPersonalTeam
 	}
+	owned, err := s.repo.CountTeamResources(ctx, teamID)
+	if err != nil {
+		return err
+	}
+	if owned > 0 {
+		return fmt.Errorf("%w: %d resource(s) still belong to this team; delete or move them first",
+			ErrTeamNotEmpty, owned)
+	}
 	if err := s.repo.DeleteTeam(ctx, teamID); err != nil {
 		return err
 	}
-	// The team's resources (applications, databases, services) cascade with
-	// the team row; their containers are not stopped by this call, so an
-	// operator deletes a team with running workloads deliberately.
-	s.logger.Info("teams: deleted; its resources were removed with it",
+	s.logger.Info("teams: deleted; it owned no resources",
 		"team_id", teamID.String(), "user_id", userID.String())
 	return nil
 }
@@ -254,70 +263,95 @@ func (s *Service) Members(ctx context.Context, userID, teamID uuid.UUID) ([]Memb
 
 // SetMemberRole implements TeamService. Owners may set any role; admins may not
 // touch owners and may not grant ownership. Demoting the last owner is refused.
+// The role checks, the owner count and the write run inside one transaction
+// that locks the team row (Repository.MutateMembership), so two concurrent
+// demotions cannot both see two owners and leave the team ownerless. The
+// personal team's owner membership is immutable.
 func (s *Service) SetMemberRole(ctx context.Context, userID, teamID, memberID uuid.UUID, role Role) (Member, error) {
 	if !role.Valid() {
 		return Member{}, fmt.Errorf("%w: role must be one of owner, admin, read_only", ErrValidation)
 	}
-	actor, err := s.manager(ctx, userID, teamID)
-	if err != nil {
-		return Member{}, err
-	}
-	target, err := s.repo.GetMember(ctx, teamID, memberID)
-	if err != nil {
-		return Member{}, err
-	}
-	if !actor.Role.IsOwner() {
-		if target.Role.IsOwner() || role.IsOwner() {
-			return Member{}, fmt.Errorf("%w: only an owner may manage owners", ErrForbidden)
+	var updated Member
+	err := s.repo.MutateMembership(ctx, teamID, func(tx *MembershipTx) error {
+		actor, ok := tx.Member(userID)
+		if !ok {
+			return ErrNotFound
 		}
-	}
-	if target.Role.IsOwner() && !role.IsOwner() {
-		owners, err := s.repo.CountOwners(ctx, teamID)
+		target, ok := tx.Member(memberID)
+		if !ok {
+			return ErrNotFound
+		}
+		if !actor.Role.CanManage() {
+			return ErrForbidden
+		}
+		if err := checkPersonalOwner(tx.Team, target, role.IsOwner()); err != nil {
+			return err
+		}
+		if !actor.Role.IsOwner() {
+			if target.Role.IsOwner() || role.IsOwner() {
+				return fmt.Errorf("%w: only an owner may manage owners", ErrForbidden)
+			}
+		}
+		if target.Role.IsOwner() && !role.IsOwner() && tx.Owners() <= 1 {
+			return ErrLastOwner
+		}
+		changed, err := tx.SetRole(memberID, role)
 		if err != nil {
-			return Member{}, err
+			return err
 		}
-		if owners <= 1 {
-			return Member{}, ErrLastOwner
-		}
-	}
-	updated, err := s.repo.UpdateMemberRole(ctx, teamID, memberID, role)
+		updated = changed
+		return nil
+	})
 	if err != nil {
 		return Member{}, err
 	}
-	updated.Email = target.Email
 	return updated, nil
 }
 
 // RemoveMember implements TeamService. Owners and admins may remove members
 // (admins not the owners); any member may remove themselves, which is how a
-// user leaves a team. The last owner can never be removed.
+// user leaves a team. The last owner can never be removed and the personal
+// team's owner membership is immutable. The checks and the delete run inside
+// one transaction that locks the team row.
 func (s *Service) RemoveMember(ctx context.Context, userID, teamID, memberID uuid.UUID) error {
-	actor, err := s.member(ctx, userID, teamID)
-	if err != nil {
-		return err
-	}
-	target, err := s.repo.GetMember(ctx, teamID, memberID)
-	if err != nil {
-		return err
-	}
-	if userID != memberID {
-		if !actor.Role.CanManage() {
-			return ErrForbidden
+	return s.repo.MutateMembership(ctx, teamID, func(tx *MembershipTx) error {
+		actor, ok := tx.Member(userID)
+		if !ok {
+			return ErrNotFound
 		}
-		if !actor.Role.IsOwner() && target.Role.IsOwner() {
-			return fmt.Errorf("%w: an admin cannot remove an owner", ErrForbidden)
+		target, ok := tx.Member(memberID)
+		if !ok {
+			return ErrNotFound
 		}
+		if userID != memberID {
+			if !actor.Role.CanManage() {
+				return ErrForbidden
+			}
+			if !actor.Role.IsOwner() && target.Role.IsOwner() {
+				return fmt.Errorf("%w: an admin cannot remove an owner", ErrForbidden)
+			}
+		}
+		if target.Role.IsOwner() {
+			if err := checkPersonalOwner(tx.Team, target, false); err != nil {
+				return err
+			}
+			if tx.Owners() <= 1 {
+				return ErrLastOwner
+			}
+		}
+		return tx.Remove(memberID)
+	})
+}
+
+// checkPersonalOwner refuses to strip the owner membership of the user whose ID
+// equals a personal team's ID. RequireTeam and Membership() resolve that user
+// as the personal team's owner without a stored lookup, so a stored demotion or
+// removal would leave the stored and the effective role out of step.
+func checkPersonalOwner(team Team, target Member, keepsOwnership bool) error {
+	if !team.IsPersonal || target.UserID != team.ID || keepsOwnership {
+		return nil
 	}
-	if target.Role.IsOwner() {
-		owners, err := s.repo.CountOwners(ctx, teamID)
-		if err != nil {
-			return err
-		}
-		if owners <= 1 {
-			return ErrLastOwner
-		}
-	}
-	return s.repo.DeleteMember(ctx, teamID, memberID)
+	return ErrPersonalOwner
 }
 
 // Invites implements TeamService.

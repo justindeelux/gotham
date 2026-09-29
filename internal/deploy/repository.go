@@ -39,10 +39,11 @@ type Repository interface {
 	ReplaceEnvVars(ctx context.Context, appID uuid.UUID, envVars []EnvVar, secrets []Secret) error
 	// ReplaceStorages replaces the application's storage mappings as one set.
 	ReplaceStorages(ctx context.Context, appID uuid.UUID, storages []Storage) error
-	// ServerExists reports whether the target server is registered. The node
-	// registry has no owner column (every server is shared by the control
-	// plane's users), so "the server belongs to the caller" is this check.
-	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
+	// ServerExists reports whether the target server is registered AND
+	// actionable by the caller's active team. A node of another team answers
+	// false, like a missing one, so node IDs cannot be probed (F6); a legacy
+	// node without a team stays shared.
+	ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error)
 	// CreateDeployment stores a new deployment row.
 	CreateDeployment(ctx context.Context, dep Deployment) (Deployment, error)
 	// GetDeployment returns one deployment of an application, or ErrNotFound.
@@ -206,16 +207,21 @@ func (r *storeRepository) ReplaceStorages(ctx context.Context, appID uuid.UUID, 
 	return nil
 }
 
-// ServerExists reports whether the server is registered on the control plane.
-func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error) {
+// ServerExists reports whether the server is registered on the control plane
+// and may be targeted by the caller's active team.
+func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	if serverID == uuid.Nil {
 		return false, nil
 	}
-	if _, err := r.store.GetServerByID(ctx, pgUUID(serverID)); err != nil {
+	row, err := r.store.GetServerByID(ctx, pgUUID(serverID))
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
 		return false, fmt.Errorf("deploy: get server: %w", err)
+	}
+	if err := scope.AuthorizeOptionalTeam(uuidFromPG(row.TeamID), true); err != nil {
+		return false, nil
 	}
 	return true, nil
 }

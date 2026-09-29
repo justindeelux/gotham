@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -138,5 +140,16 @@ func TestServerTeamIsolation(t *testing.T) {
 	}
 	if err := service.Delete(teams.WithScope(ctx, viewer), sharedNode.ID); !errors.Is(err, teams.ErrForbidden) {
 		t.Errorf("read_only Delete = %v, want ErrForbidden", err)
+	}
+
+	// F7: a team that still owns a node cannot be deleted, and the node must
+	// stay private instead of falling back to the shared legacy state.
+	teamSvc := teams.NewService(teams.Config{Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err := teamSvc.Delete(ctx, uuid.UUID(alice.ID.Bytes), uuid.UUID(shared.ID.Bytes)); !errors.Is(err, teams.ErrTeamNotEmpty) {
+		t.Fatalf("delete a team owning a node = %v, want ErrTeamNotEmpty", err)
+	}
+	stranger := teams.WithScope(ctx, teams.Scope{UserID: uuid.New(), TeamID: uuid.New(), Role: teams.RoleOwner})
+	if _, err := service.Get(stranger, sharedNode.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("node after the refused delete = %v, want ErrNotFound (still private)", err)
 	}
 }

@@ -87,3 +87,55 @@ func TestApplicationTeamIsolation(t *testing.T) {
 		t.Fatalf("inactive team B Get = %v, want ErrNotFound", err)
 	}
 }
+
+// TestApplicationServerMustBelongToTheActiveTeam is the F6 regression: a
+// resource can only be bound to a node of the caller's active team (or a
+// legacy node without a team). Creation, reassignment and deploy all refuse a
+// foreign team's node as if it did not exist.
+func TestApplicationServerMustBelongToTheActiveTeam(t *testing.T) {
+	teamA, teamB := uuid.New(), uuid.New()
+	alice := uuid.New()
+
+	repo := &fakeRepository{}
+	foreignNode := repo.seedServerForTeam(teamB)
+	ownNode := repo.seedServerForTeam(teamA)
+	legacyNode := repo.seedServerForTeam(uuid.Nil)
+	svc := newTestService(t, repo)
+	bg := context.Background()
+	ctxA := teams.WithScope(bg, teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner})
+
+	// A foreign team's node is not a valid target.
+	if _, err := svc.CreateApplication(ctxA, alice, validCreateInput(foreignNode)); !errors.Is(err, ErrServerNotFound) {
+		t.Fatalf("create on a foreign node = %v, want ErrServerNotFound", err)
+	}
+	// The team's own node and a legacy shared node are.
+	ownInput := validCreateInput(ownNode)
+	ownInput.Name = "own-node-app"
+	own, err := svc.CreateApplication(ctxA, alice, ownInput)
+	if err != nil {
+		t.Fatalf("create on the team's node: %v", err)
+	}
+	legacyInput := validCreateInput(legacyNode)
+	legacyInput.Name = "legacy-node-app"
+	if _, err := svc.CreateApplication(ctxA, alice, legacyInput); err != nil {
+		t.Fatalf("create on a legacy node: %v", err)
+	}
+
+	// Moving the application to a foreign node is refused too.
+	if _, err := svc.UpdateApplication(ctxA, alice, own.ID, UpdateApplicationInput{ServerID: &foreignNode}); !errors.Is(err, ErrServerNotFound) {
+		t.Fatalf("reassign to a foreign node = %v, want ErrServerNotFound", err)
+	}
+
+	// An application stored against a foreign node (pre-fix row) cannot be
+	// deployed by a team that does not own that node.
+	legacyApp := testApplication(alice)
+	legacyApp.TeamID = teamA
+	legacyApp.ServerID = foreignNode
+	legacyApp.BaseDomain = ""
+	repo.mu.Lock()
+	repo.apps = append(repo.apps, legacyApp)
+	repo.mu.Unlock()
+	if _, err := svc.Deploy(ctxA, alice, legacyApp.ID); !errors.Is(err, ErrServerNotFound) {
+		t.Fatalf("deploy targeting a foreign node = %v, want ErrServerNotFound", err)
+	}
+}

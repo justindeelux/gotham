@@ -419,7 +419,7 @@ func newP5Harness(t *testing.T) *p5Harness {
 	router := chi.NewRouter()
 	router.Route("/api", func(r chi.Router) {
 		databases.Mount(r, requireAuth, userIDFunc, databaseSvc)
-		databases.MountBackups(r, requireAuth, userIDFunc, backupSvc)
+		databases.MountBackups(r, requireAuth, requireAuth, userIDFunc, backupSvc)
 	})
 	httpServer := httptest.NewServer(router)
 	t.Cleanup(httpServer.Close)

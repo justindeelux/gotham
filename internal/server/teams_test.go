@@ -249,6 +249,55 @@ func TestTeamWriteGate(t *testing.T) {
 	}
 }
 
+// TestContainerRoutesRunTheTeamChain proves the nested container routes are
+// mounted through the team chain and the service: a stranger's request never
+// reaches the agent (404, not a 502 existence oracle), and a read_only member
+// may list but not stop a container.
+func TestContainerRoutesRunTheTeamChain(t *testing.T) {
+	teamID := uuid.New()
+	fake := newFakeTeamService()
+	fake.allow(teamID, testUserID, teams.RoleReadOnly)
+	serverFake := newFakeServerService()
+	nodeID := seedServer(t, serverFake, "team-node")
+	serverFake.setTeam(nodeID, teamID)
+	s := newServerRoutesTestServer(t, serverFake)
+	s.teamService = fake
+
+	withHeader := func(method, path, header string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", authHeader)
+		if header != "" {
+			req.Header.Set(TeamHeader, header)
+		}
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	containersPath := "/api/v1/servers/" + nodeID.String() + "/containers"
+
+	// A stranger's own personal team does not own the node: 404, not the
+	// agent-unavailable 502 that an existing node would produce.
+	if rec := withHeader(http.MethodGet, containersPath, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("stranger container list = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := withHeader(http.MethodGet, containersPath, uuid.New().String()); rec.Code != http.StatusForbidden {
+		t.Fatalf("non-member team header = %d, want 403", rec.Code)
+	}
+	// A read_only member may list (the agent is unavailable in tests: 502
+	// proves the request passed authorization) but not stop containers.
+	if rec := withHeader(http.MethodGet, containersPath, teamID.String()); rec.Code != http.StatusBadGateway {
+		t.Fatalf("read_only container list = %d, want 502 after authorization (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec := withHeader(http.MethodPost, containersPath+"/abc/stop", teamID.String()); rec.Code != http.StatusForbidden {
+		t.Fatalf("read_only container stop = %d, want 403", rec.Code)
+	}
+	// A missing node answers exactly like the foreign one.
+	if rec := withHeader(http.MethodGet, "/api/v1/servers/"+uuid.New().String()+"/containers", teamID.String()); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing node = %d, want 404", rec.Code)
+	}
+}
+
 // TestResourceRoutesRunTheTeamChain proves the resource groups are mounted with
 // the team middleware: the same request is answered differently depending on
 // the X-Team-Id header, before any domain handler runs.

@@ -141,6 +141,14 @@ repeated against this shared box's CP/agent yet.
 
 ## Notes
 
+- **Platform operators (BE-8.2):** the node-wide `POST /api/v1/proxy/sync` and
+  the DNS-provider CRUD require a platform operator. An API token holding the
+  `admin` scope always passes; a session (JWT) passes only with an `admin` role
+  claim or when the account email is listed in the comma-separated
+  `PLATFORM_ADMINS` environment variable. Unset means no session passes, so an
+  operator must set `PLATFORM_ADMINS` (or mint an admin-scoped token) to manage
+  global DNS providers. Per-application certificates and redirects are not
+  affected: they stay with the owning team's `owner`/`admin` members.
 - Development mode: when there is no CA (empty `GOTHAM_CA_DIR`), the control
   plane dials agents over plaintext and the agent serves its DockerService
   without TLS. As soon as a CA exists, registration issues certificates and

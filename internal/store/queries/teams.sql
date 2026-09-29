@@ -6,6 +6,22 @@ RETURNING *;
 -- name: GetTeam :one
 SELECT * FROM teams WHERE id = $1;
 
+-- name: GetTeamForUpdate :one
+-- GetTeamForUpdate locks the team row for the duration of a membership
+-- mutation transaction, so concurrent role changes of one team serialize and
+-- the last-owner invariant cannot be raced.
+SELECT * FROM teams WHERE id = $1 FOR UPDATE;
+
+-- name: CountTeamResources :one
+-- CountTeamResources reports how many resources (applications, databases,
+-- compose services, nodes) still belong to a team. Deleting a team is refused
+-- while this is non-zero.
+SELECT
+    (SELECT count(*) FROM applications WHERE applications.team_id = $1) +
+    (SELECT count(*) FROM databases WHERE databases.team_id = $1) +
+    (SELECT count(*) FROM services WHERE services.team_id = $1) +
+    (SELECT count(*) FROM servers WHERE servers.team_id = $1) AS count;
+
 -- name: GetTeamForUser :one
 -- GetTeamForUser returns one team together with the caller's role, or no row
 -- when the caller is not a member. It is the authorization read of every

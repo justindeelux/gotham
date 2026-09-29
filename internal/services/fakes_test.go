@@ -36,6 +36,8 @@ type fakeRepository struct {
 	order    []uuid.UUID
 	deploys  map[uuid.UUID][]Deploy
 	servers  map[uuid.UUID]bool
+	// serverTeams maps a registered server to its team (zero = legacy node).
+	serverTeams map[uuid.UUID]uuid.UUID
 
 	createErr     error
 	getErr        error
@@ -225,14 +227,34 @@ func (r *fakeRepository) ListServiceDeploys(_ context.Context, serviceID uuid.UU
 	return append([]Deploy{}, deploys...), nil
 }
 
-// ServerExists implements Repository.
-func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID) (bool, error) {
+// ServerExists implements Repository: the node must be known and actionable by
+// the caller's active team.
+func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.serverErr != nil {
 		return false, r.serverErr
 	}
-	return r.servers[serverID], nil
+	if !r.servers[serverID] {
+		return false, nil
+	}
+	if err := scope.AuthorizeOptionalTeam(r.serverTeams[serverID], true); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+// seedServerForTeam registers a node owned by teamID (the zero UUID seeds a
+// legacy shared node).
+func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
+	id := r.seedServer()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.serverTeams == nil {
+		r.serverTeams = map[uuid.UUID]uuid.UUID{}
+	}
+	r.serverTeams[id] = teamID
+	return id
 }
 
 // fakeAgent is a scriptable ComposeAgent recording every call.

@@ -6,9 +6,12 @@ import "errors"
 // an unexpected internal failure.
 var (
 	// ErrNotFound is returned for an unknown provider path or an application
-	// the caller does not own (another user's application is indistinguishable
-	// from a missing one, so IDs cannot be probed).
+	// outside the caller's active team (another team's application is
+	// indistinguishable from a missing one, so IDs cannot be probed).
 	ErrNotFound = errors.New("webhooks: not found")
+	// ErrForbidden is returned when the caller's team role does not permit
+	// managing the application's hooks (read_only).
+	ErrForbidden = errors.New("webhooks: insufficient team role")
 	// ErrValidation is returned when user-supplied input fails validation: an
 	// application without a repository, an unusable callback URL or a provider
 	// connection problem.

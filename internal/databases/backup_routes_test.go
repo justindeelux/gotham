@@ -162,7 +162,7 @@ func passthroughUser(_ context.Context) (uuid.UUID, bool) { return uuid.Nil, fal
 // newBackupRouter mounts the backup routes behind a stub auth middleware.
 func newBackupRouter(svc BackupService, user uuid.UUID, present bool) http.Handler {
 	r := chi.NewRouter()
-	MountBackups(r, passthroughAuth, func(context.Context) (uuid.UUID, bool) {
+	MountBackups(r, passthroughAuth, passthroughAuth, func(context.Context) (uuid.UUID, bool) {
 		if !present {
 			return uuid.Nil, false
 		}
@@ -191,7 +191,7 @@ func backupRequest(t *testing.T, handler http.Handler, method, path, body string
 
 func TestMountBackupsWithoutServiceMountsNothing(t *testing.T) {
 	r := chi.NewRouter()
-	MountBackups(r, passthroughAuth, passthroughUser, nil)
+	MountBackups(r, passthroughAuth, passthroughAuth, passthroughUser, nil)
 
 	id := uuid.New()
 	rec := backupRequest(t, r, http.MethodPost, "/v1/databases/"+id.String()+"/backup", "")

@@ -57,10 +57,10 @@ type Event struct {
 // Repository persists hooks and delivery claims. It is implemented over
 // *store.Store in production and by fakes in tests.
 type Repository interface {
-	// GetApplication returns the application when the caller owns it, or
-	// ErrNotFound (another user's application is indistinguishable from a
-	// missing one).
-	GetApplication(ctx context.Context, appID, userID uuid.UUID) (Application, error)
+	// GetApplication returns the application, or ErrNotFound. Team
+	// authorization is the service's job (it resolves the request scope), so
+	// the lookup itself is creator-independent.
+	GetApplication(ctx context.Context, appID uuid.UUID) (Application, error)
 	// GetWebhook returns the hook of an application, or ErrNotFound.
 	GetWebhook(ctx context.Context, appID uuid.UUID) (Hook, error)
 	// CreateWebhook stores the first hook of an application. A second row for
@@ -86,6 +86,7 @@ type Repository interface {
 type Application struct {
 	ID       uuid.UUID
 	UserID   uuid.UUID
+	TeamID   uuid.UUID
 	Provider string
 	Repo     string
 	Branch   string
@@ -107,9 +108,9 @@ func newStoreRepository(st *store.Store, secret string) *storeRepository {
 	return &storeRepository{store: st, secret: secret}
 }
 
-// GetApplication loads one application the caller owns.
-func (r *storeRepository) GetApplication(ctx context.Context, appID, userID uuid.UUID) (Application, error) {
-	row, err := r.store.GetApplicationForUser(ctx, pgUUID(appID), pgUUID(userID))
+// GetApplication loads one application by ID.
+func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (Application, error) {
+	row, err := r.store.GetApplication(ctx, pgUUID(appID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Application{}, ErrNotFound
@@ -119,6 +120,7 @@ func (r *storeRepository) GetApplication(ctx context.Context, appID, userID uuid
 	return Application{
 		ID:       uuidFromPG(row.ID),
 		UserID:   uuidFromPG(row.UserID),
+		TeamID:   uuidFromPG(row.TeamID),
 		Provider: row.Provider,
 		Repo:     row.Repo,
 		Branch:   row.Branch,

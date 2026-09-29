@@ -145,6 +145,61 @@ func TestServiceDeleteTeamRBAC(t *testing.T) {
 	}
 }
 
+// TestServiceDeleteTeamRefusedWhileOwningResources is the F7 regression: a team
+// that still owns resources or nodes must never be deleted, because its nodes
+// would fall back to the shared legacy state and its workloads would lose their
+// control-plane records.
+func TestServiceDeleteTeamRefusedWhileOwningResources(t *testing.T) {
+	owner := uuid.New()
+	repo := newFakeRepository()
+	teamID := seedTeam(t, repo, owner, nil)
+	repo.seedResourceCount(teamID, 1)
+	svc := newTestService(repo)
+
+	err := svc.Delete(context.Background(), owner, teamID)
+	if !errors.Is(err, ErrTeamNotEmpty) {
+		t.Fatalf("Delete with resources = %v, want ErrTeamNotEmpty", err)
+	}
+	if _, err := repo.GetTeam(context.Background(), teamID); err != nil {
+		t.Fatalf("team must survive the refused delete: %v", err)
+	}
+}
+
+// TestPersonalOwnerMembershipIsImmutable is the F5 regression: the user whose
+// ID equals a personal team's ID is resolved as its owner without a stored
+// lookup, so no API call may demote or remove that membership.
+func TestPersonalOwnerMembershipIsImmutable(t *testing.T) {
+	personal, other := uuid.New(), uuid.New()
+	repo := newFakeRepository()
+	repo.seedUser(other, "other@example.com")
+	personalTeam := PersonalTeamID(personal)
+	repo.seedTeam(Team{ID: personalTeam, Name: "personal", IsPersonal: true}, personal)
+	repo.seedMember(personalTeam, other, RoleOwner)
+	svc := newTestService(repo)
+	ctx := context.Background()
+
+	// The second owner cannot demote the personal owner...
+	if _, err := svc.SetMemberRole(ctx, other, personalTeam, personal, RoleReadOnly); !errors.Is(err, ErrPersonalOwner) {
+		t.Fatalf("demote personal owner = %v, want ErrPersonalOwner", err)
+	}
+	// ...nor remove them, not even the personal owner themselves.
+	if err := svc.RemoveMember(ctx, other, personalTeam, personal); !errors.Is(err, ErrPersonalOwner) {
+		t.Fatalf("remove personal owner = %v, want ErrPersonalOwner", err)
+	}
+	if err := svc.RemoveMember(ctx, personal, personalTeam, personal); !errors.Is(err, ErrPersonalOwner) {
+		t.Fatalf("persona owner self-removal = %v, want ErrPersonalOwner", err)
+	}
+	// The stored membership is untouched and the resolved role stays owner.
+	member, err := repo.GetMember(ctx, personalTeam, personal)
+	if err != nil || member.Role != RoleOwner {
+		t.Fatalf("stored membership = %+v, %v; want owner", member, err)
+	}
+	// Other memberships of a personal team stay manageable.
+	if _, err := svc.SetMemberRole(ctx, personal, personalTeam, other, RoleAdmin); err != nil {
+		t.Fatalf("personal owner may manage other members: %v", err)
+	}
+}
+
 func TestServiceMemberManagement(t *testing.T) {
 	owner, admin, otherAdmin := uuid.New(), uuid.New(), uuid.New()
 	repo := newFakeRepository()

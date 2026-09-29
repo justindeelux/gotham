@@ -144,9 +144,13 @@ type backupHandler struct {
 //	DELETE /v1/databases/backup-targets/{targetId}
 //	POST   /v1/databases/backup-targets/{targetId}/test
 //
-// auth wraps the group (the server passes its RequireAuth); a nil svc or
+// dbAuth wraps the database-scoped group: the server passes its team chain, so
+// a backup or restore authorizes the parent database's team and role (a
+// demoted or removed creator is refused). targetAuth wraps the backup-target
+// routes, which stay user-global (their table is out of the team scope), so the
+// server passes plain authentication there. A nil svc or
 // FEATURE_DATABASES=false mounts nothing, exactly like Mount.
-func MountBackups(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc BackupService) {
+func MountBackups(r chi.Router, dbAuth func(http.Handler) http.Handler, targetAuth func(http.Handler) http.Handler, userID UserIDFunc, svc BackupService) {
 	if svc == nil || !Enabled() {
 		return
 	}
@@ -155,7 +159,7 @@ func MountBackups(r chi.Router, auth func(http.Handler) http.Handler, userID Use
 		svc:     svc,
 	}
 	r.Group(func(protected chi.Router) {
-		protected.Use(auth)
+		protected.Use(dbAuth)
 		protected.Post("/v1/databases/{id}/backup", h.createBackup)
 		protected.Post("/v1/databases/{id}/restore", h.restore)
 		protected.Get("/v1/databases/{id}/backups", h.listBackups)
@@ -165,6 +169,9 @@ func MountBackups(r chi.Router, auth func(http.Handler) http.Handler, userID Use
 		protected.Post("/v1/databases/{id}/schedules", h.createSchedule)
 		protected.Patch("/v1/databases/{id}/schedules/{scheduleId}", h.updateSchedule)
 		protected.Delete("/v1/databases/{id}/schedules/{scheduleId}", h.deleteSchedule)
+	})
+	r.Group(func(protected chi.Router) {
+		protected.Use(targetAuth)
 		protected.Get("/v1/databases/backup-targets", h.listTargets)
 		protected.Post("/v1/databases/backup-targets", h.createTarget)
 		protected.Patch("/v1/databases/backup-targets/{targetId}", h.updateTarget)

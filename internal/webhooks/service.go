@@ -18,6 +18,7 @@ import (
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // maxBodyBytes bounds a delivery body. Push notifications are small; anything
@@ -147,7 +148,7 @@ func (s *Service) CreateWebhook(ctx context.Context, userID, appID uuid.UUID, ca
 		return Hook{}, err
 	}
 
-	app, err := s.repo.GetApplication(ctx, appID, userID)
+	app, err := s.application(ctx, userID, appID)
 	if err != nil {
 		return Hook{}, err
 	}
@@ -210,7 +211,7 @@ func (s *Service) DeleteWebhook(ctx context.Context, userID, appID uuid.UUID) (b
 		return false, errors.New("webhooks: service is not configured")
 	}
 
-	app, err := s.repo.GetApplication(ctx, appID, userID)
+	app, err := s.application(ctx, userID, appID)
 	if err != nil {
 		return false, err
 	}
@@ -236,6 +237,28 @@ func (s *Service) DeleteWebhook(ctx context.Context, userID, appID uuid.UUID) (b
 		return false, err
 	}
 	return true, nil
+}
+
+// application loads an application the caller may manage through its active
+// team: a row of another team answers ErrNotFound so application IDs cannot be
+// probed, and a write needs an owner/admin role (a creator who was demoted to
+// read_only or removed from the team is refused). Management is a mutation of
+// the application's hosting, hence write=true.
+func (s *Service) application(ctx context.Context, userID, appID uuid.UUID) (Application, error) {
+	if appID == uuid.Nil {
+		return Application{}, fmt.Errorf("%w: application id is required", ErrValidation)
+	}
+	app, err := s.repo.GetApplication(ctx, appID)
+	if err != nil {
+		return Application{}, err
+	}
+	if err := teams.ScopeFor(ctx, userID).AuthorizeResource(app.TeamID, app.UserID, true); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return Application{}, ErrForbidden
+		}
+		return Application{}, ErrNotFound
+	}
+	return app, nil
 }
 
 // Receive handles one provider delivery: rate-limit it, find the hook it was

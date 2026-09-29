@@ -231,13 +231,26 @@ func (s *Service) DeploySystem(ctx context.Context, appID uuid.UUID) (Deployment
 }
 
 // deployApplication validates a loaded application and runs it on the worker
-// pool. It is the shared tail of Deploy and DeploySystem.
+// pool. It is the shared tail of Deploy and DeploySystem. The node assignment
+// is re-checked against the caller's active team before any agent is dialed, so
+// an application stored before the F6 check existed can never execute on
+// another team's node; a system-triggered deploy (a webhook, no scope) keeps
+// its stored authorization.
 func (s *Service) deployApplication(ctx context.Context, app Application) (Deployment, error) {
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
 	}
 	if err := validateDeployTarget(app); err != nil {
 		return Deployment{}, err
+	}
+	if app.ServerID != uuid.Nil {
+		known, err := s.repo.ServerExists(ctx, app.ServerID, teams.ScopeFor(ctx, uuid.Nil))
+		if err != nil {
+			return Deployment{}, err
+		}
+		if !known {
+			return Deployment{}, ErrServerNotFound
+		}
 	}
 	return s.submit(ctx, app, Deployment{Kind: KindDeploy, State: StateQueued})
 }

@@ -108,6 +108,69 @@ func (s *Store) GetTeam(ctx context.Context, id pgtype.UUID) (sqlc.Team, error) 
 	return s.queries.GetTeam(ctx, id)
 }
 
+// CountTeamResources reports how many resources (applications, databases,
+// compose services, nodes) still belong to a team.
+func (s *Store) CountTeamResources(ctx context.Context, id pgtype.UUID) (int64, error) {
+	count, err := s.queries.CountTeamResources(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	return int64(count), nil
+}
+
+// MembershipWriter mutates memberships inside one MutateTeamMembership
+// transaction. It is the locked seam the teams service policy runs on.
+type MembershipWriter struct {
+	ctx     context.Context
+	queries *sqlc.Queries
+	teamID  pgtype.UUID
+}
+
+// SetRole changes one membership's role inside the transaction.
+func (w *MembershipWriter) SetRole(userID pgtype.UUID, role string) (sqlc.TeamMember, error) {
+	return w.queries.UpdateTeamMemberRole(w.ctx, sqlc.UpdateTeamMemberRoleParams{
+		TeamID: w.teamID,
+		UserID: userID,
+		Role:   role,
+	})
+}
+
+// Remove deletes one membership inside the transaction.
+func (w *MembershipWriter) Remove(userID pgtype.UUID) error {
+	return w.queries.DeleteTeamMember(w.ctx, sqlc.DeleteTeamMemberParams{
+		TeamID: w.teamID,
+		UserID: userID,
+	})
+}
+
+// MutateTeamMembership runs fn inside a transaction that locks the team row
+// (SELECT ... FOR UPDATE), handing it the locked team and its current
+// memberships. Two concurrent membership mutations of the same team therefore
+// serialize, so a count-then-write decision (the last-owner check) cannot race.
+// The transaction commits when fn returns nil and rolls back on any error;
+// a missing team answers pgx.ErrNoRows.
+func (s *Store) MutateTeamMembership(ctx context.Context, teamID pgtype.UUID, fn func(team sqlc.Team, members []sqlc.ListTeamMembersRow, writer *MembershipWriter) error) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	team, err := queries.GetTeamForUpdate(ctx, teamID)
+	if err != nil {
+		return err
+	}
+	members, err := queries.ListTeamMembers(ctx, teamID)
+	if err != nil {
+		return err
+	}
+	if err := fn(team, members, &MembershipWriter{ctx: ctx, queries: queries, teamID: teamID}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // GetTeamForUser returns one team with the caller's role in it, or
 // pgx.ErrNoRows when the caller is not a member.
 func (s *Store) GetTeamForUser(ctx context.Context, params sqlc.GetTeamForUserParams) (sqlc.GetTeamForUserRow, error) {
@@ -145,16 +208,6 @@ func (s *Store) GetTeamMember(ctx context.Context, params sqlc.GetTeamMemberPara
 // membership first.
 func (s *Store) ListTeamMembers(ctx context.Context, teamID pgtype.UUID) ([]sqlc.ListTeamMembersRow, error) {
 	return s.queries.ListTeamMembers(ctx, teamID)
-}
-
-// UpdateTeamMemberRole changes one membership's role and returns the row.
-func (s *Store) UpdateTeamMemberRole(ctx context.Context, params sqlc.UpdateTeamMemberRoleParams) (sqlc.TeamMember, error) {
-	return s.queries.UpdateTeamMemberRole(ctx, params)
-}
-
-// DeleteTeamMember removes one membership.
-func (s *Store) DeleteTeamMember(ctx context.Context, params sqlc.DeleteTeamMemberParams) error {
-	return s.queries.DeleteTeamMember(ctx, params)
 }
 
 // CountTeamOwners reports how many owners a team has; the last owner can never

@@ -115,6 +115,22 @@ Design priorities (in order):
 
 ---
 
+## Environment variables (selected)
+
+Beyond the `GOTHAM_*` configuration keys loaded by viper, the control plane reads
+a few operational knobs directly from the environment:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FEATURE_APPLICATIONS` | on | Mount the applications/deploy surface. |
+| `FEATURE_DATABASES` | on | Mount the databases and backup surface. |
+| `FEATURE_SERVICES` | on | Mount the compose-services and template surface. |
+| `FEATURE_PROXY` | on | Mount the Traefik/SSL/redirect surface. |
+| `FEATURE_TEAMS` | on | Mount the teams and invites routes. Off: every request resolves to the caller's personal team and the team-management routes are unmounted. |
+| `PLATFORM_ADMINS` | unset | Comma-separated account emails allowed to use the **platform-global** proxy operations (node-wide `POST /v1/proxy/sync`, DNS-provider CRUD) with a session. Unset denies every session; an admin-scoped API token always passes. **Operators must list themselves here** (or mint an admin-scoped token) to manage global DNS providers — per-application certificate and redirect management stays with the owning team. |
+
+---
+
 ## 4. Development Plan
 
 Development is phased — one file per phase in `docs/plan/`. See

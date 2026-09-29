@@ -104,7 +104,7 @@ func sampleRedirect() DomainRedirect {
 // behind a no-op auth middleware.
 func newRedirectRoutes(svc RedirectService) http.Handler {
 	r := chi.NewRouter()
-	Mount(r, func(next http.Handler) http.Handler { return next }, &fakeProxyService{}, nil, nil, svc, nil)
+	Mount(r, func(next http.Handler) http.Handler { return next }, passthroughAuth, &fakeProxyService{}, nil, nil, svc, nil)
 	return r
 }
 
@@ -248,7 +248,7 @@ func TestRedirectRoutesShareTheSyncAuthBoundary(t *testing.T) {
 			}
 			next.ServeHTTP(w, req)
 		})
-	}, &fakeProxyService{}, nil, nil, &fakeRedirectService{redirect: sampleRedirect()}, nil)
+	}, passthroughAuth, &fakeProxyService{}, nil, nil, &fakeRedirectService{redirect: sampleRedirect()}, nil)
 	path := "/v1/proxy/redirects/" + sampleRedirect().ID.String()
 	for _, request := range []struct{ method, path string }{
 		{http.MethodPost, "/v1/proxy/redirects"},
@@ -277,7 +277,7 @@ func TestCertificateResponseCarriesObservedStatus(t *testing.T) {
 	}}
 
 	r := chi.NewRouter()
-	Mount(r, func(next http.Handler) http.Handler { return next }, &fakeProxyService{}, nil,
+	Mount(r, func(next http.Handler) http.Handler { return next }, passthroughAuth, &fakeProxyService{}, nil,
 		&fakeCertificateService{certificate: certificate}, nil, statuses)
 
 	recorder := httptest.NewRecorder()
@@ -302,7 +302,7 @@ func TestCertificateResponseCarriesObservedStatus(t *testing.T) {
 	// Unknown never fabricates an expiry and the list still answers 200.
 	unknown := &fakeCertificateStatusService{}
 	r = chi.NewRouter()
-	Mount(r, func(next http.Handler) http.Handler { return next }, &fakeProxyService{}, nil,
+	Mount(r, func(next http.Handler) http.Handler { return next }, passthroughAuth, &fakeProxyService{}, nil,
 		&fakeCertificateService{certificate: certificate}, nil, unknown)
 	recorder = httptest.NewRecorder()
 	r.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/proxy/certificates", nil))
@@ -322,7 +322,7 @@ func TestCertificateResponseCarriesObservedStatus(t *testing.T) {
 
 	// Without a status service the response carries no status fields at all.
 	r = chi.NewRouter()
-	Mount(r, func(next http.Handler) http.Handler { return next }, &fakeProxyService{}, nil,
+	Mount(r, func(next http.Handler) http.Handler { return next }, passthroughAuth, &fakeProxyService{}, nil,
 		&fakeCertificateService{certificate: certificate}, nil, nil)
 	recorder = httptest.NewRecorder()
 	r.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/proxy/certificates", nil))

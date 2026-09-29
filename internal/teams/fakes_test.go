@@ -12,13 +12,15 @@ import (
 
 // fakeRepository is an in-memory Repository with the same observable rules as
 // the SQL implementation: memberships are unique per (team, user), an invite
-// is consumed exactly once, and unknown rows answer ErrNotFound.
+// is consumed exactly once, and unknown rows answer ErrNotFound. Its mutex is
+// what the SQL transaction's team-row lock provides in production.
 type fakeRepository struct {
-	mu      sync.Mutex
-	teams   map[uuid.UUID]Team
-	members map[uuid.UUID]map[uuid.UUID]Member
-	invites map[uuid.UUID]storedInvite
-	users   map[uuid.UUID]string
+	mu             sync.Mutex
+	teams          map[uuid.UUID]Team
+	members        map[uuid.UUID]map[uuid.UUID]Member
+	invites        map[uuid.UUID]storedInvite
+	users          map[uuid.UUID]string
+	resourceCounts map[uuid.UUID]int64
 }
 
 // storedInvite pairs an invite with its token hash, the way the database keeps
@@ -31,11 +33,20 @@ type storedInvite struct {
 // newFakeRepository builds an empty repository.
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
-		teams:   map[uuid.UUID]Team{},
-		members: map[uuid.UUID]map[uuid.UUID]Member{},
-		invites: map[uuid.UUID]storedInvite{},
-		users:   map[uuid.UUID]string{},
+		teams:          map[uuid.UUID]Team{},
+		members:        map[uuid.UUID]map[uuid.UUID]Member{},
+		invites:        map[uuid.UUID]storedInvite{},
+		users:          map[uuid.UUID]string{},
+		resourceCounts: map[uuid.UUID]int64{},
 	}
+}
+
+// seedResourceCount records how many resources a team owns, which is what the
+// delete guard counts.
+func (f *fakeRepository) seedResourceCount(teamID uuid.UUID, count int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resourceCounts[teamID] = count
 }
 
 // seedUser registers an account email, as the users table does.
@@ -78,6 +89,52 @@ func (f *fakeRepository) member(teamID, userID uuid.UUID) (Member, bool) {
 	}
 	member, ok := byUser[userID]
 	return member, ok
+}
+
+// CountTeamResources implements Repository.
+func (f *fakeRepository) CountTeamResources(_ context.Context, teamID uuid.UUID) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resourceCounts[teamID], nil
+}
+
+// MutateMembership implements Repository: the mutex makes the read-policy-write
+// sequence atomic, exactly like the SQL transaction's team-row lock.
+func (f *fakeRepository) MutateMembership(_ context.Context, teamID uuid.UUID, fn func(*MembershipTx) error) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	team, ok := f.teams[teamID]
+	if !ok {
+		return ErrNotFound
+	}
+	members := make([]Member, 0, len(f.members[teamID]))
+	for _, member := range f.members[teamID] {
+		member.Email = f.users[member.UserID]
+		members = append(members, member)
+	}
+	sort.Slice(members, func(i, j int) bool { return members[i].UserID.String() < members[j].UserID.String() })
+	tx := &MembershipTx{
+		Team:    team,
+		Members: members,
+		setRole: func(userID uuid.UUID, role Role) (Member, error) {
+			member, ok := f.member(teamID, userID)
+			if !ok {
+				return Member{}, ErrNotFound
+			}
+			member.Role = role
+			member.Email = f.users[userID]
+			f.members[teamID][userID] = member
+			return member, nil
+		},
+		remove: func(userID uuid.UUID) error {
+			if _, ok := f.member(teamID, userID); !ok {
+				return ErrNotFound
+			}
+			delete(f.members[teamID], userID)
+			return nil
+		},
+	}
+	return fn(tx)
 }
 
 // CreateTeam implements Repository.

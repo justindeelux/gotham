@@ -38,9 +38,11 @@ type Repository interface {
 	CreateSecret(ctx context.Context, secret Secret) (Secret, error)
 	// ListSecrets returns a database's sealed credentials, sorted by key.
 	ListSecrets(ctx context.Context, databaseID uuid.UUID) ([]Secret, error)
-	// ServerExists reports whether the target node is registered. Servers are
-	// a shared resource in this schema, so there is no per-user check to make.
-	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
+	// ServerExists reports whether the target node is registered AND
+	// actionable by the caller's active team. A node of another team answers
+	// false, like a missing one, so node IDs cannot be probed (F6); a legacy
+	// node without a team stays shared.
+	ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error)
 }
 
 // storeRepository adapts *store.Store to Repository.
@@ -173,16 +175,21 @@ func (r *storeRepository) ListSecrets(ctx context.Context, databaseID uuid.UUID)
 	return secrets, nil
 }
 
-// ServerExists implements Repository using the node registry table.
-func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error) {
+// ServerExists implements Repository using the node registry table and the
+// caller's active team.
+func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	if serverID == uuid.Nil {
 		return false, nil
 	}
-	if _, err := r.store.GetServerByID(ctx, pgUUID(serverID)); err != nil {
+	row, err := r.store.GetServerByID(ctx, pgUUID(serverID))
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
 		return false, fmt.Errorf("databases: resolve server: %w", err)
+	}
+	if err := scope.AuthorizeOptionalTeam(uuidFromPG(row.TeamID), true); err != nil {
+		return false, nil
 	}
 	return true, nil
 }

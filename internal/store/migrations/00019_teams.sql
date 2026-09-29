@@ -8,7 +8,7 @@
 -- caller's personal team" resolvable without a lookup, and it is what the
 -- backfill below uses to attribute every pre-teams row to its creator's
 -- personal team. Application code must keep creating personal teams this way
--- (auth registration, see store.CreateUserWithPersonalTeam).
+-- (auth registration, see store.CreateUser).
 CREATE TABLE teams (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name text NOT NULL,
@@ -82,8 +82,10 @@ CREATE INDEX services_team_idx ON services (team_id, created_at DESC);
 -- legacy rows cannot be attributed to a user. A NULL team_id keeps the
 -- pre-teams behavior (visible to every authenticated caller) and is documented
 -- as a Phase 8 residual; new servers are stamped with the creator's active
--- team. ON DELETE SET NULL: deleting a team must not delete the nodes.
-ALTER TABLE servers ADD COLUMN team_id uuid REFERENCES teams(id) ON DELETE SET NULL;
+-- team. ON DELETE RESTRICT: deleting a team must never turn its private nodes
+-- into globally visible legacy nodes, so the teams service refuses to delete a
+-- team that still owns nodes or resources (and the FK is the backstop).
+ALTER TABLE servers ADD COLUMN team_id uuid REFERENCES teams(id) ON DELETE RESTRICT;
 CREATE INDEX servers_team_idx ON servers (team_id, created_at DESC);
 
 -- +goose Down

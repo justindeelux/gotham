@@ -94,7 +94,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err := validateApplication(app, true); err != nil {
 		return Application{}, err
 	}
-	if err := s.validateServer(ctx, app.ServerID); err != nil {
+	if err := s.validateServer(ctx, userID, app.ServerID); err != nil {
 		return Application{}, err
 	}
 	envVars, secrets, err := s.prepareEnv(ctx, uuid.Nil, in.Env)
@@ -183,7 +183,7 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	}
 	if in.ServerID != nil {
 		if *in.ServerID != uuid.Nil {
-			if err := s.validateServer(ctx, *in.ServerID); err != nil {
+			if err := s.validateServer(ctx, userID, *in.ServerID); err != nil {
 				return Application{}, err
 			}
 		}
@@ -426,14 +426,15 @@ func (s *Service) stopBestEffort(ctx context.Context, app Application) {
 }
 
 // validateServer enforces that the application points at a server the control
-// plane knows. The node registry carries no owner column (servers are shared by
-// the installation's users), so an unknown server is the only way a server_id
-// can fail this check — it answers ErrServerNotFound (404).
-func (s *Service) validateServer(ctx context.Context, serverID uuid.UUID) error {
+// plane knows AND that the caller's active team may target it. A node of
+// another team fails like a missing one (ErrServerNotFound, 404), so node IDs
+// cannot be probed and an application can never be bound to a foreign team's
+// node (F6). A legacy node without a team stays shared.
+func (s *Service) validateServer(ctx context.Context, userID, serverID uuid.UUID) error {
 	if serverID == uuid.Nil {
 		return fmt.Errorf("%w: server is required", ErrValidation)
 	}
-	known, err := s.repo.ServerExists(ctx, serverID)
+	known, err := s.repo.ServerExists(ctx, serverID, teams.ScopeFor(ctx, userID))
 	if err != nil {
 		return err
 	}

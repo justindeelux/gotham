@@ -64,10 +64,13 @@ type handler struct {
 //	POST   /v1/applications/{id}/webhooks   (authenticated, idempotent)
 //	DELETE /v1/applications/{id}/webhooks   (authenticated, idempotent)
 //
-// auth wraps the management group (the server passes its RequireAuth). The
-// delivery route deliberately has no auth middleware: it authenticates each
-// delivery with the per-hook secret instead of a session. A nil svc mounts
-// nothing, so the control plane can call Mount unconditionally.
+// auth wraps the management group: the server passes its team chain
+// (RequireAuth + RequireTeam + the write gate), and the service additionally
+// authorizes the parent application's team and role, so a creator demoted to
+// read_only or removed from the team can no longer install or remove a hook.
+// The delivery route deliberately has no auth middleware: it authenticates
+// each delivery with the per-hook secret instead of a session. A nil svc
+// mounts nothing, so the control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc *Service) {
 	if svc == nil {
 		return
@@ -194,6 +197,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrNotFound):
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
+	case errors.Is(err, ErrForbidden):
+		writeJSON(w, http.StatusForbidden, errorBody{Message: "insufficient team role"})
 	case errors.Is(err, ErrNotConnected), errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrProvider):

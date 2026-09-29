@@ -33,18 +33,18 @@ type Repository interface {
 	// DeleteTeam removes a team; memberships, invites and team resources
 	// cascade.
 	DeleteTeam(ctx context.Context, teamID uuid.UUID) error
-	// CreateMember adds a membership, or ErrConflict when it already exists.
-	CreateMember(ctx context.Context, teamID, userID uuid.UUID, role Role) (Member, error)
+	// CountTeamResources reports how many resources (applications, databases,
+	// compose services, nodes) still belong to the team.
+	CountTeamResources(ctx context.Context, teamID uuid.UUID) (int64, error)
+	// MutateMembership runs fn inside one transaction that locks the team row,
+	// handing it the locked team and its current memberships. fn may mutate
+	// through the MembershipTx and returns any policy error, which rolls the
+	// transaction back.
+	MutateMembership(ctx context.Context, teamID uuid.UUID, fn func(tx *MembershipTx) error) error
 	// GetMember returns one membership, or ErrNotFound.
 	GetMember(ctx context.Context, teamID, userID uuid.UUID) (Member, error)
 	// ListMembers returns a team's members with their account email.
 	ListMembers(ctx context.Context, teamID uuid.UUID) ([]Member, error)
-	// UpdateMemberRole changes a membership's role, or ErrNotFound.
-	UpdateMemberRole(ctx context.Context, teamID, userID uuid.UUID, role Role) (Member, error)
-	// DeleteMember removes a membership.
-	DeleteMember(ctx context.Context, teamID, userID uuid.UUID) error
-	// CountOwners reports how many owners a team has.
-	CountOwners(ctx context.Context, teamID uuid.UUID) (int64, error)
 	// CreateInvite stores a hashed invite and returns it.
 	CreateInvite(ctx context.Context, invite Invite, tokenHash string) (Invite, error)
 	// ListInvites returns a team's invites, newest first.
@@ -165,20 +165,45 @@ func (r *storeRepository) DeleteTeam(ctx context.Context, teamID uuid.UUID) erro
 	return nil
 }
 
-// CreateMember implements Repository.
-func (r *storeRepository) CreateMember(ctx context.Context, teamID, userID uuid.UUID, role Role) (Member, error) {
-	row, err := r.store.CreateTeamMember(ctx, sqlc.CreateTeamMemberParams{
-		TeamID: pgUUID(teamID),
-		UserID: pgUUID(userID),
-		Role:   string(role),
-	})
+// CountTeamResources implements Repository.
+func (r *storeRepository) CountTeamResources(ctx context.Context, teamID uuid.UUID) (int64, error) {
+	count, err := r.store.CountTeamResources(ctx, pgUUID(teamID))
 	if err != nil {
-		if isUniqueViolation(err) {
-			return Member{}, ErrConflict
-		}
-		return Member{}, fmt.Errorf("teams: create member: %w", err)
+		return 0, fmt.Errorf("teams: count team resources: %w", err)
 	}
-	return memberFromRow(row), nil
+	return count, nil
+}
+
+// MutateMembership implements Repository over the store's locking transaction.
+func (r *storeRepository) MutateMembership(ctx context.Context, teamID uuid.UUID, fn func(tx *MembershipTx) error) error {
+	err := r.store.MutateTeamMembership(ctx, pgUUID(teamID),
+		func(team sqlc.Team, members []sqlc.ListTeamMembersRow, writer *store.MembershipWriter) error {
+			tx := &MembershipTx{
+				Team:    teamFromRow(team),
+				Members: membersFromRows(members),
+				setRole: func(userID uuid.UUID, role Role) (Member, error) {
+					row, err := writer.SetRole(pgUUID(userID), string(role))
+					if err != nil {
+						if errors.Is(err, pgx.ErrNoRows) {
+							return Member{}, ErrNotFound
+						}
+						return Member{}, fmt.Errorf("teams: update member role: %w", err)
+					}
+					return memberFromRow(row), nil
+				},
+				remove: func(userID uuid.UUID) error {
+					if err := writer.Remove(pgUUID(userID)); err != nil {
+						return fmt.Errorf("teams: delete member: %w", err)
+					}
+					return nil
+				},
+			}
+			return fn(tx)
+		})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
 }
 
 // GetMember implements Repository.
@@ -212,42 +237,6 @@ func (r *storeRepository) ListMembers(ctx context.Context, teamID uuid.UUID) ([]
 		})
 	}
 	return members, nil
-}
-
-// UpdateMemberRole implements Repository.
-func (r *storeRepository) UpdateMemberRole(ctx context.Context, teamID, userID uuid.UUID, role Role) (Member, error) {
-	row, err := r.store.UpdateTeamMemberRole(ctx, sqlc.UpdateTeamMemberRoleParams{
-		TeamID: pgUUID(teamID),
-		UserID: pgUUID(userID),
-		Role:   string(role),
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Member{}, ErrNotFound
-		}
-		return Member{}, fmt.Errorf("teams: update member role: %w", err)
-	}
-	return memberFromRow(row), nil
-}
-
-// DeleteMember implements Repository.
-func (r *storeRepository) DeleteMember(ctx context.Context, teamID, userID uuid.UUID) error {
-	if err := r.store.DeleteTeamMember(ctx, sqlc.DeleteTeamMemberParams{
-		TeamID: pgUUID(teamID),
-		UserID: pgUUID(userID),
-	}); err != nil {
-		return fmt.Errorf("teams: delete member: %w", err)
-	}
-	return nil
-}
-
-// CountOwners implements Repository.
-func (r *storeRepository) CountOwners(ctx context.Context, teamID uuid.UUID) (int64, error) {
-	count, err := r.store.CountTeamOwners(ctx, pgUUID(teamID))
-	if err != nil {
-		return 0, fmt.Errorf("teams: count owners: %w", err)
-	}
-	return count, nil
 }
 
 // CreateInvite implements Repository.
@@ -333,6 +322,20 @@ func (r *storeRepository) UserEmail(ctx context.Context, userID uuid.UUID) (stri
 		return "", fmt.Errorf("teams: get user email: %w", err)
 	}
 	return row.Email, nil
+}
+
+// membersFromRows maps the joined membership rows (email included).
+func membersFromRows(rows []sqlc.ListTeamMembersRow) []Member {
+	members := make([]Member, 0, len(rows))
+	for _, row := range rows {
+		members = append(members, Member{
+			UserID:    uuidFromPG(row.UserID),
+			Email:     row.Email,
+			Role:      Role(row.Role),
+			CreatedAt: timeFromPG(row.CreatedAt),
+		})
+	}
+	return members
 }
 
 // teamFromRow maps a stored team row.

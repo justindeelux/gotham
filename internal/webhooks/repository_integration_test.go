@@ -67,16 +67,16 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	}
 	appID := uuid.UUID(createdApp.ID.Bytes)
 
-	// Ownership: another user must see nothing rather than someone's app.
-	if _, err := repo.GetApplication(ctx, appID, uuid.New()); !errors.Is(err, ErrNotFound) {
-		t.Errorf("foreign application error = %v, want ErrNotFound", err)
+	// The lookup is by ID; team authorization happens in the service.
+	if _, err := repo.GetApplication(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing application error = %v, want ErrNotFound", err)
 	}
-	app, err := repo.GetApplication(ctx, appID, userID)
+	app, err := repo.GetApplication(ctx, appID)
 	if err != nil {
 		t.Fatalf("GetApplication: %v", err)
 	}
-	if app.Repo != "Octo/Gotham" || app.Branch != "main" {
-		t.Errorf("application = %+v", app)
+	if app.Repo != "Octo/Gotham" || app.Branch != "main" || app.TeamID != userID {
+		t.Errorf("application = %+v, want the creator's personal team", app)
 	}
 
 	// Installing a hook seals its secret at rest and reads it back opened.

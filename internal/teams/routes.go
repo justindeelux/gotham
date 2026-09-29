@@ -38,6 +38,9 @@ type (
 		Email string `json:"email"`
 		Role  string `json:"role"`
 	}
+	acceptInviteRequest struct {
+		Token string `json:"token"`
+	}
 )
 
 // teamResponse is the wire representation of a team. role is the requesting
@@ -72,8 +75,9 @@ type inviteResponse struct {
 }
 
 // createdInviteResponse carries the raw token exactly once, when the invite is
-// created. accept_url tells the client where the token is accepted; email
-// delivery of the link is a separate work package (BE-8.3).
+// created. accept_url names the endpoint the token is posted to (in the request
+// body, never a URL path, so access logs never see it); email delivery of the
+// link is a separate work package (BE-8.3).
 type createdInviteResponse struct {
 	inviteResponse
 	Token     string `json:"token"`
@@ -124,7 +128,7 @@ type handler struct {
 //	GET    /v1/teams/{id}/invites
 //	POST   /v1/teams/{id}/invites
 //	DELETE /v1/teams/{id}/invites/{inviteID}
-//	POST   /v1/invites/{token}/accept
+//	POST   /v1/invites/accept
 //
 // auth wraps the group. A nil svc or FEATURE_TEAMS=false mounts nothing, so the
 // control plane can call Mount unconditionally. The routes carry no admin scope:
@@ -148,7 +152,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Get("/v1/teams/{id}/invites", h.invites)
 		protected.Post("/v1/teams/{id}/invites", h.createInvite)
 		protected.Delete("/v1/teams/{id}/invites/{inviteID}", h.revokeInvite)
-		protected.Post("/v1/invites/{token}/accept", h.acceptInvite)
+		protected.Post("/v1/invites/accept", h.acceptInvite)
 	})
 }
 
@@ -341,7 +345,7 @@ func (h *handler) createInvite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, singleInviteEnvelope{Invite: createdInviteResponse{
 		inviteResponse: newInviteResponse(invite),
 		Token:          token,
-		AcceptURL:      acceptURL(token),
+		AcceptURL:      acceptURL(),
 	}})
 }
 
@@ -362,15 +366,19 @@ func (h *handler) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// acceptInvite serves POST /v1/invites/{token}/accept: the authenticated
-// account whose email the invite names.
+// acceptInvite serves POST /v1/invites/accept: the authenticated account whose
+// email the invite names posts the raw token in the body. The token is never a
+// URL segment, so it cannot leak through access logs or referrers.
 func (h *handler) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
 		return
 	}
-	token := strings.TrimSpace(chi.URLParam(r, "token"))
-	team, err := h.svc.Accept(r.Context(), userID, token)
+	var req acceptInviteRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	team, err := h.svc.Accept(r.Context(), userID, req.Token)
 	if err != nil {
 		h.writeError(w, err)
 		return
@@ -426,7 +434,8 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusGone, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrInviteUsed), errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
-	case errors.Is(err, ErrLastOwner), errors.Is(err, ErrPersonalTeam):
+	case errors.Is(err, ErrLastOwner), errors.Is(err, ErrPersonalTeam),
+		errors.Is(err, ErrPersonalOwner), errors.Is(err, ErrTeamNotEmpty):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
@@ -436,10 +445,10 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 	}
 }
 
-// acceptURL is the relative path a client posts the token to. The frontend
-// builds the absolute link from it; email delivery is BE-8.3.
-func acceptURL(token string) string {
-	return "/v1/invites/" + token + "/accept"
+// acceptURL is the relative API path a client posts the token to (in the body).
+// The frontend builds the absolute link from it; email delivery is BE-8.3.
+func acceptURL() string {
+	return "/v1/invites/accept"
 }
 
 // newTeamResponse maps a team to its wire representation.

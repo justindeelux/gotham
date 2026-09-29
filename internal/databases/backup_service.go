@@ -382,8 +382,13 @@ func (m *BackupManager) GetBackup(ctx context.Context, userID, databaseID, backu
 }
 
 // DeleteBackup implements BackupService: the stored artifact goes first, then
-// the row, so a failed delete never leaves an unreachable object behind.
+// the row, so a failed delete never leaves an unreachable object behind. It is
+// a mutation of the parent database, so the team role must permit writes before
+// the backup is even looked up.
 func (m *BackupManager) DeleteBackup(ctx context.Context, userID, databaseID, backupID uuid.UUID) error {
+	if _, err := m.database(ctx, userID, databaseID, true); err != nil {
+		return err
+	}
 	backup, err := m.GetBackup(ctx, userID, databaseID, backupID)
 	if err != nil {
 		return err

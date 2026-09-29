@@ -254,13 +254,13 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	}
 
 	// ServerExists resolves registered and unknown nodes.
-	if exists, err := repo.ServerExists(ctx, serverID); err != nil || !exists {
+	if exists, err := repo.ServerExists(ctx, serverID, teams.Scope{UserID: ownerID}); err != nil || !exists {
 		t.Errorf("ServerExists(seeded) = %v, %v, want true", exists, err)
 	}
-	if exists, err := repo.ServerExists(ctx, uuid.New()); err != nil || exists {
+	if exists, err := repo.ServerExists(ctx, uuid.New(), teams.Scope{UserID: ownerID}); err != nil || exists {
 		t.Errorf("ServerExists(unknown) = %v, %v, want false", exists, err)
 	}
-	if exists, err := repo.ServerExists(ctx, uuid.Nil); err != nil || exists {
+	if exists, err := repo.ServerExists(ctx, uuid.Nil, teams.Scope{UserID: ownerID}); err != nil || exists {
 		t.Errorf("ServerExists(nil) = %v, %v, want false", exists, err)
 	}
 }

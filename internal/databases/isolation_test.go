@@ -74,8 +74,8 @@ func TestDatabaseTeamIsolation(t *testing.T) {
 	if _, err := svc.Get(viewerCtx, alice, other.ID); err != nil {
 		t.Fatalf("read_only Get: %v", err)
 	}
-	if _, err := svc.Credentials(viewerCtx, alice, other.ID); err != nil {
-		t.Fatalf("read_only Credentials: %v", err)
+	if _, err := svc.Credentials(viewerCtx, alice, other.ID); !errors.Is(err, teams.ErrForbidden) {
+		t.Fatalf("read_only Credentials = %v, want ErrForbidden (plaintext secrets need owner/admin)", err)
 	}
 	if _, err := svc.Update(viewerCtx, alice, other.ID, UpdateRequest{Name: "renamed"}); !errors.Is(err, teams.ErrForbidden) {
 		t.Fatalf("read_only Update = %v, want ErrForbidden", err)
@@ -116,5 +116,37 @@ func TestDatabaseCreateWithoutTeamContextStaysCreatorScoped(t *testing.T) {
 	}
 	if _, err := svc.Get(context.Background(), uuid.New(), created.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get(other creator) = %v, want ErrNotFound", err)
+	}
+}
+
+// TestDatabaseCreateRejectsForeignServer is the F6 regression for databases: a
+// database can only be provisioned on a node of the caller's active team (or a
+// legacy node without a team), so a stranger cannot bind a workload to another
+// team's server.
+func TestDatabaseCreateRejectsForeignServer(t *testing.T) {
+	teamA, teamB := uuid.New(), uuid.New()
+	alice := uuid.New()
+
+	repo := newFakeRepository()
+	foreignNode := repo.seedServerForTeam(teamB)
+	ownNode := repo.seedServerForTeam(teamA)
+	legacyNode := repo.seedServerForTeam(uuid.Nil)
+	svc := newTestService(repo, &fakeContainers{runID: "container-1"})
+	ctxA := teams.WithScope(context.Background(), teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner})
+
+	if _, _, err := svc.Create(ctxA, alice, CreateRequest{
+		Name: "foreign", Engine: "postgres", ServerID: foreignNode,
+	}); !errors.Is(err, ErrServerNotFound) {
+		t.Fatalf("create on a foreign node = %v, want ErrServerNotFound", err)
+	}
+	if _, _, err := svc.Create(ctxA, alice, CreateRequest{
+		Name: "own", Engine: "postgres", ServerID: ownNode,
+	}); err != nil {
+		t.Fatalf("create on the team's node: %v", err)
+	}
+	if _, _, err := svc.Create(ctxA, alice, CreateRequest{
+		Name: "legacy", Engine: "postgres", ServerID: legacyNode,
+	}); err != nil {
+		t.Fatalf("create on a legacy node: %v", err)
 	}
 }

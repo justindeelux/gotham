@@ -351,6 +351,9 @@ func (s *redirectService) CreateRedirect(ctx context.Context, in CreateRedirectI
 	if err != nil {
 		return DomainRedirect{}, err
 	}
+	if err := authorizeApp(ctx, app.TeamID, true); err != nil {
+		return DomainRedirect{}, err
+	}
 	if err := validateRedirectApplication(app); err != nil {
 		return DomainRedirect{}, err
 	}
@@ -393,20 +396,48 @@ func (s *redirectService) CreateRedirect(ctx context.Context, in CreateRedirectI
 	return created, nil
 }
 
-// ListRedirects returns every rule, or one application's rules.
+// ListRedirects returns the rules of the caller's active team, or one
+// application's rules when it belongs to that team.
 func (s *redirectService) ListRedirects(ctx context.Context, applicationID uuid.UUID) ([]DomainRedirect, error) {
+	var (
+		redirects []DomainRedirect
+		err       error
+	)
 	if applicationID == uuid.Nil {
-		return s.store.ListRedirects(ctx)
+		redirects, err = s.store.ListRedirects(ctx)
+	} else {
+		redirects, err = s.store.ListRedirectsByApplication(ctx, applicationID)
 	}
-	return s.store.ListRedirectsByApplication(ctx, applicationID)
+	if err != nil {
+		return nil, err
+	}
+	filtered := filterByTeam(ctx, s.store, redirects, func(r DomainRedirect) uuid.UUID {
+		return r.ApplicationID
+	})
+	if filtered == nil {
+		return []DomainRedirect{}, nil
+	}
+	return filtered, nil
 }
 
-// GetRedirect returns one rule.
+// GetRedirect returns one rule of an application the caller's active team
+// owns; a foreign team's rule answers ErrNotFound.
 func (s *redirectService) GetRedirect(ctx context.Context, id uuid.UUID) (DomainRedirect, error) {
 	if id == uuid.Nil {
 		return DomainRedirect{}, fmt.Errorf("%w: redirect id is required", ErrValidation)
 	}
-	return s.store.GetRedirect(ctx, id)
+	redirect, err := s.store.GetRedirect(ctx, id)
+	if err != nil {
+		return DomainRedirect{}, err
+	}
+	app, err := s.store.GetApplication(ctx, redirect.ApplicationID)
+	if err != nil {
+		return DomainRedirect{}, err
+	}
+	if err := authorizeApp(ctx, app.TeamID, false); err != nil {
+		return DomainRedirect{}, err
+	}
+	return redirect, nil
 }
 
 // UpdateRedirect applies a partial update. The owning application is re-read
@@ -423,6 +454,9 @@ func (s *redirectService) UpdateRedirect(ctx context.Context, id uuid.UUID, in U
 	}
 	app, err := s.store.GetApplication(ctx, existing.ApplicationID)
 	if err != nil {
+		return DomainRedirect{}, err
+	}
+	if err := authorizeApp(ctx, app.TeamID, true); err != nil {
 		return DomainRedirect{}, err
 	}
 	if err := validateRedirectApplication(app); err != nil {
@@ -478,7 +512,15 @@ func (s *redirectService) DeleteRedirect(ctx context.Context, id uuid.UUID) erro
 	if id == uuid.Nil {
 		return fmt.Errorf("%w: redirect id is required", ErrValidation)
 	}
-	if _, err := s.store.GetRedirect(ctx, id); err != nil {
+	existing, err := s.store.GetRedirect(ctx, id)
+	if err != nil {
+		return err
+	}
+	app, err := s.store.GetApplication(ctx, existing.ApplicationID)
+	if err != nil {
+		return err
+	}
+	if err := authorizeApp(ctx, app.TeamID, true); err != nil {
 		return err
 	}
 	if err := s.store.DeleteRedirect(ctx, id); err != nil {

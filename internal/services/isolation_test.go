@@ -109,3 +109,34 @@ func TestServiceTeamIsolation(t *testing.T) {
 func ptr[T any](v T) *T {
 	return &v
 }
+
+// TestServiceCreateRejectsForeignServer is the F6 regression for compose
+// services: a project can only be placed on a node of the caller's active team
+// (or a legacy node without a team).
+func TestServiceCreateRejectsForeignServer(t *testing.T) {
+	teamA, teamB := uuid.New(), uuid.New()
+	alice := uuid.New()
+
+	repo := newFakeRepository()
+	foreignNode := repo.seedServerForTeam(teamB)
+	ownNode := repo.seedServerForTeam(teamA)
+	legacyNode := repo.seedServerForTeam(uuid.Nil)
+	svc := newTestService(t, repo, &fakeAgent{})
+	ctxA := teams.WithScope(context.Background(), teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner})
+
+	if _, err := svc.Create(ctxA, alice, CreateRequest{
+		Name: "foreign", ServerID: foreignNode, ComposeYAML: testDocument, Env: testEnv,
+	}); !errors.Is(err, ErrServerNotFound) {
+		t.Fatalf("create on a foreign node = %v, want ErrServerNotFound", err)
+	}
+	if _, err := svc.Create(ctxA, alice, CreateRequest{
+		Name: "own", ServerID: ownNode, ComposeYAML: testDocument, Env: testEnv,
+	}); err != nil {
+		t.Fatalf("create on the team's node: %v", err)
+	}
+	if _, err := svc.Create(ctxA, alice, CreateRequest{
+		Name: "legacy", ServerID: legacyNode, ComposeYAML: testDocument, Env: testEnv,
+	}); err != nil {
+		t.Fatalf("create on a legacy node: %v", err)
+	}
+}

@@ -66,7 +66,7 @@ type DatabaseService interface {
 	// Get returns one database the caller owns (404 for anyone else's).
 	Get(ctx context.Context, userID, databaseID uuid.UUID) (Database, error)
 	// Credentials returns the decrypted credentials of a database the caller
-	// owns.
+	// may manage (owner/admin: plaintext secrets are not a read-only view).
 	Credentials(ctx context.Context, userID, databaseID uuid.UUID) (Credentials, error)
 	// Update renames a database the caller owns.
 	Update(ctx context.Context, userID, databaseID uuid.UUID, req UpdateRequest) (Database, error)
@@ -195,7 +195,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if req.PublicPort < 0 || req.PublicPort > 65535 {
 		return Database{}, Credentials{}, fmt.Errorf("%w: public_port must be between 0 and 65535", ErrValidation)
 	}
-	exists, err := s.repo.ServerExists(ctx, req.ServerID)
+	exists, err := s.repo.ServerExists(ctx, req.ServerID, teams.ScopeFor(ctx, userID))
 	if err != nil {
 		return Database{}, Credentials{}, err
 	}
@@ -287,9 +287,11 @@ func (s *Service) Get(ctx context.Context, userID, databaseID uuid.UUID) (Databa
 	return s.database(ctx, userID, databaseID, false)
 }
 
-// Credentials opens the sealed credentials of a database the caller may read.
+// Credentials opens the sealed credentials of a database. Plaintext secrets
+// are owner/admin material, not a read-only resource view, so the team role
+// must permit writes.
 func (s *Service) Credentials(ctx context.Context, userID, databaseID uuid.UUID) (Credentials, error) {
-	database, err := s.database(ctx, userID, databaseID, false)
+	database, err := s.database(ctx, userID, databaseID, true)
 	if err != nil {
 		return Credentials{}, err
 	}

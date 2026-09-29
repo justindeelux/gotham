@@ -17,6 +17,7 @@ import {
   NSpin,
   NTabPane,
   NTabs,
+  NTag,
   NText,
   NTooltip,
   useMessage,
@@ -34,6 +35,14 @@ import type {
   EnvVar,
   StorageMapping,
 } from "../api/applications";
+import type { Preview } from "../api/previews";
+import {
+  describePreviewError,
+  isFeatureDisabled as isPreviewsDisabled,
+  listPreviews,
+  previewStateTagType,
+  previewURL,
+} from "../api/previews";
 import DeployLogs from "../components/DeployLogs.vue";
 import DeploymentStatusTag from "../components/DeploymentStatusTag.vue";
 import DomainEditor from "../components/DomainEditor.vue";
@@ -62,6 +71,16 @@ const envError = ref<string | null>(null);
 const storagesDraft = ref<StorageMapping[]>([]);
 const storagesLoading = ref(false);
 const storagesError = ref<string | null>(null);
+
+// Previews (FE-8.1). `previewsLoaded` is only set by a successful read, so an
+// unavailable list can never render as a confirmed-empty one: a failure keeps
+// the previously loaded rows and shows an explicit error with a retry, and a
+// feature-flag 404 hides the whole tab instead of erroring.
+const previews = ref<Preview[]>([]);
+const previewsLoading = ref(false);
+const previewsLoaded = ref(false);
+const previewsError = ref<string | null>(null);
+const previewsAvailable = ref(true);
 
 /** isNarrow stacks the two-column descriptions on small screens. */
 const isNarrow = useMediaQuery("(max-width: 640px)");
@@ -307,6 +326,85 @@ function rowKey(row: Deployment): string {
   return row.id;
 }
 
+/** Preview rows shown in the Previews tab, oldest closed last. */
+const previewColumns: DataTableColumns<Preview> = [
+  {
+    title: "PR",
+    key: "pr_number",
+    width: 90,
+    render: (row) => h("span", { class: "mono" }, `#${row.pr_number}`),
+  },
+  {
+    title: "Branch",
+    key: "branch",
+    minWidth: 160,
+    ellipsis: { tooltip: true },
+    render: (row) =>
+      row.branch
+        ? h("span", { class: "mono" }, row.branch)
+        : h(NText, { depth: 3 }, { default: () => "—" }),
+  },
+  {
+    title: "Preview URL",
+    key: "host",
+    minWidth: 300,
+    ellipsis: { tooltip: true },
+    render: (row) =>
+      row.host
+        ? h(
+            "a",
+            {
+              class: "mono",
+              href: previewURL(row.host),
+              target: "_blank",
+              rel: "noopener noreferrer",
+            },
+            row.host,
+          )
+        : h(NText, { depth: 3 }, { default: () => "—" }),
+  },
+  {
+    title: "State",
+    key: "state",
+    width: 120,
+    render: (row) =>
+      h(
+        NTag,
+        { type: previewStateTagType(row.state), size: "small", round: true },
+        { default: () => row.state },
+      ),
+  },
+  {
+    title: "Head",
+    key: "head_sha",
+    width: 100,
+    render: (row) =>
+      row.head_sha
+        ? h("span", { class: "mono" }, row.head_sha.slice(0, 8))
+        : h(NText, { depth: 3 }, { default: () => "—" }),
+  },
+  {
+    title: "Created",
+    key: "created_at",
+    width: 110,
+    render: (row) => relativeTime(row.created_at),
+  },
+  {
+    title: "Deleted",
+    key: "deleted_at",
+    width: 110,
+    render: (row) =>
+      row.deleted_at
+        ? relativeTime(row.deleted_at)
+        : h(NText, { depth: 3 }, { default: () => "—" }),
+  },
+];
+
+/** previewRowKey identifies a preview row by its binding id. */
+function previewRowKey(row: Preview): string {
+  return row.id;
+}
+
 /** fetchAll loads the application, its history, config and node list. */
 async function fetchAll(): Promise<void> {
   if (!appId.value) {
@@ -324,6 +422,7 @@ async function fetchAll(): Promise<void> {
   }
   void loadEnv();
   void loadStorages();
+  void loadPreviews();
   void serversStore.fetchServers().catch(() => undefined);
 }
 
@@ -352,6 +451,35 @@ async function loadStorages(): Promise<void> {
     storagesError.value = describeApplicationError(error);
   } finally {
     storagesLoading.value = false;
+  }
+}
+
+/**
+ * loadPreviews refreshes the application's preview bindings. A feature-flag
+ * 404 hides the tab; any other failure keeps the rows already shown and
+ * surfaces an explicit error with a retry (an unavailable list is never
+ * rendered as an empty one).
+ */
+async function loadPreviews(): Promise<void> {
+  if (!appId.value) {
+    return;
+  }
+  previewsLoading.value = true;
+  previewsError.value = null;
+  try {
+    previews.value = await listPreviews(appId.value);
+    previewsLoaded.value = true;
+    previewsAvailable.value = true;
+  } catch (error) {
+    if (isPreviewsDisabled(error)) {
+      previews.value = [];
+      previewsLoaded.value = false;
+      previewsAvailable.value = false;
+      return;
+    }
+    previewsError.value = describePreviewError(error);
+  } finally {
+    previewsLoading.value = false;
   }
 }
 
@@ -438,6 +566,10 @@ watch(appId, () => {
   envError.value = null;
   storagesDraft.value = [];
   storagesError.value = null;
+  previews.value = [];
+  previewsLoaded.value = false;
+  previewsError.value = null;
+  previewsAvailable.value = true;
   appsStore.stopAllPolling();
   void fetchAll();
 });
@@ -764,6 +896,63 @@ onUnmounted(() => {
               <NEmpty description="Loading the application…" />
             </NCard>
           </div>
+        </NTabPane>
+
+        <NTabPane
+          v-if="previewsAvailable"
+          name="previews"
+          :tab="previewsLoaded ? `Previews (${previews.length})` : 'Previews'"
+        >
+          <NCard style="margin-top: 16px" title="Preview deployments">
+            <template #header-extra>
+              <NButton
+                size="small"
+                :loading="previewsLoading"
+                @click="void loadPreviews()"
+              >
+                Refresh
+              </NButton>
+            </template>
+            <NSpace vertical :size="12">
+              <NAlert v-if="previewsError" type="error" :show-icon="true">
+                <NSpace align="center" :size="12" wrap>
+                  <span>{{ previewsError }}</span>
+                  <NButton size="small" @click="void loadPreviews()">
+                    Retry
+                  </NButton>
+                </NSpace>
+              </NAlert>
+              <NDataTable
+                v-if="previews.length > 0"
+                :columns="previewColumns"
+                :data="previews"
+                :loading="previewsLoading"
+                :row-key="previewRowKey"
+                :bordered="false"
+                :scroll-x="1000"
+                :pagination="false"
+              />
+              <NEmpty
+                v-else-if="!previewsLoading && previewsLoaded && !previewsError"
+                description="No previews for this application yet."
+              >
+                <template #extra>
+                  <NText depth="3">
+                    A preview is created when a pull request opens against
+                    <span class="mono">{{ application?.branch || "the watched branch" }}</span>,
+                    and torn down when it closes or merges.
+                  </NText>
+                </template>
+              </NEmpty>
+            </NSpace>
+            <template #footer>
+              <NText depth="3">
+                Previews are sibling applications: they build the PR head
+                branch on a temporary host, and the base application's sealed
+                secrets and volumes are deliberately not shared with them.
+              </NText>
+            </template>
+          </NCard>
         </NTabPane>
       </NTabs>
     </NSpin>

@@ -50,11 +50,6 @@ interface PreviewListEnvelope {
   previews: Preview[];
 }
 
-/** Wire envelope for a preview list. */
-interface PreviewListEnvelope {
-  previews: Preview[];
-}
-
 /** listPreviews returns one application's preview bindings, newest first. */
 export async function listPreviews(applicationId: string): Promise<Preview[]> {
   const response = await http.get<PreviewListEnvelope>(

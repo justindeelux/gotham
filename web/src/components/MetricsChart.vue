@@ -242,7 +242,7 @@ function niceCeil(value: number): number {
         </text>
       </g>
       <g v-for="item in series" :key="item.name" :data-series="item.name">
-        <template v-for="(group, index) in segments(item.points)" :key="index">
+        <template v-for="group in segments(item.points)" :key="group[0].at">
           <polygon
             v-if="series.length === 1 && group.length > 1"
             class="chart__area"
@@ -327,7 +327,9 @@ function niceCeil(value: number): number {
 .chart__xlabels text {
   fill: var(--muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  /* The SVG scales with its container, so the axis labels use the smallest
+     step of the shared type scale rather than a literal pixel size. */
+  font-size: var(--text-xs);
 }
 
 .chart__line {

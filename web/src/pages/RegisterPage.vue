@@ -15,6 +15,7 @@ import { computed, reactive, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { describeAuthError, useAuthStore } from "../stores/auth";
+import { authSwitchTarget, safeRedirect } from "../utils/authRedirect";
 
 // Error convention (shared with LoginPage): client-side validation errors
 // render inline on the field via NFormItem; server-side submit failures render
@@ -128,12 +129,7 @@ const rules: FormRules = {
 
 /** redirectAfterAuth honours ?redirect when it is a safe local path. */
 async function redirectAfterAuth(): Promise<void> {
-  const redirect = route.query.redirect;
-  const target =
-    typeof redirect === "string" && redirect.startsWith("/") && !redirect.startsWith("//")
-      ? redirect
-      : "/dashboard";
-  await router.replace(target);
+  await router.replace(safeRedirect(route.query.redirect) ?? "/dashboard");
 }
 
 async function handleSubmit(): Promise<void> {
@@ -163,7 +159,7 @@ async function handleSubmit(): Promise<void> {
       <NSpace vertical :size="16">
         <div class="auth-switch" role="tablist" aria-label="Sign in or create an account">
           <RouterLink
-            to="/login"
+            :to="authSwitchTarget(route, 'login')"
             role="tab"
             aria-selected="false"
           >

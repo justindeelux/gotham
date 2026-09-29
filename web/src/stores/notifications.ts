@@ -27,6 +27,12 @@ import { useTeamsStore } from "./teams";
  * set by a successful response and `featureDisabled` marks the
  * FEATURE_NOTIFICATIONS=false 404, which the page renders as a hidden surface
  * rather than an error.
+ *
+ * Reads and mutations are race-guarded by team: a response may only write
+ * state while it still belongs to the team the list currently holds
+ * (`loadedTeamId`), and only the newest list read may write at all. A read
+ * for another team clears the list first, so the previous team's channels can
+ * never render under a new selection — not even after a failed read.
  */
 export const useNotificationsStore = defineStore("notifications", () => {
   const channels = ref<NotificationChannel[]>([]);
@@ -35,13 +41,34 @@ export const useNotificationsStore = defineStore("notifications", () => {
   const error = ref<string | null>(null);
   const featureDisabled = ref(false);
 
+  /** Team the current list belongs to; empty when no list is held. */
+  const loadedTeamId = ref("");
+
+  /** Token of the newest list read; a stale response never writes state. */
+  let listReadToken = 0;
+
   /** activeTeamId reads the current team selection. */
   function activeTeamId(): string {
     return useTeamsStore().activeTeamId;
   }
 
-  /** applyChannel merges one channel into the list in place. */
+  /** clearList drops the held list (used when the team changes). */
+  function clearList(): void {
+    channels.value = [];
+    loaded.value = false;
+    error.value = null;
+    featureDisabled.value = false;
+  }
+
+  /**
+   * applyChannel merges one channel into the list in place, but only when it
+   * belongs to the team the list holds: a mutation that completes after the
+   * operator switched teams must not leak into the new team's list.
+   */
   function applyChannel(updated: NotificationChannel): void {
+    if (updated.team_id !== loadedTeamId.value) {
+      return;
+    }
     const index = channels.value.findIndex((item) => item.id === updated.id);
     if (index === -1) {
       channels.value = [...channels.value, updated];
@@ -53,13 +80,30 @@ export const useNotificationsStore = defineStore("notifications", () => {
   /** fetchChannels loads the active team's channels. */
   async function fetchChannels(): Promise<void> {
     const teamId = activeTeamId();
+    const token = ++listReadToken;
+    const isCurrent = (): boolean =>
+      token === listReadToken && activeTeamId() === teamId;
+
+    if (loadedTeamId.value !== teamId) {
+      // A different team's rows must never render under this selection, and
+      // any read still in flight for the old team is now obsolete.
+      clearList();
+      loadedTeamId.value = teamId;
+    }
     loading.value = true;
     error.value = null;
     try {
-      channels.value = await listChannels(teamId);
+      const next = await listChannels(teamId);
+      if (!isCurrent()) {
+        return;
+      }
+      channels.value = next;
       featureDisabled.value = false;
       loaded.value = true;
     } catch (err) {
+      if (!isCurrent()) {
+        return;
+      }
       if (isFeatureDisabled(err)) {
         featureDisabled.value = true;
         loaded.value = true;
@@ -69,7 +113,11 @@ export const useNotificationsStore = defineStore("notifications", () => {
       error.value = describeChannelError(err);
       throw err;
     } finally {
-      loading.value = false;
+      // Only the newest read owns the spinner; an obsolete one must not clear
+      // a loading state the current read still needs.
+      if (isCurrent()) {
+        loading.value = false;
+      }
     }
   }
 
@@ -92,7 +140,11 @@ export const useNotificationsStore = defineStore("notifications", () => {
 
   /** remove deletes one channel and drops it from the list. */
   async function remove(id: string): Promise<void> {
-    await deleteChannel(activeTeamId(), id);
+    const teamId = activeTeamId();
+    await deleteChannel(teamId, id);
+    if (loadedTeamId.value !== teamId) {
+      return;
+    }
     channels.value = channels.value.filter((item) => item.id !== id);
   }
 

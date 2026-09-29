@@ -26,11 +26,23 @@ async function handleAccept(): Promise<void> {
   try {
     const team = await acceptInvite(token.value);
     joined.value = team.name;
+    // The token is spent: drop it from the address bar and history so a
+    // reload or a shared URL cannot replay it.
+    scrubToken();
   } catch (err) {
     error.value = describeTeamError(err);
   } finally {
     accepting.value = false;
   }
+}
+
+/**
+ * scrubToken replaces the token-bearing query with the bare accept path. It
+ * runs only after the token was consumed, so the signed-out handoff (which
+ * carries the token to the login/register redirect) is untouched.
+ */
+function scrubToken(): void {
+  void router.replace({ query: {} });
 }
 
 /** goToTeams returns to the teams page after the flow settles. */

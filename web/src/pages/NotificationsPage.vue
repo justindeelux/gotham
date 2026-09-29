@@ -311,8 +311,13 @@ watch(
 );
 
 onMounted(async () => {
+  const selectionBeforeLoad = teamsStore.activeTeamId;
   await teamsStore.ensureTeams();
-  await channelsStore.fetchChannels().catch(() => undefined);
+  // The selection watcher already reloaded the list when ensureTeams changed
+  // the active team; only an unchanged selection needs an explicit first read.
+  if (teamsStore.activeTeamId === selectionBeforeLoad) {
+    await channelsStore.fetchChannels().catch(() => undefined);
+  }
 });
 </script>
 
@@ -351,8 +356,9 @@ onMounted(async () => {
       <NCard v-if="!teamsStore.featureDisabled" title="Team scope">
         <NSpace align="center" :size="12" wrap>
           <NSelect
-            v-model:value="teamsStore.activeTeamId"
+            :value="teamsStore.activeTeamId"
             :options="teamOptions"
+            filterable
             style="width: 260px"
             aria-label="Notification team"
             @update:value="(value: string) => teamsStore.selectTeam(value)"
@@ -372,7 +378,12 @@ onMounted(async () => {
         </NSpace>
       </NCard>
 
-      <NAlert v-if="channelsStore.error" type="error" :show-icon="true">
+      <NAlert
+        v-if="channelsStore.error"
+        type="error"
+        :show-icon="true"
+        data-testid="channels-error"
+      >
         {{ channelsStore.error }}
       </NAlert>
 
@@ -486,7 +497,14 @@ onMounted(async () => {
             </div>
           </NCard>
 
-          <NCard v-if="!channelsStore.loading && channelsStore.channels.length === 0">
+          <NCard
+            v-if="
+              !channelsStore.loading &&
+              channelsStore.loaded &&
+              channelsStore.channels.length === 0 &&
+              !channelsStore.error
+            "
+          >
             <NEmpty description="No channels for this team yet.">
               <template v-if="canMutate" #extra>
                 <NButton type="primary" @click="openCreate">

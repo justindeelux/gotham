@@ -84,8 +84,25 @@ const metricsError = ref<string | null>(null);
 /** False once the API answers the FEATURE_METRICS 404: the charts are hidden. */
 const metricsAvailable = ref(true);
 
+/**
+ * The step the rendered points belong to. It is only written from a
+ * successful response, so the chart's gap width and range label always
+ * describe the data on screen — never a range the operator merely selected.
+ */
+const metricSeriesStep = ref<MetricStep>("1m");
+
+/** Token of the newest metrics request; a stale response never writes state. */
+let metricsRequestToken = 0;
+
 const activeMetricRange = computed<MetricRange>(
   () => metricRanges.find((range) => range.step === metricStep.value) ?? metricRanges[0],
+);
+
+/** appliedMetricRange is the range the rendered points actually belong to. */
+const appliedMetricRange = computed<MetricRange>(
+  () =>
+    metricRanges.find((range) => range.step === metricSeriesStep.value) ??
+    metricRanges[0],
 );
 
 /** hasMetrics reports whether the loaded window carries any sample. */
@@ -172,26 +189,48 @@ const metricCharts = computed<MetricChart[]>(() => {
   ];
 });
 
+/** isMetricStep narrows a server-returned step onto the accepted values. */
+function isMetricStep(value: string): value is MetricStep {
+  return value === "1m" || value === "1h" || value === "1d";
+}
+
 /**
- * loadMetrics reads the active step's window. A feature-flag 404 hides the
- * charts instead of rendering an error; any other failure keeps the previously
- * loaded window and surfaces an explicit error with a retry.
+ * loadMetrics reads the active step's window. Completion is guarded by both a
+ * request generation and the server ID, so a late response for another range
+ * or another node can never overwrite the current one. A feature-flag 404
+ * hides the charts instead of rendering an error; any other failure surfaces
+ * an explicit error with a retry.
  */
 async function loadMetrics(): Promise<void> {
-  if (!serverId.value) {
+  const requestServerId = serverId.value;
+  if (!requestServerId) {
     return;
   }
   const range = activeMetricRange.value;
+  const token = ++metricsRequestToken;
+  const isCurrent = (): boolean =>
+    token === metricsRequestToken && serverId.value === requestServerId;
+
   metricsLoading.value = true;
   metricsError.value = null;
   try {
     const to = new Date();
     const from = new Date(to.getTime() - range.windowMs);
-    const series = await getServerMetrics(serverId.value, from, to, range.step);
+    const series = await getServerMetrics(requestServerId, from, to, range.step);
+    if (!isCurrent()) {
+      return;
+    }
     metricPoints.value = series.points;
+    // The response names the aggregation it applied; the chart's range and
+    // gap width follow it, falling back to the requested step when a server
+    // ever answers an unknown one.
+    metricSeriesStep.value = isMetricStep(series.step) ? series.step : range.step;
     metricsLoaded.value = true;
     metricsAvailable.value = true;
   } catch (error) {
+    if (!isCurrent()) {
+      return;
+    }
     if (isMetricsDisabled(error)) {
       metricPoints.value = [];
       metricsLoaded.value = false;
@@ -200,13 +239,26 @@ async function loadMetrics(): Promise<void> {
     }
     metricsError.value = describeMetricsError(error);
   } finally {
-    metricsLoading.value = false;
+    // Only the newest request owns the spinner; an obsolete one must not clear
+    // a loading state the current request still needs.
+    if (isCurrent()) {
+      metricsLoading.value = false;
+    }
   }
 }
 
-/** selectMetricRange switches the step and reloads the window. */
+/**
+ * selectMetricRange switches the step and reloads the window. The previous
+ * window's points belong to another range, so they are dropped here: a slow or
+ * failed read can never render under the new selection's label.
+ */
 function selectMetricRange(step: MetricStep): void {
+  if (step === metricStep.value) {
+    return;
+  }
   metricStep.value = step;
+  metricPoints.value = [];
+  metricsLoaded.value = false;
   void loadMetrics();
 }
 
@@ -328,10 +380,13 @@ async function handleDelete(): Promise<void> {
 watch(serverId, () => {
   activeTab.value = "overview";
   metricStep.value = "1m";
+  metricSeriesStep.value = "1m";
   metricPoints.value = [];
   metricsLoaded.value = false;
   metricsError.value = null;
   metricsAvailable.value = true;
+  // The in-flight read's own guard compares the server id, so a response for
+  // the previous node can never land on this one.
   void fetchServer();
 });
 
@@ -514,7 +569,12 @@ onMounted(() => {
                       {{ range.step }}
                     </NRadioButton>
                   </NRadioGroup>
-                  <NText depth="3">{{ activeMetricRange.hint }}</NText>
+                  <NText depth="3">
+                    {{ activeMetricRange.hint }}
+                    <template v-if="metricsLoaded && metricSeriesStep !== metricStep">
+                      · server returned step {{ metricSeriesStep }}
+                    </template>
+                  </NText>
                   <NText depth="3" style="margin-left: auto">
                     Samples are kept 30 days · empty buckets are gaps, not
                     zeros
@@ -528,7 +588,12 @@ onMounted(() => {
                   </NButton>
                 </div>
 
-                <NAlert v-if="metricsError" type="error" :show-icon="true">
+                <NAlert
+                  v-if="metricsError"
+                  type="error"
+                  :show-icon="true"
+                  data-testid="metrics-error"
+                >
                   <NSpace align="center" :size="12" wrap>
                     <span>{{ metricsError }}</span>
                     <NButton size="small" @click="void loadMetrics()">
@@ -553,7 +618,7 @@ onMounted(() => {
                         <MetricsChart
                           v-if="hasMetrics"
                           :series="chart.series"
-                          :step-ms="activeMetricRange.stepMs"
+                          :step-ms="appliedMetricRange.stepMs"
                           :y-max="chart.percent ? 100 : undefined"
                           :format-value="
                             chart.percent ? formatPercentValue : formatRateValue
@@ -564,9 +629,11 @@ onMounted(() => {
                           v-else
                           size="small"
                           :description="
-                            metricsLoaded
-                              ? 'No samples in this window.'
-                              : 'Loading the metrics window…'
+                            metricsError
+                              ? 'Metrics unavailable.'
+                              : metricsLoaded
+                                ? 'No samples in this window.'
+                                : 'Loading the metrics window…'
                           "
                         />
                       </div>

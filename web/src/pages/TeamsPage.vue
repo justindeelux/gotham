@@ -68,12 +68,16 @@ const membersLoading = ref(false);
 const membersError = ref<string | null>(null);
 const memberActionError = ref<string | null>(null);
 const busyMemberId = ref("");
+/** Token of the newest members read; a stale response never writes state. */
+let membersReadToken = 0;
 
 // Invites.
 const invites = ref<TeamInvite[]>([]);
 const invitesLoading = ref(false);
 const invitesError = ref<string | null>(null);
 const inviteActionError = ref<string | null>(null);
+/** Token of the newest invites read; a stale response never writes state. */
+let invitesReadToken = 0;
 const inviteOpen = ref(false);
 const inviteEmail = ref("");
 const inviteRole = ref<TeamRole>("read_only");
@@ -250,9 +254,29 @@ const inviteColumns = computed<DataTableColumns<TeamInvite>>(() => [
   },
 ]);
 
+/**
+ * resetCollections drops the previous team's members and invites and
+ * invalidates every read still in flight for it. It runs before the selection
+ * changes are acted on, so rows of one team can never render under another.
+ */
+function resetCollections(): void {
+  membersReadToken += 1;
+  invitesReadToken += 1;
+  members.value = [];
+  invites.value = [];
+  membersError.value = null;
+  invitesError.value = null;
+  memberActionError.value = null;
+  inviteActionError.value = null;
+  membersLoading.value = false;
+  invitesLoading.value = false;
+}
+
 async function loadMembers(): Promise<void> {
   const teamId = teamsStore.activeTeamId;
-  members.value = [];
+  const token = ++membersReadToken;
+  const isCurrent = (): boolean =>
+    token === membersReadToken && teamsStore.activeTeamId === teamId;
   membersError.value = null;
   memberActionError.value = null;
   if (!teamId) {
@@ -260,17 +284,30 @@ async function loadMembers(): Promise<void> {
   }
   membersLoading.value = true;
   try {
-    members.value = await listMembers(teamId);
+    const loaded = await listMembers(teamId);
+    if (!isCurrent()) {
+      return;
+    }
+    members.value = loaded;
   } catch (error) {
+    if (!isCurrent()) {
+      return;
+    }
     membersError.value = describeTeamError(error);
   } finally {
-    membersLoading.value = false;
+    // Only the newest read owns the spinner; an obsolete one must not clear a
+    // loading state the current read still needs.
+    if (isCurrent()) {
+      membersLoading.value = false;
+    }
   }
 }
 
 async function loadInvites(): Promise<void> {
   const teamId = teamsStore.activeTeamId;
-  invites.value = [];
+  const token = ++invitesReadToken;
+  const isCurrent = (): boolean =>
+    token === invitesReadToken && teamsStore.activeTeamId === teamId;
   invitesError.value = null;
   inviteActionError.value = null;
   if (!teamId) {
@@ -278,11 +315,20 @@ async function loadInvites(): Promise<void> {
   }
   invitesLoading.value = true;
   try {
-    invites.value = await listInvites(teamId);
+    const loaded = await listInvites(teamId);
+    if (!isCurrent()) {
+      return;
+    }
+    invites.value = loaded;
   } catch (error) {
+    if (!isCurrent()) {
+      return;
+    }
     invitesError.value = describeTeamError(error);
   } finally {
-    invitesLoading.value = false;
+    if (isCurrent()) {
+      invitesLoading.value = false;
+    }
   }
 }
 
@@ -299,7 +345,8 @@ async function handleCreate(): Promise<void> {
     message.success(`Created team ${team.name}`);
     createOpen.value = false;
     createName.value = "";
-    await loadTeam();
+    // Selecting the new team fires the selection watcher, which reloads the
+    // collections; an explicit load here would duplicate that read.
   } catch (error) {
     createError.value = describeTeamError(error);
   } finally {
@@ -342,7 +389,8 @@ async function handleDelete(): Promise<void> {
   try {
     await teamsStore.remove(team.id);
     message.success(`Deleted team ${team.name}`);
-    await loadTeam();
+    // The store falls back to the personal team, whose selection change
+    // reloads the collections through the watcher.
   } catch (error) {
     // The backend message is the actionable part: personal teams and teams
     // that still own resources are refused with 409.
@@ -353,18 +401,27 @@ async function handleDelete(): Promise<void> {
 }
 
 async function changeMemberRole(member: TeamMember, role: TeamRole): Promise<void> {
-  if (role === member.role || !selectedTeam.value) {
+  const teamId = teamsStore.activeTeamId;
+  if (!teamId || role === member.role) {
     return;
   }
   busyMemberId.value = member.user_id;
   memberActionError.value = null;
   try {
-    const updated = await updateMemberRole(selectedTeam.value.id, member.user_id, role);
+    const updated = await updateMemberRole(teamId, member.user_id, role);
+    if (teamsStore.activeTeamId !== teamId) {
+      // The operator moved to another team: the row belongs to the team the
+      // mutation was issued for, never to the one now selected.
+      return;
+    }
     members.value = members.value.map((item) =>
       item.user_id === updated.user_id ? updated : item,
     );
     message.success(`${member.email} is now ${roleLabel(role)}`);
   } catch (error) {
+    if (teamsStore.activeTeamId !== teamId) {
+      return;
+    }
     memberActionError.value = describeTeamError(error);
   } finally {
     busyMemberId.value = "";
@@ -372,16 +429,23 @@ async function changeMemberRole(member: TeamMember, role: TeamRole): Promise<voi
 }
 
 async function handleRemoveMember(member: TeamMember): Promise<void> {
-  if (!selectedTeam.value) {
+  const teamId = teamsStore.activeTeamId;
+  if (!teamId) {
     return;
   }
   busyMemberId.value = member.user_id;
   memberActionError.value = null;
   try {
-    await removeMember(selectedTeam.value.id, member.user_id);
+    await removeMember(teamId, member.user_id);
+    if (teamsStore.activeTeamId !== teamId) {
+      return;
+    }
     members.value = members.value.filter((item) => item.user_id !== member.user_id);
     message.success(`Removed ${member.email}`);
   } catch (error) {
+    if (teamsStore.activeTeamId !== teamId) {
+      return;
+    }
     memberActionError.value = describeTeamError(error);
   } finally {
     busyMemberId.value = "";
@@ -404,15 +468,24 @@ async function handleCreateInvite(): Promise<void> {
   inviteBusy.value = true;
   inviteError.value = null;
   try {
-    createdInvite.value = await createInvite(
+    const invite = await createInvite(
       team.id,
       inviteEmail.value.trim(),
       inviteRole.value,
     );
+    if (teamsStore.activeTeamId !== team.id) {
+      // The operator moved on; the one-time token belongs to the team the
+      // invite was created for and must not surface under another one.
+      return;
+    }
+    createdInvite.value = invite;
     copied.value = false;
     inviteOpen.value = false;
     await loadInvites();
   } catch (error) {
+    if (teamsStore.activeTeamId !== team.id) {
+      return;
+    }
     inviteError.value = describeTeamError(error);
   } finally {
     inviteBusy.value = false;
@@ -420,15 +493,22 @@ async function handleCreateInvite(): Promise<void> {
 }
 
 async function handleRevokeInvite(invite: TeamInvite): Promise<void> {
-  if (!selectedTeam.value) {
+  const teamId = teamsStore.activeTeamId;
+  if (!teamId) {
     return;
   }
   inviteActionError.value = null;
   try {
-    await revokeInvite(selectedTeam.value.id, invite.id);
+    await revokeInvite(teamId, invite.id);
+    if (teamsStore.activeTeamId !== teamId) {
+      return;
+    }
     invites.value = invites.value.filter((item) => item.id !== invite.id);
     message.success(`Revoked the invite to ${invite.email}`);
   } catch (error) {
+    if (teamsStore.activeTeamId !== teamId) {
+      return;
+    }
     inviteActionError.value = describeTeamError(error);
   }
 }
@@ -457,6 +537,9 @@ function closeInviteToken(): void {
 watch(
   () => teamsStore.activeTeamId,
   () => {
+    // Drop and invalidate the previous team's collections before the new
+    // reads start: no late response may render under the new selection.
+    resetCollections();
     closeInviteToken();
     teamActionError.value = null;
     void loadTeam();
@@ -464,12 +547,17 @@ watch(
 );
 
 onMounted(async () => {
+  const selectionBeforeLoad = teamsStore.activeTeamId;
   try {
     await teamsStore.fetchTeams();
   } catch {
     // The store exposes the error; the alert renders it.
   }
-  await loadTeam();
+  // The selection watcher already started the reads when fetchTeams changed
+  // the active team; only an unchanged selection needs an explicit first load.
+  if (teamsStore.activeTeamId === selectionBeforeLoad) {
+    await loadTeam();
+  }
 });
 </script>
 
@@ -488,7 +576,13 @@ onMounted(async () => {
         </p>
       </div>
       <div class="page-actions">
-        <NButton type="primary" @click="createOpen = true">New team</NButton>
+        <NButton
+          v-if="!teamsStore.featureDisabled"
+          type="primary"
+          @click="createOpen = true"
+        >
+          New team
+        </NButton>
       </div>
     </div>
 
@@ -570,7 +664,12 @@ onMounted(async () => {
             </div>
           </div>
           <NEmpty
-            v-if="!teamsStore.loading && teamsStore.teams.length === 0"
+            v-if="
+              !teamsStore.loading &&
+              teamsStore.teams.length === 0 &&
+              !teamsStore.error &&
+              teamsStore.loaded
+            "
             description="No teams yet."
           />
         </NSpin>
@@ -596,7 +695,12 @@ onMounted(async () => {
         <NTabs type="line" animated>
           <NTabPane name="members" :tab="`Members (${members.length})`">
             <NSpace vertical :size="12" style="margin-top: 12px">
-              <NAlert v-if="membersError" type="error" :show-icon="true">
+              <NAlert
+                v-if="membersError"
+                type="error"
+                :show-icon="true"
+                data-testid="members-error"
+              >
                 {{ membersError }}
               </NAlert>
               <NAlert
@@ -626,7 +730,12 @@ onMounted(async () => {
 
           <NTabPane name="invites" :tab="`Invites (${invites.length})`">
             <NSpace vertical :size="12" style="margin-top: 12px">
-              <NAlert v-if="invitesError" type="error" :show-icon="true">
+              <NAlert
+                v-if="invitesError"
+                type="error"
+                :show-icon="true"
+                data-testid="invites-error"
+              >
                 {{ invitesError }}
               </NAlert>
               <NAlert
@@ -664,6 +773,7 @@ onMounted(async () => {
     </template>
 
     <NModal
+      v-if="!teamsStore.featureDisabled"
       v-model:show="createOpen"
       preset="card"
       title="New team"

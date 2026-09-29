@@ -206,7 +206,11 @@ func readDisk(path string) (used, total uint64, err error) {
 
 // parseNetDev sums the bytes received and transmitted by every interface in a
 // /proc/net/dev document. The loopback device is skipped: loopback traffic
-// never leaves the host and would otherwise sit permanently on the charts.
+// never leaves the host and would otherwise sit permanently on the charts. A
+// line that cannot be parsed (an alias-style name, a truncated or non-numeric
+// counter row) is skipped rather than failing the read, so one unreadable
+// interface never zeroes the host's network metric; only a document with no
+// parsable interface at all is an error.
 func parseNetDev(r io.Reader) (rx, tx uint64, err error) {
 	scanner := bufio.NewScanner(r)
 	seen := false
@@ -222,15 +226,15 @@ func parseNetDev(r io.Reader) (rx, tx uint64, err error) {
 		fields := strings.Fields(counters)
 		// rx_bytes and tx_bytes are the 1st and 9th counter.
 		if len(fields) < 9 {
-			return 0, 0, fmt.Errorf("stats: malformed /proc/net/dev line for %q", name)
+			continue
 		}
 		received, err := strconv.ParseUint(fields[0], 10, 64)
 		if err != nil {
-			return 0, 0, fmt.Errorf("stats: /proc/net/dev rx bytes for %q: %w", name, err)
+			continue
 		}
 		transmitted, err := strconv.ParseUint(fields[8], 10, 64)
 		if err != nil {
-			return 0, 0, fmt.Errorf("stats: /proc/net/dev tx bytes for %q: %w", name, err)
+			continue
 		}
 		rx += received
 		tx += transmitted
@@ -282,6 +286,12 @@ func parseDiskStats(r io.Reader, devices map[string]struct{}) (read, write uint6
 		return 0, 0, errors.New("stats: no whole devices in /proc/diskstats")
 	}
 	return read, write, nil
+}
+
+// pseudoBlockDevice reports whether a /sys/block entry is a pseudo device with
+// no real I/O: loop (loop-mounted images), ram and zram (RAM-backed swap).
+func pseudoBlockDevice(name string) bool {
+	return strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") || strings.HasPrefix(name, "zram")
 }
 
 // clampFraction constrains v to the 0..1 range, mapping NaN to 0.

@@ -30,5 +30,10 @@ CREATE TABLE server_metrics (
 -- newest-first reads the charts open with.
 CREATE INDEX server_metrics_server_time_idx ON server_metrics (server_id, recorded_at DESC);
 
+-- The retention sweep deletes by recorded_at alone (no server filter), so it
+-- needs its own index; without it every hourly DELETE would scan the whole
+-- growing table.
+CREATE INDEX server_metrics_recorded_at_idx ON server_metrics (recorded_at);
+
 -- +goose Down
 DROP TABLE IF EXISTS server_metrics;

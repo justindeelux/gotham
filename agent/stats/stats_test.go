@@ -67,13 +67,45 @@ func TestParseNetDev(t *testing.T) {
 		t.Errorf("tx = %d; want 1224", tx)
 	}
 
+	// A malformed, truncated or alias-style line is skipped, not fatal: the
+	// readable interfaces still contribute.
+	mixed := netDevFixture +
+		"  eth2: not-a-number\n" + // non-numeric counter
+		"  eth3: 1 2 3\n" + // truncated counter row
+		"  eth0:1: 999 999\n" // alias-style name (splits at the first colon)
+	rx, tx, err = parseNetDev(strings.NewReader(mixed))
+	if err != nil {
+		t.Fatalf("parseNetDev(mixed): %v", err)
+	}
+	if rx != 2148 || tx != 1224 {
+		t.Errorf("mixed rx/tx = %d/%d; want 2148/1224 from the parsable lines", rx, tx)
+	}
+
+	// Only a document with nothing parsable is an error.
+	if _, _, err := parseNetDev(strings.NewReader("  eth2: not-a-number\n")); err == nil {
+		t.Error("parseNetDev(all malformed) = nil error; want a no-interfaces error")
+	}
 	if _, _, err := parseNetDev(strings.NewReader("")); err == nil {
 		t.Error("parseNetDev(empty) = nil error; want a no-interfaces error")
 	}
+}
 
-	malformed := netDevFixture + "  eth2: not-a-number\n"
-	if _, _, err := parseNetDev(strings.NewReader(malformed)); err == nil {
-		t.Error("parseNetDev(malformed) = nil error; want a parse error")
+// TestPseudoBlockDevice pins the /sys/block filter: a RAM-backed zram device
+// would otherwise inflate the disk I/O rate.
+func TestPseudoBlockDevice(t *testing.T) {
+	tests := map[string]bool{
+		"loop0":   true,
+		"ram0":    true,
+		"zram0":   true,
+		"sda":     false,
+		"vda":     false,
+		"nvme0n1": false,
+		"dm-0":    false,
+	}
+	for name, want := range tests {
+		if got := pseudoBlockDevice(name); got != want {
+			t.Errorf("pseudoBlockDevice(%q) = %v; want %v", name, got, want)
+		}
 	}
 }
 

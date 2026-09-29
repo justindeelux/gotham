@@ -32,8 +32,10 @@ func TestMetricsRangeAndRetention(t *testing.T) {
 	server := addMetricsNode(t, ctx, service, st, "metrics-range")
 
 	// Two buckets of the 1m series, with the first bucket carrying three
-	// samples so its average is observable.
-	base := time.Now().UTC().Truncate(time.Minute).Add(-2 * time.Hour)
+	// samples so its average is observable. The base is hour-aligned so the
+	// four samples always share one hourly bucket and one UTC day, whatever
+	// minute the test starts in.
+	base := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour)
 	insertMetric(t, st, server.ID, base, 0.10)
 	insertMetric(t, st, server.ID, base.Add(10*time.Second), 0.20)
 	insertMetric(t, st, server.ID, base.Add(50*time.Second), 0.30)

@@ -22,7 +22,7 @@ func TestReadIOFromProc(t *testing.T) {
 	if len(devices) == 0 {
 		t.Fatal("wholeBlockDevices() = empty; want at least one device")
 	}
-	for _, name := range []string{"loop0", "ram0"} {
+	for _, name := range []string{"loop0", "ram0", "zram0"} {
 		if _, ok := devices[name]; ok {
 			t.Errorf("wholeBlockDevices() includes pseudo device %q", name)
 		}

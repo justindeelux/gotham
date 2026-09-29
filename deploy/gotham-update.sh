@@ -124,17 +124,22 @@ finish() {
     exit "$3"
 }
 
-# acquire_lock serializes with the control plane's Apply/Rollback.
+# acquire_lock serializes with the control plane's Apply/Rollback. flock must
+# not redirect this shell's stderr (a bare `exec 9>... 2>/dev/null` would send
+# every later diagnostic to /dev/null).
 acquire_lock() {
     if ! command -v flock >/dev/null 2>&1; then
         log "flock not available; proceeding without the update lock"
         return 0
     fi
-    if ! exec 9>"${LOCK}" 2>/dev/null; then
-        log "could not open lock ${LOCK}; proceeding without it"
+    if [ ! -d "$(dirname "${LOCK}")" ]; then
+        log "lock directory missing; proceeding without the update lock"
         return 0
     fi
-    flock -w 60 9 || log "could not acquire lock ${LOCK} within 60s"
+    exec 9>"${LOCK}"
+    if ! flock -w 60 9; then
+        log "could not acquire lock ${LOCK} within 60s"
+    fi
 }
 
 probe() {

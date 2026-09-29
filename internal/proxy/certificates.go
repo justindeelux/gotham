@@ -67,6 +67,9 @@ func (s *sslService) CreateCertificate(ctx context.Context, in CreateCertificate
 		if err != nil {
 			return err
 		}
+		if err := authorizeApp(ctx, app.TeamID, true); err != nil {
+			return err
+		}
 		domain, err := certificateDomain(app)
 		if err != nil {
 			return err
@@ -116,17 +119,40 @@ func (s *sslService) CreateCertificate(ctx context.Context, in CreateCertificate
 	return certificate, nil
 }
 
-// List returns every certificate config, newest first.
+// List returns the certificate configs of the caller's active team, newest
+// first.
 func (s *sslService) ListCertificates(ctx context.Context) ([]DomainCertificate, error) {
-	return s.store.ListCertificates(ctx)
+	certificates, err := s.store.ListCertificates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filtered := filterByTeam(ctx, s.store, certificates, func(c DomainCertificate) uuid.UUID {
+		return c.ApplicationID
+	})
+	if filtered == nil {
+		return []DomainCertificate{}, nil
+	}
+	return filtered, nil
 }
 
-// Get returns one certificate config.
+// Get returns one certificate config of an application the caller's active
+// team owns; a foreign team's certificate answers ErrNotFound.
 func (s *sslService) GetCertificate(ctx context.Context, id uuid.UUID) (DomainCertificate, error) {
 	if id == uuid.Nil {
 		return DomainCertificate{}, fmt.Errorf("%w: certificate id is required", ErrValidation)
 	}
-	return s.store.GetCertificate(ctx, id)
+	certificate, err := s.store.GetCertificate(ctx, id)
+	if err != nil {
+		return DomainCertificate{}, err
+	}
+	app, err := s.store.GetApplication(ctx, certificate.ApplicationID)
+	if err != nil {
+		return DomainCertificate{}, err
+	}
+	if err := authorizeApp(ctx, app.TeamID, false); err != nil {
+		return DomainCertificate{}, err
+	}
+	return certificate, nil
 }
 
 // Update applies a partial update inside the shared mutation boundary. The
@@ -147,6 +173,9 @@ func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in Upd
 		}
 		app, err := s.store.GetApplication(ctx, existing.ApplicationID)
 		if err != nil {
+			return err
+		}
+		if err := authorizeApp(ctx, app.TeamID, true); err != nil {
 			return err
 		}
 		domain, err := certificateDomain(app)
@@ -212,7 +241,15 @@ func (s *sslService) DeleteCertificate(ctx context.Context, id uuid.UUID) error 
 		return fmt.Errorf("%w: certificate id is required", ErrValidation)
 	}
 	err := s.mutate(ctx, func(ctx context.Context) error {
-		if _, err := s.store.GetCertificate(ctx, id); err != nil {
+		existing, err := s.store.GetCertificate(ctx, id)
+		if err != nil {
+			return err
+		}
+		app, err := s.store.GetApplication(ctx, existing.ApplicationID)
+		if err != nil {
+			return err
+		}
+		if err := authorizeApp(ctx, app.TeamID, true); err != nil {
 			return err
 		}
 		return s.store.DeleteCertificate(ctx, id)

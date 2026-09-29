@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // TestMain clears the feature flag so the suite runs with the services surface
@@ -34,6 +36,8 @@ type fakeRepository struct {
 	order    []uuid.UUID
 	deploys  map[uuid.UUID][]Deploy
 	servers  map[uuid.UUID]bool
+	// serverTeams maps a registered server to its team (zero = legacy node).
+	serverTeams map[uuid.UUID]uuid.UUID
 
 	createErr     error
 	getErr        error
@@ -104,8 +108,9 @@ func (r *fakeRepository) GetService(_ context.Context, serviceID uuid.UUID) (Ser
 	return service, nil
 }
 
-// ListServicesByUser implements Repository.
-func (r *fakeRepository) ListServicesByUser(_ context.Context, userID uuid.UUID) ([]Service, error) {
+// ListServices implements Repository: the active team's services, or the
+// creator's when the scope has no team context (pre-teams behavior).
+func (r *fakeRepository) ListServices(_ context.Context, scope teams.Scope) ([]Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listErr != nil {
@@ -114,7 +119,13 @@ func (r *fakeRepository) ListServicesByUser(_ context.Context, userID uuid.UUID)
 	services := []Service{}
 	for i := len(r.order) - 1; i >= 0; i-- {
 		service := r.services[r.order[i]]
-		if service.UserID == userID && r.live(service) {
+		if scope.Active() {
+			if service.TeamID == scope.TeamID && r.live(service) {
+				services = append(services, service)
+			}
+			continue
+		}
+		if service.UserID == scope.UserID && r.live(service) {
 			services = append(services, service)
 		}
 	}
@@ -216,14 +227,34 @@ func (r *fakeRepository) ListServiceDeploys(_ context.Context, serviceID uuid.UU
 	return append([]Deploy{}, deploys...), nil
 }
 
-// ServerExists implements Repository.
-func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID) (bool, error) {
+// ServerExists implements Repository: the node must be known and actionable by
+// the caller's active team.
+func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.serverErr != nil {
 		return false, r.serverErr
 	}
-	return r.servers[serverID], nil
+	if !r.servers[serverID] {
+		return false, nil
+	}
+	if err := scope.AuthorizeOptionalTeam(r.serverTeams[serverID], true); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+// seedServerForTeam registers a node owned by teamID (the zero UUID seeds a
+// legacy shared node).
+func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
+	id := r.seedServer()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.serverTeams == nil {
+		r.serverTeams = map[uuid.UUID]uuid.UUID{}
+	}
+	r.serverTeams[id] = teamID
+	return id
 }
 
 // fakeAgent is a scriptable ComposeAgent recording every call.

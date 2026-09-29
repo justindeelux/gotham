@@ -14,6 +14,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // FeatureEnv is the kill switch for the whole databases surface:
@@ -65,7 +66,7 @@ type DatabaseService interface {
 	// Get returns one database the caller owns (404 for anyone else's).
 	Get(ctx context.Context, userID, databaseID uuid.UUID) (Database, error)
 	// Credentials returns the decrypted credentials of a database the caller
-	// owns.
+	// may manage (owner/admin: plaintext secrets are not a read-only view).
 	Credentials(ctx context.Context, userID, databaseID uuid.UUID) (Credentials, error)
 	// Update renames a database the caller owns.
 	Update(ctx context.Context, userID, databaseID uuid.UUID, req UpdateRequest) (Database, error)
@@ -194,7 +195,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if req.PublicPort < 0 || req.PublicPort > 65535 {
 		return Database{}, Credentials{}, fmt.Errorf("%w: public_port must be between 0 and 65535", ErrValidation)
 	}
-	exists, err := s.repo.ServerExists(ctx, req.ServerID)
+	exists, err := s.repo.ServerExists(ctx, req.ServerID, teams.ScopeFor(ctx, userID))
 	if err != nil {
 		return Database{}, Credentials{}, err
 	}
@@ -210,6 +211,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	database := Database{
 		ID:         uuid.New(),
 		UserID:     userID,
+		TeamID:     teams.ScopeFor(ctx, userID).TeamID,
 		ServerID:   req.ServerID,
 		Name:       name,
 		Engine:     canonical,
@@ -264,12 +266,13 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	return stored, credentials, nil
 }
 
-// List returns the caller's live databases, newest first.
+// List returns the active team's live databases, newest first. Without a team
+// context it returns the creator's databases, which is the pre-teams behavior.
 func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Database, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
-	databases, err := s.repo.ListDatabasesByUser(ctx, userID)
+	databases, err := s.repo.ListDatabases(ctx, teams.ScopeFor(ctx, userID))
 	if err != nil {
 		return nil, err
 	}
@@ -279,14 +282,16 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Database, error
 	return databases, nil
 }
 
-// Get returns one database the caller owns.
+// Get returns one database of the caller's active team.
 func (s *Service) Get(ctx context.Context, userID, databaseID uuid.UUID) (Database, error) {
-	return s.database(ctx, userID, databaseID)
+	return s.database(ctx, userID, databaseID, false)
 }
 
-// Credentials opens the sealed credentials of a database the caller owns.
+// Credentials opens the sealed credentials of a database. Plaintext secrets
+// are owner/admin material, not a read-only resource view, so the team role
+// must permit writes.
 func (s *Service) Credentials(ctx context.Context, userID, databaseID uuid.UUID) (Credentials, error) {
-	database, err := s.database(ctx, userID, databaseID)
+	database, err := s.database(ctx, userID, databaseID, true)
 	if err != nil {
 		return Credentials{}, err
 	}
@@ -297,10 +302,10 @@ func (s *Service) Credentials(ctx context.Context, userID, databaseID uuid.UUID)
 	return openCredentials(s.secret, secrets)
 }
 
-// Update renames a database the caller owns. The partial unique index turns a
-// collision with a live database into ErrConflict.
+// Update renames a database of the active team. The partial unique index turns
+// a collision with a live database into ErrConflict.
 func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req UpdateRequest) (Database, error) {
-	database, err := s.database(ctx, userID, databaseID)
+	database, err := s.database(ctx, userID, databaseID, true)
 	if err != nil {
 		return Database{}, err
 	}
@@ -313,12 +318,12 @@ func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req 
 	return s.repo.UpdateDatabase(ctx, database)
 }
 
-// Delete stops and removes the container of a database the caller owns, then
-// soft-deletes the row. The named volume is never touched: it is kept for the
-// 7-day grace window of the phase rollback note, so the data outlives both the
-// container and the row's visibility.
+// Delete stops and removes the container of a database of the active team,
+// then soft-deletes the row. The named volume is never touched: it is kept for
+// the 7-day grace window of the phase rollback note, so the data outlives both
+// the container and the row's visibility.
 func (s *Service) Delete(ctx context.Context, userID, databaseID uuid.UUID) error {
-	database, err := s.database(ctx, userID, databaseID)
+	database, err := s.database(ctx, userID, databaseID, true)
 	if err != nil {
 		return err
 	}
@@ -410,10 +415,12 @@ func (s *Service) ready() error {
 	return nil
 }
 
-// database loads a database the caller owns, mapping another user's row to
-// ErrNotFound so database IDs cannot be probed. Soft-deleted rows are already
+// database loads a database of the caller's active team, mapping a row of
+// another team (or, without a team context, of another creator) to ErrNotFound
+// so database IDs cannot be probed. A write additionally needs an owner/admin
+// role; the read path is open to every member. Soft-deleted rows are already
 // filtered out by the repository.
-func (s *Service) database(ctx context.Context, userID, databaseID uuid.UUID) (Database, error) {
+func (s *Service) database(ctx context.Context, userID, databaseID uuid.UUID, write bool) (Database, error) {
 	if err := s.ready(); err != nil {
 		return Database{}, err
 	}
@@ -424,15 +431,19 @@ func (s *Service) database(ctx context.Context, userID, databaseID uuid.UUID) (D
 	if err != nil {
 		return Database{}, err
 	}
-	if database.UserID != userID {
+	if err := teams.ScopeFor(ctx, userID).AuthorizeResource(database.TeamID, database.UserID, write); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return Database{}, err
+		}
 		return Database{}, ErrNotFound
 	}
 	return database, nil
 }
 
-// ownedContainer loads an owned database that has a container to act on.
+// ownedContainer loads a database of the active team that has a container to
+// act on. Every caller performs a mutation, so it is authorized as a write.
 func (s *Service) ownedContainer(ctx context.Context, userID, databaseID uuid.UUID) (Database, error) {
-	database, err := s.database(ctx, userID, databaseID)
+	database, err := s.database(ctx, userID, databaseID, true)
 	if err != nil {
 		return Database{}, err
 	}

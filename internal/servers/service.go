@@ -17,6 +17,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
+	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -35,12 +36,16 @@ const defaultSSHPort = 22
 // Server is a managed node. It is the domain representation, decoupled from the
 // sqlc row so the HTTP and gRPC layers never see storage types.
 type Server struct {
-	ID             uuid.UUID
-	Name           string
-	IP             string
-	Port           int
-	SSHUser        string
-	SSHKeyID       *uuid.UUID
+	ID       uuid.UUID
+	Name     string
+	IP       string
+	Port     int
+	SSHUser  string
+	SSHKeyID *uuid.UUID
+	// TeamID is the owning team. The zero UUID marks a legacy node that
+	// predates teams: it stays visible to every authenticated caller, which
+	// is the documented Phase 8 residual for the shared node registry.
+	TeamID         uuid.UUID
 	Status         string
 	NodeID         *string
 	OS             *string
@@ -122,8 +127,9 @@ func NewService(cfg Config) *ServerService {
 }
 
 // Add registers a new server. sshKeyID may be the zero UUID when no key is
-// attached. userID is recorded for future ownership scoping; the schema does
-// not yet carry an owner column.
+// attached. userID is recorded as the creator, and the node is stamped with the
+// caller's active team; a request without a team scope leaves team_id NULL,
+// which is the legacy shared-node behavior.
 func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip string, port int, sshUser string, sshKeyID uuid.UUID) (*Server, error) {
 	name = strings.TrimSpace(name)
 	ip = strings.TrimSpace(ip)
@@ -165,6 +171,7 @@ func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip stri
 		Port:     int32(port),
 		SshUser:  sshUser,
 		SshKeyID: keyID,
+		TeamID:   pgUUID(teams.ScopeFor(ctx, userID).TeamID),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create server: %w", err)
@@ -174,9 +181,20 @@ func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip stri
 	return serverFromRow(row), nil
 }
 
-// List returns every managed server, newest first.
+// List returns the managed servers of the caller's active team plus every
+// legacy node (team_id NULL). Without a team scope it returns every server,
+// which is the pre-teams behavior.
 func (s *ServerService) List(ctx context.Context) ([]Server, error) {
-	rows, err := s.store.ListServers(ctx)
+	scope := teams.ScopeFor(ctx, uuid.Nil)
+	var (
+		rows []sqlc.Server
+		err  error
+	)
+	if scope.Active() {
+		rows, err = s.store.ListServersByTeam(ctx, pgUUID(scope.TeamID))
+	} else {
+		rows, err = s.store.ListServers(ctx)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list servers: %w", err)
 	}
@@ -188,7 +206,9 @@ func (s *ServerService) List(ctx context.Context) ([]Server, error) {
 	return servers, nil
 }
 
-// Get returns one server, or ErrNotFound.
+// Get returns one server, or ErrNotFound. A node outside the active team
+// answers ErrNotFound so node IDs cannot be probed; a legacy node (team_id
+// NULL) stays readable by every authenticated caller.
 func (s *ServerService) Get(ctx context.Context, id uuid.UUID) (*Server, error) {
 	row, err := s.store.GetServerByID(ctx, pgUUID(id))
 	if err != nil {
@@ -197,16 +217,29 @@ func (s *ServerService) Get(ctx context.Context, id uuid.UUID) (*Server, error) 
 		}
 		return nil, fmt.Errorf("get server: %w", err)
 	}
-	return serverFromRow(row), nil
+	server := serverFromRow(row)
+	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, false); err != nil {
+		return nil, ErrNotFound
+	}
+	return server, nil
 }
 
-// Delete removes a server, or returns ErrNotFound.
+// Delete removes a server, or returns ErrNotFound. A node outside the active
+// team is not deletable; a legacy node stays deletable by any authenticated
+// caller, matching pre-teams behavior.
 func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
-	if _, err := s.store.GetServerByID(ctx, pgUUID(id)); err != nil {
+	row, err := s.store.GetServerByID(ctx, pgUUID(id))
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		return fmt.Errorf("get server: %w", err)
+	}
+	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(uuidFromPG(row.TeamID), true); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return err
+		}
+		return ErrNotFound
 	}
 	if err := s.store.DeleteServer(ctx, pgUUID(id)); err != nil {
 		return fmt.Errorf("delete server: %w", err)
@@ -260,6 +293,12 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		return nil, fmt.Errorf("get server: %w", err)
 	}
 	server := serverFromRow(row)
+	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, true); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return nil, err
+		}
+		return nil, ErrNotFound
+	}
 
 	credentials, err := s.credentials(ctx, row, auth)
 	if err != nil {
@@ -467,6 +506,7 @@ func serverFromRow(row sqlc.Server) *Server {
 		IP:             row.Ip,
 		Port:           int(row.Port),
 		SSHUser:        row.SshUser,
+		TeamID:         uuidFromPG(row.TeamID),
 		Status:         row.Status,
 		NodeID:         row.NodeID,
 		OS:             row.Os,

@@ -12,9 +12,9 @@ import (
 )
 
 const createServer = `-- name: CreateServer :one
-INSERT INTO servers (name, ip, port, ssh_user, ssh_key_id)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at
+INSERT INTO servers (name, ip, port, ssh_user, ssh_key_id, team_id)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id
 `
 
 type CreateServerParams struct {
@@ -23,6 +23,7 @@ type CreateServerParams struct {
 	Port     int32       `json:"port"`
 	SshUser  string      `json:"ssh_user"`
 	SshKeyID pgtype.UUID `json:"ssh_key_id"`
+	TeamID   pgtype.UUID `json:"team_id"`
 }
 
 func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Server, error) {
@@ -32,6 +33,7 @@ func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Ser
 		arg.Port,
 		arg.SshUser,
 		arg.SshKeyID,
+		arg.TeamID,
 	)
 	var i Server
 	err := row.Scan(
@@ -55,6 +57,7 @@ func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Ser
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -69,7 +72,7 @@ func (q *Queries) DeleteServer(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getServerByID = `-- name: GetServerByID :one
-SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at FROM servers WHERE id = $1
+SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id FROM servers WHERE id = $1
 `
 
 func (q *Queries) GetServerByID(ctx context.Context, id pgtype.UUID) (Server, error) {
@@ -96,12 +99,13 @@ func (q *Queries) GetServerByID(ctx context.Context, id pgtype.UUID) (Server, er
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
 
 const getServerByNodeID = `-- name: GetServerByNodeID :one
-SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at FROM servers WHERE node_id = $1
+SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id FROM servers WHERE node_id = $1
 `
 
 func (q *Queries) GetServerByNodeID(ctx context.Context, nodeID *string) (Server, error) {
@@ -128,12 +132,13 @@ func (q *Queries) GetServerByNodeID(ctx context.Context, nodeID *string) (Server
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
 
 const listServers = `-- name: ListServers :many
-SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at FROM servers ORDER BY created_at DESC, id DESC
+SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id FROM servers ORDER BY created_at DESC, id DESC
 `
 
 func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
@@ -166,6 +171,57 @@ func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
 			&i.LastSeen,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TeamID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listServersByTeam = `-- name: ListServersByTeam :many
+SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id FROM servers
+WHERE team_id = $1 OR team_id IS NULL
+ORDER BY created_at DESC, id DESC
+`
+
+// A legacy node (team_id NULL) predates teams and stays visible to every
+// authenticated caller; a team node belongs to its team only.
+func (q *Queries) ListServersByTeam(ctx context.Context, teamID pgtype.UUID) ([]Server, error) {
+	rows, err := q.db.Query(ctx, listServersByTeam, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Server{}
+	for rows.Next() {
+		var i Server
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Ip,
+			&i.Port,
+			&i.SshUser,
+			&i.SshKeyID,
+			&i.Status,
+			&i.NodeID,
+			&i.Os,
+			&i.DockerVersion,
+			&i.Arch,
+			&i.TotalMem,
+			&i.TotalDisk,
+			&i.CpuUsage,
+			&i.MemUsage,
+			&i.DiskUsage,
+			&i.ContainerCount,
+			&i.LastSeen,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TeamID,
 		); err != nil {
 			return nil, err
 		}
@@ -182,7 +238,7 @@ UPDATE servers
 SET status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id
 `
 
 type SetServerStatusParams struct {
@@ -214,6 +270,7 @@ func (q *Queries) SetServerStatus(ctx context.Context, arg SetServerStatusParams
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -230,7 +287,7 @@ SET node_id = $2,
     last_seen = now(),
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id
 `
 
 type UpdateServerAgentInfoParams struct {
@@ -275,6 +332,7 @@ func (q *Queries) UpdateServerAgentInfo(ctx context.Context, arg UpdateServerAge
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -289,7 +347,7 @@ SET cpu_usage = $2,
     last_seen = now(),
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id
 `
 
 type UpdateServerMetricsParams struct {
@@ -330,6 +388,7 @@ func (q *Queries) UpdateServerMetrics(ctx context.Context, arg UpdateServerMetri
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }

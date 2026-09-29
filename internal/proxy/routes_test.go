@@ -41,7 +41,7 @@ func (f *fakeProxyService) RevertServer(_ context.Context, serverID uuid.UUID) e
 // auth middleware.
 func newRoutes(svc ProxyService) http.Handler {
 	r := chi.NewRouter()
-	Mount(r, func(next http.Handler) http.Handler { return next }, svc, nil, nil, nil, nil)
+	Mount(r, func(next http.Handler) http.Handler { return next }, passthroughAuth, svc, nil, nil, nil, nil)
 	return r
 }
 
@@ -238,3 +238,7 @@ func TestSyncRouteAllNodesPartialDiagnostics(t *testing.T) {
 		t.Fatalf("results = %#v, want the per-app diagnostics", response.Results)
 	}
 }
+
+// passthroughAuth applies no authentication: the route tests exercise the
+// handlers, not the server's middleware chain.
+func passthroughAuth(next http.Handler) http.Handler { return next }

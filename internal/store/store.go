@@ -36,15 +36,6 @@ func (s *Store) GetUserByID(ctx context.Context, id pgtype.UUID) (sqlc.User, err
 	return s.queries.GetUserByID(ctx, id)
 }
 
-// CreateUser inserts a user with the given email and password hash (nil when
-// the account has no local password) and returns the stored row.
-func (s *Store) CreateUser(ctx context.Context, email string, passwordHash *string) (sqlc.User, error) {
-	return s.queries.CreateUser(ctx, sqlc.CreateUserParams{
-		Email:        email,
-		PasswordHash: passwordHash,
-	})
-}
-
 // CreateSession stores a refresh-token session and returns the stored row.
 func (s *Store) CreateSession(ctx context.Context, params sqlc.CreateSessionParams) (sqlc.Session, error) {
 	return s.queries.CreateSession(ctx, params)
@@ -113,6 +104,12 @@ func (s *Store) GetServerByNodeID(ctx context.Context, nodeID *string) (sqlc.Ser
 // ListServers returns every managed node, newest first.
 func (s *Store) ListServers(ctx context.Context) ([]sqlc.Server, error) {
 	return s.queries.ListServers(ctx)
+}
+
+// ListServersByTeam returns the active team's nodes plus every legacy node
+// (team_id NULL), newest first.
+func (s *Store) ListServersByTeam(ctx context.Context, teamID pgtype.UUID) ([]sqlc.Server, error) {
+	return s.queries.ListServersByTeam(ctx, teamID)
 }
 
 // DeleteServer removes the node with the given ID.

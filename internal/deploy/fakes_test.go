@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/providers"
+	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -56,6 +57,9 @@ type fakeRepository struct {
 
 	// unknownServers names servers ServerExists must report as missing.
 	unknownServers map[uuid.UUID]bool
+	// serverTeams maps a registered server to its team; an entry without a
+	// team (missing or zero) is a legacy shared node.
+	serverTeams map[uuid.UUID]uuid.UUID
 
 	getErr       error
 	createErr    error
@@ -93,19 +97,27 @@ func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (App
 	return Application{}, ErrNotFound
 }
 
-// ListApplications implements Repository, newest first (created_at DESC, id DESC).
-func (r *fakeRepository) ListApplications(_ context.Context, userID uuid.UUID) ([]Application, error) {
+// ListApplications implements Repository: the active team's applications, or
+// the creator's when the scope has no team context (pre-teams behavior),
+// newest first (created_at DESC, id DESC).
+func (r *fakeRepository) ListApplications(_ context.Context, scope teams.Scope) ([]Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.getErr != nil {
 		return nil, r.getErr
 	}
+	matches := func(app Application) bool {
+		if scope.Active() {
+			return app.TeamID == scope.TeamID
+		}
+		return app.UserID == scope.UserID
+	}
 	var out []Application
-	if r.app.ID != uuid.Nil && r.app.UserID == userID {
+	if r.app.ID != uuid.Nil && matches(r.app) {
 		out = append(out, r.app)
 	}
 	for _, app := range r.apps {
-		if app.UserID == userID {
+		if matches(app) {
 			out = append(out, app)
 		}
 	}
@@ -287,14 +299,45 @@ func (r *fakeRepository) ReplaceStorages(_ context.Context, appID uuid.UUID, sto
 	return nil
 }
 
-// ServerExists implements Repository.
-func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID) (bool, error) {
+// ServerExists implements Repository: the node must be known and actionable by
+// the caller's active team.
+func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if serverID == uuid.Nil {
 		return false, nil
 	}
-	return !r.unknownServers[serverID], nil
+	if r.unknownServers[serverID] {
+		return false, nil
+	}
+	if err := scope.AuthorizeOptionalTeam(r.serverTeams[serverID], true); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+// ServerTeam implements Repository: the registered node's team (zero for a
+// legacy shared node).
+func (r *fakeRepository) ServerTeam(_ context.Context, serverID uuid.UUID) (uuid.UUID, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if serverID == uuid.Nil || r.unknownServers[serverID] {
+		return uuid.Nil, false, nil
+	}
+	return r.serverTeams[serverID], true, nil
+}
+
+// seedServerForTeam registers a node owned by teamID (the zero UUID seeds a
+// legacy shared node).
+func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.serverTeams == nil {
+		r.serverTeams = map[uuid.UUID]uuid.UUID{}
+	}
+	id := uuid.New()
+	r.serverTeams[id] = teamID
+	return id
 }
 
 // ownedApplications returns every application the fake holds (seed first).

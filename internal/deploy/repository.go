@@ -14,6 +14,7 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // Repository persists applications, deployments and the application
@@ -22,8 +23,9 @@ import (
 type Repository interface {
 	// GetApplication returns the application, or ErrNotFound.
 	GetApplication(ctx context.Context, appID uuid.UUID) (Application, error)
-	// ListApplications returns the applications owned by userID, newest first.
-	ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error)
+	// ListApplications returns the applications of the scope's active team
+	// (or, without a team context, of the creator), newest first.
+	ListApplications(ctx context.Context, scope teams.Scope) ([]Application, error)
 	// CreateApplication stores a new application together with its env vars,
 	// sealed secrets and storages in one transaction.
 	CreateApplication(ctx context.Context, app Application, envVars []EnvVar, secrets []Secret, storages []Storage) (Application, error)
@@ -37,10 +39,15 @@ type Repository interface {
 	ReplaceEnvVars(ctx context.Context, appID uuid.UUID, envVars []EnvVar, secrets []Secret) error
 	// ReplaceStorages replaces the application's storage mappings as one set.
 	ReplaceStorages(ctx context.Context, appID uuid.UUID, storages []Storage) error
-	// ServerExists reports whether the target server is registered. The node
-	// registry has no owner column (every server is shared by the control
-	// plane's users), so "the server belongs to the caller" is this check.
-	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
+	// ServerExists reports whether the target server is registered AND
+	// actionable by the caller's active team. A node of another team answers
+	// false, like a missing one, so node IDs cannot be probed (F6); a legacy
+	// node without a team stays shared.
+	ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error)
+	// ServerTeam reports the team a registered node belongs to (uuid.Nil for a
+	// legacy shared node) and whether it exists. It backs the stored
+	// application→node invariant checked at the queue boundary.
+	ServerTeam(ctx context.Context, serverID uuid.UUID) (uuid.UUID, bool, error)
 	// CreateDeployment stores a new deployment row.
 	CreateDeployment(ctx context.Context, dep Deployment) (Deployment, error)
 	// GetDeployment returns one deployment of an application, or ErrNotFound.
@@ -99,9 +106,18 @@ func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (
 	return applicationFromRow(row), nil
 }
 
-// ListApplications loads every application owned by userID, newest first.
-func (r *storeRepository) ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error) {
-	rows, err := r.store.ListApplicationsByUser(ctx, pgUUID(userID))
+// ListApplications loads the active team's applications, or the creator's when
+// no team context is present, newest first.
+func (r *storeRepository) ListApplications(ctx context.Context, scope teams.Scope) ([]Application, error) {
+	var (
+		rows []sqlc.Application
+		err  error
+	)
+	if scope.Active() {
+		rows, err = r.store.ListApplicationsByTeam(ctx, pgUUID(scope.TeamID))
+	} else {
+		rows, err = r.store.ListApplicationsByUser(ctx, pgUUID(scope.UserID))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("deploy: list applications: %w", err)
 	}
@@ -125,6 +141,7 @@ func (r *storeRepository) CreateApplication(
 	row, err := r.store.CreateApplicationWithConfig(ctx,
 		sqlc.CreateApplicationParams{
 			UserID:     pgUUID(app.UserID),
+			TeamID:     pgUUID(app.TeamID),
 			ServerID:   pgUUID(app.ServerID),
 			Name:       app.Name,
 			Provider:   app.Provider,
@@ -194,18 +211,39 @@ func (r *storeRepository) ReplaceStorages(ctx context.Context, appID uuid.UUID, 
 	return nil
 }
 
-// ServerExists reports whether the server is registered on the control plane.
-func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error) {
+// ServerExists reports whether the server is registered on the control plane
+// and may be targeted by the caller's active team.
+func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	if serverID == uuid.Nil {
 		return false, nil
 	}
-	if _, err := r.store.GetServerByID(ctx, pgUUID(serverID)); err != nil {
+	row, err := r.store.GetServerByID(ctx, pgUUID(serverID))
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
 		return false, fmt.Errorf("deploy: get server: %w", err)
 	}
+	if err := scope.AuthorizeOptionalTeam(uuidFromPG(row.TeamID), true); err != nil {
+		return false, nil
+	}
 	return true, nil
+}
+
+// ServerTeam reports the team of a registered node (the zero UUID for a legacy
+// shared node) and whether it exists at all.
+func (r *storeRepository) ServerTeam(ctx context.Context, serverID uuid.UUID) (uuid.UUID, bool, error) {
+	if serverID == uuid.Nil {
+		return uuid.Nil, false, nil
+	}
+	row, err := r.store.GetServerByID(ctx, pgUUID(serverID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, nil
+		}
+		return uuid.Nil, false, fmt.Errorf("deploy: get server team: %w", err)
+	}
+	return uuidFromPG(row.TeamID), true, nil
 }
 
 // CreateDeployment stores a queued deployment. The partial unique index on
@@ -427,6 +465,7 @@ func applicationFromRow(row sqlc.Application) Application {
 	return Application{
 		ID:                 uuidFromPG(row.ID),
 		UserID:             uuidFromPG(row.UserID),
+		TeamID:             uuidFromPG(row.TeamID),
 		ServerID:           uuidFromPG(row.ServerID),
 		Name:               row.Name,
 		Provider:           row.Provider,

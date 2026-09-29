@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -103,7 +104,27 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := s.tokens.Create(r.Context(), userID, req.Name, req.Scopes)
+	// The requested scopes are canonicalized first, so the operator gate below
+	// and the values the token service persists cannot diverge: a padded or
+	// duplicated "admin" is normalized here and then checked, never stored
+	// past the gate (fix-round-3 A).
+	scopes, err := auth.NormalizeScopes(req.Scopes)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: err.Error()})
+		return
+	}
+
+	// Minting the admin scope is the platform-operator boundary: an
+	// admin-scoped token unlocks the platform-global proxy surface
+	// (RequirePlatformAdmin), so any authenticated user could otherwise
+	// self-service that boundary. Plain read/deploy tokens stay available to
+	// every account.
+	if slices.Contains(scopes, auth.ScopeAdmin) && !s.isPlatformOperator(r) {
+		writeJSON(w, http.StatusForbidden, apiError{Message: platformAdminScopeDenied})
+		return
+	}
+
+	created, err := s.tokens.Create(r.Context(), userID, req.Name, scopes)
 	if err != nil {
 		if errors.Is(err, auth.ErrValidation) {
 			writeJSON(w, http.StatusBadRequest, apiError{Message: err.Error()})

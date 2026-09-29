@@ -1,8 +1,8 @@
 -- name: CreateDatabase :one
 INSERT INTO databases (
-    id, user_id, server_id, name, engine, version, status, public_port, storage_path
+    id, user_id, server_id, name, engine, version, status, public_port, storage_path, team_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING *;
 
 -- name: GetDatabase :one
@@ -12,6 +12,11 @@ WHERE id = $1 AND deleted_at IS NULL;
 -- name: ListDatabasesByUser :many
 SELECT * FROM databases
 WHERE user_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC;
+
+-- name: ListDatabasesByTeam :many
+SELECT * FROM databases
+WHERE team_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC;
 
 -- name: UpdateDatabase :one

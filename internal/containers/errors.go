@@ -16,4 +16,7 @@ var (
 	ErrAgentUnavailable = errors.New("containers: agent unavailable")
 	// ErrValidation reports a malformed request (empty image, empty IDs).
 	ErrValidation = errors.New("containers: invalid request")
+	// ErrForbidden reports a caller whose team role does not permit the
+	// mutation (read_only member).
+	ErrForbidden = errors.New("containers: insufficient team role")
 )

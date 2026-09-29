@@ -144,7 +144,7 @@ func sampleCertificate() DomainCertificate {
 // endpoints behind a no-op auth middleware.
 func newSSLRoutes(dns DNSProviderService, certs CertificateService) http.Handler {
 	r := chi.NewRouter()
-	Mount(r, func(next http.Handler) http.Handler { return next }, &fakeProxyService{}, dns, certs, nil, nil)
+	Mount(r, func(next http.Handler) http.Handler { return next }, passthroughAuth, &fakeProxyService{}, dns, certs, nil, nil)
 	return r
 }
 
@@ -361,12 +361,13 @@ func TestMountSkipsSSLRoutesWithoutServices(t *testing.T) {
 	}
 }
 
-// TestSSLRoutesShareTheSyncAuthBoundary proves every SSL endpoint is mounted
-// inside the same authenticated group as the sync route: unauthenticated
-// requests never reach the services.
-func TestSSLRoutesShareTheSyncAuthBoundary(t *testing.T) {
+// TestSSLRoutesAreBehindAuthentication proves every SSL endpoint is mounted
+// behind its group's auth middleware (the platform boundary for the global
+// routes, the team chain for per-application certificates and redirects):
+// unauthenticated requests never reach the services.
+func TestSSLRoutesAreBehindAuthentication(t *testing.T) {
 	r := chi.NewRouter()
-	Mount(r, func(next http.Handler) http.Handler {
+	requireTestAuth := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			if req.Header.Get("X-Test-Auth") != "ok" {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -374,7 +375,8 @@ func TestSSLRoutesShareTheSyncAuthBoundary(t *testing.T) {
 			}
 			next.ServeHTTP(w, req)
 		})
-	}, &fakeProxyService{}, &fakeDNSProviderService{provider: sampleProvider()}, &fakeCertificateService{certificate: sampleCertificate()}, nil, nil)
+	}
+	Mount(r, requireTestAuth, requireTestAuth, &fakeProxyService{}, &fakeDNSProviderService{provider: sampleProvider()}, &fakeCertificateService{certificate: sampleCertificate()}, nil, nil)
 
 	id := sampleProvider().ID.String()
 	certificateID := sampleCertificate().ID.String()
@@ -395,5 +397,24 @@ func TestSSLRoutesShareTheSyncAuthBoundary(t *testing.T) {
 		if recorder.Code != http.StatusUnauthorized {
 			t.Fatalf("%s %s status = %d, want 401 without auth", tc.method, tc.path, recorder.Code)
 		}
+	}
+}
+
+// TestPerApplicationRoutesMapTeamErrors proves the certificate and redirect
+// handlers answer 403 for a read_only member's mutation and 404 for a foreign
+// team's resource, which are the two errors the services produce (F3).
+func TestPerApplicationRoutesMapTeamErrors(t *testing.T) {
+	certs := &fakeCertificateService{certificate: sampleCertificate(), err: ErrForbidden}
+	redirects := &fakeRedirectService{redirect: sampleRedirect(), err: ErrNotFound}
+	r := chi.NewRouter()
+	Mount(r, passthroughAuth, passthroughAuth, &fakeProxyService{}, nil, certs, redirects, nil)
+
+	recorder := doJSON(t, r, http.MethodDelete, "/v1/proxy/certificates/"+certs.certificate.ID.String(), "")
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("read_only certificate delete = %d, want 403", recorder.Code)
+	}
+	recorder = doJSON(t, r, http.MethodGet, "/v1/proxy/redirects/"+redirects.redirect.ID.String(), "")
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("foreign redirect get = %d, want 404", recorder.Code)
 	}
 }

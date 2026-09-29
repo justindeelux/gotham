@@ -13,6 +13,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // Repository persists databases and their sealed credentials. It is
@@ -25,8 +26,9 @@ type Repository interface {
 	CreateDatabase(ctx context.Context, database Database) (Database, error)
 	// GetDatabase returns a live database, or ErrNotFound.
 	GetDatabase(ctx context.Context, databaseID uuid.UUID) (Database, error)
-	// ListDatabasesByUser returns a user's live databases, newest first.
-	ListDatabasesByUser(ctx context.Context, userID uuid.UUID) ([]Database, error)
+	// ListDatabases returns the live databases of the scope's active team
+	// (or, without a team context, of the creator), newest first.
+	ListDatabases(ctx context.Context, scope teams.Scope) ([]Database, error)
 	// UpdateDatabase persists the mutable fields, or ErrNotFound when the row
 	// is gone or already deleted.
 	UpdateDatabase(ctx context.Context, database Database) (Database, error)
@@ -36,9 +38,11 @@ type Repository interface {
 	CreateSecret(ctx context.Context, secret Secret) (Secret, error)
 	// ListSecrets returns a database's sealed credentials, sorted by key.
 	ListSecrets(ctx context.Context, databaseID uuid.UUID) ([]Secret, error)
-	// ServerExists reports whether the target node is registered. Servers are
-	// a shared resource in this schema, so there is no per-user check to make.
-	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
+	// ServerExists reports whether the target node is registered AND
+	// actionable by the caller's active team. A node of another team answers
+	// false, like a missing one, so node IDs cannot be probed (F6); a legacy
+	// node without a team stays shared.
+	ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error)
 }
 
 // storeRepository adapts *store.Store to Repository.
@@ -60,6 +64,7 @@ func (r *storeRepository) CreateDatabase(ctx context.Context, database Database)
 	row, err := r.store.CreateDatabase(ctx, sqlc.CreateDatabaseParams{
 		ID:          pgUUID(database.ID),
 		UserID:      pgUUID(database.UserID),
+		TeamID:      pgUUID(database.TeamID),
 		ServerID:    pgUUID(database.ServerID),
 		Name:        database.Name,
 		Engine:      database.Engine,
@@ -89,9 +94,18 @@ func (r *storeRepository) GetDatabase(ctx context.Context, databaseID uuid.UUID)
 	return databaseFromRow(row), nil
 }
 
-// ListDatabasesByUser implements Repository.
-func (r *storeRepository) ListDatabasesByUser(ctx context.Context, userID uuid.UUID) ([]Database, error) {
-	rows, err := r.store.ListDatabasesByUser(ctx, pgUUID(userID))
+// ListDatabases implements Repository: the active team's live databases, or
+// the creator's when no team context is present.
+func (r *storeRepository) ListDatabases(ctx context.Context, scope teams.Scope) ([]Database, error) {
+	var (
+		rows []sqlc.Database
+		err  error
+	)
+	if scope.Active() {
+		rows, err = r.store.ListDatabasesByTeam(ctx, pgUUID(scope.TeamID))
+	} else {
+		rows, err = r.store.ListDatabasesByUser(ctx, pgUUID(scope.UserID))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("databases: list databases: %w", err)
 	}
@@ -161,16 +175,21 @@ func (r *storeRepository) ListSecrets(ctx context.Context, databaseID uuid.UUID)
 	return secrets, nil
 }
 
-// ServerExists implements Repository using the node registry table.
-func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error) {
+// ServerExists implements Repository using the node registry table and the
+// caller's active team.
+func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	if serverID == uuid.Nil {
 		return false, nil
 	}
-	if _, err := r.store.GetServerByID(ctx, pgUUID(serverID)); err != nil {
+	row, err := r.store.GetServerByID(ctx, pgUUID(serverID))
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
 		return false, fmt.Errorf("databases: resolve server: %w", err)
+	}
+	if err := scope.AuthorizeOptionalTeam(uuidFromPG(row.TeamID), true); err != nil {
+		return false, nil
 	}
 	return true, nil
 }
@@ -180,6 +199,7 @@ func databaseFromRow(row sqlc.Database) Database {
 	return Database{
 		ID:          uuidFromPG(row.ID),
 		UserID:      uuidFromPG(row.UserID),
+		TeamID:      uuidFromPG(row.TeamID),
 		ServerID:    uuidFromPG(row.ServerID),
 		Name:        row.Name,
 		Engine:      row.Engine,

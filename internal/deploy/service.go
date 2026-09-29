@@ -13,6 +13,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // FeatureEnv is the kill switch for the whole applications surface:
@@ -200,7 +201,7 @@ func (s *Service) Close() error {
 
 // Deploy queues a deployment of the application's current revision.
 func (s *Service) Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployment, error) {
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -241,6 +242,32 @@ func (s *Service) deployApplication(ctx context.Context, app Application) (Deplo
 	return s.submit(ctx, app, Deployment{Kind: KindDeploy, State: StateQueued})
 }
 
+// checkStoredTarget enforces the stored application→node invariant at the queue
+// boundary: an application may only run on a node of its own team, or on a
+// legacy node without a team. It compares the application's STORED team with
+// the node's team — not the caller's active team — so every queue path is
+// covered, including rollback and signature-verified system deploys whose
+// worker context carries no team scope at all. Caller membership and role stay
+// enforced at the entry points (application()). The refusal is ErrNotFound, so
+// a foreign node cannot be probed through the deploy surface.
+func (s *Service) checkStoredTarget(ctx context.Context, app Application) error {
+	if app.ServerID == uuid.Nil {
+		// validateDeployTarget reports the missing node with its own message.
+		return nil
+	}
+	teamID, found, err := s.repo.ServerTeam(ctx, app.ServerID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrServerNotFound
+	}
+	if teamID != uuid.Nil && teamID != app.TeamID {
+		return ErrServerNotFound
+	}
+	return nil
+}
+
 // Rollback queues a deployment of a previous release's image. The stored
 // image reference is copied onto the new rollback row, which is what makes
 // "back to the old version" a normal state-machine run rather than a rewind.
@@ -248,7 +275,7 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
 	}
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -272,7 +299,7 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 
 // ListDeployments returns the application's deployments, newest first.
 func (s *Service) ListDeployments(ctx context.Context, userID, appID uuid.UUID) ([]Deployment, error) {
-	if _, err := s.application(ctx, userID, appID); err != nil {
+	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return nil, err
 	}
 	deployments, err := s.repo.ListDeployments(ctx, appID)
@@ -285,9 +312,11 @@ func (s *Service) ListDeployments(ctx context.Context, userID, appID uuid.UUID) 
 	return deployments, nil
 }
 
-// application loads an application the caller owns, mapping another user's
-// row to ErrNotFound so application IDs cannot be probed.
-func (s *Service) application(ctx context.Context, userID, appID uuid.UUID) (Application, error) {
+// application loads an application of the caller's active team, mapping a row
+// of another team (or, without a team context, of another creator) to
+// ErrNotFound so application IDs cannot be probed. A write additionally needs
+// an owner/admin role; a read_only member may read.
+func (s *Service) application(ctx context.Context, userID, appID uuid.UUID, write bool) (Application, error) {
 	if s == nil || s.repo == nil {
 		return Application{}, errors.New("deploy: repository is not configured")
 	}
@@ -298,7 +327,10 @@ func (s *Service) application(ctx context.Context, userID, appID uuid.UUID) (App
 	if err != nil {
 		return Application{}, err
 	}
-	if app.UserID != userID {
+	if err := teams.ScopeFor(ctx, userID).AuthorizeResource(app.TeamID, app.UserID, write); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return Application{}, err
+		}
 		return Application{}, ErrNotFound
 	}
 	return app, nil
@@ -364,9 +396,15 @@ func (s *Service) previousContainer(ctx context.Context, appID uuid.UUID) string
 }
 
 // submit persists a queued deployment, enqueues its run and returns the row.
-// When the queue rejects the job the row is marked failed immediately, so it
-// never sits in a non-terminal state and blocks the active-deployment index.
+// It is the single queue boundary of deploy, rollback and system deploys, so
+// the stored application→node check runs here: no queue path can hand the
+// worker an application bound to another team's node. When the queue rejects
+// the job the row is marked failed immediately, so it never sits in a
+// non-terminal state and blocks the active-deployment index.
 func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (Deployment, error) {
+	if err := s.checkStoredTarget(ctx, app); err != nil {
+		return Deployment{}, err
+	}
 	dep.ApplicationID = app.ID
 	created, err := s.repo.CreateDeployment(ctx, dep)
 	if err != nil {

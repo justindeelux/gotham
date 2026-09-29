@@ -31,8 +31,12 @@ var (
 	// prove it owns, or another routing conflict needs operator action (409).
 	ErrConflict = errors.New("proxy: conflict")
 	// ErrNotFound — a DNS provider, certificate config or application the
-	// request targets does not exist (404).
+	// request targets does not exist (404). A per-application resource of
+	// another team answers this too, so IDs cannot be probed.
 	ErrNotFound = errors.New("proxy: not found")
+	// ErrForbidden — the caller's team role does not permit the mutation
+	// (read_only).
+	ErrForbidden = errors.New("proxy: insufficient team role")
 	// ErrSecret — the deployment secret that seals and opens DNS provider
 	// credentials is not configured. Credential writes are refused instead of
 	// falling back to the public empty-string key (503).

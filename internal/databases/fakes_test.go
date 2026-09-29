@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/containers"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // testSecret is the key the suite seals credentials with. It is a fixed value
@@ -40,6 +41,8 @@ type fakeRepository struct {
 	order     []uuid.UUID
 	secrets   map[uuid.UUID][]Secret
 	servers   map[uuid.UUID]bool
+	// serverTeams maps a registered server to its team (zero = legacy node).
+	serverTeams map[uuid.UUID]uuid.UUID
 
 	createErr     error
 	getErr        error
@@ -126,8 +129,9 @@ func (r *fakeRepository) GetDatabase(_ context.Context, databaseID uuid.UUID) (D
 	return database, nil
 }
 
-// ListDatabasesByUser implements Repository.
-func (r *fakeRepository) ListDatabasesByUser(_ context.Context, userID uuid.UUID) ([]Database, error) {
+// ListDatabases implements Repository: the active team's databases, or the
+// creator's when the scope has no team context (pre-teams behavior).
+func (r *fakeRepository) ListDatabases(_ context.Context, scope teams.Scope) ([]Database, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listErr != nil {
@@ -136,7 +140,13 @@ func (r *fakeRepository) ListDatabasesByUser(_ context.Context, userID uuid.UUID
 	live := make([]Database, 0, len(r.order))
 	for i := len(r.order) - 1; i >= 0; i-- { // newest first
 		database := r.databases[r.order[i]]
-		if database.UserID == userID && r.live(database) {
+		if scope.Active() {
+			if database.TeamID == scope.TeamID && r.live(database) {
+				live = append(live, database)
+			}
+			continue
+		}
+		if database.UserID == scope.UserID && r.live(database) {
 			live = append(live, database)
 		}
 	}
@@ -210,17 +220,34 @@ func (r *fakeRepository) ListSecrets(_ context.Context, databaseID uuid.UUID) ([
 	return secrets, nil
 }
 
-// ServerExists implements Repository.
-func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID) (bool, error) {
+// ServerExists implements Repository: the node must be known and actionable by
+// the caller's active team.
+func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.serverErr != nil {
 		return false, r.serverErr
 	}
-	if r.serverMissing {
+	if r.serverMissing || !r.servers[serverID] {
 		return false, nil
 	}
-	return r.servers[serverID], nil
+	if err := scope.AuthorizeOptionalTeam(r.serverTeams[serverID], true); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+// seedServerForTeam registers a node owned by teamID (the zero UUID seeds a
+// legacy shared node).
+func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
+	id := r.seedServer()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.serverTeams == nil {
+		r.serverTeams = map[uuid.UUID]uuid.UUID{}
+	}
+	r.serverTeams[id] = teamID
+	return id
 }
 
 // fakeContainers is a scriptable containers.ContainerService: it records every

@@ -14,6 +14,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // Repository persists services and their deploy history. It is implemented
@@ -26,8 +27,9 @@ type Repository interface {
 	CreateService(ctx context.Context, service Service) (Service, error)
 	// GetService returns a live service, or ErrNotFound.
 	GetService(ctx context.Context, serviceID uuid.UUID) (Service, error)
-	// ListServicesByUser returns a user's live services, newest first.
-	ListServicesByUser(ctx context.Context, userID uuid.UUID) ([]Service, error)
+	// ListServices returns the live services of the scope's active team (or,
+	// without a team context, of the creator), newest first.
+	ListServices(ctx context.Context, scope teams.Scope) ([]Service, error)
 	// UpdateServiceConfig persists the mutable configuration fields (name,
 	// document, environment) without touching the status, so a concurrent
 	// lifecycle completion cannot clobber an edit (and an edit cannot clobber
@@ -44,9 +46,11 @@ type Repository interface {
 	// ListServiceDeploys returns a service's attempts, newest first, bounded
 	// by limit.
 	ListServiceDeploys(ctx context.Context, serviceID uuid.UUID, limit int32) ([]Deploy, error)
-	// ServerExists reports whether the target node is registered. Servers are
-	// a shared resource in this schema, so there is no per-user check to make.
-	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
+	// ServerExists reports whether the target node is registered AND
+	// actionable by the caller's active team. A node of another team answers
+	// false, like a missing one, so node IDs cannot be probed (F6); a legacy
+	// node without a team stays shared.
+	ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error)
 }
 
 // storeRepository adapts *store.Store to Repository.
@@ -72,6 +76,7 @@ func (r *storeRepository) CreateService(ctx context.Context, service Service) (S
 	row, err := r.store.CreateService(ctx, sqlc.CreateServiceParams{
 		ID:          pgUUID(service.ID),
 		UserID:      pgUUID(service.UserID),
+		TeamID:      pgUUID(service.TeamID),
 		ServerID:    pgUUID(service.ServerID),
 		Name:        service.Name,
 		Status:      string(service.Status),
@@ -99,9 +104,18 @@ func (r *storeRepository) GetService(ctx context.Context, serviceID uuid.UUID) (
 	return serviceFromRow(row)
 }
 
-// ListServicesByUser implements Repository.
-func (r *storeRepository) ListServicesByUser(ctx context.Context, userID uuid.UUID) ([]Service, error) {
-	rows, err := r.store.ListServicesByUser(ctx, pgUUID(userID))
+// ListServices implements Repository: the active team's live services, or the
+// creator's when no team context is present.
+func (r *storeRepository) ListServices(ctx context.Context, scope teams.Scope) ([]Service, error) {
+	var (
+		rows []sqlc.Service
+		err  error
+	)
+	if scope.Active() {
+		rows, err = r.store.ListServicesByTeam(ctx, pgUUID(scope.TeamID))
+	} else {
+		rows, err = r.store.ListServicesByUser(ctx, pgUUID(scope.UserID))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("services: list services: %w", err)
 	}
@@ -221,16 +235,21 @@ func (r *storeRepository) ListServiceDeploys(ctx context.Context, serviceID uuid
 	return deploys, nil
 }
 
-// ServerExists implements Repository using the node registry table.
-func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error) {
+// ServerExists implements Repository using the node registry table and the
+// caller's active team.
+func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	if serverID == uuid.Nil {
 		return false, nil
 	}
-	if _, err := r.store.GetServerByID(ctx, pgUUID(serverID)); err != nil {
+	row, err := r.store.GetServerByID(ctx, pgUUID(serverID))
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
 		return false, fmt.Errorf("services: resolve server: %w", err)
+	}
+	if err := scope.AuthorizeOptionalTeam(uuidFromPG(row.TeamID), true); err != nil {
+		return false, nil
 	}
 	return true, nil
 }
@@ -244,6 +263,7 @@ func serviceFromRow(row sqlc.Service) (Service, error) {
 	return Service{
 		ID:          uuidFromPG(row.ID),
 		UserID:      uuidFromPG(row.UserID),
+		TeamID:      uuidFromPG(row.TeamID),
 		ServerID:    uuidFromPG(row.ServerID),
 		Name:        row.Name,
 		Status:      Status(row.Status),

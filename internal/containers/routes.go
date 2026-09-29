@@ -53,8 +53,10 @@ type handler struct {
 //	POST /v1/servers/{id}/images/pull
 //	POST /v1/servers/{id}/containers/run
 //
-// auth wraps the group (the server passes its RequireAuth); a nil svc is a
-// no-op so the control plane can call Mount unconditionally.
+// auth wraps the group: the server passes its team chain (RequireAuth +
+// RequireTeam + the write gate), and the service authorizes the target node's
+// team and role before any agent or cache access. A nil svc is a no-op so the
+// control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc ContainerService) {
 	if svc == nil {
 		return
@@ -167,6 +169,8 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrServerNotFound), errors.Is(err, ErrContainerNotFound):
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
+	case errors.Is(err, ErrForbidden):
+		writeJSON(w, http.StatusForbidden, errorBody{Message: "insufficient team role"})
 	case errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrAgentUnavailable):

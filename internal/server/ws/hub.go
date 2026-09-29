@@ -16,6 +16,9 @@ const (
 	TypeLog        = "log"
 	TypeDisconnect = "disconnect"
 	TypeSubscribed = "subscribed"
+	// TypeDenied reports a subscription the server refused (the client never
+	// joined the channel).
+	TypeDenied = "denied"
 )
 
 // Client is one WebSocket connection attached to the hub.

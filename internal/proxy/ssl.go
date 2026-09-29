@@ -180,7 +180,10 @@ type DomainCertificate struct {
 // a configuration against, and the redirect service validates ownership
 // against.
 type ApplicationInfo struct {
-	ID             uuid.UUID
+	ID uuid.UUID
+	// TeamID is the team that owns the application; per-application SSL and
+	// redirect resources authorize against it.
+	TeamID         uuid.UUID
 	BaseDomain     string
 	DomainDisabled bool
 	// ServerID is the node hosting the application; uuid.Nil when none is
@@ -435,6 +438,7 @@ func (s storeSSL) GetApplication(ctx context.Context, id uuid.UUID) (Application
 func applicationInfoFromRow(row sqlc.Application) ApplicationInfo {
 	return ApplicationInfo{
 		ID:             uuidFromPG(row.ID),
+		TeamID:         uuidFromPG(row.TeamID),
 		BaseDomain:     row.BaseDomain,
 		DomainDisabled: row.BaseDomainDisabled,
 		ServerID:       uuidFromPG(row.ServerID),

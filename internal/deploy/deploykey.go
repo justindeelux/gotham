@@ -143,7 +143,7 @@ func (s *Service) CreateDeployKey(ctx context.Context, userID, appID uuid.UUID) 
 	if s == nil || s.repo == nil {
 		return DeployKey{}, errors.New("deploy: repository is not configured")
 	}
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return DeployKey{}, err
 	}
@@ -201,7 +201,7 @@ func (s *Service) DeleteDeployKey(ctx context.Context, userID, appID uuid.UUID) 
 	if s == nil || s.repo == nil {
 		return false, errors.New("deploy: repository is not configured")
 	}
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return false, err
 	}

@@ -83,7 +83,7 @@ func newTestServer(t *testing.T) (*Hub, *httptest.Server) {
 	go hub.Run()
 	t.Cleanup(hub.Close)
 
-	handler := NewHandler(hub, stubVerifier{token: testToken}, nil)
+	handler := NewHandler(hub, stubVerifier{token: testToken}, nil, nil)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	return hub, server

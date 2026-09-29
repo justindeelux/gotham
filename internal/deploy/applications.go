@@ -12,6 +12,7 @@ import (
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/proxy"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // secretRefPrefix marks an environment value as a sealed secret. Written by an
@@ -75,6 +76,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	}
 	app := Application{
 		UserID:     userID,
+		TeamID:     teams.ScopeFor(ctx, userID).TeamID,
 		Name:       strings.TrimSpace(in.Name),
 		Provider:   strings.TrimSpace(in.Provider),
 		Repo:       strings.TrimSpace(in.Repo),
@@ -92,7 +94,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err := validateApplication(app, true); err != nil {
 		return Application{}, err
 	}
-	if err := s.validateServer(ctx, app.ServerID); err != nil {
+	if err := s.validateServer(ctx, userID, app.ServerID); err != nil {
 		return Application{}, err
 	}
 	envVars, secrets, err := s.prepareEnv(ctx, uuid.Nil, in.Env)
@@ -115,12 +117,14 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	return created, nil
 }
 
-// ListApplications returns the caller's applications, newest first.
+// ListApplications returns the active team's applications, newest first.
+// Without a team context it returns the creator's applications, which is the
+// pre-teams behavior.
 func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error) {
 	if s == nil || s.repo == nil {
 		return nil, errors.New("deploy: repository is not configured")
 	}
-	applications, err := s.repo.ListApplications(ctx, userID)
+	applications, err := s.repo.ListApplications(ctx, teams.ScopeFor(ctx, userID))
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +137,7 @@ func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID) ([]App
 // GetApplication returns one application the caller owns. Another user's row
 // answers ErrNotFound, so application IDs cannot be probed.
 func (s *Service) GetApplication(ctx context.Context, userID, appID uuid.UUID) (Application, error) {
-	return s.application(ctx, userID, appID)
+	return s.application(ctx, userID, appID, false)
 }
 
 // UpdateApplication applies a partial update to the mutable application fields
@@ -145,7 +149,7 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if in.empty() {
 		return Application{}, fmt.Errorf("%w: no fields to update", ErrValidation)
 	}
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Application{}, err
 	}
@@ -179,7 +183,7 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	}
 	if in.ServerID != nil {
 		if *in.ServerID != uuid.Nil {
-			if err := s.validateServer(ctx, *in.ServerID); err != nil {
+			if err := s.validateServer(ctx, userID, *in.ServerID); err != nil {
 				return Application{}, err
 			}
 		}
@@ -231,7 +235,7 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 	if !Enabled() {
 		return ErrDisabled
 	}
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return err
 	}
@@ -254,7 +258,7 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 // GetEnv returns the application's environment: plain values verbatim and
 // sealed secrets as `secret:<id>` references. Plaintext is never returned.
 func (s *Service) GetEnv(ctx context.Context, userID, appID uuid.UUID) ([]EnvEntry, error) {
-	if _, err := s.application(ctx, userID, appID); err != nil {
+	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return nil, err
 	}
 	return s.envEntries(ctx, appID)
@@ -267,7 +271,7 @@ func (s *Service) ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entri
 	if !Enabled() {
 		return nil, ErrDisabled
 	}
-	if _, err := s.application(ctx, userID, appID); err != nil {
+	if _, err := s.application(ctx, userID, appID, true); err != nil {
 		return nil, err
 	}
 	envVars, secrets, err := s.prepareEnv(ctx, appID, entries)
@@ -282,7 +286,7 @@ func (s *Service) ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entri
 
 // GetStorages returns the application's storage mappings.
 func (s *Service) GetStorages(ctx context.Context, userID, appID uuid.UUID) ([]Storage, error) {
-	if _, err := s.application(ctx, userID, appID); err != nil {
+	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return nil, err
 	}
 	storages, err := s.repo.ListStorages(ctx, appID)
@@ -301,7 +305,7 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 	if !Enabled() {
 		return nil, ErrDisabled
 	}
-	if _, err := s.application(ctx, userID, appID); err != nil {
+	if _, err := s.application(ctx, userID, appID, true); err != nil {
 		return nil, err
 	}
 	normalized, err := normalizeStorages(storages)
@@ -332,7 +336,7 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
 	}
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -422,14 +426,15 @@ func (s *Service) stopBestEffort(ctx context.Context, app Application) {
 }
 
 // validateServer enforces that the application points at a server the control
-// plane knows. The node registry carries no owner column (servers are shared by
-// the installation's users), so an unknown server is the only way a server_id
-// can fail this check — it answers ErrServerNotFound (404).
-func (s *Service) validateServer(ctx context.Context, serverID uuid.UUID) error {
+// plane knows AND that the caller's active team may target it. A node of
+// another team fails like a missing one (ErrServerNotFound, 404), so node IDs
+// cannot be probed and an application can never be bound to a foreign team's
+// node (F6). A legacy node without a team stays shared.
+func (s *Service) validateServer(ctx context.Context, userID, serverID uuid.UUID) error {
 	if serverID == uuid.Nil {
 		return fmt.Errorf("%w: server is required", ErrValidation)
 	}
-	known, err := s.repo.ServerExists(ctx, serverID)
+	known, err := s.repo.ServerExists(ctx, serverID, teams.ScopeFor(ctx, userID))
 	if err != nil {
 		return err
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // defaultIntegrationDSN points at the dev database from deploy/compose.dev.yml.
@@ -284,7 +285,7 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	}
 
 	// The owner sees only their live rows.
-	list, err := repo.ListServicesByUser(ctx, ownerID)
+	list, err := repo.ListServices(ctx, teams.Scope{UserID: ownerID})
 	if err != nil {
 		t.Fatalf("ListServicesByUser: %v", err)
 	}
@@ -293,13 +294,13 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	}
 
 	// ServerExists resolves registered and unknown nodes.
-	if exists, err := repo.ServerExists(ctx, serverID); err != nil || !exists {
+	if exists, err := repo.ServerExists(ctx, serverID, teams.Scope{UserID: ownerID}); err != nil || !exists {
 		t.Errorf("ServerExists(seeded) = %v, %v, want true", exists, err)
 	}
-	if exists, err := repo.ServerExists(ctx, uuid.New()); err != nil || exists {
+	if exists, err := repo.ServerExists(ctx, uuid.New(), teams.Scope{UserID: ownerID}); err != nil || exists {
 		t.Errorf("ServerExists(unknown) = %v, %v, want false", exists, err)
 	}
-	if exists, err := repo.ServerExists(ctx, uuid.Nil); err != nil || exists {
+	if exists, err := repo.ServerExists(ctx, uuid.Nil, teams.Scope{UserID: ownerID}); err != nil || exists {
 		t.Errorf("ServerExists(nil) = %v, %v, want false", exists, err)
 	}
 }

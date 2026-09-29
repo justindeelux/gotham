@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/services"
+	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/templates"
 )
 
@@ -53,8 +54,8 @@ func (f *fakeRepository) GetService(_ context.Context, serviceID uuid.UUID) (ser
 	return f.service, nil
 }
 
-// ListServicesByUser implements services.Repository.
-func (f *fakeRepository) ListServicesByUser(_ context.Context, _ uuid.UUID) ([]services.Service, error) {
+// ListServices implements services.Repository.
+func (f *fakeRepository) ListServices(_ context.Context, _ teams.Scope) ([]services.Service, error) {
 	return []services.Service{f.service}, nil
 }
 
@@ -99,7 +100,9 @@ func (f *fakeRepository) ListServiceDeploys(_ context.Context, _ uuid.UUID, _ in
 }
 
 // ServerExists implements services.Repository.
-func (f *fakeRepository) ServerExists(_ context.Context, _ uuid.UUID) (bool, error) { return true, nil }
+func (f *fakeRepository) ServerExists(_ context.Context, _ uuid.UUID, _ teams.Scope) (bool, error) {
+	return true, nil
+}
 
 // failingAgent is a node whose compose up fails while quoting the secret.
 type failingAgent struct {

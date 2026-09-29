@@ -11,6 +11,7 @@ import (
 // CreateDatabase stores a database row with the caller-generated ID (the ID
 // seeds the named volume) and returns it.
 func (s *Store) CreateDatabase(ctx context.Context, params sqlc.CreateDatabaseParams) (sqlc.Database, error) {
+	params.TeamID = personalTeamOrDefault(params.TeamID, params.UserID)
 	return s.queries.CreateDatabase(ctx, params)
 }
 
@@ -24,6 +25,11 @@ func (s *Store) GetDatabase(ctx context.Context, id pgtype.UUID) (sqlc.Database,
 // first.
 func (s *Store) ListDatabasesByUser(ctx context.Context, userID pgtype.UUID) ([]sqlc.Database, error) {
 	return s.queries.ListDatabasesByUser(ctx, userID)
+}
+
+// ListDatabasesByTeam returns every live database of one team, newest first.
+func (s *Store) ListDatabasesByTeam(ctx context.Context, teamID pgtype.UUID) ([]sqlc.Database, error) {
+	return s.queries.ListDatabasesByTeam(ctx, teamID)
 }
 
 // UpdateDatabase persists the mutable database fields (rename, status,

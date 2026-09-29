@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/justindeelux/gotham/internal/servers"
+	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -138,7 +139,7 @@ func (s *Service) Close() error {
 // List returns the containers on a node, serving the Redis cache (10s TTL)
 // when it hits and degrading to a direct agent call otherwise.
 func (s *Service) List(ctx context.Context, serverID uuid.UUID) ([]Container, error) {
-	if _, err := s.resolve(ctx, serverID); err != nil {
+	if _, err := s.resolve(ctx, serverID, false); err != nil {
 		return nil, err
 	}
 
@@ -148,7 +149,7 @@ func (s *Service) List(ctx context.Context, serverID uuid.UUID) ([]Container, er
 		return cached, nil
 	}
 
-	client, cancel, err := s.client(ctx, serverID)
+	client, cancel, err := s.client(ctx, serverID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -174,10 +175,10 @@ func (s *Service) List(ctx context.Context, serverID uuid.UUID) ([]Container, er
 // orchestrator never touches this cache, so a stale UI list must not hide a
 // just-started application's published port.
 func (s *Service) ListFresh(ctx context.Context, serverID uuid.UUID) ([]Container, error) {
-	if _, err := s.resolve(ctx, serverID); err != nil {
+	if _, err := s.resolve(ctx, serverID, false); err != nil {
 		return nil, err
 	}
-	client, cancel, err := s.client(ctx, serverID)
+	client, cancel, err := s.client(ctx, serverID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +200,7 @@ func (s *Service) Start(ctx context.Context, serverID uuid.UUID, containerID str
 	if strings.TrimSpace(containerID) == "" {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
 	}
-	client, cancel, err := s.client(ctx, serverID)
+	client, cancel, err := s.client(ctx, serverID, true)
 	if err != nil {
 		return err
 	}
@@ -217,7 +218,7 @@ func (s *Service) Stop(ctx context.Context, serverID uuid.UUID, containerID stri
 	if strings.TrimSpace(containerID) == "" {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
 	}
-	client, cancel, err := s.client(ctx, serverID)
+	client, cancel, err := s.client(ctx, serverID, true)
 	if err != nil {
 		return err
 	}
@@ -235,7 +236,7 @@ func (s *Service) Restart(ctx context.Context, serverID uuid.UUID, containerID s
 	if strings.TrimSpace(containerID) == "" {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
 	}
-	client, cancel, err := s.client(ctx, serverID)
+	client, cancel, err := s.client(ctx, serverID, true)
 	if err != nil {
 		return err
 	}
@@ -255,7 +256,7 @@ func (s *Service) Remove(ctx context.Context, serverID uuid.UUID, containerID st
 	if strings.TrimSpace(containerID) == "" {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
 	}
-	client, cancel, err := s.client(ctx, serverID)
+	client, cancel, err := s.client(ctx, serverID, true)
 	if err != nil {
 		return err
 	}
@@ -318,7 +319,7 @@ func (s *Service) Logs(ctx context.Context, serverID uuid.UUID, containerID stri
 		return nil, fmt.Errorf("%w: container id is required", ErrValidation)
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.logTimeout)
-	server, err := s.resolve(ctx, serverID)
+	server, err := s.resolve(ctx, serverID, false)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -365,8 +366,13 @@ func (s *Service) Logs(ctx context.Context, serverID uuid.UUID, containerID stri
 }
 
 // resolve returns the registry entry for a server, mapping a missing row to
-// ErrServerNotFound.
-func (s *Service) resolve(ctx context.Context, serverID uuid.UUID) (*servers.Server, error) {
+// ErrServerNotFound and a node outside the caller's active team to the same
+// not-found (so server IDs cannot be probed). write additionally requires an
+// owner/admin role: the container routes are mounted through the team chain,
+// and this is the authoritative per-node check behind it. A request without a
+// team scope (background jobs, tests) keeps the pre-teams behavior, exactly
+// like every other team-scoped resource.
+func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, write bool) (*servers.Server, error) {
 	if s.registry == nil {
 		return nil, errors.New("containers: server registry is not configured")
 	}
@@ -377,14 +383,21 @@ func (s *Service) resolve(ctx context.Context, serverID uuid.UUID) (*servers.Ser
 		}
 		return nil, fmt.Errorf("containers: resolve server: %w", err)
 	}
+	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, write); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return nil, ErrForbidden
+		}
+		return nil, ErrServerNotFound
+	}
 	return server, nil
 }
 
 // client resolves the server and dials its agent with the standard RPC
-// timeout.
-func (s *Service) client(ctx context.Context, serverID uuid.UUID) (DockerClient, context.CancelFunc, error) {
+// timeout. write selects the authorization: read methods pass false, every
+// mutation passes true.
+func (s *Service) client(ctx context.Context, serverID uuid.UUID, write bool) (DockerClient, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.rpcTimeout)
-	server, err := s.resolve(ctx, serverID)
+	server, err := s.resolve(ctx, serverID, write)
 	if err != nil {
 		cancel()
 		return nil, nil, err
@@ -397,10 +410,11 @@ func (s *Service) client(ctx context.Context, serverID uuid.UUID) (DockerClient,
 	return client, cancel, nil
 }
 
-// pullClient is client with the longer image-transfer timeout.
+// pullClient is client with the longer image-transfer timeout. Pull and run
+// are mutations.
 func (s *Service) pullClient(ctx context.Context, serverID uuid.UUID) (DockerClient, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.pullTimeout)
-	server, err := s.resolve(ctx, serverID)
+	server, err := s.resolve(ctx, serverID, true)
 	if err != nil {
 		cancel()
 		return nil, nil, err

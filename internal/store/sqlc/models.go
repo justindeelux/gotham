@@ -35,6 +35,7 @@ type Application struct {
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 	BaseDomainDisabled bool               `json:"base_domain_disabled"`
+	TeamID             pgtype.UUID        `json:"team_id"`
 }
 
 type ApplicationDeployKey struct {
@@ -124,6 +125,7 @@ type Database struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
+	TeamID      pgtype.UUID        `json:"team_id"`
 }
 
 type DatabaseSecret struct {
@@ -193,6 +195,18 @@ type EnvVar struct {
 	Key           string             `json:"key"`
 	Value         string             `json:"value"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type Invite struct {
+	ID         pgtype.UUID        `json:"id"`
+	TeamID     pgtype.UUID        `json:"team_id"`
+	Email      string             `json:"email"`
+	Role       string             `json:"role"`
+	TokenHash  string             `json:"token_hash"`
+	InvitedBy  pgtype.UUID        `json:"invited_by"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	AcceptedAt pgtype.Timestamptz `json:"accepted_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 type PrivateKey struct {
@@ -271,6 +285,7 @@ type Server struct {
 	LastSeen       pgtype.Timestamptz `json:"last_seen"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	TeamID         pgtype.UUID        `json:"team_id"`
 }
 
 type Service struct {
@@ -284,6 +299,7 @@ type Service struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
+	TeamID      pgtype.UUID        `json:"team_id"`
 }
 
 type ServiceDeploy struct {
@@ -313,6 +329,21 @@ type Storage struct {
 	HostPath      string             `json:"host_path"`
 	ContainerPath string             `json:"container_path"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type Team struct {
+	ID         pgtype.UUID        `json:"id"`
+	Name       string             `json:"name"`
+	IsPersonal bool               `json:"is_personal"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TeamMember struct {
+	TeamID    pgtype.UUID        `json:"team_id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	Role      string             `json:"role"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type User struct {

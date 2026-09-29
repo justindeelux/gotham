@@ -38,6 +38,7 @@ const (
 type Service struct {
 	ID       uuid.UUID
 	UserID   uuid.UUID
+	TeamID   uuid.UUID
 	ServerID uuid.UUID
 	Name     string
 	Status   Status

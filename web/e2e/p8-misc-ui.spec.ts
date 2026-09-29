@@ -1088,6 +1088,75 @@ test.describe("team mutation races", () => {
       `unexpected failed API requests:\n${unexpected.join("\n")}`,
     ).toEqual([]);
   });
+
+  test("a superseded delete failure cannot surface after a newer success", async ({
+    page,
+    request,
+    guardrails,
+  }) => {
+    test.setTimeout(60_000);
+
+    const suffix = uniqueSuffix();
+    const teamA = await seedTeam(request, `ui-e2e-late-a-${suffix}`);
+
+    // The first delete of A fails late; the second one succeeds immediately.
+    let releaseFirst: () => void = () => undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let deletes = 0;
+    await page.route("**/api/v1/teams/*", async (route) => {
+      if (route.request().method() !== "DELETE") {
+        await route.continue();
+        return;
+      }
+      deletes += 1;
+      if (deletes === 1) {
+        await firstGate;
+        await route.abort("failed");
+        return;
+      }
+      await route.fulfill({ status: 204, body: "" });
+    });
+
+    await page.goto("/teams");
+    const rowA = page.locator(`[data-team="${teamA.name}"]`);
+    await rowA.getByRole("button", { name: teamA.name }).click();
+
+    // First delete of A: held, doomed to fail after the newer one succeeded.
+    await rowA.getByRole("button", { name: "Delete" }).click();
+    await page.locator(".n-popconfirm").getByRole("button", { name: "Confirm" }).click();
+    await expect(rowA.getByRole("button", { name: "Delete" })).toHaveClass(
+      /n-button--loading/,
+    );
+
+    // The newer delete succeeds first: A leaves the list, the toast fires and
+    // the page falls back to another team.
+    await rowA.getByRole("button", { name: "Delete" }).click();
+    await page
+      .locator(".n-popconfirm")
+      .getByRole("button", { name: "Confirm" })
+      .last()
+      .click();
+    await expect(page.getByText(`Deleted team ${teamA.name}`)).toBeVisible();
+    await expect(page.locator(`[data-team="${teamA.name}"]`)).toHaveCount(0);
+    expect(deletes).toBe(2);
+
+    // The older failure lands afterwards: it must not paint the fallback team.
+    releaseFirst();
+    await settle(page);
+    await expect(page.locator('[data-testid="team-action-error"]')).toHaveCount(0);
+    await expect(page.getByText(`Deleted team ${teamA.name}`)).toBeVisible();
+
+    const unexpected = guardrails.apiFailures.filter(
+      (line) =>
+        !(line.includes(`/teams/${teamA.id}`) && line.includes("requestfailed")),
+    );
+    expect(
+      unexpected,
+      `unexpected failed API requests:\n${unexpected.join("\n")}`,
+    ).toEqual([]);
+  });
 });
 
 /**

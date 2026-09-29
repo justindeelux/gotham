@@ -466,22 +466,24 @@ async function handleDelete(): Promise<void> {
   const subject = `team:${teamId}`;
   const token = beginMutation(subject);
   /**
-   * A successful delete removes the team from the store and moves the
-   * selection, which clears the mutation token, so the real outcome (the team
-   * is gone) is checked first and its success is still reported. Otherwise the
-   * delete must own the context: a failure can never move the selection, so a
-   * changed generation or a superseded token means the feedback belongs to an
-   * earlier operation and must not touch the newer one's state.
+   * A team absent from the store is the genuine outcome of a successful delete
+   * (the store removes the row and moves the selection), so that is what the
+   * success message reports. Every other write — the failure alert and the
+   * pending spinner — must own the current context (mutation token and
+   * selection generation). The team-gone shortcut must never feed the error
+   * path: once a newer delete has succeeded, an older failure would otherwise
+   * paint its error on the fallback team.
    */
+  const teamGone = (): boolean =>
+    !teamsStore.teams.some((item) => item.id === teamId);
   const ownsFeedback = (): boolean =>
-    !teamsStore.teams.some((item) => item.id === teamId) ||
-    (mutationTokens.get(subject) === token &&
-      generation === selectionGeneration);
+    mutationTokens.get(subject) === token &&
+    generation === selectionGeneration;
   deleting.value = true;
   teamActionError.value = null;
   try {
     await teamsStore.remove(teamId);
-    if (ownsFeedback()) {
+    if (teamGone()) {
       message.success(`Deleted team ${team.name}`);
     }
     // The store falls back to the personal team, whose selection change

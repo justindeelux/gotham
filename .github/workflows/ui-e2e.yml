@@ -50,7 +50,7 @@ jobs:
       GOTHAM_REDIS_ADDR: localhost:6380
       GOTHAM_SERVER_ADDR: 127.0.0.1
       GOTHAM_SERVER_PORT: "8099"
-      GOTHAM_GRPC_ADDR: 127.0.0.1:9442
+      GOTHAM_GRPC_ADDR: 127.0.0.1:9444
       GOTHAM_LOG_LEVEL: info
       GOTHAM_LOG_FORMAT: text
       # Applications are enabled by default; pinned explicitly so the smoke

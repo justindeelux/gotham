@@ -99,42 +99,61 @@ func TestGitLabSourceExchangeToken(t *testing.T) {
 }
 
 func TestGitLabSourceCreateWebhook(t *testing.T) {
-	var gotMethod, gotPath string
-	var gotBody struct {
-		URL        string `json:"url"`
-		Token      string `json:"token"`
-		PushEvents bool   `json:"push_events"`
-		SSL        bool   `json:"enable_ssl_verification"`
+	// F1 regression: the events list must translate "pull_request" into
+	// merge_requests_events, or a previews-enabled hook never delivers MR
+	// notifications.
+	cases := []struct {
+		name         string
+		events       []string
+		wantPush     bool
+		wantRequests bool
+	}{
+		{"previews enabled", []string{"push", "pull_request"}, true, true},
+		{"previews disabled", []string{"push"}, true, false},
 	}
-	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
-		gotMethod, gotPath = r.Method, r.URL.EscapedPath()
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Errorf("decode request: %v", err)
-		}
-		w.WriteHeader(http.StatusCreated)
-		writeJSONTest(t, w, map[string]any{"id": 77})
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotMethod, gotPath string
+			var gotBody struct {
+				URL                string `json:"url"`
+				Token              string `json:"token"`
+				PushEvents         bool   `json:"push_events"`
+				MergeRequestsEvent bool   `json:"merge_requests_events"`
+				SSL                bool   `json:"enable_ssl_verification"`
+			}
+			srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+				gotMethod, gotPath = r.Method, r.URL.EscapedPath()
+				if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+					t.Errorf("decode request: %v", err)
+				}
+				w.WriteHeader(http.StatusCreated)
+				writeJSONTest(t, w, map[string]any{"id": 77})
+			})
 
-	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"})
-	source.apiBase = srv.URL
-	id, err := source.CreateWebhook(context.Background(), staticToken, "group/project", Webhook{
-		URL:    "https://cp.gotham.dev/api/v1/webhooks/gitlab",
-		Secret: "s3cr3t",
-	})
-	if err != nil {
-		t.Fatalf("CreateWebhook: %v", err)
-	}
-	if id != "77" {
-		t.Errorf("id = %q, want 77", id)
-	}
-	if gotMethod != http.MethodPost || gotPath != "/projects/group%2Fproject/hooks" {
-		t.Errorf("request = %s %s, want POST /projects/group%%2Fproject/hooks", gotMethod, gotPath)
-	}
-	if gotBody.URL != "https://cp.gotham.dev/api/v1/webhooks/gitlab" || gotBody.Token != "s3cr3t" {
-		t.Errorf("body = %+v, want the control-plane url and token", gotBody)
-	}
-	if !gotBody.PushEvents || !gotBody.SSL {
-		t.Errorf("body = %+v, want push events with TLS verification", gotBody)
+			source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"})
+			source.apiBase = srv.URL
+			id, err := source.CreateWebhook(context.Background(), staticToken, "group/project", Webhook{
+				URL:    "https://cp.gotham.dev/api/v1/webhooks/gitlab",
+				Secret: "s3cr3t",
+				Events: tc.events,
+			})
+			if err != nil {
+				t.Fatalf("CreateWebhook: %v", err)
+			}
+			if id != "77" {
+				t.Errorf("id = %q, want 77", id)
+			}
+			if gotMethod != http.MethodPost || gotPath != "/projects/group%2Fproject/hooks" {
+				t.Errorf("request = %s %s, want POST /projects/group%%2Fproject/hooks", gotMethod, gotPath)
+			}
+			if gotBody.URL != "https://cp.gotham.dev/api/v1/webhooks/gitlab" || gotBody.Token != "s3cr3t" {
+				t.Errorf("body = %+v, want the control-plane url and token", gotBody)
+			}
+			if gotBody.PushEvents != tc.wantPush || gotBody.MergeRequestsEvent != tc.wantRequests || !gotBody.SSL {
+				t.Errorf("body = %+v, want push=%v merge_requests=%v with TLS verification",
+					gotBody, tc.wantPush, tc.wantRequests)
+			}
+		})
 	}
 }
 

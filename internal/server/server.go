@@ -381,13 +381,17 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 		cfg.Notifier = notifier
 	}
 	// Preview siblings hang off the base application outside the deploy
-	// schema; they are torn down before the base row is deleted (BE-8.1). The
-	// closure reads s.webhooks lazily: the webhook service is built after the
-	// deploy service, and the hook only fires once the server is serving.
-	cfg.PreviewCleanup = func(ctx context.Context, appID uuid.UUID) {
-		if s.webhooks != nil {
-			s.webhooks.DeletePreviews(ctx, appID)
+	// schema; they are torn down before the base row is deleted, and a
+	// failure aborts the delete (the base FK cascades the bindings away, so
+	// deleting it after a failed teardown would leave the siblings untracked)
+	// — BE-8.1. The closure reads s.webhooks lazily: the webhook service is
+	// built after the deploy service, and the hook only fires once the server
+	// is serving.
+	cfg.PreviewCleanup = func(ctx context.Context, appID uuid.UUID) error {
+		if s.webhooks == nil {
+			return nil
 		}
+		return s.webhooks.CleanupApplication(ctx, appID)
 	}
 	return deploy.NewDefaultService(cfg)
 }

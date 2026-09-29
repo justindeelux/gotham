@@ -156,9 +156,13 @@ func (p *gitLabSource) CreateWebhook(ctx context.Context, tok *oauth2.Token, rep
 	}
 	client := p.config.Client(ctx, tok)
 	payload := map[string]any{
-		"url":                     hook.URL,
-		"token":                   hook.Secret,
-		"push_events":             wantsEvent(hook.Events, "push"),
+		"url":         hook.URL,
+		"token":       hook.Secret,
+		"push_events": wantsEvent(hook.Events, "push"),
+		// Merge-request events are the GitLab shape of pull_request: a
+		// previews-enabled hook (events include "pull_request") must subscribe
+		// to them or the installed hook never delivers an MR notification.
+		"merge_requests_events":   eventSelected(hook.Events, "pull_request"),
 		"enable_ssl_verification": true,
 	}
 

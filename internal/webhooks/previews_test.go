@@ -19,20 +19,40 @@ import (
 
 // githubPRBody is a GitHub-shaped pull_request delivery body.
 func githubPRBody(action string, number int, head, base, sha string) string {
-	return `{"action":"` + action + `","number":` + itoa(number) + `,"pull_request":{"number":` + itoa(number) +
+	return `{"action":"` + action + `","number":` + strconv.Itoa(number) +
+		`,"pull_request":{"number":` + strconv.Itoa(number) +
 		`,"head":{"ref":"` + head + `","sha":"` + sha + `"},"base":{"ref":"` + base + `"}},` +
+		`"repository":{"full_name":"octo/gotham"}}`
+}
+
+// githubHeadRepoPRBody is an "opened" GitHub pull_request body with an
+// explicit head repository object (fork detection). The branch facts are
+// fixed; only the head repository identity varies.
+func githubHeadRepoPRBody(headRepo string, fork bool) string {
+	return `{"action":"opened","number":7,` +
+		`"pull_request":{"number":7,"head":{"ref":"feat/x","sha":"abc",` +
+		`"repo":{"full_name":"` + headRepo + `","fork":` + strconv.FormatBool(fork) + `}},` +
+		`"base":{"ref":"main"}},` +
 		`"repository":{"full_name":"octo/gotham"}}`
 }
 
 // gitLabMRBody is a GitLab-shaped merge request delivery body.
 func gitLabMRBody(action string, iid int, source, target, sha string) string {
-	return `{"object_attributes":{"iid":` + itoa(iid) + `,"action":"` + action + `","source_branch":"` + source +
-		`","target_branch":"` + target + `","last_commit":{"id":"` + sha + `"}},` +
+	return `{"object_attributes":{"iid":` + strconv.Itoa(iid) + `,"action":"` + action +
+		`","source_branch":"` + source + `","target_branch":"` + target +
+		`","last_commit":{"id":"` + sha + `"}},` +
 		`"project":{"path_with_namespace":"octo/gotham"}}`
 }
 
-// itoa renders a small non-negative int for the payload helpers.
-func itoa(n int) string { return strconv.Itoa(n) }
+// gitLabForkMRBody is the same with different source/target project ids (a
+// merge request from a fork).
+func gitLabForkMRBody(action string, iid int, source, target, sha string) string {
+	return `{"object_attributes":{"iid":` + strconv.Itoa(iid) + `,"action":"` + action +
+		`","source_branch":"` + source + `","target_branch":"` + target +
+		`","source_project_id":41,"target_project_id":7,` +
+		`"last_commit":{"id":"` + sha + `"}},` +
+		`"project":{"path_with_namespace":"octo/gotham"}}`
+}
 
 // prRequest signs a GitHub pull_request delivery for the fake repository's
 // hook. GitLab and Gitea bodies are exercised at the parsing layer; the
@@ -61,6 +81,12 @@ func newPreviewService(t *testing.T, repo *fakeRepository, deployer *fakeDeploye
 	})
 }
 
+// receive delivers one signed GitHub PR body and returns the outcome.
+func receive(t *testing.T, svc *Service, body string) (Delivery, error) {
+	t.Helper()
+	return svc.Receive(context.Background(), providers.NameGitHub, prRequest("pull_request", body))
+}
+
 func TestParsePullRequestDelivery(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -72,6 +98,7 @@ func TestParsePullRequestDelivery(t *testing.T) {
 		wantHead   string
 		wantBase   string
 		wantSHA    string
+		wantFork   bool
 		wantNil    bool
 	}{
 		{
@@ -93,6 +120,24 @@ func TestParsePullRequestDelivery(t *testing.T) {
 			wantNumber: 7, wantAction: "closed", wantHead: "feat/x", wantBase: "main", wantSHA: "def",
 		},
 		{
+			name:     "github fork head",
+			provider: providers.NameGitHub, event: "pull_request",
+			body:       githubHeadRepoPRBody("stranger/gotham", true),
+			wantNumber: 7, wantAction: "opened", wantHead: "feat/x", wantBase: "main", wantSHA: "abc", wantFork: true,
+		},
+		{
+			name:     "github same-repo head with the fork flag missing",
+			provider: providers.NameGitHub, event: "pull_request",
+			body:       githubHeadRepoPRBody("Octo/Gotham", false),
+			wantNumber: 7, wantAction: "opened", wantHead: "feat/x", wantBase: "main", wantSHA: "abc",
+		},
+		{
+			name:     "github foreign head without the fork flag",
+			provider: providers.NameGitHub, event: "pull_request",
+			body:       githubHeadRepoPRBody("stranger/gotham", false),
+			wantNumber: 7, wantAction: "opened", wantHead: "feat/x", wantBase: "main", wantSHA: "abc", wantFork: true,
+		},
+		{
 			name:     "gitea synchronized",
 			provider: providers.NameGitea, event: "pull_request",
 			body:       githubPRBody("synchronized", 8, "fix/y", "main", "123"),
@@ -109,6 +154,12 @@ func TestParsePullRequestDelivery(t *testing.T) {
 			provider: providers.NameGitLab, event: "Merge Request Hook",
 			body:       gitLabMRBody("merge", 9, "feat/z", "main", "456"),
 			wantNumber: 9, wantAction: "merge", wantHead: "feat/z", wantBase: "main", wantSHA: "456",
+		},
+		{
+			name:     "gitlab fork merge request",
+			provider: providers.NameGitLab, event: "Merge Request Hook",
+			body:       gitLabForkMRBody("open", 9, "feat/z", "main", "456"),
+			wantNumber: 9, wantAction: "open", wantHead: "feat/z", wantBase: "main", wantSHA: "456", wantFork: true,
 		},
 		{
 			name:     "push body carries no pull request",
@@ -143,9 +194,10 @@ func TestParsePullRequestDelivery(t *testing.T) {
 				t.Fatal("PullRequest = nil, want the parsed pull request")
 			}
 			if pr.Number != tc.wantNumber || pr.Action != tc.wantAction ||
-				pr.HeadBranch != tc.wantHead || pr.BaseBranch != tc.wantBase || pr.HeadSHA != tc.wantSHA {
-				t.Errorf("pull request = %+v, want number=%d action=%q head=%q base=%q sha=%q",
-					pr, tc.wantNumber, tc.wantAction, tc.wantHead, tc.wantBase, tc.wantSHA)
+				pr.HeadBranch != tc.wantHead || pr.BaseBranch != tc.wantBase || pr.HeadSHA != tc.wantSHA ||
+				pr.Fork != tc.wantFork {
+				t.Errorf("pull request = %+v, want number=%d action=%q head=%q base=%q sha=%q fork=%v",
+					pr, tc.wantNumber, tc.wantAction, tc.wantHead, tc.wantBase, tc.wantSHA, tc.wantFork)
 			}
 		})
 	}
@@ -233,8 +285,7 @@ func TestReceivePullRequestCreatesPreviewAndDeploys(t *testing.T) {
 	svc := newPreviewService(t, repo, deployer, commenter)
 
 	body := githubPRBody("opened", 7, "feat/x", "main", "abc123")
-	delivery, err := svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", body))
+	delivery, err := receive(t, svc, body)
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
 	}
@@ -258,7 +309,7 @@ func TestReceivePullRequestCreatesPreviewAndDeploys(t *testing.T) {
 	deployedSibling := deployer.provisionID
 	deployer.mu.Unlock()
 	if deployedApp != deployedSibling && deployedSibling != uuid.Nil {
-		t.Errorf("deployed %s, want the provisioned sibling", deployedApp)
+		t.Errorf("deployed %s, want the provisioned sibling %s", deployedApp, deployedSibling)
 	}
 
 	preview, err := repo.GetPreview(context.Background(), repo.app.ID, 7)
@@ -271,6 +322,9 @@ func TestReceivePullRequestCreatesPreviewAndDeploys(t *testing.T) {
 	}
 	if preview.TeamID != repo.app.TeamID {
 		t.Errorf("preview team = %s, want the base application's team %s", preview.TeamID, repo.app.TeamID)
+	}
+	if got := repo.reservationCount(); got != 1 {
+		t.Errorf("reservations = %d, want the start reservation kept", got)
 	}
 
 	if got := commenter.commentCount(); got != 1 {
@@ -294,8 +348,7 @@ func TestReceivePullRequestSyncReusesSibling(t *testing.T) {
 
 	for _, sha := range []string{"abc123", "def456"} {
 		body := githubPRBody("synchronize", 7, "feat/x", "main", sha)
-		if _, err := svc.Receive(context.Background(), providers.NameGitHub,
-			prRequest("pull_request", body)); err != nil {
+		if _, err := receive(t, svc, body); err != nil {
 			t.Fatalf("Receive(%s): %v", sha, err)
 		}
 	}
@@ -320,13 +373,12 @@ func TestReceivePullRequestRedeliveryIsDuplicate(t *testing.T) {
 	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
 
 	body := githubPRBody("opened", 7, "feat/x", "main", "abc123")
-	req := prRequest("pull_request", body)
-	if _, err := svc.Receive(context.Background(), providers.NameGitHub, req); err != nil {
+	if _, err := receive(t, svc, body); err != nil {
 		t.Fatalf("Receive: %v", err)
 	}
-	// A redelivery of the same body (same head SHA) is an anti-spam no-op.
-	redelivered := prRequest("pull_request", body)
-	delivery, err := svc.Receive(context.Background(), providers.NameGitHub, redelivered)
+	// A redelivery of the same body (same signed head SHA) is an anti-spam
+	// no-op.
+	delivery, err := receive(t, svc, body)
 	if err != nil {
 		t.Fatalf("Receive(redelivery): %v", err)
 	}
@@ -341,14 +393,353 @@ func TestReceivePullRequestRedeliveryIsDuplicate(t *testing.T) {
 	}
 }
 
+// TestReopenAtSameSHAAfterClose is the F2 regression: a close clears the PR's
+// reservations, so a reopen at the same head revision creates a fresh preview.
+func TestReopenAtSameSHAAfterClose(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	open := githubPRBody("opened", 7, "feat/x", "main", "abc123")
+	if _, err := receive(t, svc, open); err != nil {
+		t.Fatalf("Receive(open): %v", err)
+	}
+	closed := githubPRBody("closed", 7, "feat/x", "main", "abc123")
+	delivery, err := receive(t, svc, closed)
+	if err != nil {
+		t.Fatalf("Receive(close): %v", err)
+	}
+	if delivery.Status != StatusDeleted {
+		t.Fatalf("close = %+v, want deleted", delivery)
+	}
+	if got := repo.reservationCount(); got != 0 {
+		t.Errorf("reservations after close = %d, want 0", got)
+	}
+
+	// The same head revision, reopened: a new preview, not a duplicate.
+	delivery, err = receive(t, svc, open)
+	if err != nil {
+		t.Fatalf("Receive(reopen): %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("reopen = %+v, want queued", delivery)
+	}
+	if got := deployer.provisionCount(); got != 2 {
+		t.Errorf("siblings provisioned = %d, want 2 (delete then reopen)", got)
+	}
+	preview, err := repo.GetPreview(context.Background(), repo.app.ID, 7)
+	if err != nil {
+		t.Fatalf("GetPreview: %v", err)
+	}
+	if preview.State != PreviewActive {
+		t.Errorf("preview after reopen = %+v", preview)
+	}
+}
+
+// TestSecondPRAtSameSHADeploys is the F2 regression: two PRs of one
+// application sharing a head revision are independent previews.
+func TestSecondPRAtSameSHADeploys(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	if _, err := receive(t, svc, githubPRBody("opened", 7, "feat/x", "main", "same-sha")); err != nil {
+		t.Fatalf("Receive(PR 7): %v", err)
+	}
+	delivery, err := receive(t, svc, githubPRBody("opened", 8, "feat/y", "main", "same-sha"))
+	if err != nil {
+		t.Fatalf("Receive(PR 8): %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("PR 8 = %+v, want queued", delivery)
+	}
+	if got := deployer.provisionCount(); got != 2 {
+		t.Errorf("siblings provisioned = %d, want 2", got)
+	}
+	for _, number := range []int{7, 8} {
+		if _, err := repo.GetPreview(context.Background(), repo.app.ID, number); err != nil {
+			t.Errorf("preview %d: %v", number, err)
+		}
+	}
+}
+
+// TestPushAtPRHeadSHAStillDeploys is the F2 push regression: the PR ledger and
+// the push webhook_events ledger are disjoint, so a push of a commit that also
+// heads a PR still deploys the base application.
+func TestPushAtPRHeadSHAStillDeploys(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	if _, err := receive(t, svc, githubPRBody("opened", 7, "feat/x", "main", "shared-sha")); err != nil {
+		t.Fatalf("Receive(PR): %v", err)
+	}
+	push := `{"ref":"refs/heads/main","after":"shared-sha","repository":{"full_name":"octo/gotham"}}`
+	delivery, err := svc.Receive(context.Background(), providers.NameGitHub, prRequest("push", push))
+	if err != nil {
+		t.Fatalf("Receive(push): %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("push = %+v, want queued (the PR ledger must not suppress it)", delivery)
+	}
+	// The push still dedupes against itself through webhook_events.
+	if _, err := svc.Receive(context.Background(), providers.NameGitHub, prRequest("push", push)); err != nil {
+		t.Fatalf("Receive(push redelivery): %v", err)
+	}
+	if got := repo.claimCount(); got != 1 {
+		t.Errorf("push claims = %d, want 1", got)
+	}
+}
+
+// TestBusyDeploymentIsRetryable is the F3 regression: a synchronize during an
+// active deployment is not recorded as handled — it answers retryable and
+// releases its reservation, and the retry deploys the new revision.
+func TestBusyDeploymentIsRetryable(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	if _, err := receive(t, svc, githubPRBody("opened", 7, "feat/x", "main", "old-sha")); err != nil {
+		t.Fatalf("Receive(open): %v", err)
+	}
+	preview, err := repo.GetPreview(context.Background(), repo.app.ID, 7)
+	if err != nil {
+		t.Fatalf("GetPreview: %v", err)
+	}
+	if preview.HeadSHA != "old-sha" {
+		t.Fatalf("head sha = %q, want old-sha", preview.HeadSHA)
+	}
+
+	newSHA := githubPRBody("synchronize", 7, "feat/x", "main", "new-sha")
+	deployer.mu.Lock()
+	deployer.err = deploy.ErrConflict
+	deployer.mu.Unlock()
+
+	_, err = receive(t, svc, newSHA)
+	if !errors.Is(err, ErrRetryable) {
+		t.Fatalf("busy synchronize = %v, want ErrRetryable", err)
+	}
+	// The busy delivery released its own reservation; the earlier, actually
+	// queued revision keeps its own.
+	if got := repo.reservationCount(); got != 1 {
+		t.Errorf("reservations after the busy delivery = %d, want 1 (the queued revision)", got)
+	}
+	repo.mu.Lock()
+	_, busyReservation := repo.reservations[ReservationKey(DeliveryReservation{
+		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "new-sha",
+	})]
+	repo.mu.Unlock()
+	if busyReservation {
+		t.Error("the unqueued revision kept its reservation")
+	}
+	preview, _ = repo.GetPreview(context.Background(), repo.app.ID, 7)
+	if preview.HeadSHA != "old-sha" {
+		t.Errorf("head sha after the busy delivery = %q, want the actually queued old-sha", preview.HeadSHA)
+	}
+
+	// The host redelivers the same revision once the deployment finished.
+	deployer.mu.Lock()
+	deployer.err = nil
+	deployer.mu.Unlock()
+	delivery, err := receive(t, svc, newSHA)
+	if err != nil {
+		t.Fatalf("Receive(retry): %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("retry = %+v, want queued", delivery)
+	}
+	preview, _ = repo.GetPreview(context.Background(), repo.app.ID, 7)
+	if preview.HeadSHA != "new-sha" {
+		t.Errorf("head sha after the retry = %q, want new-sha", preview.HeadSHA)
+	}
+	if got := deployer.deployCount(); got != 2 {
+		t.Errorf("deployments queued = %d, want 2", got)
+	}
+}
+
+// TestBindingWriteFailureCompensatesAndRetries is the F4 regression: a failed
+// binding write deletes the just-created sibling (so it cannot be orphaned)
+// and a retry provisions again and deploys.
+func TestBindingWriteFailureCompensatesAndRetries(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	body := githubPRBody("opened", 7, "feat/x", "main", "abc123")
+	repo.mu.Lock()
+	repo.upsertErr = errors.New("database down")
+	repo.mu.Unlock()
+
+	if _, err := receive(t, svc, body); err == nil {
+		t.Fatal("Receive: no error, want the binding write failure to surface")
+	}
+	if got := deployer.provisionCount(); got != 1 {
+		t.Fatalf("siblings provisioned = %d, want 1", got)
+	}
+	if got := deployer.deleteCount(); got != 1 {
+		t.Fatalf("siblings deleted = %d, want the failed binding compensated", got)
+	}
+	if got := repo.reservationCount(); got != 0 {
+		t.Errorf("reservations = %d, want 0", got)
+	}
+
+	// Retry: the same delivery succeeds and re-provisions the (deleted) sibling.
+	repo.mu.Lock()
+	repo.upsertErr = nil
+	repo.mu.Unlock()
+	delivery, err := receive(t, svc, body)
+	if err != nil {
+		t.Fatalf("Receive(retry): %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("retry = %+v, want queued", delivery)
+	}
+	if got := deployer.provisionCount(); got != 2 {
+		t.Errorf("siblings provisioned = %d, want 2", got)
+	}
+	if _, err := repo.GetPreview(context.Background(), repo.app.ID, 7); err != nil {
+		t.Fatalf("preview after retry: %v", err)
+	}
+}
+
+// TestRetryRecoversReservedSibling is the F4 recovery path: a sibling whose
+// binding exists (the previous attempt failed after persisting it) is reused,
+// never rejected as a name/host collision.
+func TestRetryRecoversReservedSibling(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	open := githubPRBody("opened", 7, "feat/x", "main", "abc123")
+	if _, err := receive(t, svc, open); err != nil {
+		t.Fatalf("Receive(open): %v", err)
+	}
+	// Simulate a binding left behind by a queue failure: the sibling is
+	// reserved, the revision was never queued.
+	deployer.mu.Lock()
+	deployer.err = deploy.ErrConflict
+	deployer.mu.Unlock()
+	sync := githubPRBody("synchronize", 7, "feat/x", "main", "new-sha")
+	if _, err := receive(t, svc, sync); !errors.Is(err, ErrRetryable) {
+		t.Fatalf("busy synchronize = %v, want ErrRetryable", err)
+	}
+
+	deployer.mu.Lock()
+	deployer.err = nil
+	deployer.mu.Unlock()
+	delivery, err := receive(t, svc, sync)
+	if err != nil {
+		t.Fatalf("Receive(retry): %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("retry = %+v, want queued", delivery)
+	}
+	if got := deployer.provisionCount(); got != 1 {
+		t.Errorf("siblings provisioned = %d, want 1 (the reserved sibling is reused)", got)
+	}
+}
+
+// TestCapLimitsLivePreviews is the M3 regression: a new PR beyond the cap is
+// ignored, while refreshing an existing preview keeps working.
+func TestCapLimitsLivePreviews(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	// One live binding of the application's own, plus the cap already full.
+	if _, err := receive(t, svc, githubPRBody("opened", 1, "feat/one", "main", "sha-one")); err != nil {
+		t.Fatalf("Receive(PR 1): %v", err)
+	}
+	repo.mu.Lock()
+	repo.liveCount, repo.liveCountSet = maxLivePreviewsPerApplication, true
+	repo.mu.Unlock()
+
+	delivery, err := receive(t, svc, githubPRBody("opened", 9, "feat/nine", "main", "sha-nine"))
+	if err != nil {
+		t.Fatalf("Receive(PR 9): %v", err)
+	}
+	if delivery.Status != StatusIgnored || delivery.Reason != "preview limit reached" {
+		t.Fatalf("capped delivery = %+v, want ignored at the cap", delivery)
+	}
+	if got := deployer.provisionCount(); got != 1 {
+		t.Errorf("siblings provisioned = %d, want 1 (the capped PR must not provision)", got)
+	}
+	if got := repo.reservationCount(); got != 1 {
+		t.Errorf("reservations = %d, want 1 (the capped reservation is released)", got)
+	}
+
+	// The already-previewed PR refreshes despite the cap.
+	delivery, err = receive(t, svc, githubPRBody("synchronize", 1, "feat/one", "main", "sha-one-next"))
+	if err != nil {
+		t.Fatalf("Receive(PR 1 sync): %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("refresh at the cap = %+v, want queued", delivery)
+	}
+}
+
+// TestForkPullRequestsAreIgnored is the M2 regression: a fork head is never
+// previewed, while a same-repository head is.
+func TestForkPullRequestsAreIgnored(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider string
+		body     string
+	}{
+		{"github fork flag", providers.NameGitHub,
+			githubHeadRepoPRBody("stranger/gotham", true)},
+		{"github foreign head", providers.NameGitHub,
+			githubHeadRepoPRBody("stranger/gotham", false)},
+		{"gitlab foreign project", providers.NameGitLab,
+			gitLabForkMRBody("open", 7, "feat/x", "main", "abc")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newFakeRepositoryFor(tc.provider).withTarget()
+			deployer := &fakeDeployer{}
+			svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+			var req *http.Request
+			if tc.provider == providers.NameGitLab {
+				req = httptest.NewRequest(http.MethodPost, "/v1/webhooks/gitlab", strings.NewReader(tc.body))
+				req.Header.Set(headerGitLabToken, testHookSecret)
+				req.Header.Set(headerGitLabEvent, "Merge Request Hook")
+			} else {
+				req = prRequest("pull_request", tc.body)
+			}
+			req.RemoteAddr = "203.0.113.9:1234"
+			delivery, err := svc.Receive(context.Background(), tc.provider, req)
+			if err != nil {
+				t.Fatalf("Receive: %v", err)
+			}
+			if delivery.Status != StatusIgnored || delivery.Reason != "fork" {
+				t.Fatalf("delivery = %+v, want ignored (fork)", delivery)
+			}
+			if got := deployer.provisionCount(); got != 0 {
+				t.Errorf("siblings provisioned = %d, want 0", got)
+			}
+		})
+	}
+
+	// A same-repository head (case-insensitive) still previews.
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+	delivery, err := receive(t, svc, githubHeadRepoPRBody("Octo/Gotham", false))
+	if err != nil {
+		t.Fatalf("Receive(same repo): %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("same-repo delivery = %+v, want queued", delivery)
+	}
+}
+
 func TestReceivePullRequestIgnoresUnwatchedBaseBranch(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
 	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
 
-	body := githubPRBody("opened", 7, "feat/x", "release", "abc123")
-	delivery, err := svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", body))
+	delivery, err := receive(t, svc, githubPRBody("opened", 7, "feat/x", "release", "abc123"))
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
 	}
@@ -359,8 +750,8 @@ func TestReceivePullRequestIgnoresUnwatchedBaseBranch(t *testing.T) {
 		t.Fatalf("a PR against an unwatched branch must not deploy (provisioned=%d deployed=%d)",
 			deployer.provisionCount(), deployer.deployCount())
 	}
-	if repo.claimCount() != 0 {
-		t.Errorf("claims = %d, want 0", repo.claimCount())
+	if repo.reservationCount() != 0 {
+		t.Errorf("reservations = %d, want 0", repo.reservationCount())
 	}
 }
 
@@ -370,8 +761,7 @@ func TestReceivePullRequestIgnoresUnwatchedRepository(t *testing.T) {
 	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
 
 	body := strings.ReplaceAll(githubPRBody("opened", 7, "feat/x", "main", "abc123"), "octo/gotham", "other/repo")
-	_, err := svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", body))
+	_, err := receive(t, svc, body)
 	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Receive = %v, want ErrUnauthorized for an unwatched repository", err)
 	}
@@ -387,9 +777,7 @@ func TestReceivePullRequestWithoutDomainIsIgnored(t *testing.T) {
 	deployer := &fakeDeployer{}
 	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
 
-	body := githubPRBody("opened", 7, "feat/x", "main", "abc123")
-	delivery, err := svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", body))
+	delivery, err := receive(t, svc, githubPRBody("opened", 7, "feat/x", "main", "abc123"))
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
 	}
@@ -398,6 +786,9 @@ func TestReceivePullRequestWithoutDomainIsIgnored(t *testing.T) {
 	}
 	if deployer.provisionCount() != 0 {
 		t.Errorf("siblings provisioned = %d, want 0", deployer.provisionCount())
+	}
+	if repo.reservationCount() != 0 {
+		t.Errorf("reservations = %d, want none (checked before reserving)", repo.reservationCount())
 	}
 }
 
@@ -408,8 +799,7 @@ func TestReceivePullRequestCloseDeletesSibling(t *testing.T) {
 	svc := newPreviewService(t, repo, deployer, commenter)
 
 	open := githubPRBody("opened", 7, "feat/x", "main", "abc123")
-	if _, err := svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", open)); err != nil {
+	if _, err := receive(t, svc, open); err != nil {
 		t.Fatalf("Receive(open): %v", err)
 	}
 	preview, err := repo.GetPreview(context.Background(), repo.app.ID, 7)
@@ -418,8 +808,7 @@ func TestReceivePullRequestCloseDeletesSibling(t *testing.T) {
 	}
 
 	closeBody := githubPRBody("closed", 7, "feat/x", "main", "def456")
-	delivery, err := svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", closeBody))
+	delivery, err := receive(t, svc, closeBody)
 	if err != nil {
 		t.Fatalf("Receive(close): %v", err)
 	}
@@ -443,19 +832,23 @@ func TestReceivePullRequestCloseDeletesSibling(t *testing.T) {
 	if closed.State != PreviewDeleted || closed.DeletedAt.IsZero() {
 		t.Errorf("preview after close = %+v, want deleted with a timestamp", closed)
 	}
+	if got := repo.reservationCount(); got != 0 {
+		t.Errorf("reservations after close = %d, want 0", got)
+	}
 	if got := commenter.commentCount(); got != 2 {
 		t.Errorf("comments = %d, want 2 (started and removed)", got)
 	}
 
 	// A redelivered close is idempotent: no second teardown.
-	redelivered := githubPRBody("closed", 7, "feat/x", "main", "def456")
-	delivery, err = svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", redelivered))
+	delivery, err = receive(t, svc, closeBody)
 	if err != nil {
 		t.Fatalf("Receive(close redelivery): %v", err)
 	}
 	if delivery.Status != StatusDuplicate {
 		t.Errorf("close redelivery = %+v, want duplicate", delivery)
+	}
+	if got := deployer.deleteCount(); got != 1 {
+		t.Errorf("siblings deleted = %d, want 1 after the redelivery", got)
 	}
 }
 
@@ -466,8 +859,7 @@ func TestReceivePullRequestCommentFailureDoesNotFailDelivery(t *testing.T) {
 	svc := newPreviewService(t, repo, deployer, commenter)
 
 	body := githubPRBody("opened", 7, "feat/x", "main", "abc123")
-	delivery, err := svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", body))
+	delivery, err := receive(t, svc, body)
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
 	}
@@ -480,8 +872,7 @@ func TestReceivePullRequestCommentFailureDoesNotFailDelivery(t *testing.T) {
 
 	// The close path is equally resilient.
 	closeBody := githubPRBody("closed", 7, "feat/x", "main", "def456")
-	delivery, err = svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", closeBody))
+	delivery, err = receive(t, svc, closeBody)
 	if err != nil {
 		t.Fatalf("Receive(close): %v", err)
 	}
@@ -499,8 +890,7 @@ func TestReceivePullRequestRecreatesMissingSibling(t *testing.T) {
 	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
 
 	body := githubPRBody("opened", 7, "feat/x", "main", "abc123")
-	if _, err := svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", body)); err != nil {
+	if _, err := receive(t, svc, body); err != nil {
 		t.Fatalf("Receive: %v", err)
 	}
 	preview, err := repo.GetPreview(context.Background(), repo.app.ID, 7)
@@ -514,8 +904,7 @@ func TestReceivePullRequestRecreatesMissingSibling(t *testing.T) {
 	deployer.mu.Unlock()
 
 	sync := githubPRBody("synchronize", 7, "feat/x", "main", "def456")
-	if _, err := svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", sync)); err != nil {
+	if _, err := receive(t, svc, sync); err != nil {
 		t.Fatalf("Receive(sync): %v", err)
 	}
 	if got := deployer.provisionCount(); got != 2 {
@@ -541,8 +930,7 @@ func TestPreviewsDisabledIgnoresPullRequests(t *testing.T) {
 	})
 
 	body := githubPRBody("opened", 7, "feat/x", "main", "abc123")
-	delivery, err := svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", body))
+	delivery, err := receive(t, svc, body)
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
 	}
@@ -553,14 +941,13 @@ func TestPreviewsDisabledIgnoresPullRequests(t *testing.T) {
 		t.Fatalf("previews disabled must not provision, deploy or comment (provisioned=%d deployed=%d comments=%d)",
 			deployer.provisionCount(), deployer.deployCount(), commenter.commentCount())
 	}
-	if repo.claimCount() != 0 {
-		t.Errorf("claims = %d, want 0", repo.claimCount())
+	if repo.reservationCount() != 0 {
+		t.Errorf("reservations = %d, want 0", repo.reservationCount())
 	}
 
 	// Push deliveries are untouched by the preview flag.
 	push := pushBody("push-sha")
-	delivery, err = svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("push", push))
+	delivery, err = svc.Receive(context.Background(), providers.NameGitHub, prRequest("push", push))
 	if err != nil {
 		t.Fatalf("Receive(push): %v", err)
 	}
@@ -605,17 +992,19 @@ func TestCreateWebhookEventsFollowPreviewsFlag(t *testing.T) {
 	}
 }
 
-func TestSweepPreviewsTearsDownStaleBindings(t *testing.T) {
+// TestSweepIsOrphanOnly is the F6 regression: age alone never tears a live
+// preview down; a binding whose sibling is gone is marked deleted, and a
+// sibling application without a binding is deleted through the provisioner.
+func TestSweepIsOrphanOnly(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
-	now := time.Now().UTC()
 	svc := newTestServiceWith(Config{
 		Repository: repo, Installer: &fakeInstaller{}, Deployer: deployer,
 		Provisioner: deployer, Logger: discardLogger(),
-		Now: func() time.Time { return now }, PreviewTTL: time.Hour,
 	})
 
+	// A live, bound preview that has been idle for a year: untouched.
 	if _, err := repo.UpsertPreview(context.Background(), Preview{
 		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
 		Repo: repo.app.Repo, PRNumber: 7, Branch: "feat/x", Host: "pr-7-gotham.apps.example.com",
@@ -623,35 +1012,62 @@ func TestSweepPreviewsTearsDownStaleBindings(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertPreview: %v", err)
 	}
-	// Fresh: the sweep leaves it alone.
+	repo.mu.Lock()
+	stale := repo.previews[previewKey(repo.app.ID, 7)]
+	stale.UpdatedAt = time.Now().UTC().Add(-365 * 24 * time.Hour)
+	repo.previews[previewKey(repo.app.ID, 7)] = stale
+	repo.mu.Unlock()
+	// One orphaned binding (no sibling link).
+	if _, err := repo.UpsertPreview(context.Background(), Preview{
+		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
+		Repo: repo.app.Repo, PRNumber: 8, Host: "pr-8-gotham.apps.example.com", State: PreviewDeploying,
+	}); err != nil {
+		t.Fatalf("UpsertPreview(orphan): %v", err)
+	}
+
 	removed, err := svc.SweepPreviews(context.Background())
 	if err != nil {
 		t.Fatalf("SweepPreviews: %v", err)
 	}
-	if removed != 0 || deployer.deleteCount() != 0 {
-		t.Fatalf("fresh sweep removed %d previews, want 0", removed)
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1 (the orphaned binding)", removed)
+	}
+	if deployer.deleteCount() != 0 {
+		t.Errorf("siblings deleted = %d, want 0 (nothing live was bound)", deployer.deleteCount())
+	}
+	current, _ := repo.GetPreview(context.Background(), repo.app.ID, 7)
+	if current.State != PreviewActive {
+		t.Errorf("bound preview state = %q, want active (age must not matter)", current.State)
+	}
+	orphaned, _ := repo.GetPreview(context.Background(), repo.app.ID, 8)
+	if orphaned.State != PreviewDeleted {
+		t.Errorf("orphaned binding = %+v, want deleted", orphaned)
 	}
 
-	// Idle past the TTL: the sweep tears it down.
+	// A sibling application with no binding is deleted through the provisioner.
+	orphanApp := uuid.New()
 	repo.mu.Lock()
-	stale := repo.previews[previewKey(repo.app.ID, 7)]
-	stale.UpdatedAt = now.Add(-2 * time.Hour)
-	repo.previews[previewKey(repo.app.ID, 7)] = stale
+	repo.orphanApps = []uuid.UUID{orphanApp}
 	repo.mu.Unlock()
-
 	removed, err = svc.SweepPreviews(context.Background())
 	if err != nil {
-		t.Fatalf("SweepPreviews(stale): %v", err)
+		t.Fatalf("SweepPreviews(orphan app): %v", err)
 	}
 	if removed != 1 || deployer.deleteCount() != 1 {
-		t.Fatalf("stale sweep removed %d previews (deletes=%d), want 1", removed, deployer.deleteCount())
+		t.Fatalf("removed = %d (deletes=%d), want the orphan application deleted", removed, deployer.deleteCount())
 	}
-	if got, _ := repo.GetPreview(context.Background(), repo.app.ID, 7); got.State != PreviewDeleted {
-		t.Errorf("preview state = %q, want deleted", got.State)
+	deployer.mu.Lock()
+	deleted := deployer.deleted[0]
+	deployer.mu.Unlock()
+	if deleted != orphanApp {
+		t.Errorf("deleted %s, want the orphan application %s", deleted, orphanApp)
 	}
 }
 
-func TestDeletePreviewsTearsDownBaseApplicationSiblings(t *testing.T) {
+// TestCleanupApplicationTearsDownBaseSiblings is the F5/H1 path: deleting a
+// base application tears its previews down first, and a failure aborts the
+// delete instead of erasing the bindings.
+func TestCleanupApplicationTearsDownBaseSiblings(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -666,7 +1082,9 @@ func TestDeletePreviewsTearsDownBaseApplicationSiblings(t *testing.T) {
 			t.Fatalf("UpsertPreview: %v", err)
 		}
 	}
-	svc.DeletePreviews(context.Background(), repo.app.ID)
+	if err := svc.CleanupApplication(context.Background(), repo.app.ID); err != nil {
+		t.Fatalf("CleanupApplication: %v", err)
+	}
 	if got := deployer.deleteCount(); got != 2 {
 		t.Fatalf("siblings deleted = %d, want 2", got)
 	}
@@ -678,6 +1096,71 @@ func TestDeletePreviewsTearsDownBaseApplicationSiblings(t *testing.T) {
 		if preview.State != PreviewDeleted {
 			t.Errorf("preview %d state = %q, want deleted", preview.PRNumber, preview.State)
 		}
+	}
+
+	// A teardown failure is reported so the caller can abort the base delete.
+	repo2 := newFakeRepository().withTarget()
+	deployer2 := &fakeDeployer{deleteErr: errors.New("database down")}
+	svc2 := newPreviewService(t, repo2, deployer2, &fakeCommenter{})
+	if _, err := repo2.UpsertPreview(context.Background(), Preview{
+		ApplicationID: repo2.app.ID, TeamID: repo2.app.TeamID, Provider: repo2.app.Provider,
+		Repo: repo2.app.Repo, PRNumber: 7, Host: "pr-7.apps.example.com",
+		PreviewApplicationID: uuid.New(), State: PreviewActive,
+	}); err != nil {
+		t.Fatalf("UpsertPreview: %v", err)
+	}
+	if err := svc2.CleanupApplication(context.Background(), repo2.app.ID); err == nil {
+		t.Fatal("CleanupApplication with a failing teardown: no error, want one")
+	}
+	preview, _ := repo2.GetPreview(context.Background(), repo2.app.ID, 7)
+	if preview.State != PreviewActive {
+		t.Errorf("preview after a failed cleanup = %+v, want the binding kept", preview)
+	}
+	// Retry after the failure succeeds and marks the binding deleted.
+	deployer2.mu.Lock()
+	deployer2.deleteErr = nil
+	deployer2.mu.Unlock()
+	if err := svc2.CleanupApplication(context.Background(), repo2.app.ID); err != nil {
+		t.Fatalf("CleanupApplication(retry): %v", err)
+	}
+	preview, _ = repo2.GetPreview(context.Background(), repo2.app.ID, 7)
+	if preview.State != PreviewDeleted {
+		t.Errorf("preview after the retry = %q, want deleted", preview.State)
+	}
+}
+
+// TestCleanupApplicationMarksSiblingBindingDeleted covers H1's audit path: a
+// preview application deleted directly by its owner keeps its binding, but the
+// binding is marked deleted instead of pointing at a gone sibling.
+func TestCleanupApplicationMarksSiblingBindingDeleted(t *testing.T) {
+	t.Setenv(FeatureEnv, "true")
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	sibling := uuid.New()
+	if _, err := repo.UpsertPreview(context.Background(), Preview{
+		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
+		Repo: repo.app.Repo, PRNumber: 7, Host: "pr-7.apps.example.com",
+		PreviewApplicationID: sibling, State: PreviewActive,
+	}); err != nil {
+		t.Fatalf("UpsertPreview: %v", err)
+	}
+	if err := svc.CleanupApplication(context.Background(), sibling); err != nil {
+		t.Fatalf("CleanupApplication(sibling): %v", err)
+	}
+	preview, err := repo.GetPreview(context.Background(), repo.app.ID, 7)
+	if err != nil {
+		t.Fatalf("GetPreview: %v", err)
+	}
+	if preview.State != PreviewDeleted {
+		t.Errorf("binding state = %q, want deleted", preview.State)
+	}
+	if preview.PreviewApplicationID != sibling {
+		t.Errorf("binding sibling link = %s, want the (row-level) link kept for the FK", preview.PreviewApplicationID)
+	}
+	if got := deployer.deleteCount(); got != 0 {
+		t.Errorf("siblings deleted = %d, want 0 (the sibling is being deleted by its owner)", got)
 	}
 }
 
@@ -748,6 +1231,26 @@ func TestPreviewRoutesListAndFlag(t *testing.T) {
 	}
 }
 
+// TestRetryableDeliveryAnswers503 pins the route mapping: an unqueued preview
+// revision that hit a running deployment answers 503 (retryable), not a 2xx
+// that would silently drop it.
+func TestRetryableDeliveryAnswers503(t *testing.T) {
+	t.Setenv(FeatureEnv, "true")
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{err: deploy.ErrConflict}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+	server := newRouteServer(svc, repo.app.UserID)
+
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, prRequest("pull_request", githubPRBody("opened", 7, "feat/x", "main", "abc")))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("busy delivery = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := repo.reservationCount(); got != 0 {
+		t.Errorf("reservations = %d, want 0 (released for the retry)", got)
+	}
+}
+
 func TestPreviewsDisabledSkipsSweep(t *testing.T) {
 	t.Setenv(FeatureEnv, "false")
 	repo := newFakeRepository().withTarget()
@@ -765,26 +1268,31 @@ func TestPreviewsDisabledSkipsSweep(t *testing.T) {
 	}
 }
 
-func TestDeploySystemErrorReleasesTheClaim(t *testing.T) {
+// TestRetryableFailureReleasesTheReservation pins the generic path: any
+// delivery error (not just the busy case) releases the reservation so a retry
+// can reserve again, while the binding it may have persisted survives.
+func TestRetryableFailureReleasesTheReservation(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{err: errors.New("agent unavailable")}
 	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
 
 	body := githubPRBody("opened", 7, "feat/x", "main", "abc123")
-	if _, err := svc.Receive(context.Background(), providers.NameGitHub,
-		prRequest("pull_request", body)); err == nil {
+	if _, err := receive(t, svc, body); err == nil {
 		t.Fatal("Receive: no error, want the queue failure to surface")
 	}
-	if repo.claimCount() != 0 {
-		t.Errorf("claims = %d, want the failed delivery released", repo.claimCount())
+	if got := repo.reservationCount(); got != 0 {
+		t.Errorf("reservations = %d, want the failed delivery released", got)
 	}
 	preview, err := repo.GetPreview(context.Background(), repo.app.ID, 7)
 	if err != nil {
 		t.Fatalf("GetPreview: %v", err)
 	}
-	if preview.State != PreviewFailed {
-		t.Errorf("preview state = %q, want failed", preview.State)
+	if preview.State != PreviewDeploying {
+		t.Errorf("preview state = %q, want deploying (the sibling is reserved)", preview.State)
+	}
+	if preview.HeadSHA != "" {
+		t.Errorf("head sha = %q, want empty (never queued)", preview.HeadSHA)
 	}
 }
 

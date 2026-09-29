@@ -58,14 +58,27 @@ func TestCreatePreviewApplicationClonesConfig(t *testing.T) {
 	if created.HostPort != 0 {
 		t.Errorf("HostPort = %d, want 0 so the preview never fights the base port binding", created.HostPort)
 	}
+	if !created.IsPreview {
+		t.Error("the clone is not marked is_preview")
+	}
+	if base.IsPreview {
+		t.Error("the base application was marked is_preview")
+	}
 
+	// Plain environment variables travel with the preview; sealed secrets and
+	// storages do not (M2: a PR branch must not read production secrets or
+	// write production volumes).
 	envVars, _ := repo.ListEnvVars(context.Background(), created.ID)
 	secrets, _ := repo.ListSecrets(context.Background(), created.ID)
 	storages, _ := repo.ListStorages(context.Background(), created.ID)
-	if len(envVars) != 1 || envVars[0].Key != "FOO" ||
-		len(secrets) != 1 || secrets[0].Ciphertext != "sealed" ||
-		len(storages) != 1 || storages[0].HostPath != "/srv/data" {
-		t.Errorf("cloned configuration = env=%v secrets=%v storages=%v", envVars, secrets, storages)
+	if len(envVars) != 1 || envVars[0].Key != "FOO" {
+		t.Errorf("cloned env vars = %v, want the base's plain variables", envVars)
+	}
+	if len(secrets) != 0 {
+		t.Errorf("cloned secrets = %v, want none", secrets)
+	}
+	if len(storages) != 0 {
+		t.Errorf("cloned storages = %v, want none", storages)
 	}
 
 	key, err := repo.GetDeployKey(context.Background(), created.ID)
@@ -141,10 +154,14 @@ func TestCreatePreviewApplicationRejectsUnusableInput(t *testing.T) {
 	}
 }
 
-func TestDeleteSystemApplicationIsIdempotentAndKeepsTheBaseKey(t *testing.T) {
+// TestDeleteSystemApplicationRemovesLocalKeyOnly is the F7 regression: the
+// system teardown deletes the sibling's local deploy-key rows (the mapping and
+// the sealed private key) but never touches the shared remote key.
+func TestDeleteSystemApplicationRemovesLocalKeyOnly(t *testing.T) {
 	base := testApplication(uuid.New())
 	repo := seedBaseForPreview(t, base)
-	svc := newTestService(t, repo)
+	registrar := &fakeRegistrar{}
+	svc := newKeyService(t, repo, registrar)
 
 	preview, err := svc.CreatePreviewApplication(context.Background(), base.ID, PreviewApplicationInput{
 		Name: "demo app-pr-7", Branch: "feat/x", BaseDomain: "pr-7.app.example.com",
@@ -152,14 +169,27 @@ func TestDeleteSystemApplicationIsIdempotentAndKeepsTheBaseKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePreviewApplication: %v", err)
 	}
+	if !repo.hasDeployKey(preview.ID) {
+		t.Fatal("the preview has no local deploy key to clean up")
+	}
+
 	if err := svc.DeleteSystemApplication(context.Background(), preview.ID); err != nil {
 		t.Fatalf("DeleteSystemApplication: %v", err)
 	}
 	if _, err := repo.GetApplication(context.Background(), preview.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("preview still exists: %v", err)
 	}
+	if repo.hasDeployKey(preview.ID) {
+		t.Error("the preview's local deploy key survived the teardown")
+	}
 	if !repo.hasDeployKey(base.ID) {
-		t.Error("the system delete detached the base deploy key")
+		t.Error("the base deploy key was removed by the preview teardown")
+	}
+	registrar.mu.Lock()
+	removed := len(registrar.removed)
+	registrar.mu.Unlock()
+	if removed != 0 {
+		t.Errorf("remote removals = %d, want 0 (the key is shared with the base)", removed)
 	}
 	// Deleting again (a redelivered close, a sweep racing the close) is a
 	// success.
@@ -173,25 +203,82 @@ func TestDeleteSystemApplicationIsIdempotentAndKeepsTheBaseKey(t *testing.T) {
 	}
 }
 
+// TestDeleteApplicationOfAPreviewKeepsTheRemoteKey is the H1 regression: the
+// user-facing delete of a preview sibling removes the local rows but leaves
+// the base application's remote deploy key registered.
+func TestDeleteApplicationOfAPreviewKeepsTheRemoteKey(t *testing.T) {
+	base := testApplication(uuid.New())
+	repo := seedBaseForPreview(t, base)
+	registrar := &fakeRegistrar{}
+	svc := newKeyService(t, repo, registrar)
+
+	preview, err := svc.CreatePreviewApplication(context.Background(), base.ID, PreviewApplicationInput{
+		Name: "demo app-pr-7", Branch: "feat/x", BaseDomain: "pr-7.app.example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreatePreviewApplication: %v", err)
+	}
+	if err := svc.DeleteApplication(context.Background(), preview.UserID, preview.ID); err != nil {
+		t.Fatalf("DeleteApplication(preview): %v", err)
+	}
+	registrar.mu.Lock()
+	removed := len(registrar.removed)
+	registrar.mu.Unlock()
+	if removed != 0 {
+		t.Errorf("remote removals = %d, want 0 (the preview shares the base's key)", removed)
+	}
+	if repo.hasDeployKey(preview.ID) {
+		t.Error("the preview's local deploy key survived the user delete")
+	}
+	if !repo.hasDeployKey(base.ID) {
+		t.Error("the base deploy key was removed")
+	}
+	if _, err := repo.GetApplication(context.Background(), base.ID); err != nil {
+		t.Fatalf("base application after the preview delete: %v", err)
+	}
+}
+
+// TestDeleteApplicationTearsDownPreviewsFirst is the F5 regression: the base
+// delete runs the preview cleanup first and aborts when it fails, so the
+// bindings are never cascaded away while a sibling survives.
 func TestDeleteApplicationTearsDownPreviewsFirst(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
-	var cleaned []uuid.UUID
+	cleanupErr := error(nil)
+	cleaned := 0
 	svc := NewService(Config{
 		Repository: repo,
 		Secret:     testSecretKey,
 		Logger:     discardLogger(),
-		PreviewCleanup: func(_ context.Context, appID uuid.UUID) {
-			cleaned = append(cleaned, appID)
+		PreviewCleanup: func(_ context.Context, appID uuid.UUID) error {
+			if appID != app.ID {
+				t.Errorf("cleanup app = %s, want %s", appID, app.ID)
+			}
+			cleaned++
+			return cleanupErr
 		},
 	})
 	t.Cleanup(func() { _ = svc.Close() })
 
-	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
-		t.Fatalf("DeleteApplication: %v", err)
+	// A failing cleanup aborts the delete and keeps the base application.
+	cleanupErr = errors.New("preview teardown failed")
+	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err == nil {
+		t.Fatal("DeleteApplication with a failing preview cleanup: no error, want one")
 	}
-	if len(cleaned) != 1 || cleaned[0] != app.ID {
-		t.Fatalf("preview cleanup = %v, want one call for %s", cleaned, app.ID)
+	if _, err := repo.GetApplication(context.Background(), app.ID); err != nil {
+		t.Fatalf("base application was deleted despite the failed cleanup: %v", err)
+	}
+	if cleaned != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", cleaned)
+	}
+
+	// Retrying with a working cleanup deletes the base.
+	cleanupErr = nil
+	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
+		t.Fatalf("DeleteApplication(retry): %v", err)
+	}
+	if cleaned != 2 {
+		t.Fatalf("cleanup calls = %d, want 2", cleaned)
 	}
 	if _, err := repo.GetApplication(context.Background(), app.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("application still exists: %v", err)

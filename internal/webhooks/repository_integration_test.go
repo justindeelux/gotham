@@ -257,19 +257,74 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Errorf("missing preview error = %v, want ErrNotFound", err)
 	}
 
-	// One preview of the application, and the stale sweep sees it while it is
-	// fresh only.
+	// One preview of the application; a bound preview is never an orphan.
 	list, err := repo.ListPreviews(ctx, baseID)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("ListPreviews = %d / %v, want one preview", len(list), err)
 	}
-	stale, err := repo.ListStalePreviews(ctx, time.Now().UTC().Add(time.Hour))
-	if err != nil || len(stale) != 1 {
-		t.Fatalf("ListStalePreviews(future) = %d / %v, want one preview", len(stale), err)
+	if got, err := repo.CountLivePreviews(ctx, baseID); err != nil || got != 1 {
+		t.Fatalf("CountLivePreviews = %d / %v, want 1", got, err)
 	}
-	stale, err = repo.ListStalePreviews(ctx, time.Now().UTC().Add(-time.Hour))
-	if err != nil || len(stale) != 0 {
-		t.Fatalf("ListStalePreviews(past) = %d / %v, want none", len(stale), err)
+	if orphans, err := repo.ListOrphanedPreviews(ctx); err != nil || len(orphans) != 0 {
+		t.Fatalf("ListOrphanedPreviews = %d / %v, want none", len(orphans), err)
+	}
+	if apps, err := repo.ListOrphanedPreviewApplications(ctx, time.Now().UTC().Add(time.Hour)); err != nil || len(apps) != 0 {
+		t.Fatalf("ListOrphanedPreviewApplications = %d / %v, want none", len(apps), err)
+	}
+
+	// The reservation ledger: a replayed start is a duplicate, a new head is
+	// allowed, a close reserves once, and clearing frees the reopen path.
+	start := DeliveryReservation{
+		ApplicationID: baseID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "abc123", DeliveryID: "d1",
+	}
+	reserved, err := repo.ReservePreviewDelivery(ctx, start)
+	if err != nil {
+		t.Fatalf("ReservePreviewDelivery: %v", err)
+	}
+	if reserved.ID == uuid.Nil || reserved.DeliveryID != "d1" {
+		t.Errorf("reservation = %+v", reserved)
+	}
+	if _, err := repo.ReservePreviewDelivery(ctx, start); !errors.Is(err, ErrDuplicate) {
+		t.Errorf("replayed reservation error = %v, want ErrDuplicate", err)
+	}
+	// A different PR at the same head is independent (F2).
+	if _, err := repo.ReservePreviewDelivery(ctx, DeliveryReservation{
+		ApplicationID: baseID, PRNumber: 8, Kind: ReservationStart, HeadSHA: "abc123",
+	}); err != nil {
+		t.Errorf("second PR at the same head: %v, want a reservation", err)
+	}
+	// A new head revision of the same PR is independent.
+	if _, err := repo.ReservePreviewDelivery(ctx, DeliveryReservation{
+		ApplicationID: baseID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "def456",
+	}); err != nil {
+		t.Errorf("new head reservation: %v, want one", err)
+	}
+	closeReservation, err := repo.ReservePreviewDelivery(ctx, DeliveryReservation{
+		ApplicationID: baseID, PRNumber: 7, Kind: ReservationClose,
+	})
+	if err != nil {
+		t.Fatalf("close reservation: %v", err)
+	}
+	if _, err := repo.ReservePreviewDelivery(ctx, DeliveryReservation{
+		ApplicationID: baseID, PRNumber: 7, Kind: ReservationClose,
+	}); !errors.Is(err, ErrDuplicate) {
+		t.Errorf("second close reservation error = %v, want ErrDuplicate", err)
+	}
+	if err := repo.ReleasePreviewDelivery(ctx, reserved.ID); err != nil {
+		t.Fatalf("ReleasePreviewDelivery: %v", err)
+	}
+	if err := repo.ClearPreviewDeliveries(ctx, baseID, 7); err != nil {
+		t.Fatalf("ClearPreviewDeliveries: %v", err)
+	}
+	if reserved.ID == closeReservation.ID {
+		t.Error("distinct reservations share one id")
+	}
+	// After the clear the same head can reserve again (reopen, F2).
+	if _, err := repo.ReservePreviewDelivery(ctx, start); err != nil {
+		t.Errorf("reservation after clear: %v, want a fresh reservation", err)
+	}
+	if err := repo.ClearPreviewDeliveries(ctx, baseID, 7); err != nil {
+		t.Fatalf("ClearPreviewDeliveries(second): %v", err)
 	}
 
 	// Closing marks the row deleted; a re-opened PR refreshes the same row
@@ -305,8 +360,68 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	if survivor.PreviewApplicationID != uuid.Nil {
 		t.Errorf("preview still links the deleted sibling: %+v", survivor)
 	}
+	// The binding is now orphaned: the sweep's binding pass finds it, and its
+	// application pass ignores it (it is a binding, not an application).
+	orphans, err := repo.ListOrphanedPreviews(ctx)
+	if err != nil || len(orphans) != 1 || orphans[0].ID != survivor.ID {
+		t.Fatalf("ListOrphanedPreviews = %+v / %v, want the orphaned binding", orphans, err)
+	}
 	if _, err := repo.MarkPreviewDeleted(ctx, survivor.ID); err != nil {
 		t.Fatalf("MarkPreviewDeleted: %v", err)
+	}
+	if orphans, err := repo.ListOrphanedPreviews(ctx); err != nil || len(orphans) != 0 {
+		t.Fatalf("ListOrphanedPreviews after mark = %d / %v, want none", len(orphans), err)
+	}
+
+	// An is_preview application without a live binding is the sweep's second
+	// work list; marking its binding deleted puts it back in scope even when
+	// the application row itself survived.
+	previewApp, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		UserID: pgUUID(userID), Name: "wh-app-pr-11", Provider: "github",
+		Repo: base.Repo, CloneUrl: base.CloneUrl, Branch: "feat/w", BuildPack: "auto",
+		BaseDomain: "pr-11-wh-app.example.com", IsPreview: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication(preview sibling): %v", err)
+	}
+	previewAppID := uuid.UUID(previewApp.ID.Bytes)
+	listed := func() bool {
+		apps, err := repo.ListOrphanedPreviewApplications(ctx, time.Now().UTC().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("ListOrphanedPreviewApplications: %v", err)
+		}
+		for _, id := range apps {
+			if id == previewAppID {
+				return true
+			}
+		}
+		return false
+	}
+	if !listed() {
+		t.Fatal("the unbound is_preview application is not in the sweep's work list")
+	}
+	preview11, err := repo.UpsertPreview(ctx, Preview{
+		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
+		PRNumber: 11, Host: "pr-11-wh-app.example.com", State: PreviewActive,
+		PreviewApplicationID: previewAppID,
+	})
+	if err != nil {
+		t.Fatalf("UpsertPreview(PR 11): %v", err)
+	}
+	if listed() {
+		t.Fatal("a live-bound preview application is in the sweep's work list")
+	}
+	if err := repo.MarkPreviewsDeletedForSibling(ctx, previewAppID); err != nil {
+		t.Fatalf("MarkPreviewsDeletedForSibling: %v", err)
+	}
+	if got, err := repo.GetPreview(ctx, baseID, 11); err != nil || got.State != PreviewDeleted {
+		t.Fatalf("binding after MarkPreviewsDeletedForSibling = %+v / %v", got, err)
+	}
+	if !listed() {
+		t.Fatal("a preview application whose binding was marked deleted is not in the sweep's work list")
+	}
+	if preview11.ID == uuid.Nil {
+		t.Error("preview 11 lost its id")
 	}
 
 	// Deleting the base application cascades its previews too.

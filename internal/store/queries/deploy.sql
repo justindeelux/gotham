@@ -1,9 +1,9 @@
 -- name: CreateApplication :one
 INSERT INTO applications (
     user_id, server_id, name, provider, repo, clone_url,
-    branch, build_pack, base_domain, port, host_port, team_id
+    branch, build_pack, base_domain, port, host_port, team_id, is_preview
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING *;
 
 -- name: GetApplication :one

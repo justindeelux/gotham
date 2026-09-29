@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
@@ -192,5 +193,105 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 	}
 	if remaining != 0 {
 		t.Errorf("private_keys rows after delete = %d, want 0", remaining)
+	}
+}
+
+// TestSystemTeardownRemovesLocalKey is the F7 regression: deleting a preview
+// sibling through the system path removes its local deploy-key rows — the
+// mapping and the sealed private key it points at — while the base
+// application's key stays untouched (the remote key is shared).
+func TestSystemTeardownRemovesLocalKey(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	const secret = "integration-secret"
+	st := store.New(pool)
+	repo := newStoreRepository(st, secret)
+
+	email := fmt.Sprintf("be-8.1-key-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	userID := uuid.UUID(user.ID.Bytes)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete user: %v", err)
+		}
+	})
+
+	base, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		UserID: pgUUID(userID), Name: "preview-base", Provider: "github",
+		Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git",
+		Branch: "main", BuildPack: "dockerfile", BaseDomain: "app.example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication(base): %v", err)
+	}
+	baseID := uuid.UUID(base.ID.Bytes)
+	preview, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		UserID: pgUUID(userID), Name: "preview-base-pr-7", Provider: "github",
+		Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git",
+		Branch: "feat/x", BuildPack: "dockerfile", BaseDomain: "pr-7-app.example.com",
+		IsPreview: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication(preview): %v", err)
+	}
+	previewID := uuid.UUID(preview.ID.Bytes)
+	if !preview.IsPreview {
+		t.Fatal("the preview application is not marked is_preview")
+	}
+
+	privatePEM, publicKey, fingerprint, err := generateDeployKeyPair("gotham:deploy:integration")
+	if err != nil {
+		t.Fatalf("generateDeployKeyPair: %v", err)
+	}
+	for _, appID := range []uuid.UUID{baseID, previewID} {
+		if _, err := repo.CreateDeployKey(ctx, DeployKey{
+			ApplicationID: appID, Provider: "github", Repo: "acme/demo",
+			ProviderKeyID: "77", Fingerprint: fingerprint, PublicKey: publicKey,
+		}, privatePEM); err != nil {
+			t.Fatalf("CreateDeployKey(%s): %v", appID, err)
+		}
+	}
+
+	svc := NewService(Config{Repository: repo, Secret: secret, Logger: discardLogger()})
+	t.Cleanup(func() { _ = svc.Close() })
+	if err := svc.DeleteSystemApplication(ctx, previewID); err != nil {
+		t.Fatalf("DeleteSystemApplication: %v", err)
+	}
+	if _, err := st.GetApplication(ctx, pgUUID(previewID)); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("preview application still exists: %v", err)
+	}
+
+	// The preview's local rows are gone...
+	var previewKeys int
+	if err := pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM private_keys WHERE name = $1", deployKeyRowName(previewID),
+	).Scan(&previewKeys); err != nil {
+		t.Fatalf("count preview private keys: %v", err)
+	}
+	if previewKeys != 0 {
+		t.Errorf("preview private_keys rows = %d, want 0", previewKeys)
+	}
+	// ...and the base's are untouched.
+	if _, err := repo.GetDeployKey(ctx, baseID); err != nil {
+		t.Errorf("base deploy key after the preview teardown: %v", err)
+	}
+	if pem, err := repo.DeployKeyPrivatePEM(ctx, baseID); err != nil || pem != privatePEM {
+		t.Errorf("base private key after the preview teardown = %q, %v", pem, err)
 	}
 }

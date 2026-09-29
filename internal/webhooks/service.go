@@ -102,11 +102,9 @@ type Config struct {
 	Burst int
 	// Now overrides the clock (tests). Defaults to time.Now.
 	Now func() time.Time
-	// PreviewTTL is how long a preview may go without activity before the
-	// orphan sweep tears it down. Zero selects defaultPreviewTTL.
-	PreviewTTL time.Duration
 	// SweepInterval is the orphan sweep period. Zero selects
-	// defaultPreviewSweepInterval.
+	// defaultPreviewSweepInterval. The sweep is orphan-only: it never deletes
+	// a preview that is still bound to a live sibling application.
 	SweepInterval time.Duration
 }
 
@@ -122,7 +120,6 @@ type Service struct {
 	logger      *slog.Logger
 	limiter     *deliveryLimiter
 	now         func() time.Time
-	previewTTL  time.Duration
 	sweepEvery  time.Duration
 
 	// Sweep lifecycle (StartPreviews/Close).
@@ -146,10 +143,6 @@ func NewService(cfg Config) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	ttl := cfg.PreviewTTL
-	if ttl <= 0 {
-		ttl = defaultPreviewTTL
-	}
 	interval := cfg.SweepInterval
 	if interval <= 0 {
 		interval = defaultPreviewSweepInterval
@@ -163,7 +156,6 @@ func NewService(cfg Config) *Service {
 		logger:      logger,
 		limiter:     newDeliveryLimiter(cfg.Limit, cfg.Burst),
 		now:         now,
-		previewTTL:  ttl,
 		sweepEvery:  interval,
 	}
 }

@@ -23,26 +23,33 @@
 
 ### BE-8.1 delivered design
 
-**Schema (migration `00022_preview_deploys.sql`).** `preview_deploys(id,
-application_id → applications ON DELETE CASCADE, team_id, provider, repo,
-pr_number, branch, head_sha, preview_application_id → applications ON DELETE
-SET NULL, host, state CHECK IN ('active','deploying','failed','deleted'),
-created_at, updated_at, deleted_at)`. The unique `(application_id, pr_number)`
-pair makes a redelivered PR event refresh its own row instead of racing a
-second sibling. `preview_application_id` is SET NULL, not CASCADE: the normal
-teardown deletes the sibling application, and a cascade would erase the audit
-row (`state='deleted'`, `deleted_at`) the design asks to keep.
+**Schema (migrations `00022_preview_deploys.sql` +
+`00023_preview_hardening.sql`).** `preview_deploys(id, application_id →
+applications ON DELETE CASCADE, team_id, provider, repo, pr_number, branch,
+head_sha, preview_application_id → applications ON DELETE SET NULL, host,
+state CHECK IN ('active','deploying','failed','deleted'), created_at,
+updated_at, deleted_at)`. The unique `(application_id, pr_number)` pair makes a
+redelivered PR event refresh its own row instead of racing a second sibling.
+`preview_application_id` is SET NULL, not CASCADE: the normal teardown deletes
+the sibling application, and a cascade would erase the audit row
+(`state='deleted'`, `deleted_at`) the design asks to keep. `00023` adds
+`applications.is_preview` (the marker the teardown and sweep key on) and
+`preview_deliveries`, the preview-specific delivery ledger (see below).
 
 **A preview is a sibling application.** `deploy.CreatePreviewApplication`
 (system path, no caller) clones the base application's server, provider/repo/
-clone URL, build pack, port, env vars, sealed secrets, storages and team, with
-`branch = PR head branch`, `name = "<base>-pr-<n>"` and `base_domain =
+clone URL, build pack, port, plain env vars and team, with `branch = PR head
+branch`, `name = "<base>-pr-<n>"` and `base_domain =
 "pr-<n>-<slug(base)>.<base_domain>"` (lowercase, `[a-z0-9-]` label, ≤ 63
 chars, base name slugified). The base host port is never copied (the agent
 assigns one), and the base deploy key is re-registered on the sibling so a
-private repository stays cloneable. The sibling is a normal applications row,
-so deploying, routing and deleting reuse the Phase 4 orchestrator and the
-Phase 6 proxy sync unchanged — the only difference is the trigger.
+private repository stays cloneable. Sealed secrets and storages are
+deliberately **not** copied: a preview builds a PR branch and is served
+publicly, so it must not read the base application's production secrets or
+write its volumes. The sibling is a normal applications row flagged
+`is_preview`, so deploying, routing and deleting reuse the Phase 4
+orchestrator and the Phase 6 proxy sync unchanged — the only difference is the
+trigger.
 
 **Webhook handling.** `POST /v1/webhooks/{provider}` now also accepts
 `pull_request` (GitHub/Gitea) and `Merge Request Hook` (GitLab) deliveries:
@@ -50,16 +57,33 @@ Phase 6 proxy sync unchanged — the only difference is the trigger.
 refresh the preview and queue a deployment; `closed` (GitLab
 `close`/`merge`) delete the sibling application and mark the binding deleted.
 A PR whose base branch is not the application's watched branch, a repo no
-application watches, an action that is not one of the above, and an
-application without a base domain are acknowledged as ignored. The delivery is
-claimed in `webhook_events` like a push; a start delivery dedupes by head SHA,
-a close delivery deliberately does **not** (its SHA is the same as the
-synchronize that deployed the preview) — close redeliveries are idempotent
-through the binding's state. Hooks are installed with
-`Events: ["push","pull_request"]` (GitLab: `merge_requests_events`). Hooks
-installed before this release keep push-only events: they must be deleted and
-re-installed — the documented re-install path, chosen over silently
-re-registering a hook and losing the secret deliveries are signed with.
+application watches, an action that is not one of the above, an application
+without a base domain, and **a fork head** (GitHub/Gitea `head.repo.fork` or a
+foreign head repository, GitLab source/target project mismatch) are
+acknowledged as ignored. Live previews are capped at 5 per base application;
+a PR beyond the cap is ignored and logged, while a synchronize of an
+already-previewed PR is never capped.
+
+**PR idempotency uses its own ledger (fix round 1).** PR deliveries are
+reserved in `preview_deliveries`, never in the push `webhook_events` ledger:
+`(application_id, pr_number, head_sha)` is the signed-body identity of a start
+(the same union mirrors the close as `(application_id, pr_number)`), so a
+replayed body is a duplicate while a new head, a second PR at the same commit,
+and a push of that commit stay independent. Closing clears the PR's
+reservations, so a reopen at the same head reserves again. `delivery_id` is
+stored for the audit trail only — it is an unsigned header and never gates a
+delivery by itself. A start reserves, persists the binding, then queues: a
+failed queue or a conflicting active deployment **releases the reservation**
+and answers 503 (retryable), so a redelivered revision is deployed instead of
+being marked handled; a failed binding write deletes the just-created sibling
+(compensation), and a retry recovers the reserved sibling instead of treating
+its unique name/host as a permanent collision.
+
+Hooks are installed with `Events: ["push","pull_request"]` (GitLab:
+`push_events` + `merge_requests_events`). Hooks installed before the preview
+feature keep push-only events: they must be deleted and re-installed — the
+documented re-install path, chosen over silently re-registering a hook and
+losing the secret deliveries are signed with.
 
 **PR badge comment.** `providers.SourceProvider` gained
 `CreatePullRequestComment` (GitHub/Gitea `POST /repos/{repo}/issues/{n}/comments`,
@@ -71,10 +95,18 @@ fails the delivery. The URL renders as `http://<host>` (a certificate-covered
 host redirects to HTTPS; without one the HTTP URL is what works).
 
 **Cleanup.** Close is the normal teardown (delete sibling → route/container
-gone, mark binding deleted). `DeleteApplication` calls the webhooks service
-before deleting a base row so preview siblings are never orphaned, and an
-hourly sweep (`FEATURE_PREVIEWS`, TTL 7d, started/stopped with the server
-lifecycle) tears down previews whose close delivery never arrived.
+gone, local deploy-key rows removed, binding marked deleted). Teardown never
+removes a deploy key from the Git host: a preview reuses its base
+application's remote key, and deleting it (user or system path) would break
+the base. `DeleteApplication` runs the webhook cleanup before deleting a base
+row and **aborts on its failure**, so the base FK can never cascade the
+bindings away while a sibling survives. The hourly sweep
+(`FEATURE_PREVIEWS`, started/stopped with the server lifecycle) is
+**orphan-only**: it marks bindings deleted whose sibling is already gone and
+deletes `is_preview` applications that no live binding references (created
+before the sweep's 15-minute grace), and it never tears down a preview that is
+still bound to a live sibling — an open PR keeps its preview however old it
+is.
 
 **Routes.** Delivery route unchanged; authenticated `GET
 /v1/applications/{id}/previews` lists an application's bindings (team-scoped
@@ -88,22 +120,31 @@ still serves plain HTTP. Copying the base application's wildcard DNS-01 intent
 to the sibling (a system-path certificate clone) is the follow-up; issuing a
 per-preview certificate is explicitly out of scope. (2) The badge comment
 reflects the queue decision, not the terminal deployment state (the deploy
-notifier carries team-channel notifications, not PR comments). (3) Reusing the
-base application's storages means base and preview mount the same host path —
-acceptable for a preview, risky for stateful apps. (4) `preview_deploys` rows
-of a closed PR are kept as audit; pruning them is deferred.
+notifier carries team-channel notifications, not PR comments). (3) Secrets and
+storages are not shared with previews by default (fix round 1); an operator
+who needs shared configuration must move the value into a plain env var
+(visible) or configure the preview application explicitly — a per-application
+opt-in is deliberately not implemented. (4) A conflicting synchronize answers
+503 and waits for a host redelivery: there is no automatic retry queue.
+(5) `preview_deploys` and `preview_deliveries` rows are kept as audit; pruning
+them is deferred.
 
 **Verification.** Unit tests for payload parsing (three providers ×
-open/synchronize/close), host/name derivation, the service lifecycle
-(create/reuse/redelivery/close/comment-failure/flag-off/team scope), the
-provider comment endpoints and the deploy clone/system-delete seam;
-repository integration tests against PostgreSQL for the unique pair, the
-deleted→reopened transition, the stale list and both cascades. Gated e2e
-(`GOTHAM_E2E=1`): `TestP8PreviewLifecycle` opens a PR over the real delivery
-route, deploys the head branch through the agent, proves the anti-spam
-redelivery and deletes the sibling on close. A real GitHub PR, a wildcard
-certificate and the live comment were **not** exercised (no Git host or TLS
-in CI).
+open/synchronize/close/fork), host/name derivation, the service lifecycle
+(create/reuse/redelivery/reopen at the same SHA, a second PR at the same SHA,
+push at the same SHA, busy-deployment retry, binding-write compensation and
+recovery, cap, fork rejection, close/comment-failure/flag-off/team scope,
+orphan-only sweep), the provider comment endpoints, the GitLab
+`merge_requests_events` subscription and the deploy clone/system-delete seam;
+repository integration tests against PostgreSQL for the unique pair,
+`is_preview`, the reservation ledger (replay, second PR, close, clear), the
+orphan queries, the deleted→reopened transition and both cascades, plus a
+DB-backed teardown removing the preview's local private-key row while the base
+key survives. Gated e2e (`GOTHAM_E2E=1`): `TestP8PreviewLifecycle` opens a PR
+over the real delivery route, deploys the head branch through the agent,
+proves the anti-spam redelivery and deletes the sibling on close. A real
+GitHub PR, a wildcard certificate and the live comment were **not** exercised
+(no Git host or TLS in CI).
 
 ## BE-8.2 — Teams & roles — `ws/p8-teams`
 

@@ -36,6 +36,7 @@ type Application struct {
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 	BaseDomainDisabled bool               `json:"base_domain_disabled"`
 	TeamID             pgtype.UUID        `json:"team_id"`
+	IsPreview          bool               `json:"is_preview"`
 }
 
 type ApplicationDeployKey struct {
@@ -221,6 +222,16 @@ type NotificationChannel struct {
 	Events       []string           `json:"events"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PreviewDelivery struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	PrNumber      int32              `json:"pr_number"`
+	Kind          string             `json:"kind"`
+	HeadSha       string             `json:"head_sha"`
+	DeliveryID    string             `json:"delivery_id"`
+	ReceivedAt    pgtype.Timestamptz `json:"received_at"`
 }
 
 type PreviewDeploy struct {

@@ -104,9 +104,11 @@ type Config struct {
 	Source Source
 	// PreviewCleanup tears down resources that hang off an application
 	// outside the deploy schema before the application row is deleted
-	// (BE-8.1 preview siblings). Best effort: the callback reports nothing and
-	// a failure there must never block the delete. nil disables the hook.
-	PreviewCleanup func(ctx context.Context, appID uuid.UUID)
+	// (BE-8.1 preview siblings). A returned error aborts the delete: deleting
+	// the base application would cascade the preview bindings away while the
+	// siblings survive, leaving them untracked. Container stops inside the
+	// callback stay best effort. nil disables the hook.
+	PreviewCleanup func(ctx context.Context, appID uuid.UUID) error
 	// Emitter overrides the publisher-based realtime emitter (tests).
 	Emitter *Emitter
 	// Logger defaults to slog.Default.
@@ -147,7 +149,7 @@ type Service struct {
 	registrar KeyRegistrar
 	// previewCleanup, when set, runs before an application row is deleted (see
 	// Config.PreviewCleanup).
-	previewCleanup func(ctx context.Context, appID uuid.UUID)
+	previewCleanup func(ctx context.Context, appID uuid.UUID) error
 }
 
 // Compile-time guarantee that Service satisfies the route-level contract.

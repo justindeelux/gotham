@@ -29,14 +29,17 @@ func Enabled() bool {
 
 // Preview lifecycle states, mirroring the preview_deploys CHECK constraint.
 const (
-	// PreviewActive means the sibling application exists and its deployment
-	// was queued (or is already running). The sibling's own deployments rows
-	// carry the fine-grained state.
+	// PreviewActive means the sibling application exists and its newest
+	// revision was queued. The sibling's own deployments rows carry the
+	// fine-grained state.
 	PreviewActive = "active"
-	// PreviewDeploying is reserved for a binding whose deployment is being
-	// queued right now.
+	// PreviewDeploying means the binding is reserved and a revision is being
+	// queued (or a queue attempt failed and the binding awaits its next
+	// delivery).
 	PreviewDeploying = "deploying"
-	// PreviewFailed means the deployment could not be queued.
+	// PreviewFailed is reserved for the previews screen contract; the current
+	// lifecycle records a failed queue attempt as deploying (the sibling is
+	// intact and the next delivery retries it).
 	PreviewFailed = "failed"
 	// PreviewDeleted means the pull request closed and the preview was torn
 	// down. The row is kept as the audit trail.
@@ -52,15 +55,21 @@ const (
 	prActionClose = "close"
 )
 
-// Preview tunables. The TTL is measured from the last event (every
-// synchronize refreshes it); it is a backstop for previews whose close
-// delivery never arrived, not the normal teardown path.
+// Preview tunables.
 const (
-	defaultPreviewTTL           = 7 * 24 * time.Hour
 	defaultPreviewSweepInterval = time.Hour
 	// commentTimeout bounds one PR comment call. The comment is best effort:
 	// a slow Git host must never hold the delivery open.
 	commentTimeout = 5 * time.Second
+	// maxLivePreviewsPerApplication caps how many live previews one base
+	// application may have. A PR synchronize of an already-previewed PR never
+	// counts against the cap (it refreshes its own binding); a new PR beyond
+	// the cap is acknowledged and logged.
+	maxLivePreviewsPerApplication = 5
+	// previewSweepGrace keeps the orphan-application sweep away from a
+	// sibling that a delivery has just provisioned but not yet bound. It is
+	// far larger than the window between the clone and the binding write.
+	previewSweepGrace = 15 * time.Minute
 )
 
 // PreviewProvisioner is the slice of the deploy service the preview surface
@@ -77,18 +86,9 @@ type Commenter interface {
 	CreatePullRequestComment(ctx context.Context, target providers.HookTarget, number int, body string) error
 }
 
-// closeCommit hides the head SHA of a teardown delivery from the commit
-// dedupe index (see receivePullRequest).
-func closeCommit(pr *pullRequest, action string) string {
-	if action == prActionClose {
-		return ""
-	}
-	return pr.HeadSHA
-}
-
 // normalizePullRequestAction maps the provider-specific action vocabulary onto
-// the three decisions a preview makes: start (opened/synchronize/reopened),
-// stop (closed/merge) or ignore.
+// the two decisions a preview makes: start (opened/synchronize/reopened) and
+// close (closed/merge), or "" for everything else.
 func normalizePullRequestAction(action string) string {
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case "closed", "close", "merge", "merged":
@@ -150,14 +150,16 @@ func slugifyLabel(name string) string {
 	return b.String()
 }
 
-// receivePullRequest handles a verified pull_request delivery: it finds or
-// creates the preview of the base application and either queues a deployment
-// of the PR head branch or tears the preview down. Any untriggering PR (an
-// unwatched base branch, a metadata-only action, a repository without an
-// application) is acknowledged as ignored.
+// receivePullRequest handles a verified pull_request delivery: it reserves the
+// delivery in the preview-specific ledger (never in the push webhook_events
+// ledger), then either queues a deployment of the PR head revision or tears
+// the preview down. Any untriggering PR (a fork head, an unwatched base
+// branch, a metadata-only action, a repository without an application) is
+// acknowledged as ignored.
 //
-// The delivery is claimed in webhook_events exactly like a push, so a
-// redelivered PR event cannot start a second deployment.
+// A reservation is released on every path that did not queue a deployment, so
+// a failed or refused delivery can be retried by the host; a successful start
+// keeps it, which is what makes a replayed body a duplicate.
 func (s *Service) receivePullRequest(ctx context.Context, provider string, target Target, parsed signedDelivery) (Delivery, error) {
 	if !Enabled() {
 		return Delivery{Status: StatusIgnored, Reason: "previews disabled"}, nil
@@ -165,6 +167,11 @@ func (s *Service) receivePullRequest(ctx context.Context, provider string, targe
 	pr := parsed.PullRequest
 	if pr == nil || pr.Number <= 0 {
 		return Delivery{Status: StatusIgnored, Reason: "pull request"}, nil
+	}
+	if pr.Fork {
+		// A fork PR's code is not the repository the base application trusts:
+		// never build it against the platform.
+		return Delivery{Status: StatusIgnored, Reason: "fork"}, nil
 	}
 	if !strings.EqualFold(pr.BaseBranch, target.Branch) {
 		return Delivery{Status: StatusIgnored, Reason: "branch"}, nil
@@ -176,19 +183,29 @@ func (s *Service) receivePullRequest(ctx context.Context, provider string, targe
 	if s.provisioner == nil {
 		return Delivery{Status: StatusIgnored, Reason: "previews disabled"}, nil
 	}
+	if action == prActionStart {
+		if strings.TrimSpace(pr.HeadSHA) == "" {
+			return Delivery{Status: StatusIgnored, Reason: "revision"}, nil
+		}
+		if strings.TrimSpace(pr.HeadBranch) == "" {
+			return Delivery{Status: StatusIgnored, Reason: "branch"}, nil
+		}
+		if strings.TrimSpace(target.BaseDomain) == "" {
+			// A preview has no address without a base domain; deploying it
+			// would only produce an unreachable container.
+			return Delivery{Status: StatusIgnored, Reason: "application has no domain"}, nil
+		}
+	}
 
-	event, err := s.repo.ClaimEvent(ctx, Event{
+	reservation, err := s.repo.ReservePreviewDelivery(ctx, DeliveryReservation{
 		ApplicationID: target.ApplicationID,
-		Provider:      provider,
-		Event:         parsed.Event,
-		DeliveryID:    parsed.DeliveryID,
-		Ref:           "refs/heads/" + pr.HeadBranch,
-		// Only a start delivery dedupes by commit: a close event carries the
-		// same head SHA as the synchronize that deployed it, and deduping the
-		// close against that claim would leave the preview running forever.
-		// Close redeliveries are made idempotent by the binding's state (and
-		// by the delivery ID when the host repeats it verbatim).
-		CommitSHA: closeCommit(pr, action),
+		PRNumber:      pr.Number,
+		Kind:          reservationKind(action),
+		// Only a start reserves the signed revision: a close carries no
+		// revision, and its idempotency is the PR-scoped close reservation
+		// plus the binding state.
+		HeadSHA:    startSHA(pr, action),
+		DeliveryID: parsed.DeliveryID,
 	})
 	switch {
 	case errors.Is(err, ErrDuplicate):
@@ -201,15 +218,32 @@ func (s *Service) receivePullRequest(ctx context.Context, provider string, targe
 	if action == prActionClose {
 		delivery, err = s.closePreview(ctx, target, pr.Number)
 	} else {
-		delivery, err = s.openPreview(ctx, provider, target, pr)
+		delivery, err = s.openPreview(ctx, provider, target, pr, reservation)
 	}
 	if err != nil {
-		// Nothing durable was achieved: release the claim so the host's retry
-		// of this delivery is not mistaken for spam.
-		s.releaseClaim(ctx, event)
+		// The reservation must not outlive a delivery that queued nothing: a
+		// redelivered body has to be able to reserve again.
+		s.releaseReservation(ctx, reservation)
 		return Delivery{}, err
 	}
 	return delivery, nil
+}
+
+// reservationKind maps the normalized action onto the ledger kind.
+func reservationKind(action string) string {
+	if action == prActionClose {
+		return ReservationClose
+	}
+	return ReservationStart
+}
+
+// startSHA hides the head SHA of a teardown delivery from the start
+// reservation key (see receivePullRequest).
+func startSHA(pr *pullRequest, action string) string {
+	if action == prActionClose {
+		return ""
+	}
+	return strings.TrimSpace(pr.HeadSHA)
 }
 
 // ListPreviews returns an application's preview bindings, newest first, for a
@@ -236,13 +270,13 @@ func (s *Service) ListPreviews(ctx context.Context, userID, appID uuid.UUID) ([]
 }
 
 // openPreview creates (or reuses) the preview sibling of a base application
-// and queues a deployment of the PR head branch. Re-deliveries of the same PR
-// refresh the existing sibling instead of racing a second one.
-func (s *Service) openPreview(ctx context.Context, provider string, target Target, pr *pullRequest) (Delivery, error) {
+// and queues a deployment of the PR head revision. The binding is persisted
+// before the deployment is queued, so a queue failure can never leave a
+// sibling outside every cleanup path (close, base delete, sweep).
+func (s *Service) openPreview(ctx context.Context, provider string, target Target, pr *pullRequest, reservation DeliveryReservation) (Delivery, error) {
 	host := previewHost(target.Name, target.BaseDomain, pr.Number)
 	if host == "" {
-		// A preview has no address without a base domain; deploying it would
-		// only produce an unreachable container.
+		s.releaseReservation(ctx, reservation)
 		return Delivery{Status: StatusIgnored, Reason: "application has no domain"}, nil
 	}
 
@@ -250,48 +284,62 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return Delivery{}, err
 	}
-	appID := uuid.Nil
-	if err == nil && existing.State != PreviewDeleted {
-		appID = existing.PreviewApplicationID
+	live := err == nil && existing.State != PreviewDeleted
+	previewAppID := uuid.Nil
+	previousSHA := ""
+	if err == nil {
+		previousSHA = existing.HeadSHA
+	}
+	if live {
+		previewAppID = existing.PreviewApplicationID
 	}
 
-	var deployment deploy.Deployment
-	deployErr := error(nil)
-	if appID != uuid.Nil {
-		deployment, deployErr = s.deployer.DeploySystem(ctx, appID)
-		if errors.Is(deployErr, deploy.ErrNotFound) {
-			// The sibling was removed out of band: recreate it below.
-			appID, deployErr = uuid.Nil, nil
+	// New previews are capped per base application; refreshing the PR's own
+	// binding is always allowed. The check is read-then-write: two concurrent
+	// deliveries can overshoot by one, which is accepted for a preview cap.
+	if !live {
+		count, err := s.repo.CountLivePreviews(ctx, target.ApplicationID)
+		if err != nil {
+			return Delivery{}, err
+		}
+		if count >= maxLivePreviewsPerApplication {
+			s.releaseReservation(ctx, reservation)
+			s.logger.Warn("webhooks: preview limit reached",
+				"application_id", target.ApplicationID, "pr_number", pr.Number,
+				"limit", maxLivePreviewsPerApplication)
+			return Delivery{Status: StatusIgnored, Reason: "preview limit reached"}, nil
 		}
 	}
-	if appID == uuid.Nil {
+
+	provisioned := false
+	if previewAppID == uuid.Nil {
 		created, err := s.provisioner.CreatePreviewApplication(ctx, target.ApplicationID, deploy.PreviewApplicationInput{
 			Name:       previewName(target.Name, pr.Number),
 			Branch:     pr.HeadBranch,
 			BaseDomain: host,
 		})
 		if err != nil {
-			if errors.Is(err, deploy.ErrConflict) || errors.Is(err, deploy.ErrValidation) {
-				// A name or host collision is permanent for this attempt:
-				// answer ignored (2xx) with the reason in the delivery log so
-				// the host does not retry forever.
-				return Delivery{Status: StatusIgnored, Reason: "preview application rejected"}, nil
+			// A concurrent delivery may have created the sibling and the
+			// binding between our read and the clone: recover that binding.
+			// Otherwise the failure is retryable (a transient store error, or
+			// a name/host collision the operator can resolve) — never a
+			// permanent ignore, which would strand the sibling.
+			recovered, recoveryErr := s.repo.GetPreview(ctx, target.ApplicationID, pr.Number)
+			if recoveryErr == nil && recovered.State != PreviewDeleted && recovered.PreviewApplicationID != uuid.Nil {
+				previewAppID, previousSHA = recovered.PreviewApplicationID, recovered.HeadSHA
+			} else {
+				s.previewComment(ctx, target, pr.Number, failedComment(host))
+				return Delivery{}, fmt.Errorf("%w: provision preview application: %v", ErrRetryable, err)
 			}
-			return Delivery{}, err
+		} else {
+			previewAppID = created.ID
+			provisioned = true
 		}
-		appID = created.ID
-		deployment, deployErr = s.deployer.DeploySystem(ctx, appID)
 	}
 
-	state := PreviewActive
-	switch {
-	case deployErr == nil:
-		// queued (or already running: ErrConflict below)
-	case errors.Is(deployErr, deploy.ErrConflict):
-		deployErr = nil // a deployment is already in flight; the preview is live
-	default:
-		state = PreviewFailed
-	}
+	// Persist the binding BEFORE queueing: a crash or a queue failure then
+	// leaves a tracked sibling, and the next delivery recovers it instead of
+	// hitting (and being rejected by) its unique name and host.
 	if _, err := s.repo.UpsertPreview(ctx, Preview{
 		ApplicationID:        target.ApplicationID,
 		TeamID:               target.TeamID,
@@ -299,36 +347,99 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 		Repo:                 target.Repo,
 		PRNumber:             pr.Number,
 		Branch:               pr.HeadBranch,
-		HeadSHA:              pr.HeadSHA,
-		PreviewApplicationID: appID,
+		HeadSHA:              previousSHA,
+		PreviewApplicationID: previewAppID,
 		Host:                 host,
-		State:                state,
+		State:                PreviewDeploying,
 	}); err != nil {
+		// Compensation: a sibling this delivery just created must not survive
+		// a binding it cannot be found through.
+		if provisioned {
+			if derr := s.provisioner.DeleteSystemApplication(ctx, previewAppID); derr != nil {
+				s.logger.Warn("webhooks: preview compensation delete failed; the sweep will pick it up",
+					"application_id", previewAppID, "error", derr)
+			}
+		}
 		return Delivery{}, err
 	}
 
+	deployment, deployErr := s.deployer.DeploySystem(ctx, previewAppID)
+	if errors.Is(deployErr, deploy.ErrNotFound) {
+		// The sibling vanished between the read and the queue (deleted out of
+		// band): clear the dead link and provision a fresh sibling once.
+		if _, err := s.repo.UpsertPreview(ctx, Preview{
+			ApplicationID: target.ApplicationID, TeamID: target.TeamID, Provider: provider,
+			Repo: target.Repo, PRNumber: pr.Number, Branch: pr.HeadBranch,
+			HeadSHA: previousSHA, PreviewApplicationID: uuid.Nil, Host: host, State: PreviewDeploying,
+		}); err != nil {
+			return Delivery{}, err
+		}
+		created, err := s.provisioner.CreatePreviewApplication(ctx, target.ApplicationID, deploy.PreviewApplicationInput{
+			Name:       previewName(target.Name, pr.Number),
+			Branch:     pr.HeadBranch,
+			BaseDomain: host,
+		})
+		if err != nil {
+			return Delivery{}, fmt.Errorf("%w: recreate preview application: %v", ErrRetryable, err)
+		}
+		previewAppID = created.ID
+		if _, err := s.repo.UpsertPreview(ctx, Preview{
+			ApplicationID: target.ApplicationID, TeamID: target.TeamID, Provider: provider,
+			Repo: target.Repo, PRNumber: pr.Number, Branch: pr.HeadBranch,
+			HeadSHA: previousSHA, PreviewApplicationID: previewAppID, Host: host, State: PreviewDeploying,
+		}); err != nil {
+			if derr := s.provisioner.DeleteSystemApplication(ctx, previewAppID); derr != nil {
+				s.logger.Warn("webhooks: preview compensation delete failed; the sweep will pick it up",
+					"application_id", previewAppID, "error", derr)
+			}
+			return Delivery{}, err
+		}
+		deployment, deployErr = s.deployer.DeploySystem(ctx, previewAppID)
+	}
+
 	switch {
-	case state == PreviewFailed:
-		s.previewComment(ctx, target, pr.Number, failedComment(host))
-		return Delivery{}, fmt.Errorf("webhooks: queue preview deployment: %w", deployErr)
-	case deployErr == nil && deployment.ID != uuid.Nil:
+	case deployErr == nil:
+		// The revision is queued: only now does the binding name it, and only
+		// now is the reservation allowed to stand.
+		if _, err := s.repo.UpsertPreview(ctx, Preview{
+			ApplicationID: target.ApplicationID, TeamID: target.TeamID, Provider: provider,
+			Repo: target.Repo, PRNumber: pr.Number, Branch: pr.HeadBranch,
+			HeadSHA: strings.TrimSpace(pr.HeadSHA), PreviewApplicationID: previewAppID,
+			Host: host, State: PreviewActive,
+		}); err != nil {
+			// The deployment is queued and tracked by the sibling; a stale
+			// binding revision is repaired by the next delivery.
+			s.logger.Warn("webhooks: could not record the queued preview revision",
+				"application_id", target.ApplicationID, "pr_number", pr.Number, "error", err)
+		}
 		s.previewComment(ctx, target, pr.Number, startedComment(host))
 		return Delivery{Status: StatusQueued, Reason: "preview", DeploymentID: deployment.ID.String(), Host: host}, nil
+	case errors.Is(deployErr, deploy.ErrConflict):
+		// A deployment is already running for the sibling. The revision must
+		// not be recorded as handled: the reservation is released (by the
+		// caller) and the delivery answers retryable, so the host can
+		// redeliver it once the active deployment finishes. The binding keeps
+		// the revision that was actually queued.
+		return Delivery{}, fmt.Errorf("%w: a deployment is already running for the preview", ErrRetryable)
 	default:
-		if deployment.ID != uuid.Nil {
-			return Delivery{Status: StatusSkipped, Reason: "deployment in progress", DeploymentID: deployment.ID.String(), Host: host}, nil
-		}
-		return Delivery{Status: StatusSkipped, Reason: "preview exists", Host: host}, nil
+		return Delivery{}, fmt.Errorf("webhooks: queue preview deployment: %w", deployErr)
 	}
 }
 
 // closePreview tears a preview down when its pull request closes or merges.
 // The sibling application is deleted through the system path (container stop
-// best effort, route refreshed), which cascades its deployments and
-// configuration; the binding row stays as the audit trail.
+// best effort, route refreshed, local deploy-key rows removed but the shared
+// remote key kept); the binding row stays as the audit trail. On success the
+// PR's reservations are cleared, so a reopen — even at the same head — can
+// reserve again.
 func (s *Service) closePreview(ctx context.Context, target Target, number int) (Delivery, error) {
 	preview, err := s.repo.GetPreview(ctx, target.ApplicationID, number)
 	if errors.Is(err, ErrNotFound) {
+		// Nothing to tear down. Clear any stale reservation so a later start
+		// at the same revision is not blocked forever.
+		if cerr := s.repo.ClearPreviewDeliveries(ctx, target.ApplicationID, number); cerr != nil {
+			return Delivery{}, cerr
+		}
 		return Delivery{Status: StatusIgnored, Reason: "no preview"}, nil
 	}
 	if err != nil {
@@ -340,13 +451,17 @@ func (s *Service) closePreview(ctx context.Context, target Target, number int) (
 	if err := s.teardownPreview(ctx, preview); err != nil {
 		return Delivery{}, err
 	}
+	if err := s.repo.ClearPreviewDeliveries(ctx, target.ApplicationID, number); err != nil {
+		return Delivery{}, err
+	}
 	s.previewComment(ctx, target, number, deletedComment())
 	return Delivery{Status: StatusDeleted, Reason: "preview deleted", Host: preview.Host}, nil
 }
 
 // teardownPreview deletes a preview's sibling application and marks the
-// binding deleted. Deleting the sibling removes its container and, through
-// the proxy sync, its route.
+// binding deleted. Deleting the sibling removes its container, its local
+// deploy-key rows (the remote key stays: it is shared with the base
+// application) and, through the proxy sync, its route.
 func (s *Service) teardownPreview(ctx context.Context, preview Preview) error {
 	if preview.PreviewApplicationID != uuid.Nil {
 		if err := s.provisioner.DeleteSystemApplication(ctx, preview.PreviewApplicationID); err != nil {
@@ -359,54 +474,94 @@ func (s *Service) teardownPreview(ctx context.Context, preview Preview) error {
 	return nil
 }
 
-// DeletePreviews tears down every live preview of one base application. The
-// deploy service calls it before deleting the base row, because the preview
-// siblings hang off the base application outside the deploy schema: the
-// preview_deploys link cascades with the base, so the siblings must be
-// removed first or their containers would be orphaned.
-func (s *Service) DeletePreviews(ctx context.Context, baseAppID uuid.UUID) {
-	if s == nil || s.repo == nil || s.provisioner == nil || baseAppID == uuid.Nil {
-		return
+// CleanupApplication runs before an application row is deleted (BE-8.1). Two
+// cases:
+//
+//   - the application is itself a preview sibling: its binding is marked
+//     deleted (the FK then clears the link), because the binding is the audit
+//     trail, not the owner;
+//   - the application is a base: every live preview of it is torn down, and a
+//     failure is returned so the caller aborts the base delete — the base FK
+//     cascades the bindings away, so deleting the base after a failed teardown
+//     would leave the siblings untracked. Container stops stay best effort.
+func (s *Service) CleanupApplication(ctx context.Context, appID uuid.UUID) error {
+	if s == nil || s.repo == nil {
+		return errors.New("webhooks: service is not configured")
 	}
-	previews, err := s.repo.ListPreviews(ctx, baseAppID)
+	if appID == uuid.Nil {
+		return fmt.Errorf("%w: application id is required", ErrValidation)
+	}
+	if err := s.repo.MarkPreviewsDeletedForSibling(ctx, appID); err != nil {
+		return err
+	}
+	if s.provisioner == nil {
+		return nil
+	}
+	previews, err := s.repo.ListPreviews(ctx, appID)
 	if err != nil {
-		s.logger.Warn("webhooks: preview lookup failed",
-			"application_id", baseAppID, "error", err)
-		return
+		return err
 	}
+	var firstErr error
 	for _, preview := range previews {
 		if preview.State == PreviewDeleted {
 			continue
 		}
 		if err := s.teardownPreview(ctx, preview); err != nil {
 			s.logger.Warn("webhooks: preview teardown failed",
-				"preview_id", preview.ID, "application_id", baseAppID, "error", err)
+				"preview_id", preview.ID, "application_id", appID, "error", err)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
+	return firstErr
 }
 
-// SweepPreviews tears down previews whose last activity is older than the
-// configured TTL. It is the backstop for close deliveries that never arrived
-// (deleted hooks, lost networks); the normal teardown path is the closed PR
-// event. Per-row failures are logged and skipped so one unreachable node
-// cannot block the rest of the sweep.
+// SweepPreviews is the orphan sweep, run on the configured interval. It is
+// deliberately orphan-only: it never deletes a preview that is still bound to
+// a live sibling application, however old it is (an open PR keeps its preview
+// until it closes).
+//
+//   - pass 1 marks bindings deleted whose sibling is already gone (deleted out
+//     of band, or never linked at all);
+//   - pass 2 deletes preview siblings that no binding references at all and
+//     that are older than the grace period (a crash between the clone and the
+//     binding write, or a base delete whose cleanup could not finish).
 func (s *Service) SweepPreviews(ctx context.Context) (int, error) {
 	if s == nil || s.repo == nil || s.provisioner == nil || !Enabled() {
 		return 0, nil
 	}
-	stale, err := s.repo.ListStalePreviews(ctx, s.now().UTC().Add(-s.previewTTL))
+	removed := 0
+
+	orphaned, err := s.repo.ListOrphanedPreviews(ctx)
 	if err != nil {
 		return 0, err
 	}
-	removed := 0
-	for _, preview := range stale {
-		if err := s.teardownPreview(ctx, preview); err != nil {
-			s.logger.Warn("webhooks: orphaned preview teardown failed",
-				"preview_id", preview.ID, "application_id", preview.ApplicationID, "error", err)
+	for _, preview := range orphaned {
+		if _, err := s.repo.MarkPreviewDeleted(ctx, preview.ID); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			s.logger.Warn("webhooks: orphaned preview binding could not be marked deleted",
+				"preview_id", preview.ID, "error", err)
 			continue
 		}
 		removed++
 	}
+
+	siblings, err := s.repo.ListOrphanedPreviewApplications(ctx, s.now().UTC().Add(-previewSweepGrace))
+	if err != nil {
+		return removed, err
+	}
+	for _, appID := range siblings {
+		if err := s.provisioner.DeleteSystemApplication(ctx, appID); err != nil {
+			s.logger.Warn("webhooks: orphaned preview application delete failed",
+				"application_id", appID, "error", err)
+			continue
+		}
+		removed++
+	}
+
 	if removed > 0 {
 		s.logger.Info("webhooks: orphaned previews removed", "count", removed)
 	}
@@ -461,6 +616,17 @@ func (s *Service) Close() error {
 		}
 	})
 	return nil
+}
+
+// releaseReservation removes a reservation whose delivery queued nothing.
+func (s *Service) releaseReservation(ctx context.Context, reservation DeliveryReservation) {
+	if reservation.ID == uuid.Nil {
+		return
+	}
+	if err := s.repo.ReleasePreviewDelivery(ctx, reservation.ID); err != nil {
+		s.logger.Warn("webhooks: could not release preview reservation",
+			"reservation_id", reservation.ID, "error", err)
+	}
 }
 
 // previewComment posts the PR badge comment, best effort: a Git host that

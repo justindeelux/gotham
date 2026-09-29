@@ -56,13 +56,16 @@ type signedDelivery struct {
 }
 
 // pullRequest is the routing information of one pull request delivery: which
-// PR, what happened, and the head/base branches the preview decision needs.
+// PR, what happened, the head/base branches the preview decision needs, and
+// whether the head comes from a fork (a fork PR must not be previewed: its
+// code is not the repository the base application trusts).
 type pullRequest struct {
 	Number     int
 	Action     string
 	HeadBranch string
 	BaseBranch string
 	HeadSHA    string
+	Fork       bool
 }
 
 // pushPayload is the subset of a push body shared by GitHub, GitLab and Gitea.
@@ -99,6 +102,14 @@ type pullRequestPayload struct {
 		Head   struct {
 			Ref string `json:"ref"`
 			SHA string `json:"sha"`
+			// Repo is the head repository. GitHub and Gitea set fork=true (and
+			// a foreign full_name) for a pull request opened from a fork; a
+			// missing object cannot be proven a fork and is treated as
+			// same-repository only when full_name is absent too.
+			Repo *struct {
+				FullName string `json:"full_name"`
+				Fork     bool   `json:"fork"`
+			} `json:"repo"`
 		} `json:"head"`
 		Base struct {
 			Ref string `json:"ref"`
@@ -109,22 +120,47 @@ type pullRequestPayload struct {
 		Action       string `json:"action"`
 		SourceBranch string `json:"source_branch"`
 		TargetBranch string `json:"target_branch"`
-		LastCommit   *struct {
+		// GitLab: an MR from a fork has a source project different from the
+		// target project.
+		SourceProjectID int64 `json:"source_project_id"`
+		TargetProjectID int64 `json:"target_project_id"`
+		LastCommit      *struct {
 			ID string `json:"id"`
 		} `json:"last_commit"`
 	} `json:"object_attributes"`
 }
 
+// isForkHead reports whether a pull request's head comes from another
+// repository (or repository fork). repo is the delivery's repository
+// identifier ("owner/name" / "group/project").
+func (p pullRequestPayload) isForkHead(repo string) bool {
+	if attrs := p.ObjectAttributes; attrs != nil && attrs.IID > 0 {
+		return attrs.SourceProjectID != 0 && attrs.TargetProjectID != 0 &&
+			attrs.SourceProjectID != attrs.TargetProjectID
+	}
+	if p.PullRequest == nil || p.PullRequest.Head.Repo == nil {
+		return false
+	}
+	head := p.PullRequest.Head.Repo
+	if head.Fork {
+		return true
+	}
+	// A head.repository naming a different repository is a fork even when the
+	// host did not set the flag.
+	return head.FullName != "" && !strings.EqualFold(strings.TrimSpace(head.FullName), strings.TrimSpace(repo))
+}
+
 // info turns a parsed body into the pull request routing facts, or nil when
 // the body carries no pull request. A missing or non-positive number means the
 // delivery cannot address a preview and is reported as "not a pull request".
-func (p pullRequestPayload) info() *pullRequest {
+func (p pullRequestPayload) info(repo string) *pullRequest {
 	if attrs := p.ObjectAttributes; attrs != nil && attrs.IID > 0 {
 		pr := &pullRequest{
 			Number:     attrs.IID,
 			Action:     strings.ToLower(strings.TrimSpace(attrs.Action)),
 			HeadBranch: strings.TrimSpace(attrs.SourceBranch),
 			BaseBranch: strings.TrimSpace(attrs.TargetBranch),
+			Fork:       p.isForkHead(repo),
 		}
 		if attrs.LastCommit != nil {
 			pr.HeadSHA = strings.TrimSpace(attrs.LastCommit.ID)
@@ -147,6 +183,7 @@ func (p pullRequestPayload) info() *pullRequest {
 		HeadBranch: strings.TrimSpace(p.PullRequest.Head.Ref),
 		BaseBranch: strings.TrimSpace(p.PullRequest.Base.Ref),
 		HeadSHA:    strings.TrimSpace(p.PullRequest.Head.SHA),
+		Fork:       p.isForkHead(repo),
 	}
 }
 
@@ -164,14 +201,6 @@ func parseDelivery(provider string, header http.Header, body []byte) (signedDeli
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return signedDelivery{}, fmt.Errorf("%w: body is not a JSON object", ErrBadRequest)
 	}
-	// The push and pull_request shapes overlap only in repository/project, so
-	// the pull request facts are decoded from the same bounded body. A push
-	// body leaves PullRequest nil.
-	var prPayload pullRequestPayload
-	if err := json.Unmarshal(body, &prPayload); err == nil {
-		delivery.PullRequest = prPayload.info()
-	}
-
 	delivery.Ref = strings.TrimSpace(payload.Ref)
 	switch {
 	case payload.Repository != nil && payload.Repository.FullName != "":
@@ -185,6 +214,15 @@ func parseDelivery(provider string, header http.Header, body []byte) (signedDeli
 	}
 	if delivery.Repository == "" {
 		return signedDelivery{}, fmt.Errorf("%w: delivery names no repository", ErrBadRequest)
+	}
+
+	// The push and pull_request shapes overlap only in repository/project, so
+	// the pull request facts are decoded from the same bounded body after the
+	// repository is known (fork detection compares the head repository with
+	// it). A push body leaves PullRequest nil.
+	var prPayload pullRequestPayload
+	if err := json.Unmarshal(body, &prPayload); err == nil {
+		delivery.PullRequest = prPayload.info(delivery.Repository)
 	}
 
 	delivery.Commit = strings.TrimSpace(payload.After)

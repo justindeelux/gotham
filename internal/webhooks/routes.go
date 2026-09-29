@@ -250,6 +250,13 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrRateLimited):
 		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrRetryable):
+		// 503: the delivery was not acted on (a conflicting deployment is
+		// running, or a transient dependency failed). The message names the
+		// condition without leaking provider or database detail, and the Git
+		// host can redeliver the same event.
+		h.logger.Warn("webhooks: retryable delivery failure", "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "delivery can be retried"})
 	case errors.Is(err, ErrNotFound):
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
 	case errors.Is(err, ErrForbidden):

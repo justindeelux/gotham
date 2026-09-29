@@ -11,6 +11,35 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearPreviewDeliveries = `-- name: ClearPreviewDeliveries :exec
+DELETE FROM preview_deliveries
+WHERE application_id = $1 AND pr_number = $2
+`
+
+type ClearPreviewDeliveriesParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	PrNumber      int32       `json:"pr_number"`
+}
+
+// Clears a pull request's reservations at a lifecycle transition (close), so a
+// reopen — even at the same head revision — can reserve again.
+func (q *Queries) ClearPreviewDeliveries(ctx context.Context, arg ClearPreviewDeliveriesParams) error {
+	_, err := q.db.Exec(ctx, clearPreviewDeliveries, arg.ApplicationID, arg.PrNumber)
+	return err
+}
+
+const countLivePreviewDeploys = `-- name: CountLivePreviewDeploys :one
+SELECT count(*) FROM preview_deploys
+WHERE application_id = $1 AND state <> 'deleted'
+`
+
+func (q *Queries) CountLivePreviewDeploys(ctx context.Context, applicationID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countLivePreviewDeploys, applicationID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getPreviewDeploy = `-- name: GetPreviewDeploy :one
 SELECT id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
 WHERE application_id = $1 AND pr_number = $2
@@ -43,14 +72,54 @@ func (q *Queries) GetPreviewDeploy(ctx context.Context, arg GetPreviewDeployPara
 	return i, err
 }
 
-const listPreviewDeploysByApplication = `-- name: ListPreviewDeploysByApplication :many
-SELECT id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
-WHERE application_id = $1
-ORDER BY created_at DESC
+const listOrphanedPreviewApplications = `-- name: ListOrphanedPreviewApplications :many
+SELECT a.id FROM applications a
+WHERE a.is_preview
+  AND a.created_at < $1
+  AND NOT EXISTS (
+      SELECT 1 FROM preview_deploys p
+      WHERE p.preview_application_id = a.id AND p.state <> 'deleted'
+  )
+ORDER BY a.created_at ASC
 `
 
-func (q *Queries) ListPreviewDeploysByApplication(ctx context.Context, applicationID pgtype.UUID) ([]PreviewDeploy, error) {
-	rows, err := q.db.Query(ctx, listPreviewDeploysByApplication, applicationID)
+// Preview siblings without a LIVE binding, older than the sweep grace period:
+// created before the binding was written (crash), left behind by a base delete
+// whose cleanup could not finish, or kept after their binding was marked
+// deleted (a failed direct sibling delete). Ordinary applications are never
+// matched.
+func (q *Queries) ListOrphanedPreviewApplications(ctx context.Context, createdAt pgtype.Timestamptz) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listOrphanedPreviewApplications, createdAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrphanedPreviewDeploys = `-- name: ListOrphanedPreviewDeploys :many
+SELECT p.id, p.application_id, p.team_id, p.provider, p.repo, p.pr_number, p.branch, p.head_sha, p.preview_application_id, p.host, p.state, p.created_at, p.updated_at, p.deleted_at FROM preview_deploys p
+LEFT JOIN applications a ON a.id = p.preview_application_id
+WHERE p.state <> 'deleted'
+  AND (p.preview_application_id IS NULL OR a.id IS NULL)
+`
+
+// Live bindings whose sibling application no longer exists (deleted out of
+// band, or never linked because preview_application_id is NULL): the sweep
+// marks these deleted without touching any live preview.
+func (q *Queries) ListOrphanedPreviewDeploys(ctx context.Context) ([]PreviewDeploy, error) {
+	rows, err := q.db.Query(ctx, listOrphanedPreviewDeploys)
 	if err != nil {
 		return nil, err
 	}
@@ -84,14 +153,14 @@ func (q *Queries) ListPreviewDeploysByApplication(ctx context.Context, applicati
 	return items, nil
 }
 
-const listStalePreviewDeploys = `-- name: ListStalePreviewDeploys :many
+const listPreviewDeploysByApplication = `-- name: ListPreviewDeploysByApplication :many
 SELECT id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
-WHERE state <> 'deleted' AND updated_at < $1
-ORDER BY updated_at ASC
+WHERE application_id = $1
+ORDER BY created_at DESC
 `
 
-func (q *Queries) ListStalePreviewDeploys(ctx context.Context, updatedAt pgtype.Timestamptz) ([]PreviewDeploy, error) {
-	rows, err := q.db.Query(ctx, listStalePreviewDeploys, updatedAt)
+func (q *Queries) ListPreviewDeploysByApplication(ctx context.Context, applicationID pgtype.UUID) ([]PreviewDeploy, error) {
+	rows, err := q.db.Query(ctx, listPreviewDeploysByApplication, applicationID)
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +219,69 @@ func (q *Queries) MarkPreviewDeployDeleted(ctx context.Context, id pgtype.UUID) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const markPreviewDeploysDeletedForSibling = `-- name: MarkPreviewDeploysDeletedForSibling :exec
+UPDATE preview_deploys
+SET state = 'deleted', deleted_at = now(), updated_at = now()
+WHERE preview_application_id = $1 AND state <> 'deleted'
+`
+
+// Marks the bindings that point at a sibling application being deleted (the
+// user-facing delete path): the binding is the audit trail, not the owner.
+func (q *Queries) MarkPreviewDeploysDeletedForSibling(ctx context.Context, previewApplicationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markPreviewDeploysDeletedForSibling, previewApplicationID)
+	return err
+}
+
+const releasePreviewDelivery = `-- name: ReleasePreviewDelivery :exec
+DELETE FROM preview_deliveries WHERE id = $1
+`
+
+// Removes a reservation that did not lead to a queued deployment, so the
+// host's retry of the delivery can reserve again.
+func (q *Queries) ReleasePreviewDelivery(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, releasePreviewDelivery, id)
+	return err
+}
+
+const reservePreviewDelivery = `-- name: ReservePreviewDelivery :one
+INSERT INTO preview_deliveries (application_id, pr_number, kind, head_sha, delivery_id)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT DO NOTHING
+RETURNING id, application_id, pr_number, kind, head_sha, delivery_id, received_at
+`
+
+type ReservePreviewDeliveryParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	PrNumber      int32       `json:"pr_number"`
+	Kind          string      `json:"kind"`
+	HeadSha       string      `json:"head_sha"`
+	DeliveryID    string      `json:"delivery_id"`
+}
+
+// Insert a delivery reservation. A replay of the same signed revision (or a
+// concurrent close of the same PR) conflicts and returns no row; the caller
+// maps pgx.ErrNoRows to a duplicate delivery.
+func (q *Queries) ReservePreviewDelivery(ctx context.Context, arg ReservePreviewDeliveryParams) (PreviewDelivery, error) {
+	row := q.db.QueryRow(ctx, reservePreviewDelivery,
+		arg.ApplicationID,
+		arg.PrNumber,
+		arg.Kind,
+		arg.HeadSha,
+		arg.DeliveryID,
+	)
+	var i PreviewDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.PrNumber,
+		&i.Kind,
+		&i.HeadSha,
+		&i.DeliveryID,
+		&i.ReceivedAt,
 	)
 	return i, err
 }

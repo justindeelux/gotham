@@ -34,6 +34,21 @@ type fakeRepository struct {
 	previews       map[string]Preview
 	previewListErr error
 
+	// reservations mirrors preview_deliveries: keyed by the partial unique
+	// index the database enforces (start: app/pr/sha, close: app/pr).
+	reservations   map[string]DeliveryReservation
+	reserveErr     error
+	unreserveErr   error
+	clearErr       error
+	countErr       error
+	orphanErr      error
+	orphanAppErr   error
+	markSiblingErr error
+	liveCount      int
+	liveCountSet   bool
+	orphanPreviews []Preview
+	orphanApps     []uuid.UUID
+
 	getAppErr    error
 	createErr    error
 	targetsErr   error
@@ -43,7 +58,6 @@ type fakeRepository struct {
 	upsertErr    error
 	getPrevErr   error
 	markErr      error
-	staleErr     error
 	createCalls  int
 	deleteCalls  int
 	targetsCalls int
@@ -70,8 +84,9 @@ func newFakeRepositoryFor(provider string) *fakeRepository {
 			Name:       "gotham",
 			BaseDomain: "apps.example.com",
 		},
-		claims:   make(map[string]Event),
-		previews: make(map[string]Preview),
+		claims:       make(map[string]Event),
+		previews:     make(map[string]Preview),
+		reservations: make(map[string]DeliveryReservation),
 	}
 }
 
@@ -335,23 +350,136 @@ func (r *fakeRepository) MarkPreviewDeleted(_ context.Context, previewID uuid.UU
 	return Preview{}, ErrNotFound
 }
 
-// ListStalePreviews implements Repository.
-func (r *fakeRepository) ListStalePreviews(_ context.Context, before time.Time) ([]Preview, error) {
+// ReservationKey is the fake's unique key: the signed revision for a start,
+// the PR for a close (the two partial unique indexes of preview_deliveries).
+func ReservationKey(reservation DeliveryReservation) string {
+	if reservation.Kind == ReservationClose {
+		return fmt.Sprintf("%s/%d/close", reservation.ApplicationID, reservation.PRNumber)
+	}
+	return fmt.Sprintf("%s/%d/%s", reservation.ApplicationID, reservation.PRNumber, reservation.HeadSHA)
+}
+
+// ReservePreviewDelivery implements Repository with the unique-key semantics
+// of preview_deliveries.
+func (r *fakeRepository) ReservePreviewDelivery(_ context.Context, reservation DeliveryReservation) (DeliveryReservation, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.staleErr != nil {
-		return nil, r.staleErr
+	if r.reserveErr != nil {
+		return DeliveryReservation{}, r.reserveErr
 	}
-	stale := make([]Preview, 0, len(r.previews))
+	key := ReservationKey(reservation)
+	if _, taken := r.reservations[key]; taken {
+		return DeliveryReservation{}, ErrDuplicate
+	}
+	reservation.ID = uuid.New()
+	reservation.ReceivedAt = time.Now().UTC()
+	r.reservations[key] = reservation
+	return reservation, nil
+}
+
+// ReleasePreviewDelivery implements Repository.
+func (r *fakeRepository) ReleasePreviewDelivery(_ context.Context, reservationID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.unreserveErr != nil {
+		return r.unreserveErr
+	}
+	for key, reservation := range r.reservations {
+		if reservation.ID == reservationID {
+			delete(r.reservations, key)
+		}
+	}
+	return nil
+}
+
+// ClearPreviewDeliveries implements Repository.
+func (r *fakeRepository) ClearPreviewDeliveries(_ context.Context, appID uuid.UUID, prNumber int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.clearErr != nil {
+		return r.clearErr
+	}
+	for key, reservation := range r.reservations {
+		if reservation.ApplicationID == appID && reservation.PRNumber == prNumber {
+			delete(r.reservations, key)
+		}
+	}
+	return nil
+}
+
+// CountLivePreviews implements Repository.
+func (r *fakeRepository) CountLivePreviews(_ context.Context, appID uuid.UUID) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.countErr != nil {
+		return 0, r.countErr
+	}
+	if r.liveCountSet {
+		return r.liveCount, nil
+	}
+	count := 0
 	for _, preview := range r.previews {
-		if preview.State == PreviewDeleted {
+		if preview.ApplicationID == appID && preview.State != PreviewDeleted {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// ListOrphanedPreviews implements Repository.
+func (r *fakeRepository) ListOrphanedPreviews(_ context.Context) ([]Preview, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.orphanErr != nil {
+		return nil, r.orphanErr
+	}
+	if r.orphanPreviews != nil {
+		return append([]Preview{}, r.orphanPreviews...), nil
+	}
+	orphans := make([]Preview, 0)
+	for _, preview := range r.previews {
+		if preview.State == PreviewDeleted || preview.PreviewApplicationID != uuid.Nil {
 			continue
 		}
-		if preview.UpdatedAt.Before(before) {
-			stale = append(stale, preview)
-		}
+		orphans = append(orphans, preview)
 	}
-	return stale, nil
+	return orphans, nil
+}
+
+// ListOrphanedPreviewApplications implements Repository.
+func (r *fakeRepository) ListOrphanedPreviewApplications(_ context.Context, _ time.Time) ([]uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.orphanAppErr != nil {
+		return nil, r.orphanAppErr
+	}
+	return append([]uuid.UUID{}, r.orphanApps...), nil
+}
+
+// MarkPreviewsDeletedForSibling implements Repository.
+func (r *fakeRepository) MarkPreviewsDeletedForSibling(_ context.Context, previewAppID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.markSiblingErr != nil {
+		return r.markSiblingErr
+	}
+	for key, preview := range r.previews {
+		if preview.PreviewApplicationID != previewAppID || preview.State == PreviewDeleted {
+			continue
+		}
+		preview.State = PreviewDeleted
+		preview.DeletedAt = time.Now().UTC()
+		preview.UpdatedAt = preview.DeletedAt
+		r.previews[key] = preview
+	}
+	return nil
+}
+
+// reservationCount reports how many preview reservations are held.
+func (r *fakeRepository) reservationCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.reservations)
 }
 
 // fakeInstaller records hook installations instead of calling a Git host.

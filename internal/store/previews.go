@@ -35,8 +35,47 @@ func (s *Store) MarkPreviewDeployDeleted(ctx context.Context, id pgtype.UUID) (s
 	return s.queries.MarkPreviewDeployDeleted(ctx, id)
 }
 
-// ListStalePreviewDeploys returns live previews whose last activity is older
-// than before — the orphan sweep's work list.
-func (s *Store) ListStalePreviewDeploys(ctx context.Context, before pgtype.Timestamptz) ([]sqlc.PreviewDeploy, error) {
-	return s.queries.ListStalePreviewDeploys(ctx, before)
+// CountLivePreviewDeploys returns how many live (non-deleted) preview bindings
+// one base application has — the per-application preview cap's read.
+func (s *Store) CountLivePreviewDeploys(ctx context.Context, applicationID pgtype.UUID) (int64, error) {
+	return s.queries.CountLivePreviewDeploys(ctx, applicationID)
+}
+
+// ListOrphanedPreviewDeploys returns live bindings whose sibling application
+// is gone (or was never linked).
+func (s *Store) ListOrphanedPreviewDeploys(ctx context.Context) ([]sqlc.PreviewDeploy, error) {
+	return s.queries.ListOrphanedPreviewDeploys(ctx)
+}
+
+// MarkPreviewDeploysDeletedForSibling marks the bindings that point at a
+// sibling application being deleted.
+func (s *Store) MarkPreviewDeploysDeletedForSibling(ctx context.Context, previewApplicationID pgtype.UUID) error {
+	return s.queries.MarkPreviewDeploysDeletedForSibling(ctx, previewApplicationID)
+}
+
+// ListOrphanedPreviewApplications returns preview applications with no
+// binding, created before the given cutoff (the sweep grace period).
+func (s *Store) ListOrphanedPreviewApplications(ctx context.Context, createdBefore pgtype.Timestamptz) ([]pgtype.UUID, error) {
+	return s.queries.ListOrphanedPreviewApplications(ctx, createdBefore)
+}
+
+// ReservePreviewDelivery inserts a preview delivery reservation. pgx.ErrNoRows
+// means the same signed revision (or a concurrent close) already reserved it.
+func (s *Store) ReservePreviewDelivery(ctx context.Context, params sqlc.ReservePreviewDeliveryParams) (sqlc.PreviewDelivery, error) {
+	return s.queries.ReservePreviewDelivery(ctx, params)
+}
+
+// ReleasePreviewDelivery removes a reservation that did not lead to a queued
+// deployment. Removing an already-gone row is not an error.
+func (s *Store) ReleasePreviewDelivery(ctx context.Context, id pgtype.UUID) error {
+	return s.queries.ReleasePreviewDelivery(ctx, id)
+}
+
+// ClearPreviewDeliveries removes every reservation of one pull request at a
+// lifecycle transition, so the opposite transition can reserve again.
+func (s *Store) ClearPreviewDeliveries(ctx context.Context, applicationID pgtype.UUID, prNumber int32) error {
+	return s.queries.ClearPreviewDeliveries(ctx, sqlc.ClearPreviewDeliveriesParams{
+		ApplicationID: applicationID,
+		PrNumber:      prNumber,
+	})
 }

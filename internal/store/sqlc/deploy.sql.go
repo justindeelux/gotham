@@ -41,10 +41,10 @@ func (q *Queries) ClearStoragesByApp(ctx context.Context, applicationID pgtype.U
 const createApplication = `-- name: CreateApplication :one
 INSERT INTO applications (
     user_id, server_id, name, provider, repo, clone_url,
-    branch, build_pack, base_domain, port, host_port, team_id
+    branch, build_pack, base_domain, port, host_port, team_id, is_preview
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview
 `
 
 type CreateApplicationParams struct {
@@ -60,6 +60,7 @@ type CreateApplicationParams struct {
 	Port       int32       `json:"port"`
 	HostPort   int32       `json:"host_port"`
 	TeamID     pgtype.UUID `json:"team_id"`
+	IsPreview  bool        `json:"is_preview"`
 }
 
 func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationParams) (Application, error) {
@@ -76,6 +77,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		arg.Port,
 		arg.HostPort,
 		arg.TeamID,
+		arg.IsPreview,
 	)
 	var i Application
 	err := row.Scan(
@@ -95,6 +97,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.UpdatedAt,
 		&i.BaseDomainDisabled,
 		&i.TeamID,
+		&i.IsPreview,
 	)
 	return i, err
 }
@@ -210,7 +213,7 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 }
 
 const getApplication = `-- name: GetApplication :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id FROM applications WHERE id = $1
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview FROM applications WHERE id = $1
 `
 
 func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Application, error) {
@@ -233,6 +236,7 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 		&i.UpdatedAt,
 		&i.BaseDomainDisabled,
 		&i.TeamID,
+		&i.IsPreview,
 	)
 	return i, err
 }
@@ -361,7 +365,7 @@ func (q *Queries) InsertStorage(ctx context.Context, arg InsertStorageParams) (S
 }
 
 const listApplicationsByTeam = `-- name: ListApplicationsByTeam :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview FROM applications
 WHERE team_id = $1
 ORDER BY created_at DESC, id DESC
 `
@@ -392,6 +396,7 @@ func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID
 			&i.UpdatedAt,
 			&i.BaseDomainDisabled,
 			&i.TeamID,
+			&i.IsPreview,
 		); err != nil {
 			return nil, err
 		}
@@ -404,7 +409,7 @@ func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID
 }
 
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview FROM applications
 WHERE user_id = $1
 ORDER BY created_at DESC, id DESC
 `
@@ -435,6 +440,7 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 			&i.UpdatedAt,
 			&i.BaseDomainDisabled,
 			&i.TeamID,
+			&i.IsPreview,
 		); err != nil {
 			return nil, err
 		}
@@ -597,7 +603,7 @@ SET name = $2,
     base_domain_disabled = $9,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview
 `
 
 type UpdateApplicationParams struct {
@@ -642,6 +648,7 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		&i.UpdatedAt,
 		&i.BaseDomainDisabled,
 		&i.TeamID,
+		&i.IsPreview,
 	)
 	return i, err
 }

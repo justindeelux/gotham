@@ -923,6 +923,82 @@ test.describe("team mutation races", () => {
       `unexpected failed API requests:\n${guardrails.apiFailures.join("\n")}`,
     ).toEqual([]);
   });
+
+  test("an invite cancelled in one team never leaves the next team's form loading", async ({
+    page,
+    request,
+    guardrails,
+  }) => {
+    test.setTimeout(60_000);
+
+    const suffix = uniqueSuffix();
+    const teamA = await seedTeam(request, `ui-e2e-inv-a-${suffix}`);
+    const teamB = await seedTeam(request, `ui-e2e-inv-b-${suffix}`);
+    const emailA = `ui-e2e-inv-a-${suffix}@example.com`;
+    const emailB = `ui-e2e-inv-b-${suffix}@example.com`;
+
+    // Team A's invite creation is held; later ones pass through.
+    let releaseA: () => void = () => undefined;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const posts: string[] = [];
+    await page.route("**/api/v1/teams/*/invites", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      const forTeamA = route.request().url().includes(`/teams/${teamA.id}/`);
+      posts.push(forTeamA ? "A" : "B");
+      if (forTeamA) {
+        await gateA;
+      }
+      await route.continue();
+    });
+
+    await page.goto("/teams");
+    const rowA = page.locator(`[data-team="${teamA.name}"]`);
+    const rowB = page.locator(`[data-team="${teamB.name}"]`);
+
+    // In A, start an invite and leave it pending, then cancel the form.
+    await rowA.getByRole("button", { name: teamA.name }).click();
+    await page.locator(".n-tabs-tab").filter({ hasText: "Invites" }).click();
+    await page.getByRole("button", { name: "Invite member" }).click();
+    let modal = page.locator(".n-modal").filter({ hasText: "Invite member" });
+    await modal.getByLabel("Invite email").locator("input").fill(emailA);
+    await modal.getByRole("button", { name: "Create invite" }).click();
+    await expect(modal.getByRole("button", { name: "Create invite" })).toHaveClass(
+      /n-button--loading/,
+    );
+    await modal.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.locator(".n-modal")).toHaveCount(0);
+
+    // B: the form must not inherit A's pending submission.
+    await rowB.getByRole("button", { name: teamB.name }).click();
+    await page.getByRole("button", { name: "Invite member" }).click();
+    modal = page.locator(".n-modal").filter({ hasText: "Invite member" });
+    const createButton = modal.getByRole("button", { name: "Create invite" });
+    await expect(createButton).not.toHaveClass(/n-button--loading/);
+    await modal.getByLabel("Invite email").locator("input").fill(emailB);
+    await createButton.click();
+
+    // B's invite is created and its one-time link is shown.
+    const tokenModal = page.locator(".n-modal").filter({ hasText: "Invite created" });
+    await expect(tokenModal).toBeVisible();
+    await expect(tokenModal).toContainText(emailB);
+    expect(posts).toEqual(["A", "B"]);
+
+    // Releasing A's held request must not surface under B.
+    releaseA();
+    await settle(page);
+    await expect(tokenModal).toContainText(emailB);
+    await expect(tokenModal).not.toContainText(emailA);
+
+    expect(
+      guardrails.apiFailures,
+      `unexpected failed API requests:\n${guardrails.apiFailures.join("\n")}`,
+    ).toEqual([]);
+  });
 });
 
 /**

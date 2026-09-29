@@ -91,17 +91,22 @@ let selectionGeneration = 0;
 
 /**
  * Latest mutation token per subject (a member id, an invite id, the invite
- * form). Only the newest mutation of one subject may write page state, so an
- * overlapping older submission cannot regress to its response or clear the
- * newer one's pending indicator.
+ * form, the team delete). Only the newest mutation of one subject may write
+ * page state, so an overlapping older submission cannot regress to its
+ * response or clear the newer one's pending indicator. The counter itself
+ * never resets, so a token minted after a selection change can never collide
+ * with one that is still in flight.
  */
 const mutationTokens = new Map<string, number>();
 
+/** Monotonic mutation counter; every issuance is unique. */
+let mutationSequence = 0;
+
 /** beginMutation registers a mutation of one subject and returns its token. */
 function beginMutation(subject: string): number {
-  const token = (mutationTokens.get(subject) ?? 0) + 1;
-  mutationTokens.set(subject, token);
-  return token;
+  mutationSequence += 1;
+  mutationTokens.set(subject, mutationSequence);
+  return mutationSequence;
 }
 
 /**
@@ -336,6 +341,12 @@ function resetTeamContext(): void {
   pendingMemberIds.value = {};
   deleting.value = false;
   teamActionError.value = null;
+  // The invite form belongs to the previous team: its pending submission is
+  // now owned by nobody (the guard refuses to clear it), so reset the busy
+  // state here or the next team's form would stay loading forever, and close
+  // a form the new selection did not open.
+  inviteBusy.value = false;
+  inviteOpen.value = false;
 }
 
 async function loadMembers(): Promise<void> {
@@ -452,16 +463,20 @@ async function handleDelete(): Promise<void> {
   }
   const generation = selectionGeneration;
   const teamId = team.id;
+  const subject = `team:${teamId}`;
+  const token = beginMutation(subject);
   /**
    * A delete may legitimately move the selection (the deleted team was the
    * selected one), so its own outcome is judged by the team being gone from
    * the store; otherwise the context must be unchanged. A failure can never
    * move the selection, so a changed generation means the operator switched
-   * away while the delete was pending and its alert is stale.
+   * away while the delete was pending and its alert is stale. The mutation
+   * token keeps a superseded double-delete from writing the newer spinner.
    */
   const ownsFeedback = (): boolean =>
-    generation === selectionGeneration ||
-    !teamsStore.teams.some((item) => item.id === teamId);
+    mutationTokens.get(subject) === token &&
+    (generation === selectionGeneration ||
+      !teamsStore.teams.some((item) => item.id === teamId));
   deleting.value = true;
   teamActionError.value = null;
   try {

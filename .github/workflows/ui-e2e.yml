@@ -16,7 +16,7 @@ permissions:
 jobs:
   playwright:
     name: Playwright smoke (chromium)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 20
 
     services:
@@ -27,7 +27,7 @@ jobs:
           POSTGRES_PASSWORD: gotham
           POSTGRES_DB: gotham_ui_e2e
         ports:
-          - 5432:5432
+          - 5433:5432
         options: >-
           --health-cmd "pg_isready -U gotham -d gotham_ui_e2e"
           --health-interval 5s
@@ -36,7 +36,7 @@ jobs:
       redis:
         image: redis:7-alpine
         ports:
-          - 6379:6379
+          - 6380:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -46,11 +46,11 @@ jobs:
     env:
       # Dedicated test database and fixed port, kept off the production
       # defaults used by the shared test server.
-      GOTHAM_DATABASE_DSN: postgres://gotham:gotham@localhost:5432/gotham_ui_e2e?sslmode=disable
-      GOTHAM_REDIS_ADDR: localhost:6379
+      GOTHAM_DATABASE_DSN: postgres://gotham:gotham@localhost:5433/gotham_ui_e2e?sslmode=disable
+      GOTHAM_REDIS_ADDR: localhost:6380
       GOTHAM_SERVER_ADDR: 127.0.0.1
       GOTHAM_SERVER_PORT: "8099"
-      GOTHAM_GRPC_ADDR: 127.0.0.1:9442
+      GOTHAM_GRPC_ADDR: 127.0.0.1:9444
       GOTHAM_LOG_LEVEL: info
       GOTHAM_LOG_FORMAT: text
       # Applications are enabled by default; pinned explicitly so the smoke
@@ -64,6 +64,11 @@ jobs:
       # key; the domains smoke exercises the DNS-provider CRUD path.
       GOTHAM_SECRET_KEY: "ui-e2e-secret-key-not-for-production"
       GOTHAM_E2E_BASE_URL: http://127.0.0.1:8099
+      # The smoke account is a platform operator so the platform-global DNS
+      # surface (BE-8.2) is reachable; per-application cert/redirect management
+      # stays team-scoped.
+      GOTHAM_E2E_EMAIL: ui-e2e-admin@example.com
+      PLATFORM_ADMINS: ui-e2e-admin@example.com
 
     steps:
       - name: Checkout
@@ -88,6 +93,9 @@ jobs:
       - name: Build control plane
         run: go build -o bin/gotham ./cmd/gotham
 
+      - name: Stop any leftover control plane
+        run: pkill -f 'bin/gotham serve' || true
+
       - name: Start control plane
         run: |
           nohup ./bin/gotham serve > gotham-ui-e2e.log 2>&1 &
@@ -108,7 +116,7 @@ jobs:
 
       - name: Install Playwright Chromium
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
       - name: Run Playwright smoke
         working-directory: web
@@ -135,3 +143,7 @@ jobs:
           path: web/test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Stop control plane
+        if: always()
+        run: pkill -f 'bin/gotham serve' || true

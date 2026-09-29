@@ -30,14 +30,25 @@ interface RegisterResponse {
  * rate limit (5/minute burst).
  */
 export default async function globalSetup(): Promise<void> {
-  const email = `ui-e2e-${uniqueSuffix()}@example.com`;
+  // A fixed email lets the control plane list this account as a platform
+  // operator (PLATFORM_ADMINS) so the DNS-provider surface — platform-global
+  // since BE-8.2 — is reachable by the smoke. Otherwise a unique per-run email
+  // keeps parallel runs isolated.
+  const email =
+    process.env.GOTHAM_E2E_EMAIL ?? `ui-e2e-${uniqueSuffix()}@example.com`;
   const password = "Gotham-E2E-Password1";
 
   const api = await request.newContext({ baseURL, timeout: 15_000 });
   try {
-    const response = await api.post("/api/v1/auth/register", {
+    let response = await api.post("/api/v1/auth/register", {
       data: { email, password },
     });
+    if (response.status() === 409) {
+      // The account survives across runs on a persistent database; sign in.
+      response = await api.post("/api/v1/auth/login", {
+        data: { email, password },
+      });
+    }
     if (!response.ok()) {
       throw new Error(
         `global setup: register ${email} failed: ${response.status()} ${await response.text()}`,

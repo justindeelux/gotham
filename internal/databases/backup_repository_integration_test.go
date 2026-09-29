@@ -19,7 +19,7 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	ownerID, serverID := seedUserAndServer(t, st)
 
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	databaseRepo := newStoreRepository(st)
 	database, err := databaseRepo.CreateDatabase(ctx, Database{
 		ID:          uuid.New(),

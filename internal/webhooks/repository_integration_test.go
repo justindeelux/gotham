@@ -567,6 +567,217 @@ func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 	}
 }
 
+// claimFixture creates a user and a base application for claim-level tests.
+func claimFixture(t *testing.T, ctx context.Context, st *store.Store) (uuid.UUID, uuid.UUID) {
+	t.Helper()
+	email := fmt.Sprintf("be-8.1-claim-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	userID := uuid.UUID(user.ID.Bytes)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete: %v", err)
+		}
+	})
+	base, err := st.CreateApplication(ctx, createApplicationParams(userID))
+	if err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+	return userID, uuid.UUID(base.ID.Bytes)
+}
+
+// openClaimFixture opens the integration database and returns the store.
+func openClaimFixture(t *testing.T, ctx context.Context) *store.Store {
+	t.Helper()
+	dsn := integrationDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return store.New(pool)
+}
+
+// TestStoreClosingSameHeadClaimRetries is the N4 database-level proof: a claim
+// at a closing binding's own head answers retryable, and the fenced write
+// refuses to touch it.
+func TestStoreClosingSameHeadClaimRetries(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openClaimFixture(t, ctx)
+	userID, baseID := claimFixture(t, ctx, st)
+
+	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
+		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
+		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
+		Host: "pr-7.example.com", State: "closing",
+	}); err != nil {
+		t.Fatalf("UpsertPreviewDeploy: %v", err)
+	}
+	result, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-a", LiveLimit: 5,
+	})
+	if err != nil {
+		t.Fatalf("ClaimPreviewDelivery: %v", err)
+	}
+	if result.Duplicate || !result.Retryable || result.Approved {
+		t.Fatalf("closing same-head claim = %+v, want retryable (not duplicate)", result)
+	}
+
+	// The fenced write refuses a closing binding even with a valid lease.
+	lease, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-a", LiveLimit: 5, // still closing: retryable again
+	})
+	if err != nil || !lease.Retryable {
+		t.Fatalf("second closing claim = %+v / %v, want retryable", lease, err)
+	}
+	if _, err := st.DB.Exec(ctx, "UPDATE preview_deploys SET state = 'active' WHERE application_id = $1 AND pr_number = 7", pgUUID(baseID)); err != nil {
+		t.Fatalf("unsettle closing: %v", err)
+	}
+	approved, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-b", LiveLimit: 5,
+	})
+	if err != nil || !approved.Approved {
+		t.Fatalf("claim after closing = %+v / %v, want approved", approved, err)
+	}
+	if _, err := st.DB.Exec(ctx, "UPDATE preview_deploys SET state = 'closing' WHERE application_id = $1 AND pr_number = 7", pgUUID(baseID)); err != nil {
+		t.Fatalf("re-close: %v", err)
+	}
+	write, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
+		ApplicationID: pgUUID(baseID), PrNumber: 7, ReservationID: approved.Reservation.ID,
+		LeaseHeadSHA: "head-b", HeadSHA: "head-b", State: "active",
+	})
+	if err != nil {
+		t.Fatalf("WritePreviewBinding: %v", err)
+	}
+	if write.Refused != store.PreviewWriteClosingRefused {
+		t.Fatalf("closing write = %+v, want refused closing", write)
+	}
+}
+
+// TestStoreExpiredWorkerCannotPromote is the N5 database-level proof: a worker
+// whose lease lapsed cannot promote a binding once five other previews are
+// live; the fenced write refuses it.
+func TestStoreExpiredWorkerCannotPromote(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openClaimFixture(t, ctx)
+	userID, baseID := claimFixture(t, ctx, st)
+
+	slow, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: 1, Kind: store.PreviewClaimStart,
+		HeadSHA: "sha-1", LiveLimit: 5,
+	})
+	if err != nil || !slow.Approved {
+		t.Fatalf("slow claim = %+v / %v, want approved", slow, err)
+	}
+	if _, err := st.DB.Exec(ctx,
+		"UPDATE preview_deliveries SET expires_at = now() - interval '1 minute' WHERE id = $1",
+		slow.Reservation.ID,
+	); err != nil {
+		t.Fatalf("expire the slow lease: %v", err)
+	}
+
+	// Five other previews take every slot.
+	for pr := 2; pr <= 6; pr++ {
+		claim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+			ApplicationID: pgUUID(baseID), PrNumber: int32(pr), Kind: store.PreviewClaimStart,
+			HeadSHA: fmt.Sprintf("sha-%d", pr), LiveLimit: 5,
+		})
+		if err != nil || !claim.Approved {
+			t.Fatalf("claim PR %d = %+v / %v, want approved", pr, claim, err)
+		}
+		write, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
+			ApplicationID: pgUUID(baseID), PrNumber: int32(pr), ReservationID: claim.Reservation.ID,
+			LeaseHeadSHA: fmt.Sprintf("sha-%d", pr), HeadSHA: fmt.Sprintf("sha-%d", pr),
+			TeamID: pgUUID(userID), State: "active", ConsumeLease: true,
+		})
+		if err != nil || write.Refused != "" {
+			t.Fatalf("bind PR %d = %+v / %v, want written", pr, write, err)
+		}
+	}
+
+	// The slow worker resumes: its promotion is refused and no sixth binding
+	// appears.
+	write, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
+		ApplicationID: pgUUID(baseID), PrNumber: 1, ReservationID: slow.Reservation.ID,
+		LeaseHeadSHA: "sha-1", HeadSHA: "sha-1", State: "active", ConsumeLease: true,
+	})
+	if err != nil {
+		t.Fatalf("WritePreviewBinding(slow): %v", err)
+	}
+	if write.Refused != store.PreviewWriteLeaseRefused {
+		t.Fatalf("slow write = %+v, want refused lease", write)
+	}
+	var live int
+	if err := st.DB.QueryRow(ctx,
+		"SELECT count(*) FROM preview_deploys WHERE application_id = $1 AND state <> 'deleted'",
+		pgUUID(baseID),
+	).Scan(&live); err != nil {
+		t.Fatalf("count live: %v", err)
+	}
+	if live != 5 {
+		t.Fatalf("live previews = %d, want 5 (the expired worker must not promote)", live)
+	}
+}
+
+// TestStoreClosedBindingCannotBeResurrected is the R-1 database-level proof: a
+// completed close clears the ledger, so a racing worker's promotion is refused
+// and the binding stays deleted.
+func TestStoreClosedBindingCannotBeResurrected(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openClaimFixture(t, ctx)
+	userID, baseID := claimFixture(t, ctx, st)
+
+	claim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-b", LiveLimit: 5,
+	})
+	if err != nil || !claim.Approved {
+		t.Fatalf("claim = %+v / %v, want approved", claim, err)
+	}
+	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
+		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
+		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
+		Host: "pr-7.example.com", State: "active",
+	}); err != nil {
+		t.Fatalf("UpsertPreviewDeploy: %v", err)
+	}
+	// The close completes while the worker is in flight.
+	if _, err := st.MarkPreviewClosed(ctx, pgUUID(baseID), 7); err != nil {
+		t.Fatalf("MarkPreviewClosed: %v", err)
+	}
+
+	write, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
+		ApplicationID: pgUUID(baseID), PrNumber: 7, ReservationID: claim.Reservation.ID,
+		LeaseHeadSHA: "head-b", HeadSHA: "head-b", State: "active", ConsumeLease: true,
+	})
+	if err != nil {
+		t.Fatalf("WritePreviewBinding: %v", err)
+	}
+	if write.Refused != store.PreviewWriteLeaseRefused {
+		t.Fatalf("racing write = %+v, want refused lease", write)
+	}
+	binding, err := st.GetPreviewDeploy(ctx, pgUUID(baseID), 7)
+	if err != nil {
+		t.Fatalf("GetPreviewDeploy: %v", err)
+	}
+	if binding.State != "deleted" {
+		t.Fatalf("binding state = %q, want deleted (never resurrected)", binding.State)
+	}
+}
+
 // TestStoreClaimConcurrencyRespectsTheCap is the N3 database-level proof:
 // concurrent claims for distinct pull requests of one application never
 // approve more than the cap, because every claim locks the base application

@@ -583,7 +583,7 @@ func TestBindingWriteFailureCompensatesAndRetries(t *testing.T) {
 
 	body := githubPRBody("opened", 7, "feat/x", "main", "abc123")
 	repo.mu.Lock()
-	repo.upsertErr = errors.New("database down")
+	repo.promoteErr = errors.New("database down")
 	repo.mu.Unlock()
 
 	if _, err := receive(t, svc, body); err == nil {
@@ -601,7 +601,7 @@ func TestBindingWriteFailureCompensatesAndRetries(t *testing.T) {
 
 	// Retry: the same delivery succeeds and re-provisions the (deleted) sibling.
 	repo.mu.Lock()
-	repo.upsertErr = nil
+	repo.promoteErr = nil
 	repo.mu.Unlock()
 	delivery, err := receive(t, svc, body)
 	if err != nil {
@@ -1499,6 +1499,317 @@ func TestConcurrentDistinctPRsRespectTheCap(t *testing.T) {
 	}
 	if queued != maxLivePreviewsPerApplication || ignored != attempts-maxLivePreviewsPerApplication {
 		t.Errorf("queued/ignored = %d/%d, want %d/%d", queued, ignored, maxLivePreviewsPerApplication, attempts-maxLivePreviewsPerApplication)
+	}
+}
+
+// testClock is a controllable clock shared by the service and the fake
+// repository (lease expiry).
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *testClock) get() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *testClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// blockingProvisioner holds the first preview-clone call until release, so a
+// test can expire its lease (or close the PR) while the worker is stuck.
+// Later calls are never blocked (a sync.Once would make them wait for the
+// first call to finish).
+type blockingProvisioner struct {
+	*fakeDeployer
+	started chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	calls   int
+}
+
+func (b *blockingProvisioner) CreatePreviewApplication(ctx context.Context, baseAppID uuid.UUID, in deploy.PreviewApplicationInput) (deploy.Application, error) {
+	b.mu.Lock()
+	b.calls++
+	first := b.calls == 1
+	b.mu.Unlock()
+	if first {
+		close(b.started)
+		<-b.release
+	}
+	return b.fakeDeployer.CreatePreviewApplication(ctx, baseAppID, in)
+}
+
+// blockingQueue holds the next DeploySystem call after arm() until release.
+type blockingQueue struct {
+	*fakeDeployer
+	mu      sync.Mutex
+	armed   bool
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingQueue) arm() {
+	b.mu.Lock()
+	b.armed = true
+	b.mu.Unlock()
+}
+
+func (b *blockingQueue) DeploySystem(ctx context.Context, appID uuid.UUID) (deploy.Deployment, error) {
+	b.mu.Lock()
+	block := b.armed
+	b.armed = false
+	b.mu.Unlock()
+	if block {
+		close(b.started)
+		<-b.release
+	}
+	return b.fakeDeployer.DeploySystem(ctx, appID)
+}
+
+// TestClosingSameHeadReopenIsRetryable is the N4 regression: a reopen at the
+// closing binding's own head must answer retryable, not duplicate; after the
+// teardown completes the same delivery creates the preview again.
+func TestClosingSameHeadReopenIsRetryable(t *testing.T) {
+	t.Setenv(FeatureEnv, "true")
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{deleteErr: errors.New("node unreachable")}
+	now := time.Now().UTC()
+	svc := newTestServiceWith(Config{
+		Repository: repo, Installer: &fakeInstaller{}, Deployer: deployer,
+		Provisioner: deployer, Logger: discardLogger(),
+		Now: func() time.Time { return now },
+	})
+	repo.mu.Lock()
+	repo.now = func() time.Time { return now }
+	repo.mu.Unlock()
+
+	body := githubPRBody("opened", 7, "feat/x", "main", "head-a")
+	if _, err := receive(t, svc, body); err != nil {
+		t.Fatalf("Receive(open): %v", err)
+	}
+	closed := githubPRBody("closed", 7, "feat/x", "main", "head-a")
+	if _, err := receive(t, svc, closed); err == nil {
+		t.Fatal("close with a failing teardown: no error, want one")
+	}
+	preview, _ := repo.GetPreview(context.Background(), repo.app.ID, 7)
+	if preview.State != PreviewClosing {
+		t.Fatalf("binding = %q, want closing", preview.State)
+	}
+
+	// The same-SHA reopen while closing must be retryable (503), never a
+	// duplicate that acknowledges the delivery and loses the reopen.
+	_, err := receive(t, svc, body)
+	if !errors.Is(err, ErrRetryable) {
+		t.Fatalf("same-head reopen during closing = %v, want ErrRetryable", err)
+	}
+
+	// The sweep completes the close; the retry then recreates the preview.
+	deployer.mu.Lock()
+	deployer.deleteErr = nil
+	deployer.mu.Unlock()
+	repo.mu.Lock()
+	stale := repo.previews[previewKey(repo.app.ID, 7)]
+	stale.UpdatedAt = now.Add(-time.Hour)
+	repo.previews[previewKey(repo.app.ID, 7)] = stale
+	repo.mu.Unlock()
+	if removed, err := svc.SweepPreviews(context.Background()); err != nil || removed != 1 {
+		t.Fatalf("SweepPreviews = %d / %v, want the closing preview completed", removed, err)
+	}
+	if completed, _ := repo.GetPreview(context.Background(), repo.app.ID, 7); completed.State != PreviewDeleted {
+		t.Fatalf("binding after the sweep = %q, want deleted", completed.State)
+	}
+	delivery, err := receive(t, svc, body)
+	if err != nil {
+		t.Fatalf("Receive(reopen retry): %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("reopen retry = %+v, want queued", delivery)
+	}
+	if got := deployer.provisionCount(); got != 2 {
+		t.Errorf("siblings provisioned = %d, want 2 (original + reopen)", got)
+	}
+}
+
+// TestExpiredWorkerCannotExceedTheCap is the N5 regression: a worker whose
+// claim lease lapsed while it provisioned cannot promote a sixth live
+// preview; its sibling is compensated and the delivery answers retryable.
+func TestExpiredWorkerCannotExceedTheCap(t *testing.T) {
+	clock := &testClock{now: time.Now().UTC()}
+	repo := newFakeRepository().withTarget()
+	repo.mu.Lock()
+	repo.now = clock.get
+	repo.mu.Unlock()
+	blocking := &blockingProvisioner{
+		fakeDeployer: &fakeDeployer{},
+		started:      make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	svc := newTestServiceWith(Config{
+		Repository: repo, Installer: &fakeInstaller{}, Deployer: blocking,
+		Provisioner: blocking, Logger: discardLogger(), Now: clock.get,
+	})
+
+	// PR 1 gets stuck inside provisioning.
+	type result struct {
+		delivery Delivery
+		err      error
+	}
+	slow := make(chan result, 1)
+	go func() {
+		delivery, err := receive(t, svc, githubPRBody("opened", 1, "feat/one", "main", "sha-one"))
+		slow <- result{delivery, err}
+	}()
+	<-blocking.started
+
+	// Its lease lapses while it is stuck, and five other PRs fill the cap.
+	clock.advance(16 * time.Minute)
+	for pr := 2; pr <= 1+maxLivePreviewsPerApplication; pr++ {
+		delivery, err := receive(t, svc, githubPRBody("opened", pr, "feat/x", "main", "sha-"+strconv.Itoa(pr)))
+		if err != nil || delivery.Status != StatusQueued {
+			t.Fatalf("Receive(PR %d) = %+v / %v, want queued", pr, delivery, err)
+		}
+	}
+
+	// The stale worker resumes: the fence refuses the promotion, its sibling
+	// is compensated, and the delivery is retryable.
+	close(blocking.release)
+	res := <-slow
+	if !errors.Is(res.err, ErrRetryable) {
+		t.Fatalf("resumed stale worker = %+v / %v, want ErrRetryable", res.delivery, res.err)
+	}
+	if got := repo.countLiveForTest(repo.app.ID); got > maxLivePreviewsPerApplication {
+		t.Fatalf("live previews = %d, want at most the cap %d", got, maxLivePreviewsPerApplication)
+	}
+	if got := blocking.deleteCount(); got != 1 {
+		t.Errorf("compensated siblings = %d, want the stale worker's sibling deleted", got)
+	}
+	if _, err := repo.GetPreview(context.Background(), repo.app.ID, 1); !errors.Is(err, ErrNotFound) {
+		t.Errorf("PR 1 binding = %v, want none (the stale worker never promoted)", err)
+	}
+}
+
+// TestCloseWinsOverRacingSynchronize is the R-1 regression: a synchronize
+// that was in flight when the close completed cannot resurrect the binding
+// through the ErrNotFound recreate branch.
+func TestCloseWinsOverRacingSynchronize(t *testing.T) {
+	t.Setenv(FeatureEnv, "true")
+	repo := newFakeRepository().withTarget()
+	queue := &blockingQueue{
+		fakeDeployer: &fakeDeployer{},
+		started:      make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	svc := newTestServiceWith(Config{
+		Repository: repo, Installer: &fakeInstaller{}, Deployer: queue,
+		Provisioner: queue, Logger: discardLogger(),
+	})
+
+	open := githubPRBody("opened", 7, "feat/x", "main", "head-a")
+	if _, err := receive(t, svc, open); err != nil {
+		t.Fatalf("Receive(open): %v", err)
+	}
+	preview, _ := repo.GetPreview(context.Background(), repo.app.ID, 7)
+	sibling := preview.PreviewApplicationID
+
+	// Hold the synchronize inside its queue call.
+	queue.arm()
+	synced := make(chan error, 1)
+	go func() {
+		_, err := receive(t, svc, githubPRBody("synchronize", 7, "feat/x", "main", "head-b"))
+		synced <- err
+	}()
+	<-queue.started
+
+	// The PR closes while the synchronize is in flight: the teardown deletes
+	// the sibling and the atomic completion clears the ledger.
+	if _, err := receive(t, svc, githubPRBody("closed", 7, "feat/x", "main", "head-b")); err != nil {
+		t.Fatalf("Receive(close): %v", err)
+	}
+	queue.mu.Lock()
+	queue.fakeDeployer.mu.Lock()
+	queue.missing = map[uuid.UUID]bool{sibling: true}
+	queue.fakeDeployer.mu.Unlock()
+	queue.mu.Unlock()
+	close(queue.release)
+
+	if err := <-synced; !errors.Is(err, ErrRetryable) {
+		t.Fatalf("racing synchronize = %v, want ErrRetryable (the close won)", err)
+	}
+	resurrected, err := repo.GetPreview(context.Background(), repo.app.ID, 7)
+	if err != nil {
+		t.Fatalf("GetPreview: %v", err)
+	}
+	if resurrected.State != PreviewDeleted {
+		t.Fatalf("binding after the race = %q, want deleted (never resurrected)", resurrected.State)
+	}
+	if got := queue.provisionCount(); got != 1 {
+		t.Errorf("siblings provisioned = %d, want only the original", got)
+	}
+}
+
+// TestOwnLeaseDoesNotDenyTheCap is the LOW regression: the quota excludes the
+// claiming PR's own in-flight lease, so a new head of an existing,
+// not-yet-bound PR is not falsely denied, while the cap still holds for a
+// different PR.
+func TestOwnLeaseDoesNotDenyTheCap(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	// Four live previews plus PR 9's own in-flight lease: the new head of PR 9
+	// must be approved (its lease already holds its slot).
+	seedLive := func(pr int) {
+		t.Helper()
+		if _, err := repo.UpsertPreview(context.Background(), Preview{
+			ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
+			Repo: repo.app.Repo, PRNumber: pr, Host: "pr-x.apps.example.com",
+			PreviewApplicationID: uuid.New(), State: PreviewActive,
+		}); err != nil {
+			t.Fatalf("UpsertPreview(PR %d): %v", pr, err)
+		}
+	}
+	for pr := 1; pr <= 4; pr++ {
+		seedLive(pr)
+	}
+	repo.mu.Lock()
+	repo.reservations[ReservationKey(DeliveryReservation{
+		ApplicationID: repo.app.ID, PRNumber: 9, Kind: ReservationStart, HeadSHA: "old-head",
+	})] = DeliveryReservation{
+		ID: uuid.New(), ApplicationID: repo.app.ID, PRNumber: 9, Kind: ReservationStart,
+		HeadSHA: "old-head", ExpiresAt: time.Now().Add(time.Hour),
+	}
+	repo.mu.Unlock()
+
+	delivery, err := receive(t, svc, githubPRBody("synchronize", 9, "feat/x", "main", "new-head"))
+	if err != nil {
+		t.Fatalf("Receive(PR 9): %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("PR 9 new head = %+v, want queued (its own lease must not deny it)", delivery)
+	}
+
+	// A different PR at the full cap is still refused.
+	seedLive(5)
+	repo.mu.Lock()
+	repo.reservations[ReservationKey(DeliveryReservation{
+		ApplicationID: repo.app.ID, PRNumber: 10, Kind: ReservationStart, HeadSHA: "old-head",
+	})] = DeliveryReservation{
+		ID: uuid.New(), ApplicationID: repo.app.ID, PRNumber: 10, Kind: ReservationStart,
+		HeadSHA: "old-head", ExpiresAt: time.Now().Add(time.Hour),
+	}
+	repo.mu.Unlock()
+	delivery, err = receive(t, svc, githubPRBody("synchronize", 10, "feat/x", "main", "new-head"))
+	if err != nil {
+		t.Fatalf("Receive(PR 10): %v", err)
+	}
+	if delivery.Status != StatusIgnored || delivery.Reason != "preview limit reached" {
+		t.Fatalf("PR 10 = %+v, want ignored at the cap", delivery)
 	}
 }
 

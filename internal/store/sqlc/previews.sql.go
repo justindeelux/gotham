@@ -31,22 +31,52 @@ func (q *Queries) ClearPreviewDeliveries(ctx context.Context, arg ClearPreviewDe
 const countLivePreviews = `-- name: CountLivePreviews :one
 SELECT count(*) FROM (
     SELECT p.pr_number AS pr_number FROM preview_deploys p
-    WHERE p.application_id = $1 AND p.state <> 'deleted'
+    WHERE p.application_id = $1 AND p.pr_number <> $2 AND p.state <> 'deleted'
     UNION
     SELECT d.pr_number AS pr_number FROM preview_deliveries d
-    WHERE d.application_id = $1 AND d.kind = 'start' AND d.expires_at > now()
+    WHERE d.application_id = $1 AND d.pr_number <> $2 AND d.kind = 'start' AND d.expires_at > now()
 ) AS live
 `
 
+type CountLivePreviewsParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	PrNumber      int32       `json:"pr_number"`
+}
+
 // The quota read: distinct pull requests of one base application that are
 // live (a non-deleted binding) or in flight (an unexpired start lease).
-// Counting the leases closes the window between "approved" and "binding
-// written" that a plain binding count leaves open under concurrency.
-func (q *Queries) CountLivePreviews(ctx context.Context, applicationID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countLivePreviews, applicationID)
+// Leases close the window between "approved" and "binding written" that a
+// plain binding count leaves open under concurrency. $2 excludes the pull
+// request the caller is acting on: its own in-flight lease already holds a
+// slot and must not deny a new head of the same PR.
+func (q *Queries) CountLivePreviews(ctx context.Context, arg CountLivePreviewsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countLivePreviews, arg.ApplicationID, arg.PrNumber)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const getPreviewDelivery = `-- name: GetPreviewDelivery :one
+SELECT id, application_id, pr_number, kind, head_sha, delivery_id, received_at, expires_at FROM preview_deliveries WHERE id = $1 AND expires_at > now()
+`
+
+// Loads one UNEXPIRED ledger row by id: the promotion fence verifies the
+// lease it was issued still exists and has not lapsed. An expired lease is
+// reported as missing, so a stale worker cannot promote a binding.
+func (q *Queries) GetPreviewDelivery(ctx context.Context, id pgtype.UUID) (PreviewDelivery, error) {
+	row := q.db.QueryRow(ctx, getPreviewDelivery, id)
+	var i PreviewDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.PrNumber,
+		&i.Kind,
+		&i.HeadSha,
+		&i.DeliveryID,
+		&i.ReceivedAt,
+		&i.ExpiresAt,
+	)
+	return i, err
 }
 
 const getPreviewDeploy = `-- name: GetPreviewDeploy :one

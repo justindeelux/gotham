@@ -38,6 +38,7 @@ type fakeRepository struct {
 	// index the database enforces (start: app/pr/sha, close: app/pr).
 	reservations   map[string]DeliveryReservation
 	claimStoreErr  error
+	promoteErr     error
 	unreserveErr   error
 	clearErr       error
 	orphanErr      error
@@ -490,13 +491,16 @@ func (r *fakeRepository) ClaimPreviewDelivery(_ context.Context, claim PreviewCl
 		reserve()
 	case ReservationStart:
 		switch {
+		case hasBinding && binding.State == PreviewClosing:
+			// N4: a close owns the preview even at the delivery's own head;
+			// the same-SHA reopen stays retryable until the teardown completes.
+			result.Retryable = true
 		case hasBinding && binding.State != PreviewDeleted && binding.HeadSHA == claim.HeadSHA:
 			result.Duplicate = true
-		case hasBinding && binding.State == PreviewClosing:
-			result.Retryable = true
 		default:
 			live := hasBinding && binding.State != PreviewDeleted
-			if !live && claim.LiveLimit > 0 && r.liveCountLocked(claim.ApplicationID, now) >= claim.LiveLimit {
+			if !live && claim.LiveLimit > 0 &&
+				r.liveCountLocked(claim.ApplicationID, now, claim.PRNumber) >= claim.LiveLimit {
 				result.Limit = true
 				return result, nil
 			}
@@ -509,21 +513,93 @@ func (r *fakeRepository) ClaimPreviewDelivery(_ context.Context, claim PreviewCl
 }
 
 // liveCountLocked counts the distinct pull requests of one application that
-// are live (non-deleted binding) or in flight (unexpired start lease).
-func (r *fakeRepository) liveCountLocked(appID uuid.UUID, now time.Time) int {
+// are live (non-deleted binding) or in flight (unexpired start lease),
+// excluding excludePR — the caller's own slot must not deny its next head.
+func (r *fakeRepository) liveCountLocked(appID uuid.UUID, now time.Time, excludePR int) int {
 	prs := make(map[int]bool)
 	for _, preview := range r.previews {
-		if preview.ApplicationID == appID && preview.State != PreviewDeleted {
+		if preview.ApplicationID == appID && preview.State != PreviewDeleted && preview.PRNumber != excludePR {
 			prs[preview.PRNumber] = true
 		}
 	}
 	for _, reservation := range r.reservations {
 		if reservation.ApplicationID == appID && reservation.Kind == ReservationStart &&
-			reservation.ExpiresAt.After(now) {
+			reservation.PRNumber != excludePR && reservation.ExpiresAt.After(now) {
 			prs[reservation.PRNumber] = true
 		}
 	}
 	return len(prs)
+}
+
+// WritePreviewBinding implements Repository with the same fence the store
+// transaction applies: the claim lease must still exist and be unexpired, a
+// closing binding is owned by its close, and a write that would make the
+// binding live re-checks the quota.
+func (r *fakeRepository) WritePreviewBinding(_ context.Context, write PreviewBindingWrite) (PreviewBindingWriteResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.promoteErr != nil {
+		return PreviewBindingWriteResult{}, r.promoteErr
+	}
+	now := r.clock()
+	lease, ok := r.reservationByIDLocked(write.ReservationID)
+	if !ok || !lease.ExpiresAt.After(now) ||
+		lease.Kind != ReservationStart ||
+		lease.ApplicationID != write.ApplicationID ||
+		lease.PRNumber != write.PRNumber ||
+		lease.HeadSHA != write.LeaseHeadSHA {
+		return PreviewBindingWriteResult{Refused: BindingRefusedLease}, nil
+	}
+
+	key := previewKey(write.ApplicationID, write.PRNumber)
+	binding, hasBinding := r.previews[key]
+	if hasBinding && binding.State == PreviewClosing {
+		return PreviewBindingWriteResult{Refused: BindingRefusedClosing}, nil
+	}
+	live := hasBinding && binding.State != PreviewDeleted
+	if !live && write.LiveLimit > 0 &&
+		r.liveCountLocked(write.ApplicationID, now, write.PRNumber) >= write.LiveLimit {
+		return PreviewBindingWriteResult{Refused: BindingRefusedLimit}, nil
+	}
+
+	stored := Preview{
+		ID:                   uuid.New(),
+		ApplicationID:        write.ApplicationID,
+		TeamID:               write.TeamID,
+		Provider:             write.Provider,
+		Repo:                 write.Repo,
+		PRNumber:             write.PRNumber,
+		Branch:               write.Branch,
+		HeadSHA:              write.HeadSHA,
+		PreviewApplicationID: write.PreviewApplicationID,
+		Host:                 write.Host,
+		State:                write.State,
+		CreatedAt:            now.UTC(),
+		UpdatedAt:            now.UTC(),
+	}
+	if hasBinding {
+		stored.ID = binding.ID
+		stored.CreatedAt = binding.CreatedAt
+	}
+	r.previews[key] = stored
+	if write.ConsumeLease {
+		for reservationKey, reservation := range r.reservations {
+			if reservation.ID == write.ReservationID {
+				delete(r.reservations, reservationKey)
+			}
+		}
+	}
+	return PreviewBindingWriteResult{Binding: &stored}, nil
+}
+
+// reservationByIDLocked find a reservation by id (test helper).
+func (r *fakeRepository) reservationByIDLocked(id uuid.UUID) (DeliveryReservation, bool) {
+	for _, reservation := range r.reservations {
+		if reservation.ID == id {
+			return reservation, true
+		}
+	}
+	return DeliveryReservation{}, false
 }
 
 // ReleasePreviewDelivery implements Repository.
@@ -560,7 +636,7 @@ func (r *fakeRepository) ClearPreviewDeliveries(_ context.Context, appID uuid.UU
 func (r *fakeRepository) countLiveForTest(appID uuid.UUID) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.liveCountLocked(appID, r.clock())
+	return r.liveCountLocked(appID, r.clock(), 0)
 }
 
 // ListOrphanedPreviews implements Repository.

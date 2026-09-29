@@ -308,6 +308,36 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 		previewAppID = existing.PreviewApplicationID
 	}
 
+	// promote is the fenced binding write: it is refused when the claim lease
+	// has lapsed (a stale worker), when a close owns the preview, or when the
+	// quota filled while this worker provisioned.
+	promote := func(write PreviewBindingWrite) error {
+		write.ApplicationID = target.ApplicationID
+		write.PRNumber = pr.Number
+		write.ReservationID = claim.Reservation.ID
+		write.LeaseHeadSHA = strings.TrimSpace(pr.HeadSHA)
+		write.TeamID = target.TeamID
+		write.Provider = provider
+		write.Repo = target.Repo
+		write.Branch = pr.HeadBranch
+		write.Host = host
+		write.LiveLimit = maxLivePreviewsPerApplication
+		result, err := s.repo.WritePreviewBinding(ctx, write)
+		if err != nil {
+			return err
+		}
+		switch result.Refused {
+		case "":
+			return nil
+		case BindingRefusedClosing:
+			return fmt.Errorf("%w: a close transition is in progress", ErrRetryable)
+		case BindingRefusedLease:
+			return fmt.Errorf("%w: the preview claim expired", ErrRetryable)
+		default:
+			return fmt.Errorf("%w: the preview limit was reached while provisioning", ErrRetryable)
+		}
+	}
+
 	provisioned := false
 	if previewAppID == uuid.Nil {
 		created, err := s.provisioner.CreatePreviewApplication(ctx, target.ApplicationID, deploy.PreviewApplicationInput{
@@ -336,38 +366,28 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 
 	// Persist the binding BEFORE queueing: a crash or a queue failure then
 	// leaves a tracked sibling, and the next delivery recovers it instead of
-	// hitting (and being rejected by) its unique name and host.
-	if _, err := s.repo.UpsertPreview(ctx, Preview{
-		ApplicationID:        target.ApplicationID,
-		TeamID:               target.TeamID,
-		Provider:             provider,
-		Repo:                 target.Repo,
-		PRNumber:             pr.Number,
-		Branch:               pr.HeadBranch,
+	// hitting (and being rejected by) its unique name and host. The write is
+	// fenced, so a worker whose lease lapsed cannot promote a live binding.
+	if err := promote(PreviewBindingWrite{
 		HeadSHA:              previousSHA,
 		PreviewApplicationID: previewAppID,
-		Host:                 host,
 		State:                PreviewDeploying,
 	}); err != nil {
 		// Compensation: a sibling this delivery just created must not survive
 		// a binding it cannot be found through.
-		if provisioned {
-			if derr := s.provisioner.DeleteSystemApplication(ctx, previewAppID); derr != nil {
-				s.logger.Warn("webhooks: preview compensation delete failed; the sweep will pick it up",
-					"application_id", previewAppID, "error", derr)
-			}
-		}
+		s.compensatePreview(ctx, previewAppID, provisioned)
 		return Delivery{}, err
 	}
 
 	deployment, deployErr := s.deployer.DeploySystem(ctx, previewAppID)
 	if errors.Is(deployErr, deploy.ErrNotFound) {
 		// The sibling vanished between the read and the queue (deleted out of
-		// band): clear the dead link and provision a fresh sibling once.
-		if _, err := s.repo.UpsertPreview(ctx, Preview{
-			ApplicationID: target.ApplicationID, TeamID: target.TeamID, Provider: provider,
-			Repo: target.Repo, PRNumber: pr.Number, Branch: pr.HeadBranch,
-			HeadSHA: previousSHA, PreviewApplicationID: uuid.Nil, Host: host, State: PreviewDeploying,
+		// band): clear the dead link and provision a fresh sibling once. Both
+		// writes stay fenced, so a close that completed in the meantime is
+		// never overwritten back to active (R-1).
+		if err := promote(PreviewBindingWrite{
+			HeadSHA: previousSHA,
+			State:   PreviewDeploying,
 		}); err != nil {
 			return Delivery{}, err
 		}
@@ -380,15 +400,12 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 			return Delivery{}, fmt.Errorf("%w: recreate preview application: %v", ErrRetryable, err)
 		}
 		previewAppID = created.ID
-		if _, err := s.repo.UpsertPreview(ctx, Preview{
-			ApplicationID: target.ApplicationID, TeamID: target.TeamID, Provider: provider,
-			Repo: target.Repo, PRNumber: pr.Number, Branch: pr.HeadBranch,
-			HeadSHA: previousSHA, PreviewApplicationID: previewAppID, Host: host, State: PreviewDeploying,
+		if err := promote(PreviewBindingWrite{
+			HeadSHA:              previousSHA,
+			PreviewApplicationID: previewAppID,
+			State:                PreviewDeploying,
 		}); err != nil {
-			if derr := s.provisioner.DeleteSystemApplication(ctx, previewAppID); derr != nil {
-				s.logger.Warn("webhooks: preview compensation delete failed; the sweep will pick it up",
-					"application_id", previewAppID, "error", derr)
-			}
+			s.compensatePreview(ctx, previewAppID, true)
 			return Delivery{}, err
 		}
 		deployment, deployErr = s.deployer.DeploySystem(ctx, previewAppID)
@@ -397,20 +414,19 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 	switch {
 	case deployErr == nil:
 		// The revision is queued: only now does the binding name it, and only
-		// now may the in-flight lease go. A replay after this point dedupes
+		// now does the in-flight lease go. A replay after this point dedupes
 		// against the binding's current head.
-		if _, err := s.repo.UpsertPreview(ctx, Preview{
-			ApplicationID: target.ApplicationID, TeamID: target.TeamID, Provider: provider,
-			Repo: target.Repo, PRNumber: pr.Number, Branch: pr.HeadBranch,
-			HeadSHA: strings.TrimSpace(pr.HeadSHA), PreviewApplicationID: previewAppID,
-			Host: host, State: PreviewActive,
+		if err := promote(PreviewBindingWrite{
+			HeadSHA:              strings.TrimSpace(pr.HeadSHA),
+			PreviewApplicationID: previewAppID,
+			State:                PreviewActive,
+			ConsumeLease:         true,
 		}); err != nil {
-			// The deployment is queued and tracked by the sibling; a stale
-			// binding revision is repaired by the next delivery.
+			// The deployment is queued and tracked by the sibling; the lease
+			// lapses on its own (bounded) and the next delivery repairs the
+			// binding revision.
 			s.logger.Warn("webhooks: could not record the queued preview revision",
 				"application_id", target.ApplicationID, "pr_number", pr.Number, "error", err)
-		} else {
-			s.releaseReservation(ctx, claim.Reservation)
 		}
 		s.previewComment(ctx, target, pr.Number, startedComment(host))
 		return Delivery{Status: StatusQueued, Reason: "preview", DeploymentID: deployment.ID.String(), Host: host}, nil
@@ -423,6 +439,19 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 		return Delivery{}, fmt.Errorf("%w: a deployment is already running for the preview", ErrRetryable)
 	default:
 		return Delivery{}, fmt.Errorf("webhooks: queue preview deployment: %w", deployErr)
+	}
+}
+
+// compensatePreview deletes a sibling this delivery just provisioned when its
+// binding could not be promoted (fence refusal or store failure), so the
+// orphan sweep is a backstop rather than the only cleanup.
+func (s *Service) compensatePreview(ctx context.Context, appID uuid.UUID, provisioned bool) {
+	if !provisioned || appID == uuid.Nil {
+		return
+	}
+	if err := s.provisioner.DeleteSystemApplication(ctx, appID); err != nil {
+		s.logger.Warn("webhooks: preview compensation delete failed; the sweep will pick it up",
+			"application_id", appID, "error", err)
 	}
 }
 

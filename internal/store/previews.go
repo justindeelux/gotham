@@ -129,17 +129,23 @@ func (s *Store) ClaimPreviewDelivery(ctx context.Context, params PreviewClaimPar
 		}
 	case PreviewClaimStart:
 		switch {
+		case binding != nil && binding.State == "closing":
+			// A close transition owns the preview right now — even at the
+			// delivery's own head. A same-SHA reopen must stay retryable until
+			// the teardown completes; afterward the same delivery recreates.
+			result.Retryable = true
 		case binding != nil && binding.State != "deleted" && binding.HeadSha == params.HeadSHA:
 			// The live binding already names this revision.
 			result.Duplicate = true
-		case binding != nil && binding.State == "closing":
-			// A close transition owns the preview right now; the reopen waits
-			// for a redelivery once it finishes.
-			result.Retryable = true
 		default:
 			live := binding != nil && binding.State != "deleted"
 			if !live && params.LiveLimit > 0 {
-				count, err := queries.CountLivePreviews(ctx, params.ApplicationID)
+				count, err := queries.CountLivePreviews(ctx, sqlc.CountLivePreviewsParams{
+					ApplicationID: params.ApplicationID,
+					// The PR's own in-flight lease already holds its slot and
+					// must not deny a new head of the same PR.
+					PrNumber: params.PrNumber,
+				})
 				if err != nil {
 					return PreviewClaimResult{}, err
 				}
@@ -162,6 +168,154 @@ func (s *Store) ClaimPreviewDelivery(ctx context.Context, params PreviewClaimPar
 	if err := tx.Commit(ctx); err != nil {
 		return PreviewClaimResult{}, err
 	}
+	return result, nil
+}
+
+// PreviewBindingWriteParams is one fenced binding promotion: the pending
+// binding write of a preview worker, authorized by the claim lease it was
+// issued.
+type PreviewBindingWriteParams struct {
+	ApplicationID pgtype.UUID
+	PrNumber      int32
+	// ReservationID is the claim lease that authorizes this write.
+	ReservationID pgtype.UUID
+	// LeaseHeadSHA is the revision the lease was issued for (the delivery's
+	// signed head); HeadSHA is the revision the binding records (an
+	// intermediate promotion keeps the previously queued head).
+	LeaseHeadSHA string
+	HeadSHA      string
+	// ConsumeLease deletes the lease on success (the final promotion);
+	// an intermediate write keeps it.
+	ConsumeLease bool
+	// LiveLimit re-checks the quota when the write would make a deleted or
+	// missing binding live (zero disables the check).
+	LiveLimit int64
+	// Binding fields.
+	TeamID               pgtype.UUID
+	Provider             string
+	Repo                 string
+	Branch               string
+	Host                 string
+	State                string
+	PreviewApplicationID pgtype.UUID
+}
+
+// Refusal reasons reported by WritePreviewBinding.
+const (
+	// PreviewWriteLeaseRefused means the claim lease is gone or expired: the
+	// worker is stale and must not promote a binding.
+	PreviewWriteLeaseRefused = "lease"
+	// PreviewWriteClosingRefused means a close transition owns the preview.
+	PreviewWriteClosingRefused = "closing"
+	// PreviewWriteLimitRefused means the preview quota is full.
+	PreviewWriteLimitRefused = "limit"
+)
+
+// PreviewBindingWriteResult is the outcome of WritePreviewBinding: Binding is
+// set when the write went through, Refused names the fence that stopped it
+// otherwise.
+type PreviewBindingWriteResult struct {
+	Binding sqlc.PreviewDeploy
+	Refused string
+}
+
+// WritePreviewBinding is the fenced counterpart of a plain upsert: it runs
+// under the base-application lock, verifies the worker's claim lease still
+// exists and is unexpired, refuses to touch a `closing` binding (a close owns
+// it), re-checks the live-preview quota when the write would make the binding
+// live, and only then stores the binding (consuming the lease on the final
+// promotion). A worker whose lease expired while it provisioned therefore
+// cannot promote a sixth live preview, and a close that completed in the
+// meantime can never be overwritten back to active.
+func (s *Store) WritePreviewBinding(ctx context.Context, params PreviewBindingWriteParams) (PreviewBindingWriteResult, error) {
+	var result PreviewBindingWriteResult
+
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := s.queries.WithTx(tx)
+
+	// The same lock the claim takes: promotion serializes with allocation.
+	var locked pgtype.UUID
+	if err := tx.QueryRow(ctx, "SELECT id FROM applications WHERE id = $1 FOR UPDATE", params.ApplicationID).Scan(&locked); err != nil {
+		return result, err
+	}
+
+	lease, err := queries.GetPreviewDelivery(ctx, params.ReservationID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		result.Refused = PreviewWriteLeaseRefused
+		return result, nil
+	case err != nil:
+		return result, err
+	}
+	if lease.Kind != PreviewClaimStart ||
+		lease.ApplicationID != params.ApplicationID ||
+		lease.PrNumber != params.PrNumber ||
+		lease.HeadSha != params.LeaseHeadSHA {
+		result.Refused = PreviewWriteLeaseRefused
+		return result, nil
+	}
+
+	var binding *sqlc.PreviewDeploy
+	row, err := queries.GetPreviewDeploy(ctx, sqlc.GetPreviewDeployParams{
+		ApplicationID: params.ApplicationID,
+		PrNumber:      params.PrNumber,
+	})
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return result, err
+	default:
+		binding = &row
+	}
+	if binding != nil && binding.State == "closing" {
+		// N4/R-1: a close transition owns this preview; never write over it.
+		result.Refused = PreviewWriteClosingRefused
+		return result, nil
+	}
+
+	live := binding != nil && binding.State != "deleted"
+	if !live && params.LiveLimit > 0 {
+		count, err := queries.CountLivePreviews(ctx, sqlc.CountLivePreviewsParams{
+			ApplicationID: params.ApplicationID,
+			PrNumber:      params.PrNumber,
+		})
+		if err != nil {
+			return result, err
+		}
+		if count >= params.LiveLimit {
+			result.Refused = PreviewWriteLimitRefused
+			return result, nil
+		}
+	}
+
+	stored, err := queries.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
+		ApplicationID:        params.ApplicationID,
+		TeamID:               params.TeamID,
+		Provider:             params.Provider,
+		Repo:                 params.Repo,
+		PrNumber:             params.PrNumber,
+		Branch:               params.Branch,
+		HeadSha:              params.HeadSHA,
+		PreviewApplicationID: params.PreviewApplicationID,
+		Host:                 params.Host,
+		State:                params.State,
+	})
+	if err != nil {
+		return PreviewBindingWriteResult{}, err
+	}
+	if params.ConsumeLease {
+		if err := queries.ReleasePreviewDelivery(ctx, params.ReservationID); err != nil {
+			return PreviewBindingWriteResult{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return PreviewBindingWriteResult{}, err
+	}
+	result.Binding = stored
 	return result, nil
 }
 

@@ -84,15 +84,23 @@ ORDER BY a.created_at ASC;
 -- name: CountLivePreviews :one
 -- The quota read: distinct pull requests of one base application that are
 -- live (a non-deleted binding) or in flight (an unexpired start lease).
--- Counting the leases closes the window between "approved" and "binding
--- written" that a plain binding count leaves open under concurrency.
+-- Leases close the window between "approved" and "binding written" that a
+-- plain binding count leaves open under concurrency. $2 excludes the pull
+-- request the caller is acting on: its own in-flight lease already holds a
+-- slot and must not deny a new head of the same PR.
 SELECT count(*) FROM (
     SELECT p.pr_number AS pr_number FROM preview_deploys p
-    WHERE p.application_id = $1 AND p.state <> 'deleted'
+    WHERE p.application_id = $1 AND p.pr_number <> $2 AND p.state <> 'deleted'
     UNION
     SELECT d.pr_number AS pr_number FROM preview_deliveries d
-    WHERE d.application_id = $1 AND d.kind = 'start' AND d.expires_at > now()
+    WHERE d.application_id = $1 AND d.pr_number <> $2 AND d.kind = 'start' AND d.expires_at > now()
 ) AS live;
+
+-- name: GetPreviewDelivery :one
+-- Loads one UNEXPIRED ledger row by id: the promotion fence verifies the
+-- lease it was issued still exists and has not lapsed. An expired lease is
+-- reported as missing, so a stale worker cannot promote a binding.
+SELECT * FROM preview_deliveries WHERE id = $1 AND expires_at > now();
 
 -- name: ReservePreviewDelivery :one
 -- Insert a delivery reservation (in-flight lease for a start, teardown marker

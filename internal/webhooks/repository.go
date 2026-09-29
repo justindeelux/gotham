@@ -117,6 +117,50 @@ type PreviewClaimResult struct {
 	Binding *Preview
 }
 
+// Fence refusals reported by WritePreviewBinding.
+const (
+	// BindingRefusedLease: the claim lease is gone or expired (a stale
+	// worker); the write must not promote a binding.
+	BindingRefusedLease = "lease"
+	// BindingRefusedClosing: a close transition owns the preview.
+	BindingRefusedClosing = "closing"
+	// BindingRefusedLimit: the preview quota is full.
+	BindingRefusedLimit = "limit"
+)
+
+// PreviewBindingWrite is one fenced binding promotion: the pending write of a
+// preview worker, authorized by the claim lease it was issued.
+type PreviewBindingWrite struct {
+	ApplicationID uuid.UUID
+	PRNumber      int
+	// ReservationID is the claim lease that authorizes the write.
+	ReservationID uuid.UUID
+	// LeaseHeadSHA is the revision the lease was issued for; HeadSHA is what
+	// the binding records (an intermediate promotion keeps the previously
+	// queued revision).
+	LeaseHeadSHA string
+	HeadSHA      string
+	// ConsumeLease removes the lease on success (the final promotion).
+	ConsumeLease bool
+	// LiveLimit re-checks the quota when the write would make the binding
+	// live (zero disables the check).
+	LiveLimit            int
+	TeamID               uuid.UUID
+	Provider             string
+	Repo                 string
+	Branch               string
+	Host                 string
+	State                string
+	PreviewApplicationID uuid.UUID
+}
+
+// PreviewBindingWriteResult is the outcome of a fenced write. Binding is set
+// when it went through; Refused names the fence that stopped it otherwise.
+type PreviewBindingWriteResult struct {
+	Binding *Preview
+	Refused string
+}
+
 // Event is one claimed delivery: the anti-spam ledger row that makes a
 // repeated commit SHA a no-op.
 type Event struct {
@@ -186,12 +230,18 @@ type Repository interface {
 	// PurgeExpiredPreviewReservations removes every expired ledger row and
 	// reports how many went.
 	PurgeExpiredPreviewReservations(ctx context.Context) (int, error)
+	// WritePreviewBinding stores a preview worker's binding under the
+	// base-application lock, fenced by its claim lease (still present and
+	// unexpired), the closing state (a close owns the preview) and the quota.
+	// The refused write is reported, never applied; production promotion goes
+	// through this method.
+	WritePreviewBinding(ctx context.Context, write PreviewBindingWrite) (PreviewBindingWriteResult, error)
 	// GetPreview returns the preview binding of one pull request, or
 	// ErrNotFound when the PR has no preview yet.
 	GetPreview(ctx context.Context, appID uuid.UUID, prNumber int) (Preview, error)
-	// UpsertPreview stores or refreshes the binding of one pull request. The
-	// unique (application_id, pr_number) pair keeps a redelivered event
-	// idempotent.
+	// UpsertPreview stores or refreshes the binding without the promotion
+	// fence. It is the seeding seam for tests and the audit tooling; the
+	// delivery path uses ClaimPreviewDelivery + WritePreviewBinding.
 	UpsertPreview(ctx context.Context, preview Preview) (Preview, error)
 	// ListPreviews returns an application's preview bindings, newest first.
 	ListPreviews(ctx context.Context, appID uuid.UUID) ([]Preview, error)
@@ -375,6 +425,39 @@ func (r *storeRepository) LinkEventDeployment(ctx context.Context, eventID, depl
 // success: releasing twice must not fail.
 func (r *storeRepository) ReleaseEvent(ctx context.Context, eventID uuid.UUID) error {
 	return r.store.DeleteWebhookEvent(ctx, pgUUID(eventID))
+}
+
+// WritePreviewBinding runs the store's fenced promotion and maps its refusal
+// to the domain result.
+func (r *storeRepository) WritePreviewBinding(ctx context.Context, write PreviewBindingWrite) (PreviewBindingWriteResult, error) {
+	result, err := r.store.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
+		ApplicationID:        pgUUID(write.ApplicationID),
+		PrNumber:             int32(write.PRNumber),
+		ReservationID:        pgUUID(write.ReservationID),
+		LeaseHeadSHA:         write.LeaseHeadSHA,
+		HeadSHA:              write.HeadSHA,
+		ConsumeLease:         write.ConsumeLease,
+		LiveLimit:            int64(write.LiveLimit),
+		TeamID:               pgUUID(write.TeamID),
+		Provider:             write.Provider,
+		Repo:                 write.Repo,
+		Branch:               write.Branch,
+		Host:                 write.Host,
+		State:                write.State,
+		PreviewApplicationID: pgUUID(write.PreviewApplicationID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PreviewBindingWriteResult{}, fmt.Errorf("%w: application not found", ErrRetryable)
+		}
+		return PreviewBindingWriteResult{}, err
+	}
+	mapped := PreviewBindingWriteResult{Refused: result.Refused}
+	if result.Refused == "" {
+		binding := previewFromRow(result.Binding)
+		mapped.Binding = &binding
+	}
+	return mapped, nil
 }
 
 // GetPreview loads the preview binding of one (application, pull request).

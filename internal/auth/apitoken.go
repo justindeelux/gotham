@@ -93,7 +93,7 @@ func (s *APITokenService) Create(ctx context.Context, userID uuid.UUID, name str
 		return nil, fmt.Errorf("%w: name must be between 1 and %d characters", ErrValidation, apiTokenMaxLen)
 	}
 
-	normalized, err := normalizeScopes(scopes)
+	normalized, err := NormalizeScopes(scopes)
 	if err != nil {
 		return nil, err
 	}
@@ -232,9 +232,12 @@ func ScopesContain(scopes []string, required ...string) bool {
 	return true
 }
 
-// normalizeScopes validates and de-duplicates scopes, defaulting to read-only
-// when none are supplied.
-func normalizeScopes(scopes []string) ([]string, error) {
+// NormalizeScopes validates, trims and de-duplicates requested scopes,
+// defaulting to read-only when none are supplied. The HTTP layer calls it
+// before its admin-scope gate, so the list the gate authorizes and the list
+// that is persisted are the same canonical value (a padded or duplicated
+// "admin" can never slip past the gate and still be stored as admin).
+func NormalizeScopes(scopes []string) ([]string, error) {
 	if len(scopes) == 0 {
 		return []string{ScopeRead}, nil
 	}

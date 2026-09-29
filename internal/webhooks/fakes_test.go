@@ -37,17 +37,18 @@ type fakeRepository struct {
 	// reservations mirrors preview_deliveries: keyed by the partial unique
 	// index the database enforces (start: app/pr/sha, close: app/pr).
 	reservations   map[string]DeliveryReservation
-	reserveErr     error
+	claimStoreErr  error
 	unreserveErr   error
 	clearErr       error
-	countErr       error
 	orphanErr      error
 	orphanAppErr   error
 	markSiblingErr error
-	liveCount      int
-	liveCountSet   bool
+	markClosingErr error
+	markClosedErr  error
 	orphanPreviews []Preview
 	orphanApps     []uuid.UUID
+	// now overrides the fake's clock for lease expiry (tests).
+	now func() time.Time
 
 	getAppErr    error
 	createErr    error
@@ -57,10 +58,17 @@ type fakeRepository struct {
 	releaseErr   error
 	upsertErr    error
 	getPrevErr   error
-	markErr      error
 	createCalls  int
 	deleteCalls  int
 	targetsCalls int
+}
+
+// clock returns the fake's clock (defaults to time.Now).
+func (r *fakeRepository) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
 }
 
 // newFakeRepository returns a repository holding one application on the main
@@ -330,24 +338,84 @@ func (r *fakeRepository) ListPreviews(_ context.Context, appID uuid.UUID) ([]Pre
 	return previews, nil
 }
 
-// MarkPreviewDeleted implements Repository.
-func (r *fakeRepository) MarkPreviewDeleted(_ context.Context, previewID uuid.UUID) (Preview, error) {
+// MarkPreviewClosing implements Repository: the close intent is persisted
+// before a teardown.
+func (r *fakeRepository) MarkPreviewClosing(_ context.Context, previewID uuid.UUID) (Preview, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.markErr != nil {
-		return Preview{}, r.markErr
+	if r.markClosingErr != nil {
+		return Preview{}, r.markClosingErr
 	}
 	for key, preview := range r.previews {
 		if preview.ID != previewID {
 			continue
 		}
-		preview.State = PreviewDeleted
-		preview.DeletedAt = time.Now().UTC()
-		preview.UpdatedAt = preview.DeletedAt
+		preview.State = PreviewClosing
+		preview.UpdatedAt = r.clock().UTC()
 		r.previews[key] = preview
 		return preview, nil
 	}
 	return Preview{}, ErrNotFound
+}
+
+// MarkPreviewClosed implements Repository: binding deleted and the PR's
+// reservations cleared atomically (the fake mutates both under its lock).
+func (r *fakeRepository) MarkPreviewClosed(_ context.Context, appID uuid.UUID, prNumber int) (Preview, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.markClosedErr != nil {
+		return Preview{}, r.markClosedErr
+	}
+	key := previewKey(appID, prNumber)
+	preview, ok := r.previews[key]
+	if !ok {
+		return Preview{}, ErrNotFound
+	}
+	now := r.clock().UTC()
+	preview.State = PreviewDeleted
+	preview.DeletedAt = now
+	preview.UpdatedAt = now
+	r.previews[key] = preview
+	for reservationKey, reservation := range r.reservations {
+		if reservation.ApplicationID == appID && reservation.PRNumber == prNumber {
+			delete(r.reservations, reservationKey)
+		}
+	}
+	return preview, nil
+}
+
+// ListClosingPreviews implements Repository.
+func (r *fakeRepository) ListClosingPreviews(_ context.Context, before time.Time) ([]Preview, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.orphanErr != nil {
+		return nil, r.orphanErr
+	}
+	closing := make([]Preview, 0)
+	for _, preview := range r.previews {
+		if preview.State == PreviewClosing && preview.UpdatedAt.Before(before) {
+			closing = append(closing, preview)
+		}
+	}
+	return closing, nil
+}
+
+// PurgeExpiredPreviewReservations implements Repository.
+func (r *fakeRepository) PurgeExpiredPreviewReservations(_ context.Context) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.unreserveErr != nil {
+		return 0, r.unreserveErr
+	}
+	now := r.clock()
+	purged := 0
+	for key, reservation := range r.reservations {
+		if !reservation.ExpiresAt.IsZero() && !reservation.ExpiresAt.After(now) {
+			delete(r.reservations, key)
+			purged++
+		}
+	}
+	return purged, nil
 }
 
 // ReservationKey is the fake's unique key: the signed revision for a start,
@@ -359,22 +427,103 @@ func ReservationKey(reservation DeliveryReservation) string {
 	return fmt.Sprintf("%s/%d/%s", reservation.ApplicationID, reservation.PRNumber, reservation.HeadSHA)
 }
 
-// ReservePreviewDelivery implements Repository with the unique-key semantics
-// of preview_deliveries.
-func (r *fakeRepository) ReservePreviewDelivery(_ context.Context, reservation DeliveryReservation) (DeliveryReservation, error) {
+// claimReservationKey is ReservationKey for a claim request.
+func claimReservationKey(claim PreviewClaim) string {
+	return ReservationKey(DeliveryReservation{
+		ApplicationID: claim.ApplicationID, PRNumber: claim.PRNumber,
+		Kind: claim.Kind, HeadSHA: claim.HeadSHA,
+	})
+}
+
+// leaseTTL is the fake's reservation lifetime (the migration's default).
+const leaseTTL = 15 * time.Minute
+
+// ClaimPreviewDelivery implements Repository with the same decision the store
+// transaction makes: purge the PR's expired leases, dedupe a start against the
+// live binding's current head or an in-flight lease for that head, enforce the
+// live cap for a new preview, then reserve.
+func (r *fakeRepository) ClaimPreviewDelivery(_ context.Context, claim PreviewClaim) (PreviewClaimResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.reserveErr != nil {
-		return DeliveryReservation{}, r.reserveErr
+	if r.claimStoreErr != nil {
+		return PreviewClaimResult{}, r.claimStoreErr
 	}
-	key := ReservationKey(reservation)
-	if _, taken := r.reservations[key]; taken {
-		return DeliveryReservation{}, ErrDuplicate
+	now := r.clock()
+	for key, reservation := range r.reservations {
+		if reservation.ApplicationID != claim.ApplicationID || reservation.PRNumber != claim.PRNumber {
+			continue
+		}
+		if !reservation.ExpiresAt.IsZero() && !reservation.ExpiresAt.After(now) {
+			delete(r.reservations, key)
+		}
 	}
-	reservation.ID = uuid.New()
-	reservation.ReceivedAt = time.Now().UTC()
-	r.reservations[key] = reservation
-	return reservation, nil
+
+	var result PreviewClaimResult
+	binding, hasBinding := r.previews[previewKey(claim.ApplicationID, claim.PRNumber)]
+	if hasBinding {
+		current := binding
+		result.Binding = &current
+	}
+
+	reserve := func() {
+		key := claimReservationKey(claim)
+		if _, taken := r.reservations[key]; taken {
+			result.Duplicate = true
+			return
+		}
+		result.Approved = true
+		result.Reservation = DeliveryReservation{
+			ID:            uuid.New(),
+			ApplicationID: claim.ApplicationID,
+			PRNumber:      claim.PRNumber,
+			Kind:          claim.Kind,
+			HeadSHA:       claim.HeadSHA,
+			DeliveryID:    claim.DeliveryID,
+			ReceivedAt:    now.UTC(),
+			ExpiresAt:     now.Add(leaseTTL).UTC(),
+		}
+		r.reservations[key] = result.Reservation
+	}
+
+	switch claim.Kind {
+	case ReservationClose:
+		reserve()
+	case ReservationStart:
+		switch {
+		case hasBinding && binding.State != PreviewDeleted && binding.HeadSHA == claim.HeadSHA:
+			result.Duplicate = true
+		case hasBinding && binding.State == PreviewClosing:
+			result.Retryable = true
+		default:
+			live := hasBinding && binding.State != PreviewDeleted
+			if !live && claim.LiveLimit > 0 && r.liveCountLocked(claim.ApplicationID, now) >= claim.LiveLimit {
+				result.Limit = true
+				return result, nil
+			}
+			reserve()
+		}
+	default:
+		return PreviewClaimResult{}, fmt.Errorf("fake: unknown preview claim kind %q", claim.Kind)
+	}
+	return result, nil
+}
+
+// liveCountLocked counts the distinct pull requests of one application that
+// are live (non-deleted binding) or in flight (unexpired start lease).
+func (r *fakeRepository) liveCountLocked(appID uuid.UUID, now time.Time) int {
+	prs := make(map[int]bool)
+	for _, preview := range r.previews {
+		if preview.ApplicationID == appID && preview.State != PreviewDeleted {
+			prs[preview.PRNumber] = true
+		}
+	}
+	for _, reservation := range r.reservations {
+		if reservation.ApplicationID == appID && reservation.Kind == ReservationStart &&
+			reservation.ExpiresAt.After(now) {
+			prs[reservation.PRNumber] = true
+		}
+	}
+	return len(prs)
 }
 
 // ReleasePreviewDelivery implements Repository.
@@ -407,23 +556,11 @@ func (r *fakeRepository) ClearPreviewDeliveries(_ context.Context, appID uuid.UU
 	return nil
 }
 
-// CountLivePreviews implements Repository.
-func (r *fakeRepository) CountLivePreviews(_ context.Context, appID uuid.UUID) (int, error) {
+// countLiveForTest reports the fake's live count (test helper).
+func (r *fakeRepository) countLiveForTest(appID uuid.UUID) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.countErr != nil {
-		return 0, r.countErr
-	}
-	if r.liveCountSet {
-		return r.liveCount, nil
-	}
-	count := 0
-	for _, preview := range r.previews {
-		if preview.ApplicationID == appID && preview.State != PreviewDeleted {
-			count++
-		}
-	}
-	return count, nil
+	return r.liveCountLocked(appID, r.clock())
 }
 
 // ListOrphanedPreviews implements Repository.

@@ -37,6 +37,10 @@ const (
 	// queued (or a queue attempt failed and the binding awaits its next
 	// delivery).
 	PreviewDeploying = "deploying"
+	// PreviewClosing means a close delivery owns the preview: the close intent
+	// is persisted before the sibling is torn down, so a failed (or lost)
+	// teardown is re-attempted by the sweep.
+	PreviewClosing = "closing"
 	// PreviewFailed is reserved for the previews screen contract; the current
 	// lifecycle records a failed queue attempt as deploying (the sibling is
 	// intact and the next delivery retries it).
@@ -197,33 +201,45 @@ func (s *Service) receivePullRequest(ctx context.Context, provider string, targe
 		}
 	}
 
-	reservation, err := s.repo.ReservePreviewDelivery(ctx, DeliveryReservation{
+	claim, err := s.repo.ClaimPreviewDelivery(ctx, PreviewClaim{
 		ApplicationID: target.ApplicationID,
 		PRNumber:      pr.Number,
 		Kind:          reservationKind(action),
-		// Only a start reserves the signed revision: a close carries no
-		// revision, and its idempotency is the PR-scoped close reservation
-		// plus the binding state.
+		// Only a start names a revision: a close carries no revision, and its
+		// idempotency is the PR-scoped close marker plus the binding state.
 		HeadSHA:    startSHA(pr, action),
 		DeliveryID: parsed.DeliveryID,
+		LiveLimit:  maxLivePreviewsPerApplication,
 	})
-	switch {
-	case errors.Is(err, ErrDuplicate):
-		return Delivery{Status: StatusDuplicate, Reason: "delivery already handled"}, nil
-	case err != nil:
+	if err != nil {
+		// Includes the retryable "the application vanished" case, which the
+		// route answers 503 for.
 		return Delivery{}, err
+	}
+	switch {
+	case claim.Duplicate:
+		// The live binding already names this head, or an earlier attempt for
+		// it is still in flight.
+		return Delivery{Status: StatusDuplicate, Reason: "delivery already handled"}, nil
+	case claim.Retryable:
+		return Delivery{}, fmt.Errorf("%w: a close transition is in progress", ErrRetryable)
+	case claim.Limit:
+		s.logger.Warn("webhooks: preview limit reached",
+			"application_id", target.ApplicationID, "pr_number", pr.Number,
+			"limit", maxLivePreviewsPerApplication)
+		return Delivery{Status: StatusIgnored, Reason: "preview limit reached"}, nil
 	}
 
 	var delivery Delivery
 	if action == prActionClose {
-		delivery, err = s.closePreview(ctx, target, pr.Number)
+		delivery, err = s.closePreview(ctx, target, pr.Number, &claim)
 	} else {
-		delivery, err = s.openPreview(ctx, provider, target, pr, reservation)
+		delivery, err = s.openPreview(ctx, provider, target, pr, &claim)
 	}
 	if err != nil {
-		// The reservation must not outlive a delivery that queued nothing: a
-		// redelivered body has to be able to reserve again.
-		s.releaseReservation(ctx, reservation)
+		// The lease must not outlive a delivery that queued nothing: a
+		// redelivered body has to be able to claim again.
+		s.releaseReservation(ctx, claim.Reservation)
 		return Delivery{}, err
 	}
 	return delivery, nil
@@ -272,43 +288,24 @@ func (s *Service) ListPreviews(ctx context.Context, userID, appID uuid.UUID) ([]
 // openPreview creates (or reuses) the preview sibling of a base application
 // and queues a deployment of the PR head revision. The binding is persisted
 // before the deployment is queued, so a queue failure can never leave a
-// sibling outside every cleanup path (close, base delete, sweep).
-func (s *Service) openPreview(ctx context.Context, provider string, target Target, pr *pullRequest, reservation DeliveryReservation) (Delivery, error) {
+// sibling outside every cleanup path (close, base delete, sweep). The quota
+// and the current-head dedupe already ran atomically in the claim.
+func (s *Service) openPreview(ctx context.Context, provider string, target Target, pr *pullRequest, claim *PreviewClaimResult) (Delivery, error) {
 	host := previewHost(target.Name, target.BaseDomain, pr.Number)
 	if host == "" {
-		s.releaseReservation(ctx, reservation)
+		s.releaseReservation(ctx, claim.Reservation)
 		return Delivery{Status: StatusIgnored, Reason: "application has no domain"}, nil
 	}
 
-	existing, err := s.repo.GetPreview(ctx, target.ApplicationID, pr.Number)
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return Delivery{}, err
-	}
-	live := err == nil && existing.State != PreviewDeleted
+	existing := claim.Binding
+	live := existing != nil && existing.State != PreviewDeleted
 	previewAppID := uuid.Nil
 	previousSHA := ""
-	if err == nil {
+	if existing != nil {
 		previousSHA = existing.HeadSHA
 	}
 	if live {
 		previewAppID = existing.PreviewApplicationID
-	}
-
-	// New previews are capped per base application; refreshing the PR's own
-	// binding is always allowed. The check is read-then-write: two concurrent
-	// deliveries can overshoot by one, which is accepted for a preview cap.
-	if !live {
-		count, err := s.repo.CountLivePreviews(ctx, target.ApplicationID)
-		if err != nil {
-			return Delivery{}, err
-		}
-		if count >= maxLivePreviewsPerApplication {
-			s.releaseReservation(ctx, reservation)
-			s.logger.Warn("webhooks: preview limit reached",
-				"application_id", target.ApplicationID, "pr_number", pr.Number,
-				"limit", maxLivePreviewsPerApplication)
-			return Delivery{Status: StatusIgnored, Reason: "preview limit reached"}, nil
-		}
 	}
 
 	provisioned := false
@@ -400,7 +397,8 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 	switch {
 	case deployErr == nil:
 		// The revision is queued: only now does the binding name it, and only
-		// now is the reservation allowed to stand.
+		// now may the in-flight lease go. A replay after this point dedupes
+		// against the binding's current head.
 		if _, err := s.repo.UpsertPreview(ctx, Preview{
 			ApplicationID: target.ApplicationID, TeamID: target.TeamID, Provider: provider,
 			Repo: target.Repo, PRNumber: pr.Number, Branch: pr.HeadBranch,
@@ -411,6 +409,8 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 			// binding revision is repaired by the next delivery.
 			s.logger.Warn("webhooks: could not record the queued preview revision",
 				"application_id", target.ApplicationID, "pr_number", pr.Number, "error", err)
+		} else {
+			s.releaseReservation(ctx, claim.Reservation)
 		}
 		s.previewComment(ctx, target, pr.Number, startedComment(host))
 		return Delivery{Status: StatusQueued, Reason: "preview", DeploymentID: deployment.ID.String(), Host: host}, nil
@@ -427,51 +427,58 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 }
 
 // closePreview tears a preview down when its pull request closes or merges.
-// The sibling application is deleted through the system path (container stop
-// best effort, route refreshed, local deploy-key rows removed but the shared
-// remote key kept); the binding row stays as the audit trail. On success the
-// PR's reservations are cleared, so a reopen — even at the same head — can
-// reserve again.
-func (s *Service) closePreview(ctx context.Context, target Target, number int) (Delivery, error) {
-	preview, err := s.repo.GetPreview(ctx, target.ApplicationID, number)
-	if errors.Is(err, ErrNotFound) {
-		// Nothing to tear down. Clear any stale reservation so a later start
-		// at the same revision is not blocked forever.
+// The close intent is persisted before the teardown, so a failed (or lost)
+// teardown is re-attempted by the sweep instead of leaving the preview running
+// forever. The sibling application is deleted through the system path
+// (container stop best effort, route refreshed, local deploy-key rows removed
+// but the shared remote key kept); the binding row stays as the audit trail.
+// The close completion — binding deleted, ledger cleared — is one atomic
+// operation, so a stale reservation can never block a reopen.
+func (s *Service) closePreview(ctx context.Context, target Target, number int, claim *PreviewClaimResult) (Delivery, error) {
+	if claim.Binding == nil {
+		// Nothing to tear down. Clearing the ledger keeps a stale reservation
+		// from suppressing a later reopen at the same revision.
 		if cerr := s.repo.ClearPreviewDeliveries(ctx, target.ApplicationID, number); cerr != nil {
 			return Delivery{}, cerr
 		}
 		return Delivery{Status: StatusIgnored, Reason: "no preview"}, nil
 	}
-	if err != nil {
-		return Delivery{}, err
-	}
+	preview := *claim.Binding
 	if preview.State == PreviewDeleted {
+		// N2: an already-deleted close retry must still complete the ledger
+		// cleanup, and a cleanup failure must surface (so the host retries)
+		// instead of reporting success over a poisoned ledger.
+		if _, err := s.repo.MarkPreviewClosed(ctx, target.ApplicationID, number); err != nil {
+			return Delivery{}, err
+		}
 		return Delivery{Status: StatusDuplicate, Reason: "preview already deleted"}, nil
 	}
+	if preview.State != PreviewClosing {
+		if _, err := s.repo.MarkPreviewClosing(ctx, preview.ID); err != nil {
+			return Delivery{}, err
+		}
+	}
 	if err := s.teardownPreview(ctx, preview); err != nil {
+		// The binding stays 'closing': the host may retry, and the sweep
+		// re-attempts the teardown either way.
 		return Delivery{}, err
 	}
-	if err := s.repo.ClearPreviewDeliveries(ctx, target.ApplicationID, number); err != nil {
+	if _, err := s.repo.MarkPreviewClosed(ctx, target.ApplicationID, number); err != nil {
 		return Delivery{}, err
 	}
 	s.previewComment(ctx, target, number, deletedComment())
 	return Delivery{Status: StatusDeleted, Reason: "preview deleted", Host: preview.Host}, nil
 }
 
-// teardownPreview deletes a preview's sibling application and marks the
-// binding deleted. Deleting the sibling removes its container, its local
-// deploy-key rows (the remote key stays: it is shared with the base
-// application) and, through the proxy sync, its route.
+// teardownPreview deletes a preview's sibling application. Deleting the
+// sibling removes its container, its local deploy-key rows (the remote key
+// stays: it is shared with the base application) and, through the proxy sync,
+// its route. The caller completes the close with MarkPreviewClosed.
 func (s *Service) teardownPreview(ctx context.Context, preview Preview) error {
-	if preview.PreviewApplicationID != uuid.Nil {
-		if err := s.provisioner.DeleteSystemApplication(ctx, preview.PreviewApplicationID); err != nil {
-			return err
-		}
+	if preview.PreviewApplicationID == uuid.Nil {
+		return nil
 	}
-	if _, err := s.repo.MarkPreviewDeleted(ctx, preview.ID); err != nil {
-		return err
-	}
-	return nil
+	return s.provisioner.DeleteSystemApplication(ctx, preview.PreviewApplicationID)
 }
 
 // CleanupApplication runs before an application row is deleted (BE-8.1). Two
@@ -506,8 +513,26 @@ func (s *Service) CleanupApplication(ctx context.Context, appID uuid.UUID) error
 		if preview.State == PreviewDeleted {
 			continue
 		}
+		if preview.State != PreviewClosing {
+			if _, err := s.repo.MarkPreviewClosing(ctx, preview.ID); err != nil {
+				s.logger.Warn("webhooks: could not persist the close intent",
+					"preview_id", preview.ID, "application_id", appID, "error", err)
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+		}
 		if err := s.teardownPreview(ctx, preview); err != nil {
 			s.logger.Warn("webhooks: preview teardown failed",
+				"preview_id", preview.ID, "application_id", appID, "error", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if _, err := s.repo.MarkPreviewClosed(ctx, appID, preview.PRNumber); err != nil {
+			s.logger.Warn("webhooks: preview close completion failed",
 				"preview_id", preview.ID, "application_id", appID, "error", err)
 			if firstErr == nil {
 				firstErr = err
@@ -522,9 +547,13 @@ func (s *Service) CleanupApplication(ctx context.Context, appID uuid.UUID) error
 // a live sibling application, however old it is (an open PR keeps its preview
 // until it closes).
 //
-//   - pass 1 marks bindings deleted whose sibling is already gone (deleted out
-//     of band, or never linked at all);
-//   - pass 2 deletes preview siblings that no binding references at all and
+//   - pass 0 purges expired delivery leases, so a crashed delivery can never
+//     suppress a later revision;
+//   - pass 1 closes bindings whose sibling is already gone (deleted out of
+//     band, or never linked at all);
+//   - pass 2 re-attempts the teardown of bindings left in 'closing' by a
+//     failed or lost close delivery;
+//   - pass 3 deletes preview siblings that no binding references at all and
 //     that are older than the grace period (a crash between the clone and the
 //     binding write, or a base delete whose cleanup could not finish).
 func (s *Service) SweepPreviews(ctx context.Context) (int, error) {
@@ -533,16 +562,40 @@ func (s *Service) SweepPreviews(ctx context.Context) (int, error) {
 	}
 	removed := 0
 
+	if purged, err := s.repo.PurgeExpiredPreviewReservations(ctx); err != nil {
+		s.logger.Warn("webhooks: expired preview reservations could not be purged", "error", err)
+	} else if purged > 0 {
+		s.logger.Info("webhooks: expired preview reservations purged", "count", purged)
+	}
+
 	orphaned, err := s.repo.ListOrphanedPreviews(ctx)
 	if err != nil {
 		return 0, err
 	}
 	for _, preview := range orphaned {
-		if _, err := s.repo.MarkPreviewDeleted(ctx, preview.ID); err != nil {
+		if _, err := s.repo.MarkPreviewClosed(ctx, preview.ApplicationID, preview.PRNumber); err != nil {
 			if errors.Is(err, ErrNotFound) {
 				continue
 			}
-			s.logger.Warn("webhooks: orphaned preview binding could not be marked deleted",
+			s.logger.Warn("webhooks: orphaned preview binding could not be closed",
+				"preview_id", preview.ID, "error", err)
+			continue
+		}
+		removed++
+	}
+
+	closing, err := s.repo.ListClosingPreviews(ctx, s.now().UTC().Add(-previewSweepGrace))
+	if err != nil {
+		return removed, err
+	}
+	for _, preview := range closing {
+		if err := s.teardownPreview(ctx, preview); err != nil {
+			s.logger.Warn("webhooks: closing preview teardown failed",
+				"preview_id", preview.ID, "application_id", preview.ApplicationID, "error", err)
+			continue
+		}
+		if _, err := s.repo.MarkPreviewClosed(ctx, preview.ApplicationID, preview.PRNumber); err != nil {
+			s.logger.Warn("webhooks: closing preview could not be completed",
 				"preview_id", preview.ID, "error", err)
 			continue
 		}

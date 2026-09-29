@@ -16,15 +16,18 @@
 //     and removing it when the application is deleted, exposed to the HTTP
 //     layer as authenticated management routes.
 //   - Preview deployments (BE-8.1, FEATURE_PREVIEWS): a verified
-//     pull_request delivery creates (or refreshes) a sibling application
-//     cloned from the base application (plain env vars and the shared deploy
-//     key only; secrets, storages and fork heads are excluded), reserves the
-//     delivery in the preview-specific ledger, deploys the PR head branch
-//     through the same deploy service, records the binding in preview_deploys,
-//     and tears the sibling down when the PR closes. An hourly, orphan-only
-//     sweep removes previews whose sibling or binding went missing. The
-//     surface is disabled by FEATURE_PREVIEWS=false without touching push
-//     handling.
+//     pull_request delivery claims the delivery in the preview-specific
+//     ledger (an atomic, expiring in-flight lease deduped against the live
+//     binding's current head or an in-flight attempt for that head; never a
+//     permanent handled-SHA set), creates (or refreshes) a sibling
+//     application cloned from the base application (plain env vars and the
+//     shared deploy key only; secrets, storages, unverifiable head identities
+//     and forks are excluded), deploys the PR head branch through the same
+//     deploy service, and records the binding in preview_deploys. A close
+//     persists its intent before tearing the sibling down, completes
+//     atomically (binding deleted + ledger cleared) and is re-attempted by an
+//     hourly orphan-only sweep when it fails. The surface is disabled by
+//     FEATURE_PREVIEWS=false without touching push handling.
 //
 // The package depends on narrow seams (Repository, Installer, Deployer,
 // PreviewProvisioner, Commenter) rather than on the HTTP server, so the route

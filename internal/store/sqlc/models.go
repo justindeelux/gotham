@@ -232,6 +232,7 @@ type PreviewDelivery struct {
 	HeadSha       string             `json:"head_sha"`
 	DeliveryID    string             `json:"delivery_id"`
 	ReceivedAt    pgtype.Timestamptz `json:"received_at"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
 }
 
 type PreviewDeploy struct {

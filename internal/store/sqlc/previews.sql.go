@@ -21,20 +21,29 @@ type ClearPreviewDeliveriesParams struct {
 	PrNumber      int32       `json:"pr_number"`
 }
 
-// Clears a pull request's reservations at a lifecycle transition (close), so a
-// reopen — even at the same head revision — can reserve again.
+// Clears a pull request's reservations at a lifecycle transition, so the
+// opposite transition (reopen) can reserve again.
 func (q *Queries) ClearPreviewDeliveries(ctx context.Context, arg ClearPreviewDeliveriesParams) error {
 	_, err := q.db.Exec(ctx, clearPreviewDeliveries, arg.ApplicationID, arg.PrNumber)
 	return err
 }
 
-const countLivePreviewDeploys = `-- name: CountLivePreviewDeploys :one
-SELECT count(*) FROM preview_deploys
-WHERE application_id = $1 AND state <> 'deleted'
+const countLivePreviews = `-- name: CountLivePreviews :one
+SELECT count(*) FROM (
+    SELECT p.pr_number AS pr_number FROM preview_deploys p
+    WHERE p.application_id = $1 AND p.state <> 'deleted'
+    UNION
+    SELECT d.pr_number AS pr_number FROM preview_deliveries d
+    WHERE d.application_id = $1 AND d.kind = 'start' AND d.expires_at > now()
+) AS live
 `
 
-func (q *Queries) CountLivePreviewDeploys(ctx context.Context, applicationID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countLivePreviewDeploys, applicationID)
+// The quota read: distinct pull requests of one base application that are
+// live (a non-deleted binding) or in flight (an unexpired start lease).
+// Counting the leases closes the window between "approved" and "binding
+// written" that a plain binding count leaves open under concurrency.
+func (q *Queries) CountLivePreviews(ctx context.Context, applicationID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countLivePreviews, applicationID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -70,6 +79,49 @@ func (q *Queries) GetPreviewDeploy(ctx context.Context, arg GetPreviewDeployPara
 		&i.DeletedAt,
 	)
 	return i, err
+}
+
+const listClosingPreviewDeploys = `-- name: ListClosingPreviewDeploys :many
+SELECT id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
+WHERE state = 'closing' AND updated_at < $1
+ORDER BY updated_at ASC
+`
+
+// Bindings whose close intent is older than the sweep grace period: the sweep
+// re-attempts their teardown.
+func (q *Queries) ListClosingPreviewDeploys(ctx context.Context, updatedAt pgtype.Timestamptz) ([]PreviewDeploy, error) {
+	rows, err := q.db.Query(ctx, listClosingPreviewDeploys, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PreviewDeploy{}
+	for rows.Next() {
+		var i PreviewDeploy
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.TeamID,
+			&i.Provider,
+			&i.Repo,
+			&i.PrNumber,
+			&i.Branch,
+			&i.HeadSha,
+			&i.PreviewApplicationID,
+			&i.Host,
+			&i.State,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listOrphanedPreviewApplications = `-- name: ListOrphanedPreviewApplications :many
@@ -117,7 +169,7 @@ WHERE p.state <> 'deleted'
 
 // Live bindings whose sibling application no longer exists (deleted out of
 // band, or never linked because preview_application_id is NULL): the sweep
-// marks these deleted without touching any live preview.
+// closes these without touching any live preview.
 func (q *Queries) ListOrphanedPreviewDeploys(ctx context.Context) ([]PreviewDeploy, error) {
 	rows, err := q.db.Query(ctx, listOrphanedPreviewDeploys)
 	if err != nil {
@@ -194,15 +246,55 @@ func (q *Queries) ListPreviewDeploysByApplication(ctx context.Context, applicati
 	return items, nil
 }
 
-const markPreviewDeployDeleted = `-- name: MarkPreviewDeployDeleted :one
+const markPreviewDeployClosed = `-- name: MarkPreviewDeployClosed :one
 UPDATE preview_deploys
 SET state = 'deleted', deleted_at = now(), updated_at = now()
+WHERE application_id = $1 AND pr_number = $2
+RETURNING id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at
+`
+
+type MarkPreviewDeployClosedParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	PrNumber      int32       `json:"pr_number"`
+}
+
+// The close completion, wrapped with ClearPreviewDeliveries in one
+// transaction by Store.MarkPreviewClosed. Used on every close path, including
+// the already-deleted retry, so a stale reservation can never poison a
+// reopen.
+func (q *Queries) MarkPreviewDeployClosed(ctx context.Context, arg MarkPreviewDeployClosedParams) (PreviewDeploy, error) {
+	row := q.db.QueryRow(ctx, markPreviewDeployClosed, arg.ApplicationID, arg.PrNumber)
+	var i PreviewDeploy
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.TeamID,
+		&i.Provider,
+		&i.Repo,
+		&i.PrNumber,
+		&i.Branch,
+		&i.HeadSha,
+		&i.PreviewApplicationID,
+		&i.Host,
+		&i.State,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const markPreviewDeployClosing = `-- name: MarkPreviewDeployClosing :one
+UPDATE preview_deploys
+SET state = 'closing', updated_at = now()
 WHERE id = $1
 RETURNING id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at
 `
 
-func (q *Queries) MarkPreviewDeployDeleted(ctx context.Context, id pgtype.UUID) (PreviewDeploy, error) {
-	row := q.db.QueryRow(ctx, markPreviewDeployDeleted, id)
+// Persists a close intent before the sibling is torn down, so a failed (or
+// lost) teardown is re-attempted by the sweep.
+func (q *Queries) MarkPreviewDeployClosing(ctx context.Context, id pgtype.UUID) (PreviewDeploy, error) {
+	row := q.db.QueryRow(ctx, markPreviewDeployClosing, id)
 	var i PreviewDeploy
 	err := row.Scan(
 		&i.ID,
@@ -236,6 +328,37 @@ func (q *Queries) MarkPreviewDeploysDeletedForSibling(ctx context.Context, previ
 	return err
 }
 
+const purgeExpiredPreviewDeliveries = `-- name: PurgeExpiredPreviewDeliveries :execrows
+DELETE FROM preview_deliveries WHERE expires_at <= now()
+`
+
+// Removes every expired reservation — the sweep's housekeeping pass.
+func (q *Queries) PurgeExpiredPreviewDeliveries(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeExpiredPreviewDeliveries)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const purgeExpiredPreviewDeliveriesFor = `-- name: PurgeExpiredPreviewDeliveriesFor :exec
+DELETE FROM preview_deliveries
+WHERE application_id = $1 AND pr_number = $2 AND expires_at <= now()
+`
+
+type PurgeExpiredPreviewDeliveriesForParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	PrNumber      int32       `json:"pr_number"`
+}
+
+// Removes the pull request's expired reservations. A lease that outlived its
+// delivery (a crash) must never suppress a later delivery of the same
+// revision.
+func (q *Queries) PurgeExpiredPreviewDeliveriesFor(ctx context.Context, arg PurgeExpiredPreviewDeliveriesForParams) error {
+	_, err := q.db.Exec(ctx, purgeExpiredPreviewDeliveriesFor, arg.ApplicationID, arg.PrNumber)
+	return err
+}
+
 const releasePreviewDelivery = `-- name: ReleasePreviewDelivery :exec
 DELETE FROM preview_deliveries WHERE id = $1
 `
@@ -251,7 +374,7 @@ const reservePreviewDelivery = `-- name: ReservePreviewDelivery :one
 INSERT INTO preview_deliveries (application_id, pr_number, kind, head_sha, delivery_id)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT DO NOTHING
-RETURNING id, application_id, pr_number, kind, head_sha, delivery_id, received_at
+RETURNING id, application_id, pr_number, kind, head_sha, delivery_id, received_at, expires_at
 `
 
 type ReservePreviewDeliveryParams struct {
@@ -262,9 +385,10 @@ type ReservePreviewDeliveryParams struct {
 	DeliveryID    string      `json:"delivery_id"`
 }
 
-// Insert a delivery reservation. A replay of the same signed revision (or a
-// concurrent close of the same PR) conflicts and returns no row; the caller
-// maps pgx.ErrNoRows to a duplicate delivery.
+// Insert a delivery reservation (in-flight lease for a start, teardown marker
+// for a close). A replay of the same signed revision while an earlier attempt
+// is still in flight (or a concurrent close of the same PR) conflicts and
+// returns no row; the caller maps pgx.ErrNoRows to a duplicate delivery.
 func (q *Queries) ReservePreviewDelivery(ctx context.Context, arg ReservePreviewDeliveryParams) (PreviewDelivery, error) {
 	row := q.db.QueryRow(ctx, reservePreviewDelivery,
 		arg.ApplicationID,
@@ -282,6 +406,7 @@ func (q *Queries) ReservePreviewDelivery(ctx context.Context, arg ReservePreview
 		&i.HeadSha,
 		&i.DeliveryID,
 		&i.ReceivedAt,
+		&i.ExpiresAt,
 	)
 	return i, err
 }

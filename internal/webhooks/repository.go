@@ -3,6 +3,7 @@ package webhooks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,17 +68,18 @@ type Preview struct {
 	DeletedAt            time.Time
 }
 
-// Reservation kinds: a start delivery reserves one PR head revision, a close
-// delivery reserves the teardown.
+// Reservation kinds: a start delivery holds an in-flight lease for one PR head
+// revision, a close delivery holds the teardown marker.
 const (
 	ReservationStart = "start"
 	ReservationClose = "close"
 )
 
 // DeliveryReservation is one row of preview_deliveries: the preview-specific
-// idempotency reservation. It deliberately lives outside webhook_events (the
-// push ledger): a PR head must never suppress — or be suppressed by — a push
-// of the same commit.
+// in-flight lease. It deliberately lives outside webhook_events (the push
+// ledger): a PR head must never suppress — or be suppressed by — a push of the
+// same commit. A lease is removed when its delivery finishes and expires if
+// its process dies, so it is never a permanent handled set.
 type DeliveryReservation struct {
 	ID            uuid.UUID
 	ApplicationID uuid.UUID
@@ -86,6 +88,33 @@ type DeliveryReservation struct {
 	HeadSHA       string
 	DeliveryID    string
 	ReceivedAt    time.Time
+	ExpiresAt     time.Time
+}
+
+// PreviewClaim is one delivery decision request for the preview-specific
+// atomic transition (see Repository.ClaimPreviewDelivery).
+type PreviewClaim struct {
+	ApplicationID uuid.UUID
+	PRNumber      int
+	Kind          string
+	HeadSHA       string
+	DeliveryID    string
+	// LiveLimit caps distinct live-or-in-flight pull requests. Zero disables
+	// the cap.
+	LiveLimit int
+}
+
+// PreviewClaimResult is the outcome of a claim. Exactly one of
+// Approved/Duplicate/Limit/Retryable is set.
+type PreviewClaimResult struct {
+	Approved  bool
+	Duplicate bool
+	Limit     bool
+	Retryable bool
+	// Reservation is the inserted ledger row (Approved only).
+	Reservation DeliveryReservation
+	// Binding is the current binding, nil when the PR has none.
+	Binding *Preview
 }
 
 // Event is one claimed delivery: the anti-spam ledger row that makes a
@@ -128,20 +157,35 @@ type Repository interface {
 	ReleaseEvent(ctx context.Context, eventID uuid.UUID) error
 	// LinkEventDeployment attaches the queued deployment to a claimed event.
 	LinkEventDeployment(ctx context.Context, eventID, deploymentID uuid.UUID) error
-	// ReservePreviewDelivery records a preview delivery reservation. A replay
-	// of the same signed revision (or a concurrent close of the same pull
-	// request) surfaces as ErrDuplicate and must stop the delivery.
-	ReservePreviewDelivery(ctx context.Context, reservation DeliveryReservation) (DeliveryReservation, error)
-	// ReleasePreviewDelivery removes a reservation that never queued a
-	// deployment, so the host's retry can reserve again. An already-gone
-	// reservation is a success.
+	// ClaimPreviewDelivery runs the atomic per-(application, PR) delivery
+	// decision: lock the application, purge its expired leases, dedupe a start
+	// against the live binding's current head (or an in-flight attempt for
+	// that head only), enforce the live-preview cap for a new preview, and
+	// insert the in-flight lease. The decision is carried by the result
+	// (Approved/Duplicate/Limit/Retryable); a returned error means the
+	// decision could not be made.
+	ClaimPreviewDelivery(ctx context.Context, claim PreviewClaim) (PreviewClaimResult, error)
+	// ReleasePreviewDelivery removes a lease that never queued a deployment,
+	// so the host's retry can reserve again. An already-gone reservation is a
+	// success.
 	ReleasePreviewDelivery(ctx context.Context, reservationID uuid.UUID) error
 	// ClearPreviewDeliveries removes every reservation of one pull request at
 	// a lifecycle transition (close), so a reopen can reserve again.
 	ClearPreviewDeliveries(ctx context.Context, appID uuid.UUID, prNumber int) error
-	// CountLivePreviews returns how many live (non-deleted) bindings a base
-	// application has — the per-application preview cap's read.
-	CountLivePreviews(ctx context.Context, appID uuid.UUID) (int, error)
+	// MarkPreviewClosing persists the close intent on one binding, so a failed
+	// teardown is re-attempted by the sweep.
+	MarkPreviewClosing(ctx context.Context, previewID uuid.UUID) (Preview, error)
+	// MarkPreviewClosed completes a close atomically: the binding becomes
+	// deleted and the PR's ledger is cleared in one transaction. It is
+	// idempotent and runs on the already-deleted retry path too, so a stale
+	// reservation can never poison a reopen.
+	MarkPreviewClosed(ctx context.Context, appID uuid.UUID, prNumber int) (Preview, error)
+	// ListClosingPreviews returns bindings whose close intent is older than
+	// before — the sweep's teardown-retry list.
+	ListClosingPreviews(ctx context.Context, before time.Time) ([]Preview, error)
+	// PurgeExpiredPreviewReservations removes every expired ledger row and
+	// reports how many went.
+	PurgeExpiredPreviewReservations(ctx context.Context) (int, error)
 	// GetPreview returns the preview binding of one pull request, or
 	// ErrNotFound when the PR has no preview yet.
 	GetPreview(ctx context.Context, appID uuid.UUID, prNumber int) (Preview, error)
@@ -151,8 +195,6 @@ type Repository interface {
 	UpsertPreview(ctx context.Context, preview Preview) (Preview, error)
 	// ListPreviews returns an application's preview bindings, newest first.
 	ListPreviews(ctx context.Context, appID uuid.UUID) ([]Preview, error)
-	// MarkPreviewDeleted marks a preview torn down and returns the row.
-	MarkPreviewDeleted(ctx context.Context, previewID uuid.UUID) (Preview, error)
 	// ListOrphanedPreviews returns live bindings whose sibling application is
 	// gone (or was never linked) — the orphan sweep's binding pass.
 	ListOrphanedPreviews(ctx context.Context) ([]Preview, error)
@@ -380,35 +422,39 @@ func (r *storeRepository) ListPreviews(ctx context.Context, appID uuid.UUID) ([]
 	return previews, nil
 }
 
-// MarkPreviewDeleted marks a preview torn down and returns the row.
-func (r *storeRepository) MarkPreviewDeleted(ctx context.Context, previewID uuid.UUID) (Preview, error) {
-	row, err := r.store.MarkPreviewDeployDeleted(ctx, pgUUID(previewID))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Preview{}, ErrNotFound
-		}
-		return Preview{}, err
-	}
-	return previewFromRow(row), nil
-}
-
-// ReservePreviewDelivery inserts a reservation; the partial unique indexes
-// turn a replayed body or a concurrent close into ErrDuplicate.
-func (r *storeRepository) ReservePreviewDelivery(ctx context.Context, reservation DeliveryReservation) (DeliveryReservation, error) {
-	row, err := r.store.ReservePreviewDelivery(ctx, sqlc.ReservePreviewDeliveryParams{
-		ApplicationID: pgUUID(reservation.ApplicationID),
-		PrNumber:      int32(reservation.PRNumber),
-		Kind:          reservation.Kind,
-		HeadSha:       reservation.HeadSHA,
-		DeliveryID:    reservation.DeliveryID,
+// ClaimPreviewDelivery runs the store's atomic claim transaction and maps its
+// outcome to the domain result.
+func (r *storeRepository) ClaimPreviewDelivery(ctx context.Context, claim PreviewClaim) (PreviewClaimResult, error) {
+	result, err := r.store.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(claim.ApplicationID),
+		PrNumber:      int32(claim.PRNumber),
+		Kind:          claim.Kind,
+		HeadSHA:       claim.HeadSHA,
+		DeliveryID:    claim.DeliveryID,
+		LiveLimit:     int64(claim.LiveLimit),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return DeliveryReservation{}, ErrDuplicate
+			// The base application vanished between the hook join and the
+			// claim: nothing durable exists to act on.
+			return PreviewClaimResult{}, fmt.Errorf("%w: application not found", ErrRetryable)
 		}
-		return DeliveryReservation{}, err
+		return PreviewClaimResult{}, err
 	}
-	return reservationFromRow(row), nil
+	mapped := PreviewClaimResult{
+		Approved:  result.Approved,
+		Duplicate: result.Duplicate,
+		Limit:     result.Limit,
+		Retryable: result.Retryable,
+	}
+	if result.Approved {
+		mapped.Reservation = reservationFromRow(result.Reservation)
+	}
+	if result.Binding != nil {
+		binding := previewFromRow(*result.Binding)
+		mapped.Binding = &binding
+	}
+	return mapped, nil
 }
 
 // ReleasePreviewDelivery removes a reservation that never queued a
@@ -422,13 +468,49 @@ func (r *storeRepository) ClearPreviewDeliveries(ctx context.Context, appID uuid
 	return r.store.ClearPreviewDeliveries(ctx, pgUUID(appID), int32(prNumber))
 }
 
-// CountLivePreviews counts a base application's live bindings.
-func (r *storeRepository) CountLivePreviews(ctx context.Context, appID uuid.UUID) (int, error) {
-	count, err := r.store.CountLivePreviewDeploys(ctx, pgUUID(appID))
+// MarkPreviewClosing persists a close intent on one binding.
+func (r *storeRepository) MarkPreviewClosing(ctx context.Context, previewID uuid.UUID) (Preview, error) {
+	row, err := r.store.MarkPreviewClosing(ctx, pgUUID(previewID))
 	if err != nil {
-		return 0, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Preview{}, ErrNotFound
+		}
+		return Preview{}, err
 	}
-	return int(count), nil
+	return previewFromRow(row), nil
+}
+
+// MarkPreviewClosed completes a close atomically (binding deleted, ledger
+// cleared).
+func (r *storeRepository) MarkPreviewClosed(ctx context.Context, appID uuid.UUID, prNumber int) (Preview, error) {
+	row, err := r.store.MarkPreviewClosed(ctx, pgUUID(appID), int32(prNumber))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Preview{}, ErrNotFound
+		}
+		return Preview{}, err
+	}
+	return previewFromRow(row), nil
+}
+
+// ListClosingPreviews returns bindings whose close intent is older than
+// before.
+func (r *storeRepository) ListClosingPreviews(ctx context.Context, before time.Time) ([]Preview, error) {
+	rows, err := r.store.ListClosingPreviewDeploys(ctx, pgtype.Timestamptz{Time: before, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	previews := make([]Preview, 0, len(rows))
+	for _, row := range rows {
+		previews = append(previews, previewFromRow(row))
+	}
+	return previews, nil
+}
+
+// PurgeExpiredPreviewReservations removes every expired ledger row.
+func (r *storeRepository) PurgeExpiredPreviewReservations(ctx context.Context) (int, error) {
+	n, err := r.store.PurgeExpiredPreviewDeliveries(ctx)
+	return int(n), err
 }
 
 // ListOrphanedPreviews returns live bindings without a live sibling.
@@ -477,6 +559,7 @@ func reservationFromRow(row sqlc.PreviewDelivery) DeliveryReservation {
 		HeadSHA:       row.HeadSha,
 		DeliveryID:    row.DeliveryID,
 		ReceivedAt:    timeFromPG(row.ReceivedAt),
+		ExpiresAt:     timeFromPG(row.ExpiresAt),
 	}
 }
 

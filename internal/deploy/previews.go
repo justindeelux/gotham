@@ -157,6 +157,12 @@ func (s *Service) DeleteSystemApplication(ctx context.Context, appID uuid.UUID) 
 		}
 		return err
 	}
+	// Defence in depth: this system path exists for preview siblings only. An
+	// ordinary application must never be deleted through it, because the
+	// teardown deliberately skips the remote deploy-key detach.
+	if !app.IsPreview {
+		return fmt.Errorf("%w: application %s is not a preview", ErrValidation, appID)
+	}
 	// Local key rows go first: a failure aborts before the application row
 	// disappears, so the teardown (and its binding) stays retryable and no
 	// orphan private key is left behind.

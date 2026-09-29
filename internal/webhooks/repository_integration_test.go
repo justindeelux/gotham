@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -262,9 +263,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	if err != nil || len(list) != 1 {
 		t.Fatalf("ListPreviews = %d / %v, want one preview", len(list), err)
 	}
-	if got, err := repo.CountLivePreviews(ctx, baseID); err != nil || got != 1 {
-		t.Fatalf("CountLivePreviews = %d / %v, want 1", got, err)
-	}
 	if orphans, err := repo.ListOrphanedPreviews(ctx); err != nil || len(orphans) != 0 {
 		t.Fatalf("ListOrphanedPreviews = %d / %v, want none", len(orphans), err)
 	}
@@ -272,70 +270,115 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Fatalf("ListOrphanedPreviewApplications = %d / %v, want none", len(apps), err)
 	}
 
-	// The reservation ledger: a replayed start is a duplicate, a new head is
-	// allowed, a close reserves once, and clearing frees the reopen path.
-	start := DeliveryReservation{
-		ApplicationID: baseID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "abc123", DeliveryID: "d1",
+	// The claim: the live binding's head dedupes a start, an in-flight lease
+	// dedupes a replay, a different head is a new transition, and a historical
+	// head is NOT a permanent handled set (N1) — the claim approves it again.
+	claimStart := func(head string) PreviewClaimResult {
+		t.Helper()
+		result, err := repo.ClaimPreviewDelivery(ctx, PreviewClaim{
+			ApplicationID: baseID, PRNumber: 7, Kind: ReservationStart,
+			HeadSHA: head, LiveLimit: 5,
+		})
+		if err != nil {
+			t.Fatalf("ClaimPreviewDelivery(%s): %v", head, err)
+		}
+		return result
 	}
-	reserved, err := repo.ReservePreviewDelivery(ctx, start)
-	if err != nil {
-		t.Fatalf("ReservePreviewDelivery: %v", err)
+	// The binding currently names abc123: delivering it again is a duplicate.
+	if dup := claimStart("abc123"); !dup.Duplicate {
+		t.Fatalf("current-head claim = %+v, want duplicate", dup)
 	}
-	if reserved.ID == uuid.Nil || reserved.DeliveryID != "d1" {
-		t.Errorf("reservation = %+v", reserved)
+	// A new head is approved and holds an in-flight lease.
+	approved := claimStart("sha-b")
+	if !approved.Approved || approved.Reservation.ID == uuid.Nil || approved.Binding == nil {
+		t.Fatalf("new-head claim = %+v, want approved with a lease and the binding", approved)
 	}
-	if _, err := repo.ReservePreviewDelivery(ctx, start); !errors.Is(err, ErrDuplicate) {
-		t.Errorf("replayed reservation error = %v, want ErrDuplicate", err)
+	// The same head while its lease is live is a duplicate.
+	if dup := claimStart("sha-b"); !dup.Duplicate {
+		t.Fatalf("in-flight claim = %+v, want duplicate", dup)
 	}
 	// A different PR at the same head is independent (F2).
-	if _, err := repo.ReservePreviewDelivery(ctx, DeliveryReservation{
-		ApplicationID: baseID, PRNumber: 8, Kind: ReservationStart, HeadSHA: "abc123",
-	}); err != nil {
-		t.Errorf("second PR at the same head: %v, want a reservation", err)
+	if other, err := repo.ClaimPreviewDelivery(ctx, PreviewClaim{
+		ApplicationID: baseID, PRNumber: 8, Kind: ReservationStart, HeadSHA: "sha-b", LiveLimit: 5,
+	}); err != nil || !other.Approved {
+		t.Fatalf("second PR at the same head = %+v / %v, want approved", other, err)
 	}
-	// A new head revision of the same PR is independent.
-	if _, err := repo.ReservePreviewDelivery(ctx, DeliveryReservation{
-		ApplicationID: baseID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "def456",
+	// The queue succeeded: the binding names the new head and the lease goes.
+	if _, err := repo.UpsertPreview(ctx, Preview{
+		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
+		PRNumber: 7, Branch: "feat/x", HeadSHA: "sha-b",
+		PreviewApplicationID: siblingID, Host: "pr-7-wh-app.example.com", State: PreviewActive,
 	}); err != nil {
-		t.Errorf("new head reservation: %v, want one", err)
+		t.Fatalf("UpsertPreview(sha-b): %v", err)
 	}
-	closeReservation, err := repo.ReservePreviewDelivery(ctx, DeliveryReservation{
+	if err := repo.ReleasePreviewDelivery(ctx, approved.Reservation.ID); err != nil {
+		t.Fatalf("ReleasePreviewDelivery: %v", err)
+	}
+	if dup := claimStart("sha-b"); !dup.Duplicate {
+		t.Fatalf("current-head claim after the queue = %+v, want duplicate", dup)
+	}
+	// N1: a force-push back to the historical head must deploy again.
+	back := claimStart("abc123")
+	if !back.Approved {
+		t.Fatalf("historical-head claim = %+v, want approved (not a handled set)", back)
+	}
+	// A close marker reserves once.
+	closeResult, err := repo.ClaimPreviewDelivery(ctx, PreviewClaim{
 		ApplicationID: baseID, PRNumber: 7, Kind: ReservationClose,
 	})
-	if err != nil {
-		t.Fatalf("close reservation: %v", err)
+	if err != nil || !closeResult.Approved {
+		t.Fatalf("close claim = %+v / %v, want approved", closeResult, err)
 	}
-	if _, err := repo.ReservePreviewDelivery(ctx, DeliveryReservation{
+	if dup, err := repo.ClaimPreviewDelivery(ctx, PreviewClaim{
 		ApplicationID: baseID, PRNumber: 7, Kind: ReservationClose,
-	}); !errors.Is(err, ErrDuplicate) {
-		t.Errorf("second close reservation error = %v, want ErrDuplicate", err)
+	}); err != nil || !dup.Duplicate {
+		t.Fatalf("second close claim = %+v / %v, want duplicate", dup, err)
 	}
-	if err := repo.ReleasePreviewDelivery(ctx, reserved.ID); err != nil {
-		t.Fatalf("ReleasePreviewDelivery: %v", err)
+	// The atomic close completion deletes the binding and clears the ledger.
+	closed, err := repo.MarkPreviewClosed(ctx, baseID, 7)
+	if err != nil {
+		t.Fatalf("MarkPreviewClosed: %v", err)
+	}
+	if closed.State != PreviewDeleted || closed.DeletedAt.IsZero() {
+		t.Errorf("closed preview = %+v", closed)
+	}
+	// A stale reservation can never poison a reopen: the completion cleared
+	// every row, and the same historical head is claimable again.
+	if reopened := claimStart("abc123"); !reopened.Approved {
+		t.Fatalf("reopen claim = %+v, want approved", reopened)
+	}
+	if err := repo.ReleasePreviewDelivery(ctx, uuid.MustParse("00000000-0000-0000-0000-000000000000")); err != nil {
+		t.Errorf("releasing a missing reservation: %v, want nil", err)
+	}
+	// Expired leases are purged by the claim (and by the sweep's global pass),
+	// so a crashed delivery cannot suppress its revision forever.
+	expired, err := repo.ClaimPreviewDelivery(ctx, PreviewClaim{
+		ApplicationID: baseID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "sha-expired",
+	})
+	if err != nil || !expired.Approved {
+		t.Fatalf("expired-lease setup = %+v / %v", expired, err)
+	}
+	if _, err := pool.Exec(ctx,
+		"UPDATE preview_deliveries SET expires_at = now() - interval '1 minute' WHERE id = $1",
+		pgUUID(expired.Reservation.ID),
+	); err != nil {
+		t.Fatalf("expire the lease: %v", err)
+	}
+	if purged, err := repo.PurgeExpiredPreviewReservations(ctx); err != nil || purged != 1 {
+		t.Fatalf("PurgeExpiredPreviewReservations = %d / %v, want 1", purged, err)
+	}
+	if again := claimStart("sha-expired"); !again.Approved {
+		t.Fatalf("claim after the purge = %+v, want approved", again)
 	}
 	if err := repo.ClearPreviewDeliveries(ctx, baseID, 7); err != nil {
 		t.Fatalf("ClearPreviewDeliveries: %v", err)
 	}
-	if reserved.ID == closeReservation.ID {
-		t.Error("distinct reservations share one id")
-	}
-	// After the clear the same head can reserve again (reopen, F2).
-	if _, err := repo.ReservePreviewDelivery(ctx, start); err != nil {
-		t.Errorf("reservation after clear: %v, want a fresh reservation", err)
-	}
-	if err := repo.ClearPreviewDeliveries(ctx, baseID, 7); err != nil {
-		t.Fatalf("ClearPreviewDeliveries(second): %v", err)
+	if err := repo.ClearPreviewDeliveries(ctx, baseID, 8); err != nil {
+		t.Fatalf("ClearPreviewDeliveries(PR 8): %v", err)
 	}
 
-	// Closing marks the row deleted; a re-opened PR refreshes the same row
-	// (the unique pair) instead of inserting a second one.
-	deleted, err := repo.MarkPreviewDeleted(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("MarkPreviewDeleted: %v", err)
-	}
-	if deleted.State != PreviewDeleted || deleted.DeletedAt.IsZero() {
-		t.Errorf("deleted preview = %+v", deleted)
-	}
+	// A re-opened PR refreshes the same binding row (the unique pair) instead
+	// of inserting a second one.
 	reopened, err := repo.UpsertPreview(ctx, Preview{
 		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
 		PRNumber: 7, Branch: "feat/y", HeadSHA: "def456",
@@ -366,11 +409,33 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	if err != nil || len(orphans) != 1 || orphans[0].ID != survivor.ID {
 		t.Fatalf("ListOrphanedPreviews = %+v / %v, want the orphaned binding", orphans, err)
 	}
-	if _, err := repo.MarkPreviewDeleted(ctx, survivor.ID); err != nil {
-		t.Fatalf("MarkPreviewDeleted: %v", err)
+	if _, err := repo.MarkPreviewClosed(ctx, survivor.ApplicationID, survivor.PRNumber); err != nil {
+		t.Fatalf("MarkPreviewClosed: %v", err)
 	}
 	if orphans, err := repo.ListOrphanedPreviews(ctx); err != nil || len(orphans) != 0 {
-		t.Fatalf("ListOrphanedPreviews after mark = %d / %v, want none", len(orphans), err)
+		t.Fatalf("ListOrphanedPreviews after close = %d / %v, want none", len(orphans), err)
+	}
+
+	// A persisted close intent is the sweep's teardown-retry list. The sibling
+	// link is NULL here: the listing only cares about the state and age.
+	if _, err := repo.UpsertPreview(ctx, Preview{
+		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
+		PRNumber: 12, Host: "pr-12-wh-app.example.com",
+		State:     PreviewClosing,
+		CreatedAt: time.Now().UTC().Add(-time.Hour), UpdatedAt: time.Now().UTC().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("UpsertPreview(closing): %v", err)
+	}
+	// The fake/test flow uses the binding row's updated_at; force it into the
+	// past through the schema so the cutoff is deterministic.
+	if _, err := pool.Exec(ctx, "UPDATE preview_deploys SET updated_at = now() - interval '1 hour' WHERE application_id = $1 AND pr_number = 12", pgUUID(baseID)); err != nil {
+		t.Fatalf("age the closing binding: %v", err)
+	}
+	if closing, err := repo.ListClosingPreviews(ctx, time.Now().UTC().Add(-previewSweepGrace)); err != nil || len(closing) != 1 || closing[0].PRNumber != 12 {
+		t.Fatalf("ListClosingPreviews = %+v / %v, want the closing binding", closing, err)
+	}
+	if closing, err := repo.ListClosingPreviews(ctx, time.Now().UTC().Add(-2*time.Hour)); err != nil || len(closing) != 0 {
+		t.Fatalf("ListClosingPreviews(older cutoff) = %d / %v, want none", len(closing), err)
 	}
 
 	// An is_preview application without a live binding is the sweep's second
@@ -499,6 +564,124 @@ func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 	if target.Name != "wh-app" || target.BaseDomain != "wh-app.example.com" ||
 		target.UserID != userID || target.TeamID != userID {
 		t.Errorf("target = %+v, want name/domain/user/team from the application", target)
+	}
+}
+
+// TestStoreClaimConcurrencyRespectsTheCap is the N3 database-level proof:
+// concurrent claims for distinct pull requests of one application never
+// approve more than the cap, because every claim locks the base application
+// row and counts the live bindings plus in-flight leases in the same
+// transaction.
+func TestStoreClaimConcurrencyRespectsTheCap(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	st := store.New(pool)
+	email := fmt.Sprintf("be-8.1-cap-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	userID := uuid.UUID(user.ID.Bytes)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete: %v", err)
+		}
+	})
+	base, err := st.CreateApplication(ctx, createApplicationParams(userID))
+	if err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+	baseID := uuid.UUID(base.ID.Bytes)
+
+	const (
+		cap      = 5
+		attempts = 12
+	)
+	approved := make(chan int32, attempts)
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			result, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+				ApplicationID: pgUUID(baseID),
+				PrNumber:      int32(100 + i),
+				Kind:          store.PreviewClaimStart,
+				HeadSHA:       fmt.Sprintf("sha-%d", i),
+				DeliveryID:    fmt.Sprintf("delivery-%d", i),
+				LiveLimit:     cap,
+			})
+			if err != nil {
+				t.Errorf("ClaimPreviewDelivery(%d): %v", i, err)
+				return
+			}
+			if result.Approved {
+				approved <- result.Reservation.PrNumber
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(approved)
+
+	got := make([]int32, 0, attempts)
+	for pr := range approved {
+		got = append(got, pr)
+	}
+	if len(got) != cap {
+		t.Fatalf("approved = %d, want exactly the cap %d (prs %v)", len(got), cap, got)
+	}
+
+	// The database agrees: distinct live-or-in-flight pull requests == cap.
+	var live int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM (
+			SELECT pr_number FROM preview_deploys
+			WHERE application_id = $1 AND state <> 'deleted'
+			UNION
+			SELECT pr_number FROM preview_deliveries
+			WHERE application_id = $1 AND kind = 'start' AND expires_at > now()
+		) AS live`, pgUUID(baseID)).Scan(&live); err != nil {
+		t.Fatalf("count live previews: %v", err)
+	}
+	if live != cap {
+		t.Fatalf("live previews = %d, want %d", live, cap)
+	}
+
+	// Complete one of the approved previews (binding written, lease released):
+	// a refresh of it is allowed even at the cap, because the claim skips the
+	// quota for an existing live binding.
+	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
+		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
+		Repo: base.Repo, PrNumber: got[0], Branch: "main", HeadSha: "sha-orig",
+		Host: "pr-x.example.com", State: "active",
+	}); err != nil {
+		t.Fatalf("UpsertPreviewDeploy: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		"DELETE FROM preview_deliveries WHERE application_id = $1 AND pr_number = $2",
+		pgUUID(baseID), got[0],
+	); err != nil {
+		t.Fatalf("release the completed lease: %v", err)
+	}
+	existing, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: got[0], Kind: store.PreviewClaimStart,
+		HeadSHA: "refresh-sha", DeliveryID: "refresh", LiveLimit: cap,
+	})
+	if err != nil || !existing.Approved {
+		t.Fatalf("refresh claim = %+v / %v, want approved at the cap", existing, err)
 	}
 }
 

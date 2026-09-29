@@ -58,7 +58,7 @@ func TestP8PreviewLifecycle(t *testing.T) {
 		"number": 7,
 		"pull_request": map[string]any{
 			"number": 7,
-			"head":   map[string]any{"ref": "feature/preview", "sha": headSHA},
+			"head":   map[string]any{"ref": "feature/preview", "sha": headSHA, "repo": map[string]any{"full_name": fixture.repo, "fork": false}},
 			"base":   map[string]any{"ref": "main"},
 		},
 		"repository": map[string]any{"full_name": fixture.repo},
@@ -106,7 +106,7 @@ func TestP8PreviewLifecycle(t *testing.T) {
 		"number": 7,
 		"pull_request": map[string]any{
 			"number": 7,
-			"head":   map[string]any{"ref": "feature/preview", "sha": headSHA},
+			"head":   map[string]any{"ref": "feature/preview", "sha": headSHA, "repo": map[string]any{"full_name": fixture.repo, "fork": false}},
 			"base":   map[string]any{"ref": "main"},
 		},
 		"repository": map[string]any{"full_name": fixture.repo},
@@ -124,7 +124,7 @@ func TestP8PreviewLifecycle(t *testing.T) {
 		"number": 7,
 		"pull_request": map[string]any{
 			"number": 7,
-			"head":   map[string]any{"ref": "feature/preview", "sha": headSHA},
+			"head":   map[string]any{"ref": "feature/preview", "sha": headSHA, "repo": map[string]any{"full_name": fixture.repo, "fork": false}},
 			"base":   map[string]any{"ref": "main"},
 		},
 		"repository": map[string]any{"full_name": fixture.repo},

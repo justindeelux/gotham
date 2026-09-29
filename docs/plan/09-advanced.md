@@ -58,26 +58,36 @@ refresh the preview and queue a deployment; `closed` (GitLab
 `close`/`merge`) delete the sibling application and mark the binding deleted.
 A PR whose base branch is not the application's watched branch, a repo no
 application watches, an action that is not one of the above, an application
-without a base domain, and **a fork head** (GitHub/Gitea `head.repo.fork` or a
-foreign head repository, GitLab source/target project mismatch) are
-acknowledged as ignored. Live previews are capped at 5 per base application;
+without a base domain, and **a fork head** are acknowledged as ignored. Fork
+detection fails closed: a GitHub/Gitea delivery without its `head.repo`
+identity (or with the fork flag, or a foreign head repository) and a GitLab
+delivery whose source/target project ids are missing or differ are treated as
+forks and never previewed. Live previews are capped at 5 per base application;
 a PR beyond the cap is ignored and logged, while a synchronize of an
-already-previewed PR is never capped.
+already-previewed PR is never capped — and the cap is enforced inside the
+atomic claim, so concurrent distinct-PR deliveries cannot overshoot it.
 
-**PR idempotency uses its own ledger (fix round 1).** PR deliveries are
-reserved in `preview_deliveries`, never in the push `webhook_events` ledger:
-`(application_id, pr_number, head_sha)` is the signed-body identity of a start
-(the same union mirrors the close as `(application_id, pr_number)`), so a
-replayed body is a duplicate while a new head, a second PR at the same commit,
-and a push of that commit stay independent. Closing clears the PR's
-reservations, so a reopen at the same head reserves again. `delivery_id` is
+**PR idempotency uses an atomic lease claim (fix rounds 1–2).** PR deliveries
+are claimed in `preview_deliveries`, never in the push `webhook_events`
+ledger. The claim (`Store.ClaimPreviewDelivery`) is one transaction per
+`(application, PR)`: it locks the base application row, purges that PR's
+expired rows, dedupes a start **only against the live binding's current head**
+or an in-flight lease for exactly that head, enforces the live-preview quota
+for a new preview, and inserts the in-flight lease (15-minute expiry; a crashed
+delivery's lease self-heals). Historical revisions are therefore not a
+permanent handled set: a force-push A → B → A deploys three times. A close
+claims `(application_id, pr_number)` as a teardown marker. `delivery_id` is
 stored for the audit trail only — it is an unsigned header and never gates a
-delivery by itself. A start reserves, persists the binding, then queues: a
-failed queue or a conflicting active deployment **releases the reservation**
-and answers 503 (retryable), so a redelivered revision is deployed instead of
-being marked handled; a failed binding write deletes the just-created sibling
-(compensation), and a retry recovers the reserved sibling instead of treating
-its unique name/host as a permanent collision.
+delivery by itself.
+
+The commit-based SHA ledger of the push path is untouched. A start persists the
+binding before queueing; a failed queue or a conflicting active deployment
+releases the lease and answers 503 (retryable), so a redelivered revision is
+deployed instead of being marked handled. A failed binding write deletes the
+just-created sibling (compensation), and a retry recovers the reserved sibling
+instead of treating its unique name/host as a permanent collision. Quota
+allocation rides the same claim, so concurrent distinct-PR deliveries cannot
+overshoot the cap.
 
 Hooks are installed with `Events: ["push","pull_request"]` (GitLab:
 `push_events` + `merge_requests_events`). Hooks installed before the preview
@@ -94,19 +104,24 @@ best effort with a 5s bound: a Git host that cannot accept a comment never
 fails the delivery. The URL renders as `http://<host>` (a certificate-covered
 host redirects to HTTPS; without one the HTTP URL is what works).
 
-**Cleanup.** Close is the normal teardown (delete sibling → route/container
-gone, local deploy-key rows removed, binding marked deleted). Teardown never
+**Cleanup.** Close persists its intent first (`state='closing'`), then deletes
+the sibling (route/container gone, local deploy-key rows removed) and finally
+completes atomically: binding deleted and the PR's ledger cleared in one
+transaction (`MarkPreviewClosed`, idempotent and used on the already-deleted
+retry path too, so a stale reservation can never block a reopen). A teardown
+failure leaves the binding `closing` and returns an error. Teardown never
 removes a deploy key from the Git host: a preview reuses its base
 application's remote key, and deleting it (user or system path) would break
-the base. `DeleteApplication` runs the webhook cleanup before deleting a base
-row and **aborts on its failure**, so the base FK can never cascade the
-bindings away while a sibling survives. The hourly sweep
-(`FEATURE_PREVIEWS`, started/stopped with the server lifecycle) is
-**orphan-only**: it marks bindings deleted whose sibling is already gone and
-deletes `is_preview` applications that no live binding references (created
-before the sweep's 15-minute grace), and it never tears down a preview that is
-still bound to a live sibling — an open PR keeps its preview however old it
-is.
+the base; the system path additionally refuses a non-preview application.
+`DeleteApplication` runs the webhook cleanup before deleting a base row and
+**aborts on its failure**, so the base FK can never cascade the bindings away
+while a sibling survives. The hourly sweep (`FEATURE_PREVIEWS`, started/stopped
+with the server lifecycle) is **orphan-only**: it purges expired leases, closes
+bindings whose sibling is already gone, re-attempts the teardown of bindings
+left `closing` (older than the grace period) and deletes `is_preview`
+applications that no live binding references — it never tears down a preview
+that is still bound to a live sibling, so an open PR keeps its preview however
+old it is.
 
 **Routes.** Delivery route unchanged; authenticated `GET
 /v1/applications/{id}/previews` lists an application's bindings (team-scoped
@@ -125,20 +140,27 @@ storages are not shared with previews by default (fix round 1); an operator
 who needs shared configuration must move the value into a plain env var
 (visible) or configure the preview application explicitly — a per-application
 opt-in is deliberately not implemented. (4) A conflicting synchronize answers
-503 and waits for a host redelivery: there is no automatic retry queue.
-(5) `preview_deploys` and `preview_deliveries` rows are kept as audit; pruning
-them is deferred.
+503 and waits for a host redelivery: there is no automatic retry queue. A
+failed close is covered by the sweep's `closing` retry instead. (5)
+`preview_deploys` rows are kept as audit; `preview_deliveries` is transactional
+state with a 15-minute lease expiry and is pruned by the sweep and by each
+claim. (6) Two previews of one application can still be sequenced by the host
+in either order; the claim serializes them but does not reorder events.
 
 **Verification.** Unit tests for payload parsing (three providers ×
-open/synchronize/close/fork), host/name derivation, the service lifecycle
-(create/reuse/redelivery/reopen at the same SHA, a second PR at the same SHA,
-push at the same SHA, busy-deployment retry, binding-write compensation and
-recovery, cap, fork rejection, close/comment-failure/flag-off/team scope,
-orphan-only sweep), the provider comment endpoints, the GitLab
+open/synchronize/close/fork, including the fail-closed missing-identity
+cases), host/name derivation, the service lifecycle (create/reuse/redelivery,
+reopen at the same SHA, **A→B→A back to an earlier head**, a second PR at the
+same SHA, push at the same SHA, busy-deployment retry, binding-write
+compensation and recovery, **concurrent distinct-PR cap enforcement**,
+fork rejection, close/close-retry/sweep-retry/comment-failure/flag-off/team
+scope, orphan-only sweep), the provider comment endpoints, the GitLab
 `merge_requests_events` subscription and the deploy clone/system-delete seam;
 repository integration tests against PostgreSQL for the unique pair,
-`is_preview`, the reservation ledger (replay, second PR, close, clear), the
-orphan queries, the deleted→reopened transition and both cascades, plus a
+`is_preview`, the atomic claim (current-head dedupe, in-flight duplicate,
+second PR, historical head approved, expired-lease purge), the closing list,
+the orphan queries, the deleted→reopened transition and both cascades, a
+concurrent claim test proving the cap holds under real transactions, plus a
 DB-backed teardown removing the preview's local private-key row while the base
 key survives. Gated e2e (`GOTHAM_E2E=1`): `TestP8PreviewLifecycle` opens a PR
 over the real delivery route, deploys the head branch through the agent,

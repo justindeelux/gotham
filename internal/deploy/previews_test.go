@@ -203,6 +203,23 @@ func TestDeleteSystemApplicationRemovesLocalKeyOnly(t *testing.T) {
 	}
 }
 
+// TestDeleteSystemApplicationRefusesNonPreview pins the hardening check: the
+// system teardown only accepts preview siblings (it skips the remote key
+// detach), so an ordinary application can never be deleted through it.
+func TestDeleteSystemApplicationRefusesNonPreview(t *testing.T) {
+	base := testApplication(uuid.New())
+	repo := &fakeRepository{app: base}
+	svc := newTestService(t, repo)
+
+	err := svc.DeleteSystemApplication(context.Background(), base.ID)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("DeleteSystemApplication(base) = %v, want ErrValidation", err)
+	}
+	if _, err := repo.GetApplication(context.Background(), base.ID); err != nil {
+		t.Fatalf("the base application was deleted: %v", err)
+	}
+}
+
 // TestDeleteApplicationOfAPreviewKeepsTheRemoteKey is the H1 regression: the
 // user-facing delete of a preview sibling removes the local rows but leaves
 // the base application's remote deploy key registered.

@@ -25,20 +25,35 @@ SELECT * FROM preview_deploys
 WHERE application_id = $1
 ORDER BY created_at DESC;
 
--- name: MarkPreviewDeployDeleted :one
+-- name: MarkPreviewDeployClosing :one
+-- Persists a close intent before the sibling is torn down, so a failed (or
+-- lost) teardown is re-attempted by the sweep.
 UPDATE preview_deploys
-SET state = 'deleted', deleted_at = now(), updated_at = now()
+SET state = 'closing', updated_at = now()
 WHERE id = $1
 RETURNING *;
 
--- name: CountLivePreviewDeploys :one
-SELECT count(*) FROM preview_deploys
-WHERE application_id = $1 AND state <> 'deleted';
+-- name: MarkPreviewDeployClosed :one
+-- The close completion, wrapped with ClearPreviewDeliveries in one
+-- transaction by Store.MarkPreviewClosed. Used on every close path, including
+-- the already-deleted retry, so a stale reservation can never poison a
+-- reopen.
+UPDATE preview_deploys
+SET state = 'deleted', deleted_at = now(), updated_at = now()
+WHERE application_id = $1 AND pr_number = $2
+RETURNING *;
+
+-- name: ListClosingPreviewDeploys :many
+-- Bindings whose close intent is older than the sweep grace period: the sweep
+-- re-attempts their teardown.
+SELECT * FROM preview_deploys
+WHERE state = 'closing' AND updated_at < $1
+ORDER BY updated_at ASC;
 
 -- name: ListOrphanedPreviewDeploys :many
 -- Live bindings whose sibling application no longer exists (deleted out of
 -- band, or never linked because preview_application_id is NULL): the sweep
--- marks these deleted without touching any live preview.
+-- closes these without touching any live preview.
 SELECT p.* FROM preview_deploys p
 LEFT JOIN applications a ON a.id = p.preview_application_id
 WHERE p.state <> 'deleted'
@@ -66,10 +81,24 @@ WHERE a.is_preview
   )
 ORDER BY a.created_at ASC;
 
+-- name: CountLivePreviews :one
+-- The quota read: distinct pull requests of one base application that are
+-- live (a non-deleted binding) or in flight (an unexpired start lease).
+-- Counting the leases closes the window between "approved" and "binding
+-- written" that a plain binding count leaves open under concurrency.
+SELECT count(*) FROM (
+    SELECT p.pr_number AS pr_number FROM preview_deploys p
+    WHERE p.application_id = $1 AND p.state <> 'deleted'
+    UNION
+    SELECT d.pr_number AS pr_number FROM preview_deliveries d
+    WHERE d.application_id = $1 AND d.kind = 'start' AND d.expires_at > now()
+) AS live;
+
 -- name: ReservePreviewDelivery :one
--- Insert a delivery reservation. A replay of the same signed revision (or a
--- concurrent close of the same PR) conflicts and returns no row; the caller
--- maps pgx.ErrNoRows to a duplicate delivery.
+-- Insert a delivery reservation (in-flight lease for a start, teardown marker
+-- for a close). A replay of the same signed revision while an earlier attempt
+-- is still in flight (or a concurrent close of the same PR) conflicts and
+-- returns no row; the caller maps pgx.ErrNoRows to a duplicate delivery.
 INSERT INTO preview_deliveries (application_id, pr_number, kind, head_sha, delivery_id)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT DO NOTHING
@@ -81,7 +110,18 @@ RETURNING *;
 DELETE FROM preview_deliveries WHERE id = $1;
 
 -- name: ClearPreviewDeliveries :exec
--- Clears a pull request's reservations at a lifecycle transition (close), so a
--- reopen — even at the same head revision — can reserve again.
+-- Clears a pull request's reservations at a lifecycle transition, so the
+-- opposite transition (reopen) can reserve again.
 DELETE FROM preview_deliveries
 WHERE application_id = $1 AND pr_number = $2;
+
+-- name: PurgeExpiredPreviewDeliveriesFor :exec
+-- Removes the pull request's expired reservations. A lease that outlived its
+-- delivery (a crash) must never suppress a later delivery of the same
+-- revision.
+DELETE FROM preview_deliveries
+WHERE application_id = $1 AND pr_number = $2 AND expires_at <= now();
+
+-- name: PurgeExpiredPreviewDeliveries :execrows
+-- Removes every expired reservation — the sweep's housekeeping pass.
+DELETE FROM preview_deliveries WHERE expires_at <= now();

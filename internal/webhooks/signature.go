@@ -133,21 +133,28 @@ type pullRequestPayload struct {
 // isForkHead reports whether a pull request's head comes from another
 // repository (or repository fork). repo is the delivery's repository
 // identifier ("owner/name" / "group/project").
+//
+// The check fails closed: a payload that does not carry the head repository
+// identity (a null GitHub head.repo cannot be proven same-repository) is
+// treated as a fork and never previewed. A preview builds and serves code, so
+// an unverifiable head must not run.
 func (p pullRequestPayload) isForkHead(repo string) bool {
 	if attrs := p.ObjectAttributes; attrs != nil && attrs.IID > 0 {
-		return attrs.SourceProjectID != 0 && attrs.TargetProjectID != 0 &&
+		// GitLab: both project ids must be present and identical; a missing id
+		// or a different source project is a fork.
+		return attrs.SourceProjectID == 0 || attrs.TargetProjectID == 0 ||
 			attrs.SourceProjectID != attrs.TargetProjectID
 	}
 	if p.PullRequest == nil || p.PullRequest.Head.Repo == nil {
-		return false
+		return true
 	}
 	head := p.PullRequest.Head.Repo
-	if head.Fork {
+	if head.Fork || head.FullName == "" {
 		return true
 	}
 	// A head.repository naming a different repository is a fork even when the
 	// host did not set the flag.
-	return head.FullName != "" && !strings.EqualFold(strings.TrimSpace(head.FullName), strings.TrimSpace(repo))
+	return !strings.EqualFold(strings.TrimSpace(head.FullName), strings.TrimSpace(repo))
 }
 
 // info turns a parsed body into the pull request routing facts, or nil when

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,11 +18,14 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// githubPRBody is a GitHub-shaped pull_request delivery body.
+// githubPRBody is a GitHub-shaped pull_request delivery body. The head
+// repository is the delivery repository (a same-repository head), which the
+// fail-closed fork check requires.
 func githubPRBody(action string, number int, head, base, sha string) string {
 	return `{"action":"` + action + `","number":` + strconv.Itoa(number) +
 		`,"pull_request":{"number":` + strconv.Itoa(number) +
-		`,"head":{"ref":"` + head + `","sha":"` + sha + `"},"base":{"ref":"` + base + `"}},` +
+		`,"head":{"ref":"` + head + `","sha":"` + sha + `","repo":{"full_name":"octo/gotham","fork":false}},` +
+		`"base":{"ref":"` + base + `"}},` +
 		`"repository":{"full_name":"octo/gotham"}}`
 }
 
@@ -36,11 +40,13 @@ func githubHeadRepoPRBody(headRepo string, fork bool) string {
 		`"repository":{"full_name":"octo/gotham"}}`
 }
 
-// gitLabMRBody is a GitLab-shaped merge request delivery body.
+// gitLabMRBody is a GitLab-shaped merge request delivery body from the same
+// project (matching source/target project ids).
 func gitLabMRBody(action string, iid int, source, target, sha string) string {
 	return `{"object_attributes":{"iid":` + strconv.Itoa(iid) + `,"action":"` + action +
 		`","source_branch":"` + source + `","target_branch":"` + target +
-		`","last_commit":{"id":"` + sha + `"}},` +
+		`","source_project_id":7,"target_project_id":7,` +
+		`"last_commit":{"id":"` + sha + `"}},` +
 		`"project":{"path_with_namespace":"octo/gotham"}}`
 }
 
@@ -136,6 +142,24 @@ func TestParsePullRequestDelivery(t *testing.T) {
 			provider: providers.NameGitHub, event: "pull_request",
 			body:       githubHeadRepoPRBody("stranger/gotham", false),
 			wantNumber: 7, wantAction: "opened", wantHead: "feat/x", wantBase: "main", wantSHA: "abc", wantFork: true,
+		},
+		{
+			// Fail closed: a null head.repo cannot be proven same-repository.
+			name:     "github without the head repository",
+			provider: providers.NameGitHub, event: "pull_request",
+			body: `{"action":"opened","number":7,"pull_request":{"number":7,` +
+				`"head":{"ref":"feat/x","sha":"abc"},"base":{"ref":"main"}},` +
+				`"repository":{"full_name":"octo/gotham"}}`,
+			wantNumber: 7, wantAction: "opened", wantHead: "feat/x", wantBase: "main", wantSHA: "abc", wantFork: true,
+		},
+		{
+			// Fail closed: GitLab must carry both project ids.
+			name:     "gitlab without project ids",
+			provider: providers.NameGitLab, event: "Merge Request Hook",
+			body: `{"object_attributes":{"iid":9,"action":"open","source_branch":"feat/z",` +
+				`"target_branch":"main","last_commit":{"id":"456"}},` +
+				`"project":{"path_with_namespace":"octo/gotham"}}`,
+			wantNumber: 9, wantAction: "open", wantHead: "feat/z", wantBase: "main", wantSHA: "456", wantFork: true,
 		},
 		{
 			name:     "gitea synchronized",
@@ -323,8 +347,8 @@ func TestReceivePullRequestCreatesPreviewAndDeploys(t *testing.T) {
 	if preview.TeamID != repo.app.TeamID {
 		t.Errorf("preview team = %s, want the base application's team %s", preview.TeamID, repo.app.TeamID)
 	}
-	if got := repo.reservationCount(); got != 1 {
-		t.Errorf("reservations = %d, want the start reservation kept", got)
+	if got := repo.reservationCount(); got != 0 {
+		t.Errorf("reservations = %d, want the in-flight lease released after the queue", got)
 	}
 
 	if got := commenter.commentCount(); got != 1 {
@@ -519,18 +543,10 @@ func TestBusyDeploymentIsRetryable(t *testing.T) {
 	if !errors.Is(err, ErrRetryable) {
 		t.Fatalf("busy synchronize = %v, want ErrRetryable", err)
 	}
-	// The busy delivery released its own reservation; the earlier, actually
-	// queued revision keeps its own.
-	if got := repo.reservationCount(); got != 1 {
-		t.Errorf("reservations after the busy delivery = %d, want 1 (the queued revision)", got)
-	}
-	repo.mu.Lock()
-	_, busyReservation := repo.reservations[ReservationKey(DeliveryReservation{
-		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "new-sha",
-	})]
-	repo.mu.Unlock()
-	if busyReservation {
-		t.Error("the unqueued revision kept its reservation")
+	// The busy delivery released its in-flight lease: a redelivery of the
+	// revision must be claimable.
+	if got := repo.reservationCount(); got != 0 {
+		t.Errorf("reservations after the busy delivery = %d, want 0 (released)", got)
 	}
 	preview, _ = repo.GetPreview(context.Background(), repo.app.ID, 7)
 	if preview.HeadSHA != "old-sha" {
@@ -646,13 +662,23 @@ func TestCapLimitsLivePreviews(t *testing.T) {
 	deployer := &fakeDeployer{}
 	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
 
-	// One live binding of the application's own, plus the cap already full.
+	// One live preview of the application's own, and the cap filled by four
+	// more live bindings of other pull requests.
 	if _, err := receive(t, svc, githubPRBody("opened", 1, "feat/one", "main", "sha-one")); err != nil {
 		t.Fatalf("Receive(PR 1): %v", err)
 	}
-	repo.mu.Lock()
-	repo.liveCount, repo.liveCountSet = maxLivePreviewsPerApplication, true
-	repo.mu.Unlock()
+	for pr := 2; pr <= maxLivePreviewsPerApplication; pr++ {
+		if _, err := repo.UpsertPreview(context.Background(), Preview{
+			ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
+			Repo: repo.app.Repo, PRNumber: pr, Host: "pr-x.apps.example.com",
+			PreviewApplicationID: uuid.New(), State: PreviewActive,
+		}); err != nil {
+			t.Fatalf("UpsertPreview(PR %d): %v", pr, err)
+		}
+	}
+	if got := repo.countLiveForTest(repo.app.ID); got != maxLivePreviewsPerApplication {
+		t.Fatalf("live previews = %d, want the cap filled", got)
+	}
 
 	delivery, err := receive(t, svc, githubPRBody("opened", 9, "feat/nine", "main", "sha-nine"))
 	if err != nil {
@@ -664,8 +690,8 @@ func TestCapLimitsLivePreviews(t *testing.T) {
 	if got := deployer.provisionCount(); got != 1 {
 		t.Errorf("siblings provisioned = %d, want 1 (the capped PR must not provision)", got)
 	}
-	if got := repo.reservationCount(); got != 1 {
-		t.Errorf("reservations = %d, want 1 (the capped reservation is released)", got)
+	if got := repo.reservationCount(); got != 0 {
+		t.Errorf("reservations = %d, want 0 (the capped delivery holds no lease)", got)
 	}
 
 	// The already-previewed PR refreshes despite the cap.
@@ -1113,8 +1139,8 @@ func TestCleanupApplicationTearsDownBaseSiblings(t *testing.T) {
 		t.Fatal("CleanupApplication with a failing teardown: no error, want one")
 	}
 	preview, _ := repo2.GetPreview(context.Background(), repo2.app.ID, 7)
-	if preview.State != PreviewActive {
-		t.Errorf("preview after a failed cleanup = %+v, want the binding kept", preview)
+	if preview.State != PreviewClosing {
+		t.Errorf("preview after a failed cleanup = %+v, want the close intent kept", preview)
 	}
 	// Retry after the failure succeeds and marks the binding deleted.
 	deployer2.mu.Lock()
@@ -1265,6 +1291,214 @@ func TestPreviewsDisabledSkipsSweep(t *testing.T) {
 	}
 	if deployer.deleteCount() != 0 {
 		t.Errorf("siblings deleted = %d, want 0", deployer.deleteCount())
+	}
+}
+
+// TestReturnToEarlierHeadDeploys is the N1 regression: a force-push back to a
+// revision that was already deployed queues again instead of being suppressed
+// by a permanent handled-SHA set.
+func TestReturnToEarlierHeadDeploys(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	heads := []string{"head-a", "head-b", "head-a"}
+	for _, head := range heads {
+		delivery, err := receive(t, svc, githubPRBody("synchronize", 7, "feat/x", "main", head))
+		if err != nil {
+			t.Fatalf("Receive(%s): %v", head, err)
+		}
+		if delivery.Status != StatusQueued {
+			t.Fatalf("delivery for %s = %+v, want queued", head, delivery)
+		}
+	}
+	if got := deployer.deployCount(); got != 3 {
+		t.Fatalf("deployments queued = %d, want 3 (A, B, A)", got)
+	}
+	if got := deployer.provisionCount(); got != 1 {
+		t.Errorf("siblings provisioned = %d, want 1", got)
+	}
+	preview, err := repo.GetPreview(context.Background(), repo.app.ID, 7)
+	if err != nil {
+		t.Fatalf("GetPreview: %v", err)
+	}
+	if preview.HeadSHA != "head-a" {
+		t.Errorf("binding head = %q, want head-a (the latest queued revision)", preview.HeadSHA)
+	}
+	// The binding's current head is still a duplicate.
+	if delivery, err := receive(t, svc, githubPRBody("synchronize", 7, "feat/x", "main", "head-a")); err != nil {
+		t.Fatalf("Receive(current head): %v", err)
+	} else if delivery.Status != StatusDuplicate {
+		t.Errorf("current-head re-delivery = %+v, want duplicate", delivery)
+	}
+	if got := deployer.deployCount(); got != 3 {
+		t.Errorf("deployments queued after the current-head re-delivery = %d, want 3", got)
+	}
+}
+
+// TestCloseRetryClearsPoisonedLedger is the N2 regression: an already-deleted
+// close retry still completes the ledger cleanup, and a cleanup failure is
+// surfaced (so the delivery is retried) instead of reporting success over a
+// poisoned ledger that would block a reopen at the same revision.
+func TestCloseRetryClearsPoisonedLedger(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	body := githubPRBody("opened", 7, "feat/x", "main", "head-a")
+	if _, err := receive(t, svc, body); err != nil {
+		t.Fatalf("Receive(open): %v", err)
+	}
+	closed := githubPRBody("closed", 7, "feat/x", "main", "head-a")
+	if delivery, err := receive(t, svc, closed); err != nil || delivery.Status != StatusDeleted {
+		t.Fatalf("first close = %+v / %v, want deleted", delivery, err)
+	}
+
+	// Simulate the poisoned state: the binding is deleted but a stale start
+	// lease survived (a crash between the old teardown and its ledger clear),
+	// and the cleanup now fails.
+	repo.mu.Lock()
+	repo.reservations[ReservationKey(DeliveryReservation{
+		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "head-a",
+	})] = DeliveryReservation{
+		ID: uuid.New(), ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart,
+		HeadSHA: "head-a", ExpiresAt: time.Now().Add(time.Hour),
+	}
+	repo.markClosedErr = errors.New("database down")
+	repo.mu.Unlock()
+
+	if _, err := receive(t, svc, closed); err == nil {
+		t.Fatal("already-deleted close with a failing ledger cleanup: no error, want one")
+	}
+	if got := repo.reservationCount(); got != 1 {
+		t.Fatalf("reservations after the failing close = %d, want the stale lease kept", got)
+	}
+
+	// The retry succeeds, clears the ledger, and reports the idempotent close
+	// without blocking the reopen.
+	repo.mu.Lock()
+	repo.markClosedErr = nil
+	repo.mu.Unlock()
+	delivery, err := receive(t, svc, closed)
+	if err != nil {
+		t.Fatalf("Receive(close retry): %v", err)
+	}
+	if delivery.Status != StatusDuplicate {
+		t.Fatalf("close retry = %+v, want duplicate", delivery)
+	}
+	if got := repo.reservationCount(); got != 0 {
+		t.Fatalf("reservations after the close retry = %d, want the ledger cleared", got)
+	}
+	// Reopening at the same revision queued before now works.
+	reopen, err := receive(t, svc, body)
+	if err != nil {
+		t.Fatalf("Receive(reopen): %v", err)
+	}
+	if reopen.Status != StatusQueued {
+		t.Fatalf("reopen = %+v, want queued", reopen)
+	}
+}
+
+// TestCloseFailureIsRetriedByTheSweep is the hardening regression: a close
+// that fails after persisting its intent leaves the binding 'closing', and the
+// sweep re-attempts the teardown instead of leaving the preview running
+// forever.
+func TestCloseFailureIsRetriedByTheSweep(t *testing.T) {
+	t.Setenv(FeatureEnv, "true")
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{deleteErr: errors.New("node unreachable")}
+	now := time.Now().UTC()
+	svc := newTestServiceWith(Config{
+		Repository: repo, Installer: &fakeInstaller{}, Deployer: deployer,
+		Provisioner: deployer, Logger: discardLogger(),
+		Now: func() time.Time { return now },
+	})
+
+	body := githubPRBody("opened", 7, "feat/x", "main", "head-a")
+	if _, err := receive(t, svc, body); err != nil {
+		t.Fatalf("Receive(open): %v", err)
+	}
+	closed := githubPRBody("closed", 7, "feat/x", "main", "head-a")
+	if _, err := receive(t, svc, closed); err == nil {
+		t.Fatal("close with a failing teardown: no error, want one")
+	}
+	preview, _ := repo.GetPreview(context.Background(), repo.app.ID, 7)
+	if preview.State != PreviewClosing {
+		t.Fatalf("binding after the failed close = %q, want closing", preview.State)
+	}
+
+	// The sweep's grace period passes; the teardown succeeds on the retry.
+	deployer.mu.Lock()
+	deployer.deleteErr = nil
+	deployer.mu.Unlock()
+	repo.mu.Lock()
+	stale := repo.previews[previewKey(repo.app.ID, 7)]
+	stale.UpdatedAt = now.Add(-time.Hour)
+	repo.previews[previewKey(repo.app.ID, 7)] = stale
+	repo.mu.Unlock()
+
+	removed, err := svc.SweepPreviews(context.Background())
+	if err != nil {
+		t.Fatalf("SweepPreviews: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1 (the closing preview)", removed)
+	}
+	if got := deployer.deleteCount(); got != 1 {
+		t.Errorf("siblings deleted = %d, want 1 (the failed attempt never reached the delete, the sweep retry did)", got)
+	}
+	closedPreview, _ := repo.GetPreview(context.Background(), repo.app.ID, 7)
+	if closedPreview.State != PreviewDeleted {
+		t.Errorf("binding after the sweep = %q, want deleted", closedPreview.State)
+	}
+}
+
+// TestConcurrentDistinctPRsRespectTheCap is the N3 regression: concurrent
+// distinct-PR opens must not overshoot the live-preview cap. All writers go
+// through the same atomic claim gate, so the cap is enforced under
+// contention, not just sequentially.
+func TestConcurrentDistinctPRsRespectTheCap(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	commenter := &fakeCommenter{}
+	svc := newPreviewService(t, repo, deployer, commenter)
+
+	const attempts = 12
+	var wg sync.WaitGroup
+	statuses := make([]string, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			body := githubPRBody("opened", 100+i, "feat/x", "main", "sha-"+strconv.Itoa(i))
+			delivery, err := receive(t, svc, body)
+			if err != nil {
+				t.Errorf("Receive(PR %d): %v", 100+i, err)
+			}
+			statuses[i] = delivery.Status
+		}(i)
+	}
+	wg.Wait()
+
+	if got := repo.countLiveForTest(repo.app.ID); got > maxLivePreviewsPerApplication {
+		t.Fatalf("live previews = %d, want at most the cap %d", got, maxLivePreviewsPerApplication)
+	}
+	if got := deployer.provisionCount(); got > maxLivePreviewsPerApplication {
+		t.Errorf("siblings provisioned = %d, want at most the cap", got)
+	}
+	queued, ignored := 0, 0
+	for _, status := range statuses {
+		switch status {
+		case StatusQueued:
+			queued++
+		case StatusIgnored:
+			ignored++
+		default:
+			t.Errorf("unexpected status %q", status)
+		}
+	}
+	if queued != maxLivePreviewsPerApplication || ignored != attempts-maxLivePreviewsPerApplication {
+		t.Errorf("queued/ignored = %d/%d, want %d/%d", queued, ignored, maxLivePreviewsPerApplication, attempts-maxLivePreviewsPerApplication)
 	}
 }
 

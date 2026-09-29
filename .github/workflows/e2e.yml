@@ -46,7 +46,7 @@ permissions:
 jobs:
   e2e:
     name: phase 4 end-to-end (GOTHAM_E2E=1)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 30
     services:
       postgres:

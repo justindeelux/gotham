@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
+          - self-hosted
         go:
           - "1.22.x"
     steps:
@@ -62,7 +62,7 @@ jobs:
 
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,7 +80,7 @@ jobs:
 
   web:
     name: web build + type-check + dist drift
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -109,7 +109,7 @@ jobs:
 
   sqlc:
     name: sqlc drift check
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v4

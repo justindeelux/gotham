@@ -842,6 +842,7 @@ onMounted(async () => {
                 :bordered="false"
                 :scroll-x="760"
                 :pagination="false"
+                data-testid="members-table"
               />
               <NText depth="3">
                 A team always keeps at least one owner: demoting or removing the
@@ -885,6 +886,7 @@ onMounted(async () => {
                 :bordered="false"
                 :scroll-x="760"
                 :pagination="false"
+                data-testid="invites-table"
               />
               <NText v-if="!canManage" depth="3">
                 Your role does not list or manage invites.

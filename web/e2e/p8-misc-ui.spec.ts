@@ -205,7 +205,7 @@ test.describe("teams", () => {
     // ── select the new team; members show the caller as owner ─────────────
     await teamRow.getByRole("button", { name: teamName }).click();
     const account = loadAccount();
-    await expect(page.locator("tr:visible").filter({ hasText: account.email })).toBeVisible();
+    await expect(memberRow(page, account.email)).toBeVisible();
 
     // ── invite: the one-time link/token is shown and never persisted ──────
     await page.locator(".n-tabs-tab").filter({ hasText: "Invites" }).click();
@@ -242,17 +242,20 @@ test.describe("teams", () => {
     // ── members: change the role, then remove ─────────────────────────────
     await page.locator(".n-tabs-tab").filter({ hasText: "Members" }).click();
     await page.getByRole("button", { name: "Refresh" }).click();
-    const memberRow = page.locator("tr:visible").filter({ hasText: inviteeEmail });
-    await expect(memberRow).toBeVisible();
+    // The members table is the only source of truth here: the accepted invite
+    // may still be listed in the (hidden) invites table with the same email.
+    await expect(page.locator('[data-testid="members-table"]')).toBeVisible();
+    const row = memberRow(page, inviteeEmail);
+    await expect(row).toBeVisible();
 
-    await memberRow.locator(".n-select").click();
+    await row.locator(".n-select").click();
     await page.locator(".n-base-select-option").filter({ hasText: "admin" }).click();
-    await expect(memberRow.locator(".n-select")).toContainText("admin");
+    await expect(row.locator(".n-select")).toContainText("admin");
     await expect(page.locator('[data-testid="member-action-error"]')).toHaveCount(0);
 
-    await memberRow.getByRole("button", { name: "Remove" }).click();
+    await row.getByRole("button", { name: "Remove" }).click();
     await page.locator(".n-popconfirm").getByRole("button", { name: "Confirm" }).click();
-    await expect(page.locator("tr:visible").filter({ hasText: inviteeEmail })).toHaveCount(0);
+    await expect(memberRow(page, inviteeEmail)).toHaveCount(0);
 
     // ── delete the team ───────────────────────────────────────────────────
     await teamRow.getByRole("button", { name: "Delete" }).click();
@@ -528,9 +531,14 @@ function memberBody(
   };
 }
 
-/** memberRow locates one member's row in the active members pane. */
+/** memberRow locates one member's row in the members table. */
 function memberRow(page: Page, email: string): Locator {
-  return page.locator(".n-tab-pane tr").filter({ hasText: email });
+  return page.locator('[data-testid="members-table"] tr').filter({ hasText: email });
+}
+
+/** invitesRow locates one invite's row in the invites table. */
+function invitesRow(page: Page, email: string): Locator {
+  return page.locator('[data-testid="invites-table"] tr').filter({ hasText: email });
 }
 
 /** setMemberRoleViaUi drives one member row's role select. */
@@ -643,12 +651,8 @@ test.describe("team context races", () => {
     await rowA.getByRole("button", { name: teamA.name }).click();
     await rowB.getByRole("button", { name: teamB.name }).click();
     await expect(rowB).toHaveClass(/is-selected/);
-    await expect(
-      page.locator(".n-tab-pane tr").filter({ hasText: loadAccount().email }),
-    ).toHaveCount(1);
-    await expect(
-      page.locator(".n-tab-pane tr").filter({ hasText: invitee.email }),
-    ).toHaveCount(0);
+    await expect(memberRow(page, loadAccount().email)).toHaveCount(1);
+    await expect(memberRow(page, invitee.email)).toHaveCount(0);
 
     // Release A: both late payloads land after B is selected.
     const membersLanded = page.waitForResponse(
@@ -667,18 +671,12 @@ test.describe("team context races", () => {
     await settle(page);
 
     // The stale A payloads must not touch B's collections.
-    await expect(
-      page.locator(".n-tab-pane tr").filter({ hasText: invitee.email }),
-    ).toHaveCount(0);
-    await expect(
-      page.locator(".n-tab-pane tr").filter({ hasText: loadAccount().email }),
-    ).toHaveCount(1);
+    await expect(memberRow(page, invitee.email)).toHaveCount(0);
+    await expect(memberRow(page, loadAccount().email)).toHaveCount(1);
 
     // A's pending invite must not surface in B's (empty) invites pane either.
     await page.locator(".n-tabs-tab").filter({ hasText: "Invites" }).click();
-    await expect(
-      page.locator(".n-tab-pane tr").filter({ hasText: pendingEmail }),
-    ).toHaveCount(0);
+    await expect(invitesRow(page, pendingEmail)).toHaveCount(0);
 
     expect(
       guardrails.apiFailures,
@@ -709,9 +707,7 @@ test.describe("team context races", () => {
       .getByRole("button", { name: teamA.name })
       .click();
     // Team A is loaded: its second member is on screen.
-    await expect(
-      page.locator(".n-tab-pane tr").filter({ hasText: invitee.email }),
-    ).toBeVisible();
+    await expect(memberRow(page, invitee.email)).toBeVisible();
 
     // Team B's reads fail; switching to it must not keep A's rows.
     const failTeamB = async (route: Route): Promise<void> => {
@@ -730,9 +726,7 @@ test.describe("team context races", () => {
       .click();
 
     await expect(page.locator('[data-testid="members-error"]')).toBeVisible();
-    await expect(
-      page.locator(".n-tab-pane tr").filter({ hasText: invitee.email }),
-    ).toHaveCount(0);
+    await expect(memberRow(page, invitee.email)).toHaveCount(0);
 
     // The invites pane is mounted only when its tab is opened; its own failed
     // read surfaces the same way, with A's invites still dropped.

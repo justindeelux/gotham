@@ -88,6 +88,9 @@ jobs:
       - name: Build control plane
         run: go build -o bin/gotham ./cmd/gotham
 
+      - name: Stop any leftover control plane
+        run: pkill -f 'bin/gotham serve' || true
+
       - name: Start control plane
         run: |
           nohup ./bin/gotham serve > gotham-ui-e2e.log 2>&1 &
@@ -135,3 +138,7 @@ jobs:
           path: web/test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Stop control plane
+        if: always()
+        run: pkill -f 'bin/gotham serve' || true

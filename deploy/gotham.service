@@ -1,0 +1,52 @@
+# Gotham control-plane systemd unit.
+#
+# Install to /etc/systemd/system/gotham.service, create the gotham user and
+# /etc/gotham/gotham.env, then run `systemctl enable --now gotham`.
+#
+# Self-update wiring
+# ------------------
+# The in-process updater swaps /usr/local/bin/gotham (keeping gotham.old) and
+# then invokes the restart wrapper deploy/gotham-update.sh through sudo, so the
+# unit must NOT set NoNewPrivileges and the service user needs:
+#
+#   1. write access to the install directory (ReadWritePaths below), and
+#   2. permission to run the wrapper as root, via install-sudoers.sh or this
+#      sudoers line:
+#
+#        gotham ALL=(root) NOPASSWD: /usr/local/bin/gotham-update
+#
+# The wrapper restarts the unit, health-checks it, and restores gotham.old on
+# failure. Grant only the wrapper, never a blanket systemctl rule.
+[Unit]
+Description=Gotham control plane
+Documentation=https://github.com/justindeelux/gotham
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gotham
+Group=gotham
+WorkingDirectory=/var/lib/gotham
+Environment=GOTHAM_CA_DIR=/var/lib/gotham/ca
+EnvironmentFile=-/etc/gotham/gotham.env
+# AUTO_UPDATE=true enables the in-process scheduled check/apply loop.
+# Environment=AUTO_UPDATE=true
+ExecStart=/usr/local/bin/gotham serve
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Hardening, minus what self-update needs: the updater writes the binary in the
+# install directory, so /usr/local/bin stays writable. Do not add
+# NoNewPrivileges: it would block the sudo call that triggers the restart
+# wrapper.
+StateDirectory=gotham
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/usr/local/bin
+
+[Install]
+WantedBy=multi-user.target

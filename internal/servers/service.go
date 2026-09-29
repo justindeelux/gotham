@@ -126,6 +126,10 @@ func NewService(cfg Config) *ServerService {
 	}
 }
 
+// Version returns the control-plane build version this service reports to
+// agents; the self-update surface uses it as the running version.
+func (s *ServerService) Version() string { return s.version }
+
 // Add registers a new server. sshKeyID may be the zero UUID when no key is
 // attached. userID is recorded as the creator, and the node is stamped with the
 // caller's active team; a request without a team scope leaves team_id NULL,

@@ -11,6 +11,22 @@
 #   GOTHAM_OAUTH_GITHUB_CLIENT_ID, GOTHAM_OAUTH_GITHUB_CLIENT_SECRET,
 #   GOTHAM_OAUTH_GITHUB_REDIRECT_URL,
 #   GOTHAM_GRPC_ADDR, GOTHAM_CA_DIR, GOTHAM_SECRET_KEY
+#
+# Self-update variables (read directly, not from this file):
+#   FEATURE_UPDATES        kill switch for the update surface (default on)
+#   AUTO_UPDATE            run the scheduled check/apply loop (default off)
+#   AUTO_UPDATE_INTERVAL   auto-update interval, e.g. 6h (default 6h)
+#   GOTHAM_UPDATE_CHANNEL  stable (default) or beta
+#   GOTHAM_UPDATE_REPO     GitHub repository (default justindeelux/gotham)
+#   GOTHAM_UPDATE_BASE_URL Releases API base (default https://api.github.com;
+#                          a local mirror must be http(s), http loopback only)
+#   GOTHAM_UPDATE_PUBLIC_KEY  release public key (PEM or base64); release
+#                          builds embed it with -ldflags instead
+#   GOTHAM_UPDATE_SCRIPT   restart wrapper (default /usr/local/bin/gotham-update)
+#   GOTHAM_UPDATE_CURRENT  override the running version (wrappers/tests)
+#
+# The restart wrapper and its sudoers rule live in deploy/ (see
+# deploy/gotham.service and deploy/install-sudoers.sh).
 
 # HTTP listener.
 server:

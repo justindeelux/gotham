@@ -95,6 +95,11 @@ type Config struct {
 	// application state. Best effort: a sync failure is logged, never
 	// returned. nil disables the notifications.
 	Proxy ProxySync
+	// Notifier receives one terminal deployment result (running or failed).
+	// Best effort: delivery runs asynchronously and can never fail a
+	// deployment. nil disables notifications, which is also the
+	// FEATURE_NOTIFICATIONS=false path.
+	Notifier Notifier
 	// Source clones the repository; nil selects git on the control plane.
 	Source Source
 	// Emitter overrides the publisher-based realtime emitter (tests).

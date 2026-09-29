@@ -209,6 +209,20 @@ type Invite struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type NotificationChannel struct {
+	ID           pgtype.UUID        `json:"id"`
+	TeamID       pgtype.UUID        `json:"team_id"`
+	Name         string             `json:"name"`
+	Kind         string             `json:"kind"`
+	Config       string             `json:"config"`
+	Enabled      bool               `json:"enabled"`
+	ResourceType *string            `json:"resource_type"`
+	ResourceID   pgtype.UUID        `json:"resource_id"`
+	Events       []string           `json:"events"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type PrivateKey struct {
 	ID           pgtype.UUID        `json:"id"`
 	Name         string             `json:"name"`

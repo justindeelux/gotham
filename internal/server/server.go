@@ -21,6 +21,7 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
+	"github.com/justindeelux/gotham/internal/notifications"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/server/ws"
@@ -66,6 +67,7 @@ type Server struct {
 	deploy      deploy.DeployService
 	proxy       proxy.ProxyService
 	backups     databases.BackupService
+	notify      notifications.NotificationService
 	metrics     *servers.MetricsSweeper
 	authLimiter *ipRateLimiter
 	router      http.Handler
@@ -116,12 +118,15 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		// shutting it down first stops in-flight deployments before the
 		// shared Redis pinger goes away. The backup service stops its cron
 		// scheduler for the same reason, and the metrics retention stops its
-		// sweep.
+		// sweep. The notification dispatcher stops its delivery pool.
 		if s.backups != nil {
 			_ = s.backups.Close()
 		}
 		if s.metrics != nil {
 			s.metrics.Close()
+		}
+		if closer, ok := s.notify.(interface{ Close() error }); ok {
+			_ = closer.Close()
 		}
 		if closer, ok := s.deploy.(interface{ Close() error }); ok {
 			_ = closer.Close()
@@ -198,6 +203,14 @@ func (s *Server) routes() (http.Handler, error) {
 		// their pre-teams, creator-scoped behavior.
 		s.teamService = teams.NewDefaultService(teams.Config{Store: s.persistence, Logger: s.logger})
 		teams.Mount(api, s.RequireAuth, UserIDFromContext, s.teamService)
+
+		// Notifications (BE-8.3): the team-scoped channel CRUD plus the
+		// dispatcher behind the deploy and backup hooks below. A nil service
+		// (no database, or FEATURE_NOTIFICATIONS=false) mounts nothing and
+		// leaves both hooks unwired, so the deploy/backup flows are
+		// untouched.
+		s.notify = s.notificationService()
+		notifications.Mount(api, s.withTeam(false), UserIDFromContext, s.notify)
 
 		// Container management routes to the node agent; a nil service (no
 		// registry) mounts nothing. The mTLS agent dialer is plugged in here
@@ -354,6 +367,9 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 	if proxySvc != nil {
 		cfg.Proxy = proxySvc
 	}
+	if notifier, ok := s.notify.(deploy.Notifier); ok {
+		cfg.Notifier = notifier
+	}
 	return deploy.NewDefaultService(cfg)
 }
 
@@ -497,11 +513,31 @@ func (s *Server) backupService(containerService containers.ContainerService) dat
 	if s.persistence == nil || containerService == nil {
 		return nil
 	}
-	return databases.NewDefaultBackupService(databases.BackupConfig{
+	cfg := databases.BackupConfig{
 		Store:      s.persistence,
 		Containers: containerService,
 		Secret:     s.cfg.Snapshot().SecretKey,
 		Logger:     s.logger,
+	}
+	if notifier, ok := s.notify.(databases.BackupNotifier); ok {
+		cfg.Notifier = notifier
+	}
+	return databases.NewDefaultBackupService(cfg)
+}
+
+// notificationService builds the notifications domain service for the HTTP
+// wiring: the database and the key that seals channel configs. The dispatcher
+// behind it receives the terminal deploy and backup events. It returns nil
+// (no database, or FEATURE_NOTIFICATIONS=false) so notifications.Mount is a
+// no-op and both hooks stay unwired.
+func (s *Server) notificationService() notifications.NotificationService {
+	if s.persistence == nil {
+		return nil
+	}
+	return notifications.NewDefaultService(notifications.Config{
+		Store:  s.persistence,
+		Secret: s.cfg.Snapshot().SecretKey,
+		Logger: s.logger,
 	})
 }
 

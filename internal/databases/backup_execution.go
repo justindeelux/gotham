@@ -88,7 +88,9 @@ func (m *BackupManager) runBackup(backup Backup, database Database, target *Back
 	if _, ferr := m.backups.FinishBackup(finishCtx, finished); ferr != nil {
 		m.logger.Error("databases: could not record the backup outcome",
 			"backup_id", backup.ID.String(), "error", ferr)
+		return
 	}
+	m.notifyBackup(finishCtx, finished, database)
 }
 
 // runRestore is the restore job: download the artifact, stage it onto the

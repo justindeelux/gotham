@@ -67,13 +67,14 @@ type runState struct {
 // the realtime log channel; only ErrAgentUnavailable is retried, and only
 // within the step that failed.
 type Orchestrator struct {
-	repo    Repository
-	source  Source
-	dial    DialFunc
-	emitter *Emitter
-	secret  string
-	logger  *slog.Logger
-	proxy   ProxySync
+	repo     Repository
+	source   Source
+	dial     DialFunc
+	emitter  *Emitter
+	notifier Notifier
+	secret   string
+	logger   *slog.Logger
+	proxy    ProxySync
 
 	queue         chan job
 	workers       int
@@ -143,6 +144,7 @@ func newOrchestrator(cfg Config) *Orchestrator {
 		source:        source,
 		dial:          cfg.Dial,
 		emitter:       emitter,
+		notifier:      cfg.Notifier,
 		secret:        cfg.Secret,
 		logger:        logger,
 		proxy:         cfg.Proxy,
@@ -549,6 +551,9 @@ func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) e
 	}
 	st.dep = updated
 	o.emitter.State(ctx, st.target, from, to)
+	if to.Terminal() {
+		o.notify(ctx, st, to)
+	}
 	return nil
 }
 

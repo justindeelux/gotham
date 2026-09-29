@@ -10,6 +10,7 @@ import (
 
 // CreateApplication stores an application and returns the row.
 func (s *Store) CreateApplication(ctx context.Context, params sqlc.CreateApplicationParams) (sqlc.Application, error) {
+	params.TeamID = personalTeamOrDefault(params.TeamID, params.UserID)
 	return s.queries.CreateApplication(ctx, params)
 }
 
@@ -23,6 +24,11 @@ func (s *Store) GetApplication(ctx context.Context, id pgtype.UUID) (sqlc.Applic
 // first.
 func (s *Store) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID) ([]sqlc.Application, error) {
 	return s.queries.ListApplicationsByUser(ctx, userID)
+}
+
+// ListApplicationsByTeam returns every application of one team, newest first.
+func (s *Store) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID) ([]sqlc.Application, error) {
+	return s.queries.ListApplicationsByTeam(ctx, teamID)
 }
 
 // UpdateApplication persists the mutable application fields and returns the
@@ -55,6 +61,7 @@ func (s *Store) CreateApplicationWithConfig(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	params.TeamID = personalTeamOrDefault(params.TeamID, params.UserID)
 	queries := s.queries.WithTx(tx)
 	app, err := queries.CreateApplication(ctx, params)
 	if err != nil {

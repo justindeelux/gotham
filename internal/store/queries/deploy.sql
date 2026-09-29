@@ -1,9 +1,9 @@
 -- name: CreateApplication :one
 INSERT INTO applications (
     user_id, server_id, name, provider, repo, clone_url,
-    branch, build_pack, base_domain, port, host_port
+    branch, build_pack, base_domain, port, host_port, team_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING *;
 
 -- name: GetApplication :one
@@ -12,6 +12,11 @@ SELECT * FROM applications WHERE id = $1;
 -- name: ListApplicationsByUser :many
 SELECT * FROM applications
 WHERE user_id = $1
+ORDER BY created_at DESC, id DESC;
+
+-- name: ListApplicationsByTeam :many
+SELECT * FROM applications
+WHERE team_id = $1
 ORDER BY created_at DESC, id DESC;
 
 -- name: UpdateApplication :one

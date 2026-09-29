@@ -13,6 +13,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // Repository persists databases and their sealed credentials. It is
@@ -25,8 +26,9 @@ type Repository interface {
 	CreateDatabase(ctx context.Context, database Database) (Database, error)
 	// GetDatabase returns a live database, or ErrNotFound.
 	GetDatabase(ctx context.Context, databaseID uuid.UUID) (Database, error)
-	// ListDatabasesByUser returns a user's live databases, newest first.
-	ListDatabasesByUser(ctx context.Context, userID uuid.UUID) ([]Database, error)
+	// ListDatabases returns the live databases of the scope's active team
+	// (or, without a team context, of the creator), newest first.
+	ListDatabases(ctx context.Context, scope teams.Scope) ([]Database, error)
 	// UpdateDatabase persists the mutable fields, or ErrNotFound when the row
 	// is gone or already deleted.
 	UpdateDatabase(ctx context.Context, database Database) (Database, error)
@@ -60,6 +62,7 @@ func (r *storeRepository) CreateDatabase(ctx context.Context, database Database)
 	row, err := r.store.CreateDatabase(ctx, sqlc.CreateDatabaseParams{
 		ID:          pgUUID(database.ID),
 		UserID:      pgUUID(database.UserID),
+		TeamID:      pgUUID(database.TeamID),
 		ServerID:    pgUUID(database.ServerID),
 		Name:        database.Name,
 		Engine:      database.Engine,
@@ -89,9 +92,18 @@ func (r *storeRepository) GetDatabase(ctx context.Context, databaseID uuid.UUID)
 	return databaseFromRow(row), nil
 }
 
-// ListDatabasesByUser implements Repository.
-func (r *storeRepository) ListDatabasesByUser(ctx context.Context, userID uuid.UUID) ([]Database, error) {
-	rows, err := r.store.ListDatabasesByUser(ctx, pgUUID(userID))
+// ListDatabases implements Repository: the active team's live databases, or
+// the creator's when no team context is present.
+func (r *storeRepository) ListDatabases(ctx context.Context, scope teams.Scope) ([]Database, error) {
+	var (
+		rows []sqlc.Database
+		err  error
+	)
+	if scope.Active() {
+		rows, err = r.store.ListDatabasesByTeam(ctx, pgUUID(scope.TeamID))
+	} else {
+		rows, err = r.store.ListDatabasesByUser(ctx, pgUUID(scope.UserID))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("databases: list databases: %w", err)
 	}
@@ -180,6 +192,7 @@ func databaseFromRow(row sqlc.Database) Database {
 	return Database{
 		ID:          uuidFromPG(row.ID),
 		UserID:      uuidFromPG(row.UserID),
+		TeamID:      uuidFromPG(row.TeamID),
 		ServerID:    uuidFromPG(row.ServerID),
 		Name:        row.Name,
 		Engine:      row.Engine,

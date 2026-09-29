@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/providers"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // validCreateInput returns a payload every creation test starts from: a known
@@ -262,7 +263,7 @@ func TestServiceCreateApplicationValidation(t *testing.T) {
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
-			if applications, _ := repo.ListApplications(context.Background(), userID); len(applications) != 0 {
+			if applications, _ := repo.ListApplications(context.Background(), teams.Scope{UserID: userID}); len(applications) != 0 {
 				t.Errorf("stored %d applications, want none", len(applications))
 			}
 		})

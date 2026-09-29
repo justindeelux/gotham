@@ -15,7 +15,7 @@ func (m *BackupManager) ListSchedules(ctx context.Context, userID, databaseID uu
 	if err := m.backupsReady(); err != nil {
 		return nil, err
 	}
-	if _, err := m.database(ctx, userID, databaseID); err != nil {
+	if _, err := m.database(ctx, userID, databaseID, false); err != nil {
 		return nil, err
 	}
 	schedules, err := m.backups.ListBackupSchedulesByDatabase(ctx, databaseID)
@@ -32,7 +32,7 @@ func (m *BackupManager) ListSchedules(ctx context.Context, userID, databaseID uu
 // the first run computed before anything is written, so an invalid cron
 // never reaches the table.
 func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
-	if _, err := m.database(ctx, userID, databaseID); err != nil {
+	if _, err := m.database(ctx, userID, databaseID, true); err != nil {
 		return BackupSchedule{}, err
 	}
 	cron := strings.TrimSpace(req.Cron)
@@ -77,7 +77,7 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID u
 // empty string clears it (runs go to the local backup directory) and an id
 // replaces it with an owned target.
 func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, scheduleID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
-	if _, err := m.database(ctx, userID, databaseID); err != nil {
+	if _, err := m.database(ctx, userID, databaseID, true); err != nil {
 		return BackupSchedule{}, err
 	}
 	schedule, err := m.backups.GetBackupSchedule(ctx, scheduleID)
@@ -118,7 +118,7 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, 
 
 // DeleteSchedule implements BackupService.
 func (m *BackupManager) DeleteSchedule(ctx context.Context, userID, databaseID, scheduleID uuid.UUID) error {
-	if _, err := m.database(ctx, userID, databaseID); err != nil {
+	if _, err := m.database(ctx, userID, databaseID, true); err != nil {
 		return err
 	}
 	schedule, err := m.backups.GetBackupSchedule(ctx, scheduleID)

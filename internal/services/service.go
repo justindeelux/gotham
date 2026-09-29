@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // FeatureEnv is the kill switch for the whole services surface:
@@ -261,6 +262,7 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	service := Service{
 		ID:          uuid.New(),
 		UserID:      userID,
+		TeamID:      teams.ScopeFor(ctx, userID).TeamID,
 		ServerID:    req.ServerID,
 		Name:        name,
 		Status:      StatusCreating,
@@ -272,12 +274,13 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	return s.repo.CreateService(ctx, service)
 }
 
-// List returns the caller's live services, newest first.
+// List returns the active team's live services, newest first. Without a team
+// context it returns the creator's services, which is the pre-teams behavior.
 func (s *service) List(ctx context.Context, userID uuid.UUID) ([]Service, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
-	services, err := s.repo.ListServicesByUser(ctx, userID)
+	services, err := s.repo.ListServices(ctx, teams.ScopeFor(ctx, userID))
 	if err != nil {
 		return nil, err
 	}
@@ -287,18 +290,18 @@ func (s *service) List(ctx context.Context, userID uuid.UUID) ([]Service, error)
 	return services, nil
 }
 
-// Get returns one service the caller owns.
+// Get returns one service of the caller's active team.
 func (s *service) Get(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
-	return s.service(ctx, userID, serviceID)
+	return s.service(ctx, userID, serviceID, false)
 }
 
-// Update patches a service the caller owns and re-validates the result. The
+// Update patches a service of the active team and re-validates the result. The
 // stored document is always the renderable one: a patch that introduces an
 // unresolvable environment reference is rejected. The write touches only the
 // config columns, so it can never clobber a lifecycle status a concurrent
 // deploy/stop is writing.
 func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req UpdateRequest) (Service, error) {
-	service, err := s.service(ctx, userID, serviceID)
+	service, err := s.service(ctx, userID, serviceID, true)
 	if err != nil {
 		return Service{}, err
 	}
@@ -511,7 +514,7 @@ func (s *service) Restart(ctx context.Context, userID, serviceID uuid.UUID) (Ser
 
 // Containers lists the project's containers as the node reports them.
 func (s *service) Containers(ctx context.Context, userID, serviceID uuid.UUID) ([]ComposeContainer, error) {
-	service, err := s.service(ctx, userID, serviceID)
+	service, err := s.service(ctx, userID, serviceID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -539,7 +542,7 @@ func (s *service) Containers(ctx context.Context, userID, serviceID uuid.UUID) (
 // stream error is redacted like every other node error: only application log
 // content is passed through untouched.
 func (s *service) Logs(ctx context.Context, userID, serviceID uuid.UUID, composeService string, tail int64, follow bool) (LogStream, error) {
-	service, err := s.service(ctx, userID, serviceID)
+	service, err := s.service(ctx, userID, serviceID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -595,7 +598,7 @@ func (s *redactingLogStream) Close() error { return s.inner.Close() }
 
 // Deploys returns the deploy history, newest first.
 func (s *service) Deploys(ctx context.Context, userID, serviceID uuid.UUID) ([]Deploy, error) {
-	service, err := s.service(ctx, userID, serviceID)
+	service, err := s.service(ctx, userID, serviceID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -644,10 +647,11 @@ func (s *service) lifecycleLock(serviceID uuid.UUID) func() {
 	return s.locks.acquire(serviceID)
 }
 
-// lifecycle loads a service the caller owns while holding its lifecycle lock.
-// The authoritative row read happens after the lock is acquired, so a queued
-// operation always acts on the state its predecessor left behind: a Restart
-// queued behind a Delete reads the deleted row and refuses instead of
+// lifecycle loads a service of the caller's active team while holding its
+// lifecycle lock. Every lifecycle operation mutates, so it is authorized as a
+// write. The authoritative row read happens after the lock is acquired, so a
+// queued operation always acts on the state its predecessor left behind: a
+// Restart queued behind a Delete reads the deleted row and refuses instead of
 // resurrecting containers. The returned release function must be deferred by
 // the caller.
 func (s *service) lifecycle(ctx context.Context, userID, serviceID uuid.UUID) (Service, func(), error) {
@@ -658,7 +662,7 @@ func (s *service) lifecycle(ctx context.Context, userID, serviceID uuid.UUID) (S
 		return Service{}, nil, fmt.Errorf("%w: invalid service id", ErrValidation)
 	}
 	release := s.lifecycleLock(serviceID)
-	service, err := s.service(ctx, userID, serviceID)
+	service, err := s.service(ctx, userID, serviceID, true)
 	if err != nil {
 		release()
 		return Service{}, nil, err
@@ -710,10 +714,11 @@ func (s *service) ready() error {
 	return nil
 }
 
-// service loads a service the caller owns, mapping another user's row to
-// ErrNotFound so service IDs cannot be probed. Soft-deleted rows are already
-// filtered out by the repository.
-func (s *service) service(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
+// service loads a service of the caller's active team, mapping a row of
+// another team (or, without a team context, of another creator) to ErrNotFound
+// so service IDs cannot be probed. A write additionally needs an owner/admin
+// role. Soft-deleted rows are already filtered out by the repository.
+func (s *service) service(ctx context.Context, userID, serviceID uuid.UUID, write bool) (Service, error) {
 	if err := s.ready(); err != nil {
 		return Service{}, err
 	}
@@ -724,7 +729,10 @@ func (s *service) service(ctx context.Context, userID, serviceID uuid.UUID) (Ser
 	if err != nil {
 		return Service{}, err
 	}
-	if service.UserID != userID {
+	if err := teams.ScopeFor(ctx, userID).AuthorizeResource(service.TeamID, service.UserID, write); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return Service{}, err
+		}
 		return Service{}, ErrNotFound
 	}
 	return service, nil

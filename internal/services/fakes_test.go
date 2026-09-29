@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // TestMain clears the feature flag so the suite runs with the services surface
@@ -104,8 +106,9 @@ func (r *fakeRepository) GetService(_ context.Context, serviceID uuid.UUID) (Ser
 	return service, nil
 }
 
-// ListServicesByUser implements Repository.
-func (r *fakeRepository) ListServicesByUser(_ context.Context, userID uuid.UUID) ([]Service, error) {
+// ListServices implements Repository: the active team's services, or the
+// creator's when the scope has no team context (pre-teams behavior).
+func (r *fakeRepository) ListServices(_ context.Context, scope teams.Scope) ([]Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listErr != nil {
@@ -114,7 +117,13 @@ func (r *fakeRepository) ListServicesByUser(_ context.Context, userID uuid.UUID)
 	services := []Service{}
 	for i := len(r.order) - 1; i >= 0; i-- {
 		service := r.services[r.order[i]]
-		if service.UserID == userID && r.live(service) {
+		if scope.Active() {
+			if service.TeamID == scope.TeamID && r.live(service) {
+				services = append(services, service)
+			}
+			continue
+		}
+		if service.UserID == scope.UserID && r.live(service) {
 			services = append(services, service)
 		}
 	}

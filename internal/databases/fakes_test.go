@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/containers"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // testSecret is the key the suite seals credentials with. It is a fixed value
@@ -126,8 +127,9 @@ func (r *fakeRepository) GetDatabase(_ context.Context, databaseID uuid.UUID) (D
 	return database, nil
 }
 
-// ListDatabasesByUser implements Repository.
-func (r *fakeRepository) ListDatabasesByUser(_ context.Context, userID uuid.UUID) ([]Database, error) {
+// ListDatabases implements Repository: the active team's databases, or the
+// creator's when the scope has no team context (pre-teams behavior).
+func (r *fakeRepository) ListDatabases(_ context.Context, scope teams.Scope) ([]Database, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listErr != nil {
@@ -136,7 +138,13 @@ func (r *fakeRepository) ListDatabasesByUser(_ context.Context, userID uuid.UUID
 	live := make([]Database, 0, len(r.order))
 	for i := len(r.order) - 1; i >= 0; i-- { // newest first
 		database := r.databases[r.order[i]]
-		if database.UserID == userID && r.live(database) {
+		if scope.Active() {
+			if database.TeamID == scope.TeamID && r.live(database) {
+				live = append(live, database)
+			}
+			continue
+		}
+		if database.UserID == scope.UserID && r.live(database) {
 			live = append(live, database)
 		}
 	}

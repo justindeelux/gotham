@@ -27,6 +27,7 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/templates"
 	"github.com/justindeelux/gotham/internal/webhooks"
 )
@@ -61,6 +62,7 @@ type Server struct {
 	tokens      TokenService
 	servers     ServerService
 	persistence *store.Store
+	teamService teams.TeamService
 	deploy      deploy.DeployService
 	proxy       proxy.ProxyService
 	backups     databases.BackupService
@@ -173,6 +175,16 @@ func (s *Server) routes() (http.Handler, error) {
 			s.mountServerRoutes(api)
 		}
 
+		// Teams (BE-8.2): the team service backs the teams/invites routes
+		// (mounted by teams.Mount only when FEATURE_TEAMS is on) and the
+		// active-team middleware behind every team-scoped resource route
+		// below. It is built even when the feature flag is off, because the
+		// middleware then always resolves the caller's personal team. A nil
+		// service (no database: the handler tests) leaves resource routes on
+		// their pre-teams, creator-scoped behavior.
+		s.teamService = teams.NewDefaultService(teams.Config{Store: s.persistence, Logger: s.logger})
+		teams.Mount(api, s.RequireAuth, UserIDFromContext, s.teamService)
+
 		// Container management routes to the node agent; a nil service (no
 		// registry) mounts nothing. The mTLS agent dialer is plugged in here
 		// (the P3-CONN seam) so the container routes and the databases
@@ -238,7 +250,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// lifecycle uses. The proxy service (BE-6.1) receives a best-effort
 		// resync after application mutations and successful deployments.
 		s.deploy = s.deployService(providerSvc, s.proxy)
-		deploy.Mount(api, s.RequireAuth, UserIDFromContext, s.deploy)
+		deploy.Mount(api, s.withTeam(false), UserIDFromContext, s.deploy)
 
 		// Push webhooks (BE-4.4): the public, signature-verified delivery
 		// endpoint plus authenticated hook management. It reuses the deploy
@@ -248,7 +260,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// Managed databases (BE-5.1): same container service as above, so a
 		// database container is created through the shared container service
 		// rather than a second agent path.
-		databases.Mount(api, s.RequireAuth, UserIDFromContext, s.databaseService(containerService))
+		databases.Mount(api, s.withTeam(false), UserIDFromContext, s.databaseService(containerService))
 
 		// Backup and restore surface (BE-5.2), same container service and
 		// same feature flag as the databases routes above: a nil service
@@ -264,7 +276,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// requires the admin scope on top of authentication (JWT sessions
 		// already hold every scope). A nil service (no database, no agent
 		// dialer, or FEATURE_SERVICES=false) mounts nothing.
-		services.Mount(api, adminOnly, UserIDFromContext, s.composeService())
+		services.Mount(api, s.withTeam(true), UserIDFromContext, s.composeService())
 
 		// One-click templates (BE-7.2): the built-in catalog (embedded in
 		// the binary) and the render engine. The surface is read-only and

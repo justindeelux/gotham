@@ -14,6 +14,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // maxBodyBytes bounds service request bodies. A compose document is capped at
@@ -429,6 +431,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrServerNotFound):
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
+	case errors.Is(err, teams.ErrForbidden):
+		writeJSON(w, http.StatusForbidden, errorBody{Message: "insufficient team role"})
 	case errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrConflict):

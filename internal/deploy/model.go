@@ -13,6 +13,7 @@ import (
 type Application struct {
 	ID         uuid.UUID
 	UserID     uuid.UUID
+	TeamID     uuid.UUID
 	ServerID   uuid.UUID
 	Name       string
 	Provider   string

@@ -41,10 +41,10 @@ func (q *Queries) ClearStoragesByApp(ctx context.Context, applicationID pgtype.U
 const createApplication = `-- name: CreateApplication :one
 INSERT INTO applications (
     user_id, server_id, name, provider, repo, clone_url,
-    branch, build_pack, base_domain, port, host_port
+    branch, build_pack, base_domain, port, host_port, team_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id
 `
 
 type CreateApplicationParams struct {
@@ -59,6 +59,7 @@ type CreateApplicationParams struct {
 	BaseDomain string      `json:"base_domain"`
 	Port       int32       `json:"port"`
 	HostPort   int32       `json:"host_port"`
+	TeamID     pgtype.UUID `json:"team_id"`
 }
 
 func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationParams) (Application, error) {
@@ -74,6 +75,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		arg.BaseDomain,
 		arg.Port,
 		arg.HostPort,
+		arg.TeamID,
 	)
 	var i Application
 	err := row.Scan(
@@ -92,6 +94,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.BaseDomainDisabled,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -207,7 +210,7 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 }
 
 const getApplication = `-- name: GetApplication :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled FROM applications WHERE id = $1
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id FROM applications WHERE id = $1
 `
 
 func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Application, error) {
@@ -229,6 +232,7 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.BaseDomainDisabled,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -356,8 +360,51 @@ func (q *Queries) InsertStorage(ctx context.Context, arg InsertStorageParams) (S
 	return i, err
 }
 
+const listApplicationsByTeam = `-- name: ListApplicationsByTeam :many
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id FROM applications
+WHERE team_id = $1
+ORDER BY created_at DESC, id DESC
+`
+
+func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID) ([]Application, error) {
+	rows, err := q.db.Query(ctx, listApplicationsByTeam, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Application{}
+	for rows.Next() {
+		var i Application
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ServerID,
+			&i.Name,
+			&i.Provider,
+			&i.Repo,
+			&i.CloneUrl,
+			&i.Branch,
+			&i.BuildPack,
+			&i.BaseDomain,
+			&i.Port,
+			&i.HostPort,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.BaseDomainDisabled,
+			&i.TeamID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id FROM applications
 WHERE user_id = $1
 ORDER BY created_at DESC, id DESC
 `
@@ -387,6 +434,7 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.BaseDomainDisabled,
+			&i.TeamID,
 		); err != nil {
 			return nil, err
 		}
@@ -549,7 +597,7 @@ SET name = $2,
     base_domain_disabled = $9,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id
 `
 
 type UpdateApplicationParams struct {
@@ -593,6 +641,7 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.BaseDomainDisabled,
+		&i.TeamID,
 	)
 	return i, err
 }

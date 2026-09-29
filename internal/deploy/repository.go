@@ -14,6 +14,7 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // Repository persists applications, deployments and the application
@@ -22,8 +23,9 @@ import (
 type Repository interface {
 	// GetApplication returns the application, or ErrNotFound.
 	GetApplication(ctx context.Context, appID uuid.UUID) (Application, error)
-	// ListApplications returns the applications owned by userID, newest first.
-	ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error)
+	// ListApplications returns the applications of the scope's active team
+	// (or, without a team context, of the creator), newest first.
+	ListApplications(ctx context.Context, scope teams.Scope) ([]Application, error)
 	// CreateApplication stores a new application together with its env vars,
 	// sealed secrets and storages in one transaction.
 	CreateApplication(ctx context.Context, app Application, envVars []EnvVar, secrets []Secret, storages []Storage) (Application, error)
@@ -99,9 +101,18 @@ func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (
 	return applicationFromRow(row), nil
 }
 
-// ListApplications loads every application owned by userID, newest first.
-func (r *storeRepository) ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error) {
-	rows, err := r.store.ListApplicationsByUser(ctx, pgUUID(userID))
+// ListApplications loads the active team's applications, or the creator's when
+// no team context is present, newest first.
+func (r *storeRepository) ListApplications(ctx context.Context, scope teams.Scope) ([]Application, error) {
+	var (
+		rows []sqlc.Application
+		err  error
+	)
+	if scope.Active() {
+		rows, err = r.store.ListApplicationsByTeam(ctx, pgUUID(scope.TeamID))
+	} else {
+		rows, err = r.store.ListApplicationsByUser(ctx, pgUUID(scope.UserID))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("deploy: list applications: %w", err)
 	}
@@ -125,6 +136,7 @@ func (r *storeRepository) CreateApplication(
 	row, err := r.store.CreateApplicationWithConfig(ctx,
 		sqlc.CreateApplicationParams{
 			UserID:     pgUUID(app.UserID),
+			TeamID:     pgUUID(app.TeamID),
 			ServerID:   pgUUID(app.ServerID),
 			Name:       app.Name,
 			Provider:   app.Provider,
@@ -427,6 +439,7 @@ func applicationFromRow(row sqlc.Application) Application {
 	return Application{
 		ID:                 uuidFromPG(row.ID),
 		UserID:             uuidFromPG(row.UserID),
+		TeamID:             uuidFromPG(row.TeamID),
 		ServerID:           uuidFromPG(row.ServerID),
 		Name:               row.Name,
 		Provider:           row.Provider,

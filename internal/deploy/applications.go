@@ -12,6 +12,7 @@ import (
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/proxy"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // secretRefPrefix marks an environment value as a sealed secret. Written by an
@@ -75,6 +76,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	}
 	app := Application{
 		UserID:     userID,
+		TeamID:     teams.ScopeFor(ctx, userID).TeamID,
 		Name:       strings.TrimSpace(in.Name),
 		Provider:   strings.TrimSpace(in.Provider),
 		Repo:       strings.TrimSpace(in.Repo),
@@ -115,12 +117,14 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	return created, nil
 }
 
-// ListApplications returns the caller's applications, newest first.
+// ListApplications returns the active team's applications, newest first.
+// Without a team context it returns the creator's applications, which is the
+// pre-teams behavior.
 func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error) {
 	if s == nil || s.repo == nil {
 		return nil, errors.New("deploy: repository is not configured")
 	}
-	applications, err := s.repo.ListApplications(ctx, userID)
+	applications, err := s.repo.ListApplications(ctx, teams.ScopeFor(ctx, userID))
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +137,7 @@ func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID) ([]App
 // GetApplication returns one application the caller owns. Another user's row
 // answers ErrNotFound, so application IDs cannot be probed.
 func (s *Service) GetApplication(ctx context.Context, userID, appID uuid.UUID) (Application, error) {
-	return s.application(ctx, userID, appID)
+	return s.application(ctx, userID, appID, false)
 }
 
 // UpdateApplication applies a partial update to the mutable application fields
@@ -145,7 +149,7 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if in.empty() {
 		return Application{}, fmt.Errorf("%w: no fields to update", ErrValidation)
 	}
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Application{}, err
 	}
@@ -231,7 +235,7 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 	if !Enabled() {
 		return ErrDisabled
 	}
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return err
 	}
@@ -254,7 +258,7 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 // GetEnv returns the application's environment: plain values verbatim and
 // sealed secrets as `secret:<id>` references. Plaintext is never returned.
 func (s *Service) GetEnv(ctx context.Context, userID, appID uuid.UUID) ([]EnvEntry, error) {
-	if _, err := s.application(ctx, userID, appID); err != nil {
+	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return nil, err
 	}
 	return s.envEntries(ctx, appID)
@@ -267,7 +271,7 @@ func (s *Service) ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entri
 	if !Enabled() {
 		return nil, ErrDisabled
 	}
-	if _, err := s.application(ctx, userID, appID); err != nil {
+	if _, err := s.application(ctx, userID, appID, true); err != nil {
 		return nil, err
 	}
 	envVars, secrets, err := s.prepareEnv(ctx, appID, entries)
@@ -282,7 +286,7 @@ func (s *Service) ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entri
 
 // GetStorages returns the application's storage mappings.
 func (s *Service) GetStorages(ctx context.Context, userID, appID uuid.UUID) ([]Storage, error) {
-	if _, err := s.application(ctx, userID, appID); err != nil {
+	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return nil, err
 	}
 	storages, err := s.repo.ListStorages(ctx, appID)
@@ -301,7 +305,7 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 	if !Enabled() {
 		return nil, ErrDisabled
 	}
-	if _, err := s.application(ctx, userID, appID); err != nil {
+	if _, err := s.application(ctx, userID, appID, true); err != nil {
 		return nil, err
 	}
 	normalized, err := normalizeStorages(storages)
@@ -332,7 +336,7 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
 	}
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Deployment{}, err
 	}

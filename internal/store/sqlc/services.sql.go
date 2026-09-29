@@ -13,10 +13,10 @@ import (
 
 const createService = `-- name: CreateService :one
 INSERT INTO services (
-    id, user_id, server_id, name, status, compose_yaml, env
+    id, user_id, server_id, name, status, compose_yaml, env, team_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id
 `
 
 type CreateServiceParams struct {
@@ -27,6 +27,7 @@ type CreateServiceParams struct {
 	Status      string      `json:"status"`
 	ComposeYaml string      `json:"compose_yaml"`
 	Env         []byte      `json:"env"`
+	TeamID      pgtype.UUID `json:"team_id"`
 }
 
 func (q *Queries) CreateService(ctx context.Context, arg CreateServiceParams) (Service, error) {
@@ -38,6 +39,7 @@ func (q *Queries) CreateService(ctx context.Context, arg CreateServiceParams) (S
 		arg.Status,
 		arg.ComposeYaml,
 		arg.Env,
+		arg.TeamID,
 	)
 	var i Service
 	err := row.Scan(
@@ -51,6 +53,7 @@ func (q *Queries) CreateService(ctx context.Context, arg CreateServiceParams) (S
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -90,7 +93,7 @@ func (q *Queries) CreateServiceDeploy(ctx context.Context, arg CreateServiceDepl
 }
 
 const getService = `-- name: GetService :one
-SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at FROM services
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id FROM services
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -108,12 +111,13 @@ func (q *Queries) GetService(ctx context.Context, id pgtype.UUID) (Service, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
 
 const listRoutableServices = `-- name: ListRoutableServices :many
-SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at FROM services
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id FROM services
 WHERE deleted_at IS NULL
 ORDER BY created_at ASC, id ASC
 `
@@ -142,6 +146,7 @@ func (q *Queries) ListRoutableServices(ctx context.Context) ([]Service, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.TeamID,
 		); err != nil {
 			return nil, err
 		}
@@ -194,8 +199,46 @@ func (q *Queries) ListServiceDeploys(ctx context.Context, arg ListServiceDeploys
 	return items, nil
 }
 
+const listServicesByTeam = `-- name: ListServicesByTeam :many
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id FROM services
+WHERE team_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+`
+
+func (q *Queries) ListServicesByTeam(ctx context.Context, teamID pgtype.UUID) ([]Service, error) {
+	rows, err := q.db.Query(ctx, listServicesByTeam, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Service{}
+	for rows.Next() {
+		var i Service
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ServerID,
+			&i.Name,
+			&i.Status,
+			&i.ComposeYaml,
+			&i.Env,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.TeamID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listServicesByUser = `-- name: ListServicesByUser :many
-SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at FROM services
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id FROM services
 WHERE user_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 `
@@ -220,6 +263,7 @@ func (q *Queries) ListServicesByUser(ctx context.Context, userID pgtype.UUID) ([
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.TeamID,
 		); err != nil {
 			return nil, err
 		}
@@ -237,7 +281,7 @@ SET status = 'deleting',
     deleted_at = now(),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id
 `
 
 func (q *Queries) SoftDeleteService(ctx context.Context, id pgtype.UUID) (Service, error) {
@@ -254,6 +298,7 @@ func (q *Queries) SoftDeleteService(ctx context.Context, id pgtype.UUID) (Servic
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -265,7 +310,7 @@ SET name = $2,
     env = $4,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id
 `
 
 type UpdateServiceConfigParams struct {
@@ -294,6 +339,7 @@ func (q *Queries) UpdateServiceConfig(ctx context.Context, arg UpdateServiceConf
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -341,7 +387,7 @@ UPDATE services
 SET status = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id
 `
 
 type UpdateServiceStatusParams struct {
@@ -363,6 +409,7 @@ func (q *Queries) UpdateServiceStatus(ctx context.Context, arg UpdateServiceStat
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.TeamID,
 	)
 	return i, err
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/providers"
+	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -93,19 +94,27 @@ func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (App
 	return Application{}, ErrNotFound
 }
 
-// ListApplications implements Repository, newest first (created_at DESC, id DESC).
-func (r *fakeRepository) ListApplications(_ context.Context, userID uuid.UUID) ([]Application, error) {
+// ListApplications implements Repository: the active team's applications, or
+// the creator's when the scope has no team context (pre-teams behavior),
+// newest first (created_at DESC, id DESC).
+func (r *fakeRepository) ListApplications(_ context.Context, scope teams.Scope) ([]Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.getErr != nil {
 		return nil, r.getErr
 	}
+	matches := func(app Application) bool {
+		if scope.Active() {
+			return app.TeamID == scope.TeamID
+		}
+		return app.UserID == scope.UserID
+	}
 	var out []Application
-	if r.app.ID != uuid.Nil && r.app.UserID == userID {
+	if r.app.ID != uuid.Nil && matches(r.app) {
 		out = append(out, r.app)
 	}
 	for _, app := range r.apps {
-		if app.UserID == userID {
+		if matches(app) {
 			out = append(out, app)
 		}
 	}

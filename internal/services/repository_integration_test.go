@@ -15,6 +15,7 @@ import (
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // defaultIntegrationDSN points at the dev database from deploy/compose.dev.yml.
@@ -284,7 +285,7 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	}
 
 	// The owner sees only their live rows.
-	list, err := repo.ListServicesByUser(ctx, ownerID)
+	list, err := repo.ListServices(ctx, teams.Scope{UserID: ownerID})
 	if err != nil {
 		t.Fatalf("ListServicesByUser: %v", err)
 	}

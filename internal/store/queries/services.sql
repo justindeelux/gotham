@@ -1,8 +1,8 @@
 -- name: CreateService :one
 INSERT INTO services (
-    id, user_id, server_id, name, status, compose_yaml, env
+    id, user_id, server_id, name, status, compose_yaml, env, team_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
 -- name: GetService :one
@@ -12,6 +12,11 @@ WHERE id = $1 AND deleted_at IS NULL;
 -- name: ListServicesByUser :many
 SELECT * FROM services
 WHERE user_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC;
+
+-- name: ListServicesByTeam :many
+SELECT * FROM services
+WHERE team_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC;
 
 -- name: UpdateServiceConfig :one

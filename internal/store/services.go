@@ -11,6 +11,7 @@ import (
 // CreateService stores a compose-service row with the caller-generated ID and
 // returns it. env is the JSON-encoded substitution environment.
 func (s *Store) CreateService(ctx context.Context, params sqlc.CreateServiceParams) (sqlc.Service, error) {
+	params.TeamID = personalTeamOrDefault(params.TeamID, params.UserID)
 	return s.queries.CreateService(ctx, params)
 }
 
@@ -23,6 +24,11 @@ func (s *Store) GetService(ctx context.Context, id pgtype.UUID) (sqlc.Service, e
 // ListServicesByUser returns every live service owned by userID, newest first.
 func (s *Store) ListServicesByUser(ctx context.Context, userID pgtype.UUID) ([]sqlc.Service, error) {
 	return s.queries.ListServicesByUser(ctx, userID)
+}
+
+// ListServicesByTeam returns every live service of one team, newest first.
+func (s *Store) ListServicesByTeam(ctx context.Context, teamID pgtype.UUID) ([]sqlc.Service, error) {
+	return s.queries.ListServicesByTeam(ctx, teamID)
 }
 
 // UpdateServiceConfig persists the mutable service configuration (name,

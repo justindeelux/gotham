@@ -335,7 +335,7 @@ func (m *BackupManager) CreateBackup(ctx context.Context, userID, databaseID uui
 	if !Enabled() {
 		return Backup{}, ErrDisabled
 	}
-	database, err := m.database(ctx, userID, databaseID)
+	database, err := m.database(ctx, userID, databaseID, true)
 	if err != nil {
 		return Backup{}, err
 	}
@@ -351,7 +351,7 @@ func (m *BackupManager) ListBackups(ctx context.Context, userID, databaseID uuid
 	if err := m.backupsReady(); err != nil {
 		return nil, err
 	}
-	if _, err := m.database(ctx, userID, databaseID); err != nil {
+	if _, err := m.database(ctx, userID, databaseID, false); err != nil {
 		return nil, err
 	}
 	backups, err := m.backups.ListBackupsByDatabase(ctx, databaseID)
@@ -368,7 +368,7 @@ func (m *BackupManager) ListBackups(ctx context.Context, userID, databaseID uuid
 // the lookup of another user's backup: a backup of someone else's database is
 // simply not visible.
 func (m *BackupManager) GetBackup(ctx context.Context, userID, databaseID, backupID uuid.UUID) (Backup, error) {
-	if _, err := m.database(ctx, userID, databaseID); err != nil {
+	if _, err := m.database(ctx, userID, databaseID, false); err != nil {
 		return Backup{}, err
 	}
 	backup, err := m.backups.GetBackup(ctx, backupID)
@@ -415,7 +415,7 @@ func (m *BackupManager) RestoreBackup(ctx context.Context, userID, databaseID uu
 	if !Enabled() {
 		return RestoreResult{}, ErrDisabled
 	}
-	database, err := m.database(ctx, userID, databaseID)
+	database, err := m.database(ctx, userID, databaseID, true)
 	if err != nil {
 		return RestoreResult{}, err
 	}

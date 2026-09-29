@@ -13,6 +13,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // FeatureEnv is the kill switch for the whole applications surface:
@@ -200,7 +201,7 @@ func (s *Service) Close() error {
 
 // Deploy queues a deployment of the application's current revision.
 func (s *Service) Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployment, error) {
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -248,7 +249,7 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
 	}
-	app, err := s.application(ctx, userID, appID)
+	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -272,7 +273,7 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 
 // ListDeployments returns the application's deployments, newest first.
 func (s *Service) ListDeployments(ctx context.Context, userID, appID uuid.UUID) ([]Deployment, error) {
-	if _, err := s.application(ctx, userID, appID); err != nil {
+	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return nil, err
 	}
 	deployments, err := s.repo.ListDeployments(ctx, appID)
@@ -285,9 +286,11 @@ func (s *Service) ListDeployments(ctx context.Context, userID, appID uuid.UUID) 
 	return deployments, nil
 }
 
-// application loads an application the caller owns, mapping another user's
-// row to ErrNotFound so application IDs cannot be probed.
-func (s *Service) application(ctx context.Context, userID, appID uuid.UUID) (Application, error) {
+// application loads an application of the caller's active team, mapping a row
+// of another team (or, without a team context, of another creator) to
+// ErrNotFound so application IDs cannot be probed. A write additionally needs
+// an owner/admin role; a read_only member may read.
+func (s *Service) application(ctx context.Context, userID, appID uuid.UUID, write bool) (Application, error) {
 	if s == nil || s.repo == nil {
 		return Application{}, errors.New("deploy: repository is not configured")
 	}
@@ -298,7 +301,10 @@ func (s *Service) application(ctx context.Context, userID, appID uuid.UUID) (App
 	if err != nil {
 		return Application{}, err
 	}
-	if app.UserID != userID {
+	if err := teams.ScopeFor(ctx, userID).AuthorizeResource(app.TeamID, app.UserID, write); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return Application{}, err
+		}
 		return Application{}, ErrNotFound
 	}
 	return app, nil

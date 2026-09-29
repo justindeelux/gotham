@@ -56,8 +56,13 @@ const navSections: NavSection[] = [
   {
     label: "Team",
     items: [
-      { key: "members", label: "Members & roles", icon: "users", phase: 8 },
-      { key: "notifications", label: "Notification channels", icon: "bell", phase: 8 },
+      { key: "teams", label: "Members & roles", icon: "users", to: "teams" },
+      {
+        key: "notifications",
+        label: "Notification channels",
+        icon: "bell",
+        to: "notifications",
+      },
       { key: "tokens", label: "API tokens", icon: "key", phase: 8 },
     ],
   },

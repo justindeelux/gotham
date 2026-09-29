@@ -52,6 +52,13 @@ function watchGuardrails(page: Page): Guardrails {
 
 interface GuardrailFixtures {
   guardrails: Guardrails;
+  /**
+   * Console-error substrings a scenario provokes on purpose. Provoking a 404
+   * (the feature-flag path of a hidden surface) makes the browser log
+   * "Failed to load resource…"; the test still asserts the app renders no
+   * error of its own.
+   */
+  expectedConsoleErrors: string[];
 }
 
 /**
@@ -60,13 +67,18 @@ interface GuardrailFixtures {
  * Scenarios that must also prove no 4xx requests can assert `apiFailures`.
  */
 export const test = base.extend<GuardrailFixtures>({
-  guardrails: async ({ page }, use) => {
+  expectedConsoleErrors: [[], { option: true }],
+  guardrails: async ({ page, expectedConsoleErrors }, use) => {
     const guardrails = watchGuardrails(page);
     await use(guardrails);
 
+    const unexpectedConsoleErrors = guardrails.consoleErrors.filter(
+      (message) =>
+        !expectedConsoleErrors.some((allowed) => message.includes(allowed)),
+    );
     expect(
-      guardrails.consoleErrors,
-      `unexpected console errors:\n${guardrails.consoleErrors.join("\n")}`,
+      unexpectedConsoleErrors,
+      `unexpected console errors:\n${unexpectedConsoleErrors.join("\n")}`,
     ).toEqual([]);
     expect(
       guardrails.serverErrors,

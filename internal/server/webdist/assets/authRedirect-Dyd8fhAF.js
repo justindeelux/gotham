@@ -1,0 +1,1 @@
+function n(t){return typeof t!="string"||!t.startsWith("/")||t.slice(0,2).replaceAll("\\","/")==="//"?null:t}function c(t,r){const e=n(t.query.redirect);return e?{name:r,query:{redirect:e}}:{name:r}}export{c as a,n as s};

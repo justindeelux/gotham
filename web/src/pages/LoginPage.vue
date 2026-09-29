@@ -16,6 +16,7 @@ import { onMounted, reactive, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { describeAuthError, useAuthStore } from "../stores/auth";
+import { authSwitchTarget, safeRedirect } from "../utils/authRedirect";
 
 // Error convention (shared with RegisterPage): client-side validation errors
 // render inline on the field via NFormItem; server-side submit failures render
@@ -51,12 +52,7 @@ const rules: FormRules = {
 
 /** redirectAfterAuth honours ?redirect when it is a safe local path. */
 async function redirectAfterAuth(): Promise<void> {
-  const redirect = route.query.redirect;
-  const target =
-    typeof redirect === "string" && redirect.startsWith("/") && !redirect.startsWith("//")
-      ? redirect
-      : "/dashboard";
-  await router.replace(target);
+  await router.replace(safeRedirect(route.query.redirect) ?? "/dashboard");
 }
 
 async function handleSubmit(): Promise<void> {
@@ -101,7 +97,7 @@ onMounted(() => {
             Sign in
           </RouterLink>
           <RouterLink
-            to="/register"
+            :to="authSwitchTarget(route, 'register')"
             role="tab"
             aria-selected="false"
           >

@@ -12,9 +12,11 @@ import (
 	"time"
 )
 
-// DefaultUpdateScript is the installed restart/healthcheck wrapper the Applier
-// invokes after a successful swap.
-const DefaultUpdateScript = "/usr/local/bin/gotham-update"
+// DefaultUpdateScript is the installed, root-owned restart/healthcheck wrapper
+// the Applier invokes after a successful swap. It lives outside every path the
+// service user can write and takes no arguments: its binary, service and health
+// targets come from a root-owned configuration file.
+const DefaultUpdateScript = "/usr/libexec/gotham/gotham-update"
 
 // ApplyResult reports the outcome of an apply attempt.
 type ApplyResult struct {
@@ -22,7 +24,11 @@ type ApplyResult struct {
 	Applied bool   `json:"applied"`
 	Version string `json:"version,omitempty"`
 	Message string `json:"message,omitempty"`
-	// Restart reports whether an automatic restart/healthcheck was triggered.
+	// Staged reports that the swap succeeded and a restart/healthcheck is
+	// pending; the durable outcome is recorded by the wrapper and surfaced by
+	// LastStatus.
+	Staged bool `json:"staged"`
+	// Restart is an alias of Staged kept for the response shape.
 	Restart bool `json:"restart"`
 }
 
@@ -36,6 +42,8 @@ type Service interface {
 	Apply(ctx context.Context, channel Channel) (*ApplyResult, error)
 	// Rollback restores the retained previous binary.
 	Rollback() error
+	// LastStatus returns the durable outcome of the most recent update attempt.
+	LastStatus() (*Status, error)
 	// StartAuto launches the scheduled check/apply loop when enabled.
 	StartAuto(ctx context.Context)
 }
@@ -49,8 +57,9 @@ type Config struct {
 	PublicKey    ed25519.PublicKey
 	BinaryPath   string
 	OldPath      string
+	LockPath     string
 	UpdateScript string
-	HealthURL    string
+	StatusPath   string
 	Timeout      time.Duration
 	MaxBytes     int64
 	Logger       *slog.Logger
@@ -62,7 +71,7 @@ type Config struct {
 	// Client overrides the HTTP client for the checker and applier (tests).
 	Client *http.Client
 	// Restart overrides the restart wrapper (tests). When nil a default that
-	// runs the installed wrapper through sudo is used.
+	// runs the fixed root-owned wrapper through sudo is used.
 	Restart func(ctx context.Context) error
 }
 
@@ -70,13 +79,15 @@ type service struct {
 	current  string
 	checker  *Checker
 	applier  *Applier
+	status   *StatusStore
 	logger   *slog.Logger
 	auto     bool
 	interval time.Duration
 }
 
 // NewService builds a self-update Service. It does not fail when no public key
-// is configured: Check still works, Apply stays disabled (fail closed).
+// is configured: Check still works, Apply stays disabled (fail closed). It
+// recovers an interrupted swap at startup and logs the last recorded outcome.
 func NewService(cfg Config) (Service, error) {
 	logger := cfg.Logger
 	if logger == nil {
@@ -91,10 +102,13 @@ func NewService(cfg Config) (Service, error) {
 		Timeout: cfg.Timeout,
 		GOARCH:  cfg.GOARCH,
 	}
+	status := NewStatusStore(defaultString(cfg.StatusPath, ""))
 	applier := &Applier{
 		Client:     cfg.Client,
 		BinaryPath: cfg.BinaryPath,
 		OldPath:    cfg.OldPath,
+		LockPath:   cfg.LockPath,
+		Status:     status,
 		Timeout:    cfg.Timeout,
 		MaxBytes:   cfg.MaxBytes,
 	}
@@ -107,7 +121,23 @@ func NewService(cfg Config) (Service, error) {
 	}
 	applier.Restart = cfg.Restart
 	if applier.Restart == nil {
-		applier.Restart = defaultRestart(cfg.UpdateScript, cfg.BinaryPath, cfg.HealthURL)
+		applier.Restart = defaultRestart(cfg.UpdateScript)
+	}
+
+	if restored, err := applier.Recover(); err != nil {
+		logger.Warn("updates: startup recovery failed", "error", err)
+	} else if restored {
+		logger.Warn("updates: restored the previous binary after an interrupted update")
+	}
+	if last, err := status.Read(); err != nil {
+		logger.Warn("updates: could not read the update status", "error", err)
+	} else if last != nil {
+		if last.Result == StatusOK {
+			logger.Info("updates: last update succeeded", "version", last.Version, "at", last.At)
+		} else {
+			logger.Warn("updates: last update did not complete cleanly",
+				"result", last.Result, "version", last.Version, "detail", last.Detail, "at", last.At)
+		}
 	}
 
 	interval := cfg.AutoInterval
@@ -118,6 +148,7 @@ func NewService(cfg Config) (Service, error) {
 		current:  defaultString(cfg.Current, "dev"),
 		checker:  checker,
 		applier:  applier,
+		status:   status,
 		logger:   logger,
 		auto:     cfg.Auto,
 		interval: interval,
@@ -146,14 +177,25 @@ func (s *service) Apply(ctx context.Context, channel Channel) (*ApplyResult, err
 	if release == nil {
 		return &ApplyResult{Applied: false, Version: s.current, Message: "already up to date"}, nil
 	}
-	if err := s.applier.Apply(ctx, release); err != nil {
+	outcome, err := s.applier.Apply(ctx, release)
+	if err != nil {
 		return nil, err
 	}
-	return &ApplyResult{Applied: true, Version: release.Version, Restart: s.applier.Restart != nil}, nil
+	result := &ApplyResult{Applied: true, Version: outcome.Version}
+	if outcome.Staged {
+		result.Staged = true
+		result.Restart = true
+		result.Message = "staged; the restart wrapper will health-check and record the outcome"
+	}
+	return result, nil
 }
 
 // Rollback restores the retained previous binary.
 func (s *service) Rollback() error { return s.applier.Rollback() }
+
+// LastStatus returns the durable outcome of the most recent update attempt, or
+// nil when no update has run.
+func (s *service) LastStatus() (*Status, error) { return s.status.Read() }
 
 // StartAuto runs the scheduled check/apply loop until ctx is cancelled. It is
 // a no-op unless auto-update is enabled.
@@ -175,7 +217,7 @@ func (s *service) StartAuto(ctx context.Context) {
 				case err != nil:
 					s.logger.Warn("updates: auto-update failed", "error", err)
 				case result.Applied:
-					s.logger.Info("updates: auto-update applied", "version", result.Version)
+					s.logger.Info("updates: auto-update staged", "version", result.Version)
 				default:
 					s.logger.Debug("updates: no auto-update available", "current", result.Version)
 				}
@@ -184,23 +226,21 @@ func (s *service) StartAuto(ctx context.Context) {
 	}()
 }
 
-// defaultRestart runs the installed wrapper through sudo, detached, so it
-// survives the restart of this process. The wrapper restarts the service,
-// health-checks it, and rolls back when the new binary fails.
-func defaultRestart(script, binPath, healthURL string) func(ctx context.Context) error {
+// defaultRestart runs the fixed, root-owned wrapper through sudo, detached, so
+// it survives the restart of this process. The wrapper takes no arguments: it
+// restarts the fixed service, health-checks it, rolls back on failure and
+// records the outcome in its status file. sudoers grants exactly this command
+// with no arguments.
+//
+// NoNewPrivileges must remain disabled in the unit because this call needs
+// setuid sudo; the only privileged action granted is the fixed wrapper.
+func defaultRestart(script string) func(ctx context.Context) error {
 	return func(_ context.Context) error {
 		path := defaultString(script, DefaultUpdateScript)
 		if _, err := os.Stat(path); err != nil {
 			return fmt.Errorf("updates: restart wrapper %s: %w", path, err)
 		}
-		args := []string{"-n", path}
-		if binPath != "" {
-			args = append(args, "--binary", binPath)
-		}
-		if healthURL != "" {
-			args = append(args, "--health", healthURL)
-		}
-		cmd := exec.Command("sudo", args...)
+		cmd := exec.Command("sudo", "-n", path)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("updates: start restart wrapper: %w", err)

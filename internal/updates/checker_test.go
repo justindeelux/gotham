@@ -62,7 +62,11 @@ func releasesHandler(releases []fixtureRelease, status int, delay time.Duration)
 
 // platformAssets is the asset set a complete, signable release carries.
 func platformAssets() []string {
-	return []string{"gotham-linux-amd64", "gotham-linux-amd64.sig", "checksums.txt"}
+	return []string{
+		"gotham-linux-amd64",
+		ManifestName("amd64"),
+		ManifestName("amd64") + ManifestSigSuffix,
+	}
 }
 
 // newChecker points a Checker at a fixture server for the running architecture.
@@ -100,11 +104,11 @@ func TestCheckerResolvesNewerRelease(t *testing.T) {
 	if release.AssetURL != server.URL+"/gotham-linux-amd64" {
 		t.Errorf("asset url = %q", release.AssetURL)
 	}
-	if release.SignatureURL != server.URL+"/gotham-linux-amd64.sig" {
-		t.Errorf("signature url = %q", release.SignatureURL)
+	if release.ManifestURL != server.URL+"/"+ManifestName("amd64") {
+		t.Errorf("manifest url = %q", release.ManifestURL)
 	}
-	if release.ChecksumURL != server.URL+"/checksums.txt" {
-		t.Errorf("checksum url = %q", release.ChecksumURL)
+	if release.ManifestSignatureURL != server.URL+"/"+ManifestName("amd64")+ManifestSigSuffix {
+		t.Errorf("manifest signature url = %q", release.ManifestSignatureURL)
 	}
 
 	for _, current := range []string{"v1.2.0", "v2.0.0"} {

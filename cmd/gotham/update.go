@@ -22,15 +22,13 @@ func runUpdate(args []string) int {
 		return exitUsage
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
+	if _, err := config.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		return exitError
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	healthURL := fmt.Sprintf("http://127.0.0.1:%d/healthz", cfg.Snapshot().Server.Port)
-	updateConfig, keyErr := updates.FromEnv(version, healthURL, logger)
+	updateConfig, keyErr := updates.FromEnv(version, logger)
 	if keyErr != nil {
 		logger.Warn("updates: release public key not configured; apply disabled", "reason", keyErr)
 	}
@@ -98,7 +96,11 @@ func runUpdateApply(ctx context.Context, svc updates.Service, args []string) int
 		fmt.Printf("gotham %s is up to date\n", result.Version)
 		return exitOK
 	}
-	fmt.Printf("updated to %s; the restart wrapper will health-check and roll back on failure\n", result.Version)
+	if result.Staged {
+		fmt.Printf("staged %s; the restart wrapper will health-check it and record the outcome\n", result.Version)
+		return exitOK
+	}
+	fmt.Printf("updated to %s\n", result.Version)
 	return exitOK
 }
 

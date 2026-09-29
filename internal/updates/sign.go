@@ -16,9 +16,10 @@ import (
 // SignatureSize is the fixed size of an Ed25519 signature.
 const SignatureSize = ed25519.SignatureSize
 
-// PublicKeyEnv optionally overrides the embedded public key with an inline
-// value (PEM or base64-encoded raw key). It exists for local development and
-// tests; release builds embed the key instead.
+// PublicKeyEnv optionally supplies a public key for development builds, where
+// no key is embedded. It is ignored whenever a key is embedded at build time:
+// the release trust anchor is fixed in the binary and cannot be replaced by the
+// service environment.
 const PublicKeyEnv = "GOTHAM_UPDATE_PUBLIC_KEY"
 
 // PublicKey is the release-signing Ed25519 public key, base64 (standard)
@@ -171,14 +172,15 @@ func ParsePublicKey(raw string) (ed25519.PublicKey, error) {
 	return nil, errors.New("updates: unrecognised public key format")
 }
 
-// LoadPublicKey resolves the embedded release public key, letting the
-// GOTHAM_UPDATE_PUBLIC_KEY environment override it for local development.
+// LoadPublicKey resolves the release public key. An embedded key (set at build
+// time) is authoritative and the environment override is ignored; only when no
+// key is embedded does GOTHAM_UPDATE_PUBLIC_KEY apply (development builds).
+// With neither set it fails closed.
 func LoadPublicKey() (ed25519.PublicKey, error) {
-	raw := strings.TrimSpace(os.Getenv(PublicKeyEnv))
-	if raw == "" {
-		raw = strings.TrimSpace(PublicKey)
+	if embedded := strings.TrimSpace(PublicKey); embedded != "" {
+		return ParsePublicKey(embedded)
 	}
-	return ParsePublicKey(raw)
+	return ParsePublicKey(strings.TrimSpace(os.Getenv(PublicKeyEnv)))
 }
 
 // EncodePublicKeyBase64 renders the raw public key for ldflags embedding.

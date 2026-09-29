@@ -95,23 +95,43 @@ func TestPublicKeyFormats(t *testing.T) {
 	}
 }
 
-// TestLoadPublicKeyEnvOverride proves GOTHAM_UPDATE_PUBLIC_KEY overrides the
-// embedded key and that an empty configuration fails closed.
-func TestLoadPublicKeyEnvOverride(t *testing.T) {
-	publicKey, _, err := GenerateKey()
+// TestLoadPublicKeyPrecedence proves the embedded key is the trust anchor: the
+// environment override is ignored whenever a key is embedded, and is only used
+// for development builds without one.
+func TestLoadPublicKeyPrecedence(t *testing.T) {
+	embedded, _, err := GenerateKey()
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	t.Setenv(PublicKeyEnv, EncodePublicKeyBase64(publicKey))
+	envKey, _, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey (env): %v", err)
+	}
+	original := PublicKey
+	t.Cleanup(func() { PublicKey = original })
+	t.Setenv(PublicKeyEnv, EncodePublicKeyBase64(envKey))
 
+	// Embedded key wins; the environment cannot replace it.
+	PublicKey = EncodePublicKeyBase64(embedded)
 	got, err := LoadPublicKey()
 	if err != nil {
 		t.Fatalf("LoadPublicKey: %v", err)
 	}
-	if !got.Equal(publicKey) {
-		t.Fatal("LoadPublicKey did not return the configured key")
+	if !got.Equal(embedded) {
+		t.Fatal("environment override replaced the embedded trust anchor")
 	}
 
+	// Dev build with no embedded key: the environment applies.
+	PublicKey = ""
+	got, err = LoadPublicKey()
+	if err != nil {
+		t.Fatalf("LoadPublicKey (dev): %v", err)
+	}
+	if !got.Equal(envKey) {
+		t.Fatal("dev environment key was not used")
+	}
+
+	// Neither set fails closed.
 	t.Setenv(PublicKeyEnv, "")
 	if _, err := LoadPublicKey(); !errors.Is(err, ErrNoPublicKey) {
 		t.Fatalf("LoadPublicKey(empty) = %v, want ErrNoPublicKey", err)

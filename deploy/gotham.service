@@ -3,20 +3,15 @@
 # Install to /etc/systemd/system/gotham.service, create the gotham user and
 # /etc/gotham/gotham.env, then run `systemctl enable --now gotham`.
 #
-# Self-update wiring
-# ------------------
-# The in-process updater swaps /usr/local/bin/gotham (keeping gotham.old) and
-# then invokes the restart wrapper deploy/gotham-update.sh through sudo, so the
-# unit must NOT set NoNewPrivileges and the service user needs:
-#
-#   1. write access to the install directory (ReadWritePaths below), and
-#   2. permission to run the wrapper as root, via install-sudoers.sh or this
-#      sudoers line:
-#
-#        gotham ALL=(root) NOPASSWD: /usr/local/bin/gotham-update
-#
-# The wrapper restarts the unit, health-checks it, and restores gotham.old on
-# failure. Grant only the wrapper, never a blanket systemctl rule.
+# Self-update layout (see deploy/README.md)
+# ----------------------------------------
+# The binary lives in the service's StateDirectory (/var/lib/gotham/bin/gotham)
+# so the unprivileged control plane can write it. The privileged restart
+# wrapper lives at /usr/libexec/gotham/gotham-update, which is root-owned and
+# outside every path the service user can write; sudoers grants exactly that
+# command with no arguments. A compromised control plane can therefore only ask
+# the fixed wrapper to restart the fixed service, never replace it or point it
+# at another unit/path/URL.
 [Unit]
 Description=Gotham control plane
 Documentation=https://github.com/justindeelux/gotham
@@ -29,24 +24,31 @@ User=gotham
 Group=gotham
 WorkingDirectory=/var/lib/gotham
 Environment=GOTHAM_CA_DIR=/var/lib/gotham/ca
+Environment=GOTHAM_UPDATE_STATUS=/run/gotham/update.status
 EnvironmentFile=-/etc/gotham/gotham.env
 # AUTO_UPDATE=true enables the in-process scheduled check/apply loop.
 # Environment=AUTO_UPDATE=true
-ExecStart=/usr/local/bin/gotham serve
+ExecStart=/var/lib/gotham/bin/gotham serve
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
 LimitNOFILE=65536
 
-# Hardening, minus what self-update needs: the updater writes the binary in the
-# install directory, so /usr/local/bin stays writable. Do not add
-# NoNewPrivileges: it would block the sudo call that triggers the restart
-# wrapper.
+# Hardening. The updater writes the binary under StateDirectory, so that path
+# stays writable; everything the privileged wrapper needs is root-owned.
+#
+# NoNewPrivileges is intentionally NOT set: the control plane invokes the fixed
+# root-owned wrapper through `sudo -n` (the only privileged action sudoers
+# grants), and NoNewPrivileges would block setuid sudo entirely. If an operator
+# replaces the sudo handoff with a root systemd path/transient unit, this can be
+# enabled.
 StateDirectory=gotham
+StateDirectoryMode=0755
+RuntimeDirectory=gotham
+RuntimeDirectoryMode=0750
 ProtectSystem=full
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/usr/local/bin
 
 [Install]
 WantedBy=multi-user.target

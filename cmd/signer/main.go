@@ -4,12 +4,16 @@
 //
 // Usage:
 //
-//	signer keygen [-out signing.key]
-//	signer sign   -key signing.key -in gotham-linux-amd64 [-out gotham-linux-amd64.sig]
-//	signer verify -key signing.key.pub -in gotham-linux-amd64 [-sig gotham-linux-amd64.sig]
+//	signer keygen   [-out signing.key]
+//	signer sign     -key signing.key -in gotham-linux-amd64 [-out gotham-linux-amd64.sig]
+//	signer verify   -key signing.key.pub -in gotham-linux-amd64 [-sig gotham-linux-amd64.sig]
+//	signer manifest -key signing.key -in gotham-linux-amd64 -version v1.2.0 -arch amd64
 //
 // The signature is written as standard base64 (with a trailing newline), which
-// is the format the Applier verifies.
+// is the format the Applier verifies. Releases must publish a signed manifest
+// (gotham-manifest-<arch>.txt and its .sig) as well as the artifact: the
+// manifest binds the version, channel, arch and file name to the artifact
+// SHA-256.
 package main
 
 import (
@@ -18,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/justindeelux/gotham/internal/updates"
 )
@@ -48,6 +53,8 @@ func run(args []string) int {
 		return runSign(args[1:])
 	case "verify":
 		return runVerify(args[1:])
+	case "manifest":
+		return runManifest(args[1:])
 	case "version", "-v", "--version":
 		fmt.Printf("signer %s\n", version)
 		return exitOK
@@ -154,6 +161,65 @@ func runSign(args []string) int {
 	return exitOK
 }
 
+// runManifest generates and signs the release manifest for an artifact. The
+// manifest binds the version, channel, arch and file name to the artifact
+// sha256; the detached signature authenticates the manifest.
+func runManifest(args []string) int {
+	var keyPath, inPath, version, channel, arch, outPath string
+	flags := newFlagSet("manifest")
+	flags.StringVar(&keyPath, "key", "", "private key PEM path (required)")
+	flags.StringVar(&inPath, "in", "", "artifact to describe (required)")
+	flags.StringVar(&version, "version", "", "release version, e.g. v1.2.0 (required)")
+	flags.StringVar(&channel, "channel", "stable", "release channel: stable or beta")
+	flags.StringVar(&arch, "arch", "", "artifact architecture, e.g. amd64 (required)")
+	flags.StringVar(&outPath, "out", "", "manifest output path (default gotham-manifest-<arch>.txt)")
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+	if keyPath == "" || inPath == "" || version == "" || arch == "" {
+		fmt.Fprintln(os.Stderr, "manifest: -key, -in, -version and -arch are required")
+		return exitUsage
+	}
+	if outPath == "" {
+		outPath = updates.ManifestName(arch)
+	}
+
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "manifest: read key: %v\n", err)
+		return exitError
+	}
+	privateKey, err := updates.ParsePrivateKeyPEM(keyPEM)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "manifest: %v\n", err)
+		return exitError
+	}
+	signer, err := updates.NewSigner(privateKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "manifest: %v\n", err)
+		return exitError
+	}
+	artifact, err := os.ReadFile(inPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "manifest: read %s: %v\n", inPath, err)
+		return exitError
+	}
+
+	manifest := updates.BuildManifest(version, channel, arch, filepath.Base(inPath), artifact)
+	body := manifest.Marshal()
+	if err := os.WriteFile(outPath, body, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "manifest: write %s: %v\n", outPath, err)
+		return exitError
+	}
+	signature := signer.SignBase64(body) + "\n"
+	if err := os.WriteFile(outPath+updates.ManifestSigSuffix, []byte(signature), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "manifest: write signature: %v\n", err)
+		return exitError
+	}
+	fmt.Printf("wrote %s and %s%s\n", outPath, outPath, updates.ManifestSigSuffix)
+	return exitOK
+}
+
 // runVerify verifies a detached signature; it exits 1 when verification fails.
 func runVerify(args []string) int {
 	var keyPath, inPath, sigPath string
@@ -224,6 +290,8 @@ Usage:
   signer keygen [-out signing.key]                        Generate a keypair
   signer sign   -key <priv> -in <file> [-out <sig>]       Sign a file (base64)
   signer verify -key <pub.pem> -in <file> [-sig <sig>]    Verify a signature
+  signer manifest -key <priv> -in <artifact> -version <v> -arch <a> [-channel <c>]
+                                                          Generate + sign a release manifest
   signer version                                          Print the version
   signer help                                             Show this help
 `, version)

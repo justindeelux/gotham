@@ -25,6 +25,9 @@ type checkResponse struct {
 	Notes       string     `json:"notes,omitempty"`
 	Asset       string     `json:"asset,omitempty"`
 	PublishedAt *time.Time `json:"published_at,omitempty"`
+	// LastUpdate is the durable outcome of the most recent update attempt, so a
+	// failed or rolled-back update is visible instead of silently "successful".
+	LastUpdate *Status `json:"last_update,omitempty"`
 }
 
 // applyRequest is the optional POST /v1/updates/apply body.
@@ -37,6 +40,7 @@ type applyResponse struct {
 	Applied bool   `json:"applied"`
 	Version string `json:"version,omitempty"`
 	Message string `json:"message,omitempty"`
+	Staged  bool   `json:"staged"`
 	Restart bool   `json:"restart"`
 }
 
@@ -92,6 +96,11 @@ func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 		published := release.PublishedAt
 		response.PublishedAt = &published
 	}
+	if last, err := h.svc.LastStatus(); err != nil {
+		h.logger.Warn("updates: could not read the update status", "error", err)
+	} else {
+		response.LastUpdate = last
+	}
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -111,6 +120,7 @@ func (h *handler) apply(w http.ResponseWriter, r *http.Request) {
 		Applied: result.Applied,
 		Version: result.Version,
 		Message: result.Message,
+		Staged:  result.Staged,
 		Restart: result.Restart,
 	})
 }
@@ -126,6 +136,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		errors.Is(err, ErrDownload),
 		errors.Is(err, ErrNoRelease),
 		errors.Is(err, ErrAssetNotFound),
+		errors.Is(err, ErrManifest),
+		errors.Is(err, ErrChecksumMismatch),
 		errors.Is(err, ErrBadURL):
 		writeJSON(w, http.StatusBadGateway, errorBody{Message: "release server error"})
 	default:

@@ -28,6 +28,8 @@ const (
 	BaseURLEnv = "GOTHAM_UPDATE_BASE_URL"
 	// ScriptEnv overrides the installed restart/healthcheck wrapper path.
 	ScriptEnv = "GOTHAM_UPDATE_SCRIPT"
+	// StatusPathEnv overrides the update status file the wrapper writes.
+	StatusPathEnv = "GOTHAM_UPDATE_STATUS"
 	// CurrentEnv overrides the running version (useful for wrappers and
 	// tests). When unset the version reported by the node registry is used.
 	CurrentEnv = "GOTHAM_UPDATE_CURRENT"
@@ -95,23 +97,30 @@ func ScriptFromEnv() string {
 	return DefaultUpdateScript
 }
 
+// StatusPathFromEnv returns the configured update status file path.
+func StatusPathFromEnv() string {
+	if raw := strings.TrimSpace(os.Getenv(StatusPathEnv)); raw != "" {
+		return raw
+	}
+	return DefaultStatusPath
+}
+
 // CurrentFromEnv returns the configured running version, or "" when unset.
 func CurrentFromEnv() string {
 	return strings.TrimSpace(os.Getenv(CurrentEnv))
 }
 
-// FromEnv assembles a self-update Config from the environment for the given
-// running version and health URL. A missing or malformed public key is
-// returned as err with a usable Config (Apply then fails closed), so callers
-// can log it and still serve the check route.
-func FromEnv(current, healthURL string, logger *slog.Logger) (Config, error) {
+// FromEnv assembles a self-update Config from the environment. A missing or
+// malformed public key is returned as err with a usable Config (Apply then
+// fails closed), so callers can log it and still serve the check route.
+func FromEnv(current string, logger *slog.Logger) (Config, error) {
 	cfg := Config{
 		Current:      current,
 		Repo:         RepoFromEnv(),
 		BaseURL:      BaseURLFromEnv(),
 		Channel:      ChannelFromEnv(),
 		UpdateScript: ScriptFromEnv(),
-		HealthURL:    healthURL,
+		StatusPath:   StatusPathFromEnv(),
 		Logger:       logger,
 		Auto:         AutoUpdateEnabled(),
 		AutoInterval: AutoIntervalFromEnv(),

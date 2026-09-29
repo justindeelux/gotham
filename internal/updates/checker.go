@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strings"
 	"time"
@@ -37,20 +38,22 @@ const (
 )
 
 // Release is a resolved update candidate: the newest release above the running
-// version together with the URLs of its platform asset, detached signature and
-// checksums.
+// version together with the URLs of its platform asset, signed manifest and
+// manifest signature.
 type Release struct {
-	Version      string
-	Tag          string
-	Channel      string
-	Prerelease   bool
-	Notes        string
-	PublishedAt  time.Time
-	AssetName    string
-	AssetURL     string
-	SignatureURL string
-	ChecksumURL  string
-	AssetSize    int64
+	Version              string
+	Tag                  string
+	Channel              string
+	Prerelease           bool
+	Notes                string
+	PublishedAt          time.Time
+	Arch                 string
+	AssetName            string
+	AssetURL             string
+	ManifestName         string
+	ManifestURL          string
+	ManifestSignatureURL string
+	AssetSize            int64
 }
 
 // Checker queries the Releases API for a repository and resolves an update.
@@ -167,11 +170,12 @@ func (c *Checker) Check(ctx context.Context, current string) (*Release, error) {
 	return candidate, nil
 }
 
-// resolve maps a chosen release onto the platform asset, its signature and the
-// checksums file.
+// resolve maps a chosen release onto the platform asset, its signed manifest
+// and the manifest signature.
 func (c *Checker) resolve(release ghRelease, version Version, channel Channel, arch string) (*Release, error) {
 	assetName := fmt.Sprintf("gotham-linux-%s", arch)
-	sigName := assetName + ".sig"
+	manifestName := ManifestName(arch)
+	manifestSigName := manifestName + ManifestSigSuffix
 
 	candidate := &Release{
 		Version:     version.String(),
@@ -180,6 +184,7 @@ func (c *Checker) resolve(release ghRelease, version Version, channel Channel, a
 		Prerelease:  release.Prerelease,
 		Notes:       release.Body,
 		PublishedAt: release.PublishedAt,
+		Arch:        arch,
 		AssetName:   assetName,
 	}
 
@@ -188,27 +193,25 @@ func (c *Checker) resolve(release ghRelease, version Version, channel Channel, a
 		case assetName:
 			candidate.AssetURL = asset.BrowserDownloadURL
 			candidate.AssetSize = asset.Size
-		case sigName:
-			candidate.SignatureURL = asset.BrowserDownloadURL
-		case "checksums.txt":
-			candidate.ChecksumURL = asset.BrowserDownloadURL
+		case manifestName:
+			candidate.ManifestName = manifestName
+			candidate.ManifestURL = asset.BrowserDownloadURL
+		case manifestSigName:
+			candidate.ManifestSignatureURL = asset.BrowserDownloadURL
 		}
 	}
 
 	if candidate.AssetURL == "" {
 		return nil, fmt.Errorf("%w: %s in release %s", ErrAssetNotFound, assetName, release.TagName)
 	}
-	if candidate.SignatureURL == "" {
-		return nil, fmt.Errorf("%w: %s in release %s", ErrAssetNotFound, sigName, release.TagName)
+	if candidate.ManifestURL == "" {
+		return nil, fmt.Errorf("%w: %s in release %s", ErrAssetNotFound, manifestName, release.TagName)
 	}
-	if err := validateURL(candidate.AssetURL); err != nil {
-		return nil, err
+	if candidate.ManifestSignatureURL == "" {
+		return nil, fmt.Errorf("%w: %s in release %s", ErrAssetNotFound, manifestSigName, release.TagName)
 	}
-	if err := validateURL(candidate.SignatureURL); err != nil {
-		return nil, err
-	}
-	if candidate.ChecksumURL != "" {
-		if err := validateURL(candidate.ChecksumURL); err != nil {
+	for _, rawURL := range []string{candidate.AssetURL, candidate.ManifestURL, candidate.ManifestSignatureURL} {
+		if err := validateURL(rawURL); err != nil {
 			return nil, err
 		}
 	}
@@ -265,16 +268,23 @@ func (c *Checker) arch() string {
 	return runtime.GOARCH
 }
 
-// defaultHTTPClient builds an HTTP client that bounds redirects and revalidates
-// every hop.
+// defaultHTTPClient builds an HTTP client that bounds redirects, revalidates
+// every hop, refuses https downgrades, and blocks link-local/metadata dials.
 func defaultHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = safeDialContext
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("updates: too many redirects")
 			}
-			return validateURL(req.URL.String())
+			var previous *url.URL
+			if len(via) > 0 {
+				previous = via[0].URL
+			}
+			return validateRedirect(previous, req.URL)
 		},
 	}
 }

@@ -19,12 +19,13 @@ import (
 func fakeReleasesServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	asset := "gotham-linux-" + runtime.GOARCH
+	manifest := "gotham-manifest-" + runtime.GOARCH + ".txt"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		base := "http://" + r.Host
 		assets := []map[string]any{
 			{"name": asset, "browser_download_url": base + "/" + asset, "size": 1024},
-			{"name": asset + ".sig", "browser_download_url": base + "/" + asset + ".sig", "size": 64},
-			{"name": "checksums.txt", "browser_download_url": base + "/checksums.txt", "size": 100},
+			{"name": manifest, "browser_download_url": base + "/" + manifest, "size": 200},
+			{"name": manifest + ".sig", "browser_download_url": base + "/" + manifest + ".sig", "size": 64},
 		}
 		_ = json.NewEncoder(w).Encode([]map[string]any{{
 			"tag_name":     "v1.2.0",

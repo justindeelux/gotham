@@ -22,11 +22,12 @@
 #                          a local mirror must be http(s), http loopback only)
 #   GOTHAM_UPDATE_PUBLIC_KEY  release public key (PEM or base64); release
 #                          builds embed it with -ldflags instead
-#   GOTHAM_UPDATE_SCRIPT   restart wrapper (default /usr/local/bin/gotham-update)
+#   GOTHAM_UPDATE_SCRIPT   restart wrapper (default /usr/libexec/gotham/gotham-update)
+#   GOTHAM_UPDATE_STATUS   update status file (default /run/gotham/update.status)
 #   GOTHAM_UPDATE_CURRENT  override the running version (wrappers/tests)
 #
-# The restart wrapper and its sudoers rule live in deploy/ (see
-# deploy/gotham.service and deploy/install-sudoers.sh).
+# The restart wrapper (fixed, root-owned, no arguments) and its sudoers rule
+# live in deploy/; see deploy/README.md for the privilege model and layout.
 
 # HTTP listener.
 server:

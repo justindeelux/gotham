@@ -14,10 +14,11 @@ import (
 
 // fakeService is a deterministic Service for route tests.
 type fakeService struct {
-	release  *Release
-	checkErr error
-	applied  []Channel
-	applyErr error
+	release    *Release
+	checkErr   error
+	applied    []Channel
+	applyErr   error
+	lastStatus *Status
 }
 
 func (f *fakeService) Current() string { return "v1.0.0" }
@@ -32,10 +33,12 @@ func (f *fakeService) Apply(_ context.Context, channel Channel) (*ApplyResult, e
 	if f.release == nil {
 		return &ApplyResult{Applied: false, Version: "v1.0.0", Message: "already up to date"}, nil
 	}
-	return &ApplyResult{Applied: true, Version: f.release.Version, Restart: true}, nil
+	return &ApplyResult{Applied: true, Version: f.release.Version, Staged: true, Restart: true}, nil
 }
 
 func (f *fakeService) Rollback() error { return nil }
+
+func (f *fakeService) LastStatus() (*Status, error) { return f.lastStatus, nil }
 
 func (f *fakeService) StartAuto(context.Context) {}
 
@@ -107,6 +110,28 @@ func TestMountRoutes(t *testing.T) {
 		}
 	})
 
+	t.Run("check surfaces the durable outcome", func(t *testing.T) {
+		svc := &fakeService{
+			release:    &Release{Version: "v1.2.0", Channel: "stable", AssetName: "gotham-linux-amd64"},
+			lastStatus: &Status{Result: StatusRolledBack, Version: "v1.2.0", Detail: "new binary unhealthy"},
+		}
+		router := chi.NewRouter()
+		Mount(router, identityAuth, identityAuth, svc)
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/updates/check", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("check status = %d, want 200", rec.Code)
+		}
+		var body checkResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode check: %v", err)
+		}
+		if body.LastUpdate == nil || body.LastUpdate.Result != StatusRolledBack {
+			t.Fatalf("last_update = %+v, want rolled_back", body.LastUpdate)
+		}
+	})
+
 	t.Run("apply accepts a channel body", func(t *testing.T) {
 		svc := &fakeService{}
 		router := chi.NewRouter()
@@ -169,6 +194,8 @@ func TestCheckErrorMapping(t *testing.T) {
 	}{
 		{ErrHTTP, http.StatusBadGateway},
 		{ErrAssetNotFound, http.StatusBadGateway},
+		{ErrManifest, http.StatusBadGateway},
+		{ErrChecksumMismatch, http.StatusBadGateway},
 		{ErrNoPublicKey, http.StatusServiceUnavailable},
 		{context.DeadlineExceeded, http.StatusGatewayTimeout},
 	}

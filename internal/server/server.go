@@ -617,8 +617,7 @@ func (s *Server) updatesService() updates.Service {
 			current = v
 		}
 	}
-	healthURL := fmt.Sprintf("http://127.0.0.1:%d/healthz", s.cfg.Snapshot().Server.Port)
-	config, err := updates.FromEnv(current, healthURL, s.logger)
+	config, err := updates.FromEnv(current, s.logger)
 	if err != nil {
 		s.logger.Info("updates: release public key not configured; apply disabled", "reason", err)
 	}

@@ -46,7 +46,7 @@ permissions:
 jobs:
   e2e:
     name: phase 4 end-to-end (GOTHAM_E2E=1)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 30
     services:
       postgres:
@@ -56,7 +56,7 @@ jobs:
           POSTGRES_PASSWORD: gotham
           POSTGRES_DB: gotham
         ports:
-          - "5432:5432"
+          - "5433:5432"
         options: >-
           --health-cmd "pg_isready -U gotham -d gotham"
           --health-interval 5s
@@ -65,7 +65,7 @@ jobs:
       redis:
         image: redis:7-alpine
         ports:
-          - "6379:6379"
+          - "6380:6379"
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -73,9 +73,9 @@ jobs:
           --health-retries 12
 
     env:
-      GOTHAM_DATABASE_DSN: postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable
-      GOTHAM_TEST_DSN: postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable
-      GOTHAM_E2E_REDIS: 127.0.0.1:6379
+      GOTHAM_DATABASE_DSN: postgres://gotham:gotham@localhost:5433/gotham?sslmode=disable
+      GOTHAM_TEST_DSN: postgres://gotham:gotham@localhost:5433/gotham?sslmode=disable
+      GOTHAM_E2E_REDIS: 127.0.0.1:6380
       GOTHAM_E2E_DOCKER_SOCK: /var/run/docker.sock
 
     steps:

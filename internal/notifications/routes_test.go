@@ -342,6 +342,42 @@ func TestChannelRouteMaskedConfigPatch(t *testing.T) {
 	}
 }
 
+// TestChannelRouteTestHidesStatusReasonPhrase proves the authenticated
+// send-test response never carries the remote-controlled HTTP reason phrase.
+func TestChannelRouteTestHidesStatusReasonPhrase(t *testing.T) {
+	userID, teamID := uuid.New(), uuid.New()
+	server := newReflectingStatusServer(t, http.StatusInternalServerError)
+	repo := newFakeRepository()
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook/route-reason-secret"})
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	channel := repo.seed(Channel{
+		ID: uuid.New(), TeamID: teamID, Name: "discord", Kind: KindDiscord,
+		Enabled: true, Events: AllEvents, SealedConfig: sealed,
+	})
+	service := newTestService(t, repo)
+	handler := newRouteServer(userID, teamID, teams.RoleOwner, service)
+
+	rec := doRequest(handler, http.MethodPost, "/v1/notification-channels/"+channel.ID.String()+"/test", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test = %d (body %s), want 200", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "route-reason-secret") {
+		t.Fatalf("test response leaks the webhook: %s", rec.Body.String())
+	}
+	var envelope testEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode test result: %v", err)
+	}
+	if envelope.Check.OK {
+		t.Errorf("check = %+v, want a failed delivery", envelope.Check)
+	}
+	if !strings.Contains(envelope.Check.Message, "status 500") {
+		t.Errorf("message = %q, want the numeric status", envelope.Check.Message)
+	}
+}
+
 // TestChannelRoutesUnmountWhenDisabled proves the feature flag and a nil
 // service mount no routes.
 func TestChannelRoutesUnmountWhenDisabled(t *testing.T) {

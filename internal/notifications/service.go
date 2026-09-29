@@ -369,10 +369,11 @@ func (s *Service) CreateChannel(ctx context.Context, userID uuid.UUID, req Chann
 	if err != nil {
 		return ChannelView{}, err
 	}
-	if err := req.Config.validate(kind); err != nil {
+	config := req.Config.normalized()
+	if err := config.validate(kind); err != nil {
 		return ChannelView{}, err
 	}
-	sealed, err := sealConfig(s.secret, req.Config)
+	sealed, err := sealConfig(s.secret, config)
 	if err != nil {
 		return ChannelView{}, err
 	}
@@ -449,7 +450,7 @@ func (s *Service) UpdateChannel(ctx context.Context, userID, channelID uuid.UUID
 		if err != nil {
 			return ChannelView{}, err
 		}
-		merged := stored.merged(req.Config)
+		merged := stored.merged(req.Config).normalized()
 		if err := merged.validate(existing.Kind); err != nil {
 			return ChannelView{}, err
 		}

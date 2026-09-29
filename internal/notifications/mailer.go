@@ -101,12 +101,17 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	startTLS := false
 	if ok, _ := client.Extension("STARTTLS"); ok {
 		if err := client.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
 			return smtpFailure("starttls", err)
 		}
+		startTLS = true
 	}
 	if username := strings.TrimSpace(mail.Username); username != "" {
+		if err := credentialsRequireTLS(host, startTLS); err != nil {
+			return err
+		}
 		if err := client.Auth(smtp.PlainAuth("", username, mail.Password, host)); err != nil {
 			return smtpFailure("auth", err)
 		}
@@ -144,6 +149,33 @@ func envelopeAddress(raw string) (string, error) {
 		return "", fmt.Errorf("%w: config.from and config.to must be valid email addresses", ErrValidation)
 	}
 	return parsed.Address, nil
+}
+
+// credentialsRequireTLS refuses to authenticate to a relay that did not
+// negotiate STARTTLS: the offer can be stripped in transit, and the SMTP
+// password would travel in the clear. A loopback relay is exempt because a
+// network attacker cannot downgrade a connection that never leaves the host.
+func credentialsRequireTLS(host string, startTLS bool) error {
+	if startTLS || isLoopbackHost(host) {
+		return nil
+	}
+	return fmt.Errorf(
+		"notifications: smtp relay %s does not offer STARTTLS; refusing to send credentials in plaintext",
+		host)
+}
+
+// isLoopbackHost reports whether an SMTP host is a loopback literal (with or
+// without a bracket or zone) or the name localhost.
+func isLoopbackHost(host string) bool {
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if zone := strings.IndexByte(host, '%'); zone >= 0 {
+		host = host[:zone]
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // smtpFailure renders one SMTP step failure without forwarding remote text: a

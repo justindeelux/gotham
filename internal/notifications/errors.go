@@ -12,4 +12,8 @@ var (
 	ErrForbidden = errors.New("notifications: forbidden")
 	// errNotReady — the service was built without a repository.
 	errNotReady = errors.New("notifications: repository is not configured")
+	// errRedirectRefused — a webhook redirect left the origin or targeted a
+	// link-local/metadata host; the wrapped cause never carries the target
+	// URL, which may include the credential.
+	errRedirectRefused = errors.New("notifications: redirect refused")
 )

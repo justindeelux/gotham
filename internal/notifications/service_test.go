@@ -784,6 +784,104 @@ func TestDispatcherLogHidesTransportSecret(t *testing.T) {
 	}
 }
 
+// TestDispatcherLogHidesStatusReasonPhrase proves the delivery-failure log line
+// never carries the remote-controlled HTTP reason phrase.
+func TestDispatcherLogHidesStatusReasonPhrase(t *testing.T) {
+	teamID := uuid.New()
+	server := newReflectingStatusServer(t, http.StatusInternalServerError)
+	repo := newFakeRepository()
+	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook/log-reason-secret"})
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	repo.seed(Channel{
+		ID: uuid.New(), TeamID: teamID, Name: "discord", Kind: KindDiscord,
+		Enabled: true, Events: AllEvents, SealedConfig: sealed,
+	})
+
+	logs := &syncBuffer{}
+	service := NewService(Config{
+		Repository: repo, Secret: testSecret,
+		Logger: slog.New(slog.NewTextHandler(logs, nil)),
+		Mailer: &fakeMailer{}, Workers: 1, QueueSize: 4, SendTimeout: time.Second,
+	})
+	t.Cleanup(func() { _ = service.Close() })
+
+	service.Dispatch(sampleEvent(teamID))
+	waitFor(t, "the delivery failure log", func() bool { return strings.Contains(logs.String(), "delivery failed") })
+	if strings.Contains(logs.String(), "log-reason-secret") {
+		t.Fatalf("log leaks the webhook URL: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "status 500") {
+		t.Errorf("log = %q, want the numeric status", logs.String())
+	}
+}
+
+// TestTelegramTokenNormalized proves a padded token is trimmed before it is
+// stored and used, while a genuinely malformed token is still rejected.
+func TestTelegramTokenNormalized(t *testing.T) {
+	userID, teamID := uuid.New(), uuid.New()
+	ctx := scopedCtx(userID, teamID, teams.RoleOwner)
+	repo := newFakeRepository()
+	service := newTestService(t, repo)
+
+	view, err := service.CreateChannel(ctx, userID, ChannelRequest{
+		Name: "telegram", Kind: KindTelegram,
+		Config: ChannelConfig{BotToken: " 7184:AAH-padded-token ", ChatID: " -1001 "},
+	})
+	if err != nil {
+		t.Fatalf("CreateChannel: %v", err)
+	}
+	stored, ok := repo.get(view.ID)
+	if !ok {
+		t.Fatal("the channel was not stored")
+	}
+	opened, err := openConfig(testSecret, stored.SealedConfig)
+	if err != nil {
+		t.Fatalf("openConfig: %v", err)
+	}
+	if opened.BotToken != "7184:AAH-padded-token" {
+		t.Errorf("token = %q, want the trimmed value", opened.BotToken)
+	}
+	if opened.ChatID != "-1001" {
+		t.Errorf("chat id = %q, want the trimmed value", opened.ChatID)
+	}
+	notifier, err := service.notifierFor(stored)
+	if err != nil {
+		t.Fatalf("notifierFor: %v", err)
+	}
+	telegram, ok := notifier.(*telegramNotifier)
+	if !ok {
+		t.Fatalf("notifier = %T, want *telegramNotifier", notifier)
+	}
+	if telegram.token != "7184:AAH-padded-token" {
+		t.Errorf("notifier token = %q, want the trimmed value", telegram.token)
+	}
+
+	// The update path normalizes too.
+	if _, err := service.UpdateChannel(ctx, userID, view.ID, ChannelRequest{
+		Config: ChannelConfig{BotToken: " 999:AAH-second "},
+	}); err != nil {
+		t.Fatalf("UpdateChannel: %v", err)
+	}
+	stored, _ = repo.get(view.ID)
+	opened, err = openConfig(testSecret, stored.SealedConfig)
+	if err != nil {
+		t.Fatalf("openConfig after update: %v", err)
+	}
+	if opened.BotToken != "999:AAH-second" {
+		t.Errorf("token after update = %q, want the trimmed replacement", opened.BotToken)
+	}
+
+	// Whitespace inside the token is still a validation error.
+	if _, err := service.CreateChannel(ctx, userID, ChannelRequest{
+		Name: "bad", Kind: KindTelegram,
+		Config: ChannelConfig{BotToken: "7184:AAH bad", ChatID: "-1"},
+	}); !errors.Is(err, ErrValidation) {
+		t.Errorf("malformed token err = %v, want ErrValidation", err)
+	}
+}
+
 // TestEmptySecretKeyUsesEphemeralSecret mirrors providers/servers: an empty
 // GOTHAM_SECRET_KEY must never seal under SHA-256("").
 func TestEmptySecretKeyUsesEphemeralSecret(t *testing.T) {

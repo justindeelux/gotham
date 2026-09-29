@@ -21,11 +21,16 @@ type mockSMTP struct {
 	// rcptReject, when set, makes RCPT TO answer 501 with that text instead
 	// of accepting the recipient.
 	rcptReject string
+	// advertiseAuth makes EHLO offer AUTH PLAIN, which lets a test exercise
+	// the credential path (loopback plaintext is allowed by design).
+	advertiseAuth bool
 
-	mu   sync.Mutex
-	from string
-	rcpt []string
-	data string
+	mu           sync.Mutex
+	from         string
+	rcpt         []string
+	data         string
+	authAttempts int
+	authPayload  string
 
 	done chan struct{}
 }
@@ -71,7 +76,18 @@ func (s *mockSMTP) serve() {
 		command := strings.TrimRight(line, "\r\n")
 		switch {
 		case strings.HasPrefix(command, "EHLO"), strings.HasPrefix(command, "HELO"):
+			if s.advertiseAuth {
+				_, _ = writer.WriteString("250-mock\r\n250 AUTH PLAIN\r\n")
+				_ = writer.Flush()
+				continue
+			}
 			reply("250 mock")
+		case strings.HasPrefix(command, "AUTH PLAIN"):
+			s.mu.Lock()
+			s.authAttempts++
+			s.authPayload = strings.TrimSpace(strings.TrimPrefix(command, "AUTH PLAIN"))
+			s.mu.Unlock()
+			reply("235 2.7.0 Authentication successful")
 		case strings.HasPrefix(command, "MAIL FROM:"):
 			s.mu.Lock()
 			s.from = strings.Trim(command[len("MAIL FROM:"):], "<>")
@@ -117,6 +133,13 @@ func (s *mockSMTP) envelope() (from string, rcpt []string, data string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.from, append([]string(nil), s.rcpt...), s.data
+}
+
+// auth returns how many AUTH attempts arrived and the payload of the last.
+func (s *mockSMTP) auth() (attempts int, payload string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.authAttempts, s.authPayload
 }
 
 // TestSMTPMailerSendsBareEnvelopeAddresses runs the real net/smtp path against
@@ -242,5 +265,74 @@ func TestSMTPMailerRejectsInvalidEnvelopeAddress(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "valid email address") {
 		t.Errorf("error = %q, want the validation message", err)
+	}
+}
+
+// TestCredentialsRequireTLS pins the STARTTLS policy: a remote relay that did
+// not negotiate TLS is refused when credentials are configured, a loopback
+// relay is exempt.
+func TestCredentialsRequireTLS(t *testing.T) {
+	cases := []struct {
+		name     string
+		host     string
+		startTLS bool
+		wantErr  bool
+	}{
+		{name: "remote without starttls", host: "smtp.example.com", wantErr: true},
+		{name: "remote with starttls", host: "smtp.example.com", startTLS: true},
+		{name: "loopback ipv4", host: "127.0.0.1"},
+		{name: "loopback ipv6", host: "::1"},
+		{name: "loopback scoped", host: "[::1%lo0]"},
+		{name: "localhost name", host: "localhost"},
+		{name: "private relay without starttls", host: "10.0.0.5", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := credentialsRequireTLS(tc.host, tc.startTLS)
+			if tc.wantErr && err == nil {
+				t.Fatalf("credentialsRequireTLS(%q, %v) = nil, want an error", tc.host, tc.startTLS)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("credentialsRequireTLS(%q, %v) = %v, want nil", tc.host, tc.startTLS, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "STARTTLS") {
+				t.Errorf("error = %q, want the STARTTLS refusal", err)
+			}
+		})
+	}
+}
+
+// TestSMTPMailerAuthenticatesOnLoopback proves the loopback exemption works
+// end to end: a local relay without STARTTLS still accepts PLAIN auth.
+func TestSMTPMailerAuthenticatesOnLoopback(t *testing.T) {
+	server := startMockSMTP(t)
+	server.advertiseAuth = true
+	host, portText, _ := net.SplitHostPort(server.listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+
+	mailer := &smtpMailer{timeout: 5 * time.Second}
+	err := mailer.Send(context.Background(), Mail{
+		Host:     host,
+		Port:     port,
+		Username: "ops@gotham.dev",
+		Password: "smtp-secret",
+		From:     "ops@gotham.dev",
+		To:       []string{"oncall@gotham.dev"},
+		Subject:  "subject",
+		Body:     "body",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	attempts, payload := server.auth()
+	if attempts != 1 {
+		t.Errorf("AUTH attempts = %d, want 1", attempts)
+	}
+	if payload == "" {
+		t.Error("no AUTH payload was recorded")
+	}
+	from, _, _ := server.envelope()
+	if from != "ops@gotham.dev" {
+		t.Errorf("MAIL FROM = %q, want the envelope sender", from)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -268,8 +269,131 @@ func TestNotifierNon2xxHidesRemoteBody(t *testing.T) {
 		t.Fatal("Notify = nil error, want a failure")
 	}
 	assertNoSecret(t, err, "reflected-secret-token", "reflected:", "diagnosis")
-	if !strings.Contains(err.Error(), "400 Bad Request") {
-		t.Errorf("error = %q, want the HTTP status", err)
+	if !strings.Contains(err.Error(), "status 400") {
+		t.Errorf("error = %q, want the numeric HTTP status", err)
+	}
+}
+
+// newReflectingStatusServer starts a mock endpoint that hijacks the
+// connection and answers with a status line whose reason phrase reflects the
+// request path — exactly the hostile-webhook behavior the credential-leak
+// tests guard against.
+func newReflectingStatusServer(t *testing.T, status int) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("the test server does not support hijacking")
+			return
+		}
+		conn, buffer, err := hijacker.Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = fmt.Fprintf(buffer, "HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", status, r.URL.Path)
+		_ = buffer.Flush()
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// TestNotifierHidesStatusReasonPhrase proves the remote-controlled HTTP reason
+// phrase never reaches the error: an endpoint can reflect the
+// credential-bearing request path in it.
+func TestNotifierHidesStatusReasonPhrase(t *testing.T) {
+	server := newReflectingStatusServer(t, http.StatusInternalServerError)
+	notifier := newDiscordNotifier(server.URL+"/webhook/reason-secret-token", server.Client())
+
+	err := notifier.Notify(context.Background(), fixedEvent())
+	if err == nil {
+		t.Fatal("Notify = nil error, want a failure")
+	}
+	assertNoSecret(t, err, "reason-secret-token", "/webhook")
+	if !strings.Contains(err.Error(), "status 500") {
+		t.Errorf("error = %q, want the numeric HTTP status", err)
+	}
+}
+
+// TestNotifierRefusesCrossOriginRedirect proves a redirect to another origin is
+// refused before the credential-bearing request is replayed there.
+func TestNotifierRefusesCrossOriginRedirect(t *testing.T) {
+	var targetCalls int
+	var mu sync.Mutex
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		targetCalls++
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/webhook/hop-secret-token", http.StatusFound)
+	}))
+	defer redirector.Close()
+	notifier := newDiscordNotifier(redirector.URL+"/webhook/hop-secret-token", redirector.Client())
+
+	err := notifier.Notify(context.Background(), fixedEvent())
+	if err == nil {
+		t.Fatal("Notify = nil error, want a refused redirect")
+	}
+	assertNoSecret(t, err, "hop-secret-token")
+	if !strings.Contains(err.Error(), "redirect refused") {
+		t.Errorf("error = %q, want the redirect category", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if targetCalls != 0 {
+		t.Errorf("the redirect target received %d requests, want 0", targetCalls)
+	}
+}
+
+// TestNotifierRefusesLinkLocalRedirect proves a same-host is not enough: a
+// redirect whose target is a literal link-local address is refused.
+func TestNotifierRefusesLinkLocalRedirect(t *testing.T) {
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "http://169.254.169.254/latest/meta-data/redirect-secret-token")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer redirector.Close()
+	notifier := newSlackNotifier(redirector.URL+"/services/redirect-secret-token", redirector.Client())
+
+	err := notifier.Notify(context.Background(), fixedEvent())
+	if err == nil {
+		t.Fatal("Notify = nil error, want a refused redirect")
+	}
+	assertNoSecret(t, err, "redirect-secret-token", "169.254.169.254", "meta-data")
+	if !strings.Contains(err.Error(), "redirect refused") {
+		t.Errorf("error = %q, want the redirect category", err)
+	}
+}
+
+// TestNotifierFollowsSameOriginRedirect keeps a legitimate path redirect
+// working.
+func TestNotifierFollowsSameOriginRedirect(t *testing.T) {
+	var finalPath string
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/webhook" {
+			http.Redirect(w, r, "/webhook/", http.StatusFound)
+			return
+		}
+		mu.Lock()
+		finalPath = r.URL.Path
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	notifier := newDiscordNotifier(server.URL+"/webhook", server.Client())
+
+	if err := notifier.Notify(context.Background(), fixedEvent()); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if finalPath != "/webhook/" {
+		t.Errorf("final path = %q, want the same-origin redirect target", finalPath)
 	}
 }
 
@@ -322,12 +446,15 @@ func TestTelegramNotifierEscapesTokenPath(t *testing.T) {
 }
 
 // TestOutboundHostValidation refuses literal link-local/metadata destinations
-// while keeping private/self-hosted ranges allowed.
+// (including scoped IPv6 literals) while keeping private/self-hosted ranges
+// allowed.
 func TestOutboundHostValidation(t *testing.T) {
 	blocked := []string{
 		"http://169.254.169.254/latest/meta-data/",
 		"http://[fe80::1]/hook",
 		"http://[::ffff:169.254.169.254]/hook",
+		"http://[fe80::1%25lo0]/hook",
+		"http://[fe80::1%25eth0]/hook",
 	}
 	for _, raw := range blocked {
 		if err := validateWebhookURL(raw); !errors.Is(err, ErrValidation) {
@@ -341,14 +468,23 @@ func TestOutboundHostValidation(t *testing.T) {
 		"http://172.16.4.4:9000/hook",
 		"http://192.168.1.10/hook",
 		"http://hooks.internal/hook",
+		"http://[2001:db8::1%25eth0]/hook",
 	}
 	for _, raw := range allowed {
 		if err := validateWebhookURL(raw); err != nil {
 			t.Errorf("validateWebhookURL(%q) = %v, want nil", raw, err)
 		}
 	}
+	for _, host := range []string{"fe80::1", "fe80::1%lo0", "fe80::1%eth0"} {
+		if err := validateOutboundHost(host); !errors.Is(err, ErrValidation) {
+			t.Errorf("validateOutboundHost(%q) = %v, want ErrValidation", host, err)
+		}
+	}
 	if err := (ChannelConfig{Host: "169.254.169.254", From: "a@example.com", To: []string{"b@example.com"}}).validate(KindEmail); !errors.Is(err, ErrValidation) {
 		t.Errorf("email host 169.254.169.254 = %v, want ErrValidation", err)
+	}
+	if err := (ChannelConfig{Host: "fe80::1%lo0", From: "a@example.com", To: []string{"b@example.com"}}).validate(KindEmail); !errors.Is(err, ErrValidation) {
+		t.Errorf("email host fe80::1%%lo0 = %v, want ErrValidation", err)
 	}
 	if err := (ChannelConfig{Host: "10.0.0.5", From: "a@example.com", To: []string{"b@example.com"}}).validate(KindEmail); err != nil {
 		t.Errorf("email host 10.0.0.5 = %v, want nil", err)

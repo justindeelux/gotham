@@ -301,16 +301,23 @@ func validateWebhookURL(raw string) error {
 }
 
 // validateOutboundHost refuses literal link-local addresses, which cover the
-// cloud metadata services (169.254.169.254) and IPv6 fe80::/10. A hostname is
-// left to DNS at send time: resolving during validation would make config
-// writes depend on the resolver. Private ranges (10/8, 172.16/12, 192.168/16)
-// stay allowed on purpose.
+// cloud metadata services (169.254.169.254) and IPv6 fe80::/10, including
+// scoped literals such as fe80::1%eth0. A hostname is left to DNS at send
+// time: resolving during validation would make config writes depend on the
+// resolver. Private ranges (10/8, 172.16/12, 192.168/16) stay allowed on
+// purpose.
 func validateOutboundHost(host string) error {
 	host = strings.TrimSpace(host)
 	if split, _, err := net.SplitHostPort(host); err == nil {
 		host = split
 	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
+	host = strings.Trim(host, "[]")
+	// A zone id is not part of the address; net.ParseIP rejects it, so drop
+	// it before the link-local test.
+	if zone := strings.IndexByte(host, '%'); zone >= 0 {
+		host = host[:zone]
+	}
+	ip := net.ParseIP(host)
 	if ip == nil {
 		return nil
 	}
@@ -324,6 +331,27 @@ func validateOutboundHost(host string) error {
 func (c ChannelConfig) isZero() bool {
 	return c.WebhookURL == "" && c.BotToken == "" && c.ChatID == "" && c.Host == "" &&
 		c.Port == 0 && c.Username == "" && c.Password == "" && c.From == "" && c.To == nil
+}
+
+// normalized trims the transport fields a client copy-pastes from a dashboard:
+// a surrounding space must never reach a URL, the Telegram API or an SMTP
+// command. Password is never trimmed because leading/trailing spaces can be
+// part of a credential.
+func (c ChannelConfig) normalized() ChannelConfig {
+	normalized := c
+	normalized.WebhookURL = strings.TrimSpace(c.WebhookURL)
+	normalized.BotToken = strings.TrimSpace(c.BotToken)
+	normalized.ChatID = strings.TrimSpace(c.ChatID)
+	normalized.Host = strings.TrimSpace(c.Host)
+	normalized.Username = strings.TrimSpace(c.Username)
+	normalized.From = strings.TrimSpace(c.From)
+	if c.To != nil {
+		normalized.To = make([]string, 0, len(c.To))
+		for _, recipient := range c.To {
+			normalized.To = append(normalized.To, strings.TrimSpace(recipient))
+		}
+	}
+	return normalized
 }
 
 // merged applies the non-empty fields of an update over the stored config. A

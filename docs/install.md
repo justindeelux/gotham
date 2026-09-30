@@ -6,11 +6,12 @@ updates and rollback, and the release/signing flow.
 ## Requirements
 
 - **Control plane host:** Ubuntu 22.04 (or any systemd Linux) with `curl`,
-  `openssl` 3, and `coreutils`. The installer provisions PostgreSQL and Redis
-  from the distribution packages unless you point it at managed services with
-  `GOTHAM_DATABASE_DSN` / `GOTHAM_REDIS_ADDR` (or set `GOTHAM_SKIP_DEPS=1`).
-- **Node host:** Linux (`amd64` or `arm64`) with `systemd`, `curl`, `openssl` 3
-  and Docker Engine.
+  `openssl` 3, `sudo` (with `visudo`) and `coreutils`. The installer provisions
+  PostgreSQL and Redis from the distribution packages unless you point it at
+  managed services with `GOTHAM_DATABASE_DSN` / `GOTHAM_REDIS_ADDR` (or set
+  `GOTHAM_SKIP_DEPS=1`).
+- **Node host:** Linux (`amd64` or `arm64`) with `systemd`, `curl`, `openssl` 3,
+  `sudo` (with `visudo`) and Docker Engine.
 - Outbound HTTPS to `github.com` (or your mirror via `GOTHAM_RELEASES_URL` /
   `GOTHAM_BASE_URL`).
 
@@ -166,8 +167,10 @@ The asset naming is a contract with the update code — see
 the manifests, serves them from a loopback fake releases server (including a
 `/releases/latest` redirect), and runs `deploy/install.sh` against it under a
 scratch `GOTHAM_INSTALL_ROOT`. It covers the pinned-tag path, the default
-latest-tag resolution, the agent family, re-install preservation, and the
-fail-closed cases (tampered artifact, tampered manifest, pinned-key mismatch):
+latest-tag resolution, the agent family, re-install with no operator additions
+(the B1 regression), re-install preservation (operator keys and the managed
+DSN), and the fail-closed cases (tampered artifact, tampered manifest,
+pinned-key mismatch):
 
 ```sh
 sh deploy/test-release-install.sh

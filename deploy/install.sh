@@ -158,6 +158,13 @@ require_cmd mktemp "coreutils"
 require_cmd sed "sed"
 require_cmd awk "mawk/gawk"
 require_cmd install "coreutils"
+# sudo/visudo are only needed when the sudoers drop-in is installed; --dry-run
+# and test mode skip that step, so do not require them there (a non-root
+# dry-run may not have /usr/sbin on PATH, where visudo lives).
+if [ "${TEST_MODE}" -eq 0 ] && [ "${DRY_RUN}" -eq 0 ]; then
+    require_cmd sudo "apt-get install -y sudo"
+    require_cmd visudo "apt-get install -y sudo"
+fi
 if [ "${DRY_RUN}" -eq 0 ]; then
     openssl pkeyutl -help 2>&1 | grep -q rawin \
         || die "openssl 3+ is required (Ed25519 -rawin support)"
@@ -217,7 +224,10 @@ fi
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-install.XXXXXX")"
 PUBKEY_FILE="${WORK_DIR}/release.pub"
 TMP_BINARY="${WORK_DIR}/${BINARY_NAME}"
-trap 'rm -rf "${WORK_DIR}"' EXIT INT TERM
+# Clean up the private scratch dir on normal exit, and abort on a signal (a
+# cleanup-only INT/TERM trap would let the install carry on).
+trap 'rm -rf "${WORK_DIR}"' EXIT
+trap 'exit 1' INT TERM
 materialize_public_key "${PUBKEY_SOURCE}" "${PUBKEY_FILE}"
 
 if [ "${DRY_RUN}" -eq 1 ]; then
@@ -292,6 +302,14 @@ if [ "${DRY_RUN}" -eq 0 ]; then
         fi
         # Rewrite the managed keys and keep every other (operator) line untouched.
         env_tmp="${ENV_FILE}.tmp.$$"
+        # The temp copy is root-only and holds the secret key: remove it if any
+        # step below aborts. The success path moves it into place first, so this
+        # is a no-op then. INT/TERM must abort, not merely clean up: a trap that
+        # only removes the temp would let the subshell resume and `mv` a temp
+        # holding just the operator lines over gotham.env, silently dropping the
+        # managed keys and the secret.
+        trap 'rm -f "${env_tmp}"' EXIT
+        trap 'exit 1' INT TERM
         {
             echo "# Gotham control-plane environment. Read by gotham.service (EnvironmentFile)."
             echo "GOTHAM_DATABASE_DSN=${DSN}"
@@ -302,10 +320,29 @@ if [ "${DRY_RUN}" -eq 0 ]; then
             echo "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH=${JWT_PUB}"
         } >"${env_tmp}"
         if [ -n "${ENV_PREV}" ]; then
-            printf '%s\n' "${ENV_PREV}" \
-                | grep -v -E '^(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
-                | grep -v -F '# Gotham control-plane environment. Read by gotham.service' \
-                >>"${env_tmp}"
+            # Keep the operator lines: drop every managed key (tolerating leading
+            # whitespace, so a hand-indented key cannot silently override the
+            # managed value) and the header comment. A single grep keeps the exit
+            # status exact — with a pipeline only the last stage's status is
+            # visible, so a failure in an earlier stage would be masked. 1 means
+            # "nothing matched" (the normal "no operator settings" case) and is
+            # fine; anything else aborts rather than silently dropping operator
+            # settings.
+            filter_status=0
+            preserved=$(printf '%s\n' "${ENV_PREV}" \
+                | grep -v -E \
+                    -e '^[[:space:]]*(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
+                    -e '^# Gotham control-plane environment\. Read by gotham\.service') \
+                || filter_status=$?
+            case "${filter_status}" in
+                0) ;;
+                1) preserved="" ;;
+                *) die "could not filter the existing ${ENV_FILE} (grep exit ${filter_status})" ;;
+            esac
+            if [ -n "${preserved}" ]; then
+                printf '%s\n' "${preserved}" >>"${env_tmp}" \
+                    || die "could not preserve operator settings in ${ENV_FILE}"
+            fi
         fi
         chmod 0640 "${env_tmp}"
         mv -f "${env_tmp}" "${ENV_FILE}"
@@ -335,7 +372,8 @@ run chmod 0755 "${STATUS_DIR}"
 
 if [ "${TEST_MODE}" -eq 0 ] && [ "${DRY_RUN}" -eq 0 ]; then
     log "installing the sudoers rule"
-    "${SCRIPT_DIR}/install-sudoers.sh" "${SERVICE_USER}"
+    # Invoke via sh so a checkout that lost the exec bit still installs.
+    sh "${SCRIPT_DIR}/install-sudoers.sh" "${SERVICE_USER}"
 fi
 
 log "installing systemd unit ${SERVICE_FILE}"

@@ -150,7 +150,10 @@ fi
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-agent-install.XXXXXX")"
 PUBKEY_FILE="${WORK_DIR}/release.pub"
 TMP_BINARY="${WORK_DIR}/${BINARY_NAME}"
-trap 'rm -rf "${WORK_DIR}"' EXIT INT TERM
+# Clean up the private scratch dir on normal exit, and abort on a signal (a
+# cleanup-only INT/TERM trap would let the install carry on).
+trap 'rm -rf "${WORK_DIR}"' EXIT
+trap 'exit 1' INT TERM
 
 log "installing ${BINARY_NAME} ${VERSION} for linux/${ARCH}"
 log "downloading ${RELEASE_BASE}/gotham-agent-linux-${ARCH}"
@@ -158,6 +161,12 @@ log "downloading ${RELEASE_BASE}/gotham-agent-linux-${ARCH}"
 require_cmd curl "apt-get install -y curl"
 require_cmd openssl "apt-get install -y openssl"
 require_cmd base64 "coreutils"
+# sudo/visudo are only needed when the sudoers drop-in is installed; --dry-run
+# skips that step, so do not require them there.
+if [ "${DRY_RUN}" -eq 0 ]; then
+    require_cmd sudo "apt-get install -y sudo"
+    require_cmd visudo "apt-get install -y sudo"
+fi
 # The pinned release public key is the anchor; there is no runtime override.
 materialize_public_key "${GOTHAM_RELEASE_PUBLIC_KEY_B64}" "${PUBKEY_FILE}"
 if [ "${DRY_RUN}" -eq 1 ]; then
@@ -247,9 +256,10 @@ run chmod 0755 "${STATUS_DIR}"
 
 log "installing the sudoers rule"
 if [ "${DRY_RUN}" -eq 1 ]; then
-    echo "[dry-run] ${SCRIPT_DIR}/install-agent-sudoers.sh ${SERVICE_USER}"
+    echo "[dry-run] sh ${SCRIPT_DIR}/install-agent-sudoers.sh ${SERVICE_USER}"
 else
-    "${SCRIPT_DIR}/install-agent-sudoers.sh" "${SERVICE_USER}"
+    # Invoke via sh so a checkout that lost the exec bit still installs.
+    sh "${SCRIPT_DIR}/install-agent-sudoers.sh" "${SERVICE_USER}"
 fi
 
 log "installing systemd unit ${SERVICE_FILE}"

@@ -151,6 +151,16 @@ run_install_pinned() {
         sh "${SCRIPT_DIR}/install.sh" "$@"
 }
 
+# run_install_at installs into an arbitrary GOTHAM_INSTALL_ROOT (test mode).
+run_install_at() {
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+    GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+    GOTHAM_INSTALL_ROOT="$1" \
+    GOTHAM_SKIP_DEPS=1 \
+        sh "${SCRIPT_DIR}/install.sh"
+}
+
 echo "==> install (happy path)"
 run_install >/dev/null
 
@@ -207,9 +217,174 @@ grep -q 'chmod 0755 /usr/libexec/gotham' "${AGENT_INSTALLER}" \
     || { echo "FAIL: install-agent.sh does not 0755 /usr/libexec/gotham" >&2; exit 1; }
 grep -q 'chmod 0755 "${ENV_DIR}"' "${AGENT_INSTALLER}" \
     || { echo "FAIL: install-agent.sh does not 0755 /etc/gotham" >&2; exit 1; }
+
+# B2 static guard: the sudoers installers create /etc/sudoers.d and validate the
+# drop-in with visudo, and the installers check for sudo/visudo up front.
+for installer in "${SCRIPT_DIR}/install-sudoers.sh" "${SCRIPT_DIR}/install-agent-sudoers.sh"; do
+    grep -q 'install -d -m 0750 /etc/sudoers.d' "${installer}" \
+        || { echo "FAIL: ${installer} does not create /etc/sudoers.d" >&2; exit 1; }
+    grep -q 'mktemp /etc/sudoers.d' "${installer}" \
+        || { echo "FAIL: ${installer} does not validate a temp copy first" >&2; exit 1; }
+    grep -q 'mv -f "${SUDOERS_TMP}" "${SUDOERS_FILE}"' "${installer}" \
+        || { echo "FAIL: ${installer} does not move the validated drop-in into place" >&2; exit 1; }
+    grep -q '^visudo -cf' "${installer}" \
+        || { echo "FAIL: ${installer} does not validate the drop-in with visudo" >&2; exit 1; }
+done
+for installer in "${SCRIPT_DIR}/install.sh" "${AGENT_INSTALLER}"; do
+    grep -q 'require_cmd visudo' "${installer}" \
+        || { echo "FAIL: ${installer} does not require visudo" >&2; exit 1; }
+done
+echo "PASS: sudoers hardening present (B2)"
 echo "PASS: happy-path install verified and rendered"
 
-# ---- M2: re-install preserves operator settings -----------------------------
+# ---- N1: installer scripts must be executable ---------------------------------
+# The installers invoke the sudoers helpers (via `sh`, but the committed mode
+# must still be +x) and the operator runs the installers and verification
+# scripts directly. A missing bit makes the install die at its last step with
+# "bad interpreter: Permission denied".
+for script in install.sh install-agent.sh install-sudoers.sh install-agent-sudoers.sh \
+    test-release-install.sh verify-systemd.sh verify-agent-update.sh; do
+    [ -x "${SCRIPT_DIR}/${script}" ] \
+        || { echo "FAIL: ${script} is not executable (chmod +x it)" >&2; exit 1; }
+done
+if git -C "${REPO_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+    for script in install.sh install-agent.sh install-sudoers.sh install-agent-sudoers.sh; do
+        mode="$(git -C "${REPO_DIR}" ls-files -s -- "deploy/${script}" | awk '{print $1}')"
+        [ "${mode}" = "100755" ] \
+            || { echo "FAIL: deploy/${script} is committed mode ${mode}, want 100755" >&2; exit 1; }
+    done
+fi
+echo "PASS: installer scripts are executable (N1)"
+
+# ---- I4: no cleanup-only INT/TERM trap (a signal must abort) -----------------
+# A `trap '…' EXIT INT TERM` cleans up but lets the shell carry on after a
+# signal; both scripts must clean up on EXIT and exit on INT/TERM.
+for installer in "${SCRIPT_DIR}/install.sh" "${AGENT_INSTALLER}"; do
+    if grep -qE "trap '.*' EXIT INT TERM" "${installer}"; then
+        echo "FAIL: ${installer} has a cleanup-only EXIT/INT/TERM trap" >&2
+        exit 1
+    fi
+    grep -q "trap 'exit 1' INT TERM" "${installer}" \
+        || { echo "FAIL: ${installer} does not abort on INT/TERM" >&2; exit 1; }
+done
+echo "PASS: no cleanup-only signal trap (I4)"
+
+# ---- B1: re-install with no operator additions succeeds ---------------------
+# Regression: the preservation pipeline filtered every managed key and the
+# gotham.env header, so on a host that never added operator settings the final
+# `grep -v` matched nothing and exited 1. Under `set -e` that aborted the second
+# install right after "writing /etc/gotham/gotham.env", with no error message.
+echo "==> re-install with no operator additions (B1)"
+B1_ROOT="${SCRATCH}/root-b1"
+B1_ENV="${B1_ROOT}/etc/gotham/gotham.env"
+run_install_at "${B1_ROOT}" >"${SCRATCH}/b1-first.log" 2>&1 \
+    || { echo "FAIL: first install failed" >&2; cat "${SCRATCH}/b1-first.log" >&2; exit 1; }
+run_install_at "${B1_ROOT}" >"${SCRATCH}/b1-second.log" 2>&1 \
+    || { echo "FAIL: re-install with no operator additions failed (B1 regression)" >&2; cat "${SCRATCH}/b1-second.log" >&2; exit 1; }
+grep -qx 'GOTHAM_DATABASE_DSN=postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable' "${B1_ENV}" \
+    || { echo "FAIL: re-install did not refresh the managed DSN" >&2; exit 1; }
+[ "$(grep -c '^# Gotham control-plane environment\. Read by gotham.service' "${B1_ENV}")" -eq 1 ] \
+    || { echo "FAIL: re-install duplicated or dropped the gotham.env header" >&2; exit 1; }
+[ "$(grep -c '^GOTHAM_DATABASE_DSN=' "${B1_ENV}")" -eq 1 ] \
+    || { echo "FAIL: re-install duplicated a managed key" >&2; exit 1; }
+echo "PASS: re-install with no operator additions succeeded (B1)"
+
+# ---- I1: an indented managed key must not override the managed value --------
+# systemd strips leading whitespace in EnvironmentFile, so a hand-indented
+# managed key used to survive the filter and win. It must be filtered.
+printf '  GOTHAM_REDIS_ADDR=attacker:6379\nKEEP_ME=1\n' >>"${B1_ENV}"
+run_install_at "${B1_ROOT}" >"${SCRATCH}/i1.log" 2>&1 \
+    || { echo "FAIL: re-install with an indented managed key failed" >&2; cat "${SCRATCH}/i1.log" >&2; exit 1; }
+grep -qx 'GOTHAM_REDIS_ADDR=localhost:6379' "${B1_ENV}" \
+    || { echo "FAIL: managed GOTHAM_REDIS_ADDR was not refreshed" >&2; exit 1; }
+if grep -qE '^[[:space:]]+GOTHAM_REDIS_ADDR=' "${B1_ENV}"; then
+    echo "FAIL: an indented managed key survived the filter (I1)" >&2
+    exit 1
+fi
+[ "$(grep -cE '^[[:space:]]*GOTHAM_REDIS_ADDR=' "${B1_ENV}")" -eq 1 ] \
+    || { echo "FAIL: managed GOTHAM_REDIS_ADDR is not unique" >&2; exit 1; }
+grep -qx 'KEEP_ME=1' "${B1_ENV}" \
+    || { echo "FAIL: operator key dropped alongside the indented managed key" >&2; exit 1; }
+echo "PASS: indented managed keys filtered, operator keys kept (I1)"
+
+# ---- L1/N2: a real filter failure aborts; empty match does not ---------------
+# Only grep's "no lines matched" status (1) is tolerated. A genuine failure must
+# abort loudly instead of silently dropping operator settings. The shim fails
+# the **managed-key** pattern (the first stage of the old two-grep pipeline): a
+# single grep makes the exact status visible, closing N2.
+echo "==> preservation filter failure aborts (L1/N2)"
+REAL_GREP="$(command -v grep)"
+mkdir -p "${SCRATCH}/shim"
+cat >"${SCRATCH}/shim/grep" <<GREP
+#!/bin/sh
+case "\$*" in
+    *'GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)='*) exit 2 ;;
+esac
+exec "${REAL_GREP}" "\$@"
+GREP
+chmod +x "${SCRATCH}/shim/grep"
+SAVED_PATH="${PATH}"
+PATH="${SCRATCH}/shim:${PATH}"
+if run_install_at "${B1_ROOT}" >"${SCRATCH}/l1.log" 2>&1; then
+    PATH="${SAVED_PATH}"
+    echo "FAIL: a failing preservation filter did not abort the install (L1/N2)" >&2
+    exit 1
+fi
+PATH="${SAVED_PATH}"
+grep -q 'could not filter' "${SCRATCH}/l1.log" \
+    || { echo "FAIL: filter failure aborted for an unexpected reason" >&2; cat "${SCRATCH}/l1.log" >&2; exit 1; }
+# The abort must not have dropped the operator line from the existing file.
+grep -qx 'KEEP_ME=1' "${B1_ENV}" \
+    || { echo "FAIL: operator settings were dropped on abort (L1/N2)" >&2; exit 1; }
+echo "PASS: a failing preservation filter aborts the install (L1/N2)"
+
+# ---- I3: no secret-bearing temp env copy survives an abort -------------------
+# The abort above happened after the root-only gotham.env.tmp.<pid> was written;
+# the trap must have removed it.
+if ls "${B1_ROOT}"/etc/gotham/gotham.env.tmp.* >/dev/null 2>&1; then
+    echo "FAIL: a temp gotham.env survived the aborted install (I3)" >&2
+    exit 1
+fi
+echo "PASS: no temp gotham.env survives an abort (I3)"
+
+# ---- F1: a signal must abort, not rewrite gotham.env -------------------------
+# A cleanup-only INT/TERM trap would resume the env subshell and `mv` a temp
+# holding only the operator lines over gotham.env, dropping the managed keys and
+# the secret (regression from the first I3 trap). The shim TERMs the env
+# subshell during the filter and then runs the real grep, so the signal lands
+# exactly in that window.
+echo "==> a signal during the env write aborts without wiping gotham.env (F1)"
+cp "${B1_ENV}" "${SCRATCH}/f1-env-before"
+cat >"${SCRATCH}/shim/grep" <<GREP
+#!/bin/sh
+case "\$*" in
+    *'GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)='*)
+        # TERM the env subshell (the grandparent of this grep, skipping the
+        # command-substitution subshell), then run the real grep.
+        gp="\$(ps -o ppid= -p "\$PPID" 2>/dev/null | tr -d ' ')"
+        [ -n "\${gp}" ] && kill -TERM "\${gp}" 2>/dev/null
+        ;;
+esac
+exec "${REAL_GREP}" "\$@"
+GREP
+chmod +x "${SCRATCH}/shim/grep"
+SAVED_PATH="${PATH}"
+PATH="${SCRATCH}/shim:${PATH}"
+if run_install_at "${B1_ROOT}" >"${SCRATCH}/f1.log" 2>&1; then
+    PATH="${SAVED_PATH}"
+    echo "FAIL: a TERM during the env write did not abort the install (F1)" >&2
+    exit 1
+fi
+PATH="${SAVED_PATH}"
+cmp -s "${SCRATCH}/f1-env-before" "${B1_ENV}" \
+    || { echo "FAIL: the aborted install rewrote gotham.env (F1)" >&2; exit 1; }
+if ls "${B1_ROOT}"/etc/gotham/gotham.env.tmp.* >/dev/null 2>&1; then
+    echo "FAIL: a temp gotham.env survived the TERM abort (F1)" >&2
+    exit 1
+fi
+echo "PASS: a signal during the env write aborts without wiping gotham.env (F1)"
+
+# ---- M2: re-install preserves operator settings (b) and managed DSN (c) ------
 ENV_FILE="${ROOT}/etc/gotham/gotham.env"
 SECRET_BEFORE="$(sed -n 's/^GOTHAM_SECRET_KEY=//p' "${ENV_FILE}" | head -n1)"
 sed 's#^GOTHAM_DATABASE_DSN=.*#GOTHAM_DATABASE_DSN=postgres://managed/db#' "${ENV_FILE}" >"${ENV_FILE}.edit"

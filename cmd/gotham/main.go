@@ -44,6 +44,8 @@ func run(args []string) int {
 		return runServe()
 	case "migrate":
 		return runMigrate(args[1:])
+	case "update":
+		return runUpdate(args[1:])
 	case "version", "-v", "--version":
 		fmt.Printf("gotham %s\n", version)
 		return exitOK
@@ -244,6 +246,7 @@ func usage(w io.Writer) {
 Usage:
   gotham serve              Start the control plane
   gotham migrate [verb]     Run database migrations (up, down, status; default up)
+  gotham update [command]   Check, apply or roll back a self-update
   gotham version            Print the version
   gotham help               Show this help
 

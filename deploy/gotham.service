@@ -1,0 +1,63 @@
+# Gotham control-plane systemd unit.
+#
+# Install to /etc/systemd/system/gotham.service, create the gotham user and
+# /etc/gotham/gotham.env, then run `systemctl enable --now gotham`.
+#
+# Self-update layout (see deploy/README.md)
+# ----------------------------------------
+# The binary lives in the service's StateDirectory (/var/lib/gotham/bin/gotham),
+# the only path the service user can write. The privileged restart wrapper
+# lives at /usr/libexec/gotham/gotham-update, which is root-owned and outside
+# every writable path; sudoers grants exactly that command with no arguments. A
+# compromised control plane can therefore only ask the fixed wrapper to restart
+# the fixed service, never replace it or point it at another unit/path/URL.
+[Unit]
+Description=Gotham control plane
+Documentation=https://github.com/justindeelux/gotham
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gotham
+Group=gotham
+WorkingDirectory=/var/lib/gotham
+Environment=GOTHAM_CA_DIR=/var/lib/gotham/ca
+Environment=GOTHAM_UPDATE_BINARY=/var/lib/gotham/bin/gotham
+Environment=GOTHAM_UPDATE_STATUS=/var/lib/gotham-updater/update.status
+Environment=GOTHAM_UPDATE_PENDING=/var/lib/gotham/update.pending
+Environment=GOTHAM_UPDATE_LOCK=/var/lib/gotham/update.lock
+Environment=GOTHAM_UPDATE_SCRIPT=/usr/libexec/gotham/gotham-update
+EnvironmentFile=-/etc/gotham/gotham.env
+# AUTO_UPDATE=true enables the in-process scheduled check/apply loop.
+# Environment=AUTO_UPDATE=true
+ExecStart=/var/lib/gotham/bin/gotham serve
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# KillMode=process is required for self-update: the privileged wrapper is a
+# child of this service and calls `systemctl restart gotham`. With the default
+# control-group mode, stopping the unit would kill the wrapper before it can
+# health-check, roll back or record the outcome. Only the main process is
+# stopped; the wrapper (root-owned, detached) finishes its transaction.
+KillMode=process
+
+# Hardening. The updater writes the binary under StateDirectory, so that single
+# path stays writable; everything the privileged wrapper needs is root-owned.
+#
+# NoNewPrivileges is intentionally NOT set: the control plane invokes the fixed
+# root-owned wrapper through `sudo -n` (the only privileged action sudoers
+# grants), and NoNewPrivileges would block setuid sudo entirely. If an operator
+# replaces the sudo handoff with a root systemd path/transient unit, this can be
+# enabled.
+StateDirectory=gotham
+StateDirectoryMode=0755
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/gotham
+
+[Install]
+WantedBy=multi-user.target

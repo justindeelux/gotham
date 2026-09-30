@@ -30,6 +30,7 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/templates"
+	"github.com/justindeelux/gotham/internal/updates"
 	"github.com/justindeelux/gotham/internal/webhooks"
 )
 
@@ -70,6 +71,7 @@ type Server struct {
 	notify      notifications.NotificationService
 	webhooks    *webhooks.Service
 	metrics     *servers.MetricsSweeper
+	updates     updates.Service
 	authLimiter *ipRateLimiter
 	router      http.Handler
 	closer      func()
@@ -270,6 +272,14 @@ func (s *Server) routes() (http.Handler, error) {
 			proxy.NewDefaultCertificateService(sslConfig),
 			proxy.NewDefaultRedirectService(redirectConfig),
 			proxy.NewDefaultCertificateStatusService(statusConfig))
+
+		// Self-update (BE-9.1): the check route is available to any
+		// authenticated caller, while apply requires a platform operator
+		// because it replaces the whole runtime (a plain session must never
+		// be able to swap the binary). A nil service (FEATURE_UPDATES=false,
+		// or unusable configuration) mounts nothing.
+		s.updates = s.updatesService()
+		updates.Mount(api, s.RequireAuth, platformOnly, s.isPlatformOperator, s.updates)
 
 		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
 		// Log subscriptions are authorized against the node's team before the
@@ -585,6 +595,40 @@ func (s *Server) metricsRetention() *servers.MetricsSweeper {
 	return servers.NewMetricsSweeper(s.persistence, s.logger)
 }
 
+// versionReporter exposes the control-plane build version without widening the
+// ServerService interface (the concrete servers.ServerService implements it).
+type versionReporter interface{ Version() string }
+
+// updatesService builds the self-update domain service. It reads the running
+// version from the node registry when available, resolves the release public
+// key from the embedded value (or GOTHAM_UPDATE_PUBLIC_KEY for development) and
+// wires the release API and platform from the environment. It returns nil when
+// FEATURE_UPDATES=false or the configuration is unusable, so updates.Mount is a
+// no-op; with no public key Check still works but Apply stays disabled.
+func (s *Server) updatesService() updates.Service {
+	if !updates.Enabled() {
+		return nil
+	}
+	current := "dev"
+	if fromEnv := updates.CurrentFromEnv(); fromEnv != "" {
+		current = fromEnv
+	} else if reporter, ok := s.servers.(versionReporter); ok {
+		if v := reporter.Version(); v != "" {
+			current = v
+		}
+	}
+	config, err := updates.FromEnv(current, s.logger)
+	if err != nil {
+		s.logger.Info("updates: release public key not configured; apply disabled", "reason", err)
+	}
+	svc, err := updates.NewService(config)
+	if err != nil {
+		s.logger.Warn("updates: self-update disabled", "error", err)
+		return nil
+	}
+	return svc
+}
+
 // composeDialer is the mTLS ComposeService dial implemented by
 // *servers.ServerService. The HTTP layer type-asserts its server registry to
 // this interface, so tests that pass a fake registry simply leave the dialer
@@ -723,6 +767,16 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 func (s *Server) Run(ctx context.Context) error {
 	if s.closer != nil {
 		defer s.closer()
+	}
+
+	// Resume a staged update left behind by a crash/reboot during the health
+	// window, then run the self-update loop (AUTO_UPDATE=true); both are bound
+	// to the server lifetime.
+	if s.updates != nil {
+		if err := s.updates.Resume(ctx); err != nil {
+			s.logger.Warn("updates: could not resume a staged update", "error", err)
+		}
+		s.updates.StartAuto(ctx)
 	}
 
 	snap := s.cfg.Snapshot()

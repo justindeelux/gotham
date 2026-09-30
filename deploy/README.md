@@ -72,13 +72,15 @@ closed and refuses to update rather than running unserialized.
   (`409`/`ErrUpdatePending`); the wrapper removes the marker once it records the
   final `ok` / `rolled_back` / `rollback_failed` / `no_backup` status in the
   root-owned status file.
-- If the wrapper cannot be launched, the control plane records `wrapper_failed`
-  in the pending marker instead of leaving `staged` forever.
 - If the wrapper cannot be launched, the control plane rolls back and records
   `rolled_back` (or `rollback_failed`); a wrapper that exits without recording
   its own outcome (`monitorRestart`) is treated the same way, so the unproven
   binary is never left armed and the next apply cannot lose the known-good
   backup.
+- If the wrapper cannot acquire the update lock it fails closed, records
+  `wrapper_failed` in the root-owned status, and exits nonzero; the pending
+  marker is left in place so the gate stays closed and the control plane's
+  monitor rolls back.
 - If the host crashes or reboots during the health window, the next startup sees
   a `staged` marker and relaunches the wrapper once (marker rewritten to
   `resuming`, so it never loops); the new binary is then health-checked or
@@ -112,6 +114,14 @@ closed and refuses to update rather than running unserialized.
   It is guarded to a regular, non-symlink file and the value is sanitized; the
   marker is also read by the control plane. Upgrade path: the same
   `runuser`/`setpriv` handoff.
+- **Check-then-open TOCTOU in the wrapper (LOW).** The wrapper checks
+  `[ -L ]`/`[ -f ]` before opening the lock and reading the pending marker, so a
+  service user that swaps in a symlink between the check and the open could make
+  root open a FIFO (the wrapper hangs, the gate stays `staged`) or a device node.
+  The opens are read-only, so nothing is truncated; the leak is at most a
+  sanitized 64-character `version=` line. Worst case is a self-DoS by an
+  already-compromised service user. Upgrade path: the same `runuser`/`setpriv`
+  handoff.
 
 ## Linux/systemd verification
 

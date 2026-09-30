@@ -423,6 +423,12 @@ func (a *Applier) pendingInFlight() bool {
 // is health-checked or rolled back instead of running unproven behind a closed
 // gate. It rewrites the marker to resuming first, so a second startup cannot
 // relaunch again; it never loops.
+//
+// It uses a non-blocking lock: on a normal update the wrapper holds the lock
+// through the restart and the whole health window, and the restarted binary
+// must not wait for it (waiting would deadlock the update against itself). A
+// held lock means the wrapper already owns this update's outcome, so the resume
+// is skipped.
 func (a *Applier) ResumeStaged(ctx context.Context) error {
 	if a.Restart == nil {
 		return nil
@@ -433,7 +439,7 @@ func (a *Applier) ResumeStaged(ctx context.Context) error {
 	}
 	var version string
 	resume := false
-	if err := withFileLock(a.lockPath(binPath), func() error {
+	acquired, err := tryFileLock(a.lockPath(binPath), func() error {
 		if err := a.recoverLocked(binPath); err != nil {
 			return err
 		}
@@ -444,8 +450,13 @@ func (a *Applier) ResumeStaged(ctx context.Context) error {
 		version = pending.Version
 		resume = true
 		return a.Pending.Write(Status{Result: StatusResuming, Version: pending.Version})
-	}); err != nil {
+	})
+	if err != nil {
 		return err
+	}
+	if !acquired {
+		// The wrapper is already handling this update; never wait for it.
+		return nil
 	}
 	if !resume {
 		return nil

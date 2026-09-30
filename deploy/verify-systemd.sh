@@ -22,7 +22,10 @@
 #      recording the wrapper's cgroup.
 #
 # Environment:
-#   GOTHAM_GO=/path/to/go   Go binary for section 4 (default: go)
+#   GOTHAM_GO=/path/to/go            Go binary for section 4 and the section-6
+#                                    chain fixture (default: go)
+#   GOTHAM_CHAIN_BINARY=/path/to/bin Use a prebuilt verify-chain binary instead
+#                                    of building one with GOTHAM_GO
 #
 # It does NOT provision a real network release; the signed-manifest chain is
 # covered by `go test ./internal/updates`.
@@ -66,7 +69,10 @@ cleanup() {
     systemctl daemon-reload >/dev/null 2>&1 || true
     rm -rf "${SCRATCH}"
 }
-trap cleanup EXIT INT TERM
+# Clean up on every exit; a signal exits so the script stops immediately (the
+# EXIT trap then cleans once).
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
@@ -212,8 +218,8 @@ fi
 echo "== 4. staged gate and self-update regression tests =="
 if command -v "${GOTHAM_GO}" >/dev/null 2>&1 && [ -f "${REPO_DIR}/go.mod" ]; then
     if (cd "${REPO_DIR}" && "${GOTHAM_GO}" test -count=1 ./internal/updates \
-        -run 'TestApplierRefusesSecondApplyWhileStaged|TestApplierConcurrentApplySerialized|TestWrapperFailedPreservesKnownGood|TestMonitorRestartRollsBack|TestCrashBeforeCommitReopensGate|TestResumeStagedRelaunches|TestApplierRejectsDigestMismatch|TestLoadPublicKeyPrecedence|TestWrapperRefusesSymlinkedLock'); then
-        pass "gate, wrapper-failed rollback, resume, manifest and lock tests pass"
+        -run 'TestApplierRefusesSecondApplyWhileStaged|TestApplierConcurrentApplySerialized|TestWrapperFailedPreservesKnownGood|TestMonitorRestartRollsBack|TestCrashBeforeCommitReopensGate|TestResumeStagedRelaunches|TestResumeStagedSkipsWhileLockHeld|TestApplierRejectsDigestMismatch|TestLoadPublicKeyPrecedence|TestWrapperRefusesSymlinkedLock'); then
+        pass "gate, wrapper-failed rollback, resume (incl. held-lock), manifest and lock tests pass"
     else
         fail "self-update Go tests failed"
     fi
@@ -277,6 +283,25 @@ rm -f "${SCRATCH}/update.lock"
 : >"${SCRATCH}/update.lock"
 
 echo "== 6. real launch chain (non-root unit + sudo) =="
+
+# Prefer a Go fixture that exercises the real control plane ordering
+# (NewService -> Resume -> listen). Fall back to a shell HTTP server when no
+# toolchain/prebuilt binary is available; that fallback does not cover C1.
+CHAIN_BIN=""
+if [ -n "${GOTHAM_CHAIN_BINARY:-}" ] && [ -x "${GOTHAM_CHAIN_BINARY}" ]; then
+    CHAIN_BIN="${GOTHAM_CHAIN_BINARY}"
+elif command -v "${GOTHAM_GO}" >/dev/null 2>&1 && [ -f "${REPO_DIR}/go.mod" ]; then
+    if (cd "${REPO_DIR}" && "${GOTHAM_GO}" build -o "${SCRATCH}/gotham-chain" ./deploy/verify-chain) >/dev/null 2>&1; then
+        CHAIN_BIN="${SCRATCH}/gotham-chain"
+        chmod 0755 "${CHAIN_BIN}"
+    fi
+fi
+if [ -n "${CHAIN_BIN}" ]; then
+    echo "  healthy chain run uses the Go fixture (real Resume ordering)"
+else
+    skip "no Go toolchain or GOTHAM_CHAIN_BINARY; the healthy run uses a shell HTTP fallback and does not exercise the Go Resume ordering"
+fi
+
 if ! command -v useradd >/dev/null 2>&1 || ! command -v sudo >/dev/null 2>&1 || ! command -v setsid >/dev/null 2>&1; then
     skip "useradd/sudo/setsid not available; the real chain was not exercised"
 else
@@ -310,13 +335,23 @@ EOF
         # wrapper (root) still writes the status into the root-owned statusdir.
         chown -R "${CHAIN_USER}:${CHAIN_USER}" "${SCRATCH}/chain"
 
-        cat >"${CHAIN_SUDOERS}" <<EOF
+        # Validate the sudoers drop-in in the scratch dir before installing it:
+        # an invalid file in /etc/sudoers.d would break sudo host-wide.
+        CHAIN_SUDOERS_TMP="${SCRATCH}/sudoers.chain"
+        cat >"${CHAIN_SUDOERS_TMP}" <<EOF
 Defaults:${CHAIN_USER} !requiretty
 ${CHAIN_USER} ALL=(root) NOPASSWD: ${SCRATCH}/gotham-update ""
 EOF
-        chmod 0440 "${CHAIN_SUDOERS}"
-        if command -v visudo >/dev/null 2>&1 && ! visudo -cf "${CHAIN_SUDOERS}" >/dev/null 2>&1; then
-            fail "scratch sudoers drop-in is invalid"
+        if command -v visudo >/dev/null 2>&1; then
+            if visudo -cf "${CHAIN_SUDOERS_TMP}" >/dev/null 2>&1; then
+                install -m 0440 -o root -g root "${CHAIN_SUDOERS_TMP}" "${CHAIN_SUDOERS}"
+                pass "scratch sudoers drop-in validated and installed"
+            else
+                fail "scratch sudoers drop-in is invalid; not installed"
+            fi
+        else
+            install -m 0440 -o root -g root "${CHAIN_SUDOERS_TMP}" "${CHAIN_SUDOERS}"
+            skip "visudo unavailable; scratch sudoers installed without validation"
         fi
 
         cat >"${CHAIN_UNIT_FILE}" <<EOF
@@ -328,16 +363,23 @@ User=${CHAIN_USER}
 Group=${CHAIN_USER}
 WorkingDirectory=${SCRATCH}/chain
 KillMode=process
+Environment=GOTHAM_UPDATE_CURRENT=v1.2.0-chain
+Environment=GOTHAM_UPDATE_BINARY=${SCRATCH}/chain/bin/gotham
+Environment=GOTHAM_UPDATE_LOCK=${SCRATCH}/chain/update.lock
+Environment=GOTHAM_UPDATE_PENDING=${SCRATCH}/chain/update.pending
+Environment=GOTHAM_UPDATE_STATUS=${SCRATCH}/statusdir/chain.status
+Environment=GOTHAM_UPDATE_SCRIPT=${SCRATCH}/gotham-update
 ExecStart=${SCRATCH}/chain/bin/gotham
 Restart=no
 EOF
 
         systemctl daemon-reload
 
-        # write_chain_binary: launches the sudo wrapper once, then either serves
-        # health (healthy) or exits 1 (broken).
+        # write_chain_binary launches the sudo wrapper once (waiting until it
+        # holds the update lock, as production does before the restart), then
+        # either runs the Go fixture, serves a shell fallback, or exits 1.
         write_chain_binary() {
-            # $1 path, $2 "1" for broken
+            # $1 path, $2 go|shell|broken
             cat >"$1" <<EOF
 #!/bin/sh
 if [ ! -e "${SCRATCH}/chain/chain.launched" ]; then
@@ -357,27 +399,53 @@ if [ ! -e "${SCRATCH}/chain/chain.launched" ]; then
             done
         ) &
     fi
+    # Wait until the wrapper holds the update lock before continuing, so the
+    # startup Resume ordering under test sees the lock held (as it does in
+    # production before the restart).
+    if command -v flock >/dev/null 2>&1; then
+        i=0
+        while [ "\$i" -lt 100 ]; do
+            if ! flock -n "${SCRATCH}/chain/update.lock" true 2>/dev/null; then
+                break
+            fi
+            i=\$((i + 1))
+            sleep 0.1
+        done
+    fi
 fi
 EOF
-            if [ "$2" = "1" ]; then
-                printf 'exit 1\n' >>"$1"
-            else
-                cat >>"$1" <<EOF
+            case "$2" in
+                broken)
+                    printf 'exit 1\n' >>"$1"
+                    ;;
+                go)
+                    printf 'exec "%s" -addr 127.0.0.1:%s\n' "${CHAIN_BIN}" "${CHAIN_PORT}" >>"$1"
+                    ;;
+                *)
+                    cat >>"$1" <<EOF
 exec python3 -m http.server ${CHAIN_PORT} --bind 127.0.0.1 --directory "${SCRATCH}/chain/docroot"
 EOF
-            fi
+                    ;;
+            esac
             chmod 0755 "$1"
             chown "${CHAIN_USER}:${CHAIN_USER}" "$1"
         }
 
         # Healthy chain run.
         rm -f "${SCRATCH}/chain/chain.launched" "${SCRATCH}/statusdir/chain.status" "${SCRATCH}/chain/wrapper.cgroup"
-        write_chain_binary "${SCRATCH}/chain/bin/gotham" "0"
+        if [ -n "${CHAIN_BIN}" ]; then
+            write_chain_binary "${SCRATCH}/chain/bin/gotham" "go"
+        else
+            write_chain_binary "${SCRATCH}/chain/bin/gotham" "shell"
+        fi
         printf 'result=staged\nversion=v1.2.0-chain\n' >"${SCRATCH}/chain/update.pending"
         systemctl start "${CHAIN_UNIT}" || true
         if wait_status "${SCRATCH}/statusdir/chain.status"; then
             if grep -q '^result=ok' "${SCRATCH}/statusdir/chain.status"; then
                 pass "real chain: healthy update recorded result=ok"
+                if [ -n "${CHAIN_BIN}" ]; then
+                    pass "real chain: the Go Resume ordering was exercised"
+                fi
             else
                 fail "real chain: healthy status = $(cat "${SCRATCH}/statusdir/chain.status" 2>/dev/null)"
             fi
@@ -400,7 +468,7 @@ EOF
         cp "${SCRATCH}/chain/bin/gotham" "${SCRATCH}/chain/bin/gotham.pristine"
         cp "${SCRATCH}/chain/bin/gotham" "${SCRATCH}/chain/bin/gotham.old"
         rm -f "${SCRATCH}/chain/chain.launched" "${SCRATCH}/statusdir/chain.status"
-        write_chain_binary "${SCRATCH}/chain/bin/gotham" "1"
+        write_chain_binary "${SCRATCH}/chain/bin/gotham" "broken"
         printf 'result=staged\nversion=v9.9.9-chain\n' >"${SCRATCH}/chain/update.pending"
         systemctl start "${CHAIN_UNIT}" || true
         if wait_status "${SCRATCH}/statusdir/chain.status"; then
@@ -427,7 +495,6 @@ EOF
     fi
 fi
 
-echo
 if [ "${FAILURES}" -eq 0 ]; then
     echo "verify-systemd: all checks passed"
     exit 0

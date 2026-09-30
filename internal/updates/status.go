@@ -25,8 +25,11 @@ const (
 	StatusRollbackFailed = "rollback_failed"
 	// StatusNoBackup means activation failed and no previous binary existed.
 	StatusNoBackup = "no_backup"
-	// StatusWrapperFailed means the privileged wrapper could not be launched
-	// (or exited before it could record a result).
+	// StatusWrapperFailed means the privileged wrapper could not acquire the
+	// update lock (or otherwise failed closed before it could act); the control
+	// plane rolls back and records rolled_back/rollback_failed. An asynchronous
+	// wrapper exit is also handled by the control plane's rollback, not by this
+	// status.
 	StatusWrapperFailed = "wrapper_failed"
 	// StatusResuming means a staged update was re-launched at startup (crash
 	// or reboot during the health window) and its outcome is still pending.

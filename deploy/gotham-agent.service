@@ -30,6 +30,7 @@ Environment=GOTHAM_AGENT_UPDATE_STATUS=/var/lib/gotham-agent-updater/update.stat
 Environment=GOTHAM_AGENT_UPDATE_PENDING=/var/lib/gotham-agent/update.pending
 Environment=GOTHAM_AGENT_UPDATE_LOCK=/var/lib/gotham-agent/update.lock
 Environment=GOTHAM_AGENT_UPDATE_RETRY=/var/lib/gotham-agent/update.retry
+Environment=GOTHAM_AGENT_UPDATE_BACKOFF=/var/lib/gotham-agent/update.backoff
 Environment=GOTHAM_AGENT_UPDATE_SCRIPT=/usr/libexec/gotham/gotham-agent-update
 Environment=GOTHAM_AGENT_HEALTH_ADDR=127.0.0.1:8001
 EnvironmentFile=-/etc/gotham/agent.env

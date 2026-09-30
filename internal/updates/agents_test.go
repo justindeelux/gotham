@@ -212,6 +212,50 @@ func TestAgentUpdaterCheckerError(t *testing.T) {
 	}
 }
 
+// TestAgentUpdaterCachesEmptyResult is L2: a "no release" answer is cached as
+// (nil, nil), so repeated calls do not flip to a release-server error.
+func TestAgentUpdaterCachesEmptyResult(t *testing.T) {
+	var hits atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/name/releases", func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		// A release at the floor is not newer than the floor, so Check returns
+		// (nil, nil): no eligible release.
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"tag_name": "v0.0.0", "draft": false, "prerelease": false, "assets": []any{}},
+		})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	public, _, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	updater, err := NewAgentUpdater(AgentUpdaterConfig{
+		Repo: "owner/name", BaseURL: server.URL, Channel: ChannelStable,
+		PublicKey: public, Client: server.Client(),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewAgentUpdater: %v", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		release, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64")
+		if err != nil || release != nil {
+			t.Fatalf("Offer %d = (%+v, %v), want (nil, nil)", i, release, err)
+		}
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("release-API hits = %d, want 1 (the empty result must be cached)", got)
+	}
+	if target, err := updater.TargetVersion(context.Background()); err != nil || target != "" {
+		t.Fatalf("TargetVersion = (%q, %v), want (\"\", nil)", target, err)
+	}
+}
+
 // TestAgentUpdaterFromEnvFeatureOff proves FEATURE_UPDATES=false disables the
 // offerer entirely.
 func TestAgentUpdaterFromEnvFeatureOff(t *testing.T) {

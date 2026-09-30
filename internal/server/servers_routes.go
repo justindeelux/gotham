@@ -435,7 +435,7 @@ func (s *Server) handleUpdateAllAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if target == "" {
-		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "agent updates are not configured"})
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "no agent release is available (agent updates may be disabled)"})
 		return
 	}
 

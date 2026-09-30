@@ -160,6 +160,7 @@ back to the control-plane defaults). The privilege split is the same:
 | `/var/lib/gotham-agent/update.pending` | `gotham-agent` | yes | Staged-update marker that gates a second apply. |
 | `/var/lib/gotham-agent/update.lock` | `gotham-agent` | yes | Lock shared with the wrapper. |
 | `/var/lib/gotham-agent/update.retry` | `gotham-agent` | yes | Operator retry marker: a running agent clears its failed-update backoff when it appears. |
+| `/var/lib/gotham-agent/update.backoff` | `gotham-agent` | yes | Persisted failed-attempt count so the seeded backoff escalates across restarts. |
 | `/usr/libexec/gotham/gotham-agent-update` | root | **no** | Privileged wrapper (no arguments). |
 | `/etc/gotham/agent-updater.conf` | root | **no** | Fixed binary/service/health/status/pending/lock. |
 | `/var/lib/gotham-agent-updater/update.status` | root | **no** (read-only) | Authoritative outcome. |
@@ -197,20 +198,27 @@ handoff.
 
 A release that fails to activate is rolled back and the root-owned status
 records `rolled_back`/`rollback_failed` with its version. The agent seeds a
-durable-status backoff at startup (`updateFailedSeedBackoff`, 30 minutes) and
-keeps its per-version exponential backoff for repeated attempts, so a wrapper
-restart does not immediately re-apply the same broken release and crash-loop
-while the rollout target is unchanged. A **newer** release is applied
-automatically; only retrying the *same* version needs the operator path:
+durable-status backoff at startup and persists the failed-attempt count
+(agent-owned `update.backoff`), so the seeded delay escalates across the wrapper
+restarts that follow each rollback — 5m, 10m, 20m, 40m, then capped at 1h —
+instead of a flat retry, and a wrapper restart does not immediately re-apply the
+same broken release and crash-loop while the rollout target is unchanged. A
+**newer** release is applied automatically; only retrying the *same* version
+needs the operator path:
 
 ```sh
-sudo gotham-agent update reset   # clears the pending marker, the status (as root)
-                                 # and the agent-owned retry marker
+sudo gotham-agent update reset   # clears the pending marker, the status (as root),
+                                 # the agent-owned retry marker and the attempt count
 ```
 
 A running agent consumes `update.retry` on its next poll and clears its
 in-memory backoff; a non-root `gotham-agent update reset` still works through
-that marker (it just cannot remove the root-owned status file).
+that marker (it just cannot remove the root-owned status file). The command
+resolves paths from the process environment, then `/etc/gotham/agent.env` (the
+systemd `EnvironmentFile`; `GOTHAM_AGENT_ENV_FILE` overrides the path), then the
+built-in defaults, so a service with custom paths is reset correctly. The retry
+marker is written with a temp-file + rename, so a symlink or FIFO planted by the
+service user in its own directory cannot redirect or block a root run.
 
 ## Linux/systemd verification
 

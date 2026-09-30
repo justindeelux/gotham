@@ -127,9 +127,10 @@ fail() { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
 log() { echo "==> $*"; }
 
 # timestamp_to_epoch converts a Go RFC3339Nano timestamp to epoch seconds, or 0
-# when it cannot be parsed. Go marshals time.Time with up to 9 fractional
-# digits; Python 3.10's fromisoformat accepts at most 6, so truncate before
-# parsing (the box's Python rejected 9 digits and the helper always returned 0).
+# when it cannot be parsed. Go trims trailing zeros, so the fraction may have any
+# length from 1 to 9 digits; Python 3.10's fromisoformat accepts only 3 or 6, so
+# pad/truncate it to exactly 6 before parsing (the box's Python rejected a
+# 9-digit value and the helper always returned 0).
 timestamp_to_epoch() { # $1 raw RFC3339
     python3 -c '
 import sys, re, datetime
@@ -137,7 +138,7 @@ raw = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
 if not raw:
     print(0)
     raise SystemExit(0)
-raw = re.sub(r"\.(\d{6})\d+", r".\1", raw)
+raw = re.sub(r"\.(\d+)", lambda m: "." + (m.group(1) + "000000")[:6], raw)
 try:
     print(int(datetime.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()))
 except Exception:
@@ -182,7 +183,14 @@ cleanup() {
         print_debug_paths
         return
     fi
+    # Stop the agents first so they stop restarting, then clear any failed/
+    # rate-limited state and kill lingering scratch-user processes. Every step
+    # is best-effort so a failing run still leaves the host clean.
     systemctl stop "${UNIT_A}" "${UNIT_B}" >/dev/null 2>&1 || true
+    systemctl reset-failed "${UNIT_A}" "${UNIT_B}" >/dev/null 2>&1 || true
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -u "${AGENT_USER}" >/dev/null 2>&1 || true
+    fi
     rm -f "${UNIT_DIR}/${UNIT_A}.service" "${UNIT_DIR}/${UNIT_B}.service" "${SUDOERS_FILE}"
     systemctl daemon-reload >/dev/null 2>&1 || true
     if [ -n "${CP_PID}" ]; then kill "${CP_PID}" >/dev/null 2>&1 || true; fi
@@ -191,7 +199,15 @@ cleanup() {
         docker exec "${PG_CONTAINER}" psql -U "${PG_USER}" -d postgres \
             -c "DROP DATABASE IF EXISTS \"${SCRATCH_DB}\"" >/dev/null 2>&1 || true
     fi
-    userdel "${AGENT_USER}" >/dev/null 2>&1 || true
+    # Remove the scratch user with retries, then force it, then the directory
+    # last so nothing can re-create files under it.
+    if id -u "${AGENT_USER}" >/dev/null 2>&1; then
+        for _ in 1 2 3; do
+            userdel "${AGENT_USER}" >/dev/null 2>&1 && break
+            sleep 1
+        done
+        userdel -f "${AGENT_USER}" >/dev/null 2>&1 || true
+    fi
     rm -rf "${SCRATCH}"
 }
 trap cleanup EXIT
@@ -485,6 +501,7 @@ Environment=GOTHAM_AGENT_UPDATE_STATUS=${SCRATCH}/status-${suffix}/${node}.statu
 Environment=GOTHAM_AGENT_UPDATE_PENDING=${state}/update.pending
 Environment=GOTHAM_AGENT_UPDATE_LOCK=${state}/update.lock
 Environment=GOTHAM_AGENT_UPDATE_RETRY=${state}/update.retry
+Environment=GOTHAM_AGENT_UPDATE_BACKOFF=${state}/update.backoff
 Environment=GOTHAM_AGENT_HEALTH_ADDR=127.0.0.1:${health}
 Environment=GOTHAM_AGENT_UPDATE_INTERVAL=5s
 Environment=GOTHAM_AGENT_AUTO_UPDATE=false

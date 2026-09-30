@@ -247,7 +247,10 @@ func (a *AgentUpdater) resolve(ctx context.Context, arch string) (*Release, erro
 		return nil, err
 	}
 	if release == nil {
-		a.storeFailure(arch, ErrNoRelease)
+		// No eligible release: cache the empty result so repeated calls answer
+		// (nil, nil) instead of alternating 503 and a 502 "release server
+		// error" during the negative-cache window (L2).
+		a.storeEmpty(arch)
 		return nil, nil
 	}
 	a.store(arch, release)
@@ -255,8 +258,9 @@ func (a *AgentUpdater) resolve(ctx context.Context, arch string) (*Release, erro
 }
 
 // cached reports whether the cache answers without a fetch: a fresh verified
-// release, a stale verified release while a failure backoff is active, or the
-// cached failure itself. ok is false when a fetch should be attempted.
+// release, a stale verified release while a failure backoff is active, the
+// cached failure itself, or a cached "no release" (nil, nil). ok is false when
+// a fetch should be attempted.
 func (a *AgentUpdater) cached(arch string, now time.Time) (*Release, error, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -273,6 +277,7 @@ func (a *AgentUpdater) cached(arch string, now time.Time) (*Release, error, bool
 			clone := *entry.release
 			return &clone, nil, true
 		}
+		// A nil failure is a cached "no release"; a non-nil one is a real error.
 		return nil, entry.failure, true
 	}
 	return nil, nil, false
@@ -314,6 +319,21 @@ func (a *AgentUpdater) storeFailure(arch string, err error) {
 		a.cache[arch] = entry
 	}
 	entry.failure = err
+	entry.retryAt = time.Now().Add(a.negativeTTL)
+}
+
+// storeEmpty negative-caches a "no release" result for arch: cached then returns
+// (nil, nil), so the operator-facing answer is a consistent no-update rather
+// than flipping to a release-server error for the negative-cache window.
+func (a *AgentUpdater) storeEmpty(arch string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	entry, ok := a.cache[arch]
+	if !ok {
+		entry = &cachedEntry{}
+		a.cache[arch] = entry
+	}
+	entry.failure = nil
 	entry.retryAt = time.Now().Add(a.negativeTTL)
 }
 

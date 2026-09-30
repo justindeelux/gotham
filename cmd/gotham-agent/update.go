@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/justindeelux/gotham/agent"
 )
@@ -17,6 +18,8 @@ func runUpdate(args []string) int {
 		updateUsage(os.Stderr)
 		return exitUsage
 	}
+
+	loadAgentEnvFile()
 
 	cfg, err := agent.Load()
 	if err != nil {
@@ -42,6 +45,39 @@ func runUpdate(args []string) int {
 	}
 }
 
+// loadAgentEnvFile loads the systemd EnvironmentFile (`/etc/gotham/agent.env`)
+// so `sudo gotham-agent update reset` resolves the same update paths the service
+// uses instead of the built-in defaults. Explicit environment variables win;
+// `GOTHAM_AGENT_ENV_FILE` overrides the file path (empty string disables it).
+func loadAgentEnvFile() {
+	path := os.Getenv("GOTHAM_AGENT_ENV_FILE")
+	if path == "" {
+		path = "/etc/gotham/agent.env"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if !strings.HasPrefix(key, "GOTHAM_") {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		_ = os.Setenv(key, strings.TrimSpace(value))
+	}
+}
+
 // updateUsage prints the `gotham-agent update` help.
 func updateUsage(w io.Writer) {
 	fmt.Fprintf(w, `gotham-agent update <command>
@@ -50,8 +86,9 @@ Commands:
   reset    Clear the failed-update state and backoff so a fixed release is retried
 
 A newer release is applied automatically; reset is only needed to retry the same
-version after a rollback. Run it as root to also remove the root-owned status
-file (a non-root reset still clears the backoff through the agent-owned retry
-marker).
+version after a rollback. Paths are resolved from the process environment, then
+/etc/gotham/agent.env (GOTHAM_AGENT_ENV_FILE overrides the file), then the
+built-in defaults. Run it as root to also remove the root-owned status file (a
+non-root reset still clears the backoff through the agent-owned retry marker).
 `)
 }

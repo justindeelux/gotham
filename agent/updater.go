@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -29,17 +30,15 @@ const (
 )
 
 // Failed-update backoff (N5). After a failed attempt the agent does not
-// re-download the same version every poll: it waits base, doubling per
-// consecutive failure up to max.
+// re-download the same version every poll: it waits, doubling per consecutive
+// failure up to max. The attempt count is persisted (see backoffCount) so it
+// survives the wrapper restart that follows a rollback and the delay escalates
+// instead of staying flat.
 const (
-	updateBackoffBase = time.Minute
-	updateBackoffMax  = time.Hour
-	// updateFailedSeedBackoff is the initial backoff seeded at startup from a
-	// durable rolled_back/rollback_failed status, so an agent restarted by the
-	// wrapper does not immediately re-apply the release that just failed and
-	// crash-loop. It is bounded by updateBackoffMax and cleared by an operator
-	// reset (`gotham-agent update reset`).
-	updateFailedSeedBackoff = 30 * time.Minute
+	// updateFailedSeedBase is the first failed-attempt backoff (5m); each
+	// further attempt doubles it, capped at updateBackoffMax.
+	updateFailedSeedBase = 5 * time.Minute
+	updateBackoffMax     = time.Hour
 )
 
 // statusFreshness bounds how old a healthy status may be before it is treated
@@ -61,6 +60,9 @@ type updater struct {
 	applier    *updatecore.Applier
 	version    func() string
 	setVersion func(string)
+	// backoffCount persists the per-version failed-attempt count (agent-owned)
+	// so the seeded backoff escalates across wrapper restarts.
+	backoffCount *updatecore.StatusStore
 
 	// backoffMu guards backoff, the per-version failed-attempt backoff (N5).
 	backoffMu sync.Mutex
@@ -116,12 +118,13 @@ func newUpdater(cfg Config, log *slog.Logger, version func() string, setVersion 
 		log.Warn("agent: could not resume a staged update", "error", err)
 	}
 	u := &updater{
-		cfg:        cfg,
-		log:        log,
-		applier:    applier,
-		version:    version,
-		setVersion: setVersion,
-		backoff:    map[string]*backoffState{},
+		cfg:          cfg,
+		log:          log,
+		applier:      applier,
+		version:      version,
+		setVersion:   setVersion,
+		backoffCount: updatecore.NewStatusStore(cfg.UpdateBackoffPath),
+		backoff:      map[string]*backoffState{},
 	}
 	// A wrapper restart clears this process's in-memory backoff, so seed it from
 	// the durable status: a release that just rolled back must not be re-applied
@@ -238,39 +241,32 @@ func (u *updater) inBackoff(version string) bool {
 	return ok && time.Now().Before(state.until)
 }
 
-// recordFailure extends the exponential backoff for version.
+// recordFailure extends the persisted, exponential backoff for version.
 func (u *updater) recordFailure(version string) {
+	count := u.readBackoffCount(version) + 1
+	u.writeBackoffCount(version, count)
+	delay := seedDelay(count)
 	u.backoffMu.Lock()
-	defer u.backoffMu.Unlock()
-	state, ok := u.backoff[version]
-	if !ok {
-		state = &backoffState{}
-		u.backoff[version] = state
-	}
-	state.failures++
-	delay := updateBackoffBase
-	for i := 1; i < state.failures && delay < updateBackoffMax; i++ {
-		delay *= 2
-	}
-	if delay > updateBackoffMax {
-		delay = updateBackoffMax
-	}
-	state.until = time.Now().Add(delay)
+	u.backoff[version] = &backoffState{failures: count, until: time.Now().Add(delay)}
+	u.backoffMu.Unlock()
 	u.log.Info("agent: backing off after a failed update",
-		"version", version, "failures", state.failures, "retry_in", delay.String())
+		"version", version, "failures", count, "retry_in", delay.String())
 }
 
-// clearBackoff drops the backoff for version after a successful update.
+// clearBackoff drops the backoff for version after a successful update and
+// resets the persisted attempt count.
 func (u *updater) clearBackoff(version string) {
 	u.backoffMu.Lock()
-	defer u.backoffMu.Unlock()
 	delete(u.backoff, version)
+	u.backoffMu.Unlock()
+	u.clearBackoffCount()
 }
 
 // seedBackoffFromStatus seeds the backoff for the version a durable
 // rolled_back/rollback_failed status names when it is newer than the running
 // version, so a wrapper restart does not immediately re-apply a release that
-// just failed.
+// just failed. The persisted attempt count makes the delay escalate across
+// restarts instead of staying flat.
 func (u *updater) seedBackoffFromStatus() {
 	status, err := u.applier.Status.Read()
 	if err != nil || status == nil {
@@ -284,15 +280,22 @@ func (u *updater) seedBackoffFromStatus() {
 	if !isNewerVersion(status.Version, u.version()) {
 		return
 	}
+	count := u.readBackoffCount(status.Version)
+	if count < 1 {
+		count = 1
+		u.writeBackoffCount(status.Version, count)
+	}
+	delay := seedDelay(count)
 	u.backoffMu.Lock()
-	u.backoff[status.Version] = &backoffState{failures: 1, until: time.Now().Add(updateFailedSeedBackoff)}
+	u.backoff[status.Version] = &backoffState{failures: count, until: time.Now().Add(delay)}
 	u.backoffMu.Unlock()
 	u.log.Warn("agent: backing off a release that previously failed to activate",
-		"version", status.Version, "result", status.Result, "retry_in", updateFailedSeedBackoff.String())
+		"version", status.Version, "result", status.Result, "failures", count, "retry_in", delay.String())
 }
 
 // consumeRetry clears the whole backoff when an operator reset left the retry
-// marker, and removes the marker. It is a cheap stat on the common path.
+// marker, and removes the marker and the persisted count. It is a cheap stat on
+// the common path.
 func (u *updater) consumeRetry() {
 	path := strings.TrimSpace(u.cfg.UpdateRetryPath)
 	if path == "" {
@@ -304,8 +307,58 @@ func (u *updater) consumeRetry() {
 	u.backoffMu.Lock()
 	u.backoff = map[string]*backoffState{}
 	u.backoffMu.Unlock()
+	u.clearBackoffCount()
 	_ = os.Remove(path)
 	u.log.Info("agent: update retry requested; cleared the failed-update backoff")
+}
+
+// seedDelay is the exponential failed-attempt delay: base * 2^(count-1), capped.
+func seedDelay(count int) time.Duration {
+	delay := updateFailedSeedBase
+	for i := 1; i < count && delay < updateBackoffMax; i++ {
+		delay *= 2
+	}
+	if delay > updateBackoffMax {
+		delay = updateBackoffMax
+	}
+	return delay
+}
+
+// readBackoffCount returns the persisted failed-attempt count for version, or 0.
+func (u *updater) readBackoffCount(version string) int {
+	if u.backoffCount == nil {
+		return 0
+	}
+	status, err := u.backoffCount.Read()
+	if err != nil || status == nil || status.Version != version {
+		return 0
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(status.Detail))
+	if err != nil || count < 0 {
+		return 0
+	}
+	return count
+}
+
+// writeBackoffCount persists the failed-attempt count for version using the
+// hardened StatusStore write (temp file + rename, no symlink follow).
+func (u *updater) writeBackoffCount(version string, count int) {
+	if u.backoffCount == nil {
+		return
+	}
+	if err := u.backoffCount.Write(updatecore.Status{
+		Result: "backoff", Version: version, Detail: strconv.Itoa(count),
+	}); err != nil {
+		u.log.Warn("agent: could not persist the failed-update count", "error", err)
+	}
+}
+
+// clearBackoffCount removes the persisted failed-attempt count.
+func (u *updater) clearBackoffCount() {
+	if u.backoffCount == nil {
+		return
+	}
+	_ = u.backoffCount.Remove()
 }
 
 // ResetUpdateState is the operator retry path (`gotham-agent update reset`). It
@@ -326,12 +379,38 @@ func ResetUpdateState(cfg Config) error {
 	if path == "" {
 		return nil
 	}
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
+	return writeRetryMarker(path)
+}
+
+// writeRetryMarker writes the operator retry marker atomically. It never
+// follows a symlink and never opens a non-regular file: it stages a temp file
+// (O_EXCL, no-follow) and renames it over the path, so a symlink or FIFO that
+// the service user planted in its own directory cannot redirect or block a root
+// run. os.Rename replaces the path itself; it does not open it.
+func writeRetryMarker(path string) error {
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	return os.WriteFile(path, []byte("retry\n"), 0o644)
+	tmp, err := os.CreateTemp(dir, ".update.retry.*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.WriteString("retry\n"); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // isNewerVersion reports whether offered is strictly newer than current. An

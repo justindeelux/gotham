@@ -146,6 +146,7 @@ func updaterTestConfig(t *testing.T, target string, restart updatecore.RestartFu
 		UpdatePendingPath: filepath.Join(dir, "update.pending"),
 		UpdateStatusPath:  filepath.Join(dir, "update.status"),
 		UpdateRetryPath:   filepath.Join(dir, "update.retry"),
+		UpdateBackoffPath: filepath.Join(dir, "update.backoff"),
 		UpdateScript:      filepath.Join(dir, "gotham-agent-update"),
 		AutoUpdate:        true,
 		UpdateInterval:    time.Minute,

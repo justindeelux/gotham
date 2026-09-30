@@ -106,7 +106,7 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", script)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(sanitizedEnv(),
 		"GOTHAM_UPDATER_CONF="+conf,
 		"WRAPPER_TEST_TARGET="+target,
 		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -134,6 +134,45 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 		result.pending = string(data)
 	}
 	return result
+}
+
+// sanitizedEnv returns os.Environ() without sudo's variables. The harness
+// models the non-sudo GOTHAM_UPDATER_CONF seam, so how `go test` was invoked
+// (plain or via sudo) must not change what the wrapper touches.
+func sanitizedEnv() []string {
+	env := os.Environ()
+	filtered := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		switch name {
+		case "SUDO_USER", "SUDO_UID", "SUDO_GID":
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+// realInstallPresent reports whether this host has a real Gotham control plane.
+// Safety tests skip rather than risk acting on it.
+func realInstallPresent() bool {
+	for _, path := range []string{"/etc/gotham/updater.conf", "/var/lib/gotham", "/var/lib/gotham-updater"} {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// writeGuardShim writes a command that records its use in sentinel and then
+// fails, so a stray wrapper run cannot act on the host (and the test can prove
+// the PATH shim was consulted).
+func writeGuardShim(t *testing.T, path, sentinel string) {
+	t.Helper()
+	script := "#!/bin/sh\n: > \"" + sentinel + "\"\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write guard shim %s: %v", path, err)
+	}
 }
 
 // writeShim writes a fake command that exits with code.
@@ -412,6 +451,7 @@ func TestWrapperRejectsArguments(t *testing.T) {
 		t.Fatalf("resolve script: %v", err)
 	}
 	cmd := exec.Command("sh", script, "unexpected")
+	cmd.Env = sanitizedEnv()
 	output, runErr := cmd.CombinedOutput()
 	exitErr, ok := runErr.(*exec.ExitError)
 	if !ok || exitErr.ExitCode() != 2 {
@@ -423,9 +463,27 @@ func TestWrapperRejectsArguments(t *testing.T) {
 }
 
 // TestWrapperIgnoresEnvUnderSudo proves a GOTHAM_* override cannot change the
-// wrapper's configuration when it runs through sudo.
+// wrapper's configuration when it runs through sudo. It never touches a real
+// install: it skips when one is present, and every command the wrapper could
+// use to act on the host is replaced by a failing shim that records its use.
 func TestWrapperIgnoresEnvUnderSudo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("gotham-update.sh targets POSIX")
+	}
+	if realInstallPresent() {
+		t.Skip("a real Gotham install is present; refusing to run the wrapper against it")
+	}
+
 	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "fakebin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatalf("mkdir fakebin: %v", err)
+	}
+	sentinel := filepath.Join(dir, "shim-used")
+	for _, name := range []string{"systemctl", "flock", "curl", "wget", "mv", "mkdir", "mktemp", "chmod", "rm", "install"} {
+		writeGuardShim(t, filepath.Join(fakeBin, name), sentinel)
+	}
+
 	conf := filepath.Join(dir, "evil.conf")
 	if err := os.WriteFile(conf, []byte("GOTHAM_HEALTH=http://evil.example.com/healthz\n"), 0o644); err != nil {
 		t.Fatalf("write conf: %v", err)
@@ -434,14 +492,29 @@ func TestWrapperIgnoresEnvUnderSudo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve script: %v", err)
 	}
+
 	cmd := exec.Command("sh", script)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(sanitizedEnv(),
 		"SUDO_USER=root",
 		"SUDO_UID=0",
+		"SUDO_GID=0",
 		"GOTHAM_UPDATER_CONF="+conf,
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	output, _ := cmd.CombinedOutput()
-	if strings.Contains(string(output), "must be a loopback") {
+
+	if strings.Contains(string(output), "evil.example.com") || strings.Contains(string(output), "must be a loopback") {
 		t.Fatalf("wrapper honoured the GOTHAM_UPDATER_CONF override under sudo: %q", output)
+	}
+	if !strings.Contains(string(output), "refusing to lock") {
+		t.Fatalf("wrapper did not fall back to the default lock path: %q", output)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("PATH shims were not used (no sentinel): %v", err)
+	}
+	for _, path := range []string{"/var/lib/gotham", "/var/lib/gotham-updater"} {
+		if _, err := os.Stat(path); err == nil {
+			t.Fatalf("wrapper created a real install path %s", path)
+		}
 	}
 }

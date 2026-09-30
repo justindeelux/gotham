@@ -216,14 +216,20 @@ else
 fi
 
 echo "== 4. staged gate and self-update regression tests =="
+GO_AVAILABLE=0
+GO_EXERCISED=0
 if command -v "${GOTHAM_GO}" >/dev/null 2>&1 && [ -f "${REPO_DIR}/go.mod" ]; then
-    if (cd "${REPO_DIR}" && "${GOTHAM_GO}" test -count=1 ./internal/updates \
+    GO_AVAILABLE=1
+    # Strip sudo's variables: the wrapper tests model the non-sudo
+    # GOTHAM_UPDATER_CONF seam and must not act on a real install when the
+    # script is run under sudo.
+    if (cd "${REPO_DIR}" && env -u SUDO_USER -u SUDO_UID -u SUDO_GID "${GOTHAM_GO}" test -count=1 ./internal/updates \
         -run 'TestApplierRefusesSecondApplyWhileStaged|TestApplierConcurrentApplySerialized|TestWrapperFailedPreservesKnownGood|TestMonitorRestartRollsBack|TestCrashBeforeCommitReopensGate|TestResumeStagedRelaunches|TestResumeStagedSkipsWhileLockHeld|TestApplierRejectsDigestMismatch|TestLoadPublicKeyPrecedence|TestWrapperRefusesSymlinkedLock'); then
         pass "gate, wrapper-failed rollback, resume (incl. held-lock), manifest and lock tests pass"
     else
         fail "self-update Go tests failed"
     fi
-    if (cd "${REPO_DIR}" && "${GOTHAM_GO}" test -count=1 ./internal/server -run TestUpdateRoutesGating); then
+    if (cd "${REPO_DIR}" && env -u SUDO_USER -u SUDO_UID -u SUDO_GID "${GOTHAM_GO}" test -count=1 ./internal/server -run TestUpdateRoutesGating); then
         pass "route gating test passes"
     else
         fail "route gating test failed"
@@ -285,19 +291,27 @@ rm -f "${SCRATCH}/update.lock"
 echo "== 6. real launch chain (non-root unit + sudo) =="
 
 # Prefer a Go fixture that exercises the real control plane ordering
-# (NewService -> Resume -> listen). Fall back to a shell HTTP server when no
-# toolchain/prebuilt binary is available; that fallback does not cover C1.
+# (NewService -> Resume -> listen). Fall back to a shell HTTP server only when
+# no toolchain/prebuilt binary is genuinely available; that fallback does not
+# cover C1.
 CHAIN_BIN=""
 if [ -n "${GOTHAM_CHAIN_BINARY:-}" ] && [ -x "${GOTHAM_CHAIN_BINARY}" ]; then
     CHAIN_BIN="${GOTHAM_CHAIN_BINARY}"
-elif command -v "${GOTHAM_GO}" >/dev/null 2>&1 && [ -f "${REPO_DIR}/go.mod" ]; then
-    if (cd "${REPO_DIR}" && "${GOTHAM_GO}" build -o "${SCRATCH}/gotham-chain" ./deploy/verify-chain) >/dev/null 2>&1; then
+elif [ "${GO_AVAILABLE}" -eq 1 ]; then
+    CHAIN_BUILD_LOG="${SCRATCH}/chain-build.log"
+    if (cd "${REPO_DIR}" && "${GOTHAM_GO}" build -o "${SCRATCH}/gotham-chain" ./deploy/verify-chain) >"${CHAIN_BUILD_LOG}" 2>&1; then
         CHAIN_BIN="${SCRATCH}/gotham-chain"
         chmod 0755 "${CHAIN_BIN}"
+    else
+        fail "go toolchain is present but building ./deploy/verify-chain failed: $(tr '\n' ' ' <"${CHAIN_BUILD_LOG}")"
     fi
+elif [ -n "${GOTHAM_CHAIN_BINARY:-}" ]; then
+    fail "GOTHAM_CHAIN_BINARY=${GOTHAM_CHAIN_BINARY} is not an executable file"
 fi
 if [ -n "${CHAIN_BIN}" ]; then
     echo "  healthy chain run uses the Go fixture (real Resume ordering)"
+elif [ "${GO_AVAILABLE}" -eq 1 ]; then
+    fail "a Go toolchain is available but the chain fixture could not be built"
 else
     skip "no Go toolchain or GOTHAM_CHAIN_BINARY; the healthy run uses a shell HTTP fallback and does not exercise the Go Resume ordering"
 fi
@@ -444,6 +458,7 @@ EOF
             if grep -q '^result=ok' "${SCRATCH}/statusdir/chain.status"; then
                 pass "real chain: healthy update recorded result=ok"
                 if [ -n "${CHAIN_BIN}" ]; then
+                    GO_EXERCISED=1
                     pass "real chain: the Go Resume ordering was exercised"
                 fi
             else
@@ -493,6 +508,12 @@ EOF
     else
         skip "could not create the scratch service user; the real chain was not exercised"
     fi
+fi
+
+# When a Go toolchain is present, the run must actually exercise the Go Resume
+# ordering; otherwise exit 0 would hide a Go-side regression.
+if [ "${GO_AVAILABLE}" -eq 1 ] && [ "${GO_EXERCISED}" -ne 1 ]; then
+    fail "a Go toolchain is available but the real chain never exercised the Go Resume ordering"
 fi
 
 if [ "${FAILURES}" -eq 0 ]; then

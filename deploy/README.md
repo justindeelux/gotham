@@ -114,6 +114,12 @@ closed and refuses to update rather than running unserialized.
   It is guarded to a regular, non-symlink file and the value is sanitized; the
   marker is also read by the control plane. Upgrade path: the same
   `runuser`/`setpriv` handoff.
+- **If only the wrapper dies during the health window (LOW).** A wrapper that is
+  killed or OOM-killed (but not a host crash) after it restarted the unit leaves
+  the update `staged`: the old process's monitor died with the restart and the
+  new process already skipped `Resume` while the wrapper held the lock. The
+  unproven binary keeps serving until the next restart (when startup `Resume`
+  fires) or `gotham update reset`. It fails closed and self-heals on restart.
 - **Check-then-open TOCTOU in the wrapper (LOW).** The wrapper checks
   `[ -L ]`/`[ -f ]` before opening the lock and reading the pending marker, so a
   service user that swaps in a symlink between the check and the open could make

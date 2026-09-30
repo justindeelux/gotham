@@ -60,14 +60,25 @@ install -d -m 0750 /etc/sudoers.d
 
 # sudoers(5): a command with no argument list permits any arguments. The empty
 # string "" pins the invocation to zero arguments.
-cat >"${SUDOERS_FILE}" <<EOF
+#
+# Write the drop-in to a temp file and validate it BEFORE it lands in
+# /etc/sudoers.d: a broken file there could disable sudo on the host. The move
+# is atomic within the directory and the final path is re-checked.
+SUDOERS_TMP="$(mktemp /etc/sudoers.d/.gotham-update.XXXXXX)" \
+    || { echo "install-sudoers.sh: could not create a temp file in /etc/sudoers.d" >&2; exit 1; }
+cat >"${SUDOERS_TMP}" <<EOF
 # Allow the Gotham control plane to trigger its own update restart wrapper.
 # The wrapper is root-owned and outside every writable path; "" pins it to zero
 # arguments, so sudoers grants exactly the fixed command.
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${WRAPPER} ""
 EOF
-chmod 0440 "${SUDOERS_FILE}"
-
+chmod 0440 "${SUDOERS_TMP}"
+if ! visudo -cf "${SUDOERS_TMP}"; then
+    rm -f "${SUDOERS_TMP}"
+    echo "install-sudoers.sh: generated drop-in failed visudo; nothing installed" >&2
+    exit 1
+fi
+mv -f "${SUDOERS_TMP}" "${SUDOERS_FILE}"
 visudo -cf "${SUDOERS_FILE}"
 
 echo "installed ${SUDOERS_FILE}"

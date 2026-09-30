@@ -11,7 +11,7 @@ updates and rollback, and the release/signing flow.
   managed services with `GOTHAM_DATABASE_DSN` / `GOTHAM_REDIS_ADDR` (or set
   `GOTHAM_SKIP_DEPS=1`).
 - **Node host:** Linux (`amd64` or `arm64`) with `systemd`, `curl`, `openssl` 3,
-  `sudo` and Docker Engine.
+  `sudo` (with `visudo`) and Docker Engine.
 - Outbound HTTPS to `github.com` (or your mirror via `GOTHAM_RELEASES_URL` /
   `GOTHAM_BASE_URL`).
 

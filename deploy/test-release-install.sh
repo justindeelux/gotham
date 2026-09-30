@@ -223,6 +223,10 @@ grep -q 'chmod 0755 "${ENV_DIR}"' "${AGENT_INSTALLER}" \
 for installer in "${SCRIPT_DIR}/install-sudoers.sh" "${SCRIPT_DIR}/install-agent-sudoers.sh"; do
     grep -q 'install -d -m 0750 /etc/sudoers.d' "${installer}" \
         || { echo "FAIL: ${installer} does not create /etc/sudoers.d" >&2; exit 1; }
+    grep -q 'mktemp /etc/sudoers.d' "${installer}" \
+        || { echo "FAIL: ${installer} does not validate a temp copy first" >&2; exit 1; }
+    grep -q 'mv -f "${SUDOERS_TMP}" "${SUDOERS_FILE}"' "${installer}" \
+        || { echo "FAIL: ${installer} does not move the validated drop-in into place" >&2; exit 1; }
     grep -q '^visudo -cf' "${installer}" \
         || { echo "FAIL: ${installer} does not validate the drop-in with visudo" >&2; exit 1; }
 done
@@ -252,6 +256,51 @@ grep -qx 'GOTHAM_DATABASE_DSN=postgres://gotham:gotham@localhost:5432/gotham?ssl
 [ "$(grep -c '^GOTHAM_DATABASE_DSN=' "${B1_ENV}")" -eq 1 ] \
     || { echo "FAIL: re-install duplicated a managed key" >&2; exit 1; }
 echo "PASS: re-install with no operator additions succeeded (B1)"
+
+# ---- I1: an indented managed key must not override the managed value --------
+# systemd strips leading whitespace in EnvironmentFile, so a hand-indented
+# managed key used to survive the filter and win. It must be filtered.
+printf '  GOTHAM_REDIS_ADDR=attacker:6379\nKEEP_ME=1\n' >>"${B1_ENV}"
+run_install_at "${B1_ROOT}" >"${SCRATCH}/i1.log" 2>&1 \
+    || { echo "FAIL: re-install with an indented managed key failed" >&2; cat "${SCRATCH}/i1.log" >&2; exit 1; }
+grep -qx 'GOTHAM_REDIS_ADDR=localhost:6379' "${B1_ENV}" \
+    || { echo "FAIL: managed GOTHAM_REDIS_ADDR was not refreshed" >&2; exit 1; }
+if grep -qE '^[[:space:]]+GOTHAM_REDIS_ADDR=' "${B1_ENV}"; then
+    echo "FAIL: an indented managed key survived the filter (I1)" >&2
+    exit 1
+fi
+[ "$(grep -cE '^[[:space:]]*GOTHAM_REDIS_ADDR=' "${B1_ENV}")" -eq 1 ] \
+    || { echo "FAIL: managed GOTHAM_REDIS_ADDR is not unique" >&2; exit 1; }
+grep -qx 'KEEP_ME=1' "${B1_ENV}" \
+    || { echo "FAIL: operator key dropped alongside the indented managed key" >&2; exit 1; }
+echo "PASS: indented managed keys filtered, operator keys kept (I1)"
+
+# ---- L1: a real preservation-filter failure aborts; empty match does not -----
+# Only grep's "no lines matched" status (1) is tolerated. A genuine failure
+# (here, a grep that exits 2) must abort loudly instead of silently dropping
+# operator settings.
+echo "==> preservation filter failure aborts (L1)"
+REAL_GREP="$(command -v grep)"
+mkdir -p "${SCRATCH}/shim"
+cat >"${SCRATCH}/shim/grep" <<GREP
+#!/bin/sh
+case "\$*" in
+    *'Gotham control-plane environment'*) exit 2 ;;
+esac
+exec "${REAL_GREP}" "\$@"
+GREP
+chmod +x "${SCRATCH}/shim/grep"
+SAVED_PATH="${PATH}"
+PATH="${SCRATCH}/shim:${PATH}"
+if run_install_at "${B1_ROOT}" >"${SCRATCH}/l1.log" 2>&1; then
+    PATH="${SAVED_PATH}"
+    echo "FAIL: a failing preservation filter did not abort the install (L1)" >&2
+    exit 1
+fi
+PATH="${SAVED_PATH}"
+grep -q 'could not filter' "${SCRATCH}/l1.log" \
+    || { echo "FAIL: filter failure aborted for an unexpected reason" >&2; cat "${SCRATCH}/l1.log" >&2; exit 1; }
+echo "PASS: a failing preservation filter aborts the install (L1)"
 
 # ---- M2: re-install preserves operator settings (b) and managed DSN (c) ------
 ENV_FILE="${ROOT}/etc/gotham/gotham.env"

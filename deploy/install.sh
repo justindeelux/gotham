@@ -158,8 +158,13 @@ require_cmd mktemp "coreutils"
 require_cmd sed "sed"
 require_cmd awk "mawk/gawk"
 require_cmd install "coreutils"
-require_cmd sudo "apt-get install -y sudo"
-require_cmd visudo "apt-get install -y sudo"
+# sudo/visudo are only needed when the sudoers drop-in is installed; --dry-run
+# and test mode skip that step, so do not require them there (a non-root
+# dry-run may not have /usr/sbin on PATH, where visudo lives).
+if [ "${TEST_MODE}" -eq 0 ] && [ "${DRY_RUN}" -eq 0 ]; then
+    require_cmd sudo "apt-get install -y sudo"
+    require_cmd visudo "apt-get install -y sudo"
+fi
 if [ "${DRY_RUN}" -eq 0 ]; then
     openssl pkeyutl -help 2>&1 | grep -q rawin \
         || die "openssl 3+ is required (Ed25519 -rawin support)"
@@ -304,14 +309,26 @@ if [ "${DRY_RUN}" -eq 0 ]; then
             echo "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH=${JWT_PUB}"
         } >"${env_tmp}"
         if [ -n "${ENV_PREV}" ]; then
-            # Filtering every line (managed key or header) is a normal outcome on
-            # a host that never added operator settings, but grep exits 1 when it
-            # matches nothing and `set -e` would abort the re-install. Tolerate the
-            # empty result; the operator lines (if any) are still appended.
-            printf '%s\n' "${ENV_PREV}" \
-                | grep -v -E '^(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
-                | grep -v -F '# Gotham control-plane environment. Read by gotham.service' \
-                >>"${env_tmp}" || true
+            # Keep the operator lines: drop every managed key (tolerating leading
+            # whitespace, so a hand-indented key cannot silently override the
+            # managed value) and the header comment. grep exits 1 when nothing
+            # matches — the normal "no operator settings" case — which is fine;
+            # any other status is a real failure and must abort rather than
+            # silently drop operator settings.
+            filter_status=0
+            preserved=$(printf '%s\n' "${ENV_PREV}" \
+                | grep -v -E '^[[:space:]]*(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
+                | grep -v -F '# Gotham control-plane environment. Read by gotham.service') \
+                || filter_status=$?
+            case "${filter_status}" in
+                0) ;;
+                1) preserved="" ;;
+                *) die "could not filter the existing ${ENV_FILE} (grep exit ${filter_status})" ;;
+            esac
+            if [ -n "${preserved}" ]; then
+                printf '%s\n' "${preserved}" >>"${env_tmp}" \
+                    || die "could not preserve operator settings in ${ENV_FILE}"
+            fi
         fi
         chmod 0640 "${env_tmp}"
         mv -f "${env_tmp}" "${ENV_FILE}"

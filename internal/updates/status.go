@@ -3,10 +3,12 @@ package updates
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -80,17 +82,19 @@ func NewStatusStore(path string) *StatusStore {
 }
 
 // Read loads the recorded status. A missing file returns (nil, nil): no update
-// has run yet.
+// has run yet. A non-regular file (FIFO, device, directory or symlink) is
+// ignored: both the pending marker and the status file live in a directory the
+// service user can write, and opening a planted FIFO would block.
 func (s *StatusStore) Read() (*Status, error) {
 	if s == nil {
 		return nil, nil
 	}
-	data, err := os.ReadFile(s.Path)
+	data, err := readRegularFile(s.Path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
 		return nil, err
+	}
+	if data == nil {
+		return nil, nil
 	}
 	status := &Status{}
 	for _, line := range strings.Split(string(data), "\n") {
@@ -166,4 +170,37 @@ func (s *StatusStore) Remove() error {
 // singleLine keeps a detail value on one line in the status file.
 func singleLine(value string) string {
 	return strings.NewReplacer("\n", " ", "\r", " ").Replace(value)
+}
+
+// readRegularFile reads path only when it is a regular file. Symlinks and
+// non-regular files (FIFO, device, directory) return (nil, nil) instead of
+// following a link or blocking; the open uses O_NONBLOCK so a FIFO swapped in
+// after the Lstat cannot block either. A missing file also returns (nil, nil).
+func readRegularFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() {
+		return nil, nil
+	}
+	return io.ReadAll(file)
 }

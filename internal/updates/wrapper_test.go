@@ -2,6 +2,7 @@ package updates
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,19 +122,36 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 		}
 		result.exitCode = exitErr.ExitCode()
 	}
-	if data, err := os.ReadFile(target); err == nil {
-		result.target = string(data)
-	}
-	if data, err := os.ReadFile(backup); err == nil {
-		result.backup = string(data)
-	}
-	if data, err := os.ReadFile(status); err == nil {
-		result.status = string(data)
-	}
-	if data, err := os.ReadFile(pending); err == nil {
-		result.pending = string(data)
-	}
+	result.target = readRegularOrEmpty(target)
+	result.backup = readRegularOrEmpty(backup)
+	result.status = readRegularOrEmpty(status)
+	result.pending = readRegularOrEmpty(pending)
 	return result
+}
+
+// readRegularOrEmpty returns a file's contents only when it is a regular file.
+// The tests plant FIFOs/symlinks at the wrapper's paths, and os.ReadFile on one
+// would block the harness forever; anything non-regular (or missing) yields "".
+// The open uses O_NONBLOCK so even a swap after the Lstat cannot block.
+func readRegularOrEmpty(path string) string {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() {
+		return ""
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // sanitizedEnv returns os.Environ() without sudo's variables. The harness
@@ -442,6 +460,151 @@ func TestWrapperHardensPendingRead(t *testing.T) {
 			t.Fatalf("status = %q, want ok (no hang, no FIFO read)", result.status)
 		}
 	})
+}
+
+// TestReadRegularOrEmptyNeverBlocks proves the harness read helper returns
+// promptly for FIFOs, symlinks, directories and missing paths (os.ReadFile on a
+// FIFO would block forever).
+func TestReadRegularOrEmptyNeverBlocks(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	symlink := filepath.Join(dir, "symlink")
+	if err := os.Symlink("/nonexistent-target", symlink); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	subdir := filepath.Join(dir, "subdir")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	regular := filepath.Join(dir, "regular")
+	if err := os.WriteFile(regular, []byte("data"), 0o644); err != nil {
+		t.Fatalf("write regular: %v", err)
+	}
+
+	cases := []struct {
+		path string
+		want string
+	}{
+		{fifo, ""},
+		{symlink, ""},
+		{subdir, ""},
+		{filepath.Join(dir, "missing"), ""},
+		{regular, "data"},
+	}
+	for _, tc := range cases {
+		done := make(chan string, 1)
+		go func() { done <- readRegularOrEmpty(tc.path) }()
+		select {
+		case got := <-done:
+			if got != tc.want {
+				t.Errorf("readRegularOrEmpty(%s) = %q, want %q", tc.path, got, tc.want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("readRegularOrEmpty(%s) blocked", tc.path)
+		}
+	}
+}
+
+// TestRunWrapperDoesNotBlockOnNonRegularPaths plants a FIFO or a symlink at
+// every path runWrapper reads and asserts it returns within a short deadline; a
+// planted FIFO must never hang the harness (the round-6 CI hang).
+func TestRunWrapperDoesNotBlockOnNonRegularPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("gotham-update.sh targets POSIX")
+	}
+	cases := []struct {
+		name string
+		path func(dir, target, status string) string
+		fifo bool
+	}{
+		{"pending-fifo", func(dir, _, _ string) string { return filepath.Join(dir, "update.pending") }, true},
+		{"pending-symlink", func(dir, _, _ string) string { return filepath.Join(dir, "update.pending") }, false},
+		{"status-fifo", func(_, _, status string) string { return status }, true},
+		{"status-symlink", func(_, _, status string) string { return status }, false},
+		{"target-fifo", func(_, target, _ string) string { return target }, true},
+		{"backup-fifo", func(_, target, _ string) string { return target + OldSuffix }, true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			setup := func(dir, target, status string) {
+				if tc.fifo {
+					plantFIFO(t, tc.path(dir, target, status))
+				} else {
+					plantSymlink(t, tc.path(dir, target, status))
+				}
+			}
+			done := make(chan struct{}, 1)
+			go func() {
+				runWrapper(t, wrapperEnv{
+					systemctlExit: 0,
+					health:        healthAlwaysOK,
+					setup:         setup,
+				})
+				done <- struct{}{}
+			}()
+			select {
+			case <-done:
+			case <-time.After(15 * time.Second):
+				t.Fatal("runWrapper blocked on a non-regular path")
+			}
+		})
+	}
+}
+
+// plantFIFO replaces path with a FIFO.
+func plantFIFO(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove %s: %v", path, err)
+	}
+	if err := syscall.Mkfifo(path, 0o644); err != nil {
+		t.Fatalf("mkfifo %s: %v", path, err)
+	}
+}
+
+// plantSymlink replaces path with a dangling symlink.
+func plantSymlink(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove %s: %v", path, err)
+	}
+	if err := os.Symlink("/nonexistent-target", path); err != nil {
+		t.Fatalf("symlink %s: %v", path, err)
+	}
+}
+
+// TestWrapperRemovesNonRegularPendingOnFailClosed proves a planted FIFO pending
+// marker is removed even when the wrapper fails closed on the lock, so it can
+// never hang a later reader (the round-6 CI hang).
+func TestWrapperRemovesNonRegularPendingOnFailClosed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("gotham-update.sh targets POSIX")
+	}
+	var pending string
+	runWrapper(t, wrapperEnv{
+		systemctlExit: 0,
+		health:        healthAlwaysOK,
+		setup: func(dir, _ string, _ string) {
+			pending = filepath.Join(dir, "update.pending")
+			plantFIFO(t, pending)
+			lock := filepath.Join(dir, "update.lock")
+			if err := os.Remove(lock); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("remove lock: %v", err)
+			}
+			if err := os.Symlink("/nonexistent-target", lock); err != nil {
+				t.Fatalf("plant lock symlink: %v", err)
+			}
+		},
+	})
+
+	info, err := os.Lstat(pending)
+	if err == nil && info.Mode()&os.ModeNamedPipe != 0 {
+		t.Fatalf("wrapper left a FIFO pending marker after failing closed")
+	}
 }
 
 // TestWrapperRejectsArguments proves the no-argument contract.

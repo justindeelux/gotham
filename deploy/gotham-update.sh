@@ -67,25 +67,40 @@ log() {
     echo "gotham-update: $*" >&2
 }
 
-# validate_conf refuses anything but the fixed, root-owned values.
+# remove_nonregular_pending deletes the pending marker when it is not a regular
+# file (a planted FIFO, device, directory or symlink). Such a marker can hang a
+# reader, and it never carries a staged update, so removing it is safe; a
+# regular staged marker is left in place so the control plane gate stays closed.
+remove_nonregular_pending() {
+    if [ -L "${PENDING}" ] || { [ -e "${PENDING}" ] && [ ! -f "${PENDING}" ]; }; then
+        rm -f "${PENDING}" 2>/dev/null || true
+    fi
+}
+# Any unexpected exit also clears a non-regular pending marker so it can never
+# hang a reader; a regular staged marker is preserved for the control plane.
+trap 'remove_nonregular_pending' EXIT
+
+# validate_conf refuses anything but the fixed, root-owned values. It returns
+# nonzero on invalid config so the caller can clean up before exiting.
 validate_conf() {
     case "${BINARY}" in
         /*) ;;
-        *) log "binary must be an absolute path: ${BINARY}"; exit 2 ;;
+        *) log "binary must be an absolute path: ${BINARY}"; return 1 ;;
     esac
     case "${BINARY}" in
-        *[[:space:]]*) log "binary path contains whitespace"; exit 2 ;;
+        *[[:space:]]*) log "binary path contains whitespace"; return 1 ;;
     esac
     case "${SERVICE}" in
-        "" | *[!A-Za-z0-9_.@-]*) log "invalid service name: ${SERVICE}"; exit 2 ;;
+        "" | *[!A-Za-z0-9_.@-]*) log "invalid service name: ${SERVICE}"; return 1 ;;
     esac
     case "${HEALTH}" in
-        *"@"* | *"?"* | *"#"*) log "health URL must not contain @ ? #: ${HEALTH}"; exit 2 ;;
+        *"@"* | *"?"* | *"#"*) log "health URL must not contain @ ? #: ${HEALTH}"; return 1 ;;
     esac
     case "${HEALTH}" in
         http://127.0.0.1:[0-9]* | http://localhost:[0-9]* | "http://[::1]:"[0-9]*) ;;
-        *) log "health URL must be a loopback http URL: ${HEALTH}"; exit 2 ;;
+        *) log "health URL must be a loopback http URL: ${HEALTH}"; return 1 ;;
     esac
+    return 0
 }
 
 # write_status writes the authoritative status into the root-owned status
@@ -213,12 +228,17 @@ if [ "${#VERSION}" -gt 64 ]; then
     VERSION=""
 fi
 
-validate_conf
-# Fail closed on a lock failure: record the outcome but leave the pending marker
-# in place so the staged gate stays closed (the control plane's monitor will
-# roll back, or an operator resets).
+if ! validate_conf; then
+    remove_nonregular_pending
+    exit 2
+fi
+# Fail closed on a lock failure: record the outcome and keep a regular staged
+# marker in place so the gate stays closed (the control plane's monitor will
+# roll back, or an operator resets). A non-regular marker is removed so it
+# cannot hang a reader.
 if ! acquire_lock; then
     write_status wrapper_failed "${VERSION}" "could not acquire the update lock"
+    remove_nonregular_pending
     log "refusing to continue without the update lock"
     exit 1
 fi

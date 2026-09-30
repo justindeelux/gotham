@@ -222,10 +222,10 @@ if command -v "${GOTHAM_GO}" >/dev/null 2>&1 && [ -f "${REPO_DIR}/go.mod" ]; the
     GO_AVAILABLE=1
     # Strip sudo's variables: the wrapper tests model the non-sudo
     # GOTHAM_UPDATER_CONF seam and must not act on a real install when the
-    # script is run under sudo.
-    if (cd "${REPO_DIR}" && env -u SUDO_USER -u SUDO_UID -u SUDO_GID "${GOTHAM_GO}" test -count=1 ./internal/updates \
-        -run 'TestApplierRefusesSecondApplyWhileStaged|TestApplierConcurrentApplySerialized|TestWrapperFailedPreservesKnownGood|TestMonitorRestartRollsBack|TestCrashBeforeCommitReopensGate|TestResumeStagedRelaunches|TestResumeStagedSkipsWhileLockHeld|TestApplierRejectsDigestMismatch|TestLoadPublicKeyPrecedence|TestWrapperRefusesSymlinkedLock'); then
-        pass "gate, wrapper-failed rollback, resume (incl. held-lock), manifest and lock tests pass"
+    # script is run under sudo. Run the FULL suite so a hang (e.g. a planted
+    # FIFO) is caught here too.
+    if (cd "${REPO_DIR}" && env -u SUDO_USER -u SUDO_UID -u SUDO_GID "${GOTHAM_GO}" test -count=1 -timeout 300s ./internal/updates); then
+        pass "full internal/updates suite passes (incl. the FIFO non-blocking regression)"
     else
         fail "self-update Go tests failed"
     fi

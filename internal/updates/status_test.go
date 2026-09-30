@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -44,6 +45,49 @@ func TestStatusStoreEmptyPath(t *testing.T) {
 	}
 	if got, err := store.Read(); err != nil || got != nil {
 		t.Fatalf("nil Read = (%v, %v)", got, err)
+	}
+}
+
+// TestStatusStoreReadIgnoresNonRegular proves the control-plane read of the
+// pending/status file never blocks on a planted FIFO or follows a symlink.
+func TestStatusStoreReadIgnoresNonRegular(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	secret := filepath.Join(dir, "secret")
+	if err := os.WriteFile(secret, []byte("result=ok\nversion=v9\n"), 0o600); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	symlink := filepath.Join(dir, "symlink")
+	if err := os.Symlink(secret, symlink); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	for _, path := range []string{fifo, symlink} {
+		done := make(chan struct {
+			status *Status
+			err    error
+		}, 1)
+		go func(p string) {
+			status, err := NewStatusStore(p).Read()
+			done <- struct {
+				status *Status
+				err    error
+			}{status, err}
+		}(path)
+		select {
+		case got := <-done:
+			if got.err != nil {
+				t.Fatalf("Read(%s) error: %v", path, got.err)
+			}
+			if got.status != nil {
+				t.Fatalf("Read(%s) = %+v, want nil (non-regular)", path, got.status)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("StatusStore.Read(%s) blocked", path)
+		}
 	}
 }
 

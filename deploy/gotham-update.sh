@@ -203,6 +203,15 @@ wait_healthy() {
 }
 
 restart_service() {
+    # A crash-looping new binary can trip systemd's start rate limit
+    # ("Start request repeated too quickly"), after which systemd refuses to
+    # start the unit until its failed state is cleared. Without this, a healthy
+    # rollback would be recorded as rollback_failed and the service would stay
+    # down. Clearing the failed state is best-effort; the restart below is what
+    # decides the outcome.
+    if ! systemctl reset-failed "${SERVICE}"; then
+        log "systemctl reset-failed ${SERVICE} failed; continuing"
+    fi
     if systemctl restart "${SERVICE}"; then
         return 0
     fi

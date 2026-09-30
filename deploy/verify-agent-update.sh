@@ -368,6 +368,28 @@ else:
 ' "$1" 2>/dev/null
 }
 
+node_heartbeat_epoch() { # $1 node id; epoch seconds of its last heartbeat, or 0
+    api_get /api/v1/servers/agents 2>/dev/null | python3 -c '
+import sys, json, datetime
+want = sys.argv[1]
+data = json.load(sys.stdin)
+for agent in data.get("agents", []):
+    if agent.get("node_id") == want:
+        raw = agent.get("at", "")
+        try:
+            print(int(datetime.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()))
+        except Exception:
+            print(0)
+        break
+else:
+    print(0)
+' "$1" 2>/dev/null
+}
+
+unit_is_active() { # $1 unit; "active" when systemd reports it running
+    systemctl is-active "$1" 2>/dev/null || true
+}
+
 # ---------------------------------------------------------------------------
 # Scratch agents (systemd units + root-owned wrapper + sudoers)
 # ---------------------------------------------------------------------------
@@ -596,26 +618,75 @@ sleep 5 # let the offer cache lapse
 curl -fsS -X POST -H "Authorization: Bearer ${TOKEN}" \
     "http://127.0.0.1:${HTTP_PORT}/api/v1/servers/agents/update-all" >/dev/null 2>&1 || true
 
-# Wait for the wrapper to record a rolled_back outcome, then stop the units so a
-# fresh process cannot retry in a loop.
-ROLLED=0
-deadline=$(( $(date +%s) + 90 ))
+# Wait until BOTH wrapper status files record rolled_back.
+ROLLED_A=0
+ROLLED_B=0
+deadline=$(( $(date +%s) + 120 ))
 while [ "$(date +%s)" -lt "${deadline}" ]; do
-    for suffix in a b; do
-        node="${NODE_A}"; [ "${suffix}" = "b" ] && node="${NODE_B}"
-        status="${SCRATCH}/status-${suffix}/${node}.status"
-        if [ -f "${status}" ] && grep -q '^result=rolled_back' "${status}"; then ROLLED=1; fi
-    done
-    [ "${ROLLED}" -eq 1 ] && break
+    [ -f "${SCRATCH}/status-a/${NODE_A}.status" ] && grep -q '^result=rolled_back' "${SCRATCH}/status-a/${NODE_A}.status" && ROLLED_A=1
+    [ -f "${SCRATCH}/status-b/${NODE_B}.status" ] && grep -q '^result=rolled_back' "${SCRATCH}/status-b/${NODE_B}.status" && ROLLED_B=1
+    [ "${ROLLED_A}" -eq 1 ] && [ "${ROLLED_B}" -eq 1 ] && break
     sleep 2
 done
+if [ "${ROLLED_A}" -eq 1 ] && [ "${ROLLED_B}" -eq 1 ]; then
+    pass "NEG2 both wrapper statuses record rolled_back"
+else
+    fail "NEG2 rollback not recorded (a=${ROLLED_A} b=${ROLLED_B})"
+fi
+
+# A rolled_back status alone is not enough: the old check read the CP's version
+# map, which stayed v2 even while systemd's start rate limit left the units
+# dead. Assert both units are actually running the restored binary.
+HEARTBEAT_TS=$(date +%s)
+ACTIVE_OK=1
+for suffix in a b; do
+    unit="${UNIT_A}"; [ "${suffix}" = "b" ] && unit="${UNIT_B}"
+    state=""
+    deadline=$(( $(date +%s) + 30 ))
+    while [ "$(date +%s)" -lt "${deadline}" ]; do
+        state=$(unit_is_active "${unit}")
+        [ "${state}" = "active" ] && break
+        sleep 1
+    done
+    if [ "${state}" = "active" ]; then
+        pass "NEG2 agent ${suffix} unit is active after rollback"
+    else
+        fail "NEG2 agent ${suffix} unit is not active after rollback (state=${state:-unknown})"
+        ACTIVE_OK=0
+    fi
+done
+
+# A fresh heartbeat after the rollback proves the restored binary really runs.
+HEARTBEAT_OK=1
+for suffix in a b; do
+    node="${NODE_A}"; [ "${suffix}" = "b" ] && node="${NODE_B}"
+    beat=0
+    deadline=$(( $(date +%s) + 30 ))
+    while [ "$(date +%s)" -lt "${deadline}" ]; do
+        at=$(node_heartbeat_epoch "${node}")
+        if [ -n "${at}" ] && [ "${at}" -ge "${HEARTBEAT_TS}" ] 2>/dev/null; then
+            beat=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "${beat}" -eq 1 ]; then
+        pass "NEG2 agent ${suffix} sent a fresh heartbeat after the rollback"
+    else
+        fail "NEG2 agent ${suffix} sent no fresh heartbeat after the rollback"
+        HEARTBEAT_OK=0
+    fi
+done
+
+# Now stop the units so a fresh process cannot retry the bad release in a loop.
 systemctl stop "${UNIT_A}" "${UNIT_B}" >/dev/null 2>&1 || true
 NEG2_A=$(node_version "${NODE_A}")
 NEG2_B=$(node_version "${NODE_B}")
-if [ "${ROLLED}" -eq 1 ] && [ "${NEG2_A}" = "v2.0.0" ] && [ "${NEG2_B}" = "v2.0.0" ]; then
-    pass "NEG2 broken signed release rolled back and agents stayed on v2.0.0"
+if [ "${ROLLED_A}" -eq 1 ] && [ "${ROLLED_B}" -eq 1 ] && [ "${ACTIVE_OK}" -eq 1 ] && [ "${HEARTBEAT_OK}" -eq 1 ] \
+    && [ "${NEG2_A}" = "v2.0.0" ] && [ "${NEG2_B}" = "v2.0.0" ]; then
+    pass "NEG2 broken signed release rolled back, both units active, agents on v2.0.0"
 else
-    fail "NEG2 broken release not rolled back (rolled=${ROLLED} a=${NEG2_A} b=${NEG2_B})"
+    fail "NEG2 broken release not rolled back cleanly (rolled=${ROLLED_A}/${ROLLED_B} active=${ACTIVE_OK} heartbeat=${HEARTBEAT_OK} a=${NEG2_A} b=${NEG2_B})"
 fi
 
 # ---------------------------------------------------------------------------

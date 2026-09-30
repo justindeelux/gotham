@@ -90,6 +90,14 @@ closed and refuses to update rather than running unserialized.
   rolled back.
 - A crash *before* the commit rename leaves target and `<binary>.old` as the
   same inode; startup recovery clears the marker so the gate reopens.
+- **systemd start rate limit.** A new binary that starts but crash-loops (for
+  example a broken build) makes systemd trip its start rate limit and mark the
+  unit failed, after which `systemctl restart` is refused with "Start request
+  repeated too quickly". Before every restart the wrapper clears that state with
+  `systemctl reset-failed "<service>"` (best-effort), so the rollback restart
+  still runs the restored binary and the outcome is `rolled_back`, not
+  `rollback_failed` with the service left down. The shared wrapper therefore
+  covers the control plane and the agent identically.
 - `GET /api/v1/updates/check` returns the outcome; release notes and the
   wrapper's `detail` (which can contain paths) are only shown to a platform
   operator.
@@ -131,6 +139,12 @@ closed and refuses to update rather than running unserialized.
   sanitized 64-character `version=` line. Worst case is a self-DoS by an
   already-compromised service user. Upgrade path: the same `runuser`/`setpriv`
   handoff.
+- **systemd start-limit tuning (LOW).** `Restart=always` + `RestartSec=5` means a
+  crash-looping new binary can trip the default start rate limit during the
+  wrapper's health window; the wrapper now clears it with `reset-failed`, so the
+  rollback is correct. Operators who prefer the unit to give up sooner (or later)
+  can tune `StartLimitIntervalSec`/`StartLimitBurst`/`RestartSec` in the unit;
+  the wrapper does not depend on the exact values.
 
 ## Node-agent self-update layout
 

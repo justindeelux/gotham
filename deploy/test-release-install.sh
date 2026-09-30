@@ -4,10 +4,19 @@
 # chain without GitHub or any host change.
 #
 # It builds the signer and a snapshot control-plane + agent binary, signs the
-# per-arch manifests, serves the artifacts from a loopback file server, and runs
-# deploy/install.sh against it with GOTHAM_INSTALL_ROOT so nothing outside the
-# scratch directory is touched. It then proves the verification fails closed:
-# a tampered artifact and a tampered manifest must both abort the install.
+# per-arch manifests, serves the artifacts from a loopback fake releases server,
+# and runs deploy/install.sh against it with GOTHAM_INSTALL_ROOT so nothing
+# outside the scratch directory is touched. It covers:
+#   - the pinned GOTHAM_BASE_URL + GOTHAM_VERSION path (happy path);
+#   - the default no-GOTHAM_VERSION path, resolving the tag from the first
+#     redirect of <releases>/latest (H2 regression guard);
+#   - the gotham-agent family branch of verify_release;
+#   - re-install preserving operator settings (M2);
+#   - fail-closed: tampered artifact, tampered manifest, pinned-key mismatch.
+#
+# The installer's public key is the provisioned release key; the tests inject an
+# ephemeral key through GOTHAM_INSTALL_TEST_PUBLIC_KEY (test mode only), and the
+# pinned-key case runs without it.
 #
 # Usage:
 #   sh deploy/test-release-install.sh
@@ -71,9 +80,48 @@ echo "==> signing manifests"
 "${SCRATCH}/signer" manifest -key "${SCRATCH}/signing.key" -in "${SERVE}/gotham-agent-linux-${ARCH}" \
     -version "${VERSION}" -arch "${ARCH}" -channel stable -out "${SERVE}/gotham-agent-manifest-${ARCH}.txt" >/dev/null
 
+# Fake releases server: a static file server plus GitHub-style routes so the
+# default "latest" resolution (a 302 from <releases>/latest) can be exercised.
+cat >"${SCRATCH}/server.py" <<'PY'
+import http.server, os, sys
+root, port, version = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path == "/releases/latest":
+            self.send_response(302)
+            self.send_header("Location", "/releases/tag/" + version)
+            self.end_headers()
+            return
+        if path.startswith("/releases/download/"):
+            path = "/" + path.split("/", 4)[4]
+        elif path.startswith("/releases/tag/"):
+            self.send_response(200)
+            self.end_headers()
+            return
+        fp = os.path.join(root, path.lstrip("/"))
+        try:
+            with open(fp, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            self.send_response(404)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+PY
+
 echo "==> serving ${SERVE} on 127.0.0.1"
 PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
-python3 -m http.server "${PORT}" --bind 127.0.0.1 --directory "${SERVE}" >/dev/null 2>&1 &
+python3 "${SCRATCH}/server.py" "${SERVE}" "${PORT}" "${VERSION}" >/dev/null 2>&1 &
 SERVER_PID=$!
 i=0
 while ! curl -fsS "http://127.0.0.1:${PORT}/gotham-linux-${ARCH}" -o /dev/null 2>/dev/null; do
@@ -85,7 +133,7 @@ done
 run_install() {
     GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
     GOTHAM_VERSION="${VERSION}" \
-    GOTHAM_UPDATE_PUBLIC_KEY="${PUB_B64}" \
+    GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
     GOTHAM_INSTALL_ROOT="${ROOT}" \
     GOTHAM_SKIP_DEPS=1 \
         sh "${SCRIPT_DIR}/install.sh" "$@"
@@ -129,6 +177,52 @@ grep -q "^GOTHAM_DATABASE_DSN=" "${ROOT}/etc/gotham/gotham.env" \
     || { echo "FAIL: gotham.env not written" >&2; exit 1; }
 echo "PASS: happy-path install verified and rendered"
 
+# ---- M2: re-install preserves operator settings -----------------------------
+ENV_FILE="${ROOT}/etc/gotham/gotham.env"
+SECRET_BEFORE="$(sed -n 's/^GOTHAM_SECRET_KEY=//p' "${ENV_FILE}" | head -n1)"
+sed 's#^GOTHAM_DATABASE_DSN=.*#GOTHAM_DATABASE_DSN=postgres://managed/db#' "${ENV_FILE}" >"${ENV_FILE}.edit"
+printf '\nAUTO_UPDATE=true\nPLATFORM_ADMINS=ops@example.com\n' >>"${ENV_FILE}.edit"
+mv "${ENV_FILE}.edit" "${ENV_FILE}"
+run_install >/dev/null
+grep -qx 'GOTHAM_DATABASE_DSN=postgres://managed/db' "${ENV_FILE}" \
+    || { echo "FAIL: re-install overwrote the managed DSN with the local default" >&2; exit 1; }
+grep -qx 'AUTO_UPDATE=true' "${ENV_FILE}" \
+    || { echo "FAIL: re-install dropped the operator AUTO_UPDATE key" >&2; exit 1; }
+grep -qx 'PLATFORM_ADMINS=ops@example.com' "${ENV_FILE}" \
+    || { echo "FAIL: re-install dropped the operator PLATFORM_ADMINS key" >&2; exit 1; }
+SECRET_AFTER="$(sed -n 's/^GOTHAM_SECRET_KEY=//p' "${ENV_FILE}" | head -n1)"
+[ "${SECRET_BEFORE}" = "${SECRET_AFTER}" ] \
+    || { echo "FAIL: re-install rotated GOTHAM_SECRET_KEY" >&2; exit 1; }
+echo "PASS: re-install preserved the DSN, the secret and operator keys"
+# restore the default DSN for the following cases
+sed 's#^GOTHAM_DATABASE_DSN=.*#GOTHAM_DATABASE_DSN=postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable#' \
+    "${ENV_FILE}" >"${ENV_FILE}.edit"
+mv "${ENV_FILE}.edit" "${ENV_FILE}"
+
+# ---- H2: default path resolves the tag from <releases>/latest ---------------
+echo "==> install (default latest resolution, no GOTHAM_VERSION)"
+LATEST_ROOT="${SCRATCH}/root-latest"
+GOTHAM_RELEASES_URL="http://127.0.0.1:${PORT}/releases" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_ROOT="${LATEST_ROOT}" \
+GOTHAM_SKIP_DEPS=1 \
+    sh "${SCRIPT_DIR}/install.sh" >/dev/null
+LATEST_BIN="${LATEST_ROOT}/var/lib/gotham/bin/gotham"
+[ -x "${LATEST_BIN}" ] || { echo "FAIL: default latest-path install did not install the binary" >&2; exit 1; }
+[ "$(sha "${LATEST_BIN}")" = "$(sha "${SERVE}/gotham-linux-${ARCH}")" ] \
+    || { echo "FAIL: latest-path binary differs from the served artifact" >&2; exit 1; }
+echo "PASS: default latest-tag resolution installs the verified binary"
+
+# ---- L6: the agent family branch of verify_release -------------------------
+echo "==> verify_release (gotham-agent family)"
+# shellcheck source=deploy/release-verify.sh
+. "${SCRIPT_DIR}/release-verify.sh"
+verify_release "http://127.0.0.1:${PORT}" "${VERSION}" "${ARCH}" gotham-agent \
+    "${SCRATCH}/signing.key.pub" "${SCRATCH}/agent-verified" >/dev/null
+[ "$(sha "${SCRATCH}/agent-verified")" = "$(sha "${SERVE}/gotham-agent-linux-${ARCH}")" ] \
+    || { echo "FAIL: agent-family verification produced the wrong binary" >&2; exit 1; }
+echo "PASS: agent-family verify_release downloaded and verified the agent binary"
+
 # ---- Fail-closed: tampered artifact ----------------------------------------
 cp "${SERVE}/gotham-linux-${ARCH}" "${SCRATCH}/good-artifact"
 printf 'x' | dd of="${SERVE}/gotham-linux-${ARCH}" bs=1 seek=100 count=1 conv=notrunc 2>/dev/null
@@ -168,7 +262,7 @@ echo "PASS: pinned-key mismatch rejected (signature failure)"
 DRY_ROOT="${SCRATCH}/dry-root"
 GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
 GOTHAM_VERSION="${VERSION}" \
-GOTHAM_UPDATE_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
 GOTHAM_INSTALL_ROOT="${DRY_ROOT}" \
 GOTHAM_SKIP_DEPS=1 \
     sh "${SCRIPT_DIR}/install.sh" --dry-run >/dev/null

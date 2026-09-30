@@ -14,7 +14,8 @@
 # public key, then the artifact digest against the signed sha256. A failed
 # verification aborts; nothing is trusted on first use.
 #
-# Override the release for testing with GOTHAM_VERSION and GOTHAM_BASE_URL.
+# Override the release for testing with GOTHAM_VERSION, GOTHAM_RELEASES_URL or
+# GOTHAM_BASE_URL.
 #
 # Usage:
 #   sudo ./install-agent.sh [--dry-run]
@@ -33,6 +34,7 @@
 #   GOTHAM_AGENT_UPDATE_INTERVAL
 
 set -eu
+umask 077
 
 BINARY_NAME="gotham-agent"
 INSTALL_PATH="/var/lib/gotham-agent/bin/gotham-agent"
@@ -84,14 +86,14 @@ log() {
 # config and the sudoers installer). Fail early with a clear message rather than
 # aborting after the user has been created and the binary installed.
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-# shellcheck source=deploy/release-verify.sh
-. "${SCRIPT_DIR}/release-verify.sh"
 for sibling in release-verify.sh gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh; do
     if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
         echo "install-agent.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
         exit 2
     fi
 done
+# shellcheck source=deploy/release-verify.sh
+. "${SCRIPT_DIR}/release-verify.sh"
 
 detect_arch() {
     case "$(uname -m)" in
@@ -120,28 +122,34 @@ fi
 
 ARCH="$(detect_arch)"
 REPO="${GOTHAM_REPO:-${DEFAULT_REPO}}"
+DEFAULT_RELEASES_URL="https://github.com/${REPO}/releases"
 if [ -n "${GOTHAM_BASE_URL:-}" ]; then
     RELEASE_BASE="${GOTHAM_BASE_URL%/}"
     [ -n "${GOTHAM_VERSION:-}" ] || { echo "GOTHAM_VERSION is required with GOTHAM_BASE_URL" >&2; exit 1; }
     VERSION="${GOTHAM_VERSION}"
 else
-    RELEASES_BASE="https://github.com/${REPO}/releases"
+    RELEASES_BASE="${GOTHAM_RELEASES_URL:-${DEFAULT_RELEASES_URL}}"
+    RELEASES_BASE="${RELEASES_BASE%/}"
     if [ -n "${GOTHAM_VERSION:-}" ]; then
-        RELEASE_BASE="${RELEASES_BASE}/download/${GOTHAM_VERSION}"
         VERSION="${GOTHAM_VERSION}"
     else
-        RELEASE_BASE="${RELEASES_BASE}/latest/download"
-        VERSION="$(
-            curl -fsSL -o /dev/null -w '%{url_effective}' \
-                "${RELEASE_BASE}/gotham-agent-manifest-${ARCH}.txt" \
-                | sed -n 's#.*/download/\([^/]*\)/.*#\1#p'
-        )"
-        [ -n "${VERSION}" ] || { echo "could not resolve the latest release tag" >&2; exit 1; }
+        # First redirect of /releases/latest; -L would land on a tagless CDN URL.
+        redirect="$(curl -fsS -o /dev/null -w '%{redirect_url}' "${RELEASES_BASE}/latest" || true)"
+        VERSION="${redirect%/}"
+        VERSION="${VERSION##*/}"
+        case "${VERSION}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "could not resolve the latest release tag from ${RELEASES_BASE}/latest" >&2; exit 1 ;;
+        esac
     fi
+    RELEASE_BASE="${RELEASES_BASE}/download/${VERSION}"
 fi
-TMP_BINARY="${TMPDIR:-/tmp}/${BINARY_NAME}.$$"
-PUBKEY_FILE="$(mktemp "${TMPDIR:-/tmp}/gotham-pubkey.XXXXXX")"
-trap 'rm -f "${PUBKEY_FILE}" "${TMP_BINARY}"' EXIT INT TERM
+# Private scratch dir (umask 077): the pinned key and the verified binary live
+# here and are removed on exit.
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-agent-install.XXXXXX")"
+PUBKEY_FILE="${WORK_DIR}/release.pub"
+TMP_BINARY="${WORK_DIR}/${BINARY_NAME}"
+trap 'rm -rf "${WORK_DIR}"' EXIT INT TERM
 
 log "installing ${BINARY_NAME} ${VERSION} for linux/${ARCH}"
 log "downloading ${RELEASE_BASE}/gotham-agent-linux-${ARCH}"
@@ -149,7 +157,8 @@ log "downloading ${RELEASE_BASE}/gotham-agent-linux-${ARCH}"
 require_cmd curl "apt-get install -y curl"
 require_cmd openssl "apt-get install -y openssl"
 require_cmd base64 "coreutils"
-materialize_public_key "${GOTHAM_UPDATE_PUBLIC_KEY:-${GOTHAM_RELEASE_PUBLIC_KEY_B64}}" "${PUBKEY_FILE}"
+# The pinned release public key is the anchor; there is no runtime override.
+materialize_public_key "${GOTHAM_RELEASE_PUBLIC_KEY_B64}" "${PUBKEY_FILE}"
 if [ "${DRY_RUN}" -eq 1 ]; then
     echo "[dry-run] verify_release ${RELEASE_BASE} ${VERSION} ${ARCH} gotham-agent <pubkey> ${TMP_BINARY}"
 else

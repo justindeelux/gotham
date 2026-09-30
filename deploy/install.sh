@@ -17,26 +17,37 @@
 #
 # Verification environment overrides (testing only; see
 # deploy/test-release-install.sh):
-#   GOTHAM_VERSION            release tag to install (default: latest)
-#   GOTHAM_BASE_URL           full asset base URL (mirror); requires GOTHAM_VERSION
-#   GOTHAM_REPO               owner/name (default justindeelux/gotham)
-#   GOTHAM_UPDATE_PUBLIC_KEY  override the embedded public key (PEM or base64)
-#   GOTHAM_INSTALL_ROOT       install everything under this prefix (non-root)
+#   GOTHAM_VERSION              release tag to install (default: resolve latest)
+#   GOTHAM_RELEASES_URL         GitHub-style releases root (mirror); default
+#                               https://github.com/<repo>/releases
+#   GOTHAM_BASE_URL             full asset base URL (static mirror); requires
+#                               GOTHAM_VERSION
+#   GOTHAM_REPO                 owner/name (default justindeelux/gotham)
+#   GOTHAM_INSTALL_ROOT         install everything under this prefix (non-root);
+#                               enables test mode
+#   GOTHAM_INSTALL_TEST_PUBLIC_KEY  test-only: replace the pinned trust anchor
+#                               (PEM or base64); honoured ONLY with
+#                               GOTHAM_INSTALL_ROOT, otherwise warned and ignored
 #
 # Runtime configuration overrides:
 #   GOTHAM_DATABASE_DSN       managed PostgreSQL DSN; skips local provisioning
 #   GOTHAM_REDIS_ADDR         Redis host:port (default localhost:6379)
 #   GOTHAM_SKIP_DEPS=1        do not install/configure PostgreSQL + Redis
 #
+# Re-running the installer preserves /etc/gotham/gotham.env: managed keys are
+# refreshed (a DSN given on the command line wins; otherwise the existing value
+# is kept) and any operator-added keys (AUTO_UPDATE, PLATFORM_ADMINS, ...) are
+# left intact.
+#
 # Usage:
 #   sudo ./install.sh [--dry-run]
 
 set -eu
+umask 077
 
 BINARY_NAME="gotham"
 FAMILY=""
 SERVICE_USER="gotham"
-MANIFEST_PREFIX="gotham-manifest-"
 DEFAULT_REPO="justindeelux/gotham"
 
 # The release trust anchor. This is the base64 raw Ed25519 public key printed by
@@ -51,7 +62,7 @@ for argument in "$@"; do
     case "${argument}" in
         --dry-run) DRY_RUN=1 ;;
         -h | --help)
-            sed -n '2,34p' "$0"
+            sed -n '2,43p' "$0"
             exit 0
             ;;
         *)
@@ -62,6 +73,12 @@ for argument in "$@"; do
 done
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+for sibling in release-verify.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service; do
+    if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
+        echo "install.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
+        exit 2
+    fi
+done
 # shellcheck source=deploy/release-verify.sh
 . "${SCRIPT_DIR}/release-verify.sh"
 
@@ -123,11 +140,6 @@ render_file() {
     fi
 }
 
-for sibling in release-verify.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service; do
-    [ -f "${SCRIPT_DIR}/${sibling}" ] \
-        || die "${sibling} must be next to this script (run it from the repository checkout)"
-done
-
 if [ "$(id -u)" -ne 0 ] && [ "${DRY_RUN}" -eq 0 ] && [ "${TEST_MODE}" -eq 0 ]; then
     die "install.sh must run as root (try sudo)"
 fi
@@ -157,41 +169,59 @@ detect_arch() {
 
 ARCH="$(detect_arch)"
 REPO="${GOTHAM_REPO:-${DEFAULT_REPO}}"
+DEFAULT_RELEASES_URL="https://github.com/${REPO}/releases"
 if [ -n "${GOTHAM_BASE_URL:-}" ]; then
-    # Full asset base URL (e.g. a local mirror or .../releases/download/<tag>).
+    # Full asset base URL (e.g. a static mirror or .../releases/download/<tag>).
     RELEASE_BASE="${GOTHAM_BASE_URL%/}"
     [ -n "${GOTHAM_VERSION:-}" ] || die "GOTHAM_VERSION is required with GOTHAM_BASE_URL"
     VERSION="${GOTHAM_VERSION}"
 else
-    RELEASES_BASE="https://github.com/${REPO}/releases"
+    RELEASES_BASE="${GOTHAM_RELEASES_URL:-${DEFAULT_RELEASES_URL}}"
+    RELEASES_BASE="${RELEASES_BASE%/}"
     if [ -n "${GOTHAM_VERSION:-}" ]; then
-        RELEASE_BASE="${RELEASES_BASE}/download/${GOTHAM_VERSION}"
         VERSION="${GOTHAM_VERSION}"
     else
-        RELEASE_BASE="${RELEASES_BASE}/latest/download"
-        # The manifest binds the version; discover it from the release redirect.
-        VERSION="$(
-            curl -fsSL -o /dev/null -w '%{url_effective}' \
-                "${RELEASE_BASE}/${MANIFEST_PREFIX}${ARCH}.txt" \
-                | sed -n 's#.*/download/\([^/]*\)/.*#\1#p'
-        )"
-        [ -n "${VERSION}" ] || die "could not resolve the latest release tag"
+        # Resolve the current tag from the FIRST redirect of /releases/latest.
+        # Following it with -L lands on a CDN URL that carries no tag, so only
+        # the first hop is used; all downloads then pin to that one tag.
+        redirect="$(curl -fsS -o /dev/null -w '%{redirect_url}' "${RELEASES_BASE}/latest" || true)"
+        VERSION="${redirect%/}"
+        VERSION="${VERSION##*/}"
+        case "${VERSION}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) die "could not resolve the latest release tag from ${RELEASES_BASE}/latest" ;;
+        esac
     fi
+    RELEASE_BASE="${RELEASES_BASE}/download/${VERSION}"
 fi
 
 log "installing ${BINARY_NAME} ${VERSION} for linux/${ARCH}"
 
-# Materialize the pinned public key.
-PUBKEY_FILE="$(mktemp "${TMPDIR:-/tmp}/gotham-pubkey.XXXXXX")"
-# shellcheck disable=SC2064
-trap "rm -f '${PUBKEY_FILE}'" EXIT INT TERM
-materialize_public_key "${GOTHAM_UPDATE_PUBLIC_KEY:-${GOTHAM_RELEASE_PUBLIC_KEY_B64}}" "${PUBKEY_FILE}"
+# Materialize the pinned public key. The test-only override is honoured only in
+# test mode (GOTHAM_INSTALL_ROOT set); elsewhere it is ignored with a warning so
+# an exported GOTHAM_INSTALL_TEST_PUBLIC_KEY cannot silently replace the anchor.
+PUBKEY_SOURCE="${GOTHAM_RELEASE_PUBLIC_KEY_B64}"
+if [ -n "${GOTHAM_INSTALL_TEST_PUBLIC_KEY:-}" ]; then
+    if [ "${TEST_MODE}" -eq 1 ]; then
+        log "WARNING: using the GOTHAM_INSTALL_TEST_PUBLIC_KEY override (test mode)"
+        PUBKEY_SOURCE="${GOTHAM_INSTALL_TEST_PUBLIC_KEY}"
+    else
+        echo "gotham-install: WARNING: ignoring GOTHAM_INSTALL_TEST_PUBLIC_KEY outside test mode" >&2
+    fi
+fi
+
+# Private scratch dir (umask 077): the pinned key, the verified binary and the
+# generated secrets live here and are removed on exit.
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-install.XXXXXX")"
+PUBKEY_FILE="${WORK_DIR}/release.pub"
+TMP_BINARY="${WORK_DIR}/${BINARY_NAME}"
+trap 'rm -rf "${WORK_DIR}"' EXIT INT TERM
+materialize_public_key "${PUBKEY_SOURCE}" "${PUBKEY_FILE}"
 
 if [ "${DRY_RUN}" -eq 1 ]; then
     echo "[dry-run] write ${PUBKEY_FILE}"
     echo "[dry-run] verify_release ${RELEASE_BASE} ${VERSION} ${ARCH} ${FAMILY} <pubkey> ${INSTALL_PATH}"
 else
-    TMP_BINARY="${TMPDIR:-/tmp}/${BINARY_NAME}.$$"
     verify_release "${RELEASE_BASE}" "${VERSION}" "${ARCH}" "${FAMILY}" "${PUBKEY_FILE}" "${TMP_BINARY}"
 fi
 
@@ -224,14 +254,27 @@ log "writing ${ENV_FILE}"
 run mkdir -p "${ETC_DIR}"
 JWT_KEY="${ETC_DIR}/jwt_ed25519.key"
 JWT_PUB="${ETC_DIR}/jwt_ed25519.pub"
-DSN="${GOTHAM_DATABASE_DSN:-postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable}"
-REDIS_ADDR="${GOTHAM_REDIS_ADDR:-localhost:6379}"
+DEFAULT_DSN="postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
+DEFAULT_REDIS="localhost:6379"
+
+# Values a previous install already wrote, so a repair/upgrade keeps a managed
+# DSN and operator edits instead of falling back to local defaults. A DSN or
+# Redis address given on the command line still wins.
+ENV_PREV=""
+if [ -f "${ENV_FILE}" ]; then
+    ENV_PREV="$(cat "${ENV_FILE}")"
+fi
+env_prev() {
+    printf '%s\n' "${ENV_PREV}" | sed -n "s/^$1=//p" | head -n1
+}
+DSN="${GOTHAM_DATABASE_DSN:-$(env_prev GOTHAM_DATABASE_DSN)}"
+DSN="${DSN:-${DEFAULT_DSN}}"
+REDIS_ADDR="${GOTHAM_REDIS_ADDR:-$(env_prev GOTHAM_REDIS_ADDR)}"
+REDIS_ADDR="${REDIS_ADDR:-${DEFAULT_REDIS}}"
+
 if [ "${DRY_RUN}" -eq 0 ]; then
-    # Persist the secret and JWT keys across reinstalls; only generate missing.
-    SECRET_KEY=""
-    if [ -f "${ENV_FILE}" ]; then
-        SECRET_KEY="$(sed -n 's/^GOTHAM_SECRET_KEY=//p' "${ENV_FILE}" | head -n1)"
-    fi
+    # Preserve the secret and JWT keys across reinstalls; only generate missing.
+    SECRET_KEY="$(env_prev GOTHAM_SECRET_KEY)"
     [ -n "${SECRET_KEY}" ] || SECRET_KEY="$(openssl rand -base64 32)"
     if [ ! -f "${JWT_KEY}" ]; then
         openssl genpkey -algorithm ed25519 -out "${JWT_KEY}"
@@ -239,15 +282,25 @@ if [ "${DRY_RUN}" -eq 0 ]; then
     if [ ! -f "${JWT_PUB}" ]; then
         openssl pkey -in "${JWT_KEY}" -pubout -out "${JWT_PUB}"
     fi
-    cat >"${ENV_FILE}" <<EOF
-# Gotham control-plane environment. Read by gotham.service (EnvironmentFile).
-GOTHAM_DATABASE_DSN=${DSN}
-GOTHAM_REDIS_ADDR=${REDIS_ADDR}
-GOTHAM_CA_DIR=${STATE_DIR}/ca
-GOTHAM_SECRET_KEY=${SECRET_KEY}
-GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH=${JWT_KEY}
-GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH=${JWT_PUB}
-EOF
+    # Rewrite the managed keys and keep every other (operator) line untouched.
+    env_tmp="${ENV_FILE}.tmp.$$"
+    {
+        echo "# Gotham control-plane environment. Read by gotham.service (EnvironmentFile)."
+        echo "GOTHAM_DATABASE_DSN=${DSN}"
+        echo "GOTHAM_REDIS_ADDR=${REDIS_ADDR}"
+        echo "GOTHAM_CA_DIR=${STATE_DIR}/ca"
+        echo "GOTHAM_SECRET_KEY=${SECRET_KEY}"
+        echo "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH=${JWT_KEY}"
+        echo "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH=${JWT_PUB}"
+    } >"${env_tmp}"
+    if [ -n "${ENV_PREV}" ]; then
+        printf '%s\n' "${ENV_PREV}" \
+            | grep -v -E '^(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
+            | grep -v -F '# Gotham control-plane environment. Read by gotham.service' \
+            >>"${env_tmp}"
+    fi
+    chmod 0640 "${env_tmp}"
+    mv -f "${env_tmp}" "${ENV_FILE}"
     chmod 0640 "${ENV_FILE}" "${JWT_KEY}"
     chmod 0644 "${JWT_PUB}"
     if [ "${TEST_MODE}" -eq 0 ]; then
@@ -285,7 +338,9 @@ if [ "${TEST_MODE}" -eq 1 ]; then
 fi
 
 # ---- Dependencies (PostgreSQL + Redis) --------------------------------------
-if [ "${DRY_RUN}" -eq 0 ] && [ "${GOTHAM_SKIP_DEPS:-0}" != "1" ] && [ -z "${GOTHAM_DATABASE_DSN:-}" ]; then
+# Only provision local services when the resolved DSN is the built-in local
+# default; a managed DSN (from the CLI or a previous install) is left alone.
+if [ "${DRY_RUN}" -eq 0 ] && [ "${GOTHAM_SKIP_DEPS:-0}" != "1" ] && [ "${DSN}" = "${DEFAULT_DSN}" ]; then
     if ! command -v psql >/dev/null 2>&1 || ! command -v redis-server >/dev/null 2>&1; then
         if command -v apt-get >/dev/null 2>&1; then
             log "installing PostgreSQL and Redis"
@@ -330,10 +385,12 @@ Gotham ${VERSION} is installed.
   Logs:     journalctl -u gotham -f
 
 First login:
-  1. Open the Web UI and choose "Create account" (the first account is the
-     platform owner).
+  1. Open the Web UI and create an account through the sign-up form.
   2. Sign in, then add a node agent with deploy/install-agent.sh.
+  Platform-global operations (node-wide proxy sync, DNS providers) also require
+  the account email in PLATFORM_ADMINS in /etc/gotham/gotham.env.
 
-Self-update is on by default; set AUTO_UPDATE=true in
-/etc/gotham/gotham.env to apply new releases unattended.
+Self-update checking is enabled by default. To apply new releases unattended,
+add AUTO_UPDATE=true to /etc/gotham/gotham.env (operator edits there are kept
+across reinstalls).
 EOF

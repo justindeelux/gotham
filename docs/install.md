@@ -11,7 +11,8 @@ updates and rollback, and the release/signing flow.
   `GOTHAM_DATABASE_DSN` / `GOTHAM_REDIS_ADDR` (or set `GOTHAM_SKIP_DEPS=1`).
 - **Node host:** Linux (`amd64` or `arm64`) with `systemd`, `curl`, `openssl` 3
   and Docker Engine.
-- Outbound HTTPS to `github.com` (or your mirror via `GOTHAM_BASE_URL`).
+- Outbound HTTPS to `github.com` (or your mirror via `GOTHAM_RELEASES_URL` /
+  `GOTHAM_BASE_URL`).
 
 ## Control plane
 
@@ -26,8 +27,10 @@ sudo gotham/deploy/install.sh
 The installer:
 
 1. detects the architecture (`amd64`/`arm64`);
-2. downloads `gotham-linux-<arch>`, `gotham-manifest-<arch>.txt` and
-   `gotham-manifest-<arch>.txt.sig` from GitHub Releases;
+2. resolves the version — `GOTHAM_VERSION` if given, otherwise the newest tag
+   from the first redirect of `<releases>/latest` — and downloads
+   `gotham-linux-<arch>`, `gotham-manifest-<arch>.txt` and
+   `gotham-manifest-<arch>.txt.sig` from that single pinned tag;
 3. verifies the manifest's Ed25519 signature against the **embedded** release
    public key, binds the manifest to the version/arch/file name, and verifies
    the artifact SHA-256 against the signed manifest — any failure aborts;
@@ -38,27 +41,40 @@ The installer:
 5. applies the database migrations and starts `gotham.service`;
 6. prints the Web UI URL and the first-login steps.
 
+Re-running the installer keeps `/etc/gotham/gotham.env`: the managed keys
+(`GOTHAM_DATABASE_DSN`, `GOTHAM_REDIS_ADDR`, `GOTHAM_CA_DIR`,
+`GOTHAM_SECRET_KEY`, the JWT key paths) are refreshed — a DSN given on the
+command line wins, otherwise the existing value is kept — and any operator-added
+keys (`AUTO_UPDATE`, `PLATFORM_ADMINS`, ...) are left untouched. A managed DSN
+is never replaced by the local default, and local PostgreSQL/Redis are only
+provisioned when the resolved DSN is the built-in local default.
+
 Useful overrides:
 
 | Variable | Purpose |
 |---|---|
-| `GOTHAM_VERSION` | Install a specific tag (default: the latest release). |
-| `GOTHAM_BASE_URL` | Full asset base URL for a mirror; requires `GOTHAM_VERSION`. |
+| `GOTHAM_VERSION` | Install a specific tag (default: resolve the latest tag). |
+| `GOTHAM_RELEASES_URL` | GitHub-style releases root for a mirror (default `https://github.com/<repo>/releases`). |
+| `GOTHAM_BASE_URL` | Full static asset base URL; requires `GOTHAM_VERSION`. |
 | `GOTHAM_REPO` | `owner/name` (default `justindeelux/gotham`). |
 | `GOTHAM_DATABASE_DSN` | Managed PostgreSQL DSN; skips local provisioning. |
 | `GOTHAM_REDIS_ADDR` | Redis `host:port` (default `localhost:6379`). |
 | `GOTHAM_SKIP_DEPS=1` | Do not install or configure PostgreSQL/Redis. |
-| `GOTHAM_UPDATE_PUBLIC_KEY` | Override the pinned public key (PEM or base64; testing only). |
-| `GOTHAM_INSTALL_ROOT` | Install under a prefix instead of `/` (testing only; non-root). |
+| `GOTHAM_INSTALL_ROOT` | Install under a prefix instead of `/` (testing only; non-root; enables test mode). |
+| `GOTHAM_INSTALL_TEST_PUBLIC_KEY` | Test-only: replace the pinned trust anchor (PEM or base64); honoured **only** with `GOTHAM_INSTALL_ROOT`, otherwise warned and ignored. |
 
 `deploy/install.sh --dry-run` prints what it would do without changing the host.
 
 ## First login
 
 1. Open `http://<host>:8000`.
-2. Create the first account — it owns the platform.
-3. Sign in. From **Servers**, install an agent on a node (below); the node then
-   reports heartbeats and is visible in the UI.
+2. Create an account through the sign-up form and sign in.
+3. From **Servers**, install an agent on a node (below); the node then reports
+   heartbeats and is visible in the UI.
+
+The first account is a normal account, not a platform administrator. The
+platform-global operations (node-wide proxy sync, DNS providers) require the
+account email in `PLATFORM_ADMINS` in `/etc/gotham/gotham.env`.
 
 ## Node agent
 
@@ -69,7 +85,8 @@ sudo gotham/deploy/install-agent.sh
 
 The agent installer uses the same signed-manifest verification
 (`deploy/release-verify.sh`) for `gotham-agent-linux-<arch>` and
-`gotham-agent-manifest-<arch>.txt`. It installs the agent into
+`gotham-agent-manifest-<arch>.txt`, with the pinned release public key and no
+runtime override. It installs the agent into
 `/var/lib/gotham-agent/bin/gotham-agent`, the shared wrapper as
 `gotham-agent-update`, the config `/etc/gotham/agent-updater.conf`, the
 sudoers rule and the unit. Set `GOTHAM_AGENT_CP_ADDR` (control-plane gRPC
@@ -111,10 +128,13 @@ tag, on the self-hosted runner:
    the version and public key, and creates a **draft** GitHub Release with the
    binaries, `checksums.txt` and the published public key.
 4. The workflow signs the per-arch manifests (`gotham-manifest-<arch>.txt` and
-   `gotham-agent-manifest-<arch>.txt`) over the exact built bytes, uploads the
-   manifests and their `.sig` files, and only then publishes the draft. Draft
-   releases are skipped by the checker, so an incomplete release is never
-   offered.
+   `gotham-agent-manifest-<arch>.txt`) over the exact built bytes. It locates
+   the **draft** through the releases list (drafts are not returned by
+   `/releases/tags/<tag>`), asserts the complete asset set — 4 binaries,
+   `checksums.txt`, the public key and all 8 manifest/signature files — uploads
+   the manifests and their `.sig` files, then publishes the draft and verifies
+   it is no longer a draft. Draft releases are skipped by the checker, so an
+   incomplete release is never offered.
 
 The asset naming is a contract with the update code — see
 `internal/updates/checker.go` (control plane), `internal/updates/agents.go`
@@ -142,9 +162,11 @@ The asset naming is a contract with the update code — see
 ## Testing the install chain without GitHub
 
 `deploy/test-release-install.sh` builds a signer and snapshot binaries, signs
-the manifests, serves them from a loopback `python3 -m http.server`, runs
-`deploy/install.sh` against it under a scratch `GOTHAM_INSTALL_ROOT`, and proves
-a tampered artifact and a tampered manifest both fail closed:
+the manifests, serves them from a loopback fake releases server (including a
+`/releases/latest` redirect), and runs `deploy/install.sh` against it under a
+scratch `GOTHAM_INSTALL_ROOT`. It covers the pinned-tag path, the default
+latest-tag resolution, the agent family, re-install preservation, and the
+fail-closed cases (tampered artifact, tampered manifest, pinned-key mismatch):
 
 ```sh
 sh deploy/test-release-install.sh

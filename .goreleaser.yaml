@@ -11,9 +11,10 @@
 #
 # The release is created as a DRAFT: GoReleaser uploads the binaries, checksums
 # and the published signing key, then .github/workflows/release.yml signs the
-# per-arch manifests over the exact uploaded bytes, uploads them with
-# `gh release upload`, and finally publishes the draft. Draft releases are
-# skipped by the checker, so an incomplete release is never offered.
+# per-arch manifests over the exact uploaded bytes, uploads them through the
+# GitHub REST API, asserts the complete asset set, and finally publishes the
+# draft. Draft releases are skipped by the checker, so an incomplete release is
+# never offered.
 
 version: 2
 

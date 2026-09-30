@@ -9,6 +9,13 @@ Design priorities (in order):
 3. **Self-updating** — signed automatic updates for both the control plane and node agents, with rollback.
 4. **Lean footprint** — comfortable on small servers (≥ 1 GB RAM, 1 vCPU), but not at the cost of the three priorities above.
 
+## Install
+
+Control-plane and node-agent install, first login, updates and the
+release/signing flow live in [`docs/install.md`](docs/install.md). Releases are
+signed with Ed25519; the installer and the built-in updater verify the signed
+manifest and the artifact digest before installing anything.
+
 ---
 
 ## 1. Final Technology Stack

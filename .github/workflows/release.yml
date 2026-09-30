@@ -1,0 +1,239 @@
+name: Release
+
+# INFRA-9.1: build, sign and publish a Gotham release on a v* tag.
+#
+# The workflow fails closed unless BOTH release secrets are present:
+#   GOTHAM_UPDATE_PUBLIC_KEY   base64 raw Ed25519 public key (-ldflags embed)
+#   GOTHAM_UPDATE_SIGNING_KEY  PKCS#8 PEM Ed25519 private key (signing only)
+# The private key never leaves a 0600 temp file and is never echoed.
+#
+# GoReleaser creates the release as a DRAFT (see .goreleaser.yaml; drafts are
+# skipped by the update checkers). This workflow then signs per-arch manifests
+# over the exact built bytes, locates the draft through the releases list
+# (drafts are not returned by /releases/tags/<tag>), asserts the complete asset
+# set, uploads the manifests + signatures, and finally publishes the draft and
+# verifies it is no longer a draft.
+#
+# Actions are pinned by commit SHA on purpose: this job holds contents: write
+# and the signing secret.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: goreleaser + signed manifests
+    runs-on: self-hosted
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.22.x"
+          cache: true
+
+      - name: Require release secrets
+        env:
+          GOTHAM_UPDATE_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_PUBLIC_KEY }}
+          GOTHAM_UPDATE_SIGNING_KEY: ${{ secrets.GOTHAM_UPDATE_SIGNING_KEY }}
+        run: |
+          set -eu
+          [ -n "${GOTHAM_UPDATE_PUBLIC_KEY:-}" ] || {
+            echo "::error::repository secret GOTHAM_UPDATE_PUBLIC_KEY is missing or empty"
+            exit 1
+          }
+          [ -n "${GOTHAM_UPDATE_SIGNING_KEY:-}" ] || {
+            echo "::error::repository secret GOTHAM_UPDATE_SIGNING_KEY is missing or empty"
+            exit 1
+          }
+
+      - name: Require jq
+        run: |
+          command -v jq >/dev/null 2>&1 || {
+            echo "::error::jq is required on the self-hosted runner (release asset checks)"
+            exit 1
+          }
+
+      - name: Verify the signing key matches the embedded/published public key
+        env:
+          GOTHAM_UPDATE_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_PUBLIC_KEY }}
+          GOTHAM_UPDATE_SIGNING_KEY: ${{ secrets.GOTHAM_UPDATE_SIGNING_KEY }}
+        run: |
+          set -eu
+          umask 077
+          key="$(mktemp)"
+          trap 'rm -f "$key" "$key.pub"' EXIT
+          printf '%s\n' "$GOTHAM_UPDATE_SIGNING_KEY" >"$key"
+          openssl pkey -in "$key" -pubout -out "$key.pub"
+          derived="$(openssl pkey -pubin -in "$key.pub" -outform DER | tail -c 32 | base64 | tr -d '\n')"
+          committed="$(openssl pkey -pubin -in deploy/gotham-signing-key.pub -outform DER | tail -c 32 | base64 | tr -d '\n')"
+          [ "$derived" = "$GOTHAM_UPDATE_PUBLIC_KEY" ] || {
+            echo "::error::GOTHAM_UPDATE_SIGNING_KEY does not match GOTHAM_UPDATE_PUBLIC_KEY"
+            exit 1
+          }
+          [ "$derived" = "$committed" ] || {
+            echo "::error::the secret keypair does not match deploy/gotham-signing-key.pub (and install.sh's embedded key)"
+            exit 1
+          }
+          echo "keypair consistent with the embedded and published public key"
+
+      - name: Install GoReleaser
+        run: |
+          go install github.com/goreleaser/goreleaser/v2@v2.18.0
+          echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
+
+      - name: GoReleaser release (draft)
+        env:
+          GOTHAM_UPDATE_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_PUBLIC_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: goreleaser release --clean
+
+      - name: Assert the version and key are embedded
+        env:
+          GOTHAM_UPDATE_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_PUBLIC_KEY }}
+        run: |
+          set -eu
+          expected_version="${GITHUB_REF_NAME#v}"
+          count=0
+          for bin in dist/gotham_linux_*/gotham dist/gotham-agent_linux_*/gotham-agent; do
+            [ -f "$bin" ] || continue
+            count=$((count + 1))
+            grep -aqF "$GOTHAM_UPDATE_PUBLIC_KEY" "$bin" || {
+              echo "::error::$bin did not embed the release public key"
+              exit 1
+            }
+          done
+          [ "$count" = "4" ] || {
+            echo "::error::expected 4 release binaries, found $count"
+            exit 1
+          }
+          # Run the host-arch control-plane binary and check its exact version
+          # rather than a bare substring match.
+          case "$(uname -m)" in
+            x86_64 | amd64) host_arch=amd64 ;;
+            aarch64 | arm64) host_arch=arm64 ;;
+            *) host_arch="" ;;
+          esac
+          if [ -n "$host_arch" ]; then
+            out="$(dist/gotham_linux_${host_arch}_*/gotham version)"
+            [ "$out" = "gotham ${expected_version}" ] || {
+              echo "::error::version mismatch: got '$out', want 'gotham ${expected_version}'"
+              exit 1
+            }
+          fi
+
+      - name: Sign the release manifests
+        env:
+          GOTHAM_UPDATE_SIGNING_KEY: ${{ secrets.GOTHAM_UPDATE_SIGNING_KEY }}
+        run: |
+          set -eu
+          umask 077
+          tag="$GITHUB_REF_NAME"
+          case "$tag" in
+            *-*) channel=beta ;;
+            *) channel=stable ;;
+          esac
+          key="$(mktemp)"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$GOTHAM_UPDATE_SIGNING_KEY" >"$key"
+          rm -rf signed
+          mkdir -p signed
+          go build -o "$RUNNER_TEMP/gotham-signer" ./cmd/signer
+          count=0
+          for bin in dist/gotham_linux_*/gotham dist/gotham-agent_linux_*/gotham-agent; do
+            [ -f "$bin" ] || continue
+            arch="$(basename "$(dirname "$bin")" | sed -n 's/.*_linux_\(arm64\|amd64\).*/\1/p')"
+            [ -n "$arch" ] || { echo "::error::cannot determine arch for $bin"; exit 1; }
+            base="$(basename "$bin")"
+            asset="${base}-linux-${arch}"
+            cp "$bin" "signed/${asset}"
+            if [ "$base" = "gotham" ]; then
+              prefix="gotham-manifest"
+            else
+              prefix="gotham-agent-manifest"
+            fi
+            "$RUNNER_TEMP/gotham-signer" manifest -key "$key" -in "signed/${asset}" \
+              -version "$tag" -arch "$arch" -channel "$channel" \
+              -out "signed/${prefix}-${arch}.txt"
+            count=$((count + 1))
+          done
+          [ "$count" = "4" ] || { echo "::error::expected 4 signed binaries, got $count"; exit 1; }
+          # Exactly 4 binaries + 4 manifests + 4 signatures, no more, no less.
+          for pattern in '*-linux-*' '*manifest*.txt' '*manifest*.txt.sig'; do
+            n="$(find signed -maxdepth 1 -type f -name "$pattern" | wc -l | tr -d ' ')"
+            [ "$n" = "4" ] || { echo "::error::expected 4 files matching '$pattern', found $n"; exit 1; }
+          done
+          # The signed copy must match the checksum GoReleaser published.
+          (cd signed && sha256sum --check --ignore-missing ../dist/checksums.txt)
+
+      - name: Upload signed manifests and publish the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          command -v jq >/dev/null 2>&1 || { echo "::error::jq is required"; exit 1; }
+          tag="$GITHUB_REF_NAME"
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          auth="Authorization: Bearer ${GITHUB_TOKEN}"
+
+          # /releases/tags/<tag> returns 404 for drafts; list and match instead.
+          release_id="$(curl -fsSL -H "$auth" "${api}/releases?per_page=100" \
+            | jq -r --arg tag "$tag" '.[] | select(.draft == true and .tag_name == $tag) | .id' \
+            | head -n1)"
+          [ -n "$release_id" ] || { echo "::error::draft release for ${tag} not found"; exit 1; }
+
+          # Every asset the checkers and the installer need for both arches.
+          base="gotham-linux-amd64 gotham-linux-arm64 gotham-agent-linux-amd64 gotham-agent-linux-arm64 checksums.txt gotham-signing-key.pub"
+          expected="$base gotham-manifest-amd64.txt gotham-manifest-amd64.txt.sig gotham-manifest-arm64.txt gotham-manifest-arm64.txt.sig gotham-agent-manifest-amd64.txt gotham-agent-manifest-amd64.txt.sig gotham-agent-manifest-arm64.txt gotham-agent-manifest-arm64.txt.sig"
+
+          assets_now() {
+            curl -fsSL -H "$auth" "${api}/releases/${release_id}/assets?per_page=100" | jq -r '.[].name'
+          }
+          check_assets() {
+            want="$1"
+            have="$(assets_now)"
+            missing=""
+            for asset in $want; do
+              printf '%s\n' "$have" | grep -qxF "$asset" || missing="${missing} ${asset}"
+            done
+            if [ -n "$missing" ]; then
+              echo "::error::release ${tag} is missing assets:${missing}"
+              echo "expected:"; printf '%s\n' "$want" | tr ' ' '\n'
+              echo "found:"; printf '%s\n' "$have"
+              exit 1
+            fi
+          }
+
+          # GoReleaser must have uploaded the binaries, checksums and public key.
+          check_assets "$base"
+
+          for asset in signed/*manifest*.txt signed/*manifest*.txt.sig; do
+            [ -f "$asset" ] || { echo "::error::no signed manifest at ${asset}"; exit 1; }
+            name="$(basename "$asset")"
+            echo "uploading ${name}"
+            curl -fsSL -H "$auth" -H "Content-Type: application/octet-stream" \
+              --data-binary "@${asset}" \
+              "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${name}" \
+              >/dev/null
+          done
+
+          # Complete before publishing: all 14 assets must be attached.
+          check_assets "$expected"
+          echo "all $(printf '%s\n' "$expected" | wc -w | tr -d ' ') expected assets attached"
+
+          published="$(curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" \
+            -d '{"draft":false}' "${api}/releases/${release_id}")"
+          is_draft="$(printf '%s' "$published" | jq -r '.draft')"
+          [ "$is_draft" = "false" ] || { echo "::error::release ${tag} is still a draft"; exit 1; }
+          echo "published release ${tag}"

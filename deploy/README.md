@@ -2,13 +2,17 @@
 
 | File | Purpose |
 |---|---|
+| `install.sh` | Signed one-line control-plane installer (INFRA-9.1) |
+| `release-verify.sh` | Shared signature + digest verification for the installers |
+| `gotham-signing-key.pub` | Published release signing public key (embedded in the binaries and installers) |
+| `test-release-install.sh` | Local (no GitHub) dry run of the sign → serve → verify → install chain |
 | `gotham.service` | Control-plane systemd unit |
 | `gotham-update.sh` | Privileged restart/healthcheck/rollback wrapper (shared; installed as `gotham-update` for the CP and `gotham-agent-update` for the agent) |
 | `gotham-updater.conf` | Root-owned wrapper configuration (install to `/etc/gotham/updater.conf`) |
 | `install-sudoers.sh` | Grants the service user the wrapper (and nothing else) |
 | `verify-systemd.sh` | Root-only integration check for a Linux host with systemd |
 | `verify-agent-update.sh` | Root-only end-to-end check of the agent remote-update flow (BE-9.2) on a Linux/systemd/Docker host |
-| `gotham-agent.service`, `install-agent.sh` | Node agent |
+| `gotham-agent.service`, `install-agent.sh` | Node agent (installer verifies the signed manifest) |
 | `gotham-agent-updater.conf` | Root-owned agent wrapper configuration (install to `/etc/gotham/agent-updater.conf`) |
 | `install-agent-sudoers.sh` | Grants the agent user the agent wrapper (and nothing else) |
 | `compose.dev.yml` | Local PostgreSQL + Redis |
@@ -44,6 +48,13 @@ set, ignores every `GOTHAM_*` override, so `env_reset` and `!SETENV` remain a
 hard requirement.
 
 ## Install
+
+`deploy/install.sh` automates the layout below for a clean systemd host:
+download → verify the signed manifest and artifact digest → install the binary,
+wrapper, config, status directory, sudoers rule and unit → migrate → start. It
+uses the shared `release-verify.sh`; see `docs/install.md`.
+
+The manual layout it produces is:
 
 ```sh
 # 1. Install the binary, the wrapper, the config and the root-owned status dir.

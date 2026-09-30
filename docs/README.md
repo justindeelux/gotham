@@ -35,6 +35,12 @@ invariants, rollback, dev environment, decision log, and how to resume work.
 (CP + Postgres + Redis + node agent): connection, provisioning, test
 workflow, Playwright UI smoke, and what has been verified on real hardware.
 
+## Install & release
+
+[`install.md`](install.md) — control-plane and node-agent install, first login,
+updates/rollback, and the signed release/signing flow (keypair, assets,
+GoReleaser workflow).
+
 ## One-click service templates
 
 [`../templates/README.md`](../templates/README.md) — the template format

@@ -1,5 +1,11 @@
 import { expect, test } from "./fixtures";
-import { cloneURL, loadAccount, storageStatePath, uniqueSuffix } from "./support";
+import {
+  cloneURL,
+  loadAccount,
+  seedNodeAddress,
+  storageStatePath,
+  uniqueSuffix,
+} from "./support";
 
 // Reuse the authenticated session so the page starts signed in; the seed call
 // authenticates separately with the access token from global setup.
@@ -27,7 +33,7 @@ test.describe("applications", () => {
       headers,
       data: {
         name: `ui-e2e-node-${uniqueSuffix()}`,
-        ip: "127.0.0.1",
+        ip: seedNodeAddress,
         ssh_user: "root",
       },
     });

@@ -1,7 +1,7 @@
 import type { APIRequestContext, Locator, Page, Route } from "@playwright/test";
 
 import { expect, test } from "./fixtures";
-import { loadAccount, storageStatePath, uniqueSuffix } from "./support";
+import { loadAccount, seedNodeAddress, storageStatePath, uniqueSuffix } from "./support";
 
 // Every scenario starts from the session global setup created.
 test.use({ storageState: storageStatePath });
@@ -18,7 +18,7 @@ async function seedServer(
 ): Promise<{ id: string; name: string }> {
   const response = await request.post("/api/v1/servers", {
     headers: authHeaders(),
-    data: { name, ip: "127.0.0.1", ssh_user: "root" },
+    data: { name, ip: seedNodeAddress, ssh_user: "root" },
   });
   expect(response.status(), await response.text()).toBe(201);
   const { server } = (await response.json()) as { server: { id: string; name: string } };

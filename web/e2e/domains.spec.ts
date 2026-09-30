@@ -1,6 +1,12 @@
 import { expect, test } from "./fixtures";
 import type { Locator, Page } from "@playwright/test";
-import { cloneURL, loadAccount, storageStatePath, uniqueSuffix } from "./support";
+import {
+  cloneURL,
+  loadAccount,
+  seedNodeAddress,
+  storageStatePath,
+  uniqueSuffix,
+} from "./support";
 
 // Reuse the authenticated session so the page starts signed in; the seed
 // calls authenticate separately with the access token from global setup.
@@ -29,6 +35,16 @@ function tab(page: Page, name: string) {
  * and no node consumes them in this run.
  */
 test.describe("domains", () => {
+  // The single scenario drives the whole Domains & SSL surface against a real
+  // control plane. Every reroute mutation — a certificate, a DNS provider, a
+  // redirect, the application domain — makes the control plane resync *every*
+  // registered node, so the run scales with the node rows the smoke seeds and
+  // was recorded at 26-34 s on the shared self-hosted runner, straddling the
+  // 30 s default. Raise the per-test budget rather than loosen one assertion:
+  // nodes are seeded on an unreachable loopback address (seedNodeIP) so each
+  // resync fails fast, but the flow is legitimately long.
+  test.describe.configure({ timeout: 60_000 });
+
   test("manages DNS providers, certificates and the application domain", async ({
     page,
     request,
@@ -77,7 +93,7 @@ test.describe("domains", () => {
       headers,
       data: {
         name: `ui-e2e-node-${suffix}`,
-        ip: "127.0.0.1",
+        ip: seedNodeAddress,
         ssh_user: "root",
       },
     });

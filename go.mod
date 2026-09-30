@@ -1,6 +1,6 @@
 module github.com/justindeelux/gotham
 
-go 1.22
+go 1.25.0
 
 require (
 	github.com/fsnotify/fsnotify v1.8.0
@@ -13,9 +13,9 @@ require (
 	github.com/pressly/goose/v3 v3.24.1
 	github.com/redis/go-redis/v9 v9.12.1
 	github.com/spf13/viper v1.20.1
-	golang.org/x/crypto v0.33.0
+	golang.org/x/crypto v0.52.0
 	golang.org/x/oauth2 v0.26.0
-	golang.org/x/sys v0.30.0
+	golang.org/x/sys v0.45.0
 	golang.org/x/time v0.8.0
 	google.golang.org/grpc v1.67.3
 	google.golang.org/protobuf v1.36.1
@@ -23,7 +23,7 @@ require (
 )
 
 require (
-	golang.org/x/net v0.35.0
+	golang.org/x/net v0.54.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241223144023-3abc09e42ca8 // indirect
 )
 
@@ -51,6 +51,6 @@ require (
 	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/sync v0.11.0 // indirect
-	golang.org/x/text v0.22.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 )

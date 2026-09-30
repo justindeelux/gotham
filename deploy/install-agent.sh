@@ -34,7 +34,10 @@
 #   GOTHAM_AGENT_UPDATE_INTERVAL
 
 set -eu
-umask 077
+# Permissive base umask so shared directories stay world-traversable and the
+# agent user can read its env; a restrictive umask is applied only around the
+# env/secret write below.
+umask 022
 
 BINARY_NAME="gotham-agent"
 INSTALL_PATH="/var/lib/gotham-agent/bin/gotham-agent"
@@ -137,14 +140,12 @@ else
         redirect="$(curl -fsS -o /dev/null -w '%{redirect_url}' "${RELEASES_BASE}/latest" || true)"
         VERSION="${redirect%/}"
         VERSION="${VERSION##*/}"
-        case "${VERSION}" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "could not resolve the latest release tag from ${RELEASES_BASE}/latest" >&2; exit 1 ;;
-        esac
+        printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' \
+            || { echo "could not resolve the latest release tag from ${RELEASES_BASE}/latest" >&2; exit 1; }
     fi
     RELEASE_BASE="${RELEASES_BASE}/download/${VERSION}"
 fi
-# Private scratch dir (umask 077): the pinned key and the verified binary live
+# Private scratch dir (0700): the pinned key and the verified binary live
 # here and are removed on exit.
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-agent-install.XXXXXX")"
 PUBKEY_FILE="${WORK_DIR}/release.pub"
@@ -179,6 +180,7 @@ fi
 # with EPERM.
 log "installing binary to ${INSTALL_PATH}"
 run mkdir -p "${STATE_DIR}/bin"
+run chmod 0755 "${STATE_DIR}" "${STATE_DIR}/bin"
 run chown "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}" "${STATE_DIR}/bin"
 if [ "${DRY_RUN}" -eq 1 ]; then
     run install -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${TMP_BINARY}" "${INSTALL_PATH}"
@@ -189,29 +191,35 @@ fi
 
 log "creating ${ENV_DIR}"
 run mkdir -p "${ENV_DIR}"
+run chmod 0755 "${ENV_DIR}"
 
 log "writing ${ENV_FILE}"
 if [ "${DRY_RUN}" -eq 1 ]; then
     echo "[dry-run] write ${ENV_FILE} from GOTHAM_AGENT_* environment"
 else
-    : >"${ENV_FILE}"
+    # Restrictive umask only around the env write; the directory stays 0755.
+    (
+        umask 077
+        : >"${ENV_FILE}"
+        for key in \
+            GOTHAM_AGENT_CP_ADDR \
+            GOTHAM_AGENT_NODE_ID \
+            GOTHAM_AGENT_LISTEN_ADDR \
+            GOTHAM_AGENT_CA \
+            GOTHAM_AGENT_CERT_DIR \
+            GOTHAM_AGENT_KEY \
+            GOTHAM_AGENT_DOCKER_SOCK \
+            GOTHAM_AGENT_LOG_LEVEL \
+            GOTHAM_AGENT_AUTO_UPDATE \
+            GOTHAM_AGENT_UPDATE_INTERVAL; do
+            eval "value=\${${key}:-}"
+            if [ -n "${value}" ]; then
+                printf '%s=%s\n' "${key}" "${value}" >>"${ENV_FILE}"
+            fi
+        done
+    )
     chmod 0640 "${ENV_FILE}"
-    for key in \
-        GOTHAM_AGENT_CP_ADDR \
-        GOTHAM_AGENT_NODE_ID \
-        GOTHAM_AGENT_LISTEN_ADDR \
-        GOTHAM_AGENT_CA \
-        GOTHAM_AGENT_CERT_DIR \
-        GOTHAM_AGENT_KEY \
-        GOTHAM_AGENT_DOCKER_SOCK \
-        GOTHAM_AGENT_LOG_LEVEL \
-        GOTHAM_AGENT_AUTO_UPDATE \
-        GOTHAM_AGENT_UPDATE_INTERVAL; do
-        eval "value=\${${key}:-}"
-        if [ -n "${value}" ]; then
-            printf '%s=%s\n' "${key}" "${value}" >>"${ENV_FILE}"
-        fi
-    done
+    chown root:"${SERVICE_USER}" "${ENV_FILE}"
 fi
 
 # Self-update chain: the shared wrapper installed under the agent name, its
@@ -219,6 +227,7 @@ fi
 # rule. Mirror of the control-plane install in deploy/README.md.
 log "installing the update wrapper ${WRAPPER_PATH}"
 run mkdir -p /usr/libexec/gotham
+run chmod 0755 /usr/libexec/gotham
 if [ "${DRY_RUN}" -eq 1 ]; then
     echo "[dry-run] install ${SCRIPT_DIR}/gotham-update.sh ${WRAPPER_PATH}"
 else
@@ -245,6 +254,7 @@ fi
 
 log "installing systemd unit ${SERVICE_FILE}"
 run mkdir -p "${STATE_DIR}"
+run chmod 0755 "${STATE_DIR}"
 run chown "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}"
 
 if [ "${DRY_RUN}" -eq 1 ]; then

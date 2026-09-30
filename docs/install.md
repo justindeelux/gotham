@@ -130,11 +130,12 @@ tag, on the self-hosted runner:
 4. The workflow signs the per-arch manifests (`gotham-manifest-<arch>.txt` and
    `gotham-agent-manifest-<arch>.txt`) over the exact built bytes. It locates
    the **draft** through the releases list (drafts are not returned by
-   `/releases/tags/<tag>`), asserts the complete asset set — 4 binaries,
-   `checksums.txt`, the public key and all 8 manifest/signature files — uploads
-   the manifests and their `.sig` files, then publishes the draft and verifies
-   it is no longer a draft. Draft releases are skipped by the checker, so an
-   incomplete release is never offered.
+   `/releases/tags/<tag>`), checks the 6 base assets GoReleaser uploaded,
+   uploads the 8 manifest/signature files, then asserts the full 14-asset set
+   (4 binaries, `checksums.txt`, the public key and all 8 manifest/signature
+   files) before publishing the draft and verifying it is no longer a draft.
+   Draft releases are skipped by the checker, so an incomplete release is never
+   offered.
 
 The asset naming is a contract with the update code — see
 `internal/updates/checker.go` (control plane), `internal/updates/agents.go`

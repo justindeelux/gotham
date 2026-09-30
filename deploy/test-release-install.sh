@@ -175,6 +175,38 @@ grep -q "GOTHAM_UPDATE_SCRIPT=${ROOT}/usr/libexec/gotham/gotham-update" "${UNIT}
 
 grep -q "^GOTHAM_DATABASE_DSN=" "${ROOT}/etc/gotham/gotham.env" \
     || { echo "FAIL: gotham.env not written" >&2; exit 1; }
+
+# N1 regression guard: shared directories must be world-traversable and the
+# service user must be able to read the env/JWT files and stat/exec the wrapper.
+# A global restrictive umask would make the directories 0700 and fail here.
+mode_of() {
+    if stat -c '%a' "$1" >/dev/null 2>&1; then
+        stat -c '%a' "$1"
+    else
+        stat -f '%Lp' "$1"
+    fi
+}
+for dir in "${ROOT}/etc/gotham" "${ROOT}/usr/libexec/gotham" "${ROOT}/var/lib/gotham" "${ROOT}/var/lib/gotham-updater"; do
+    [ "$(mode_of "${dir}")" = "755" ] \
+        || { echo "FAIL: ${dir} mode is $(mode_of "${dir}"), want 755" >&2; exit 1; }
+done
+for file in "${ROOT}/etc/gotham/gotham.env" "${ROOT}/etc/gotham/jwt_ed25519.key" "${ROOT}/etc/gotham/jwt_ed25519.pub"; do
+    [ -r "${file}" ] || { echo "FAIL: ${file} is not readable" >&2; exit 1; }
+done
+[ -x "${WRAPPER}" ] && [ -r "${WRAPPER}" ] \
+    || { echo "FAIL: wrapper ${WRAPPER} is not executable/readable" >&2; exit 1; }
+[ "$(mode_of "${ROOT}/var/lib/gotham/bin/gotham")" = "755" ] \
+    || { echo "FAIL: installed binary mode is $(mode_of "${ROOT}/var/lib/gotham/bin/gotham")" >&2; exit 1; }
+
+# install-agent.sh needs root + systemd, so it is not executed here; guard its
+# N1 fix statically: permissive base umask + explicit 0755 shared directories.
+AGENT_INSTALLER="${SCRIPT_DIR}/install-agent.sh"
+grep -q '^umask 022' "${AGENT_INSTALLER}" \
+    || { echo "FAIL: install-agent.sh does not use a permissive base umask" >&2; exit 1; }
+grep -q 'chmod 0755 /usr/libexec/gotham' "${AGENT_INSTALLER}" \
+    || { echo "FAIL: install-agent.sh does not 0755 /usr/libexec/gotham" >&2; exit 1; }
+grep -q 'chmod 0755 "${ENV_DIR}"' "${AGENT_INSTALLER}" \
+    || { echo "FAIL: install-agent.sh does not 0755 /etc/gotham" >&2; exit 1; }
 echo "PASS: happy-path install verified and rendered"
 
 # ---- M2: re-install preserves operator settings -----------------------------

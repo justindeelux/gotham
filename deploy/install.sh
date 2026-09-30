@@ -43,7 +43,11 @@
 #   sudo ./install.sh [--dry-run]
 
 set -eu
-umask 077
+# A permissive base umask: shared directories (/etc/gotham, /usr/libexec/gotham,
+# /var/lib/gotham*) must be world-traversable and the service user must be able
+# to read the env/JWT files. A restrictive umask is applied only around the
+# secret writes below, so package installs and directory creation are normal.
+umask 022
 
 BINARY_NAME="gotham"
 FAMILY=""
@@ -187,10 +191,8 @@ else
         redirect="$(curl -fsS -o /dev/null -w '%{redirect_url}' "${RELEASES_BASE}/latest" || true)"
         VERSION="${redirect%/}"
         VERSION="${VERSION##*/}"
-        case "${VERSION}" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) die "could not resolve the latest release tag from ${RELEASES_BASE}/latest" ;;
-        esac
+        printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' \
+            || die "could not resolve the latest release tag from ${RELEASES_BASE}/latest"
     fi
     RELEASE_BASE="${RELEASES_BASE}/download/${VERSION}"
 fi
@@ -210,7 +212,7 @@ if [ -n "${GOTHAM_INSTALL_TEST_PUBLIC_KEY:-}" ]; then
     fi
 fi
 
-# Private scratch dir (umask 077): the pinned key, the verified binary and the
+# Private scratch dir (0700): the pinned key, the verified binary and the
 # generated secrets live here and are removed on exit.
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-install.XXXXXX")"
 PUBKEY_FILE="${WORK_DIR}/release.pub"
@@ -233,7 +235,8 @@ if [ "${TEST_MODE}" -eq 0 ] && [ "${DRY_RUN}" -eq 0 ]; then
     fi
 fi
 log "creating ${BIN_DIR}"
-run mkdir -p "${BIN_DIR}"
+run mkdir -p "${STATE_DIR}" "${BIN_DIR}"
+run chmod 0755 "${STATE_DIR}" "${BIN_DIR}"
 if [ "${TEST_MODE}" -eq 0 ]; then
     run chown "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}" "${BIN_DIR}"
 fi
@@ -252,6 +255,7 @@ fi
 # ---- Control-plane configuration --------------------------------------------
 log "writing ${ENV_FILE}"
 run mkdir -p "${ETC_DIR}"
+run chmod 0755 "${ETC_DIR}"
 JWT_KEY="${ETC_DIR}/jwt_ed25519.key"
 JWT_PUB="${ETC_DIR}/jwt_ed25519.pub"
 DEFAULT_DSN="postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
@@ -273,36 +277,41 @@ REDIS_ADDR="${GOTHAM_REDIS_ADDR:-$(env_prev GOTHAM_REDIS_ADDR)}"
 REDIS_ADDR="${REDIS_ADDR:-${DEFAULT_REDIS}}"
 
 if [ "${DRY_RUN}" -eq 0 ]; then
-    # Preserve the secret and JWT keys across reinstalls; only generate missing.
-    SECRET_KEY="$(env_prev GOTHAM_SECRET_KEY)"
-    [ -n "${SECRET_KEY}" ] || SECRET_KEY="$(openssl rand -base64 32)"
-    if [ ! -f "${JWT_KEY}" ]; then
-        openssl genpkey -algorithm ed25519 -out "${JWT_KEY}"
-    fi
-    if [ ! -f "${JWT_PUB}" ]; then
-        openssl pkey -in "${JWT_KEY}" -pubout -out "${JWT_PUB}"
-    fi
-    # Rewrite the managed keys and keep every other (operator) line untouched.
-    env_tmp="${ENV_FILE}.tmp.$$"
-    {
-        echo "# Gotham control-plane environment. Read by gotham.service (EnvironmentFile)."
-        echo "GOTHAM_DATABASE_DSN=${DSN}"
-        echo "GOTHAM_REDIS_ADDR=${REDIS_ADDR}"
-        echo "GOTHAM_CA_DIR=${STATE_DIR}/ca"
-        echo "GOTHAM_SECRET_KEY=${SECRET_KEY}"
-        echo "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH=${JWT_KEY}"
-        echo "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH=${JWT_PUB}"
-    } >"${env_tmp}"
-    if [ -n "${ENV_PREV}" ]; then
-        printf '%s\n' "${ENV_PREV}" \
-            | grep -v -E '^(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
-            | grep -v -F '# Gotham control-plane environment. Read by gotham.service' \
-            >>"${env_tmp}"
-    fi
-    chmod 0640 "${env_tmp}"
-    mv -f "${env_tmp}" "${ENV_FILE}"
-    chmod 0640 "${ENV_FILE}" "${JWT_KEY}"
-    chmod 0644 "${JWT_PUB}"
+    # Restrictive umask only around the secret material, so it is never briefly
+    # world-readable; the shared directories stay 0755 (base umask 022).
+    (
+        umask 077
+        # Preserve the secret and JWT keys across reinstalls; only generate missing.
+        SECRET_KEY="$(env_prev GOTHAM_SECRET_KEY)"
+        [ -n "${SECRET_KEY}" ] || SECRET_KEY="$(openssl rand -base64 32)"
+        if [ ! -f "${JWT_KEY}" ]; then
+            openssl genpkey -algorithm ed25519 -out "${JWT_KEY}"
+        fi
+        if [ ! -f "${JWT_PUB}" ]; then
+            openssl pkey -in "${JWT_KEY}" -pubout -out "${JWT_PUB}"
+        fi
+        # Rewrite the managed keys and keep every other (operator) line untouched.
+        env_tmp="${ENV_FILE}.tmp.$$"
+        {
+            echo "# Gotham control-plane environment. Read by gotham.service (EnvironmentFile)."
+            echo "GOTHAM_DATABASE_DSN=${DSN}"
+            echo "GOTHAM_REDIS_ADDR=${REDIS_ADDR}"
+            echo "GOTHAM_CA_DIR=${STATE_DIR}/ca"
+            echo "GOTHAM_SECRET_KEY=${SECRET_KEY}"
+            echo "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH=${JWT_KEY}"
+            echo "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH=${JWT_PUB}"
+        } >"${env_tmp}"
+        if [ -n "${ENV_PREV}" ]; then
+            printf '%s\n' "${ENV_PREV}" \
+                | grep -v -E '^(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
+                | grep -v -F '# Gotham control-plane environment. Read by gotham.service' \
+                >>"${env_tmp}"
+        fi
+        chmod 0640 "${env_tmp}"
+        mv -f "${env_tmp}" "${ENV_FILE}"
+        chmod 0640 "${ENV_FILE}" "${JWT_KEY}"
+        chmod 0644 "${JWT_PUB}"
+    )
     if [ "${TEST_MODE}" -eq 0 ]; then
         chown root:"${SERVICE_USER}" "${ENV_FILE}" "${JWT_KEY}"
         chown root:root "${JWT_PUB}"
@@ -314,6 +323,7 @@ fi
 # ---- Self-update chain (mirror of deploy/README.md) -------------------------
 log "installing the update wrapper ${WRAPPER_PATH}"
 run mkdir -p "$(dirname "${WRAPPER_PATH}")"
+run chmod 0755 "$(dirname "${WRAPPER_PATH}")"
 render_file "${SCRIPT_DIR}/gotham-update.sh" "${WRAPPER_PATH}" 0755
 
 log "installing ${WRAPPER_CONF}"
@@ -344,8 +354,9 @@ if [ "${DRY_RUN}" -eq 0 ] && [ "${GOTHAM_SKIP_DEPS:-0}" != "1" ] && [ "${DSN}" =
     if ! command -v psql >/dev/null 2>&1 || ! command -v redis-server >/dev/null 2>&1; then
         if command -v apt-get >/dev/null 2>&1; then
             log "installing PostgreSQL and Redis"
-            DEBIAN_FRONTEND=noninteractive apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql redis-server
+            # Package maintainer scripts must run under a normal umask.
+            ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update )
+            ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql redis-server )
         else
             die "PostgreSQL and Redis are required; install them or set GOTHAM_DATABASE_DSN and GOTHAM_SKIP_DEPS=1"
         fi

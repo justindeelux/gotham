@@ -148,6 +148,21 @@ TLS; agents installed before that go offline until they are reinstalled with
   operator.
 - Operator reset for a stale `staged`/`resuming` marker (for example after a
   hard kill): `gotham update reset` or `rm -f /var/lib/gotham/update.pending`.
+- Run `gotham update apply`/`rollback` as the service user
+  (`sudo -u gotham /var/lib/gotham/bin/gotham update apply`). Run as root, the
+  swap installs a `root:root 0755` binary over the service-owned one and the
+  next service-run apply fails at the hardlink backup (`fs.protected_hardlinks`
+  EPERM); the CLI refuses a mismatched binary owner with a clear message.
+  `gotham update rollback` only restores the file — the running process keeps
+  the current binary until `systemctl restart gotham`.
+- **Failed-release backoff (`AUTO_UPDATE`).** The scheduled check/apply loop
+  mirrors the agent's durable backoff: a `rolled_back`/`rollback_failed` status
+  for a newer version seeds a persisted failed-attempt count
+  (`/var/lib/gotham/update.backoff`), so the loop does not re-download and
+  re-apply the same release on every interval and restart the control plane in a
+  loop. The delay escalates 5m, 10m, 20m, 40m, then caps at 1h; a **newer**
+  release is offered immediately, and `gotham update reset` clears the backoff
+  for an operator-forced retry.
 - Crash recovery: the target is never absent, but if an older version left it
   missing, both `Applier.Recover` (startup) and the wrapper restore
   `<binary>.old` before starting the service.
@@ -288,6 +303,14 @@ read.
 `sudo deploy/verify-systemd.sh` runs a scratch service and the real wrapper on a
 systemd host. See the script header and the BE-9.1 report for exactly what it
 proves.
+
+CI covers the installer chain on every PR: the `installer` job in
+`.github/workflows/ci.yml` runs `sh -n` over `deploy/*.sh`, `actionlint` over the
+workflows, and `deploy/test-release-install.sh` (the checkout-level chain with a
+loopback fake releases server and no host changes). The two scripts that need a
+real systemd host and root — `deploy/verify-systemd.sh` and
+`deploy/verify-agent-update.sh` — stay **manual** merge gates, run on the test
+box with their logs attached to the milestone report.
 
 ## Agent remote-update verification (BE-9.2)
 

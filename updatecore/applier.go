@@ -87,8 +87,14 @@ type Applier struct {
 	Status *StatusStore
 	// Restart launches the restart/healthcheck wrapper.
 	Restart RestartFunc
-	// Timeout bounds each download when Client is nil.
+	// Timeout bounds each metadata download (signed manifest and detached
+	// signature) when Client is nil. It deliberately does not bound the
+	// artifact body, which is much larger; see ArtifactTimeout.
 	Timeout time.Duration
+	// ArtifactTimeout bounds the release-artifact body download when Client is
+	// nil. It is kept separate from Timeout so the short metadata bound never
+	// caps the tens-of-MiB binary fetch (a separate, much longer budget).
+	ArtifactTimeout time.Duration
 	// MaxBytes bounds the artifact download.
 	MaxBytes int64
 }
@@ -128,7 +134,7 @@ func (a *Applier) Apply(ctx context.Context, rel *Release) (*ApplyOutcome, error
 		return nil, err
 	}
 
-	data, err := a.fetch(ctx, rel.AssetURL, a.maxBytes())
+	data, err := a.fetchArtifact(ctx, rel.AssetURL, a.maxBytes())
 	if err != nil {
 		return nil, err
 	}
@@ -477,10 +483,35 @@ func (a *Applier) ResumeStaged(ctx context.Context) error {
 	return nil
 }
 
-// fetch downloads rawURL into memory, bounded by maxBytes.
+// fetch downloads rawURL into memory, bounded by maxBytes, with the short
+// metadata timeout. It is used for the small manifest/signature fetches.
 func (a *Applier) fetch(ctx context.Context, rawURL string, maxBytes int64) ([]byte, error) {
+	return a.fetchBounded(ctx, rawURL, maxBytes, defaultDuration(a.Timeout, defaultTimeout))
+}
+
+// fetchArtifact downloads the release artifact with the long, separate
+// artifact budget. The body is the tens-of-MiB binary, so it must not be capped
+// by the metadata timeout.
+func (a *Applier) fetchArtifact(ctx context.Context, rawURL string, maxBytes int64) ([]byte, error) {
+	return a.fetchBounded(ctx, rawURL, maxBytes, defaultDuration(a.ArtifactTimeout, defaultArtifactTimeout))
+}
+
+// fetchBounded downloads rawURL into memory. The caller's context and the
+// per-request timeout both bound the whole request including the body read; the
+// default client deliberately carries no client-level Timeout, which would
+// otherwise cap the artifact fetch at the metadata bound.
+func (a *Applier) fetchBounded(ctx context.Context, rawURL string, maxBytes int64, timeout time.Duration) ([]byte, error) {
 	if err := validateURL(rawURL); err != nil {
 		return nil, err
+	}
+	client := a.Client
+	if client == nil {
+		client = DefaultHTTPClient(0)
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -488,10 +519,6 @@ func (a *Applier) fetch(ctx context.Context, rawURL string, maxBytes int64) ([]b
 	}
 	req.Header.Set("User-Agent", "gotham-selfupdate")
 
-	client := a.Client
-	if client == nil {
-		client = DefaultHTTPClient(defaultDuration(a.Timeout, defaultTimeout))
-	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDownload, err)

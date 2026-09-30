@@ -27,6 +27,7 @@ Environment=GOTHAM_UPDATE_BINARY=/var/lib/gotham/bin/gotham
 Environment=GOTHAM_UPDATE_STATUS=/var/lib/gotham-updater/update.status
 Environment=GOTHAM_UPDATE_PENDING=/var/lib/gotham/update.pending
 Environment=GOTHAM_UPDATE_LOCK=/var/lib/gotham/update.lock
+Environment=GOTHAM_UPDATE_BACKOFF=/var/lib/gotham/update.backoff
 Environment=GOTHAM_UPDATE_SCRIPT=/usr/libexec/gotham/gotham-update
 EnvironmentFile=-/etc/gotham/gotham.env
 # AUTO_UPDATE=true enables the in-process scheduled check/apply loop.

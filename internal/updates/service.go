@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/justindeelux/gotham/updatecore"
 )
 
 // DefaultUpdateScript is the installed, root-owned restart/healthcheck wrapper
@@ -70,6 +72,12 @@ type Config struct {
 	PendingPath  string
 	Timeout      time.Duration
 	MaxBytes     int64
+	// DownloadTimeout bounds the release-artifact body (kept separate from
+	// Timeout, which bounds the short metadata/API requests).
+	DownloadTimeout time.Duration
+	// BackoffPath is the control-plane failed-attempt file for the AUTO_UPDATE
+	// loop; empty disables the persisted backoff.
+	BackoffPath  string
 	Logger       *slog.Logger
 	Auto         bool
 	AutoInterval time.Duration
@@ -89,6 +97,7 @@ type service struct {
 	applier  *Applier
 	status   *StatusStore
 	pending  *StatusStore
+	backoff  *updateBackoff
 	logger   *slog.Logger
 	auto     bool
 	interval time.Duration
@@ -123,14 +132,15 @@ func NewService(cfg Config) (Service, error) {
 	status := NewStatusStore(defaultString(cfg.StatusPath, ""))
 	pending := NewStatusStore(defaultString(cfg.PendingPath, ""))
 	applier := &Applier{
-		Client:     cfg.Client,
-		BinaryPath: binPath,
-		OldPath:    cfg.OldPath,
-		LockPath:   defaultString(cfg.LockPath, ""),
-		Pending:    pending,
-		Status:     status,
-		Timeout:    cfg.Timeout,
-		MaxBytes:   cfg.MaxBytes,
+		Client:          cfg.Client,
+		BinaryPath:      binPath,
+		OldPath:         cfg.OldPath,
+		LockPath:        defaultString(cfg.LockPath, ""),
+		Pending:         pending,
+		Status:          status,
+		Timeout:         cfg.Timeout,
+		ArtifactTimeout: cfg.DownloadTimeout,
+		MaxBytes:        cfg.MaxBytes,
 	}
 	if cfg.PublicKey != nil {
 		verifier, err := NewVerifier(cfg.PublicKey)
@@ -149,7 +159,8 @@ func NewService(cfg Config) (Service, error) {
 	} else if restored {
 		logger.Warn("updates: restored the previous binary after an interrupted update")
 	}
-	if last, err := lastStatusOf(pending, status); err != nil {
+	last, err := lastStatusOf(pending, status)
+	if err != nil {
 		logger.Warn("updates: could not read the update status", "error", err)
 	} else if last != nil {
 		if last.Result == StatusOK {
@@ -164,16 +175,22 @@ func NewService(cfg Config) (Service, error) {
 	if interval <= 0 {
 		interval = 6 * time.Hour
 	}
-	return &service{
+	backoffStore := updatecore.NewStatusStore(defaultString(cfg.BackoffPath, ""))
+	svc := &service{
 		current:  defaultString(cfg.Current, "dev"),
 		checker:  checker,
 		applier:  applier,
 		status:   status,
 		pending:  pending,
+		backoff:  newUpdateBackoff(backoffStore, logger),
 		logger:   logger,
 		auto:     cfg.Auto,
 		interval: interval,
-	}, nil
+	}
+	// Seed the persisted backoff from the durable status so a restart after a
+	// rollback does not immediately re-apply the same release (LOW-2).
+	svc.backoff.seedFromStatus(last, svc.current)
+	return svc, nil
 }
 
 // Current returns the running version.
@@ -198,6 +215,12 @@ func (s *service) Apply(ctx context.Context, channel Channel) (*ApplyResult, err
 	if release == nil {
 		return &ApplyResult{Applied: false, Version: s.current, Message: "already up to date"}, nil
 	}
+	return s.applyRelease(ctx, release)
+}
+
+// applyRelease installs an already-resolved release and shapes the result. It is
+// shared by the operator Apply and the AUTO_UPDATE loop.
+func (s *service) applyRelease(ctx context.Context, release *Release) (*ApplyResult, error) {
 	outcome, err := s.applier.Apply(ctx, release)
 	if err != nil {
 		return nil, err
@@ -211,13 +234,42 @@ func (s *service) Apply(ctx context.Context, channel Channel) (*ApplyResult, err
 	return result, nil
 }
 
+// applyAutoUpdate runs one scheduled check/apply: it resolves the newest
+// release, skips a version still inside its failed-attempt backoff, and applies
+// otherwise. A failure is persisted so the next tick backs off (LOW-2). It
+// reports whether an update was actually applied.
+func (s *service) applyAutoUpdate(ctx context.Context) (bool, error) {
+	release, err := s.Check(ctx)
+	if err != nil {
+		return false, err
+	}
+	if release == nil {
+		return false, nil
+	}
+	if s.backoff.blocked(release.Version) {
+		s.logger.Debug("updates: auto-update backoff active", "version", release.Version)
+		return false, nil
+	}
+	result, err := s.applyRelease(ctx, release)
+	if err != nil {
+		s.backoff.record(release.Version, time.Now())
+		return false, err
+	}
+	return result.Applied, nil
+}
+
 // Rollback restores the retained previous binary and clears the pending marker.
 func (s *service) Rollback() error { return s.applier.Rollback() }
 
-// Reset clears a stale pending marker so a new apply can proceed. It does not
-// touch the binary; an operator uses it only after confirming no wrapper is
+// Reset clears a stale pending marker so a new apply can proceed and drops the
+// failed-attempt backoff, so the operator can retry the same version. It does
+// not touch the binary; an operator uses it only after confirming no wrapper is
 // running.
-func (s *service) Reset() error { return s.pending.Remove() }
+func (s *service) Reset() error {
+	err := s.pending.Remove()
+	s.backoff.clear()
+	return err
+}
 
 // Resume relaunches the wrapper for a staged update left over from a crash,
 // reboot or OOM during the health window (M2). It never loops: the marker is
@@ -259,14 +311,14 @@ func (s *service) StartAuto(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				result, err := s.Apply(ctx, "")
+				applied, err := s.applyAutoUpdate(ctx)
 				switch {
 				case err != nil:
 					s.logger.Warn("updates: auto-update failed", "error", err)
-				case result.Applied:
-					s.logger.Info("updates: auto-update staged", "version", result.Version)
+				case applied:
+					s.logger.Info("updates: auto-update staged", "version", s.current)
 				default:
-					s.logger.Debug("updates: no auto-update available", "current", result.Version)
+					s.logger.Debug("updates: no auto-update available", "current", s.current)
 				}
 			}
 		}

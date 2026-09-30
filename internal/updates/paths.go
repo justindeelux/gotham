@@ -16,6 +16,11 @@ const (
 	// DefaultLockPath serializes Apply/Rollback between the control plane and
 	// the privileged wrapper.
 	DefaultLockPath = "/var/lib/gotham/update.lock"
+	// DefaultBackoffPath is the control-plane-owned failed-attempt count used by
+	// the AUTO_UPDATE loop to back off a release that rolled back (mirrors the
+	// agent's update.backoff). It lives in the service StateDirectory and is
+	// cleared by `gotham update reset`.
+	DefaultBackoffPath = "/var/lib/gotham/update.backoff"
 	// DefaultUpdaterConf is the root-owned wrapper configuration.
 	DefaultUpdaterConf = "/etc/gotham/updater.conf"
 )

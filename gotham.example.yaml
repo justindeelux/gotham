@@ -28,6 +28,11 @@
 #   GOTHAM_UPDATE_PENDING  staged gate marker (default /var/lib/gotham/update.pending)
 #   GOTHAM_UPDATE_BINARY   fixed target binary (default /var/lib/gotham/bin/gotham)
 #   GOTHAM_UPDATE_LOCK     update lock shared with the wrapper (default /var/lib/gotham/update.lock)
+#   GOTHAM_UPDATE_BACKOFF  control-plane failed-attempt count for the AUTO_UPDATE
+#                          loop (default /var/lib/gotham/update.backoff); cleared
+#                          by `gotham update reset`
+#   GOTHAM_UPDATE_DOWNLOAD_TIMEOUT  release-artifact body timeout (default 10m);
+#                          the API/manifest keep the short fixed bound
 #   GOTHAM_UPDATE_CURRENT  override the running version (wrappers/tests)
 #   GOTHAM_UPDATE_OFFER_CACHE_TTL  agent-offer cache TTL (default 10m); bounds
 #                          the release-API load from a polling fleet

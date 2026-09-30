@@ -182,12 +182,19 @@ manual verification is needed at update time.
 - **Control plane:** `gotham update check` / `gotham update apply`, or set
   `AUTO_UPDATE=true` in `/etc/gotham/gotham.env` for unattended updates. The
   wrapper health-checks the new binary and rolls back to `gotham.old` on
-  failure.
+  failure. Run the CLI as the service user that owns the binary
+  (`sudo -u gotham /var/lib/gotham/bin/gotham update apply`): run as root it
+  would install a root-owned binary over the service-owned one and the next
+  service-run apply would fail on the hardlink backup. `gotham update` refuses
+  a mismatched owner.
 - **Node agent:** agents update from the control plane over the CA-verified TLS
   channel; enable unattended applies with `GOTHAM_AGENT_AUTO_UPDATE=true`, or
-  trigger a fleet rollout from the UI. A release that fails to activate rolls
-  back and its version is backed off (see `deploy/README.md`).
-- **Rollback:** `gotham update rollback` restores the previous binary.
+  trigger a fleet rollout from the UI. A release that fails to
+  activate rolls back and its version is backed off (see `deploy/README.md`).
+- **Rollback:** `gotham update rollback` restores the previous binary on disk.
+  The running process keeps the current binary until it is restarted, so run
+  `systemctl restart gotham` afterwards to actually execute the restored
+  binary.
 
 Reinstalling a specific version is a normal install with `GOTHAM_VERSION=vX.Y.Z`.
 

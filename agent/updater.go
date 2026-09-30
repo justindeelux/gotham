@@ -102,13 +102,14 @@ func newUpdater(cfg Config, log *slog.Logger, version func() string, setVersion 
 		return nil, err
 	}
 	applier := &updatecore.Applier{
-		Verifier:   verifier,
-		BinaryPath: cfg.BinaryPath,
-		OldPath:    cfg.BinaryPath + updatecore.OldSuffix,
-		LockPath:   cfg.UpdateLockPath,
-		Pending:    updatecore.NewStatusStore(cfg.UpdatePendingPath),
-		Status:     updatecore.NewStatusStore(cfg.UpdateStatusPath),
-		Restart:    cfg.Restart,
+		Verifier:        verifier,
+		BinaryPath:      cfg.BinaryPath,
+		OldPath:         cfg.BinaryPath + updatecore.OldSuffix,
+		LockPath:        cfg.UpdateLockPath,
+		Pending:         updatecore.NewStatusStore(cfg.UpdatePendingPath),
+		Status:          updatecore.NewStatusStore(cfg.UpdateStatusPath),
+		ArtifactTimeout: updateDownloadTimeout,
+		Restart:         cfg.Restart,
 	}
 	if applier.Restart == nil {
 		applier.Restart = agentRestart(cfg.UpdateScript)

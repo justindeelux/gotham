@@ -40,6 +40,13 @@ const (
 	BinaryPathEnv = "GOTHAM_UPDATE_BINARY"
 	// LockPathEnv overrides the process-external update lock.
 	LockPathEnv = "GOTHAM_UPDATE_LOCK"
+	// BackoffPathEnv overrides the control-plane failed-attempt backoff file
+	// (written by the AUTO_UPDATE loop after a rollback).
+	BackoffPathEnv = "GOTHAM_UPDATE_BACKOFF"
+	// DownloadTimeoutEnv overrides the release-artifact body timeout (Go
+	// duration; default 10m). The signed manifest/signature and Releases API
+	// keep the short fixed bound; only the tens-of-MiB artifact body uses this.
+	DownloadTimeoutEnv = "GOTHAM_UPDATE_DOWNLOAD_TIMEOUT"
 	// CurrentEnv overrides the running version (useful for wrappers and
 	// tests). When unset the version reported by the node registry is used.
 	CurrentEnv = "GOTHAM_UPDATE_CURRENT"
@@ -143,6 +150,14 @@ func LockPathFromEnv() string {
 	return DefaultLockPath
 }
 
+// BackoffPathFromEnv returns the configured control-plane backoff file path.
+func BackoffPathFromEnv() string {
+	if raw := strings.TrimSpace(os.Getenv(BackoffPathEnv)); raw != "" {
+		return raw
+	}
+	return DefaultBackoffPath
+}
+
 // CurrentFromEnv returns the configured running version, or "" when unset.
 func CurrentFromEnv() string {
 	return strings.TrimSpace(os.Getenv(CurrentEnv))
@@ -163,23 +178,41 @@ func OfferCacheTTLFromEnv() time.Duration {
 	return d
 }
 
+// DownloadTimeoutFromEnv returns the configured release-artifact body timeout,
+// defaulting to 10m. It does not affect the short metadata/API bound. Invalid or
+// non-positive values fall back to the default.
+func DownloadTimeoutFromEnv() time.Duration {
+	const fallback = 10 * time.Minute
+	raw := strings.TrimSpace(os.Getenv(DownloadTimeoutEnv))
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
+}
+
 // FromEnv assembles a self-update Config from the environment. A missing or
 // malformed public key is returned as err with a usable Config (Apply then
 // fails closed), so callers can log it and still serve the check route.
 func FromEnv(current string, logger *slog.Logger) (Config, error) {
 	cfg := Config{
-		Current:      current,
-		Repo:         RepoFromEnv(),
-		BaseURL:      BaseURLFromEnv(),
-		Channel:      ChannelFromEnv(),
-		UpdateScript: ScriptFromEnv(),
-		StatusPath:   StatusPathFromEnv(),
-		PendingPath:  PendingPathFromEnv(),
-		BinaryPath:   BinaryPathFromEnv(),
-		LockPath:     LockPathFromEnv(),
-		Logger:       logger,
-		Auto:         AutoUpdateEnabled(),
-		AutoInterval: AutoIntervalFromEnv(),
+		Current:         current,
+		Repo:            RepoFromEnv(),
+		BaseURL:         BaseURLFromEnv(),
+		Channel:         ChannelFromEnv(),
+		UpdateScript:    ScriptFromEnv(),
+		StatusPath:      StatusPathFromEnv(),
+		PendingPath:     PendingPathFromEnv(),
+		BinaryPath:      BinaryPathFromEnv(),
+		LockPath:        LockPathFromEnv(),
+		BackoffPath:     BackoffPathFromEnv(),
+		Logger:          logger,
+		Auto:            AutoUpdateEnabled(),
+		AutoInterval:    AutoIntervalFromEnv(),
+		DownloadTimeout: DownloadTimeoutFromEnv(),
 	}
 	publicKey, err := LoadPublicKey()
 	if err != nil {

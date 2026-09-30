@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"os/user"
+	"strconv"
 	"syscall"
 
 	"github.com/justindeelux/gotham/internal/config"
@@ -45,13 +47,22 @@ func runUpdate(args []string) int {
 	case "check":
 		return runUpdateCheck(ctx, svc)
 	case "apply":
+		if err := requireBinaryOwner("apply"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return exitError
+		}
 		return runUpdateApply(ctx, svc, args[1:])
 	case "rollback":
+		if err := requireBinaryOwner("rollback"); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return exitError
+		}
 		if err := svc.Rollback(); err != nil {
 			fmt.Fprintf(os.Stderr, "update rollback: %v\n", err)
 			return exitError
 		}
 		fmt.Println("rolled back to the previous binary")
+		fmt.Println("the running process keeps the current binary until it restarts; run `systemctl restart gotham` to run the rolled-back binary")
 		return exitOK
 	case "reset":
 		if err := svc.Reset(); err != nil {
@@ -109,6 +120,40 @@ func runUpdateApply(ctx context.Context, svc updates.Service, args []string) int
 	}
 	fmt.Printf("updated to %s\n", result.Version)
 	return exitOK
+}
+
+// requireBinaryOwner refuses to swap a binary the invoking user does not own.
+// Run as root, the atomic swap installs a root:root 0755 binary over the
+// service user's binary, and the next service-run apply then fails at the
+// hardlink backup step (fs.protected_hardlinks=1 -> EPERM). Refusing is safer
+// than silently poisoning ownership; run as the service user instead:
+//
+//	sudo -u gotham /var/lib/gotham/bin/gotham update apply
+//
+// A missing binary (fresh install) is allowed: there is nothing to compare yet.
+func requireBinaryOwner(command string) error {
+	return checkBinaryOwner(updates.BinaryPathFromEnv(), os.Geteuid(), command)
+}
+
+// checkBinaryOwner is the testable core of requireBinaryOwner: it compares the
+// binary owner to euid and returns a clear message on a mismatch.
+func checkBinaryOwner(path string, euid int, command string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) == euid {
+		return nil
+	}
+	owner := strconv.Itoa(int(stat.Uid))
+	if u, lookupErr := user.LookupId(owner); lookupErr == nil {
+		owner = u.Username
+	}
+	return fmt.Errorf(
+		"refusing to update %s: it is owned by uid %d (%s) but this process runs as uid %d; "+
+			"run as the service user, e.g. sudo -u %s %s update %s",
+		path, stat.Uid, owner, euid, owner, path, command)
 }
 
 // updateUsage prints the `gotham update` help.

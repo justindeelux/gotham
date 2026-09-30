@@ -82,9 +82,11 @@ func (b *updateBackoff) seedFromStatus(status *updatecore.Status, current string
 		return
 	}
 	prev, at, ok := b.read(status.Version)
-	if ok && prev >= 1 && !at.IsZero() && at.Equal(status.At) {
-		// The same rollback is still on disk (a restart, not a new attempt):
-		// keep the escalated count, do not bump it again.
+	if ok && prev >= 1 && !at.IsZero() && !status.At.After(at) {
+		// The stored failure is at or after this rollback (the same rollback, or
+		// a later synchronous failure): keep its count and time. Rewinding `at`
+		// to an older rollback would let a restart retry sooner than the
+		// recorded backoff allows.
 		return
 	}
 	count := 1

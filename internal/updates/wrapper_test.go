@@ -309,6 +309,30 @@ func TestWrapperRollsBackWhenRestartFails(t *testing.T) {
 	}
 }
 
+// TestWrapperRestartFailRollbackUnhealthy proves the failed-restart branch
+// health-checks the restored binary (item 6 / R7): when the first restart fails
+// and the restored binary is also unhealthy, the outcome is rollback_failed,
+// not a false rolled_back.
+func TestWrapperRestartFailRollbackUnhealthy(t *testing.T) {
+	result := runWrapper(t, wrapperEnv{systemctlExit: 1, health: healthAlwaysFail})
+
+	if result.exitCode == 0 {
+		t.Fatalf("exit = 0, want nonzero (output %q)", result.output)
+	}
+	if result.target != "old" {
+		t.Fatalf("binary = %q, want the restored old binary (output %q)", result.target, result.output)
+	}
+	if !strings.Contains(result.status, "result=rollback_failed") {
+		t.Fatalf("status = %q, want rollback_failed (output %q)", result.status, result.output)
+	}
+	if strings.Contains(result.status, "result=rolled_back") {
+		t.Fatalf("status = %q, want rollback_failed, not rolled_back", result.status)
+	}
+	if result.pending != "" {
+		t.Errorf("pending marker not released: %q", result.pending)
+	}
+}
+
 // TestWrapperClearsRateLimitOnRollback proves a crash-looping new binary that
 // trips systemd's start rate limit does not turn a healthy rollback into
 // rollback_failed: the wrapper clears the failed state with reset-failed before

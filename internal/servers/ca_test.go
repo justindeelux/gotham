@@ -272,3 +272,20 @@ func mustIssueFromCSR(t *testing.T, authority *Authority, csrPEM []byte) []byte 
 	}
 	return certPEM
 }
+
+// TestUniqueStringsTrims pins N1: environment-provided SAN hosts
+// (GOTHAM_GRPC_HOSTS="cp.example.com, 203.0.113.10") can carry surrounding
+// spaces; a padded entry must be trimmed, not left as a SAN that matches
+// nothing (net.ParseIP fails on " 203.0.113.10").
+func TestUniqueStringsTrims(t *testing.T) {
+	got := uniqueStrings([]string{"cp.example.com", " 203.0.113.10", "", "cp.example.com", "  ", "\t::1 "})
+	want := []string{"cp.example.com", "203.0.113.10", "::1"}
+	if len(got) != len(want) {
+		t.Fatalf("uniqueStrings = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("uniqueStrings = %q, want %q", got, want)
+		}
+	}
+}

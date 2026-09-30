@@ -220,11 +220,14 @@ func csrIdentity(csr *x509.CertificateRequest) (commonName string, dns []string,
 	return commonName, dns, ips, nil
 }
 
-// uniqueStrings returns s with blank entries and duplicates removed, order
-// preserved.
+// uniqueStrings returns s with surrounding spaces trimmed and blank entries and
+// duplicates removed, order preserved. Trimming matters for operator input such
+// as GOTHAM_GRPC_HOSTS="cp.example.com, 203.0.113.10": a padded entry would
+// otherwise become a SAN that matches nothing.
 func uniqueStrings(s []string) []string {
 	var out []string
 	for _, item := range s {
+		item = strings.TrimSpace(item)
 		if item == "" || containsString(out, item) {
 			continue
 		}

@@ -237,25 +237,26 @@ func (s *service) applyRelease(ctx context.Context, release *Release) (*ApplyRes
 // applyAutoUpdate runs one scheduled check/apply: it resolves the newest
 // release, skips a version still inside its failed-attempt backoff, and applies
 // otherwise. A failure is persisted so the next tick backs off (LOW-2). It
-// reports whether an update was actually applied.
-func (s *service) applyAutoUpdate(ctx context.Context) (bool, error) {
+// returns the offered version (for logging — the staged version, not the
+// running one) and whether an update was actually applied.
+func (s *service) applyAutoUpdate(ctx context.Context) (string, bool, error) {
 	release, err := s.Check(ctx)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	if release == nil {
-		return false, nil
+		return s.current, false, nil
 	}
 	if s.backoff.blocked(release.Version) {
 		s.logger.Debug("updates: auto-update backoff active", "version", release.Version)
-		return false, nil
+		return release.Version, false, nil
 	}
 	result, err := s.applyRelease(ctx, release)
 	if err != nil {
 		s.backoff.record(release.Version, time.Now())
-		return false, err
+		return release.Version, false, err
 	}
-	return result.Applied, nil
+	return result.Version, result.Applied, nil
 }
 
 // Rollback restores the retained previous binary and clears the pending marker.
@@ -311,12 +312,12 @@ func (s *service) StartAuto(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				applied, err := s.applyAutoUpdate(ctx)
+				version, applied, err := s.applyAutoUpdate(ctx)
 				switch {
 				case err != nil:
 					s.logger.Warn("updates: auto-update failed", "error", err)
 				case applied:
-					s.logger.Info("updates: auto-update staged", "version", s.current)
+					s.logger.Info("updates: auto-update staged", "version", version)
 				default:
 					s.logger.Debug("updates: no auto-update available", "current", s.current)
 				}

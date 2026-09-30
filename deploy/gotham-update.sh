@@ -192,14 +192,20 @@ probe() {
 }
 
 wait_healthy() {
+    # Always probe at least once. With a short timeout (the tests use
+    # GOTHAM_TIMEOUT=1) the deadline can lapse between the `date` calls before
+    # the loop body runs, which would record a healthy binary as rolled_back.
+    # The do/while shape keeps the same deadline for the later attempts.
     deadline=$(( $(date +%s) + TIMEOUT ))
-    while [ "$(date +%s)" -lt "${deadline}" ]; do
+    while :; do
         if probe; then
             return 0
         fi
+        if [ "$(date +%s)" -ge "${deadline}" ]; then
+            return 1
+        fi
         sleep 1
     done
-    return 1
 }
 
 restart_service() {
@@ -296,7 +302,10 @@ if ! restart_service; then
     if restore; then
         log "restored ${BACKUP} after a failed restart"
         restart_service || log "restart on the previous binary failed"
-        finish rolled_back "restart failed; previous binary restored" 1
+        if wait_healthy; then
+            finish rolled_back "restart failed; previous binary restored" 1
+        fi
+        finish rollback_failed "restart failed; previous binary restored but unhealthy" 1
     fi
     finish no_backup "restart failed and no backup could be restored" 1
 fi

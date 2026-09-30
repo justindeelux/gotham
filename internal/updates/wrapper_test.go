@@ -182,6 +182,21 @@ func realInstallPresent() bool {
 	return false
 }
 
+// TestSanitizedEnvStripsSudo pins the harness itself: CI has no SUDO_*
+// variables, so without this a revert of sanitizedEnv would still pass CI.
+func TestSanitizedEnvStripsSudo(t *testing.T) {
+	t.Setenv("SUDO_USER", "root")
+	t.Setenv("SUDO_UID", "0")
+	t.Setenv("SUDO_GID", "0")
+	for _, entry := range sanitizedEnv() {
+		for _, prefix := range []string{"SUDO_USER=", "SUDO_UID=", "SUDO_GID="} {
+			if strings.HasPrefix(entry, prefix) {
+				t.Fatalf("sanitizedEnv kept %q", entry)
+			}
+		}
+	}
+}
+
 // writeGuardShim writes a command that records its use in sentinel and then
 // fails, so a stray wrapper run cannot act on the host (and the test can prove
 // the PATH shim was consulted).

@@ -77,6 +77,28 @@ systemctl daemon-reload && systemctl enable --now gotham
 `util-linux` (`flock`) is required by the wrapper; without it the wrapper fails
 closed and refuses to update rather than running unserialized.
 
+## Certificate authority (mTLS)
+
+`install.sh` provisions the gRPC certificate authority with `gotham ca init`,
+which writes `ca.crt` + `ca.key` (`0600`) into `GOTHAM_CA_DIR`
+(`/var/lib/gotham/ca`, owned by the `gotham` service user) and is idempotent — a
+reinstall keeps the existing CA. `gotham serve` loads it and the gRPC gateway
+runs TLS, presenting a server certificate signed by the CA and accepting a client
+certificate when one is presented. Without a CA (only when an operator runs
+`gotham serve` directly) the gateway falls back to plaintext and logs a warning.
+
+To add a node, copy `ca.crt` (never `ca.key`) to it and install the agent with
+`--ca`:
+
+```sh
+scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .
+sudo deploy/install-agent.sh --ca ./ca.crt
+```
+
+`install-agent.sh` fails closed without a CA; `--insecure` is the
+development-only override that leaves the agent channel in plaintext.
+
+
 ## Outcome, gate and recovery
 
 - The control plane writes `staged` to `/var/lib/gotham/update.pending`, swaps
@@ -156,6 +178,15 @@ closed and refuses to update rather than running unserialized.
   rollback is correct. Operators who prefer the unit to give up sooner (or later)
   can tune `StartLimitIntervalSec`/`StartLimitBurst`/`RestartSec` in the unit;
   the wrapper does not depend on the exact values.
+- **The release runner is shared with PR CI (HIGH, carried).** `release.yml` runs
+  on the same self-hosted runner as `ci.yml`/`e2e.yml`/`ui-e2e.yml`, which
+  execute `pull_request` code. The `release` environment's required reviewer
+  gates *who can trigger the release job*, not host compromise: a persistent
+  runner reached by untrusted code can tamper with the signed bytes or exfiltrate
+  `GOTHAM_UPDATE_SIGNING_KEY`. If any untrusted run ever executes on that runner,
+  rotate the signing key and re-release; move the release job to an
+  isolated/ephemeral runner before the next public release. Actions are
+  SHA-pinned and the sqlc download is checksum-verified to narrow this surface.
 
 ## Node-agent self-update layout
 

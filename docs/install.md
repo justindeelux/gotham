@@ -39,8 +39,23 @@ The installer:
    service user), the wrapper into `/usr/libexec/gotham/gotham-update`, the
    config into `/etc/gotham/updater.conf`, the status directory and sudoers
    rule, and the unit into `/etc/systemd/system/gotham.service`;
-5. applies the database migrations and starts `gotham.service`;
-6. prints the Web UI URL and the first-login steps.
+5. provisions the gRPC mTLS certificate authority at `/var/lib/gotham/ca`
+   (`gotham ca init`, idempotent — an existing CA is kept);
+6. applies the database migrations and starts `gotham.service`;
+7. prints the Web UI URL and the first-login steps.
+
+The gRPC gateway the node agents connect to runs **TLS** as soon as that CA
+exists: `gotham serve` loads `/var/lib/gotham/ca/ca.crt` + `ca.key` and presents
+a server certificate signed by it. To add a node, copy the public certificate to
+it (never `ca.key`):
+
+```sh
+scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .
+```
+
+An operator who runs `gotham serve` directly without a CA gets the development
+fallback (plaintext gRPC, logged as a warning); the installer never leaves a
+production host in that state.
 
 Re-running the installer keeps `/etc/gotham/gotham.env`: the managed keys
 (`GOTHAM_DATABASE_DSN`, `GOTHAM_REDIS_ADDR`, `GOTHAM_CA_DIR`,
@@ -79,10 +94,24 @@ account email in `PLATFORM_ADMINS` in `/etc/gotham/gotham.env`.
 
 ## Node agent
 
+Copy the control plane's public CA certificate to the node first (see
+[Control plane](#control-plane)), then run the installer:
+
 ```sh
+scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .
 git clone https://github.com/justindeelux/gotham.git
-sudo gotham/deploy/install-agent.sh
+sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=<node> \
+    gotham/deploy/install-agent.sh --ca ./ca.crt
 ```
+
+The installer **fails closed** without a CA: it refuses to run unless `--ca
+<path>` (or `GOTHAM_AGENT_CA_FILE=<path>`) is given, so a node never dials the
+control plane in plaintext. It installs the certificate as `/etc/gotham/ca.crt`
+(root-owned, `0644`) and writes `GOTHAM_AGENT_CA=/etc/gotham/ca.crt` to
+`/etc/gotham/agent.env`, which makes the agent verify the control plane over TLS.
+`--insecure` is the documented **local-development-only** override: it skips the
+CA check and leaves `GOTHAM_AGENT_CA` unset, so the agent connects without TLS.
+Never use it on a real node.
 
 The agent installer uses the same signed-manifest verification
 (`deploy/release-verify.sh`) for `gotham-agent-linux-<arch>` and
@@ -94,6 +123,16 @@ sudoers rule and the unit. Set `GOTHAM_AGENT_CP_ADDR` (control-plane gRPC
 address) and `GOTHAM_AGENT_NODE_ID` in the environment before running it; they
 are written to `/etc/gotham/agent.env`.
 
+Useful agent installer flags and variables:
+
+| Flag / variable | Purpose |
+|---|---|
+| `--ca <path>` | Install this control-plane CA certificate (required). |
+| `GOTHAM_AGENT_CA_FILE` | Same as `--ca`, via the environment. |
+| `--insecure` | Development only: connect without TLS. |
+| `--dry-run` | Print what would be done; makes no change. |
+| `GOTHAM_AGENT_CA` | Advanced: reuse a CA certificate already deployed on the node (skips the copy), read from an existing `agent.env` on reinstall. |
+
 ## Updates and rollback
 
 Releases are verified with the public key embedded in the running binary, so no
@@ -103,7 +142,7 @@ manual verification is needed at update time.
   `AUTO_UPDATE=true` in `/etc/gotham/gotham.env` for unattended updates. The
   wrapper health-checks the new binary and rolls back to `gotham.old` on
   failure.
-- **Node agent:** agents update from the control plane over the authenticated
+- **Node agent:** agents update from the control plane over the CA-verified TLS
   channel; enable unattended applies with `GOTHAM_AGENT_AUTO_UPDATE=true`, or
   trigger a fleet rollout from the UI. A release that fails to activate rolls
   back and its version is backed off (see `deploy/README.md`).
@@ -114,9 +153,11 @@ Reinstalling a specific version is a normal install with `GOTHAM_VERSION=vX.Y.Z`
 ## Release and signing flow
 
 Releases are built and published by `.github/workflows/release.yml` on a `v*`
-tag, on the self-hosted runner:
+tag, on the self-hosted runner. The release job targets the GitHub **`release`
+environment** (with a required reviewer), so it reads the environment secrets
+and waits for the owner's approval before it can use them:
 
-1. The job fails closed unless **both** repository secrets are set and
+1. The job fails closed unless **both** environment secrets are set and
    non-empty: `GOTHAM_UPDATE_PUBLIC_KEY` (base64 raw Ed25519 public key,
    embedded into both binaries with `-ldflags`) and `GOTHAM_UPDATE_SIGNING_KEY`
    (PKCS#8 PEM Ed25519 private key, used only on the runner).
@@ -142,20 +183,31 @@ The asset naming is a contract with the update code — see
 `internal/updates/checker.go` (control plane), `internal/updates/agents.go`
 (agent) and `updatecore.ManifestName` / `ManifestNameWithPrefix`.
 
+### Residual: the release runner is shared with PR CI
+
+The `release` environment's required reviewer gates **who can trigger the
+release job**, not what a compromised host can do: the self-hosted runner is the
+same host that runs `pull_request` CI (`ci.yml`, `e2e.yml`, `ui-e2e.yml`), which
+executes untrusted code. Environment secret isolation and SHA-pinned actions
+raise the bar, but if any untrusted workflow run ever executes on that runner,
+treat `GOTHAM_UPDATE_SIGNING_KEY` as compromised: **rotate the key and
+re-release**, and plan to move the release job to an isolated/ephemeral runner
+before the next public release. See `deploy/README.md` (Known residuals).
+
 ### Keypair
 
 - **Public key** (`deploy/gotham-signing-key.pub`): safe to publish. It is
   embedded in both binaries, in `deploy/install.sh`, and uploaded as a release
   asset so users can compare it.
-- **Private key** (`GOTHAM_UPDATE_SIGNING_KEY` repo secret): the only secret.
-  It is never committed or printed. **Back the private key up offline** — if it
+- **Private key** (`GOTHAM_UPDATE_SIGNING_KEY` environment secret): the only
+  secret. It is never committed or printed. **Back the private key up offline** — if it
   is lost no existing installation can verify a new release and a new keypair
   must be rotated in (which requires re-installing or embedding the new key in
   a manual release). Generate it with:
 
   ```sh
   go run ./cmd/signer keygen -out signing.key
-  # put signing.key (PKCS#8 PEM) in the GOTHAM_UPDATE_SIGNING_KEY repo secret
+  # put signing.key (PKCS#8 PEM) in the GOTHAM_UPDATE_SIGNING_KEY release environment secret
   # put signing.key.pub at deploy/gotham-signing-key.pub
   # put the base64 value printed above in GOTHAM_UPDATE_PUBLIC_KEY and in
   # deploy/install.sh (GOTHAM_RELEASE_PUBLIC_KEY_B64) and install-agent.sh

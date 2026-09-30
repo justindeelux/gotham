@@ -237,6 +237,40 @@ done
 echo "PASS: sudoers hardening present (B2)"
 echo "PASS: happy-path install verified and rendered"
 
+# ---- A1: control-plane CA provisioned + agent installer fails closed ---------
+# The CP installer must provision the gRPC certificate authority so a fresh
+# install serves TLS. In test mode `gotham ca init` runs the binary directly.
+CA_DIR_TEST="${ROOT}/var/lib/gotham/ca"
+for f in "${CA_DIR_TEST}/ca.crt" "${CA_DIR_TEST}/ca.key"; do
+    [ -f "${f}" ] || { echo "FAIL: installer did not create ${f} (gRPC would be plaintext)" >&2; exit 1; }
+    [ "$(mode_of "${f}")" = "600" ] \
+        || { echo "FAIL: ${f} mode is $(mode_of "${f}"), want 600" >&2; exit 1; }
+done
+grep -q "^GOTHAM_CA_DIR=${CA_DIR_TEST}$" "${ROOT}/etc/gotham/gotham.env" \
+    || { echo "FAIL: gotham.env GOTHAM_CA_DIR does not point at the provisioned CA" >&2; exit 1; }
+echo "PASS: control-plane CA provisioned 0600 and wired via GOTHAM_CA_DIR (A1)"
+
+# The agent installer must refuse to run without a CA (fail closed), accept
+# --insecure as the documented dev override, and accept --ca. --dry-run keeps
+# all three side-effect free; GOTHAM_BASE_URL/GOTHAM_VERSION avoid the network.
+agent_dry_run() {
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+        sh "${AGENT_INSTALLER}" "$@"
+}
+if agent_dry_run --dry-run >"${SCRATCH}/agent-no-ca.log" 2>&1; then
+    echo "FAIL: install-agent.sh ran without a CA (agent channel would be plaintext)" >&2
+    exit 1
+fi
+grep -q "no control-plane CA certificate configured" "${SCRATCH}/agent-no-ca.log" \
+    || { echo "FAIL: install-agent.sh refused a missing CA for an unexpected reason" >&2; cat "${SCRATCH}/agent-no-ca.log" >&2; exit 1; }
+agent_dry_run --insecure --dry-run >"${SCRATCH}/agent-insecure.log" 2>&1 \
+    || { echo "FAIL: install-agent.sh --insecure --dry-run failed" >&2; cat "${SCRATCH}/agent-insecure.log" >&2; exit 1; }
+printf 'dummy CA for the dry-run path\n' >"${SCRATCH}/ca-src.pem"
+agent_dry_run --ca "${SCRATCH}/ca-src.pem" --dry-run >"${SCRATCH}/agent-ca.log" 2>&1 \
+    || { echo "FAIL: install-agent.sh --ca --dry-run failed" >&2; cat "${SCRATCH}/agent-ca.log" >&2; exit 1; }
+echo "PASS: agent installer fails closed without a CA and accepts --ca/--insecure (A1)"
+
 # ---- N1: installer scripts must be executable ---------------------------------
 # The installers invoke the sudoers helpers (via `sh`, but the committed mode
 # must still be +x) and the operator runs the installers and verification

@@ -114,7 +114,10 @@ Node agents self-update from the control plane over the agent gRPC channel. The
 channel is **server-authenticated TLS**: the agent verifies the control plane's
 certificate but does not yet present a client certificate, so update integrity
 rests on the embedded-key signature check, not on channel client authentication
-(the agent client-certificate follow-up is tracked separately). The flow:
+(the agent client-certificate follow-up is tracked separately). The CP installer
+provisions the CA (`gotham ca init` → `/var/lib/gotham/ca`) and
+`install-agent.sh` requires it (`--ca ca.crt`; it fails closed without one). The
+flow:
 
 1. The agent calls `UpdateService/RequestUpdate` on reconnect and on a poll
    interval, reporting its `agent_version`, `os` and `arch`.

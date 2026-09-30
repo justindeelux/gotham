@@ -22,10 +22,10 @@ jobs:
           - "1.22.x"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: ${{ matrix.go }}
           cache: true
@@ -47,14 +47,14 @@ jobs:
         run: make build
 
       - name: Upload gotham binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: gotham-${{ matrix.os }}-go${{ matrix.go }}
           path: bin/gotham
           if-no-files-found: error
 
       - name: Upload gotham-agent binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: gotham-agent-${{ matrix.os }}-go${{ matrix.go }}
           path: bin/gotham-agent
@@ -65,16 +65,16 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: "1.22.x"
           cache: true
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8.0.0
         with:
           version: v2.13
 
@@ -83,10 +83,10 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
@@ -112,11 +112,19 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install sqlc
+        # The tarball is executed, so verify it against a pinned SHA-256 before
+        # extraction: a compromised release mirror must not become code execution
+        # on this persistent runner (which also signs releases).
         run: |
-          curl -sSfL https://github.com/sqlc-dev/sqlc/releases/download/v1.31.1/sqlc_1.31.1_linux_amd64.tar.gz -o sqlc.tar.gz
+          set -eu
+          version="1.31.1"
+          sha256="497ae4fcdfa64c5b0c311ffe4c2bd991e43991e82e5367792ed78bc2dca27354"
+          url="https://github.com/sqlc-dev/sqlc/releases/download/v${version}/sqlc_${version}_linux_amd64.tar.gz"
+          curl -sSfL "${url}" -o sqlc.tar.gz
+          echo "${sha256}  sqlc.tar.gz" | sha256sum --check --strict -
           tar -xzf sqlc.tar.gz
           chmod +x sqlc
           mkdir -p "$HOME/.local/bin"

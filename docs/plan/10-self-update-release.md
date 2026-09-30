@@ -55,7 +55,11 @@
   release checker and HTTP surface. The CP offers updates over the agent's
   authenticated `RequestUpdate` call and an operator `update-all` endpoint
   records a rollout target that agents pick up on their next poll (the contract
-  is pull-based; the request never dials a node).
+  is pull-based; the request never dials a node). The channel is authenticated
+  with the CA the control-plane installer provisions (`gotham ca init`); the
+  agent installer requires that certificate (`--ca`) and dials TLS, so a fresh
+  install never runs the agent channel in plaintext (client-certificate mTLS
+  remains a follow-up).
 
 ## INFRA-9.1 — Release pipeline — `ws/p9-release`
 

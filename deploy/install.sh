@@ -39,6 +39,10 @@
 # is kept) and any operator-added keys (AUTO_UPDATE, PLATFORM_ADMINS, ...) are
 # left intact.
 #
+# The installer provisions the mTLS certificate authority (`gotham ca init`) at
+# GOTHAM_CA_DIR and the gRPC gateway then runs TLS. Copy ca.crt from there to
+# each node and pass it to install-agent.sh --ca.
+#
 # Usage:
 #   sudo ./install.sh [--dry-run]
 
@@ -66,7 +70,7 @@ for argument in "$@"; do
     case "${argument}" in
         --dry-run) DRY_RUN=1 ;;
         -h | --help)
-            sed -n '2,43p' "$0"
+            sed -n '2,49p' "$0"
             exit 0
             ;;
         *)
@@ -115,6 +119,7 @@ ETC_DIR="${PREFIX}/etc/gotham"
 STATE_DIR="${PREFIX}/var/lib/gotham"
 BIN_DIR="${STATE_DIR}/bin"
 INSTALL_PATH="${BIN_DIR}/${BINARY_NAME}"
+CA_DIR="${STATE_DIR}/ca"
 STATUS_DIR="${PREFIX}/var/lib/gotham-updater"
 WRAPPER_PATH="${PREFIX}/usr/libexec/gotham/gotham-update"
 WRAPPER_CONF="${ETC_DIR}/updater.conf"
@@ -314,7 +319,7 @@ if [ "${DRY_RUN}" -eq 0 ]; then
             echo "# Gotham control-plane environment. Read by gotham.service (EnvironmentFile)."
             echo "GOTHAM_DATABASE_DSN=${DSN}"
             echo "GOTHAM_REDIS_ADDR=${REDIS_ADDR}"
-            echo "GOTHAM_CA_DIR=${STATE_DIR}/ca"
+            echo "GOTHAM_CA_DIR=${CA_DIR}"
             echo "GOTHAM_SECRET_KEY=${SECRET_KEY}"
             echo "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH=${JWT_KEY}"
             echo "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH=${JWT_PUB}"
@@ -355,6 +360,20 @@ if [ "${DRY_RUN}" -eq 0 ]; then
     fi
 else
     echo "[dry-run] write ${ENV_FILE}, ${JWT_KEY}, ${JWT_PUB}"
+fi
+
+# ---- Certificate authority (mTLS) -------------------------------------------
+# Provision the CA the gRPC gateway uses for TLS. `gotham ca init` is
+# idempotent and writes ca.crt/ca.key (0600) under the service-owned
+# GOTHAM_CA_DIR, so a fresh install never serves the agent channel in plaintext.
+# Copy ca.crt to each node for install-agent.sh --ca.
+log "initializing the mTLS certificate authority at ${CA_DIR}"
+if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "[dry-run] GOTHAM_CA_DIR=${CA_DIR} ${INSTALL_PATH} ca init"
+elif [ "${TEST_MODE}" -eq 1 ]; then
+    GOTHAM_CA_DIR="${CA_DIR}" "${INSTALL_PATH}" ca init
+else
+    runuser -u "${SERVICE_USER}" -- env GOTHAM_CA_DIR="${CA_DIR}" "${INSTALL_PATH}" ca init
 fi
 
 # ---- Self-update chain (mirror of deploy/README.md) -------------------------
@@ -413,8 +432,11 @@ fi
 # ---- Migrate + start --------------------------------------------------------
 if [ "${DRY_RUN}" -eq 0 ]; then
     log "applying database migrations"
+    # Pass the DSN and binary path positionally: interpolating the DSN into a
+    # single-quoted sh -c would let a quote in the DSN run commands as the
+    # service user.
     runuser -u "${SERVICE_USER}" -- sh -c \
-        "cd / && GOTHAM_DATABASE_DSN='${DSN}' '${INSTALL_PATH}' migrate up" \
+        'cd / && GOTHAM_DATABASE_DSN="$1" exec "$2" migrate up' gotham-migrate "${DSN}" "${INSTALL_PATH}" \
         || die "database migrations failed (check PostgreSQL and GOTHAM_DATABASE_DSN)"
 fi
 

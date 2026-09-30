@@ -29,6 +29,7 @@ func TestMain(m *testing.M) {
 		"GOTHAM_AGENT_UPDATE_STATUS":  filepath.Join(sandbox, "status", "update.status"),
 		"GOTHAM_AGENT_UPDATE_PENDING": filepath.Join(sandbox, "update.pending"),
 		"GOTHAM_AGENT_UPDATE_LOCK":    filepath.Join(sandbox, "update.lock"),
+		"GOTHAM_AGENT_UPDATE_RETRY":   filepath.Join(sandbox, "update.retry"),
 		"GOTHAM_AGENT_AUTO_UPDATE":    "false",
 		"GOTHAM_UPDATE_PUBLIC_KEY":    "",
 	} {
@@ -58,6 +59,7 @@ func TestAgentUpdatePathsSandboxed(t *testing.T) {
 		"UpdateStatusPath":  cfg.UpdateStatusPath,
 		"UpdatePendingPath": cfg.UpdatePendingPath,
 		"UpdateLockPath":    cfg.UpdateLockPath,
+		"UpdateRetryPath":   cfg.UpdateRetryPath,
 	} {
 		if !strings.HasPrefix(path, agentTestSandbox) {
 			t.Fatalf("%s = %q escapes the sandbox %q", name, path, agentTestSandbox)

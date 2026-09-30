@@ -43,6 +43,8 @@ func run(args []string) int {
 	switch args[0] {
 	case "serve", "run":
 		return runServe()
+	case "update":
+		return runUpdate(args[1:])
 	case "version", "-v", "--version":
 		fmt.Printf("gotham-agent %s\n", version)
 		return exitOK
@@ -194,6 +196,7 @@ func usage(w io.Writer) {
 Usage:
   gotham-agent              Run the node agent (same as gotham-agent serve)
   gotham-agent serve        Run the node agent
+  gotham-agent update reset Clear the failed-update state so a fixed release is retried
   gotham-agent version      Print the version
   gotham-agent help         Show this help
 

@@ -126,6 +126,43 @@ pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
 log() { echo "==> $*"; }
 
+# timestamp_to_epoch converts a Go RFC3339Nano timestamp to epoch seconds, or 0
+# when it cannot be parsed. Go marshals time.Time with up to 9 fractional
+# digits; Python 3.10's fromisoformat accepts at most 6, so truncate before
+# parsing (the box's Python rejected 9 digits and the helper always returned 0).
+timestamp_to_epoch() { # $1 raw RFC3339
+    python3 -c '
+import sys, re, datetime
+raw = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
+if not raw:
+    print(0)
+    raise SystemExit(0)
+raw = re.sub(r"\.(\d{6})\d+", r".\1", raw)
+try:
+    print(int(datetime.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()))
+except Exception:
+    print(0)
+' "$1" 2>/dev/null
+}
+
+# self_check_timestamp fails the script early when the interpreter cannot parse
+# the 9-digit fractional seconds Go emits.
+self_check_timestamp() {
+    sample="2026-09-30T12:00:05.123456789Z"
+    got=$(timestamp_to_epoch "${sample}")
+    want=$(python3 -c 'import datetime;print(int(datetime.datetime(2026,9,30,12,0,5,tzinfo=datetime.timezone.utc).timestamp()))' 2>/dev/null)
+    if [ -n "${got}" ] && [ "${got}" != "0" ] && [ "${got}" = "${want}" ]; then
+        return 0
+    fi
+    echo "timestamp self-check failed: ${sample} -> ${got:-<empty>} (want ${want:-?})" >&2
+    return 1
+}
+
+if ! self_check_timestamp; then
+    echo "verify-agent-update.sh: python3 cannot parse Go RFC3339Nano timestamps" >&2
+    exit 1
+fi
+
 # print_debug_paths prints where the scratch artifacts live and the tail of the
 # control-plane log, so a failure on a remote box is diagnosable without the
 # cleanup trap having removed everything.
@@ -369,21 +406,16 @@ else:
 }
 
 node_heartbeat_epoch() { # $1 node id; epoch seconds of its last heartbeat, or 0
-    api_get /api/v1/servers/agents 2>/dev/null | python3 -c '
-import sys, json, datetime
+    raw=$(api_get /api/v1/servers/agents 2>/dev/null | python3 -c '
+import sys, json
 want = sys.argv[1]
 data = json.load(sys.stdin)
 for agent in data.get("agents", []):
     if agent.get("node_id") == want:
-        raw = agent.get("at", "")
-        try:
-            print(int(datetime.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()))
-        except Exception:
-            print(0)
+        print(agent.get("at", ""))
         break
-else:
-    print(0)
-' "$1" 2>/dev/null
+' "$1" 2>/dev/null)
+    timestamp_to_epoch "${raw}"
 }
 
 unit_is_active() { # $1 unit; "active" when systemd reports it running
@@ -452,6 +484,7 @@ Environment=GOTHAM_AGENT_UPDATE_SCRIPT=${wrapper}
 Environment=GOTHAM_AGENT_UPDATE_STATUS=${SCRATCH}/status-${suffix}/${node}.status
 Environment=GOTHAM_AGENT_UPDATE_PENDING=${state}/update.pending
 Environment=GOTHAM_AGENT_UPDATE_LOCK=${state}/update.lock
+Environment=GOTHAM_AGENT_UPDATE_RETRY=${state}/update.retry
 Environment=GOTHAM_AGENT_HEALTH_ADDR=127.0.0.1:${health}
 Environment=GOTHAM_AGENT_UPDATE_INTERVAL=5s
 Environment=GOTHAM_AGENT_AUTO_UPDATE=false
@@ -678,15 +711,53 @@ for suffix in a b; do
     fi
 done
 
+# The failed release must not be re-applied in a loop: watch a quiet window and
+# require the wrapper status timestamps and the systemd restart counters to stay
+# put (the agent seeds a durable-status backoff so it skips the bad release).
+status_at() { # $1 status file -> the recorded epoch, or ""
+    [ -f "$1" ] || { echo ""; return; }
+    sed -n 's/^at=//p' "$1" 2>/dev/null | head -n 1
+}
+unit_nrestarts() { systemctl show -p NRestarts --value "$1" 2>/dev/null || echo ""; }
+
+STATUS_A="${SCRATCH}/status-a/${NODE_A}.status"
+STATUS_B="${SCRATCH}/status-b/${NODE_B}.status"
+at_a_before=$(status_at "${STATUS_A}")
+at_b_before=$(status_at "${STATUS_B}")
+restarts_a_before=$(unit_nrestarts "${UNIT_A}")
+restarts_b_before=$(unit_nrestarts "${UNIT_B}")
+log "NEG2 watching a 30s quiet window for a crash-loop"
+sleep 30
+at_a_after=$(status_at "${STATUS_A}")
+at_b_after=$(status_at "${STATUS_B}")
+restarts_a_after=$(unit_nrestarts "${UNIT_A}")
+restarts_b_after=$(unit_nrestarts "${UNIT_B}")
+
+LOOP_OK=1
+if [ -n "${at_a_before}" ] && [ "${at_a_before}" = "${at_a_after}" ] \
+    && [ -n "${at_b_before}" ] && [ "${at_b_before}" = "${at_b_after}" ]; then
+    pass "NEG2 no re-apply during a 30s window (wrapper status timestamps unchanged)"
+else
+    fail "NEG2 the failed release was re-applied (status at a=${at_a_before}->${at_a_after} b=${at_b_before}->${at_b_after})"
+    LOOP_OK=0
+fi
+if [ -z "${restarts_a_before}" ] || [ -z "${restarts_b_before}" ] \
+    || { [ "${restarts_a_before}" = "${restarts_a_after}" ] && [ "${restarts_b_before}" = "${restarts_b_after}" ]; }; then
+    pass "NEG2 no further systemd restarts during the window"
+else
+    fail "NEG2 systemd restarts increased (a=${restarts_a_before}->${restarts_a_after} b=${restarts_b_before}->${restarts_b_after})"
+    LOOP_OK=0
+fi
+
 # Now stop the units so a fresh process cannot retry the bad release in a loop.
 systemctl stop "${UNIT_A}" "${UNIT_B}" >/dev/null 2>&1 || true
 NEG2_A=$(node_version "${NODE_A}")
 NEG2_B=$(node_version "${NODE_B}")
 if [ "${ROLLED_A}" -eq 1 ] && [ "${ROLLED_B}" -eq 1 ] && [ "${ACTIVE_OK}" -eq 1 ] && [ "${HEARTBEAT_OK}" -eq 1 ] \
-    && [ "${NEG2_A}" = "v2.0.0" ] && [ "${NEG2_B}" = "v2.0.0" ]; then
+    && [ "${LOOP_OK}" -eq 1 ] && [ "${NEG2_A}" = "v2.0.0" ] && [ "${NEG2_B}" = "v2.0.0" ]; then
     pass "NEG2 broken signed release rolled back, both units active, agents on v2.0.0"
 else
-    fail "NEG2 broken release not rolled back cleanly (rolled=${ROLLED_A}/${ROLLED_B} active=${ACTIVE_OK} heartbeat=${HEARTBEAT_OK} a=${NEG2_A} b=${NEG2_B})"
+    fail "NEG2 broken release not rolled back cleanly (rolled=${ROLLED_A}/${ROLLED_B} active=${ACTIVE_OK} heartbeat=${HEARTBEAT_OK} loop=${LOOP_OK} a=${NEG2_A} b=${NEG2_B})"
 fi
 
 # ---------------------------------------------------------------------------

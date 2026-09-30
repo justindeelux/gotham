@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -32,6 +34,12 @@ const (
 const (
 	updateBackoffBase = time.Minute
 	updateBackoffMax  = time.Hour
+	// updateFailedSeedBackoff is the initial backoff seeded at startup from a
+	// durable rolled_back/rollback_failed status, so an agent restarted by the
+	// wrapper does not immediately re-apply the release that just failed and
+	// crash-loop. It is bounded by updateBackoffMax and cleared by an operator
+	// reset (`gotham-agent update reset`).
+	updateFailedSeedBackoff = 30 * time.Minute
 )
 
 // statusFreshness bounds how old a healthy status may be before it is treated
@@ -107,14 +115,19 @@ func newUpdater(cfg Config, log *slog.Logger, version func() string, setVersion 
 	if err := applier.ResumeStaged(context.Background()); err != nil {
 		log.Warn("agent: could not resume a staged update", "error", err)
 	}
-	return &updater{
+	u := &updater{
 		cfg:        cfg,
 		log:        log,
 		applier:    applier,
 		version:    version,
 		setVersion: setVersion,
 		backoff:    map[string]*backoffState{},
-	}, nil
+	}
+	// A wrapper restart clears this process's in-memory backoff, so seed it from
+	// the durable status: a release that just rolled back must not be re-applied
+	// immediately (the rollout target may be unchanged).
+	u.seedBackoffFromStatus()
+	return u, nil
 }
 
 // run polls immediately and then once per interval until ctx is cancelled.
@@ -136,6 +149,10 @@ func (u *updater) run(ctx context.Context, client agentv1.UpdateServiceClient) {
 // one is offered, applies it. A plain offer is only applied when unattended
 // auto-update is enabled; an operator-triggered rollout is always applied.
 func (u *updater) checkOnce(ctx context.Context, client agentv1.UpdateServiceClient) {
+	// An operator reset (or a durable-status change) clears a backoff so a fixed
+	// release can be retried.
+	u.consumeRetry()
+
 	rpcCtx, cancel := context.WithTimeout(ctx, updateRPCTimeout)
 	resp, err := client.RequestUpdate(rpcCtx, &agentv1.UpdateRequest{
 		AgentVersion: u.version(),
@@ -248,6 +265,73 @@ func (u *updater) clearBackoff(version string) {
 	u.backoffMu.Lock()
 	defer u.backoffMu.Unlock()
 	delete(u.backoff, version)
+}
+
+// seedBackoffFromStatus seeds the backoff for the version a durable
+// rolled_back/rollback_failed status names when it is newer than the running
+// version, so a wrapper restart does not immediately re-apply a release that
+// just failed.
+func (u *updater) seedBackoffFromStatus() {
+	status, err := u.applier.Status.Read()
+	if err != nil || status == nil {
+		return
+	}
+	switch status.Result {
+	case updatecore.StatusRolledBack, updatecore.StatusRollbackFailed:
+	default:
+		return
+	}
+	if !isNewerVersion(status.Version, u.version()) {
+		return
+	}
+	u.backoffMu.Lock()
+	u.backoff[status.Version] = &backoffState{failures: 1, until: time.Now().Add(updateFailedSeedBackoff)}
+	u.backoffMu.Unlock()
+	u.log.Warn("agent: backing off a release that previously failed to activate",
+		"version", status.Version, "result", status.Result, "retry_in", updateFailedSeedBackoff.String())
+}
+
+// consumeRetry clears the whole backoff when an operator reset left the retry
+// marker, and removes the marker. It is a cheap stat on the common path.
+func (u *updater) consumeRetry() {
+	path := strings.TrimSpace(u.cfg.UpdateRetryPath)
+	if path == "" {
+		return
+	}
+	if _, err := os.Stat(path); err != nil {
+		return
+	}
+	u.backoffMu.Lock()
+	u.backoff = map[string]*backoffState{}
+	u.backoffMu.Unlock()
+	_ = os.Remove(path)
+	u.log.Info("agent: update retry requested; cleared the failed-update backoff")
+}
+
+// ResetUpdateState is the operator retry path (`gotham-agent update reset`). It
+// clears the agent-owned pending marker, removes the authoritative status when
+// permitted (it is root-owned; a non-root reset still works through the retry
+// marker) and writes the retry marker a running agent consumes to clear its
+// in-memory backoff.
+func ResetUpdateState(cfg Config) error {
+	if err := updatecore.NewStatusStore(cfg.UpdatePendingPath).Remove(); err != nil {
+		return err
+	}
+	if path := strings.TrimSpace(cfg.UpdateStatusPath); path != "" {
+		// Best effort: the status directory is root-owned, so a non-root reset
+		// cannot remove it; the retry marker below still applies.
+		_ = os.Remove(path)
+	}
+	path := strings.TrimSpace(cfg.UpdateRetryPath)
+	if path == "" {
+		return nil
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, []byte("retry\n"), 0o644)
 }
 
 // isNewerVersion reports whether offered is strictly newer than current. An

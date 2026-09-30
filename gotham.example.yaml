@@ -43,6 +43,7 @@
 #   GOTHAM_AGENT_UPDATE_STATUS    root-owned agent status (default /var/lib/gotham-agent-updater/update.status)
 #   GOTHAM_AGENT_UPDATE_PENDING   agent staged gate (default /var/lib/gotham-agent/update.pending)
 #   GOTHAM_AGENT_UPDATE_LOCK      agent update lock (default /var/lib/gotham-agent/update.lock)
+#   GOTHAM_AGENT_UPDATE_RETRY     agent retry marker (default /var/lib/gotham-agent/update.retry)
 #   GOTHAM_AGENT_HEALTH_ADDR      loopback health endpoint (default 127.0.0.1:8001)
 # The agent's release public key is embedded at build time; GOTHAM_UPDATE_PUBLIC_KEY
 # is the development override and applies only when no key is embedded.

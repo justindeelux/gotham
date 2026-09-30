@@ -31,6 +31,7 @@ const (
 	envUpdateStatus   = "GOTHAM_AGENT_UPDATE_STATUS"
 	envUpdatePending  = "GOTHAM_AGENT_UPDATE_PENDING"
 	envUpdateLock     = "GOTHAM_AGENT_UPDATE_LOCK"
+	envUpdateRetry    = "GOTHAM_AGENT_UPDATE_RETRY"
 	envHealthAddr     = "GOTHAM_AGENT_HEALTH_ADDR"
 
 	envDockerHost = "DOCKER_HOST"
@@ -53,8 +54,11 @@ const (
 	defaultAgentStatusPath   = "/var/lib/gotham-agent-updater/update.status"
 	defaultAgentPendingPath  = "/var/lib/gotham-agent/update.pending"
 	defaultAgentLockPath     = "/var/lib/gotham-agent/update.lock"
-	defaultAgentHealthAddr   = "127.0.0.1:8001"
-	defaultUpdateInterval    = 5 * time.Minute
+	// defaultAgentRetryPath is the agent-owned marker an operator reset writes
+	// to make a running agent clear its failed-update backoff and retry.
+	defaultAgentRetryPath  = "/var/lib/gotham-agent/update.retry"
+	defaultAgentHealthAddr = "127.0.0.1:8001"
+	defaultUpdateInterval  = 5 * time.Minute
 )
 
 // Config holds the agent's runtime configuration, loaded from the environment.
@@ -101,6 +105,9 @@ type Config struct {
 	UpdatePendingPath string
 	// UpdateLockPath is the lock shared with the wrapper.
 	UpdateLockPath string
+	// UpdateRetryPath is the agent-owned retry marker an operator reset writes
+	// to clear the failed-update backoff of a running agent.
+	UpdateRetryPath string
 	// HealthAddr is the loopback address the wrapper probes after a restart.
 	HealthAddr string
 	// Restart overrides the restart wrapper (tests). When nil the fixed
@@ -130,6 +137,7 @@ func Load() (Config, error) {
 		UpdateStatusPath:  envOr(envUpdateStatus, defaultAgentStatusPath),
 		UpdatePendingPath: envOr(envUpdatePending, defaultAgentPendingPath),
 		UpdateLockPath:    envOr(envUpdateLock, defaultAgentLockPath),
+		UpdateRetryPath:   envOr(envUpdateRetry, defaultAgentRetryPath),
 		HealthAddr:        envOr(envHealthAddr, defaultAgentHealthAddr),
 	}
 

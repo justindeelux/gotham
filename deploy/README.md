@@ -159,6 +159,7 @@ back to the control-plane defaults). The privilege split is the same:
 | `/var/lib/gotham-agent/bin/gotham-agent.old` | `gotham-agent` | yes | Hardlink to the last known good binary. |
 | `/var/lib/gotham-agent/update.pending` | `gotham-agent` | yes | Staged-update marker that gates a second apply. |
 | `/var/lib/gotham-agent/update.lock` | `gotham-agent` | yes | Lock shared with the wrapper. |
+| `/var/lib/gotham-agent/update.retry` | `gotham-agent` | yes | Operator retry marker: a running agent clears its failed-update backoff when it appears. |
 | `/usr/libexec/gotham/gotham-agent-update` | root | **no** | Privileged wrapper (no arguments). |
 | `/etc/gotham/agent-updater.conf` | root | **no** | Fixed binary/service/health/status/pending/lock. |
 | `/var/lib/gotham-agent-updater/update.status` | root | **no** (read-only) | Authoritative outcome. |
@@ -191,6 +192,25 @@ The same residuals as the control-plane wrapper apply (root `mv` inside the
 agent-owned `bin`, root read of the agent-owned pending marker, check-then-open
 TOCTOU, wrapper-death window); the upgrade path is the same `runuser`/`setpriv`
 handoff.
+
+### Failed-release backoff and operator retry
+
+A release that fails to activate is rolled back and the root-owned status
+records `rolled_back`/`rollback_failed` with its version. The agent seeds a
+durable-status backoff at startup (`updateFailedSeedBackoff`, 30 minutes) and
+keeps its per-version exponential backoff for repeated attempts, so a wrapper
+restart does not immediately re-apply the same broken release and crash-loop
+while the rollout target is unchanged. A **newer** release is applied
+automatically; only retrying the *same* version needs the operator path:
+
+```sh
+sudo gotham-agent update reset   # clears the pending marker, the status (as root)
+                                 # and the agent-owned retry marker
+```
+
+A running agent consumes `update.retry` on its next poll and clears its
+in-memory backoff; a non-root `gotham-agent update reset` still works through
+that marker (it just cannot remove the root-owned status file).
 
 ## Linux/systemd verification
 

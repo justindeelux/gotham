@@ -145,6 +145,7 @@ func updaterTestConfig(t *testing.T, target string, restart updatecore.RestartFu
 		UpdateLockPath:    filepath.Join(dir, "update.lock"),
 		UpdatePendingPath: filepath.Join(dir, "update.pending"),
 		UpdateStatusPath:  filepath.Join(dir, "update.status"),
+		UpdateRetryPath:   filepath.Join(dir, "update.retry"),
 		UpdateScript:      filepath.Join(dir, "gotham-agent-update"),
 		AutoUpdate:        true,
 		UpdateInterval:    time.Minute,
@@ -411,6 +412,85 @@ func TestAgentUpdaterBacksOffAfterFailedUpdate(t *testing.T) {
 	runner.updater.checkOnce(context.Background(), client)
 	if launches != 1 {
 		t.Fatalf("wrapper launches = %d, want 1 (backoff must suppress the retry)", launches)
+	}
+}
+
+// TestAgentUpdaterSeedsBackoffFromRolledBackStatus is the restart-loop fix: a
+// durable rolled_back status for a newer version makes a freshly started agent
+// skip that release on its first poll (the backoff is seeded, not just the
+// in-memory map).
+func TestAgentUpdaterSeedsBackoffFromRolledBackStatus(t *testing.T) {
+	release := newAgentReleaseServer(t, false)
+	setTestPublicKey(t, release.public)
+
+	target := filepath.Join(t.TempDir(), "gotham-agent")
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	dir := filepath.Dir(target)
+	// The wrapper recorded a rollback of the offered version.
+	if err := updatecore.NewStatusStore(filepath.Join(dir, "update.status")).Write(updatecore.Status{
+		Result: updatecore.StatusRolledBack, Version: testAgentVersion, At: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("write rolled_back status: %v", err)
+	}
+	launches := 0
+	restart := func(context.Context) (func() error, error) {
+		launches++
+		return func() error { return nil }, nil
+	}
+	runner := NewAgent(updaterTestConfig(t, target, restart), discardLogger(), nil)
+
+	if !runner.updater.inBackoff(testAgentVersion) {
+		t.Fatal("backoff was not seeded from the durable rolled_back status")
+	}
+	runner.updater.checkOnce(context.Background(), &fakeUpdateClient{resp: release.offer()})
+	if launches != 0 {
+		t.Fatalf("wrapper launches = %d, want 0 (the failed release must not be re-applied)", launches)
+	}
+	if got := readFileString(t, target); got != "old binary" {
+		t.Fatalf("target = %q, want it unchanged", got)
+	}
+}
+
+// TestAgentUpdaterAppliesAfterReset proves the operator retry path: after
+// `gotham-agent update reset` the agent clears the seeded backoff and applies
+// the same version again.
+func TestAgentUpdaterAppliesAfterReset(t *testing.T) {
+	release := newAgentReleaseServer(t, false)
+	setTestPublicKey(t, release.public)
+
+	target := filepath.Join(t.TempDir(), "gotham-agent")
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	dir := filepath.Dir(target)
+	if err := updatecore.NewStatusStore(filepath.Join(dir, "update.status")).Write(updatecore.Status{
+		Result: updatecore.StatusRolledBack, Version: testAgentVersion, At: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("write rolled_back status: %v", err)
+	}
+	launches := 0
+	restart := func(context.Context) (func() error, error) {
+		launches++
+		return func() error { return nil }, nil
+	}
+	cfg := updaterTestConfig(t, target, restart)
+	runner := NewAgent(cfg, discardLogger(), nil)
+	client := &fakeUpdateClient{resp: release.offer()}
+
+	// Before the reset the failed release is skipped.
+	runner.updater.checkOnce(context.Background(), client)
+	if launches != 0 {
+		t.Fatalf("wrapper launches = %d before reset, want 0", launches)
+	}
+
+	if err := ResetUpdateState(cfg); err != nil {
+		t.Fatalf("ResetUpdateState: %v", err)
+	}
+	runner.updater.checkOnce(context.Background(), client)
+	if launches != 1 {
+		t.Fatalf("wrapper launches = %d after reset, want 1", launches)
 	}
 }
 

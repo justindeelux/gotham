@@ -45,6 +45,9 @@ func TestResetUpdateStateWritesMarker(t *testing.T) {
 	if err != nil || !info.Mode().IsRegular() {
 		t.Fatalf("retry marker is not a regular file: %v (%v)", info, err)
 	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Fatalf("retry marker mode = %o, want 0644 (set on the file handle)", perm)
+	}
 	if got := readFileString(t, cfg.UpdateRetryPath); got != "retry\n" {
 		t.Fatalf("retry marker = %q, want retry", got)
 	}
@@ -145,7 +148,7 @@ func TestAgentUpdaterPersistsBackoffCount(t *testing.T) {
 	}
 	runner := NewAgent(updaterTestConfig(t, target, noopAgentRestart), discardLogger(), nil)
 
-	if got := runner.updater.readBackoffCount(testAgentVersion); got != 1 {
+	if got := runner.updater.readBackoff(testAgentVersion).count; got != 1 {
 		t.Fatalf("seeded count = %d, want 1", got)
 	}
 	if !runner.updater.inBackoff(testAgentVersion) {
@@ -153,12 +156,60 @@ func TestAgentUpdaterPersistsBackoffCount(t *testing.T) {
 	}
 	// A further failed attempt escalates the persisted count.
 	runner.updater.recordFailure(testAgentVersion)
-	if got := runner.updater.readBackoffCount(testAgentVersion); got != 2 {
+	if got := runner.updater.readBackoff(testAgentVersion).count; got != 2 {
 		t.Fatalf("count after a second failure = %d, want 2", got)
 	}
 	// Success resets it.
 	runner.updater.clearBackoff(testAgentVersion)
-	if got := runner.updater.readBackoffCount(testAgentVersion); got != 0 {
+	if got := runner.updater.readBackoff(testAgentVersion).count; got != 0 {
 		t.Fatalf("count after success = %d, want 0", got)
+	}
+}
+
+// TestAgentUpdaterSeededBackoffDoesNotCountRestarts is the LOW: an unrelated
+// restart while the same rolled_back status is on disk must not escalate the
+// count; only a new failure (a changed status `at`) does.
+func TestAgentUpdaterSeededBackoffDoesNotCountRestarts(t *testing.T) {
+	public, _, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	setTestPublicKey(t, public)
+
+	target := filepath.Join(t.TempDir(), "gotham-agent")
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	dir := filepath.Dir(target)
+	statusPath := filepath.Join(dir, "update.status")
+	failureAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	writeStatus := func(at time.Time) {
+		t.Helper()
+		if err := updatecore.NewStatusStore(statusPath).Write(updatecore.Status{
+			Result: updatecore.StatusRolledBack, Version: testAgentVersion, At: at,
+		}); err != nil {
+			t.Fatalf("write rolled_back status: %v", err)
+		}
+	}
+	writeStatus(failureAt)
+
+	cfg := updaterTestConfig(t, target, noopAgentRestart)
+	first := NewAgent(cfg, discardLogger(), nil)
+	if got := first.updater.readBackoff(testAgentVersion).count; got != 1 {
+		t.Fatalf("first seed count = %d, want 1", got)
+	}
+
+	// Two more restarts with the same status must not bump the count.
+	_ = NewAgent(cfg, discardLogger(), nil)
+	third := NewAgent(cfg, discardLogger(), nil)
+	if got := third.updater.readBackoff(testAgentVersion).count; got != 1 {
+		t.Fatalf("count after restarts = %d, want 1 (restarts must not escalate)", got)
+	}
+
+	// A new failure time escalates it.
+	writeStatus(failureAt.Add(time.Minute))
+	fourth := NewAgent(cfg, discardLogger(), nil)
+	if got := fourth.updater.readBackoff(testAgentVersion).count; got != 2 {
+		t.Fatalf("count after a new failure = %d, want 2", got)
 	}
 }

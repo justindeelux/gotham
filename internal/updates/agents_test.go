@@ -256,6 +256,40 @@ func TestAgentUpdaterCachesEmptyResult(t *testing.T) {
 	}
 }
 
+// TestAgentUpdaterEmptyReleasesIsNotAnError is the empty-list nit: no published
+// releases is a "no release" answer, not a release-server error.
+func TestAgentUpdaterEmptyReleasesIsNotAnError(t *testing.T) {
+	var hits atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/name/releases", func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("[]"))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	public, _, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	updater, err := NewAgentUpdater(AgentUpdaterConfig{
+		Repo: "owner/name", BaseURL: server.URL, Channel: ChannelStable,
+		PublicKey: public, Client: server.Client(),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewAgentUpdater: %v", err)
+	}
+
+	if release, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64"); err != nil || release != nil {
+		t.Fatalf("Offer = (%+v, %v), want (nil, nil)", release, err)
+	}
+	if target, err := updater.TargetVersion(context.Background()); err != nil || target != "" {
+		t.Fatalf("TargetVersion = (%q, %v), want (\"\", nil)", target, err)
+	}
+}
+
 // TestAgentUpdaterFromEnvFeatureOff proves FEATURE_UPDATES=false disables the
 // offerer entirely.
 func TestAgentUpdaterFromEnvFeatureOff(t *testing.T) {

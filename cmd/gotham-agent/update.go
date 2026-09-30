@@ -74,8 +74,20 @@ func loadAgentEnvFile() {
 		if _, exists := os.LookupEnv(key); exists {
 			continue
 		}
-		_ = os.Setenv(key, strings.TrimSpace(value))
+		_ = os.Setenv(key, unquoteEnvValue(strings.TrimSpace(value)))
 	}
+}
+
+// unquoteEnvValue strips one pair of matching single or double quotes, matching
+// systemd's EnvironmentFile syntax (`KEY="value"` / `KEY='value'`).
+func unquoteEnvValue(value string) string {
+	if len(value) >= 2 {
+		first, last := value[0], value[len(value)-1]
+		if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+			return value[1 : len(value)-1]
+		}
+	}
+	return value
 }
 
 // updateUsage prints the `gotham-agent update` help.

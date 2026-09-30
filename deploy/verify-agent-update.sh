@@ -638,6 +638,22 @@ else
     sed -n '1,40p' "${SCRATCH}/snapshot.diff" >&2
 fi
 
+# The snapshot excludes the retry/backoff markers, so assert explicitly that a
+# healthy update left none behind (this is what would have caught the round-6
+# spurious-backoff bug on the box).
+C3_CLEAN=1
+for suffix in a b; do
+    for marker in update.retry update.backoff; do
+        if [ -e "${SCRATCH}/agents/${suffix}/${marker}" ]; then
+            fail "C3 agent ${suffix} has an unexpected ${marker} after a healthy update"
+            C3_CLEAN=0
+        fi
+    done
+done
+if [ "${C3_CLEAN}" -eq 1 ]; then
+    pass "C3 no retry/backoff marker after a healthy update"
+fi
+
 # ---------------------------------------------------------------------------
 # NEG1: a tampered asset (digest mismatch) leaves the agents on v2.0.0
 # ---------------------------------------------------------------------------

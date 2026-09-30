@@ -217,8 +217,17 @@ that marker (it just cannot remove the root-owned status file). The command
 resolves paths from the process environment, then `/etc/gotham/agent.env` (the
 systemd `EnvironmentFile`; `GOTHAM_AGENT_ENV_FILE` overrides the path), then the
 built-in defaults, so a service with custom paths is reset correctly. The retry
-marker is written with a temp-file + rename, so a symlink or FIFO planted by the
-service user in its own directory cannot redirect or block a root run.
+marker is written with a temp-file + rename and the mode is set on the file
+descriptor, so a symlink or FIFO planted by the service user in its own directory
+cannot redirect or block a root run.
+
+Keep `GOTHAM_AGENT_UPDATE_RETRY`/`_BACKOFF` **directly in the agent's
+StateDirectory** (`/var/lib/gotham-agent`). A nested path (for example
+`…/gotham-agent/state/update.retry`) would put an intermediate directory the
+service user can replace with a symlink on the write path; the reset CLI refuses
+a symlinked immediate parent, but a plain nested directory is not otherwise
+special-cased. Quoted values in `agent.env` (`KEY="value"`) are unquoted on
+read.
 
 ## Linux/systemd verification
 

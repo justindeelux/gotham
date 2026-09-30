@@ -252,16 +252,24 @@ func (u *updater) inBackoff(version string) bool {
 	return ok && time.Now().Before(state.until)
 }
 
-// recordFailure increments the persisted, exponential backoff for version.
+// recordFailure increments the persisted, exponential backoff for version after
+// a failed attempt.
 func (u *updater) recordFailure(version string) {
-	u.applyBackoff(version)
+	u.applyBackoff(version, time.Now())
 }
 
-// applyBackoff increments the persisted failed-attempt count for version and
-// arms the exponential in-memory backoff.
-func (u *updater) applyBackoff(version string) {
-	count := u.readBackoffCount(version) + 1
-	u.writeBackoffCount(version, count)
+// applyBackoff increments the persisted failed-attempt count for version, records
+// the failure time, and arms the exponential in-memory backoff.
+func (u *updater) applyBackoff(version string, failureAt time.Time) {
+	rec := u.readBackoff(version)
+	rec.count++
+	u.writeBackoff(version, rec.count, failureAt)
+	u.armBackoff(version, rec.count)
+}
+
+// armBackoff arms the exponential in-memory backoff for version without
+// changing the persisted count.
+func (u *updater) armBackoff(version string, count int) {
 	delay := seedDelay(count)
 	u.backoffMu.Lock()
 	u.backoff[version] = &backoffState{failures: count, until: time.Now().Add(delay)}
@@ -292,8 +300,10 @@ func (u *updater) statusFailed(version string) bool {
 // seedBackoffFromStatus seeds the backoff for the version a durable
 // rolled_back/rollback_failed status names when it is newer than the running
 // version, so a wrapper restart does not immediately re-apply a release that
-// just failed. The persisted attempt count makes the delay escalate across
-// restarts instead of staying flat.
+// just failed. The persisted attempt count is only bumped for a *new* failure
+// (the status `at` changed), so an unrelated restart (reboot, OOM, container
+// restart) does not escalate it; the delay still escalates across genuine
+// attempts and is capped.
 func (u *updater) seedBackoffFromStatus() {
 	status, err := u.applier.Status.Read()
 	if err != nil || status == nil {
@@ -307,9 +317,19 @@ func (u *updater) seedBackoffFromStatus() {
 	if !isNewerVersion(status.Version, u.version()) {
 		return
 	}
-	u.applyBackoff(status.Version)
-	u.log.Warn("agent: seeded a backoff from a durable rollback",
-		"version", status.Version, "result", status.Result)
+	rec := u.readBackoff(status.Version)
+	if rec.count < 1 || rec.at.IsZero() || !rec.at.Equal(status.At) {
+		// First observation of this failure, or a new failure time.
+		u.applyBackoff(status.Version, status.At)
+		u.log.Warn("agent: seeded a backoff from a durable rollback",
+			"version", status.Version, "result", status.Result, "failures", rec.count+1)
+		return
+	}
+	// The same failure is still on disk (a restart, not a new attempt): arm the
+	// existing backoff without counting it again.
+	u.armBackoff(status.Version, rec.count)
+	u.log.Warn("agent: re-armed the backoff for an unchanged rollback",
+		"version", status.Version, "failures", rec.count)
 }
 
 // consumeRetry clears the whole backoff when an operator reset left the retry
@@ -343,36 +363,44 @@ func seedDelay(count int) time.Duration {
 	return delay
 }
 
-// readBackoffCount returns the persisted failed-attempt count for version, or 0.
-func (u *updater) readBackoffCount(version string) int {
+// backoffRecord is the persisted failed-attempt state for one version.
+type backoffRecord struct {
+	count int
+	at    time.Time
+}
+
+// readBackoff returns the persisted failed-attempt state for version, or a zero
+// record when none matches.
+func (u *updater) readBackoff(version string) backoffRecord {
 	if u.backoffCount == nil {
-		return 0
+		return backoffRecord{}
 	}
 	status, err := u.backoffCount.Read()
 	if err != nil || status == nil || status.Version != version {
-		return 0
+		return backoffRecord{}
 	}
 	count, err := strconv.Atoi(strings.TrimSpace(status.Detail))
 	if err != nil || count < 0 {
-		return 0
+		count = 0
 	}
-	return count
+	return backoffRecord{count: count, at: status.At}
 }
 
-// writeBackoffCount persists the failed-attempt count for version using the
-// hardened StatusStore write (temp file + rename, no symlink follow).
-func (u *updater) writeBackoffCount(version string, count int) {
+// writeBackoff persists the failed-attempt count and the failure time for
+// version using the hardened StatusStore write (temp file + rename, no path
+// chmod, no symlink follow).
+func (u *updater) writeBackoff(version string, count int, at time.Time) {
 	if u.backoffCount == nil {
 		return
 	}
 	if err := u.backoffCount.Write(updatecore.Status{
-		Result: "backoff", Version: version, Detail: strconv.Itoa(count),
+		Result: "backoff", Version: version, Detail: strconv.Itoa(count), At: at,
 	}); err != nil {
 		u.log.Warn("agent: could not persist the failed-update count", "error", err)
 	}
 }
 
-// clearBackoffCount removes the persisted failed-attempt count.
+// clearBackoffCount removes the persisted failed-attempt state.
 func (u *updater) clearBackoffCount() {
 	if u.backoffCount == nil {
 		return
@@ -406,9 +434,18 @@ func ResetUpdateState(cfg Config) error {
 // (O_EXCL, no-follow) and renames it over the path, so a symlink or FIFO that
 // the service user planted in its own directory cannot redirect or block a root
 // run. os.Rename replaces the path itself; it does not open it.
+//
+// The mode is set on the open file descriptor, never by path: a path-based chmod
+// in the agent-owned directory could be redirected to a symlink target swapped
+// in by the directory owner (R4-M1).
 func writeRetryMarker(path string) error {
 	dir := filepath.Dir(path)
 	if dir != "" && dir != "." {
+		// Refuse a symlinked parent: a nested retry path under the state dir
+		// could otherwise let the service user redirect the write (LOW).
+		if info, err := os.Lstat(dir); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("agent: refusing symlinked retry directory %s", dir)
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
@@ -419,14 +456,17 @@ func writeRetryMarker(path string) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
+	// fchmod on the descriptor, before any path-based operation: the temp name
+	// can be swapped for a symlink by the directory owner at any moment.
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
 	if _, err := tmp.WriteString("retry\n"); err != nil {
 		tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)

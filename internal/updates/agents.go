@@ -3,6 +3,7 @@ package updates
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -238,6 +239,13 @@ func (a *AgentUpdater) resolve(ctx context.Context, arch string) (*Release, erro
 
 	release, err := a.fetchRelease(ctx, arch)
 	if err != nil {
+		// An empty releases list (nothing published yet) is a "no release"
+		// answer, not a release-server error, so the operator sees a consistent
+		// no-update rather than a misleading 502.
+		if errors.Is(err, ErrNoRelease) {
+			a.storeEmpty(arch)
+			return nil, nil
+		}
 		a.storeFailure(arch, err)
 		if stale := a.stale(arch); stale != nil {
 			a.logger.Warn("updates: serving a stale agent offer after a release lookup failure",

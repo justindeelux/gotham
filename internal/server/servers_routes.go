@@ -118,6 +118,39 @@ type metricsEnvelope struct {
 	Points []metricPointDTO `json:"points"`
 }
 
+// agentVersionDTO is one node's reported agent version on the wire.
+type agentVersionDTO struct {
+	NodeID  string    `json:"node_id"`
+	Version string    `json:"version"`
+	At      time.Time `json:"at"`
+}
+
+// agentVersionsEnvelope is the GET /api/v1/servers/agents body: the known agent
+// version map plus the active rollout target and the latest release the control
+// plane can see.
+type agentVersionsEnvelope struct {
+	Agents         []agentVersionDTO `json:"agents"`
+	RolloutVersion string            `json:"rollout_version,omitempty"`
+	LatestVersion  string            `json:"latest_version,omitempty"`
+}
+
+// updateAllAgentsResponse is the POST /api/v1/servers/agents/update-all body.
+type updateAllAgentsResponse struct {
+	TargetVersion string `json:"target_version,omitempty"`
+	Agents        int    `json:"agents"`
+	Message       string `json:"message,omitempty"`
+}
+
+// agentUpdateController is the optional agent-update surface of the server
+// registry (BE-9.2). The HTTP layer type-asserts its ServerService to this
+// interface, so tests with a plain fake registry simply do not mount these
+// routes (versionReporter and the dialer interfaces declare the same pattern).
+type agentUpdateController interface {
+	KnownAgentVersions() []servers.AgentVersion
+	AgentRolloutVersion() string
+	StartAgentRollout(version string)
+}
+
 // mountServerRoutes registers the authenticated node-management endpoints under
 // /api.
 func (s *Server) mountServerRoutes(api chi.Router) {
@@ -135,6 +168,18 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 			protected.Get("/v1/servers/{id}/metrics", s.handleServerMetrics)
 		}
 	})
+
+	// Agent update surface (BE-9.2): platform-operator only, like the
+	// control-plane self-update apply. The trigger only records a rollout
+	// target; agents pick it up on their next RequestUpdate poll, so the
+	// request never blocks on a node.
+	if _, ok := s.servers.(agentUpdateController); ok {
+		api.Group(func(platform chi.Router) {
+			platform.Use(s.RequireAuth, s.RequirePlatformAdmin)
+			platform.Get("/v1/servers/agents", s.handleListAgentVersions)
+			platform.Post("/v1/servers/agents/update-all", s.handleUpdateAllAgents)
+		})
+	}
 }
 
 // handleListServers returns every managed server.
@@ -331,6 +376,72 @@ func (s *Server) handleServerMetrics(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+// handleListAgentVersions returns the known agent version map, the active
+// rollout target and the latest release the control plane can resolve.
+func (s *Server) handleListAgentVersions(w http.ResponseWriter, r *http.Request) {
+	controller, ok := s.servers.(agentUpdateController)
+	if !ok {
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "agent updates are not configured"})
+		return
+	}
+	response := agentVersionsEnvelope{
+		Agents:         make([]agentVersionDTO, 0),
+		RolloutVersion: controller.AgentRolloutVersion(),
+	}
+	for _, agent := range controller.KnownAgentVersions() {
+		response.Agents = append(response.Agents, agentVersionDTO{
+			NodeID:  agent.NodeID,
+			Version: agent.Version,
+			At:      agent.At,
+		})
+	}
+	if s.updates != nil {
+		if release, err := s.updates.Check(r.Context()); err == nil && release != nil {
+			response.LatestVersion = release.Version
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// handleUpdateAllAgents triggers a fleet-wide agent update rollout. It resolves
+// the latest release, records it as the rollout target and returns immediately:
+// agents converge on their next RequestUpdate poll, so the request never blocks
+// on (or dials) any node.
+func (s *Server) handleUpdateAllAgents(w http.ResponseWriter, r *http.Request) {
+	controller, ok := s.servers.(agentUpdateController)
+	if !ok {
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "agent updates are not configured"})
+		return
+	}
+	if s.updates == nil {
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "self-update is not configured"})
+		return
+	}
+
+	release, err := s.updates.Check(r.Context())
+	if err != nil {
+		s.logger.Error("servers: agent update check failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, apiError{Message: "release server error"})
+		return
+	}
+	agents := len(controller.KnownAgentVersions())
+	if release == nil {
+		writeJSON(w, http.StatusOK, updateAllAgentsResponse{
+			Agents:  agents,
+			Message: "all agents are already up to date",
+		})
+		return
+	}
+
+	controller.StartAgentRollout(release.Version)
+	s.logger.Info("servers: agent update rollout started", "target_version", release.Version, "agents", agents)
+	writeJSON(w, http.StatusOK, updateAllAgentsResponse{
+		TargetVersion: release.Version,
+		Agents:        agents,
+		Message:       "rollout queued; agents update on their next poll",
+	})
 }
 
 // parseMetricTime parses one required RFC 3339 query timestamp, answering 400

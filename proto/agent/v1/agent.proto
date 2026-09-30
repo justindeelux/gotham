@@ -218,6 +218,10 @@ message HeartbeatRequest {
   double net_tx_bps = 7;
   double disk_read_bps = 8;
   double disk_write_bps = 9;
+  // agent_version is the agent build version the node currently runs. It lets
+  // the control plane keep a version map that updates after a self-update and
+  // survive a reconnect. Empty when the agent is older than this contract.
+  string agent_version = 10;
 }
 
 // HeartbeatResponse acknowledges the stream once it closes.
@@ -225,15 +229,44 @@ message HeartbeatResponse {
   google.protobuf.Timestamp received_at = 1;
 }
 
-// UpdateRequest asks the CP about available agent versions.
+// UpdateRequest asks the CP about available agent versions. The agent reports
+// its running version plus the platform it runs on so the CP can select the
+// matching release asset.
 message UpdateRequest {
   string agent_version = 1;
+  // os is the agent's GOOS (e.g. "linux"). The agent only ever runs on linux
+  // today; the field keeps the contract explicit for the CP's asset selection.
+  string os = 2;
+  // arch is the agent's GOARCH (e.g. "amd64", "arm64").
+  string arch = 3;
 }
 
-// UpdateResponse reports whether an update is available.
+// UpdateResponse reports whether an update is available and, when it is, the
+// signed release material the agent needs to download and verify it. The CP
+// only ever returns material it has itself verified; an empty asset_url with
+// update_available=false means no update.
 message UpdateResponse {
   bool update_available = 1;
   string latest_version = 2;
+  // asset_url is the platform binary to download. It is served over the same
+  // trusted channel as the manifest; the agent additionally re-validates the
+  // URL (https-only, bounded redirects, no link-local dials).
+  string asset_url = 3;
+  // manifest_url is the signed release manifest (version, channel, arch, file,
+  // sha256). It is the root of the update trust chain.
+  string manifest_url = 4;
+  // manifest_signature_url is the detached Ed25519 signature over manifest_url.
+  string manifest_signature_url = 5;
+  // sha256 is the artifact digest the signed manifest must also carry; the
+  // agent binds it to the manifest it verifies.
+  string sha256 = 6;
+  // channel is the release channel the offer came from ("stable"/"beta").
+  string channel = 7;
+  // rollout is true when an operator has triggered an "update all agents"
+  // rollout that includes this agent. An agent applies an offer when rollout is
+  // set even if its own unattended auto-update is disabled; a plain offer is
+  // informational and only applied when AGENT_AUTO_UPDATE is on.
+  bool rollout = 8;
 }
 
 // ListContainersRequest filters the container list.

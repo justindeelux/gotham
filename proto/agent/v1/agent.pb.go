@@ -537,10 +537,14 @@ type HeartbeatRequest struct {
 	// rates in bytes per second, computed by the agent from consecutive counter
 	// samples. They are zero on a platform that cannot report them (for example
 	// Darwin) and on the agent's first sample.
-	NetRxBps      float64 `protobuf:"fixed64,6,opt,name=net_rx_bps,json=netRxBps,proto3" json:"net_rx_bps,omitempty"`
-	NetTxBps      float64 `protobuf:"fixed64,7,opt,name=net_tx_bps,json=netTxBps,proto3" json:"net_tx_bps,omitempty"`
-	DiskReadBps   float64 `protobuf:"fixed64,8,opt,name=disk_read_bps,json=diskReadBps,proto3" json:"disk_read_bps,omitempty"`
-	DiskWriteBps  float64 `protobuf:"fixed64,9,opt,name=disk_write_bps,json=diskWriteBps,proto3" json:"disk_write_bps,omitempty"`
+	NetRxBps     float64 `protobuf:"fixed64,6,opt,name=net_rx_bps,json=netRxBps,proto3" json:"net_rx_bps,omitempty"`
+	NetTxBps     float64 `protobuf:"fixed64,7,opt,name=net_tx_bps,json=netTxBps,proto3" json:"net_tx_bps,omitempty"`
+	DiskReadBps  float64 `protobuf:"fixed64,8,opt,name=disk_read_bps,json=diskReadBps,proto3" json:"disk_read_bps,omitempty"`
+	DiskWriteBps float64 `protobuf:"fixed64,9,opt,name=disk_write_bps,json=diskWriteBps,proto3" json:"disk_write_bps,omitempty"`
+	// agent_version is the agent build version the node currently runs. It lets
+	// the control plane keep a version map that updates after a self-update and
+	// survive a reconnect. Empty when the agent is older than this contract.
+	AgentVersion  string `protobuf:"bytes,10,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -638,6 +642,13 @@ func (x *HeartbeatRequest) GetDiskWriteBps() float64 {
 	return 0
 }
 
+func (x *HeartbeatRequest) GetAgentVersion() string {
+	if x != nil {
+		return x.AgentVersion
+	}
+	return ""
+}
+
 // HeartbeatResponse acknowledges the stream once it closes.
 type HeartbeatResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -683,10 +694,17 @@ func (x *HeartbeatResponse) GetReceivedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-// UpdateRequest asks the CP about available agent versions.
+// UpdateRequest asks the CP about available agent versions. The agent reports
+// its running version plus the platform it runs on so the CP can select the
+// matching release asset.
 type UpdateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AgentVersion  string                 `protobuf:"bytes,1,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	AgentVersion string                 `protobuf:"bytes,1,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
+	// os is the agent's GOOS (e.g. "linux"). The agent only ever runs on linux
+	// today; the field keeps the contract explicit for the CP's asset selection.
+	Os string `protobuf:"bytes,2,opt,name=os,proto3" json:"os,omitempty"`
+	// arch is the agent's GOARCH (e.g. "amd64", "arm64").
+	Arch          string `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -728,13 +746,49 @@ func (x *UpdateRequest) GetAgentVersion() string {
 	return ""
 }
 
-// UpdateResponse reports whether an update is available.
+func (x *UpdateRequest) GetOs() string {
+	if x != nil {
+		return x.Os
+	}
+	return ""
+}
+
+func (x *UpdateRequest) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
+// UpdateResponse reports whether an update is available and, when it is, the
+// signed release material the agent needs to download and verify it. The CP
+// only ever returns material it has itself verified; an empty asset_url with
+// update_available=false means no update.
 type UpdateResponse struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	UpdateAvailable bool                   `protobuf:"varint,1,opt,name=update_available,json=updateAvailable,proto3" json:"update_available,omitempty"`
 	LatestVersion   string                 `protobuf:"bytes,2,opt,name=latest_version,json=latestVersion,proto3" json:"latest_version,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// asset_url is the platform binary to download. It is served over the same
+	// trusted channel as the manifest; the agent additionally re-validates the
+	// URL (https-only, bounded redirects, no link-local dials).
+	AssetUrl string `protobuf:"bytes,3,opt,name=asset_url,json=assetUrl,proto3" json:"asset_url,omitempty"`
+	// manifest_url is the signed release manifest (version, channel, arch, file,
+	// sha256). It is the root of the update trust chain.
+	ManifestUrl string `protobuf:"bytes,4,opt,name=manifest_url,json=manifestUrl,proto3" json:"manifest_url,omitempty"`
+	// manifest_signature_url is the detached Ed25519 signature over manifest_url.
+	ManifestSignatureUrl string `protobuf:"bytes,5,opt,name=manifest_signature_url,json=manifestSignatureUrl,proto3" json:"manifest_signature_url,omitempty"`
+	// sha256 is the artifact digest the signed manifest must also carry; the
+	// agent binds it to the manifest it verifies.
+	Sha256 string `protobuf:"bytes,6,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	// channel is the release channel the offer came from ("stable"/"beta").
+	Channel string `protobuf:"bytes,7,opt,name=channel,proto3" json:"channel,omitempty"`
+	// rollout is true when an operator has triggered an "update all agents"
+	// rollout that includes this agent. An agent applies an offer when rollout is
+	// set even if its own unattended auto-update is disabled; a plain offer is
+	// informational and only applied when AGENT_AUTO_UPDATE is on.
+	Rollout       bool `protobuf:"varint,8,opt,name=rollout,proto3" json:"rollout,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateResponse) Reset() {
@@ -779,6 +833,48 @@ func (x *UpdateResponse) GetLatestVersion() string {
 		return x.LatestVersion
 	}
 	return ""
+}
+
+func (x *UpdateResponse) GetAssetUrl() string {
+	if x != nil {
+		return x.AssetUrl
+	}
+	return ""
+}
+
+func (x *UpdateResponse) GetManifestUrl() string {
+	if x != nil {
+		return x.ManifestUrl
+	}
+	return ""
+}
+
+func (x *UpdateResponse) GetManifestSignatureUrl() string {
+	if x != nil {
+		return x.ManifestSignatureUrl
+	}
+	return ""
+}
+
+func (x *UpdateResponse) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *UpdateResponse) GetChannel() string {
+	if x != nil {
+		return x.Channel
+	}
+	return ""
+}
+
+func (x *UpdateResponse) GetRollout() bool {
+	if x != nil {
+		return x.Rollout
+	}
+	return false
 }
 
 // ListContainersRequest filters the container list.
@@ -2575,7 +2671,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x10RegisterResponse\x12\x12\n" +
 	"\x04cert\x18\x01 \x01(\fR\x04cert\x12\x1d\n" +
 	"\n" +
-	"cp_version\x18\x02 \x01(\tR\tcpVersion\"\xcf\x02\n" +
+	"cp_version\x18\x02 \x01(\tR\tcpVersion\"\xf4\x02\n" +
 	"\x10HeartbeatRequest\x12\x1b\n" +
 	"\tcpu_usage\x18\x01 \x01(\x01R\bcpuUsage\x12\x1b\n" +
 	"\tmem_usage\x18\x02 \x01(\x01R\bmemUsage\x12\x1d\n" +
@@ -2588,15 +2684,25 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"net_tx_bps\x18\a \x01(\x01R\bnetTxBps\x12\"\n" +
 	"\rdisk_read_bps\x18\b \x01(\x01R\vdiskReadBps\x12$\n" +
-	"\x0edisk_write_bps\x18\t \x01(\x01R\fdiskWriteBps\"P\n" +
+	"\x0edisk_write_bps\x18\t \x01(\x01R\fdiskWriteBps\x12#\n" +
+	"\ragent_version\x18\n" +
+	" \x01(\tR\fagentVersion\"P\n" +
 	"\x11HeartbeatResponse\x12;\n" +
 	"\vreceived_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"receivedAt\"4\n" +
+	"receivedAt\"X\n" +
 	"\rUpdateRequest\x12#\n" +
-	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"b\n" +
+	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\x12\x0e\n" +
+	"\x02os\x18\x02 \x01(\tR\x02os\x12\x12\n" +
+	"\x04arch\x18\x03 \x01(\tR\x04arch\"\xa4\x02\n" +
 	"\x0eUpdateResponse\x12)\n" +
 	"\x10update_available\x18\x01 \x01(\bR\x0fupdateAvailable\x12%\n" +
-	"\x0elatest_version\x18\x02 \x01(\tR\rlatestVersion\")\n" +
+	"\x0elatest_version\x18\x02 \x01(\tR\rlatestVersion\x12\x1b\n" +
+	"\tasset_url\x18\x03 \x01(\tR\bassetUrl\x12!\n" +
+	"\fmanifest_url\x18\x04 \x01(\tR\vmanifestUrl\x124\n" +
+	"\x16manifest_signature_url\x18\x05 \x01(\tR\x14manifestSignatureUrl\x12\x16\n" +
+	"\x06sha256\x18\x06 \x01(\tR\x06sha256\x12\x18\n" +
+	"\achannel\x18\a \x01(\tR\achannel\x12\x18\n" +
+	"\arollout\x18\b \x01(\bR\arollout\")\n" +
 	"\x15ListContainersRequest\x12\x10\n" +
 	"\x03all\x18\x01 \x01(\bR\x03all\"\xb0\x03\n" +
 	"\rContainerInfo\x12\x0e\n" +

@@ -28,6 +28,7 @@ Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node a
 cmd/             # control-plane + agent entrypoints
 internal/        # CP packages (server, deploy, builds, proxy, databases, services, auth, updates, store)
 agent/           # node agent implementation
+updatecore/      # shared, transport-agnostic self-update engine (verify + swap), imported by internal/updates and agent/
 proto/           # protobuf contracts (buf-managed)
 web/             # Vue 3 SPA (Vite)
 templates/       # one-click service templates (YAML)

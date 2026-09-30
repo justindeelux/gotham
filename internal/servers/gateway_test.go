@@ -2,6 +2,7 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
+	"github.com/justindeelux/gotham/updatecore"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -83,13 +85,12 @@ func newTestServiceWithAuthority(t *testing.T) (*ServerService, *store.Store, *A
 
 // startTestGateway serves g (insecure) over an in-memory connection and returns
 // a client connection.
-func startTestGateway(t *testing.T, service *ServerService, authority *Authority) *grpc.ClientConn {
+func startTestGateway(t *testing.T, service *ServerService) *grpc.ClientConn {
 	t.Helper()
 
 	gateway, err := NewGateway(GatewayConfig{
-		Service:   service,
-		Authority: authority,
-		Logger:    discardLogger(),
+		Service: service,
+		Logger:  discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -125,7 +126,7 @@ func uniqueNodeID(prefix string) string {
 
 func TestGatewayRegisterCreatesServer(t *testing.T) {
 	service, st := newTestService(t)
-	conn := startTestGateway(t, service, nil)
+	conn := startTestGateway(t, service)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -240,7 +241,7 @@ func TestGatewayRegisterRejectsInvalidCSR(t *testing.T) {
 
 func TestGatewayHeartbeatUpdatesMetrics(t *testing.T) {
 	service, st := newTestService(t)
-	conn := startTestGateway(t, service, nil)
+	conn := startTestGateway(t, service)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -347,22 +348,122 @@ func TestGatewayHeartbeatUpdatesMetrics(t *testing.T) {
 	}
 }
 
-func TestGatewayUpdateServiceSkeleton(t *testing.T) {
-	// The UpdateService skeleton touches no database, so no store is required.
-	service := NewService(Config{Secret: "gateway-test-secret", Version: "test", Logger: discardLogger()})
-	conn := startTestGateway(t, service, nil)
+// fakeAgentUpdater is a controllable AgentUpdateOfferer for gateway tests.
+type fakeAgentUpdater struct {
+	release *updatecore.Release
+	err     error
+	calls   int
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+func (f *fakeAgentUpdater) Offer(context.Context, string, string, string) (*updatecore.Release, error) {
+	f.calls++
+	return f.release, f.err
+}
 
-	resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{AgentVersion: "0.1.0"})
-	if err != nil {
-		t.Fatalf("RequestUpdate: %v", err)
+func TestGatewayRequestUpdate(t *testing.T) {
+	release := &updatecore.Release{
+		Version:              "v1.2.0",
+		Channel:              "stable",
+		Arch:                 "amd64",
+		AssetName:            "gotham-agent-linux-amd64",
+		AssetURL:             "https://releases.example.com/gotham-agent-linux-amd64",
+		ManifestURL:          "https://releases.example.com/gotham-agent-manifest-amd64.txt",
+		ManifestSignatureURL: "https://releases.example.com/gotham-agent-manifest-amd64.txt.sig",
+		SHA256:               "abc123",
 	}
-	if resp.GetUpdateAvailable() {
-		t.Error("update_available = true, want false (skeleton)")
-	}
-	if resp.GetLatestVersion() != updateLatestVersion {
-		t.Errorf("latest_version = %q, want %q", resp.GetLatestVersion(), updateLatestVersion)
-	}
+
+	t.Run("offers a newer verified release", func(t *testing.T) {
+		updater := &fakeAgentUpdater{release: release}
+		service := NewService(Config{Secret: "gateway-test-secret", Version: "test", Logger: discardLogger(), Updater: updater})
+		conn := startTestGateway(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ctx = metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, "node-update")
+
+		resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{
+			AgentVersion: "v1.0.0", Os: "linux", Arch: "amd64",
+		})
+		if err != nil {
+			t.Fatalf("RequestUpdate: %v", err)
+		}
+		if !resp.GetUpdateAvailable() || resp.GetLatestVersion() != "v1.2.0" {
+			t.Fatalf("resp = %+v, want an offer for v1.2.0", resp)
+		}
+		if resp.GetAssetUrl() != release.AssetURL || resp.GetManifestUrl() != release.ManifestURL ||
+			resp.GetManifestSignatureUrl() != release.ManifestSignatureURL || resp.GetSha256() != release.SHA256 ||
+			resp.GetChannel() != "stable" {
+			t.Fatalf("offer material = %+v", resp)
+		}
+		if resp.GetRollout() {
+			t.Error("rollout = true without an operator trigger")
+		}
+		if versions := service.KnownAgentVersions(); len(versions) != 1 || versions[0].Version != "v1.0.0" {
+			t.Errorf("version map = %+v, want the reported v1.0.0", versions)
+		}
+	})
+
+	t.Run("no update when the updater finds none", func(t *testing.T) {
+		service := NewService(Config{Secret: "gateway-test-secret", Version: "test", Logger: discardLogger(), Updater: &fakeAgentUpdater{}})
+		conn := startTestGateway(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{AgentVersion: "v1.0.0", Arch: "amd64"})
+		if err != nil {
+			t.Fatalf("RequestUpdate: %v", err)
+		}
+		if resp.GetUpdateAvailable() {
+			t.Errorf("update_available = true, want false")
+		}
+	})
+
+	t.Run("checker error reports no update", func(t *testing.T) {
+		service := NewService(Config{
+			Secret: "gateway-test-secret", Version: "test", Logger: discardLogger(),
+			Updater: &fakeAgentUpdater{err: errors.New("releases API down")},
+		})
+		conn := startTestGateway(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{AgentVersion: "v1.0.0", Arch: "amd64"})
+		if err != nil {
+			t.Fatalf("RequestUpdate: %v", err)
+		}
+		if resp.GetUpdateAvailable() {
+			t.Errorf("update_available = true on a checker error, want false")
+		}
+	})
+
+	t.Run("feature off reports no update", func(t *testing.T) {
+		service := NewService(Config{Secret: "gateway-test-secret", Version: "test", Logger: discardLogger()})
+		conn := startTestGateway(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{AgentVersion: "v1.0.0", Arch: "amd64"})
+		if err != nil {
+			t.Fatalf("RequestUpdate: %v", err)
+		}
+		if resp.GetUpdateAvailable() {
+			t.Errorf("update_available = true with no updater, want false")
+		}
+	})
+
+	t.Run("active rollout is flagged", func(t *testing.T) {
+		updater := &fakeAgentUpdater{release: release}
+		service := NewService(Config{Secret: "gateway-test-secret", Version: "test", Logger: discardLogger(), Updater: updater})
+		service.StartAgentRollout("v1.2.0")
+		conn := startTestGateway(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{AgentVersion: "v1.0.0", Arch: "amd64"})
+		if err != nil {
+			t.Fatalf("RequestUpdate: %v", err)
+		}
+		if !resp.GetRollout() {
+			t.Errorf("rollout = false during an active rollout")
+		}
+	})
 }

@@ -66,12 +66,24 @@ func runServe() int {
 	}
 
 	log := agent.NewLogger(os.Stderr, cfg.LogLevel)
+	cfg.Version = version
 	log.Info("starting gotham-agent",
 		slog.String("version", version),
 		slog.String("node_id", cfg.NodeID),
 		slog.String("cp_addr", cfg.CPAddr),
 		slog.String("listen_addr", cfg.ListenAddr),
 	)
+
+	health, err := agent.StartHealthServer(cfg.HealthAddr, log)
+	if err != nil {
+		log.Warn("health endpoint unavailable; the update wrapper health check will fail", "error", err)
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+			defer cancel()
+			_ = health.Close(shutdownCtx)
+		}()
+	}
 
 	docker, err := agent.NewDockerClient(cfg.DockerSock)
 	if err != nil {

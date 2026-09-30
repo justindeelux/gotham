@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/justindeelux/gotham/updatecore"
 )
 
 const (
@@ -37,24 +38,9 @@ const (
 	ChannelBeta Channel = "beta"
 )
 
-// Release is a resolved update candidate: the newest release above the running
-// version together with the URLs of its platform asset, signed manifest and
-// manifest signature.
-type Release struct {
-	Version              string
-	Tag                  string
-	Channel              string
-	Prerelease           bool
-	Notes                string
-	PublishedAt          time.Time
-	Arch                 string
-	AssetName            string
-	AssetURL             string
-	ManifestName         string
-	ManifestURL          string
-	ManifestSignatureURL string
-	AssetSize            int64
-}
+// Release is an alias of the shared update candidate the checker resolves and
+// the applier installs.
+type Release = updatecore.Release
 
 // Checker queries the Releases API for a repository and resolves an update.
 type Checker struct {
@@ -71,6 +57,13 @@ type Checker struct {
 	// GOOS/GOARCH select the asset, defaulting to the running platform.
 	GOOS   string
 	GOARCH string
+	// AssetPrefix is the release asset family prefix; empty selects the
+	// control-plane binary prefix "gotham-linux-". The node agent sets
+	// "gotham-agent-linux-".
+	AssetPrefix string
+	// ManifestPrefix is the signed manifest family prefix; empty selects
+	// "gotham-manifest-".
+	ManifestPrefix string
 }
 
 // HTTP errors and resolution failures.
@@ -106,13 +99,13 @@ type ghAsset struct {
 // when the running version is up to date. It fails closed: a malformed or
 // unreachable API response is an error, never a silent "no update".
 func (c *Checker) Check(ctx context.Context, current string) (*Release, error) {
-	currentVersion, err := ParseVersion(current)
+	currentVersion, err := updatecore.ParseVersion(current)
 	if err != nil {
 		return nil, err
 	}
 
 	base := strings.TrimRight(defaultString(c.BaseURL, DefaultBaseURL), "/")
-	if err := validateURL(base); err != nil {
+	if err := updatecore.ValidateURL(base); err != nil {
 		return nil, fmt.Errorf("%w: base url %q", err, base)
 	}
 	repo := strings.Trim(strings.TrimSpace(c.Repo), "/")
@@ -137,7 +130,7 @@ func (c *Checker) Check(ctx context.Context, current string) (*Release, error) {
 	channel := c.channel()
 	arch := c.arch()
 	best := -1
-	var bestVersion Version
+	var bestVersion updatecore.Version
 
 	for i, release := range releases {
 		if release.Draft || release.TagName == "" {
@@ -146,7 +139,7 @@ func (c *Checker) Check(ctx context.Context, current string) (*Release, error) {
 		if channel == ChannelStable && release.Prerelease {
 			continue
 		}
-		version, parseErr := ParseVersion(release.TagName)
+		version, parseErr := updatecore.ParseVersion(release.TagName)
 		if parseErr != nil {
 			continue
 		}
@@ -172,10 +165,10 @@ func (c *Checker) Check(ctx context.Context, current string) (*Release, error) {
 
 // resolve maps a chosen release onto the platform asset, its signed manifest
 // and the manifest signature.
-func (c *Checker) resolve(release ghRelease, version Version, channel Channel, arch string) (*Release, error) {
-	assetName := fmt.Sprintf("gotham-linux-%s", arch)
-	manifestName := ManifestName(arch)
-	manifestSigName := manifestName + ManifestSigSuffix
+func (c *Checker) resolve(release ghRelease, version updatecore.Version, channel Channel, arch string) (*Release, error) {
+	assetName := c.assetPrefix() + arch
+	manifestName := updatecore.ManifestNameWithPrefix(c.ManifestPrefix, arch)
+	manifestSigName := manifestName + updatecore.ManifestSigSuffix
 
 	candidate := &Release{
 		Version:     version.String(),
@@ -211,7 +204,7 @@ func (c *Checker) resolve(release ghRelease, version Version, channel Channel, a
 		return nil, fmt.Errorf("%w: %s in release %s", ErrAssetNotFound, manifestSigName, release.TagName)
 	}
 	for _, rawURL := range []string{candidate.AssetURL, candidate.ManifestURL, candidate.ManifestSignatureURL} {
-		if err := validateURL(rawURL); err != nil {
+		if err := updatecore.ValidateURL(rawURL); err != nil {
 			return nil, err
 		}
 	}
@@ -220,7 +213,7 @@ func (c *Checker) resolve(release ghRelease, version Version, channel Channel, a
 
 // get performs a bounded GET and returns the response body.
 func (c *Checker) get(ctx context.Context, rawURL string, maxBytes int64) ([]byte, error) {
-	if err := validateURL(rawURL); err != nil {
+	if err := updatecore.ValidateURL(rawURL); err != nil {
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -232,7 +225,7 @@ func (c *Checker) get(ctx context.Context, rawURL string, maxBytes int64) ([]byt
 
 	client := c.Client
 	if client == nil {
-		client = defaultHTTPClient(defaultDuration(c.Timeout, defaultTimeout))
+		client = updatecore.DefaultHTTPClient(defaultDuration(c.Timeout, defaultTimeout))
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -268,25 +261,12 @@ func (c *Checker) arch() string {
 	return runtime.GOARCH
 }
 
-// defaultHTTPClient builds an HTTP client that bounds redirects, revalidates
-// every hop, refuses https downgrades, and blocks link-local/metadata dials.
-func defaultHTTPClient(timeout time.Duration) *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DialContext = safeDialContext
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return errors.New("updates: too many redirects")
-			}
-			var previous *url.URL
-			if len(via) > 0 {
-				previous = via[len(via)-1].URL
-			}
-			return validateRedirect(previous, req.URL)
-		},
+// assetPrefix returns the release asset family prefix.
+func (c *Checker) assetPrefix() string {
+	if c.AssetPrefix != "" {
+		return c.AssetPrefix
 	}
+	return "gotham-linux-"
 }
 
 // defaultString returns value when non-empty, otherwise fallback.

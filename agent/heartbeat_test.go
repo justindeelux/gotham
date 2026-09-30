@@ -18,6 +18,7 @@ import (
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -34,6 +35,9 @@ type fakeAgentService struct {
 	mu         sync.Mutex
 	registers  []*agentv1.RegisterRequest
 	heartbeats []*agentv1.HeartbeatRequest
+	// heartbeatNodes is the node id carried in the heartbeat stream metadata,
+	// aligned with heartbeats (the request itself carries no node id).
+	heartbeatNodes []string
 }
 
 func (f *fakeAgentService) Register(_ context.Context, req *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error) {
@@ -57,6 +61,13 @@ func (f *fakeAgentService) Heartbeat(stream grpc.ClientStreamingServer[agentv1.H
 		}
 		f.mu.Lock()
 		f.heartbeats = append(f.heartbeats, req)
+		nodeID := ""
+		if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
+			if values := md.Get(nodeIDMetadataKey); len(values) > 0 {
+				nodeID = values[0]
+			}
+		}
+		f.heartbeatNodes = append(f.heartbeatNodes, nodeID)
 		f.mu.Unlock()
 		if f.heartbeatCh != nil {
 			select {

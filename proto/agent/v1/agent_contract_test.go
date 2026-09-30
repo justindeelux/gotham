@@ -78,6 +78,80 @@ func TestCreateContainerRequestProtoRoundtrip(t *testing.T) {
 	}
 }
 
+func TestUpdateRequestProtoRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	want := &agentv1.UpdateRequest{AgentVersion: "v1.0.0", Os: "linux", Arch: "arm64"}
+	raw, err := proto.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got agentv1.UpdateRequest
+	if err := proto.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !proto.Equal(want, &got) {
+		t.Fatalf("roundtrip mismatch: want %v, got %v", want, &got)
+	}
+}
+
+func TestUpdateResponseProtoRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	want := &agentv1.UpdateResponse{
+		UpdateAvailable:      true,
+		LatestVersion:        "v1.2.0",
+		AssetUrl:             "https://releases.example.com/gotham-agent-linux-amd64",
+		ManifestUrl:          "https://releases.example.com/gotham-agent-manifest-amd64.txt",
+		ManifestSignatureUrl: "https://releases.example.com/gotham-agent-manifest-amd64.txt.sig",
+		Sha256:               "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		Channel:              "stable",
+		Rollout:              true,
+	}
+	raw, err := proto.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got agentv1.UpdateResponse
+	if err := proto.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !proto.Equal(want, &got) {
+		t.Fatalf("roundtrip mismatch: want %v, got %v", want, &got)
+	}
+}
+
+func TestHeartbeatRequestProtoRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	want := &agentv1.HeartbeatRequest{
+		CpuUsage:       0.5,
+		MemUsage:       0.25,
+		DiskUsage:      0.75,
+		ContainerCount: 7,
+		SentAt:         timestamppb.Now(),
+		NetRxBps:       1024,
+		NetTxBps:       2048,
+		DiskReadBps:    4096,
+		DiskWriteBps:   8192,
+		AgentVersion:   "v1.2.0",
+	}
+	raw, err := proto.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got agentv1.HeartbeatRequest
+	if err := proto.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !proto.Equal(want, &got) {
+		t.Fatalf("roundtrip mismatch: want %v, got %v", want, &got)
+	}
+	if got.GetAgentVersion() != "v1.2.0" {
+		t.Fatalf("agent_version = %q", got.GetAgentVersion())
+	}
+}
+
 func TestAgentServiceRegister(t *testing.T) {
 	t.Parallel()
 

@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/justindeelux/gotham/updatecore"
 )
 
 // fixtureRelease is a minimal GitHub release fixture; asset URLs are generated
@@ -64,8 +66,8 @@ func releasesHandler(releases []fixtureRelease, status int, delay time.Duration)
 func platformAssets() []string {
 	return []string{
 		"gotham-linux-amd64",
-		ManifestName("amd64"),
-		ManifestName("amd64") + ManifestSigSuffix,
+		updatecore.ManifestName("amd64"),
+		updatecore.ManifestName("amd64") + ManifestSigSuffix,
 	}
 }
 
@@ -104,10 +106,10 @@ func TestCheckerResolvesNewerRelease(t *testing.T) {
 	if release.AssetURL != server.URL+"/gotham-linux-amd64" {
 		t.Errorf("asset url = %q", release.AssetURL)
 	}
-	if release.ManifestURL != server.URL+"/"+ManifestName("amd64") {
+	if release.ManifestURL != server.URL+"/"+updatecore.ManifestName("amd64") {
 		t.Errorf("manifest url = %q", release.ManifestURL)
 	}
-	if release.ManifestSignatureURL != server.URL+"/"+ManifestName("amd64")+ManifestSigSuffix {
+	if release.ManifestSignatureURL != server.URL+"/"+updatecore.ManifestName("amd64")+ManifestSigSuffix {
 		t.Errorf("manifest signature url = %q", release.ManifestSignatureURL)
 	}
 

@@ -1,4 +1,4 @@
-package updates
+package updatecore
 
 import (
 	"fmt"

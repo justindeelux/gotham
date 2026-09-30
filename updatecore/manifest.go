@@ -1,4 +1,4 @@
-package updates
+package updatecore
 
 import (
 	"crypto/sha256"
@@ -32,6 +32,16 @@ type Manifest struct {
 // ManifestName returns the manifest asset name for arch.
 func ManifestName(arch string) string {
 	return ManifestPrefix + arch + ManifestSuffix
+}
+
+// ManifestNameWithPrefix returns the manifest asset name for a release family,
+// e.g. "gotham-agent-manifest-amd64.txt" for the node agent. An empty prefix
+// uses the default control-plane prefix.
+func ManifestNameWithPrefix(prefix, arch string) string {
+	if prefix == "" {
+		prefix = ManifestPrefix
+	}
+	return prefix + arch + ManifestSuffix
 }
 
 // BuildManifest computes the manifest for artifact.

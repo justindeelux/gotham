@@ -90,6 +90,9 @@ type Config struct {
 	Secret    string
 	Version   string
 	Logger    *slog.Logger
+	// Updater resolves verified agent update offers (BE-9.2). nil disables the
+	// agent update surface on the gRPC gateway.
+	Updater AgentUpdateOfferer
 }
 
 // ServerService is the node-management domain service: server registry, SSH
@@ -100,6 +103,9 @@ type ServerService struct {
 	secret    string
 	version   string
 	logger    *slog.Logger
+	updater   AgentUpdateOfferer
+	// agentUpdate is the agent version map and rollout marker (BE-9.2).
+	agentUpdate agentUpdateState
 }
 
 // NewService builds a ServerService. When secret is empty an ephemeral
@@ -123,6 +129,10 @@ func NewService(cfg Config) *ServerService {
 		secret:    secret,
 		version:   cfg.Version,
 		logger:    logger,
+		updater:   cfg.Updater,
+		agentUpdate: agentUpdateState{
+			agents: map[string]AgentVersion{},
+		},
 	}
 }
 
@@ -431,6 +441,10 @@ func (s *ServerService) RecordHeartbeat(ctx context.Context, nodeID string, req 
 	// carries the latest values, so a failed append must not fail the
 	// heartbeat.
 	s.recordMetric(ctx, row.ID, req)
+
+	// The agent reports its build version on the heartbeat, which is how the
+	// version map updates after a self-update and survives a reconnect.
+	s.RecordAgentVersion(nodeID, req.GetAgentVersion())
 
 	s.logger.Debug("servers: heartbeat",
 		"node_id", nodeID,

@@ -3,11 +3,13 @@
 | File | Purpose |
 |---|---|
 | `gotham.service` | Control-plane systemd unit |
-| `gotham-update.sh` | Privileged restart/healthcheck/rollback wrapper |
+| `gotham-update.sh` | Privileged restart/healthcheck/rollback wrapper (shared; installed as `gotham-update` for the CP and `gotham-agent-update` for the agent) |
 | `gotham-updater.conf` | Root-owned wrapper configuration (install to `/etc/gotham/updater.conf`) |
 | `install-sudoers.sh` | Grants the service user the wrapper (and nothing else) |
 | `verify-systemd.sh` | Root-only integration check for a Linux host with systemd |
 | `gotham-agent.service`, `install-agent.sh` | Node agent |
+| `gotham-agent-updater.conf` | Root-owned agent wrapper configuration (install to `/etc/gotham/agent-updater.conf`) |
+| `install-agent-sudoers.sh` | Grants the agent user the agent wrapper (and nothing else) |
 | `compose.dev.yml` | Local PostgreSQL + Redis |
 
 ## Control-plane self-update layout
@@ -128,6 +130,52 @@ closed and refuses to update rather than running unserialized.
   sanitized 64-character `version=` line. Worst case is a self-DoS by an
   already-compromised service user. Upgrade path: the same `runuser`/`setpriv`
   handoff.
+
+## Node-agent self-update layout
+
+The agent reuses the same hardened wrapper, installed under the agent name
+(`gotham-agent-update`) so it selects `/etc/gotham/agent-updater.conf` by
+default and fails closed if that root-owned file is missing (it must never fall
+back to the control-plane defaults). The privilege split is the same:
+
+| Path | Owner | Writable by `gotham-agent` | Why |
+|---|---|---|---|
+| `/var/lib/gotham-agent/bin/gotham-agent` | `gotham-agent` | yes | Fixed `ExecStart` and swap target (`StateDirectory`). |
+| `/var/lib/gotham-agent/bin/gotham-agent.old` | `gotham-agent` | yes | Hardlink to the last known good binary. |
+| `/var/lib/gotham-agent/update.pending` | `gotham-agent` | yes | Staged-update marker that gates a second apply. |
+| `/var/lib/gotham-agent/update.lock` | `gotham-agent` | yes | Lock shared with the wrapper. |
+| `/usr/libexec/gotham/gotham-agent-update` | root | **no** | Privileged wrapper (no arguments). |
+| `/etc/gotham/agent-updater.conf` | root | **no** | Fixed binary/service/health/status/pending/lock. |
+| `/var/lib/gotham-agent-updater/update.status` | root | **no** (read-only) | Authoritative outcome. |
+
+The agent unit keeps `KillMode=process` (the wrapper must survive the restart
+cgroup) and does **not** set `NoNewPrivileges` (the agent invokes the fixed
+wrapper with `sudo -n`). sudoers grants exactly:
+
+```
+gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-agent-update ""
+```
+
+The agent serves a loopback liveness endpoint (`GOTHAM_AGENT_HEALTH_ADDR`,
+default `127.0.0.1:8001/healthz`) that the wrapper probes after a restart. It
+reports process liveness only, never the control-plane connection, so a node
+whose CP is temporarily unreachable is not rolled back.
+
+Install (see `install-agent.sh`):
+
+```sh
+install -d -o gotham-agent -g gotham-agent -m 0755 /var/lib/gotham-agent/bin
+install -m 0755 -o gotham-agent -g gotham-agent gotham-agent /var/lib/gotham-agent/bin/gotham-agent
+install -m 0755 deploy/gotham-update.sh /usr/libexec/gotham/gotham-agent-update
+install -m 0644 deploy/gotham-agent-updater.conf /etc/gotham/agent-updater.conf
+install -d -m 0755 -o root -g root /var/lib/gotham-agent-updater
+sudo deploy/install-agent-sudoers.sh gotham-agent
+```
+
+The same residuals as the control-plane wrapper apply (root `mv` inside the
+agent-owned `bin`, root read of the agent-owned pending marker, check-then-open
+TOCTOU, wrapper-death window); the upgrade path is the same `runuser`/`setpriv`
+handoff.
 
 ## Linux/systemd verification
 

@@ -1,4 +1,4 @@
-package updates
+package updatecore
 
 import (
 	"context"
@@ -490,7 +490,7 @@ func (a *Applier) fetch(ctx context.Context, rawURL string, maxBytes int64) ([]b
 
 	client := a.Client
 	if client == nil {
-		client = defaultHTTPClient(defaultDuration(a.Timeout, defaultTimeout))
+		client = DefaultHTTPClient(defaultDuration(a.Timeout, defaultTimeout))
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -522,6 +522,8 @@ func bindManifest(manifest Manifest, rel *Release) error {
 		return fmt.Errorf("%w: manifest file %q disagrees with %q", ErrManifest, manifest.File, rel.AssetName)
 	case rel.Channel != "" && manifest.Channel != rel.Channel:
 		return fmt.Errorf("%w: manifest channel %q disagrees with %q", ErrManifest, manifest.Channel, rel.Channel)
+	case rel.SHA256 != "" && !strings.EqualFold(manifest.SHA256, rel.SHA256):
+		return fmt.Errorf("%w: manifest sha256 %q disagrees with %q", ErrManifest, manifest.SHA256, rel.SHA256)
 	}
 	return nil
 }

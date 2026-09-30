@@ -46,12 +46,30 @@ if [ "$#" -ne 0 ]; then
     exit 2
 fi
 
-CONF="${GOTHAM_UPDATER_CONF:-/etc/gotham/updater.conf}"
+# The default configuration is chosen by the installed name so one hardened
+# wrapper serves both the control plane (gotham-update) and the node agent
+# (gotham-agent-update). The file is root-owned and is the only source of the
+# paths it acts on.
+case "$(basename "$0")" in
+    gotham-agent-update)
+        DEFAULT_CONF="/etc/gotham/agent-updater.conf"
+        # The agent wrapper fails closed on a missing config: it must never
+        # fall back to the control-plane defaults and restart/swap the wrong
+        # service.
+        if [ ! -r "${GOTHAM_UPDATER_CONF:-${DEFAULT_CONF}}" ]; then
+            echo "gotham-update: configuration ${GOTHAM_UPDATER_CONF:-${DEFAULT_CONF}} is missing or unreadable" >&2
+            exit 2
+        fi
+        ;;
+    *)
+        DEFAULT_CONF="/etc/gotham/updater.conf"
+        ;;
+esac
+CONF="${GOTHAM_UPDATER_CONF:-${DEFAULT_CONF}}"
 if [ -r "${CONF}" ]; then
     # shellcheck source=/dev/null
     . "${CONF}"
 fi
-
 BINARY="${GOTHAM_BINARY:-/var/lib/gotham/bin/gotham}"
 BACKUP="${BINARY}.old"
 SERVICE="${GOTHAM_SERVICE:-gotham}"

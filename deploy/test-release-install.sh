@@ -237,6 +237,25 @@ done
 echo "PASS: sudoers hardening present (B2)"
 echo "PASS: happy-path install verified and rendered"
 
+# ---- N1: installer scripts must be executable ---------------------------------
+# The installers invoke the sudoers helpers (via `sh`, but the committed mode
+# must still be +x) and the operator runs the installers and verification
+# scripts directly. A missing bit makes the install die at its last step with
+# "bad interpreter: Permission denied".
+for script in install.sh install-agent.sh install-sudoers.sh install-agent-sudoers.sh \
+    test-release-install.sh verify-systemd.sh verify-agent-update.sh; do
+    [ -x "${SCRIPT_DIR}/${script}" ] \
+        || { echo "FAIL: ${script} is not executable (chmod +x it)" >&2; exit 1; }
+done
+if git -C "${REPO_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+    for script in install.sh install-agent.sh install-sudoers.sh install-agent-sudoers.sh; do
+        mode="$(git -C "${REPO_DIR}" ls-files -s -- "deploy/${script}" | awk '{print $1}')"
+        [ "${mode}" = "100755" ] \
+            || { echo "FAIL: deploy/${script} is committed mode ${mode}, want 100755" >&2; exit 1; }
+    done
+fi
+echo "PASS: installer scripts are executable (N1)"
+
 # ---- B1: re-install with no operator additions succeeds ---------------------
 # Regression: the preservation pipeline filtered every managed key and the
 # gotham.env header, so on a host that never added operator settings the final
@@ -275,17 +294,18 @@ grep -qx 'KEEP_ME=1' "${B1_ENV}" \
     || { echo "FAIL: operator key dropped alongside the indented managed key" >&2; exit 1; }
 echo "PASS: indented managed keys filtered, operator keys kept (I1)"
 
-# ---- L1: a real preservation-filter failure aborts; empty match does not -----
-# Only grep's "no lines matched" status (1) is tolerated. A genuine failure
-# (here, a grep that exits 2) must abort loudly instead of silently dropping
-# operator settings.
-echo "==> preservation filter failure aborts (L1)"
+# ---- L1/N2: a real filter failure aborts; empty match does not ---------------
+# Only grep's "no lines matched" status (1) is tolerated. A genuine failure must
+# abort loudly instead of silently dropping operator settings. The shim fails
+# the **managed-key** pattern (the first stage of the old two-grep pipeline): a
+# single grep makes the exact status visible, closing N2.
+echo "==> preservation filter failure aborts (L1/N2)"
 REAL_GREP="$(command -v grep)"
 mkdir -p "${SCRATCH}/shim"
 cat >"${SCRATCH}/shim/grep" <<GREP
 #!/bin/sh
 case "\$*" in
-    *'Gotham control-plane environment'*) exit 2 ;;
+    *'GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)='*) exit 2 ;;
 esac
 exec "${REAL_GREP}" "\$@"
 GREP
@@ -294,13 +314,25 @@ SAVED_PATH="${PATH}"
 PATH="${SCRATCH}/shim:${PATH}"
 if run_install_at "${B1_ROOT}" >"${SCRATCH}/l1.log" 2>&1; then
     PATH="${SAVED_PATH}"
-    echo "FAIL: a failing preservation filter did not abort the install (L1)" >&2
+    echo "FAIL: a failing preservation filter did not abort the install (L1/N2)" >&2
     exit 1
 fi
 PATH="${SAVED_PATH}"
 grep -q 'could not filter' "${SCRATCH}/l1.log" \
     || { echo "FAIL: filter failure aborted for an unexpected reason" >&2; cat "${SCRATCH}/l1.log" >&2; exit 1; }
-echo "PASS: a failing preservation filter aborts the install (L1)"
+# The abort must not have dropped the operator line from the existing file.
+grep -qx 'KEEP_ME=1' "${B1_ENV}" \
+    || { echo "FAIL: operator settings were dropped on abort (L1/N2)" >&2; exit 1; }
+echo "PASS: a failing preservation filter aborts the install (L1/N2)"
+
+# ---- I3: no secret-bearing temp env copy survives an abort -------------------
+# The abort above happened after the root-only gotham.env.tmp.<pid> was written;
+# the trap must have removed it.
+if ls "${B1_ROOT}"/etc/gotham/gotham.env.tmp.* >/dev/null 2>&1; then
+    echo "FAIL: a temp gotham.env survived the aborted install (I3)" >&2
+    exit 1
+fi
+echo "PASS: no temp gotham.env survives an abort (I3)"
 
 # ---- M2: re-install preserves operator settings (b) and managed DSN (c) ------
 ENV_FILE="${ROOT}/etc/gotham/gotham.env"

@@ -299,6 +299,10 @@ if [ "${DRY_RUN}" -eq 0 ]; then
         fi
         # Rewrite the managed keys and keep every other (operator) line untouched.
         env_tmp="${ENV_FILE}.tmp.$$"
+        # The temp copy is root-only and holds the secret key: remove it if any
+        # step below aborts. The success path moves it into place first, so this
+        # is a no-op then.
+        trap 'rm -f "${env_tmp}"' EXIT INT TERM
         {
             echo "# Gotham control-plane environment. Read by gotham.service (EnvironmentFile)."
             echo "GOTHAM_DATABASE_DSN=${DSN}"
@@ -311,14 +315,17 @@ if [ "${DRY_RUN}" -eq 0 ]; then
         if [ -n "${ENV_PREV}" ]; then
             # Keep the operator lines: drop every managed key (tolerating leading
             # whitespace, so a hand-indented key cannot silently override the
-            # managed value) and the header comment. grep exits 1 when nothing
-            # matches — the normal "no operator settings" case — which is fine;
-            # any other status is a real failure and must abort rather than
-            # silently drop operator settings.
+            # managed value) and the header comment. A single grep keeps the exit
+            # status exact — with a pipeline only the last stage's status is
+            # visible, so a failure in an earlier stage would be masked. 1 means
+            # "nothing matched" (the normal "no operator settings" case) and is
+            # fine; anything else aborts rather than silently dropping operator
+            # settings.
             filter_status=0
             preserved=$(printf '%s\n' "${ENV_PREV}" \
-                | grep -v -E '^[[:space:]]*(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
-                | grep -v -F '# Gotham control-plane environment. Read by gotham.service') \
+                | grep -v -E \
+                    -e '^[[:space:]]*(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
+                    -e '^# Gotham control-plane environment\. Read by gotham\.service') \
                 || filter_status=$?
             case "${filter_status}" in
                 0) ;;
@@ -358,7 +365,8 @@ run chmod 0755 "${STATUS_DIR}"
 
 if [ "${TEST_MODE}" -eq 0 ] && [ "${DRY_RUN}" -eq 0 ]; then
     log "installing the sudoers rule"
-    "${SCRIPT_DIR}/install-sudoers.sh" "${SERVICE_USER}"
+    # Invoke via sh so a checkout that lost the exec bit still installs.
+    sh "${SCRIPT_DIR}/install-sudoers.sh" "${SERVICE_USER}"
 fi
 
 log "installing systemd unit ${SERVICE_FILE}"

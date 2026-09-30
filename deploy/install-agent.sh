@@ -253,9 +253,10 @@ run chmod 0755 "${STATUS_DIR}"
 
 log "installing the sudoers rule"
 if [ "${DRY_RUN}" -eq 1 ]; then
-    echo "[dry-run] ${SCRIPT_DIR}/install-agent-sudoers.sh ${SERVICE_USER}"
+    echo "[dry-run] sh ${SCRIPT_DIR}/install-agent-sudoers.sh ${SERVICE_USER}"
 else
-    "${SCRIPT_DIR}/install-agent-sudoers.sh" "${SERVICE_USER}"
+    # Invoke via sh so a checkout that lost the exec bit still installs.
+    sh "${SCRIPT_DIR}/install-agent-sudoers.sh" "${SERVICE_USER}"
 fi
 
 log "installing systemd unit ${SERVICE_FILE}"

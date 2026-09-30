@@ -70,7 +70,7 @@ for argument in "$@"; do
     case "${argument}" in
         --dry-run) DRY_RUN=1 ;;
         -h | --help)
-            sed -n '2,49p' "$0"
+            sed -n '2,47p' "$0"
             exit 0
             ;;
         *)

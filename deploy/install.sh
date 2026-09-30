@@ -158,6 +158,8 @@ require_cmd mktemp "coreutils"
 require_cmd sed "sed"
 require_cmd awk "mawk/gawk"
 require_cmd install "coreutils"
+require_cmd sudo "apt-get install -y sudo"
+require_cmd visudo "apt-get install -y sudo"
 if [ "${DRY_RUN}" -eq 0 ]; then
     openssl pkeyutl -help 2>&1 | grep -q rawin \
         || die "openssl 3+ is required (Ed25519 -rawin support)"
@@ -302,10 +304,14 @@ if [ "${DRY_RUN}" -eq 0 ]; then
             echo "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH=${JWT_PUB}"
         } >"${env_tmp}"
         if [ -n "${ENV_PREV}" ]; then
+            # Filtering every line (managed key or header) is a normal outcome on
+            # a host that never added operator settings, but grep exits 1 when it
+            # matches nothing and `set -e` would abort the re-install. Tolerate the
+            # empty result; the operator lines (if any) are still appended.
             printf '%s\n' "${ENV_PREV}" \
                 | grep -v -E '^(GOTHAM_DATABASE_DSN|GOTHAM_REDIS_ADDR|GOTHAM_CA_DIR|GOTHAM_SECRET_KEY|GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH|GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)=' \
                 | grep -v -F '# Gotham control-plane environment. Read by gotham.service' \
-                >>"${env_tmp}"
+                >>"${env_tmp}" || true
         fi
         chmod 0640 "${env_tmp}"
         mv -f "${env_tmp}" "${ENV_FILE}"

@@ -22,6 +22,14 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# Fail early when the sudo package is missing: the drop-in grants a sudoers
+# rule, and the agent invokes the wrapper through `sudo -n`. Validate the
+# drop-in with visudo before it is trusted.
+for tool in sudo visudo; do
+    command -v "${tool}" >/dev/null 2>&1 \
+        || { echo "install-agent-sudoers.sh: '${tool}' not found (install the sudo package)" >&2; exit 1; }
+done
+
 case "${SERVICE_USER}" in
     "" | *[!A-Za-z0-9_-]*)
         echo "install-agent-sudoers.sh: invalid service user: ${SERVICE_USER}" >&2
@@ -46,6 +54,10 @@ if [ "$(stat -c '%U' "${CONF}" 2>/dev/null || echo unknown)" != "root" ]; then
     exit 1
 fi
 
+# Minimal hosts and containers may not ship /etc/sudoers.d; create it with the
+# sudoers(5) convention (root:root 0750) before writing the drop-in.
+install -d -m 0750 /etc/sudoers.d
+
 # sudoers(5): a command with no argument list permits any arguments. The empty
 # string "" pins the invocation to zero arguments.
 cat >"${SUDOERS_FILE}" <<EOF
@@ -56,8 +68,6 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${WRAPPER} ""
 EOF
 chmod 0440 "${SUDOERS_FILE}"
 
-if command -v visudo >/dev/null 2>&1; then
-    visudo -cf "${SUDOERS_FILE}"
-fi
+visudo -cf "${SUDOERS_FILE}"
 
 echo "installed ${SUDOERS_FILE}"

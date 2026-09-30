@@ -151,6 +151,16 @@ run_install_pinned() {
         sh "${SCRIPT_DIR}/install.sh" "$@"
 }
 
+# run_install_at installs into an arbitrary GOTHAM_INSTALL_ROOT (test mode).
+run_install_at() {
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+    GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+    GOTHAM_INSTALL_ROOT="$1" \
+    GOTHAM_SKIP_DEPS=1 \
+        sh "${SCRIPT_DIR}/install.sh"
+}
+
 echo "==> install (happy path)"
 run_install >/dev/null
 
@@ -207,9 +217,43 @@ grep -q 'chmod 0755 /usr/libexec/gotham' "${AGENT_INSTALLER}" \
     || { echo "FAIL: install-agent.sh does not 0755 /usr/libexec/gotham" >&2; exit 1; }
 grep -q 'chmod 0755 "${ENV_DIR}"' "${AGENT_INSTALLER}" \
     || { echo "FAIL: install-agent.sh does not 0755 /etc/gotham" >&2; exit 1; }
+
+# B2 static guard: the sudoers installers create /etc/sudoers.d and validate the
+# drop-in with visudo, and the installers check for sudo/visudo up front.
+for installer in "${SCRIPT_DIR}/install-sudoers.sh" "${SCRIPT_DIR}/install-agent-sudoers.sh"; do
+    grep -q 'install -d -m 0750 /etc/sudoers.d' "${installer}" \
+        || { echo "FAIL: ${installer} does not create /etc/sudoers.d" >&2; exit 1; }
+    grep -q '^visudo -cf' "${installer}" \
+        || { echo "FAIL: ${installer} does not validate the drop-in with visudo" >&2; exit 1; }
+done
+for installer in "${SCRIPT_DIR}/install.sh" "${AGENT_INSTALLER}"; do
+    grep -q 'require_cmd visudo' "${installer}" \
+        || { echo "FAIL: ${installer} does not require visudo" >&2; exit 1; }
+done
+echo "PASS: sudoers hardening present (B2)"
 echo "PASS: happy-path install verified and rendered"
 
-# ---- M2: re-install preserves operator settings -----------------------------
+# ---- B1: re-install with no operator additions succeeds ---------------------
+# Regression: the preservation pipeline filtered every managed key and the
+# gotham.env header, so on a host that never added operator settings the final
+# `grep -v` matched nothing and exited 1. Under `set -e` that aborted the second
+# install right after "writing /etc/gotham/gotham.env", with no error message.
+echo "==> re-install with no operator additions (B1)"
+B1_ROOT="${SCRATCH}/root-b1"
+B1_ENV="${B1_ROOT}/etc/gotham/gotham.env"
+run_install_at "${B1_ROOT}" >"${SCRATCH}/b1-first.log" 2>&1 \
+    || { echo "FAIL: first install failed" >&2; cat "${SCRATCH}/b1-first.log" >&2; exit 1; }
+run_install_at "${B1_ROOT}" >"${SCRATCH}/b1-second.log" 2>&1 \
+    || { echo "FAIL: re-install with no operator additions failed (B1 regression)" >&2; cat "${SCRATCH}/b1-second.log" >&2; exit 1; }
+grep -qx 'GOTHAM_DATABASE_DSN=postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable' "${B1_ENV}" \
+    || { echo "FAIL: re-install did not refresh the managed DSN" >&2; exit 1; }
+[ "$(grep -c '^# Gotham control-plane environment\. Read by gotham.service' "${B1_ENV}")" -eq 1 ] \
+    || { echo "FAIL: re-install duplicated or dropped the gotham.env header" >&2; exit 1; }
+[ "$(grep -c '^GOTHAM_DATABASE_DSN=' "${B1_ENV}")" -eq 1 ] \
+    || { echo "FAIL: re-install duplicated a managed key" >&2; exit 1; }
+echo "PASS: re-install with no operator additions succeeded (B1)"
+
+# ---- M2: re-install preserves operator settings (b) and managed DSN (c) ------
 ENV_FILE="${ROOT}/etc/gotham/gotham.env"
 SECRET_BEFORE="$(sed -n 's/^GOTHAM_SECRET_KEY=//p' "${ENV_FILE}" | head -n1)"
 sed 's#^GOTHAM_DATABASE_DSN=.*#GOTHAM_DATABASE_DSN=postgres://managed/db#' "${ENV_FILE}" >"${ENV_FILE}.edit"

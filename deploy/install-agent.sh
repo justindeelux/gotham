@@ -158,6 +158,8 @@ log "downloading ${RELEASE_BASE}/gotham-agent-linux-${ARCH}"
 require_cmd curl "apt-get install -y curl"
 require_cmd openssl "apt-get install -y openssl"
 require_cmd base64 "coreutils"
+require_cmd sudo "apt-get install -y sudo"
+require_cmd visudo "apt-get install -y sudo"
 # The pinned release public key is the anchor; there is no runtime override.
 materialize_public_key "${GOTHAM_RELEASE_PUBLIC_KEY_B64}" "${PUBKEY_FILE}"
 if [ "${DRY_RUN}" -eq 1 ]; then

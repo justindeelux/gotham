@@ -251,7 +251,7 @@ Checks (the reviewer's three merge confirmations plus the target/negative cases)
   files record `ok`, keeping the previous binary as `gotham-agent.old`.
 - **C3** both heartbeats converge on the new version and the planted install
   directories are otherwise byte-identical (md5+mtime, excluding exactly the
-  binary, backup, pending marker, lock and status files).
+  binary, backup, pending/lock/retry/backoff markers and status files).
 - **C4** the control plane resolves the agent release family (`v2.0.0`).
 - **NEG1** a tampered asset (manifest digest mismatch) leaves the agents on the
   old version.

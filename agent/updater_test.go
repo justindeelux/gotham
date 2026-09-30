@@ -183,6 +183,11 @@ func TestAgentUpdaterAppliesVerifiedOffer(t *testing.T) {
 	if runner.Version() != testAgentVersion {
 		t.Fatalf("Version() = %q, want %s", runner.Version(), testAgentVersion)
 	}
+	// A healthy staged update must not leave a spurious failed-attempt count
+	// (it would otherwise be snapshotted as an unexpected change).
+	if _, err := os.Stat(filepath.Join(filepath.Dir(target), "update.backoff")); !os.IsNotExist(err) {
+		t.Fatalf("update.backoff exists after a healthy update: %v", err)
+	}
 }
 
 // TestAgentUpdaterKeepsVersionWhenWrapperRollsBack is M1: a wrapper that rolls

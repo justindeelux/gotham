@@ -219,6 +219,17 @@ func (u *updater) checkOnce(ctx context.Context, client agentv1.UpdateServiceCli
 		u.setVersion(outcome.Version)
 		return
 	}
+	if outcome.Staged {
+		// The wrapper owns the outcome and normally replaces this process before
+		// it can observe it. Only arm a backoff when the durable status already
+		// proves the rollback (for example a synchronous test hook); otherwise
+		// the next startup seeds it from the status, so a healthy staged update
+		// never leaves a spurious backoff or attempt-count file behind.
+		if u.statusFailed(release.Version) {
+			u.recordFailure(release.Version)
+		}
+		return
+	}
 	u.recordFailure(release.Version)
 }
 
@@ -241,15 +252,21 @@ func (u *updater) inBackoff(version string) bool {
 	return ok && time.Now().Before(state.until)
 }
 
-// recordFailure extends the persisted, exponential backoff for version.
+// recordFailure increments the persisted, exponential backoff for version.
 func (u *updater) recordFailure(version string) {
+	u.applyBackoff(version)
+}
+
+// applyBackoff increments the persisted failed-attempt count for version and
+// arms the exponential in-memory backoff.
+func (u *updater) applyBackoff(version string) {
 	count := u.readBackoffCount(version) + 1
 	u.writeBackoffCount(version, count)
 	delay := seedDelay(count)
 	u.backoffMu.Lock()
 	u.backoff[version] = &backoffState{failures: count, until: time.Now().Add(delay)}
 	u.backoffMu.Unlock()
-	u.log.Info("agent: backing off after a failed update",
+	u.log.Info("agent: backing off a failed update",
 		"version", version, "failures", count, "retry_in", delay.String())
 }
 
@@ -260,6 +277,16 @@ func (u *updater) clearBackoff(version string) {
 	delete(u.backoff, version)
 	u.backoffMu.Unlock()
 	u.clearBackoffCount()
+}
+
+// statusFailed reports whether the durable status records a rollback for
+// version (rolled_back or rollback_failed).
+func (u *updater) statusFailed(version string) bool {
+	status, err := u.applier.Status.Read()
+	if err != nil || status == nil || status.Version != version {
+		return false
+	}
+	return status.Result == updatecore.StatusRolledBack || status.Result == updatecore.StatusRollbackFailed
 }
 
 // seedBackoffFromStatus seeds the backoff for the version a durable
@@ -280,17 +307,9 @@ func (u *updater) seedBackoffFromStatus() {
 	if !isNewerVersion(status.Version, u.version()) {
 		return
 	}
-	count := u.readBackoffCount(status.Version)
-	if count < 1 {
-		count = 1
-		u.writeBackoffCount(status.Version, count)
-	}
-	delay := seedDelay(count)
-	u.backoffMu.Lock()
-	u.backoff[status.Version] = &backoffState{failures: count, until: time.Now().Add(delay)}
-	u.backoffMu.Unlock()
-	u.log.Warn("agent: backing off a release that previously failed to activate",
-		"version", status.Version, "result", status.Result, "failures", count, "retry_in", delay.String())
+	u.applyBackoff(status.Version)
+	u.log.Warn("agent: seeded a backoff from a durable rollback",
+		"version", status.Version, "result", status.Result)
 }
 
 // consumeRetry clears the whole backoff when an operator reset left the retry

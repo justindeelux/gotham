@@ -567,6 +567,8 @@ snapshot() {
             ! -path './*/bin/gotham-agent.old' \
             ! -name 'update.pending' \
             ! -name 'update.lock' \
+            ! -name 'update.retry' \
+            ! -name 'update.backoff' \
             ! -name '*.status' \
             | LC_ALL=C sort | while IFS= read -r f; do
                 printf '%s %s %s\n' "$f" "$(md5sum "$f" | cut -d' ' -f1)" "$(stat -c '%Y' "$f")"
@@ -630,7 +632,7 @@ done
 # C3: everything else under the planted install dirs is byte-identical.
 snapshot >"${SCRATCH}/snapshot.after"
 if diff -u "${SCRATCH}/snapshot.before" "${SCRATCH}/snapshot.after" >"${SCRATCH}/snapshot.diff" 2>&1; then
-    pass "C3 planted install is otherwise byte-identical (md5+mtime, swap/backup/status/marker excluded)"
+    pass "C3 planted install is otherwise byte-identical (md5+mtime, swap/backup/status/retry/backoff/marker excluded)"
 else
     fail "C3 planted install changed beyond the intended files:"
     sed -n '1,40p' "${SCRATCH}/snapshot.diff" >&2

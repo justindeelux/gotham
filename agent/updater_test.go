@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -150,6 +152,7 @@ func updaterTestConfig(t *testing.T, target string, restart updatecore.RestartFu
 		UpdateScript:      filepath.Join(dir, "gotham-agent-update"),
 		AutoUpdate:        true,
 		UpdateInterval:    time.Minute,
+		UpdateChannel:     defaultUpdateChannel,
 		Version:           testAgentCurrent,
 		Restart:           restart,
 	}
@@ -508,4 +511,101 @@ func readFileString(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+// TestReleaseFromOfferBinding is the C2 regression matrix: an agent accepts only
+// its own release family/arch/manifest/channel and refuses the control-plane
+// family, a wrong arch, a wrong manifest, an empty channel and a beta offer on a
+// stable node (the inverse of the G2 PoC).
+func TestReleaseFromOfferBinding(t *testing.T) {
+	arch := runtime.GOARCH
+	otherArch := "arm64"
+	if arch == "arm64" {
+		otherArch = "amd64"
+	}
+	base := func() *agentv1.UpdateResponse {
+		return &agentv1.UpdateResponse{
+			UpdateAvailable:      true,
+			LatestVersion:        testAgentVersion,
+			AssetUrl:             "https://releases.example/gotham-agent-linux-" + arch,
+			ManifestUrl:          "https://releases.example/gotham-agent-manifest-" + arch + ".txt",
+			ManifestSignatureUrl: "https://releases.example/gotham-agent-manifest-" + arch + ".txt.sig",
+			Sha256:               strings.Repeat("a", 64),
+			Channel:              "stable",
+		}
+	}
+
+	tests := map[string]struct {
+		mutate  func(*agentv1.UpdateResponse)
+		channel string
+		wantErr bool
+	}{
+		"valid agent offer": {mutate: func(*agentv1.UpdateResponse) {}, channel: "stable"},
+		"control-plane family": {
+			mutate: func(r *agentv1.UpdateResponse) {
+				r.AssetUrl = "https://releases.example/gotham-linux-" + arch
+			},
+			channel: "stable", wantErr: true,
+		},
+		"control-plane family and empty channel (PoC)": {
+			mutate: func(r *agentv1.UpdateResponse) {
+				r.AssetUrl = "https://releases.example/gotham-linux-" + arch
+				r.Channel = ""
+			},
+			channel: "stable", wantErr: true,
+		},
+		"wrong arch": {
+			mutate: func(r *agentv1.UpdateResponse) {
+				r.AssetUrl = "https://releases.example/gotham-agent-linux-" + otherArch
+			},
+			channel: "stable", wantErr: true,
+		},
+		"wrong manifest name": {
+			mutate: func(r *agentv1.UpdateResponse) {
+				r.ManifestUrl = "https://releases.example/gotham-manifest-" + arch + ".txt"
+			},
+			channel: "stable", wantErr: true,
+		},
+		"empty channel": {
+			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "" },
+			channel: "stable", wantErr: true,
+		},
+		"beta offer on a stable node": {
+			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "beta" },
+			channel: "stable", wantErr: true,
+		},
+		"empty configured channel still enforces stable": {
+			mutate: func(*agentv1.UpdateResponse) {}, channel: "",
+		},
+		"beta offer with an empty configured channel": {
+			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "beta" },
+			channel: "", wantErr: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			resp := base()
+			tc.mutate(resp)
+			release, err := releaseFromOffer(resp, tc.channel)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("releaseFromOffer accepted %+v, want an error", release)
+				}
+				if !errors.Is(err, errOffer) {
+					t.Errorf("err = %v, want errOffer", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("releaseFromOffer: %v", err)
+			}
+			if release.AssetName != "gotham-agent-linux-"+arch {
+				t.Errorf("AssetName = %q", release.AssetName)
+			}
+			if release.Channel != "stable" {
+				t.Errorf("Channel = %q, want stable", release.Channel)
+			}
+		})
+	}
 }

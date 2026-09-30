@@ -138,11 +138,28 @@ func runServe() int {
 		Updater:   agentUpdater(logger),
 	})
 
+	// The gRPC listener certificate carries the operator-configured SAN hosts
+	// (GOTHAM_GRPC_HOSTS, or the list `gotham ca init --host` persisted next to
+	// the CA). The loopback names and the machine hostname are always added, so
+	// a remote agent dialing by the CP's name verifies.
+	grpcHosts := snap.GRPC.Hosts
+	if len(grpcHosts) == 0 {
+		saved, err := servers.LoadHosts(snap.CA.Dir)
+		if err != nil {
+			logger.Warn("failed to read the gRPC SAN host list", "error", err)
+		}
+		grpcHosts = saved
+	}
+	if len(grpcHosts) > 0 {
+		logger.Info("gRPC listener certificate hosts", "hosts", grpcHosts)
+	}
+
 	gateway, err := servers.NewGateway(servers.GatewayConfig{
 		Addr:      snap.GRPC.Addr,
 		Authority: authority,
 		Service:   serverService,
 		Logger:    logger,
+		Hosts:     grpcHosts,
 	})
 	if err != nil {
 		logger.Error("failed to create grpc gateway", "error", err)

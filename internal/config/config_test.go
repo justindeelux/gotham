@@ -349,6 +349,31 @@ func TestLoadGRPCAndCAFromEnv(t *testing.T) {
 	if cfg.SecretKey != "env-secret" {
 		t.Errorf("SecretKey = %q", cfg.SecretKey)
 	}
+	if len(cfg.GRPC.Hosts) != 0 {
+		t.Errorf("GRPC.Hosts = %v, want empty when unset", cfg.GRPC.Hosts)
+	}
+}
+
+func TestLoadGRPCHostsFromEnv(t *testing.T) {
+	clearGothamEnv(t)
+	chdir(t, t.TempDir())
+
+	t.Setenv(EnvGRPCHosts, "cp.example.com,192.0.2.10")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	want := []string{"cp.example.com", "192.0.2.10"}
+	if len(cfg.GRPC.Hosts) != len(want) {
+		t.Fatalf("GRPC.Hosts = %v, want %v", cfg.GRPC.Hosts, want)
+	}
+	for i := range want {
+		if cfg.GRPC.Hosts[i] != want[i] {
+			t.Fatalf("GRPC.Hosts = %v, want %v", cfg.GRPC.Hosts, want)
+		}
+	}
 }
 
 func TestLoadRejectsInvalidValues(t *testing.T) {

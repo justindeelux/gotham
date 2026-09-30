@@ -53,9 +53,43 @@ it (never `ca.key`):
 scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .
 ```
 
+The listener certificate's SANs always include the loopback names
+(`localhost`, `127.0.0.1`, `::1`) and the machine hostname. A remote agent dials
+`GOTHAM_AGENT_CP_ADDR`, so the name or IP it uses must also be a SAN — otherwise
+the agent handshake fails with `certificate is valid for …, not <name>`. Add the
+control plane's address when installing:
+
+```sh
+sudo deploy/install.sh --cp-host cp.example.com --cp-host 203.0.113.10
+```
+
+`--cp-host` is repeatable (and `GOTHAM_GRPC_HOSTS=<a,b>` is the environment
+form); the list is persisted next to the CA. Re-running the installer without it
+keeps the persisted list. `GOTHAM_GRPC_HOSTS` in the service environment
+overrides the persisted list at runtime, and `gotham ca init --host <name-or-ip>`
+can set it directly. A node that dials an address which is not a SAN fails
+closed (never plaintext).
+
 An operator who runs `gotham serve` directly without a CA gets the development
 fallback (plaintext gRPC, logged as a warning); the installer never leaves a
 production host in that state.
+
+### Upgrading an existing control plane
+
+Re-running `deploy/install.sh` on a host that was installed before this change
+now provisions a CA, so the gRPC gateway switches from plaintext to TLS.
+Previously installed agents connect in plaintext and have no CA, so they **go
+offline** (Register/Heartbeat fail closed at the handshake) until each is
+reinstalled with the CA:
+
+```sh
+scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .           # on each node
+sudo gotham/deploy/install-agent.sh --ca ./ca.crt
+```
+
+The agent binary does not need updating; only `/etc/gotham/agent.env` gains
+`GOTHAM_AGENT_CA=/etc/gotham/ca.crt`. If you cannot reach the CP by a name in
+the listener SANs yet, add it first (`--cp-host`).
 
 Re-running the installer keeps `/etc/gotham/gotham.env`: the managed keys
 (`GOTHAM_DATABASE_DSN`, `GOTHAM_REDIS_ADDR`, `GOTHAM_CA_DIR`,
@@ -76,6 +110,8 @@ Useful overrides:
 | `GOTHAM_DATABASE_DSN` | Managed PostgreSQL DSN; skips local provisioning. |
 | `GOTHAM_REDIS_ADDR` | Redis `host:port` (default `localhost:6379`). |
 | `GOTHAM_SKIP_DEPS=1` | Do not install or configure PostgreSQL/Redis. |
+| `--cp-host <name-or-ip>` | Add a DNS name or IP to the gRPC listener certificate SANs (repeatable). |
+| `GOTHAM_GRPC_HOSTS` | Comma-separated SAN hosts (same as `--cp-host`); also overrides the persisted list at runtime. |
 | `GOTHAM_INSTALL_ROOT` | Install under a prefix instead of `/` (testing only; non-root; enables test mode). |
 | `GOTHAM_INSTALL_TEST_PUBLIC_KEY` | Test-only: replace the pinned trust anchor (PEM or base64); honoured **only** with `GOTHAM_INSTALL_ROOT`, otherwise warned and ignored. |
 
@@ -131,7 +167,12 @@ Useful agent installer flags and variables:
 | `GOTHAM_AGENT_CA_FILE` | Same as `--ca`, via the environment. |
 | `--insecure` | Development only: connect without TLS. |
 | `--dry-run` | Print what would be done; makes no change. |
-| `GOTHAM_AGENT_CA` | Advanced: reuse a CA certificate already deployed on the node (skips the copy), read from an existing `agent.env` on reinstall. |
+| `GOTHAM_AGENT_CA` | The agent-side path the installer writes (`/etc/gotham/ca.crt`). It is **not** read from the ambient environment; on a reinstall the installer keeps the value already in `agent.env`. Use `--ca`/`GOTHAM_AGENT_CA_FILE` to change it. |
+| `GOTHAM_AGENT_UPDATE_CHANNEL` | Release channel this node accepts, `stable` (default) or `beta`; an offer with a different or empty channel is refused. |
+
+`GOTHAM_AGENT_CP_ADDR` must use a name or IP that is one of the control plane's
+listener SANs (see [Control plane](#control-plane)); otherwise the TLS handshake
+fails and the node never registers.
 
 ## Updates and rollback
 

@@ -26,6 +26,7 @@ const (
 
 	envAutoUpdate     = "GOTHAM_AGENT_AUTO_UPDATE"
 	envUpdateInterval = "GOTHAM_AGENT_UPDATE_INTERVAL"
+	envUpdateChannel  = "GOTHAM_AGENT_UPDATE_CHANNEL"
 	envBinary         = "GOTHAM_AGENT_BINARY"
 	envUpdateScript   = "GOTHAM_AGENT_UPDATE_SCRIPT"
 	envUpdateStatus   = "GOTHAM_AGENT_UPDATE_STATUS"
@@ -63,6 +64,10 @@ const (
 	defaultAgentBackoffPath = "/var/lib/gotham-agent/update.backoff"
 	defaultAgentHealthAddr  = "127.0.0.1:8001"
 	defaultUpdateInterval   = 5 * time.Minute
+	// defaultUpdateChannel is the release channel an agent accepts when
+	// GOTHAM_AGENT_UPDATE_CHANNEL is unset. An offer whose signed channel does
+	// not match is refused (C2).
+	defaultUpdateChannel = "stable"
 )
 
 // Config holds the agent's runtime configuration, loaded from the environment.
@@ -99,6 +104,9 @@ type Config struct {
 	AutoUpdate bool
 	// UpdateInterval is how often the agent polls the CP for an update.
 	UpdateInterval time.Duration
+	// UpdateChannel is the release channel this agent accepts ("stable" by
+	// default). An offer with a different or empty channel is refused.
+	UpdateChannel string
 	// BinaryPath is the fixed agent executable the updater swaps.
 	BinaryPath string
 	// UpdateScript is the root-owned restart/healthcheck wrapper.
@@ -139,6 +147,7 @@ func Load() (Config, error) {
 
 		AutoUpdate:        strings.EqualFold(strings.TrimSpace(os.Getenv(envAutoUpdate)), "true"),
 		UpdateInterval:    updateIntervalFromEnv(),
+		UpdateChannel:     envOr(envUpdateChannel, defaultUpdateChannel),
 		BinaryPath:        envOr(envBinary, defaultAgentBinary),
 		UpdateScript:      envOr(envUpdateScript, defaultAgentUpdateScript),
 		UpdateStatusPath:  envOr(envUpdateStatus, defaultAgentStatusPath),

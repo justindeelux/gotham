@@ -117,7 +117,8 @@ rests on the embedded-key signature check, not on channel client authentication
 (the agent client-certificate follow-up is tracked separately). The CP installer
 provisions the CA (`gotham ca init` → `/var/lib/gotham/ca`) and
 `install-agent.sh` requires it (`--ca ca.crt`; it fails closed without one). The
-flow:
+gRPC listener certificate must include the name/IP agents dial
+(`install.sh --cp-host`, also `GOTHAM_GRPC_HOSTS`). The flow:
 
 1. The agent calls `UpdateService/RequestUpdate` on reconnect and on a poll
    interval, reporting its `agent_version`, `os` and `arch`.
@@ -128,9 +129,11 @@ flow:
 3. The agent downloads the asset through the shared safe client in
    `updatecore` (https-only, bounded size/redirects, no link-local dials),
    re-verifies the signature with the key **embedded in the agent binary**,
-   binds version/arch/file/digest, then swaps atomically (hardlink backup,
-   gap-free commit, `<binary>.old` rollback) and restarts via a root-owned
-   wrapper outside its writable directory.
+   binds version/arch/file/digest, refuses any offer that is not the agent
+   asset/manifest for its own arch or whose channel is empty or different from
+   `GOTHAM_AGENT_UPDATE_CHANNEL` (default `stable`), then swaps atomically
+   (hardlink backup, gap-free commit, `<binary>.old` rollback) and restarts via a
+   root-owned wrapper outside its writable directory.
 4. After the restart the agent reports the new version on its next heartbeat;
    the control plane keeps an in-memory agent version map (`GET
    /api/v1/servers/agents`). A failed update rolls back and keeps the old

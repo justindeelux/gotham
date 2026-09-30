@@ -41,6 +41,7 @@ const (
 	EnvOAuthGitHubRedirectURL  = "GOTHAM_OAUTH_GITHUB_REDIRECT_URL"
 
 	EnvGRPCAddr  = "GOTHAM_GRPC_ADDR"
+	EnvGRPCHosts = "GOTHAM_GRPC_HOSTS"
 	EnvCADir     = "GOTHAM_CA_DIR"
 	EnvSecretKey = "GOTHAM_SECRET_KEY"
 
@@ -94,6 +95,11 @@ type Redis struct {
 type GRPC struct {
 	// Addr is the host:port the gateway binds. Default: :9442
 	Addr string
+	// Hosts are extra DNS names and IPs added to the gRPC listener certificate
+	// SANs (for example the control plane's public hostname), so a remote agent
+	// dialing by that name verifies. Empty by default; the loopback names and
+	// the machine hostname are always present.
+	Hosts []string `mapstructure:"hosts"`
 }
 
 // CA holds the certificate authority settings.
@@ -294,6 +300,7 @@ func newViper() *viper.Viper {
 		"database.dsn":              EnvDatabaseDSN,
 		"redis.addr":                EnvRedisAddr,
 		"grpc.addr":                 EnvGRPCAddr,
+		"grpc.hosts":                EnvGRPCHosts,
 		"ca.dir":                    EnvCADir,
 		"secret_key":                EnvSecretKey,
 		"log.level":                 EnvLogLevel,

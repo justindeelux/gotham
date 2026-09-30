@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -37,6 +38,11 @@ type GatewayConfig struct {
 	Authority *Authority
 	Service   *ServerService
 	Logger    *slog.Logger
+	// Hosts are extra DNS names and IPs added to the listener certificate SANs,
+	// for example the control plane's public hostname. They are additive: the
+	// bind-address host, the loopback names and the machine hostname are always
+	// present.
+	Hosts []string
 }
 
 // Gateway is the control-plane gRPC server. It implements AgentService (node
@@ -82,7 +88,7 @@ func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 
 	opts := make([]grpc.ServerOption, 0, 1)
 	if cfg.Authority != nil {
-		creds, err := cfg.Authority.serverCredentials(addr)
+		creds, err := cfg.Authority.serverCredentials(addr, cfg.Hosts)
 		if err != nil {
 			return nil, err
 		}
@@ -254,8 +260,8 @@ func (g *Gateway) RequestUpdate(ctx context.Context, req *agentv1.UpdateRequest)
 // registration token or CSR, so an agent's very first Register cannot present a
 // client certificate. Requiring one is possible once the contract gains a
 // bootstrap credential.
-func (a *Authority) serverCredentials(addr string) (credentials.TransportCredentials, error) {
-	certPEM, keyPEM, err := a.IssueServerCert(serverHosts(addr))
+func (a *Authority) serverCredentials(addr string, extraHosts []string) (credentials.TransportCredentials, error) {
+	certPEM, keyPEM, err := a.IssueServerCert(serverHosts(addr, extraHosts))
 	if err != nil {
 		return nil, fmt.Errorf("issue server certificate: %w", err)
 	}
@@ -309,13 +315,21 @@ func peerAddress(ctx context.Context) string {
 	return "unknown"
 }
 
-// serverHosts derives the SAN host list for the listener certificate.
-func serverHosts(addr string) []string {
-	hosts := []string{"localhost", "127.0.0.1", "::1"}
+// serverHosts derives the SAN host list for the listener certificate: the
+// operator-configured extra hosts first, then the bind-address host, the
+// loopback names and the machine hostname so a remote agent dialing the control
+// plane by its configured name or IP verifies.
+func serverHosts(addr string, extra []string) []string {
+	hosts := make([]string, 0, len(extra)+5)
+	hosts = append(hosts, extra...)
 	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" && host != "0.0.0.0" && host != "::" {
-		hosts = append([]string{host}, hosts...)
+		hosts = append(hosts, host)
 	}
-	return hosts
+	hosts = append(hosts, "localhost", "127.0.0.1", "::1")
+	if name, err := os.Hostname(); err == nil {
+		hosts = append(hosts, name)
+	}
+	return uniqueStrings(hosts)
 }
 
 // toGRPCError maps domain sentinels to gRPC status codes.

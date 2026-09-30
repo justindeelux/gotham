@@ -87,6 +87,14 @@ runs TLS, presenting a server certificate signed by the CA and accepting a clien
 certificate when one is presented. Without a CA (only when an operator runs
 `gotham serve` directly) the gateway falls back to plaintext and logs a warning.
 
+The listener certificate SANs are the operator-declared hosts
+(`install.sh --cp-host <name-or-ip>` repeated, or `GOTHAM_GRPC_HOSTS=<a,b>`)
+persisted as `<GOTHAM_CA_DIR>/hosts`, plus the bind-address host, the loopback
+names and the machine hostname. A remote agent must dial one of these SANs or the
+handshake fails closed; add the control plane's public name/IP at install time.
+`gotham ca init --host <name-or-ip>` sets the list directly, and
+`GOTHAM_GRPC_HOSTS` in the service environment overrides it at runtime.
+
 To add a node, copy `ca.crt` (never `ca.key`) to it and install the agent with
 `--ca`:
 
@@ -97,6 +105,10 @@ sudo deploy/install-agent.sh --ca ./ca.crt
 
 `install-agent.sh` fails closed without a CA; `--insecure` is the
 development-only override that leaves the agent channel in plaintext.
+
+Re-running `install.sh` on a pre-existing plaintext control plane flips it to
+TLS; agents installed before that go offline until they are reinstalled with
+`--ca` (see `docs/install.md`, "Upgrading an existing control plane").
 
 
 ## Outcome, gate and recovery

@@ -250,6 +250,23 @@ grep -q "^GOTHAM_CA_DIR=${CA_DIR_TEST}$" "${ROOT}/etc/gotham/gotham.env" \
     || { echo "FAIL: gotham.env GOTHAM_CA_DIR does not point at the provisioned CA" >&2; exit 1; }
 echo "PASS: control-plane CA provisioned 0600 and wired via GOTHAM_CA_DIR (A1)"
 
+# F1: --cp-host seeds the listener SAN hosts persisted next to the CA, so a
+# remote agent dialing the control plane by name/IP verifies.
+[ -s "${CA_DIR_TEST}/hosts" ] \
+    || { echo "FAIL: installer did not seed a default SAN host list" >&2; exit 1; }
+CP_ROOT="${SCRATCH}/root-cp-host"
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_ROOT="${CP_ROOT}" \
+GOTHAM_SKIP_DEPS=1 \
+    sh "${SCRIPT_DIR}/install.sh" --cp-host cp.example.com --cp-host 192.0.2.10 >/dev/null
+grep -qx 'cp.example.com' "${CP_ROOT}/var/lib/gotham/ca/hosts" \
+    || { echo "FAIL: --cp-host cp.example.com was not persisted" >&2; cat "${CP_ROOT}/var/lib/gotham/ca/hosts" >&2; exit 1; }
+grep -qx '192.0.2.10' "${CP_ROOT}/var/lib/gotham/ca/hosts" \
+    || { echo "FAIL: --cp-host 192.0.2.10 was not persisted" >&2; exit 1; }
+echo "PASS: --cp-host seeds the gRPC listener SAN hosts (F1)"
+
 # The agent installer must refuse to run without a CA (fail closed), accept
 # --insecure as the documented dev override, and accept --ca. --dry-run keeps
 # all three side-effect free; GOTHAM_BASE_URL/GOTHAM_VERSION avoid the network.

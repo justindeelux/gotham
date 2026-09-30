@@ -64,3 +64,35 @@ func TestRunCAUsage(t *testing.T) {
 		t.Errorf("runCA(help) = %d, want %d", code, exitOK)
 	}
 }
+
+// TestRunCAInitPersistsHosts is F1: `gotham ca init --host` records the
+// operator-configured listener SAN hosts so serve presents them, and a bad flag
+// is a usage error.
+func TestRunCAInitPersistsHosts(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ca")
+	t.Setenv("GOTHAM_CA_DIR", dir)
+
+	if code := runCA([]string{"init", "--host", "cp.example.com", "--host=192.0.2.10,cp2.example.com"}); code != exitOK {
+		t.Fatalf("runCA init --host = %d, want %d", code, exitOK)
+	}
+	hosts, err := servers.LoadHosts(dir)
+	if err != nil {
+		t.Fatalf("LoadHosts: %v", err)
+	}
+	want := []string{"cp.example.com", "192.0.2.10", "cp2.example.com"}
+	if len(hosts) != len(want) {
+		t.Fatalf("LoadHosts = %v, want %v", hosts, want)
+	}
+	for i := range want {
+		if hosts[i] != want[i] {
+			t.Fatalf("LoadHosts = %v, want %v", hosts, want)
+		}
+	}
+
+	if code := runCA([]string{"init", "--bogus"}); code != exitUsage {
+		t.Errorf("runCA init --bogus = %d, want %d", code, exitUsage)
+	}
+	if code := runCA([]string{"init", "--host"}); code != exitUsage {
+		t.Errorf("runCA init --host (no value) = %d, want %d", code, exitUsage)
+	}
+}

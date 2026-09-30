@@ -43,8 +43,14 @@
 # GOTHAM_CA_DIR and the gRPC gateway then runs TLS. Copy ca.crt from there to
 # each node and pass it to install-agent.sh --ca.
 #
+# Remote agents must dial a name/IP present in the gRPC listener certificate
+# SANs. Pass --cp-host <name-or-ip> (repeatable) or GOTHAM_GRPC_HOSTS=<a,b> for
+# the control plane's hostname(s)/IP(s); the loopback names and the machine
+# hostname are always included. On a reinstall, omitting them keeps the list
+# already persisted next to the CA.
+#
 # Usage:
-#   sudo ./install.sh [--dry-run]
+#   sudo ./install.sh [--cp-host <name-or-ip>]... [--dry-run]
 
 set -eu
 # A permissive base umask: shared directories (/etc/gotham, /usr/libexec/gotham,
@@ -66,19 +72,34 @@ DEFAULT_REPO="justindeelux/gotham"
 GOTHAM_RELEASE_PUBLIC_KEY_B64="Yt6nz1gGQWF7Bfc9MCt/gQXbPMzhN9OygrUkOEFYdwQ="
 
 DRY_RUN=0
-for argument in "$@"; do
-    case "${argument}" in
+CP_HOSTS_OPT=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
         --dry-run) DRY_RUN=1 ;;
+        --cp-host)
+            [ "$#" -ge 2 ] || { echo "--cp-host requires a hostname or IP" >&2; exit 2; }
+            CP_HOSTS_OPT="${CP_HOSTS_OPT} $2"
+            shift
+            ;;
+        --cp-host=*) CP_HOSTS_OPT="${CP_HOSTS_OPT} ${1#--cp-host=}" ;;
         -h | --help)
-            sed -n '2,47p' "$0"
+            sed -n '2,53p' "$0"
             exit 0
             ;;
         *)
-            echo "unknown argument: ${argument}" >&2
+            echo "unknown argument: $1" >&2
             exit 2
             ;;
     esac
+    shift
 done
+
+# gRPC listener SAN hosts: --cp-host values plus GOTHAM_GRPC_HOSTS
+# (comma-separated). Empty is fine; serve always adds the loopback names and the
+# machine hostname.
+CP_HOSTS="${GOTHAM_GRPC_HOSTS:-}"
+CP_HOSTS="${CP_HOSTS}${CP_HOSTS_OPT}"
+CP_HOSTS="$(printf '%s' "${CP_HOSTS}" | tr ',' ' ')"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 for sibling in release-verify.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service; do
@@ -367,13 +388,27 @@ fi
 # idempotent and writes ca.crt/ca.key (0600) under the service-owned
 # GOTHAM_CA_DIR, so a fresh install never serves the agent channel in plaintext.
 # Copy ca.crt to each node for install-agent.sh --ca.
+#
+# The listener certificate SANs come from --cp-host / GOTHAM_GRPC_HOSTS and are
+# persisted next to the CA. With none, and no list from a previous install, seed
+# the machine's FQDN so a node can dial the control plane by name.
+CP_HOSTS_LIST="${CP_HOSTS}"
+if [ -z "${CP_HOSTS_LIST}" ] && [ ! -f "${CA_DIR}/hosts" ]; then
+    default_host="$(hostname -f 2>/dev/null || true)"
+    [ -n "${default_host}" ] || default_host="$(hostname 2>/dev/null || true)"
+    CP_HOSTS_LIST="${default_host}"
+fi
+ca_init_args=""
+for host in ${CP_HOSTS_LIST}; do
+    [ -n "${host}" ] && ca_init_args="${ca_init_args} --host ${host}"
+done
 log "initializing the mTLS certificate authority at ${CA_DIR}"
 if [ "${DRY_RUN}" -eq 1 ]; then
-    echo "[dry-run] GOTHAM_CA_DIR=${CA_DIR} ${INSTALL_PATH} ca init"
+    echo "[dry-run] GOTHAM_CA_DIR=${CA_DIR} ${INSTALL_PATH} ca init${ca_init_args}"
 elif [ "${TEST_MODE}" -eq 1 ]; then
-    GOTHAM_CA_DIR="${CA_DIR}" "${INSTALL_PATH}" ca init
+    GOTHAM_CA_DIR="${CA_DIR}" "${INSTALL_PATH}" ca init ${ca_init_args}
 else
-    runuser -u "${SERVICE_USER}" -- env GOTHAM_CA_DIR="${CA_DIR}" "${INSTALL_PATH}" ca init
+    runuser -u "${SERVICE_USER}" -- env GOTHAM_CA_DIR="${CA_DIR}" "${INSTALL_PATH}" ca init ${ca_init_args}
 fi
 
 # ---- Self-update chain (mirror of deploy/README.md) -------------------------

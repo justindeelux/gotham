@@ -43,6 +43,7 @@
 #   GOTHAM_AGENT_LOG_LEVEL
 #   GOTHAM_AGENT_AUTO_UPDATE
 #   GOTHAM_AGENT_UPDATE_INTERVAL
+#   GOTHAM_AGENT_UPDATE_CHANNEL
 
 set -eu
 # Permissive base umask so shared directories stay world-traversable and the
@@ -279,7 +280,8 @@ else
             GOTHAM_AGENT_DOCKER_SOCK \
             GOTHAM_AGENT_LOG_LEVEL \
             GOTHAM_AGENT_AUTO_UPDATE \
-            GOTHAM_AGENT_UPDATE_INTERVAL; do
+            GOTHAM_AGENT_UPDATE_INTERVAL \
+            GOTHAM_AGENT_UPDATE_CHANNEL; do
             eval "value=\${${key}:-}"
             if [ -n "${value}" ]; then
                 printf '%s=%s\n' "${key}" "${value}" >>"${ENV_FILE}"

@@ -11,6 +11,7 @@
 #   GOTHAM_OAUTH_GITHUB_CLIENT_ID, GOTHAM_OAUTH_GITHUB_CLIENT_SECRET,
 #   GOTHAM_OAUTH_GITHUB_REDIRECT_URL,
 #   GOTHAM_GRPC_ADDR, GOTHAM_CA_DIR, GOTHAM_SECRET_KEY
+#   GOTHAM_GRPC_HOSTS     extra gRPC listener SAN hosts, comma-separated
 #
 # Self-update variables (read directly, not from this file):
 #   FEATURE_UPDATES        kill switch for the update surface (default on)
@@ -38,6 +39,7 @@
 #   GOTHAM_AGENT_AUTO_UPDATE      apply a plain CP offer unattended (default off;
 #                                 an operator-triggered rollout always applies)
 #   GOTHAM_AGENT_UPDATE_INTERVAL  poll interval, e.g. 5m (default 5m)
+#   GOTHAM_AGENT_UPDATE_CHANNEL   release channel accepted, stable (default) or beta
 #   GOTHAM_AGENT_BINARY           fixed agent binary (default /var/lib/gotham-agent/bin/gotham-agent)
 #   GOTHAM_AGENT_UPDATE_SCRIPT    agent restart wrapper (default /usr/libexec/gotham/gotham-agent-update)
 #   GOTHAM_AGENT_UPDATE_STATUS    root-owned agent status (default /var/lib/gotham-agent-updater/update.status)
@@ -72,6 +74,12 @@ redis:
 grpc:
   # host:port to bind. Default: :9442
   addr: ":9442"
+  # Extra DNS names and IPs added to the listener certificate SANs, so a remote
+  # agent dialing the control plane by that name verifies. The loopback names
+  # and the machine hostname are always included. Default: none
+  # hosts:
+  #   - cp.example.com
+  #   - 203.0.113.10
 
 # Certificate authority used to issue agent and control-plane mTLS certificates.
 ca:

@@ -91,6 +91,18 @@ run_install() {
         sh "${SCRIPT_DIR}/install.sh" "$@"
 }
 
+# run_install_pinned uses the key embedded in install.sh (the provisioned release
+# public key), with no override. The test manifests are signed by an ephemeral
+# test key, so this must fail closed — proving the pinned anchor is what is
+# actually used.
+run_install_pinned() {
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+    GOTHAM_INSTALL_ROOT="${ROOT}" \
+    GOTHAM_SKIP_DEPS=1 \
+        sh "${SCRIPT_DIR}/install.sh" "$@"
+}
+
 echo "==> install (happy path)"
 run_install >/dev/null
 
@@ -140,6 +152,17 @@ grep -qi "signature verification FAILED" "${SCRATCH}/tampered-manifest.log" \
     || { echo "FAIL: tampered manifest failed for an unexpected reason" >&2; cat "${SCRATCH}/tampered-manifest.log" >&2; exit 1; }
 cp "${SCRATCH}/good-manifest" "${SERVE}/gotham-manifest-${ARCH}.txt"
 echo "PASS: tampered manifest rejected (signature failure)"
+
+# ---- Fail-closed: pinned-key mismatch --------------------------------------
+# A validly test-signed manifest verified against the provisioned key embedded
+# in install.sh must be rejected: the pinned anchor is authoritative.
+if run_install_pinned >"${SCRATCH}/pinned-mismatch.log" 2>&1; then
+    echo "FAIL: a manifest signed by a different key was accepted under the pinned key" >&2
+    exit 1
+fi
+grep -qi "signature verification FAILED" "${SCRATCH}/pinned-mismatch.log" \
+    || { echo "FAIL: pinned-key mismatch failed for an unexpected reason" >&2; cat "${SCRATCH}/pinned-mismatch.log" >&2; exit 1; }
+echo "PASS: pinned-key mismatch rejected (signature failure)"
 
 # ---- Dry-run does not touch the filesystem ---------------------------------
 DRY_ROOT="${SCRATCH}/dry-root"

@@ -47,7 +47,7 @@ SERVICE_USER="gotham-agent"
 DEFAULT_REPO="justindeelux/gotham"
 # Release trust anchor: the base64 raw Ed25519 public key (same as install.sh
 # and deploy/gotham-signing-key.pub). Never fetched from the download channel.
-GOTHAM_RELEASE_PUBLIC_KEY_B64="y21W8J0G82S/N+ws/2KwoO7RTDuOvvbKzLQOKvSe97E="
+GOTHAM_RELEASE_PUBLIC_KEY_B64="Yt6nz1gGQWF7Bfc9MCt/gQXbPMzhN9OygrUkOEFYdwQ="
 DRY_RUN=0
 
 for argument in "$@"; do

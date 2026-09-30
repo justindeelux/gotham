@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures";
-import { loadAccount, storageStatePath, uniqueSuffix } from "./support";
+import { loadAccount, seedNodeAddress, storageStatePath, uniqueSuffix } from "./support";
 
 // Reuse the authenticated session so the page starts signed in; the seed
 // calls authenticate separately with the access token from global setup.
@@ -73,7 +73,7 @@ test.describe("services & templates", () => {
     // connected, so nothing deploys and no container exists.
     const serverResponse = await request.post("/api/v1/servers", {
       headers,
-      data: { name: nodeName, ip: "127.0.0.1", ssh_user: "root" },
+      data: { name: nodeName, ip: seedNodeAddress, ssh_user: "root" },
     });
     expect(serverResponse.status(), await serverResponse.text()).toBe(201);
 

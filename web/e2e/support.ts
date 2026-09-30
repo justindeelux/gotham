@@ -23,6 +23,27 @@ export const accountPath = join(e2eDir, ".auth", "account.json");
  */
 export const cloneURL = "https://github.com/docker/welcome-to-docker.git";
 
+/**
+ * Address every seeded server row registers.
+ *
+ * Never 127.0.0.1: the shared self-hosted runner is an all-in-one Gotham host,
+ * so its long-lived agent already listens on 127.0.0.1:9443 (docs/test-server.md).
+ * Any write that re-routes a node — an application domain, a certificate, a DNS
+ * provider or a redirect — makes the control plane dial the seeded address, so
+ * 127.0.0.1 reaches that *other* live gRPC server and fails there with
+ * `Unimplemented agent.v1.ProxyService` instead of failing fast; the resync
+ * then blocks the mutation response and pushes the spec past its timeout.
+ *
+ * The seeded target must dial nothing and be refused at once on every platform.
+ * Plain 127.0.0.2 does not qualify: Linux refuses it, but macOS has no route to
+ * non-.1 loopback addresses and the connect hangs until the RPC deadline (which
+ * is the same slowdown this constant exists to remove). An explicit unused port
+ * on the IPv6 loopback is refused immediately by both, and port 1 is never an
+ * agent port, so no live service can answer. The control plane honors a stored
+ * `host:port` target verbatim (internal/servers/docker_client.go: agentTargetFor).
+ */
+export const seedNodeAddress = "[::1]:1";
+
 /** Account created once per run and shared by every scenario. */
 export interface E2EAccount {
   email: string;

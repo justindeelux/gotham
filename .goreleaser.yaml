@@ -1,0 +1,97 @@
+# GoReleaser configuration for Gotham releases (INFRA-9.1).
+#
+# The asset names produced here are a hard contract with the self-update code:
+#   control plane  internal/updates/checker.go  -> "gotham-linux-<arch>"        + "gotham-manifest-<arch>.txt"
+#   node agent     internal/updates/agents.go   -> "gotham-agent-linux-<arch>"  + "gotham-agent-manifest-<arch>.txt"
+# (`updatecore.ManifestName` / `ManifestNameWithPrefix` build the manifest names.)
+# Do not rename without changing those resolvers.
+#
+# `format: binary` uploads the raw binaries directly (no archive wrapper), so the
+# asset a checker resolves IS the executable it downloads and swaps in.
+#
+# The release is created as a DRAFT: GoReleaser uploads the binaries, checksums
+# and the published signing key, then .github/workflows/release.yml signs the
+# per-arch manifests over the exact uploaded bytes, uploads them with
+# `gh release upload`, and finally publishes the draft. Draft releases are
+# skipped by the checker, so an incomplete release is never offered.
+
+version: 2
+
+project_name: gotham
+
+builds:
+  - id: gotham
+    binary: gotham
+    main: ./cmd/gotham
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      # Update trust anchor. The workflow fails if this is empty, and asserts it
+      # matches deploy/gotham-signing-key.pub, so a release can never ship a
+      # keyless (i.e. update-disabled) binary.
+      - -X github.com/justindeelux/gotham/updatecore.PublicKey={{ .Env.GOTHAM_UPDATE_PUBLIC_KEY }}
+
+  - id: gotham-agent
+    binary: gotham-agent
+    main: ./cmd/gotham-agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X github.com/justindeelux/gotham/updatecore.PublicKey={{ .Env.GOTHAM_UPDATE_PUBLIC_KEY }}
+
+# Raw binaries, named exactly as the update checkers resolve them.
+archives:
+  - id: gotham
+    ids:
+      - gotham
+    formats:
+      - binary
+    name_template: "gotham-linux-{{ .Arch }}"
+  - id: gotham-agent
+    ids:
+      - gotham-agent
+    formats:
+      - binary
+    name_template: "gotham-agent-linux-{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+release:
+  # Draft until the signed manifests are attached and the workflow publishes it.
+  draft: true
+  # A re-run of the workflow replaces the previous draft instead of failing.
+  replace_existing_draft: true
+  # rc/alpha/beta tags publish a prerelease (the beta channel).
+  prerelease: auto
+  github:
+    owner: justindeelux
+    name: gotham
+  extra_files:
+    # The release public key is a public artifact: installers and reviewers can
+    # compare it against the key embedded in the binaries and in install.sh.
+    - glob: ./deploy/gotham-signing-key.pub
+
+changelog:
+  use: github

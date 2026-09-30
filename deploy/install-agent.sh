@@ -8,9 +8,13 @@
 # update wrapper + sudoers rule, creates the gotham-agent system user and
 # enables the systemd unit.
 #
-# This script is wired for the Phase 9 release pipeline: the download URL and
-# binary names must match the GoReleaser configuration produced in that phase.
-# Override the release host with GOTHAM_RELEASE_URL when testing.
+# The release binary is downloaded with the same signed-manifest verification as
+# the control-plane installer (deploy/release-verify.sh): the Ed25519 signature
+# of gotham-agent-manifest-<arch>.txt is checked against the embedded release
+# public key, then the artifact digest against the signed sha256. A failed
+# verification aborts; nothing is trusted on first use.
+#
+# Override the release for testing with GOTHAM_VERSION and GOTHAM_BASE_URL.
 #
 # Usage:
 #   sudo ./install-agent.sh [--dry-run]
@@ -40,7 +44,10 @@ STATUS_DIR="/var/lib/gotham-agent-updater"
 WRAPPER_PATH="/usr/libexec/gotham/gotham-agent-update"
 WRAPPER_CONF="/etc/gotham/agent-updater.conf"
 SERVICE_USER="gotham-agent"
-RELEASE_URL="${GOTHAM_RELEASE_URL:-https://github.com/justindeelux/gotham/releases/latest/download}"
+DEFAULT_REPO="justindeelux/gotham"
+# Release trust anchor: the base64 raw Ed25519 public key (same as install.sh
+# and deploy/gotham-signing-key.pub). Never fetched from the download channel.
+GOTHAM_RELEASE_PUBLIC_KEY_B64="y21W8J0G82S/N+ws/2KwoO7RTDuOvvbKzLQOKvSe97E="
 DRY_RUN=0
 
 for argument in "$@"; do
@@ -77,7 +84,9 @@ log() {
 # config and the sudoers installer). Fail early with a clear message rather than
 # aborting after the user has been created and the binary installed.
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-for sibling in gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh; do
+# shellcheck source=deploy/release-verify.sh
+. "${SCRIPT_DIR}/release-verify.sh"
+for sibling in release-verify.sh gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh; do
     if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
         echo "install-agent.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
         exit 2
@@ -110,23 +119,41 @@ if ! command -v systemctl >/dev/null 2>&1 && [ "${DRY_RUN}" -eq 0 ]; then
 fi
 
 ARCH="$(detect_arch)"
-DOWNLOAD_URL="${RELEASE_URL}/${BINARY_NAME}-linux-${ARCH}"
-TMP_BINARY="${TMPDIR:-/tmp}/${BINARY_NAME}.$$"
-
-log "installing ${BINARY_NAME} for linux/${ARCH}"
-log "downloading ${DOWNLOAD_URL}"
-
-if [ "${DRY_RUN}" -eq 1 ]; then
-    run curl -fsSL -o "${TMP_BINARY}" "${DOWNLOAD_URL}"
+REPO="${GOTHAM_REPO:-${DEFAULT_REPO}}"
+if [ -n "${GOTHAM_BASE_URL:-}" ]; then
+    RELEASE_BASE="${GOTHAM_BASE_URL%/}"
+    [ -n "${GOTHAM_VERSION:-}" ] || { echo "GOTHAM_VERSION is required with GOTHAM_BASE_URL" >&2; exit 1; }
+    VERSION="${GOTHAM_VERSION}"
 else
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -o "${TMP_BINARY}" "${DOWNLOAD_URL}"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO "${TMP_BINARY}" "${DOWNLOAD_URL}"
+    RELEASES_BASE="https://github.com/${REPO}/releases"
+    if [ -n "${GOTHAM_VERSION:-}" ]; then
+        RELEASE_BASE="${RELEASES_BASE}/download/${GOTHAM_VERSION}"
+        VERSION="${GOTHAM_VERSION}"
     else
-        echo "curl or wget is required to download the binary" >&2
-        exit 1
+        RELEASE_BASE="${RELEASES_BASE}/latest/download"
+        VERSION="$(
+            curl -fsSL -o /dev/null -w '%{url_effective}' \
+                "${RELEASE_BASE}/gotham-agent-manifest-${ARCH}.txt" \
+                | sed -n 's#.*/download/\([^/]*\)/.*#\1#p'
+        )"
+        [ -n "${VERSION}" ] || { echo "could not resolve the latest release tag" >&2; exit 1; }
     fi
+fi
+TMP_BINARY="${TMPDIR:-/tmp}/${BINARY_NAME}.$$"
+PUBKEY_FILE="$(mktemp "${TMPDIR:-/tmp}/gotham-pubkey.XXXXXX")"
+trap 'rm -f "${PUBKEY_FILE}" "${TMP_BINARY}"' EXIT INT TERM
+
+log "installing ${BINARY_NAME} ${VERSION} for linux/${ARCH}"
+log "downloading ${RELEASE_BASE}/gotham-agent-linux-${ARCH}"
+
+require_cmd curl "apt-get install -y curl"
+require_cmd openssl "apt-get install -y openssl"
+require_cmd base64 "coreutils"
+materialize_public_key "${GOTHAM_UPDATE_PUBLIC_KEY:-${GOTHAM_RELEASE_PUBLIC_KEY_B64}}" "${PUBKEY_FILE}"
+if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "[dry-run] verify_release ${RELEASE_BASE} ${VERSION} ${ARCH} gotham-agent <pubkey> ${TMP_BINARY}"
+else
+    verify_release "${RELEASE_BASE}" "${VERSION}" "${ARCH}" "gotham-agent" "${PUBKEY_FILE}" "${TMP_BINARY}"
 fi
 
 log "creating system user ${SERVICE_USER}"

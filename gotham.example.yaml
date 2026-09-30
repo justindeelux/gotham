@@ -28,9 +28,26 @@
 #   GOTHAM_UPDATE_BINARY   fixed target binary (default /var/lib/gotham/bin/gotham)
 #   GOTHAM_UPDATE_LOCK     update lock shared with the wrapper (default /var/lib/gotham/update.lock)
 #   GOTHAM_UPDATE_CURRENT  override the running version (wrappers/tests)
+#   GOTHAM_UPDATE_OFFER_CACHE_TTL  agent-offer cache TTL (default 10m); bounds
+#                          the release-API load from a polling fleet
 #
 # The restart wrapper (fixed, root-owned, no arguments) and its sudoers rule
 # live in deploy/; see deploy/README.md for the privilege model and layout.
+#
+# Node-agent remote update (read directly by the agent, not from this file):
+#   GOTHAM_AGENT_AUTO_UPDATE      apply a plain CP offer unattended (default off;
+#                                 an operator-triggered rollout always applies)
+#   GOTHAM_AGENT_UPDATE_INTERVAL  poll interval, e.g. 5m (default 5m)
+#   GOTHAM_AGENT_BINARY           fixed agent binary (default /var/lib/gotham-agent/bin/gotham-agent)
+#   GOTHAM_AGENT_UPDATE_SCRIPT    agent restart wrapper (default /usr/libexec/gotham/gotham-agent-update)
+#   GOTHAM_AGENT_UPDATE_STATUS    root-owned agent status (default /var/lib/gotham-agent-updater/update.status)
+#   GOTHAM_AGENT_UPDATE_PENDING   agent staged gate (default /var/lib/gotham-agent/update.pending)
+#   GOTHAM_AGENT_UPDATE_LOCK      agent update lock (default /var/lib/gotham-agent/update.lock)
+#   GOTHAM_AGENT_UPDATE_RETRY     agent retry marker (default /var/lib/gotham-agent/update.retry)
+#   GOTHAM_AGENT_UPDATE_BACKOFF   agent failed-attempt count (default /var/lib/gotham-agent/update.backoff)
+#   GOTHAM_AGENT_HEALTH_ADDR      loopback health endpoint (default 127.0.0.1:8001)
+# The agent's release public key is embedded at build time; GOTHAM_UPDATE_PUBLIC_KEY
+# is the development override and applies only when no key is embedded.
 
 # HTTP listener.
 server:

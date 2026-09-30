@@ -43,6 +43,8 @@ func run(args []string) int {
 	switch args[0] {
 	case "serve", "run":
 		return runServe()
+	case "update":
+		return runUpdate(args[1:])
 	case "version", "-v", "--version":
 		fmt.Printf("gotham-agent %s\n", version)
 		return exitOK
@@ -66,12 +68,24 @@ func runServe() int {
 	}
 
 	log := agent.NewLogger(os.Stderr, cfg.LogLevel)
+	cfg.Version = version
 	log.Info("starting gotham-agent",
 		slog.String("version", version),
 		slog.String("node_id", cfg.NodeID),
 		slog.String("cp_addr", cfg.CPAddr),
 		slog.String("listen_addr", cfg.ListenAddr),
 	)
+
+	health, err := agent.StartHealthServer(cfg.HealthAddr, log)
+	if err != nil {
+		log.Warn("health endpoint unavailable; the update wrapper health check will fail", "error", err)
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+			defer cancel()
+			_ = health.Close(shutdownCtx)
+		}()
+	}
 
 	docker, err := agent.NewDockerClient(cfg.DockerSock)
 	if err != nil {
@@ -182,6 +196,7 @@ func usage(w io.Writer) {
 Usage:
   gotham-agent              Run the node agent (same as gotham-agent serve)
   gotham-agent serve        Run the node agent
+  gotham-agent update reset Clear the failed-update state so a fixed release is retried
   gotham-agent version      Print the version
   gotham-agent help         Show this help
 

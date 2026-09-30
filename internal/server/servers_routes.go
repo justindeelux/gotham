@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/teams"
+	"github.com/justindeelux/gotham/updatecore"
 )
 
 // ServerService is the subset of servers.ServerService the HTTP layer depends
@@ -118,6 +120,45 @@ type metricsEnvelope struct {
 	Points []metricPointDTO `json:"points"`
 }
 
+// agentVersionDTO is one node's reported agent version on the wire.
+type agentVersionDTO struct {
+	NodeID  string    `json:"node_id"`
+	Version string    `json:"version"`
+	At      time.Time `json:"at"`
+}
+
+// agentVersionsEnvelope is the GET /api/v1/servers/agents body: the known agent
+// version map plus the active rollout target and the latest release the control
+// plane can see.
+type agentVersionsEnvelope struct {
+	Agents         []agentVersionDTO `json:"agents"`
+	RolloutVersion string            `json:"rollout_version,omitempty"`
+	LatestVersion  string            `json:"latest_version,omitempty"`
+}
+
+// updateAllAgentsResponse is the POST /api/v1/servers/agents/update-all body.
+type updateAllAgentsResponse struct {
+	TargetVersion string `json:"target_version,omitempty"`
+	Agents        int    `json:"agents"`
+	// Pending is the number of known agents whose reported version differs from
+	// the target.
+	Pending int    `json:"pending"`
+	Message string `json:"message,omitempty"`
+}
+
+// agentUpdateController is the optional agent-update surface of the server
+// registry (BE-9.2). The HTTP layer type-asserts its ServerService to this
+// interface, so tests with a plain fake registry simply do not mount these
+// routes (versionReporter and the dialer interfaces declare the same pattern).
+type agentUpdateController interface {
+	KnownAgentVersions() []servers.AgentVersion
+	AgentRolloutVersion() string
+	StartAgentRollout(version string)
+	// AgentUpdateTarget resolves the newest agent release version from the
+	// agent release family (independent of the control plane's own version).
+	AgentUpdateTarget(ctx context.Context) (string, error)
+}
+
 // mountServerRoutes registers the authenticated node-management endpoints under
 // /api.
 func (s *Server) mountServerRoutes(api chi.Router) {
@@ -135,6 +176,18 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 			protected.Get("/v1/servers/{id}/metrics", s.handleServerMetrics)
 		}
 	})
+
+	// Agent update surface (BE-9.2): platform-operator only, like the
+	// control-plane self-update apply. The trigger only records a rollout
+	// target; agents pick it up on their next RequestUpdate poll, so the
+	// request never blocks on a node.
+	if _, ok := s.servers.(agentUpdateController); ok {
+		api.Group(func(platform chi.Router) {
+			platform.Use(s.RequireAuth, s.RequirePlatformAdmin)
+			platform.Get("/v1/servers/agents", s.handleListAgentVersions)
+			platform.Post("/v1/servers/agents/update-all", s.handleUpdateAllAgents)
+		})
+	}
 }
 
 // handleListServers returns every managed server.
@@ -331,6 +384,98 @@ func (s *Server) handleServerMetrics(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+// handleListAgentVersions returns the known agent version map, the active
+// rollout target and the latest release the control plane can resolve.
+func (s *Server) handleListAgentVersions(w http.ResponseWriter, r *http.Request) {
+	controller, ok := s.servers.(agentUpdateController)
+	if !ok {
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "agent updates are not configured"})
+		return
+	}
+	response := agentVersionsEnvelope{
+		Agents:         make([]agentVersionDTO, 0),
+		RolloutVersion: controller.AgentRolloutVersion(),
+	}
+	for _, agent := range controller.KnownAgentVersions() {
+		response.Agents = append(response.Agents, agentVersionDTO{
+			NodeID:  agent.NodeID,
+			Version: agent.Version,
+			At:      agent.At,
+		})
+	}
+	// The latest version is the newest *agent* release, not the control
+	// plane's own version: the CP is normally updated first, so the CP view
+	// would report the fleet as current when it is not.
+	if target, err := controller.AgentUpdateTarget(r.Context()); err != nil {
+		s.logger.Warn("servers: agent target lookup failed", "error", err)
+	} else {
+		response.LatestVersion = target
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// handleUpdateAllAgents triggers a fleet-wide agent update rollout. It resolves
+// the newest *agent* release, records it as the rollout target and returns
+// immediately: agents converge on their next RequestUpdate poll, so the request
+// never blocks on (or dials) any node. The control plane's own version is
+// irrelevant — operators update the CP first, and the fleet is then behind it.
+func (s *Server) handleUpdateAllAgents(w http.ResponseWriter, r *http.Request) {
+	controller, ok := s.servers.(agentUpdateController)
+	if !ok {
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "agent updates are not configured"})
+		return
+	}
+
+	target, err := controller.AgentUpdateTarget(r.Context())
+	if err != nil {
+		s.logger.Error("servers: agent update target lookup failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, apiError{Message: "release server error"})
+		return
+	}
+	if target == "" {
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "no agent release is available (agent updates may be disabled)"})
+		return
+	}
+
+	agents := controller.KnownAgentVersions()
+	pending := 0
+	for _, agent := range agents {
+		if !versionsEqual(agent.Version, target) {
+			pending++
+		}
+	}
+	if len(agents) > 0 && pending == 0 {
+		writeJSON(w, http.StatusOK, updateAllAgentsResponse{
+			TargetVersion: target,
+			Agents:        len(agents),
+			Message:       "all known agents are already on the target version",
+		})
+		return
+	}
+
+	controller.StartAgentRollout(target)
+	s.logger.Info("servers: agent update rollout started",
+		"target_version", target, "agents", len(agents), "pending", pending)
+	writeJSON(w, http.StatusOK, updateAllAgentsResponse{
+		TargetVersion: target,
+		Agents:        len(agents),
+		Pending:       pending,
+		Message:       "rollout queued; agents update on their next poll",
+	})
+}
+
+// versionsEqual compares two version strings through the version parser, so a
+// bare "1.2.0" and a canonical "v1.2.0" count as the same version (N4). An
+// unparsable value on either side falls back to a literal comparison.
+func versionsEqual(a, b string) bool {
+	av, aErr := updatecore.ParseVersion(a)
+	bv, bErr := updatecore.ParseVersion(b)
+	if aErr != nil || bErr != nil {
+		return strings.TrimSpace(a) == strings.TrimSpace(b)
+	}
+	return av.Compare(bv) == 0
 }
 
 // parseMetricTime parses one required RFC 3339 query timestamp, answering 400

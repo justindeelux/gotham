@@ -1,13 +1,36 @@
-package updates
+package updatecore
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// DefaultHTTPClient builds an HTTP client that bounds redirects, revalidates
+// every hop, refuses https downgrades, and blocks link-local/metadata dials.
+func DefaultHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = safeDialContext
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("updates: too many redirects")
+			}
+			var previous *url.URL
+			if len(via) > 0 {
+				previous = via[len(via)-1].URL
+			}
+			return validateRedirect(previous, req.URL)
+		},
+	}
+}
 
 // ErrBadURL is returned when a release URL is not an acceptable http(s)
 // destination.
@@ -40,6 +63,9 @@ func validateURL(raw string) error {
 	}
 	return validateOutboundHost(parsed.Hostname())
 }
+
+// ValidateURL reports whether raw is an acceptable release destination.
+func ValidateURL(raw string) error { return validateURL(raw) }
 
 // validateRedirect rejects a redirect target and refuses an https upgrade path
 // from downgrading to plain http.

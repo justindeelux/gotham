@@ -24,7 +24,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/justindeelux/gotham/internal/updates"
+	"github.com/justindeelux/gotham/updatecore"
 )
 
 // version is the reported tool version, overridable with -ldflags.
@@ -78,17 +78,17 @@ func runKeygen(args []string) int {
 		return exitUsage
 	}
 
-	publicKey, privateKey, err := updates.GenerateKey()
+	publicKey, privateKey, err := updatecore.GenerateKey()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keygen: %v\n", err)
 		return exitError
 	}
-	privatePEM, err := updates.MarshalPrivateKeyPEM(privateKey)
+	privatePEM, err := updatecore.MarshalPrivateKeyPEM(privateKey)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keygen: %v\n", err)
 		return exitError
 	}
-	publicPEM, err := updates.MarshalPublicKeyPEM(publicKey)
+	publicPEM, err := updatecore.MarshalPublicKeyPEM(publicKey)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keygen: %v\n", err)
 		return exitError
@@ -104,8 +104,8 @@ func runKeygen(args []string) int {
 	}
 
 	fmt.Printf("wrote %s and %s.pub\n", out, out)
-	fmt.Printf("embed the public key with:\n  -ldflags \"-X github.com/justindeelux/gotham/internal/updates.PublicKey=%s\"\n",
-		updates.EncodePublicKeyBase64(publicKey))
+	fmt.Printf("embed the public key with:\n  -ldflags \"-X github.com/justindeelux/gotham/updatecore.PublicKey=%s\"\n",
+		updatecore.EncodePublicKeyBase64(publicKey))
 	return exitOK
 }
 
@@ -132,12 +132,12 @@ func runSign(args []string) int {
 		fmt.Fprintf(os.Stderr, "sign: read key: %v\n", err)
 		return exitError
 	}
-	privateKey, err := updates.ParsePrivateKeyPEM(keyPEM)
+	privateKey, err := updatecore.ParsePrivateKeyPEM(keyPEM)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sign: %v\n", err)
 		return exitError
 	}
-	signer, err := updates.NewSigner(privateKey)
+	signer, err := updatecore.NewSigner(privateKey)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sign: %v\n", err)
 		return exitError
@@ -181,7 +181,7 @@ func runManifest(args []string) int {
 		return exitUsage
 	}
 	if outPath == "" {
-		outPath = updates.ManifestName(arch)
+		outPath = updatecore.ManifestName(arch)
 	}
 
 	keyPEM, err := os.ReadFile(keyPath)
@@ -189,12 +189,12 @@ func runManifest(args []string) int {
 		fmt.Fprintf(os.Stderr, "manifest: read key: %v\n", err)
 		return exitError
 	}
-	privateKey, err := updates.ParsePrivateKeyPEM(keyPEM)
+	privateKey, err := updatecore.ParsePrivateKeyPEM(keyPEM)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "manifest: %v\n", err)
 		return exitError
 	}
-	signer, err := updates.NewSigner(privateKey)
+	signer, err := updatecore.NewSigner(privateKey)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "manifest: %v\n", err)
 		return exitError
@@ -205,18 +205,18 @@ func runManifest(args []string) int {
 		return exitError
 	}
 
-	manifest := updates.BuildManifest(version, channel, arch, filepath.Base(inPath), artifact)
+	manifest := updatecore.BuildManifest(version, channel, arch, filepath.Base(inPath), artifact)
 	body := manifest.Marshal()
 	if err := os.WriteFile(outPath, body, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "manifest: write %s: %v\n", outPath, err)
 		return exitError
 	}
 	signature := signer.SignBase64(body) + "\n"
-	if err := os.WriteFile(outPath+updates.ManifestSigSuffix, []byte(signature), 0o644); err != nil {
+	if err := os.WriteFile(outPath+updatecore.ManifestSigSuffix, []byte(signature), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "manifest: write signature: %v\n", err)
 		return exitError
 	}
-	fmt.Printf("wrote %s and %s%s\n", outPath, outPath, updates.ManifestSigSuffix)
+	fmt.Printf("wrote %s and %s%s\n", outPath, outPath, updatecore.ManifestSigSuffix)
 	return exitOK
 }
 
@@ -243,7 +243,7 @@ func runVerify(args []string) int {
 		fmt.Fprintf(os.Stderr, "verify: %v\n", err)
 		return exitError
 	}
-	verifier, err := updates.NewVerifier(key)
+	verifier, err := updatecore.NewVerifier(key)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "verify: %v\n", err)
 		return exitError
@@ -272,7 +272,7 @@ func loadPublicKeyFile(path string) (ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return updates.ParsePublicKey(string(raw))
+	return updatecore.ParsePublicKey(string(raw))
 }
 
 // newFlagSet builds a subcommand flag set that reports errors to stderr.

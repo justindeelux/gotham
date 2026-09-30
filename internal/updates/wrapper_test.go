@@ -22,6 +22,8 @@ type wrapperResult struct {
 	status   string
 	pending  string
 	output   string
+	// systemctlLog is the fake systemctl call log (mode rate-limit only).
+	systemctlLog string
 }
 
 // health modes for the fake curl shim.
@@ -31,10 +33,20 @@ const (
 	healthAfterBackup = "after-rollback" // healthy only once the old binary is back
 )
 
+// systemctl shim modes.
+const (
+	// systemctlRateLimit models systemd's start rate limit: a restart succeeds
+	// once, then fails with "Start request repeated too quickly" until
+	// reset-failed clears the failed state.
+	systemctlRateLimit = "rate-limit"
+)
+
 // wrapperEnv describes one wrapper run.
 type wrapperEnv struct {
 	systemctlExit int
 	health        string
+	// systemctlMode selects a richer fake systemctl. Empty uses systemctlExit.
+	systemctlMode string
 	// setup runs after the default files are created, to plant symlinks etc.
 	setup func(dir, target, statusPath string)
 }
@@ -54,7 +66,12 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
 		t.Fatalf("mkdir fakebin: %v", err)
 	}
-	writeShim(t, filepath.Join(fakeBin, "systemctl"), env.systemctlExit)
+	systemctlLog := filepath.Join(dir, "systemctl.log")
+	if env.systemctlMode == systemctlRateLimit {
+		writeRateLimitShim(t, filepath.Join(fakeBin, "systemctl"), systemctlLog)
+	} else {
+		writeShim(t, filepath.Join(fakeBin, "systemctl"), env.systemctlExit)
+	}
 	writeCurlShim(t, filepath.Join(fakeBin, "curl"), env.health)
 	writeShim(t, filepath.Join(fakeBin, "flock"), 0)
 
@@ -126,6 +143,7 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	result.backup = readRegularOrEmpty(backup)
 	result.status = readRegularOrEmpty(status)
 	result.pending = readRegularOrEmpty(pending)
+	result.systemctlLog = readRegularOrEmpty(systemctlLog)
 	return result
 }
 
@@ -217,6 +235,36 @@ func writeShim(t *testing.T, path string, code int) {
 	}
 }
 
+// writeRateLimitShim writes a fake systemctl that models systemd's start rate
+// limit: the first restart succeeds, later restarts fail with "Start request
+// repeated too quickly" until reset-failed clears the failed state. Every call
+// is appended to logPath so a test can assert reset-failed was invoked.
+func writeRateLimitShim(t *testing.T, path, logPath string) {
+	t.Helper()
+	script := "#!/bin/sh\n" +
+		"log='" + logPath + "'\n" +
+		"printf '%s %s\\n' \"${1:-}\" \"${2:-}\" >>\"${log}\" 2>/dev/null || true\n" +
+		"case \"${1:-}\" in\n" +
+		"  reset-failed)\n" +
+		"    rm -f \"${log}.limited\"\n" +
+		"    exit 0\n" +
+		"    ;;\n" +
+		"  restart)\n" +
+		"    if [ -f \"${log}.limited\" ]; then\n" +
+		"      echo \"Job for ${2:-} failed because start of the service was attempted too often.\" >&2\n" +
+		"      echo \"Start request repeated too quickly.\" >&2\n" +
+		"      exit 1\n" +
+		"    fi\n" +
+		"    : >\"${log}.limited\"\n" +
+		"    exit 0\n" +
+		"    ;;\n" +
+		"esac\n" +
+		"exit 0\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write rate-limit systemctl shim: %v", err)
+	}
+}
+
 // writeCurlShim writes the fake health probe.
 func writeCurlShim(t *testing.T, path, health string) {
 	t.Helper()
@@ -258,6 +306,33 @@ func TestWrapperRollsBackWhenRestartFails(t *testing.T) {
 	}
 	if result.pending != "" {
 		t.Errorf("pending marker not released: %q", result.pending)
+	}
+}
+
+// TestWrapperClearsRateLimitOnRollback proves a crash-looping new binary that
+// trips systemd's start rate limit does not turn a healthy rollback into
+// rollback_failed: the wrapper clears the failed state with reset-failed before
+// every restart, so the rollback restart succeeds and the restored binary runs.
+func TestWrapperClearsRateLimitOnRollback(t *testing.T) {
+	result := runWrapper(t, wrapperEnv{
+		systemctlMode: systemctlRateLimit,
+		health:        healthAfterBackup,
+	})
+
+	if !strings.Contains(result.systemctlLog, "reset-failed fake") {
+		t.Fatalf("wrapper did not call reset-failed (log %q, output %q)", result.systemctlLog, result.output)
+	}
+	if !strings.Contains(result.status, "result=rolled_back") {
+		t.Fatalf("status = %q, want rolled_back (output %q)", result.status, result.output)
+	}
+	if strings.Contains(result.status, "rollback_failed") {
+		t.Fatalf("status = %q, want a successful rollback (output %q)", result.status, result.output)
+	}
+	if result.target != "old" {
+		t.Fatalf("binary = %q, want the restored old binary (output %q)", result.target, result.output)
+	}
+	if result.pending != "" {
+		t.Fatalf("pending marker not released: %q", result.pending)
 	}
 }
 

@@ -3,8 +3,10 @@
 # install-agent.sh installs the Gotham node agent on a Linux host.
 #
 # It downloads the latest release binary for the host architecture, installs it
-# to /usr/local/bin, writes /etc/gotham/agent.env from the current environment,
-# creates the gotham-agent system user and enables the systemd unit.
+# to the service StateDirectory (/var/lib/gotham-agent/bin/gotham-agent), writes
+# /etc/gotham/agent.env from the current environment, installs the privileged
+# update wrapper + sudoers rule, creates the gotham-agent system user and
+# enables the systemd unit.
 #
 # This script is wired for the Phase 9 release pipeline: the download URL and
 # binary names must match the GoReleaser configuration produced in that phase.
@@ -23,15 +25,20 @@
 #   GOTHAM_AGENT_KEY
 #   GOTHAM_AGENT_DOCKER_SOCK
 #   GOTHAM_AGENT_LOG_LEVEL
+#   GOTHAM_AGENT_AUTO_UPDATE
+#   GOTHAM_AGENT_UPDATE_INTERVAL
 
 set -eu
 
 BINARY_NAME="gotham-agent"
-INSTALL_PATH="/usr/local/bin/gotham-agent"
+INSTALL_PATH="/var/lib/gotham-agent/bin/gotham-agent"
 ENV_DIR="/etc/gotham"
 ENV_FILE="${ENV_DIR}/agent.env"
 SERVICE_FILE="/etc/systemd/system/gotham-agent.service"
 STATE_DIR="/var/lib/gotham-agent"
+STATUS_DIR="/var/lib/gotham-agent-updater"
+WRAPPER_PATH="/usr/libexec/gotham/gotham-agent-update"
+WRAPPER_CONF="/etc/gotham/agent-updater.conf"
 SERVICE_USER="gotham-agent"
 RELEASE_URL="${GOTHAM_RELEASE_URL:-https://github.com/justindeelux/gotham/releases/latest/download}"
 DRY_RUN=0
@@ -65,6 +72,17 @@ run() {
 log() {
     echo "==> $*"
 }
+
+# The installer needs its sibling files (the shared wrapper, the agent wrapper
+# config and the sudoers installer). Fail early with a clear message rather than
+# aborting after the user has been created and the binary installed.
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+for sibling in gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh; do
+    if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
+        echo "install-agent.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
+        exit 2
+    fi
+done
 
 detect_arch() {
     case "$(uname -m)" in
@@ -100,7 +118,6 @@ log "downloading ${DOWNLOAD_URL}"
 
 if [ "${DRY_RUN}" -eq 1 ]; then
     run curl -fsSL -o "${TMP_BINARY}" "${DOWNLOAD_URL}"
-    run install -m 0755 "${TMP_BINARY}" "${INSTALL_PATH}"
 else
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL -o "${TMP_BINARY}" "${DOWNLOAD_URL}"
@@ -110,8 +127,6 @@ else
         echo "curl or wget is required to download the binary" >&2
         exit 1
     fi
-    install -m 0755 "${TMP_BINARY}" "${INSTALL_PATH}"
-    rm -f "${TMP_BINARY}"
 fi
 
 log "creating system user ${SERVICE_USER}"
@@ -120,6 +135,20 @@ if [ "${DRY_RUN}" -eq 1 ] || ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
 fi
 if command -v getent >/dev/null 2>&1 && getent group docker >/dev/null 2>&1; then
     run usermod -aG docker "${SERVICE_USER}"
+fi
+
+# The binary MUST live in the service StateDirectory and be owned by the
+# service user: the updater hardlinks it to <binary>.old, and
+# fs.protected_hardlinks=1 (the default) makes os.Link of a root-owned file fail
+# with EPERM.
+log "installing binary to ${INSTALL_PATH}"
+run mkdir -p "${STATE_DIR}/bin"
+run chown "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}" "${STATE_DIR}/bin"
+if [ "${DRY_RUN}" -eq 1 ]; then
+    run install -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${TMP_BINARY}" "${INSTALL_PATH}"
+else
+    install -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${TMP_BINARY}" "${INSTALL_PATH}"
+    rm -f "${TMP_BINARY}"
 fi
 
 log "creating ${ENV_DIR}"
@@ -139,12 +168,43 @@ else
         GOTHAM_AGENT_CERT_DIR \
         GOTHAM_AGENT_KEY \
         GOTHAM_AGENT_DOCKER_SOCK \
-        GOTHAM_AGENT_LOG_LEVEL; do
+        GOTHAM_AGENT_LOG_LEVEL \
+        GOTHAM_AGENT_AUTO_UPDATE \
+        GOTHAM_AGENT_UPDATE_INTERVAL; do
         eval "value=\${${key}:-}"
         if [ -n "${value}" ]; then
             printf '%s=%s\n' "${key}" "${value}" >>"${ENV_FILE}"
         fi
     done
+fi
+
+# Self-update chain: the shared wrapper installed under the agent name, its
+# root-owned configuration, the root-owned status directory and the sudoers
+# rule. Mirror of the control-plane install in deploy/README.md.
+log "installing the update wrapper ${WRAPPER_PATH}"
+run mkdir -p /usr/libexec/gotham
+if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "[dry-run] install ${SCRIPT_DIR}/gotham-update.sh ${WRAPPER_PATH}"
+else
+    install -m 0755 -o root -g root "${SCRIPT_DIR}/gotham-update.sh" "${WRAPPER_PATH}"
+fi
+
+log "installing ${WRAPPER_CONF}"
+if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "[dry-run] install ${SCRIPT_DIR}/gotham-agent-updater.conf ${WRAPPER_CONF}"
+else
+    install -m 0644 -o root -g root "${SCRIPT_DIR}/gotham-agent-updater.conf" "${WRAPPER_CONF}"
+fi
+
+log "creating the root-owned status directory ${STATUS_DIR}"
+run mkdir -p "${STATUS_DIR}"
+run chmod 0755 "${STATUS_DIR}"
+
+log "installing the sudoers rule"
+if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "[dry-run] ${SCRIPT_DIR}/install-agent-sudoers.sh ${SERVICE_USER}"
+else
+    "${SCRIPT_DIR}/install-agent-sudoers.sh" "${SERVICE_USER}"
 fi
 
 log "installing systemd unit ${SERVICE_FILE}"
@@ -154,7 +214,6 @@ run chown "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}"
 if [ "${DRY_RUN}" -eq 1 ]; then
     echo "[dry-run] write ${SERVICE_FILE}"
 else
-    SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
     if [ -f "${SCRIPT_DIR}/gotham-agent.service" ]; then
         install -m 0644 "${SCRIPT_DIR}/gotham-agent.service" "${SERVICE_FILE}"
     else
@@ -171,10 +230,12 @@ User=gotham-agent
 Group=gotham-agent
 WorkingDirectory=/var/lib/gotham-agent
 Environment=GOTHAM_AGENT_CERT_DIR=/var/lib/gotham-agent
+Environment=GOTHAM_AGENT_BINARY=/var/lib/gotham-agent/bin/gotham-agent
 EnvironmentFile=-/etc/gotham/agent.env
-ExecStart=/usr/local/bin/gotham-agent serve
+ExecStart=/var/lib/gotham-agent/bin/gotham-agent serve
 Restart=always
 RestartSec=5
+KillMode=process
 LimitNOFILE=65536
 SupplementaryGroups=docker
 

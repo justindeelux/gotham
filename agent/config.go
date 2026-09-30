@@ -7,6 +7,9 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/justindeelux/gotham/updatecore"
 )
 
 // Environment variables understood by the agent.
@@ -21,6 +24,17 @@ const (
 	envComposeRoot = "GOTHAM_AGENT_COMPOSE_ROOT"
 	envLogLevel    = "GOTHAM_AGENT_LOG_LEVEL"
 
+	envAutoUpdate     = "GOTHAM_AGENT_AUTO_UPDATE"
+	envUpdateInterval = "GOTHAM_AGENT_UPDATE_INTERVAL"
+	envBinary         = "GOTHAM_AGENT_BINARY"
+	envUpdateScript   = "GOTHAM_AGENT_UPDATE_SCRIPT"
+	envUpdateStatus   = "GOTHAM_AGENT_UPDATE_STATUS"
+	envUpdatePending  = "GOTHAM_AGENT_UPDATE_PENDING"
+	envUpdateLock     = "GOTHAM_AGENT_UPDATE_LOCK"
+	envUpdateRetry    = "GOTHAM_AGENT_UPDATE_RETRY"
+	envUpdateBackoff  = "GOTHAM_AGENT_UPDATE_BACKOFF"
+	envHealthAddr     = "GOTHAM_AGENT_HEALTH_ADDR"
+
 	envDockerHost = "DOCKER_HOST"
 )
 
@@ -31,6 +45,24 @@ const (
 	defaultCertDir    = "./data/agent"
 	defaultDockerSock = "/var/run/docker.sock"
 	defaultLogLevel   = "info"
+
+	// Agent self-update layout, mirroring the control plane's split
+	// privileges: the binary and its hardlink backup live in the agent-writable
+	// StateDirectory, the wrapper and its config are root-owned, and the
+	// authoritative status is root-owned in a directory the agent cannot write.
+	defaultAgentBinary       = "/var/lib/gotham-agent/bin/gotham-agent"
+	defaultAgentUpdateScript = "/usr/libexec/gotham/gotham-agent-update"
+	defaultAgentStatusPath   = "/var/lib/gotham-agent-updater/update.status"
+	defaultAgentPendingPath  = "/var/lib/gotham-agent/update.pending"
+	defaultAgentLockPath     = "/var/lib/gotham-agent/update.lock"
+	// defaultAgentRetryPath is the agent-owned marker an operator reset writes
+	// to make a running agent clear its failed-update backoff and retry.
+	defaultAgentRetryPath = "/var/lib/gotham-agent/update.retry"
+	// defaultAgentBackoffPath persists the failed-attempt count so the seeded
+	// backoff escalates across wrapper restarts.
+	defaultAgentBackoffPath = "/var/lib/gotham-agent/update.backoff"
+	defaultAgentHealthAddr  = "127.0.0.1:8001"
+	defaultUpdateInterval   = 5 * time.Minute
 )
 
 // Config holds the agent's runtime configuration, loaded from the environment.
@@ -56,6 +88,38 @@ type Config struct {
 	ComposeRoot string
 	// LogLevel is the slog level name (debug, info, warn, error).
 	LogLevel string
+
+	// Version is the running agent build version. It is set by the entrypoint
+	// (not the environment) and reported to the CP in heartbeats and update
+	// requests.
+	Version string
+	// AutoUpdate enables unattended updates: when set the agent applies any
+	// verified offer on its poll. Off by default, so only an operator-triggered
+	// rollout applies an update.
+	AutoUpdate bool
+	// UpdateInterval is how often the agent polls the CP for an update.
+	UpdateInterval time.Duration
+	// BinaryPath is the fixed agent executable the updater swaps.
+	BinaryPath string
+	// UpdateScript is the root-owned restart/healthcheck wrapper.
+	UpdateScript string
+	// UpdateStatusPath is the root-owned authoritative update status.
+	UpdateStatusPath string
+	// UpdatePendingPath is the agent-owned staged gate marker.
+	UpdatePendingPath string
+	// UpdateLockPath is the lock shared with the wrapper.
+	UpdateLockPath string
+	// UpdateRetryPath is the agent-owned retry marker an operator reset writes
+	// to clear the failed-update backoff of a running agent.
+	UpdateRetryPath string
+	// UpdateBackoffPath persists the failed-attempt count so the seeded backoff
+	// escalates across wrapper restarts.
+	UpdateBackoffPath string
+	// HealthAddr is the loopback address the wrapper probes after a restart.
+	HealthAddr string
+	// Restart overrides the restart wrapper (tests). When nil the fixed
+	// root-owned wrapper is run through sudo.
+	Restart updatecore.RestartFunc
 }
 
 // Load builds a Config from GOTHAM_AGENT_* environment variables, applying
@@ -72,6 +136,17 @@ func Load() (Config, error) {
 		DockerSock:  dockerSock(),
 		ComposeRoot: envOr(envComposeRoot, defaultComposeRoot),
 		LogLevel:    envOr(envLogLevel, defaultLogLevel),
+
+		AutoUpdate:        strings.EqualFold(strings.TrimSpace(os.Getenv(envAutoUpdate)), "true"),
+		UpdateInterval:    updateIntervalFromEnv(),
+		BinaryPath:        envOr(envBinary, defaultAgentBinary),
+		UpdateScript:      envOr(envUpdateScript, defaultAgentUpdateScript),
+		UpdateStatusPath:  envOr(envUpdateStatus, defaultAgentStatusPath),
+		UpdatePendingPath: envOr(envUpdatePending, defaultAgentPendingPath),
+		UpdateLockPath:    envOr(envUpdateLock, defaultAgentLockPath),
+		UpdateRetryPath:   envOr(envUpdateRetry, defaultAgentRetryPath),
+		UpdateBackoffPath: envOr(envUpdateBackoff, defaultAgentBackoffPath),
+		HealthAddr:        envOr(envHealthAddr, defaultAgentHealthAddr),
 	}
 
 	if _, _, err := net.SplitHostPort(cfg.CPAddr); err != nil {
@@ -136,4 +211,17 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// updateIntervalFromEnv parses the agent update poll interval, defaulting to 5m.
+func updateIntervalFromEnv() time.Duration {
+	raw := strings.TrimSpace(os.Getenv(envUpdateInterval))
+	if raw == "" {
+		return defaultUpdateInterval
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return defaultUpdateInterval
+	}
+	return parsed
 }

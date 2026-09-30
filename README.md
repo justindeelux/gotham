@@ -84,9 +84,10 @@ Design priorities (in order):
 │   ├── databases/            # managed databases & backups
 │   ├── services/             # one-click service templates
 │   ├── auth/                 # JWT, OAuth2, RBAC, 2FA
-│   ├── updates/              # self-update & remote agent update
+│   ├── updates/              # self-update & remote agent update (CP side; uses updatecore)
 │   └── store/                # persistence (sqlc repositories)
 ├── agent/                    # agent implementation (must not import `internal/`)
+├── updatecore/               # shared self-update engine: verify, download, atomic swap (CP + agent)
 ├── proto/                    # protobuf contracts (buf-managed)
 ├── web/                      # Vue 3 SPA (Vite)
 ├── templates/                # one-click service templates (YAML)
@@ -99,6 +100,44 @@ Design priorities (in order):
     ├── plan/                 # development plan per phase
     └── design/               # UI mockups (*.html) + design tokens
 ```
+
+## Agent remote update (BE-9.2)
+
+Node agents self-update from the control plane over the agent gRPC channel. The
+channel is **server-authenticated TLS**: the agent verifies the control plane's
+certificate but does not yet present a client certificate, so update integrity
+rests on the embedded-key signature check, not on channel client authentication
+(the agent client-certificate follow-up is tracked separately). The flow:
+
+1. The agent calls `UpdateService/RequestUpdate` on reconnect and on a poll
+   interval, reporting its `agent_version`, `os` and `arch`.
+2. The control plane resolves the newest agent release, fetches its **signed
+   manifest** and verifies the Ed25519 signature with the release public key
+   before answering, and returns the asset URL, manifest URL, signature URL,
+   `sha256` and channel. An unsigned or unverifiable release is never offered.
+3. The agent downloads the asset through the shared safe client in
+   `updatecore` (https-only, bounded size/redirects, no link-local dials),
+   re-verifies the signature with the key **embedded in the agent binary**,
+   binds version/arch/file/digest, then swaps atomically (hardlink backup,
+   gap-free commit, `<binary>.old` rollback) and restarts via a root-owned
+   wrapper outside its writable directory.
+4. After the restart the agent reports the new version on its next heartbeat;
+   the control plane keeps an in-memory agent version map (`GET
+   /api/v1/servers/agents`). A failed update rolls back and keeps the old
+   version.
+
+A plain offer is applied only when `GOTHAM_AGENT_AUTO_UPDATE=true`. A platform
+operator can force a fleet rollout with `POST /api/v1/servers/agents/update-all`,
+which records the target and lets agents converge on their next poll — the
+request never dials or blocks on a node. The control plane only serves update
+material over the server-authenticated TLS agent channel; the HTTP API only
+triggers.
+
+A release that fails to activate is rolled back and its version is backed off
+(the agent seeds the backoff from the durable status at startup, so a wrapper
+restart does not re-apply a broken release and crash-loop). A newer release is
+applied automatically; to retry the *same* version after a fix, run
+`sudo gotham-agent update reset` (documented in `deploy/README.md`).
 
 ## Naming conventions
 

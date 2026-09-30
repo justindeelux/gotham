@@ -49,6 +49,13 @@
 - **Deliverables:** `UpdateService` implemented on both sides; "Update all agents" flow from UI/API; tests: push a fake new version → agent reports the new version after reconnect.
 - **Verify:** run 2 agents (2 versions) → update all → heartbeats report the new version together.
 - **Depends on:** BE-9.1 (shared verify mechanism).
+- **Implementation note (BE-9.2):** the transport-agnostic verify/download/swap
+  engine was extracted to a neutral top-level package `updatecore/` so `agent/`
+  can reuse it without importing `internal/`; `internal/updates` keeps the CP
+  release checker and HTTP surface. The CP offers updates over the agent's
+  authenticated `RequestUpdate` call and an operator `update-all` endpoint
+  records a rollout target that agents pick up on their next poll (the contract
+  is pull-based; the request never dials a node).
 
 ## INFRA-9.1 — Release pipeline — `ws/p9-release`
 

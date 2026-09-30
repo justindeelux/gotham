@@ -1,4 +1,4 @@
-package updates
+package updatecore
 
 import (
 	"crypto/ed25519"
@@ -25,7 +25,13 @@ const PublicKeyEnv = "GOTHAM_UPDATE_PUBLIC_KEY"
 // PublicKey is the release-signing Ed25519 public key, base64 (standard)
 // encoded, injected at build time:
 //
-//	-ldflags "-X github.com/justindeelux/gotham/internal/updates.PublicKey=<base64>"
+//	-ldflags "-X github.com/justindeelux/gotham/updatecore.PublicKey=<base64>"
+//
+// The symbol lives in updatecore (the package moved out of internal/updates);
+// Go silently ignores -X for a missing symbol, so a release wired from a stale
+// path would ship a keyless binary and silently disable updates. INFRA-9.1 must
+// target updatecore.PublicKey and assert the embedded key is non-empty at build
+// time (`cmd/signer keygen` prints the exact ldflags value).
 //
 // It is empty in development, which disables applying updates. The private key
 // is never embedded, read or logged by this package.

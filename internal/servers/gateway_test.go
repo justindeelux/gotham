@@ -2,6 +2,7 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
+	"github.com/justindeelux/gotham/updatecore"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -83,13 +85,12 @@ func newTestServiceWithAuthority(t *testing.T) (*ServerService, *store.Store, *A
 
 // startTestGateway serves g (insecure) over an in-memory connection and returns
 // a client connection.
-func startTestGateway(t *testing.T, service *ServerService, authority *Authority) *grpc.ClientConn {
+func startTestGateway(t *testing.T, service *ServerService) *grpc.ClientConn {
 	t.Helper()
 
 	gateway, err := NewGateway(GatewayConfig{
-		Service:   service,
-		Authority: authority,
-		Logger:    discardLogger(),
+		Service: service,
+		Logger:  discardLogger(),
 	})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -125,7 +126,7 @@ func uniqueNodeID(prefix string) string {
 
 func TestGatewayRegisterCreatesServer(t *testing.T) {
 	service, st := newTestService(t)
-	conn := startTestGateway(t, service, nil)
+	conn := startTestGateway(t, service)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -240,7 +241,7 @@ func TestGatewayRegisterRejectsInvalidCSR(t *testing.T) {
 
 func TestGatewayHeartbeatUpdatesMetrics(t *testing.T) {
 	service, st := newTestService(t)
-	conn := startTestGateway(t, service, nil)
+	conn := startTestGateway(t, service)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -347,22 +348,203 @@ func TestGatewayHeartbeatUpdatesMetrics(t *testing.T) {
 	}
 }
 
-func TestGatewayUpdateServiceSkeleton(t *testing.T) {
-	// The UpdateService skeleton touches no database, so no store is required.
-	service := NewService(Config{Secret: "gateway-test-secret", Version: "test", Logger: discardLogger()})
-	conn := startTestGateway(t, service, nil)
+// TestGatewayHeartbeatRecordsAgentVersion proves the version map is fed by the
+// heartbeat path (which resolves the node first) and refuses an unknown node,
+// and that RequestUpdate does not write it.
+func TestGatewayHeartbeatRecordsAgentVersion(t *testing.T) {
+	service, st := newTestService(t)
+	conn := startTestGateway(t, service)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	client := agentv1.NewAgentServiceClient(conn)
 
-	resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{AgentVersion: "0.1.0"})
+	nodeID := uniqueNodeID("node-agentver")
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	row, err := st.GetServerByNodeID(ctx, &nodeID)
 	if err != nil {
-		t.Fatalf("RequestUpdate: %v", err)
+		t.Fatalf("GetServerByNodeID: %v", err)
 	}
-	if resp.GetUpdateAvailable() {
-		t.Error("update_available = true, want false (skeleton)")
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = st.DeleteServer(cleanupCtx, row.ID)
+	})
+
+	// A registered node's heartbeat records its version.
+	stream, err := client.Heartbeat(metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, nodeID))
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
 	}
-	if resp.GetLatestVersion() != updateLatestVersion {
-		t.Errorf("latest_version = %q, want %q", resp.GetLatestVersion(), updateLatestVersion)
+	if err := stream.Send(&agentv1.HeartbeatRequest{AgentVersion: "v1.2.0", SentAt: timestamppb.Now()}); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
 	}
+	if _, err := stream.CloseAndRecv(); err != nil {
+		t.Fatalf("close and recv: %v", err)
+	}
+	found := false
+	for _, version := range service.KnownAgentVersions() {
+		if version.NodeID == nodeID && version.Version == "v1.2.0" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("version map = %+v, want %s=v1.2.0", service.KnownAgentVersions(), nodeID)
+	}
+
+	// An unknown node's heartbeat is refused (ErrNotFound) and never recorded.
+	unknown := uniqueNodeID("node-unknown")
+	stream, err = client.Heartbeat(metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, unknown))
+	if err != nil {
+		t.Fatalf("Heartbeat(unknown): %v", err)
+	}
+	if err := stream.Send(&agentv1.HeartbeatRequest{AgentVersion: "v9.9.9", SentAt: timestamppb.Now()}); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
+	}
+	if _, err := stream.CloseAndRecv(); err != nil {
+		t.Fatalf("close and recv: %v", err)
+	}
+	for _, version := range service.KnownAgentVersions() {
+		if version.NodeID == unknown {
+			t.Fatalf("unknown node %s was recorded: %+v", unknown, version)
+		}
+	}
+}
+
+// fakeAgentUpdater is a controllable AgentUpdateOfferer for gateway tests.
+type fakeAgentUpdater struct {
+	release *updatecore.Release
+	target  string
+	err     error
+	calls   int
+}
+
+func (f *fakeAgentUpdater) Offer(context.Context, string, string, string) (*updatecore.Release, error) {
+	f.calls++
+	return f.release, f.err
+}
+
+func (f *fakeAgentUpdater) TargetVersion(context.Context) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	if f.target != "" {
+		return f.target, nil
+	}
+	if f.release != nil {
+		return f.release.Version, nil
+	}
+	return "", nil
+}
+
+func TestGatewayRequestUpdate(t *testing.T) {
+	release := &updatecore.Release{
+		Version:              "v1.2.0",
+		Channel:              "stable",
+		Arch:                 "amd64",
+		AssetName:            "gotham-agent-linux-amd64",
+		AssetURL:             "https://releases.example.com/gotham-agent-linux-amd64",
+		ManifestURL:          "https://releases.example.com/gotham-agent-manifest-amd64.txt",
+		ManifestSignatureURL: "https://releases.example.com/gotham-agent-manifest-amd64.txt.sig",
+		SHA256:               "abc123",
+	}
+
+	t.Run("offers a newer verified release", func(t *testing.T) {
+		updater := &fakeAgentUpdater{release: release}
+		service := NewService(Config{Secret: "gateway-test-secret", Version: "test", Logger: discardLogger(), Updater: updater})
+		conn := startTestGateway(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ctx = metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, "node-update")
+
+		resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{
+			AgentVersion: "v1.0.0", Os: "linux", Arch: "amd64",
+		})
+		if err != nil {
+			t.Fatalf("RequestUpdate: %v", err)
+		}
+		if !resp.GetUpdateAvailable() || resp.GetLatestVersion() != "v1.2.0" {
+			t.Fatalf("resp = %+v, want an offer for v1.2.0", resp)
+		}
+		if resp.GetAssetUrl() != release.AssetURL || resp.GetManifestUrl() != release.ManifestURL ||
+			resp.GetManifestSignatureUrl() != release.ManifestSignatureURL || resp.GetSha256() != release.SHA256 ||
+			resp.GetChannel() != "stable" {
+			t.Fatalf("offer material = %+v", resp)
+		}
+		if resp.GetRollout() {
+			t.Error("rollout = true without an operator trigger")
+		}
+		// M2: RequestUpdate carries no authenticated node identity, so it must
+		// not write the version map; only the heartbeat path does.
+		if versions := service.KnownAgentVersions(); len(versions) != 0 {
+			t.Errorf("version map = %+v, want empty (RequestUpdate must not record)", versions)
+		}
+	})
+
+	t.Run("no update when the updater finds none", func(t *testing.T) {
+		service := NewService(Config{Secret: "gateway-test-secret", Version: "test", Logger: discardLogger(), Updater: &fakeAgentUpdater{}})
+		conn := startTestGateway(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{AgentVersion: "v1.0.0", Arch: "amd64"})
+		if err != nil {
+			t.Fatalf("RequestUpdate: %v", err)
+		}
+		if resp.GetUpdateAvailable() {
+			t.Errorf("update_available = true, want false")
+		}
+	})
+
+	t.Run("checker error reports no update", func(t *testing.T) {
+		service := NewService(Config{
+			Secret: "gateway-test-secret", Version: "test", Logger: discardLogger(),
+			Updater: &fakeAgentUpdater{err: errors.New("releases API down")},
+		})
+		conn := startTestGateway(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{AgentVersion: "v1.0.0", Arch: "amd64"})
+		if err != nil {
+			t.Fatalf("RequestUpdate: %v", err)
+		}
+		if resp.GetUpdateAvailable() {
+			t.Errorf("update_available = true on a checker error, want false")
+		}
+	})
+
+	t.Run("feature off reports no update", func(t *testing.T) {
+		service := NewService(Config{Secret: "gateway-test-secret", Version: "test", Logger: discardLogger()})
+		conn := startTestGateway(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{AgentVersion: "v1.0.0", Arch: "amd64"})
+		if err != nil {
+			t.Fatalf("RequestUpdate: %v", err)
+		}
+		if resp.GetUpdateAvailable() {
+			t.Errorf("update_available = true with no updater, want false")
+		}
+	})
+
+	t.Run("active rollout is flagged", func(t *testing.T) {
+		updater := &fakeAgentUpdater{release: release}
+		service := NewService(Config{Secret: "gateway-test-secret", Version: "test", Logger: discardLogger(), Updater: updater})
+		service.StartAgentRollout("v1.2.0")
+		conn := startTestGateway(t, service)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		resp, err := agentv1.NewUpdateServiceClient(conn).RequestUpdate(ctx, &agentv1.UpdateRequest{AgentVersion: "v1.0.0", Arch: "amd64"})
+		if err != nil {
+			t.Fatalf("RequestUpdate: %v", err)
+		}
+		if !resp.GetRollout() {
+			t.Errorf("rollout = false during an active rollout")
+		}
+	})
 }

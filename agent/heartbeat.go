@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/justindeelux/gotham/agent/stats"
@@ -38,6 +39,10 @@ type Agent struct {
 	minBackoff  time.Duration
 	maxBackoff  time.Duration
 	dialOptions []grpc.DialOption
+
+	versionMu sync.Mutex
+	version   string
+	updater   *updater
 }
 
 // Option customizes an Agent. Options are primarily used by tests.
@@ -85,11 +90,36 @@ func NewAgent(cfg Config, log *slog.Logger, docker dockerClient, options ...Opti
 		interval:   defaultHeartbeatInterval,
 		minBackoff: defaultMinBackoff,
 		maxBackoff: defaultMaxBackoff,
+		version:    cfg.Version,
 	}
 	for _, option := range options {
 		option(agent)
 	}
+	// The updater is disabled (nil) when no release public key is configured or
+	// no fixed binary path is set; it never blocks construction.
+	if u, err := newUpdater(cfg, log, agent.Version, agent.setVersion); err != nil {
+		log.Warn("agent: self-update disabled", "error", err)
+	} else {
+		agent.updater = u
+	}
 	return agent
+}
+
+// Version returns the version this agent currently reports.
+func (a *Agent) Version() string {
+	a.versionMu.Lock()
+	defer a.versionMu.Unlock()
+	return a.version
+}
+
+// setVersion records the version after a successful update.
+func (a *Agent) setVersion(version string) {
+	if version == "" {
+		return
+	}
+	a.versionMu.Lock()
+	a.version = version
+	a.versionMu.Unlock()
 }
 
 // Run connects to the control plane and runs the register/heartbeat loop until
@@ -109,6 +139,7 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 	defer func() { _ = conn.Close() }()
 
 	client := agentv1.NewAgentServiceClient(conn)
+	updateClient := agentv1.NewUpdateServiceClient(conn)
 	backoff := a.minBackoff
 
 	for {
@@ -145,8 +176,25 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 			}
 		}
 
-		if err := a.heartbeat(ctx, client); err != nil && ctx.Err() == nil {
-			a.log.Warn("heartbeat stream ended; reconnecting", "error", err)
+		// Poll for a signed update alongside the heartbeat stream. The poll
+		// stops when the heartbeat stream ends so a reconnect starts a fresh
+		// one; the download never blocks the heartbeat because it runs on its
+		// own goroutine.
+		hbCtx, hbCancel := context.WithCancel(ctx)
+		var updateWG sync.WaitGroup
+		if a.updater != nil {
+			updateWG.Add(1)
+			go func() {
+				defer updateWG.Done()
+				a.updater.run(hbCtx, updateClient)
+			}()
+		}
+
+		heartbeatErr := a.heartbeat(ctx, client)
+		hbCancel()
+		updateWG.Wait()
+		if heartbeatErr != nil && ctx.Err() == nil {
+			a.log.Warn("heartbeat stream ended; reconnecting", "error", heartbeatErr)
 		}
 		if ctx.Err() != nil {
 			return nil
@@ -275,6 +323,7 @@ func (a *Agent) heartbeatRequest(ctx context.Context) *agentv1.HeartbeatRequest 
 		NetTxBps:       sample.NetTxBps,
 		DiskReadBps:    sample.DiskReadBps,
 		DiskWriteBps:   sample.DiskWriteBps,
+		AgentVersion:   a.Version(),
 	}
 }
 

@@ -25,8 +25,6 @@ import (
 const (
 	// defaultGatewayAddr is used when no gRPC address is configured.
 	defaultGatewayAddr = ":9442"
-	// updateLatestVersion is reported by the UpdateService skeleton.
-	updateLatestVersion = "0.0.0"
 	// nodeIDMetadataKey identifies a node on the dev (non-mTLS) listener.
 	nodeIDMetadataKey = "node-id"
 	// gatewayGracefulStop bounds graceful shutdown before forcing a stop.
@@ -209,9 +207,44 @@ func (g *Gateway) Heartbeat(stream grpc.ClientStreamingServer[agentv1.HeartbeatR
 	}
 }
 
-// RequestUpdate is the UpdateService skeleton. It always reports no update.
-func (g *Gateway) RequestUpdate(context.Context, *agentv1.UpdateRequest) (*agentv1.UpdateResponse, error) {
-	return &agentv1.UpdateResponse{UpdateAvailable: false, LatestVersion: updateLatestVersion}, nil
+// RequestUpdate answers an agent's update query. It compares the reported
+// version and platform against the release the control plane knows, and, when a
+// newer one exists, returns the signed release material (asset, manifest and
+// detached-signature URLs plus the artifact digest and channel). The control
+// plane verifies the manifest signature itself before offering, so an offer is
+// never unsigned or unverified. It never fails the RPC for a release-server or
+// configuration problem: the agent is told "no update" and the detail is
+// logged.
+//
+// It does not record the reported version: this RPC carries no authenticated
+// node identity (the listener verifies a client certificate only when one is
+// presented, and agents present none), so the version map is fed exclusively by
+// heartbeats, which resolve the node in the registry first.
+func (g *Gateway) RequestUpdate(ctx context.Context, req *agentv1.UpdateRequest) (*agentv1.UpdateResponse, error) {
+	nodeID := nodeIDFromContext(ctx)
+
+	release, rollout, err := g.service.OfferAgentUpdate(ctx, req.GetAgentVersion(), req.GetOs(), req.GetArch())
+	switch {
+	case err != nil:
+		g.logger.Warn("servers: agent update offer failed",
+			"node_id", nodeID, "arch", req.GetArch(), "error", err)
+		return &agentv1.UpdateResponse{UpdateAvailable: false}, nil
+	case release == nil:
+		return &agentv1.UpdateResponse{UpdateAvailable: false}, nil
+	}
+
+	g.logger.Info("servers: offering agent update",
+		"node_id", nodeID, "from", req.GetAgentVersion(), "to", release.Version, "rollout", rollout)
+	return &agentv1.UpdateResponse{
+		UpdateAvailable:      true,
+		LatestVersion:        release.Version,
+		AssetUrl:             release.AssetURL,
+		ManifestUrl:          release.ManifestURL,
+		ManifestSignatureUrl: release.ManifestSignatureURL,
+		Sha256:               release.SHA256,
+		Channel:              release.Channel,
+		Rollout:              rollout,
+	}, nil
 }
 
 // serverCredentials builds the mTLS transport credentials for the listener.

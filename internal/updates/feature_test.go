@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/justindeelux/gotham/updatecore"
 )
 
 // TestFeatureGetters covers the environment-driven configuration helpers.
@@ -104,8 +106,8 @@ func TestValidateURL(t *testing.T) {
 		"http://localhost:8080/asset",
 	}
 	for _, raw := range allowed {
-		if err := validateURL(raw); err != nil {
-			t.Errorf("validateURL(%q) = %v, want nil", raw, err)
+		if err := updatecore.ValidateURL(raw); err != nil {
+			t.Errorf("updatecore.ValidateURL(%q) = %v, want nil", raw, err)
 		}
 	}
 	refused := []string{
@@ -118,8 +120,8 @@ func TestValidateURL(t *testing.T) {
 		"ftp://example.com/asset",
 	}
 	for _, raw := range refused {
-		if err := validateURL(raw); !errors.Is(err, ErrBadURL) {
-			t.Errorf("validateURL(%q) = %v, want ErrBadURL", raw, err)
+		if err := updatecore.ValidateURL(raw); !errors.Is(err, ErrBadURL) {
+			t.Errorf("updatecore.ValidateURL(%q) = %v, want ErrBadURL", raw, err)
 		}
 	}
 }
@@ -127,13 +129,13 @@ func TestValidateURL(t *testing.T) {
 // TestFromEnv covers the environment assembly and the missing-key fail-closed
 // case.
 func TestFromEnv(t *testing.T) {
-	embedded, _, err := GenerateKey()
+	embedded, _, err := updatecore.GenerateKey()
 	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
+		t.Fatalf("updatecore.GenerateKey: %v", err)
 	}
-	original := PublicKey
-	t.Cleanup(func() { PublicKey = original })
-	PublicKey = EncodePublicKeyBase64(embedded)
+	original := updatecore.PublicKey
+	t.Cleanup(func() { updatecore.PublicKey = original })
+	updatecore.PublicKey = updatecore.EncodePublicKeyBase64(embedded)
 	t.Setenv(PublicKeyEnv, "")
 	t.Setenv(RepoEnv, "acme/gotham")
 	t.Setenv(BaseURLEnv, "https://ghe.example.com")
@@ -158,7 +160,7 @@ func TestFromEnv(t *testing.T) {
 		t.Fatalf("FromEnv = %+v", cfg)
 	}
 
-	PublicKey = ""
+	updatecore.PublicKey = ""
 	t.Setenv(PublicKeyEnv, "")
 	cfg, err = FromEnv("v1.0.0", nil)
 	if !errors.Is(err, ErrNoPublicKey) {

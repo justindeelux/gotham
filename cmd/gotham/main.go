@@ -15,6 +15,7 @@ import (
 	"github.com/justindeelux/gotham/internal/server"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/updates"
 )
 
 // version is the reported build version. Released binaries override it with
@@ -132,6 +133,7 @@ func runServe() int {
 		Secret:    snap.SecretKey,
 		Version:   version,
 		Logger:    logger,
+		Updater:   agentUpdater(logger),
 	})
 
 	gateway, err := servers.NewGateway(servers.GatewayConfig{
@@ -164,6 +166,21 @@ func runServe() int {
 
 	logger.Info("server stopped")
 	return exitOK
+}
+
+// agentUpdater builds the control-plane agent-update offerer. It returns nil
+// when FEATURE_UPDATES=false, no release public key is configured, or the
+// configuration is unusable, which disables agent update offers on the gateway.
+func agentUpdater(logger *slog.Logger) servers.AgentUpdateOfferer {
+	updater, err := updates.AgentUpdaterFromEnv(logger)
+	if err != nil {
+		logger.Warn("updates: agent update offers disabled", "error", err)
+		return nil
+	}
+	if updater == nil {
+		return nil
+	}
+	return updater
 }
 
 // buildOAuthService wires the configured OAuth2 providers. It returns nil when

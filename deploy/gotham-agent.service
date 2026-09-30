@@ -3,6 +3,16 @@
 # deploy/install-agent.sh installs this file. To install manually: copy it to
 # /etc/systemd/system/gotham-agent.service, create the gotham-agent user and
 # /etc/gotham/agent.env, then run `systemctl enable --now gotham-agent`.
+#
+# Self-update layout (see deploy/README.md)
+# ----------------------------------------
+# The agent binary lives in the service's StateDirectory
+# (/var/lib/gotham-agent/bin/gotham-agent), the only path the service user can
+# write. The privileged restart wrapper is the shared deploy/gotham-update.sh
+# installed as /usr/libexec/gotham/gotham-agent-update (root-owned, outside every
+# writable path); sudoers grants exactly that command with no arguments. A
+# compromised agent can therefore only ask the fixed wrapper to restart the
+# fixed unit, never replace it or point it at another unit/path/URL.
 [Unit]
 Description=Gotham node agent
 Documentation=https://github.com/justindeelux/gotham
@@ -15,21 +25,46 @@ User=gotham-agent
 Group=gotham-agent
 WorkingDirectory=/var/lib/gotham-agent
 Environment=GOTHAM_AGENT_CERT_DIR=/var/lib/gotham-agent
+Environment=GOTHAM_AGENT_BINARY=/var/lib/gotham-agent/bin/gotham-agent
+Environment=GOTHAM_AGENT_UPDATE_STATUS=/var/lib/gotham-agent-updater/update.status
+Environment=GOTHAM_AGENT_UPDATE_PENDING=/var/lib/gotham-agent/update.pending
+Environment=GOTHAM_AGENT_UPDATE_LOCK=/var/lib/gotham-agent/update.lock
+Environment=GOTHAM_AGENT_UPDATE_RETRY=/var/lib/gotham-agent/update.retry
+Environment=GOTHAM_AGENT_UPDATE_BACKOFF=/var/lib/gotham-agent/update.backoff
+Environment=GOTHAM_AGENT_UPDATE_SCRIPT=/usr/libexec/gotham/gotham-agent-update
+Environment=GOTHAM_AGENT_HEALTH_ADDR=127.0.0.1:8001
 EnvironmentFile=-/etc/gotham/agent.env
-ExecStart=/usr/local/bin/gotham-agent serve
+# GOTHAM_AGENT_AUTO_UPDATE=true enables unattended updates; a plain CP offer is
+# otherwise only applied when an operator triggers an "update all agents"
+# rollout. Off by default.
+# Environment=GOTHAM_AGENT_AUTO_UPDATE=true
+ExecStart=/var/lib/gotham-agent/bin/gotham-agent serve
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
 LimitNOFILE=65536
 
-# The agent talks to the Docker socket and writes its certificate under
-# /var/lib/gotham-agent.
-SupplementaryGroups=docker
+# KillMode=process is required for self-update: the privileged wrapper is a
+# child of this service and calls `systemctl restart gotham-agent`. With the
+# default control-group mode, stopping the unit would kill the wrapper before it
+# can health-check, roll back or record the outcome. Only the main process is
+# stopped; the wrapper (root-owned, detached) finishes its transaction.
+KillMode=process
+
+# Hardening. The updater writes the binary under StateDirectory, so that single
+# path stays writable; everything the privileged wrapper needs is root-owned.
+#
+# NoNewPrivileges is intentionally NOT set: the agent invokes the fixed
+# root-owned wrapper through `sudo -n` (the only privileged action sudoers
+# grants), and NoNewPrivileges would block setuid sudo entirely.
 StateDirectory=gotham-agent
+StateDirectoryMode=0755
 ProtectSystem=full
 ProtectHome=true
-NoNewPrivileges=true
 PrivateTmp=true
+ReadWritePaths=/var/lib/gotham-agent
+# The agent talks to the Docker socket.
+SupplementaryGroups=docker
 
 [Install]
 WantedBy=multi-user.target

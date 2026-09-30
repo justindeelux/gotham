@@ -1,6 +1,6 @@
 //go:build unix
 
-package updates
+package updatecore
 
 import (
 	"errors"

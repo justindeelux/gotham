@@ -43,6 +43,10 @@ const (
 	// CurrentEnv overrides the running version (useful for wrappers and
 	// tests). When unset the version reported by the node registry is used.
 	CurrentEnv = "GOTHAM_UPDATE_CURRENT"
+	// OfferCacheTTLEnv overrides how long a resolved agent release offer is
+	// cached on the control plane (Go duration; default 10m). It bounds the
+	// release-API load from a polling fleet.
+	OfferCacheTTLEnv = "GOTHAM_UPDATE_OFFER_CACHE_TTL"
 )
 
 // Enabled reports whether the self-update surface is available; it is on unless
@@ -142,6 +146,21 @@ func LockPathFromEnv() string {
 // CurrentFromEnv returns the configured running version, or "" when unset.
 func CurrentFromEnv() string {
 	return strings.TrimSpace(os.Getenv(CurrentEnv))
+}
+
+// OfferCacheTTLFromEnv returns the configured agent-offer cache TTL, defaulting
+// to 10m. Invalid or non-positive values fall back to the default.
+func OfferCacheTTLFromEnv() time.Duration {
+	const fallback = 10 * time.Minute
+	raw := strings.TrimSpace(os.Getenv(OfferCacheTTLEnv))
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
 }
 
 // FromEnv assembles a self-update Config from the environment. A missing or

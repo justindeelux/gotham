@@ -7,6 +7,7 @@
 | `gotham-updater.conf` | Root-owned wrapper configuration (install to `/etc/gotham/updater.conf`) |
 | `install-sudoers.sh` | Grants the service user the wrapper (and nothing else) |
 | `verify-systemd.sh` | Root-only integration check for a Linux host with systemd |
+| `verify-agent-update.sh` | Root-only end-to-end check of the agent remote-update flow (BE-9.2) on a Linux/systemd/Docker host |
 | `gotham-agent.service`, `install-agent.sh` | Node agent |
 | `gotham-agent-updater.conf` | Root-owned agent wrapper configuration (install to `/etc/gotham/agent-updater.conf`) |
 | `install-agent-sudoers.sh` | Grants the agent user the agent wrapper (and nothing else) |
@@ -182,3 +183,41 @@ handoff.
 `sudo deploy/verify-systemd.sh` runs a scratch service and the real wrapper on a
 systemd host. See the script header and the BE-9.1 report for exactly what it
 proves.
+
+## Agent remote-update verification (BE-9.2)
+
+`sudo GOTHAM_GO=/path/to/go sh deploy/verify-agent-update.sh` is the merge gate
+for the agent remote-update flow. It is entirely scratch — scratch systemd units
+(`gotham-agent-verify-<pid>-a/b`), a scratch user, a scratch database
+(`<base>_verify_<pid>`), a high scratch port range and a scratch directory — and
+cleans all of it up on EXIT/INT/TERM. It never touches a real
+`gotham`/`gotham-agent` unit, database, certificate or binary.
+
+It builds the control plane and two agent versions from this repository with the
+release Ed25519 public key **embedded** via `-ldflags` (the dev env override is
+not used), signs a `v2.0.0` agent release with `cmd/signer`, serves it from a
+loopback `python3 -m http.server`, runs a scratch control plane and two scratch
+agents as systemd units (with the shared wrapper, its config and a scratch
+sudoers rule), and drives the operator API. Postgres is reached through the
+`gotham-dev-postgres` container (`VERIFY_DATABASE_URL` overrides the DSN).
+
+Checks (the reviewer's three merge confirmations plus the target/negative cases):
+
+- **C1** `update-all` with the control plane already on the newest version starts
+  a rollout anyway (the target is the agent release family, not the CP version).
+- **C2** both agents restart through the root-owned wrapper and their status
+  files record `ok`, keeping the previous binary as `gotham-agent.old`.
+- **C3** both heartbeats converge on the new version and the planted install
+  directories are otherwise byte-identical (md5+mtime, excluding exactly the
+  binary, backup, pending marker, lock and status files).
+- **C4** the control plane resolves the agent release family (`v2.0.0`).
+- **NEG1** a tampered asset (manifest digest mismatch) leaves the agents on the
+  old version.
+- **NEG2** a validly signed but broken release rolls back and records
+  `rolled_back`, leaving the agents on the old version.
+
+A tampered **manifest** is rejected at the control plane before any agent sees
+it, and a tampered **digest** is rejected at the agent before the swap, so those
+two paths are covered by the `internal/updates` and `agent` unit tests
+(`TestAgentUpdaterRejectsTamperedManifest`, `TestAgentUpdaterRejectsDigestMismatch`)
+and by NEG1 end to end; the wrapper rollback status is covered by NEG2.

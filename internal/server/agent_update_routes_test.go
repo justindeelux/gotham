@@ -145,6 +145,31 @@ func TestAgentUpdateRoutesTargetError(t *testing.T) {
 	}
 }
 
+// TestAgentUpdateRoutesNormalizesVersions is N4: a bare "1.2.0" and a canonical
+// "v1.2.0" are the same version, so a release stamped without the "v" does not
+// make every agent look pending.
+func TestAgentUpdateRoutesNormalizesVersions(t *testing.T) {
+	t.Setenv(PlatformAdminsEnv, "user@example.com")
+	fake := &fakeAgentUpdateRegistry{
+		fakeServerService: newFakeServerService(),
+		versions:          []servers.AgentVersion{{NodeID: "node-a", Version: "1.2.0", At: time.Now().UTC()}},
+		target:            "v1.2.0",
+	}
+	s := newServerRoutesTestServer(t, fake)
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var result updateAllAgentsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.Pending != 0 || fake.rollout != "" {
+		t.Fatalf("result = %+v rollout=%q, want a no-op (versions equal)", result, fake.rollout)
+	}
+}
+
 // TestAgentUpdateRoutesRequireOperator proves a plain session is refused.
 func TestAgentUpdateRoutesRequireOperator(t *testing.T) {
 	t.Setenv(PlatformAdminsEnv, "")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/teams"
+	"github.com/justindeelux/gotham/updatecore"
 )
 
 // ServerService is the subset of servers.ServerService the HTTP layer depends
@@ -440,7 +442,7 @@ func (s *Server) handleUpdateAllAgents(w http.ResponseWriter, r *http.Request) {
 	agents := controller.KnownAgentVersions()
 	pending := 0
 	for _, agent := range agents {
-		if agent.Version != target {
+		if !versionsEqual(agent.Version, target) {
 			pending++
 		}
 	}
@@ -462,6 +464,18 @@ func (s *Server) handleUpdateAllAgents(w http.ResponseWriter, r *http.Request) {
 		Pending:       pending,
 		Message:       "rollout queued; agents update on their next poll",
 	})
+}
+
+// versionsEqual compares two version strings through the version parser, so a
+// bare "1.2.0" and a canonical "v1.2.0" count as the same version (N4). An
+// unparsable value on either side falls back to a literal comparison.
+func versionsEqual(a, b string) bool {
+	av, aErr := updatecore.ParseVersion(a)
+	bv, bErr := updatecore.ParseVersion(b)
+	if aErr != nil || bErr != nil {
+		return strings.TrimSpace(a) == strings.TrimSpace(b)
+	}
+	return av.Compare(bv) == 0
 }
 
 // parseMetricTime parses one required RFC 3339 query timestamp, answering 400

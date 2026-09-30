@@ -350,6 +350,70 @@ func TestAgentUpdaterDoesNotBlockOnNonRegularMarker(t *testing.T) {
 	}
 }
 
+// TestAgentUpdaterIgnoresStaleOKStatus is N2: a stale `ok` for the same version
+// (for example from a previous install) is not trusted; only a recent healthy
+// status is adopted.
+func TestAgentUpdaterIgnoresStaleOKStatus(t *testing.T) {
+	release := newAgentReleaseServer(t, false)
+	setTestPublicKey(t, release.public)
+
+	target := filepath.Join(t.TempDir(), "gotham-agent")
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	statusPath := filepath.Join(filepath.Dir(target), "update.status")
+	if err := updatecore.NewStatusStore(statusPath).Write(updatecore.Status{
+		Result: updatecore.StatusOK, Version: testAgentVersion, At: time.Now().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("write stale status: %v", err)
+	}
+	runner := NewAgent(updaterTestConfig(t, target, noopAgentRestart), discardLogger(), nil)
+
+	runner.updater.checkOnce(context.Background(), &fakeUpdateClient{resp: release.offer()})
+
+	if runner.Version() != testAgentCurrent {
+		t.Fatalf("Version() = %q, want the running %s (stale ok must not be trusted)", runner.Version(), testAgentCurrent)
+	}
+}
+
+// TestAgentUpdaterBacksOffAfterFailedUpdate is N5: after a failed attempt the
+// same version is not re-applied until the backoff lapses.
+func TestAgentUpdaterBacksOffAfterFailedUpdate(t *testing.T) {
+	release := newAgentReleaseServer(t, false)
+	setTestPublicKey(t, release.public)
+
+	target := filepath.Join(t.TempDir(), "gotham-agent")
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	launches := 0
+	restart := func(context.Context) (func() error, error) {
+		launches++
+		if err := updatecore.NewStatusStore(filepath.Join(filepath.Dir(target), "update.status")).Write(updatecore.Status{
+			Result: updatecore.StatusRolledBack, Version: testAgentVersion,
+		}); err != nil {
+			return nil, err
+		}
+		return func() error { return nil }, nil
+	}
+	runner := NewAgent(updaterTestConfig(t, target, restart), discardLogger(), nil)
+	client := &fakeUpdateClient{resp: release.offer()}
+
+	runner.updater.checkOnce(context.Background(), client)
+	if launches != 1 {
+		t.Fatalf("wrapper launches = %d, want 1", launches)
+	}
+	if !runner.updater.inBackoff(testAgentVersion) {
+		t.Fatal("no backoff recorded after a rolled_back outcome")
+	}
+
+	// A second poll within the backoff must not re-download/re-apply.
+	runner.updater.checkOnce(context.Background(), client)
+	if launches != 1 {
+		t.Fatalf("wrapper launches = %d, want 1 (backoff must suppress the retry)", launches)
+	}
+}
+
 // readFileString reads path, failing the test on error.
 func readFileString(t *testing.T, path string) string {
 	t.Helper()

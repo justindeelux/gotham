@@ -103,8 +103,11 @@ Design priorities (in order):
 
 ## Agent remote update (BE-9.2)
 
-Node agents self-update from the control plane over the authenticated mTLS
-channel:
+Node agents self-update from the control plane over the agent gRPC channel. The
+channel is **server-authenticated TLS**: the agent verifies the control plane's
+certificate but does not yet present a client certificate, so update integrity
+rests on the embedded-key signature check, not on channel client authentication
+(the agent client-certificate follow-up is tracked separately). The flow:
 
 1. The agent calls `UpdateService/RequestUpdate` on reconnect and on a poll
    interval, reporting its `agent_version`, `os` and `arch`.
@@ -127,7 +130,8 @@ A plain offer is applied only when `GOTHAM_AGENT_AUTO_UPDATE=true`. A platform
 operator can force a fleet rollout with `POST /api/v1/servers/agents/update-all`,
 which records the target and lets agents converge on their next poll — the
 request never dials or blocks on a node. The control plane only serves update
-material over the mTLS agent channel; the HTTP API only triggers.
+material over the server-authenticated TLS agent channel; the HTTP API only
+triggers.
 
 ## Naming conventions
 

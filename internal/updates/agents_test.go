@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -298,5 +299,108 @@ func TestAgentUpdaterTargetVersion(t *testing.T) {
 	}
 	if got := fixture.releaseHits.Load(); got != 1 {
 		t.Fatalf("release-API hits = %d, want 1 after a cached call", got)
+	}
+}
+
+// TestAgentUpdaterNegativeCachesFailure is N1: with no verified release, a
+// failing upstream is hit at most once per negative TTL, not once per offer.
+func TestAgentUpdaterNegativeCachesFailure(t *testing.T) {
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	public, _, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	updater, err := NewAgentUpdater(AgentUpdaterConfig{
+		Repo: "owner/name", BaseURL: server.URL, Channel: ChannelStable,
+		PublicKey: public, Client: server.Client(),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewAgentUpdater: %v", err)
+	}
+
+	for i := 0; i < 20; i++ {
+		if _, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64"); !errors.Is(err, ErrHTTP) {
+			t.Fatalf("Offer %d = %v, want ErrHTTP", i, err)
+		}
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("release-API hits = %d, want 1 (negative cache must absorb the fleet)", got)
+	}
+}
+
+// TestAgentUpdaterSingleFlightConcurrent is N1: concurrent cold polls fetch once
+// even when the upstream fails.
+func TestAgentUpdaterSingleFlightConcurrent(t *testing.T) {
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	public, _, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	updater, err := NewAgentUpdater(AgentUpdaterConfig{
+		Repo: "owner/name", BaseURL: server.URL, Channel: ChannelStable,
+		PublicKey: public, Client: server.Client(),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewAgentUpdater: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = updater.Offer(context.Background(), "v1.0.0", "linux", "amd64")
+		}()
+	}
+	wg.Wait()
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("release-API hits = %d, want 1 for 50 concurrent cold offers", got)
+	}
+}
+
+// TestAgentUpdaterStaleServeDoesNotRefetch is N1: after a failure, repeated
+// offers within the negative TTL serve the stale verified release without
+// re-hitting the upstream.
+func TestAgentUpdaterStaleServeDoesNotRefetch(t *testing.T) {
+	fixture := newAgentFixture(t, false)
+	updater, err := NewAgentUpdater(AgentUpdaterConfig{
+		Repo: "owner/name", BaseURL: fixture.server.URL, Channel: ChannelStable,
+		PublicKey: fixture.public, Client: fixture.server.Client(),
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		CacheTTL: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewAgentUpdater: %v", err)
+	}
+
+	if _, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64"); err != nil {
+		t.Fatalf("first Offer: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond) // lapse the positive TTL
+	fixture.fail.Store(true)
+
+	for i := 0; i < 10; i++ {
+		release, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64")
+		if err != nil || release == nil {
+			t.Fatalf("Offer %d = (%+v, %v), want the stale release", i, release, err)
+		}
+	}
+	// One successful fetch plus one failed fetch; the rest are served stale.
+	if got := fixture.releaseHits.Load(); got != 2 {
+		t.Fatalf("release-API hits = %d, want 2 (stale serve must not refetch)", got)
 	}
 }

@@ -33,6 +33,9 @@ const (
 	// poll: GitHub's anonymous limit is 60 requests/hour per egress IP, shared
 	// with the control plane's own update check.
 	defaultOfferCacheTTL = 10 * time.Minute
+	// minNegativeOfferCacheTTL is the floor for the failure backoff so a failing
+	// upstream is retried at most once per interval even with a tiny TTL.
+	minNegativeOfferCacheTTL = time.Second
 	// agentFloorVersion is the version floor used to resolve the newest agent
 	// release regardless of any particular agent's running version.
 	agentFloorVersion = "v0.0.0"
@@ -66,15 +69,29 @@ type AgentUpdater struct {
 	client   *http.Client
 	logger   *slog.Logger
 	ttl      time.Duration
+	// negativeTTL suppresses re-fetching after a failed lookup so a failing
+	// upstream is hit at most once per interval (N1).
+	negativeTTL time.Duration
 
 	mu    sync.Mutex
-	cache map[string]*cachedRelease
+	cache map[string]*cachedEntry
+	// fetchMu serializes upstream fetches (a single-flight per process) so
+	// concurrent cold polls fetch once instead of once per poll.
+	fetchMu sync.Mutex
 }
 
-// cachedRelease is one resolved, manifest-verified release keyed by arch.
-type cachedRelease struct {
+// cachedEntry is the per-arch cache state. It keeps the last verified release
+// (which stays servable when stale) together with the freshness window and the
+// failure backoff.
+type cachedEntry struct {
+	// release is the last manifest-verified release; nil before any success.
 	release *Release
-	expires time.Time
+	// freshUntil is when release stops being served without a refetch.
+	freshUntil time.Time
+	// failure is the last lookup error (nil when the last lookup succeeded).
+	failure error
+	// retryAt suppresses a refetch until it passes.
+	retryAt time.Time
 }
 
 // NewAgentUpdater builds an updater. It returns (nil, nil) when no public key
@@ -96,10 +113,11 @@ func NewAgentUpdater(cfg AgentUpdaterConfig) (*AgentUpdater, error) {
 			AssetPrefix:    AgentAssetPrefix,
 			ManifestPrefix: AgentManifestPrefix,
 		},
-		client: cfg.Client,
-		logger: logger,
-		ttl:    defaultDuration(cfg.CacheTTL, defaultOfferCacheTTL),
-		cache:  map[string]*cachedRelease{},
+		client:      cfg.Client,
+		logger:      logger,
+		ttl:         defaultDuration(cfg.CacheTTL, defaultOfferCacheTTL),
+		negativeTTL: negativeCacheTTL(cfg.CacheTTL),
+		cache:       map[string]*cachedEntry{},
 	}
 	if cfg.PublicKey == nil {
 		return nil, nil
@@ -201,15 +219,27 @@ func (a *AgentUpdater) TargetVersion(ctx context.Context) (string, error) {
 
 // resolve returns the newest verified release for arch, served from cache when
 // fresh. On a release-API or manifest failure it serves the last verified
-// release if one exists (stale but signed and digest-bound), and only fails
-// when there is nothing valid to serve.
+// release if one exists (stale but signed and digest-bound) and negative-caches
+// the failure, so a failing upstream is hit at most once per negative TTL. It
+// fails closed only when there is nothing valid to serve and the negative cache
+// has lapsed.
 func (a *AgentUpdater) resolve(ctx context.Context, arch string) (*Release, error) {
-	if fresh := a.cachedFresh(arch); fresh != nil {
-		return fresh, nil
+	if release, err, ok := a.cached(arch, time.Now()); ok {
+		return release, err
 	}
+
+	// Single-flight: concurrent cold polls fetch once. Re-check the cache after
+	// acquiring the lock because another goroutine may have populated it.
+	a.fetchMu.Lock()
+	defer a.fetchMu.Unlock()
+	if release, err, ok := a.cached(arch, time.Now()); ok {
+		return release, err
+	}
+
 	release, err := a.fetchRelease(ctx, arch)
 	if err != nil {
-		if stale := a.cachedAny(arch); stale != nil {
+		a.storeFailure(arch, err)
+		if stale := a.stale(arch); stale != nil {
 			a.logger.Warn("updates: serving a stale agent offer after a release lookup failure",
 				"arch", arch, "error", err)
 			return stale, nil
@@ -217,10 +247,84 @@ func (a *AgentUpdater) resolve(ctx context.Context, arch string) (*Release, erro
 		return nil, err
 	}
 	if release == nil {
+		a.storeFailure(arch, ErrNoRelease)
 		return nil, nil
 	}
 	a.store(arch, release)
 	return release, nil
+}
+
+// cached reports whether the cache answers without a fetch: a fresh verified
+// release, a stale verified release while a failure backoff is active, or the
+// cached failure itself. ok is false when a fetch should be attempted.
+func (a *AgentUpdater) cached(arch string, now time.Time) (*Release, error, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	entry, ok := a.cache[arch]
+	if !ok {
+		return nil, nil, false
+	}
+	if entry.release != nil && now.Before(entry.freshUntil) {
+		clone := *entry.release
+		return &clone, nil, true
+	}
+	if now.Before(entry.retryAt) {
+		if entry.release != nil {
+			clone := *entry.release
+			return &clone, nil, true
+		}
+		return nil, entry.failure, true
+	}
+	return nil, nil, false
+}
+
+// stale returns the last verified release for arch regardless of expiry, or nil.
+func (a *AgentUpdater) stale(arch string) *Release {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	entry, ok := a.cache[arch]
+	if !ok || entry.release == nil {
+		return nil
+	}
+	clone := *entry.release
+	return &clone
+}
+
+// store caches a verified release for arch and clears any failure backoff.
+func (a *AgentUpdater) store(arch string, release *Release) {
+	clone := *release
+	now := time.Now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cache[arch] = &cachedEntry{
+		release:    &clone,
+		freshUntil: now.Add(a.ttl),
+		retryAt:    now.Add(a.ttl),
+	}
+}
+
+// storeFailure negative-caches a lookup failure for arch while preserving the
+// last verified release so it stays servable (stale) during the backoff.
+func (a *AgentUpdater) storeFailure(arch string, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	entry, ok := a.cache[arch]
+	if !ok {
+		entry = &cachedEntry{}
+		a.cache[arch] = entry
+	}
+	entry.failure = err
+	entry.retryAt = time.Now().Add(a.negativeTTL)
+}
+
+// negativeCacheTTL derives the failure backoff from the offer TTL (a fifth,
+// floored at minNegativeOfferCacheTTL).
+func negativeCacheTTL(configured time.Duration) time.Duration {
+	ttl := defaultDuration(configured, defaultOfferCacheTTL) / 5
+	if ttl < minNegativeOfferCacheTTL {
+		return minNegativeOfferCacheTTL
+	}
+	return ttl
 }
 
 // fetchRelease resolves the newest release for arch and verifies its signed
@@ -305,40 +409,6 @@ func (a *AgentUpdater) get(ctx context.Context, rawURL string, maxBytes int64) (
 		return nil, fmt.Errorf("%w: %s exceeds %d bytes", ErrTooLarge, rawURL, maxBytes)
 	}
 	return data, nil
-}
-
-// cachedFresh returns a copy of a live verified release, or nil.
-func (a *AgentUpdater) cachedFresh(arch string) *Release {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	entry, ok := a.cache[arch]
-	if !ok || time.Now().After(entry.expires) {
-		return nil
-	}
-	clone := *entry.release
-	return &clone
-}
-
-// cachedAny returns a copy of the last verified release for arch even when its
-// TTL has lapsed, so a transient release-server failure does not turn into a
-// silent no-update. It is always a signed, digest-bound release.
-func (a *AgentUpdater) cachedAny(arch string) *Release {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	entry, ok := a.cache[arch]
-	if !ok {
-		return nil
-	}
-	clone := *entry.release
-	return &clone
-}
-
-// store caches a verified release for arch.
-func (a *AgentUpdater) store(arch string, release *Release) {
-	clone := *release
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.cache[arch] = &cachedRelease{release: &clone, expires: time.Now().Add(a.ttl)}
 }
 
 // supportedAgentArch reports whether arch is a published agent architecture.

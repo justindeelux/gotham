@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,19 +26,43 @@ const (
 	updateDownloadTimeout = 10 * time.Minute
 )
 
+// Failed-update backoff (N5). After a failed attempt the agent does not
+// re-download the same version every poll: it waits base, doubling per
+// consecutive failure up to max.
+const (
+	updateBackoffBase = time.Minute
+	updateBackoffMax  = time.Hour
+)
+
+// statusFreshness bounds how old a healthy status may be before it is treated
+// as unconfirmed (N2), so a stale `ok` for the same version from a previous
+// install is never trusted.
+const statusFreshness = 5 * time.Minute
+
 // updater polls the control plane for a verified agent update and applies it.
 //
 // It only ever builds a release from the authenticated CP response: the URL
-// and digest come from the mTLS gRPC channel, and updatecore re-validates the
-// URL (https-only, bounded redirects, no link-local dials), verifies the
-// Ed25519 signature over the signed manifest with the key embedded in this
-// binary, binds version/arch/file/digest and swaps atomically with rollback.
+// and digest come from the server-authenticated TLS gRPC channel, and
+// updatecore re-validates the URL (https-only, bounded redirects, no
+// link-local dials), verifies the Ed25519 signature over the signed manifest
+// with the key embedded in this binary, binds version/arch/file/digest and
+// swaps atomically with rollback.
 type updater struct {
 	cfg        Config
 	log        *slog.Logger
 	applier    *updatecore.Applier
 	version    func() string
 	setVersion func(string)
+
+	// backoffMu guards backoff, the per-version failed-attempt backoff (N5).
+	backoffMu sync.Mutex
+	backoff   map[string]*backoffState
+}
+
+// backoffState is the exponential backoff for one offered version.
+type backoffState struct {
+	failures int
+	until    time.Time
 }
 
 // newUpdater builds an updater. It returns (nil, nil) when no release public
@@ -88,6 +113,7 @@ func newUpdater(cfg Config, log *slog.Logger, version func() string, setVersion 
 		applier:    applier,
 		version:    version,
 		setVersion: setVersion,
+		backoff:    map[string]*backoffState{},
 	}, nil
 }
 
@@ -145,6 +171,12 @@ func (u *updater) checkOnce(ctx context.Context, client agentv1.UpdateServiceCli
 			"offered", release.Version, "running", u.version())
 		return
 	}
+	// A persistently failing version is backed off so the full binary is not
+	// re-downloaded on every poll (N5).
+	if u.inBackoff(release.Version) {
+		u.log.Debug("agent: update backoff active", "version", release.Version)
+		return
+	}
 
 	downloadCtx, cancelDownload := context.WithTimeout(ctx, updateDownloadTimeout)
 	defer cancelDownload()
@@ -152,6 +184,7 @@ func (u *updater) checkOnce(ctx context.Context, client agentv1.UpdateServiceCli
 	if err != nil {
 		u.log.Warn("agent: update failed; the previous binary is retained",
 			"version", release.Version, "error", err)
+		u.recordFailure(release.Version)
 		return
 	}
 	u.log.Info("agent: update staged", "version", outcome.Version, "staged", outcome.Staged)
@@ -162,15 +195,59 @@ func (u *updater) checkOnce(ctx context.Context, client agentv1.UpdateServiceCli
 	// version is kept, so a failed update never makes the node claim the new
 	// version and never suppresses the retry.
 	if u.statusHealthy(outcome.Version) {
+		u.clearBackoff(outcome.Version)
 		u.setVersion(outcome.Version)
+		return
 	}
+	u.recordFailure(release.Version)
 }
 
 // statusHealthy reports whether the authoritative status records the new binary
-// as healthy for version.
+// as healthy for version within the freshness window. A stale `ok` for the same
+// version (for example from a previous install) is treated as unconfirmed.
 func (u *updater) statusHealthy(version string) bool {
 	status, err := u.applier.Status.Read()
-	return err == nil && status != nil && status.Result == updatecore.StatusOK && status.Version == version
+	if err != nil || status == nil || status.Result != updatecore.StatusOK || status.Version != version {
+		return false
+	}
+	return time.Since(status.At) <= statusFreshness
+}
+
+// inBackoff reports whether version is currently backed off.
+func (u *updater) inBackoff(version string) bool {
+	u.backoffMu.Lock()
+	defer u.backoffMu.Unlock()
+	state, ok := u.backoff[version]
+	return ok && time.Now().Before(state.until)
+}
+
+// recordFailure extends the exponential backoff for version.
+func (u *updater) recordFailure(version string) {
+	u.backoffMu.Lock()
+	defer u.backoffMu.Unlock()
+	state, ok := u.backoff[version]
+	if !ok {
+		state = &backoffState{}
+		u.backoff[version] = state
+	}
+	state.failures++
+	delay := updateBackoffBase
+	for i := 1; i < state.failures && delay < updateBackoffMax; i++ {
+		delay *= 2
+	}
+	if delay > updateBackoffMax {
+		delay = updateBackoffMax
+	}
+	state.until = time.Now().Add(delay)
+	u.log.Info("agent: backing off after a failed update",
+		"version", version, "failures", state.failures, "retry_in", delay.String())
+}
+
+// clearBackoff drops the backoff for version after a successful update.
+func (u *updater) clearBackoff(version string) {
+	u.backoffMu.Lock()
+	defer u.backoffMu.Unlock()
+	delete(u.backoff, version)
 }
 
 // isNewerVersion reports whether offered is strictly newer than current. An

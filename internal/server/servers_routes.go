@@ -138,7 +138,10 @@ type agentVersionsEnvelope struct {
 type updateAllAgentsResponse struct {
 	TargetVersion string `json:"target_version,omitempty"`
 	Agents        int    `json:"agents"`
-	Message       string `json:"message,omitempty"`
+	// Pending is the number of known agents whose reported version differs from
+	// the target.
+	Pending int    `json:"pending"`
+	Message string `json:"message,omitempty"`
 }
 
 // agentUpdateController is the optional agent-update surface of the server
@@ -149,6 +152,9 @@ type agentUpdateController interface {
 	KnownAgentVersions() []servers.AgentVersion
 	AgentRolloutVersion() string
 	StartAgentRollout(version string)
+	// AgentUpdateTarget resolves the newest agent release version from the
+	// agent release family (independent of the control plane's own version).
+	AgentUpdateTarget(ctx context.Context) (string, error)
 }
 
 // mountServerRoutes registers the authenticated node-management endpoints under
@@ -397,49 +403,63 @@ func (s *Server) handleListAgentVersions(w http.ResponseWriter, r *http.Request)
 			At:      agent.At,
 		})
 	}
-	if s.updates != nil {
-		if release, err := s.updates.Check(r.Context()); err == nil && release != nil {
-			response.LatestVersion = release.Version
-		}
+	// The latest version is the newest *agent* release, not the control
+	// plane's own version: the CP is normally updated first, so the CP view
+	// would report the fleet as current when it is not.
+	if target, err := controller.AgentUpdateTarget(r.Context()); err != nil {
+		s.logger.Warn("servers: agent target lookup failed", "error", err)
+	} else {
+		response.LatestVersion = target
 	}
 	writeJSON(w, http.StatusOK, response)
 }
 
 // handleUpdateAllAgents triggers a fleet-wide agent update rollout. It resolves
-// the latest release, records it as the rollout target and returns immediately:
-// agents converge on their next RequestUpdate poll, so the request never blocks
-// on (or dials) any node.
+// the newest *agent* release, records it as the rollout target and returns
+// immediately: agents converge on their next RequestUpdate poll, so the request
+// never blocks on (or dials) any node. The control plane's own version is
+// irrelevant — operators update the CP first, and the fleet is then behind it.
 func (s *Server) handleUpdateAllAgents(w http.ResponseWriter, r *http.Request) {
 	controller, ok := s.servers.(agentUpdateController)
 	if !ok {
 		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "agent updates are not configured"})
 		return
 	}
-	if s.updates == nil {
-		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "self-update is not configured"})
-		return
-	}
 
-	release, err := s.updates.Check(r.Context())
+	target, err := controller.AgentUpdateTarget(r.Context())
 	if err != nil {
-		s.logger.Error("servers: agent update check failed", "error", err)
+		s.logger.Error("servers: agent update target lookup failed", "error", err)
 		writeJSON(w, http.StatusBadGateway, apiError{Message: "release server error"})
 		return
 	}
-	agents := len(controller.KnownAgentVersions())
-	if release == nil {
+	if target == "" {
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "agent updates are not configured"})
+		return
+	}
+
+	agents := controller.KnownAgentVersions()
+	pending := 0
+	for _, agent := range agents {
+		if agent.Version != target {
+			pending++
+		}
+	}
+	if len(agents) > 0 && pending == 0 {
 		writeJSON(w, http.StatusOK, updateAllAgentsResponse{
-			Agents:  agents,
-			Message: "all agents are already up to date",
+			TargetVersion: target,
+			Agents:        len(agents),
+			Message:       "all known agents are already on the target version",
 		})
 		return
 	}
 
-	controller.StartAgentRollout(release.Version)
-	s.logger.Info("servers: agent update rollout started", "target_version", release.Version, "agents", agents)
+	controller.StartAgentRollout(target)
+	s.logger.Info("servers: agent update rollout started",
+		"target_version", target, "agents", len(agents), "pending", pending)
 	writeJSON(w, http.StatusOK, updateAllAgentsResponse{
-		TargetVersion: release.Version,
-		Agents:        agents,
+		TargetVersion: target,
+		Agents:        len(agents),
+		Pending:       pending,
 		Message:       "rollout queued; agents update on their next poll",
 	})
 }

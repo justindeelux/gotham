@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,9 @@ type agentFixture struct {
 	public   ed25519.PublicKey
 	artifact []byte
 	manifest updatecore.Manifest
+	// releaseHits counts releases-API requests; fail makes the API answer 500.
+	releaseHits atomic.Int64
+	fail        atomic.Bool
 }
 
 // newAgentFixture starts a release server for v1.2.0. tamperSig signs a
@@ -48,9 +52,16 @@ func newAgentFixture(t *testing.T, tamperSig bool) *agentFixture {
 	}
 	manifestName := updatecore.ManifestNameWithPrefix(AgentManifestPrefix, "amd64")
 
+	fixture := &agentFixture{public: public, artifact: artifact, manifest: manifest}
+
 	mux := http.NewServeMux()
 	var server *httptest.Server
 	mux.HandleFunc("/repos/owner/name/releases", func(w http.ResponseWriter, _ *http.Request) {
+		fixture.releaseHits.Add(1)
+		if fixture.fail.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		assets := []map[string]any{
 			{"name": agentAsset, "browser_download_url": server.URL + "/" + agentAsset, "size": len(artifact)},
 			{"name": manifestName, "browser_download_url": server.URL + "/" + manifestName, "size": len(manifestBytes)},
@@ -73,7 +84,8 @@ func newAgentFixture(t *testing.T, tamperSig bool) *agentFixture {
 	})
 	server = httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	return &agentFixture{server: server, public: public, artifact: artifact, manifest: manifest}
+	fixture.server = server
+	return fixture
 }
 
 // newTestAgentUpdater points an AgentUpdater at a fixture.
@@ -206,5 +218,85 @@ func TestAgentUpdaterFromEnvFeatureOff(t *testing.T) {
 	updater, err := AgentUpdaterFromEnv(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil || updater != nil {
 		t.Fatalf("AgentUpdaterFromEnv(feature off) = (%+v, %v), want (nil, nil)", updater, err)
+	}
+}
+
+// TestAgentUpdaterCachesReleaseAPI is M2: a fleet polling RequestUpdate must not
+// hit the release API on every call. Twenty offers within the TTL cause one
+// upstream releases fetch.
+func TestAgentUpdaterCachesReleaseAPI(t *testing.T) {
+	fixture := newAgentFixture(t, false)
+	updater := newTestAgentUpdater(t, fixture)
+
+	for i := 0; i < 20; i++ {
+		release, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64")
+		if err != nil || release == nil {
+			t.Fatalf("Offer %d = (%+v, %v), want a release", i, release, err)
+		}
+	}
+	if got := fixture.releaseHits.Load(); got != 1 {
+		t.Fatalf("release-API hits = %d, want 1 (cache must absorb the fleet)", got)
+	}
+}
+
+// TestAgentUpdaterServesStaleOnTransientFailure is M2: once a release has been
+// verified, a transient release-API failure serves the last verified release
+// rather than a silent no-update. With no cached release it still fails.
+func TestAgentUpdaterServesStaleOnTransientFailure(t *testing.T) {
+	fixture := newAgentFixture(t, false)
+	updater, err := NewAgentUpdater(AgentUpdaterConfig{
+		Repo: "owner/name", BaseURL: fixture.server.URL, Channel: ChannelStable,
+		PublicKey: fixture.public, Client: fixture.server.Client(),
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		CacheTTL: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewAgentUpdater: %v", err)
+	}
+
+	if _, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64"); err != nil {
+		t.Fatalf("first Offer: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond) // let the cache TTL lapse
+	fixture.fail.Store(true)
+
+	release, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64")
+	if err != nil || release == nil || release.Version != "v1.2.0" {
+		t.Fatalf("Offer after failure = (%+v, %v), want the stale v1.2.0", release, err)
+	}
+
+	// With no cache at all, a failure must still be an error (fail closed).
+	fresh, err := NewAgentUpdater(AgentUpdaterConfig{
+		Repo: "owner/name", BaseURL: fixture.server.URL, Channel: ChannelStable,
+		PublicKey: fixture.public, Client: fixture.server.Client(),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewAgentUpdater: %v", err)
+	}
+	if _, err := fresh.Offer(context.Background(), "v1.0.0", "linux", "amd64"); !errors.Is(err, ErrHTTP) {
+		t.Fatalf("Offer(no cache, failure) = %v, want ErrHTTP", err)
+	}
+}
+
+// TestAgentUpdaterTargetVersion proves the fleet target is resolved from the
+// agent release family, independent of any agent's running version.
+func TestAgentUpdaterTargetVersion(t *testing.T) {
+	fixture := newAgentFixture(t, false)
+	updater := newTestAgentUpdater(t, fixture)
+
+	target, err := updater.TargetVersion(context.Background())
+	if err != nil || target != "v1.2.0" {
+		t.Fatalf("TargetVersion = (%q, %v), want v1.2.0", target, err)
+	}
+	if got := fixture.releaseHits.Load(); got != 1 {
+		t.Fatalf("release-API hits = %d, want 1", got)
+	}
+	// A second call is served from the cache.
+	if _, err := updater.TargetVersion(context.Background()); err != nil {
+		t.Fatalf("TargetVersion (cached): %v", err)
+	}
+	if got := fixture.releaseHits.Load(); got != 1 {
+		t.Fatalf("release-API hits = %d, want 1 after a cached call", got)
 	}
 }

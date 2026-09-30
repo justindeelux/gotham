@@ -81,7 +81,7 @@ func TestTwoAgentsUpdateAllReportNewVersion(t *testing.T) {
 		if err := os.WriteFile(target, []byte("old "+node), 0o755); err != nil {
 			t.Fatalf("write target: %v", err)
 		}
-		cfg := updaterTestConfig(t, target, noopAgentRestart)
+		cfg := updaterTestConfig(t, target, healthyRestart(filepath.Join(dir, "update.status"), testAgentVersion))
 		cfg.CPAddr = "passthrough:///bufnet"
 		cfg.NodeID = node
 		cfg.CertDir = dir

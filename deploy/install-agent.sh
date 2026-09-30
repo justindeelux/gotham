@@ -73,6 +73,17 @@ log() {
     echo "==> $*"
 }
 
+# The installer needs its sibling files (the shared wrapper, the agent wrapper
+# config and the sudoers installer). Fail early with a clear message rather than
+# aborting after the user has been created and the binary installed.
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+for sibling in gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh; do
+    if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
+        echo "install-agent.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
+        exit 2
+    fi
+done
+
 detect_arch() {
     case "$(uname -m)" in
         x86_64 | amd64)
@@ -170,8 +181,6 @@ fi
 # Self-update chain: the shared wrapper installed under the agent name, its
 # root-owned configuration, the root-owned status directory and the sudoers
 # rule. Mirror of the control-plane install in deploy/README.md.
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-
 log "installing the update wrapper ${WRAPPER_PATH}"
 run mkdir -p /usr/libexec/gotham
 if [ "${DRY_RUN}" -eq 1 ]; then

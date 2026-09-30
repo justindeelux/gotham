@@ -215,11 +215,13 @@ func (g *Gateway) Heartbeat(stream grpc.ClientStreamingServer[agentv1.HeartbeatR
 // never unsigned or unverified. It never fails the RPC for a release-server or
 // configuration problem: the agent is told "no update" and the detail is
 // logged.
+//
+// It does not record the reported version: this RPC carries no authenticated
+// node identity (the listener verifies a client certificate only when one is
+// presented, and agents present none), so the version map is fed exclusively by
+// heartbeats, which resolve the node in the registry first.
 func (g *Gateway) RequestUpdate(ctx context.Context, req *agentv1.UpdateRequest) (*agentv1.UpdateResponse, error) {
 	nodeID := nodeIDFromContext(ctx)
-	if nodeID != "" {
-		g.service.RecordAgentVersion(nodeID, req.GetAgentVersion())
-	}
 
 	release, rollout, err := g.service.OfferAgentUpdate(ctx, req.GetAgentVersion(), req.GetOs(), req.GetArch())
 	switch {

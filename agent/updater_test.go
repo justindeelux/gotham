@@ -98,6 +98,34 @@ func noopAgentRestart(context.Context) (func() error, error) {
 	return func() error { return nil }, nil
 }
 
+// healthyRestart models the privileged wrapper succeeding: it records an `ok`
+// status for version in the authoritative status file and reports the wrapper
+// exited cleanly. This is what a real wrapper writes after it restarts the unit
+// and the health check passes.
+func healthyRestart(statusPath, version string) updatecore.RestartFunc {
+	return func(context.Context) (func() error, error) {
+		if err := updatecore.NewStatusStore(statusPath).Write(updatecore.Status{
+			Result: updatecore.StatusOK, Version: version,
+		}); err != nil {
+			return nil, err
+		}
+		return func() error { return nil }, nil
+	}
+}
+
+// rolledBackRestart models a wrapper that restarted, failed its health check,
+// restored the old binary and recorded rolled_back.
+func rolledBackRestart(statusPath, version string) updatecore.RestartFunc {
+	return func(context.Context) (func() error, error) {
+		if err := updatecore.NewStatusStore(statusPath).Write(updatecore.Status{
+			Result: updatecore.StatusRolledBack, Version: version, Detail: "health check failed",
+		}); err != nil {
+			return nil, err
+		}
+		return func() error { return nil }, nil
+	}
+}
+
 // fakeUpdateClient is a minimal UpdateServiceClient.
 type fakeUpdateClient struct {
 	resp *agentv1.UpdateResponse
@@ -126,7 +154,8 @@ func updaterTestConfig(t *testing.T, target string, restart updatecore.RestartFu
 }
 
 // TestAgentUpdaterAppliesVerifiedOffer is the agent end to end: a CP offer is
-// downloaded, verified, swapped (keeping .old) and the new version is reported.
+// downloaded, verified, swapped (keeping .old) and, once the wrapper records
+// the new binary healthy, the new version is reported.
 func TestAgentUpdaterAppliesVerifiedOffer(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -135,7 +164,8 @@ func TestAgentUpdaterAppliesVerifiedOffer(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
 		t.Fatalf("write target: %v", err)
 	}
-	runner := NewAgent(updaterTestConfig(t, target, noopAgentRestart), discardLogger(), nil)
+	restart := healthyRestart(filepath.Join(filepath.Dir(target), "update.status"), testAgentVersion)
+	runner := NewAgent(updaterTestConfig(t, target, restart), discardLogger(), nil)
 	if runner.updater == nil {
 		t.Fatal("updater is nil with a configured key and binary path")
 	}
@@ -148,8 +178,72 @@ func TestAgentUpdaterAppliesVerifiedOffer(t *testing.T) {
 	if got := readFileString(t, target+updatecore.OldSuffix); got != "old binary" {
 		t.Fatalf("retained old binary = %q", got)
 	}
-	if runner.Version() != "v1.2.0" {
-		t.Fatalf("Version() = %q, want v1.2.0", runner.Version())
+	if runner.Version() != testAgentVersion {
+		t.Fatalf("Version() = %q, want %s", runner.Version(), testAgentVersion)
+	}
+}
+
+// TestAgentUpdaterKeepsVersionWhenWrapperRollsBack is M1: a wrapper that rolls
+// back must not make the node report the new version.
+func TestAgentUpdaterKeepsVersionWhenWrapperRollsBack(t *testing.T) {
+	release := newAgentReleaseServer(t, false)
+	setTestPublicKey(t, release.public)
+
+	target := filepath.Join(t.TempDir(), "gotham-agent")
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	restart := rolledBackRestart(filepath.Join(filepath.Dir(target), "update.status"), testAgentVersion)
+	runner := NewAgent(updaterTestConfig(t, target, restart), discardLogger(), nil)
+
+	runner.updater.checkOnce(context.Background(), &fakeUpdateClient{resp: release.offer()})
+
+	if runner.Version() != testAgentCurrent {
+		t.Fatalf("Version() = %q, want the running %s after a rollback", runner.Version(), testAgentCurrent)
+	}
+}
+
+// TestAgentUpdaterRefusesDowngrade is M3: a validly signed older release must
+// not roll the agent back.
+func TestAgentUpdaterRefusesDowngrade(t *testing.T) {
+	release := newAgentReleaseServer(t, false)
+	setTestPublicKey(t, release.public)
+
+	target := filepath.Join(t.TempDir(), "gotham-agent")
+	if err := os.WriteFile(target, []byte("v9 binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	cfg := updaterTestConfig(t, target, noopAgentRestart)
+	cfg.Version = "v9.0.0"
+	runner := NewAgent(cfg, discardLogger(), nil)
+
+	runner.updater.checkOnce(context.Background(), &fakeUpdateClient{resp: release.offer()})
+
+	if got := readFileString(t, target); got != "v9 binary" {
+		t.Fatalf("target = %q, want it unchanged after a downgrade offer", got)
+	}
+	if runner.Version() != "v9.0.0" {
+		t.Fatalf("Version() = %q, want v9.0.0", runner.Version())
+	}
+}
+
+// TestAgentUpdaterRefusesSameVersion is M3: an equal-version offer is refused.
+func TestAgentUpdaterRefusesSameVersion(t *testing.T) {
+	release := newAgentReleaseServer(t, false)
+	setTestPublicKey(t, release.public)
+
+	target := filepath.Join(t.TempDir(), "gotham-agent")
+	if err := os.WriteFile(target, []byte("current binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	cfg := updaterTestConfig(t, target, noopAgentRestart)
+	cfg.Version = testAgentVersion
+	runner := NewAgent(cfg, discardLogger(), nil)
+
+	runner.updater.checkOnce(context.Background(), &fakeUpdateClient{resp: release.offer()})
+
+	if got := readFileString(t, target); got != "current binary" {
+		t.Fatalf("target = %q, want it unchanged for an equal-version offer", got)
 	}
 }
 

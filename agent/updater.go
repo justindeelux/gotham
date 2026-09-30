@@ -17,8 +17,13 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// updateCallTimeout bounds one RequestUpdate RPC and the download it triggers.
-const updateCallTimeout = 30 * time.Second
+// Timeouts. The RPC is short; the download it triggers (a full binary over a
+// possibly slow link) is bounded separately and much longer, so a slow rollout
+// does not fail on every poll.
+const (
+	updateRPCTimeout      = 15 * time.Second
+	updateDownloadTimeout = 10 * time.Minute
+)
 
 // updater polls the control plane for a verified agent update and applies it.
 //
@@ -67,6 +72,16 @@ func newUpdater(cfg Config, log *slog.Logger, version func() string, setVersion 
 	} else if restored {
 		log.Warn("agent: restored the previous binary after an interrupted update")
 	}
+	// Resume a staged update left behind by a crash, reboot or OOM during the
+	// wrapper's health window, exactly as the control plane does at startup. A
+	// staged marker otherwise leaves the unproven binary running and refuses
+	// every later update with ErrUpdatePending forever. ResumeStaged uses the
+	// non-blocking lock, so it never waits for a wrapper that already owns the
+	// outcome, and it rewrites the marker so it never loops. The health endpoint
+	// is already listening by now (main starts it before NewAgent).
+	if err := applier.ResumeStaged(context.Background()); err != nil {
+		log.Warn("agent: could not resume a staged update", "error", err)
+	}
 	return &updater{
 		cfg:        cfg,
 		log:        log,
@@ -95,14 +110,13 @@ func (u *updater) run(ctx context.Context, client agentv1.UpdateServiceClient) {
 // one is offered, applies it. A plain offer is only applied when unattended
 // auto-update is enabled; an operator-triggered rollout is always applied.
 func (u *updater) checkOnce(ctx context.Context, client agentv1.UpdateServiceClient) {
-	callCtx, cancel := context.WithTimeout(ctx, updateCallTimeout)
-	defer cancel()
-
-	resp, err := client.RequestUpdate(callCtx, &agentv1.UpdateRequest{
+	rpcCtx, cancel := context.WithTimeout(ctx, updateRPCTimeout)
+	resp, err := client.RequestUpdate(rpcCtx, &agentv1.UpdateRequest{
 		AgentVersion: u.version(),
 		Os:           runtime.GOOS,
 		Arch:         runtime.GOARCH,
 	})
+	cancel()
 	if err != nil {
 		if ctx.Err() == nil {
 			u.log.Warn("agent: update check failed", "error", err)
@@ -123,17 +137,54 @@ func (u *updater) checkOnce(ctx context.Context, client agentv1.UpdateServiceCli
 		u.log.Warn("agent: refused an incomplete update offer", "error", err)
 		return
 	}
-	outcome, err := u.applier.Apply(callCtx, release)
+	// Monotonic guard: a compromised or buggy CP must not roll the fleet back to
+	// an older, still validly signed release. `dev`/unparsable versions fail
+	// closed. The local `.old` rollback stays the supported path.
+	if !isNewerVersion(release.Version, u.version()) {
+		u.log.Warn("agent: refusing a non-newer update offer",
+			"offered", release.Version, "running", u.version())
+		return
+	}
+
+	downloadCtx, cancelDownload := context.WithTimeout(ctx, updateDownloadTimeout)
+	defer cancelDownload()
+	outcome, err := u.applier.Apply(downloadCtx, release)
 	if err != nil {
 		u.log.Warn("agent: update failed; the previous binary is retained",
 			"version", release.Version, "error", err)
 		return
 	}
 	u.log.Info("agent: update staged", "version", outcome.Version, "staged", outcome.Staged)
-	// Record the new version so a reconnect (or a test without a real restart)
-	// reports it on the next heartbeat. A failed update never reaches here and
-	// the old version keeps being reported.
-	u.setVersion(outcome.Version)
+	// Do not trust the launch: adopt the new version only when the durable,
+	// root-owned status proves the new binary healthy. On a real restart this
+	// process is replaced and the new process reports its own build version; on
+	// rolled_back/rollback_failed/wrapper_failed/still-staged the running
+	// version is kept, so a failed update never makes the node claim the new
+	// version and never suppresses the retry.
+	if u.statusHealthy(outcome.Version) {
+		u.setVersion(outcome.Version)
+	}
+}
+
+// statusHealthy reports whether the authoritative status records the new binary
+// as healthy for version.
+func (u *updater) statusHealthy(version string) bool {
+	status, err := u.applier.Status.Read()
+	return err == nil && status != nil && status.Result == updatecore.StatusOK && status.Version == version
+}
+
+// isNewerVersion reports whether offered is strictly newer than current. An
+// unparsable version on either side fails closed (not newer).
+func isNewerVersion(offered, current string) bool {
+	offeredVersion, err := updatecore.ParseVersion(offered)
+	if err != nil {
+		return false
+	}
+	currentVersion, err := updatecore.ParseVersion(current)
+	if err != nil {
+		return false
+	}
+	return offeredVersion.Compare(currentVersion) > 0
 }
 
 // releaseFromOffer turns a CP offer into the updatecore release the applier

@@ -348,9 +348,75 @@ func TestGatewayHeartbeatUpdatesMetrics(t *testing.T) {
 	}
 }
 
+// TestGatewayHeartbeatRecordsAgentVersion proves the version map is fed by the
+// heartbeat path (which resolves the node first) and refuses an unknown node,
+// and that RequestUpdate does not write it.
+func TestGatewayHeartbeatRecordsAgentVersion(t *testing.T) {
+	service, st := newTestService(t)
+	conn := startTestGateway(t, service)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := agentv1.NewAgentServiceClient(conn)
+
+	nodeID := uniqueNodeID("node-agentver")
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	row, err := st.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = st.DeleteServer(cleanupCtx, row.ID)
+	})
+
+	// A registered node's heartbeat records its version.
+	stream, err := client.Heartbeat(metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, nodeID))
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if err := stream.Send(&agentv1.HeartbeatRequest{AgentVersion: "v1.2.0", SentAt: timestamppb.Now()}); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
+	}
+	if _, err := stream.CloseAndRecv(); err != nil {
+		t.Fatalf("close and recv: %v", err)
+	}
+	found := false
+	for _, version := range service.KnownAgentVersions() {
+		if version.NodeID == nodeID && version.Version == "v1.2.0" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("version map = %+v, want %s=v1.2.0", service.KnownAgentVersions(), nodeID)
+	}
+
+	// An unknown node's heartbeat is refused (ErrNotFound) and never recorded.
+	unknown := uniqueNodeID("node-unknown")
+	stream, err = client.Heartbeat(metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, unknown))
+	if err != nil {
+		t.Fatalf("Heartbeat(unknown): %v", err)
+	}
+	if err := stream.Send(&agentv1.HeartbeatRequest{AgentVersion: "v9.9.9", SentAt: timestamppb.Now()}); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
+	}
+	if _, err := stream.CloseAndRecv(); err != nil {
+		t.Fatalf("close and recv: %v", err)
+	}
+	for _, version := range service.KnownAgentVersions() {
+		if version.NodeID == unknown {
+			t.Fatalf("unknown node %s was recorded: %+v", unknown, version)
+		}
+	}
+}
+
 // fakeAgentUpdater is a controllable AgentUpdateOfferer for gateway tests.
 type fakeAgentUpdater struct {
 	release *updatecore.Release
+	target  string
 	err     error
 	calls   int
 }
@@ -358,6 +424,19 @@ type fakeAgentUpdater struct {
 func (f *fakeAgentUpdater) Offer(context.Context, string, string, string) (*updatecore.Release, error) {
 	f.calls++
 	return f.release, f.err
+}
+
+func (f *fakeAgentUpdater) TargetVersion(context.Context) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	if f.target != "" {
+		return f.target, nil
+	}
+	if f.release != nil {
+		return f.release.Version, nil
+	}
+	return "", nil
 }
 
 func TestGatewayRequestUpdate(t *testing.T) {
@@ -397,8 +476,10 @@ func TestGatewayRequestUpdate(t *testing.T) {
 		if resp.GetRollout() {
 			t.Error("rollout = true without an operator trigger")
 		}
-		if versions := service.KnownAgentVersions(); len(versions) != 1 || versions[0].Version != "v1.0.0" {
-			t.Errorf("version map = %+v, want the reported v1.0.0", versions)
+		// M2: RequestUpdate carries no authenticated node identity, so it must
+		// not write the version map; only the heartbeat path does.
+		if versions := service.KnownAgentVersions(); len(versions) != 0 {
+			t.Errorf("version map = %+v, want empty (RequestUpdate must not record)", versions)
 		}
 	})
 

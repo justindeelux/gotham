@@ -28,6 +28,8 @@
 #   GOTHAM_UPDATE_BINARY   fixed target binary (default /var/lib/gotham/bin/gotham)
 #   GOTHAM_UPDATE_LOCK     update lock shared with the wrapper (default /var/lib/gotham/update.lock)
 #   GOTHAM_UPDATE_CURRENT  override the running version (wrappers/tests)
+#   GOTHAM_UPDATE_OFFER_CACHE_TTL  agent-offer cache TTL (default 10m); bounds
+#                          the release-API load from a polling fleet
 #
 # The restart wrapper (fixed, root-owned, no arguments) and its sudoers rule
 # live in deploy/; see deploy/README.md for the privilege model and layout.

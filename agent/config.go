@@ -48,7 +48,7 @@ const (
 	// privileges: the binary and its hardlink backup live in the agent-writable
 	// StateDirectory, the wrapper and its config are root-owned, and the
 	// authoritative status is root-owned in a directory the agent cannot write.
-	defaultAgentBinary       = "/usr/local/bin/gotham-agent"
+	defaultAgentBinary       = "/var/lib/gotham-agent/bin/gotham-agent"
 	defaultAgentUpdateScript = "/usr/libexec/gotham/gotham-agent-update"
 	defaultAgentStatusPath   = "/var/lib/gotham-agent-updater/update.status"
 	defaultAgentPendingPath  = "/var/lib/gotham-agent/update.pending"

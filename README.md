@@ -130,6 +130,7 @@ request never dials or blocks on a node. The control plane only serves update
 material over the mTLS agent channel; the HTTP API only triggers.
 
 ## Naming conventions
+
 | Item | Convention | Example |
 |---|---|---|
 | Product | Gotham | — |

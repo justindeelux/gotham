@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -15,15 +16,22 @@ import (
 // agent-update surface (BE-9.2).
 type fakeAgentUpdateRegistry struct {
 	*fakeServerService
-	versions []servers.AgentVersion
-	rollout  string
+	versions  []servers.AgentVersion
+	rollout   string
+	target    string
+	targetErr error
 }
 
 func (f *fakeAgentUpdateRegistry) KnownAgentVersions() []servers.AgentVersion { return f.versions }
 func (f *fakeAgentUpdateRegistry) AgentRolloutVersion() string                { return f.rollout }
 func (f *fakeAgentUpdateRegistry) StartAgentRollout(version string)           { f.rollout = version }
+func (f *fakeAgentUpdateRegistry) AgentUpdateTarget(context.Context) (string, error) {
+	return f.target, f.targetErr
+}
 
-// fakeUpdatesService is a minimal updates.Service for handler tests.
+// fakeUpdatesService is a minimal updates.Service for handler tests. The agent
+// update surface must not depend on it (it reports the control plane's own
+// version), so tests set it to prove independence.
 type fakeUpdatesService struct {
 	release *updates.Release
 	err     error
@@ -52,9 +60,12 @@ func TestAgentUpdateRoutes(t *testing.T) {
 			{NodeID: "node-a", Version: "v1.0.0", At: time.Now().UTC()},
 			{NodeID: "node-b", Version: "v1.1.0", At: time.Now().UTC()},
 		},
+		target: "v1.2.0",
 	}
 	s := newServerRoutesTestServer(t, fake)
-	s.updates = &fakeUpdatesService{release: &updates.Release{Version: "v1.2.0"}}
+	// The control plane is already current: its own self-update check finds
+	// nothing. H1: update-all must still roll out to the agents behind it.
+	s.updates = &fakeUpdatesService{release: nil}
 
 	rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/agents", "", authHeader)
 	if rec.Code != http.StatusOK {
@@ -76,21 +87,24 @@ func TestAgentUpdateRoutes(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if result.TargetVersion != "v1.2.0" || result.Agents != 2 {
+	if result.TargetVersion != "v1.2.0" || result.Agents != 2 || result.Pending != 2 {
 		t.Fatalf("update-all = %+v", result)
 	}
 	if fake.rollout != "v1.2.0" {
-		t.Fatalf("rollout = %q, want v1.2.0", fake.rollout)
+		t.Fatalf("rollout = %q, want v1.2.0 (CP current + agents behind ⇒ rollout)", fake.rollout)
 	}
 }
 
-// TestAgentUpdateRoutesUpToDate proves update-all reports a no-op when nothing
-// is newer.
+// TestAgentUpdateRoutesUpToDate proves update-all is a no-op when every known
+// agent is already on the target.
 func TestAgentUpdateRoutesUpToDate(t *testing.T) {
 	t.Setenv(PlatformAdminsEnv, "user@example.com")
-	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService()}
+	fake := &fakeAgentUpdateRegistry{
+		fakeServerService: newFakeServerService(),
+		versions:          []servers.AgentVersion{{NodeID: "node-a", Version: "v1.2.0", At: time.Now().UTC()}},
+		target:            "v1.2.0",
+	}
 	s := newServerRoutesTestServer(t, fake)
-	s.updates = &fakeUpdatesService{release: nil}
 
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", authHeader)
 	if rec.Code != http.StatusOK {
@@ -100,17 +114,42 @@ func TestAgentUpdateRoutesUpToDate(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if result.TargetVersion != "" || fake.rollout != "" {
+	if result.Pending != 0 || fake.rollout != "" {
 		t.Fatalf("result = %+v rollout=%q, want a no-op", result, fake.rollout)
+	}
+}
+
+// TestAgentUpdateRoutesNoAgentRelease proves update-all reports 503 when the
+// agent updater is disabled (no key / FEATURE_UPDATES=false), rather than
+// silently no-op'ing.
+func TestAgentUpdateRoutesNoAgentRelease(t *testing.T) {
+	t.Setenv(PlatformAdminsEnv, "user@example.com")
+	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService(), target: ""}
+	s := newServerRoutesTestServer(t, fake)
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", authHeader)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAgentUpdateRoutesTargetError proves a release-server failure is a 502.
+func TestAgentUpdateRoutesTargetError(t *testing.T) {
+	t.Setenv(PlatformAdminsEnv, "user@example.com")
+	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService(), targetErr: errors.New("releases API down")}
+	s := newServerRoutesTestServer(t, fake)
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", authHeader)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 
 // TestAgentUpdateRoutesRequireOperator proves a plain session is refused.
 func TestAgentUpdateRoutesRequireOperator(t *testing.T) {
 	t.Setenv(PlatformAdminsEnv, "")
-	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService()}
+	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService(), target: "v1.2.0"}
 	s := newServerRoutesTestServer(t, fake)
-	s.updates = &fakeUpdatesService{release: &updates.Release{Version: "v1.2.0"}}
 
 	if rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/agents", "", authHeader); rec.Code != http.StatusForbidden {
 		t.Errorf("list status = %d, want 403", rec.Code)

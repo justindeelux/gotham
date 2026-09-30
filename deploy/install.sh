@@ -224,7 +224,10 @@ fi
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-install.XXXXXX")"
 PUBKEY_FILE="${WORK_DIR}/release.pub"
 TMP_BINARY="${WORK_DIR}/${BINARY_NAME}"
-trap 'rm -rf "${WORK_DIR}"' EXIT INT TERM
+# Clean up the private scratch dir on normal exit, and abort on a signal (a
+# cleanup-only INT/TERM trap would let the install carry on).
+trap 'rm -rf "${WORK_DIR}"' EXIT
+trap 'exit 1' INT TERM
 materialize_public_key "${PUBKEY_SOURCE}" "${PUBKEY_FILE}"
 
 if [ "${DRY_RUN}" -eq 1 ]; then
@@ -301,8 +304,12 @@ if [ "${DRY_RUN}" -eq 0 ]; then
         env_tmp="${ENV_FILE}.tmp.$$"
         # The temp copy is root-only and holds the secret key: remove it if any
         # step below aborts. The success path moves it into place first, so this
-        # is a no-op then.
-        trap 'rm -f "${env_tmp}"' EXIT INT TERM
+        # is a no-op then. INT/TERM must abort, not merely clean up: a trap that
+        # only removes the temp would let the subshell resume and `mv` a temp
+        # holding just the operator lines over gotham.env, silently dropping the
+        # managed keys and the secret.
+        trap 'rm -f "${env_tmp}"' EXIT
+        trap 'exit 1' INT TERM
         {
             echo "# Gotham control-plane environment. Read by gotham.service (EnvironmentFile)."
             echo "GOTHAM_DATABASE_DSN=${DSN}"

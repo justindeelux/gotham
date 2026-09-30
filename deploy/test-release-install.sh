@@ -256,6 +256,19 @@ if git -C "${REPO_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
 fi
 echo "PASS: installer scripts are executable (N1)"
 
+# ---- I4: no cleanup-only INT/TERM trap (a signal must abort) -----------------
+# A `trap '…' EXIT INT TERM` cleans up but lets the shell carry on after a
+# signal; both scripts must clean up on EXIT and exit on INT/TERM.
+for installer in "${SCRIPT_DIR}/install.sh" "${AGENT_INSTALLER}"; do
+    if grep -qE "trap '.*' EXIT INT TERM" "${installer}"; then
+        echo "FAIL: ${installer} has a cleanup-only EXIT/INT/TERM trap" >&2
+        exit 1
+    fi
+    grep -q "trap 'exit 1' INT TERM" "${installer}" \
+        || { echo "FAIL: ${installer} does not abort on INT/TERM" >&2; exit 1; }
+done
+echo "PASS: no cleanup-only signal trap (I4)"
+
 # ---- B1: re-install with no operator additions succeeds ---------------------
 # Regression: the preservation pipeline filtered every managed key and the
 # gotham.env header, so on a host that never added operator settings the final
@@ -333,6 +346,43 @@ if ls "${B1_ROOT}"/etc/gotham/gotham.env.tmp.* >/dev/null 2>&1; then
     exit 1
 fi
 echo "PASS: no temp gotham.env survives an abort (I3)"
+
+# ---- F1: a signal must abort, not rewrite gotham.env -------------------------
+# A cleanup-only INT/TERM trap would resume the env subshell and `mv` a temp
+# holding only the operator lines over gotham.env, dropping the managed keys and
+# the secret (regression from the first I3 trap). The shim TERMs the env
+# subshell during the filter and then runs the real grep, so the signal lands
+# exactly in that window.
+echo "==> a signal during the env write aborts without wiping gotham.env (F1)"
+cp "${B1_ENV}" "${SCRATCH}/f1-env-before"
+cat >"${SCRATCH}/shim/grep" <<GREP
+#!/bin/sh
+case "\$*" in
+    *'GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH)='*)
+        # TERM the env subshell (the grandparent of this grep, skipping the
+        # command-substitution subshell), then run the real grep.
+        gp="\$(ps -o ppid= -p "\$PPID" 2>/dev/null | tr -d ' ')"
+        [ -n "\${gp}" ] && kill -TERM "\${gp}" 2>/dev/null
+        ;;
+esac
+exec "${REAL_GREP}" "\$@"
+GREP
+chmod +x "${SCRATCH}/shim/grep"
+SAVED_PATH="${PATH}"
+PATH="${SCRATCH}/shim:${PATH}"
+if run_install_at "${B1_ROOT}" >"${SCRATCH}/f1.log" 2>&1; then
+    PATH="${SAVED_PATH}"
+    echo "FAIL: a TERM during the env write did not abort the install (F1)" >&2
+    exit 1
+fi
+PATH="${SAVED_PATH}"
+cmp -s "${SCRATCH}/f1-env-before" "${B1_ENV}" \
+    || { echo "FAIL: the aborted install rewrote gotham.env (F1)" >&2; exit 1; }
+if ls "${B1_ROOT}"/etc/gotham/gotham.env.tmp.* >/dev/null 2>&1; then
+    echo "FAIL: a temp gotham.env survived the TERM abort (F1)" >&2
+    exit 1
+fi
+echo "PASS: a signal during the env write aborts without wiping gotham.env (F1)"
 
 # ---- M2: re-install preserves operator settings (b) and managed DSN (c) ------
 ENV_FILE="${ROOT}/etc/gotham/gotham.env"

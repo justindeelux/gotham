@@ -150,7 +150,10 @@ fi
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-agent-install.XXXXXX")"
 PUBKEY_FILE="${WORK_DIR}/release.pub"
 TMP_BINARY="${WORK_DIR}/${BINARY_NAME}"
-trap 'rm -rf "${WORK_DIR}"' EXIT INT TERM
+# Clean up the private scratch dir on normal exit, and abort on a signal (a
+# cleanup-only INT/TERM trap would let the install carry on).
+trap 'rm -rf "${WORK_DIR}"' EXIT
+trap 'exit 1' INT TERM
 
 log "installing ${BINARY_NAME} ${VERSION} for linux/${ARCH}"
 log "downloading ${RELEASE_BASE}/gotham-agent-linux-${ARCH}"

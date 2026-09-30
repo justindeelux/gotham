@@ -41,6 +41,8 @@ func (f *fakeService) Rollback() error { return nil }
 
 func (f *fakeService) Reset() error { f.resets++; return nil }
 
+func (f *fakeService) Resume(context.Context) error { return nil }
+
 func (f *fakeService) LastStatus() (*Status, error) { return f.lastStatus, nil }
 
 func (f *fakeService) StartAuto(context.Context) {}

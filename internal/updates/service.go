@@ -46,6 +46,9 @@ type Service interface {
 	Rollback() error
 	// Reset clears a stale pending marker (operator reset path).
 	Reset() error
+	// Resume relaunches a staged update's wrapper at startup so a crash during
+	// the health window is health-checked or rolled back.
+	Resume(ctx context.Context) error
 	// LastStatus returns the durable outcome of the most recent update attempt.
 	LastStatus() (*Status, error)
 	// StartAuto launches the scheduled check/apply loop when enabled.
@@ -215,6 +218,11 @@ func (s *service) Rollback() error { return s.applier.Rollback() }
 // touch the binary; an operator uses it only after confirming no wrapper is
 // running.
 func (s *service) Reset() error { return s.pending.Remove() }
+
+// Resume relaunches the wrapper for a staged update left over from a crash,
+// reboot or OOM during the health window (M2). It never loops: the marker is
+// rewritten to resuming before the launch.
+func (s *service) Resume(ctx context.Context) error { return s.applier.ResumeStaged(ctx) }
 
 // LastStatus returns the current durable outcome: the pending marker while an
 // update is staged or its launcher failed, otherwise the authoritative

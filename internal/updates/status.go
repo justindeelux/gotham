@@ -28,6 +28,9 @@ const (
 	// StatusWrapperFailed means the privileged wrapper could not be launched
 	// (or exited before it could record a result).
 	StatusWrapperFailed = "wrapper_failed"
+	// StatusResuming means a staged update was re-launched at startup (crash
+	// or reboot during the health window) and its outcome is still pending.
+	StatusResuming = "resuming"
 )
 
 // Deployment paths.

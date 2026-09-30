@@ -1,13 +1,16 @@
 package updates
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // wrapperResult captures the outcome of one gotham-update.sh run.
@@ -52,6 +55,7 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	}
 	writeShim(t, filepath.Join(fakeBin, "systemctl"), env.systemctlExit)
 	writeCurlShim(t, filepath.Join(fakeBin, "curl"), env.health)
+	writeShim(t, filepath.Join(fakeBin, "flock"), 0)
 
 	target := filepath.Join(dir, "bin", "gotham")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -74,6 +78,9 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 		t.Fatalf("write pending: %v", err)
 	}
 	lock := filepath.Join(dir, "update.lock")
+	if err := os.WriteFile(lock, nil, 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
 	conf := filepath.Join(dir, "updater.conf")
 	confBody := strings.Join([]string{
 		"GOTHAM_BINARY=" + target,
@@ -96,7 +103,9 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	if err != nil {
 		t.Fatalf("resolve script: %v", err)
 	}
-	cmd := exec.Command("sh", script)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", script)
 	cmd.Env = append(os.Environ(),
 		"GOTHAM_UPDATER_CONF="+conf,
 		"WRAPPER_TEST_TARGET="+target,
@@ -303,6 +312,97 @@ func TestWrapperStatusWriteIsSafe(t *testing.T) {
 	if !strings.Contains(body, "SUDO_USER") {
 		t.Error("wrapper does not refuse environment overrides under sudo")
 	}
+	if !strings.Contains(body, `exec 9<`) {
+		t.Error("wrapper does not open the lock read-only")
+	}
+	if strings.Contains(body, `exec 9>`) {
+		t.Error("wrapper still opens the lock for writing (truncation risk)")
+	}
+}
+
+// TestWrapperRefusesSymlinkedLock reproduces N1: a Gotham-planted update.lock
+// symlink must not make root truncate/modify the target.
+func TestWrapperRefusesSymlinkedLock(t *testing.T) {
+	victimDir := t.TempDir()
+	victim := filepath.Join(victimDir, "victim-root-only")
+	if err := os.WriteFile(victim, []byte("root-only contents"), 0o600); err != nil {
+		t.Fatalf("write victim: %v", err)
+	}
+
+	result := runWrapper(t, wrapperEnv{
+		systemctlExit: 0,
+		health:        healthAlwaysOK,
+		setup: func(dir, _ string, _ string) {
+			lock := filepath.Join(dir, "update.lock")
+			if err := os.Remove(lock); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("remove lock: %v", err)
+			}
+			if err := os.Symlink(victim, lock); err != nil {
+				t.Fatalf("plant lock symlink: %v", err)
+			}
+		},
+	})
+
+	if got := readFile(t, victim); got != "root-only contents" {
+		t.Fatalf("victim = %q (size %d), want it byte-identical", got, len(got))
+	}
+	if !strings.Contains(result.output, "refusing to lock") {
+		t.Errorf("output = %q, want a lock refusal", result.output)
+	}
+	if !strings.Contains(result.status, "result=wrapper_failed") {
+		t.Errorf("status = %q, want wrapper_failed", result.status)
+	}
+}
+
+// TestWrapperHardensPendingRead reproduces L1: a symlinked or FIFO pending
+// marker must not leak a root-only version line or hang root.
+func TestWrapperHardensPendingRead(t *testing.T) {
+	t.Run("symlink", func(t *testing.T) {
+		victimDir := t.TempDir()
+		victim := filepath.Join(victimDir, "secret")
+		if err := os.WriteFile(victim, []byte("version=ROOT-SECRET\n"), 0o600); err != nil {
+			t.Fatalf("write victim: %v", err)
+		}
+		result := runWrapper(t, wrapperEnv{
+			systemctlExit: 0,
+			health:        healthAlwaysOK,
+			setup: func(dir, _ string, _ string) {
+				pending := filepath.Join(dir, "update.pending")
+				if err := os.Remove(pending); err != nil && !os.IsNotExist(err) {
+					t.Fatalf("remove pending: %v", err)
+				}
+				if err := os.Symlink(victim, pending); err != nil {
+					t.Fatalf("plant pending symlink: %v", err)
+				}
+			},
+		})
+		if strings.Contains(result.status, "ROOT-SECRET") {
+			t.Fatalf("status leaked the root-only version: %q", result.status)
+		}
+		if got := readFile(t, victim); got != "version=ROOT-SECRET\n" {
+			t.Errorf("victim = %q, want it unchanged", got)
+		}
+	})
+
+	t.Run("fifo", func(t *testing.T) {
+		result := runWrapper(t, wrapperEnv{
+			systemctlExit: 0,
+			health:        healthAlwaysOK,
+			setup: func(dir, _ string, _ string) {
+				pending := filepath.Join(dir, "update.pending")
+				if err := os.Remove(pending); err != nil && !os.IsNotExist(err) {
+					t.Fatalf("remove pending: %v", err)
+				}
+				if err := syscall.Mkfifo(pending, 0o644); err != nil {
+					t.Fatalf("mkfifo: %v", err)
+				}
+			},
+		})
+		// A hang would trip the harness timeout; reaching here proves it did not.
+		if !strings.Contains(result.status, "result=ok") {
+			t.Fatalf("status = %q, want ok (no hang, no FIFO read)", result.status)
+		}
+	})
 }
 
 // TestWrapperRejectsArguments proves the no-argument contract.

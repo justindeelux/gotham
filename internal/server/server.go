@@ -769,8 +769,13 @@ func (s *Server) Run(ctx context.Context) error {
 		defer s.closer()
 	}
 
-	// The self-update loop (AUTO_UPDATE=true) is bound to the server lifetime.
+	// Resume a staged update left behind by a crash/reboot during the health
+	// window, then run the self-update loop (AUTO_UPDATE=true); both are bound
+	// to the server lifetime.
 	if s.updates != nil {
+		if err := s.updates.Resume(ctx); err != nil {
+			s.logger.Warn("updates: could not resume a staged update", "error", err)
+		}
 		s.updates.StartAuto(ctx)
 	}
 

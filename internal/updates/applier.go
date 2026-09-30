@@ -144,7 +144,7 @@ func (a *Applier) Apply(ctx context.Context, rel *Release) (*ApplyOutcome, error
 		if err := a.recoverLocked(binPath); err != nil {
 			return err
 		}
-		if a.pendingStaged() {
+		if a.pendingInFlight() {
 			return ErrUpdatePending
 		}
 		// Mark the update pending before touching the binary so a crash at any
@@ -187,9 +187,12 @@ func (a *Applier) Apply(ctx context.Context, rel *Release) (*ApplyOutcome, error
 	return &ApplyOutcome{Version: manifest.Version, Staged: true}, nil
 }
 
-// monitorRestart records wrapper_failed when a launched wrapper exits without
-// recording its own result (for example a denied sudo), so the pending marker
-// does not sit at "staged" forever.
+// monitorRestart handles an asynchronous wrapper failure: when the launched
+// wrapper exits without recording its own result (for example a denied sudo),
+// it restores the known-good binary and records a terminal outcome, so the
+// unproven binary is never left armed at ExecStart and the gate can reopen
+// without the next apply hardlinking the unproven binary over the last known
+// good one.
 func (a *Applier) monitorRestart(wait func() error, version string) {
 	if wait == nil {
 		return
@@ -197,14 +200,28 @@ func (a *Applier) monitorRestart(wait func() error, version string) {
 	if err := wait(); err == nil {
 		return
 	}
-	if a.Pending == nil {
+	binPath, err := a.binaryPath()
+	if err != nil {
 		return
 	}
-	pending, err := a.Pending.Read()
-	if err != nil || pending == nil || pending.Result != StatusStaged {
-		return
-	}
-	_ = a.Pending.Write(Status{Result: StatusWrapperFailed, Version: version, Detail: "the restart wrapper exited before recording an outcome"})
+	_ = withFileLock(a.lockPath(binPath), func() error {
+		pending, err := a.Pending.Read()
+		if a.Pending == nil || err != nil || pending == nil || !inFlight(pending.Result) {
+			// The wrapper recorded a result (or another path resolved it).
+			return nil
+		}
+		if version == "" {
+			version = pending.Version
+		}
+		result := StatusRolledBack
+		detail := "the restart wrapper exited before recording an outcome"
+		if rollbackErr := a.restoreLocked(binPath); rollbackErr != nil {
+			result = StatusRollbackFailed
+			detail = fmt.Sprintf("%s (rollback: %v)", detail, rollbackErr)
+		}
+		_ = a.Pending.Write(Status{Result: result, Version: version, Detail: detail})
+		return nil
+	})
 }
 
 // Rollback restores the retained previous binary over the current one and
@@ -273,18 +290,31 @@ func (a *Applier) recoverLocked(binPath string) error {
 			syncDir(dir)
 		}
 	}
-	a.reconcilePending()
+	a.reconcilePending(binPath)
 	return nil
 }
 
-// reconcilePending clears a staged pending marker when the authoritative status
-// is at least as new (the wrapper finished but could not remove it).
-func (a *Applier) reconcilePending() {
-	if a.Pending == nil || a.Status == nil {
+// reconcilePending clears a staged pending marker when the crash left nothing
+// to activate (target and backup are the same inode) or when the authoritative
+// status is at least as new (the wrapper finished but could not remove the
+// marker).
+func (a *Applier) reconcilePending(binPath string) {
+	if a.Pending == nil {
 		return
 	}
 	pending, err := a.Pending.Read()
 	if err != nil || pending == nil || pending.Result != StatusStaged {
+		return
+	}
+	// Crash before commit: the target was never replaced, so target and backup
+	// still reference the same inode. Nothing was staged; reopen the gate.
+	if targetInfo, err := os.Stat(binPath); err == nil {
+		if backupInfo, err := os.Stat(a.oldPath(binPath)); err == nil && os.SameFile(targetInfo, backupInfo) {
+			_ = a.Pending.Remove()
+			return
+		}
+	}
+	if a.Status == nil {
 		return
 	}
 	status, err := a.Status.Read()
@@ -372,13 +402,68 @@ func (a *Applier) restoreLocked(binPath string) error {
 	return nil
 }
 
-// pendingStaged reports whether a staged update is awaiting its outcome.
-func (a *Applier) pendingStaged() bool {
+// inFlight reports whether a pending result means an update is still awaiting
+// its outcome (staged, or resumed after a crash).
+func inFlight(result string) bool {
+	return result == StatusStaged || result == StatusResuming
+}
+
+// pendingInFlight reports whether an update is awaiting its outcome; a second
+// apply is refused while it is.
+func (a *Applier) pendingInFlight() bool {
 	if a.Pending == nil {
 		return false
 	}
 	pending, err := a.Pending.Read()
-	return err == nil && pending != nil && pending.Result == StatusStaged
+	return err == nil && pending != nil && inFlight(pending.Result)
+}
+
+// ResumeStaged relaunches the wrapper when a staged update is still pending at
+// startup (a crash, reboot or OOM during the health window), so the new binary
+// is health-checked or rolled back instead of running unproven behind a closed
+// gate. It rewrites the marker to resuming first, so a second startup cannot
+// relaunch again; it never loops.
+func (a *Applier) ResumeStaged(ctx context.Context) error {
+	if a.Restart == nil {
+		return nil
+	}
+	binPath, err := a.binaryPath()
+	if err != nil {
+		return err
+	}
+	var version string
+	resume := false
+	if err := withFileLock(a.lockPath(binPath), func() error {
+		if err := a.recoverLocked(binPath); err != nil {
+			return err
+		}
+		pending, err := a.Pending.Read()
+		if a.Pending == nil || err != nil || pending == nil || pending.Result != StatusStaged {
+			return nil
+		}
+		version = pending.Version
+		resume = true
+		return a.Pending.Write(Status{Result: StatusResuming, Version: pending.Version})
+	}); err != nil {
+		return err
+	}
+	if !resume {
+		return nil
+	}
+
+	wait, err := a.Restart(ctx)
+	if err != nil {
+		result := StatusRolledBack
+		detail := fmt.Sprintf("resume: %v", err)
+		if rollbackErr := a.Rollback(); rollbackErr != nil {
+			result = StatusRollbackFailed
+			detail = fmt.Sprintf("%s (rollback: %v)", detail, rollbackErr)
+		}
+		_ = a.Pending.Write(Status{Result: result, Version: version, Detail: detail})
+		return err
+	}
+	go a.monitorRestart(wait, version)
+	return nil
 }
 
 // fetch downloads rawURL into memory, bounded by maxBytes.

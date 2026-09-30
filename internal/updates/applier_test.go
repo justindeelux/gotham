@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 const testAssetName = "gotham-linux-amd64"
@@ -438,23 +439,190 @@ func TestApplierWrapperLaunchErrorRollsBack(t *testing.T) {
 	}
 }
 
-// TestMonitorRestartRecordsWrapperFailed proves a wrapper that exits without
-// recording a result surfaces as wrapper_failed rather than staged forever.
-func TestMonitorRestartRecordsWrapperFailed(t *testing.T) {
-	dir := t.TempDir()
-	applier := newTestApplier(t, dir, filepath.Join(dir, "gotham"), nil, nil)
+// TestMonitorRestartRollsBack proves N2: a wrapper that exits without recording
+// a result restores the known-good binary and records a terminal outcome
+// instead of leaving the unproven binary armed behind a reopened gate.
+func TestMonitorRestartRollsBack(t *testing.T) {
+	target := writeTarget(t, "unproven A")
+	if err := os.WriteFile(target+OldSuffix, []byte("original"), 0o755); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+	applier := newTestApplier(t, filepath.Dir(target), target, nil, nil)
 	if err := applier.Pending.Write(Status{Result: StatusStaged, Version: "v1.2.0"}); err != nil {
 		t.Fatalf("write pending: %v", err)
 	}
 
 	applier.monitorRestart(func() error { return errors.New("wrapper exited 1") }, "v1.2.0")
 
+	if got := readFile(t, target); got != "original" {
+		t.Fatalf("target = %q, want the known-good restored", got)
+	}
 	pending, err := applier.Pending.Read()
 	if err != nil {
 		t.Fatalf("read pending: %v", err)
 	}
-	if pending == nil || pending.Result != StatusWrapperFailed {
-		t.Fatalf("pending = %+v, want wrapper_failed", pending)
+	if pending == nil || pending.Result != StatusRolledBack {
+		t.Fatalf("pending = %+v, want rolled_back", pending)
+	}
+}
+
+// TestWrapperFailedPreservesKnownGood is the promoted round-3 repro: a denied
+// sudo leaves the wrapper failed, the control plane rolls back, and a following
+// apply can no longer overwrite the last known good with the unproven binary.
+func TestWrapperFailedPreservesKnownGood(t *testing.T) {
+	signer, verifier := newTestSigner(t)
+	payloadA := []byte("payload A")
+	payloadB := []byte("payload B")
+	fakeA := defaultFakeRelease(t, signer, payloadA)
+	fakeB := defaultFakeRelease(t, signer, payloadB)
+
+	target := writeTarget(t, "original")
+	dir := filepath.Dir(target)
+
+	applierA := newTestApplier(t, dir, target, verifier, func(context.Context) (func() error, error) {
+		return func() error { return errors.New("exit status 1 (sudo: a password is required)") }, nil
+	})
+	applierA.Client = fakeA.server.Client()
+	if _, err := applierA.Apply(context.Background(), fakeA.release); err != nil {
+		t.Fatalf("apply A: %v", err)
+	}
+
+	// The monitor rolls back asynchronously; wait for a terminal marker.
+	waitForSettledPending(t, applierA.Pending)
+	if got := readFile(t, target); got != "original" {
+		t.Fatalf("target after denied sudo = %q, want the known-good original", got)
+	}
+
+	// A following apply must not lose the original known-good.
+	applierB := newTestApplier(t, dir, target, verifier, noopRestart)
+	applierB.Client = fakeB.server.Client()
+	if _, err := applierB.Apply(context.Background(), fakeB.release); err != nil {
+		t.Fatalf("apply B: %v", err)
+	}
+	if got := readFile(t, target); got != string(payloadB) {
+		t.Errorf("target = %q, want payload B", got)
+	}
+	if got := readFile(t, target+OldSuffix); got != "original" {
+		t.Fatalf("backup = %q, want the original known-good preserved", got)
+	}
+}
+
+// waitForSettledPending waits until the pending marker is no longer in flight.
+func waitForSettledPending(t *testing.T, store *StatusStore) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		pending, err := store.Read()
+		if err == nil && (pending == nil || !inFlight(pending.Result)) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pending, _ := store.Read()
+	t.Fatalf("pending never settled: %+v", pending)
+}
+
+// TestCrashBeforeCommitReopensGate proves L3: a crash before the commit rename
+// leaves target and backup as the same inode, so the staged gate is cleared and
+// a new apply can proceed.
+func TestCrashBeforeCommitReopensGate(t *testing.T) {
+	signer, verifier := newTestSigner(t)
+	fake := defaultFakeRelease(t, signer, []byte("payload A"))
+
+	target := writeTarget(t, "original")
+	if err := os.Link(target, target+OldSuffix); err != nil {
+		t.Fatalf("hardlink: %v", err)
+	}
+	applier := newTestApplier(t, filepath.Dir(target), target, verifier, noopRestart)
+	applier.Client = fake.server.Client()
+	if err := applier.Pending.Write(Status{Result: StatusStaged, Version: "v1.2.0"}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+
+	if _, err := applier.Recover(); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if pending, _ := applier.Pending.Read(); pending != nil && pending.Result == StatusStaged {
+		t.Fatalf("gate still closed after a crash before commit: %+v", pending)
+	}
+	if _, err := applier.Apply(context.Background(), fake.release); err != nil {
+		t.Fatalf("Apply after crash-before-commit: %v", err)
+	}
+}
+
+// TestResumeStagedRelaunches proves M2: a staged marker left by a crash makes
+// the next startup relaunch the wrapper exactly once (no loop).
+func TestResumeStagedRelaunches(t *testing.T) {
+	signer, verifier := newTestSigner(t)
+	fake := defaultFakeRelease(t, signer, []byte("payload A"))
+
+	target := writeTarget(t, "new-unproven")
+	if err := os.WriteFile(target+OldSuffix, []byte("original"), 0o755); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+	launched := 0
+	applier := newTestApplier(t, filepath.Dir(target), target, verifier, func(context.Context) (func() error, error) {
+		launched++
+		return func() error { return nil }, nil
+	})
+	applier.Client = fake.server.Client()
+	if err := applier.Pending.Write(Status{Result: StatusStaged, Version: "v1.2.0"}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+
+	if err := applier.ResumeStaged(context.Background()); err != nil {
+		t.Fatalf("ResumeStaged: %v", err)
+	}
+	if launched != 1 {
+		t.Fatalf("wrapper launches = %d, want 1", launched)
+	}
+	pending, err := applier.Pending.Read()
+	if err != nil {
+		t.Fatalf("read pending: %v", err)
+	}
+	if pending == nil || pending.Result != StatusResuming {
+		t.Fatalf("pending = %+v, want resuming", pending)
+	}
+
+	// A second startup must not relaunch (no loop).
+	if err := applier.ResumeStaged(context.Background()); err != nil {
+		t.Fatalf("ResumeStaged (second): %v", err)
+	}
+	if launched != 1 {
+		t.Fatalf("wrapper relaunched on a resuming marker (loop): %d", launched)
+	}
+}
+
+// TestResumeStagedLaunchErrorRollsBack proves a resume that cannot launch the
+// wrapper restores the known-good binary.
+func TestResumeStagedLaunchErrorRollsBack(t *testing.T) {
+	signer, verifier := newTestSigner(t)
+	fake := defaultFakeRelease(t, signer, []byte("payload A"))
+
+	target := writeTarget(t, "new-unproven")
+	if err := os.WriteFile(target+OldSuffix, []byte("original"), 0o755); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+	applier := newTestApplier(t, filepath.Dir(target), target, verifier, func(context.Context) (func() error, error) {
+		return nil, errors.New("sudo: a password is required")
+	})
+	applier.Client = fake.server.Client()
+	if err := applier.Pending.Write(Status{Result: StatusStaged, Version: "v1.2.0"}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+
+	if err := applier.ResumeStaged(context.Background()); err == nil {
+		t.Fatal("ResumeStaged with a failed launch = nil error")
+	}
+	if got := readFile(t, target); got != "original" {
+		t.Fatalf("target = %q, want the known-good restored", got)
+	}
+	pending, err := applier.Pending.Read()
+	if err != nil {
+		t.Fatalf("read pending: %v", err)
+	}
+	if pending == nil || pending.Result != StatusRolledBack {
+		t.Fatalf("pending = %+v, want rolled_back", pending)
 	}
 }
 

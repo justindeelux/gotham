@@ -124,22 +124,27 @@ finish() {
     exit "$3"
 }
 
-# acquire_lock serializes with the control plane's Apply/Rollback. flock must
-# not redirect this shell's stderr (a bare `exec 9>... 2>/dev/null` would send
-# every later diagnostic to /dev/null).
+# acquire_lock serializes with the control plane's Apply/Rollback. The lock
+# lives in the service StateDirectory, so the wrapper must never perform a
+# following/truncating root open there: only an existing regular, non-symlink
+# file is opened, read-only (flock(2) works on a read-only descriptor and a
+# read-only open cannot modify a target). It fails closed when the lock is
+# missing, invalid or times out.
 acquire_lock() {
     if ! command -v flock >/dev/null 2>&1; then
-        log "flock not available; proceeding without the update lock"
-        return 0
+        log "flock is unavailable; refusing to update without the lock"
+        return 1
     fi
-    if [ ! -d "$(dirname "${LOCK}")" ]; then
-        log "lock directory missing; proceeding without the update lock"
-        return 0
+    if [ -L "${LOCK}" ] || [ ! -f "${LOCK}" ] || [ ! -r "${LOCK}" ]; then
+        log "refusing to lock ${LOCK}: not an existing regular file"
+        return 1
     fi
-    exec 9>"${LOCK}"
+    exec 9<"${LOCK}"
     if ! flock -w 60 9; then
         log "could not acquire lock ${LOCK} within 60s"
+        return 1
     fi
+    return 0
 }
 
 probe() {
@@ -193,14 +198,30 @@ restore() {
 }
 
 # The control plane recorded the staged version in the pending marker; keep it
-# as a label for the final status.
+# as a label for the final status. The marker is in the Gotham-writable
+# StateDirectory, so read it only when it is a regular, non-symlink file and
+# sanitize the value: a planted symlink/FIFO must not leak a root-only line or
+# hang root.
 VERSION=""
-if [ -r "${PENDING}" ]; then
+if [ -f "${PENDING}" ] && [ ! -L "${PENDING}" ]; then
     VERSION=$(sed -n 's/^version=//p' "${PENDING}" 2>/dev/null | head -n 1 | tr -d '\r\n')
+fi
+case "${VERSION}" in
+    "" | *[!A-Za-z0-9._+-]*) VERSION="" ;;
+esac
+if [ "${#VERSION}" -gt 64 ]; then
+    VERSION=""
 fi
 
 validate_conf
-acquire_lock
+# Fail closed on a lock failure: record the outcome but leave the pending marker
+# in place so the staged gate stays closed (the control plane's monitor will
+# roll back, or an operator resets).
+if ! acquire_lock; then
+    write_status wrapper_failed "${VERSION}" "could not acquire the update lock"
+    log "refusing to continue without the update lock"
+    exit 1
+fi
 
 # Recover from an interrupted swap: a missing target with a valid backup is
 # restored before anything else, so the unit's ExecStart always finds a binary.

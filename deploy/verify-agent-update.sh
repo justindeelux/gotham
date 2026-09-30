@@ -31,6 +31,8 @@
 #   VERIFY_HTTP_PORT      override the scratch HTTP port
 #   VERIFY_GRPC_PORT      override the scratch gRPC port
 #   VERIFY_RELEASE_PORT   override the loopback release-server port
+#   VERIFY_KEEP=1         skip the cleanup trap and keep the scratch dir + logs
+#                         for debugging (prints the paths)
 #
 # Exit: 0 when every check passes, 1 otherwise.
 set -u
@@ -114,6 +116,7 @@ NODE_A="verify-node-a-${RUN_ID}"
 NODE_B="verify-node-b-${RUN_ID}"
 STATE_A="${SCRATCH}/agents/a"
 STATE_B="${SCRATCH}/agents/b"
+VERIFY_KEEP="${VERIFY_KEEP:-0}"
 FAILURES=0
 
 # ---------------------------------------------------------------------------
@@ -123,7 +126,25 @@ pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
 log() { echo "==> $*"; }
 
+# print_debug_paths prints where the scratch artifacts live and the tail of the
+# control-plane log, so a failure on a remote box is diagnosable without the
+# cleanup trap having removed everything.
+print_debug_paths() {
+    echo "scratch dir: ${SCRATCH}" >&2
+    echo "  control-plane log: ${SCRATCH}/cp.log" >&2
+    echo "  release-server log: ${SCRATCH}/release.log" >&2
+    if [ -f "${SCRATCH}/cp.log" ]; then
+        echo "--- control-plane log (tail) ---" >&2
+        tail -n 30 "${SCRATCH}/cp.log" >&2 || true
+    fi
+}
+
 cleanup() {
+    if [ "${VERIFY_KEEP}" = "1" ]; then
+        echo "VERIFY_KEEP=1: leaving scratch artifacts in place" >&2
+        print_debug_paths
+        return
+    fi
     systemctl stop "${UNIT_A}" "${UNIT_B}" >/dev/null 2>&1 || true
     rm -f "${UNIT_DIR}/${UNIT_A}.service" "${UNIT_DIR}/${UNIT_B}.service" "${SUDOERS_FILE}"
     systemctl daemon-reload >/dev/null 2>&1 || true
@@ -211,9 +232,18 @@ sign_release "v2.0.0" "${SCRATCH}/bin/gotham-agent-v2" || { echo "sign v2 releas
 python3 -m http.server "${RELEASE_PORT}" --bind 127.0.0.1 --directory "${RELEASE_DIR}" \
     >"${SCRATCH}/release.log" 2>&1 &
 RELEASE_PID=$!
-sleep 1
-if ! curl -fsS "http://127.0.0.1:${RELEASE_PORT}/repos/verify/verify/releases" >/dev/null 2>&1; then
+RELEASE_UP=0
+deadline=$(( $(date +%s) + 15 ))
+while [ "$(date +%s)" -lt "${deadline}" ]; do
+    if curl -fsS --max-time 2 "http://127.0.0.1:${RELEASE_PORT}/repos/verify/verify/releases" >/dev/null 2>&1; then
+        RELEASE_UP=1
+        break
+    fi
+    sleep 1
+done
+if [ "${RELEASE_UP}" -ne 1 ]; then
     echo "the loopback release server did not come up" >&2
+    cat "${SCRATCH}/release.log" >&2 || true
     exit 1
 fi
 
@@ -269,13 +299,20 @@ CP_PID=$!
 deadline=$(( $(date +%s) + 30 ))
 CP_UP=0
 while [ "$(date +%s)" -lt "${deadline}" ]; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${HTTP_PORT}/healthz" 2>/dev/null || echo 000)
-    if [ "${code}" != "000" ]; then CP_UP=1; break; fi
+    # Wait on curl's exit status and a real status code. A failing curl prints
+    # "000" via -w AND would append another "000" from an `|| echo`, which made
+    # the old check break on the first failed probe (the box repro).
+    if code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 \
+        "http://127.0.0.1:${HTTP_PORT}/healthz" 2>/dev/null) \
+        && [ -n "${code}" ] && [ "${code}" != "000" ]; then
+        CP_UP=1
+        break
+    fi
     sleep 1
 done
 if [ "${CP_UP}" -ne 1 ]; then
-    echo "the control plane did not start listening; log:" >&2
-    tail -n 40 "${SCRATCH}/cp.log" >&2 || true
+    echo "the control plane did not start listening" >&2
+    print_debug_paths
     exit 1
 fi
 
@@ -283,21 +320,42 @@ fi
 # Operator session (supported means: register, then PLATFORM_ADMINS)
 # ---------------------------------------------------------------------------
 log "registering the operator session"
-REGISTER_BODY=$(curl -fsS -X POST -H 'Content-Type: application/json' \
-    -d '{"email":"verify@example.com","password":"verify-password-123"}' \
-    "http://127.0.0.1:${HTTP_PORT}/api/v1/auth/register" 2>/dev/null) || {
-    echo "operator registration failed" >&2
-    exit 1
+
+# register_operator retries with a short backoff. It prints the HTTP status and
+# body on each failed attempt so a box failure is diagnosable.
+register_operator() {
+    attempt=1
+    while [ "${attempt}" -le 5 ]; do
+        response=$(curl -sS --max-time 5 -w '\n%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"email":"verify@example.com","password":"verify-password-123"}' \
+            "http://127.0.0.1:${HTTP_PORT}/api/v1/auth/register" 2>/dev/null) || response=""
+        status=$(printf '%s' "${response}" | tail -n 1)
+        body=$(printf '%s' "${response}" | sed '$d')
+        if [ "${status}" = "200" ]; then
+            token=$(printf '%s' "${body}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
+            if [ -n "${token}" ]; then
+                TOKEN="${token}"
+                return 0
+            fi
+        fi
+        echo "registration attempt ${attempt}: status=${status:-<no response>} body=${body}" >&2
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    return 1
 }
-TOKEN=$(printf '%s' "${REGISTER_BODY}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
-if [ -z "${TOKEN}" ]; then
-    echo "no access token in the registration response: ${REGISTER_BODY}" >&2
+
+if ! register_operator; then
+    echo "operator registration failed after 5 attempts" >&2
+    print_debug_paths
+    fail "operator registration failed"
     exit 1
 fi
 
-api_get() { curl -fsS -H "Authorization: Bearer ${TOKEN}" "http://127.0.0.1:${HTTP_PORT}$1"; }
-node_version() { # $1 node id
-    api_get /api/v1/servers/agents | python3 -c '
+api_get() { curl -fsS --max-time 5 -H "Authorization: Bearer ${TOKEN}" "http://127.0.0.1:${HTTP_PORT}$1"; }
+node_version() { # $1 node id; empty output on any probe failure
+    api_get /api/v1/servers/agents 2>/dev/null | python3 -c '
 import sys, json
 want = sys.argv[1]
 data = json.load(sys.stdin)
@@ -423,6 +481,7 @@ else
     fail "agents did not report v1.0.0 (a=$(node_version "${NODE_A}") b=$(node_version "${NODE_B}"))"
     echo "--- agent A journal ---" >&2; journalctl -u "${UNIT_A}" -n 40 --no-pager >&2 || true
     echo "--- agent B journal ---" >&2; journalctl -u "${UNIT_B}" -n 40 --no-pager >&2 || true
+    print_debug_paths
     exit 1
 fi
 
@@ -563,8 +622,12 @@ fi
 # Summary
 # ---------------------------------------------------------------------------
 echo
-echo "Scratch artifacts: ${SCRATCH} (removed on exit)"
-echo "Control-plane log: ${SCRATCH}/cp.log"
+if [ "${VERIFY_KEEP}" = "1" ]; then
+    echo "VERIFY_KEEP=1: scratch artifacts kept at ${SCRATCH}"
+    print_debug_paths
+else
+    echo "Scratch artifacts: ${SCRATCH} (removed on exit; set VERIFY_KEEP=1 to keep them)"
+fi
 if [ "${FAILURES}" -eq 0 ]; then
     echo "verify-agent-update: all checks passed"
     exit 0

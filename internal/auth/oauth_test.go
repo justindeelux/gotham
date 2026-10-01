@@ -217,9 +217,36 @@ func TestOAuthCallbackUnknownProvider(t *testing.T) {
 	}
 }
 
+func TestOAuthCallbackRefusesNewUserWhenClosed(t *testing.T) {
+	provider := &fakeOAuthProvider{name: "github"}
+	oauth, st := newTestOAuthWithStore(t, provider)
+	ctx := context.Background()
+
+	// The shared test database already holds accounts, so closed registration
+	// must refuse an unseen OAuth identity (P-A2) rather than create an
+	// uninvited account.
+	email := uniqueEmail("oauth-closed")
+	cleanupUser(t, st, email)
+	provider.identity = &OAuthIdentity{Email: email, Name: "Uninvited"}
+
+	_, state, err := oauth.Begin(ctx, "github", "")
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if _, err := oauth.Callback(ctx, "github", "auth-code", state); !errors.Is(err, ErrRegistrationClosed) {
+		t.Fatalf("Callback(closed) error = %v, want ErrRegistrationClosed", err)
+	}
+	if _, err := st.GetUserByEmail(ctx, email); err == nil {
+		t.Fatalf("Callback created %s despite closed registration", email)
+	}
+}
+
 func TestOAuthCallbackCreatesUser(t *testing.T) {
 	provider := &fakeOAuthProvider{name: "github"}
 	oauth, st := newTestOAuthWithStore(t, provider)
+	// The shared test database has accounts; open registration to exercise the
+	// account-creation path itself (the closed policy is covered above).
+	oauth.auth.AllowOpenRegistration = true
 	ctx := context.Background()
 
 	email := uniqueEmail("oauth-new")

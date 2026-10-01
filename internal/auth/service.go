@@ -103,6 +103,9 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 		return nil, err
 	}
 
+	// Bootstrap vs invite. On an empty instance the account is created through
+	// CreateFirstUser, whose emptiness check and insert share one transaction,
+	// so two concurrent first registrations cannot both win (P-A2).
 	count, err := s.store.CountUsers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("auth: count users: %w", err)
@@ -114,7 +117,18 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 		}
 	}
 
-	user, err := s.store.CreateUser(ctx, normalized, &hash)
+	var user sqlc.User
+	if needInvite {
+		user, err = s.store.CreateUser(ctx, normalized, &hash)
+	} else {
+		user, err = s.store.CreateFirstUser(ctx, normalized, &hash)
+		// The bootstrap lost a race (or the table filled between the count and
+		// the insert): the instance now has an account, so registration is
+		// closed and an invite is required.
+		if errors.Is(err, store.ErrInstanceHasAccount) {
+			return nil, ErrRegistrationClosed
+		}
+	}
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrEmailTaken
@@ -124,9 +138,14 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 
 	if needInvite {
 		if err := invites.AcceptInvite(ctx, uuid.UUID(user.ID.Bytes), inviteToken); err != nil {
-			// The invite stopped being valid between the peek and the
-			// accept; roll the fresh account back so a retry starts clean.
-			_, _ = s.store.DB.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+			// The invite stopped being valid between the peek and the accept.
+			// Roll the fresh account (and its personal team) back with a
+			// context that survives the request's cancellation, so a retry
+			// starts clean instead of leaving an ownerless team behind.
+			cleanup := context.WithoutCancel(ctx)
+			if delErr := s.store.DeleteUserAndPersonalTeam(cleanup, user.ID); delErr != nil {
+				s.logger.Error("auth: invite rollback failed", "error", delErr, "user_id", uuid.UUID(user.ID.Bytes))
+			}
 			s.logger.Warn("auth: invite accept failed at registration", "error", err)
 			return nil, ErrRegistrationClosed
 		}

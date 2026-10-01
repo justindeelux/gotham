@@ -35,6 +35,8 @@ export const useAuthStore = defineStore("auth", () => {
    * members join through an admin-created invite link (P-A2).
    */
   const registrationOpen = ref(false);
+  /** configLoaded caches /auth/config for the session (fetchAuthConfig once). */
+  let configLoaded = false;
 
   const isAuthenticated = computed<boolean>(() => accessToken.value !== null);
 
@@ -68,6 +70,8 @@ export const useAuthStore = defineStore("auth", () => {
 
   /** clearSession forgets the session in memory and in localStorage. */
   function clearSession(): void {
+    // The instance's registration policy does not change on sign-out; keep the
+    // cached config unless a caller forces a refresh.
     user.value = null;
     accessToken.value = null;
     refreshToken.value = null;
@@ -101,11 +105,16 @@ export const useAuthStore = defineStore("auth", () => {
    * fetchAuthConfig refreshes `registrationOpen`. A failure leaves it false
    * (closed) — the safe default for an unknown instance state.
    */
-  async function fetchAuthConfig(): Promise<void> {
+  async function fetchAuthConfig(force = false): Promise<void> {
+    if (configLoaded && !force) {
+      return;
+    }
     try {
       const response = await http.get<{ registrationOpen: boolean }>("/auth/config");
       registrationOpen.value = response.data.registrationOpen === true;
+      configLoaded = true;
     } catch {
+      // Leave the safe default (closed) and allow a later retry.
       registrationOpen.value = false;
     }
   }

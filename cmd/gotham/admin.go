@@ -140,12 +140,8 @@ func runAdminResetPassword(args []string) int {
 			return exitError
 		}
 
-		if err := st.UpdateUserPasswordHash(ctx, user.Email, hash); err != nil {
-			fmt.Fprintf(os.Stderr, "admin reset-password: update password: %v\n", err)
-			return exitError
-		}
-		if err := st.DeleteUserSessions(ctx, user.ID); err != nil {
-			fmt.Fprintf(os.Stderr, "admin reset-password: revoke sessions: %v\n", err)
+		if err := st.ResetUserPassword(ctx, user.ID, user.Email, hash); err != nil {
+			fmt.Fprintf(os.Stderr, "admin reset-password: %v\n", err)
 			return exitError
 		}
 

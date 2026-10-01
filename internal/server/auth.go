@@ -102,9 +102,12 @@ type inviteValidateResponse struct {
 // mountAuthRoutes registers the authentication endpoints under /api.
 func (s *Server) mountAuthRoutes(api chi.Router) {
 	api.Route("/v1/auth", func(r chi.Router) {
-		// Public, rate-limited surface: the SPA probes it before rendering
-		// the register tab, and invite links validate before credentials.
-		r.With(s.rateLimit).Get("/config", s.handleAuthConfig)
+		// Public surface: the SPA probes /config before rendering the register
+		// tab, and invite links validate before credentials. /config is a
+		// cheap, secret-free read the SPA calls on every auth render, so it
+		// stays off the credential rate limiter; validate keeps it (a token
+		// must not be brute-forceable).
+		r.Get("/config", s.handleAuthConfig)
 		r.With(s.rateLimit).Get("/invites/validate", s.handleInviteValidate)
 
 		r.With(s.rateLimit).Post("/register", s.handleRegister)

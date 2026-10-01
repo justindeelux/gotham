@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/oauth2"
 
+	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
@@ -165,9 +166,28 @@ func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFr
 // password, empty avatar). A concurrent insert of the same email is resolved by
 // re-reading the row rather than failing the login.
 func (s *OAuthService) createOAuthUser(ctx context.Context, email string) (sqlc.User, error) {
-	user, err := s.auth.store.CreateUser(ctx, email, nil)
+	// Closed registration applies to every account-creation path (P-A2): an
+	// unseen OAuth identity may only bootstrap an empty instance, or sign up
+	// while the test/dev override is on. Existing accounts keep signing in.
+	count, err := s.auth.store.CountUsers(ctx)
+	if err != nil {
+		return sqlc.User{}, fmt.Errorf("auth: oauth count users: %w", err)
+	}
+	if count > 0 && !s.auth.AllowOpenRegistration {
+		return sqlc.User{}, ErrRegistrationClosed
+	}
+
+	var user sqlc.User
+	if count == 0 && !s.auth.AllowOpenRegistration {
+		user, err = s.auth.store.CreateFirstUser(ctx, email, nil)
+	} else {
+		user, err = s.auth.store.CreateUser(ctx, email, nil)
+	}
 	if err == nil {
 		return user, nil
+	}
+	if errors.Is(err, store.ErrInstanceHasAccount) {
+		return sqlc.User{}, ErrRegistrationClosed
 	}
 	if !isUniqueViolation(err) {
 		return sqlc.User{}, fmt.Errorf("auth: oauth create user: %w", err)

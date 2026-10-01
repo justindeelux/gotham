@@ -172,8 +172,18 @@ const inviteRoleOptions: Array<{ label: string; value: TeamRole }> = [
   { label: "read-only", value: "read_only" },
 ];
 
-/** inviteLink builds the one-time member onboarding URL for an invite token. */
+/** acceptLink builds the accept URL for an invite token (existing account). */
 function acceptLink(token: string): string {
+  return `${window.location.origin}/invite/accept?token=${encodeURIComponent(token)}`;
+}
+
+/**
+ * registerLink builds the onboarding URL for a NEW member: registration is
+ * closed once the instance has an account, so a fresh account must come
+ * through the invite (P-A2). The accept link above still serves someone who
+ * already has an account, which is why both are shown.
+ */
+function registerLink(token: string): string {
   return `${window.location.origin}/register?invite=${encodeURIComponent(token)}`;
 }
 
@@ -643,7 +653,7 @@ async function copyAcceptLink(): Promise<void> {
     return;
   }
   try {
-    await navigator.clipboard.writeText(acceptLink(invite.token));
+    await navigator.clipboard.writeText(registerLink(invite.token));
     copied.value = true;
     message.success("Invite link copied");
   } catch {
@@ -1020,6 +1030,13 @@ onMounted(async () => {
           yet (BE-8.3) — send it to {{ createdInvite.email }} yourself.
         </NAlert>
         <NInput
+          :value="registerLink(createdInvite.token)"
+          readonly
+          class="mono"
+          aria-label="New member link"
+          data-testid="invite-register-link"
+        />
+        <NInput
           :value="acceptLink(createdInvite.token)"
           readonly
           class="mono"
@@ -1030,12 +1047,12 @@ onMounted(async () => {
           token: {{ createdInvite.token }}
         </NText>
         <NText depth="3">
-          The invited member opens this link and creates their account, which
-          joins {{ createdInvite.email }} to the team as
-          <span class="mono">{{ createdInvite.role }}</span
-          >. Registration is closed on an instance that already has an account,
-          so this invite is the only way in. It expires
-          {{ expiryLabel(createdInvite.expires_at) }}.
+          Send the first link to {{ createdInvite.email }} to create a new
+          account: registration is closed on an instance that already has an
+          account, so the invite is the only way in. The second link is for
+          someone who already has an account and is signed in. Either way the
+          member joins as <span class="mono">{{ createdInvite.role }}</span
+          >. It expires {{ expiryLabel(createdInvite.expires_at) }}.
         </NText>
       </NSpace>
       <template #footer>

@@ -22,6 +22,36 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const createFirstUser = `-- name: CreateFirstUser :one
+INSERT INTO users (email, password_hash)
+SELECT $1, $2
+WHERE NOT EXISTS (SELECT 1 FROM users)
+RETURNING id, email, created_at, password_hash, avatar, updated_at
+`
+
+type CreateFirstUserParams struct {
+	Email        string  `json:"email"`
+	PasswordHash *string `json:"password_hash"`
+}
+
+// CreateFirstUser inserts the bootstrap account only while the table is empty,
+// so two concurrent first registrations cannot both succeed (P-A2). Zero rows
+// means an account already exists and the caller must fall back to the invite
+// path.
+func (q *Queries) CreateFirstUser(ctx context.Context, arg CreateFirstUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, createFirstUser, arg.Email, arg.PasswordHash)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.CreatedAt,
+		&i.PasswordHash,
+		&i.Avatar,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash)
 VALUES ($1, $2)

@@ -68,6 +68,29 @@ func (s *Store) UpdateUserPasswordHash(ctx context.Context, email, passwordHash 
 	})
 }
 
+// ResetUserPassword replaces the account's password hash and revokes its
+// refresh sessions in one transaction, so a partial failure can never leave
+// live sessions behind a changed password (admin reset-password, P-A3).
+func (s *Store) ResetUserPassword(ctx context.Context, userID pgtype.UUID, email, passwordHash string) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.DeleteUserSessions(ctx, userID); err != nil {
+		return err
+	}
+	if err := queries.UpdateUserPasswordHash(ctx, sqlc.UpdateUserPasswordHashParams{
+		Lower:        email,
+		PasswordHash: &passwordHash,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // DeleteUserSessions removes every refresh session of a user, so an old token
 // chain cannot outlive a password change.
 func (s *Store) DeleteUserSessions(ctx context.Context, userID pgtype.UUID) error {

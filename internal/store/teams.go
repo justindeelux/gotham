@@ -53,6 +53,77 @@ func (s *Store) CreateUser(ctx context.Context, email string, passwordHash *stri
 	return user, nil
 }
 
+// ErrInstanceHasAccount reports that CreateFirstUser found the instance
+// already populated. The caller maps it to the closed-registration answer.
+var ErrInstanceHasAccount = errors.New("store: instance already has an account")
+
+// CreateFirstUser inserts the bootstrap account (and its personal team) only
+// while no account exists. The emptiness check and the insert share one
+// transaction, so concurrent first registrations serialize: exactly one wins
+// and the loser gets ErrInstanceHasAccount.
+func (s *Store) CreateFirstUser(ctx context.Context, email string, passwordHash *string) (sqlc.User, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.User{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	user, err := queries.CreateFirstUser(ctx, sqlc.CreateFirstUserParams{
+		Email:        email,
+		PasswordHash: passwordHash,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlc.User{}, ErrInstanceHasAccount
+		}
+		return sqlc.User{}, err
+	}
+	if _, err := queries.CreateTeam(ctx, sqlc.CreateTeamParams{
+		ID:         user.ID,
+		Name:       personalTeamName(email),
+		IsPersonal: true,
+	}); err != nil {
+		return sqlc.User{}, err
+	}
+	if _, err := queries.CreateTeamMember(ctx, sqlc.CreateTeamMemberParams{
+		TeamID: user.ID,
+		UserID: user.ID,
+		Role:   "owner",
+	}); err != nil {
+		return sqlc.User{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.User{}, err
+	}
+	return user, nil
+}
+
+// DeleteUserAndPersonalTeam removes an account created by a registration whose
+// invite acceptance then failed. CreateUser writes the user, the personal team
+// and the owner membership in one transaction, so the cleanup mirrors it: one
+// transaction, else the instance keeps an ownerless team (teams has no foreign
+// key to users).
+func (s *Store) DeleteUserAndPersonalTeam(ctx context.Context, userID pgtype.UUID) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.DeleteTeamMember(ctx, sqlc.DeleteTeamMemberParams{TeamID: userID, UserID: userID}); err != nil {
+		return err
+	}
+	if err := queries.DeleteTeam(ctx, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM users WHERE id = $1", userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // personalTeamOrDefault resolves the team of a resource row that names none:
 // the personal team of its creator, whose ID is the creator's user ID (see
 // migration 00019). Service-layer code always names the active team; this

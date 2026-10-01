@@ -23,3 +23,13 @@ SELECT count(*) FROM users;
 UPDATE users
 SET password_hash = $2, updated_at = now()
 WHERE lower(email) = lower($1);
+
+-- name: CreateFirstUser :one
+-- CreateFirstUser inserts the bootstrap account only while the table is empty,
+-- so two concurrent first registrations cannot both succeed (P-A2). Zero rows
+-- means an account already exists and the caller must fall back to the invite
+-- path.
+INSERT INTO users (email, password_hash)
+SELECT $1, $2
+WHERE NOT EXISTS (SELECT 1 FROM users)
+RETURNING id, email, created_at, password_hash, avatar, updated_at;

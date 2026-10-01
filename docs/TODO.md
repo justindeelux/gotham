@@ -97,10 +97,11 @@ residuals — full detail in `deploy/README.md` → Known residuals:
   closed with an inode-verified pin (a swap fails closed with `wrapper_failed`,
   no root hang); the theoretical root `mv -T` race and the wrapper-death-during-
   health-window case are documented as non-issues (root-owned-directory
-  ownership floor / deliberate fail-closed staging). Two review LOW nits remain
-  tracked: `deploy/README.md` staged-outcome wording and a SIGKILL-left stale
-  `.update-lock.<pid>` pin (degrades to the documented racy open on PID reuse);
-  a follow-up fix round is in flight.
+  ownership floor / deliberate fail-closed staging). Its two review LOW nits
+  were closed in PR #97 (`3e1ac3b`: start-time stale-pin sweep + precise README
+  wording); two further non-blocking review notes remain (README exit-code
+  precision on rollback; one redundant test assertion already covered by
+  `TestWrapperPinsLockInode`).
 
 ### M9 evidence (Phase 9)
 
@@ -154,18 +155,29 @@ Proven:
 - [ ] **Previews (live-environment evidence):** a real Git-host PR/comment exchange
   and real wildcard issuance were not exercised; run them against a live provider when
   owner credentials/infra allow.
-- [ ] **Combined UI:** per-channel event editing, per-resource notification
-  overrides and metric auto-refresh are not exposed; the mockups' full permission
-  matrix / member fields and the plan's chart-library choices were intentionally
-  adapted (dependency-free SVG chart, lean footprint).
+- [x] **Combined UI.** Closed in PR #98 (`9653a81`, three review rounds through
+  `5b4ac06`): the channel form exposes the four event keys and an optional
+  application/database resource scope (both-or-neither payloads, tri-state
+  clearing), server metrics gain an auto-refresh control (off/15s/60s; stops on
+  unmount/hidden/feature-off; single-flight), and stored (legacy) subscriptions
+  are preserved exactly on edit. The mockups' full permission matrix / member
+  fields and the chart-library choice remain intentionally adapted
+  (dependency-free SVG chart, lean footprint).
 
 ## Phase 4 residuals
 
-- [ ] Wire webhook lifecycle into applications CRUD (apps do not
-  create/delete provider hooks automatically yet).
-- [ ] Deploy keys FE: decide whether the FE should send an SSH clone URL
-  instead of relying on the https → ssh rewrite; cover a private-repo deploy
-  e2e.
+- [x] Webhook lifecycle in applications CRUD. Closed in PR #99 (`5e6aa63`,
+  rounds through `f16c111`): apps with a supported provider+repo install the
+  provider hook automatically (idempotent; a failure is surfaced in the 201 as
+  `webhook.installed=false` plus a retry message), delete removes the remote
+  hook first and fails closed with a documented `?force=true` escape hatch
+  (force skips the provider call), and rollback/detach paths use detached
+  bounded contexts (8s+3s budget under the 15s SPA timeout).
+- [x] Deploy keys FE. Closed in PR #99: the wizard sends provider SSH clone
+  URLs for private repos (a missing `ssh_url` is rejected — no silent HTTPS
+  fallback), the keyed cloner presents the 0600 ephemeral key end to end
+  (`TestGitSourceClonesPrivateRepoOverSSH`), and the sealed key row is always
+  dropped with the application even when the host detach fails.
 - [ ] GitHub OAuth manual verification (blocked on owner credentials).
 - [ ] Second-node SSH validation e2e on real hardware.
 
@@ -177,8 +189,9 @@ Proven:
   Go 1.25.
 - [ ] GitHub required status checks: enable manually in repo settings if
   enforcement is wanted (API returns 403 on this plan).
-- [ ] GitNexus re-index before larger refactors; stats drift shows up in
-  `AGENTS.md`/`CLAUDE.md`.
+- [x] GitNexus re-indexed 2026-10-02 on `main` after the merge wave:
+  32,964 symbols / 101,271 edges / 1,448 flows; `AGENTS.md` stats and guidance
+  refreshed by the tool (`.gitnexus/` stays local).
 - [x] E2E hygiene: closed in PR #95 (`3572b0a`): opted-in runs (`GOTHAM_E2E=1`)
   fail fast when Docker/Postgres/Redis are absent instead of skipping green,
   deliberate opt-ins (DNS-01) still skip, and build images are cleaned up on

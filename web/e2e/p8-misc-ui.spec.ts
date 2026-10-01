@@ -1475,3 +1475,29 @@ test.describe("invite redirect across registration", () => {
     await expect(registerTab).toHaveAttribute("href", "/register");
   });
 });
+
+/**
+ * P-A4 — the servers page is a grid of node cards, not a data table
+ * (docs/design/servers.html). Guards the design port: a seeded node renders a
+ * card with its head, key/value rows, the three metric tiles and the footer
+ * actions, and the old table is gone.
+ */
+test.describe("servers grid", () => {
+  test("renders a seeded node as a card, not a table row", async ({ page, request }) => {
+    const name = `ui-e2e-node-${uniqueSuffix()}`;
+    await seedServer(request, name);
+
+    await page.goto("/servers");
+
+    const card = page.locator(`[data-server="${name}"]`);
+    await expect(card).toBeVisible();
+    await expect(card.locator(".node-head")).toContainText(name);
+    await expect(card.locator("dl.kv dt")).toHaveCount(4);
+    await expect(card.locator(".node-metrics .node-metric")).toHaveCount(3);
+    await expect(card.getByRole("button", { name: "Open node" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "Revalidate SSH" })).toBeVisible();
+
+    // The list is no longer a Naive UI data table.
+    await expect(page.locator(".n-data-table")).toHaveCount(0);
+  });
+});

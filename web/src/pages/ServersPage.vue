@@ -3,19 +3,13 @@ import {
   NAlert,
   NButton,
   NCard,
-  NDataTable,
   NEmpty,
   NIcon,
   NInput,
   NPopconfirm,
-  NProgress,
-  NSpace,
-  NText,
   useMessage,
 } from "naive-ui";
-import type { DataTableColumns } from "naive-ui";
-import { computed, h, onMounted, onUnmounted, ref } from "vue";
-import type { VNode } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import { describeServerError } from "../api/servers";
@@ -24,7 +18,7 @@ import AddServerWizard from "../components/AddServerWizard.vue";
 import GothamIcon from "../components/GothamIcon.vue";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
-import { relativeTime, toPercent } from "../utils/format";
+import { formatBytes, relativeTime, toPercent } from "../utils/format";
 
 const router = useRouter();
 const serversStore = useServersStore();
@@ -98,195 +92,48 @@ const filteredServers = computed<Server[]>(() =>
 );
 
 /** meterColor picks the bar color: per-metric base, danger red over 80%. */
-function meterColor(value: number, base: string): string {
-  if (value > dangerThreshold) {
-    return "var(--danger)";
+function meterColor(value: number | null, base: string): string {
+  if (value === null || value === undefined || value > dangerThreshold) {
+    return value === null || value === undefined ? base : "var(--danger)";
   }
   return base;
 }
 
-/** usageCell renders a nullable usage reading as value + threshold bar.
- *
- * Heartbeat usage arrives as a fraction 0..1 (see toPercent), so the raw
- * reading is normalized before display and threshold coloring.
- */
-function usageCell(value: number | null, baseColor: string): VNode {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return h(NText, { depth: 3 }, { default: () => "—" });
-  }
-  const rounded = toPercent(value);
-  return h("div", { class: "metric" }, [
-    h("span", { class: "metric-val" }, `${rounded}%`),
-    h(NProgress, {
-      type: "line",
-      percentage: rounded,
-      height: 6,
-      color: meterColor(rounded, baseColor),
-      "show-indicator": false,
-      "border-radius": 9999,
-    }),
-  ]);
-}
-
-/** textCell renders a nullable string, falling back to an em dash. */
-function textCell(value: string | null, mono = false): VNode {
-  if (value === null || value === undefined || value === "") {
-    return h(NText, { depth: 3 }, { default: () => "—" });
-  }
-  if (mono) {
-    return h("span", { class: "mono tnum" }, value);
-  }
-  return h("span", {}, value);
-}
-
 /**
- * actionsCell renders the per-row controls: re-validate (existing flow),
- * Open node (server-detail route), Containers (server-containers route), and
- * Delete with confirm. There is no agent-update backend route, so no Update
- * agent action is rendered — it is omitted, never faked.
+ * initials builds the node avatar label: the first letters of up to two words
+ * ("gotham-prod-01" -> "GP"). Ported from the server-detail avatar.
  */
-function actionsCell(row: Server): VNode {
-  return h(NSpace, { size: 8, align: "center", wrap: false }, {
-    default: () => [
-      h(
-        NButton,
-        {
-          size: "small",
-          loading: validatingId.value === row.id,
-          onClick: () => {
-            void handleValidate(row);
-          },
-        },
-        { default: () => "Re-validate" },
-      ),
-      h(
-        NButton,
-        {
-          size: "small",
-          quaternary: true,
-          onClick: () => {
-            void openNode(row.id);
-          },
-        },
-        { default: () => "Open node" },
-      ),
-      h(
-        NButton,
-        {
-          size: "small",
-          quaternary: true,
-          onClick: () => {
-            void openContainers(row.id);
-          },
-        },
-        { default: () => "Containers" },
-      ),
-      h(
-        NPopconfirm,
-        {
-          onPositiveClick: () => {
-            void handleDelete(row);
-          },
-        },
-        {
-          trigger: () =>
-            h(
-              NButton,
-              { size: "small", type: "error", quaternary: true },
-              { default: () => "Delete" },
-            ),
-          default: () => `Delete server "${row.name}"?`,
-        },
-      ),
-    ],
-  });
+function initials(name: string): string {
+  const parts = name.split(/[-_.\s]+/).filter(Boolean);
+  const letters = parts.slice(0, 2).map((part) => part[0] ?? "");
+  return (letters.join("") || name.slice(0, 2)).toUpperCase();
 }
 
-const columns: DataTableColumns<Server> = [
-  { title: "Name", key: "name", minWidth: 140, ellipsis: { tooltip: true } },
-  {
-    title: "Address",
-    key: "address",
-    minWidth: 150,
-    render: (row) => h("span", { class: "mono tnum" }, `${row.ip}:${row.port}`),
-  },
-  {
-    title: "Status",
-    key: "status",
-    width: 110,
-    render: (row) => h(ServerStatusTag, { status: row.status }),
-  },
-  {
-    title: "CPU",
-    key: "cpu_usage",
-    width: 140,
-    render: (row) => usageCell(row.cpu_usage, "var(--accent)"),
-  },
-  {
-    title: "RAM",
-    key: "mem_usage",
-    width: 140,
-    render: (row) => usageCell(row.mem_usage, "var(--success)"),
-  },
-  {
-    title: "Disk",
-    key: "disk_usage",
-    width: 140,
-    render: (row) => usageCell(row.disk_usage, "var(--warn)"),
-  },
-  {
-    title: "OS",
-    key: "os",
-    minWidth: 120,
-    ellipsis: { tooltip: true },
-    render: (row) => textCell(row.os),
-  },
-  {
-    title: "Arch",
-    key: "arch",
-    width: 90,
-    render: (row) => textCell(row.arch, true),
-  },
-  {
-    title: "SSH user",
-    key: "ssh_user",
-    width: 100,
-    render: (row) => textCell(row.ssh_user, true),
-  },
-  {
-    title: "Containers",
-    key: "container_count",
-    width: 100,
-    render: (row) =>
-      row.container_count === null || row.container_count === undefined
-        ? h(NText, { depth: 3 }, { default: () => "—" })
-        : h("span", { class: "tnum" }, String(row.container_count)),
-  },
-  {
-    title: "Docker",
-    key: "docker_version",
-    minWidth: 110,
-    ellipsis: { tooltip: true },
-    render: (row) => textCell(row.docker_version, true),
-  },
-  {
-    title: "Last seen",
-    key: "last_seen",
-    width: 110,
-    render: (row) => relativeTime(row.last_seen),
-  },
-  {
-    title: "Actions",
-    key: "actions",
-    width: 320,
-    render: (row) => actionsCell(row),
-  },
-];
-
-/** rowKey identifies a row by its server id. */
-function rowKey(row: Server): string {
-  return row.id;
+/** pctLabel renders a nullable usage fraction (0..1) as a percentage. */
+function pctLabel(value: number | null): string {
+  return value === null || value === undefined || Number.isNaN(value)
+    ? "—"
+    : `${toPercent(value)}%`;
 }
+
+/** meterWidth is the bar width for a nullable usage fraction (0..1). */
+function meterWidth(value: number | null): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "0%";
+  }
+  return `${Math.max(0, Math.min(100, toPercent(value)))}%`;
+}
+
+/** keyLabel identifies the SSH key by its short id; the API exposes no name. */
+function keyLabel(server: Server): string {
+  return server.ssh_key_id ? server.ssh_key_id.slice(0, 8) : "default";
+}
+
+/** nodeMeta is the head sub-line: address, OS and architecture. */
+function nodeMeta(server: Server): string {
+  return [server.ip, server.os ?? "—", server.arch ?? "—"].join(" \u00b7 ");
+}
+
 
 /** handleValidate probes one server and reports the outcome. */
 async function handleValidate(server: Server): Promise<void> {
@@ -458,16 +305,112 @@ onUnmounted(() => {
         </NInput>
       </div>
 
-      <NDataTable
+      <div
         v-if="filteredServers.length > 0 || serversStore.loading"
-        :columns="columns"
-        :data="filteredServers"
-        :loading="serversStore.loading"
-        :row-key="rowKey"
-        :bordered="false"
-        :scroll-x="1500"
-        :pagination="{ pageSize: 10 }"
-      />
+        class="grid cols-2 node-list"
+        data-od-id="node-list"
+      >
+        <article
+          v-for="server in filteredServers"
+          :key="server.id"
+          class="node-card"
+          :data-server="server.name"
+        >
+          <div class="node-head">
+            <span class="avatar">{{ initials(server.name) }}</span>
+            <div class="grow">
+              <p class="fg-2 bold">{{ server.name }}</p>
+              <p class="small muted">{{ nodeMeta(server) }}</p>
+            </div>
+            <ServerStatusTag :status="server.status" />
+          </div>
+
+          <dl class="kv">
+            <dt>Docker</dt>
+            <dd class="mono">{{ server.docker_version ?? "—" }}</dd>
+            <dt>Resources</dt>
+            <dd class="mono">
+              {{ formatBytes(server.total_mem) }} RAM ·
+              {{ formatBytes(server.total_disk) }} disk
+            </dd>
+            <dt>Agent</dt>
+            <dd class="mono">
+              {{ server.node_id ?? "—" }} · {{ relativeTime(server.last_seen) }}
+            </dd>
+            <dt>SSH</dt>
+            <dd>
+              <span class="inline-code">{{ keyLabel(server) }}</span> · user
+              <span class="mono">{{ server.ssh_user }}</span>
+            </dd>
+          </dl>
+
+          <div class="node-metrics">
+            <div class="node-metric">
+              <p class="stat-label">CPU</p>
+              <p class="val">{{ pctLabel(server.cpu_usage) }}</p>
+              <span class="meter mt-2">
+                <i
+                  :style="{
+                    width: meterWidth(server.cpu_usage),
+                    background: meterColor(server.cpu_usage, 'var(--accent)'),
+                  }"
+                />
+              </span>
+            </div>
+            <div class="node-metric">
+              <p class="stat-label">RAM</p>
+              <p class="val">{{ pctLabel(server.mem_usage) }}</p>
+              <span class="meter mt-2">
+                <i
+                  :style="{
+                    width: meterWidth(server.mem_usage),
+                    background: meterColor(server.mem_usage, 'var(--success)'),
+                  }"
+                />
+              </span>
+            </div>
+            <div class="node-metric">
+              <p class="stat-label">Disk</p>
+              <p class="val">{{ pctLabel(server.disk_usage) }}</p>
+              <span class="meter mt-2">
+                <i
+                  :style="{
+                    width: meterWidth(server.disk_usage),
+                    background: meterColor(server.disk_usage, 'var(--warn)'),
+                  }"
+                />
+              </span>
+            </div>
+          </div>
+
+          <div class="node-foot">
+            <span class="tag">
+              {{ server.container_count ?? 0 }} container{{
+                (server.container_count ?? 0) === 1 ? "" : "s"
+              }}
+            </span>
+            <NButton size="small" style="margin-left: auto" @click="openNode(server.id)">
+              Open node
+            </NButton>
+            <NButton
+              size="small"
+              :loading="validatingId === server.id"
+              @click="handleValidate(server)"
+            >
+              Revalidate SSH
+            </NButton>
+            <NButton size="small" @click="openContainers(server.id)">
+              Containers
+            </NButton>
+            <NPopconfirm @positive-click="handleDelete(server)">
+              <template #trigger>
+                <NButton size="small" type="error" secondary>Delete</NButton>
+              </template>
+              Remove {{ server.name }}? Containers on the node are not touched.
+            </NPopconfirm>
+          </div>
+        </article>
+      </div>
       <NEmpty v-else class="servers-empty" description="No nodes match the current filters">
         <template #icon>
           <NIcon>
@@ -730,6 +673,175 @@ systemctl status gotham-agent</code></pre>
     margin-left: 0;
     max-width: none;
     width: 100%;
+  }
+}
+
+/* ── Node grid (docs/design/servers.html) ──────────────────────────────────
+   The list region is a grid of node cards, not a data table. These rules are
+   ported from docs/design/assets/gotham-views.css (.node-card family) and
+   docs/design/assets/gotham-ui.css (grid/avatar/tag/meter/kv utilities) that
+   the app does not carry globally; tokens come from styles/tokens.css. */
+.grid {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.node-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.node-card:hover {
+  border-color: var(--border-soft);
+}
+
+.node-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.node-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.node-metric .stat-label {
+  font-size: 10px;
+}
+
+.node-metric .val {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--fg);
+  margin-top: 2px;
+}
+
+.node-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(90px, 110px) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  align-items: baseline;
+  margin: 0;
+}
+
+.kv dt {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.kv dd {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: var(--accent-on);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.inline-code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--surface-warm);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--fg);
+}
+
+.meter {
+  display: block;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-warm);
+  overflow: hidden;
+}
+
+.meter i {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  transition: width 600ms var(--ease-standard);
+}
+
+.grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fg-2 {
+  color: var(--fg-2);
+}
+
+.bold {
+  font-weight: 600;
+}
+
+.small {
+  font-size: var(--text-xs);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.mt-2 {
+  margin-top: var(--space-2);
+}
+
+@media (max-width: 940px) {
+  .cols-2 {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

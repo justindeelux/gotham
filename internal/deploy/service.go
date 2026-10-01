@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -28,12 +29,32 @@ func Enabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv(FeatureEnv)), "false")
 }
 
+// DefaultHookTimeout bounds one best-effort Git-host hook call (install on
+// create, remove on delete; Config.HookTimeout overrides it).
+//
+// The budget, with webhooks.hookRollbackTimeout (3s): a create whose provider
+// answers at this deadline and whose hook-row write then fails spends at most
+// 8s + 3s = 11s before it answers, leaving 4s of the SPA's 15s request timeout
+// (web/src/api/http.ts) for everything else. Raising either bound must keep
+// the sum safely below that timeout — TestHookBudgetsStayUnderSPARequestTimeout
+// in internal/webhooks pins it.
+const DefaultHookTimeout = 8 * time.Second
+
 // DeployService is the control-plane surface the HTTP layer depends on. It is
 // implemented by Service and by fakes in route tests.
 type DeployService interface {
 	// CreateApplication stores an application together with the environment
 	// and storage configuration sent with it.
 	CreateApplication(ctx context.Context, userID uuid.UUID, in CreateApplicationInput) (Application, error)
+	// InstallHook installs the provider hook of an application that was just
+	// created (BE-4.4). The call is bounded (Config.HookTimeout) and a
+	// failure is logged with the configured logger; callers must never fail
+	// the create on it — the application row is already committed and the
+	// explicit idempotent webhook route is the retry path.
+	//
+	// attempted is false when no hook lifecycle is wired: there is no outcome
+	// to report, and the create response omits the webhook field.
+	InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) (attempted bool, err error)
 	// ListApplications returns the caller's applications, newest first.
 	ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error)
 	// GetApplication returns one application the caller owns (404 otherwise).
@@ -68,6 +89,24 @@ type DeployService interface {
 	// Rollback queues a deployment of a previous release's image. A zero
 	// deploymentID selects the previous successful deployment automatically.
 	Rollback(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error)
+}
+
+// HookLifecycle installs and removes the Git-host hook that turns a push
+// into a deployment. The server wires it to the webhooks service (BE-4.4);
+// without it the applications surface keeps working and hooks stay manageable
+// through the explicit webhook routes.
+//
+// InstallHook takes the create request because the public callback origin is
+// request-derived (X-Forwarded-Proto + Host), exactly like the explicit
+// webhook route; a caller without a request must use that route instead.
+type HookLifecycle interface {
+	// InstallHook installs the application's provider hook, deriving the
+	// public callback origin from r. It is idempotent: an application that
+	// already has a hook reports success without installing a second one.
+	InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) error
+	// RemoveHook removes the application's provider hook and its stored row;
+	// an application without a hook is a success.
+	RemoveHook(ctx context.Context, userID, appID uuid.UUID) error
 }
 
 // Config wires a Service. Store (or an explicit Repository) is required for
@@ -109,6 +148,17 @@ type Config struct {
 	// siblings survive, leaving them untracked. Container stops inside the
 	// callback stay best effort. nil disables the hook.
 	PreviewCleanup func(ctx context.Context, appID uuid.UUID) error
+	// Hooks resolves the provider-hook lifecycle (BE-4.4). It is a function
+	// because the webhook service is built after this one — it consumes this
+	// service as its deployer — so the server's closure returns it once it
+	// exists. nil, or a closure answering nil, disables automatic hook
+	// management; the explicit webhook routes keep working either way.
+	Hooks func() HookLifecycle
+	// HookTimeout bounds one best-effort hook call against a provider that
+	// accepts the connection and then stalls. Zero selects
+	// DefaultHookTimeout (8s). The bound is a request-path safety net, not a
+	// retry budget: a timeout is logged like any other hook failure.
+	HookTimeout time.Duration
 	// Emitter overrides the publisher-based realtime emitter (tests).
 	Emitter *Emitter
 	// Logger defaults to slog.Default.
@@ -138,9 +188,9 @@ func (c Config) repository() Repository {
 
 // Service is the deploy domain service: it validates and queues deployments,
 // lists them, drives rollbacks, and runs them on the orchestrator's worker
-// pool. It also owns the application deploy-key lifecycle (registering a key
-// on the Git host and removing it with the application). It is safe for
-// concurrent use.
+// pool. It also owns the application hook and deploy-key lifecycles
+// (installing/removing the Git-host integration with the application). It is
+// safe for concurrent use.
 type Service struct {
 	*Orchestrator
 	// registrar talks to the Git host for deploy keys; nil when no provider
@@ -150,6 +200,10 @@ type Service struct {
 	// previewCleanup, when set, runs before an application row is deleted (see
 	// Config.PreviewCleanup).
 	previewCleanup func(ctx context.Context, appID uuid.UUID) error
+	// hooks resolves the provider-hook lifecycle lazily (see Config.Hooks).
+	hooks func() HookLifecycle
+	// hookTimeout bounds one hook call (see Config.HookTimeout).
+	hookTimeout time.Duration
 }
 
 // Compile-time guarantee that Service satisfies the route-level contract.
@@ -162,7 +216,26 @@ var _ DeployService = (*Service)(nil)
 func NewService(cfg Config) *Service {
 	o := newOrchestrator(cfg)
 	o.recoverStale()
-	return &Service{Orchestrator: o, registrar: cfg.KeyRegistrar, previewCleanup: cfg.PreviewCleanup}
+	hookTimeout := cfg.HookTimeout
+	if hookTimeout <= 0 {
+		hookTimeout = DefaultHookTimeout
+	}
+	return &Service{
+		Orchestrator:   o,
+		registrar:      cfg.KeyRegistrar,
+		previewCleanup: cfg.PreviewCleanup,
+		hooks:          cfg.Hooks,
+		hookTimeout:    hookTimeout,
+	}
+}
+
+// hookLifecycle resolves the configured hook lifecycle, tolerating a closure
+// that answers nil (the webhook service is absent).
+func (s *Service) hookLifecycle() HookLifecycle {
+	if s == nil || s.hooks == nil {
+		return nil
+	}
+	return s.hooks()
 }
 
 // recoverStale marks deployments abandoned by a previous control plane

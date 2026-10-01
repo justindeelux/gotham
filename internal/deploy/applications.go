@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -117,6 +118,34 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	return created, nil
 }
 
+// InstallHook installs the provider hook that triggers automatic deploys of
+// a freshly created application (BE-4.4). It is deliberately best effort:
+// the application row is already committed, so a provider outage, missing
+// credentials or an unusable callback origin must not fail the create and
+// leave the caller with an application it does not know exists. The call is
+// bounded by Config.HookTimeout — a provider that accepts the connection and
+// then stalls must not hold the create request past the SPA's own timeout —
+// and a failure is logged with the configured logger (never silently
+// dropped). The explicit idempotent POST /v1/applications/{id}/webhooks route
+// is the retry path.
+//
+// attempted is false when no hook lifecycle is wired: there is no outcome to
+// report and the create response omits the webhook field.
+func (s *Service) InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) (attempted bool, err error) {
+	lifecycle := s.hookLifecycle()
+	if lifecycle == nil {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.hookTimeout)
+	defer cancel()
+	err = lifecycle.InstallHook(ctx, userID, appID, r)
+	if err != nil {
+		s.logger.Warn("deploy: webhook not installed for the new application; retry with POST /v1/applications/{id}/webhooks",
+			"application_id", appID, "error", err)
+	}
+	return true, err
+}
+
 // ListApplications returns the active team's applications, newest first.
 // Without a team context it returns the creator's applications, which is the
 // pre-teams behavior.
@@ -227,10 +256,15 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 }
 
 // DeleteApplication removes an application together with everything that hangs
-// off it. Its deploy key is detached first — on the Git host and then in the
-// database — so a host failure aborts the delete while both sides still agree;
-// the container stop stays best effort: a control plane that cannot reach the
-// node must still be able to delete an application.
+// off it. Its provider hook is detached first and the delete fails closed on a
+// removal failure, so nothing that would break the still-live application has
+// been mutated when it aborts (the escape hatch for a hook whose provider is
+// gone is ForgetWebhook, DELETE .../webhooks?force=true). The deploy key is
+// detached next, best effort: once the hook is gone, a host failure must not
+// leave a live application without automatic deploys (the local row cascades
+// with the application and the warning names the remote key). The container
+// stop stays best effort too: a control plane that cannot reach the node must
+// still be able to delete an application.
 func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error {
 	if !Enabled() {
 		return ErrDisabled
@@ -250,15 +284,43 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 			return err
 		}
 	}
-	// A preview sibling reuses its base application's remote deploy key:
-	// removing it from the Git host would break the base (and every other
-	// sibling). Only the local rows go; the remote key stays registered.
+	// Remove the provider hook (BE-4.4) FIRST, bounded like the create call,
+	// and fail closed: the stored row is the only handle on the remote hook,
+	// so deleting it while the host may still hold the hook would orphan the
+	// hook with nothing left to identify it (the explicit route could no
+	// longer reach it). Ordering matters for the still-live application too:
+	// when this returns an error, the deploy key, the container and the row
+	// are all untouched, so a webhook deploy that still reaches the app can
+	// keep cloning. The caller retries, removes the hook on the host by hand,
+	// or acknowledges the orphan with
+	// DELETE /v1/applications/{id}/webhooks?force=true (ForgetWebhook) and
+	// deletes again. A preview sibling never holds its own hook.
+	if !app.IsPreview && supportedSourceProvider(app.Provider) && strings.TrimSpace(app.Repo) != "" {
+		if lifecycle := s.hookLifecycle(); lifecycle != nil {
+			hookCtx, cancel := context.WithTimeout(ctx, s.hookTimeout)
+			err := lifecycle.RemoveHook(hookCtx, userID, app.ID)
+			cancel()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	// Detach the deploy key next. It is BEST EFFORT once the provider hook is
+	// gone: aborting here would leave a live application whose automatic
+	// deploys are silently disabled — the exact state this ordering exists to
+	// prevent. The local key row cascades away with the application; a key
+	// left registered on the Git host is the lesser evil, and the warning
+	// names provider and repository so it can be removed there by hand. A
+	// preview sibling reuses its base application's remote deploy key, so
+	// only its local rows go and the remote key always stays registered.
 	if app.IsPreview {
 		if _, err := s.repo.DeleteDeployKey(ctx, app.ID); err != nil && !errors.Is(err, ErrNotFound) {
-			return err
+			s.logger.Warn("deploy: preview deploy key row could not be detached; the application still deletes",
+				"application_id", app.ID, "error", err)
 		}
 	} else if err := s.detachDeployKey(ctx, app); err != nil {
-		return err
+		s.logger.Warn("deploy: deploy key could not be detached; the application still deletes",
+			"application_id", app.ID, "provider", app.Provider, "repo", app.Repo, "error", err)
 	}
 	s.stopBestEffort(ctx, app)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {

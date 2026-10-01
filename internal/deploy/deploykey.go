@@ -109,7 +109,7 @@ func deployKeyTarget(app Application) providers.HookTarget {
 // registered for: without a provider connection and a repository identifier
 // there is no API to call (a pasted public URL is cloned anonymously).
 func validateDeployKeyTarget(app Application) error {
-	if !supportedDeployKeyProvider(app.Provider) {
+	if !supportedSourceProvider(app.Provider) {
 		return fmt.Errorf("%w: application provider %q cannot register deploy keys", ErrValidation, app.Provider)
 	}
 	if strings.TrimSpace(app.Repo) == "" {
@@ -118,9 +118,10 @@ func validateDeployKeyTarget(app Application) error {
 	return nil
 }
 
-// supportedDeployKeyProvider reports whether a provider name has deploy-key
-// implementations (exactly the SourceProvider set).
-func supportedDeployKeyProvider(provider string) bool {
+// supportedSourceProvider reports whether a provider name has source-provider
+// implementations: the Git hosts whose deploy keys, webhooks and repository
+// APIs Gotham can call (exactly the providers.SourceProvider set).
+func supportedSourceProvider(provider string) bool {
 	switch provider {
 	case providers.NameGitHub, providers.NameGitLab, providers.NameGitea:
 		return true
@@ -222,10 +223,12 @@ func (s *Service) DeleteDeployKey(ctx context.Context, userID, appID uuid.UUID) 
 }
 
 // detachDeployKey removes an application's deploy key as part of deleting the
-// application itself. Unlike DeleteDeployKey it tolerates a missing registrar
-// (logging instead): an application must never become undeletable because the
-// Git host cannot be reached — the row cascade would orphan the host key, so
-// the warning names what to clean up by hand.
+// application itself. The local rows — the mapping and the sealed private key
+// it points at — always go, regardless of the host outcome: private_keys has
+// no application FK, so deleting the application cascades only the mapping and
+// would strand the sealed credential. The host removal stays best effort; its
+// error is returned so the caller logs the remote key for manual cleanup (a
+// missing registrar is tolerated the same way).
 func (s *Service) detachDeployKey(ctx context.Context, app Application) error {
 	key, err := s.repo.GetDeployKey(ctx, app.ID)
 	switch {
@@ -234,18 +237,20 @@ func (s *Service) detachDeployKey(ctx context.Context, app Application) error {
 	case err != nil:
 		return err
 	}
-	if err := s.removeHostDeployKey(ctx, app, key); err != nil {
-		return err
-	}
+	hostErr := s.removeHostDeployKey(ctx, app, key)
 	if _, err := s.repo.DeleteDeployKey(ctx, app.ID); err != nil && !errors.Is(err, ErrNotFound) {
+		if hostErr != nil {
+			return fmt.Errorf("%w; local key cleanup also failed: %v", hostErr, err)
+		}
 		return err
 	}
-	return nil
+	return hostErr
 }
 
 // removeHostDeployKey deletes the key from the Git host when one was
-// registered. A host failure is returned as ErrProvider so the caller aborts
-// before touching the row.
+// registered. A host failure is returned as ErrProvider so the caller can log
+// the orphan; detachDeployKey removes the local rows regardless, because the
+// sealed private key must not survive the application.
 func (s *Service) removeHostDeployKey(ctx context.Context, app Application, key DeployKey) error {
 	if key.ProviderKeyID == "" {
 		return nil

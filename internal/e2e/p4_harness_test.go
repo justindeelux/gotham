@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/redis/go-redis/v9"
 
@@ -287,7 +289,13 @@ func newP4Harness(t *testing.T) *p4Harness {
 	})
 
 	// 6. The domain services, wired the way internal/server wires them: store,
-	// sealing key, realtime publisher and the mTLS agent dialer.
+	// sealing key, realtime publisher and the mTLS agent dialer. hookSvc is
+	// declared first because the deploy service resolves it lazily — the
+	// production wiring builds the webhook service after the deploy service
+	// (it consumes it as its deployer), and the closure below mirrors that.
+	// This makes every application created through the API install its hook
+	// through the real lifecycle, not just the explicit webhook route.
+	var hookSvc *webhooks.Service
 	deploySvc := deploy.NewService(deploy.Config{
 		Store:     st,
 		Secret:    p4Secret,
@@ -300,6 +308,7 @@ func newP4Harness(t *testing.T) *p4Harness {
 			authority: authority,
 		}),
 		Workers: 2,
+		Hooks:   func() deploy.HookLifecycle { return hookSvc },
 	})
 	t.Cleanup(func() { _ = deploySvc.Close() })
 
@@ -309,7 +318,7 @@ func newP4Harness(t *testing.T) *p4Harness {
 	// suite never talks to a Git host). The flag is forced on so an ambient
 	// FEATURE_PREVIEWS=false cannot disable the surface under test.
 	t.Setenv(webhooks.FeatureEnv, "true")
-	hookSvc := webhooks.NewService(webhooks.Config{
+	hookSvc = webhooks.NewService(webhooks.Config{
 		Store:       st,
 		Installer:   stubInstaller{},
 		Deployer:    deploySvc,
@@ -501,7 +510,9 @@ func (h *p4Harness) waitForDeployLog(t *testing.T, deploymentID, want string) {
 // seedWebhook stores the hook of an application directly — the provider API is
 // unreachable in CI, so the row is written with the same sealed secret the
 // installer would have stored, and the test signs deliveries with the plain
-// value it passed in.
+// value it passed in. Creating an application already auto-installed a hook
+// with a random secret (the harness wires cfg.Hooks like production), so that
+// row is replaced: the test must sign with the secret it knows.
 func (h *p4Harness) seedWebhook(t *testing.T, app p4Application, plainSecret string) {
 	t.Helper()
 	sealed, err := providers.SealSecret(h.secret, plainSecret)
@@ -510,8 +521,12 @@ func (h *p4Harness) seedWebhook(t *testing.T, app p4Application, plainSecret str
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	applicationID := pgUUID(uuid.MustParse(app.ID))
+	if _, err := h.st.DeleteApplicationWebhook(ctx, applicationID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("clear auto-installed webhook row: %v", err)
+	}
 	if _, err := h.st.CreateApplicationWebhook(ctx, sqlc.CreateApplicationWebhookParams{
-		ApplicationID: pgUUID(uuid.MustParse(app.ID)),
+		ApplicationID: applicationID,
 		Provider:      "github",
 		Repo:          app.Repo,
 		HookID:        "p4-e2e-hook",

@@ -47,6 +47,12 @@ type fakeDeployService struct {
 	deletedKeyCalls int
 	createdKeyFor   uuid.UUID
 
+	// provider hook lifecycle (BE-4.4).
+	installAttempted bool
+	installCalls     int
+	installErr       error
+	installedFor     uuid.UUID
+
 	seenUser        uuid.UUID
 	seenApplication uuid.UUID
 	seenRollback    uuid.UUID
@@ -100,6 +106,13 @@ func (f *fakeDeployService) UpdateApplication(_ context.Context, userID, appID u
 func (f *fakeDeployService) DeleteApplication(_ context.Context, userID, appID uuid.UUID) error {
 	f.seenUser, f.seenApplication = userID, appID
 	return f.deleteErr
+}
+
+// InstallHook implements DeployService.
+func (f *fakeDeployService) InstallHook(_ context.Context, userID, appID uuid.UUID, _ *http.Request) (bool, error) {
+	f.seenUser, f.installedFor = userID, appID
+	f.installCalls++
+	return f.installAttempted, f.installErr
 }
 
 // CreateDeployKey implements DeployService.

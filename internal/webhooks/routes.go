@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -86,7 +87,9 @@ type handler struct {
 //
 //	POST   /v1/webhooks/{provider}          (public: signature-verified)
 //	POST   /v1/applications/{id}/webhooks   (authenticated, idempotent)
-//	DELETE /v1/applications/{id}/webhooks   (authenticated, idempotent)
+//	DELETE /v1/applications/{id}/webhooks   (authenticated, idempotent;
+//	                                         ?force=true forgets the stored
+//	                                         hook when the host is gone)
 //	GET    /v1/applications/{id}/previews   (authenticated; previews enabled)
 //
 // auth wraps the management group: the server passes its team chain
@@ -156,7 +159,11 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 // delete serves DELETE .../webhooks: remove the hook of an application. An
-// application without a hook answers 200 with deleted=false.
+// application without a hook answers 200 with deleted=false. ?force=true
+// forgets the stored hook WITHOUT contacting the Git host — the documented
+// escape hatch for deleting an application whose provider connection is gone
+// or stalling; the remote hook is then left behind and only the warning
+// records it. Every other value keeps the strict, host-first semantics.
 func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -167,12 +174,26 @@ func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	deleted, err := h.svc.DeleteWebhook(r.Context(), userID, appID)
+	var deleted bool
+	var err error
+	if forceRequested(r) {
+		deleted, err = h.svc.ForgetWebhook(r.Context(), userID, appID)
+	} else {
+		deleted, err = h.svc.DeleteWebhook(r.Context(), userID, appID)
+	}
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, deleteEnvelope{Deleted: deleted})
+}
+
+// forceRequested reports whether the caller asked for the force escape hatch
+// (?force=true). Any other value (including an unparsable one) keeps the
+// strict semantics, so a typo can never silently orphan a remote hook.
+func forceRequested(r *http.Request) bool {
+	force, err := strconv.ParseBool(strings.TrimSpace(r.URL.Query().Get("force")))
+	return err == nil && force
 }
 
 // listPreviews serves GET /v1/applications/{id}/previews: the application's

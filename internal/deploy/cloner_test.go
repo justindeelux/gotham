@@ -26,6 +26,7 @@ func TestValidateCloneURL(t *testing.T) {
 		{"https", "https://github.com/acme/demo.git", true},
 		{"http", "http://git.internal/acme/demo.git", true},
 		{"ssh", "ssh://git@git.internal/acme/demo.git", true},
+		{"ssh with port", "ssh://git@git.internal:2222/acme/demo.git", true},
 		{"scp-like", "git@git.internal:acme/demo.git", true},
 		{"local path", "/srv/fixtures/demo", false},
 		{"file URL", "file:///srv/fixtures/demo", false},
@@ -327,7 +328,10 @@ func TestGitSourceCloneKeyLookupFailureStopsClone(t *testing.T) {
 }
 
 // TestSSHCloneURL covers the http(s) → ssh rewrite a deploy key needs, and the
-// URL shapes that must pass through untouched.
+// URL shapes that must pass through untouched. The FE stores the provider's
+// own ssh_url for a private repository (BE-4.4b), so an ssh URL — including a
+// self-hosted instance on a non-default port — is what the cloner normally
+// sees and must never be rewritten.
 func TestSSHCloneURL(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -337,6 +341,7 @@ func TestSSHCloneURL(t *testing.T) {
 		{"http://git.internal/acme/demo.git", "ssh://git@git.internal/acme/demo.git"},
 		{"https://gitea.example:3000/acme/demo.git", "ssh://git@gitea.example/acme/demo.git"},
 		{"ssh://git@git.internal/acme/demo.git", "ssh://git@git.internal/acme/demo.git"},
+		{"ssh://git@git.internal:2222/acme/demo.git", "ssh://git@git.internal:2222/acme/demo.git"},
 		{"git@git.internal:acme/demo.git", "git@git.internal:acme/demo.git"},
 		{"/srv/fixtures/demo", "/srv/fixtures/demo"},
 	}
@@ -366,8 +371,10 @@ func TestGitSourceRejectsInvalidURLWithoutRunningGit(t *testing.T) {
 	}
 }
 
-func TestGitSourceClonesBranch(t *testing.T) {
-	t.Setenv(devLocalCloneEnv, "true")
+// seedGitFixture creates a local git repository with one commit on main and
+// returns its directory. It skips the test when git is unavailable.
+func seedGitFixture(t *testing.T) string {
+	t.Helper()
 	git, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("git binary is not available")
@@ -398,6 +405,12 @@ func TestGitSourceClonesBranch(t *testing.T) {
 	run("add", ".")
 	run("commit", "-m", "seed")
 	run("branch", "-M", "main")
+	return origin
+}
+
+func TestGitSourceClonesBranch(t *testing.T) {
+	t.Setenv(devLocalCloneEnv, "true")
+	origin := seedGitFixture(t)
 
 	app := testApplication(uuid.New())
 	app.CloneURL = origin
@@ -425,6 +438,104 @@ func TestGitSourceClonesBranch(t *testing.T) {
 	// overwrite: the second run must clear it and succeed again.
 	if err := (gitSource{}).Clone(context.Background(), app, dir, nil); err != nil {
 		t.Fatalf("retried clone: %v", err)
+	}
+}
+
+// stubSSHScript is a test stand-in for ssh: it records the arguments and the
+// deploy key the cloner handed it, then serves the repository with
+// git-upload-pack locally. The last argument is the remote command git asked
+// ssh to run, so the stub closes the ssh transport over local pipes — no
+// network, no sshd, no host keys.
+const stubSSHScript = `#!/bin/sh
+record="$GOTHAM_TEST_SSH_RECORD"
+key=""
+prev=""
+for arg in "$@"; do
+  echo "arg: $arg" >> "$record"
+  if [ "$prev" = "-i" ]; then key="$arg"; fi
+  prev="$arg"
+done
+if [ -n "$key" ] && [ -f "$key" ]; then
+  cat "$key" > "$GOTHAM_TEST_SSH_KEY_COPY"
+  # GNU stat and BSD stat disagree on the flag: GNU -c %a, BSD -f %Lp. Probe
+  # GNU first — the BSD form is accepted by GNU stat as a filesystem query
+  # that prints a multi-line dump and exits 0, so a BSD-first probe never
+  # reaches its fallback and records no single-token mode on Linux CI.
+  mode=$(stat -c %a "$key" 2>/dev/null || stat -f %Lp "$key" 2>/dev/null | head -n1)
+  printf 'mode: %s\n' "$mode" >> "$record"
+fi
+for last in "$@"; do :; done
+exec /bin/sh -c "$last"
+`
+
+// TestGitSourceClonesPrivateRepoOverSSH exercises the private-repository clone
+// path end to end without a network: a real git binary clones a real fixture
+// repository through the GIT_SSH_COMMAND the cloner builds, with a stub `ssh`
+// on PATH that checks the ephemeral deploy key and serves the repository with
+// git-upload-pack. It covers the pieces BE-4.4b depends on — the stored SSH
+// clone URL, the 0600 key file, the ssh options and git's ssh transport — but
+// not SSH itself: the transport is git's, the crypto/auth hop is a local
+// stand-in (see the package's TestGitSourceCloneWithDeployKey for the fake
+// runner variant and the report for what a live host would still have to
+// prove).
+func TestGitSourceClonesPrivateRepoOverSSH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the ssh stand-in is a POSIX shell script")
+	}
+	origin := seedGitFixture(t)
+	origin = filepath.ToSlash(origin)
+
+	stubDir := t.TempDir()
+	recordPath := filepath.Join(stubDir, "record")
+	keyCopyPath := filepath.Join(stubDir, "key.pem")
+	if err := os.WriteFile(filepath.Join(stubDir, "ssh"), []byte(stubSSHScript), 0o755); err != nil {
+		t.Fatalf("write ssh stand-in: %v", err)
+	}
+	t.Setenv("GOTHAM_TEST_SSH_RECORD", recordPath)
+	t.Setenv("GOTHAM_TEST_SSH_KEY_COPY", keyCopyPath)
+	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	privatePEM, _, _, err := generateDeployKeyPair("gotham:deploy:test")
+	if err != nil {
+		t.Fatalf("generateDeployKeyPair: %v", err)
+	}
+	// The URL shape the FE stores for a private provider repository: a
+	// provider-reported ssh:// clone URL, here pointing at the fixture path.
+	app := testApplication(uuid.New())
+	app.CloneURL = "ssh://git@fixture.invalid" + origin
+	app.Branch = "main"
+	dir := filepath.Join(t.TempDir(), "repo")
+
+	source := gitSource{keys: &staticKeyResolver{pem: privatePEM}}
+	if err := source.Clone(context.Background(), app, dir, nil); err != nil {
+		t.Fatalf("clone through the ssh stand-in: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
+		t.Errorf("cloned tree has no Dockerfile: %v", err)
+	}
+
+	record, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatalf("the ssh stand-in never ran: %v", err)
+	}
+	text := string(record)
+	for what, want := range map[string]string{
+		"key flag":     "arg: -i\n",
+		"key-only ssh": "IdentitiesOnly=yes",
+		"known hosts":  "UserKnownHostsFile=",
+		"remote git":   "git-upload-pack",
+		"key mode":     "mode: 600",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("ssh call is missing %s (%q):\n%s", what, want, text)
+		}
+	}
+	copied, err := os.ReadFile(keyCopyPath)
+	if err != nil {
+		t.Fatalf("read the key the stand-in saw: %v", err)
+	}
+	if strings.TrimSpace(string(copied)) != strings.TrimSpace(privatePEM) {
+		t.Error("the clone did not present the application's deploy key")
 	}
 }
 

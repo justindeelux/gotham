@@ -27,6 +27,7 @@ import type {
   StorageMapping,
 } from "../api/applications";
 import { useProvidersStore } from "../stores/providers";
+import type { ProviderRepo } from "../api/providers";
 import { useServersStore } from "../stores/servers";
 import EnvEditor from "./EnvEditor.vue";
 import StorageEditor from "./StorageEditor.vue";
@@ -99,6 +100,7 @@ const BUILD_PACKS: Array<{ value: BuildPack; label: string; hint: string }> = [
 const step = ref(0);
 const submitting = ref(false);
 const errorMessage = ref("");
+const sourceError = ref("");
 
 const form = reactive<WizardForm>({
   providerId: "",
@@ -160,8 +162,16 @@ const sourceValid = computed<boolean>(() => {
     if (form.publicCloneUrl.trim() === "") {
       return false;
     }
-  } else if (form.repoFullName === "") {
-    return false;
+  } else {
+    if (form.repoFullName === "") {
+      return false;
+    }
+    // A private repository without a provider ssh_url is rejected rather than
+    // silently degraded to https: the keyed cloner would rewrite that URL and
+    // drop a self-hosted SSH port. sourceError names the gap.
+    if (form.cloneUrl.trim() === "") {
+      return false;
+    }
   }
   return form.branch.trim() !== "" && NAME_PATTERN.test(form.name.trim());
 });
@@ -228,11 +238,29 @@ watch(
   (providerId) => {
     form.repoFullName = "";
     form.cloneUrl = "";
+    sourceError.value = "";
     if (providerId !== "" && providerId !== PUBLIC_PROVIDER) {
       void providersStore.fetchRepos(providerId).catch(() => undefined);
     }
   },
 );
+
+/**
+ * cloneUrlFor returns the clone URL stored for a provider repository
+ * (BE-4.4b). A private repository is cloned with an SSH deploy key, so the
+ * provider's own ssh_url — authoritative for the host and any non-default SSH
+ * port — is stored. An empty ssh_url for a private repo returns "" and the
+ * wizard rejects the step (sourceError): falling back to https would let the
+ * keyed cloner rewrite it and silently drop the port. A public repository
+ * keeps its https URL, which the cloner fetches anonymously.
+ */
+function cloneUrlFor(repo: ProviderRepo): string {
+  const ssh = repo.ssh_url?.trim() ?? "";
+  if (repo.private) {
+    return ssh;
+  }
+  return repo.clone_url;
+}
 
 /** handleRepoSelect prefills branch, clone URL and a name from the repo. */
 function handleRepoSelect(fullName: string): void {
@@ -240,7 +268,12 @@ function handleRepoSelect(fullName: string): void {
   if (!repo) {
     return;
   }
-  form.cloneUrl = repo.clone_url;
+  form.cloneUrl = cloneUrlFor(repo);
+  sourceError.value = "";
+  if (repo.private && form.cloneUrl === "") {
+    sourceError.value =
+      "The provider reported no SSH URL for this private repository, so a deploy key cannot be used. Pick another repository or make the SSH URL available on the provider.";
+  }
   if (repo.default_branch) {
     form.branch = repo.default_branch;
   }
@@ -272,8 +305,16 @@ async function handleSubmit(): Promise<void> {
   errorMessage.value = "";
   submitting.value = true;
   try {
-    const application = await createApplication(buildPayload());
+    const { application, webhook } = await createApplication(buildPayload());
     message.success(`Application "${application.name}" created`);
+    if (webhook && !webhook.installed) {
+      message.warning(
+        `Automatic deploys are off: ${
+          webhook.error ?? "the provider hook could not be installed"
+        }`,
+        { duration: 8000 },
+      );
+    }
     emit("created", application);
     emit("update:show", false);
     resetWizard();
@@ -315,6 +356,7 @@ function resetWizard(): void {
   form.env = [{ key: "NODE_ENV", value: "production" }];
   form.storage = [];
   errorMessage.value = "";
+  sourceError.value = "";
   submitting.value = false;
 }
 </script>
@@ -398,6 +440,10 @@ function resetWizard(): void {
                 <span class="field-hint">Private repos deploy with an SSH deploy key.</span>
               </template>
             </NFormItem>
+
+            <NAlert v-if="sourceError" type="warning" :show-icon="true">
+              {{ sourceError }}
+            </NAlert>
 
             <NSpace :size="12">
               <NFormItem label="Branch" class="grow">

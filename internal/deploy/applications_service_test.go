@@ -1,10 +1,16 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -485,6 +491,313 @@ func TestServiceDeleteApplicationWithoutNode(t *testing.T) {
 	}
 	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("get after delete err = %v, want ErrNotFound", err)
+	}
+}
+
+// newHookService builds a service over repo whose hook lifecycle is hooks (or
+// a closure answering nil when hooks itself is nil).
+func newHookService(t *testing.T, repo *fakeRepository, hooks HookLifecycle) *Service {
+	t.Helper()
+	svc := NewService(Config{
+		Repository: repo,
+		Secret:     testSecretKey,
+		Logger:     discardLogger(),
+		Hooks:      func() HookLifecycle { return hooks },
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+	return svc
+}
+
+// TestServiceDeleteApplicationRemovesProviderHook pins the BE-4.4 delete
+// lifecycle order: the provider hook goes first, then the deploy key, then the
+// application row. The key must survive a failed hook removal (see
+// TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure); on the success
+// path the order keeps a webhook deploy that still reaches the app able to
+// clone until the hook is gone.
+func TestServiceDeleteApplicationRemovesProviderHook(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	var events []string
+	repo := &fakeRepository{app: app, events: &events}
+	if _, err := repo.CreateDeployKey(context.Background(), DeployKey{
+		ApplicationID: app.ID, Provider: app.Provider, Repo: app.Repo,
+	}, "seeded-key"); err != nil {
+		t.Fatalf("seed deploy key: %v", err)
+	}
+	hooks := &fakeHookLifecycle{events: &events}
+	svc := newHookService(t, repo, hooks)
+
+	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if hooks.removeCalls != 1 || len(hooks.removed) != 1 || hooks.removed[0] != app.ID {
+		t.Fatalf("removals = %v (%d calls), want one for %s", hooks.removed, hooks.removeCalls, app.ID)
+	}
+	if got, want := strings.Join(events, ","), "hook removed,deploy key detached,application deleted"; got != want {
+		t.Errorf("operation order = %q, want %q", got, want)
+	}
+	if repo.hasDeployKey(app.ID) {
+		t.Error("the deploy key survived the successful delete")
+	}
+	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("get after delete err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestServiceDeleteApplicationSkipsHookWithoutProvider pins the other half: a
+// pasted public URL has no provider hook, so the delete makes no hook call.
+// TestServiceDeleteApplicationSurvivesDeployKeyDetachFailure pins the
+// best-effort half of the ordering: once the provider hook is gone, a failing
+// deploy-key detach must not abort the delete and leave a live application
+// with automatic deploys silently disabled. The local key row cascades with
+// the application; the remote key orphan is logged with provider and repo for
+// manual cleanup.
+func TestServiceDeleteApplicationSurvivesDeployKeyDetachFailure(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	created, err := repo.CreateDeployKey(context.Background(), DeployKey{
+		ApplicationID: app.ID, Provider: app.Provider, Repo: app.Repo,
+		ProviderKeyID: "host-key-1",
+	}, "seeded-key")
+	if err != nil {
+		t.Fatalf("seed deploy key: %v", err)
+	}
+	registrar := &fakeRegistrar{removeErr: errors.New("host unreachable")}
+	hooks := &fakeHookLifecycle{}
+
+	var logs bytes.Buffer
+	svc := NewService(Config{
+		Repository:   repo,
+		Secret:       testSecretKey,
+		Logger:       slog.New(slog.NewTextHandler(&logs, nil)),
+		KeyRegistrar: registrar,
+		Hooks:        func() HookLifecycle { return hooks },
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+		t.Fatalf("a failed deploy-key detach must not leave a live hook-less application: %v", err)
+	}
+	if hooks.removeCalls != 1 {
+		t.Errorf("hook removals = %d, want the hook removed first", hooks.removeCalls)
+	}
+	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("get after delete err = %v, want ErrNotFound", err)
+	}
+	if repo.hasDeployKey(app.ID) {
+		t.Error("the local deploy key mapping must cascade with the application")
+	}
+	// private_keys has no application FK: the sealed row must go through the
+	// explicit local cleanup even when the host detach failed, or the
+	// credential is orphaned in the database.
+	if repo.hasPrivateKey(created.PrivateKeyID) {
+		t.Error("the sealed private key row was orphaned by the failed host detach")
+	}
+	logged := logs.String()
+	for _, want := range []string{app.Provider, app.Repo, "host unreachable"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log = %q, want the remote key orphan named by %q", logged, want)
+		}
+	}
+}
+
+func TestServiceDeleteApplicationSkipsHookWithoutProvider(t *testing.T) {
+	for _, provider := range []string{"", "public"} {
+		t.Run("provider "+provider, func(t *testing.T) {
+			userID := uuid.New()
+			app := testApplication(userID)
+			app.Provider = provider
+			repo := &fakeRepository{app: app}
+			hooks := &fakeHookLifecycle{}
+			svc := newHookService(t, repo, hooks)
+
+			if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+				t.Fatalf("delete: %v", err)
+			}
+			if hooks.removeCalls != 0 {
+				t.Errorf("hook removals = %d, want 0", hooks.removeCalls)
+			}
+		})
+	}
+}
+
+// TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure pins the HIGH
+// finding: the stored hook row is the only handle on the remote hook, so a
+// failed removal aborts the delete and keeps both sides in step. Nothing that
+// would break the still-live application may have been mutated first: the
+// deploy key must still be attached (a webhook deploy that reaches the app can
+// keep cloning), the container keeps running and the row survives. The caller
+// retries, removes the hook on the host by hand, or force-forgets the row
+// (ForgetWebhook) and deletes again.
+func TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	if _, err := repo.CreateDeployKey(context.Background(), DeployKey{
+		ApplicationID: app.ID, Provider: app.Provider, Repo: app.Repo,
+	}, "seeded-key"); err != nil {
+		t.Fatalf("seed deploy key: %v", err)
+	}
+	hooks := &fakeHookLifecycle{removeErr: fmt.Errorf("%w: provider unavailable", ErrProvider)}
+	svc := newHookService(t, repo, hooks)
+
+	err := svc.DeleteApplication(context.Background(), userID, app.ID)
+	if !errors.Is(err, ErrProvider) {
+		t.Fatalf("delete err = %v, want the hook removal failure to surface", err)
+	}
+	if hooks.removeCalls != 1 {
+		t.Errorf("hook removals = %d, want the one failed attempt", hooks.removeCalls)
+	}
+	if _, err := svc.GetApplication(context.Background(), userID, app.ID); err != nil {
+		t.Errorf("the application row must survive a failed hook removal: %v", err)
+	}
+	if !repo.hasDeployKey(app.ID) {
+		t.Error("the deploy key was detached before the hook removal succeeded")
+	}
+}
+
+// TestServiceDeleteApplicationWithoutHookLifecycle pins the unwired install
+// (no provider service, or a closure answering nil): deletes keep working.
+func TestServiceDeleteApplicationWithoutHookLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		hooks func() HookLifecycle
+	}{
+		{"no closure", nil},
+		{"closure answers nil", func() HookLifecycle { return nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			userID := uuid.New()
+			app := testApplication(userID)
+			repo := &fakeRepository{app: app}
+			svc := NewService(Config{
+				Repository: repo,
+				Secret:     testSecretKey,
+				Logger:     discardLogger(),
+				Hooks:      tc.hooks,
+			})
+			t.Cleanup(func() { _ = svc.Close() })
+
+			if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+				t.Fatalf("delete: %v", err)
+			}
+			if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
+				t.Errorf("get after delete err = %v, want ErrNotFound", err)
+			}
+		})
+	}
+}
+
+// TestServiceInstallHookDelegatesToLifecycle pins the create-side entry point
+// the route calls: without a request there is no callback origin, so a
+// non-request caller must use the explicit webhook route.
+func TestServiceInstallHookDelegatesToLifecycle(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	hooks := &fakeHookLifecycle{}
+	svc := newHookService(t, &fakeRepository{}, hooks)
+	req := httptest.NewRequest(http.MethodPost, applicationsPath, nil)
+
+	attempted, err := svc.InstallHook(context.Background(), userID, appID, req)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if !attempted {
+		t.Error("attempted = false, want the wired lifecycle attempted")
+	}
+	if hooks.installCalls != 1 || hooks.installedFor != appID {
+		t.Errorf("installs = %d for %s, want one for %s", hooks.installCalls, hooks.installedFor, appID)
+	}
+}
+
+// TestServiceInstallHookWithoutLifecycleIsNoop pins the unwired install: no
+// lifecycle means nothing to do, not an error, and the route reports no
+// outcome (attempted=false).
+func TestServiceInstallHookWithoutLifecycleIsNoop(t *testing.T) {
+	svc := newTestService(t, &fakeRepository{})
+	req := httptest.NewRequest(http.MethodPost, applicationsPath, nil)
+	attempted, err := svc.InstallHook(context.Background(), uuid.New(), uuid.New(), req)
+	if err != nil {
+		t.Fatalf("install without a lifecycle = %v, want nil", err)
+	}
+	if attempted {
+		t.Error("attempted = true without a wired lifecycle")
+	}
+}
+
+// TestServiceInstallHookBoundsStalledProvider pins MEDIUM-1: a provider that
+// accepts the connection and then stalls must not hold the create path open.
+// The call is cut at Config.HookTimeout, the failure is logged (the outcome
+// stays visible) and the error is returned for the create route to surface as
+// installed=false, never to fail the create.
+func TestServiceInstallHookBoundsStalledProvider(t *testing.T) {
+	stall := &stallingHookLifecycle{}
+
+	var logs bytes.Buffer
+	svc := NewService(Config{
+		Repository:  &fakeRepository{},
+		Secret:      testSecretKey,
+		Logger:      slog.New(slog.NewTextHandler(&logs, nil)),
+		Hooks:       func() HookLifecycle { return stall },
+		HookTimeout: 50 * time.Millisecond,
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	req := httptest.NewRequest(http.MethodPost, applicationsPath, nil)
+	start := time.Now()
+	attempted, err := svc.InstallHook(context.Background(), uuid.New(), uuid.New(), req)
+	elapsed := time.Since(start)
+
+	if !attempted {
+		t.Fatal("attempted = false, want the stalled install attempted")
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("InstallHook took %s, want it bounded by the 50ms hook timeout", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the hook timeout to surface", err)
+	}
+	if stall.installCalls != 1 {
+		t.Errorf("hook installs = %d, want 1", stall.installCalls)
+	}
+	if logged := logs.String(); !strings.Contains(logged, "webhook not installed") {
+		t.Errorf("log = %q, want the stalled install recorded", logged)
+	}
+}
+
+// TestServiceDeleteApplicationBoundsStalledProvider pins the same bound on the
+// uninstall path: a stalled provider is cut off and the delete fails closed
+// (the application row survives), so the hook can still be removed later.
+func TestServiceDeleteApplicationBoundsStalledProvider(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	stall := &stallingHookLifecycle{}
+
+	svc := NewService(Config{
+		Repository:  repo,
+		Secret:      testSecretKey,
+		Logger:      discardLogger(),
+		Hooks:       func() HookLifecycle { return stall },
+		HookTimeout: 50 * time.Millisecond,
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	start := time.Now()
+	err := svc.DeleteApplication(context.Background(), userID, app.ID)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("delete err = %v, want the hook timeout to surface", err)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("delete took %s, want it bounded by the 50ms hook timeout", elapsed)
+	}
+	if stall.removeCalls != 1 {
+		t.Errorf("hook removals = %d, want 1", stall.removeCalls)
+	}
+	if _, err := svc.GetApplication(context.Background(), userID, app.ID); err != nil {
+		t.Errorf("the application row must survive a timed-out hook removal: %v", err)
 	}
 }
 

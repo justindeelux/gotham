@@ -84,9 +84,23 @@ type applicationResponse struct {
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 
-// applicationEnvelope wraps a single application.
+// applicationEnvelope wraps a single application. Webhook reports the
+// automatic hook install on create (BE-4.4); it is absent when no install was
+// attempted (a pasted public URL, or no hook lifecycle wired) and on the
+// read/update responses, which never attempt one.
 type applicationEnvelope struct {
 	Application applicationResponse `json:"application"`
+	Webhook     *webhookOutcome     `json:"webhook,omitempty"`
+}
+
+// webhookOutcome is the wire report of the automatic provider-hook install on
+// create. installed=false means the application was created but its
+// auto-deploy hook was not (the provider call failed or stalled); the caller
+// can retry the idempotent install through the webhook route named in error.
+// Provider detail stays in the server log, never in this field.
+type webhookOutcome struct {
+	Installed bool   `json:"installed"`
+	Error     string `json:"error,omitempty"`
 }
 
 // applicationListEnvelope wraps an application list.
@@ -270,7 +284,28 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, applicationEnvelope{Application: newApplicationResponse(application)})
+	// BE-4.4: a provider-connected application gets its push hook installed
+	// now, exactly as POST /v1/applications/{id}/webhooks would. The install
+	// must not fail the create: the row is already committed, so turning a
+	// provider failure into a create error would leave an application the
+	// caller believes was never stored. Service.InstallHook bounds the call
+	// and logs a failure with the configured logger; the response carries the
+	// outcome so the caller knows automatic deploys are off and which route
+	// retries the install. A pasted public URL has no provider hook.
+	var webhook *webhookOutcome
+	if supportedSourceProvider(application.Provider) && strings.TrimSpace(application.Repo) != "" {
+		attempted, err := h.svc.InstallHook(r.Context(), userID, application.ID, r)
+		if attempted {
+			webhook = &webhookOutcome{Installed: err == nil}
+			if err != nil {
+				webhook.Error = "provider hook not installed; retry with the application webhook endpoint"
+			}
+		}
+	}
+	writeJSON(w, http.StatusCreated, applicationEnvelope{
+		Application: newApplicationResponse(application),
+		Webhook:     webhook,
+	})
 }
 
 // listApplications serves GET /applications: the caller's own rows, newest

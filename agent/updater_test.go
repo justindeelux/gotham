@@ -623,6 +623,18 @@ func TestReleaseFromOfferBinding(t *testing.T) {
 			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "beta" },
 			channel: "stable", wantErr: true,
 		},
+		"stable offer on a beta node": {
+			mutate:  func(*agentv1.UpdateResponse) {},
+			channel: "beta",
+		},
+		"beta offer on a beta node": {
+			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "beta" },
+			channel: "beta",
+		},
+		"unknown offer channel": {
+			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "canary" },
+			channel: "beta", wantErr: true,
+		},
 		"empty configured channel still enforces stable": {
 			mutate: func(*agentv1.UpdateResponse) {}, channel: "",
 		},
@@ -652,8 +664,8 @@ func TestReleaseFromOfferBinding(t *testing.T) {
 			if release.AssetName != "gotham-agent-linux-"+arch {
 				t.Errorf("AssetName = %q", release.AssetName)
 			}
-			if release.Channel != "stable" {
-				t.Errorf("Channel = %q, want stable", release.Channel)
+			if release.Channel != resp.GetChannel() {
+				t.Errorf("Channel = %q, want %q", release.Channel, resp.GetChannel())
 			}
 		})
 	}

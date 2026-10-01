@@ -502,8 +502,8 @@ func isNewerVersion(offered, current string) bool {
 // verifies. Every URL and the digest are re-checked by the applier; this binds
 // the offer to this agent's own release family, asset and channel first, so a
 // compromised or buggy control plane cannot make an agent install the
-// control-plane binary or a different-channel (e.g. prerelease) build. Mirrors
-// the family binding in deploy/release-verify.sh.
+// control-plane binary or a prerelease build on a stable node. Mirrors the
+// family binding in deploy/release-verify.sh.
 func releaseFromOffer(resp *agentv1.UpdateResponse, channel string) (*updatecore.Release, error) {
 	if resp.GetLatestVersion() == "" || resp.GetAssetUrl() == "" ||
 		resp.GetManifestUrl() == "" || resp.GetManifestSignatureUrl() == "" {
@@ -532,19 +532,24 @@ func releaseFromOffer(resp *agentv1.UpdateResponse, channel string) (*updatecore
 		return nil, fmt.Errorf("%w: offered manifest %q is not %q", errOffer, manifestName, wantManifest)
 	}
 
-	// Channel must be present and match this node's configured channel: an
-	// empty or other channel is refused, so a prerelease cannot reach a stable
-	// node (bindManifest also skips an empty release channel, so enforce it
-	// here).
+	// Channel eligibility: the CP labels the offer with the release's own
+	// channel, so a beta node (which may take stable or beta) accepts both,
+	// while a stable node only ever accepts a stable offer. An empty or
+	// unknown channel fails closed (bindManifest also skips an empty release
+	// channel, so enforce it here).
 	if channel == "" {
 		channel = defaultUpdateChannel
 	}
 	offered := strings.TrimSpace(resp.GetChannel())
-	if offered == "" {
-		return nil, fmt.Errorf("%w: offer has no channel", errOffer)
-	}
-	if offered != channel {
-		return nil, fmt.Errorf("%w: offer channel %q is not the configured %q", errOffer, offered, channel)
+	switch offered {
+	case defaultUpdateChannel:
+		// Stable releases are valid for every configured channel.
+	case betaUpdateChannel:
+		if channel != betaUpdateChannel {
+			return nil, fmt.Errorf("%w: offer channel %q is not the configured %q", errOffer, offered, channel)
+		}
+	default:
+		return nil, fmt.Errorf("%w: offer has no usable channel", errOffer)
 	}
 
 	return &updatecore.Release{

@@ -156,7 +156,7 @@ func (c *Checker) Check(ctx context.Context, current string) (*Release, error) {
 	}
 
 	release := releases[best]
-	candidate, err := c.resolve(release, bestVersion, channel, arch)
+	candidate, err := c.resolve(release, bestVersion, arch)
 	if err != nil {
 		return nil, err
 	}
@@ -164,16 +164,23 @@ func (c *Checker) Check(ctx context.Context, current string) (*Release, error) {
 }
 
 // resolve maps a chosen release onto the platform asset, its signed manifest
-// and the manifest signature.
-func (c *Checker) resolve(release ghRelease, version updatecore.Version, channel Channel, arch string) (*Release, error) {
+// and the manifest signature. The offer carries the release's own channel (the
+// signed manifest records stable for a full release and beta for a prerelease),
+// never the subscriber's configured channel: a beta subscriber taking a newer
+// stable release must stay bound to the stable manifest (M4).
+func (c *Checker) resolve(release ghRelease, version updatecore.Version, arch string) (*Release, error) {
 	assetName := c.assetPrefix() + arch
 	manifestName := updatecore.ManifestNameWithPrefix(c.ManifestPrefix, arch)
 	manifestSigName := manifestName + updatecore.ManifestSigSuffix
 
+	releaseChannel := ChannelStable
+	if release.Prerelease {
+		releaseChannel = ChannelBeta
+	}
 	candidate := &Release{
 		Version:     version.String(),
 		Tag:         release.TagName,
-		Channel:     string(channel),
+		Channel:     string(releaseChannel),
 		Prerelease:  release.Prerelease,
 		Notes:       release.Body,
 		PublishedAt: release.PublishedAt,

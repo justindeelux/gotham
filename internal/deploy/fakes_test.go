@@ -52,9 +52,11 @@ type fakeRepository struct {
 	storages    []Storage
 
 	// deployKeys holds the single deploy key per application (the unique
-	// index on application_id) together with the private half, so the fake can
-	// answer the cloner's lookup the way the sealed row does.
-	deployKeys map[uuid.UUID]fakeDeployKey
+	// index on application_id); privateKeys mirrors private_keys, keyed by
+	// the private key id, because the real schema has no application FK
+	// there: deleting an application cascades only the mapping.
+	deployKeys  map[uuid.UUID]fakeDeployKey
+	privateKeys map[uuid.UUID]string
 
 	// certificates mirrors domain_certificates (one intent per application);
 	// dnsProviders mirrors the provider rows the preview clone validates
@@ -258,6 +260,10 @@ func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) e
 		}
 	}
 	r.storages = storages
+	// Cascade the deploy-key mapping only: private_keys has no application FK
+	// (application_deploy_keys.private_key_id points at it), so the sealed
+	// row survives a bare application delete — the paths that must remove it
+	// call DeleteDeployKey explicitly.
 	delete(r.deployKeys, appID)
 	certificates := make([]CertificateIntent, 0, len(r.certificates))
 	for _, cert := range r.certificates {
@@ -493,11 +499,10 @@ func (r *fakeRepository) ListStorages(_ context.Context, appID uuid.UUID) ([]Sto
 	return out, nil
 }
 
-// fakeDeployKey pairs a stored deploy-key mapping with the private half the
-// cloner opens (in production the private half is sealed in private_keys).
+// fakeDeployKey is one row of the application_deploy_keys mapping (the private
+// half lives separately in privateKeys, mirroring private_keys).
 type fakeDeployKey struct {
-	key        DeployKey
-	privatePEM string
+	key DeployKey
 }
 
 // GetDeployKey implements Repository, keeping one key per application.
@@ -512,7 +517,8 @@ func (r *fakeRepository) GetDeployKey(_ context.Context, appID uuid.UUID) (Deplo
 }
 
 // CreateDeployKey implements Repository, assigning IDs and timestamps like the
-// database and failing on the scriptable deployKeyErr.
+// database and failing on the scriptable deployKeyErr. It writes the mapping
+// and the sealed private key as two rows, like the store transaction.
 func (r *fakeRepository) CreateDeployKey(_ context.Context, key DeployKey, privateKeyPEM string) (DeployKey, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -522,17 +528,21 @@ func (r *fakeRepository) CreateDeployKey(_ context.Context, key DeployKey, priva
 	if r.deployKeys == nil {
 		r.deployKeys = make(map[uuid.UUID]fakeDeployKey)
 	}
+	if r.privateKeys == nil {
+		r.privateKeys = make(map[uuid.UUID]string)
+	}
 	if _, exists := r.deployKeys[key.ApplicationID]; exists {
 		return DeployKey{}, fmt.Errorf("%w: application already has a deploy key", ErrConflict)
 	}
 	key.ID = uuid.New()
 	key.PrivateKeyID = uuid.New()
 	key.CreatedAt = time.Now().UTC()
-	r.deployKeys[key.ApplicationID] = fakeDeployKey{key: key, privatePEM: privateKeyPEM}
+	r.deployKeys[key.ApplicationID] = fakeDeployKey{key: key}
+	r.privateKeys[key.PrivateKeyID] = privateKeyPEM
 	return key, nil
 }
 
-// DeleteDeployKey implements Repository with the schema's cascade: the mapping
+// DeleteDeployKey implements Repository with the store's cascade: the mapping
 // and the private key it points at go together.
 func (r *fakeRepository) DeleteDeployKey(_ context.Context, appID uuid.UUID) (DeployKey, error) {
 	r.mu.Lock()
@@ -543,6 +553,7 @@ func (r *fakeRepository) DeleteDeployKey(_ context.Context, appID uuid.UUID) (De
 		return DeployKey{}, ErrNotFound
 	}
 	delete(r.deployKeys, appID)
+	delete(r.privateKeys, stored.key.PrivateKeyID)
 	return stored.key, nil
 }
 
@@ -558,7 +569,7 @@ func (r *fakeRepository) DeployKeyPrivatePEM(_ context.Context, appID uuid.UUID)
 	if !ok {
 		return "", nil
 	}
-	return stored.privatePEM, nil
+	return r.privateKeys[stored.key.PrivateKeyID], nil
 }
 
 // GetCertificateIntent implements Repository.
@@ -624,6 +635,16 @@ func (r *fakeRepository) hasDeployKey(appID uuid.UUID) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_, ok := r.deployKeys[appID]
+	return ok
+}
+
+// hasPrivateKey reports whether a sealed private key row still exists (test
+// helper); it mirrors private_keys, which the application cascade does not
+// reach.
+func (r *fakeRepository) hasPrivateKey(privateKeyID uuid.UUID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.privateKeys[privateKeyID]
 	return ok
 }
 

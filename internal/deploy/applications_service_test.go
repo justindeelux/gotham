@@ -556,10 +556,11 @@ func TestServiceDeleteApplicationSurvivesDeployKeyDetachFailure(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
 	repo := &fakeRepository{app: app}
-	if _, err := repo.CreateDeployKey(context.Background(), DeployKey{
+	created, err := repo.CreateDeployKey(context.Background(), DeployKey{
 		ApplicationID: app.ID, Provider: app.Provider, Repo: app.Repo,
 		ProviderKeyID: "host-key-1",
-	}, "seeded-key"); err != nil {
+	}, "seeded-key")
+	if err != nil {
 		t.Fatalf("seed deploy key: %v", err)
 	}
 	registrar := &fakeRegistrar{removeErr: errors.New("host unreachable")}
@@ -585,7 +586,13 @@ func TestServiceDeleteApplicationSurvivesDeployKeyDetachFailure(t *testing.T) {
 		t.Errorf("get after delete err = %v, want ErrNotFound", err)
 	}
 	if repo.hasDeployKey(app.ID) {
-		t.Error("the local deploy key row must cascade with the application")
+		t.Error("the local deploy key mapping must cascade with the application")
+	}
+	// private_keys has no application FK: the sealed row must go through the
+	// explicit local cleanup even when the host detach failed, or the
+	// credential is orphaned in the database.
+	if repo.hasPrivateKey(created.PrivateKeyID) {
+		t.Error("the sealed private key row was orphaned by the failed host detach")
 	}
 	logged := logs.String()
 	for _, want := range []string{app.Provider, app.Repo, "host unreachable"} {

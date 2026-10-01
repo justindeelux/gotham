@@ -323,7 +323,8 @@ func TestDeleteDeployKeyProviderFailureKeepsKey(t *testing.T) {
 // cleanup.
 func TestDeleteApplicationProviderFailureStillDeletes(t *testing.T) {
 	repo, registrar, svc, app := keyFixture(t)
-	if _, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID); err != nil {
+	created, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID)
+	if err != nil {
 		t.Fatalf("CreateDeployKey: %v", err)
 	}
 	registrar.removeErr = errors.New("host down")
@@ -335,7 +336,10 @@ func TestDeleteApplicationProviderFailureStillDeletes(t *testing.T) {
 		t.Errorf("application survived the delete: %v", err)
 	}
 	if repo.hasDeployKey(app.ID) {
-		t.Error("the local deploy key row must cascade with the application")
+		t.Error("the local deploy key mapping must cascade with the application")
+	}
+	if repo.hasPrivateKey(created.PrivateKeyID) {
+		t.Error("the sealed private key row must be removed even when the host detach fails")
 	}
 	if len(registrar.removed) != 0 {
 		t.Errorf("removed = %v, want none (the host call failed)", registrar.removed)

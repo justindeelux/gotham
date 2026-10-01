@@ -269,3 +269,21 @@ func TestServiceMeUnknownUser(t *testing.T) {
 		t.Fatalf("Me(unknown) error = %v, want ErrUnauthorized", err)
 	}
 }
+
+// TestServiceRegisterOpenOverride covers the test/dev escape hatch: with
+// AllowOpenRegistration set on an instance that already has accounts, a
+// registration must take the plain-insert path. It must NOT reach
+// CreateFirstUser, whose emptiness guard would answer ErrRegistrationClosed
+// (that combination broke the UI smoke, which seeds extra accounts).
+func TestServiceRegisterOpenOverride(t *testing.T) {
+	svc, st := newTestService(t)
+	svc.AllowOpenRegistration = true
+	ctx := context.Background()
+
+	email := uniqueEmail("open-override")
+	cleanupUser(t, st, email)
+
+	if _, err := svc.Register(ctx, email, "s3cret-password", "", nil); err != nil {
+		t.Fatalf("Register with the open override: %v", err)
+	}
+}

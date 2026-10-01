@@ -118,16 +118,22 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 	}
 
 	var user sqlc.User
-	if needInvite {
+	switch {
+	case needInvite:
 		user, err = s.store.CreateUser(ctx, normalized, &hash)
-	} else {
+	case count == 0:
+		// Bootstrap: the emptiness check and the insert share one transaction,
+		// so only one of two concurrent first registrations can win.
 		user, err = s.store.CreateFirstUser(ctx, normalized, &hash)
-		// The bootstrap lost a race (or the table filled between the count and
-		// the insert): the instance now has an account, so registration is
-		// closed and an invite is required.
 		if errors.Is(err, store.ErrInstanceHasAccount) {
+			// Lost the race (or the table filled between the count and the
+			// insert): the instance now has an account and an invite is needed.
 			return nil, ErrRegistrationClosed
 		}
+	default:
+		// Registration is forced open (test/dev override) on a populated
+		// instance: a plain insert.
+		user, err = s.store.CreateUser(ctx, normalized, &hash)
 	}
 	if err != nil {
 		if isUniqueViolation(err) {

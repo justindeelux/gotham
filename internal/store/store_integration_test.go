@@ -149,6 +149,30 @@ func TestStoreCreateFirstUserSerializes(t *testing.T) {
 	if wins != 1 {
 		t.Fatalf("concurrent bootstraps succeeded %d times, want exactly 1", wins)
 	}
+
+	// Leave the database empty again: the bootstrap precondition is a fresh
+	// table, so a leftover account would make the next run skip.
+	remaining, err := pool.Query(ctx, "SELECT id FROM users")
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	var ids []pgtype.UUID
+	for remaining.Next() {
+		var id pgtype.UUID
+		if err := remaining.Scan(&id); err != nil {
+			t.Fatalf("scan user id: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	remaining.Close()
+	if err := remaining.Err(); err != nil {
+		t.Fatalf("iterate users: %v", err)
+	}
+	for _, id := range ids {
+		if err := st.DeleteUserAndPersonalTeam(ctx, id); err != nil {
+			t.Fatalf("cleanup user: %v", err)
+		}
+	}
 }
 
 // TestStoreRevokeSessionIfLive proves the rotation guard: a second revoke of
@@ -178,7 +202,9 @@ func TestStoreRevokeSessionIfLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	t.Cleanup(func() { _ = st.DeleteUserAndPersonalTeam(context.WithoutCancel(ctx), user.ID) })
+	// Delete before the deferred pool.Close: a t.Cleanup callback would run
+	// after it and the delete would hit a closed pool.
+	defer func() { _ = st.DeleteUserAndPersonalTeam(context.WithoutCancel(ctx), user.ID) }()
 
 	session, err := st.CreateSession(ctx, sqlc.CreateSessionParams{
 		UserID:      user.ID,

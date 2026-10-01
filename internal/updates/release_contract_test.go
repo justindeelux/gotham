@@ -63,17 +63,25 @@ func TestReleaseKeyRingContract(t *testing.T) {
 	}
 
 	workflow := readRepoFile(t, ".github/workflows/release.yml")
+	// The optional secret must reach every step that consumes it: the
+	// validation step, the GoReleaser build environment, and the per-binary
+	// embed assertion. Pinning the exact count means dropping any one of them
+	// (which would let a ring-less release ship while the secret is set, since
+	// the assert step's `if [ -n ... ]` guard would see an unset variable)
+	// fails this test.
+	secretEnv := "GOTHAM_UPDATE_NEXT_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_NEXT_PUBLIC_KEY }}"
+	if got := strings.Count(workflow, secretEnv); got != 3 {
+		t.Errorf(".github/workflows/release.yml passes the next-key secret %d times, want 3 (validate, GoReleaser build, embed assert)", got)
+	}
 	for _, want := range []string{
-		// The optional secret reaches GoReleaser and the embed assertion.
-		"GOTHAM_UPDATE_NEXT_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_NEXT_PUBLIC_KEY }}",
 		// The next key must decode to 32 raw bytes and differ from the current.
 		`[ "$decoded" = "32" ]`,
 		`[ "$next" != "$GOTHAM_UPDATE_PUBLIC_KEY" ]`,
 		// Every built binary must embed the configured next key.
 		`grep -aqF "$GOTHAM_UPDATE_NEXT_PUBLIC_KEY" "$bin"`,
 	} {
-		if !strings.Contains(workflow, want) {
-			t.Errorf(".github/workflows/release.yml is missing %q", want)
+		if got := strings.Count(workflow, want); got != 1 {
+			t.Errorf(".github/workflows/release.yml contains %q %d times, want exactly 1", want, got)
 		}
 	}
 }

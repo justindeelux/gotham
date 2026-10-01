@@ -92,6 +92,6 @@ Pending (the coordinator tags `v0.1.1` next):
 - Exercise the unattended `AUTO_UPDATE` loop.
 
 The non-blocking residual register (M4 beta-channel binding, LOW-4 mutual agent
-channel, key rotation/revocation, the shared release runner, I5, the
+channel, key rotation/revocation, I5, the
 `GOTHAM_UPDATE_CURRENT` pin) is tracked in `docs/TODO.md` → Phase 9 residuals and
 `deploy/README.md` → Known residuals.

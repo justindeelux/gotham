@@ -117,7 +117,7 @@ jobs:
       - name: Install sqlc
         # The tarball is executed, so verify it against a pinned SHA-256 before
         # extraction: a compromised release mirror must not become code execution
-        # on this persistent runner (which also signs releases).
+        # on the runner.
         run: |
           set -eu
           version="1.31.1"

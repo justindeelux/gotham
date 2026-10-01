@@ -67,10 +67,11 @@ residuals — full detail in `deploy/README.md` → Known residuals:
 - [ ] **Release key rotation/revocation.** One embedded key, no key ring: a
   compromise or loss means reinstalling the fleet. Embed a current + next key set
   and write a runbook.
-- [ ] **Shared release runner / key custody (HIGH, carried).** If any untrusted
-  workflow ever runs on the signing runner, treat `GOTHAM_UPDATE_SIGNING_KEY` as
-  compromised — rotate the key and re-release — and move signing to an
-  isolated/ephemeral runner before the next public release.
+- [x] **Shared release runner / key custody.** Resolved: the release job and PR
+  CI now run on GitHub-hosted runners, and the signing key stays in the
+  approval-gated `release` environment, so untrusted `pull_request` code never
+  shares a host with it. The reviewer gate still governs who can build a signed
+  release — keep the `v*` tag ruleset and the reviewer list to project owners.
 - [ ] **I5 `release-verify.sh` temp dir on signal.** Public material only; add
   `_GOTHAM_VERIFY_WORK` to the installers' `EXIT` cleanup.
 - [ ] **`GOTHAM_UPDATE_CURRENT` pin.** A test-only env the server honours; do not

@@ -145,6 +145,10 @@ Pending:
 
 ## Cross-cutting
 
+- [x] Go 1.27 toolchain: `go.mod` `go 1.27`, CI pins `1.27.x`, golangci-lint
+  `v2.14.0` (built with Go 1.27; older linters refuse a 1.27 target). Supersedes
+  the closed Dependabot bumps #75 (grpc) and #76 (x/crypto), which required
+  Go 1.25.
 - [ ] GitHub required status checks: enable manually in repo settings if
   enforcement is wanted (API returns 403 on this plan).
 - [ ] GitNexus re-index before larger refactors; stats drift shows up in

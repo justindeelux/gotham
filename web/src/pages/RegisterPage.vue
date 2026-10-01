@@ -54,10 +54,18 @@ const inviteEmail = ref<string>("");
 const inviteChecking = ref(false);
 
 onMounted(async () => {
-  await authStore.fetchAuthConfig();
-
   const raw = route.query.invite;
   const token = typeof raw === "string" ? raw : "";
+
+  // Take the token from the URL and block submission BEFORE the config
+  // request: on a slow connection the form is already visible, and a submit
+  // during that window would otherwise omit the invite and answer 403.
+  if (token) {
+    inviteToken.value = token;
+    inviteChecking.value = true;
+  }
+
+  await authStore.fetchAuthConfig();
 
   // A fresh instance needs no invite: the first account bootstraps it. An
   // invite present in the URL is always processed, even when ordinary
@@ -70,8 +78,6 @@ onMounted(async () => {
     return;
   }
 
-  inviteToken.value = token;
-  inviteChecking.value = true;
   try {
     const info = await authStore.validateInvite(token);
     inviteTeam.value = info.team;

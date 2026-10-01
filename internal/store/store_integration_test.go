@@ -122,56 +122,44 @@ func TestStoreCreateFirstUserSerializes(t *testing.T) {
 	}
 
 	const attempts = 8
+	type result struct {
+		user sqlc.User
+		err  error
+	}
 	var wg sync.WaitGroup
-	results := make(chan error, attempts)
+	results := make(chan result, attempts)
 	for i := 0; i < attempts; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			email := fmt.Sprintf("first-user-race-%d-%d@example.com", time.Now().UnixNano(), i)
-			_, err := st.CreateFirstUser(ctx, email, nil)
-			results <- err
+			user, err := st.CreateFirstUser(ctx, email, nil)
+			results <- result{user: user, err: err}
 		}(i)
 	}
 	wg.Wait()
 	close(results)
 
 	wins := 0
-	for err := range results {
+	var winner sqlc.User
+	for res := range results {
 		switch {
-		case err == nil:
+		case res.err == nil:
 			wins++
-		case errors.Is(err, store.ErrInstanceHasAccount):
+			winner = res.user
+		case errors.Is(res.err, store.ErrInstanceHasAccount):
 		default:
-			t.Fatalf("unexpected error: %v", err)
+			t.Fatalf("unexpected error: %v", res.err)
 		}
 	}
 	if wins != 1 {
 		t.Fatalf("concurrent bootstraps succeeded %d times, want exactly 1", wins)
 	}
 
-	// Leave the database empty again: the bootstrap precondition is a fresh
-	// table, so a leftover account would make the next run skip.
-	remaining, err := pool.Query(ctx, "SELECT id FROM users")
-	if err != nil {
-		t.Fatalf("list users: %v", err)
-	}
-	var ids []pgtype.UUID
-	for remaining.Next() {
-		var id pgtype.UUID
-		if err := remaining.Scan(&id); err != nil {
-			t.Fatalf("scan user id: %v", err)
-		}
-		ids = append(ids, id)
-	}
-	remaining.Close()
-	if err := remaining.Err(); err != nil {
-		t.Fatalf("iterate users: %v", err)
-	}
-	for _, id := range ids {
-		if err := st.DeleteUserAndPersonalTeam(ctx, id); err != nil {
-			t.Fatalf("cleanup user: %v", err)
-		}
+	// Delete exactly the row this test created: the database is shared, so a
+	// blanket delete could remove an account another process owns.
+	if err := st.DeleteUserAndPersonalTeam(ctx, winner.ID); err != nil {
+		t.Fatalf("cleanup winner: %v", err)
 	}
 }
 

@@ -108,11 +108,38 @@ func hasEntry(env []string, name string) bool {
 	return false
 }
 
+// countEntry counts env entries naming the variable. Git uses the last one it
+// sees, so two GIT_SSH_COMMAND entries are a real ambiguity, not a harmless
+// duplicate.
+func countEntry(env []string, name string) int {
+	count := 0
+	for _, entry := range env {
+		if strings.HasPrefix(entry, name+"=") {
+			count++
+		}
+	}
+	return count
+}
+
+// ambient env used by the clone tests to prove a CI-runner/developer
+// GIT_SSH_COMMAND and unrelated variables are handled deterministically.
+const (
+	ambientSSHCommand = "ssh -o ControlMaster=no -o BatchMode=yes"
+	ambientEnvName    = "GOTHAM_CLONER_TEST_AMBIENT"
+	ambientEnvValue   = "survives"
+)
+
 // TestGitSourceCloneWithDeployKey asserts everything the keyed clone must do:
 // rewrite the URL to SSH, point GIT_SSH_COMMAND at a 0600 ephemeral key file,
 // keep that file alive for the run only, and never log key material. The git
 // invocation itself is replaced, so no network and no sshd are involved.
 func TestGitSourceCloneWithDeployKey(t *testing.T) {
+	// A CI runner (actions/checkout) or a developer shell may export
+	// GIT_SSH_COMMAND. It must not survive into the keyed clone: the child
+	// gets exactly the cloner-constructed command.
+	t.Setenv("GIT_SSH_COMMAND", ambientSSHCommand)
+	t.Setenv(ambientEnvName, ambientEnvValue)
+
 	privatePEM, _, _, err := generateDeployKeyPair("gotham:deploy:test")
 	if err != nil {
 		t.Fatalf("generateDeployKeyPair: %v", err)
@@ -175,6 +202,9 @@ func TestGitSourceCloneWithDeployKey(t *testing.T) {
 		t.Errorf("argv = %v, want no anonymous https URL next to a deploy key", gotArgv)
 	}
 
+	if got := countEntry(gotEnv, "GIT_SSH_COMMAND"); got != 1 {
+		t.Fatalf("GIT_SSH_COMMAND entries = %d in env %v, want exactly 1", got, gotEnv)
+	}
 	command := ""
 	for _, entry := range gotEnv {
 		if strings.HasPrefix(entry, "GIT_SSH_COMMAND=") {
@@ -185,6 +215,15 @@ func TestGitSourceCloneWithDeployKey(t *testing.T) {
 		if !strings.Contains(command, option) {
 			t.Errorf("GIT_SSH_COMMAND = %q, want it to contain %q", command, option)
 		}
+	}
+	if keyPath != "" && !strings.Contains(command, "-i '"+keyPath+"'") {
+		t.Errorf("GIT_SSH_COMMAND = %q, want it to carry -i %q", command, keyPath)
+	}
+	if !hasEntry(gotEnv, ambientEnvName) {
+		t.Errorf("env = %v, want the ambient %s preserved", gotEnv, ambientEnvName)
+	}
+	if strings.Contains(command, ambientSSHCommand) {
+		t.Errorf("GIT_SSH_COMMAND = %q, want the ambient command stripped", command)
 	}
 
 	if keyPath == "" {
@@ -207,6 +246,12 @@ func TestGitSourceCloneWithDeployKey(t *testing.T) {
 // key in the database (or no resolver wired at all) the clone is the anonymous
 // https one it has always been, with no GIT_SSH_COMMAND in the environment.
 func TestGitSourceCloneWithoutDeployKeyStaysAnonymous(t *testing.T) {
+	// The anonymous clone must drop an inherited GIT_SSH_COMMAND rather than
+	// pass it through (the Dependabot-CI failure), while keeping the rest of
+	// the ambient environment.
+	t.Setenv("GIT_SSH_COMMAND", ambientSSHCommand)
+	t.Setenv(ambientEnvName, ambientEnvValue)
+
 	app := testApplication(uuid.New()) // https://github.com/acme/demo.git
 	dir := filepath.Join(t.TempDir(), "repo")
 
@@ -236,6 +281,12 @@ func TestGitSourceCloneWithoutDeployKeyStaysAnonymous(t *testing.T) {
 			}
 			if hasEntry(gotEnv, "GIT_SSH_COMMAND") {
 				t.Errorf("env = %v, want no GIT_SSH_COMMAND for an anonymous clone", gotEnv)
+			}
+			if got := countEntry(gotEnv, "GIT_SSH_COMMAND"); got != 0 {
+				t.Errorf("GIT_SSH_COMMAND entries = %d in env %v, want 0", got, gotEnv)
+			}
+			if !hasEntry(gotEnv, ambientEnvName) {
+				t.Errorf("env = %v, want the ambient %s preserved", gotEnv, ambientEnvName)
 			}
 		})
 	}

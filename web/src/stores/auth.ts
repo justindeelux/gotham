@@ -144,6 +144,10 @@ export const useAuthStore = defineStore("auth", () => {
       ...(inviteToken ? { inviteToken } : {}),
     });
     setSession(response.data);
+    // The instance now has an account (unless the test/dev override is on), so
+    // the cached policy is stale: the next auth render re-probes /auth/config
+    // instead of offering a create-account tab that would answer 403.
+    configLoaded = false;
   }
 
   /** logout revokes the refresh token, then clears the session. */

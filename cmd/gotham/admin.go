@@ -100,7 +100,21 @@ func runAdminCreate(args []string) int {
 			return exitError
 		}
 
-		if _, err := st.CreateUser(ctx, normalized, &hash); err != nil {
+		// The count above is a friendly pre-check; the insert itself carries the
+		// same atomic first-account guard as web registration, so two operators
+		// (or an operator racing a registration) cannot both win without
+		// --force.
+		if *force {
+			_, err = st.CreateUser(ctx, normalized, &hash)
+		} else {
+			_, err = st.CreateFirstUser(ctx, normalized, &hash)
+			if errors.Is(err, store.ErrInstanceHasAccount) {
+				fmt.Fprintf(os.Stderr, "admin create: this instance already has an account; "+
+					"invite members instead, or pass --force\n")
+				return exitError
+			}
+		}
+		if err != nil {
 			if isUniqueViolation(err) {
 				fmt.Fprintf(os.Stderr, "admin create: email already registered\n")
 				return exitError

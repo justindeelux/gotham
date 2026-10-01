@@ -187,6 +187,11 @@ func (s *OAuthService) createOAuthUser(ctx context.Context, email string) (sqlc.
 		return user, nil
 	}
 	if errors.Is(err, store.ErrInstanceHasAccount) {
+		// We lost the bootstrap race. If the winner is this same identity, the
+		// callback is a valid login, not a closed registration.
+		if existing, readErr := s.auth.store.GetUserByEmail(ctx, email); readErr == nil {
+			return existing, nil
+		}
 		return sqlc.User{}, ErrRegistrationClosed
 	}
 	if !isUniqueViolation(err) {

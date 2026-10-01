@@ -53,6 +53,11 @@ func (s *Store) CreateUser(ctx context.Context, email string, passwordHash *stri
 	return user, nil
 }
 
+// firstUserLockKey is the advisory-lock key serializing first-account creation
+// ("gotham" truncated to an int64). It is a constant, not a value, so every
+// process uses the same lock.
+const firstUserLockKey = int64(0x676f7468616d)
+
 // ErrInstanceHasAccount reports that CreateFirstUser found the instance
 // already populated. The caller maps it to the closed-registration answer.
 var ErrInstanceHasAccount = errors.New("store: instance already has an account")
@@ -67,6 +72,15 @@ func (s *Store) CreateFirstUser(ctx context.Context, email string, passwordHash 
 		return sqlc.User{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// The emptiness check and the insert must serialize across transactions:
+	// under READ COMMITTED two concurrent INSERT ... WHERE NOT EXISTS both see
+	// an empty table and both insert. The advisory lock is held until commit,
+	// so the loser re-evaluates NOT EXISTS against the winner's row and gets
+	// zero rows (ErrInstanceHasAccount).
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", firstUserLockKey); err != nil {
+		return sqlc.User{}, err
+	}
 
 	queries := s.queries.WithTx(tx)
 	user, err := queries.CreateFirstUser(ctx, sqlc.CreateFirstUserParams{

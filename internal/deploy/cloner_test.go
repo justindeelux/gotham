@@ -457,7 +457,11 @@ for arg in "$@"; do
 done
 if [ -n "$key" ] && [ -f "$key" ]; then
   cat "$key" > "$GOTHAM_TEST_SSH_KEY_COPY"
-  mode=$(stat -f %Lp "$key" 2>/dev/null || stat -c %a "$key" 2>/dev/null)
+  # GNU stat and BSD stat disagree on the flag: GNU -c %a, BSD -f %Lp. Probe
+  # GNU first — the BSD form is accepted by GNU stat as a filesystem query
+  # that prints a multi-line dump and exits 0, so a BSD-first probe never
+  # reaches its fallback and records no single-token mode on Linux CI.
+  mode=$(stat -c %a "$key" 2>/dev/null || stat -f %Lp "$key" 2>/dev/null | head -n1)
   printf 'mode: %s\n' "$mode" >> "$record"
 fi
 for last in "$@"; do :; done

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -223,19 +224,13 @@ func TestRoutesCreateApplicationSkipsHookWithoutProvider(t *testing.T) {
 // TestRoutesCreateApplicationSurvivesHookFailure pins the failure semantics:
 // the application row is already committed, so a provider outage, missing
 // credentials or an unusable callback cannot turn the create into an error
-// (the caller would retry and create a duplicate). The failure is logged —
-// visible, never silently dropped — and the explicit idempotent webhook route
-// retries it.
+// (the caller would retry and create a duplicate). The failure is logged by
+// the service and the explicit idempotent webhook route retries it.
 func TestRoutesCreateApplicationSurvivesHookFailure(t *testing.T) {
 	userID, serverID := uuid.New(), uuid.New()
 	app := sampleApplication()
 	app.UserID = userID
 	svc := &fakeDeployService{application: app, installErr: errors.New("provider unavailable")}
-
-	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(previous) })
 	srv := newRouteServer(svc, alwaysUser(userID))
 
 	rec := httptest.NewRecorder()
@@ -258,9 +253,53 @@ func TestRoutesCreateApplicationSurvivesHookFailure(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "provider unavailable") {
 		t.Error("the provider failure leaked into the response body")
 	}
-	logged := logs.String()
-	if !strings.Contains(logged, "webhook not installed") || !strings.Contains(logged, app.ID.String()) {
-		t.Errorf("log = %q, want a warning naming the application and the failed hook install", logged)
+}
+
+// TestRoutesCreateApplicationBoundsStalledHookProvider drives the real service
+// through the create route with a provider that accepts the connection and
+// then stalls: the request must return inside the hook timeout with 201 and
+// the outcome must be recorded with the configured logger. Without the bound
+// the SPA would time out after the row committed and invite a duplicate
+// create (MEDIUM-1).
+func TestRoutesCreateApplicationBoundsStalledHookProvider(t *testing.T) {
+	userID, serverID := uuid.New(), uuid.New()
+	stall := &stallingHookLifecycle{}
+
+	var logs bytes.Buffer
+	svc := NewService(Config{
+		Repository:  &fakeRepository{},
+		Secret:      testSecretKey,
+		Logger:      slog.New(slog.NewTextHandler(&logs, nil)),
+		Hooks:       func() HookLifecycle { return stall },
+		HookTimeout: 50 * time.Millisecond,
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
+		strings.NewReader(strings.Replace(applicationBody, "%s", serverID.String(), 1))))
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("create took %s, want it bounded by the 50ms hook timeout", elapsed)
+	}
+	var body applicationEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Application.ID == "" {
+		t.Error("the stalled hook install swallowed the created application")
+	}
+	if stall.installCalls != 1 {
+		t.Errorf("hook installs = %d, want 1", stall.installCalls)
+	}
+	if logged := logs.String(); !strings.Contains(logged, "webhook not installed") {
+		t.Errorf("log = %q, want the stalled install recorded", logged)
 	}
 }
 

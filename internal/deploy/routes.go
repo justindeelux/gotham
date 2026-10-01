@@ -274,15 +274,12 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 	// now, exactly as POST /v1/applications/{id}/webhooks would. The install
 	// must not fail the create: the row is already committed, so turning a
 	// provider failure into a create error would leave an application the
-	// caller believes was never stored. The failure is logged loudly (never
-	// silently dropped) and the explicit idempotent webhook route retries it;
-	// a pasted public URL has no provider hook to install.
+	// caller believes was never stored. Service.InstallHook bounds the call
+	// and logs a failure with the configured logger (never silently dropped);
+	// the explicit idempotent webhook route retries it. A pasted public URL
+	// has no provider hook to install.
 	if supportedSourceProvider(application.Provider) && strings.TrimSpace(application.Repo) != "" {
-		if err := h.svc.InstallHook(r.Context(), userID, application.ID, r); err != nil {
-			h.logger.Warn("deploy: webhook not installed for the new application; retry with POST /v1/applications/{id}/webhooks",
-				"application_id", application.ID, "provider", application.Provider,
-				"repo", application.Repo, "error", err)
-		}
+		_ = h.svc.InstallHook(r.Context(), userID, application.ID, r)
 	}
 	writeJSON(w, http.StatusCreated, applicationEnvelope{Application: newApplicationResponse(application)})
 }

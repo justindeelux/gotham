@@ -942,3 +942,33 @@ func (f *fakeHookLifecycle) RemoveHook(_ context.Context, _ uuid.UUID, appID uui
 	}
 	return f.removeErr
 }
+
+// stallingHookLifecycle blocks every hook call until its context is done,
+// simulating a provider that accepts the connection and then stalls. The
+// recorded call counts let a test prove the call happened exactly once.
+type stallingHookLifecycle struct {
+	mu           sync.Mutex
+	installCalls int
+	removeCalls  int
+}
+
+// Compile-time guarantee that stallingHookLifecycle satisfies the seam.
+var _ HookLifecycle = (*stallingHookLifecycle)(nil)
+
+// InstallHook implements HookLifecycle.
+func (f *stallingHookLifecycle) InstallHook(ctx context.Context, _, _ uuid.UUID, _ *http.Request) error {
+	f.mu.Lock()
+	f.installCalls++
+	f.mu.Unlock()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// RemoveHook implements HookLifecycle.
+func (f *stallingHookLifecycle) RemoveHook(ctx context.Context, _, _ uuid.UUID) error {
+	f.mu.Lock()
+	f.removeCalls++
+	f.mu.Unlock()
+	<-ctx.Done()
+	return ctx.Err()
+}

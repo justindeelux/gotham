@@ -29,6 +29,13 @@ func Enabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv(FeatureEnv)), "false")
 }
 
+// defaultHookTimeout bounds one best-effort Git-host hook call (install on
+// create, remove on delete; Config.HookTimeout overrides it). The bound keeps
+// a provider that accepts the connection and then stalls from holding the
+// HTTP request open past the SPA's own timeout (15s), which would surface as
+// a failed create after the application row is already committed.
+const defaultHookTimeout = 10 * time.Second
+
 // DeployService is the control-plane surface the HTTP layer depends on. It is
 // implemented by Service and by fakes in route tests.
 type DeployService interface {
@@ -36,10 +43,10 @@ type DeployService interface {
 	// and storage configuration sent with it.
 	CreateApplication(ctx context.Context, userID uuid.UUID, in CreateApplicationInput) (Application, error)
 	// InstallHook installs the provider hook of an application that was just
-	// created (BE-4.4). It returns the provider/lifecycle error so the caller
-	// can log it, but callers must never fail the create on it: the
-	// application row is already committed, so the explicit idempotent
-	// webhook route is the retry path instead.
+	// created (BE-4.4). The call is bounded (Config.HookTimeout) and a
+	// failure is logged with the configured logger; callers must never fail
+	// the create on it — the application row is already committed and the
+	// explicit idempotent webhook route is the retry path.
 	InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) error
 	// ListApplications returns the caller's applications, newest first.
 	ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error)
@@ -140,6 +147,11 @@ type Config struct {
 	// exists. nil, or a closure answering nil, disables automatic hook
 	// management; the explicit webhook routes keep working either way.
 	Hooks func() HookLifecycle
+	// HookTimeout bounds one best-effort hook call against a provider that
+	// accepts the connection and then stalls. Zero selects
+	// defaultHookTimeout (10s). The bound is a request-path safety net, not a
+	// retry budget: a timeout is logged like any other hook failure.
+	HookTimeout time.Duration
 	// Emitter overrides the publisher-based realtime emitter (tests).
 	Emitter *Emitter
 	// Logger defaults to slog.Default.
@@ -183,6 +195,8 @@ type Service struct {
 	previewCleanup func(ctx context.Context, appID uuid.UUID) error
 	// hooks resolves the provider-hook lifecycle lazily (see Config.Hooks).
 	hooks func() HookLifecycle
+	// hookTimeout bounds one hook call (see Config.HookTimeout).
+	hookTimeout time.Duration
 }
 
 // Compile-time guarantee that Service satisfies the route-level contract.
@@ -195,11 +209,16 @@ var _ DeployService = (*Service)(nil)
 func NewService(cfg Config) *Service {
 	o := newOrchestrator(cfg)
 	o.recoverStale()
+	hookTimeout := cfg.HookTimeout
+	if hookTimeout <= 0 {
+		hookTimeout = defaultHookTimeout
+	}
 	return &Service{
 		Orchestrator:   o,
 		registrar:      cfg.KeyRegistrar,
 		previewCleanup: cfg.PreviewCleanup,
 		hooks:          cfg.Hooks,
+		hookTimeout:    hookTimeout,
 	}
 }
 

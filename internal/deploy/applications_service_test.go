@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -646,6 +647,83 @@ func TestServiceInstallHookWithoutLifecycleIsNoop(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, applicationsPath, nil)
 	if err := svc.InstallHook(context.Background(), uuid.New(), uuid.New(), req); err != nil {
 		t.Fatalf("install without a lifecycle = %v, want nil", err)
+	}
+}
+
+// TestServiceInstallHookBoundsStalledProvider pins MEDIUM-1: a provider that
+// accepts the connection and then stalls must not hold the create path open.
+// The call is cut at Config.HookTimeout, the failure is logged (the outcome
+// stays visible) and the error is returned for the caller to ignore, exactly
+// as the create route does.
+func TestServiceInstallHookBoundsStalledProvider(t *testing.T) {
+	stall := &stallingHookLifecycle{}
+
+	var logs bytes.Buffer
+	svc := NewService(Config{
+		Repository:  &fakeRepository{},
+		Secret:      testSecretKey,
+		Logger:      slog.New(slog.NewTextHandler(&logs, nil)),
+		Hooks:       func() HookLifecycle { return stall },
+		HookTimeout: 50 * time.Millisecond,
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	req := httptest.NewRequest(http.MethodPost, applicationsPath, nil)
+	start := time.Now()
+	err := svc.InstallHook(context.Background(), uuid.New(), uuid.New(), req)
+	elapsed := time.Since(start)
+
+	if elapsed > 5*time.Second {
+		t.Fatalf("InstallHook took %s, want it bounded by the 50ms hook timeout", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the hook timeout to surface", err)
+	}
+	if stall.installCalls != 1 {
+		t.Errorf("hook installs = %d, want 1", stall.installCalls)
+	}
+	if logged := logs.String(); !strings.Contains(logged, "webhook not installed") {
+		t.Errorf("log = %q, want the stalled install recorded", logged)
+	}
+}
+
+// TestServiceDeleteApplicationBoundsStalledProvider pins the same bound on the
+// uninstall path: a stalled provider is cut off, the failure is logged with
+// the orphan's identity for reconciliation, and the application still deletes.
+func TestServiceDeleteApplicationBoundsStalledProvider(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	stall := &stallingHookLifecycle{}
+
+	var logs bytes.Buffer
+	svc := NewService(Config{
+		Repository:  repo,
+		Secret:      testSecretKey,
+		Logger:      slog.New(slog.NewTextHandler(&logs, nil)),
+		Hooks:       func() HookLifecycle { return stall },
+		HookTimeout: 50 * time.Millisecond,
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	start := time.Now()
+	err := svc.DeleteApplication(context.Background(), userID, app.ID)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("delete took %s, want it bounded by the 50ms hook timeout", elapsed)
+	}
+	if stall.removeCalls != 1 {
+		t.Errorf("hook removals = %d, want 1", stall.removeCalls)
+	}
+	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("get after delete err = %v, want ErrNotFound", err)
+	}
+	if logged := logs.String(); !strings.Contains(logged, app.Repo) {
+		t.Errorf("log = %q, want the orphan named", logged)
 	}
 }
 

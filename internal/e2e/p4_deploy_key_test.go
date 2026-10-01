@@ -108,6 +108,20 @@ func TestP4DeployPrivateRepoOverSSH(t *testing.T) {
 		HostPort:  hostPort,
 		ServerID:  h.serverID.String(),
 	})
+	// The create route installed the push hook through the production seam:
+	// the harness wires cfg.Hooks to the real webhook service (with a stub
+	// installer, since no Git host is reachable), so the row exists without
+	// any explicit webhook-route call.
+	hookCtx, hookCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	hookRow, err := h.st.GetApplicationWebhookByApp(hookCtx, pgUUID(uuid.MustParse(app.ID)))
+	hookCancel()
+	if err != nil {
+		t.Fatalf("auto-installed webhook row: %v", err)
+	}
+	if hookRow.Provider != "github" || !strings.Contains(hookRow.Url, "/api/v1/webhooks/github") {
+		t.Errorf("auto-installed hook = provider %q url %q, want the github delivery route",
+			hookRow.Provider, hookRow.Url)
+	}
 	h.seedPrivateRepoDeployKey(t, app.ID, fixture.repo)
 
 	stubDir := t.TempDir()

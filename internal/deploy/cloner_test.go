@@ -3,11 +3,16 @@ package deploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -421,4 +426,118 @@ func TestGitSourceClonesBranch(t *testing.T) {
 	if err := (gitSource{}).Clone(context.Background(), app, dir, nil); err != nil {
 		t.Fatalf("retried clone: %v", err)
 	}
+}
+
+// waitForPIDFile polls until the child wrote its pid.
+func waitForPIDFile(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(path); err == nil {
+			if pid, convErr := strconv.Atoi(strings.TrimSpace(string(data))); convErr == nil && pid > 0 {
+				return pid
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pid file %s was never written", path)
+	return 0
+}
+
+// waitForProcessExit polls kill(pid, 0) until the process is gone.
+func waitForProcessExit(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("process %d is still alive", pid)
+}
+
+// TestRunGitCancelKillsProcessGroup proves an aborted clone (step timeout,
+// deploy cancellation, graceful service shutdown) takes down git *and* the
+// children it spawned. The unit keeps KillMode=process, so systemd does not
+// kill them; without the group kill the background sleep (standing in for
+// ssh) would survive the cancellation.
+func TestRunGitCancelKillsProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process groups are POSIX-only")
+	}
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	script := "sleep 300 & echo $! > " + shellQuote(pidFile) + "; wait"
+	done := make(chan error, 1)
+	go func() {
+		_, err := runGit(ctx, []string{"sh", "-c", script}, os.Environ())
+		done <- err
+	}()
+
+	pid := waitForPIDFile(t, pidFile)
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("runGit returned nil after the context was cancelled")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("runGit did not return after the context was cancelled")
+	}
+	waitForProcessExit(t, pid)
+}
+
+// TestRunGitChildDiesWithItsParent proves the Linux parent-death signal: a
+// hard SIGKILL (or OOM) of the control plane leaves no chance to cancel
+// contexts, so the kernel must kill the git child. The helper re-execs this
+// test binary, starts a git command through runGit, reports the child's pid
+// and exits without cleanup.
+func TestRunGitChildDiesWithItsParent(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the parent-death signal is Linux-only")
+	}
+	helper := exec.Command(os.Args[0], "-test.run=TestRunGitChildDiesHelper")
+	helper.Env = append(os.Environ(), "GOTHAM_RUN_GIT_DEATH_HELPER=1")
+	output, err := helper.Output()
+	if err != nil {
+		t.Fatalf("helper failed: %v (output %q)", err, output)
+	}
+	value, ok := strings.CutPrefix(strings.TrimSpace(string(output)), "pid=")
+	if !ok {
+		t.Fatalf("helper output = %q, want pid=<n>", output)
+	}
+	pid, err := strconv.Atoi(value)
+	if err != nil {
+		t.Fatalf("helper pid = %q: %v", value, err)
+	}
+	waitForProcessExit(t, pid)
+}
+
+// TestRunGitChildDiesHelper is the child of TestRunGitChildDiesWithItsParent.
+func TestRunGitChildDiesHelper(t *testing.T) {
+	if os.Getenv("GOTHAM_RUN_GIT_DEATH_HELPER") != "1" {
+		t.Skip("helper process for TestRunGitChildDiesWithItsParent")
+	}
+	dir, err := os.MkdirTemp("", "gotham-git-death-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "helper: %v\n", err)
+		os.Exit(2)
+	}
+	pidFile := filepath.Join(dir, "child.pid")
+	script := "echo $$ > " + shellQuote(pidFile) + "; exec sleep 300"
+	go func() { _, _ = runGit(context.Background(), []string{"sh", "-c", script}, nil) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, readErr := os.ReadFile(pidFile); readErr == nil && strings.TrimSpace(string(data)) != "" {
+			fmt.Printf("pid=%s\n", strings.TrimSpace(string(data)))
+			os.Exit(0)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	fmt.Fprintln(os.Stderr, "helper: the child never reported its pid")
+	os.Exit(2)
 }

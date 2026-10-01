@@ -80,6 +80,9 @@ STATUS_DIR=$(dirname "${STATUS}")
 PENDING="${GOTHAM_PENDING:-/var/lib/gotham/update.pending}"
 LOCK="${GOTHAM_LOCK:-/var/lib/gotham/update.lock}"
 GRACE="${GOTHAM_GRACE:-1}"
+# LOCK_PIN is the hardlink that pins the lock inode in the root-owned status
+# directory for the duration of a run (acquire_lock); the exit trap removes it.
+LOCK_PIN=""
 
 log() {
     echo "gotham-update: $*" >&2
@@ -94,9 +97,17 @@ remove_nonregular_pending() {
         rm -f "${PENDING}" 2>/dev/null || true
     fi
 }
-# Any unexpected exit also clears a non-regular pending marker so it can never
-# hang a reader; a regular staged marker is preserved for the control plane.
-trap 'remove_nonregular_pending' EXIT
+
+# cleanup runs on every exit: drop a non-regular pending marker so it cannot
+# hang a reader, and remove a lock pin this run created. A regular staged
+# marker is preserved for the control plane.
+cleanup() {
+    remove_nonregular_pending
+    if [ -n "${LOCK_PIN:-}" ]; then
+        rm -f "${LOCK_PIN}" 2>/dev/null || true
+    fi
+}
+trap 'cleanup' EXIT
 
 # validate_conf refuses anything but the fixed, root-owned values. It returns
 # nonzero on invalid config so the caller can clean up before exiting.
@@ -121,16 +132,34 @@ validate_conf() {
     return 0
 }
 
+# status_dir_usable reports whether STATUS_DIR is (or can be created as) an
+# existing, non-symlink, root-owned directory. That ownership floor is what
+# makes the temp-file + mv status write and the lock pin safe: the service user
+# cannot create, swap or redirect entries in a directory it does not own.
+status_dir_usable() {
+    [ ! -L "${STATUS_DIR}" ] || return 1
+    if [ ! -d "${STATUS_DIR}" ]; then
+        mkdir -p "${STATUS_DIR}" 2>/dev/null || return 1
+    fi
+    [ -O "${STATUS_DIR}" ]
+}
+
 # write_status writes the authoritative status into the root-owned status
-# directory using an exclusive temp file. The directory is not writable by the
-# service user, so a pre-planted symlink cannot redirect the root write.
+# directory using an exclusive temp file. The directory must be an existing,
+# non-symlink, root-owned directory (status_dir_usable); when that floor is
+# broken the wrapper refuses instead of writing authoritative state into a
+# service-writable directory. The update then records no outcome (fail closed):
+# the control plane's monitor resolves the staged gate.
 write_status() {
     # $1 result, $2 version, $3 detail
     if [ -L "${STATUS}" ]; then
         log "refusing symlinked status file ${STATUS}"
         return 0
     fi
-    mkdir -p "${STATUS_DIR}" 2>/dev/null || true
+    if ! status_dir_usable; then
+        log "refusing to write status in ${STATUS_DIR}: not a root-owned directory"
+        return 0
+    fi
     tmp=$(mktemp "${STATUS_DIR}/.status.XXXXXX" 2>/dev/null) || {
         log "could not create a status temp file in ${STATUS_DIR}"
         return 0
@@ -158,23 +187,55 @@ finish() {
 }
 
 # acquire_lock serializes with the control plane's Apply/Rollback. The lock
-# lives in the service StateDirectory, so the wrapper must never perform a
-# following/truncating root open there: only an existing regular, non-symlink
-# file is opened, read-only (flock(2) works on a read-only descriptor and a
-# read-only open cannot modify a target). It fails closed when the lock is
-# missing, invalid or times out.
+# lives in the service StateDirectory, so the service user owns every path
+# component: a FIFO swapped in between the checks and the open would block
+# root's open(2) forever (flock(1) opens blocking too, so `flock -w` cannot
+# bound it).
+#
+# Root therefore pins the inode first: ln(2) hardlinks whatever the lock path
+# resolves to into the root-owned status directory and never opens the inode,
+# so a FIFO cannot block it. Only a pinned, verified regular file is opened;
+# the pinned name cannot be swapped out of a root-owned directory, and locking
+# the hardlink locks the same inode the control plane locks. When no pin can be
+# made (no root-owned status directory, no hardlink support) it falls back to
+# the checked read-only open; that residual is recorded in deploy/README.md.
 acquire_lock() {
     if ! command -v flock >/dev/null 2>&1; then
         log "flock is unavailable; refusing to update without the lock"
         return 1
     fi
-    if [ -L "${LOCK}" ] || [ ! -f "${LOCK}" ] || [ ! -r "${LOCK}" ]; then
-        log "refusing to lock ${LOCK}: not an existing regular file"
-        return 1
+    LOCK_PIN=""
+    if status_dir_usable; then
+        pin="${STATUS_DIR}/.update-lock.$$"
+        if ln "${LOCK}" "${pin}" 2>/dev/null; then
+            # ln may dereference a symlink; require the pinned name itself to be
+            # a regular file, the original path not to be a symlink, and both
+            # to resolve to the same inode. A swapped FIFO fails -f; a swapped
+            # symlink fails either -L; a swapped regular file fails -ef.
+            if [ -f "${pin}" ] && [ ! -L "${pin}" ] && [ ! -L "${LOCK}" ] && [ "${LOCK}" -ef "${pin}" ]; then
+                LOCK_PIN="${pin}"
+            else
+                rm -f "${pin}" 2>/dev/null || true
+            fi
+        fi
     fi
-    exec 9<"${LOCK}"
+    if [ -n "${LOCK_PIN}" ]; then
+        exec 9<"${LOCK_PIN}"
+    else
+        if [ -L "${LOCK}" ] || [ ! -f "${LOCK}" ] || [ ! -r "${LOCK}" ]; then
+            log "refusing to lock ${LOCK}: not an existing regular file"
+            return 1
+        fi
+        exec 9<"${LOCK}"
+    fi
     if ! flock -w 60 9; then
         log "could not acquire lock ${LOCK} within 60s"
+        return 1
+    fi
+    # A swap while waiting would leave root holding an inode the control plane
+    # no longer locks; refuse rather than run unserialized.
+    if [ -n "${LOCK_PIN}" ] && { [ -L "${LOCK}" ] || ! [ "${LOCK}" -ef "${LOCK_PIN}" ]; }; then
+        log "lock ${LOCK} changed while acquiring it"
         return 1
     fi
     return 0

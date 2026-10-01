@@ -130,6 +130,11 @@ TLS; agents installed before that go offline until they are reinstalled with
   `wrapper_failed` in the root-owned status, and exits nonzero; the pending
   marker is left in place so the gate stays closed and the control plane's
   monitor rolls back.
+- If the status directory is not an existing, non-symlink, root-owned directory
+  the wrapper refuses to record there and falls back to the checked lock open
+  (the residual above); the update then records no outcome and stays `staged`
+  until the control plane's monitor or the next startup resolves it — fail
+  closed, never a root write into a service-writable directory.
 - If the host crashes or reboots during the health window, the next startup sees
   a `staged` marker and relaunches the wrapper once (marker rewritten to
   `resuming`, so it never loops); the new binary is then health-checked or
@@ -170,18 +175,36 @@ TLS; agents installed before that go offline until they are reinstalled with
 
 ## Known residuals
 
-- **`KillMode=process` applies to every stop.** Control-plane children such as
-  `git`/`ssh` are no longer killed by `systemctl stop`/`restart` and systemd may
-  report left-over processes. This is required so the wrapper survives the
-  update restart. Upgrade path: have the wrapper re-exec itself into a transient
+- **`KillMode=process` applies to every stop (children handled in Go).**
+  `KillMode=process` is required so the wrapper survives the update restart, so
+  systemd itself does not kill control-plane children (`git`/`ssh`) on
+  `systemctl stop`/`restart`. The cloner compensates: it runs `git` in its own
+  process group and kills the whole group when the clone context is cancelled
+  (step timeout, deploy cancellation, graceful service shutdown), and on Linux
+  it sets `PR_SET_PDEATHSIG` (SIGKILL) on the forking thread, so a hard
+  `SIGKILL`/OOM of the control plane still kills `git` even though no Go code
+  runs. Residual: after a hard kill, a grandchild that escaped git's process
+  group (`setsid`) can outlive the service until its own socket timeouts. Only
+  the cgroup path closes that completely: re-exec the wrapper into a transient
   scope (`systemd-run --unit=gotham-update-<id> --collect`) and restore the
-  default `control-group` mode.
-- **Root `mv` inside the gotham-owned binary directory.** `restore` performs a
-  root rename of `<binary>.old` over `<binary>` in `/var/lib/gotham/bin`, which
-  the service user owns; a very tight race could swap the `bin` component for a
-  symlink between the rename lookups. The hardlink+rename Go swap is not
-  affected. Upgrade path: perform the restore as the service user via
-  `runuser`/`setpriv`.
+  default `control-group` mode — a root/dbus workflow that stays the upgrade
+  path. Guards: `TestRunGitCancelKillsProcessGroup` and
+  `TestRunGitChildDiesWithItsParent` (`internal/deploy/cloner_test.go`).
+- **Root `mv` inside the gotham-owned binary directory (INFO).** `restore`
+  performs a root rename of `<binary>.old` over `<binary>` in the service-owned
+  `bin` directory, so a tightly timed path swap could make root rename a
+  different pair of files. `rename(2)` requires write + search permission on
+  both parent directories, and every directory on that path is owned by the
+  service user, so a successful rename can only move service-user files inside
+  service-writable space; a destination in a root-owned directory fails with
+  `ENOENT`/`EACCES`, and no root-owned file can become the source. The status
+  write is not exposed: `write_status` and `acquire_lock` refuse unless
+  `GOTHAM_STATUS`'s directory is an existing, non-symlink, **root-owned**
+  directory (runtime `-O` check in `status_dir_usable`), matching
+  `/var/lib/gotham-updater` root:root 0755 — created by `deploy/install.sh`
+  (which runs as root), outside the unit's `ReadWritePaths` and unreachable
+  through the sudoers grant. The theoretical upgrade path for the rename itself
+  remains performing it as the service user (`runuser`/`setpriv`).
 - **Root reads the gotham-owned pending marker** (for the version label only).
   It is guarded to a regular, non-symlink file and the value is sanitized; the
   marker is also read by the control plane. Upgrade path: the same
@@ -191,15 +214,30 @@ TLS; agents installed before that go offline until they are reinstalled with
   the update `staged`: the old process's monitor died with the restart and the
   new process already skipped `Resume` while the wrapper held the lock. The
   unproven binary keeps serving until the next restart (when startup `Resume`
-  fires) or `gotham update reset`. It fails closed and self-heals on restart.
-- **Check-then-open TOCTOU in the wrapper (LOW).** The wrapper checks
-  `[ -L ]`/`[ -f ]` before opening the lock and reading the pending marker, so a
-  service user that swaps in a symlink between the check and the open could make
-  root open a FIFO (the wrapper hangs, the gate stays `staged`) or a device node.
-  The opens are read-only, so nothing is truncated; the leak is at most a
-  sanitized 64-character `version=` line. Worst case is a self-DoS by an
-  already-compromised service user. Upgrade path: the same `runuser`/`setpriv`
-  handoff.
+  fires) or `gotham update reset`. This is deliberate fail-closed behavior and
+  must not change. Guards: `TestResumeStagedRelaunches` and
+  `TestResumeStagedLaunchErrorRollsBack` (`updatecore/applier_test.go`) prove a
+  later startup resumes or rolls back, `TestResumeStagedSkipsWhileLockHeld`
+  (`updatecore/resume_unix_test.go`) proves a live wrapper is never awaited,
+  `TestMonitorRestartRollsBack` / `TestWrapperFailedPreservesKnownGood` prove a
+  wrapper that dies without recording cannot arm the unproven binary, and
+  `TestServiceAutoUpdateBacksOffRolledBackRelease` / `TestUpdateBackoff*`
+  (`internal/updates/backoff_test.go`) prove the AUTO_UPDATE loop does not
+  re-apply the same failed release.
+- **Wrapper lock open is pinned (LOW, reduced).** `acquire_lock` no longer
+  opens the service-swappable lock path directly: `ln` hardlinks whatever inode
+  the path resolves to into the root-owned status directory (`link(2)` never
+  opens the inode, so a FIFO swapped in cannot block it), the pinned name is
+  required to be a regular, non-symlink file that still matches the lock path,
+  and only that name is opened read-only. The pinned name cannot be swapped out
+  of a root-owned directory, and locking the hardlink locks the same inode the
+  control plane locks. A post-`flock` check refuses when the lock path was
+  replaced while root waited. Residual: when no pin can be made (missing status
+  directory, hardlinks unsupported), the wrapper falls back to the previous
+  checked read-only open, where a FIFO swapped in between the check and the open
+  can still block root; the worst case stays a self-DoS by an
+  already-compromised service user, and the durable fix is moving the lock into
+  a root-owned directory or the `runuser`/`setpriv` handoff.
 - **systemd start-limit tuning (LOW).** `Restart=always` + `RestartSec=5` means a
   crash-looping new binary can trip the default start rate limit during the
   wrapper's health window; the wrapper now clears it with `reset-failed`, so the
@@ -299,9 +337,10 @@ sudo deploy/install-agent-sudoers.sh gotham-agent
 ```
 
 The same residuals as the control-plane wrapper apply (root `mv` inside the
-agent-owned `bin`, root read of the agent-owned pending marker, check-then-open
-TOCTOU, wrapper-death window); the upgrade path is the same `runuser`/`setpriv`
-handoff.
+agent-owned `bin`, root read of the agent-owned pending marker, wrapper-death
+window); the shared wrapper carries the same mitigations (pinned lock open,
+root-owned status-directory floor enforced at run time) and the upgrade path is
+the same `runuser`/`setpriv` handoff.
 
 ### Failed-release backoff and operator retry
 

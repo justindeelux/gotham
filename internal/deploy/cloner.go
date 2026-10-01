@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -140,11 +141,21 @@ func (s gitSource) deployKeyPEM(ctx context.Context, appID uuid.UUID) (string, e
 	return strings.TrimSpace(privatePEM), nil
 }
 
+// gitWaitDelay bounds how long Wait waits on the command's I/O pipes after the
+// context is cancelled, so a process that inherited the pipes cannot outlive
+// the cancellation and hold the deploy step open.
+const gitWaitDelay = 10 * time.Second
+
 // runGit executes argv (starting with "git") with env and returns its combined
-// output, preserving exec.CommandContext's cancellation behaviour.
+// output, preserving exec.CommandContext's cancellation behaviour. The child is
+// isolated (own process group, and on Linux a parent-death signal) so a
+// cancelled clone takes down git and the ssh/sh it spawned; see
+// configureGitCommand.
 func runGit(ctx context.Context, argv []string, env []string) ([]byte, error) {
 	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	command.Env = env
+	cleanup := configureGitCommand(command)
+	defer cleanup()
 	return command.CombinedOutput()
 }
 

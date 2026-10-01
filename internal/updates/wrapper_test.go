@@ -22,6 +22,8 @@ type wrapperResult struct {
 	status   string
 	pending  string
 	output   string
+	// statusDir is the scratch root-owned status directory of the run.
+	statusDir string
 	// systemctlLog is the fake systemctl call log (mode rate-limit only).
 	systemctlLog string
 }
@@ -47,9 +49,18 @@ type wrapperEnv struct {
 	health        string
 	// systemctlMode selects a richer fake systemctl. Empty uses systemctlExit.
 	systemctlMode string
+	// flockShim selects a richer fake flock. Empty exits 0 immediately.
+	flockShim string
 	// setup runs after the default files are created, to plant symlinks etc.
 	setup func(dir, target, statusPath string)
 }
+
+// flock shim modes.
+const (
+	// flockSwapWhileWaiting models the service user swapping the lock path
+	// while root waits on it: the wrapper must refuse, not run unserialized.
+	flockSwapWhileWaiting = "swap"
+)
 
 // runWrapper runs the deployed wrapper with fake systemctl/curl shims. It
 // reproduces the reviewers' repros: a restart that exits nonzero must still
@@ -70,10 +81,15 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	if env.systemctlMode == systemctlRateLimit {
 		writeRateLimitShim(t, filepath.Join(fakeBin, "systemctl"), systemctlLog)
 	} else {
-		writeShim(t, filepath.Join(fakeBin, "systemctl"), env.systemctlExit)
+		writeSystemctlShim(t, filepath.Join(fakeBin, "systemctl"), env.systemctlExit)
 	}
 	writeCurlShim(t, filepath.Join(fakeBin, "curl"), env.health)
-	writeShim(t, filepath.Join(fakeBin, "flock"), 0)
+	switch env.flockShim {
+	case flockSwapWhileWaiting:
+		writeFlockSwapShim(t, filepath.Join(fakeBin, "flock"))
+	default:
+		writeShim(t, filepath.Join(fakeBin, "flock"), 0)
+	}
 
 	target := filepath.Join(dir, "bin", "gotham")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -127,11 +143,13 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	cmd.Env = append(sanitizedEnv(),
 		"GOTHAM_UPDATER_CONF="+conf,
 		"WRAPPER_TEST_TARGET="+target,
+		"WRAPPER_TEST_LOCK="+lock,
+		"WRAPPER_TEST_STATUS_DIR="+statusDir,
 		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	output, runErr := cmd.CombinedOutput()
 
-	result := wrapperResult{output: string(output)}
+	result := wrapperResult{output: string(output), statusDir: statusDir}
 	if runErr != nil {
 		exitErr, ok := runErr.(*exec.ExitError)
 		if !ok {
@@ -232,6 +250,37 @@ func writeShim(t *testing.T, path string, code int) {
 	script := "#!/bin/sh\nexit " + strconv.Itoa(code) + "\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write shim %s: %v", path, err)
+	}
+}
+
+// writeSystemctlShim writes a fake systemctl that optionally snapshots the
+// status directory listing (WRAPPER_TEST_STATUS_LIST) so a test can observe
+// what the wrapper left there while it held the lock, then exits with code.
+func writeSystemctlShim(t *testing.T, path string, code int) {
+	t.Helper()
+	script := "#!/bin/sh\n" +
+		"if [ -n \"${WRAPPER_TEST_STATUS_LIST:-}\" ] && [ -n \"${WRAPPER_TEST_STATUS_DIR:-}\" ]; then\n" +
+		"  ls -A \"${WRAPPER_TEST_STATUS_DIR}\" > \"${WRAPPER_TEST_STATUS_LIST}\" 2>/dev/null || true\n" +
+		"fi\n" +
+		"exit " + strconv.Itoa(code) + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write systemctl shim %s: %v", path, err)
+	}
+}
+
+// writeFlockSwapShim writes a fake flock that simulates the service user
+// replacing the lock path while root waits on it: it swaps the lock file and
+// exits 0 as if the lock had been acquired.
+func writeFlockSwapShim(t *testing.T, path string) {
+	t.Helper()
+	script := "#!/bin/sh\n" +
+		"if [ -n \"${WRAPPER_TEST_LOCK:-}\" ]; then\n" +
+		"  rm -f \"${WRAPPER_TEST_LOCK}\" 2>/dev/null || true\n" +
+		"  : > \"${WRAPPER_TEST_LOCK}\" 2>/dev/null || true\n" +
+		"fi\n" +
+		"exit 0\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write flock swap shim %s: %v", path, err)
 	}
 }
 
@@ -489,6 +538,12 @@ func TestWrapperStatusWriteIsSafe(t *testing.T) {
 	if strings.Contains(body, `exec 9>`) {
 		t.Error("wrapper still opens the lock for writing (truncation risk)")
 	}
+	if !strings.Contains(body, "status_dir_usable") {
+		t.Error("wrapper does not verify the root-owned status directory before writing/opening")
+	}
+	if !strings.Contains(body, ".update-lock.") {
+		t.Error("wrapper does not pin the lock inode into the root-owned status directory")
+	}
 }
 
 // TestWrapperRefusesSymlinkedLock reproduces N1: a Gotham-planted update.lock
@@ -522,6 +577,95 @@ func TestWrapperRefusesSymlinkedLock(t *testing.T) {
 	}
 	if !strings.Contains(result.status, "result=wrapper_failed") {
 		t.Errorf("status = %q, want wrapper_failed", result.status)
+	}
+}
+
+// TestWrapperPinsLockInode proves the lock inode is pinned into the root-owned
+// status directory before it is opened: the fake systemctl snapshots the
+// directory while the wrapper holds the lock, and the pin must be there. The
+// pin is what stops a swapped-in FIFO from blocking root's open(2); a skipped
+// pin would silently fall back to the racy open.
+func TestWrapperPinsLockInode(t *testing.T) {
+	listing := filepath.Join(t.TempDir(), "status-listing")
+	t.Setenv("WRAPPER_TEST_STATUS_LIST", listing)
+
+	runWrapper(t, wrapperEnv{systemctlExit: 0, health: healthAlwaysOK})
+
+	data, err := os.ReadFile(listing)
+	if err != nil {
+		t.Fatalf("read the status dir snapshot: %v", err)
+	}
+	if !strings.Contains(string(data), ".update-lock.") {
+		t.Fatalf("status dir during the update = %q, want a pinned lock hardlink", data)
+	}
+}
+
+// TestWrapperRemovesLockPin proves the pin is transient: it is removed when the
+// wrapper exits, so it cannot accumulate in the root-owned directory.
+func TestWrapperRemovesLockPin(t *testing.T) {
+	result := runWrapper(t, wrapperEnv{systemctlExit: 0, health: healthAlwaysOK})
+
+	entries, err := os.ReadDir(result.statusDir)
+	if err != nil {
+		t.Fatalf("read status dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".update-lock.") {
+			t.Fatalf("lock pin %s survived the wrapper", entry.Name())
+		}
+	}
+}
+
+// TestWrapperRefusesLockSwappedWhileWaiting proves the post-flock inode check:
+// when the lock path is replaced while root waits on it, the wrapper refuses
+// instead of running the update while the control plane locks a different
+// inode.
+func TestWrapperRefusesLockSwappedWhileWaiting(t *testing.T) {
+	result := runWrapper(t, wrapperEnv{
+		systemctlExit: 0,
+		health:        healthAlwaysOK,
+		flockShim:     flockSwapWhileWaiting,
+	})
+
+	if !strings.Contains(result.output, "lock") || !strings.Contains(result.output, "changed") {
+		t.Errorf("output = %q, want a lock-changed refusal", result.output)
+	}
+	if !strings.Contains(result.status, "result=wrapper_failed") {
+		t.Fatalf("status = %q, want wrapper_failed", result.status)
+	}
+	if result.target != "new" {
+		t.Errorf("binary = %q, want the update refused before any restart/rollback", result.target)
+	}
+}
+
+// TestWrapperRefusesStatusDirOutsideRootOwnership proves the status directory
+// floor is enforced at run time: a symlinked status directory (a shape the
+// installer never produces) is refused, the update still runs, and no
+// authoritative status is written into the unsafe path.
+func TestWrapperRefusesStatusDirOutsideRootOwnership(t *testing.T) {
+	result := runWrapper(t, wrapperEnv{
+		systemctlExit: 0,
+		health:        healthAlwaysOK,
+		setup: func(dir, _ string, _ string) {
+			statusDir := filepath.Join(dir, "statusdir")
+			if err := os.RemoveAll(statusDir); err != nil {
+				t.Fatalf("remove statusdir: %v", err)
+			}
+			target := filepath.Join(dir, "real-statusdir")
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				t.Fatalf("mkdir real-statusdir: %v", err)
+			}
+			if err := os.Symlink(target, statusDir); err != nil {
+				t.Fatalf("symlink statusdir: %v", err)
+			}
+		},
+	})
+
+	if !strings.Contains(result.output, "not a root-owned directory") {
+		t.Errorf("output = %q, want a status-directory refusal", result.output)
+	}
+	if result.status != "" {
+		t.Errorf("status = %q, want no status written through the symlinked directory", result.status)
 	}
 }
 
@@ -640,6 +784,8 @@ func TestRunWrapperDoesNotBlockOnNonRegularPaths(t *testing.T) {
 		{"status-symlink", func(_, _, status string) string { return status }, false},
 		{"target-fifo", func(_, target, _ string) string { return target }, true},
 		{"backup-fifo", func(_, target, _ string) string { return target + OldSuffix }, true},
+		{"lock-fifo", func(dir, _, _ string) string { return filepath.Join(dir, "update.lock") }, true},
+		{"lock-symlink", func(dir, _, _ string) string { return filepath.Join(dir, "update.lock") }, false},
 	}
 	for _, tc := range cases {
 		tc := tc

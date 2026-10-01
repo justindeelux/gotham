@@ -94,7 +94,7 @@ func runAdminCreate(args []string) int {
 			return exitError
 		}
 
-		hash, err := adminPassword(*password, "New password: ", "Confirm password: ")
+		hash, err := adminPasswordHash(*password, "New password: ", "Confirm password: ")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "admin create: %v\n", err)
 			return exitError
@@ -148,7 +148,7 @@ func runAdminResetPassword(args []string) int {
 			return exitError
 		}
 
-		hash, err := adminPassword(*password, "New password: ", "Confirm password: ")
+		hash, err := adminPasswordHash(*password, "New password: ", "Confirm password: ")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "admin reset-password: %v\n", err)
 			return exitError
@@ -164,10 +164,11 @@ func runAdminResetPassword(args []string) int {
 	})
 }
 
-// adminPassword resolves the password: the flag value when given, otherwise a
-// hidden double prompt on the terminal. It validates with the same policy as
-// registration.
-func adminPassword(password, prompt, confirm string) (string, error) {
+// adminPasswordHash resolves the password (the flag value when given, otherwise
+// a hidden double prompt on the terminal), validates it with the same policy as
+// registration, and returns the argon2id-encoded hash the store expects. The
+// plaintext never leaves this function.
+func adminPasswordHash(password, prompt, confirm string) (string, error) {
 	if password == "" {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return "", fmt.Errorf("no terminal for the password prompt; pass --password")
@@ -186,7 +187,7 @@ func adminPassword(password, prompt, confirm string) (string, error) {
 	if err := auth.ValidatePassword(password); err != nil {
 		return "", err
 	}
-	return password, nil
+	return auth.HashPassword(password)
 }
 
 // readPassword prints prompt and reads a hidden answer from the terminal.

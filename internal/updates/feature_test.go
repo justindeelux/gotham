@@ -144,9 +144,14 @@ func TestFromEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("updatecore.GenerateKey: %v", err)
 	}
-	original := updatecore.PublicKey
-	t.Cleanup(func() { updatecore.PublicKey = original })
+	next, _, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("updatecore.GenerateKey (next): %v", err)
+	}
+	originalCurrent, originalNext := updatecore.PublicKey, updatecore.NextPublicKey
+	t.Cleanup(func() { updatecore.PublicKey, updatecore.NextPublicKey = originalCurrent, originalNext })
 	updatecore.PublicKey = updatecore.EncodePublicKeyBase64(embedded)
+	updatecore.NextPublicKey = updatecore.EncodePublicKeyBase64(next)
 	t.Setenv(PublicKeyEnv, "")
 	t.Setenv(RepoEnv, "acme/gotham")
 	t.Setenv(BaseURLEnv, "https://ghe.example.com")
@@ -167,17 +172,19 @@ func TestFromEnv(t *testing.T) {
 		cfg.Channel != ChannelBeta || cfg.UpdateScript != "/opt/gotham-update" ||
 		cfg.StatusPath != "/var/lib/gotham-updater/status" || cfg.PendingPath != "/var/lib/gotham/pending" ||
 		cfg.BinaryPath != "/opt/gotham/bin/gotham" || cfg.LockPath != "/var/lib/gotham/lock" ||
-		!cfg.Auto || cfg.AutoInterval != 90*time.Minute || cfg.PublicKey == nil {
+		!cfg.Auto || cfg.AutoInterval != 90*time.Minute ||
+		len(cfg.PublicKeys) != 2 || !cfg.PublicKeys[0].Equal(embedded) || !cfg.PublicKeys[1].Equal(next) {
 		t.Fatalf("FromEnv = %+v", cfg)
 	}
 
 	updatecore.PublicKey = ""
+	updatecore.NextPublicKey = ""
 	t.Setenv(PublicKeyEnv, "")
 	cfg, err = FromEnv("v1.0.0", nil)
 	if !errors.Is(err, ErrNoPublicKey) {
 		t.Fatalf("FromEnv(no key) err = %v, want ErrNoPublicKey", err)
 	}
-	if cfg.PublicKey != nil {
+	if len(cfg.PublicKeys) != 0 {
 		t.Error("FromEnv(no key) returned a public key")
 	}
 }

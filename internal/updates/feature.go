@@ -214,10 +214,10 @@ func FromEnv(current string, logger *slog.Logger) (Config, error) {
 		AutoInterval:    AutoIntervalFromEnv(),
 		DownloadTimeout: DownloadTimeoutFromEnv(),
 	}
-	publicKey, err := LoadPublicKey()
+	publicKeys, err := LoadPublicKeys()
 	if err != nil {
 		return cfg, err
 	}
-	cfg.PublicKey = publicKey
+	cfg.PublicKeys = publicKeys
 	return cfg, nil
 }

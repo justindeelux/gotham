@@ -193,6 +193,55 @@ func TestAgentUpdaterAppliesVerifiedOffer(t *testing.T) {
 	}
 }
 
+// TestAgentUpdaterLoadsKeyRing proves the embedded current + next ring flows
+// into the agent's applier: a manifest signed by the pre-positioned next key
+// verifies, and an unknown key is refused.
+func TestAgentUpdaterLoadsKeyRing(t *testing.T) {
+	current, _, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey (current): %v", err)
+	}
+	next, nextPrivate, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey (next): %v", err)
+	}
+	originalCurrent, originalNext := updatecore.PublicKey, updatecore.NextPublicKey
+	t.Cleanup(func() { updatecore.PublicKey, updatecore.NextPublicKey = originalCurrent, originalNext })
+	updatecore.PublicKey = updatecore.EncodePublicKeyBase64(current)
+	updatecore.NextPublicKey = updatecore.EncodePublicKeyBase64(next)
+	t.Setenv(updatecore.PublicKeyEnv, "")
+
+	target := filepath.Join(t.TempDir(), "gotham-agent")
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	runner := NewAgent(updaterTestConfig(t, target, noopAgentRestart), discardLogger(), nil)
+	if runner.updater == nil || runner.updater.applier == nil || runner.updater.applier.Verifier == nil {
+		t.Fatal("updater did not wire the applier verifier from the embedded key ring")
+	}
+
+	payload := []byte("signed manifest")
+	ringSigner, err := updatecore.NewSigner(nextPrivate)
+	if err != nil {
+		t.Fatalf("NewSigner (next): %v", err)
+	}
+	if err := runner.updater.applier.Verifier.Verify(payload, []byte(ringSigner.SignBase64(payload))); err != nil {
+		t.Fatalf("the agent refused a manifest signed by the next key: %v", err)
+	}
+
+	_, unknownPrivate, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey (unknown): %v", err)
+	}
+	unknownSigner, err := updatecore.NewSigner(unknownPrivate)
+	if err != nil {
+		t.Fatalf("NewSigner (unknown): %v", err)
+	}
+	if err := runner.updater.applier.Verifier.Verify(payload, unknownSigner.Sign(payload)); !errors.Is(err, updatecore.ErrBadSignature) {
+		t.Fatalf("the agent accepted an unknown key: %v", err)
+	}
+}
+
 // TestAgentUpdaterKeepsVersionWhenWrapperRollsBack is M1: a wrapper that rolls
 // back must not make the node report the new version.
 func TestAgentUpdaterKeepsVersionWhenWrapperRollsBack(t *testing.T) {

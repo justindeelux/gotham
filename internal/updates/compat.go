@@ -77,8 +77,15 @@ var (
 	ErrUpdatePending    = updatecore.ErrUpdatePending
 )
 
-// NewVerifier wraps a release public key. It fails closed on a wrong-sized key.
+// NewVerifier wraps a single release public key. It fails closed on a
+// wrong-sized key.
 func NewVerifier(key ed25519.PublicKey) (*Verifier, error) { return updatecore.NewVerifier(key) }
+
+// NewVerifierSet wraps the release key ring (current + pre-positioned next).
+// It fails closed on an empty set or a wrong-sized key.
+func NewVerifierSet(keys ...ed25519.PublicKey) (*Verifier, error) {
+	return updatecore.NewVerifierSet(keys...)
+}
 
 // NewSigner wraps a release private key.
 func NewSigner(key ed25519.PrivateKey) (*Signer, error) { return updatecore.NewSigner(key) }
@@ -86,7 +93,12 @@ func NewSigner(key ed25519.PrivateKey) (*Signer, error) { return updatecore.NewS
 // NewStatusStore returns a store at path, or nil when path is empty.
 func NewStatusStore(path string) *StatusStore { return updatecore.NewStatusStore(path) }
 
-// LoadPublicKey resolves the release public key: the embedded key is
-// authoritative, the development environment override applies only when no key
-// is embedded.
+// LoadPublicKey resolves the single release public key: the embedded current
+// key is authoritative, the development environment override applies only when
+// no key is embedded.
 func LoadPublicKey() (ed25519.PublicKey, error) { return updatecore.LoadPublicKey() }
+
+// LoadPublicKeys resolves the release key ring (embedded current + optional
+// next key; the development environment override applies only when nothing is
+// embedded). It fails closed when no usable key is configured.
+func LoadPublicKeys() ([]ed25519.PublicKey, error) { return updatecore.LoadPublicKeys() }

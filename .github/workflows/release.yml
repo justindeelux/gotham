@@ -8,6 +8,11 @@ name: Release
 #   GOTHAM_UPDATE_SIGNING_KEY  PKCS#8 PEM Ed25519 private key (signing only)
 # The private key never leaves a 0600 temp file and is never echoed.
 #
+# GOTHAM_UPDATE_NEXT_PUBLIC_KEY is OPTIONAL: the base64 raw Ed25519 public key
+# pre-positioned for the next rotation. When set, it is validated (parses,
+# differs from the current key) and both binaries must embed it. See
+# deploy/release-key-rotation.md for the rotation procedure.
+#
 # GoReleaser creates the release as a DRAFT (see .goreleaser.yaml; drafts are
 # skipped by the update checkers). This workflow then signs per-arch manifests
 # over the exact built bytes, locates the draft through the releases list
@@ -72,6 +77,28 @@ jobs:
             exit 1
           }
 
+      - name: Validate the optional next release key
+        env:
+          GOTHAM_UPDATE_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_PUBLIC_KEY }}
+          GOTHAM_UPDATE_NEXT_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_NEXT_PUBLIC_KEY }}
+        run: |
+          set -eu
+          next="${GOTHAM_UPDATE_NEXT_PUBLIC_KEY:-}"
+          if [ -z "$next" ]; then
+            echo "no next release key configured; the binaries embed the current key only"
+            exit 0
+          fi
+          decoded="$(printf '%s' "$next" | base64 -d 2>/dev/null | wc -c | tr -d ' ' || true)"
+          [ "$decoded" = "32" ] || {
+            echo "::error::GOTHAM_UPDATE_NEXT_PUBLIC_KEY is not a base64-encoded raw 32-byte Ed25519 public key"
+            exit 1
+          }
+          [ "$next" != "$GOTHAM_UPDATE_PUBLIC_KEY" ] || {
+            echo "::error::GOTHAM_UPDATE_NEXT_PUBLIC_KEY equals GOTHAM_UPDATE_PUBLIC_KEY"
+            exit 1
+          }
+          echo "next release key validated (parses, differs from the current key)"
+
       - name: Require jq
         run: |
           command -v jq >/dev/null 2>&1 || {
@@ -112,12 +139,14 @@ jobs:
       - name: GoReleaser release (draft)
         env:
           GOTHAM_UPDATE_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_PUBLIC_KEY }}
+          GOTHAM_UPDATE_NEXT_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_NEXT_PUBLIC_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: goreleaser release --clean
 
-      - name: Assert the version and key are embedded
+      - name: Assert the version and key ring are embedded
         env:
           GOTHAM_UPDATE_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_PUBLIC_KEY }}
+          GOTHAM_UPDATE_NEXT_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_NEXT_PUBLIC_KEY }}
         run: |
           set -eu
           expected_version="${GITHUB_REF_NAME#v}"
@@ -129,6 +158,14 @@ jobs:
               echo "::error::$bin did not embed the release public key"
               exit 1
             }
+            # A configured next key must be embedded in every binary: a mixed
+            # ring would leave a node unable to verify the promoted key.
+            if [ -n "${GOTHAM_UPDATE_NEXT_PUBLIC_KEY:-}" ]; then
+              grep -aqF "$GOTHAM_UPDATE_NEXT_PUBLIC_KEY" "$bin" || {
+                echo "::error::$bin did not embed the pre-positioned next release key"
+                exit 1
+              }
+            fi
           done
           [ "$count" = "4" ] || {
             echo "::error::expected 4 release binaries, found $count"

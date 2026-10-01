@@ -93,13 +93,13 @@ func newAgentFixture(t *testing.T, tamperSig bool) *agentFixture {
 func newTestAgentUpdater(t *testing.T, fixture *agentFixture) *AgentUpdater {
 	t.Helper()
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
-		Repo:      "owner/name",
-		BaseURL:   fixture.server.URL,
-		Channel:   ChannelStable,
-		PublicKey: fixture.public,
-		Client:    fixture.server.Client(),
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
-		CacheTTL:  time.Minute,
+		Repo:       "owner/name",
+		BaseURL:    fixture.server.URL,
+		Channel:    ChannelStable,
+		PublicKeys: []ed25519.PublicKey{fixture.public},
+		Client:     fixture.server.Client(),
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		CacheTTL:   time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("NewAgentUpdater: %v", err)
@@ -201,7 +201,7 @@ func TestAgentUpdaterCheckerError(t *testing.T) {
 	public, _, _ := updatecore.GenerateKey()
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
 		Repo: "owner/name", BaseURL: server.URL, Channel: ChannelStable,
-		PublicKey: public, Client: server.Client(),
+		PublicKeys: []ed25519.PublicKey{public}, Client: server.Client(),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -235,7 +235,7 @@ func TestAgentUpdaterCachesEmptyResult(t *testing.T) {
 	}
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
 		Repo: "owner/name", BaseURL: server.URL, Channel: ChannelStable,
-		PublicKey: public, Client: server.Client(),
+		PublicKeys: []ed25519.PublicKey{public}, Client: server.Client(),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -275,7 +275,7 @@ func TestAgentUpdaterEmptyReleasesIsNotAnError(t *testing.T) {
 	}
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
 		Repo: "owner/name", BaseURL: server.URL, Channel: ChannelStable,
-		PublicKey: public, Client: server.Client(),
+		PublicKeys: []ed25519.PublicKey{public}, Client: server.Client(),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -297,6 +297,54 @@ func TestAgentUpdaterFromEnvFeatureOff(t *testing.T) {
 	updater, err := AgentUpdaterFromEnv(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil || updater != nil {
 		t.Fatalf("AgentUpdaterFromEnv(feature off) = (%+v, %v), want (nil, nil)", updater, err)
+	}
+}
+
+// TestAgentUpdaterUsesKeyRing proves the embedded current + next ring flows
+// through AgentUpdaterFromEnv into the offer verification: a manifest signed by
+// the pre-positioned next key verifies, and an unknown key is refused.
+func TestAgentUpdaterUsesKeyRing(t *testing.T) {
+	current, _, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey (current): %v", err)
+	}
+	next, nextPrivate, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey (next): %v", err)
+	}
+	originalCurrent, originalNext := updatecore.PublicKey, updatecore.NextPublicKey
+	t.Cleanup(func() { updatecore.PublicKey, updatecore.NextPublicKey = originalCurrent, originalNext })
+	updatecore.PublicKey = updatecore.EncodePublicKeyBase64(current)
+	updatecore.NextPublicKey = updatecore.EncodePublicKeyBase64(next)
+	t.Setenv(updatecore.PublicKeyEnv, "")
+
+	updater, err := AgentUpdaterFromEnv(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil || updater == nil {
+		t.Fatalf("AgentUpdaterFromEnv = (%+v, %v), want an updater", updater, err)
+	}
+	if updater.verifier == nil {
+		t.Fatal("AgentUpdaterFromEnv did not wire the key-ring verifier")
+	}
+
+	payload := []byte("signed manifest")
+	ringSigner, err := NewSigner(nextPrivate)
+	if err != nil {
+		t.Fatalf("NewSigner (next): %v", err)
+	}
+	if err := updater.verifier.Verify(payload, []byte(ringSigner.SignBase64(payload))); err != nil {
+		t.Fatalf("the updater refused a manifest signed by the next key: %v", err)
+	}
+
+	_, unknownPrivate, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey (unknown): %v", err)
+	}
+	unknownSigner, err := NewSigner(unknownPrivate)
+	if err != nil {
+		t.Fatalf("NewSigner (unknown): %v", err)
+	}
+	if err := updater.verifier.Verify(payload, unknownSigner.Sign(payload)); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("the updater accepted an unknown key: %v", err)
 	}
 }
 
@@ -325,7 +373,7 @@ func TestAgentUpdaterServesStaleOnTransientFailure(t *testing.T) {
 	fixture := newAgentFixture(t, false)
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
 		Repo: "owner/name", BaseURL: fixture.server.URL, Channel: ChannelStable,
-		PublicKey: fixture.public, Client: fixture.server.Client(),
+		PublicKeys: []ed25519.PublicKey{fixture.public}, Client: fixture.server.Client(),
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		CacheTTL: time.Millisecond,
 	})
@@ -347,7 +395,7 @@ func TestAgentUpdaterServesStaleOnTransientFailure(t *testing.T) {
 	// With no cache at all, a failure must still be an error (fail closed).
 	fresh, err := NewAgentUpdater(AgentUpdaterConfig{
 		Repo: "owner/name", BaseURL: fixture.server.URL, Channel: ChannelStable,
-		PublicKey: fixture.public, Client: fixture.server.Client(),
+		PublicKeys: []ed25519.PublicKey{fixture.public}, Client: fixture.server.Client(),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -396,7 +444,7 @@ func TestAgentUpdaterNegativeCachesFailure(t *testing.T) {
 	}
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
 		Repo: "owner/name", BaseURL: server.URL, Channel: ChannelStable,
-		PublicKey: public, Client: server.Client(),
+		PublicKeys: []ed25519.PublicKey{public}, Client: server.Client(),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -429,7 +477,7 @@ func TestAgentUpdaterSingleFlightConcurrent(t *testing.T) {
 	}
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
 		Repo: "owner/name", BaseURL: server.URL, Channel: ChannelStable,
-		PublicKey: public, Client: server.Client(),
+		PublicKeys: []ed25519.PublicKey{public}, Client: server.Client(),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -457,7 +505,7 @@ func TestAgentUpdaterStaleServeDoesNotRefetch(t *testing.T) {
 	fixture := newAgentFixture(t, false)
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
 		Repo: "owner/name", BaseURL: fixture.server.URL, Channel: ChannelStable,
-		PublicKey: fixture.public, Client: fixture.server.Client(),
+		PublicKeys: []ed25519.PublicKey{fixture.public}, Client: fixture.server.Client(),
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		CacheTTL: time.Millisecond,
 	})

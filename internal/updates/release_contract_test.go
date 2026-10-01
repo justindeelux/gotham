@@ -45,6 +45,39 @@ func TestReleasePublicKeyConsistency(t *testing.T) {
 	}
 }
 
+// TestReleaseKeyRingContract pins the embedded key-ring contract: both release
+// binaries embed the current key plus the optional pre-positioned next key, and
+// the workflow validates the next key (parses as 32 raw bytes, differs from the
+// current) and asserts its embed in every binary before publishing. A release
+// that embedded a partial ring would leave nodes unable to verify the promoted
+// key without a fleet reinstall.
+func TestReleaseKeyRingContract(t *testing.T) {
+	cfg := readRepoFile(t, ".goreleaser.yaml")
+	for _, want := range []string{
+		"updatecore.PublicKey={{ .Env.GOTHAM_UPDATE_PUBLIC_KEY }}",
+		"updatecore.NextPublicKey={{ .Env.GOTHAM_UPDATE_NEXT_PUBLIC_KEY }}",
+	} {
+		if got := strings.Count(cfg, want); got != 2 {
+			t.Errorf(".goreleaser.yaml embeds %q %d times, want one per binary (2)", want, got)
+		}
+	}
+
+	workflow := readRepoFile(t, ".github/workflows/release.yml")
+	for _, want := range []string{
+		// The optional secret reaches GoReleaser and the embed assertion.
+		"GOTHAM_UPDATE_NEXT_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_NEXT_PUBLIC_KEY }}",
+		// The next key must decode to 32 raw bytes and differ from the current.
+		`[ "$decoded" = "32" ]`,
+		`[ "$next" != "$GOTHAM_UPDATE_PUBLIC_KEY" ]`,
+		// Every built binary must embed the configured next key.
+		`grep -aqF "$GOTHAM_UPDATE_NEXT_PUBLIC_KEY" "$bin"`,
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Errorf(".github/workflows/release.yml is missing %q", want)
+		}
+	}
+}
+
 // TestReleaseAssetNamingContract pins the asset names GoReleaser produces to the
 // names the update checkers resolve and the installers verify. Renaming any one
 // of these without the others breaks self-update silently.

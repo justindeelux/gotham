@@ -47,10 +47,12 @@ var SupportedAgentArches = []string{"amd64", "arm64"}
 
 // AgentUpdaterConfig wires the control-plane side of the agent update flow.
 type AgentUpdaterConfig struct {
-	Repo      string
-	BaseURL   string
-	Channel   Channel
-	PublicKey ed25519.PublicKey
+	Repo    string
+	BaseURL string
+	Channel Channel
+	// PublicKeys is the release key ring (current first, then the
+	// pre-positioned next key). A manifest verifies when any key signed it.
+	PublicKeys []ed25519.PublicKey
 	// Client overrides the HTTP client used for the release API and manifest
 	// fetches (tests).
 	Client  *http.Client
@@ -120,10 +122,10 @@ func NewAgentUpdater(cfg AgentUpdaterConfig) (*AgentUpdater, error) {
 		negativeTTL: negativeCacheTTL(cfg.CacheTTL),
 		cache:       map[string]*cachedEntry{},
 	}
-	if cfg.PublicKey == nil {
+	if len(cfg.PublicKeys) == 0 {
 		return nil, nil
 	}
-	verifier, err := NewVerifier(cfg.PublicKey)
+	verifier, err := NewVerifierSet(cfg.PublicKeys...)
 	if err != nil {
 		return nil, err
 	}
@@ -141,19 +143,19 @@ func AgentUpdaterFromEnv(logger *slog.Logger) (*AgentUpdater, error) {
 	if !Enabled() {
 		return nil, nil
 	}
-	publicKey, err := LoadPublicKey()
+	publicKeys, err := LoadPublicKeys()
 	if err != nil {
 		logger.Info("updates: agent update offers disabled; no release public key", "reason", err)
 		return nil, nil
 	}
 	return NewAgentUpdater(AgentUpdaterConfig{
-		Repo:      RepoFromEnv(),
-		BaseURL:   BaseURLFromEnv(),
-		Channel:   ChannelFromEnv(),
-		PublicKey: publicKey,
-		Timeout:   defaultTimeout,
-		Logger:    logger,
-		CacheTTL:  OfferCacheTTLFromEnv(),
+		Repo:       RepoFromEnv(),
+		BaseURL:    BaseURLFromEnv(),
+		Channel:    ChannelFromEnv(),
+		PublicKeys: publicKeys,
+		Timeout:    defaultTimeout,
+		Logger:     logger,
+		CacheTTL:   OfferCacheTTLFromEnv(),
 	})
 }
 

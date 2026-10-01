@@ -378,8 +378,9 @@ onUnmounted(() => {
         <h1>Servers</h1>
         <p class="page-desc">
           Each node runs a <code class="inline-code">gotham-agent</code> connected to
-          the gRPC gateway <span class="mono">:9442</span> over mTLS. The control
-          plane never calls Docker directly — every command goes through the agent.
+          the gRPC gateway <span class="mono">:9442</span> over server-authenticated
+          TLS. The control plane never calls Docker directly — every command goes
+          through the agent.
         </p>
       </div>
       <div class="page-actions">

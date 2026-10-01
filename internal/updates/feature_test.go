@@ -76,6 +76,14 @@ func TestFeatureGetters(t *testing.T) {
 	if got := LockPathFromEnv(); got != "/var/lib/gotham/lock" {
 		t.Errorf("LockPathFromEnv() = %q", got)
 	}
+	t.Setenv(BackoffPathEnv, "/var/lib/gotham/backoff")
+	if got := BackoffPathFromEnv(); got != "/var/lib/gotham/backoff" {
+		t.Errorf("BackoffPathFromEnv() = %q", got)
+	}
+	t.Setenv(DownloadTimeoutEnv, "3m")
+	if got := DownloadTimeoutFromEnv(); got != 3*time.Minute {
+		t.Errorf("DownloadTimeoutFromEnv() = %v", got)
+	}
 	t.Setenv(CurrentEnv, "v9.9.9")
 	if got := CurrentFromEnv(); got != "v9.9.9" {
 		t.Errorf("CurrentFromEnv() = %q", got)
@@ -88,11 +96,14 @@ func TestFeatureGetters(t *testing.T) {
 	t.Setenv(PendingPathEnv, "")
 	t.Setenv(BinaryPathEnv, "")
 	t.Setenv(LockPathEnv, "")
+	t.Setenv(BackoffPathEnv, "")
+	t.Setenv(DownloadTimeoutEnv, "")
 	t.Setenv(CurrentEnv, "")
 	if RepoFromEnv() != DefaultRepo || BaseURLFromEnv() != DefaultBaseURL ||
 		ScriptFromEnv() != DefaultUpdateScript || StatusPathFromEnv() != DefaultStatusPath ||
 		PendingPathFromEnv() != DefaultPendingPath || BinaryPathFromEnv() != DefaultBinaryPath ||
-		LockPathFromEnv() != DefaultLockPath || CurrentFromEnv() != "" {
+		LockPathFromEnv() != DefaultLockPath || BackoffPathFromEnv() != DefaultBackoffPath ||
+		DownloadTimeoutFromEnv() != 10*time.Minute || CurrentFromEnv() != "" {
 		t.Error("defaults not applied")
 	}
 }

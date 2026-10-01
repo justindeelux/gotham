@@ -688,3 +688,79 @@ func TestApplierRefusesSymlinkedPaths(t *testing.T) {
 		t.Errorf("victim = %q, want it untouched", got)
 	}
 }
+
+// TestApplierArtifactDownloadBudget is M1: the artifact body must not be capped
+// by the short metadata bound. http.Client.Timeout covers the body read, and
+// the tens-of-MiB binary needs far longer than the 10s bound the manifest and
+// Releases API use. A server whose artifact body exceeds the metadata bound
+// must still succeed under the separate artifact budget, while the same delay
+// on the manifest must fail.
+func TestApplierArtifactDownloadBudget(t *testing.T) {
+	signer, verifier := newTestSigner(t)
+	artifact := []byte("gotham v1.2.0 binary")
+	manifest := BuildManifest("v1.2.0", "stable", "amd64", testAssetName, artifact)
+	manifestBytes := manifest.Marshal()
+	manifestSig := signer.SignBase64(manifestBytes)
+
+	const slow = 200 * time.Millisecond
+	newServer := func(delayArtifact, delayManifest bool) (*httptest.Server, *Release) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/" + testAssetName:
+				if delayArtifact {
+					time.Sleep(slow)
+				}
+				_, _ = w.Write(artifact)
+			case "/" + ManifestName("amd64"):
+				if delayManifest {
+					time.Sleep(slow)
+				}
+				_, _ = w.Write(manifestBytes)
+			case "/" + ManifestName("amd64") + ManifestSigSuffix:
+				_, _ = w.Write([]byte(manifestSig))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(server.Close)
+		return server, &Release{
+			Version:              "v1.2.0",
+			Tag:                  "v1.2.0",
+			Channel:              "stable",
+			Arch:                 "amd64",
+			AssetName:            testAssetName,
+			AssetURL:             server.URL + "/" + testAssetName,
+			ManifestName:         ManifestName("amd64"),
+			ManifestURL:          server.URL + "/" + ManifestName("amd64"),
+			ManifestSignatureURL: server.URL + "/" + ManifestName("amd64") + ManifestSigSuffix,
+		}
+	}
+
+	// 50ms metadata bound, 200ms body: the artifact must still complete. The
+	// default (nil Client) path is exercised, i.e. the shipped HTTP client.
+	applierFor := func(t *testing.T, target string) *Applier {
+		applier := newTestApplier(t, filepath.Dir(target), target, verifier, noopRestart)
+		applier.Timeout = 50 * time.Millisecond
+		applier.ArtifactTimeout = 2 * time.Second
+		return applier
+	}
+
+	t.Run("artifact survives a slow body", func(t *testing.T) {
+		_, release := newServer(true, false)
+		target := writeTarget(t, "gotham v1.0.0 binary")
+		if _, err := applierFor(t, target).Apply(context.Background(), release); err != nil {
+			t.Fatalf("Apply with a slow artifact body: %v", err)
+		}
+		if got := readFile(t, target); got != string(artifact) {
+			t.Fatalf("target = %q, want the artifact installed", got)
+		}
+	})
+
+	t.Run("manifest keeps the short bound", func(t *testing.T) {
+		_, release := newServer(false, true)
+		target := writeTarget(t, "gotham v1.0.0 binary")
+		if _, err := applierFor(t, target).Apply(context.Background(), release); !errors.Is(err, ErrDownload) {
+			t.Fatalf("Apply with a slow manifest = %v, want ErrDownload", err)
+		}
+	})
+}

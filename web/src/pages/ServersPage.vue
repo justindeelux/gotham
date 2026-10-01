@@ -7,6 +7,8 @@ import {
   NIcon,
   NInput,
   NPopconfirm,
+  NProgress,
+  NSpin,
   useMessage,
 } from "naive-ui";
 import { computed, onMounted, onUnmounted, ref } from "vue";
@@ -92,13 +94,6 @@ const filteredServers = computed<Server[]>(() =>
 );
 
 /** meterColor picks the bar color: per-metric base, danger red over 80%. */
-function meterColor(value: number | null, base: string): string {
-  if (value === null || value === undefined || value > dangerThreshold) {
-    return value === null || value === undefined ? base : "var(--danger)";
-  }
-  return base;
-}
-
 /**
  * initials builds the node avatar label: the first letters of up to two words
  * ("gotham-prod-01" -> "GP"). Ported from the server-detail avatar.
@@ -109,24 +104,44 @@ function initials(name: string): string {
   return (letters.join("") || name.slice(0, 2)).toUpperCase();
 }
 
-/** pctLabel renders a nullable usage fraction (0..1) as a percentage. */
-function pctLabel(value: number | null): string {
-  return value === null || value === undefined || Number.isNaN(value)
-    ? "—"
-    : `${toPercent(value)}%`;
+/** MetricView is one rendered usage tile. */
+interface MetricView {
+  /** label is the displayed reading, or an em dash when the node reported none. */
+  label: string;
+  /** color is the bar color; danger red once the normalized reading exceeds 80%. */
+  color: string;
+  /** percentage is the normalized 0..100 reading the bar renders. */
+  percentage: number;
 }
 
-/** meterWidth is the bar width for a nullable usage fraction (0..1). */
-function meterWidth(value: number | null): string {
+/**
+ * metricView normalizes a heartbeat usage fraction (0..1) before applying the
+ * danger threshold — comparing the raw fraction with a percentage threshold
+ * would never turn the bar red.
+ */
+function metricView(value: number | null, base: string): MetricView {
   if (value === null || value === undefined || Number.isNaN(value)) {
-    return "0%";
+    return { label: "—", color: base, percentage: 0 };
   }
-  return `${Math.max(0, Math.min(100, toPercent(value)))}%`;
+  const percentage = Math.max(0, Math.min(100, toPercent(value)));
+  return {
+    label: `${percentage}%`,
+    color: percentage > dangerThreshold ? "var(--danger)" : base,
+    percentage,
+  };
 }
 
 /** keyLabel identifies the SSH key by its short id; the API exposes no name. */
 function keyLabel(server: Server): string {
-  return server.ssh_key_id ? server.ssh_key_id.slice(0, 8) : "default";
+  return server.ssh_key_id ? server.ssh_key_id.slice(0, 8) : "no key attached";
+}
+
+/** containerLabel keeps an unknown count (no heartbeat yet) distinct from zero. */
+function containerLabel(server: Server): string {
+  if (server.container_count === null || server.container_count === undefined) {
+    return "—";
+  }
+  return `${server.container_count} container${server.container_count === 1 ? "" : "s"}`;
 }
 
 /** nodeMeta is the head sub-line: address, OS and architecture. */
@@ -305,8 +320,9 @@ onUnmounted(() => {
         </NInput>
       </div>
 
+      <NSpin v-if="serversStore.loading && filteredServers.length === 0" class="servers-loading" />
       <div
-        v-if="filteredServers.length > 0 || serversStore.loading"
+        v-else-if="filteredServers.length > 0"
         class="grid cols-2 node-list"
         data-od-id="node-list"
       >
@@ -347,48 +363,47 @@ onUnmounted(() => {
           <div class="node-metrics">
             <div class="node-metric">
               <p class="stat-label">CPU</p>
-              <p class="val">{{ pctLabel(server.cpu_usage) }}</p>
-              <span class="meter mt-2">
-                <i
-                  :style="{
-                    width: meterWidth(server.cpu_usage),
-                    background: meterColor(server.cpu_usage, 'var(--accent)'),
-                  }"
-                />
-              </span>
+              <p class="val">{{ metricView(server.cpu_usage, 'var(--accent)').label }}</p>
+              <NProgress
+                class="mt-2"
+                type="line"
+                :percentage="metricView(server.cpu_usage, 'var(--accent)').percentage"
+                :color="metricView(server.cpu_usage, 'var(--accent)').color"
+                :height="6"
+                :show-indicator="false"
+                :rail-style="{ borderRadius: 'var(--radius-pill)' }"
+              />
             </div>
             <div class="node-metric">
               <p class="stat-label">RAM</p>
-              <p class="val">{{ pctLabel(server.mem_usage) }}</p>
-              <span class="meter mt-2">
-                <i
-                  :style="{
-                    width: meterWidth(server.mem_usage),
-                    background: meterColor(server.mem_usage, 'var(--success)'),
-                  }"
-                />
-              </span>
+              <p class="val">{{ metricView(server.mem_usage, 'var(--success)').label }}</p>
+              <NProgress
+                class="mt-2"
+                type="line"
+                :percentage="metricView(server.mem_usage, 'var(--success)').percentage"
+                :color="metricView(server.mem_usage, 'var(--success)').color"
+                :height="6"
+                :show-indicator="false"
+                :rail-style="{ borderRadius: 'var(--radius-pill)' }"
+              />
             </div>
             <div class="node-metric">
               <p class="stat-label">Disk</p>
-              <p class="val">{{ pctLabel(server.disk_usage) }}</p>
-              <span class="meter mt-2">
-                <i
-                  :style="{
-                    width: meterWidth(server.disk_usage),
-                    background: meterColor(server.disk_usage, 'var(--warn)'),
-                  }"
-                />
-              </span>
+              <p class="val">{{ metricView(server.disk_usage, 'var(--warn)').label }}</p>
+              <NProgress
+                class="mt-2"
+                type="line"
+                :percentage="metricView(server.disk_usage, 'var(--warn)').percentage"
+                :color="metricView(server.disk_usage, 'var(--warn)').color"
+                :height="6"
+                :show-indicator="false"
+                :rail-style="{ borderRadius: 'var(--radius-pill)' }"
+              />
             </div>
           </div>
 
           <div class="node-foot">
-            <span class="tag">
-              {{ server.container_count ?? 0 }} container{{
-                (server.container_count ?? 0) === 1 ? "" : "s"
-              }}
-            </span>
+            <span class="tag">{{ containerLabel(server) }}</span>
             <NButton size="small" style="margin-left: auto" @click="openNode(server.id)">
               Open node
             </NButton>
@@ -797,21 +812,6 @@ systemctl status gotham-agent</code></pre>
   border-radius: 3px;
   padding: 1px 5px;
   color: var(--fg);
-}
-
-.meter {
-  display: block;
-  height: 6px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-warm);
-  overflow: hidden;
-}
-
-.meter i {
-  display: block;
-  height: 100%;
-  border-radius: var(--radius-pill);
-  transition: width 600ms var(--ease-standard);
 }
 
 .grow {

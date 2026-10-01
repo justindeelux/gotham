@@ -1494,6 +1494,8 @@ test.describe("servers grid", () => {
     await expect(card.locator(".node-head")).toContainText(name);
     await expect(card.locator("dl.kv dt")).toHaveCount(4);
     await expect(card.locator(".node-metrics .node-metric")).toHaveCount(3);
+    // The metric bars stay on the Naive UI component base, not hand-built CSS.
+    await expect(card.locator(".node-metrics .n-progress")).toHaveCount(3);
     await expect(card.getByRole("button", { name: "Open node" })).toBeVisible();
     await expect(card.getByRole("button", { name: "Revalidate SSH" })).toBeVisible();
 

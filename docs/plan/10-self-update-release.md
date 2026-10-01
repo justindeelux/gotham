@@ -10,7 +10,7 @@
 
 **Rollback:** rollback IS the feature — the old binary is kept as `<binary>.old`, `update rollback` switches back. If a release is broken: publish a fixed release, users update again; no extra mechanism needed.
 
-**Phase gate:** after the exit criteria are met and Gate G2 passes, STOP and report to the project owner for final acceptance (see Process & Phase gate in `../process.md`).
+**Phase gate:** after the exit criteria are met and Gate G2 passes, STOP and report to the project owner for final acceptance (see the phase gate in [`../../AGENTS.md`](../../AGENTS.md)).
 
 ---
 

@@ -26,8 +26,7 @@ Phase status and remaining work live only in [`TODO.md`](TODO.md).
 
 ## How we work
 
-[`process.md`](process.md) — work packages, phase gates, review gates,
-invariants, rollback, dev environment, decision log, and how to resume work.
+[`../AGENTS.md`](../AGENTS.md) — workflow, invariants, review gates and the phase gate.
 
 ## Test server
 

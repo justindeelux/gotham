@@ -99,9 +99,8 @@ manifest and the artifact digest before installing anything.
 ├── web/                      # Vue 3 SPA (Vite)
 ├── templates/                # one-click service templates (YAML)
 ├── deploy/                   # install scripts, systemd units, compose
-└── docs/                     # docs index, process, plan, test server
-    ├── README.md             # start here: plan status, process, test server
-    ├── process.md            # how we work (packages, gates, invariants)
+└── docs/                     # docs index, plan, test server
+    ├── README.md             # start here: plan status and test server
     ├── TODO.md               # remaining work, checkbox by checkbox
     ├── test-server.md        # shared all-in-one test box
     ├── plan/                 # development plan per phase
@@ -188,5 +187,5 @@ a few operational knobs directly from the environment:
 
 Development is phased — one file per phase in `docs/plan/`. See
 [`docs/README.md`](docs/README.md) for the plan index with per-phase status,
-[`docs/process.md`](docs/process.md) for how we work, and
+[`AGENTS.md`](AGENTS.md) for how we work, and
 [`docs/TODO.md`](docs/TODO.md) for what is left.

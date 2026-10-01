@@ -1,6 +1,6 @@
 # Gotham TODO
 
-Remaining work, checkbox by checkbox. Process: [`process.md`](process.md).
+Remaining work, checkbox by checkbox. Workflow, invariants and gates: [`../AGENTS.md`](../AGENTS.md).
 Plan: [`plan/00-roadmap.md`](plan/00-roadmap.md).
 
 ## Phases

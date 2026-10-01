@@ -12,7 +12,7 @@
 
 **Rollback:** this phase is the starting point — if anything breaks, fix directly on main (no users, no data yet). No rollback mechanism needed.
 
-**Phase gate:** after the exit criteria are met and Gate G0 passes, STOP and ask the project owner before continuing to Phase 1 (see Process & Phase gate in `../process.md`).
+**Phase gate:** after the exit criteria are met and Gate G0 passes, STOP and ask the project owner before continuing to Phase 1 (see the phase gate in [`../../AGENTS.md`](../../AGENTS.md)).
 
 ---
 

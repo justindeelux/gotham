@@ -9,7 +9,7 @@
 
 **Rollback:** a service is a compose project — rollback = redeploy the old compose (compose file versioned per deploy). Templates are static renders — editing a template does not affect already-deployed services.
 
-**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 8 (see Process & Phase gate in `../process.md`).
+**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 8 (see the phase gate in [`../../AGENTS.md`](../../AGENTS.md)).
 
 ---
 

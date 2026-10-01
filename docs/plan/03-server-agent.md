@@ -10,7 +10,7 @@
 
 **Rollback:** everything new is an add-on (server registry, agent). If it breaks: the agent exits on its own when it loses the CP connection (safe), the `servers` table can be wiped on dev. Phases 0–1 are unaffected.
 
-**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 3 (see Process & Phase gate in `../process.md`).
+**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 3 (see the phase gate in [`../../AGENTS.md`](../../AGENTS.md)).
 
 ---
 

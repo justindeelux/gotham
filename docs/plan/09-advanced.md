@@ -10,7 +10,7 @@
 
 **Rollback:** all add-on features — each has its own env flag to disable. The core deploy flow is untouched.
 
-**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 9 (see Process & Phase gate in `../process.md`).
+**Phase gate:** after the exit criteria are met, STOP and ask the project owner before continuing to Phase 9 (see the phase gate in [`../../AGENTS.md`](../../AGENTS.md)).
 
 ---
 

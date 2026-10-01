@@ -4,7 +4,7 @@ Overall plan for building Gotham, a self-hosted PaaS (Coolify clone) using the t
 **Go + Chi + sqlc/pgx + PostgreSQL + gRPC agent + Redis + Traefik + Vue 3 + Naive UI**.
 
 > Status and remaining work live in [`../TODO.md`](../TODO.md); how we work
-> lives in [`../process.md`](../process.md).
+> lives in [`../../AGENTS.md`](../../AGENTS.md).
 
 ---
 

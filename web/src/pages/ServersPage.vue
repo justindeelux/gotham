@@ -103,14 +103,37 @@ const filteredServers = computed<Server[]>(() =>
 const pageSize = 12;
 const page = ref(1);
 
+/** pageCount is the last page the filtered list has. */
+const pageCount = computed<number>(() =>
+  Math.max(1, Math.ceil(filteredServers.value.length / pageSize)),
+);
+
+/**
+ * currentPage clamps the requested page to the available range: deleting the
+ * only node on the last page (or the five-second refresh shrinking the list)
+ * would otherwise leave an empty slice and hide a control that could return
+ * the operator to the data.
+ */
+const currentPage = computed<number>(() => Math.min(page.value, pageCount.value));
+
 /** pagedServers is the visible slice of the filtered list. */
 const pagedServers = computed<Server[]>(() =>
-  filteredServers.value.slice((page.value - 1) * pageSize, page.value * pageSize),
+  filteredServers.value.slice(
+    (currentPage.value - 1) * pageSize,
+    currentPage.value * pageSize,
+  ),
 );
 
 // A filter or search change re-enters at the first page.
 watch([activeFilter, searchQuery], () => {
   page.value = 1;
+});
+
+// Follow the list down when it shrinks under the current page.
+watch(pageCount, (count) => {
+  if (page.value > count) {
+    page.value = count;
+  }
 });
 
 /** meterColor picks the bar color: per-metric base, danger red over 80%. */
@@ -446,7 +469,7 @@ onUnmounted(() => {
         <NPagination
           v-if="filteredServers.length > pageSize"
           class="servers-pagination"
-          :page="page"
+          :page="currentPage"
           :page-size="pageSize"
           :item-count="filteredServers.length"
           @update:page="page = $event"

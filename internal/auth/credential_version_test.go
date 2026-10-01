@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/justindeelux/gotham/internal/store"
 )
 
 // The P-A5 regression tests: a password reset must end every refresh chain,
@@ -113,9 +115,83 @@ func TestServiceLoginRefusesVersionBumpDuringVerify(t *testing.T) {
 	}
 	svc.afterPasswordVerified = nil
 
-	// The reset really committed: the new password works.
-	if _, err := svc.Login(ctx, email, "rotated-password"); err != nil {
+	// The reset really committed: the new password works, and the session it
+	// mints is bound to the account's post-reset version — not a constant and
+	// not an off-by-one, either of which would silently reopen the reset race.
+	loggedIn, err := svc.Login(ctx, email, "rotated-password")
+	if err != nil {
 		t.Fatalf("Login(new password): %v", err)
+	}
+	account, err := st.GetUserByID(ctx, pgUUID(userID))
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	assertSessionVersion(t, ctx, st, loggedIn.RefreshToken, account.CredentialVersion)
+}
+
+// TestServiceIssuedSessionsCarryAccountVersion pins the mint-time version
+// binding for both issuance paths at a non-trivial version: the session a
+// successful Login stores, and the replacement a successful Refresh stores,
+// must carry the account's current credential version. Storing a constant
+// (1) or an off-by-one (version+1) makes a pre-reset chain survive the reset
+// while the guard tests stay green, so this assertion is load-bearing.
+func TestServiceIssuedSessionsCarryAccountVersion(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	email := uniqueEmail("mint-version")
+	cleanupUser(t, st, email)
+
+	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	userID, err := uuid.Parse(registered.User.ID)
+	if err != nil {
+		t.Fatalf("parse user ID: %v", err)
+	}
+
+	// Move the account to version 2 so a constant or an off-by-one differs
+	// from the account's version.
+	newHash, err := HashPassword("rotated-password")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := st.ResetUserPassword(ctx, pgUUID(userID), email, newHash); err != nil {
+		t.Fatalf("ResetUserPassword: %v", err)
+	}
+	account, err := st.GetUserByID(ctx, pgUUID(userID))
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	if account.CredentialVersion != 2 {
+		t.Fatalf("account version after reset = %d, want 2", account.CredentialVersion)
+	}
+
+	loggedIn, err := svc.Login(ctx, email, "rotated-password")
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	assertSessionVersion(t, ctx, st, loggedIn.RefreshToken, account.CredentialVersion)
+
+	rotated, err := svc.Refresh(ctx, loggedIn.RefreshToken)
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	assertSessionVersion(t, ctx, st, rotated.RefreshToken, account.CredentialVersion)
+}
+
+// assertSessionVersion reads the session behind refreshToken back from the
+// store and asserts it stores want.
+func assertSessionVersion(t *testing.T, ctx context.Context, st *store.Store, refreshToken string, want int32) {
+	t.Helper()
+
+	session, err := st.GetSessionByRefreshHash(ctx, hashRefreshToken(refreshToken))
+	if err != nil {
+		t.Fatalf("GetSessionByRefreshHash: %v", err)
+	}
+	if session.CredentialVersion != want {
+		t.Fatalf("stored session version = %d, want the account's %d", session.CredentialVersion, want)
 	}
 }
 

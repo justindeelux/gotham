@@ -97,9 +97,8 @@ func TestStoreCreateFirstUserSerializes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	if err := store.Migrate(ctx, testDSN(), store.MigrateUp); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	// Reachability first: CI has no database, so an unreachable DSN must skip
+	// (the opt-in GOTHAM_TEST_DSN turns a missing database into a failure).
 	pool, err := store.Open(ctx, testDSN())
 	if err != nil {
 		if testDSNExplicit() {
@@ -108,6 +107,10 @@ func TestStoreCreateFirstUserSerializes(t *testing.T) {
 		t.Skipf("no database: %v", err)
 	}
 	defer pool.Close()
+
+	if err := store.Migrate(ctx, testDSN(), store.MigrateUp); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
 
 	st := store.New(pool)
 	count, err := st.CountUsers(ctx)
@@ -155,9 +158,8 @@ func TestStoreRevokeSessionIfLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := store.Migrate(ctx, testDSN(), store.MigrateUp); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	// Reachability first: CI has no database, so an unreachable DSN must skip
+	// (the opt-in GOTHAM_TEST_DSN turns a missing database into a failure).
 	pool, err := store.Open(ctx, testDSN())
 	if err != nil {
 		if testDSNExplicit() {
@@ -166,6 +168,10 @@ func TestStoreRevokeSessionIfLive(t *testing.T) {
 		t.Skipf("no database: %v", err)
 	}
 	defer pool.Close()
+
+	if err := store.Migrate(ctx, testDSN(), store.MigrateUp); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
 
 	st := store.New(pool)
 	user, err := st.CreateUser(ctx, fmt.Sprintf("revoke-live-%d@example.com", time.Now().UnixNano()), nil)

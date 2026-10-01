@@ -6,12 +6,13 @@ import {
   NEmpty,
   NIcon,
   NInput,
+  NPagination,
   NPopconfirm,
   NProgress,
   NSpin,
   useMessage,
 } from "naive-ui";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { describeServerError } from "../api/servers";
@@ -92,6 +93,25 @@ const filteredServers = computed<Server[]>(() =>
       matchesSearch(server, searchQuery.value),
   ),
 );
+
+/**
+ * Page size bounds the mounted cards. The store replaces the whole list every
+ * five seconds, so rendering every node (three progress bars each) would make
+ * the update cost grow without limit; the mockup has no pagination, so the
+ * control stays a single row under the grid.
+ */
+const pageSize = 12;
+const page = ref(1);
+
+/** pagedServers is the visible slice of the filtered list. */
+const pagedServers = computed<Server[]>(() =>
+  filteredServers.value.slice((page.value - 1) * pageSize, page.value * pageSize),
+);
+
+// A filter or search change re-enters at the first page.
+watch([activeFilter, searchQuery], () => {
+  page.value = 1;
+});
 
 /** meterColor picks the bar color: per-metric base, danger red over 80%. */
 /**
@@ -321,13 +341,10 @@ onUnmounted(() => {
       </div>
 
       <NSpin v-if="serversStore.loading && filteredServers.length === 0" class="servers-loading" />
-      <div
-        v-else-if="filteredServers.length > 0"
-        class="grid cols-2 node-list"
-        data-od-id="node-list"
-      >
+      <template v-else-if="filteredServers.length > 0">
+        <div class="grid cols-2 node-list" data-od-id="node-list">
         <article
-          v-for="server in filteredServers"
+          v-for="server in pagedServers"
           :key="server.id"
           class="node-card"
           :data-server="server.name"
@@ -425,8 +442,21 @@ onUnmounted(() => {
             </NPopconfirm>
           </div>
         </article>
-      </div>
-      <NEmpty v-else class="servers-empty" description="No nodes match the current filters">
+        </div>
+        <NPagination
+          v-if="filteredServers.length > pageSize"
+          class="servers-pagination"
+          :page="page"
+          :page-size="pageSize"
+          :item-count="filteredServers.length"
+          @update:page="page = $event"
+        />
+      </template>
+      <NEmpty
+        v-else
+        class="servers-empty"
+        description="No nodes match the current filters"
+      >
         <template #icon>
           <NIcon>
             <GothamIcon name="server" />
@@ -696,6 +726,12 @@ systemctl status gotham-agent</code></pre>
    ported from docs/design/assets/gotham-views.css (.node-card family) and
    docs/design/assets/gotham-ui.css (grid/avatar/tag/meter/kv utilities) that
    the app does not carry globally; tokens come from styles/tokens.css. */
+.servers-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+}
+
 .grid {
   display: grid;
   gap: var(--space-4);

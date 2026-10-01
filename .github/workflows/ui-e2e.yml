@@ -16,7 +16,7 @@ permissions:
 jobs:
   playwright:
     name: Playwright smoke (chromium)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     services:
@@ -116,7 +116,7 @@ jobs:
 
       - name: Install Playwright Chromium
         working-directory: web
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Run Playwright smoke
         working-directory: web

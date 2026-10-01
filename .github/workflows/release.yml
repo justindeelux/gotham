@@ -29,7 +29,7 @@ permissions:
 jobs:
   release:
     name: goreleaser + signed manifests
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     # The signing secret lives in the `release` environment, which has a
     # required reviewer, so the job reads environment secrets and needs the
     # owner's approval before it can run. The runner is still shared with PR CI,

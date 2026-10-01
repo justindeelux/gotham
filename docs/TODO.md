@@ -11,11 +11,12 @@ Plan: [`plan/00-roadmap.md`](plan/00-roadmap.md).
 - [x] Phase 3 — Docker Engine Core (PRs #15–#30)
 - [x] Phase 4 — Applications (PRs #31–#50; gate G1 passed with waivers)
 - [x] Phase 5 core — Database engines + CRUD (#39), databases UI (#43), backups + S3 + restore (#46), backups UI (#50)
-- [ ] Phase 5 residuals — live smoke, chunk-scale e2e and S3 smoke are proven (below); the deferred backups LOWs keep this umbrella open
-- [ ] Phase 6 — Proxy, Domains & SSL (BE-6.1 #51 and BE-6.2 #55/#56 merged; FE-6.1 in review; phase gate pending)
-- [ ] Phase 7 — Services & Templates
-- [ ] Phase 8 — Advanced
-- [ ] Phase 9 — Self-update & Release (gate G2 approved with conditions; residuals below)
+- [x] Phase 5 residuals — closed: live smoke, chunk-scale e2e and S3 smoke proven;
+  backup LOWs reviewed and merged in PR #54 (`3705260`). Umbrella item done.
+- [x] Phase 6 — Proxy, Domains & SSL (BE-6.1 merged #51/#53; BE-6.2 SSL merged #55 at `e0ec802`; real DNS-01 issuance merged #56 at `2788a4e`; FE-6.1 domains UI merged #59 at `4199cca`; BE-6.3 redirects + cert status merged #60 at `15f3da9`; FE follow-up merged #61 at `7ccda27`)
+- [x] Phase 7 — Services & Templates (BE-7.1 compose services merged `9832466`; BE-7.2 template engine merged `9fb7741`; FE-7.1 services UI + gallery merged `a7d3340`)
+- [x] Phase 8 — Advanced (BE-8.2 teams & roles `8ecdc2c`; BE-8.4 server metrics `cd3840b`; BE-8.3 notifications `8e0f1cb`; BE-8.1 preview deployments `eea683f`; FE-8.1 combined UI `7ba71d3` — all merged; CI on the self-hosted runner)
+- [ ] Phase 9 — Self-update & Release (gate G2 approved with conditions): BE-9.1 control-plane self-update merged `390a2fa` (PR #71); BE-9.2 agent remote update merged `ae78888` (PR #72); INFRA-9.1 release pipeline + signed installers merged `9a6268d` (PR #73); install hardening merged `e99ef49` (PR #74); G2 conditions closed: e2e determinism (#79 `8928b49`), agent channel TLS by default + release-environment gating + supply-chain pins (#78 `d716734`), download budget + CLI ownership + CP backoff + wrapper health gate (#77 `4220931`), docs/UI + residual register (#80 `0deee90`); pending: the real newer-release `gotham update` + AUTO_UPDATE exercise (tag `v0.1.1` cut; M9 evidence and residuals below)
 - [x] Phase 11 — UI Alignment side track
 
 ## Phase 5 residuals
@@ -76,6 +77,13 @@ residuals — full detail in `deploy/README.md` → Known residuals:
   set it in production.
 - [ ] **M9 partial evidence.** See below.
 
+- [ ] **BE-9.1 chain residuals (carried):** the `KillMode=process` side effect (CP
+  `git`/`ssh` children can outlive a stop; upgrade path: transient `systemd-run --scope`),
+  the theoretical root `mv -T` race in the Gotham-owned `bin` dir, the wrapper
+  check-then-open TOCTOU (read-only opens; a swapped-in FIFO can still make root wait),
+  and a wrapper death during the health window leaving the update `staged` until the next
+  restart/`gotham update reset` (fails closed by design).
+
 ### M9 evidence (Phase 9)
 
 Proven today:
@@ -96,6 +104,29 @@ Pending (the coordinator tags `v0.1.1` next):
   roll back once (closes the real-release gap for the control plane).
 - Apply an agent release rollout against the real CDN.
 - Exercise the unattended `AUTO_UPDATE` loop.
+
+## Phase 8 residuals
+
+- [ ] **Teams:** legacy `servers.team_id IS NULL` nodes, their containers and logs
+  stay shared with every authenticated caller; a pre-fix self-minted admin-scoped
+  API token would need rotation (none shipped); global DNS/proxy management needs
+  `PLATFORM_ADMINS` (or an admin-role session / admin-scoped token).
+- [ ] **Metrics:** the Linux `/proc` reads run in Linux CI only; the chart
+  stress/workload criterion and production-scale index performance were not
+  exercised locally; the container/bridge interface double-count is a documented
+  ceiling.
+- [ ] **Notifications:** a real Discord/Slack/Telegram/SMTP endpoint was never
+  contacted (mock servers + a fake mailer only); invite email delivery stays a stub;
+  global proxy/DNS routes are operator-gated.
+- [ ] **Previews:** served HTTP-only (the base app's wildcard cert intent is not
+  cloned onto the sibling); the PR badge comment reflects the queue decision, not the
+  terminal deploy state; a live Git-host PR/comment and wildcard TLS were not
+  exercised; the disclosed no-binding-close race (F-1) and the unlocked exported
+  `UpsertPreviewDeploy` (F-2) remain follow-ups.
+- [ ] **Combined UI:** per-channel event editing, per-resource notification
+  overrides and metric auto-refresh are not exposed; the mockups' full permission
+  matrix / member fields and the plan's chart-library choices were intentionally
+  adapted (dependency-free SVG chart, lean footprint).
 
 ## Phase 4 residuals
 

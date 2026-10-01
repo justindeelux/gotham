@@ -29,6 +29,17 @@ const (
 	updateDownloadTimeout = 10 * time.Minute
 )
 
+// Release-family binding for an agent update offer (C2). An offer must name the
+// agent asset and manifest for this arch; the control-plane family is refused.
+const (
+	agentAssetPrefix    = "gotham-agent-linux-"
+	agentManifestPrefix = "gotham-agent-manifest-"
+)
+
+// errOffer marks an update offer the agent refuses as not its own (wrong
+// family, asset, manifest or channel).
+var errOffer = errors.New("agent: refused update offer")
+
 // Failed-update backoff (N5). After a failed attempt the agent does not
 // re-download the same version every poll: it waits, doubling per consecutive
 // failure up to max. The attempt count is persisted (see backoffCount) so it
@@ -178,7 +189,7 @@ func (u *updater) checkOnce(ctx context.Context, client agentv1.UpdateServiceCli
 		return
 	}
 
-	release, err := releaseFromOffer(resp)
+	release, err := releaseFromOffer(resp, u.cfg.UpdateChannel)
 	if err != nil {
 		u.log.Warn("agent: refused an incomplete update offer", "error", err)
 		return
@@ -487,25 +498,58 @@ func isNewerVersion(offered, current string) bool {
 }
 
 // releaseFromOffer turns a CP offer into the updatecore release the applier
-// verifies. Every URL and the digest are re-checked by the applier; this only
-// assembles the candidate and derives the asset file name from the asset URL
-// so the signed manifest's file field can be bound.
-func releaseFromOffer(resp *agentv1.UpdateResponse) (*updatecore.Release, error) {
+// verifies. Every URL and the digest are re-checked by the applier; this binds
+// the offer to this agent's own release family, asset and channel first, so a
+// compromised or buggy control plane cannot make an agent install the
+// control-plane binary or a different-channel (e.g. prerelease) build. Mirrors
+// the family binding in deploy/release-verify.sh.
+func releaseFromOffer(resp *agentv1.UpdateResponse, channel string) (*updatecore.Release, error) {
 	if resp.GetLatestVersion() == "" || resp.GetAssetUrl() == "" ||
 		resp.GetManifestUrl() == "" || resp.GetManifestSignatureUrl() == "" {
-		return nil, errors.New("agent: update offer is missing release material")
+		return nil, fmt.Errorf("%w: update offer is missing release material", errOffer)
 	}
+
+	// Family: the agent only ever installs its own asset.
+	arch := runtime.GOARCH
+	wantAsset := agentAssetPrefix + arch
 	assetName := ""
 	if parsed, err := url.Parse(resp.GetAssetUrl()); err == nil {
 		assetName = path.Base(parsed.Path)
 	}
-	if assetName == "" || assetName == "." || assetName == "/" {
-		return nil, errors.New("agent: update offer has no asset name")
+	if assetName != wantAsset {
+		return nil, fmt.Errorf("%w: offered asset %q is not %q", errOffer, assetName, wantAsset)
 	}
+
+	// The manifest that describes the asset must also be the agent manifest for
+	// this arch (the applier then binds manifest.File to the asset name).
+	wantManifest := agentManifestPrefix + arch + ".txt"
+	manifestName := ""
+	if parsed, err := url.Parse(resp.GetManifestUrl()); err == nil {
+		manifestName = path.Base(parsed.Path)
+	}
+	if manifestName != wantManifest {
+		return nil, fmt.Errorf("%w: offered manifest %q is not %q", errOffer, manifestName, wantManifest)
+	}
+
+	// Channel must be present and match this node's configured channel: an
+	// empty or other channel is refused, so a prerelease cannot reach a stable
+	// node (bindManifest also skips an empty release channel, so enforce it
+	// here).
+	if channel == "" {
+		channel = defaultUpdateChannel
+	}
+	offered := strings.TrimSpace(resp.GetChannel())
+	if offered == "" {
+		return nil, fmt.Errorf("%w: offer has no channel", errOffer)
+	}
+	if offered != channel {
+		return nil, fmt.Errorf("%w: offer channel %q is not the configured %q", errOffer, offered, channel)
+	}
+
 	return &updatecore.Release{
 		Version:              resp.GetLatestVersion(),
-		Channel:              resp.GetChannel(),
-		Arch:                 runtime.GOARCH,
+		Channel:              offered,
+		Arch:                 arch,
 		AssetName:            assetName,
 		AssetURL:             resp.GetAssetUrl(),
 		ManifestURL:          resp.GetManifestUrl(),

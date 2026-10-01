@@ -22,6 +22,9 @@ import (
 const (
 	caCertFile = "ca.crt"
 	caKeyFile  = "ca.key"
+	// hostsFile is the optional SAN host list `gotham ca init --host` persists
+	// next to the CA. serve reads it when GOTHAM_GRPC_HOSTS is unset.
+	hostsFile = "hosts"
 
 	caValidity         = 10 * 365 * 24 * time.Hour
 	serverCertValidity = 365 * 24 * time.Hour
@@ -74,6 +77,50 @@ func LoadOrCreateAuthority(dir string) (*Authority, error) {
 // CACertPEM returns the PEM-encoded CA certificate.
 func (a *Authority) CACertPEM() []byte {
 	return a.pem
+}
+
+// SaveHosts persists the extra gRPC listener SAN hosts under dir, one per line,
+// so `gotham serve` keeps presenting the operator-declared names and IPs after
+// a restart. The file lives inside the 0700 CA directory.
+func SaveHosts(dir string, hosts []string) error {
+	if dir == "" {
+		return errors.New("servers: ca dir is empty")
+	}
+	clean := uniqueStrings(hosts)
+	if len(clean) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create ca dir: %w", err)
+	}
+	var b strings.Builder
+	for _, host := range clean {
+		b.WriteString(host)
+		b.WriteByte('\n')
+	}
+	return writeFile(filepath.Join(dir, hostsFile), []byte(b.String()))
+}
+
+// LoadHosts reads the SAN host list persisted by SaveHosts. It returns nil when
+// the file (or the directory) does not exist.
+func LoadHosts(dir string) ([]string, error) {
+	if dir == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(filepath.Join(dir, hostsFile))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read gRPC SAN host list: %w", err)
+	}
+	var hosts []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if host := strings.TrimSpace(line); host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	return uniqueStrings(hosts), nil
 }
 
 // Pool returns a certificate pool containing the CA certificate, suitable for

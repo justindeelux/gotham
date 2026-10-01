@@ -17,21 +17,33 @@
 # Override the release for testing with GOTHAM_VERSION, GOTHAM_RELEASES_URL or
 # GOTHAM_BASE_URL.
 #
+# mTLS: the agent verifies the control plane with the CA certificate. This
+# installer fails closed unless a CA is supplied, so a fresh install never
+# dials the agent channel in plaintext. Supply it with --ca <path> (or
+# GOTHAM_AGENT_CA_FILE=<path>); the file is installed as /etc/gotham/ca.crt and
+# GOTHAM_AGENT_CA is written to agent.env. Copy it from the control plane:
+#   scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .
+#   sudo ./install-agent.sh --ca ./ca.crt
+# --insecure is a local-development-only escape hatch: it skips the CA check and
+# leaves GOTHAM_AGENT_CA unset, so the agent connects without TLS. Never use it
+# on a real node.
+#
 # Usage:
-#   sudo ./install-agent.sh [--dry-run]
+#   sudo ./install-agent.sh [--ca <path>] [--insecure] [--dry-run]
 #
 # Environment variables written to /etc/gotham/agent.env (unset values are
 # omitted so the agent keeps its built-in default):
 #   GOTHAM_AGENT_CP_ADDR
 #   GOTHAM_AGENT_NODE_ID
 #   GOTHAM_AGENT_LISTEN_ADDR
-#   GOTHAM_AGENT_CA
+#   GOTHAM_AGENT_CA            (set to /etc/gotham/ca.crt when --ca is used)
 #   GOTHAM_AGENT_CERT_DIR
 #   GOTHAM_AGENT_KEY
 #   GOTHAM_AGENT_DOCKER_SOCK
 #   GOTHAM_AGENT_LOG_LEVEL
 #   GOTHAM_AGENT_AUTO_UPDATE
 #   GOTHAM_AGENT_UPDATE_INTERVAL
+#   GOTHAM_AGENT_UPDATE_CHANNEL
 
 set -eu
 # Permissive base umask so shared directories stay world-traversable and the
@@ -54,21 +66,35 @@ DEFAULT_REPO="justindeelux/gotham"
 # and deploy/gotham-signing-key.pub). Never fetched from the download channel.
 GOTHAM_RELEASE_PUBLIC_KEY_B64="Yt6nz1gGQWF7Bfc9MCt/gQXbPMzhN9OygrUkOEFYdwQ="
 DRY_RUN=0
+INSECURE=0
+CA_SOURCE=""
 
-for argument in "$@"; do
-    case "${argument}" in
+while [ "$#" -gt 0 ]; do
+    case "$1" in
         --dry-run)
             DRY_RUN=1
             ;;
+        --insecure)
+            INSECURE=1
+            ;;
+        --ca)
+            [ "$#" -ge 2 ] || { echo "--ca requires a path" >&2; exit 2; }
+            CA_SOURCE="$2"
+            shift
+            ;;
+        --ca=*)
+            CA_SOURCE="${1#--ca=}"
+            ;;
         -h | --help)
-            sed -n '2,30p' "$0"
+            sed -n '2,45p' "$0"
             exit 0
             ;;
         *)
-            echo "unknown argument: ${argument}" >&2
+            echo "unknown argument: $1" >&2
             exit 2
             ;;
     esac
+    shift
 done
 
 # run executes a command, or prints it when in dry-run mode.
@@ -121,6 +147,32 @@ fi
 if ! command -v systemctl >/dev/null 2>&1 && [ "${DRY_RUN}" -eq 0 ]; then
     echo "systemctl not found; this installer targets systemd hosts" >&2
     exit 1
+fi
+
+# ---- mTLS: resolve the control-plane CA before doing anything else ----------
+# The agent verifies the control plane against this CA. Without one the agent
+# would connect in plaintext, so fail closed here unless --insecure was given.
+# CA_SRC is a file to install; AGENT_CA_PATH is the path the agent reads.
+CA_SRC="${CA_SOURCE:-${GOTHAM_AGENT_CA_FILE:-}}"
+AGENT_CA_PATH=""
+if [ -n "${CA_SRC}" ]; then
+    [ -f "${CA_SRC}" ] && [ -r "${CA_SRC}" ] \
+        || { echo "install-agent.sh: CA certificate ${CA_SRC} is not a readable file" >&2; exit 1; }
+    AGENT_CA_PATH="${ENV_DIR}/ca.crt"
+elif [ -f "${ENV_FILE}" ]; then
+    # Reinstall: keep the CA a previous run configured.
+    existing_ca="$(sed -n 's/^GOTHAM_AGENT_CA=//p' "${ENV_FILE}" | head -n1)"
+    [ -n "${existing_ca}" ] && AGENT_CA_PATH="${existing_ca}"
+fi
+if [ -z "${AGENT_CA_PATH}" ] && [ "${INSECURE}" -ne 1 ]; then
+    echo "install-agent.sh: no control-plane CA certificate configured." >&2
+    echo "  Copy /var/lib/gotham/ca/ca.crt from the control plane and pass --ca <path>," >&2
+    echo "  or set GOTHAM_AGENT_CA_FILE=<path>." >&2
+    echo "  For local development only, pass --insecure to connect without TLS." >&2
+    exit 1
+fi
+if [ "${INSECURE}" -eq 1 ]; then
+    echo "==> WARNING: --insecure: the agent will connect to the control plane WITHOUT TLS (development only)" >&2
 fi
 
 ARCH="$(detect_arch)"
@@ -202,6 +254,15 @@ log "creating ${ENV_DIR}"
 run mkdir -p "${ENV_DIR}"
 run chmod 0755 "${ENV_DIR}"
 
+if [ -n "${CA_SRC}" ]; then
+    log "installing the control-plane CA certificate to ${AGENT_CA_PATH}"
+    if [ "${DRY_RUN}" -eq 1 ]; then
+        echo "[dry-run] install -m 0644 ${CA_SRC} ${AGENT_CA_PATH}"
+    else
+        install -m 0644 -o root -g root "${CA_SRC}" "${AGENT_CA_PATH}"
+    fi
+fi
+
 log "writing ${ENV_FILE}"
 if [ "${DRY_RUN}" -eq 1 ]; then
     echo "[dry-run] write ${ENV_FILE} from GOTHAM_AGENT_* environment"
@@ -214,18 +275,23 @@ else
             GOTHAM_AGENT_CP_ADDR \
             GOTHAM_AGENT_NODE_ID \
             GOTHAM_AGENT_LISTEN_ADDR \
-            GOTHAM_AGENT_CA \
             GOTHAM_AGENT_CERT_DIR \
             GOTHAM_AGENT_KEY \
             GOTHAM_AGENT_DOCKER_SOCK \
             GOTHAM_AGENT_LOG_LEVEL \
             GOTHAM_AGENT_AUTO_UPDATE \
-            GOTHAM_AGENT_UPDATE_INTERVAL; do
+            GOTHAM_AGENT_UPDATE_INTERVAL \
+            GOTHAM_AGENT_UPDATE_CHANNEL; do
             eval "value=\${${key}:-}"
             if [ -n "${value}" ]; then
                 printf '%s=%s\n' "${key}" "${value}" >>"${ENV_FILE}"
             fi
         done
+        # The CA path is resolved above (never taken verbatim from the ambient
+        # GOTHAM_AGENT_CA, which the installer itself does not write).
+        if [ -n "${AGENT_CA_PATH}" ]; then
+            printf 'GOTHAM_AGENT_CA=%s\n' "${AGENT_CA_PATH}" >>"${ENV_FILE}"
+        fi
     )
     chmod 0640 "${ENV_FILE}"
     chown root:"${SERVICE_USER}" "${ENV_FILE}"

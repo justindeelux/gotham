@@ -2,7 +2,8 @@ name: Release
 
 # INFRA-9.1: build, sign and publish a Gotham release on a v* tag.
 #
-# The workflow fails closed unless BOTH release secrets are present:
+# The workflow runs in the `release` environment (required reviewer) and fails
+# closed unless BOTH environment secrets are present:
 #   GOTHAM_UPDATE_PUBLIC_KEY   base64 raw Ed25519 public key (-ldflags embed)
 #   GOTHAM_UPDATE_SIGNING_KEY  PKCS#8 PEM Ed25519 private key (signing only)
 # The private key never leaves a 0600 temp file and is never echoed.
@@ -29,6 +30,12 @@ jobs:
   release:
     name: goreleaser + signed manifests
     runs-on: self-hosted
+    # The signing secret lives in the `release` environment, which has a
+    # required reviewer, so the job reads environment secrets and needs the
+    # owner's approval before it can run. The runner is still shared with PR CI,
+    # so approval gates *who can trigger the job*, not host compromise; see
+    # deploy/README.md (Known residuals).
+    environment: release
     permissions:
       contents: write
     steps:
@@ -50,11 +57,11 @@ jobs:
         run: |
           set -eu
           [ -n "${GOTHAM_UPDATE_PUBLIC_KEY:-}" ] || {
-            echo "::error::repository secret GOTHAM_UPDATE_PUBLIC_KEY is missing or empty"
+            echo "::error::release environment secret GOTHAM_UPDATE_PUBLIC_KEY is missing or empty"
             exit 1
           }
           [ -n "${GOTHAM_UPDATE_SIGNING_KEY:-}" ] || {
-            echo "::error::repository secret GOTHAM_UPDATE_SIGNING_KEY is missing or empty"
+            echo "::error::release environment secret GOTHAM_UPDATE_SIGNING_KEY is missing or empty"
             exit 1
           }
 
@@ -89,6 +96,10 @@ jobs:
           echo "keypair consistent with the embedded and published public key"
 
       - name: Install GoReleaser
+        # Version-pinned on purpose. GoReleaser v2.18 needs a newer Go than the
+        # 1.22.x CI toolchain, so the `go install` below downloads a toolchain
+        # through GOTOOLCHAIN=auto (a supply-chain download on the shared
+        # runner); pin/verify the toolchain if that becomes a concern.
         run: |
           go install github.com/goreleaser/goreleaser/v2@v2.18.0
           echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"

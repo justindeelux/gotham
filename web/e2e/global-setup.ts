@@ -43,8 +43,10 @@ export default async function globalSetup(): Promise<void> {
     let response = await api.post("/api/v1/auth/register", {
       data: { email, password },
     });
-    if (response.status() === 409) {
-      // The account survives across runs on a persistent database; sign in.
+    if (!response.ok()) {
+      // The account survives across runs on a persistent database, and once an
+      // instance has an account registration is closed (P-A2) — either way,
+      // fall back to signing the existing account in.
       response = await api.post("/api/v1/auth/login", {
         data: { email, password },
       });

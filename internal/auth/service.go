@@ -54,6 +54,10 @@ type Service struct {
 	signer *Signer
 	logger *slog.Logger
 	now    func() time.Time
+	// AllowOpenRegistration reopens self-registration after the first account.
+	// Test/dev only (GOTHAM_AUTH_ALLOW_REGISTRATION): production relies on the
+	// closed default, where members join through admin invites (P-A2).
+	AllowOpenRegistration bool
 }
 
 // New builds a Service. The clock is injectable so tests can exercise expiry
@@ -65,13 +69,32 @@ func New(st *store.Store, signer *Signer, logger *slog.Logger) *Service {
 	return &Service{store: st, signer: signer, logger: logger, now: time.Now}
 }
 
+// InviteAcceptor is the teams-domain slice the invite-registration path
+// (P-A2) needs from the caller: peek a pending invite before the account
+// exists, then consume it for the fresh account. auth never imports the teams
+// package; the HTTP wiring passes the teams service at call time.
+type InviteAcceptor interface {
+	// PeekInvite returns the invited team name and target email behind a
+	// pending invite token, or an error when the token is unknown, expired,
+	// or already consumed.
+	PeekInvite(ctx context.Context, token string) (teamName, email string, err error)
+	// AcceptInvite consumes a pending invite for the freshly created account.
+	AcceptInvite(ctx context.Context, userID uuid.UUID, token string) error
+}
+
 // Register creates a new account and returns an authenticated token pair.
-func (s *Service) Register(ctx context.Context, email, password string) (*AuthResult, error) {
-	normalized, err := normalizeEmail(email)
+//
+// Registration is open only while the instance has no account (the bootstrap
+// of exactly one admin account, P-A2). Afterwards a valid, pending, unused
+// invite token issued to the same email is required; any token problem
+// answers ErrRegistrationClosed so token validity is never publicly
+// distinguishable from a closed instance.
+func (s *Service) Register(ctx context.Context, email, password, inviteToken string, invites InviteAcceptor) (*AuthResult, error) {
+	normalized, err := NormalizeEmail(email)
 	if err != nil {
 		return nil, err
 	}
-	if err := validatePassword(password); err != nil {
+	if err := ValidatePassword(password); err != nil {
 		return nil, err
 	}
 
@@ -80,7 +103,44 @@ func (s *Service) Register(ctx context.Context, email, password string) (*AuthRe
 		return nil, err
 	}
 
-	user, err := s.store.CreateUser(ctx, normalized, &hash)
+	// Bootstrap vs invite. On an empty instance the account is created through
+	// CreateFirstUser, whose emptiness check and insert share one transaction,
+	// so two concurrent first registrations cannot both win (P-A2).
+	count, err := s.store.CountUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("auth: count users: %w", err)
+	}
+	// An invite token is honoured whenever one is supplied, even when ordinary
+	// registration is also open (test/dev override) or the instance is empty:
+	// the invitee must still join the team, not just get a personal account.
+	consumeInvite := inviteToken != ""
+	if !consumeInvite && count > 0 && !s.AllowOpenRegistration {
+		return nil, ErrRegistrationClosed
+	}
+	if consumeInvite {
+		if err := checkInvite(ctx, normalized, inviteToken, invites); err != nil {
+			return nil, err
+		}
+	}
+
+	var user sqlc.User
+	switch {
+	case consumeInvite:
+		user, err = s.store.CreateUser(ctx, normalized, &hash)
+	case count == 0:
+		// Bootstrap: the emptiness check and the insert share one transaction,
+		// so only one of two concurrent first registrations can win.
+		user, err = s.store.CreateFirstUser(ctx, normalized, &hash)
+		if errors.Is(err, store.ErrInstanceHasAccount) {
+			// Lost the race (or the table filled between the count and the
+			// insert): the instance now has an account and an invite is needed.
+			return nil, ErrRegistrationClosed
+		}
+	default:
+		// Registration is forced open (test/dev override) on a populated
+		// instance: a plain insert.
+		user, err = s.store.CreateUser(ctx, normalized, &hash)
+	}
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrEmailTaken
@@ -88,7 +148,38 @@ func (s *Service) Register(ctx context.Context, email, password string) (*AuthRe
 		return nil, fmt.Errorf("auth: create user: %w", err)
 	}
 
+	if consumeInvite {
+		if err := invites.AcceptInvite(ctx, uuid.UUID(user.ID.Bytes), inviteToken); err != nil {
+			// AcceptInvite reports failure only when nothing was committed
+			// (teams.Accept never fails after a successful membership write),
+			// so the fresh account and its personal team are rolled back with a
+			// context that survives request cancellation.
+			cleanup := context.WithoutCancel(ctx)
+			if delErr := s.store.DeleteUserAndPersonalTeam(cleanup, user.ID); delErr != nil {
+				s.logger.Error("auth: invite rollback failed", "error", delErr, "user_id", uuid.UUID(user.ID.Bytes))
+			}
+			s.logger.Warn("auth: invite accept failed at registration", "error", err)
+			return nil, ErrRegistrationClosed
+		}
+	}
+
 	return s.issue(ctx, user)
+}
+
+// checkInvite reports whether the pending invite token admits email to
+// register. Every token problem maps to ErrRegistrationClosed.
+func checkInvite(ctx context.Context, email, token string, invites InviteAcceptor) error {
+	if token == "" || invites == nil {
+		return ErrRegistrationClosed
+	}
+	_, inviteEmail, err := invites.PeekInvite(ctx, token)
+	if err != nil {
+		return ErrRegistrationClosed
+	}
+	if !strings.EqualFold(inviteEmail, email) {
+		return ErrRegistrationClosed
+	}
+	return nil
 }
 
 // Login verifies credentials and returns an authenticated token pair. Unknown
@@ -138,8 +229,15 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 		return nil, ErrUnauthorized
 	}
 
-	if err := s.store.RevokeSession(ctx, hash); err != nil {
+	live, err := s.store.RevokeSessionIfLive(ctx, hash)
+	if err != nil {
 		return nil, fmt.Errorf("auth: revoke session: %w", err)
+	}
+	if !live {
+		// The session disappeared between the read and the rotation — a
+		// password reset (or a concurrent rotation) won the race. Refuse,
+		// otherwise the old credential chain would outlive the reset.
+		return nil, ErrUnauthorized
 	}
 
 	user, err := s.store.GetUserByID(ctx, session.UserID)
@@ -234,8 +332,9 @@ func hashRefreshToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// normalizeEmail trims, lowercases, and syntactically validates an email.
-func normalizeEmail(email string) (string, error) {
+// NormalizeEmail trims, lowercases, and syntactically validates an email. It
+// is shared by registration and the admin CLI.
+func NormalizeEmail(email string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" {
 		return "", fmt.Errorf("%w: email is required", ErrValidation)
@@ -248,8 +347,9 @@ func normalizeEmail(email string) (string, error) {
 	return normalized, nil
 }
 
-// validatePassword enforces the password length bounds.
-func validatePassword(password string) error {
+// ValidatePassword enforces the password length bounds. It is shared by
+// registration and the admin CLI (P-A3).
+func ValidatePassword(password string) error {
 	if len(password) < minPasswordLength || len(password) > maxPasswordLength {
 		return fmt.Errorf("%w: password must be between %d and %d characters",
 			ErrValidation, minPasswordLength, maxPasswordLength)

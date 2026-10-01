@@ -29,6 +29,15 @@ export const useAuthStore = defineStore("auth", () => {
   const accessToken = ref<string | null>(initial.accessToken);
   const refreshToken = ref<string | null>(initial.refreshToken);
 
+  /**
+   * registrationOpen mirrors `GET /auth/config`: true only on a fresh instance
+   * with zero accounts. Afterwards the create-account tab is hidden and
+   * members join through an admin-created invite link (P-A2).
+   */
+  const registrationOpen = ref(false);
+  /** configLoaded caches /auth/config for the session (fetchAuthConfig once). */
+  let configLoaded = false;
+
   const isAuthenticated = computed<boolean>(() => accessToken.value !== null);
 
   /** applySession replaces the in-memory state from a stored snapshot. */
@@ -61,6 +70,8 @@ export const useAuthStore = defineStore("auth", () => {
 
   /** clearSession forgets the session in memory and in localStorage. */
   function clearSession(): void {
+    // The instance's registration policy does not change on sign-out; keep the
+    // cached config unless a caller forces a refresh.
     user.value = null;
     accessToken.value = null;
     refreshToken.value = null;
@@ -90,13 +101,53 @@ export const useAuthStore = defineStore("auth", () => {
     setSession(response.data);
   }
 
+  /**
+   * fetchAuthConfig refreshes `registrationOpen`. A failure leaves it false
+   * (closed) — the safe default for an unknown instance state.
+   */
+  async function fetchAuthConfig(force = false): Promise<void> {
+    if (configLoaded && !force) {
+      return;
+    }
+    try {
+      const response = await http.get<{ registrationOpen: boolean }>("/auth/config");
+      registrationOpen.value = response.data.registrationOpen === true;
+      configLoaded = true;
+    } catch {
+      // Leave the safe default (closed) and allow a later retry.
+      registrationOpen.value = false;
+    }
+  }
+
+  /**
+   * validateInvite resolves an invite token to the team the invitee is
+   * joining. A missing or unusable token throws, so the caller can fall back
+   * to the sign-in form.
+   */
+  async function validateInvite(token: string): Promise<{ team: string; email: string }> {
+    const response = await http.get<{ team: string; email: string }>(
+      "/auth/invites/validate",
+      { params: { token } },
+    );
+    return response.data;
+  }
+
   /** register creates an account and starts the session. */
-  async function register(email: string, password: string): Promise<void> {
+  async function register(
+    email: string,
+    password: string,
+    inviteToken?: string,
+  ): Promise<void> {
     const response = await http.post<AuthResult>("/auth/register", {
       email,
       password,
+      ...(inviteToken ? { inviteToken } : {}),
     });
     setSession(response.data);
+    // The instance now has an account (unless the test/dev override is on), so
+    // the cached policy is stale: the next auth render re-probes /auth/config
+    // instead of offering a create-account tab that would answer 403.
+    configLoaded = false;
   }
 
   /** logout revokes the refresh token, then clears the session. */
@@ -116,10 +167,13 @@ export const useAuthStore = defineStore("auth", () => {
     accessToken,
     refreshToken,
     isAuthenticated,
+    registrationOpen,
     setSession,
     clearSession,
     persist,
     fetchMe,
+    fetchAuthConfig,
+    validateInvite,
     login,
     register,
     logout,

@@ -124,18 +124,6 @@ func NewService(cfg Config) *Service {
 	return &Service{repo: cfg.repository(), logger: loggerOr(cfg.Logger), now: now}
 }
 
-// NewDefaultService builds the production service for the HTTP wiring. It
-// returns nil (a nil TeamService) when there is no database, so callers can
-// pass its result to Mount unconditionally. The service is built even when
-// FEATURE_TEAMS is off, because the active-team middleware still needs it; the
-// routes themselves are gated by Enabled inside Mount.
-func NewDefaultService(cfg Config) TeamService {
-	if cfg.repository() == nil {
-		return nil
-	}
-	return NewService(cfg)
-}
-
 // PersonalTeamID returns the personal team ID of a user: the personal team's ID
 // is the owner's user ID (see migration 00019), so no lookup is needed. The
 // helper exists so callers do not have to know that invariant.
@@ -444,13 +432,56 @@ func (s *Service) Accept(ctx context.Context, userID uuid.UUID, token string) (T
 	if _, err := s.repo.AcceptInvite(ctx, hash, userID); err != nil {
 		return Team{}, err
 	}
-	team, err := s.repo.GetTeamForUser(ctx, invite.TeamID, userID)
+	// The membership is committed: every error from here on would misreport a
+	// successful acceptance. Read with a context detached from the request so a
+	// cancellation cannot fail the post-commit lookup either.
+	team, err := s.repo.GetTeamForUser(context.WithoutCancel(ctx), invite.TeamID, userID)
 	if err != nil {
-		return Team{}, err
+		s.logger.Warn("teams: invite accepted but the team read failed",
+			"team_id", invite.TeamID.String(), "user_id", userID.String(), "error", err)
+		team = Team{ID: invite.TeamID, Role: invite.Role}
 	}
 	s.logger.Info("teams: invite accepted",
 		"team_id", invite.TeamID.String(), "user_id", userID.String(), "role", string(invite.Role))
 	return team, nil
+}
+
+// PeekInvite validates a pending invite token without consuming it. The
+// invite-registration flow (P-A2) calls it before creating the invited
+// account, and the public validate endpoint shows the invitee which team they
+// are joining. Unknown, expired and consumed tokens answer the same typed
+// errors the accept path uses.
+func (s *Service) PeekInvite(ctx context.Context, token string) (teamName, email string, err error) {
+	if err := s.ready(); err != nil {
+		return "", "", err
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", "", fmt.Errorf("%w: invite token is required", ErrValidation)
+	}
+	invite, err := s.repo.GetInviteByTokenHash(ctx, hashInviteToken(token))
+	if err != nil {
+		return "", "", err
+	}
+	if invite.AcceptedAt != nil {
+		return "", "", ErrInviteUsed
+	}
+	if !s.now().Before(invite.ExpiresAt) {
+		return "", "", ErrInviteExpired
+	}
+	team, err := s.repo.GetTeam(ctx, invite.TeamID)
+	if err != nil {
+		return "", "", err
+	}
+	return team.Name, invite.Email, nil
+}
+
+// AcceptInvite consumes a pending invite for an existing account. It backs
+// auth.InviteAcceptor so the registration flow can join the fresh account
+// without the auth package importing teams.
+func (s *Service) AcceptInvite(ctx context.Context, userID uuid.UUID, token string) error {
+	_, err := s.Accept(ctx, userID, token)
+	return err
 }
 
 // member loads a team the caller belongs to, mapping non-membership to

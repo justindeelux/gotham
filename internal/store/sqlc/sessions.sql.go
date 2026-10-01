@@ -37,6 +37,18 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 	return i, err
 }
 
+const deleteUserSessions = `-- name: DeleteUserSessions :exec
+DELETE FROM sessions
+WHERE user_id = $1
+`
+
+// DeleteUserSessions removes every session of a user, used after a password
+// change so the old refresh chain dies with the credential.
+func (q *Queries) DeleteUserSessions(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteUserSessions, userID)
+	return err
+}
+
 const getSessionByRefreshHash = `-- name: GetSessionByRefreshHash :one
 SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at
 FROM sessions
@@ -67,4 +79,23 @@ WHERE refresh_hash = $1
 func (q *Queries) RevokeSession(ctx context.Context, refreshHash string) error {
 	_, err := q.db.Exec(ctx, revokeSession, refreshHash)
 	return err
+}
+
+const revokeSessionIfLive = `-- name: RevokeSessionIfLive :one
+UPDATE sessions
+SET revoked_at = now()
+WHERE refresh_hash = $1
+  AND revoked_at IS NULL
+RETURNING id
+`
+
+// RevokeSessionIfLive revokes a session only while it is still live and
+// returns its id. Zero rows means the session was already revoked or deleted
+// (for example by a password reset racing this rotation), so the caller must
+// refuse to issue a replacement.
+func (q *Queries) RevokeSessionIfLive(ctx context.Context, refreshHash string) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, revokeSessionIfLive, refreshHash)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }

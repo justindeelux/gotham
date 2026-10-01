@@ -11,6 +11,47 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countUsers = `-- name: CountUsers :one
+SELECT count(*) FROM users
+`
+
+func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countUsers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const createFirstUser = `-- name: CreateFirstUser :one
+INSERT INTO users (email, password_hash)
+SELECT $1, $2
+WHERE NOT EXISTS (SELECT 1 FROM users)
+RETURNING id, email, created_at, password_hash, avatar, updated_at
+`
+
+type CreateFirstUserParams struct {
+	Email        string  `json:"email"`
+	PasswordHash *string `json:"password_hash"`
+}
+
+// CreateFirstUser inserts the bootstrap account only while the table is empty,
+// so two concurrent first registrations cannot both succeed (P-A2). Zero rows
+// means an account already exists and the caller must fall back to the invite
+// path.
+func (q *Queries) CreateFirstUser(ctx context.Context, arg CreateFirstUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, createFirstUser, arg.Email, arg.PasswordHash)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.CreatedAt,
+		&i.PasswordHash,
+		&i.Avatar,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash)
 VALUES ($1, $2)
@@ -74,4 +115,23 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateUserPasswordHash = `-- name: UpdateUserPasswordHash :exec
+UPDATE users
+SET password_hash = $2, updated_at = now()
+WHERE lower(email) = lower($1)
+`
+
+type UpdateUserPasswordHashParams struct {
+	Lower        string  `json:"lower"`
+	PasswordHash *string `json:"password_hash"`
+}
+
+// UpdateUserPasswordHash replaces the password hash of the account with the
+// given (normalized, lowercase) email; callers resolve the exact address via
+// GetUserByEmail first.
+func (q *Queries) UpdateUserPasswordHash(ctx context.Context, arg UpdateUserPasswordHashParams) error {
+	_, err := q.db.Exec(ctx, updateUserPasswordHash, arg.Lower, arg.PasswordHash)
+	return err
 }

@@ -30,4 +30,8 @@ var (
 	// ErrMissingEmail is returned when an OAuth identity exposes no usable
 	// email address.
 	ErrMissingEmail = errors.New("auth: oauth identity missing email")
+	// ErrRegistrationClosed is returned by Register when the instance already
+	// has an account and no valid invite token is supplied (P-A2: exactly one
+	// admin account; members join through admin-created invites).
+	ErrRegistrationClosed = errors.New("auth: registration is closed")
 )

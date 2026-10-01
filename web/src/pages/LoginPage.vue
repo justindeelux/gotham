@@ -76,6 +76,10 @@ async function handleSubmit(): Promise<void> {
 }
 
 onMounted(() => {
+  // Registration is open only on a fresh instance; the create-account tab is
+  // hidden otherwise and members join through an admin invite link (P-A2).
+  void authStore.fetchAuthConfig();
+
   if (route.query.error === "oauth_failed") {
     message.error("GitHub sign-in failed. Please try again.");
     void router.replace({ path: "/login" });
@@ -87,7 +91,12 @@ onMounted(() => {
   <div class="auth-page">
     <NCard class="auth-card">
       <NSpace vertical :size="16">
-        <div class="auth-switch" role="tablist" aria-label="Sign in or create an account">
+        <div
+          v-if="authStore.registrationOpen"
+          class="auth-switch"
+          role="tablist"
+          aria-label="Sign in or create an account"
+        >
           <RouterLink
             to="/login"
             class="is-active"

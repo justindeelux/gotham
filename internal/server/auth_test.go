@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -41,12 +42,14 @@ func (f *fakeAuthService) result() *auth.AuthResult {
 	}
 }
 
-func (f *fakeAuthService) Register(_ context.Context, email string, _ string) (*auth.AuthResult, error) {
+func (f *fakeAuthService) Register(_ context.Context, email string, _ string, _ string, _ auth.InviteAcceptor) (*auth.AuthResult, error) {
 	switch email {
 	case "taken@example.com":
 		return nil, auth.ErrEmailTaken
 	case "invalid@example.com":
 		return nil, auth.ErrValidation
+	case "closed@example.com":
+		return nil, auth.ErrRegistrationClosed
 	default:
 		return f.result(), nil
 	}
@@ -85,6 +88,21 @@ func (f *fakeAuthService) VerifyAccessToken(token string) (*auth.Claims, error) 
 		Role:             "user",
 		RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
 	}, nil
+}
+
+// fakeInvites is a deterministic auth.InviteAcceptor for handler tests.
+type fakeInvites struct {
+	team  string
+	email string
+	err   error
+}
+
+func (f fakeInvites) PeekInvite(_ context.Context, _ string) (string, string, error) {
+	return f.team, f.email, f.err
+}
+
+func (fakeInvites) AcceptInvite(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
 }
 
 // newTestAuthServer builds a Server backed by the fake auth service.
@@ -176,6 +194,65 @@ func TestAuthRegisterErrors(t *testing.T) {
 	malformed := doRequest(t, s, http.MethodPost, "/api/v1/auth/register", `{`, "")
 	if malformed.Code != http.StatusBadRequest {
 		t.Errorf("malformed register status = %d, want 400", malformed.Code)
+	}
+
+	closed := doRequest(t, s, http.MethodPost, "/api/v1/auth/register",
+		`{"email":"closed@example.com","password":"password123"}`, "")
+	if closed.Code != http.StatusForbidden {
+		t.Errorf("closed register status = %d, want 403", closed.Code)
+	}
+	if body := closed.Body.String(); !strings.Contains(body, `"registration is closed"`) {
+		t.Errorf("closed register body = %s, want the generic closed message", body)
+	}
+}
+
+// TestAuthConfig: the public config probe reports the SPA's register surface
+// without leaking anything else.
+func TestAuthConfig(t *testing.T) {
+	s := newTestAuthServer(t)
+
+	rec := doRequest(t, s, http.MethodGet, "/api/v1/auth/config", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("config status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var config authConfigResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &config); err != nil {
+		t.Fatalf("config body: %v", err)
+	}
+	// The test server has no store: registration is closed by default.
+	if config.RegistrationOpen {
+		t.Error("registrationOpen = true without a store, want false")
+	}
+}
+
+// TestAuthInviteValidate: a pending token returns the team and invited email;
+// any problem — unknown token, unset teams service — answers the same 404.
+func TestAuthInviteValidate(t *testing.T) {
+	s := newTestAuthServer(t)
+
+	missing := doRequest(t, s, http.MethodGet, "/api/v1/auth/invites/validate?token=unknown", "", "")
+	if missing.Code != http.StatusNotFound {
+		t.Errorf("validate without a teams service status = %d, want 404", missing.Code)
+	}
+
+	s.invites = fakeInvites{team: "acme", email: "member@example.com"}
+	found := doRequest(t, s, http.MethodGet, "/api/v1/auth/invites/validate?token=pending", "", "")
+	if found.Code != http.StatusOK {
+		t.Fatalf("validate status = %d, want 200 (body %s)", found.Code, found.Body.String())
+	}
+	var invite inviteValidateResponse
+	if err := json.Unmarshal(found.Body.Bytes(), &invite); err != nil {
+		t.Fatalf("validate body: %v", err)
+	}
+	if invite.Team != "acme" || invite.Email != "member@example.com" {
+		t.Errorf("validate body = %+v, want team acme + member@example.com", invite)
+	}
+
+	broken := fakeInvites{err: errors.New("expired")}
+	s.invites = broken
+	failed := doRequest(t, s, http.MethodGet, "/api/v1/auth/invites/validate?token=pending", "", "")
+	if failed.Code != http.StatusNotFound {
+		t.Errorf("validate failure status = %d, want 404", failed.Code)
 	}
 }
 

@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -50,6 +52,65 @@ func (s *Store) GetSessionByRefreshHash(ctx context.Context, refreshHash string)
 // It is idempotent: an unknown or already-revoked token is not an error.
 func (s *Store) RevokeSession(ctx context.Context, refreshHash string) error {
 	return s.queries.RevokeSession(ctx, refreshHash)
+}
+
+// RevokeSessionIfLive revokes a live session by its refresh hash and reports
+// whether a row was updated. A false result means the session was already
+// revoked or deleted, so a rotation racing it must not issue a new session.
+func (s *Store) RevokeSessionIfLive(ctx context.Context, refreshHash string) (bool, error) {
+	_, err := s.queries.RevokeSessionIfLive(ctx, refreshHash)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// CountUsers returns the number of accounts. Zero means registration is open:
+// the first account bootstraps the instance (P-A2).
+func (s *Store) CountUsers(ctx context.Context) (int64, error) {
+	return s.queries.CountUsers(ctx)
+}
+
+// UpdateUserPasswordHash replaces the argon2id hash of the account with the
+// given email. email must already be normalized (lowercase), as resolved
+// through GetUserByEmail.
+func (s *Store) UpdateUserPasswordHash(ctx context.Context, email, passwordHash string) error {
+	return s.queries.UpdateUserPasswordHash(ctx, sqlc.UpdateUserPasswordHashParams{
+		Lower:        email,
+		PasswordHash: &passwordHash,
+	})
+}
+
+// ResetUserPassword replaces the account's password hash and revokes its
+// refresh sessions in one transaction, so a partial failure can never leave
+// live sessions behind a changed password (admin reset-password, P-A3).
+func (s *Store) ResetUserPassword(ctx context.Context, userID pgtype.UUID, email, passwordHash string) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.DeleteUserSessions(ctx, userID); err != nil {
+		return err
+	}
+	if err := queries.UpdateUserPasswordHash(ctx, sqlc.UpdateUserPasswordHashParams{
+		Lower:        email,
+		PasswordHash: &passwordHash,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// DeleteUserSessions removes every refresh session of a user, so an old token
+// chain cannot outlive a password change.
+func (s *Store) DeleteUserSessions(ctx context.Context, userID pgtype.UUID) error {
+	return s.queries.DeleteUserSessions(ctx, userID)
 }
 
 // CreateAPIToken stores a scoped API token (hash only) and returns the row.

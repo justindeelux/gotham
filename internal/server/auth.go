@@ -22,7 +22,7 @@ const tokenTypeBearer = "Bearer"
 // AuthService is the subset of auth.Service the HTTP layer depends on. Keeping
 // it an interface lets tests substitute a fake without a database.
 type AuthService interface {
-	Register(ctx context.Context, email, password string) (*auth.AuthResult, error)
+	Register(ctx context.Context, email, password, inviteToken string, invites auth.InviteAcceptor) (*auth.AuthResult, error)
 	Login(ctx context.Context, email, password string) (*auth.AuthResult, error)
 	Refresh(ctx context.Context, refreshToken string) (*auth.AuthResult, error)
 	Logout(ctx context.Context, refreshToken string) error
@@ -59,10 +59,12 @@ func ScopesFromContext(ctx context.Context) ([]string, bool) {
 	return scopes, ok
 }
 
-// credentialsRequest is the body of register and login.
+// credentialsRequest is the body of register and login. inviteToken carries
+// the admin-created invite (P-A2) for registration after the first account.
 type credentialsRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+	InviteToken string `json:"inviteToken,omitempty"`
 }
 
 // refreshTokenRequest is the body of refresh and logout.
@@ -84,9 +86,30 @@ type meResponse struct {
 	User *auth.User `json:"user"`
 }
 
+// authConfigResponse is the public instance configuration the SPA needs
+// before it renders the register surface.
+type authConfigResponse struct {
+	RegistrationOpen bool `json:"registrationOpen"`
+}
+
+// inviteValidateResponse tells the invitee which team they are joining before
+// they create credentials.
+type inviteValidateResponse struct {
+	Team  string `json:"team"`
+	Email string `json:"email"`
+}
+
 // mountAuthRoutes registers the authentication endpoints under /api.
 func (s *Server) mountAuthRoutes(api chi.Router) {
 	api.Route("/v1/auth", func(r chi.Router) {
+		// Public surface: the SPA probes /config before rendering the register
+		// tab, and invite links validate before credentials. /config is a
+		// cheap, secret-free read the SPA calls on every auth render, so it
+		// stays off the credential rate limiter; validate keeps it (a token
+		// must not be brute-forceable).
+		r.Get("/config", s.handleAuthConfig)
+		r.With(s.rateLimit).Get("/invites/validate", s.handleInviteValidate)
+
 		r.With(s.rateLimit).Post("/register", s.handleRegister)
 		r.With(s.rateLimit).Post("/login", s.handleLogin)
 		r.Post("/refresh", s.handleRefresh)
@@ -100,18 +123,60 @@ func (s *Server) mountAuthRoutes(api chi.Router) {
 	})
 }
 
-// handleRegister creates an account and returns a token pair.
+// handleAuthConfig reports whether registration is open: it is open only on a
+// fresh instance with zero accounts (P-A2). Without a store the instance is
+// treated as closed, matching the closed-by-default registration rule.
+func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
+	// allowRegistration (GOTHAM_AUTH_ALLOW_REGISTRATION) is a test/dev escape
+	// hatch; production relies on the closed default.
+	open := s.allowRegistration
+	if s.persistence != nil {
+		count, err := s.persistence.CountUsers(r.Context())
+		if err != nil {
+			s.logger.Error("auth: config", "error", err)
+			writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
+			return
+		}
+		open = count == 0 || s.allowRegistration
+	}
+	writeJSON(w, http.StatusOK, authConfigResponse{RegistrationOpen: open})
+}
+
+// handleInviteValidate looks up a pending invite token so the invitee sees
+// which team they are joining before they create credentials. Unknown,
+// expired and consumed tokens all answer 404, never a distinction.
+func (s *Server) handleInviteValidate(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if s.invites == nil || strings.TrimSpace(token) == "" {
+		writeJSON(w, http.StatusNotFound, apiError{Message: "invite not found"})
+		return
+	}
+
+	team, email, err := s.invites.PeekInvite(r.Context(), token)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, apiError{Message: "invite not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, inviteValidateResponse{Team: team, Email: email})
+}
+
+// handleRegister creates an account and returns a token pair. On an instance
+// that already has accounts (P-A2) a valid admin-created invite token is
+// required; any registration refusal answers 403 without leaking whether the
+// token itself was the problem.
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
 	if !s.decodeJSON(w, r, &req) {
 		return
 	}
 
-	result, err := s.auth.Register(r.Context(), req.Email, req.Password)
+	result, err := s.auth.Register(r.Context(), req.Email, req.Password, req.InviteToken, s.invites)
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrEmailTaken):
 			writeJSON(w, http.StatusConflict, apiError{Message: "email already registered"})
+		case errors.Is(err, auth.ErrRegistrationClosed):
+			writeJSON(w, http.StatusForbidden, apiError{Message: "registration is closed"})
 		case errors.Is(err, auth.ErrValidation):
 			writeJSON(w, http.StatusBadRequest, apiError{Message: err.Error()})
 		default:

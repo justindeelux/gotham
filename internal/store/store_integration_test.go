@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
 // defaultTestDSN points at the dev database from deploy/compose.dev.yml. Override
@@ -83,5 +86,132 @@ func TestStoreUserRoundtrip(t *testing.T) {
 
 	if _, err := s.GetUserByEmail(ctx, "missing-"+email); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("expected pgx.ErrNoRows for missing user, got %v", err)
+	}
+}
+
+// TestStoreCreateFirstUserSerializes proves the first-account guard is atomic:
+// concurrent bootstraps with different emails must yield exactly one account.
+// It skips unless the users table is empty (the bootstrap precondition), so it
+// runs on a fresh database and never touches a populated one.
+func TestStoreCreateFirstUserSerializes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Reachability first: CI has no database, so an unreachable DSN must skip
+	// (the opt-in GOTHAM_TEST_DSN turns a missing database into a failure).
+	pool, err := store.Open(ctx, testDSN())
+	if err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("open store: %v", err)
+		}
+		t.Skipf("no database: %v", err)
+	}
+	defer pool.Close()
+
+	if err := store.Migrate(ctx, testDSN(), store.MigrateUp); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	st := store.New(pool)
+	count, err := st.CountUsers(ctx)
+	if err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if count != 0 {
+		t.Skipf("users table is not empty (%d rows); the bootstrap guard needs a fresh database", count)
+	}
+
+	const attempts = 8
+	type result struct {
+		user sqlc.User
+		err  error
+	}
+	var wg sync.WaitGroup
+	results := make(chan result, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			email := fmt.Sprintf("first-user-race-%d-%d@example.com", time.Now().UnixNano(), i)
+			user, err := st.CreateFirstUser(ctx, email, nil)
+			results <- result{user: user, err: err}
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+
+	wins := 0
+	var winner sqlc.User
+	for res := range results {
+		switch {
+		case res.err == nil:
+			wins++
+			winner = res.user
+		case errors.Is(res.err, store.ErrInstanceHasAccount):
+		default:
+			t.Fatalf("unexpected error: %v", res.err)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("concurrent bootstraps succeeded %d times, want exactly 1", wins)
+	}
+
+	// Delete exactly the row this test created: the database is shared, so a
+	// blanket delete could remove an account another process owns.
+	if err := st.DeleteUserAndPersonalTeam(ctx, winner.ID); err != nil {
+		t.Fatalf("cleanup winner: %v", err)
+	}
+}
+
+// TestStoreRevokeSessionIfLive proves the rotation guard: a second revoke of
+// the same refresh hash reports false, so a refresh racing a password reset
+// cannot mint a replacement session.
+func TestStoreRevokeSessionIfLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Reachability first: CI has no database, so an unreachable DSN must skip
+	// (the opt-in GOTHAM_TEST_DSN turns a missing database into a failure).
+	pool, err := store.Open(ctx, testDSN())
+	if err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("open store: %v", err)
+		}
+		t.Skipf("no database: %v", err)
+	}
+	defer pool.Close()
+
+	if err := store.Migrate(ctx, testDSN(), store.MigrateUp); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	st := store.New(pool)
+	user, err := st.CreateUser(ctx, fmt.Sprintf("revoke-live-%d@example.com", time.Now().UnixNano()), nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	// Delete before the deferred pool.Close: a t.Cleanup callback would run
+	// after it and the delete would hit a closed pool.
+	defer func() { _ = st.DeleteUserAndPersonalTeam(context.WithoutCancel(ctx), user.ID) }()
+
+	session, err := st.CreateSession(ctx, sqlc.CreateSessionParams{
+		UserID:      user.ID,
+		RefreshHash: fmt.Sprintf("hash-%d", time.Now().UnixNano()),
+		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	live, err := st.RevokeSessionIfLive(ctx, session.RefreshHash)
+	if err != nil || !live {
+		t.Fatalf("first revoke = (%v, %v), want (true, nil)", live, err)
+	}
+	live, err = st.RevokeSessionIfLive(ctx, session.RefreshHash)
+	if err != nil {
+		t.Fatalf("second revoke error: %v", err)
+	}
+	if live {
+		t.Fatal("second revoke reported a live session; the rotation race is open")
 	}
 }

@@ -361,6 +361,23 @@ func TestRemoveHookTranslatesProviderFailures(t *testing.T) {
 	}
 }
 
+// TestHookBudgetsStayUnderSPARequestTimeout pins the latency budget: the SPA
+// aborts a create at 15s (web/src/api/http.ts), and the worst-case hook
+// latency is one bounded install (deploy.DefaultHookTimeout) plus the detached
+// rollback (hookRollbackTimeout). Raising either bound must fail here rather
+// than surface as a client timeout after the application row committed, with a
+// minimum of 3s headroom for the rest of the request.
+func TestHookBudgetsStayUnderSPARequestTimeout(t *testing.T) {
+	const spaRequestTimeout = 15 * time.Second
+	worst := deploy.DefaultHookTimeout + hookRollbackTimeout
+	if worst >= spaRequestTimeout {
+		t.Fatalf("worst-case hook latency %s reaches the SPA request timeout %s", worst, spaRequestTimeout)
+	}
+	if worst > 12*time.Second {
+		t.Errorf("worst-case hook latency %s leaves under 3s of headroom", worst)
+	}
+}
+
 func TestReceiveIsNotConfiguredWithoutSeams(t *testing.T) {
 	svc := NewService(Config{Logger: discardLogger()})
 	req := deliveryRequest(providers.NameGitHub, "{}", nil, "10.0.0.1:1")

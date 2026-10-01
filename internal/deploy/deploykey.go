@@ -223,10 +223,12 @@ func (s *Service) DeleteDeployKey(ctx context.Context, userID, appID uuid.UUID) 
 }
 
 // detachDeployKey removes an application's deploy key as part of deleting the
-// application itself. Unlike DeleteDeployKey it tolerates a missing registrar
-// (logging instead): an application must never become undeletable because the
-// Git host cannot be reached — the row cascade would orphan the host key, so
-// the warning names what to clean up by hand.
+// application itself. It is best effort by construction: the caller logs and
+// continues on error (once the provider hook is gone, aborting would leave a
+// live application without automatic deploys), and a missing registrar is
+// tolerated the same way. The row cascade removes the local key with the
+// application; a host key left behind is named in the warning for manual
+// cleanup.
 func (s *Service) detachDeployKey(ctx context.Context, app Application) error {
 	key, err := s.repo.GetDeployKey(ctx, app.ID)
 	switch {

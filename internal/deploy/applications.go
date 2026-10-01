@@ -260,10 +260,11 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 // removal failure, so nothing that would break the still-live application has
 // been mutated when it aborts (the escape hatch for a hook whose provider is
 // gone is ForgetWebhook, DELETE .../webhooks?force=true). The deploy key is
-// detached next — also on the Git host first, then in the database, so a host
-// failure aborts with both sides in step — and the container stop stays best
-// effort: a control plane that cannot reach the node must still be able to
-// delete an application.
+// detached next, best effort: once the hook is gone, a host failure must not
+// leave a live application without automatic deploys (the local row cascades
+// with the application and the warning names the remote key). The container
+// stop stays best effort too: a control plane that cannot reach the node must
+// still be able to delete an application.
 func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error {
 	if !Enabled() {
 		return ErrDisabled
@@ -304,15 +305,22 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 			}
 		}
 	}
-	// A preview sibling reuses its base application's remote deploy key:
-	// removing it from the Git host would break the base (and every other
-	// sibling). Only the local rows go; the remote key stays registered.
+	// Detach the deploy key next. It is BEST EFFORT once the provider hook is
+	// gone: aborting here would leave a live application whose automatic
+	// deploys are silently disabled — the exact state this ordering exists to
+	// prevent. The local key row cascades away with the application; a key
+	// left registered on the Git host is the lesser evil, and the warning
+	// names provider and repository so it can be removed there by hand. A
+	// preview sibling reuses its base application's remote deploy key, so
+	// only its local rows go and the remote key always stays registered.
 	if app.IsPreview {
 		if _, err := s.repo.DeleteDeployKey(ctx, app.ID); err != nil && !errors.Is(err, ErrNotFound) {
-			return err
+			s.logger.Warn("deploy: preview deploy key row could not be detached; the application still deletes",
+				"application_id", app.ID, "error", err)
 		}
 	} else if err := s.detachDeployKey(ctx, app); err != nil {
-		return err
+		s.logger.Warn("deploy: deploy key could not be detached; the application still deletes",
+			"application_id", app.ID, "provider", app.Provider, "repo", app.Repo, "error", err)
 	}
 	s.stopBestEffort(ctx, app)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {

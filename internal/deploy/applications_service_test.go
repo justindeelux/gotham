@@ -546,6 +546,55 @@ func TestServiceDeleteApplicationRemovesProviderHook(t *testing.T) {
 
 // TestServiceDeleteApplicationSkipsHookWithoutProvider pins the other half: a
 // pasted public URL has no provider hook, so the delete makes no hook call.
+// TestServiceDeleteApplicationSurvivesDeployKeyDetachFailure pins the
+// best-effort half of the ordering: once the provider hook is gone, a failing
+// deploy-key detach must not abort the delete and leave a live application
+// with automatic deploys silently disabled. The local key row cascades with
+// the application; the remote key orphan is logged with provider and repo for
+// manual cleanup.
+func TestServiceDeleteApplicationSurvivesDeployKeyDetachFailure(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	if _, err := repo.CreateDeployKey(context.Background(), DeployKey{
+		ApplicationID: app.ID, Provider: app.Provider, Repo: app.Repo,
+		ProviderKeyID: "host-key-1",
+	}, "seeded-key"); err != nil {
+		t.Fatalf("seed deploy key: %v", err)
+	}
+	registrar := &fakeRegistrar{removeErr: errors.New("host unreachable")}
+	hooks := &fakeHookLifecycle{}
+
+	var logs bytes.Buffer
+	svc := NewService(Config{
+		Repository:   repo,
+		Secret:       testSecretKey,
+		Logger:       slog.New(slog.NewTextHandler(&logs, nil)),
+		KeyRegistrar: registrar,
+		Hooks:        func() HookLifecycle { return hooks },
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+		t.Fatalf("a failed deploy-key detach must not leave a live hook-less application: %v", err)
+	}
+	if hooks.removeCalls != 1 {
+		t.Errorf("hook removals = %d, want the hook removed first", hooks.removeCalls)
+	}
+	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("get after delete err = %v, want ErrNotFound", err)
+	}
+	if repo.hasDeployKey(app.ID) {
+		t.Error("the local deploy key row must cascade with the application")
+	}
+	logged := logs.String()
+	for _, want := range []string{app.Provider, app.Repo, "host unreachable"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log = %q, want the remote key orphan named by %q", logged, want)
+		}
+	}
+}
+
 func TestServiceDeleteApplicationSkipsHookWithoutProvider(t *testing.T) {
 	for _, provider := range []string{"", "public"} {
 		t.Run("provider "+provider, func(t *testing.T) {

@@ -473,12 +473,13 @@ func (s *Service) releaseClaim(ctx context.Context, event Event) {
 	}
 }
 
-// bestEffortDelete removes a hook the host already accepted when storing it
-// failed, so a retry does not accumulate orphan hooks on the repository.
 // hookRollbackTimeout bounds the best-effort rollback of a hook whose row
 // could not be stored. It is deliberately short: the rollback runs on a
-// detached context (see bestEffortDelete), so nothing else bounds it.
-const hookRollbackTimeout = 5 * time.Second
+// detached context (see bestEffortDelete), so nothing else bounds it, and the
+// create request budget is deploy.DefaultHookTimeout + this value — 8s + 3s =
+// 11s, leaving 4s of the SPA's 15s request timeout. TestHookBudgetsStayUnderSPARequestTimeout
+// pins the sum; do not raise this without shrinking the other side.
+const hookRollbackTimeout = 3 * time.Second
 
 // bestEffortDelete removes a hook the host already accepted when storing it
 // failed, so a retry does not accumulate orphan hooks on the repository.

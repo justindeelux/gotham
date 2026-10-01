@@ -315,26 +315,30 @@ func TestDeleteDeployKeyProviderFailureKeepsKey(t *testing.T) {
 	}
 }
 
-// TestDeleteApplicationProviderFailureKeepsApplication is the rollback the
-// delete path promises: when the Git host cannot drop the key, the
-// application (and its key) must survive untouched so host and database stay
-// in step.
-func TestDeleteApplicationProviderFailureKeepsApplication(t *testing.T) {
+// TestDeleteApplicationProviderFailureStillDeletes pins the delete-path
+// trade-off: a Git host that cannot drop the deploy key must not leave a live
+// application behind (the provider hook, if any, was already removed first, so
+// aborting would silently disable automatic deploys). The local key row
+// cascades with the application and the remote key orphan is logged for manual
+// cleanup.
+func TestDeleteApplicationProviderFailureStillDeletes(t *testing.T) {
 	repo, registrar, svc, app := keyFixture(t)
 	if _, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID); err != nil {
 		t.Fatalf("CreateDeployKey: %v", err)
 	}
 	registrar.removeErr = errors.New("host down")
 
-	err := svc.DeleteApplication(context.Background(), app.UserID, app.ID)
-	if !errors.Is(err, ErrProvider) {
-		t.Fatalf("DeleteApplication error = %v, want ErrProvider", err)
+	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
+		t.Fatalf("DeleteApplication = %v, want the delete to proceed despite the host failure", err)
 	}
-	if _, err := svc.GetApplication(context.Background(), app.UserID, app.ID); err != nil {
-		t.Errorf("application did not survive the aborted delete: %v", err)
+	if _, err := svc.GetApplication(context.Background(), app.UserID, app.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("application survived the delete: %v", err)
 	}
-	if !repo.hasDeployKey(app.ID) {
-		t.Error("deploy key row was removed although the host call failed")
+	if repo.hasDeployKey(app.ID) {
+		t.Error("the local deploy key row must cascade with the application")
+	}
+	if len(registrar.removed) != 0 {
+		t.Errorf("removed = %v, want none (the host call failed)", registrar.removed)
 	}
 }
 

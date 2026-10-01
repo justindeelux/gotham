@@ -29,12 +29,16 @@ func Enabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv(FeatureEnv)), "false")
 }
 
-// defaultHookTimeout bounds one best-effort Git-host hook call (install on
-// create, remove on delete; Config.HookTimeout overrides it). The bound keeps
-// a provider that accepts the connection and then stalls from holding the
-// HTTP request open past the SPA's own timeout (15s), which would surface as
-// a failed create after the application row is already committed.
-const defaultHookTimeout = 10 * time.Second
+// DefaultHookTimeout bounds one best-effort Git-host hook call (install on
+// create, remove on delete; Config.HookTimeout overrides it).
+//
+// The budget, with webhooks.hookRollbackTimeout (3s): a create whose provider
+// answers at this deadline and whose hook-row write then fails spends at most
+// 8s + 3s = 11s before it answers, leaving 4s of the SPA's 15s request timeout
+// (web/src/api/http.ts) for everything else. Raising either bound must keep
+// the sum safely below that timeout — TestHookBudgetsStayUnderSPARequestTimeout
+// in internal/webhooks pins it.
+const DefaultHookTimeout = 8 * time.Second
 
 // DeployService is the control-plane surface the HTTP layer depends on. It is
 // implemented by Service and by fakes in route tests.
@@ -152,7 +156,7 @@ type Config struct {
 	Hooks func() HookLifecycle
 	// HookTimeout bounds one best-effort hook call against a provider that
 	// accepts the connection and then stalls. Zero selects
-	// defaultHookTimeout (10s). The bound is a request-path safety net, not a
+	// DefaultHookTimeout (8s). The bound is a request-path safety net, not a
 	// retry budget: a timeout is logged like any other hook failure.
 	HookTimeout time.Duration
 	// Emitter overrides the publisher-based realtime emitter (tests).
@@ -214,7 +218,7 @@ func NewService(cfg Config) *Service {
 	o.recoverStale()
 	hookTimeout := cfg.HookTimeout
 	if hookTimeout <= 0 {
-		hookTimeout = defaultHookTimeout
+		hookTimeout = DefaultHookTimeout
 	}
 	return &Service{
 		Orchestrator:   o,

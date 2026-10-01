@@ -22,6 +22,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import type {
   ChannelConfig,
   NotificationChannel,
+  NotificationEventKey,
   NotificationKind,
   TestResult,
 } from "../api/notifications";
@@ -31,6 +32,8 @@ import {
   eventLabel,
   kindLabel,
 } from "../api/notifications";
+import { listApplications } from "../api/applications";
+import { listDatabases } from "../api/databases";
 import type { TeamRole } from "../api/teams";
 import { canManageMembers, roleLabel, roleTagType } from "../api/teams";
 import { useNotificationsStore } from "../stores/notifications";
@@ -55,6 +58,11 @@ interface ChannelForm {
   name: string;
   kind: NotificationKind;
   enabled: boolean;
+  /** Subscribed event keys; the backend requires at least one. */
+  events: NotificationEventKey[];
+  /** Empty for a team-wide channel. */
+  resourceType: ChannelScope;
+  resourceId: string;
   webhook_url: string;
   bot_token: string;
   chat_id: string;
@@ -65,6 +73,15 @@ interface ChannelForm {
   from: string;
   /** Comma/space separated recipient list. */
   to: string;
+}
+
+/** Resource scope of a channel: team-wide or one resource. */
+type ChannelScope = "" | "application" | "database";
+
+/** One selectable resource of the picker. */
+interface ResourceOption {
+  id: string;
+  name: string;
 }
 
 const formOpen = ref(false);
@@ -85,6 +102,29 @@ const kindOptions: Array<{ label: string; value: NotificationKind }> = [
   { label: "Telegram bot", value: "telegram" },
   { label: "Email (SMTP)", value: "email" },
 ];
+
+const eventOptions: Array<{ label: string; value: NotificationEventKey }> =
+  allNotificationEvents.map((event) => ({
+    label: eventLabel(event),
+    value: event,
+  }));
+
+const scopeOptions: Array<{ label: string; value: ChannelScope }> = [
+  { label: "Team-wide (all resources)", value: "" },
+  { label: "Application", value: "application" },
+  { label: "Database", value: "database" },
+];
+
+/** Applications of the active team, offered when the scope is one app. */
+const resourceApplications = ref<ResourceOption[]>([]);
+/** Databases of the active team, offered when the scope is one database. */
+const resourceDatabases = ref<ResourceOption[]>([]);
+/** Team the resource lists belong to; a switch drops them. */
+const loadedResourcesTeamId = ref("");
+/** True when the resource lists could not be read; team-wide stays possible. */
+const resourcesUnavailable = ref(false);
+/** Token of the newest resource read; a stale response never writes state. */
+let resourcesReadToken = 0;
 
 const teamOptions = computed<Array<{ label: string; value: string }>>(() =>
   teamsStore.teams.map((team) => ({
@@ -107,6 +147,9 @@ function emptyForm(): ChannelForm {
     name: "",
     kind: "discord",
     enabled: true,
+    events: [...allNotificationEvents],
+    resourceType: "",
+    resourceId: "",
     webhook_url: "",
     bot_token: "",
     chat_id: "",
@@ -118,6 +161,78 @@ function emptyForm(): ChannelForm {
     to: "",
   };
 }
+
+/** selectScope switches the scope kind and drops the stale resource pick. */
+function selectScope(scope: string): void {
+  form.value.resourceType =
+    scope === "application" || scope === "database" ? scope : "";
+  form.value.resourceId = "";
+}
+
+/**
+ * resourcePickerOptions offers the resources of the selected scope. While
+ * editing, a stored resource the list no longer carries is kept as a
+ * "(missing)" option so an untouched scope survives the save.
+ */
+const resourcePickerOptions = computed<Array<{ label: string; value: string }>>(
+  () => {
+    const options = (
+      form.value.resourceType === "application"
+        ? resourceApplications.value
+        : resourceDatabases.value
+    ).map((resource) => ({ label: resource.name, value: resource.id }));
+    const current = form.value.resourceId;
+    if (current !== "" && !options.some((option) => option.value === current)) {
+      options.unshift({ label: `${current} (missing)`, value: current });
+    }
+    return options;
+  },
+);
+
+/**
+ * loadResources reads the active team's applications and databases. A team
+ * switch drops the previous team's lists first, and only the newest read may
+ * write, so a late response cannot offer another team's resources.
+ */
+async function loadResources(teamId: string): Promise<void> {
+  const token = ++resourcesReadToken;
+  const isCurrent = (): boolean => token === resourcesReadToken;
+  if (loadedResourcesTeamId.value !== teamId) {
+    resourceApplications.value = [];
+    resourceDatabases.value = [];
+    loadedResourcesTeamId.value = teamId;
+  }
+  resourcesUnavailable.value = false;
+  try {
+    const [applications, databases] = await Promise.all([
+      listApplications(teamId),
+      listDatabases(teamId),
+    ]);
+    if (!isCurrent()) {
+      return;
+    }
+    resourceApplications.value = applications.map(({ id, name }) => ({
+      id,
+      name,
+    }));
+    resourceDatabases.value = databases.map(({ id, name }) => ({ id, name }));
+  } catch {
+    if (!isCurrent()) {
+      return;
+    }
+    resourceApplications.value = [];
+    resourceDatabases.value = [];
+    resourcesUnavailable.value = true;
+  }
+}
+
+/** canSubmit mirrors the backend rules: name and at least one event. */
+const canSubmit = computed<boolean>(
+  () =>
+    form.value.name.trim() !== "" &&
+    form.value.events.length > 0 &&
+    (form.value.resourceType === "" || form.value.resourceId !== ""),
+);
 
 /** parseRecipients splits a comma/newline separated address list. */
 function parseRecipients(raw: string): string[] {
@@ -148,6 +263,13 @@ function openEdit(channel: NotificationChannel): void {
     name: channel.name,
     kind: channel.kind,
     enabled: channel.enabled,
+    events: [...channel.events],
+    resourceType:
+      channel.resource_type === "application" ||
+      channel.resource_type === "database"
+        ? channel.resource_type
+        : "",
+    resourceId: channel.resource_id ?? "",
     webhook_url: channel.config.webhook_url ?? "",
     bot_token: channel.config.bot_token ?? "",
     chat_id: channel.config.chat_id ?? "",
@@ -221,6 +343,20 @@ function buildConfig(): ChannelConfig {
   return config;
 }
 
+/**
+ * resourceScopeInput maps the scope draft onto the request pair. The empty
+ * pair clears a stored override (both halves are always sent together).
+ */
+function resourceScopeInput(): { resource_type: string; resource_id: string } {
+  if (form.value.resourceType === "") {
+    return { resource_type: "", resource_id: "" };
+  }
+  return {
+    resource_type: form.value.resourceType,
+    resource_id: form.value.resourceId,
+  };
+}
+
 /** handleSave creates or updates the channel. */
 async function handleSave(): Promise<void> {
   saving.value = true;
@@ -230,6 +366,8 @@ async function handleSave(): Promise<void> {
       await channelsStore.update(editingId.value, {
         name: form.value.name.trim(),
         enabled: form.value.enabled,
+        events: [...form.value.events],
+        ...resourceScopeInput(),
         config: buildConfig(),
       });
       message.success("Channel updated");
@@ -238,6 +376,8 @@ async function handleSave(): Promise<void> {
         name: form.value.name.trim(),
         kind: form.value.kind,
         enabled: form.value.enabled,
+        events: [...form.value.events],
+        ...resourceScopeInput(),
         config: buildConfig(),
       });
       message.success("Channel created");
@@ -303,10 +443,26 @@ function configSummary(channel: NotificationChannel): string {
   }
 }
 
+/** scopeLabel renders the channel's resource scope for the card header. */
+function scopeLabel(channel: NotificationChannel): string {
+  if (!channel.resource_type || !channel.resource_id) {
+    return "Team-wide";
+  }
+  const resources =
+    channel.resource_type === "application"
+      ? resourceApplications.value
+      : resourceDatabases.value;
+  const name =
+    resources.find((resource) => resource.id === channel.resource_id)?.name ??
+    channel.resource_id;
+  return channel.resource_type === "application" ? `App: ${name}` : `Database: ${name}`;
+}
+
 watch(
   () => teamsStore.activeTeamId,
   () => {
     void channelsStore.fetchChannels().catch(() => undefined);
+    void loadResources(teamsStore.activeTeamId);
   },
 );
 
@@ -316,7 +472,10 @@ onMounted(async () => {
   // The selection watcher already reloaded the list when ensureTeams changed
   // the active team; only an unchanged selection needs an explicit first read.
   if (teamsStore.activeTeamId === selectionBeforeLoad) {
-    await channelsStore.fetchChannels().catch(() => undefined);
+    await Promise.all([
+      channelsStore.fetchChannels().catch(() => undefined),
+      loadResources(teamsStore.activeTeamId),
+    ]);
   }
 });
 </script>
@@ -397,6 +556,7 @@ onMounted(async () => {
               <NSpace align="center" :size="10">
                 <NText strong>{{ channel.name }}</NText>
                 <NTag size="small" round>{{ kindLabel(channel.kind) }}</NTag>
+                <NTag size="small" round>{{ scopeLabel(channel) }}</NTag>
                 <NTag
                   :type="channel.enabled ? 'success' : 'default'"
                   size="small"
@@ -639,15 +799,57 @@ onMounted(async () => {
             </NFormItem>
           </template>
 
+          <NFormItem label="Events">
+            <div class="field-stack">
+              <NSelect
+                v-model:value="form.events"
+                multiple
+                :options="eventOptions"
+                placeholder="Select at least one event"
+                aria-label="Events"
+              />
+              <NText v-if="form.events.length === 0" type="error" class="small">
+                Select at least one event.
+              </NText>
+            </div>
+          </NFormItem>
+
+          <NFormItem label="Resource scope">
+            <div class="field-stack">
+              <NSelect
+                :value="form.resourceType"
+                :options="scopeOptions"
+                aria-label="Resource scope"
+                @update:value="(value: string) => selectScope(value)"
+              />
+              <NSelect
+                v-if="form.resourceType !== ''"
+                v-model:value="form.resourceId"
+                :options="resourcePickerOptions"
+                filterable
+                :placeholder="
+                  form.resourceType === 'application'
+                    ? 'Select an application'
+                    : 'Select a database'
+                "
+                aria-label="Resource"
+              />
+              <NText v-if="resourcesUnavailable" depth="3" class="small">
+                The resource list could not be loaded; the channel can still
+                stay team-wide.
+              </NText>
+            </div>
+          </NFormItem>
+
           <NFormItem label="Enabled">
             <NSwitch v-model:value="form.enabled" aria-label="Channel enabled" />
           </NFormItem>
         </NForm>
         <NText depth="3" class="small">
           Secrets travel once, are sealed server-side and are never displayed
-          again — a read only returns the mask. New channels subscribe to all
-          four events ({{ allNotificationEvents.length }}); the backend keeps
-          that subscription.
+          again — a read only returns the mask. A team-wide channel receives
+          every selected event; a scoped channel only receives events of the
+          selected resource.
         </NText>
       </NSpace>
       <template #footer>
@@ -656,7 +858,7 @@ onMounted(async () => {
           <NButton
             type="primary"
             :loading="saving"
-            :disabled="form.name.trim() === ''"
+            :disabled="!canSubmit"
             @click="void handleSave()"
           >
             {{ editing ? "Save" : "Create channel" }}
@@ -717,6 +919,13 @@ onMounted(async () => {
 
 .small {
   font-size: var(--text-xs);
+}
+
+.field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
 }
 
 @media (max-width: 860px) {

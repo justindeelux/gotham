@@ -1,4 +1,4 @@
-import { http } from "./http";
+import { http, teamHeaders } from "./http";
 import { isApiError } from "./servers";
 
 /**
@@ -107,9 +107,15 @@ export interface CreatedDatabase {
   credentials: DatabaseCredentials;
 }
 
-/** listDatabases returns the caller's live databases, newest first. */
-export async function listDatabases(): Promise<Database[]> {
-  const response = await http.get<DatabaseListEnvelope>("/databases");
+/**
+ * listDatabases returns one team's live databases, newest first. An empty
+ * teamId reads the caller's personal team, matching the other pre-teams
+ * surfaces.
+ */
+export async function listDatabases(teamId = ""): Promise<Database[]> {
+  const response = await http.get<DatabaseListEnvelope>("/databases", {
+    headers: teamHeaders(teamId),
+  });
   return response.data.databases ?? [];
 }
 

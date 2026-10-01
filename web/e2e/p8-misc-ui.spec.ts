@@ -280,30 +280,60 @@ test.describe("teams", () => {
  * refused loopback address, so its failure is deterministic and offline-safe.
  */
 test.describe("notification channels", () => {
-  test("creates a channel, keeps the secret masked, tests, toggles and deletes", async ({
+  test("creates a channel with a resource scope and an event subset, keeps the secret masked, tests, toggles and deletes", async ({
     page,
+    request,
     guardrails,
   }) => {
+    test.setTimeout(60_000);
+
     const suffix = uniqueSuffix();
     const name = `ui-e2e-hook-${suffix}`;
     const webhook = `http://127.0.0.1:9/${name}`;
     const masked = `…${name.slice(-4)}`;
+    // The picker lists the active team's resources; the smoke account's
+    // default scope is the personal team, so the pooled app is offered.
+    const node = await seedServer(request, `ui-e2e-hook-node-${suffix}`);
+    const application = await seedApplication(
+      request,
+      node.id,
+      `ui-e2e-hook-app-${suffix}`,
+    );
 
     await page.goto("/settings/notifications");
     await expect(
       page.getByRole("heading", { name: "Notification channels", level: 1 }),
     ).toBeVisible();
 
-    // ── create ────────────────────────────────────────────────────────────
+    // ── create: event subset + application scope ──────────────────────────
     await page.getByRole("button", { name: "New channel" }).click();
     const modal = page.locator(".n-modal").filter({ hasText: "New notification channel" });
     await modal.getByLabel("Channel name").locator("input").fill(name);
     await modal.getByLabel("Webhook URL").locator("input").fill(webhook);
+
+    // The event select starts with every event; drop one.
+    await modal.locator('[aria-label="Events"]').click();
+    await page.locator(".n-base-select-option").filter({ hasText: "Backup failed" }).click();
+    await page.keyboard.press("Escape");
+    await expect(modal.locator('[aria-label="Events"]')).not.toContainText("Backup failed");
+
+    // Scope the channel to one application from the picker.
+    await modal.locator('[aria-label="Resource scope"]').click();
+    await page.locator(".n-base-select-option").filter({ hasText: "Application" }).click();
+    await modal.locator('[aria-label="Resource"]').click();
+    await modal.locator('[aria-label="Resource"] input').fill(application.name);
+    await page.locator(".n-base-select-option").filter({ hasText: application.name }).click();
+    await page.keyboard.press("Escape");
+
     await modal.getByRole("button", { name: "Create channel" }).click();
     await expect(page.locator(".n-modal")).toHaveCount(0);
 
     const card = page.locator(".n-card").filter({ hasText: name });
     await expect(card).toBeVisible();
+    // The card lists the subset and names the scoped resource.
+    await expect(card).toContainText("App: " + application.name);
+    await expect(card).toContainText("Deploy succeeded");
+    await expect(card).not.toContainText("Backup failed");
     // The read view carries the mask and the "configured" indicator only.
     await expect(card).toContainText("secret configured");
     await expect(card).toContainText(masked);
@@ -321,10 +351,14 @@ test.describe("notification channels", () => {
     await page.getByRole("switch", { name: `Enable ${name}` }).click();
     await expect(card).toContainText("disabled");
 
-    // ── edit: the masked secret stays masked and is not resubmitted ───────
+    // ── edit: the masked secret stays masked, and the subscription and the
+    //    scope come back prefilled ────────────────────────────────────────
     await card.getByRole("button", { name: "Edit" }).click();
     const editModal = page.locator(".n-modal").filter({ hasText: "Edit notification channel" });
     await expect(editModal.getByLabel("Webhook URL").locator("input")).toHaveValue(masked);
+    await expect(editModal.locator('[aria-label="Resource"]')).toContainText(application.name);
+    await expect(editModal.locator('[aria-label="Events"]')).toContainText("Backup succeeded");
+    await expect(editModal.locator('[aria-label="Events"]')).not.toContainText("Backup failed");
     await editModal.getByRole("button", { name: "Save" }).click();
     await expect(page.locator(".n-modal")).toHaveCount(0);
     expect(await page.content()).not.toContain(webhook);
@@ -352,12 +386,12 @@ test.describe("notification channels", () => {
  * and that switching the step issues a new range request.
  */
 test.describe("server metrics", () => {
-  test("renders the real empty window, then samples with gaps and a step switch", async ({
+  test("renders the real empty window, then samples with gaps, a step switch and auto-refresh", async ({
     page,
     request,
     guardrails,
   }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(120_000);
 
     const node = await seedServer(request, `ui-e2e-metrics-node-${uniqueSuffix()}`);
     const requestedSteps: string[] = [];
@@ -421,6 +455,30 @@ test.describe("server metrics", () => {
     await page.locator(".n-radio-button").filter({ hasText: "1h" }).click();
     await expect.poll(() => requestedSteps.includes("1h")).toBe(true);
     await expect(cpu.locator("polyline")).toHaveCount(1);
+
+    // ── auto-refresh: off by default, a chosen cadence refetches on its own,
+    //    and a hidden document pauses the polling again ────────────────────
+    const refreshGroup = page.locator('[aria-label="Metrics auto-refresh"]');
+    await expect(refreshGroup).toContainText("off");
+
+    const beforeRefresh = requestedSteps.length;
+    await page.locator(".n-radio-button").filter({ hasText: "15s" }).click();
+    await expect
+      .poll(() => requestedSteps.length, { timeout: 20_000 })
+      .toBeGreaterThan(beforeRefresh);
+
+    // The visibilitychange handler stops the interval, so no further request
+    // may arrive within one full cadence.
+    await page.evaluate(() => {
+      Object.defineProperty(document, "hidden", {
+        configurable: true,
+        get: () => true,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    const onHide = requestedSteps.length;
+    await page.waitForTimeout(16_000);
+    expect(requestedSteps.length).toBe(onHide);
 
     expect(
       guardrails.apiFailures,

@@ -149,6 +149,15 @@ function redirectToLogin(): void {
   window.location.assign("/login");
 }
 
+/**
+ * teamHeaders scopes a request to one team (`X-Team-Id`). An empty id means
+ * the caller's personal team, which the control plane resolves without the
+ * header.
+ */
+export function teamHeaders(teamId: string): Record<string, string> {
+  return teamId ? { "X-Team-Id": teamId } : {};
+}
+
 /** toApiError maps an axios failure to a typed ApiError. */
 function toApiError(error: AxiosError<ApiErrorBody>): ApiError {
   const message =

@@ -86,24 +86,29 @@ residuals — full detail in `deploy/README.md` → Known residuals:
 
 ### M9 evidence (Phase 9)
 
-Proven today:
+Proven:
 
-- Signed `v0.1.0` GitHub release with exactly 14 assets; all four
-  `gotham{,-agent}-manifest-{amd64,arm64}.txt` verify with the pinned key, and
-  the GitHub-reported digests equal the signed `sha256=` values.
-- Clean Ubuntu 22.04 container install of the control plane, plus re-install with
-  no operator additions; the signed manifest/digest chain is covered by
+- Signed `v0.1.0` and `v0.1.1` GitHub releases, each with exactly 14 assets; all four
+  `gotham{,-agent}-manifest-{amd64,arm64}.txt` verify with the pinned key, and the
+  GitHub-reported digests equal the signed `sha256=` values.
+- Clean Ubuntu 22.04 container install of the control plane, plus re-install with no
+  operator additions; the signed manifest/digest chain is covered by
   `deploy/test-release-install.sh`.
-- Real two-agent systemd remote-update proof (`deploy/verify-agent-update.sh`
-  C1–C4 plus NEG1/NEG2: a tampered asset and a broken-but-signed release both
-  refuse and roll back).
+- Real two-agent systemd remote-update proof (`deploy/verify-agent-update.sh` C1–C4
+  plus NEG1/NEG2: a tampered asset and a broken-but-signed release both refuse and roll
+  back).
+- **Real newer-release self-update (2026-10-01, container):** `gotham update check`
+  reported `v0.1.1 available (current 0.1.0, channel stable)`; `update apply` staged
+  v0.1.1, the root wrapper health-checked it and recorded `result=ok
+  detail=new binary healthy`; the CP ran **0.1.1** with the new `gotham ca` command
+  present; `update rollback` plus the documented restart brought back **0.1.0**; a
+  re-apply returned to **0.1.1**. `AUTO_UPDATE=true` (10 s interval) was enabled and the
+  loop logged `auto-update enabled` with the durable status, then reverted.
 
-Pending (the coordinator tags `v0.1.1` next):
+Pending:
 
-- Apply a real *newer* GitHub-hosted release through `gotham update apply` and
-  roll back once (closes the real-release gap for the control plane).
-- Apply an agent release rollout against the real CDN.
-- Exercise the unattended `AUTO_UPDATE` loop.
+- Apply an agent release rollout against the real GitHub CDN (the mechanism is proven
+  with the local release server and the two-agent systemd script).
 
 ## Phase 8 residuals
 

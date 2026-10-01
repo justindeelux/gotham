@@ -177,20 +177,30 @@ fails and the node never registers.
 ## Updates and rollback
 
 Releases are verified with the public key embedded in the running binary, so no
-manual verification is needed at update time.
+manual verification is needed at update time. The `gotham` binary lives in the
+service-owned directory `/var/lib/gotham/bin`, so run the operator CLI as the
+service user:
 
-- **Control plane:** `gotham update check` / `gotham update apply`, or set
-  `AUTO_UPDATE=true` in `/etc/gotham/gotham.env` for unattended updates. The
-  wrapper health-checks the new binary and rolls back to `gotham.old` on
-  failure. Run the CLI as the service user that owns the binary
-  (`sudo -u gotham /var/lib/gotham/bin/gotham update apply`): run as root it
-  would install a root-owned binary over the service-owned one and the next
-  service-run apply would fail on the hardlink backup. `gotham update` refuses
-  a mismatched owner.
+```sh
+sudo -u gotham /var/lib/gotham/bin/gotham update check
+sudo -u gotham /var/lib/gotham/bin/gotham update apply
+sudo -u gotham /var/lib/gotham/bin/gotham update rollback
+```
+
+Run as root it would install a `root:root` binary over the service-owned one and
+the next service-run apply would fail at the hardlink backup
+(`fs.protected_hardlinks`); `gotham update apply`/`rollback` refuses a
+mismatched owner with a clear message.
+
+- **Control plane:** the commands above, or set `AUTO_UPDATE=true` in
+  `/etc/gotham/gotham.env` for unattended updates. The wrapper health-checks the
+  new binary and rolls back to `gotham.old` on failure.
 - **Node agent:** agents update from the control plane over the CA-verified TLS
   channel; enable unattended applies with `GOTHAM_AGENT_AUTO_UPDATE=true`, or
-  trigger a fleet rollout from the UI. A release that fails to
-  activate rolls back and its version is backed off (see `deploy/README.md`).
+  trigger a fleet rollout with the operator-only
+  `POST /api/v1/servers/agents/update-all` API — there is no UI control for it
+  yet. A release that fails to activate rolls back and its version is backed off
+  (see `deploy/README.md`).
 - **Rollback:** `gotham update rollback` restores the previous binary on disk.
   The running process keeps the current binary until it is restarted, so run
   `systemctl restart gotham` afterwards to actually execute the restored

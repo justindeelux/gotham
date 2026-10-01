@@ -220,7 +220,9 @@ onUnmounted(() => {
 
         <div class="section-title">
           <h2>Server health</h2>
-          <NText depth="3" class="mono meta">heartbeat every 10s over gRPC mTLS</NText>
+          <NText depth="3" class="mono meta">
+            heartbeat every 10s over gRPC server-authenticated TLS
+          </NText>
         </div>
         <NEmpty
           v-if="!serversStore.loading && totalCount === 0"

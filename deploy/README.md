@@ -205,6 +205,41 @@ TLS; agents installed before that go offline until they are reinstalled with
   rollback is correct. Operators who prefer the unit to give up sooner (or later)
   can tune `StartLimitIntervalSec`/`StartLimitBurst`/`RestartSec` in the unit;
   the wrapper does not depend on the exact values.
+- **Beta channel binding (M4, MED — fix before any beta user).** A
+  beta-configured node rejects a *stable* manifest because the signed manifest
+  carries `channel=stable` while the checker labels the offer `beta`
+  (`internal/updates/checker.go`, `internal/updates/agents.go`,
+  `updatecore/applier.go`). It fails closed (no update until a newer beta), so it
+  is a beta-channel availability bug, not an integrity one.
+- **The agent channel is not mutual yet (LOW-4).** The gRPC listener uses
+  `VerifyClientCertIfGiven`, so any peer that can reach the port can ask for
+  (signed) update offers and force cached release lookups. The agent verifies the
+  control plane; the control plane does not yet verify a client certificate.
+  Making the channel mutual waits on the registration bootstrap acquiring a
+  client credential.
+- **Single embedded release key: no rotation or revocation (R1, MED).** If
+  `GOTHAM_UPDATE_SIGNING_KEY` is lost or compromised, every installed node must
+  be reinstalled to trust a new key (the trust anchor is compiled into the
+  binary and pinned in the installers). Upgrade path: embed a current + next key
+  set so a rotation can ship through a release signed by the old key; keep the
+  offline backup and write a compromise runbook.
+- **`GOTHAM_UPDATE_CURRENT` pins the reported version (INFO).** The server
+  honours it and `/etc/gotham/gotham.env` is root-owned, so it is not a
+  downgrade path, but an operator who sets it by mistake pins the "current"
+  version and can hide real releases. It exists for `deploy/verify-systemd.sh`
+  and tests; do not set it in production.
+- **`release-verify.sh` leaves its temp directory on a signal (I5, INFO).** The
+  shared verifier has no `trap` (the caller may own `EXIT`), so a SIGINT/SIGTERM
+  mid-download can leave `/tmp/gotham-verify.XXXXXX` behind. It holds only public
+  release material. Upgrade path: add `_GOTHAM_VERIFY_WORK` to the installers'
+  `EXIT` cleanup.
+- **M9 real-release evidence is partial.** A signed `v0.1.0` release (14 assets)
+  was installed on a clean Ubuntu 22.04 container and re-installed; the signed
+  manifests and artifact digests verify with the pinned key, and the two-agent
+  systemd update path is proven on the test box. Still unproven: applying a
+  *newer* GitHub-hosted release through `gotham update` (control plane and agent
+  rollout) and exercising the unattended `AUTO_UPDATE` loop. See
+  `docs/plan/10-self-update-release.md` and `docs/TODO.md` (Phase 9 residuals).
 - **The release runner is shared with PR CI (HIGH, carried).** `release.yml` runs
   on the same self-hosted runner as `ci.yml`/`e2e.yml`/`ui-e2e.yml`, which
   execute `pull_request` code. The `release` environment's required reviewer
@@ -285,10 +320,12 @@ in-memory backoff; a non-root `gotham-agent update reset` still works through
 that marker (it just cannot remove the root-owned status file). The command
 resolves paths from the process environment, then `/etc/gotham/agent.env` (the
 systemd `EnvironmentFile`; `GOTHAM_AGENT_ENV_FILE` overrides the path), then the
-built-in defaults, so a service with custom paths is reset correctly. The retry
-marker is written with a temp-file + rename and the mode is set on the file
-descriptor, so a symlink or FIFO planted by the service user in its own directory
-cannot redirect or block a root run.
+built-in defaults. It does **not** see `Environment=` values that exist only on
+the unit: put custom paths in `/etc/gotham/agent.env` (or export them) so a
+service with custom paths is reset correctly. The retry marker is written with a
+temp-file + rename and the mode is set on the file descriptor, so a symlink or
+FIFO planted by the service user in its own directory cannot redirect or block a
+root run.
 
 Keep `GOTHAM_AGENT_UPDATE_RETRY`/`_BACKOFF` **directly in the agent's
 StateDirectory** (`/var/lib/gotham-agent`). A nested path (for example

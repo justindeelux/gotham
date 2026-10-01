@@ -61,10 +61,18 @@ const emit = defineEmits<{
 const serversStore = useServersStore();
 const message = useMessage();
 
-// The install one-liner mirrors deploy/install-agent.sh's release base URL.
-const releaseBaseUrl =
-  "https://github.com/justindeelux/gotham/releases/latest/download";
-const installCommand = `curl -fsSL ${releaseBaseUrl}/install-agent.sh | sudo sh`;
+// The agent installer is not a release asset and needs its sibling files
+// (deploy/release-verify.sh, gotham-agent-updater.conf, ...); it also fails
+// closed without the control-plane CA, and the agent dials 127.0.0.1 unless
+// GOTHAM_AGENT_CP_ADDR is set. This is the same complete checkout block the
+// Servers page and docs/install.md use — keep it a single copy-pasteable
+// command (the copy button copies this exact string).
+const installCommand = [
+  "scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .",
+  "git clone --depth 1 https://github.com/justindeelux/gotham /tmp/gotham",
+  "sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=<node> \\",
+  "  /tmp/gotham/deploy/install-agent.sh --ca ./ca.crt",
+].join("\n");
 
 const stepNames = ["Connect", "Validate", "Install", "Finish"];
 
@@ -347,7 +355,7 @@ async function handleValidate(): Promise<void> {
   }
 }
 
-/** copyInstallCommand copies the agent one-liner to the clipboard. */
+/** copyInstallCommand copies the agent install block to the clipboard. */
 async function copyInstallCommand(): Promise<void> {
   try {
     await navigator.clipboard.writeText(installCommand);
@@ -605,12 +613,22 @@ function resetWizard(): void {
             </NAlert>
 
             <NText depth="2">
-              SSH into the node and run the installer. It downloads the agent,
-              installs the systemd unit, and registers with the control plane.
+              SSH into the node and run the block below. It copies the control
+              plane's CA certificate, clones the installer's sibling files, and
+              registers the node. Replace the CP host and node placeholders; the
+              installer fails closed without --ca, and the agent dials the
+              loopback address unless GOTHAM_AGENT_CP_ADDR points at the control
+              plane.
             </NText>
 
-            <NSpace align="center" :size="8">
-              <NInput :value="installCommand" readonly class="grow" />
+            <NSpace align="start" :size="8">
+              <NInput
+                :value="installCommand"
+                type="textarea"
+                readonly
+                :autosize="{ minRows: 4, maxRows: 4 }"
+                class="grow install-command"
+              />
               <NButton @click="copyInstallCommand">Copy</NButton>
             </NSpace>
 
@@ -948,6 +966,13 @@ function resetWizard(): void {
 .grow {
   flex: 1;
   min-width: 0;
+}
+
+.install-command :deep(.n-input__textarea-el),
+.install-command :deep(textarea) {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
 }
 
 .wizard-modal :deep(.n-card__content) {

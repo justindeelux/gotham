@@ -20,7 +20,7 @@ const valueProps: ValueProp[] = [
   },
   {
     icon: "shield",
-    title: "Control channel over gRPC mTLS to the agent",
+    title: "Control channel over server-authenticated gRPC TLS",
     body: "The agent drives the Docker Engine on each node; the control plane and the agent speak versioned protobuf over :9442, with certificates from the internal CA.",
   },
   {

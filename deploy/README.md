@@ -132,9 +132,13 @@ TLS; agents installed before that go offline until they are reinstalled with
   monitor rolls back.
 - If the status directory is not an existing, non-symlink, root-owned directory
   the wrapper refuses to record there and falls back to the checked lock open
-  (the residual above); the update then records no outcome and stays `staged`
-  until the control plane's monitor or the next startup resolves it — fail
-  closed, never a root write into a service-writable directory.
+  (the residual above). With a usable directory the lock failure above records
+  `wrapper_failed` and leaves the marker `staged`; with an unusable one, if the
+  fallback open fails the wrapper exits nonzero with no status recorded and
+  again leaves a regular `staged` marker until the monitor or the next startup
+  resolves it (fail closed), while if it succeeds the update proceeds, removes
+  the pending marker and exits 0 with no root-owned status record. Either way
+  the wrapper never performs a root write into a service-writable directory.
 - If the host crashes or reboots during the health window, the next startup sees
   a `staged` marker and relaunches the wrapper once (marker rewritten to
   `resuming`, so it never loops); the new binary is then health-checked or
@@ -232,7 +236,10 @@ TLS; agents installed before that go offline until they are reinstalled with
   and only that name is opened read-only. The pinned name cannot be swapped out
   of a root-owned directory, and locking the hardlink locks the same inode the
   control plane locks. A post-`flock` check refuses when the lock path was
-  replaced while root waited. Residual: when no pin can be made (missing status
+  replaced while root waited, and each run first sweeps pins whose embedded PID
+  is no longer alive (or is its own PID, i.e. PID reuse), so a pin left by a
+  hard-killed wrapper cannot silently degrade a later run to the fallback.
+  Residual: when no pin can be made (missing status
   directory, hardlinks unsupported), the wrapper falls back to the previous
   checked read-only open, where a FIFO swapped in between the check and the open
   can still block root; the worst case stays a self-DoS by an

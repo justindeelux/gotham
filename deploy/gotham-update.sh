@@ -81,7 +81,8 @@ PENDING="${GOTHAM_PENDING:-/var/lib/gotham/update.pending}"
 LOCK="${GOTHAM_LOCK:-/var/lib/gotham/update.lock}"
 GRACE="${GOTHAM_GRACE:-1}"
 # LOCK_PIN is the hardlink that pins the lock inode in the root-owned status
-# directory for the duration of a run (acquire_lock); the exit trap removes it.
+# directory for the duration of a run (acquire_lock); the trap removes it, and
+# stale pins from hard-killed runs are swept when the next run starts.
 LOCK_PIN=""
 
 log() {
@@ -108,6 +109,10 @@ cleanup() {
     fi
 }
 trap 'cleanup' EXIT
+# Route catchable termination signals through the EXIT trap too, so the pin is
+# removed on TERM/INT/HUP and not only on normal exits; SIGKILL (and OOM) cannot
+# be trapped, which is what the start-time sweep in acquire_lock covers.
+trap 'exit 1' HUP INT TERM
 
 # validate_conf refuses anything but the fixed, root-owned values. It returns
 # nonzero on invalid config so the caller can clean up before exiting.
@@ -186,6 +191,26 @@ finish() {
     exit "$3"
 }
 
+# sweep_stale_lock_pins removes pins left behind by wrappers that died without
+# running their trap (SIGKILL, OOM). A pin's name embeds the PID of the wrapper
+# that created it, so a pin whose PID is no longer alive — or whose PID is this
+# process (PID reuse: a live wrapper cannot share our PID) — cannot belong to a
+# live run. Only called for a directory that passed status_dir_usable, so root
+# only ever unlinks a root-owned entry in a root-owned directory.
+sweep_stale_lock_pins() {
+    for pin in "${STATUS_DIR}/.update-lock."*; do
+        [ -f "${pin}" ] && [ ! -L "${pin}" ] || continue
+        pid="${pin##*.update-lock.}"
+        case "${pid}" in
+            '' | *[!0-9]*) continue ;;
+        esac
+        if [ "${pid}" -eq "$$" ] || ! kill -0 "${pid}" 2>/dev/null; then
+            rm -f "${pin}" 2>/dev/null || true
+        fi
+    done
+    return 0
+}
+
 # acquire_lock serializes with the control plane's Apply/Rollback. The lock
 # lives in the service StateDirectory, so the service user owns every path
 # component: a FIFO swapped in between the checks and the open would block
@@ -206,6 +231,7 @@ acquire_lock() {
     fi
     LOCK_PIN=""
     if status_dir_usable; then
+        sweep_stale_lock_pins
         pin="${STATUS_DIR}/.update-lock.$$"
         if ln "${LOCK}" "${pin}" 2>/dev/null; then
             # ln may dereference a symlink; require the pinned name itself to be

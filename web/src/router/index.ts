@@ -16,6 +16,11 @@ const routes: RouteRecordRaw[] = [
     path: "",
     component: () => import("../layouts/AuthLayout.vue"),
     children: [
+      // The bare root must land on the auth form. Without an index record this
+      // parent matches "/" and its empty router-view renders no form at all
+      // (the catch-all never fires), so `http://<host>:8000/` showed a blank
+      // right pane with no way to sign in or register.
+      { path: "", redirect: { name: "login" } },
       {
         path: "/login",
         name: "login",

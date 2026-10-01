@@ -187,9 +187,14 @@ function containerLabel(server: Server): string {
   return `${server.container_count} container${server.container_count === 1 ? "" : "s"}`;
 }
 
-/** nodeMeta is the head sub-line: address, OS and architecture. */
+/**
+ * nodeMeta is the head sub-line: address, OS and architecture. A non-default
+ * SSH port is shown with the address (the table always did), so two nodes on
+ * the same IP stay distinguishable.
+ */
 function nodeMeta(server: Server): string {
-  return [server.ip, server.os ?? "—", server.arch ?? "—"].join(" \u00b7 ");
+  const endpoint = server.port && server.port !== 22 ? `${server.ip}:${server.port}` : server.ip;
+  return [endpoint, server.os ?? "—", server.arch ?? "—"].join(" \u00b7 ");
 }
 
 

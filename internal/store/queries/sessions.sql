@@ -1,10 +1,10 @@
 -- name: CreateSession :one
-INSERT INTO sessions (user_id, refresh_hash, expires_at)
-VALUES ($1, $2, $3)
-RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at;
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
+VALUES ($1, $2, $3, $4)
+RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version;
 
 -- name: GetSessionByRefreshHash :one
-SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at
+SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version
 FROM sessions
 WHERE refresh_hash = $1;
 

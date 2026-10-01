@@ -84,9 +84,13 @@ func (s *Store) UpdateUserPasswordHash(ctx context.Context, email, passwordHash 
 	})
 }
 
-// ResetUserPassword replaces the account's password hash and revokes its
-// refresh sessions in one transaction, so a partial failure can never leave
-// live sessions behind a changed password (admin reset-password, P-A3).
+// ResetUserPassword replaces the account's password hash, revokes its refresh
+// sessions, and bumps its credential version in one transaction, so a partial
+// failure can never leave a live session behind a changed password (admin
+// reset-password, P-A3). The version bump (P-A5) is what ends a chain whose
+// refresh or login is still in flight while this commits: a replacement
+// session minted from the old credential carries the pre-bump version and is
+// refused by Refresh.
 func (s *Store) ResetUserPassword(ctx context.Context, userID pgtype.UUID, email, passwordHash string) error {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -102,6 +106,9 @@ func (s *Store) ResetUserPassword(ctx context.Context, userID pgtype.UUID, email
 		Lower:        email,
 		PasswordHash: &passwordHash,
 	}); err != nil {
+		return err
+	}
+	if err := queries.BumpCredentialVersion(ctx, userID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

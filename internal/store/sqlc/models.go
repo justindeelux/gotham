@@ -370,12 +370,13 @@ type ServiceDeploy struct {
 }
 
 type Session struct {
-	ID          pgtype.UUID        `json:"id"`
-	UserID      pgtype.UUID        `json:"user_id"`
-	RefreshHash string             `json:"refresh_hash"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
-	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ID                pgtype.UUID        `json:"id"`
+	UserID            pgtype.UUID        `json:"user_id"`
+	RefreshHash       string             `json:"refresh_hash"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt         pgtype.Timestamptz `json:"revoked_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	CredentialVersion int32              `json:"credential_version"`
 }
 
 type Storage struct {
@@ -403,12 +404,13 @@ type TeamMember struct {
 }
 
 type User struct {
-	ID           pgtype.UUID        `json:"id"`
-	Email        string             `json:"email"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	PasswordHash *string            `json:"password_hash"`
-	Avatar       *string            `json:"avatar"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID                pgtype.UUID        `json:"id"`
+	Email             string             `json:"email"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	PasswordHash      *string            `json:"password_hash"`
+	Avatar            *string            `json:"avatar"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	CredentialVersion int32              `json:"credential_version"`
 }
 
 type WebhookEvent struct {

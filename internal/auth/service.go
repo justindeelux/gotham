@@ -58,6 +58,10 @@ type Service struct {
 	// Test/dev only (GOTHAM_AUTH_ALLOW_REGISTRATION): production relies on the
 	// closed default, where members join through admin invites (P-A2).
 	AllowOpenRegistration bool
+	// afterPasswordVerified is a test seam: Login runs it after verifying the
+	// password and before re-reading the credential version, so a test can
+	// commit a password reset into that window deterministically.
+	afterPasswordVerified func()
 }
 
 // New builds a Service. The clock is injectable so tests can exercise expiry
@@ -206,12 +210,33 @@ func (s *Service) Login(ctx context.Context, email, password string) (*AuthResul
 	if !ok {
 		return nil, ErrInvalidCredentials
 	}
+	if s.afterPasswordVerified != nil {
+		s.afterPasswordVerified()
+	}
 
-	return s.issue(ctx, user)
+	// A password reset may have committed while the (deliberately slow) hash
+	// verification ran: re-read the credential version and refuse when it
+	// moved, so a login that verified the old password cannot mint a session
+	// under the new credential (P-A5). Issue from the fresh read.
+	current, err := s.store.GetUserByID(ctx, user.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrInvalidCredentials
+		}
+		return nil, fmt.Errorf("auth: re-read user: %w", err)
+	}
+	if current.CredentialVersion != user.CredentialVersion {
+		return nil, ErrInvalidCredentials
+	}
+
+	return s.issue(ctx, current)
 }
 
 // Refresh rotates a refresh token: the presented session is revoked and a new
 // session plus token pair is issued. Any unusable token returns ErrUnauthorized.
+// A session whose credential version is older than the account's current
+// version (a password reset committed after it was minted) is refused as well,
+// so the old chain cannot mint a replacement under the new credential.
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult, error) {
 	if refreshToken == "" {
 		return nil, ErrUnauthorized
@@ -246,6 +271,15 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 			return nil, ErrUnauthorized
 		}
 		return nil, fmt.Errorf("auth: get user: %w", err)
+	}
+	// A password reset bumps the account's credential version and deletes its
+	// sessions in one transaction. When the reset commits between the session
+	// read above and this user read, the delete finds the session already
+	// revoked (or gone), so only the version comparison stops the old chain
+	// from minting a replacement under the new credential (P-A5). The session
+	// was revoked above, so it cannot be presented again.
+	if session.CredentialVersion < user.CredentialVersion {
+		return nil, ErrUnauthorized
 	}
 
 	return s.issue(ctx, user)
@@ -286,7 +320,9 @@ func (s *Service) IssueSession(ctx context.Context, user sqlc.User) (*AuthResult
 	return s.issue(ctx, user)
 }
 
-// issue creates a refresh session and signs an access token for user.
+// issue creates a refresh session and signs an access token for user. The
+// session records the account's credential version, so a later password reset
+// invalidates it.
 func (s *Service) issue(ctx context.Context, user sqlc.User) (*AuthResult, error) {
 	refreshToken, refreshHash, err := newRefreshToken()
 	if err != nil {
@@ -294,9 +330,10 @@ func (s *Service) issue(ctx context.Context, user sqlc.User) (*AuthResult, error
 	}
 
 	_, err = s.store.CreateSession(ctx, sqlc.CreateSessionParams{
-		UserID:      user.ID,
-		RefreshHash: refreshHash,
-		ExpiresAt:   pgTimestamp(s.now().Add(refreshTokenTTL)),
+		UserID:            user.ID,
+		RefreshHash:       refreshHash,
+		ExpiresAt:         pgTimestamp(s.now().Add(refreshTokenTTL)),
+		CredentialVersion: user.CredentialVersion,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("auth: create session: %w", err)

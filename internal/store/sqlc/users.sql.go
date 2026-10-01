@@ -11,6 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bumpCredentialVersion = `-- name: BumpCredentialVersion :exec
+UPDATE users
+SET credential_version = credential_version + 1
+WHERE id = $1
+`
+
+// BumpCredentialVersion advances the account's credential version. It runs
+// inside the password-reset transaction: every session minted before the bump
+// carries the older version and Refresh refuses it.
+func (q *Queries) BumpCredentialVersion(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, bumpCredentialVersion, id)
+	return err
+}
+
 const countUsers = `-- name: CountUsers :one
 SELECT count(*) FROM users
 `
@@ -26,7 +40,7 @@ const createFirstUser = `-- name: CreateFirstUser :one
 INSERT INTO users (email, password_hash)
 SELECT $1, $2
 WHERE NOT EXISTS (SELECT 1 FROM users)
-RETURNING id, email, created_at, password_hash, avatar, updated_at
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version
 `
 
 type CreateFirstUserParams struct {
@@ -48,6 +62,7 @@ func (q *Queries) CreateFirstUser(ctx context.Context, arg CreateFirstUserParams
 		&i.PasswordHash,
 		&i.Avatar,
 		&i.UpdatedAt,
+		&i.CredentialVersion,
 	)
 	return i, err
 }
@@ -55,7 +70,7 @@ func (q *Queries) CreateFirstUser(ctx context.Context, arg CreateFirstUserParams
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash)
 VALUES ($1, $2)
-RETURNING id, email, created_at, password_hash, avatar, updated_at
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version
 `
 
 type CreateUserParams struct {
@@ -73,12 +88,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.PasswordHash,
 		&i.Avatar,
 		&i.UpdatedAt,
+		&i.CredentialVersion,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, created_at, password_hash, avatar, updated_at
+SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version
 FROM users
 WHERE lower(email) = lower($1)
 `
@@ -93,12 +109,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error
 		&i.PasswordHash,
 		&i.Avatar,
 		&i.UpdatedAt,
+		&i.CredentialVersion,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, created_at, password_hash, avatar, updated_at
+SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version
 FROM users
 WHERE id = $1
 `
@@ -113,6 +130,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.PasswordHash,
 		&i.Avatar,
 		&i.UpdatedAt,
+		&i.CredentialVersion,
 	)
 	return i, err
 }

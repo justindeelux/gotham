@@ -383,15 +383,26 @@ test.describe("notification channels", () => {
  * samples, so the charts must claim an empty window (never a fabricated
  * series). Second half mocks a payload with a real gap (the backend omits
  * empty buckets) and proves the chart breaks the line instead of bridging it,
- * and that switching the step issues a new range request.
+ * and that switching the step issues a new range request. It then exercises
+ * auto-refresh: a chosen cadence refetches, a hidden document and a
+ * mid-session FEATURE_METRICS 404 both stop the polling, and a held response
+ * proves the next tick does not start a second in-flight request.
  */
 test.describe("server metrics", () => {
-  test("renders the real empty window, then samples with gaps, a step switch and auto-refresh", async ({
+  // The single-flight/404 phase provokes the FEATURE_METRICS 404 on purpose;
+  // the browser logs it, the app must hide the surface instead.
+  test.use({
+    expectedConsoleErrors: [
+      "Failed to load resource: the server responded with a status of 404",
+    ],
+  });
+
+  test("renders the real empty window, then samples with gaps, a step switch, auto-refresh and single-flight", async ({
     page,
     request,
     guardrails,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
 
     const node = await seedServer(request, `ui-e2e-metrics-node-${uniqueSuffix()}`);
     const requestedSteps: string[] = [];
@@ -480,9 +491,61 @@ test.describe("server metrics", () => {
     await page.waitForTimeout(16_000);
     expect(requestedSteps.length).toBe(onHide);
 
+    // ── single-flight and a mid-session FEATURE_METRICS 404 ────────────────
+    // Fake timers from here on: the held request must not reach the real 15s
+    // axios timeout, and the cadence can be advanced instantly.
+    await page.clock.install();
+    await page.evaluate(() => {
+      Object.defineProperty(document, "hidden", {
+        configurable: true,
+        get: () => false,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await page.unroute("**/api/v1/servers/*/metrics*");
+    let heldRequests = 0;
+    const heldRoutes: Route[] = [];
+    await page.route("**/api/v1/servers/*/metrics*", (route) => {
+      heldRequests += 1;
+      heldRoutes.push(route);
+      // Deliberately left in flight: the next tick must skip, not overlap.
+    });
+
+    // First tick: exactly one request, held in flight.
+    await page.clock.fastForward(15_000);
+    await expect.poll(() => heldRequests, { timeout: 10_000 }).toBe(1);
+    // Second tick: must be skipped while the first fetch is still in flight.
+    await page.clock.fastForward(15_000);
+    await page.waitForTimeout(500);
+    // Soft so a single-flight failure still lets the 404 assertion below report.
+    expect.soft(heldRequests, "a tick must not overlap an in-flight refresh").toBe(1);
+
+    // ── a mid-session FEATURE_METRICS 404 stops the polling for good ───────
+    for (const route of heldRoutes) {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "not found" }),
+      });
+    }
+    await expect(
+      page.getByText("Server metrics are not enabled on this control plane"),
+    ).toBeVisible();
+    const after404 = requestedSteps.length;
+    await page.clock.fastForward(16_000);
+    await page.waitForTimeout(500);
+    expect.soft(
+      requestedSteps.length,
+      "a disabled metrics feature must stop auto-refresh",
+    ).toBe(after404);
+
+    // The 404 was provoked on purpose; no other request may have failed.
+    const unexpected = guardrails.apiFailures.filter(
+      (line) => !line.includes(`/servers/${node.id}/metrics`),
+    );
     expect(
-      guardrails.apiFailures,
-      `unexpected failed API requests:\n${guardrails.apiFailures.join("\n")}`,
+      unexpected,
+      `unexpected failed API requests:\n${unexpected.join("\n")}`,
     ).toEqual([]);
   });
 });

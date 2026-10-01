@@ -110,6 +110,13 @@ const metricRefreshMs = computed<number>(() => {
 let metricsRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
+ * True while any metrics fetch (manual or quiet) is in flight. A tick never
+ * starts a second fetch: overlapping quiet requests are bounded by this flag,
+ * not by the shared axios timeout.
+ */
+let metricsRequestInFlight = false;
+
+/**
  * The step the rendered points belong to. It is only written from a
  * successful response, so the chart's gap width and range label always
  * describe the data on screen — never a range the operator merely selected.
@@ -225,7 +232,9 @@ function isMetricStep(value: string): value is MetricStep {
  * or another node can never overwrite the current one. A feature-flag 404
  * hides the charts instead of rendering an error; any other failure surfaces
  * an explicit error with a retry. A quiet call (auto-refresh) never toggles
- * the spinner: a background tick must not flash the loading state.
+ * the spinner: a background tick must not flash the loading state. Either
+ * kind of fetch keeps the in-flight flag raised, so a tick can never overlap
+ * one already running.
  */
 async function loadMetrics(options: { quiet?: boolean } = {}): Promise<void> {
   const requestServerId = serverId.value;
@@ -238,6 +247,7 @@ async function loadMetrics(options: { quiet?: boolean } = {}): Promise<void> {
   const isCurrent = (): boolean =>
     token === metricsRequestToken && serverId.value === requestServerId;
 
+  metricsRequestInFlight = true;
   if (!quiet) {
     metricsLoading.value = true;
   }
@@ -264,14 +274,20 @@ async function loadMetrics(options: { quiet?: boolean } = {}): Promise<void> {
       metricPoints.value = [];
       metricsLoaded.value = false;
       metricsAvailable.value = false;
+      // The control disappears with the charts, so the operator cannot turn
+      // the cadence off: stop polling here instead of leaving silent 404s.
+      stopMetricRefresh();
       return;
     }
     metricsError.value = describeMetricsError(error);
   } finally {
-    // Only the newest request owns the spinner; an obsolete one must not clear
-    // a loading state the current request still needs.
-    if (isCurrent() && !quiet) {
-      metricsLoading.value = false;
+    // Only the newest request releases the in-flight flag and the spinner; an
+    // obsolete one must not clear state the current request still holds.
+    if (isCurrent()) {
+      metricsRequestInFlight = false;
+      if (!quiet) {
+        metricsLoading.value = false;
+      }
     }
   }
 }
@@ -291,21 +307,23 @@ function stopMetricRefresh(): void {
 
 /**
  * syncMetricRefresh starts or stops the interval for the current choice.
- * Polling only runs while the metrics tab is open and the document is
- * visible, so a backgrounded tab stops querying the control plane; each tick
- * skips while a manual load is in flight and refreshes quietly.
+ * Polling only runs while the metrics feature is available, the metrics tab
+ * is open and the document is visible, so a disabled feature or a
+ * backgrounded tab stops querying the control plane; each tick skips while a
+ * fetch is already in flight and refreshes quietly.
  */
 function syncMetricRefresh(): void {
   stopMetricRefresh();
   if (
     metricRefreshMs.value === 0 ||
+    !metricsAvailable.value ||
     activeTab.value !== "metrics" ||
     document.hidden
   ) {
     return;
   }
   metricsRefreshTimer = setInterval(() => {
-    if (!metricsLoading.value) {
+    if (!metricsRequestInFlight) {
       void loadMetrics({ quiet: true });
     }
   }, metricRefreshMs.value);
@@ -445,10 +463,12 @@ watch(serverId, () => {
   activeTab.value = "overview";
   stopMetricRefresh();
   // Invalidate an in-flight read for the previous node: its guarded
-  // completion can no longer clear the spinner, so release it here too, or
-  // the metrics tab's lazy load would stay blocked until a manual refresh.
+  // completion can no longer clear the spinner or the in-flight flag, so
+  // release both here too, or the metrics tab's lazy load would stay blocked
+  // until a manual refresh.
   metricsRequestToken += 1;
   metricsLoading.value = false;
+  metricsRequestInFlight = false;
   metricStep.value = "1m";
   metricSeriesStep.value = "1m";
   metricPoints.value = [];

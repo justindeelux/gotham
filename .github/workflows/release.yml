@@ -47,7 +47,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: "1.22.x"
+          go-version: "1.27.x"
           cache: true
 
       - name: Require release secrets
@@ -96,10 +96,8 @@ jobs:
           echo "keypair consistent with the embedded and published public key"
 
       - name: Install GoReleaser
-        # Version-pinned on purpose. GoReleaser v2.18 needs a newer Go than the
-        # 1.22.x CI toolchain, so the `go install` below downloads a toolchain
-        # through GOTOOLCHAIN=auto (a supply-chain download on the shared
-        # runner); pin/verify the toolchain if that becomes a concern.
+        # Version-pinned on purpose. GoReleaser v2.18 targets go 1.27.0, so the
+        # 1.27.x CI toolchain builds it directly (no GOTOOLCHAIN=auto download).
         run: |
           go install github.com/goreleaser/goreleaser/v2@v2.18.0
           echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"

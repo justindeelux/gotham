@@ -6,7 +6,7 @@ Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node a
 
 | Layer | Technology |
 |---|---|
-| Backend / Agent | Go 1.22+, single binary, `linux/amd64` + `linux/arm64` |
+| Backend / Agent | Go 1.27+, single binary, `linux/amd64` + `linux/arm64` |
 | HTTP framework | Chi router |
 | Data access | sqlc + pgx |
 | Database | PostgreSQL 16 |

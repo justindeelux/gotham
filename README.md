@@ -22,7 +22,7 @@ manifest and the artifact digest before installing anything.
 
 | Layer | Technology | Notes |
 |---|---|---|
-| Backend | Go 1.22+ | Single binary, cross-compiled for `linux/amd64` + `linux/arm64` |
+| Backend | Go 1.27+ | Single binary, cross-compiled for `linux/amd64` + `linux/arm64` |
 | HTTP framework | Chi router | stdlib `net/http` compatible, easy middleware composition |
 | Data access | sqlc + pgx | Type-safe generated queries, no reflection |
 | Database | PostgreSQL | Control-plane state (single node or managed cluster) |

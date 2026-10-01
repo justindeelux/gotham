@@ -240,15 +240,13 @@ TLS; agents installed before that go offline until they are reinstalled with
   *newer* GitHub-hosted release through `gotham update` (control plane and agent
   rollout) and exercising the unattended `AUTO_UPDATE` loop. See
   `docs/plan/10-self-update-release.md` and `docs/TODO.md` (Phase 9 residuals).
-- **The release runner is shared with PR CI (HIGH, carried).** `release.yml` runs
-  on the same self-hosted runner as `ci.yml`/`e2e.yml`/`ui-e2e.yml`, which
-  execute `pull_request` code. The `release` environment's required reviewer
-  gates *who can trigger the release job*, not host compromise: a persistent
-  runner reached by untrusted code can tamper with the signed bytes or exfiltrate
-  `GOTHAM_UPDATE_SIGNING_KEY`. If any untrusted run ever executes on that runner,
-  rotate the signing key and re-release; move the release job to an
-  isolated/ephemeral runner before the next public release. Actions are
-  SHA-pinned and the sqlc download is checksum-verified to narrow this surface.
+- **Release trigger custody (INFO).** The release job and PR CI now run on
+  GitHub-hosted runners and the signing key stays in the approval-gated
+  `release` environment, so untrusted `pull_request` code no longer shares a host
+  with `GOTHAM_UPDATE_SIGNING_KEY`. The reviewer gate still governs *who can
+  build a signed release*: keep the `v*` tag ruleset and the required reviewers
+  limited to project owners. Actions stay SHA-pinned and the sqlc download stays
+  checksum-verified.
 
 ## Node-agent self-update layout
 

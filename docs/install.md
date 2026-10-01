@@ -211,7 +211,7 @@ Reinstalling a specific version is a normal install with `GOTHAM_VERSION=vX.Y.Z`
 ## Release and signing flow
 
 Releases are built and published by `.github/workflows/release.yml` on a `v*`
-tag, on the self-hosted runner. The release job targets the GitHub **`release`
+tag, on a GitHub-hosted runner. The release job targets the GitHub **`release`
 environment** (with a required reviewer), so it reads the environment secrets
 and waits for the owner's approval before it can use them:
 
@@ -241,16 +241,15 @@ The asset naming is a contract with the update code — see
 `internal/updates/checker.go` (control plane), `internal/updates/agents.go`
 (agent) and `updatecore.ManifestName` / `ManifestNameWithPrefix`.
 
-### Residual: the release runner is shared with PR CI
+### Release runner
 
-The `release` environment's required reviewer gates **who can trigger the
-release job**, not what a compromised host can do: the self-hosted runner is the
-same host that runs `pull_request` CI (`ci.yml`, `e2e.yml`, `ui-e2e.yml`), which
-executes untrusted code. Environment secret isolation and SHA-pinned actions
-raise the bar, but if any untrusted workflow run ever executes on that runner,
-treat `GOTHAM_UPDATE_SIGNING_KEY` as compromised: **rotate the key and
-re-release**, and plan to move the release job to an isolated/ephemeral runner
-before the next public release. See `deploy/README.md` (Known residuals).
+The release job and every PR workflow (`ci.yml`, `e2e.yml`, `ui-e2e.yml`) run on
+GitHub-hosted runners, so untrusted `pull_request` code never executes on the
+machine that builds and signs a release. The signing key stays in the `release`
+environment, and a `v*` tag build only reads it after the required reviewer
+approves the run. The reviewer gate therefore governs *who can produce a signed
+release*: keep the `v*` tag ruleset and the required reviewers limited to project
+owners.
 
 ### Keypair
 

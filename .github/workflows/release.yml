@@ -32,9 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     # The signing secret lives in the `release` environment, which has a
     # required reviewer, so the job reads environment secrets and needs the
-    # owner's approval before it can run. The runner is still shared with PR CI,
-    # so approval gates *who can trigger the job*, not host compromise; see
-    # deploy/README.md (Known residuals).
+    # owner's approval before it can run. Release and PR CI both run on
+    # GitHub-hosted runners, so untrusted pull_request code never shares a host
+    # with the signing key; the gate governs who can build a signed release.
     environment: release
     permissions:
       contents: write

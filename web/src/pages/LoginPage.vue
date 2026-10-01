@@ -2,7 +2,6 @@
 import {
   NAlert,
   NButton,
-  NCard,
   NForm,
   NFormItem,
   NInput,
@@ -89,7 +88,7 @@ onMounted(() => {
 
 <template>
   <div class="auth-page">
-    <NCard class="auth-card">
+    <div class="auth-card">
       <NSpace vertical :size="16">
         <div
           v-if="authStore.registrationOpen"
@@ -198,11 +197,18 @@ onMounted(() => {
           via the <span class="mono">OAuthProvider</span> interface.
         </p>
       </NSpace>
-    </NCard>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* Ported from docs/design/assets/gotham-views.css: the design's card is a bare
+   width limiter — no border, no background. The only filled element is the
+   tab switch below. */
+.auth-card {
+  width: min(420px, 100%);
+}
+
 /* Tab switch, divider, and footnote ported from docs/design/login.html +
    docs/design/assets/gotham-views.css; tokens come from styles/tokens.css. */
 .auth-title {

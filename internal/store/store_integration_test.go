@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
 // defaultTestDSN points at the dev database from deploy/compose.dev.yml. Override
@@ -143,5 +145,53 @@ func TestStoreCreateFirstUserSerializes(t *testing.T) {
 	}
 	if wins != 1 {
 		t.Fatalf("concurrent bootstraps succeeded %d times, want exactly 1", wins)
+	}
+}
+
+// TestStoreRevokeSessionIfLive proves the rotation guard: a second revoke of
+// the same refresh hash reports false, so a refresh racing a password reset
+// cannot mint a replacement session.
+func TestStoreRevokeSessionIfLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := store.Migrate(ctx, testDSN(), store.MigrateUp); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.Open(ctx, testDSN())
+	if err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("open store: %v", err)
+		}
+		t.Skipf("no database: %v", err)
+	}
+	defer pool.Close()
+
+	st := store.New(pool)
+	user, err := st.CreateUser(ctx, fmt.Sprintf("revoke-live-%d@example.com", time.Now().UnixNano()), nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	t.Cleanup(func() { _ = st.DeleteUserAndPersonalTeam(context.WithoutCancel(ctx), user.ID) })
+
+	session, err := st.CreateSession(ctx, sqlc.CreateSessionParams{
+		UserID:      user.ID,
+		RefreshHash: fmt.Sprintf("hash-%d", time.Now().UnixNano()),
+		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	live, err := st.RevokeSessionIfLive(ctx, session.RefreshHash)
+	if err != nil || !live {
+		t.Fatalf("first revoke = (%v, %v), want (true, nil)", live, err)
+	}
+	live, err = st.RevokeSessionIfLive(ctx, session.RefreshHash)
+	if err != nil {
+		t.Fatalf("second revoke error: %v", err)
+	}
+	if live {
+		t.Fatal("second revoke reported a live session; the rotation race is open")
 	}
 }

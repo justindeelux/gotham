@@ -19,3 +19,14 @@ WHERE refresh_hash = $1
 -- change so the old refresh chain dies with the credential.
 DELETE FROM sessions
 WHERE user_id = $1;
+
+-- name: RevokeSessionIfLive :one
+-- RevokeSessionIfLive revokes a session only while it is still live and
+-- returns its id. Zero rows means the session was already revoked or deleted
+-- (for example by a password reset racing this rotation), so the caller must
+-- refuse to issue a replacement.
+UPDATE sessions
+SET revoked_at = now()
+WHERE refresh_hash = $1
+  AND revoked_at IS NULL
+RETURNING id;

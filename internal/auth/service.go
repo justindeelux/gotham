@@ -150,20 +150,16 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 
 	if consumeInvite {
 		if err := invites.AcceptInvite(ctx, uuid.UUID(user.ID.Bytes), inviteToken); err != nil {
-			// Roll the fresh account back only when the invite is provably
-			// still pending: Accept commits the membership and can fail on its
-			// final lookup afterwards, in which case deleting the account
-			// would strand a consumed invite. A re-peek that errors means the
-			// invite is gone, so the account stays and the session is issued.
-			if _, _, peekErr := invites.PeekInvite(ctx, inviteToken); peekErr == nil {
-				cleanup := context.WithoutCancel(ctx)
-				if delErr := s.store.DeleteUserAndPersonalTeam(cleanup, user.ID); delErr != nil {
-					s.logger.Error("auth: invite rollback failed", "error", delErr, "user_id", uuid.UUID(user.ID.Bytes))
-				}
-				s.logger.Warn("auth: invite accept failed at registration", "error", err)
-				return nil, ErrRegistrationClosed
+			// AcceptInvite reports failure only when nothing was committed
+			// (teams.Accept never fails after a successful membership write),
+			// so the fresh account and its personal team are rolled back with a
+			// context that survives request cancellation.
+			cleanup := context.WithoutCancel(ctx)
+			if delErr := s.store.DeleteUserAndPersonalTeam(cleanup, user.ID); delErr != nil {
+				s.logger.Error("auth: invite rollback failed", "error", delErr, "user_id", uuid.UUID(user.ID.Bytes))
 			}
-			s.logger.Warn("auth: invite accept errored after consuming the invite; keeping the account", "error", err)
+			s.logger.Warn("auth: invite accept failed at registration", "error", err)
+			return nil, ErrRegistrationClosed
 		}
 	}
 
@@ -233,8 +229,15 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 		return nil, ErrUnauthorized
 	}
 
-	if err := s.store.RevokeSession(ctx, hash); err != nil {
+	live, err := s.store.RevokeSessionIfLive(ctx, hash)
+	if err != nil {
 		return nil, fmt.Errorf("auth: revoke session: %w", err)
+	}
+	if !live {
+		// The session disappeared between the read and the rotation — a
+		// password reset (or a concurrent rotation) won the race. Refuse,
+		// otherwise the old credential chain would outlive the reset.
+		return nil, ErrUnauthorized
 	}
 
 	user, err := s.store.GetUserByID(ctx, session.UserID)

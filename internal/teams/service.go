@@ -432,9 +432,14 @@ func (s *Service) Accept(ctx context.Context, userID uuid.UUID, token string) (T
 	if _, err := s.repo.AcceptInvite(ctx, hash, userID); err != nil {
 		return Team{}, err
 	}
-	team, err := s.repo.GetTeamForUser(ctx, invite.TeamID, userID)
+	// The membership is committed: every error from here on would misreport a
+	// successful acceptance. Read with a context detached from the request so a
+	// cancellation cannot fail the post-commit lookup either.
+	team, err := s.repo.GetTeamForUser(context.WithoutCancel(ctx), invite.TeamID, userID)
 	if err != nil {
-		return Team{}, err
+		s.logger.Warn("teams: invite accepted but the team read failed",
+			"team_id", invite.TeamID.String(), "user_id", userID.String(), "error", err)
+		team = Team{ID: invite.TeamID, Role: invite.Role}
 	}
 	s.logger.Info("teams: invite accepted",
 		"team_id", invite.TeamID.String(), "user_id", userID.String(), "role", string(invite.Role))

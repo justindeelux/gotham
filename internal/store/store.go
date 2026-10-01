@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -50,6 +52,20 @@ func (s *Store) GetSessionByRefreshHash(ctx context.Context, refreshHash string)
 // It is idempotent: an unknown or already-revoked token is not an error.
 func (s *Store) RevokeSession(ctx context.Context, refreshHash string) error {
 	return s.queries.RevokeSession(ctx, refreshHash)
+}
+
+// RevokeSessionIfLive revokes a live session by its refresh hash and reports
+// whether a row was updated. A false result means the session was already
+// revoked or deleted, so a rotation racing it must not issue a new session.
+func (s *Store) RevokeSessionIfLive(ctx context.Context, refreshHash string) (bool, error) {
+	_, err := s.queries.RevokeSessionIfLive(ctx, refreshHash)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // CountUsers returns the number of accounts. Zero means registration is open:

@@ -110,11 +110,11 @@ const metricRefreshMs = computed<number>(() => {
 let metricsRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
- * True while any metrics fetch (manual or quiet) is in flight. A tick never
- * starts a second fetch: overlapping quiet requests are bounded by this flag,
- * not by the shared axios timeout.
+ * Number of metrics fetches in flight (manual or quiet). A tick starts only
+ * when the count is zero: the newest request must not clear the guard for an
+ * older one still pending, or a later tick could overlap it.
  */
-let metricsRequestInFlight = false;
+let metricsRequestsInFlight = 0;
 
 /**
  * The step the rendered points belong to. It is only written from a
@@ -233,8 +233,8 @@ function isMetricStep(value: string): value is MetricStep {
  * hides the charts instead of rendering an error; any other failure surfaces
  * an explicit error with a retry. A quiet call (auto-refresh) never toggles
  * the spinner: a background tick must not flash the loading state. Either
- * kind of fetch keeps the in-flight flag raised, so a tick can never overlap
- * one already running.
+ * kind of fetch raises the in-flight count, so a tick can never overlap one
+ * already running.
  */
 async function loadMetrics(options: { quiet?: boolean } = {}): Promise<void> {
   const requestServerId = serverId.value;
@@ -247,7 +247,7 @@ async function loadMetrics(options: { quiet?: boolean } = {}): Promise<void> {
   const isCurrent = (): boolean =>
     token === metricsRequestToken && serverId.value === requestServerId;
 
-  metricsRequestInFlight = true;
+  metricsRequestsInFlight += 1;
   if (!quiet) {
     metricsLoading.value = true;
   }
@@ -281,13 +281,12 @@ async function loadMetrics(options: { quiet?: boolean } = {}): Promise<void> {
     }
     metricsError.value = describeMetricsError(error);
   } finally {
-    // Only the newest request releases the in-flight flag and the spinner; an
-    // obsolete one must not clear state the current request still holds.
-    if (isCurrent()) {
-      metricsRequestInFlight = false;
-      if (!quiet) {
-        metricsLoading.value = false;
-      }
+    // Every request releases its own count. Only the newest one owns the
+    // spinner; an obsolete one must not clear a loading state the current
+    // request still needs.
+    metricsRequestsInFlight -= 1;
+    if (isCurrent() && !quiet) {
+      metricsLoading.value = false;
     }
   }
 }
@@ -309,8 +308,8 @@ function stopMetricRefresh(): void {
  * syncMetricRefresh starts or stops the interval for the current choice.
  * Polling only runs while the metrics feature is available, the metrics tab
  * is open and the document is visible, so a disabled feature or a
- * backgrounded tab stops querying the control plane; each tick skips while a
- * fetch is already in flight and refreshes quietly.
+ * backgrounded tab stops querying the control plane; each tick skips while
+ * any fetch is already in flight and refreshes quietly.
  */
 function syncMetricRefresh(): void {
   stopMetricRefresh();
@@ -323,7 +322,7 @@ function syncMetricRefresh(): void {
     return;
   }
   metricsRefreshTimer = setInterval(() => {
-    if (!metricsRequestInFlight) {
+    if (metricsRequestsInFlight === 0) {
       void loadMetrics({ quiet: true });
     }
   }, metricRefreshMs.value);
@@ -463,12 +462,11 @@ watch(serverId, () => {
   activeTab.value = "overview";
   stopMetricRefresh();
   // Invalidate an in-flight read for the previous node: its guarded
-  // completion can no longer clear the spinner or the in-flight flag, so
-  // release both here too, or the metrics tab's lazy load would stay blocked
-  // until a manual refresh.
+  // completion can no longer clear the spinner, so release it here too, or
+  // the metrics tab's lazy load would stay blocked until a manual refresh.
+  // The in-flight count is owned by each request's finally and needs no reset.
   metricsRequestToken += 1;
   metricsLoading.value = false;
-  metricsRequestInFlight = false;
   metricStep.value = "1m";
   metricSeriesStep.value = "1m";
   metricPoints.value = [];

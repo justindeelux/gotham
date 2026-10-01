@@ -103,17 +103,95 @@ const kindOptions: Array<{ label: string; value: NotificationKind }> = [
   { label: "Email (SMTP)", value: "email" },
 ];
 
-const eventOptions: Array<{ label: string; value: NotificationEventKey }> =
-  allNotificationEvents.map((event) => ({
+/**
+ * allowedEvents lists the event keys a scope can actually deliver:
+ * applications emit deploys, databases emit backups, team-wide gets all.
+ */
+function allowedEvents(scope: ChannelScope): NotificationEventKey[] {
+  switch (scope) {
+    case "application":
+      return allNotificationEvents.filter((event) => event.startsWith("deploy_"));
+    case "database":
+      return allNotificationEvents.filter((event) => event.startsWith("backup_"));
+    default:
+      return [...allNotificationEvents];
+  }
+}
+
+/** keepDeliverableEvents narrows a selection to what the scope can deliver. */
+function keepDeliverableEvents(
+  scope: ChannelScope,
+  events: NotificationEventKey[],
+): NotificationEventKey[] {
+  const deliverable = allowedEvents(scope);
+  const kept = deliverable.filter((event) => events.includes(event));
+  return kept.length > 0 ? kept : deliverable;
+}
+
+/** Event options the current scope can deliver; a dead combination is absent. */
+const eventOptions = computed<
+  Array<{ label: string; value: NotificationEventKey }>
+>(() =>
+  allowedEvents(form.value.resourceType).map((event) => ({
     label: eventLabel(event),
     value: event,
-  }));
+  })),
+);
 
-const scopeOptions: Array<{ label: string; value: ChannelScope }> = [
+/** applicationsUnavailable is true when the picker's app list cannot load. */
+const applicationsUnavailable = ref(false);
+/** databasesUnavailable is true when the picker's database list cannot load. */
+const databasesUnavailable = ref(false);
+
+/**
+ * Scope choices: a feature whose list is unavailable is disabled and labelled,
+ * so the other scope (or team-wide) stays selectable.
+ */
+const scopeOptions = computed<
+  Array<{ label: string; value: ChannelScope; disabled?: boolean }>
+>(() => [
   { label: "Team-wide (all resources)", value: "" },
-  { label: "Application", value: "application" },
-  { label: "Database", value: "database" },
-];
+  {
+    label: applicationsUnavailable.value
+      ? "Application (unavailable)"
+      : "Application",
+    value: "application",
+    disabled: applicationsUnavailable.value,
+  },
+  {
+    label: databasesUnavailable.value
+      ? "Database (unavailable)"
+      : "Database",
+    value: "database",
+    disabled: databasesUnavailable.value,
+  },
+]);
+
+/** unavailableScopeHint names the resource features that cannot be offered. */
+const unavailableScopeHint = computed<string>(() => {
+  if (applicationsUnavailable.value && databasesUnavailable.value) {
+    return "Applications and databases are unavailable on this control plane; the channel can stay team-wide.";
+  }
+  if (applicationsUnavailable.value) {
+    return "Applications are unavailable on this control plane (FEATURE_APPLICATIONS=false); a database scope is still available.";
+  }
+  if (databasesUnavailable.value) {
+    return "Databases are unavailable on this control plane (FEATURE_DATABASES=false); an application scope is still available.";
+  }
+  return "";
+});
+
+/** eventsHint explains the event restriction of the selected scope. */
+const eventsHint = computed<string>(() => {
+  switch (form.value.resourceType) {
+    case "application":
+      return "Applications deliver deploy events; backup events cannot reach this channel.";
+    case "database":
+      return "Databases deliver backup events; deploy events cannot reach this channel.";
+    default:
+      return "A team-wide channel receives every selected event.";
+  }
+});
 
 /** Applications of the active team, offered when the scope is one app. */
 const resourceApplications = ref<ResourceOption[]>([]);
@@ -121,8 +199,6 @@ const resourceApplications = ref<ResourceOption[]>([]);
 const resourceDatabases = ref<ResourceOption[]>([]);
 /** Team the resource lists belong to; a switch drops them. */
 const loadedResourcesTeamId = ref("");
-/** True when the resource lists could not be read; team-wide stays possible. */
-const resourcesUnavailable = ref(false);
 /** Token of the newest resource read; a stale response never writes state. */
 let resourcesReadToken = 0;
 
@@ -162,11 +238,14 @@ function emptyForm(): ChannelForm {
   };
 }
 
-/** selectScope switches the scope kind and drops the stale resource pick. */
+/** selectScope switches the scope kind, drops the stale pick and re-constrains
+ * the subscription so a channel that can never fire cannot be saved. */
 function selectScope(scope: string): void {
-  form.value.resourceType =
+  const next: ChannelScope =
     scope === "application" || scope === "database" ? scope : "";
+  form.value.resourceType = next;
   form.value.resourceId = "";
+  form.value.events = keepDeliverableEvents(next, form.value.events);
 }
 
 /**
@@ -192,7 +271,9 @@ const resourcePickerOptions = computed<Array<{ label: string; value: string }>>(
 /**
  * loadResources reads the active team's applications and databases. A team
  * switch drops the previous team's lists first, and only the newest read may
- * write, so a late response cannot offer another team's resources.
+ * write, so a late response cannot offer another team's resources. The two
+ * lists load independently: a disabled feature on one endpoint (404) must not
+ * hide the other scope's picker.
  */
 async function loadResources(teamId: string): Promise<void> {
   const token = ++resourcesReadToken;
@@ -202,28 +283,23 @@ async function loadResources(teamId: string): Promise<void> {
     resourceDatabases.value = [];
     loadedResourcesTeamId.value = teamId;
   }
-  resourcesUnavailable.value = false;
-  try {
-    const [applications, databases] = await Promise.all([
-      listApplications(teamId),
-      listDatabases(teamId),
-    ]);
-    if (!isCurrent()) {
-      return;
-    }
-    resourceApplications.value = applications.map(({ id, name }) => ({
-      id,
-      name,
-    }));
-    resourceDatabases.value = databases.map(({ id, name }) => ({ id, name }));
-  } catch {
-    if (!isCurrent()) {
-      return;
-    }
-    resourceApplications.value = [];
-    resourceDatabases.value = [];
-    resourcesUnavailable.value = true;
+  const [applications, databases] = await Promise.allSettled([
+    listApplications(teamId),
+    listDatabases(teamId),
+  ]);
+  if (!isCurrent()) {
+    return;
   }
+  applicationsUnavailable.value = applications.status === "rejected";
+  resourceApplications.value =
+    applications.status === "fulfilled"
+      ? applications.value.map(({ id, name }) => ({ id, name }))
+      : [];
+  databasesUnavailable.value = databases.status === "rejected";
+  resourceDatabases.value =
+    databases.status === "fulfilled"
+      ? databases.value.map(({ id, name }) => ({ id, name }))
+      : [];
 }
 
 /** canSubmit mirrors the backend rules: name and at least one event. */
@@ -259,16 +335,19 @@ function openEdit(channel: NotificationChannel): void {
     bot_token: channel.config.bot_token ?? "",
     password: channel.config.password ?? "",
   };
+  const resourceType: ChannelScope =
+    channel.resource_type === "application" ||
+    channel.resource_type === "database"
+      ? channel.resource_type
+      : "";
   form.value = {
     name: channel.name,
     kind: channel.kind,
     enabled: channel.enabled,
-    events: [...channel.events],
-    resourceType:
-      channel.resource_type === "application" ||
-      channel.resource_type === "database"
-        ? channel.resource_type
-        : "",
+    // A stored channel may predate the scope/event constraint; drop events
+    // its scope can never deliver instead of resubmitting a dead combination.
+    events: keepDeliverableEvents(resourceType, channel.events),
+    resourceType,
     resourceId: channel.resource_id ?? "",
     webhook_url: channel.config.webhook_url ?? "",
     bot_token: channel.config.bot_token ?? "",
@@ -811,6 +890,9 @@ onMounted(async () => {
               <NText v-if="form.events.length === 0" type="error" class="small">
                 Select at least one event.
               </NText>
+              <NText v-else depth="3" class="small">
+                {{ eventsHint }}
+              </NText>
             </div>
           </NFormItem>
 
@@ -834,9 +916,8 @@ onMounted(async () => {
                 "
                 aria-label="Resource"
               />
-              <NText v-if="resourcesUnavailable" depth="3" class="small">
-                The resource list could not be loaded; the channel can still
-                stay team-wide.
+              <NText v-if="unavailableScopeHint !== ''" depth="3" class="small">
+                {{ unavailableScopeHint }}
               </NText>
             </div>
           </NFormItem>

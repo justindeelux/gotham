@@ -278,9 +278,21 @@ test.describe("teams", () => {
  * in browser storage or back on the edit form (which shows the read mask), and
  * a save that does not touch it keeps the stored value. The send-test uses a
  * refused loopback address, so its failure is deterministic and offline-safe.
+ * The scenario also covers the two scope constraints: with the databases
+ * route answering the FEATURE_DATABASES 404, only the database scope is
+ * disabled (the application picker still works), and an application-scoped
+ * channel only offers deploy events.
  */
 test.describe("notification channels", () => {
-  test("creates a channel with a resource scope and an event subset, keeps the secret masked, tests, toggles and deletes", async ({
+  // The database scope is disabled on purpose (FEATURE_DATABASES=false): the
+  // browser logs the 404, the app must hide only that scope.
+  test.use({
+    expectedConsoleErrors: [
+      "Failed to load resource: the server responded with a status of 404",
+    ],
+  });
+
+  test("creates an application-scoped channel with deliverable events while databases are disabled", async ({
     page,
     request,
     guardrails,
@@ -300,40 +312,62 @@ test.describe("notification channels", () => {
       `ui-e2e-hook-app-${suffix}`,
     );
 
+    // FEATURE_DATABASES=false: the database list 404s, the application list
+    // must keep working (independent loads) and only the database scope is
+    // disabled.
+    await page.route("**/api/v1/databases", (route) =>
+      route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "not found" }),
+      }),
+    );
+
     await page.goto("/settings/notifications");
     await expect(
       page.getByRole("heading", { name: "Notification channels", level: 1 }),
     ).toBeVisible();
 
-    // ── create: event subset + application scope ──────────────────────────
+    // ── create: application scope, deploy events only ─────────────────────
     await page.getByRole("button", { name: "New channel" }).click();
     const modal = page.locator(".n-modal").filter({ hasText: "New notification channel" });
     await modal.getByLabel("Channel name").locator("input").fill(name);
     await modal.getByLabel("Webhook URL").locator("input").fill(webhook);
 
-    // The event select starts with every event; drop one.
-    await modal.locator('[aria-label="Events"]').click();
-    await page.locator(".n-base-select-option").filter({ hasText: "Backup failed" }).click();
-    await page.keyboard.press("Escape");
-    await expect(modal.locator('[aria-label="Events"]')).not.toContainText("Backup failed");
+    const selectOption = (label: string) =>
+      page.locator(".n-base-select-option").filter({ hasText: label });
 
-    // Scope the channel to one application from the picker.
+    // Only the unavailable database scope is disabled.
     await modal.locator('[aria-label="Resource scope"]').click();
-    await page.locator(".n-base-select-option").filter({ hasText: "Application" }).click();
+    await expect(selectOption("Database")).toHaveClass(/n-base-select-option--disabled/);
+    await expect(selectOption("Application")).not.toHaveClass(
+      /n-base-select-option--disabled/,
+    );
+    await selectOption("Application").click();
     await modal.locator('[aria-label="Resource"]').click();
     await modal.locator('[aria-label="Resource"] input').fill(application.name);
-    await page.locator(".n-base-select-option").filter({ hasText: application.name }).click();
-    await page.keyboard.press("Escape");
+    await selectOption(application.name).click();
+
+    // An application delivers deploy events only: no backup key is offered,
+    // and the two deploy keys are pre-selected.
+    await modal.locator('[aria-label="Events"]').click();
+    await expect(selectOption("Deploy succeeded")).toBeVisible();
+    await expect(selectOption("Deploy failed")).toBeVisible();
+    await expect(selectOption("Backup succeeded")).toHaveCount(0);
+    await expect(selectOption("Backup failed")).toHaveCount(0);
+    // Close the open menu on a neutral spot: Escape would close the modal.
+    await modal.locator(".n-card-header").first().click();
 
     await modal.getByRole("button", { name: "Create channel" }).click();
     await expect(page.locator(".n-modal")).toHaveCount(0);
 
     const card = page.locator(".n-card").filter({ hasText: name });
     await expect(card).toBeVisible();
-    // The card lists the subset and names the scoped resource.
+    // The card names the scoped resource and only deliverable events.
     await expect(card).toContainText("App: " + application.name);
     await expect(card).toContainText("Deploy succeeded");
-    await expect(card).not.toContainText("Backup failed");
+    await expect(card).toContainText("Deploy failed");
+    await expect(card).not.toContainText("Backup");
     // The read view carries the mask and the "configured" indicator only.
     await expect(card).toContainText("secret configured");
     await expect(card).toContainText(masked);
@@ -357,8 +391,8 @@ test.describe("notification channels", () => {
     const editModal = page.locator(".n-modal").filter({ hasText: "Edit notification channel" });
     await expect(editModal.getByLabel("Webhook URL").locator("input")).toHaveValue(masked);
     await expect(editModal.locator('[aria-label="Resource"]')).toContainText(application.name);
-    await expect(editModal.locator('[aria-label="Events"]')).toContainText("Backup succeeded");
-    await expect(editModal.locator('[aria-label="Events"]')).not.toContainText("Backup failed");
+    await expect(editModal.locator('[aria-label="Events"]')).toContainText("Deploy succeeded");
+    await expect(editModal.locator('[aria-label="Events"]')).not.toContainText("Backup");
     await editModal.getByRole("button", { name: "Save" }).click();
     await expect(page.locator(".n-modal")).toHaveCount(0);
     expect(await page.content()).not.toContain(webhook);
@@ -369,9 +403,13 @@ test.describe("notification channels", () => {
     await page.locator(".n-popconfirm").getByRole("button", { name: "Confirm" }).click();
     await expect(page.locator(".n-card").filter({ hasText: name })).toHaveCount(0);
 
+    // The databases 404 was provoked on purpose; no other request may fail.
+    const unexpected = guardrails.apiFailures.filter(
+      (line) => !line.includes("/api/v1/databases"),
+    );
     expect(
-      guardrails.apiFailures,
-      `unexpected failed API requests:\n${guardrails.apiFailures.join("\n")}`,
+      unexpected,
+      `unexpected failed API requests:\n${unexpected.join("\n")}`,
     ).toEqual([]);
   });
 });
@@ -385,8 +423,8 @@ test.describe("notification channels", () => {
  * empty buckets) and proves the chart breaks the line instead of bridging it,
  * and that switching the step issues a new range request. It then exercises
  * auto-refresh: a chosen cadence refetches, a hidden document and a
- * mid-session FEATURE_METRICS 404 both stop the polling, and a held response
- * proves the next tick does not start a second in-flight request.
+ * mid-session FEATURE_METRICS 404 both stop the polling, and a pending fetch
+ * whose newer sibling completes still blocks the next tick.
  */
 test.describe("server metrics", () => {
   // The single-flight/404 phase provokes the FEATURE_METRICS 404 on purpose;
@@ -492,7 +530,7 @@ test.describe("server metrics", () => {
     expect(requestedSteps.length).toBe(onHide);
 
     // ── single-flight and a mid-session FEATURE_METRICS 404 ────────────────
-    // Fake timers from here on: the held request must not reach the real 15s
+    // Fake timers from here on: a held request must not reach the real 15s
     // axios timeout, and the cadence can be advanced instantly.
     await page.clock.install();
     await page.evaluate(() => {
@@ -503,24 +541,78 @@ test.describe("server metrics", () => {
       document.dispatchEvent(new Event("visibilitychange"));
     });
     await page.unroute("**/api/v1/servers/*/metrics*");
-    let heldRequests = 0;
+
+    // Scripted replies: "hold" leaves a request in flight, "ok" answers with
+    // samples, "missing" answers the FEATURE_METRICS 404.
+    type MetricsReply = "hold" | "ok" | "missing";
+    let metricsReply: MetricsReply = "hold";
+    let metricsRequests = 0;
     const heldRoutes: Route[] = [];
     await page.route("**/api/v1/servers/*/metrics*", (route) => {
-      heldRequests += 1;
-      heldRoutes.push(route);
-      // Deliberately left in flight: the next tick must skip, not overlap.
+      metricsRequests += 1;
+      if (metricsReply === "hold") {
+        heldRoutes.push(route);
+        return;
+      }
+      if (metricsReply === "missing") {
+        void route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "not found" }),
+        });
+        return;
+      }
+      void route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          step: "1m",
+          points: [point(0, 0.1), point(60_000, 0.2)],
+        }),
+      });
     });
 
-    // First tick: exactly one request, held in flight.
+    // Tick 1: one quiet request, held in flight.
     await page.clock.fastForward(15_000);
-    await expect.poll(() => heldRequests, { timeout: 10_000 }).toBe(1);
-    // Second tick: must be skipped while the first fetch is still in flight.
+    await expect.poll(() => metricsRequests, { timeout: 10_000 }).toBe(1);
+
+    // A manual refresh starts a newer fetch while tick 1 is still pending and
+    // completes first; that must not clear the guard for the older request.
+    metricsReply = "ok";
+    const manualDone = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/servers/${node.id}/metrics`) &&
+        response.status() === 200,
+    );
+    await page.getByRole("button", { name: "Refresh" }).click();
+    await manualDone;
+    await page.waitForTimeout(200);
+
+    // Tick 2: the older request is still in flight, so no fetch may start.
+    metricsReply = "hold";
     await page.clock.fastForward(15_000);
     await page.waitForTimeout(500);
     // Soft so a single-flight failure still lets the 404 assertion below report.
-    expect.soft(heldRequests, "a tick must not overlap an in-flight refresh").toBe(1);
+    expect.soft(
+      metricsRequests,
+      "a newer completion must not clear the guard for a pending fetch",
+    ).toBe(2);
 
     // ── a mid-session FEATURE_METRICS 404 stops the polling for good ───────
+    metricsReply = "missing";
+    await page.getByRole("button", { name: "Refresh" }).click();
+    await expect(
+      page.getByText("Server metrics are not enabled on this control plane"),
+    ).toBeVisible();
+    const after404 = metricsRequests;
+    await page.clock.fastForward(16_000);
+    await page.waitForTimeout(500);
+    expect.soft(
+      metricsRequests,
+      "a disabled metrics feature must stop auto-refresh",
+    ).toBe(after404);
+
+    // Release whatever is still held; their stale responses must be dropped.
     for (const route of heldRoutes) {
       await route.fulfill({
         status: 404,
@@ -528,16 +620,7 @@ test.describe("server metrics", () => {
         body: JSON.stringify({ message: "not found" }),
       });
     }
-    await expect(
-      page.getByText("Server metrics are not enabled on this control plane"),
-    ).toBeVisible();
-    const after404 = requestedSteps.length;
-    await page.clock.fastForward(16_000);
-    await page.waitForTimeout(500);
-    expect.soft(
-      requestedSteps.length,
-      "a disabled metrics feature must stop auto-refresh",
-    ).toBe(after404);
+    await page.waitForTimeout(200);
 
     // The 404 was provoked on purpose; no other request may have failed.
     const unexpected = guardrails.apiFailures.filter(

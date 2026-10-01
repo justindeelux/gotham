@@ -128,15 +128,41 @@ function keepDeliverableEvents(
   return kept.length > 0 ? kept : deliverable;
 }
 
-/** Event options the current scope can deliver; a dead combination is absent. */
+/** outOfScopeEvents lists stored events the current scope cannot deliver. */
+const outOfScopeEvents = computed<NotificationEventKey[]>(() => {
+  const deliverable = allowedEvents(form.value.resourceType);
+  return form.value.events.filter((event) => !deliverable.includes(event));
+});
+
+/**
+ * Event options the current scope can deliver, plus any stored event outside
+ * those rules. The extra keys keep their label and stay removable, but once
+ * removed they disappear from the list and cannot be re-selected — a dead
+ * combination cannot be built here, only preserved from older data.
+ */
 const eventOptions = computed<
   Array<{ label: string; value: NotificationEventKey }>
->(() =>
-  allowedEvents(form.value.resourceType).map((event) => ({
+>(() => {
+  const deliverable = allowedEvents(form.value.resourceType);
+  const options = deliverable.map((event) => ({
     label: eventLabel(event),
     value: event,
-  })),
-);
+  }));
+  for (const event of outOfScopeEvents.value) {
+    options.push({ label: eventLabel(event), value: event });
+  }
+  return options;
+});
+
+/** outOfScopeWarning explains a stored subscription its scope cannot deliver. */
+const outOfScopeWarning = computed<string>(() => {
+  const events = outOfScopeEvents.value;
+  if (events.length === 0) {
+    return "";
+  }
+  const names = events.map((event) => eventLabel(event)).join(", ");
+  return `This channel is subscribed to ${names}, which its resource scope cannot deliver. The stored subscription is kept unchanged unless you edit the events or the scope.`;
+});
 
 /** applicationsUnavailable is true when the picker's app list cannot load. */
 const applicationsUnavailable = ref(false);
@@ -344,9 +370,11 @@ function openEdit(channel: NotificationChannel): void {
     name: channel.name,
     kind: channel.kind,
     enabled: channel.enabled,
-    // A stored channel may predate the scope/event constraint; drop events
-    // its scope can never deliver instead of resubmitting a dead combination.
-    events: keepDeliverableEvents(resourceType, channel.events),
+    // The stored subscription is preserved exactly: an unrelated save must
+    // never expand or normalize events the operator did not touch. The form
+    // warns when the scope cannot deliver a stored key; changing the scope or
+    // the events is the deliberate path that re-constrains them.
+    events: [...channel.events],
     resourceType,
     resourceId: channel.resource_id ?? "",
     webhook_url: channel.config.webhook_url ?? "",
@@ -889,6 +917,14 @@ onMounted(async () => {
               />
               <NText v-if="form.events.length === 0" type="error" class="small">
                 Select at least one event.
+              </NText>
+              <NText
+                v-else-if="outOfScopeWarning !== ''"
+                type="warning"
+                class="small"
+                data-testid="events-out-of-scope"
+              >
+                {{ outOfScopeWarning }}
               </NText>
               <NText v-else depth="3" class="small">
                 {{ eventsHint }}

@@ -412,6 +412,112 @@ test.describe("notification channels", () => {
       `unexpected failed API requests:\n${unexpected.join("\n")}`,
     ).toEqual([]);
   });
+
+  /**
+   * A stored channel may predate the scope/event constraint (for example an
+   * application scope subscribed only to backup events). Opening it must show
+   * and keep exactly the stored subscription — an unrelated save must never
+   * expand it — while a deliberate scope change re-constrains it.
+   */
+  test("preserves a legacy out-of-scope subscription on an unrelated save and constrains a deliberate scope change", async ({
+    page,
+    request,
+    guardrails,
+  }) => {
+    test.setTimeout(60_000);
+
+    const suffix = uniqueSuffix();
+    const name = `ui-e2e-legacy-${suffix}`;
+    const renamed = `${name}-renamed`;
+    const node = await seedServer(request, `ui-e2e-legacy-node-${suffix}`);
+    const application = await seedApplication(
+      request,
+      node.id,
+      `ui-e2e-legacy-app-${suffix}`,
+    );
+
+    // Seed the legacy dead combination directly through the API: the current
+    // form cannot build it.
+    const seeded = await request.post("/api/v1/notification-channels", {
+      headers: authHeaders(),
+      data: {
+        name,
+        kind: "discord",
+        events: ["backup_success"],
+        resource_type: "application",
+        resource_id: application.id,
+        config: { webhook_url: "http://127.0.0.1:9/legacy" },
+      },
+    });
+    expect(seeded.status(), await seeded.text()).toBe(201);
+    const { channel } = (await seeded.json()) as { channel: { id: string } };
+
+    /** storedEvents reads one channel's persisted subscription by name. */
+    const storedEvents = async (channelName: string): Promise<string[]> => {
+      const response = await request.get("/api/v1/notification-channels", {
+        headers: authHeaders(),
+      });
+      expect(response.status(), await response.text()).toBe(200);
+      const { channels } = (await response.json()) as {
+        channels: Array<{ name: string; events: string[] }>;
+      };
+      return channels.find((item) => item.name === channelName)?.events ?? [];
+    };
+
+    await page.goto("/settings/notifications");
+    const card = page.locator(".n-card").filter({ hasText: name });
+    await expect(card).toBeVisible();
+
+    // ── edit: the stored backup-only subscription is shown as stored ──────
+    await card.getByRole("button", { name: "Edit" }).click();
+    const modal = page.locator(".n-modal").filter({ hasText: "Edit notification channel" });
+    await expect(modal.locator('[aria-label="Events"]')).toContainText("Backup succeeded");
+    await expect(modal.locator('[aria-label="Events"]')).not.toContainText("Deploy succeeded");
+    await expect(modal.locator('[data-testid="events-out-of-scope"]')).toContainText(
+      "Backup succeeded",
+    );
+
+    // An unrelated save (rename only) must not touch the subscription.
+    await modal.getByLabel("Channel name").locator("input").fill(renamed);
+    await modal.getByRole("button", { name: "Save" }).click();
+    await expect(page.locator(".n-modal")).toHaveCount(0);
+    expect(await storedEvents(renamed)).toEqual(["backup_success"]);
+
+    // ── a deliberate scope change re-constrains the subscription ──────────
+    await page
+      .locator(".n-card")
+      .filter({ hasText: renamed })
+      .getByRole("button", { name: "Edit" })
+      .click();
+    const scopeModal = page.locator(".n-modal").filter({ hasText: "Edit notification channel" });
+    const selectOption = (label: string) =>
+      page.locator(".n-base-select-option").filter({ hasText: label });
+    // Application -> team-wide -> application: the way back intersects the
+    // backup-only selection with the deploy events and falls back to both.
+    await scopeModal.locator('[aria-label="Resource scope"]').click();
+    await selectOption("Team-wide").click();
+    await scopeModal.locator('[aria-label="Resource scope"]').click();
+    await selectOption("Application").click();
+    await scopeModal.locator('[aria-label="Resource"]').click();
+    await scopeModal.locator('[aria-label="Resource"] input').fill(application.name);
+    await selectOption(application.name).click();
+    await expect(scopeModal.locator('[aria-label="Events"]')).toContainText("Deploy succeeded");
+    await expect(scopeModal.locator('[aria-label="Events"]')).not.toContainText("Backup succeeded");
+    await expect(scopeModal.locator('[data-testid="events-out-of-scope"]')).toHaveCount(0);
+    await scopeModal.getByRole("button", { name: "Save" }).click();
+    await expect(page.locator(".n-modal")).toHaveCount(0);
+    expect(await storedEvents(renamed)).toEqual(["deploy_success", "deploy_failure"]);
+
+    const removed = await request.delete(`/api/v1/notification-channels/${channel.id}`, {
+      headers: authHeaders(),
+    });
+    expect(removed.status(), await removed.text()).toBe(204);
+
+    expect(
+      guardrails.apiFailures,
+      `unexpected failed API requests:\n${guardrails.apiFailures.join("\n")}`,
+    ).toEqual([]);
+  });
 });
 
 /**

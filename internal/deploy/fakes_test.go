@@ -537,6 +537,7 @@ func (r *fakeRepository) CreateDeployKey(_ context.Context, key DeployKey, priva
 func (r *fakeRepository) DeleteDeployKey(_ context.Context, appID uuid.UUID) (DeployKey, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.record("deploy key detached")
 	stored, ok := r.deployKeys[appID]
 	if !ok {
 		return DeployKey{}, ErrNotFound

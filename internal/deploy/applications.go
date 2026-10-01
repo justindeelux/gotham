@@ -256,12 +256,14 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 }
 
 // DeleteApplication removes an application together with everything that hangs
-// off it. Its deploy key and its provider hook are detached first — on the Git
-// host and then in the database — so a host failure aborts the delete while
-// both sides still agree (the escape hatch for a hook whose provider is gone
-// is ForgetWebhook, DELETE .../webhooks?force=true); the container stop stays
-// best effort: a control plane that cannot reach the node must still be able
-// to delete an application.
+// off it. Its provider hook is detached first and the delete fails closed on a
+// removal failure, so nothing that would break the still-live application has
+// been mutated when it aborts (the escape hatch for a hook whose provider is
+// gone is ForgetWebhook, DELETE .../webhooks?force=true). The deploy key is
+// detached next — also on the Git host first, then in the database, so a host
+// failure aborts with both sides in step — and the container stop stays best
+// effort: a control plane that cannot reach the node must still be able to
+// delete an application.
 func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error {
 	if !Enabled() {
 		return ErrDisabled
@@ -281,26 +283,17 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 			return err
 		}
 	}
-	// A preview sibling reuses its base application's remote deploy key:
-	// removing it from the Git host would break the base (and every other
-	// sibling). Only the local rows go; the remote key stays registered.
-	if app.IsPreview {
-		if _, err := s.repo.DeleteDeployKey(ctx, app.ID); err != nil && !errors.Is(err, ErrNotFound) {
-			return err
-		}
-	} else if err := s.detachDeployKey(ctx, app); err != nil {
-		return err
-	}
-	// Remove the provider hook (BE-4.4) after the key and before the row,
-	// bounded like the create call. Removal FAILS CLOSED: the stored row is
-	// the only handle on the remote hook, so deleting it while the host may
-	// still hold the hook would orphan the hook with nothing left to identify
-	// it (the explicit route could no longer reach it). A failed delete is
-	// retryable — the application and the provider stay in step — and the
-	// caller can retry, remove the hook on the host by hand, or acknowledge
-	// the orphan with DELETE /v1/applications/{id}/webhooks?force=true
-	// (ForgetWebhook) and then delete the application. A preview sibling never
-	// holds its own hook.
+	// Remove the provider hook (BE-4.4) FIRST, bounded like the create call,
+	// and fail closed: the stored row is the only handle on the remote hook,
+	// so deleting it while the host may still hold the hook would orphan the
+	// hook with nothing left to identify it (the explicit route could no
+	// longer reach it). Ordering matters for the still-live application too:
+	// when this returns an error, the deploy key, the container and the row
+	// are all untouched, so a webhook deploy that still reaches the app can
+	// keep cloning. The caller retries, removes the hook on the host by hand,
+	// or acknowledges the orphan with
+	// DELETE /v1/applications/{id}/webhooks?force=true (ForgetWebhook) and
+	// deletes again. A preview sibling never holds its own hook.
 	if !app.IsPreview && supportedSourceProvider(app.Provider) && strings.TrimSpace(app.Repo) != "" {
 		if lifecycle := s.hookLifecycle(); lifecycle != nil {
 			hookCtx, cancel := context.WithTimeout(ctx, s.hookTimeout)
@@ -310,6 +303,16 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 				return err
 			}
 		}
+	}
+	// A preview sibling reuses its base application's remote deploy key:
+	// removing it from the Git host would break the base (and every other
+	// sibling). Only the local rows go; the remote key stays registered.
+	if app.IsPreview {
+		if _, err := s.repo.DeleteDeployKey(ctx, app.ID); err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+	} else if err := s.detachDeployKey(ctx, app); err != nil {
+		return err
 	}
 	s.stopBestEffort(ctx, app)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {

@@ -160,11 +160,10 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 
 // delete serves DELETE .../webhooks: remove the hook of an application. An
 // application without a hook answers 200 with deleted=false. ?force=true
-// forgets the stored hook even when the Git host cannot be reached — the
-// documented escape hatch for deleting an application whose provider
-// connection is gone; the remote hook is then left behind and only the
-// warning records it. Every other value keeps the strict, host-first
-// semantics.
+// forgets the stored hook WITHOUT contacting the Git host — the documented
+// escape hatch for deleting an application whose provider connection is gone
+// or stalling; the remote hook is then left behind and only the warning
+// records it. Every other value keeps the strict, host-first semantics.
 func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {

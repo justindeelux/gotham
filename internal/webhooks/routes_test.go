@@ -597,12 +597,12 @@ func TestRoutesDeleteWebhookProviderFailureKeepsRow(t *testing.T) {
 
 // TestRoutesForgetWebhookForceEscapeHatch pins ?force=true: the caller
 // acknowledges that the provider cannot be reached, the stored row is dropped
-// (so the application delete can proceed), and the response reports the
-// removal. The strict route keeps the row and answers 502 — see
-// TestRoutesDeleteWebhookProviderFailureKeepsRow.
+// without any host call (so a stalled provider cannot block the hatch), and
+// the response reports the removal. The strict route keeps the row and answers
+// 502 — see TestRoutesDeleteWebhookProviderFailureKeepsRow.
 func TestRoutesForgetWebhookForceEscapeHatch(t *testing.T) {
 	repo := newFakeRepository().withTarget()
-	installer := &fakeInstaller{deleteErr: io.ErrUnexpectedEOF}
+	installer := &fakeInstaller{}
 	svc := newTestService(repo, installer, &fakeDeployer{})
 
 	rec := httptest.NewRecorder()
@@ -622,6 +622,9 @@ func TestRoutesForgetWebhookForceEscapeHatch(t *testing.T) {
 	}
 	if repo.hook != nil {
 		t.Errorf("stored hook = %+v, want it forgotten", repo.hook)
+	}
+	if len(installer.deleted) != 0 {
+		t.Errorf("provider deletions = %v, want none (force must not contact the host)", installer.deleted)
 	}
 }
 

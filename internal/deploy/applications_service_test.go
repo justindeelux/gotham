@@ -509,14 +509,21 @@ func newHookService(t *testing.T, repo *fakeRepository, hooks HookLifecycle) *Se
 }
 
 // TestServiceDeleteApplicationRemovesProviderHook pins the BE-4.4 delete
-// lifecycle: the provider hook goes before the application row (afterwards it
-// is unreachable), but only after the deploy key detach, so a failed key
-// detach still aborts the delete with both sides in step.
+// lifecycle order: the provider hook goes first, then the deploy key, then the
+// application row. The key must survive a failed hook removal (see
+// TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure); on the success
+// path the order keeps a webhook deploy that still reaches the app able to
+// clone until the hook is gone.
 func TestServiceDeleteApplicationRemovesProviderHook(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
 	var events []string
 	repo := &fakeRepository{app: app, events: &events}
+	if _, err := repo.CreateDeployKey(context.Background(), DeployKey{
+		ApplicationID: app.ID, Provider: app.Provider, Repo: app.Repo,
+	}, "seeded-key"); err != nil {
+		t.Fatalf("seed deploy key: %v", err)
+	}
 	hooks := &fakeHookLifecycle{events: &events}
 	svc := newHookService(t, repo, hooks)
 
@@ -526,8 +533,11 @@ func TestServiceDeleteApplicationRemovesProviderHook(t *testing.T) {
 	if hooks.removeCalls != 1 || len(hooks.removed) != 1 || hooks.removed[0] != app.ID {
 		t.Fatalf("removals = %v (%d calls), want one for %s", hooks.removed, hooks.removeCalls, app.ID)
 	}
-	if got, want := strings.Join(events, ","), "hook removed,application deleted"; got != want {
+	if got, want := strings.Join(events, ","), "hook removed,deploy key detached,application deleted"; got != want {
 		t.Errorf("operation order = %q, want %q", got, want)
+	}
+	if repo.hasDeployKey(app.ID) {
+		t.Error("the deploy key survived the successful delete")
 	}
 	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("get after delete err = %v, want ErrNotFound", err)
@@ -558,13 +568,21 @@ func TestServiceDeleteApplicationSkipsHookWithoutProvider(t *testing.T) {
 
 // TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure pins the HIGH
 // finding: the stored hook row is the only handle on the remote hook, so a
-// failed removal aborts the delete and keeps both sides in step. The caller
-// can retry, remove the hook on the host by hand, or force-forget the row
-// (ForgetWebhook) and delete again.
+// failed removal aborts the delete and keeps both sides in step. Nothing that
+// would break the still-live application may have been mutated first: the
+// deploy key must still be attached (a webhook deploy that reaches the app can
+// keep cloning), the container keeps running and the row survives. The caller
+// retries, removes the hook on the host by hand, or force-forgets the row
+// (ForgetWebhook) and deletes again.
 func TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
 	repo := &fakeRepository{app: app}
+	if _, err := repo.CreateDeployKey(context.Background(), DeployKey{
+		ApplicationID: app.ID, Provider: app.Provider, Repo: app.Repo,
+	}, "seeded-key"); err != nil {
+		t.Fatalf("seed deploy key: %v", err)
+	}
 	hooks := &fakeHookLifecycle{removeErr: fmt.Errorf("%w: provider unavailable", ErrProvider)}
 	svc := newHookService(t, repo, hooks)
 
@@ -577,6 +595,9 @@ func TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure(t *testing.T) {
 	}
 	if _, err := svc.GetApplication(context.Background(), userID, app.ID); err != nil {
 		t.Errorf("the application row must survive a failed hook removal: %v", err)
+	}
+	if !repo.hasDeployKey(app.ID) {
+		t.Error("the deploy key was detached before the hook removal succeeded")
 	}
 }
 

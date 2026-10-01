@@ -12,19 +12,25 @@ import (
 )
 
 const createSession = `-- name: CreateSession :one
-INSERT INTO sessions (user_id, refresh_hash, expires_at)
-VALUES ($1, $2, $3)
-RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
+VALUES ($1, $2, $3, $4)
+RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version
 `
 
 type CreateSessionParams struct {
-	UserID      pgtype.UUID        `json:"user_id"`
-	RefreshHash string             `json:"refresh_hash"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	UserID            pgtype.UUID        `json:"user_id"`
+	RefreshHash       string             `json:"refresh_hash"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	CredentialVersion int32              `json:"credential_version"`
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
-	row := q.db.QueryRow(ctx, createSession, arg.UserID, arg.RefreshHash, arg.ExpiresAt)
+	row := q.db.QueryRow(ctx, createSession,
+		arg.UserID,
+		arg.RefreshHash,
+		arg.ExpiresAt,
+		arg.CredentialVersion,
+	)
 	var i Session
 	err := row.Scan(
 		&i.ID,
@@ -33,6 +39,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.ExpiresAt,
 		&i.RevokedAt,
 		&i.CreatedAt,
+		&i.CredentialVersion,
 	)
 	return i, err
 }
@@ -50,7 +57,7 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID pgtype.UUID) er
 }
 
 const getSessionByRefreshHash = `-- name: GetSessionByRefreshHash :one
-SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at
+SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version
 FROM sessions
 WHERE refresh_hash = $1
 `
@@ -65,6 +72,7 @@ func (q *Queries) GetSessionByRefreshHash(ctx context.Context, refreshHash strin
 		&i.ExpiresAt,
 		&i.RevokedAt,
 		&i.CreatedAt,
+		&i.CredentialVersion,
 	)
 	return i, err
 }

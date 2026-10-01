@@ -195,9 +195,10 @@ func TestStoreRevokeSessionIfLive(t *testing.T) {
 	defer func() { _ = st.DeleteUserAndPersonalTeam(context.WithoutCancel(ctx), user.ID) }()
 
 	session, err := st.CreateSession(ctx, sqlc.CreateSessionParams{
-		UserID:      user.ID,
-		RefreshHash: fmt.Sprintf("hash-%d", time.Now().UnixNano()),
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		UserID:            user.ID,
+		RefreshHash:       fmt.Sprintf("hash-%d", time.Now().UnixNano()),
+		ExpiresAt:         pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		CredentialVersion: user.CredentialVersion,
 	})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)

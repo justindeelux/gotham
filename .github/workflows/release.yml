@@ -68,7 +68,7 @@ jobs:
       - name: Require jq
         run: |
           command -v jq >/dev/null 2>&1 || {
-            echo "::error::jq is required on the self-hosted runner (release asset checks)"
+            echo "::error::jq is required on the runner (release asset checks)"
             exit 1
           }
 

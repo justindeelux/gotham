@@ -3,6 +3,7 @@ package webhooks
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
@@ -194,6 +196,67 @@ func TestRemoveHookIsIdempotent(t *testing.T) {
 	}
 	if len(installer.deleted) != 1 {
 		t.Errorf("provider deletions = %d after a repeat, want 1", len(installer.deleted))
+	}
+}
+
+// TestForgetWebhookDropsRowDespiteProviderFailure pins the escape hatch: when
+// the provider can no longer be reached, the caller can acknowledge the orphan
+// (DELETE .../webhooks?force=true) and the stored row goes, unblocking the
+// application delete. The remote hook then cannot be removed by the control
+// plane anymore, which is exactly what the caller acknowledged; the warning
+// names it for manual cleanup.
+func TestForgetWebhookDropsRowDespiteProviderFailure(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	installer := &fakeInstaller{deleteErr: io.ErrUnexpectedEOF}
+	svc := newTestService(repo, installer, &fakeDeployer{})
+
+	deleted, err := svc.ForgetWebhook(context.Background(), repo.app.UserID, repo.app.ID)
+	if err != nil {
+		t.Fatalf("ForgetWebhook: %v", err)
+	}
+	if !deleted {
+		t.Error("deleted = false, want the stored row removed")
+	}
+	if repo.hook != nil {
+		t.Errorf("stored hook = %+v, want it forgotten", repo.hook)
+	}
+
+	// Idempotent: an application with no hook reports false, no error.
+	deleted, err = svc.ForgetWebhook(context.Background(), repo.app.UserID, repo.app.ID)
+	if err != nil {
+		t.Fatalf("second ForgetWebhook: %v", err)
+	}
+	if deleted {
+		t.Error("deleted = true on the second call, want false")
+	}
+}
+
+// TestRemoveHookTranslatesProviderFailures pins the deploy-seam contract: the
+// application delete maps these errors to 409/502 (fail closed), so the
+// webhook adapter must hand up the deploy sentinels rather than its own
+// package's.
+func TestRemoveHookTranslatesProviderFailures(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"not connected", providers.ErrNotConnected, deploy.ErrNotConnected},
+		{"provider call failure", io.ErrUnexpectedEOF, deploy.ErrProvider},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newFakeRepository().withTarget()
+			svc := newTestService(repo, &fakeInstaller{deleteErr: tc.err}, &fakeDeployer{})
+
+			err := svc.RemoveHook(context.Background(), repo.app.UserID, repo.app.ID)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			if repo.hook == nil {
+				t.Error("the stored hook was removed although the host still has it")
+			}
+		})
 	}
 }
 

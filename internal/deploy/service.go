@@ -47,7 +47,10 @@ type DeployService interface {
 	// failure is logged with the configured logger; callers must never fail
 	// the create on it — the application row is already committed and the
 	// explicit idempotent webhook route is the retry path.
-	InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) error
+	//
+	// attempted is false when no hook lifecycle is wired: there is no outcome
+	// to report, and the create response omits the webhook field.
+	InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) (attempted bool, err error)
 	// ListApplications returns the caller's applications, newest first.
 	ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error)
 	// GetApplication returns one application the caller owns (404 otherwise).

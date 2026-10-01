@@ -246,8 +246,30 @@ func (s *Service) CreateWebhook(ctx context.Context, userID, appID uuid.UUID, ca
 // DeleteWebhook removes the hook of an application, first on the Git host and
 // then in the database. It is idempotent: an application with no hook reports
 // false and no error. A host that fails for any reason other than "already
-// gone" aborts the call so the row and the host stay in step.
+// gone" aborts the call so the row and the host stay in step; the caller then
+// retries, removes the hook on the host by hand, or acknowledges the orphan
+// with ForgetWebhook (DELETE .../webhooks?force=true).
 func (s *Service) DeleteWebhook(ctx context.Context, userID, appID uuid.UUID) (bool, error) {
+	return s.deleteWebhook(ctx, userID, appID, false)
+}
+
+// ForgetWebhook removes the stored hook of an application without requiring
+// the Git host to confirm it: the host removal is still attempted, but a
+// failure is logged and the row is deleted anyway. It is the operator's
+// explicit escape hatch when a provider connection is gone and an application
+// must still be deletable — the deploy delete fails closed on a hook removal
+// failure (the stored row is the only handle on the remote hook), so without
+// this the application would be stuck. The remote hook is intentionally left
+// behind; the warning names application, provider, repo and hook ID so it can
+// be removed on the host later.
+func (s *Service) ForgetWebhook(ctx context.Context, userID, appID uuid.UUID) (bool, error) {
+	return s.deleteWebhook(ctx, userID, appID, true)
+}
+
+// deleteWebhook is the shared body of DeleteWebhook and ForgetWebhook. With
+// force=false a host failure aborts before the row is touched; with force=true
+// the host failure is logged and the row goes regardless.
+func (s *Service) deleteWebhook(ctx context.Context, userID, appID uuid.UUID, force bool) (bool, error) {
 	if s == nil || s.repo == nil || s.installer == nil {
 		return false, errors.New("webhooks: service is not configured")
 	}
@@ -271,7 +293,12 @@ func (s *Service) DeleteWebhook(ctx context.Context, userID, appID uuid.UUID) (b
 			CloneURL: app.CloneURL,
 			Repo:     app.Repo,
 		}, hook.HookID); err != nil {
-			return false, mapProviderError(app.Provider, err)
+			if !force {
+				return false, mapProviderError(app.Provider, err)
+			}
+			s.logger.Warn("webhooks: hook left on the Git host; forgetting the stored row anyway",
+				"application_id", appID, "provider", app.Provider, "repo", app.Repo,
+				"hook_id", hook.HookID, "error", mapProviderError(app.Provider, err))
 		}
 	}
 	if _, err := s.repo.DeleteWebhook(ctx, appID); err != nil && !errors.Is(err, ErrNotFound) {
@@ -291,11 +318,22 @@ func (s *Service) InstallHook(ctx context.Context, userID, appID uuid.UUID, r *h
 
 // RemoveHook implements deploy.HookLifecycle: it removes the application's
 // hook from the Git host and then its stored row, tolerating an application
-// that never had one. A host failure is returned so the caller can log it,
-// but the application delete itself is not blocked on it.
+// that never had one. The application delete fails closed, so errors are
+// translated to the deploy sentinels the delete route maps to a status
+// (409 for a missing connection, 502 for a provider failure): the row must
+// survive so the hook can still be removed once the provider is reachable.
 func (s *Service) RemoveHook(ctx context.Context, userID, appID uuid.UUID) error {
 	_, err := s.DeleteWebhook(ctx, userID, appID)
-	return err
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrNotConnected):
+		return fmt.Errorf("%w: %v", deploy.ErrNotConnected, err)
+	case errors.Is(err, ErrProvider):
+		return fmt.Errorf("%w: %v", deploy.ErrProvider, err)
+	default:
+		return err
+	}
 }
 
 // Compile-time guarantee that Service satisfies the application-lifecycle

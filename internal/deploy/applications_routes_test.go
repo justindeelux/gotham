@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -171,12 +172,13 @@ func TestRoutesCreateApplicationRejectsBadInput(t *testing.T) {
 // TestRoutesCreateApplicationInstallsProviderHook pins the BE-4.4 create
 // lifecycle: an application created with a supported provider and a repository
 // installs its push hook through the service, which is what lets a push
-// trigger auto-deploys without the caller touching the webhook route.
+// trigger auto-deploys without the caller touching the webhook route. The
+// response reports the successful install.
 func TestRoutesCreateApplicationInstallsProviderHook(t *testing.T) {
 	userID, serverID := uuid.New(), uuid.New()
 	app := sampleApplication()
 	app.UserID = userID
-	svc := &fakeDeployService{application: app}
+	svc := &fakeDeployService{application: app, installAttempted: true}
 	srv := newRouteServer(svc, alwaysUser(userID))
 
 	rec := httptest.NewRecorder()
@@ -192,6 +194,13 @@ func TestRoutesCreateApplicationInstallsProviderHook(t *testing.T) {
 	if svc.installedFor != app.ID || svc.seenUser != userID {
 		t.Errorf("install saw app %s / user %s, want %s / %s",
 			svc.installedFor, svc.seenUser, app.ID, userID)
+	}
+	var body applicationEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Webhook == nil || !body.Webhook.Installed || body.Webhook.Error != "" {
+		t.Errorf("webhook outcome = %+v, want installed with no error", body.Webhook)
 	}
 }
 
@@ -225,12 +234,17 @@ func TestRoutesCreateApplicationSkipsHookWithoutProvider(t *testing.T) {
 // the application row is already committed, so a provider outage, missing
 // credentials or an unusable callback cannot turn the create into an error
 // (the caller would retry and create a duplicate). The failure is logged by
-// the service and the explicit idempotent webhook route retries it.
+// the service and the response carries a coarse webhook outcome so the caller
+// knows automatic deploys are off and which route retries the install.
 func TestRoutesCreateApplicationSurvivesHookFailure(t *testing.T) {
 	userID, serverID := uuid.New(), uuid.New()
 	app := sampleApplication()
 	app.UserID = userID
-	svc := &fakeDeployService{application: app, installErr: errors.New("provider unavailable")}
+	svc := &fakeDeployService{
+		application:      app,
+		installAttempted: true,
+		installErr:       errors.New("provider unavailable"),
+	}
 	srv := newRouteServer(svc, alwaysUser(userID))
 
 	rec := httptest.NewRecorder()
@@ -249,6 +263,12 @@ func TestRoutesCreateApplicationSurvivesHookFailure(t *testing.T) {
 	}
 	if svc.installCalls != 1 {
 		t.Errorf("hook installs = %d, want the one failed attempt", svc.installCalls)
+	}
+	if body.Webhook == nil || body.Webhook.Installed {
+		t.Fatalf("webhook outcome = %+v, want installed=false", body.Webhook)
+	}
+	if !strings.Contains(body.Webhook.Error, "retry") {
+		t.Errorf("webhook error = %q, want the retry named", body.Webhook.Error)
 	}
 	if strings.Contains(rec.Body.String(), "provider unavailable") {
 		t.Error("the provider failure leaked into the response body")
@@ -294,6 +314,9 @@ func TestRoutesCreateApplicationBoundsStalledHookProvider(t *testing.T) {
 	}
 	if body.Application.ID == "" {
 		t.Error("the stalled hook install swallowed the created application")
+	}
+	if body.Webhook == nil || body.Webhook.Installed {
+		t.Errorf("webhook outcome = %+v, want installed=false for the stalled provider", body.Webhook)
 	}
 	if stall.installCalls != 1 {
 		t.Errorf("hook installs = %d, want 1", stall.installCalls)
@@ -487,6 +510,39 @@ func TestRoutesDeleteApplication(t *testing.T) {
 	}
 	if svc.seenUser != userID || svc.seenApplication != appID {
 		t.Errorf("service saw %s/%s, want %s/%s", svc.seenUser, svc.seenApplication, userID, appID)
+	}
+}
+
+// TestRoutesDeleteApplicationFailsClosedOnHookFailure drives the real service:
+// when the provider hook cannot be removed, the delete answers 502 and the
+// application survives. The stored hook row is the only handle on the remote
+// hook, so the caller retries, cleans the host by hand, or force-forgets the
+// row (DELETE .../webhooks?force=true) and deletes again.
+func TestRoutesDeleteApplicationFailsClosedOnHookFailure(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	hooks := &fakeHookLifecycle{removeErr: fmt.Errorf("%w: provider unavailable", ErrProvider)}
+	svc := NewService(Config{
+		Repository: repo,
+		Secret:     testSecretKey,
+		Logger:     discardLogger(),
+		Hooks:      func() HookLifecycle { return hooks },
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, applicationsPath+"/"+app.ID.String(), nil))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (body %s)", rec.Code, rec.Body.String())
+	}
+	if hooks.removeCalls != 1 {
+		t.Errorf("hook removals = %d, want the one failed attempt", hooks.removeCalls)
+	}
+	if _, err := svc.GetApplication(context.Background(), userID, app.ID); err != nil {
+		t.Errorf("the application must survive a failed hook removal: %v", err)
 	}
 }
 

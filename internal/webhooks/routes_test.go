@@ -595,6 +595,36 @@ func TestRoutesDeleteWebhookProviderFailureKeepsRow(t *testing.T) {
 	}
 }
 
+// TestRoutesForgetWebhookForceEscapeHatch pins ?force=true: the caller
+// acknowledges that the provider cannot be reached, the stored row is dropped
+// (so the application delete can proceed), and the response reports the
+// removal. The strict route keeps the row and answers 502 — see
+// TestRoutesDeleteWebhookProviderFailureKeepsRow.
+func TestRoutesForgetWebhookForceEscapeHatch(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	installer := &fakeInstaller{deleteErr: io.ErrUnexpectedEOF}
+	svc := newTestService(repo, installer, &fakeDeployer{})
+
+	rec := httptest.NewRecorder()
+	newRouteServer(svc, repo.app.UserID).ServeHTTP(rec,
+		managementRequest(http.MethodDelete,
+			"/v1/applications/"+repo.app.ID.String()+"/webhooks?force=true"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var got deleteEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.Deleted {
+		t.Error("deleted = false, want true")
+	}
+	if repo.hook != nil {
+		t.Errorf("stored hook = %+v, want it forgotten", repo.hook)
+	}
+}
+
 func TestRoutesCreateWebhookProviderFailure(t *testing.T) {
 	repo := newFakeRepository()
 	installer := &fakeInstaller{createErr: io.ErrUnexpectedEOF}

@@ -155,6 +155,28 @@ interface ApplicationListEnvelope {
 /** Wire envelope for a single application. */
 interface ApplicationEnvelope {
   application: Application;
+  /**
+   * Outcome of the automatic provider-hook install on create (see
+   * `webhookOutcome` in `internal/deploy/routes.go`). Absent when no install
+   * was attempted — a pasted public URL, or no hook lifecycle wired.
+   */
+  webhook?: HookOutcome;
+}
+
+/**
+ * Outcome of the automatic provider-hook install when an application is
+ * created. `installed: false` means the application was created but automatic
+ * deploys are off; `error` names the idempotent retry route.
+ */
+export interface HookOutcome {
+  installed: boolean;
+  error?: string;
+}
+
+/** Result of a successful create: the application plus its hook outcome. */
+export interface CreatedApplication {
+  application: Application;
+  webhook?: HookOutcome;
 }
 
 /** Wire envelope for the environment collection (see envListEnvelope). */
@@ -249,16 +271,19 @@ export async function getApplication(id: string): Promise<Application> {
 
 /**
  * createApplication stores a new application with its environment and storage
- * in one transaction (POST /applications → 201).
+ * in one transaction (POST /applications → 201). The result also carries the
+ * automatic provider-hook outcome, when one was attempted: the application is
+ * stored even when its hook install failed, and the caller should surface that
+ * (`webhook.installed === false`) to the user.
  */
 export async function createApplication(
   input: CreateApplicationInput,
-): Promise<Application> {
+): Promise<CreatedApplication> {
   const response = await http.post<ApplicationEnvelope>(
     "/applications",
     input,
   );
-  return response.data.application;
+  return response.data;
 }
 
 /**

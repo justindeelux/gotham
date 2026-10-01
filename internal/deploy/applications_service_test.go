@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -555,39 +556,27 @@ func TestServiceDeleteApplicationSkipsHookWithoutProvider(t *testing.T) {
 	}
 }
 
-// TestServiceDeleteApplicationSurvivesHookRemovalFailure pins the outage
-// semantics: a provider the control plane cannot reach must never make an
-// application undeletable. The failure is logged with the orphan's provider
-// and repository (the reconciliation record) and the delete proceeds.
-func TestServiceDeleteApplicationSurvivesHookRemovalFailure(t *testing.T) {
+// TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure pins the HIGH
+// finding: the stored hook row is the only handle on the remote hook, so a
+// failed removal aborts the delete and keeps both sides in step. The caller
+// can retry, remove the hook on the host by hand, or force-forget the row
+// (ForgetWebhook) and delete again.
+func TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
 	repo := &fakeRepository{app: app}
-	hooks := &fakeHookLifecycle{removeErr: errors.New("provider unavailable")}
+	hooks := &fakeHookLifecycle{removeErr: fmt.Errorf("%w: provider unavailable", ErrProvider)}
+	svc := newHookService(t, repo, hooks)
 
-	var logs bytes.Buffer
-	svc := NewService(Config{
-		Repository: repo,
-		Secret:     testSecretKey,
-		Logger:     slog.New(slog.NewTextHandler(&logs, nil)),
-		Hooks:      func() HookLifecycle { return hooks },
-	})
-	t.Cleanup(func() { _ = svc.Close() })
-
-	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
-		t.Fatalf("delete must not depend on the provider: %v", err)
+	err := svc.DeleteApplication(context.Background(), userID, app.ID)
+	if !errors.Is(err, ErrProvider) {
+		t.Fatalf("delete err = %v, want the hook removal failure to surface", err)
 	}
 	if hooks.removeCalls != 1 {
 		t.Errorf("hook removals = %d, want the one failed attempt", hooks.removeCalls)
 	}
-	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("get after delete err = %v, want ErrNotFound", err)
-	}
-	logged := logs.String()
-	for _, want := range []string{app.Provider, app.Repo, app.ID.String()} {
-		if !strings.Contains(logged, want) {
-			t.Errorf("log = %q, want the orphaned hook named by %q", logged, want)
-		}
+	if _, err := svc.GetApplication(context.Background(), userID, app.ID); err != nil {
+		t.Errorf("the application row must survive a failed hook removal: %v", err)
 	}
 }
 
@@ -632,8 +621,12 @@ func TestServiceInstallHookDelegatesToLifecycle(t *testing.T) {
 	svc := newHookService(t, &fakeRepository{}, hooks)
 	req := httptest.NewRequest(http.MethodPost, applicationsPath, nil)
 
-	if err := svc.InstallHook(context.Background(), userID, appID, req); err != nil {
+	attempted, err := svc.InstallHook(context.Background(), userID, appID, req)
+	if err != nil {
 		t.Fatalf("install: %v", err)
+	}
+	if !attempted {
+		t.Error("attempted = false, want the wired lifecycle attempted")
 	}
 	if hooks.installCalls != 1 || hooks.installedFor != appID {
 		t.Errorf("installs = %d for %s, want one for %s", hooks.installCalls, hooks.installedFor, appID)
@@ -641,20 +634,25 @@ func TestServiceInstallHookDelegatesToLifecycle(t *testing.T) {
 }
 
 // TestServiceInstallHookWithoutLifecycleIsNoop pins the unwired install: no
-// lifecycle means nothing to do, not an error.
+// lifecycle means nothing to do, not an error, and the route reports no
+// outcome (attempted=false).
 func TestServiceInstallHookWithoutLifecycleIsNoop(t *testing.T) {
 	svc := newTestService(t, &fakeRepository{})
 	req := httptest.NewRequest(http.MethodPost, applicationsPath, nil)
-	if err := svc.InstallHook(context.Background(), uuid.New(), uuid.New(), req); err != nil {
+	attempted, err := svc.InstallHook(context.Background(), uuid.New(), uuid.New(), req)
+	if err != nil {
 		t.Fatalf("install without a lifecycle = %v, want nil", err)
+	}
+	if attempted {
+		t.Error("attempted = true without a wired lifecycle")
 	}
 }
 
 // TestServiceInstallHookBoundsStalledProvider pins MEDIUM-1: a provider that
 // accepts the connection and then stalls must not hold the create path open.
 // The call is cut at Config.HookTimeout, the failure is logged (the outcome
-// stays visible) and the error is returned for the caller to ignore, exactly
-// as the create route does.
+// stays visible) and the error is returned for the create route to surface as
+// installed=false, never to fail the create.
 func TestServiceInstallHookBoundsStalledProvider(t *testing.T) {
 	stall := &stallingHookLifecycle{}
 
@@ -670,9 +668,12 @@ func TestServiceInstallHookBoundsStalledProvider(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, applicationsPath, nil)
 	start := time.Now()
-	err := svc.InstallHook(context.Background(), uuid.New(), uuid.New(), req)
+	attempted, err := svc.InstallHook(context.Background(), uuid.New(), uuid.New(), req)
 	elapsed := time.Since(start)
 
+	if !attempted {
+		t.Fatal("attempted = false, want the stalled install attempted")
+	}
 	if elapsed > 5*time.Second {
 		t.Fatalf("InstallHook took %s, want it bounded by the 50ms hook timeout", elapsed)
 	}
@@ -688,19 +689,18 @@ func TestServiceInstallHookBoundsStalledProvider(t *testing.T) {
 }
 
 // TestServiceDeleteApplicationBoundsStalledProvider pins the same bound on the
-// uninstall path: a stalled provider is cut off, the failure is logged with
-// the orphan's identity for reconciliation, and the application still deletes.
+// uninstall path: a stalled provider is cut off and the delete fails closed
+// (the application row survives), so the hook can still be removed later.
 func TestServiceDeleteApplicationBoundsStalledProvider(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
 	repo := &fakeRepository{app: app}
 	stall := &stallingHookLifecycle{}
 
-	var logs bytes.Buffer
 	svc := NewService(Config{
 		Repository:  repo,
 		Secret:      testSecretKey,
-		Logger:      slog.New(slog.NewTextHandler(&logs, nil)),
+		Logger:      discardLogger(),
 		Hooks:       func() HookLifecycle { return stall },
 		HookTimeout: 50 * time.Millisecond,
 	})
@@ -710,8 +710,8 @@ func TestServiceDeleteApplicationBoundsStalledProvider(t *testing.T) {
 	err := svc.DeleteApplication(context.Background(), userID, app.ID)
 	elapsed := time.Since(start)
 
-	if err != nil {
-		t.Fatalf("delete: %v", err)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("delete err = %v, want the hook timeout to surface", err)
 	}
 	if elapsed > 5*time.Second {
 		t.Fatalf("delete took %s, want it bounded by the 50ms hook timeout", elapsed)
@@ -719,11 +719,8 @@ func TestServiceDeleteApplicationBoundsStalledProvider(t *testing.T) {
 	if stall.removeCalls != 1 {
 		t.Errorf("hook removals = %d, want 1", stall.removeCalls)
 	}
-	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("get after delete err = %v, want ErrNotFound", err)
-	}
-	if logged := logs.String(); !strings.Contains(logged, app.Repo) {
-		t.Errorf("log = %q, want the orphan named", logged)
+	if _, err := svc.GetApplication(context.Background(), userID, app.ID); err != nil {
+		t.Errorf("the application row must survive a timed-out hook removal: %v", err)
 	}
 }
 

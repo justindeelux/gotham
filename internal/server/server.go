@@ -32,6 +32,7 @@ import (
 	"github.com/justindeelux/gotham/internal/templates"
 	"github.com/justindeelux/gotham/internal/updates"
 	"github.com/justindeelux/gotham/internal/webhooks"
+	"github.com/justindeelux/gotham/updatecore"
 )
 
 // shutdownTimeout bounds graceful shutdown after the context is cancelled.
@@ -623,11 +624,21 @@ func (s *Server) updatesService() updates.Service {
 		return nil
 	}
 	current := "dev"
-	if fromEnv := updates.CurrentFromEnv(); fromEnv != "" {
-		current = fromEnv
-	} else if reporter, ok := s.servers.(versionReporter); ok {
+	if reporter, ok := s.servers.(versionReporter); ok {
 		if v := reporter.Version(); v != "" {
 			current = v
+		}
+	}
+	// GOTHAM_UPDATE_CURRENT is a development seam for wrappers and tests. On a
+	// release build (an embedded release key) it is ignored so a stray
+	// environment value cannot pin the reported version; the node-registry
+	// version is used instead.
+	if fromEnv := updates.CurrentFromEnv(); fromEnv != "" {
+		if updatecore.HasEmbeddedKey() {
+			s.logger.Warn("updates: ignoring GOTHAM_UPDATE_CURRENT on a build with an embedded release key",
+				"version", fromEnv)
+		} else {
+			current = fromEnv
 		}
 	}
 	config, err := updates.FromEnv(current, s.logger)

@@ -64,9 +64,10 @@ const (
 	defaultAgentBackoffPath = "/var/lib/gotham-agent/update.backoff"
 	defaultAgentHealthAddr  = "127.0.0.1:8001"
 	defaultUpdateInterval   = 5 * time.Minute
-	// defaultUpdateChannel is the release channel an agent accepts when
-	// GOTHAM_AGENT_UPDATE_CHANNEL is unset. An offer whose signed channel does
-	// not match is refused (C2).
+	// defaultUpdateChannel is the release channel accepted when
+	// GOTHAM_AGENT_UPDATE_CHANNEL is unset. A stable node refuses beta offers;
+	// a beta node accepts stable and beta offers (the offer carries the
+	// release's own channel). An unknown configured value behaves like stable.
 	defaultUpdateChannel = "stable"
 	// betaUpdateChannel opts a node into prereleases: a beta node accepts both
 	// stable and beta offers (the offer carries the release's own channel).

@@ -564,8 +564,9 @@ func readFileString(t *testing.T, path string) string {
 
 // TestReleaseFromOfferBinding is the C2 regression matrix: an agent accepts only
 // its own release family/arch/manifest/channel and refuses the control-plane
-// family, a wrong arch, a wrong manifest, an empty channel and a beta offer on a
-// stable node (the inverse of the G2 PoC).
+// family, a wrong arch, a wrong manifest, an empty channel and a beta offer on
+// any non-beta node (the inverse of the G2 PoC). It also pins the F3 fallback:
+// an unknown configured channel behaves like stable.
 func TestReleaseFromOfferBinding(t *testing.T) {
 	arch := runtime.GOARCH
 	otherArch := "arm64"
@@ -622,6 +623,14 @@ func TestReleaseFromOfferBinding(t *testing.T) {
 		"beta offer on a stable node": {
 			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "beta" },
 			channel: "stable", wantErr: true,
+		},
+		"unknown configured channel accepts a stable offer (F3 fallback)": {
+			mutate:  func(*agentv1.UpdateResponse) {},
+			channel: "canary",
+		},
+		"unknown configured channel refuses a beta offer (F3 fallback)": {
+			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "beta" },
+			channel: "canary", wantErr: true,
 		},
 		"stable offer on a beta node": {
 			mutate:  func(*agentv1.UpdateResponse) {},

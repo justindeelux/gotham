@@ -206,12 +206,12 @@ TLS; agents installed before that go offline until they are reinstalled with
   rollback is correct. Operators who prefer the unit to give up sooner (or later)
   can tune `StartLimitIntervalSec`/`StartLimitBurst`/`RestartSec` in the unit;
   the wrapper does not depend on the exact values.
-- **Beta channel binding (M4, MED — fix before any beta user).** A
-  beta-configured node rejects a *stable* manifest because the signed manifest
-  carries `channel=stable` while the checker labels the offer `beta`
-  (`internal/updates/checker.go`, `internal/updates/agents.go`,
-  `updatecore/applier.go`). It fails closed (no update until a newer beta), so it
-  is a beta-channel availability bug, not an integrity one.
+- **Beta channel binding (M4) — resolved.** Offers now carry the release's own
+  channel (`stable` unless the GitHub release is a prerelease), and the agent
+  accepts stable offers on every non-beta configuration, so a beta node takes a
+  newer stable release; stable nodes still never see prereleases and the
+  offer→manifest channel binding stays enforced (`internal/updates/checker.go`,
+  `agent/updater.go`).
 - **The agent channel is not mutual yet (LOW-4).** The gRPC listener uses
   `VerifyClientCertIfGiven`, so any peer that can reach the port can ask for
   (signed) update offers and force cached release lookups. The agent verifies the
@@ -228,16 +228,18 @@ TLS; agents installed before that go offline until they are reinstalled with
   current key cannot be revoked on a node that has not yet received a ring
   release (the anchor is compiled in), so those nodes still need an upgrade or
   reinstall; the runbook covers the emergency sequencing.
-- **`GOTHAM_UPDATE_CURRENT` pins the reported version (INFO).** The server
-  honours it and `/etc/gotham/gotham.env` is root-owned, so it is not a
-  downgrade path, but an operator who sets it by mistake pins the "current"
-  version and can hide real releases. It exists for `deploy/verify-systemd.sh`
-  and tests; do not set it in production.
-- **`release-verify.sh` leaves its temp directory on a signal (I5, INFO).** The
-  shared verifier has no `trap` (the caller may own `EXIT`), so a SIGINT/SIGTERM
-  mid-download can leave `/tmp/gotham-verify.XXXXXX` behind. It holds only public
-  release material. Upgrade path: add `_GOTHAM_VERIFY_WORK` to the installers'
-  `EXIT` cleanup.
+- **`GOTHAM_UPDATE_CURRENT` pin — resolved for release builds (INFO).** The
+  override still exists for `deploy/verify-systemd.sh` and tests, but a build
+  that embeds release key material ignores it (with a warning) and reports the
+  node-registry version, so a stray environment value cannot pin a production
+  build; `/etc/gotham/gotham.env` stays root-owned (`internal/server/server.go`,
+  `updatecore.HasEmbeddedKey`).
+- **`release-verify.sh` cleans up on a signal (I5) — resolved.** The shared
+  verifier installs EXIT/INT/TERM/HUP handlers for the duration of one
+  verification, chaining the caller's handlers instead of clobbering them,
+  restoring them on success and aborting nonzero on a signal, so a
+  SIGINT/SIGTERM mid-download can no longer leave `/tmp/gotham-verify.XXXXXX`
+  behind (`deploy/release-verify.sh`).
 - **M9 real-release evidence is partial.** A signed `v0.1.0` release (14 assets)
   was installed on a clean Ubuntu 22.04 container and re-installed; the signed
   manifests and artifact digests verify with the pinned key, and the two-agent

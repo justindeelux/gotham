@@ -89,7 +89,11 @@ _gotham_verify_install_traps() {
 }
 
 # _gotham_verify_exit is the verifier's chained EXIT handler: remove the scratch
-# dir, then run the caller's prior EXIT handler.
+# dir, then run the caller's prior EXIT handler. Fidelity limits (F2; no current
+# caller is affected): the chained handler observes $? = 0 rather than the
+# shell's exit status, and a prior trap command containing a literal newline is
+# not extracted (it is dropped for the verification window; cleanup and the
+# nonzero abort still happen).
 _gotham_verify_exit() {
     trap - EXIT
     _gotham_verify_cleanup

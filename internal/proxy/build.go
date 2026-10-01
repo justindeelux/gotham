@@ -335,7 +335,7 @@ func NormalizeDomain(domain string) string {
 	return strings.ToLower(strings.TrimSpace(domain))
 }
 
-// wildcardBase derives the wildcard base that covers the routed host. A
+// WildcardBase derives the wildcard base that covers the routed host. A
 // wildcard certificate name matches exactly one label, so the generated
 // request keeps the exact host as the main name and adds `*.base` as a SAN:
 //
@@ -346,8 +346,9 @@ func NormalizeDomain(domain string) string {
 //     then covers its subdomains)
 //
 // ok is false only when neither the parent nor the host sits inside a
-// configured zone.
-func wildcardBase(host string, zones []string) (string, bool) {
+// configured zone. It is exported so the preview clone can check that a
+// sibling's host is certifiable through the base application's provider.
+func WildcardBase(host string, zones []string) (string, bool) {
 	labels := strings.Split(host, ".")
 	if len(labels) >= 2 {
 		parent := strings.Join(labels[1:], ".")

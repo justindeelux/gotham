@@ -305,6 +305,22 @@ func (r *fakeRepository) GetPreview(_ context.Context, appID uuid.UUID, prNumber
 	return preview, nil
 }
 
+// GetPreviewByApplication implements Repository: the live binding a preview
+// sibling backs (the terminal deploy comment hook's lookup).
+func (r *fakeRepository) GetPreviewByApplication(_ context.Context, previewAppID uuid.UUID) (Preview, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.getPrevErr != nil {
+		return Preview{}, r.getPrevErr
+	}
+	for _, preview := range r.previews {
+		if preview.PreviewApplicationID == previewAppID && preview.State != PreviewDeleted {
+			return preview, nil
+		}
+	}
+	return Preview{}, ErrNotFound
+}
+
 // UpsertPreview implements Repository with the unique-key semantics of the
 // database.
 func (r *fakeRepository) UpsertPreview(_ context.Context, preview Preview) (Preview, error) {
@@ -469,6 +485,10 @@ func (r *fakeRepository) ClaimPreviewDelivery(_ context.Context, claim PreviewCl
 		current := binding
 		result.Binding = &current
 	}
+	// F-1: a live close reservation owns the pull request even before any
+	// binding exists, so a start that arrives while the close is in flight is
+	// retryable instead of provisioning a sibling the close cannot see.
+	closeInFlight := r.hasLiveCloseLocked(claim.ApplicationID, claim.PRNumber, now)
 
 	reserve := func() {
 		key := claimReservationKey(claim)
@@ -492,9 +512,22 @@ func (r *fakeRepository) ClaimPreviewDelivery(_ context.Context, claim PreviewCl
 
 	switch claim.Kind {
 	case ReservationClose:
+		if !hasBinding || binding.State == PreviewDeleted {
+			// MEDIUM-1: with no live binding, a leftover close marker is
+			// replaced so the redelivery re-runs the idempotent clear instead
+			// of being acked duplicate.
+			for key, reservation := range r.reservations {
+				if reservation.ApplicationID == claim.ApplicationID &&
+					reservation.PRNumber == claim.PRNumber && reservation.Kind == ReservationClose {
+					delete(r.reservations, key)
+				}
+			}
+		}
 		reserve()
 	case ReservationStart:
 		switch {
+		case closeInFlight:
+			result.Retryable = true
 		case hasBinding && binding.State == PreviewClosing:
 			// N4: a close owns the preview even at the delivery's own head;
 			// the same-SHA reopen stays retryable until the teardown completes.
@@ -556,6 +589,13 @@ func (r *fakeRepository) WritePreviewBinding(_ context.Context, write PreviewBin
 		return PreviewBindingWriteResult{Refused: BindingRefusedLease}, nil
 	}
 
+	// F-1: a live close reservation owns the pull request even when no binding
+	// exists yet; a start that claimed before the close can never promote after
+	// it.
+	if r.hasLiveCloseLocked(write.ApplicationID, write.PRNumber, now) {
+		return PreviewBindingWriteResult{Refused: BindingRefusedClosing}, nil
+	}
+
 	key := previewKey(write.ApplicationID, write.PRNumber)
 	binding, hasBinding := r.previews[key]
 	if hasBinding && binding.State == PreviewClosing {
@@ -595,6 +635,32 @@ func (r *fakeRepository) WritePreviewBinding(_ context.Context, write PreviewBin
 		}
 	}
 	return PreviewBindingWriteResult{Binding: &stored}, nil
+}
+
+// hasCloseMarker reports whether a close reservation is present (test helper;
+// unlike hasLiveCloseLocked it ignores expiry).
+func (r *fakeRepository) hasCloseMarker(appID uuid.UUID, prNumber int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, reservation := range r.reservations {
+		if reservation.ApplicationID == appID && reservation.PRNumber == prNumber &&
+			reservation.Kind == ReservationClose {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLiveCloseLocked reports whether a close reservation for the pull request
+// is still in flight (an expired marker fences nothing). Callers hold r.mu.
+func (r *fakeRepository) hasLiveCloseLocked(appID uuid.UUID, prNumber int, now time.Time) bool {
+	for _, reservation := range r.reservations {
+		if reservation.ApplicationID == appID && reservation.PRNumber == prNumber &&
+			reservation.Kind == ReservationClose && reservation.ExpiresAt.After(now) {
+			return true
+		}
+	}
+	return false
 }
 
 // reservationByIDLocked find a reservation by id (test helper).

@@ -238,8 +238,13 @@ func (s *Service) receivePullRequest(ctx context.Context, provider string, targe
 	}
 	if err != nil {
 		// The lease must not outlive a delivery that queued nothing: a
-		// redelivered body has to be able to claim again.
-		s.releaseReservation(ctx, claim.Reservation)
+		// redelivered body has to be able to claim again. The one exception is
+		// a no-binding close whose ledger clear failed: its reservation is the
+		// only fence over a racing open, so it stays until the redelivery (or
+		// the marker's expiry) clears it (MEDIUM-1).
+		if !errors.Is(err, errCloseFenceHeld) {
+			s.releaseReservation(ctx, claim.Reservation)
+		}
 		return Delivery{}, err
 	}
 	return delivery, nil
@@ -468,9 +473,14 @@ func (s *Service) compensatePreview(ctx context.Context, appID uuid.UUID, provis
 func (s *Service) closePreview(ctx context.Context, target Target, number int, claim *PreviewClaimResult) (Delivery, error) {
 	if claim.Binding == nil {
 		// Nothing to tear down. Clearing the ledger keeps a stale reservation
-		// from suppressing a later reopen at the same revision.
+		// from suppressing a later reopen at the same revision; it also removes
+		// the start lease of a racing open. On failure the close marker must
+		// survive: it is the fence that refuses that open's promotion, so
+		// releasing it here would leave a live preview behind a closed pull
+		// request (MEDIUM-1). The delivery is retryable, and the retry
+		// replaces the marker and re-runs this clear.
 		if cerr := s.repo.ClearPreviewDeliveries(ctx, target.ApplicationID, number); cerr != nil {
-			return Delivery{}, cerr
+			return Delivery{}, errors.Join(ErrRetryable, errCloseFenceHeld, cerr)
 		}
 		return Delivery{Status: StatusIgnored, Reason: "no preview"}, nil
 	}
@@ -745,7 +755,72 @@ func failedComment(host string) string {
 		"Check the application's deployment log for details."
 }
 
+// succeededComment is the badge comment of a preview whose deployment reached
+// the running state.
+func succeededComment(host string) string {
+	return "Preview deployment is live: http://" + host
+}
+
+// failedDeployComment is the badge comment of a preview whose deployment
+// failed terminally (as opposed to a delivery that never queued one).
+func failedDeployComment(host string) string {
+	return "Preview deployment failed for http://" + host + ".\n\n" +
+		"Check the application's deployment log for details."
+}
+
 // deletedComment is the badge comment of a torn-down preview.
 func deletedComment() string {
 	return "Preview deployment removed."
+}
+
+// DeployFinished implements deploy.Notifier for the preview surface: a
+// terminal deployment of a preview sibling updates the pull request's badge
+// comment. The binding lookup by sibling application ID makes an unrelated
+// (non-preview) deployment a no-op, and a binding a close already owns or
+// completed is skipped so the close comment is never overwritten. Best effort:
+// a lookup or comment failure is logged and never fails a deployment. The
+// server wiring calls it detached from the deploy worker.
+func (s *Service) DeployFinished(ctx context.Context, result deploy.DeployResult) {
+	if s == nil || s.repo == nil || s.commenter == nil {
+		return
+	}
+	if result.State != deploy.StateRunning && result.State != deploy.StateFailed {
+		return
+	}
+	binding, err := s.repo.GetPreviewByApplication(ctx, result.ApplicationID)
+	if err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			s.logger.Warn("webhooks: preview terminal comment lookup failed",
+				"application_id", result.ApplicationID, "error", err)
+		}
+		return
+	}
+	if binding.State != PreviewActive {
+		return
+	}
+	base, err := s.repo.GetApplication(ctx, binding.ApplicationID)
+	if err != nil {
+		s.logger.Warn("webhooks: preview terminal comment application lookup failed",
+			"application_id", binding.ApplicationID, "error", err)
+		return
+	}
+	host := strings.TrimSpace(result.Host)
+	if host == "" {
+		host = binding.Host
+	}
+	target := Target{
+		ApplicationID: base.ID,
+		UserID:        base.UserID,
+		TeamID:        base.TeamID,
+		Provider:      base.Provider,
+		Repo:          base.Repo,
+		CloneURL:      base.CloneURL,
+		Name:          base.Name,
+		BaseDomain:    base.BaseDomain,
+	}
+	if result.State == deploy.StateRunning {
+		s.previewComment(ctx, target, binding.PRNumber, succeededComment(host))
+		return
+	}
+	s.previewComment(ctx, target, binding.PRNumber, failedDeployComment(host))
 }

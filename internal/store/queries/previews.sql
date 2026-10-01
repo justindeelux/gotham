@@ -25,6 +25,14 @@ SELECT * FROM preview_deploys
 WHERE application_id = $1
 ORDER BY created_at DESC;
 
+-- name: GetLivePreviewDeployBySibling :one
+-- The live binding a preview sibling application backs: the terminal deploy
+-- hook resolves the pull request through it. A sibling backs at most one
+-- binding, and a deleted binding is the audit trail, not a comment target.
+SELECT * FROM preview_deploys
+WHERE preview_application_id = $1 AND state <> 'deleted'
+LIMIT 1;
+
 -- name: MarkPreviewDeployClosing :one
 -- Persists a close intent before the sibling is torn down, so a failed (or
 -- lost) teardown is re-attempted by the sweep.
@@ -103,6 +111,29 @@ SELECT count(*) FROM (
 -- lease it was issued still exists and has not lapsed. An expired lease is
 -- reported as missing, so a stale worker cannot promote a binding.
 SELECT * FROM preview_deliveries WHERE id = $1 AND expires_at > clock_timestamp();
+
+-- name: HasLivePreviewClose :one
+-- The promotion fence's close check (F-1): a live close reservation owns the
+-- pull request even before any binding exists, so a start that claimed before
+-- the close can never promote after it. An expired marker (a crashed close
+-- delivery) fences nothing; the promotion's own lease fence still stops a
+-- stale worker.
+SELECT EXISTS (
+    SELECT 1 FROM preview_deliveries
+    WHERE application_id = $1
+      AND pr_number = $2
+      AND kind = 'close'
+      AND expires_at > clock_timestamp()
+) AS live;
+
+-- name: DeletePreviewCloseReservation :exec
+-- A close retry with no live binding replaces a leftover marker (a previous
+-- attempt whose ledger clear failed, or a concurrent no-binding close whose
+-- clear is idempotent) so the redelivery re-runs the idempotent close instead
+-- of being acked as a duplicate (MEDIUM-1). Runs under the application lock,
+-- in the same transaction that reserves the new marker.
+DELETE FROM preview_deliveries
+WHERE application_id = $1 AND pr_number = $2 AND kind = 'close';
 
 -- name: ReservePreviewDelivery :one
 -- Insert a delivery reservation (in-flight lease for a start, teardown marker

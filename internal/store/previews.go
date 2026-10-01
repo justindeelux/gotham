@@ -63,7 +63,13 @@ type PreviewClaimResult struct {
 //     an earlier revision must deploy again);
 //   - a start for a new preview is refused as Limit when the live-or-in-flight
 //     count is already at LiveLimit;
-//   - a close always reserves (until an earlier close is still in flight).
+//   - a start that arrives while a close reservation is live is Retryable,
+//     even when no binding exists yet (F-1): the close either wins the
+//     promotion or the start is redelivered after it completes;
+//   - a close always reserves; when there is no live binding a leftover marker
+//     is replaced so a redelivery re-runs the idempotent ledger clear instead
+//     of being acked as a duplicate (MEDIUM-1), while an earlier in-flight
+//     close of a live preview still dedupes.
 func (s *Store) ClaimPreviewDelivery(ctx context.Context, params PreviewClaimParams) (PreviewClaimResult, error) {
 	var result PreviewClaimResult
 
@@ -121,13 +127,43 @@ func (s *Store) ClaimPreviewDelivery(ctx context.Context, params PreviewClaimPar
 		return nil
 	}
 
+	// F-1: a live close reservation owns the pull request even before any
+	// binding exists. A start that arrives while the close is in flight must
+	// stay retryable (never approve a sibling the close cannot see) instead of
+	// provisioning one and relying on the promotion fence to refuse it.
+	closeInFlight := false
+	if params.Kind == PreviewClaimStart {
+		closeInFlight, err = queries.HasLivePreviewClose(ctx, sqlc.HasLivePreviewCloseParams{
+			ApplicationID: params.ApplicationID,
+			PrNumber:      params.PrNumber,
+		})
+		if err != nil {
+			return PreviewClaimResult{}, err
+		}
+	}
+
 	switch params.Kind {
 	case PreviewClaimClose:
+		if binding == nil || binding.State == "deleted" {
+			// No live binding to tear down: a leftover close marker can only be
+			// a previous close attempt that failed before clearing the ledger
+			// (MEDIUM-1) or a concurrent no-binding close, whose clear is
+			// idempotent. Replace it so the redelivery re-runs the close
+			// instead of being acked as a duplicate.
+			if err := queries.DeletePreviewCloseReservation(ctx, sqlc.DeletePreviewCloseReservationParams{
+				ApplicationID: params.ApplicationID,
+				PrNumber:      params.PrNumber,
+			}); err != nil {
+				return PreviewClaimResult{}, err
+			}
+		}
 		if err := reserve(); err != nil {
 			return PreviewClaimResult{}, err
 		}
 	case PreviewClaimStart:
 		switch {
+		case closeInFlight:
+			result.Retryable = true
 		case binding != nil && binding.State == "closing":
 			// A close transition owns the preview right now — even at the
 			// delivery's own head. A same-SHA reopen must stay retryable until
@@ -255,6 +291,25 @@ func (s *Store) WritePreviewBinding(ctx context.Context, params PreviewBindingWr
 		lease.PrNumber != params.PrNumber ||
 		lease.HeadSha != params.LeaseHeadSHA {
 		result.Refused = PreviewWriteLeaseRefused
+		return result, nil
+	}
+
+	// F-1: a live close reservation owns this pull request even when no binding
+	// exists yet. The close claim and this write serialize on the application
+	// lock, so a start that claimed before the close can never promote after it
+	// — the close either won the lock first (this check refuses) or the
+	// promotion won (the close sees the binding and tears it down). A completed
+	// close clears the marker (and the start lease) atomically, so a legitimate
+	// reopen at the same revision is not blocked.
+	closing, err := queries.HasLivePreviewClose(ctx, sqlc.HasLivePreviewCloseParams{
+		ApplicationID: params.ApplicationID,
+		PrNumber:      params.PrNumber,
+	})
+	if err != nil {
+		return PreviewBindingWriteResult{}, err
+	}
+	if closing {
+		result.Refused = PreviewWriteClosingRefused
 		return result, nil
 	}
 
@@ -404,10 +459,35 @@ func (s *Store) PurgeExpiredPreviewDeliveries(ctx context.Context) (int64, error
 }
 
 // UpsertPreviewDeploy stores one pull request's preview binding, refreshing an
-// existing (application_id, pr_number) row in place. The unique pair is what
-// makes a redelivered PR event idempotent.
+// existing (application_id, pr_number) row in place, under the base-application
+// lock the other preview transitions serialize on (claim, promotion, close
+// intent, close completion, ledger clear). The unique pair is what makes a
+// redelivered PR event idempotent.
 func (s *Store) UpsertPreviewDeploy(ctx context.Context, params sqlc.UpsertPreviewDeployParams) (sqlc.PreviewDeploy, error) {
-	return s.queries.UpsertPreviewDeploy(ctx, params)
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.PreviewDeploy{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := lockApplication(ctx, tx, params.ApplicationID); err != nil {
+		return sqlc.PreviewDeploy{}, err
+	}
+	row, err := s.queries.WithTx(tx).UpsertPreviewDeploy(ctx, params)
+	if err != nil {
+		return sqlc.PreviewDeploy{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.PreviewDeploy{}, err
+	}
+	return row, nil
+}
+
+// GetLivePreviewDeployBySibling returns the live binding a preview sibling
+// application backs, or pgx.ErrNoRows. It is the terminal deploy hook's
+// lookup: an application that is not a live preview resolves to nothing.
+func (s *Store) GetLivePreviewDeployBySibling(ctx context.Context, previewApplicationID pgtype.UUID) (sqlc.PreviewDeploy, error) {
+	return s.queries.GetLivePreviewDeployBySibling(ctx, previewApplicationID)
 }
 
 // GetPreviewDeploy returns one preview binding, or pgx.ErrNoRows when the PR

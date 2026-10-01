@@ -107,6 +107,149 @@ func TestCreatePreviewApplicationClonesConfig(t *testing.T) {
 	}
 }
 
+// TestCreatePreviewApplicationClonesWildcardCertificate is the HTTPS intent
+// regression: a base application with an enabled wildcard DNS-01 intent gets an
+// equivalent intent on the sibling (recorded for the preview host, same
+// provider), and the system teardown removes it through the application
+// cascade.
+func TestCreatePreviewApplicationClonesWildcardCertificate(t *testing.T) {
+	base := testApplication(uuid.New())
+	base.BaseDomain = "app.example.com"
+	repo := seedBaseForPreview(t, base)
+	providerID := uuid.New()
+	repo.certificates = []CertificateIntent{{
+		ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true,
+		Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
+	}}
+	repo.dnsProviders = map[uuid.UUID]DNSProviderInfo{
+		providerID: {Zones: []string{"example.com"}, Enabled: true},
+	}
+
+	svc := newTestService(t, repo)
+	created, err := svc.CreatePreviewApplication(context.Background(), base.ID, PreviewApplicationInput{
+		Name: "demo app-pr-7", Branch: "feat/x", BaseDomain: "pr-7-demo.app.example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreatePreviewApplication: %v", err)
+	}
+
+	intent, ok := repo.certificateIntent(created.ID)
+	if !ok {
+		t.Fatal("the sibling got no certificate intent")
+	}
+	if intent.Domain != "pr-7-demo.app.example.com" || !intent.Enabled || !intent.Wildcard ||
+		intent.Challenge != "dns-01" || intent.DNSProviderID != providerID {
+		t.Fatalf("cloned intent = %+v, want the base's wildcard configuration for the preview host", intent)
+	}
+	if baseIntent, _ := repo.certificateIntent(base.ID); baseIntent.Domain != "app.example.com" {
+		t.Fatalf("base intent = %+v, want it untouched", baseIntent)
+	}
+
+	// The teardown removes the sibling and its intent (the schema cascade).
+	if err := svc.DeleteSystemApplication(context.Background(), created.ID); err != nil {
+		t.Fatalf("DeleteSystemApplication: %v", err)
+	}
+	if _, ok := repo.certificateIntent(created.ID); ok {
+		t.Fatal("the sibling intent survived the teardown")
+	}
+}
+
+// TestCreatePreviewApplicationSkipsUncoveredCertificates pins the negative
+// cases: no base intent, a plain/disabled/stale intent, a disabled or missing
+// provider, and a provider whose zones do not cover the preview host all leave
+// the sibling HTTP-only.
+func TestCreatePreviewApplicationSkipsUncoveredCertificates(t *testing.T) {
+	base := testApplication(uuid.New())
+	base.BaseDomain = "app.example.com"
+	providerID := uuid.New()
+	enabled := map[uuid.UUID]DNSProviderInfo{
+		providerID: {Zones: []string{"example.com"}, Enabled: true},
+	}
+
+	cases := []struct {
+		name      string
+		intent    *CertificateIntent
+		providers map[uuid.UUID]DNSProviderInfo
+	}{
+		{name: "no intent"},
+		{name: "plain http-01 intent", intent: &CertificateIntent{
+			ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true, Challenge: "http-01",
+		}},
+		{name: "disabled wildcard intent", intent: &CertificateIntent{
+			ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: false,
+			Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
+		}, providers: enabled},
+		{name: "stale recorded domain", intent: &CertificateIntent{
+			ApplicationID: base.ID, Domain: "old.example.com", Enabled: true,
+			Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
+		}, providers: enabled},
+		{name: "disabled provider", intent: &CertificateIntent{
+			ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true,
+			Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
+		}, providers: map[uuid.UUID]DNSProviderInfo{
+			providerID: {Zones: []string{"example.com"}, Enabled: false},
+		}},
+		{name: "provider zones do not cover the preview host", intent: &CertificateIntent{
+			ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true,
+			Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
+		}, providers: map[uuid.UUID]DNSProviderInfo{
+			providerID: {Zones: []string{"other.com"}, Enabled: true},
+		}},
+		{name: "missing provider", intent: &CertificateIntent{
+			ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true,
+			Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := seedBaseForPreview(t, base)
+			if tc.intent != nil {
+				repo.certificates = []CertificateIntent{*tc.intent}
+			}
+			repo.dnsProviders = tc.providers
+			svc := newTestService(t, repo)
+			created, err := svc.CreatePreviewApplication(context.Background(), base.ID, PreviewApplicationInput{
+				Name: "demo app-pr-7", Branch: "feat/x", BaseDomain: "pr-7-demo.app.example.com",
+			})
+			if err != nil {
+				t.Fatalf("CreatePreviewApplication: %v", err)
+			}
+			if intent, ok := repo.certificateIntent(created.ID); ok {
+				t.Fatalf("cloned intent = %+v, want none", intent)
+			}
+		})
+	}
+}
+
+// TestCreatePreviewApplicationCertificateFailureIsBestEffort pins the contract:
+// a failing certificate write never fails the sibling clone (the preview simply
+// stays HTTP-only).
+func TestCreatePreviewApplicationCertificateFailureIsBestEffort(t *testing.T) {
+	base := testApplication(uuid.New())
+	base.BaseDomain = "app.example.com"
+	repo := seedBaseForPreview(t, base)
+	providerID := uuid.New()
+	repo.certificates = []CertificateIntent{{
+		ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true,
+		Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
+	}}
+	repo.dnsProviders = map[uuid.UUID]DNSProviderInfo{
+		providerID: {Zones: []string{"example.com"}, Enabled: true},
+	}
+	repo.certErr = errors.New("database down")
+
+	svc := newTestService(t, repo)
+	created, err := svc.CreatePreviewApplication(context.Background(), base.ID, PreviewApplicationInput{
+		Name: "demo app-pr-7", Branch: "feat/x", BaseDomain: "pr-7-demo.app.example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreatePreviewApplication: %v", err)
+	}
+	if created.ID == uuid.Nil {
+		t.Fatal("the clone failed because the best-effort certificate write failed")
+	}
+}
+
 func TestCreatePreviewApplicationRejectsUnusableInput(t *testing.T) {
 	base := testApplication(uuid.New())
 	base.BaseDomain = "app.example.com"

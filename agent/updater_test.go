@@ -564,8 +564,9 @@ func readFileString(t *testing.T, path string) string {
 
 // TestReleaseFromOfferBinding is the C2 regression matrix: an agent accepts only
 // its own release family/arch/manifest/channel and refuses the control-plane
-// family, a wrong arch, a wrong manifest, an empty channel and a beta offer on a
-// stable node (the inverse of the G2 PoC).
+// family, a wrong arch, a wrong manifest, an empty channel and a beta offer on
+// any non-beta node (the inverse of the G2 PoC). It also pins the F3 fallback:
+// an unknown configured channel behaves like stable.
 func TestReleaseFromOfferBinding(t *testing.T) {
 	arch := runtime.GOARCH
 	otherArch := "arm64"
@@ -623,6 +624,26 @@ func TestReleaseFromOfferBinding(t *testing.T) {
 			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "beta" },
 			channel: "stable", wantErr: true,
 		},
+		"unknown configured channel accepts a stable offer (F3 fallback)": {
+			mutate:  func(*agentv1.UpdateResponse) {},
+			channel: "canary",
+		},
+		"unknown configured channel refuses a beta offer (F3 fallback)": {
+			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "beta" },
+			channel: "canary", wantErr: true,
+		},
+		"stable offer on a beta node": {
+			mutate:  func(*agentv1.UpdateResponse) {},
+			channel: "beta",
+		},
+		"beta offer on a beta node": {
+			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "beta" },
+			channel: "beta",
+		},
+		"unknown offer channel": {
+			mutate:  func(r *agentv1.UpdateResponse) { r.Channel = "canary" },
+			channel: "beta", wantErr: true,
+		},
 		"empty configured channel still enforces stable": {
 			mutate: func(*agentv1.UpdateResponse) {}, channel: "",
 		},
@@ -652,8 +673,8 @@ func TestReleaseFromOfferBinding(t *testing.T) {
 			if release.AssetName != "gotham-agent-linux-"+arch {
 				t.Errorf("AssetName = %q", release.AssetName)
 			}
-			if release.Channel != "stable" {
-				t.Errorf("Channel = %q, want stable", release.Channel)
+			if release.Channel != resp.GetChannel() {
+				t.Errorf("Channel = %q, want %q", release.Channel, resp.GetChannel())
 			}
 		})
 	}

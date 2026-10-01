@@ -143,6 +143,9 @@ func TestCheckerPicksNewest(t *testing.T) {
 	if stable == nil || stable.Version != "v1.2.0" {
 		t.Fatalf("stable Check = %+v, want v1.2.0", stable)
 	}
+	if stable.Channel != string(ChannelStable) {
+		t.Errorf("stable offer channel = %q, want stable", stable.Channel)
+	}
 
 	beta := newChecker(t, server)
 	beta.Channel = ChannelBeta
@@ -153,8 +156,47 @@ func TestCheckerPicksNewest(t *testing.T) {
 	if got == nil || got.Version != "v1.3.0-rc.1" {
 		t.Fatalf("beta Check = %+v, want v1.3.0-rc.1", got)
 	}
+	if got.Channel != string(ChannelBeta) {
+		t.Errorf("beta offer channel = %q, want beta", got.Channel)
+	}
 	if !got.Prerelease {
 		t.Error("beta release not marked prerelease")
+	}
+}
+
+// TestCheckerLabelsOfferWithReleaseChannel is M4: the offer carries the
+// release's own channel, not the subscriber's, so a beta subscriber can take a
+// newer stable release and still bind it to the stable signed manifest.
+func TestCheckerLabelsOfferWithReleaseChannel(t *testing.T) {
+	server := httptest.NewServer(releasesHandler([]fixtureRelease{
+		{Tag: "v1.2.0", Body: "stable notes", Assets: platformAssets()},
+	}, 0, 0))
+	defer server.Close()
+
+	beta := newChecker(t, server)
+	beta.Channel = ChannelBeta
+	release, err := beta.Check(context.Background(), "v1.0.0")
+	if err != nil {
+		t.Fatalf("beta Check: %v", err)
+	}
+	if release == nil || release.Version != "v1.2.0" {
+		t.Fatalf("beta Check = %+v, want v1.2.0", release)
+	}
+	if release.Channel != string(ChannelStable) || release.Prerelease {
+		t.Errorf("beta subscriber offer = channel %q prerelease %t, want stable/false", release.Channel, release.Prerelease)
+	}
+
+	// A stable subscriber still never sees a prerelease.
+	prerelease := httptest.NewServer(releasesHandler([]fixtureRelease{
+		{Tag: "v1.3.0-rc.1", Prerelease: true, Assets: platformAssets()},
+	}, 0, 0))
+	defer prerelease.Close()
+	stable, err := newChecker(t, prerelease).Check(context.Background(), "v1.0.0")
+	if err != nil {
+		t.Fatalf("stable Check: %v", err)
+	}
+	if stable != nil {
+		t.Fatalf("stable Check = %+v, want nil (prereleases never offered)", stable)
 	}
 }
 

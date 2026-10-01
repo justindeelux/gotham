@@ -32,9 +32,17 @@ type agentFixture struct {
 	fail        atomic.Bool
 }
 
-// newAgentFixture starts a release server for v1.2.0. tamperSig signs a
-// different payload so the manifest signature no longer verifies.
+// newAgentFixture starts a release server for the default stable v1.2.0.
 func newAgentFixture(t *testing.T, tamperSig bool) *agentFixture {
+	t.Helper()
+	return newAgentFixtureRelease(t, "v1.2.0", "stable", false, tamperSig)
+}
+
+// newAgentFixtureRelease starts a release server for one release: tag is the
+// GitHub tag, manifestChannel the channel carried by the signed manifest and
+// prerelease the GitHub prerelease flag. tamperSig signs a different payload so
+// the manifest signature no longer verifies.
+func newAgentFixtureRelease(t *testing.T, tag, manifestChannel string, prerelease, tamperSig bool) *agentFixture {
 	t.Helper()
 	public, private, err := updatecore.GenerateKey()
 	if err != nil {
@@ -44,8 +52,8 @@ func newAgentFixture(t *testing.T, tamperSig bool) *agentFixture {
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	artifact := []byte("agent binary v1.2.0")
-	manifest := updatecore.BuildManifest("v1.2.0", "stable", "amd64", agentAsset, artifact)
+	artifact := []byte("agent binary " + tag)
+	manifest := updatecore.BuildManifest(tag, manifestChannel, "amd64", agentAsset, artifact)
 	manifestBytes := manifest.Marshal()
 	signature := signer.SignBase64(manifestBytes)
 	if tamperSig {
@@ -69,9 +77,9 @@ func newAgentFixture(t *testing.T, tamperSig bool) *agentFixture {
 			{"name": manifestName + updatecore.ManifestSigSuffix, "browser_download_url": server.URL + "/" + manifestName + updatecore.ManifestSigSuffix, "size": len(signature)},
 		}
 		releases := []map[string]any{{
-			"tag_name":     "v1.2.0",
+			"tag_name":     tag,
 			"draft":        false,
-			"prerelease":   false,
+			"prerelease":   prerelease,
 			"published_at": "2026-01-02T15:04:05Z",
 			"assets":       assets,
 		}}
@@ -92,10 +100,17 @@ func newAgentFixture(t *testing.T, tamperSig bool) *agentFixture {
 // newTestAgentUpdater points an AgentUpdater at a fixture.
 func newTestAgentUpdater(t *testing.T, fixture *agentFixture) *AgentUpdater {
 	t.Helper()
+	return newTestAgentUpdaterChannel(t, fixture, ChannelStable)
+}
+
+// newTestAgentUpdaterChannel points an AgentUpdater at a fixture with the given
+// subscriber channel (stable or beta).
+func newTestAgentUpdaterChannel(t *testing.T, fixture *agentFixture, channel Channel) *AgentUpdater {
+	t.Helper()
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
 		Repo:       "owner/name",
 		BaseURL:    fixture.server.URL,
-		Channel:    ChannelStable,
+		Channel:    channel,
 		PublicKeys: []ed25519.PublicKey{fixture.public},
 		Client:     fixture.server.Client(),
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -172,6 +187,65 @@ func TestAgentUpdaterRejectsTamperedManifest(t *testing.T) {
 	if _, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64"); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("Offer(tampered) = %v, want ErrBadSignature", err)
 	}
+}
+
+// TestAgentUpdaterBetaChannel is M4: the offer carries the release's own
+// channel, so a beta-configured subscriber can take a newer stable release (or
+// a prerelease), while the offer→manifest channel binding and the stable
+// subscriber's prerelease filter stay fail-closed.
+func TestAgentUpdaterBetaChannel(t *testing.T) {
+	t.Run("beta subscriber takes a newer stable release", func(t *testing.T) {
+		fixture := newAgentFixtureRelease(t, "v1.2.0", "stable", false, false)
+		updater := newTestAgentUpdaterChannel(t, fixture, ChannelBeta)
+
+		release, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64")
+		if err != nil {
+			t.Fatalf("Offer: %v", err)
+		}
+		if release == nil {
+			t.Fatal("Offer = nil, want the stable v1.2.0")
+		}
+		if release.Channel != string(ChannelStable) || release.Prerelease {
+			t.Fatalf("offer channel/prerelease = %q/%t, want stable/false", release.Channel, release.Prerelease)
+		}
+		if release.SHA256 != fixture.manifest.SHA256 {
+			t.Errorf("offer sha256 = %q, want the verified manifest digest %q", release.SHA256, fixture.manifest.SHA256)
+		}
+	})
+
+	t.Run("beta subscriber takes a newer prerelease", func(t *testing.T) {
+		fixture := newAgentFixtureRelease(t, "v1.3.0-rc.1", "beta", true, false)
+		updater := newTestAgentUpdaterChannel(t, fixture, ChannelBeta)
+
+		release, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64")
+		if err != nil {
+			t.Fatalf("Offer: %v", err)
+		}
+		if release == nil || release.Channel != string(ChannelBeta) || !release.Prerelease {
+			t.Fatalf("Offer = %+v, want the beta prerelease labelled beta", release)
+		}
+	})
+
+	t.Run("stable subscriber never sees a prerelease", func(t *testing.T) {
+		fixture := newAgentFixtureRelease(t, "v1.3.0-rc.1", "beta", true, false)
+		updater := newTestAgentUpdater(t, fixture)
+
+		release, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64")
+		if err != nil || release != nil {
+			t.Fatalf("Offer = (%+v, %v), want (nil, nil)", release, err)
+		}
+	})
+
+	t.Run("mismatched manifest channel is refused", func(t *testing.T) {
+		// The GitHub release is stable but the signed manifest claims beta: the
+		// offer→manifest binding must refuse it.
+		fixture := newAgentFixtureRelease(t, "v1.2.0", "beta", false, false)
+		updater := newTestAgentUpdaterChannel(t, fixture, ChannelBeta)
+
+		if _, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64"); !errors.Is(err, ErrManifest) {
+			t.Fatalf("Offer = %v, want ErrManifest", err)
+		}
+	})
 }
 
 // TestAgentUpdaterNoKey proves the updater is disabled without a public key.

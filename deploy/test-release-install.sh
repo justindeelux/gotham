@@ -481,6 +481,64 @@ verify_release "http://127.0.0.1:${PORT}" "${VERSION}" "${ARCH}" gotham-agent \
     || { echo "FAIL: agent-family verification produced the wrong binary" >&2; exit 1; }
 echo "PASS: agent-family verify_release downloaded and verified the agent binary"
 
+# ---- I5: verifier cleanup on a signal, caller traps chained/restored --------
+# release-verify.sh installs EXIT/INT/TERM/HUP handlers only for the duration
+# of verify_release: it captures and chains the caller's handlers, removes the
+# scratch dir on a signal, aborts nonzero and restores the caller's handlers on
+# success. A slow curl shim lets the signal land mid-download.
+echo "==> verify_release cleans up and chains the caller's traps on a signal (I5)"
+I5_DIR="${SCRATCH}/i5"
+I5_TMP="${I5_DIR}/tmp"
+I5_MARKS="${I5_DIR}/marks"
+mkdir -p "${I5_TMP}" "${I5_MARKS}" "${I5_DIR}/shim"
+REAL_CURL="$(command -v curl)"
+cat >"${I5_DIR}/shim/curl" <<SHIM
+#!/bin/sh
+sleep 1
+exec "${REAL_CURL}" "\$@"
+SHIM
+chmod +x "${I5_DIR}/shim/curl"
+cat >"${I5_DIR}/run.sh" <<RUN
+#!/bin/sh
+set -eu
+. "${SCRIPT_DIR}/release-verify.sh"
+trap 'echo prior-exit >>"${I5_MARKS}/exit"' EXIT
+trap 'echo prior-term >>"${I5_MARKS}/term"; exit 19' TERM
+verify_release "http://127.0.0.1:${PORT}" "${VERSION}" "${ARCH}" "" \\
+    "${SCRATCH}/signing.key.pub" "${I5_DIR}/binary"
+echo "verify_release unexpectedly completed" >&2
+exit 1
+RUN
+PATH="${I5_DIR}/shim:${PATH}" TMPDIR="${I5_TMP}" sh "${I5_DIR}/run.sh" \
+    >"${I5_DIR}/run.log" 2>&1 &
+I5_PID=$!
+# Wait until the verifier has installed its traps (the lists writes .traps),
+# then let it settle into the slow first download.
+i=0
+while [ "${i}" -lt 50 ]; do
+    set -- "${I5_TMP}"/gotham-verify.*/.traps
+    [ -f "$1" ] && break
+    i=$((i + 1))
+    sleep 0.1
+done
+sleep 0.1
+kill -TERM "${I5_PID}" 2>/dev/null || true
+I5_RC=0
+wait "${I5_PID}" || I5_RC=$?
+[ "${I5_RC}" -eq 19 ] \
+    || { echo "FAIL: a signal during verify_release exited ${I5_RC}, want the chained handler's 19 (I5)" >&2; cat "${I5_DIR}/run.log" >&2; exit 1; }
+[ ! -e "${I5_DIR}/binary" ] \
+    || { echo "FAIL: a signal still installed the verified binary (I5)" >&2; exit 1; }
+[ "$(cat "${I5_MARKS}/term" 2>/dev/null)" = "prior-term" ] \
+    || { echo "FAIL: the caller's TERM handler was not chained (I5)" >&2; exit 1; }
+[ "$(cat "${I5_MARKS}/exit" 2>/dev/null)" = "prior-exit" ] \
+    || { echo "FAIL: the caller's EXIT handler was not chained (I5)" >&2; exit 1; }
+if ls "${I5_TMP}"/gotham-verify.* >/dev/null 2>&1; then
+    echo "FAIL: the verifier scratch dir survived the signal (I5)" >&2
+    exit 1
+fi
+echo "PASS: signal cleanup chained the caller's traps and removed the scratch dir (I5)"
+
 # ---- Fail-closed: tampered artifact ----------------------------------------
 cp "${SERVE}/gotham-linux-${ARCH}" "${SCRATCH}/good-artifact"
 printf 'x' | dd of="${SERVE}/gotham-linux-${ARCH}" bs=1 seek=100 count=1 conv=notrunc 2>/dev/null

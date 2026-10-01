@@ -217,6 +217,15 @@ func ParsePublicKey(raw string) (ed25519.PublicKey, error) {
 	return nil, errors.New("updates: unrecognised public key format")
 }
 
+// HasEmbeddedKey reports whether release key material is compiled into the
+// binary (the current key and/or the pre-positioned next key). An embedded key
+// set is authoritative: the development environment overrides
+// (GOTHAM_UPDATE_PUBLIC_KEY, and the GOTHAM_UPDATE_CURRENT version pin that
+// exists for wrappers and tests) are ignored on release builds.
+func HasEmbeddedKey() bool {
+	return strings.TrimSpace(PublicKey) != "" || strings.TrimSpace(NextPublicKey) != ""
+}
+
 // LoadPublicKeys resolves the release key ring: the embedded current key
 // (PublicKey) plus the optional pre-positioned next key (NextPublicKey), in
 // that order. An embedded ring is authoritative and the environment override is

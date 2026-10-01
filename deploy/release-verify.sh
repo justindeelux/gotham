@@ -26,11 +26,118 @@
 #   3. the downloaded binary digest matches the signed manifest sha256.
 # Any failure aborts the caller (exit 1).
 
+# _gotham_verify_cleanup removes the verification scratch dir (idempotent).
+_gotham_verify_cleanup() {
+    if [ -n "${_GOTHAM_VERIFY_WORK:-}" ]; then
+        rm -rf "${_GOTHAM_VERIFY_WORK}"
+        _GOTHAM_VERIFY_WORK=""
+    fi
+}
+
 # die prints an error, removes any verification scratch dir, and exits nonzero.
 die() {
-    [ -n "${_GOTHAM_VERIFY_WORK:-}" ] && rm -rf "${_GOTHAM_VERIFY_WORK}" || true
+    _gotham_verify_cleanup
     echo "gotham-install: $*" >&2
     exit 1
+}
+
+# _gotham_verify_trap_cmd prints the command currently trapped for condition $2
+# (EXIT/INT/TERM/HUP), or nothing. `trap` with no operands is the only portable
+# introspection; it prints re-inputtable "trap -- 'cmd' SIG..." lines. The list
+# is read from the file $1 because a command substitution resets caught traps
+# in dash. Both the bare (dash) and SIG-prefixed (bash) condition names match.
+_gotham_verify_trap_cmd() {
+    _gv_file=$1
+    _gv_want=$2
+    _gv_prefix="trap -- '"
+    _gv_found=""
+    while IFS= read -r _gv_line; do
+        case "${_gv_line}" in
+            "${_gv_prefix}"*"' ${_gv_want}")
+                _gv_found=${_gv_line#"${_gv_prefix}"}
+                _gv_found=${_gv_found%"' ${_gv_want}"}
+                continue
+                ;;
+        esac
+        case "${_gv_line}" in
+            "${_gv_prefix}"*"' SIG${_gv_want}")
+                _gv_found=${_gv_line#"${_gv_prefix}"}
+                _gv_found=${_gv_found%"' SIG${_gv_want}"}
+                ;;
+        esac
+    done <"${_gv_file}"
+    printf '%s' "${_gv_found}"
+}
+
+# _gotham_verify_install_traps captures the caller's traps (file $1) and installs
+# the verifier's handlers for the duration of one verification: EXIT removes the
+# scratch dir, INT/TERM/HUP remove it, chain the caller's handler when one
+# exists and abort nonzero. It never clobbers a caller trap without chaining it;
+# _gotham_verify_restore_traps puts the caller's handlers back on success.
+_gotham_verify_install_traps() {
+    _GOTHAM_VERIFY_TRAPS_FILE=$1
+    trap >"${_GOTHAM_VERIFY_TRAPS_FILE}"
+    _GOTHAM_VERIFY_SAVED_TRAPS="$(cat "${_GOTHAM_VERIFY_TRAPS_FILE}")"
+    _GOTHAM_VERIFY_PREV_EXIT="$(_gotham_verify_trap_cmd "${_GOTHAM_VERIFY_TRAPS_FILE}" EXIT)"
+    _GOTHAM_VERIFY_PREV_INT="$(_gotham_verify_trap_cmd "${_GOTHAM_VERIFY_TRAPS_FILE}" INT)"
+    _GOTHAM_VERIFY_PREV_TERM="$(_gotham_verify_trap_cmd "${_GOTHAM_VERIFY_TRAPS_FILE}" TERM)"
+    _GOTHAM_VERIFY_PREV_HUP="$(_gotham_verify_trap_cmd "${_GOTHAM_VERIFY_TRAPS_FILE}" HUP)"
+    trap '_gotham_verify_exit' EXIT
+    trap '_gotham_verify_signal INT' INT
+    trap '_gotham_verify_signal TERM' TERM
+    trap '_gotham_verify_signal HUP' HUP
+}
+
+# _gotham_verify_exit is the verifier's chained EXIT handler: remove the scratch
+# dir, then run the caller's prior EXIT handler. Fidelity limits (F2; no current
+# caller is affected): the chained handler observes $? = 0 rather than the
+# shell's exit status, and a prior trap command containing a literal newline is
+# not extracted (it is dropped for the verification window; cleanup and the
+# nonzero abort still happen).
+_gotham_verify_exit() {
+    trap - EXIT
+    _gotham_verify_cleanup
+    if [ -n "${_GOTHAM_VERIFY_PREV_EXIT:-}" ]; then
+        eval "${_GOTHAM_VERIFY_PREV_EXIT}" || true
+    fi
+}
+
+# _gotham_verify_signal is the verifier's chained INT/TERM/HUP handler: remove
+# the scratch dir, then run the caller's prior handler for the signal (which
+# decides the exit status); with no prior handler, abort 128+signal.
+_gotham_verify_signal() {
+    _gv_signal=$1
+    trap - INT TERM HUP
+    _gotham_verify_cleanup
+    _gv_prior=""
+    case "${_gv_signal}" in
+        INT) _gv_prior="${_GOTHAM_VERIFY_PREV_INT:-}" ;;
+        TERM) _gv_prior="${_GOTHAM_VERIFY_PREV_TERM:-}" ;;
+        HUP) _gv_prior="${_GOTHAM_VERIFY_PREV_HUP:-}" ;;
+    esac
+    if [ -n "${_gv_prior}" ]; then
+        eval "${_gv_prior}" || true
+    fi
+    case "${_gv_signal}" in
+        INT) exit 130 ;;
+        TERM) exit 143 ;;
+        HUP) exit 129 ;;
+    esac
+    exit 1
+}
+
+# _gotham_verify_restore_traps reinstates the caller's traps after a successful
+# verification (the scratch dir is already gone, so our cleanup has no work).
+_gotham_verify_restore_traps() {
+    trap - EXIT INT TERM HUP
+    if [ -n "${_GOTHAM_VERIFY_SAVED_TRAPS:-}" ]; then
+        eval "${_GOTHAM_VERIFY_SAVED_TRAPS}" || true
+    fi
+    _GOTHAM_VERIFY_SAVED_TRAPS=""
+    _GOTHAM_VERIFY_PREV_EXIT=""
+    _GOTHAM_VERIFY_PREV_INT=""
+    _GOTHAM_VERIFY_PREV_TERM=""
+    _GOTHAM_VERIFY_PREV_HUP=""
 }
 
 # require_cmd fails when a required tool is missing.
@@ -118,9 +225,11 @@ verify_release() {
 
     work=$(mktemp -d "${TMPDIR:-/tmp}/gotham-verify.XXXXXX") \
         || die "could not create a temporary directory"
-    # die() removes this on any failure; cleared once the work dir is gone.
-    # (No trap: the caller may have its own EXIT trap we must not clobber.)
+    # Clean up on any failure or signal without clobbering the caller's traps:
+    # the verifier captures and chains them, and restores them once the scratch
+    # dir is gone (success) or the shell exits.
     _GOTHAM_VERIFY_WORK="${work}"
+    _gotham_verify_install_traps "${work}/.traps"
 
     manifest_file="${work}/${manifest}"
     sig_file="${manifest_file}.sig"
@@ -164,5 +273,6 @@ verify_release() {
     chmod 0755 "${dest}"
     rm -rf "${work}"
     _GOTHAM_VERIFY_WORK=""
+    _gotham_verify_restore_traps
     echo "${dest}"
 }

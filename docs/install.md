@@ -139,7 +139,9 @@ join through admin-created invites.
    heartbeats and is visible in the UI.
 
 Lost the admin password? `sudo /var/lib/gotham/bin/gotham admin reset-password
---email ops@example.com` replaces it and revokes the account's sessions.
+--email ops@example.com` replaces it and revokes the account's refresh sessions.
+Bearer access tokens are stateless JWTs, so a token already minted stays valid
+until it expires (15 minutes); resetting is not an instant, fleet-wide logout.
 
 The first account is a normal account, not a platform administrator. The
 platform-global operations (node-wide proxy sync, DNS providers) require the

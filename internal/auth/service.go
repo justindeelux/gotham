@@ -110,8 +110,14 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 	if err != nil {
 		return nil, fmt.Errorf("auth: count users: %w", err)
 	}
-	needInvite := count > 0 && !s.AllowOpenRegistration
-	if needInvite {
+	// An invite token is honoured whenever one is supplied, even when ordinary
+	// registration is also open (test/dev override) or the instance is empty:
+	// the invitee must still join the team, not just get a personal account.
+	consumeInvite := inviteToken != ""
+	if !consumeInvite && count > 0 && !s.AllowOpenRegistration {
+		return nil, ErrRegistrationClosed
+	}
+	if consumeInvite {
 		if err := checkInvite(ctx, normalized, inviteToken, invites); err != nil {
 			return nil, err
 		}
@@ -119,7 +125,7 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 
 	var user sqlc.User
 	switch {
-	case needInvite:
+	case consumeInvite:
 		user, err = s.store.CreateUser(ctx, normalized, &hash)
 	case count == 0:
 		// Bootstrap: the emptiness check and the insert share one transaction,
@@ -142,18 +148,22 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 		return nil, fmt.Errorf("auth: create user: %w", err)
 	}
 
-	if needInvite {
+	if consumeInvite {
 		if err := invites.AcceptInvite(ctx, uuid.UUID(user.ID.Bytes), inviteToken); err != nil {
-			// The invite stopped being valid between the peek and the accept.
-			// Roll the fresh account (and its personal team) back with a
-			// context that survives the request's cancellation, so a retry
-			// starts clean instead of leaving an ownerless team behind.
-			cleanup := context.WithoutCancel(ctx)
-			if delErr := s.store.DeleteUserAndPersonalTeam(cleanup, user.ID); delErr != nil {
-				s.logger.Error("auth: invite rollback failed", "error", delErr, "user_id", uuid.UUID(user.ID.Bytes))
+			// Roll the fresh account back only when the invite is provably
+			// still pending: Accept commits the membership and can fail on its
+			// final lookup afterwards, in which case deleting the account
+			// would strand a consumed invite. A re-peek that errors means the
+			// invite is gone, so the account stays and the session is issued.
+			if _, _, peekErr := invites.PeekInvite(ctx, inviteToken); peekErr == nil {
+				cleanup := context.WithoutCancel(ctx)
+				if delErr := s.store.DeleteUserAndPersonalTeam(cleanup, user.ID); delErr != nil {
+					s.logger.Error("auth: invite rollback failed", "error", delErr, "user_id", uuid.UUID(user.ID.Bytes))
+				}
+				s.logger.Warn("auth: invite accept failed at registration", "error", err)
+				return nil, ErrRegistrationClosed
 			}
-			s.logger.Warn("auth: invite accept failed at registration", "error", err)
-			return nil, ErrRegistrationClosed
+			s.logger.Warn("auth: invite accept errored after consuming the invite; keeping the account", "error", err)
 		}
 	}
 

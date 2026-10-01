@@ -159,7 +159,8 @@ func runAdminResetPassword(args []string) int {
 			return exitError
 		}
 
-		fmt.Printf("password updated for %s; existing sessions were revoked\n", user.Email)
+		fmt.Printf("password updated for %s; refresh sessions were revoked. "+
+			"Access tokens already issued stay valid until they expire (15 minutes).\n", user.Email)
 		return exitOK
 	})
 }

@@ -1475,3 +1475,34 @@ test.describe("invite redirect across registration", () => {
     await expect(registerTab).toHaveAttribute("href", "/register");
   });
 });
+
+/**
+ * P-A4 — the servers page is a grid of node cards, not a data table
+ * (docs/design/servers.html). Guards the design port: a seeded node renders a
+ * card with its head, key/value rows, the three metric tiles and the footer
+ * actions, and the old table is gone.
+ */
+test.describe("servers grid", () => {
+  test("renders a seeded node as a card, not a table row", async ({ page, request }) => {
+    const name = `ui-e2e-node-${uniqueSuffix()}`;
+    await seedServer(request, name);
+
+    await page.goto("/servers");
+    // Filter to the seeded node: the grid pages at 12 cards, and a run seeds
+    // several nodes, so the card may not be on the first page otherwise.
+    await page.getByPlaceholder("Search by name, IP, OS…").fill(name);
+
+    const card = page.locator(`[data-server="${name}"]`);
+    await expect(card).toBeVisible();
+    await expect(card.locator(".node-head")).toContainText(name);
+    await expect(card.locator("dl.kv dt")).toHaveCount(4);
+    await expect(card.locator(".node-metrics .node-metric")).toHaveCount(3);
+    // The metric bars stay on the Naive UI component base, not hand-built CSS.
+    await expect(card.locator(".node-metrics .n-progress")).toHaveCount(3);
+    await expect(card.getByRole("button", { name: "Open node" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "Revalidate SSH" })).toBeVisible();
+
+    // The list is no longer a Naive UI data table.
+    await expect(page.locator(".n-data-table")).toHaveCount(0);
+  });
+});

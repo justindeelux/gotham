@@ -3,19 +3,16 @@ import {
   NAlert,
   NButton,
   NCard,
-  NDataTable,
   NEmpty,
   NIcon,
   NInput,
+  NPagination,
   NPopconfirm,
   NProgress,
-  NSpace,
-  NText,
+  NSpin,
   useMessage,
 } from "naive-ui";
-import type { DataTableColumns } from "naive-ui";
-import { computed, h, onMounted, onUnmounted, ref } from "vue";
-import type { VNode } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { describeServerError } from "../api/servers";
@@ -24,7 +21,7 @@ import AddServerWizard from "../components/AddServerWizard.vue";
 import GothamIcon from "../components/GothamIcon.vue";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
-import { relativeTime, toPercent } from "../utils/format";
+import { formatBytes, relativeTime, toPercent } from "../utils/format";
 
 const router = useRouter();
 const serversStore = useServersStore();
@@ -97,196 +94,109 @@ const filteredServers = computed<Server[]>(() =>
   ),
 );
 
-/** meterColor picks the bar color: per-metric base, danger red over 80%. */
-function meterColor(value: number, base: string): string {
-  if (value > dangerThreshold) {
-    return "var(--danger)";
-  }
-  return base;
-}
-
-/** usageCell renders a nullable usage reading as value + threshold bar.
- *
- * Heartbeat usage arrives as a fraction 0..1 (see toPercent), so the raw
- * reading is normalized before display and threshold coloring.
+/**
+ * Page size bounds the mounted cards. The store replaces the whole list every
+ * five seconds, so rendering every node (three progress bars each) would make
+ * the update cost grow without limit; the mockup has no pagination, so the
+ * control stays a single row under the grid.
  */
-function usageCell(value: number | null, baseColor: string): VNode {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return h(NText, { depth: 3 }, { default: () => "—" });
+const pageSize = 12;
+const page = ref(1);
+
+/** pageCount is the last page the filtered list has. */
+const pageCount = computed<number>(() =>
+  Math.max(1, Math.ceil(filteredServers.value.length / pageSize)),
+);
+
+/**
+ * currentPage clamps the requested page to the available range: deleting the
+ * only node on the last page (or the five-second refresh shrinking the list)
+ * would otherwise leave an empty slice and hide a control that could return
+ * the operator to the data.
+ */
+const currentPage = computed<number>(() => Math.min(page.value, pageCount.value));
+
+/** pagedServers is the visible slice of the filtered list. */
+const pagedServers = computed<Server[]>(() =>
+  filteredServers.value.slice(
+    (currentPage.value - 1) * pageSize,
+    currentPage.value * pageSize,
+  ),
+);
+
+// A filter or search change re-enters at the first page.
+watch([activeFilter, searchQuery], () => {
+  page.value = 1;
+});
+
+// Follow the list down when it shrinks under the current page.
+watch(pageCount, (count) => {
+  if (page.value > count) {
+    page.value = count;
   }
-  const rounded = toPercent(value);
-  return h("div", { class: "metric" }, [
-    h("span", { class: "metric-val" }, `${rounded}%`),
-    h(NProgress, {
-      type: "line",
-      percentage: rounded,
-      height: 6,
-      color: meterColor(rounded, baseColor),
-      "show-indicator": false,
-      "border-radius": 9999,
-    }),
-  ]);
+});
+
+/** meterColor picks the bar color: per-metric base, danger red over 80%. */
+/**
+ * initials builds the node avatar label: the first letters of up to two words
+ * ("gotham-prod-01" -> "GP"). Ported from the server-detail avatar.
+ */
+function initials(name: string): string {
+  const parts = name.split(/[-_.\s]+/).filter(Boolean);
+  const letters = parts.slice(0, 2).map((part) => part[0] ?? "");
+  return (letters.join("") || name.slice(0, 2)).toUpperCase();
 }
 
-/** textCell renders a nullable string, falling back to an em dash. */
-function textCell(value: string | null, mono = false): VNode {
-  if (value === null || value === undefined || value === "") {
-    return h(NText, { depth: 3 }, { default: () => "—" });
-  }
-  if (mono) {
-    return h("span", { class: "mono tnum" }, value);
-  }
-  return h("span", {}, value);
+/** MetricView is one rendered usage tile. */
+interface MetricView {
+  /** label is the displayed reading, or an em dash when the node reported none. */
+  label: string;
+  /** color is the bar color; danger red once the normalized reading exceeds 80%. */
+  color: string;
+  /** percentage is the normalized 0..100 reading the bar renders. */
+  percentage: number;
 }
 
 /**
- * actionsCell renders the per-row controls: re-validate (existing flow),
- * Open node (server-detail route), Containers (server-containers route), and
- * Delete with confirm. There is no agent-update backend route, so no Update
- * agent action is rendered — it is omitted, never faked.
+ * metricView normalizes a heartbeat usage fraction (0..1) before applying the
+ * danger threshold — comparing the raw fraction with a percentage threshold
+ * would never turn the bar red.
  */
-function actionsCell(row: Server): VNode {
-  return h(NSpace, { size: 8, align: "center", wrap: false }, {
-    default: () => [
-      h(
-        NButton,
-        {
-          size: "small",
-          loading: validatingId.value === row.id,
-          onClick: () => {
-            void handleValidate(row);
-          },
-        },
-        { default: () => "Re-validate" },
-      ),
-      h(
-        NButton,
-        {
-          size: "small",
-          quaternary: true,
-          onClick: () => {
-            void openNode(row.id);
-          },
-        },
-        { default: () => "Open node" },
-      ),
-      h(
-        NButton,
-        {
-          size: "small",
-          quaternary: true,
-          onClick: () => {
-            void openContainers(row.id);
-          },
-        },
-        { default: () => "Containers" },
-      ),
-      h(
-        NPopconfirm,
-        {
-          onPositiveClick: () => {
-            void handleDelete(row);
-          },
-        },
-        {
-          trigger: () =>
-            h(
-              NButton,
-              { size: "small", type: "error", quaternary: true },
-              { default: () => "Delete" },
-            ),
-          default: () => `Delete server "${row.name}"?`,
-        },
-      ),
-    ],
-  });
+function metricView(value: number | null, base: string): MetricView {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return { label: "—", color: base, percentage: 0 };
+  }
+  const percentage = Math.max(0, Math.min(100, toPercent(value)));
+  return {
+    label: `${percentage}%`,
+    color: percentage > dangerThreshold ? "var(--danger)" : base,
+    percentage,
+  };
 }
 
-const columns: DataTableColumns<Server> = [
-  { title: "Name", key: "name", minWidth: 140, ellipsis: { tooltip: true } },
-  {
-    title: "Address",
-    key: "address",
-    minWidth: 150,
-    render: (row) => h("span", { class: "mono tnum" }, `${row.ip}:${row.port}`),
-  },
-  {
-    title: "Status",
-    key: "status",
-    width: 110,
-    render: (row) => h(ServerStatusTag, { status: row.status }),
-  },
-  {
-    title: "CPU",
-    key: "cpu_usage",
-    width: 140,
-    render: (row) => usageCell(row.cpu_usage, "var(--accent)"),
-  },
-  {
-    title: "RAM",
-    key: "mem_usage",
-    width: 140,
-    render: (row) => usageCell(row.mem_usage, "var(--success)"),
-  },
-  {
-    title: "Disk",
-    key: "disk_usage",
-    width: 140,
-    render: (row) => usageCell(row.disk_usage, "var(--warn)"),
-  },
-  {
-    title: "OS",
-    key: "os",
-    minWidth: 120,
-    ellipsis: { tooltip: true },
-    render: (row) => textCell(row.os),
-  },
-  {
-    title: "Arch",
-    key: "arch",
-    width: 90,
-    render: (row) => textCell(row.arch, true),
-  },
-  {
-    title: "SSH user",
-    key: "ssh_user",
-    width: 100,
-    render: (row) => textCell(row.ssh_user, true),
-  },
-  {
-    title: "Containers",
-    key: "container_count",
-    width: 100,
-    render: (row) =>
-      row.container_count === null || row.container_count === undefined
-        ? h(NText, { depth: 3 }, { default: () => "—" })
-        : h("span", { class: "tnum" }, String(row.container_count)),
-  },
-  {
-    title: "Docker",
-    key: "docker_version",
-    minWidth: 110,
-    ellipsis: { tooltip: true },
-    render: (row) => textCell(row.docker_version, true),
-  },
-  {
-    title: "Last seen",
-    key: "last_seen",
-    width: 110,
-    render: (row) => relativeTime(row.last_seen),
-  },
-  {
-    title: "Actions",
-    key: "actions",
-    width: 320,
-    render: (row) => actionsCell(row),
-  },
-];
-
-/** rowKey identifies a row by its server id. */
-function rowKey(row: Server): string {
-  return row.id;
+/** keyLabel identifies the SSH key by its short id; the API exposes no name. */
+function keyLabel(server: Server): string {
+  return server.ssh_key_id ? server.ssh_key_id.slice(0, 8) : "no key attached";
 }
+
+/** containerLabel keeps an unknown count (no heartbeat yet) distinct from zero. */
+function containerLabel(server: Server): string {
+  if (server.container_count === null || server.container_count === undefined) {
+    return "—";
+  }
+  return `${server.container_count} container${server.container_count === 1 ? "" : "s"}`;
+}
+
+/**
+ * nodeMeta is the head sub-line: address, OS and architecture. A non-default
+ * SSH port is shown with the address (the table always did), so two nodes on
+ * the same IP stay distinguishable.
+ */
+function nodeMeta(server: Server): string {
+  const endpoint = server.port && server.port !== 22 ? `${server.ip}:${server.port}` : server.ip;
+  return [endpoint, server.os ?? "—", server.arch ?? "—"].join(" \u00b7 ");
+}
+
 
 /** handleValidate probes one server and reports the outcome. */
 async function handleValidate(server: Server): Promise<void> {
@@ -458,17 +368,123 @@ onUnmounted(() => {
         </NInput>
       </div>
 
-      <NDataTable
-        v-if="filteredServers.length > 0 || serversStore.loading"
-        :columns="columns"
-        :data="filteredServers"
-        :loading="serversStore.loading"
-        :row-key="rowKey"
-        :bordered="false"
-        :scroll-x="1500"
-        :pagination="{ pageSize: 10 }"
-      />
-      <NEmpty v-else class="servers-empty" description="No nodes match the current filters">
+      <NSpin v-if="serversStore.loading && filteredServers.length === 0" class="servers-loading" />
+      <template v-else-if="filteredServers.length > 0">
+        <div class="grid cols-2 node-list" data-od-id="node-list">
+        <article
+          v-for="server in pagedServers"
+          :key="server.id"
+          class="node-card"
+          :data-server="server.name"
+        >
+          <div class="node-head">
+            <span class="avatar">{{ initials(server.name) }}</span>
+            <div class="grow">
+              <p class="fg-2 bold">{{ server.name }}</p>
+              <p class="small muted">{{ nodeMeta(server) }}</p>
+            </div>
+            <ServerStatusTag :status="server.status" />
+          </div>
+
+          <dl class="kv">
+            <dt>Docker</dt>
+            <dd class="mono">{{ server.docker_version ?? "—" }}</dd>
+            <dt>Resources</dt>
+            <dd class="mono">
+              {{ formatBytes(server.total_mem) }} RAM ·
+              {{ formatBytes(server.total_disk) }} disk
+            </dd>
+            <dt>Agent</dt>
+            <dd class="mono">
+              {{ server.node_id ?? "—" }} · {{ relativeTime(server.last_seen) }}
+            </dd>
+            <dt>SSH</dt>
+            <dd>
+              <span class="inline-code">{{ keyLabel(server) }}</span> · user
+              <span class="mono">{{ server.ssh_user }}</span>
+            </dd>
+          </dl>
+
+          <div class="node-metrics">
+            <div class="node-metric">
+              <p class="stat-label">CPU</p>
+              <p class="val">{{ metricView(server.cpu_usage, 'var(--accent)').label }}</p>
+              <NProgress
+                class="mt-2"
+                type="line"
+                :percentage="metricView(server.cpu_usage, 'var(--accent)').percentage"
+                :color="metricView(server.cpu_usage, 'var(--accent)').color"
+                :height="6"
+                :show-indicator="false"
+                :rail-style="{ borderRadius: 'var(--radius-pill)' }"
+              />
+            </div>
+            <div class="node-metric">
+              <p class="stat-label">RAM</p>
+              <p class="val">{{ metricView(server.mem_usage, 'var(--success)').label }}</p>
+              <NProgress
+                class="mt-2"
+                type="line"
+                :percentage="metricView(server.mem_usage, 'var(--success)').percentage"
+                :color="metricView(server.mem_usage, 'var(--success)').color"
+                :height="6"
+                :show-indicator="false"
+                :rail-style="{ borderRadius: 'var(--radius-pill)' }"
+              />
+            </div>
+            <div class="node-metric">
+              <p class="stat-label">Disk</p>
+              <p class="val">{{ metricView(server.disk_usage, 'var(--warn)').label }}</p>
+              <NProgress
+                class="mt-2"
+                type="line"
+                :percentage="metricView(server.disk_usage, 'var(--warn)').percentage"
+                :color="metricView(server.disk_usage, 'var(--warn)').color"
+                :height="6"
+                :show-indicator="false"
+                :rail-style="{ borderRadius: 'var(--radius-pill)' }"
+              />
+            </div>
+          </div>
+
+          <div class="node-foot">
+            <span class="tag">{{ containerLabel(server) }}</span>
+            <NButton size="small" style="margin-left: auto" @click="openNode(server.id)">
+              Open node
+            </NButton>
+            <NButton
+              size="small"
+              :loading="validatingId === server.id"
+              @click="handleValidate(server)"
+            >
+              Revalidate SSH
+            </NButton>
+            <NButton size="small" @click="openContainers(server.id)">
+              Containers
+            </NButton>
+            <NPopconfirm @positive-click="handleDelete(server)">
+              <template #trigger>
+                <NButton size="small" type="error" secondary>Delete</NButton>
+              </template>
+              Remove {{ server.name }}? Containers on the node are not touched.
+            </NPopconfirm>
+          </div>
+        </article>
+        </div>
+        <NPagination
+          v-if="filteredServers.length > pageSize"
+          class="servers-pagination"
+          :page="currentPage"
+          :page-size="pageSize"
+          :item-count="filteredServers.length"
+          @update:page="page = $event"
+        />
+      </template>
+      <NEmpty
+        v-else
+        class="servers-empty"
+        description="No nodes match the current filters"
+      >
         <template #icon>
           <NIcon>
             <GothamIcon name="server" />
@@ -730,6 +746,166 @@ systemctl status gotham-agent</code></pre>
     margin-left: 0;
     max-width: none;
     width: 100%;
+  }
+}
+
+/* ── Node grid (docs/design/servers.html) ──────────────────────────────────
+   The list region is a grid of node cards, not a data table. These rules are
+   ported from docs/design/assets/gotham-views.css (.node-card family) and
+   docs/design/assets/gotham-ui.css (grid/avatar/tag/meter/kv utilities) that
+   the app does not carry globally; tokens come from styles/tokens.css. */
+.servers-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+}
+
+.grid {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.node-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.node-card:hover {
+  border-color: var(--border-soft);
+}
+
+.node-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.node-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.node-metric .stat-label {
+  font-size: 10px;
+}
+
+.node-metric .val {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--fg);
+  margin-top: 2px;
+}
+
+.node-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(90px, 110px) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  align-items: baseline;
+  margin: 0;
+}
+
+.kv dt {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.kv dd {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: var(--accent-on);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.inline-code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--surface-warm);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--fg);
+}
+
+.grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fg-2 {
+  color: var(--fg-2);
+}
+
+.bold {
+  font-weight: 600;
+}
+
+.small {
+  font-size: var(--text-xs);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.mt-2 {
+  margin-top: var(--space-2);
+}
+
+@media (max-width: 940px) {
+  .cols-2 {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

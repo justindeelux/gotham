@@ -62,7 +62,7 @@ jobs:
 
   lint:
     name: lint
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -80,7 +80,7 @@ jobs:
 
   web:
     name: web build + type-check + dist drift
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -109,7 +109,7 @@ jobs:
 
   sqlc:
     name: sqlc drift check
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -127,9 +127,7 @@ jobs:
           echo "${sha256}  sqlc.tar.gz" | sha256sum --check --strict -
           tar -xzf sqlc.tar.gz
           chmod +x sqlc
-          mkdir -p "$HOME/.local/bin"
-          mv sqlc "$HOME/.local/bin/sqlc"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          sudo mv sqlc /usr/local/bin/
 
       - name: Generate and check drift
         run: |
@@ -138,7 +136,7 @@ jobs:
 
   installer:
     name: installer scripts (shell + actionlint + release chain)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

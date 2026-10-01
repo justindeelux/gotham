@@ -29,7 +29,7 @@ permissions:
 jobs:
   release:
     name: goreleaser + signed manifests
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     # The signing secret lives in the `release` environment, which has a
     # required reviewer, so the job reads environment secrets and needs the
     # owner's approval before it can run. The runner is still shared with PR CI,
@@ -137,7 +137,9 @@ jobs:
             *) host_arch="" ;;
           esac
           if [ -n "$host_arch" ]; then
-            out="$(dist/gotham_linux_${host_arch}_*/gotham version)"
+            set -- dist/gotham_linux_"${host_arch}"_*/gotham
+            host_bin="$1"
+            out="$("$host_bin" version)"
             [ "$out" = "gotham ${expected_version}" ] || {
               echo "::error::version mismatch: got '$out', want 'gotham ${expected_version}'"
               exit 1

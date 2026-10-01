@@ -66,7 +66,10 @@ type PreviewClaimResult struct {
 //   - a start that arrives while a close reservation is live is Retryable,
 //     even when no binding exists yet (F-1): the close either wins the
 //     promotion or the start is redelivered after it completes;
-//   - a close always reserves (until an earlier close is still in flight).
+//   - a close always reserves; when there is no live binding a leftover marker
+//     is replaced so a redelivery re-runs the idempotent ledger clear instead
+//     of being acked as a duplicate (MEDIUM-1), while an earlier in-flight
+//     close of a live preview still dedupes.
 func (s *Store) ClaimPreviewDelivery(ctx context.Context, params PreviewClaimParams) (PreviewClaimResult, error) {
 	var result PreviewClaimResult
 
@@ -141,6 +144,19 @@ func (s *Store) ClaimPreviewDelivery(ctx context.Context, params PreviewClaimPar
 
 	switch params.Kind {
 	case PreviewClaimClose:
+		if binding == nil || binding.State == "deleted" {
+			// No live binding to tear down: a leftover close marker can only be
+			// a previous close attempt that failed before clearing the ledger
+			// (MEDIUM-1) or a concurrent no-binding close, whose clear is
+			// idempotent. Replace it so the redelivery re-runs the close
+			// instead of being acked as a duplicate.
+			if err := queries.DeletePreviewCloseReservation(ctx, sqlc.DeletePreviewCloseReservationParams{
+				ApplicationID: params.ApplicationID,
+				PrNumber:      params.PrNumber,
+			}); err != nil {
+				return PreviewClaimResult{}, err
+			}
+		}
 		if err := reserve(); err != nil {
 			return PreviewClaimResult{}, err
 		}

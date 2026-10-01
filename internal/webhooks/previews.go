@@ -238,8 +238,13 @@ func (s *Service) receivePullRequest(ctx context.Context, provider string, targe
 	}
 	if err != nil {
 		// The lease must not outlive a delivery that queued nothing: a
-		// redelivered body has to be able to claim again.
-		s.releaseReservation(ctx, claim.Reservation)
+		// redelivered body has to be able to claim again. The one exception is
+		// a no-binding close whose ledger clear failed: its reservation is the
+		// only fence over a racing open, so it stays until the redelivery (or
+		// the marker's expiry) clears it (MEDIUM-1).
+		if !errors.Is(err, errCloseFenceHeld) {
+			s.releaseReservation(ctx, claim.Reservation)
+		}
 		return Delivery{}, err
 	}
 	return delivery, nil
@@ -468,9 +473,14 @@ func (s *Service) compensatePreview(ctx context.Context, appID uuid.UUID, provis
 func (s *Service) closePreview(ctx context.Context, target Target, number int, claim *PreviewClaimResult) (Delivery, error) {
 	if claim.Binding == nil {
 		// Nothing to tear down. Clearing the ledger keeps a stale reservation
-		// from suppressing a later reopen at the same revision.
+		// from suppressing a later reopen at the same revision; it also removes
+		// the start lease of a racing open. On failure the close marker must
+		// survive: it is the fence that refuses that open's promotion, so
+		// releasing it here would leave a live preview behind a closed pull
+		// request (MEDIUM-1). The delivery is retryable, and the retry
+		// replaces the marker and re-runs this clear.
 		if cerr := s.repo.ClearPreviewDeliveries(ctx, target.ApplicationID, number); cerr != nil {
-			return Delivery{}, cerr
+			return Delivery{}, errors.Join(ErrRetryable, errCloseFenceHeld, cerr)
 		}
 		return Delivery{Status: StatusIgnored, Reason: "no preview"}, nil
 	}

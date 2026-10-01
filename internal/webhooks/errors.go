@@ -44,6 +44,12 @@ var (
 	// the delivery was NOT recorded as handled. The route answers 503 so the
 	// revision stays visible as a failed delivery and the Git host can
 	// redeliver it; the preview reservation is released first, so the retry
-	// can reserve again.
+	// can reserve again — except for a no-binding close whose ledger clear
+	// failed, which keeps its marker (see errCloseFenceHeld).
 	ErrRetryable = errors.New("webhooks: delivery can be retried")
+	// errCloseFenceHeld marks a no-binding close whose ledger clear failed
+	// (MEDIUM-1). That reservation is the only fence over a racing open, so it
+	// must not be released; the redelivery replaces it and re-runs the
+	// idempotent clear.
+	errCloseFenceHeld = errors.New("webhooks: preview close fence is held")
 )

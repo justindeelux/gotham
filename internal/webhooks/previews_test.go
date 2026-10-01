@@ -2056,3 +2056,74 @@ func TestDeployFinishedUpdatesThePreviewComment(t *testing.T) {
 		t.Fatalf("comments after a closing preview's deploy = %d, want no close overwrite", got)
 	}
 }
+
+// TestFailedNoBindingCloseKeepsTheFence is the MEDIUM-1 regression: when the
+// no-binding close's ledger clear fails, the close marker is the only fence
+// over a racing open, so it must survive the error, and a redelivered close
+// must re-run the ledger clear instead of being acked as a duplicate.
+func TestFailedNoBindingCloseKeepsTheFence(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	// The open claimed first: its lease is live and no binding exists yet.
+	openClaim, err := repo.ClaimPreviewDelivery(context.Background(), PreviewClaim{
+		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart,
+		HeadSHA: "head-a", LiveLimit: maxLivePreviewsPerApplication,
+	})
+	if err != nil || !openClaim.Approved {
+		t.Fatalf("open claim = %+v / %v, want approved", openClaim, err)
+	}
+
+	// The close claims, then its ledger clear fails transiently.
+	repo.mu.Lock()
+	repo.clearErr = errors.New("database down")
+	repo.mu.Unlock()
+	closeBody := githubPRBody("closed", 7, "feat/x", "main", "head-a")
+	if _, err := receive(t, svc, closeBody); err == nil {
+		t.Fatal("close with a failing ledger clear: no error, want one")
+	} else if !errors.Is(err, ErrRetryable) {
+		t.Fatalf("failed close = %v, want ErrRetryable so the host redelivers", err)
+	}
+	if !repo.hasCloseMarker(repo.app.ID, 7) {
+		t.Fatal("the close marker was released by the failed clear")
+	}
+
+	// The in-flight open cannot promote behind the failed close.
+	promoted, err := repo.WritePreviewBinding(context.Background(), PreviewBindingWrite{
+		ApplicationID: repo.app.ID, PRNumber: 7, ReservationID: openClaim.Reservation.ID,
+		LeaseHeadSHA: "head-a", HeadSHA: "head-a", State: PreviewActive,
+		ConsumeLease: true, LiveLimit: maxLivePreviewsPerApplication,
+	})
+	if err != nil {
+		t.Fatalf("WritePreviewBinding: %v", err)
+	}
+	if promoted.Refused != BindingRefusedClosing {
+		t.Fatalf("promotion after the failed close = %+v, want refused closing", promoted)
+	}
+	if _, err := repo.GetPreview(context.Background(), repo.app.ID, 7); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("binding after the failed close = %v, want none", err)
+	}
+
+	// The redelivered close (the clear works now) completes the no-binding
+	// close instead of being acked as a duplicate.
+	repo.mu.Lock()
+	repo.clearErr = nil
+	repo.mu.Unlock()
+	delivery, err := receive(t, svc, closeBody)
+	if err != nil {
+		t.Fatalf("Receive(close retry): %v", err)
+	}
+	if delivery.Status != StatusIgnored || delivery.Reason != "no preview" {
+		t.Fatalf("close retry = %+v, want the no-binding close completed", delivery)
+	}
+	if repo.hasCloseMarker(repo.app.ID, 7) {
+		t.Fatal("the close marker survived the completed close")
+	}
+
+	// The pull request can reopen normally afterwards.
+	reopen, err := receive(t, svc, githubPRBody("opened", 7, "feat/x", "main", "head-b"))
+	if err != nil || reopen.Status != StatusQueued {
+		t.Fatalf("reopen = %+v / %v, want queued", reopen, err)
+	}
+}

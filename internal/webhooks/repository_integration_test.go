@@ -1233,10 +1233,82 @@ func TestStoreNoBindingCloseRefusesTheRacingPromote(t *testing.T) {
 	}
 }
 
+// TestStoreFailedNoBindingCloseRetryReclaims is the MEDIUM-1 store-level
+// regression: a no-binding close whose clear failed keeps its marker (the
+// fence refuses the racing open), and the redelivered close must be approved
+// again so it can re-run the clear instead of being acked as a duplicate.
+func TestStoreFailedNoBindingCloseRetryReclaims(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openClaimFixture(t, ctx)
+	userID, baseID := claimFixture(t, ctx, st)
+
+	const pr = 8
+	open, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-a", LiveLimit: 5,
+	})
+	if err != nil || !open.Approved {
+		t.Fatalf("open claim = %+v / %v, want approved", open, err)
+	}
+	if _, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, Kind: store.PreviewClaimClose,
+		LiveLimit: 5,
+	}); err != nil {
+		t.Fatalf("close claim: %v", err)
+	}
+
+	// The close's clear "fails" (nothing is cleared). The marker is still the
+	// fence, so the racing open's promotion is refused.
+	write, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, ReservationID: open.Reservation.ID,
+		LeaseHeadSHA: "head-a", HeadSHA: "head-a", State: "active",
+		ConsumeLease: true, LiveLimit: 5,
+	})
+	if err != nil {
+		t.Fatalf("WritePreviewBinding: %v", err)
+	}
+	if write.Refused != store.PreviewWriteClosingRefused {
+		t.Fatalf("racing promotion after the failed clear = %+v, want refused closing", write)
+	}
+
+	// The redelivered close re-claims (not Duplicate) so it can run the clear.
+	retry, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, Kind: store.PreviewClaimClose,
+		LiveLimit: 5,
+	})
+	if err != nil || !retry.Approved {
+		t.Fatalf("close retry = %+v / %v, want approved (the retry must re-run the clear)", retry, err)
+	}
+	if err := st.ClearPreviewDeliveries(ctx, pgUUID(baseID), pr); err != nil {
+		t.Fatalf("ClearPreviewDeliveries: %v", err)
+	}
+
+	// The same delivery reopens and promotes after the close completed.
+	reopen, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-a", LiveLimit: 5,
+	})
+	if err != nil || !reopen.Approved {
+		t.Fatalf("reopen claim = %+v / %v, want approved", reopen, err)
+	}
+	written, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, ReservationID: reopen.Reservation.ID,
+		LeaseHeadSHA: "head-a", HeadSHA: "head-a", TeamID: pgUUID(userID), State: "active",
+		ConsumeLease: true, LiveLimit: 5,
+	})
+	if err != nil || written.Refused != "" {
+		t.Fatalf("reopen promotion = %+v / %v, want stored", written, err)
+	}
+}
+
 // TestStoreUpsertPreviewDeployTakesTheApplicationLock is the F-2 regression:
 // the exported upsert serializes with the other preview transitions on the
-// per-application row lock — it must wait for a lock holder, and succeed once
-// the lock is released.
+// per-application row lock. The probe seeds the conflict row first: the INSERT
+// path takes FOR KEY SHARE on the applications row for its FK check, which
+// would block even without the application lock, so only the ON CONFLICT
+// UPDATE path discriminates the locked implementation from the unlocked one
+// (MEDIUM-2).
 func TestStoreUpsertPreviewDeployTakesTheApplicationLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1248,9 +1320,13 @@ func TestStoreUpsertPreviewDeployTakesTheApplicationLock(t *testing.T) {
 		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
 		Host: "pr-7.example.com", State: "active",
 	}
+	if _, err := st.UpsertPreviewDeploy(ctx, params); err != nil {
+		t.Fatalf("seed the binding row: %v", err)
+	}
 
-	// Hold the application lock in an outer transaction: an unlocked upsert
-	// would slip past it.
+	// Hold the application lock in an outer transaction: the locked upsert
+	// must wait on it, while an unlocked conflict update (no FK re-check on
+	// the unchanged application_id) would slip past.
 	tx, err := st.DB.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin lock holder: %v", err)
@@ -1270,13 +1346,24 @@ func TestStoreUpsertPreviewDeployTakesTheApplicationLock(t *testing.T) {
 		t.Fatalf("release the application lock: %v", err)
 	}
 
-	// Without contention the upsert stores the binding.
+	// Without contention the upsert refreshes the one row.
+	params.HeadSha = "head-b"
 	stored, err := st.UpsertPreviewDeploy(ctx, params)
 	if err != nil {
 		t.Fatalf("UpsertPreviewDeploy: %v", err)
 	}
-	if stored.PrNumber != 7 || stored.HeadSha != "head-a" {
-		t.Fatalf("stored binding = %+v", stored)
+	if stored.PrNumber != 7 || stored.HeadSha != "head-b" {
+		t.Fatalf("stored binding = %+v, want the refreshed head", stored)
+	}
+	var count int
+	if err := st.DB.QueryRow(ctx,
+		"SELECT count(*) FROM preview_deploys WHERE application_id = $1 AND pr_number = $2",
+		pgUUID(baseID), 7,
+	).Scan(&count); err != nil {
+		t.Fatalf("count bindings: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("bindings = %d, want the one refreshed row", count)
 	}
 }
 

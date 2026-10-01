@@ -126,6 +126,15 @@ SELECT EXISTS (
       AND expires_at > clock_timestamp()
 ) AS live;
 
+-- name: DeletePreviewCloseReservation :exec
+-- A close retry with no live binding replaces a leftover marker (a previous
+-- attempt whose ledger clear failed, or a concurrent no-binding close whose
+-- clear is idempotent) so the redelivery re-runs the idempotent close instead
+-- of being acked as a duplicate (MEDIUM-1). Runs under the application lock,
+-- in the same transaction that reserves the new marker.
+DELETE FROM preview_deliveries
+WHERE application_id = $1 AND pr_number = $2 AND kind = 'close';
+
 -- name: ReservePreviewDelivery :one
 -- Insert a delivery reservation (in-flight lease for a start, teardown marker
 -- for a close). A replay of the same signed revision while an earlier attempt

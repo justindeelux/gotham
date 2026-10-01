@@ -512,6 +512,17 @@ func (r *fakeRepository) ClaimPreviewDelivery(_ context.Context, claim PreviewCl
 
 	switch claim.Kind {
 	case ReservationClose:
+		if !hasBinding || binding.State == PreviewDeleted {
+			// MEDIUM-1: with no live binding, a leftover close marker is
+			// replaced so the redelivery re-runs the idempotent clear instead
+			// of being acked duplicate.
+			for key, reservation := range r.reservations {
+				if reservation.ApplicationID == claim.ApplicationID &&
+					reservation.PRNumber == claim.PRNumber && reservation.Kind == ReservationClose {
+					delete(r.reservations, key)
+				}
+			}
+		}
 		reserve()
 	case ReservationStart:
 		switch {
@@ -624,6 +635,20 @@ func (r *fakeRepository) WritePreviewBinding(_ context.Context, write PreviewBin
 		}
 	}
 	return PreviewBindingWriteResult{Binding: &stored}, nil
+}
+
+// hasCloseMarker reports whether a close reservation is present (test helper;
+// unlike hasLiveCloseLocked it ignores expiry).
+func (r *fakeRepository) hasCloseMarker(appID uuid.UUID, prNumber int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, reservation := range r.reservations {
+		if reservation.ApplicationID == appID && reservation.PRNumber == prNumber &&
+			reservation.Kind == ReservationClose {
+			return true
+		}
+	}
+	return false
 }
 
 // hasLiveCloseLocked reports whether a close reservation for the pull request

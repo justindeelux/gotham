@@ -56,6 +56,26 @@ func (q *Queries) CountLivePreviews(ctx context.Context, arg CountLivePreviewsPa
 	return count, err
 }
 
+const deletePreviewCloseReservation = `-- name: DeletePreviewCloseReservation :exec
+DELETE FROM preview_deliveries
+WHERE application_id = $1 AND pr_number = $2 AND kind = 'close'
+`
+
+type DeletePreviewCloseReservationParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	PrNumber      int32       `json:"pr_number"`
+}
+
+// A close retry with no live binding replaces a leftover marker (a previous
+// attempt whose ledger clear failed, or a concurrent no-binding close whose
+// clear is idempotent) so the redelivery re-runs the idempotent close instead
+// of being acked as a duplicate (MEDIUM-1). Runs under the application lock,
+// in the same transaction that reserves the new marker.
+func (q *Queries) DeletePreviewCloseReservation(ctx context.Context, arg DeletePreviewCloseReservationParams) error {
+	_, err := q.db.Exec(ctx, deletePreviewCloseReservation, arg.ApplicationID, arg.PrNumber)
+	return err
+}
+
 const getLivePreviewDeployBySibling = `-- name: GetLivePreviewDeployBySibling :one
 SELECT id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
 WHERE preview_application_id = $1 AND state <> 'deleted'

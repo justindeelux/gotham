@@ -172,9 +172,9 @@ const inviteRoleOptions: Array<{ label: string; value: TeamRole }> = [
   { label: "read-only", value: "read_only" },
 ];
 
-/** acceptLink builds the one-time accept URL for an invite token. */
+/** inviteLink builds the one-time member onboarding URL for an invite token. */
 function acceptLink(token: string): string {
-  return `${window.location.origin}/invite/accept?token=${encodeURIComponent(token)}`;
+  return `${window.location.origin}/register?invite=${encodeURIComponent(token)}`;
 }
 
 /** memberRoleDisabled reports whether a member's role select is locked. */
@@ -1030,9 +1030,11 @@ onMounted(async () => {
           token: {{ createdInvite.token }}
         </NText>
         <NText depth="3">
-          The recipient posts this token to
-          <span class="mono">{{ createdInvite.accept_url }}</span> while signed
-          in as {{ createdInvite.email }}. It expires
+          The invited member opens this link and creates their account, which
+          joins {{ createdInvite.email }} to the team as
+          <span class="mono">{{ createdInvite.role }}</span
+          >. Registration is closed on an instance that already has an account,
+          so this invite is the only way in. It expires
           {{ expiryLabel(createdInvite.expires_at) }}.
         </NText>
       </NSpace>

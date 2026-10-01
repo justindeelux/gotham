@@ -140,7 +140,7 @@ func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFr
 		return nil, err
 	}
 
-	email, err := normalizeEmail(identity.Email)
+	email, err := NormalizeEmail(identity.Email)
 	if err != nil {
 		return nil, ErrMissingEmail
 	}

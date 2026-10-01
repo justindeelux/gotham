@@ -101,7 +101,7 @@ func TestServiceRegisterLoginMe(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	registered, err := svc.Register(ctx, "  "+strings.ToUpper(email)+"  ", password)
+	registered, err := svc.Register(ctx, "  "+strings.ToUpper(email)+"  ", password, newTestInvite(t, st, email), storeInvites{st})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -144,12 +144,13 @@ func TestServiceRegisterDuplicateEmail(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	if _, err := svc.Register(ctx, email, password); err != nil {
+	if _, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}); err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
 
-	// Same email in different case must also collide.
-	_, err := svc.Register(ctx, strings.ToUpper(email), password)
+	// Same email in different case must also collide; a fresh invite keeps
+	// the duplicate past the registration gate so the unique index answers.
+	_, err := svc.Register(ctx, strings.ToUpper(email), password, newTestInvite(t, st, email), storeInvites{st})
 	if !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("second Register error = %v, want ErrEmailTaken", err)
 	}
@@ -163,7 +164,7 @@ func TestServiceLoginFailures(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	if _, err := svc.Register(ctx, email, password); err != nil {
+	if _, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -180,10 +181,10 @@ func TestServiceRegisterValidation(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Register(ctx, "not-an-email", "s3cret-password"); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Register(ctx, "not-an-email", "s3cret-password", "", nil); !errors.Is(err, ErrValidation) {
 		t.Errorf("Register(bad email) error = %v, want ErrValidation", err)
 	}
-	if _, err := svc.Register(ctx, uniqueEmail("short"), "short"); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Register(ctx, uniqueEmail("short"), "short", "", nil); !errors.Is(err, ErrValidation) {
 		t.Errorf("Register(short password) error = %v, want ErrValidation", err)
 	}
 }
@@ -195,7 +196,7 @@ func TestServiceRefreshRotation(t *testing.T) {
 	email := uniqueEmail("refresh")
 	cleanupUser(t, st, email)
 
-	first, err := svc.Register(ctx, email, "s3cret-password")
+	first, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -230,7 +231,7 @@ func TestServiceLogoutRevokesSession(t *testing.T) {
 	email := uniqueEmail("logout")
 	cleanupUser(t, st, email)
 
-	result, err := svc.Register(ctx, email, "s3cret-password")
+	result, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

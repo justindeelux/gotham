@@ -52,6 +52,28 @@ func (s *Store) RevokeSession(ctx context.Context, refreshHash string) error {
 	return s.queries.RevokeSession(ctx, refreshHash)
 }
 
+// CountUsers returns the number of accounts. Zero means registration is open:
+// the first account bootstraps the instance (P-A2).
+func (s *Store) CountUsers(ctx context.Context) (int64, error) {
+	return s.queries.CountUsers(ctx)
+}
+
+// UpdateUserPasswordHash replaces the argon2id hash of the account with the
+// given email. email must already be normalized (lowercase), as resolved
+// through GetUserByEmail.
+func (s *Store) UpdateUserPasswordHash(ctx context.Context, email, passwordHash string) error {
+	return s.queries.UpdateUserPasswordHash(ctx, sqlc.UpdateUserPasswordHashParams{
+		Lower:        email,
+		PasswordHash: &passwordHash,
+	})
+}
+
+// DeleteUserSessions removes every refresh session of a user, so an old token
+// chain cannot outlive a password change.
+func (s *Store) DeleteUserSessions(ctx context.Context, userID pgtype.UUID) error {
+	return s.queries.DeleteUserSessions(ctx, userID)
+}
+
 // CreateAPIToken stores a scoped API token (hash only) and returns the row.
 func (s *Store) CreateAPIToken(ctx context.Context, params sqlc.CreateAPITokenParams) (sqlc.ApiToken, error) {
 	return s.queries.CreateAPIToken(ctx, params)

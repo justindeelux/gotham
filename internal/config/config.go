@@ -35,6 +35,10 @@ const (
 	EnvLogFormat             = "GOTHAM_LOG_FORMAT"
 	EnvAuthJWTPrivateKeyPath = "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH"
 	EnvAuthJWTPublicKeyPath  = "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH"
+	// EnvAuthAllowRegistration reopens self-registration on an instance that
+	// already has an account. Test/dev only: production relies on the closed
+	// default (one admin, members join through invites, P-A2).
+	EnvAuthAllowRegistration = "GOTHAM_AUTH_ALLOW_REGISTRATION"
 
 	EnvOAuthGitHubClientID     = "GOTHAM_OAUTH_GITHUB_CLIENT_ID"
 	EnvOAuthGitHubClientSecret = "GOTHAM_OAUTH_GITHUB_CLIENT_SECRET"
@@ -123,6 +127,9 @@ type Auth struct {
 	// and sessions do not survive a restart.
 	JWTPrivateKeyPath string `mapstructure:"jwt_private_key_path"`
 	JWTPublicKeyPath  string `mapstructure:"jwt_public_key_path"`
+	// AllowRegistration reopens self-registration after the first account.
+	// Test/dev only; see EnvAuthAllowRegistration.
+	AllowRegistration bool `mapstructure:"allow_registration"`
 }
 
 // OAuth holds third-party identity provider settings. Each provider is disabled
@@ -307,6 +314,7 @@ func newViper() *viper.Viper {
 		"log.format":                EnvLogFormat,
 		"auth.jwt_private_key_path": EnvAuthJWTPrivateKeyPath,
 		"auth.jwt_public_key_path":  EnvAuthJWTPublicKeyPath,
+		"auth.allow_registration":   EnvAuthAllowRegistration,
 
 		"oauth.github.client_id":     EnvOAuthGitHubClientID,
 		"oauth.github.client_secret": EnvOAuthGitHubClientSecret,

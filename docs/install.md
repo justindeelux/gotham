@@ -110,6 +110,7 @@ Useful overrides:
 | `GOTHAM_DATABASE_DSN` | Managed PostgreSQL DSN; skips local provisioning. |
 | `GOTHAM_REDIS_ADDR` | Redis `host:port` (default `localhost:6379`). |
 | `GOTHAM_SKIP_DEPS=1` | Do not install or configure PostgreSQL/Redis. |
+| `GOTHAM_AUTH_ALLOW_REGISTRATION` | Test/dev only: reopens self-registration after the first account (the default is closed — members join through invites). |
 | `--cp-host <name-or-ip>` | Add a DNS name or IP to the gRPC listener certificate SANs (repeatable). |
 | `GOTHAM_GRPC_HOSTS` | Comma-separated SAN hosts (same as `--cp-host`); also overrides the persisted list at runtime. |
 | `GOTHAM_INSTALL_ROOT` | Install under a prefix instead of `/` (testing only; non-root; enables test mode). |
@@ -119,10 +120,26 @@ Useful overrides:
 
 ## First login
 
-1. Open `http://<host>:8000`.
-2. Create an account through the sign-up form and sign in.
-3. From **Servers**, install an agent on a node (below); the node then reports
+Registration is closed: exactly one account bootstraps the instance and members
+join through admin-created invites.
+
+1. Create the admin account on the host:
+
+   ```sh
+   sudo /var/lib/gotham/bin/gotham admin create --email ops@example.com
+   ```
+
+   The password prompt is hidden. Re-run with `--force` only to add a second
+   account deliberately; the CLI refuses by default once one exists.
+2. Open `http://<host>:8000` and sign in.
+3. To add a member, create an invite in **Teams** and send the shown link:
+   the member opens `/register?invite=<token>` and chooses their credentials.
+   The link is shown once and expires.
+4. From **Servers**, install an agent on a node (below); the node then reports
    heartbeats and is visible in the UI.
+
+Lost the admin password? `sudo /var/lib/gotham/bin/gotham admin reset-password
+--email ops@example.com` replaces it and revokes the account's sessions.
 
 The first account is a normal account, not a platform administrator. The
 platform-global operations (node-wide proxy sync, DNS providers) require the

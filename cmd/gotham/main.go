@@ -43,6 +43,8 @@ func run(args []string) int {
 	switch args[0] {
 	case "serve":
 		return runServe()
+	case "admin":
+		return runAdmin(args[1:])
 	case "migrate":
 		return runMigrate(args[1:])
 	case "ca":
@@ -113,6 +115,13 @@ func runServe() int {
 
 	authStore := store.New(pool)
 	authService := auth.New(authStore, signer, logger)
+	if snap.Auth.AllowRegistration {
+		// Test/dev escape hatch (P-A2): reopen self-registration after the
+		// first account. Never enable this on a real instance.
+		authService.AllowOpenRegistration = true
+		logger.Warn("registration is open to everyone (GOTHAM_AUTH_ALLOW_REGISTRATION); " +
+			"members should join through admin invites instead")
+	}
 	oauthService := buildOAuthService(snap.OAuth, authService, logger)
 	tokenService := auth.NewAPITokenService(authStore, logger)
 
@@ -281,6 +290,9 @@ func usage(w io.Writer) {
 
 Usage:
   gotham serve              Start the control plane
+  gotham admin create       Create the first account (--email; see gotham admin help)
+  gotham admin reset-password
+                            Replace a password and revoke its sessions
   gotham migrate [verb]     Run database migrations (up, down, status; default up)
   gotham ca init            Create the gRPC mTLS certificate authority
   gotham update [command]   Check, apply or roll back a self-update

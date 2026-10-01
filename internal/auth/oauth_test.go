@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
 	"github.com/justindeelux/gotham/internal/store"
@@ -257,10 +258,17 @@ func TestOAuthCallbackExistingUserLogsIn(t *testing.T) {
 
 	email := uniqueEmail("oauth-existing")
 	cleanupUser(t, st, email)
-	registered, err := oauth.auth.Register(ctx, email, "s3cret-password")
+	// Registration is closed once accounts exist (P-A2); seed the local
+	// account directly through the store.
+	hash, err := HashPassword("s3cret-password")
 	if err != nil {
-		t.Fatalf("Register: %v", err)
+		t.Fatalf("HashPassword: %v", err)
 	}
+	registered, err := st.CreateUser(ctx, email, &hash)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	registeredID := uuid.UUID(registered.ID.Bytes).String()
 
 	provider.identity = &OAuthIdentity{Email: email}
 	_, state, err := oauth.Begin(ctx, "github", "")
@@ -272,8 +280,8 @@ func TestOAuthCallbackExistingUserLogsIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Callback: %v", err)
 	}
-	if result.User.ID != registered.User.ID {
-		t.Fatalf("Callback user ID = %q, want existing %q", result.User.ID, registered.User.ID)
+	if result.User.ID != registeredID {
+		t.Fatalf("Callback user ID = %q, want existing %q", result.User.ID, registeredID)
 	}
 
 	// The local password must still work: OAuth login must not clobber it.

@@ -29,6 +29,13 @@ export const useAuthStore = defineStore("auth", () => {
   const accessToken = ref<string | null>(initial.accessToken);
   const refreshToken = ref<string | null>(initial.refreshToken);
 
+  /**
+   * registrationOpen mirrors `GET /auth/config`: true only on a fresh instance
+   * with zero accounts. Afterwards the create-account tab is hidden and
+   * members join through an admin-created invite link (P-A2).
+   */
+  const registrationOpen = ref(false);
+
   const isAuthenticated = computed<boolean>(() => accessToken.value !== null);
 
   /** applySession replaces the in-memory state from a stored snapshot. */
@@ -90,11 +97,42 @@ export const useAuthStore = defineStore("auth", () => {
     setSession(response.data);
   }
 
+  /**
+   * fetchAuthConfig refreshes `registrationOpen`. A failure leaves it false
+   * (closed) — the safe default for an unknown instance state.
+   */
+  async function fetchAuthConfig(): Promise<void> {
+    try {
+      const response = await http.get<{ registrationOpen: boolean }>("/auth/config");
+      registrationOpen.value = response.data.registrationOpen === true;
+    } catch {
+      registrationOpen.value = false;
+    }
+  }
+
+  /**
+   * validateInvite resolves an invite token to the team the invitee is
+   * joining. A missing or unusable token throws, so the caller can fall back
+   * to the sign-in form.
+   */
+  async function validateInvite(token: string): Promise<{ team: string; email: string }> {
+    const response = await http.get<{ team: string; email: string }>(
+      "/auth/invites/validate",
+      { params: { token } },
+    );
+    return response.data;
+  }
+
   /** register creates an account and starts the session. */
-  async function register(email: string, password: string): Promise<void> {
+  async function register(
+    email: string,
+    password: string,
+    inviteToken?: string,
+  ): Promise<void> {
     const response = await http.post<AuthResult>("/auth/register", {
       email,
       password,
+      ...(inviteToken ? { inviteToken } : {}),
     });
     setSession(response.data);
   }
@@ -116,10 +154,13 @@ export const useAuthStore = defineStore("auth", () => {
     accessToken,
     refreshToken,
     isAuthenticated,
+    registrationOpen,
     setSession,
     clearSession,
     persist,
     fetchMe,
+    fetchAuthConfig,
+    validateInvite,
     login,
     register,
     logout,

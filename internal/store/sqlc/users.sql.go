@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countUsers = `-- name: CountUsers :one
+SELECT count(*) FROM users
+`
+
+func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countUsers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash)
 VALUES ($1, $2)
@@ -74,4 +85,23 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateUserPasswordHash = `-- name: UpdateUserPasswordHash :exec
+UPDATE users
+SET password_hash = $2, updated_at = now()
+WHERE lower(email) = lower($1)
+`
+
+type UpdateUserPasswordHashParams struct {
+	Lower        string  `json:"lower"`
+	PasswordHash *string `json:"password_hash"`
+}
+
+// UpdateUserPasswordHash replaces the password hash of the account with the
+// given (normalized, lowercase) email; callers resolve the exact address via
+// GetUserByEmail first.
+func (q *Queries) UpdateUserPasswordHash(ctx context.Context, arg UpdateUserPasswordHashParams) error {
+	_, err := q.db.Exec(ctx, updateUserPasswordHash, arg.Lower, arg.PasswordHash)
+	return err
 }

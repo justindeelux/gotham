@@ -13,3 +13,9 @@ UPDATE sessions
 SET revoked_at = now()
 WHERE refresh_hash = $1
   AND revoked_at IS NULL;
+
+-- name: DeleteUserSessions :exec
+-- DeleteUserSessions removes every session of a user, used after a password
+-- change so the old refresh chain dies with the credential.
+DELETE FROM sessions
+WHERE user_id = $1;

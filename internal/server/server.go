@@ -65,16 +65,21 @@ type Server struct {
 	servers     ServerService
 	persistence *store.Store
 	teamService teams.TeamService
-	deploy      deploy.DeployService
-	proxy       proxy.ProxyService
-	backups     databases.BackupService
-	notify      notifications.NotificationService
-	webhooks    *webhooks.Service
-	metrics     *servers.MetricsSweeper
-	updates     updates.Service
-	authLimiter *ipRateLimiter
-	router      http.Handler
-	closer      func()
+	// invites is the teams-domain slice backing invite registration (P-A2);
+	// it is the same object as teamService, typed for the auth seam.
+	invites auth.InviteAcceptor
+	// allowRegistration mirrors GOTHAM_AUTH_ALLOW_REGISTRATION (test/dev only).
+	allowRegistration bool
+	deploy            deploy.DeployService
+	proxy             proxy.ProxyService
+	backups           databases.BackupService
+	notify            notifications.NotificationService
+	webhooks          *webhooks.Service
+	metrics           *servers.MetricsSweeper
+	updates           updates.Service
+	authLimiter       *ipRateLimiter
+	router            http.Handler
+	closer            func()
 }
 
 // New constructs a Server bound to cfg and logging through logger. The
@@ -105,16 +110,17 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	}
 
 	s := &Server{
-		cfg:         cfg,
-		logger:      logger,
-		db:          db,
-		redis:       redisClient,
-		auth:        authService,
-		oauth:       oauthService,
-		tokens:      tokenService,
-		servers:     serverService,
-		persistence: st,
-		authLimiter: limiter,
+		cfg:               cfg,
+		logger:            logger,
+		db:                db,
+		allowRegistration: snap.Auth.AllowRegistration,
+		redis:             redisClient,
+		auth:              authService,
+		oauth:             oauthService,
+		tokens:            tokenService,
+		servers:           serverService,
+		persistence:       st,
+		authLimiter:       limiter,
 	}
 	s.closer = func() {
 		// The deploy service owns its worker pool and realtime publisher;
@@ -207,7 +213,14 @@ func (s *Server) routes() (http.Handler, error) {
 		// middleware then always resolves the caller's personal team. A nil
 		// service (no database: the handler tests) leaves resource routes on
 		// their pre-teams, creator-scoped behavior.
-		s.teamService = teams.NewDefaultService(teams.Config{Store: s.persistence, Logger: s.logger})
+		if s.persistence != nil {
+			teamSvc := teams.NewService(teams.Config{Store: s.persistence, Logger: s.logger})
+			s.teamService = teamSvc
+			// The same service backs invite registration (P-A2): the auth
+			// service consumes invites through the auth.InviteAcceptor seam,
+			// so auth never imports teams.
+			s.invites = teamSvc
+		}
 		teams.Mount(api, s.RequireAuth, UserIDFromContext, s.teamService)
 
 		// Notifications (BE-8.3): the team-scoped channel CRUD plus the

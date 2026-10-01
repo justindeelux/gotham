@@ -72,6 +72,10 @@ jobs:
       # stays team-scoped.
       GOTHAM_E2E_EMAIL: ui-e2e-admin@example.com
       PLATFORM_ADMINS: ui-e2e-admin@example.com
+      # Test-only: the smoke seeds extra accounts through POST /auth/register,
+      # which is closed once the instance has an account (P-A2). Production
+      # never sets this; the closed default is covered by the Go HTTP tests.
+      GOTHAM_AUTH_ALLOW_REGISTRATION: "true"
 
     steps:
       - name: Checkout

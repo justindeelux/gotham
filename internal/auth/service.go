@@ -54,6 +54,10 @@ type Service struct {
 	signer *Signer
 	logger *slog.Logger
 	now    func() time.Time
+	// AllowOpenRegistration reopens self-registration after the first account.
+	// Test/dev only (GOTHAM_AUTH_ALLOW_REGISTRATION): production relies on the
+	// closed default, where members join through admin invites (P-A2).
+	AllowOpenRegistration bool
 }
 
 // New builds a Service. The clock is injectable so tests can exercise expiry
@@ -65,19 +69,49 @@ func New(st *store.Store, signer *Signer, logger *slog.Logger) *Service {
 	return &Service{store: st, signer: signer, logger: logger, now: time.Now}
 }
 
+// InviteAcceptor is the teams-domain slice the invite-registration path
+// (P-A2) needs from the caller: peek a pending invite before the account
+// exists, then consume it for the fresh account. auth never imports the teams
+// package; the HTTP wiring passes the teams service at call time.
+type InviteAcceptor interface {
+	// PeekInvite returns the invited team name and target email behind a
+	// pending invite token, or an error when the token is unknown, expired,
+	// or already consumed.
+	PeekInvite(ctx context.Context, token string) (teamName, email string, err error)
+	// AcceptInvite consumes a pending invite for the freshly created account.
+	AcceptInvite(ctx context.Context, userID uuid.UUID, token string) error
+}
+
 // Register creates a new account and returns an authenticated token pair.
-func (s *Service) Register(ctx context.Context, email, password string) (*AuthResult, error) {
-	normalized, err := normalizeEmail(email)
+//
+// Registration is open only while the instance has no account (the bootstrap
+// of exactly one admin account, P-A2). Afterwards a valid, pending, unused
+// invite token issued to the same email is required; any token problem
+// answers ErrRegistrationClosed so token validity is never publicly
+// distinguishable from a closed instance.
+func (s *Service) Register(ctx context.Context, email, password, inviteToken string, invites InviteAcceptor) (*AuthResult, error) {
+	normalized, err := NormalizeEmail(email)
 	if err != nil {
 		return nil, err
 	}
-	if err := validatePassword(password); err != nil {
+	if err := ValidatePassword(password); err != nil {
 		return nil, err
 	}
 
 	hash, err := HashPassword(password)
 	if err != nil {
 		return nil, err
+	}
+
+	count, err := s.store.CountUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("auth: count users: %w", err)
+	}
+	needInvite := count > 0 && !s.AllowOpenRegistration
+	if needInvite {
+		if err := checkInvite(ctx, normalized, inviteToken, invites); err != nil {
+			return nil, err
+		}
 	}
 
 	user, err := s.store.CreateUser(ctx, normalized, &hash)
@@ -88,7 +122,33 @@ func (s *Service) Register(ctx context.Context, email, password string) (*AuthRe
 		return nil, fmt.Errorf("auth: create user: %w", err)
 	}
 
+	if needInvite {
+		if err := invites.AcceptInvite(ctx, uuid.UUID(user.ID.Bytes), inviteToken); err != nil {
+			// The invite stopped being valid between the peek and the
+			// accept; roll the fresh account back so a retry starts clean.
+			_, _ = s.store.DB.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+			s.logger.Warn("auth: invite accept failed at registration", "error", err)
+			return nil, ErrRegistrationClosed
+		}
+	}
+
 	return s.issue(ctx, user)
+}
+
+// checkInvite reports whether the pending invite token admits email to
+// register. Every token problem maps to ErrRegistrationClosed.
+func checkInvite(ctx context.Context, email, token string, invites InviteAcceptor) error {
+	if token == "" || invites == nil {
+		return ErrRegistrationClosed
+	}
+	_, inviteEmail, err := invites.PeekInvite(ctx, token)
+	if err != nil {
+		return ErrRegistrationClosed
+	}
+	if !strings.EqualFold(inviteEmail, email) {
+		return ErrRegistrationClosed
+	}
+	return nil
 }
 
 // Login verifies credentials and returns an authenticated token pair. Unknown
@@ -234,8 +294,9 @@ func hashRefreshToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// normalizeEmail trims, lowercases, and syntactically validates an email.
-func normalizeEmail(email string) (string, error) {
+// NormalizeEmail trims, lowercases, and syntactically validates an email. It
+// is shared by registration and the admin CLI.
+func NormalizeEmail(email string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" {
 		return "", fmt.Errorf("%w: email is required", ErrValidation)
@@ -248,8 +309,9 @@ func normalizeEmail(email string) (string, error) {
 	return normalized, nil
 }
 
-// validatePassword enforces the password length bounds.
-func validatePassword(password string) error {
+// ValidatePassword enforces the password length bounds. It is shared by
+// registration and the admin CLI (P-A3).
+func ValidatePassword(password string) error {
 	if len(password) < minPasswordLength || len(password) > maxPasswordLength {
 		return fmt.Errorf("%w: password must be between %d and %d characters",
 			ErrValidation, minPasswordLength, maxPasswordLength)

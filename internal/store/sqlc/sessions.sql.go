@@ -37,6 +37,18 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 	return i, err
 }
 
+const deleteUserSessions = `-- name: DeleteUserSessions :exec
+DELETE FROM sessions
+WHERE user_id = $1
+`
+
+// DeleteUserSessions removes every session of a user, used after a password
+// change so the old refresh chain dies with the credential.
+func (q *Queries) DeleteUserSessions(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteUserSessions, userID)
+	return err
+}
+
 const getSessionByRefreshHash = `-- name: GetSessionByRefreshHash :one
 SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at
 FROM sessions

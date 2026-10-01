@@ -11,7 +11,7 @@ import {
   NText,
 } from "naive-ui";
 import type { FormInst, FormItemRule, FormRules } from "naive-ui";
-import { computed, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { describeAuthError, useAuthStore } from "../stores/auth";
@@ -39,6 +39,49 @@ const form = reactive<RegisterForm>({
   password: "",
   confirmPassword: "",
   terms: false,
+});
+
+/**
+ * Invite mode (P-A2): when the instance already has an account, registration
+ * is closed and this page is reachable only through an admin-created invite
+ * link (`/register?invite=<token>`). The token is validated up front so the
+ * invitee sees which team they are joining; an unusable token bounces to the
+ * sign-in form.
+ */
+const inviteToken = ref<string>("");
+const inviteTeam = ref<string>("");
+const inviteEmail = ref<string>("");
+const inviteChecking = ref(false);
+
+onMounted(async () => {
+  await authStore.fetchAuthConfig();
+
+  const raw = route.query.invite;
+  const token = typeof raw === "string" ? raw : "";
+
+  // A fresh instance needs no invite: the first account bootstraps it.
+  if (authStore.registrationOpen) {
+    return;
+  }
+  if (!token) {
+    void router.replace({ name: "login" });
+    return;
+  }
+
+  inviteToken.value = token;
+  inviteChecking.value = true;
+  try {
+    const info = await authStore.validateInvite(token);
+    inviteTeam.value = info.team;
+    inviteEmail.value = info.email;
+    if (info.email && !form.email) {
+      form.email = info.email;
+    }
+  } catch {
+    void router.replace({ name: "login" });
+  } finally {
+    inviteChecking.value = false;
+  }
 });
 
 /** countCharClasses counts the character classes present (lower, upper, digit, symbol). */
@@ -143,7 +186,11 @@ async function handleSubmit(): Promise<void> {
 
   submitting.value = true;
   try {
-    await authStore.register(form.email, form.password);
+    await authStore.register(
+      form.email,
+      form.password,
+      inviteToken.value || undefined,
+    );
     await redirectAfterAuth();
   } catch (error) {
     errorMessage.value = describeAuthError(error);
@@ -157,7 +204,12 @@ async function handleSubmit(): Promise<void> {
   <div class="auth-page">
     <NCard class="auth-card">
       <NSpace vertical :size="16">
-        <div class="auth-switch" role="tablist" aria-label="Sign in or create an account">
+        <div
+          v-if="authStore.registrationOpen"
+          class="auth-switch"
+          role="tablist"
+          aria-label="Sign in or create an account"
+        >
           <RouterLink
             :to="authSwitchTarget(route, 'login')"
             role="tab"
@@ -177,7 +229,12 @@ async function handleSubmit(): Promise<void> {
 
         <div>
           <h2 class="auth-title">Create account</h2>
-          <NText depth="3">
+          <NText v-if="inviteToken" depth="3">
+            You were invited to join
+            <span class="mono">{{ inviteTeam || "this team" }}</span
+            >. Choose your credentials to accept.
+          </NText>
+          <NText v-else depth="3">
             The first account on a new instance becomes the
             <span class="mono">owner</span> of the default team.
           </NText>
@@ -244,6 +301,7 @@ async function handleSubmit(): Promise<void> {
             type="primary"
             block
             :loading="submitting"
+            :disabled="inviteChecking"
             @click="handleSubmit"
           >
             Create account

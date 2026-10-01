@@ -84,7 +84,12 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		return fmt.Errorf("git clone: clear %s: %w", dir, err)
 	}
 
-	env := os.Environ()
+	// The child environment must be deterministic regardless of the ambient
+	// one: a CI runner (actions/checkout) or a developer shell may export
+	// GIT_SSH_COMMAND, and git would then use it for an anonymous clone or
+	// combine it with the deploy key one. Drop every inherited entry first;
+	// the keyed branch below adds back exactly one.
+	env := withoutEnv(os.Environ(), "GIT_SSH_COMMAND")
 	if privatePEM != "" {
 		files, err := newDeployKeyFiles(privatePEM)
 		if err != nil {
@@ -177,6 +182,20 @@ func newDeployKeyFiles(privatePEM string) (*deployKeyFiles, error) {
 // remove deletes the ephemeral key and the known_hosts it accepted into.
 func (f *deployKeyFiles) remove() {
 	_ = os.RemoveAll(f.dir)
+}
+
+// withoutEnv returns env with every entry naming the variable dropped. Git
+// reads GIT_SSH_COMMAND from the child environment, so an inherited value must
+// be removed before the cloner decides which one (if any) the clone uses.
+func withoutEnv(env []string, name string) []string {
+	kept := make([]string, 0, len(env))
+	for _, entry := range env {
+		if strings.HasPrefix(entry, name+"=") {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
 }
 
 // sshEnv returns env plus GIT_SSH_COMMAND: ssh offering only this key

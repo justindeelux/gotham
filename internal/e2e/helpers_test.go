@@ -38,6 +38,13 @@ const (
 // requireE2E gates every test that needs a live Docker daemon or Redis. The
 // tests run only when GOTHAM_E2E=1 is set and the suite is not in -short
 // mode, so a plain `go test ./...` stays green on machines without Docker.
+//
+// GOTHAM_E2E=1 is an explicit opt-in: once it is set, a missing harness
+// precondition (Docker, Postgres, Redis, git) must fail the test instead of
+// skipping it green — the dedicated CI workflow provides all of them, and a
+// silent skip would mask a broken job. Only the gate itself, -short mode and
+// owner-only opt-ins CI cannot guarantee (live DNS-01 issuance) keep
+// skipping.
 func requireE2E(t *testing.T) {
 	t.Helper()
 	if testing.Short() {

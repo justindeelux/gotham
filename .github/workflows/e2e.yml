@@ -2,9 +2,10 @@ name: E2E
 
 # Gate G1 (QA-4.1): the Phase 4 end-to-end suite drives a real control plane —
 # PostgreSQL, Redis and a node agent on the runner's Docker daemon — so it runs
-# in its own workflow instead of the unit-test job. The tests are gated by
-# GOTHAM_E2E=1 and skip when a precondition is missing, which keeps ci.yml green
-# on machines without Docker.
+# in its own workflow instead of the unit-test job. Setting GOTHAM_E2E=1 is an
+# explicit opt-in: a missing Postgres, Redis or Docker fails the job instead of
+# skipping it green. ci.yml never sets the gate, so plain `go test ./...` stays
+# green on machines without Docker.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

@@ -14,8 +14,8 @@ import (
 // and finally reached over its host port.
 //
 // Everything runs against real infrastructure — PostgreSQL, Redis, a mTLS
-// agent and the local Docker daemon — so it is gated by GOTHAM_E2E=1 and skips
-// when any of it is missing.
+// agent and the local Docker daemon — so it is gated by GOTHAM_E2E=1 and fails
+// when any precondition is missing; only the feature-off default run skips.
 func TestP4DeployRunning(t *testing.T) {
 	h := newP4Harness(t)
 	suffix := uuid.New().String()[:8]

@@ -3,6 +3,9 @@ name: UI E2E
 # Browser-level smoke for the embedded SPA against a real control plane.
 # Separate from ci.yml (unit/build) and internal/e2e (API-level suite) so the
 # Playwright run only fires on UI changes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 on:
   workflow_dispatch:
   pull_request:

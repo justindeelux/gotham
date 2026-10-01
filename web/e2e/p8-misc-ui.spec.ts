@@ -1490,7 +1490,7 @@ test.describe("servers grid", () => {
     await page.goto("/servers");
     // Filter to the seeded node: the grid pages at 12 cards, and a run seeds
     // several nodes, so the card may not be on the first page otherwise.
-    await page.getByLabel("Search servers").fill(name);
+    await page.getByPlaceholder("Search by name, IP, OS…").fill(name);
 
     const card = page.locator(`[data-server="${name}"]`);
     await expect(card).toBeVisible();

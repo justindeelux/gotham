@@ -616,6 +616,58 @@ func TestWrapperRemovesLockPin(t *testing.T) {
 	}
 }
 
+// TestWrapperSweepsStaleLockPins proves the start-time sweep: a pin left by a
+// wrapper that died without its trap (SIGKILL/OOM) is removed before the next
+// pin is made, so a reused PID cannot silently degrade the run to the racy
+// fallback open. A pin whose embedded PID is alive is left alone, and the pin
+// path itself is still used.
+func TestWrapperSweepsStaleLockPins(t *testing.T) {
+	// Above kernel.pid_max on Linux (2^22) and the macOS max PID, so the PID
+	// cannot exist and kill -0 must fail.
+	const deadPID = 4194305
+	livePID := os.Getpid()
+
+	listing := filepath.Join(t.TempDir(), "status-listing")
+	t.Setenv("WRAPPER_TEST_STATUS_LIST", listing)
+
+	var stalePin, livePin string
+	result := runWrapper(t, wrapperEnv{
+		systemctlExit: 0,
+		health:        healthAlwaysOK,
+		setup: func(dir, _ string, _ string) {
+			lock := filepath.Join(dir, "update.lock")
+			stalePin = filepath.Join(dir, "statusdir", ".update-lock."+strconv.Itoa(deadPID))
+			if err := os.Link(lock, stalePin); err != nil {
+				t.Fatalf("plant stale pin: %v", err)
+			}
+			livePin = filepath.Join(dir, "statusdir", ".update-lock."+strconv.Itoa(livePID))
+			if err := os.Link(lock, livePin); err != nil {
+				t.Fatalf("plant live pin: %v", err)
+			}
+		},
+	})
+
+	if !strings.Contains(result.status, "result=ok") {
+		t.Fatalf("status = %q, want the update to proceed (ok)", result.status)
+	}
+	if _, err := os.Lstat(stalePin); !os.IsNotExist(err) {
+		t.Fatalf("stale pin %s survived (stat err %v), want it swept", stalePin, err)
+	}
+	if _, err := os.Lstat(livePin); err != nil {
+		t.Fatalf("live pin %s was removed: %v", livePin, err)
+	}
+	// A silent fallback could also exit 0, but the snapshot taken while the
+	// wrapper held the lock only shows a pin when ln succeeded after the stale
+	// entry was swept.
+	data, err := os.ReadFile(listing)
+	if err != nil {
+		t.Fatalf("read the status dir snapshot: %v", err)
+	}
+	if !strings.Contains(string(data), ".update-lock.") {
+		t.Fatalf("status dir during the update = %q, want a pinned lock hardlink", data)
+	}
+}
+
 // TestWrapperRefusesLockSwappedWhileWaiting proves the post-flock inode check:
 // when the lock path is replaced while root waits on it, the wrapper refuses
 // instead of running the update while the control plane locks a different
@@ -630,11 +682,23 @@ func TestWrapperRefusesLockSwappedWhileWaiting(t *testing.T) {
 	if !strings.Contains(result.output, "lock") || !strings.Contains(result.output, "changed") {
 		t.Errorf("output = %q, want a lock-changed refusal", result.output)
 	}
+	if result.exitCode == 0 {
+		t.Fatalf("exit = 0, want nonzero on a lock swap")
+	}
 	if !strings.Contains(result.status, "result=wrapper_failed") {
 		t.Fatalf("status = %q, want wrapper_failed", result.status)
 	}
 	if result.target != "new" {
 		t.Errorf("binary = %q, want the update refused before any restart/rollback", result.target)
+	}
+	entries, err := os.ReadDir(result.statusDir)
+	if err != nil {
+		t.Fatalf("read status dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".update-lock.") {
+			t.Fatalf("lock pin %s survived the refusal", entry.Name())
+		}
 	}
 }
 

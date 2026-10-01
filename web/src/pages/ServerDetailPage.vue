@@ -17,7 +17,7 @@ import {
   NText,
   useMessage,
 } from "naive-ui";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import type { Server } from "../api/servers";
@@ -83,6 +83,38 @@ const metricsLoaded = ref(false);
 const metricsError = ref<string | null>(null);
 /** False once the API answers the FEATURE_METRICS 404: the charts are hidden. */
 const metricsAvailable = ref(true);
+
+/** Auto-refresh choices: off unless the operator picks a cadence. */
+type MetricRefreshChoice = "off" | "15s" | "60s";
+const metricRefreshOptions: Array<{ label: string; value: MetricRefreshChoice }> =
+  [
+    { label: "off", value: "off" },
+    { label: "15s", value: "15s" },
+    { label: "60s", value: "60s" },
+  ];
+const metricRefresh = ref<MetricRefreshChoice>("off");
+
+/** Cadence of the auto-refresh in milliseconds; 0 keeps it off. */
+const metricRefreshMs = computed<number>(() => {
+  switch (metricRefresh.value) {
+    case "15s":
+      return 15_000;
+    case "60s":
+      return 60_000;
+    default:
+      return 0;
+  }
+});
+
+/** Interval handle of the auto-refresh; null while it is off. */
+let metricsRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Number of metrics fetches in flight (manual or quiet). A tick starts only
+ * when the count is zero: the newest request must not clear the guard for an
+ * older one still pending, or a later tick could overlap it.
+ */
+let metricsRequestsInFlight = 0;
 
 /**
  * The step the rendered points belong to. It is only written from a
@@ -199,19 +231,26 @@ function isMetricStep(value: string): value is MetricStep {
  * request generation and the server ID, so a late response for another range
  * or another node can never overwrite the current one. A feature-flag 404
  * hides the charts instead of rendering an error; any other failure surfaces
- * an explicit error with a retry.
+ * an explicit error with a retry. A quiet call (auto-refresh) never toggles
+ * the spinner: a background tick must not flash the loading state. Either
+ * kind of fetch raises the in-flight count, so a tick can never overlap one
+ * already running.
  */
-async function loadMetrics(): Promise<void> {
+async function loadMetrics(options: { quiet?: boolean } = {}): Promise<void> {
   const requestServerId = serverId.value;
   if (!requestServerId) {
     return;
   }
+  const quiet = options.quiet === true;
   const range = activeMetricRange.value;
   const token = ++metricsRequestToken;
   const isCurrent = (): boolean =>
     token === metricsRequestToken && serverId.value === requestServerId;
 
-  metricsLoading.value = true;
+  metricsRequestsInFlight += 1;
+  if (!quiet) {
+    metricsLoading.value = true;
+  }
   metricsError.value = null;
   try {
     const to = new Date();
@@ -235,16 +274,58 @@ async function loadMetrics(): Promise<void> {
       metricPoints.value = [];
       metricsLoaded.value = false;
       metricsAvailable.value = false;
+      // The control disappears with the charts, so the operator cannot turn
+      // the cadence off: stop polling here instead of leaving silent 404s.
+      stopMetricRefresh();
       return;
     }
     metricsError.value = describeMetricsError(error);
   } finally {
-    // Only the newest request owns the spinner; an obsolete one must not clear
-    // a loading state the current request still needs.
-    if (isCurrent()) {
+    // Every request releases its own count. Only the newest one owns the
+    // spinner; an obsolete one must not clear a loading state the current
+    // request still needs.
+    metricsRequestsInFlight -= 1;
+    if (isCurrent() && !quiet) {
       metricsLoading.value = false;
     }
   }
+}
+
+/** selectMetricRefresh switches the auto-refresh cadence. */
+function selectMetricRefresh(choice: MetricRefreshChoice): void {
+  metricRefresh.value = choice;
+}
+
+/** stopMetricRefresh clears the interval; safe when it is already off. */
+function stopMetricRefresh(): void {
+  if (metricsRefreshTimer !== null) {
+    clearInterval(metricsRefreshTimer);
+    metricsRefreshTimer = null;
+  }
+}
+
+/**
+ * syncMetricRefresh starts or stops the interval for the current choice.
+ * Polling only runs while the metrics feature is available, the metrics tab
+ * is open and the document is visible, so a disabled feature or a
+ * backgrounded tab stops querying the control plane; each tick skips while
+ * any fetch is already in flight and refreshes quietly.
+ */
+function syncMetricRefresh(): void {
+  stopMetricRefresh();
+  if (
+    metricRefreshMs.value === 0 ||
+    !metricsAvailable.value ||
+    activeTab.value !== "metrics" ||
+    document.hidden
+  ) {
+    return;
+  }
+  metricsRefreshTimer = setInterval(() => {
+    if (metricsRequestsInFlight === 0) {
+      void loadMetrics({ quiet: true });
+    }
+  }, metricRefreshMs.value);
 }
 
 /**
@@ -379,9 +460,11 @@ async function handleDelete(): Promise<void> {
 
 watch(serverId, () => {
   activeTab.value = "overview";
+  stopMetricRefresh();
   // Invalidate an in-flight read for the previous node: its guarded
   // completion can no longer clear the spinner, so release it here too, or
   // the metrics tab's lazy load would stay blocked until a manual refresh.
+  // The in-flight count is owned by each request's finally and needs no reset.
   metricsRequestToken += 1;
   metricsLoading.value = false;
   metricStep.value = "1m";
@@ -401,8 +484,22 @@ watch(activeTab, (tab) => {
   }
 });
 
+// Auto-refresh follows the cadence choice as well as tab switches.
+watch([metricRefresh, activeTab], syncMetricRefresh);
+
+/** handleVisibilityChange pauses or resumes polling with the document. */
+function handleVisibilityChange(): void {
+  syncMetricRefresh();
+}
+
 onMounted(() => {
+  document.addEventListener("visibilitychange", handleVisibilityChange);
   void fetchServer();
+});
+
+onBeforeUnmount(() => {
+  stopMetricRefresh();
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
 });
 </script>
 
@@ -578,6 +675,23 @@ onMounted(() => {
                       · server returned step {{ metricSeriesStep }}
                     </template>
                   </NText>
+                  <NSpace align="center" :size="8">
+                    <NText depth="3">Auto-refresh</NText>
+                    <NRadioGroup
+                      :value="metricRefresh"
+                      size="small"
+                      aria-label="Metrics auto-refresh"
+                      @update:value="(value: MetricRefreshChoice) => selectMetricRefresh(value)"
+                    >
+                      <NRadioButton
+                        v-for="option in metricRefreshOptions"
+                        :key="option.value"
+                        :value="option.value"
+                      >
+                        {{ option.label }}
+                      </NRadioButton>
+                    </NRadioGroup>
+                  </NSpace>
                   <NText depth="3" style="margin-left: auto">
                     Samples are kept 30 days · empty buckets are gaps, not
                     zeros

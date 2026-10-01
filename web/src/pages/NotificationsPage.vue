@@ -22,6 +22,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import type {
   ChannelConfig,
   NotificationChannel,
+  NotificationEventKey,
   NotificationKind,
   TestResult,
 } from "../api/notifications";
@@ -31,6 +32,8 @@ import {
   eventLabel,
   kindLabel,
 } from "../api/notifications";
+import { listApplications } from "../api/applications";
+import { listDatabases } from "../api/databases";
 import type { TeamRole } from "../api/teams";
 import { canManageMembers, roleLabel, roleTagType } from "../api/teams";
 import { useNotificationsStore } from "../stores/notifications";
@@ -55,6 +58,11 @@ interface ChannelForm {
   name: string;
   kind: NotificationKind;
   enabled: boolean;
+  /** Subscribed event keys; the backend requires at least one. */
+  events: NotificationEventKey[];
+  /** Empty for a team-wide channel. */
+  resourceType: ChannelScope;
+  resourceId: string;
   webhook_url: string;
   bot_token: string;
   chat_id: string;
@@ -65,6 +73,15 @@ interface ChannelForm {
   from: string;
   /** Comma/space separated recipient list. */
   to: string;
+}
+
+/** Resource scope of a channel: team-wide or one resource. */
+type ChannelScope = "" | "application" | "database";
+
+/** One selectable resource of the picker. */
+interface ResourceOption {
+  id: string;
+  name: string;
 }
 
 const formOpen = ref(false);
@@ -85,6 +102,131 @@ const kindOptions: Array<{ label: string; value: NotificationKind }> = [
   { label: "Telegram bot", value: "telegram" },
   { label: "Email (SMTP)", value: "email" },
 ];
+
+/**
+ * allowedEvents lists the event keys a scope can actually deliver:
+ * applications emit deploys, databases emit backups, team-wide gets all.
+ */
+function allowedEvents(scope: ChannelScope): NotificationEventKey[] {
+  switch (scope) {
+    case "application":
+      return allNotificationEvents.filter((event) => event.startsWith("deploy_"));
+    case "database":
+      return allNotificationEvents.filter((event) => event.startsWith("backup_"));
+    default:
+      return [...allNotificationEvents];
+  }
+}
+
+/** keepDeliverableEvents narrows a selection to what the scope can deliver. */
+function keepDeliverableEvents(
+  scope: ChannelScope,
+  events: NotificationEventKey[],
+): NotificationEventKey[] {
+  const deliverable = allowedEvents(scope);
+  const kept = deliverable.filter((event) => events.includes(event));
+  return kept.length > 0 ? kept : deliverable;
+}
+
+/** outOfScopeEvents lists stored events the current scope cannot deliver. */
+const outOfScopeEvents = computed<NotificationEventKey[]>(() => {
+  const deliverable = allowedEvents(form.value.resourceType);
+  return form.value.events.filter((event) => !deliverable.includes(event));
+});
+
+/**
+ * Event options the current scope can deliver, plus any stored event outside
+ * those rules. The extra keys keep their label and stay removable, but once
+ * removed they disappear from the list and cannot be re-selected — a dead
+ * combination cannot be built here, only preserved from older data.
+ */
+const eventOptions = computed<
+  Array<{ label: string; value: NotificationEventKey }>
+>(() => {
+  const deliverable = allowedEvents(form.value.resourceType);
+  const options = deliverable.map((event) => ({
+    label: eventLabel(event),
+    value: event,
+  }));
+  for (const event of outOfScopeEvents.value) {
+    options.push({ label: eventLabel(event), value: event });
+  }
+  return options;
+});
+
+/** outOfScopeWarning explains a stored subscription its scope cannot deliver. */
+const outOfScopeWarning = computed<string>(() => {
+  const events = outOfScopeEvents.value;
+  if (events.length === 0) {
+    return "";
+  }
+  const names = events.map((event) => eventLabel(event)).join(", ");
+  return `This channel is subscribed to ${names}, which its resource scope cannot deliver. The stored subscription is kept unchanged unless you edit the events or the scope.`;
+});
+
+/** applicationsUnavailable is true when the picker's app list cannot load. */
+const applicationsUnavailable = ref(false);
+/** databasesUnavailable is true when the picker's database list cannot load. */
+const databasesUnavailable = ref(false);
+
+/**
+ * Scope choices: a feature whose list is unavailable is disabled and labelled,
+ * so the other scope (or team-wide) stays selectable.
+ */
+const scopeOptions = computed<
+  Array<{ label: string; value: ChannelScope; disabled?: boolean }>
+>(() => [
+  { label: "Team-wide (all resources)", value: "" },
+  {
+    label: applicationsUnavailable.value
+      ? "Application (unavailable)"
+      : "Application",
+    value: "application",
+    disabled: applicationsUnavailable.value,
+  },
+  {
+    label: databasesUnavailable.value
+      ? "Database (unavailable)"
+      : "Database",
+    value: "database",
+    disabled: databasesUnavailable.value,
+  },
+]);
+
+/** unavailableScopeHint names the resource features that cannot be offered. */
+const unavailableScopeHint = computed<string>(() => {
+  if (applicationsUnavailable.value && databasesUnavailable.value) {
+    return "Applications and databases are unavailable on this control plane; the channel can stay team-wide.";
+  }
+  if (applicationsUnavailable.value) {
+    return "Applications are unavailable on this control plane (FEATURE_APPLICATIONS=false); a database scope is still available.";
+  }
+  if (databasesUnavailable.value) {
+    return "Databases are unavailable on this control plane (FEATURE_DATABASES=false); an application scope is still available.";
+  }
+  return "";
+});
+
+/** eventsHint explains the event restriction of the selected scope. */
+const eventsHint = computed<string>(() => {
+  switch (form.value.resourceType) {
+    case "application":
+      return "Applications deliver deploy events; backup events cannot reach this channel.";
+    case "database":
+      return "Databases deliver backup events; deploy events cannot reach this channel.";
+    default:
+      return "A team-wide channel receives every selected event.";
+  }
+});
+
+/** Applications of the active team, offered when the scope is one app. */
+const resourceApplications = ref<ResourceOption[]>([]);
+/** Databases of the active team, offered when the scope is one database. */
+const resourceDatabases = ref<ResourceOption[]>([]);
+/** Team the resource lists belong to; a switch drops them. */
+const loadedResourcesTeamId = ref("");
+/** Token of the newest resource read; a stale response never writes state. */
+let resourcesReadToken = 0;
 
 const teamOptions = computed<Array<{ label: string; value: string }>>(() =>
   teamsStore.teams.map((team) => ({
@@ -107,6 +249,9 @@ function emptyForm(): ChannelForm {
     name: "",
     kind: "discord",
     enabled: true,
+    events: [...allNotificationEvents],
+    resourceType: "",
+    resourceId: "",
     webhook_url: "",
     bot_token: "",
     chat_id: "",
@@ -118,6 +263,78 @@ function emptyForm(): ChannelForm {
     to: "",
   };
 }
+
+/** selectScope switches the scope kind, drops the stale pick and re-constrains
+ * the subscription so a channel that can never fire cannot be saved. */
+function selectScope(scope: string): void {
+  const next: ChannelScope =
+    scope === "application" || scope === "database" ? scope : "";
+  form.value.resourceType = next;
+  form.value.resourceId = "";
+  form.value.events = keepDeliverableEvents(next, form.value.events);
+}
+
+/**
+ * resourcePickerOptions offers the resources of the selected scope. While
+ * editing, a stored resource the list no longer carries is kept as a
+ * "(missing)" option so an untouched scope survives the save.
+ */
+const resourcePickerOptions = computed<Array<{ label: string; value: string }>>(
+  () => {
+    const options = (
+      form.value.resourceType === "application"
+        ? resourceApplications.value
+        : resourceDatabases.value
+    ).map((resource) => ({ label: resource.name, value: resource.id }));
+    const current = form.value.resourceId;
+    if (current !== "" && !options.some((option) => option.value === current)) {
+      options.unshift({ label: `${current} (missing)`, value: current });
+    }
+    return options;
+  },
+);
+
+/**
+ * loadResources reads the active team's applications and databases. A team
+ * switch drops the previous team's lists first, and only the newest read may
+ * write, so a late response cannot offer another team's resources. The two
+ * lists load independently: a disabled feature on one endpoint (404) must not
+ * hide the other scope's picker.
+ */
+async function loadResources(teamId: string): Promise<void> {
+  const token = ++resourcesReadToken;
+  const isCurrent = (): boolean => token === resourcesReadToken;
+  if (loadedResourcesTeamId.value !== teamId) {
+    resourceApplications.value = [];
+    resourceDatabases.value = [];
+    loadedResourcesTeamId.value = teamId;
+  }
+  const [applications, databases] = await Promise.allSettled([
+    listApplications(teamId),
+    listDatabases(teamId),
+  ]);
+  if (!isCurrent()) {
+    return;
+  }
+  applicationsUnavailable.value = applications.status === "rejected";
+  resourceApplications.value =
+    applications.status === "fulfilled"
+      ? applications.value.map(({ id, name }) => ({ id, name }))
+      : [];
+  databasesUnavailable.value = databases.status === "rejected";
+  resourceDatabases.value =
+    databases.status === "fulfilled"
+      ? databases.value.map(({ id, name }) => ({ id, name }))
+      : [];
+}
+
+/** canSubmit mirrors the backend rules: name and at least one event. */
+const canSubmit = computed<boolean>(
+  () =>
+    form.value.name.trim() !== "" &&
+    form.value.events.length > 0 &&
+    (form.value.resourceType === "" || form.value.resourceId !== ""),
+);
 
 /** parseRecipients splits a comma/newline separated address list. */
 function parseRecipients(raw: string): string[] {
@@ -144,10 +361,22 @@ function openEdit(channel: NotificationChannel): void {
     bot_token: channel.config.bot_token ?? "",
     password: channel.config.password ?? "",
   };
+  const resourceType: ChannelScope =
+    channel.resource_type === "application" ||
+    channel.resource_type === "database"
+      ? channel.resource_type
+      : "";
   form.value = {
     name: channel.name,
     kind: channel.kind,
     enabled: channel.enabled,
+    // The stored subscription is preserved exactly: an unrelated save must
+    // never expand or normalize events the operator did not touch. The form
+    // warns when the scope cannot deliver a stored key; changing the scope or
+    // the events is the deliberate path that re-constrains them.
+    events: [...channel.events],
+    resourceType,
+    resourceId: channel.resource_id ?? "",
     webhook_url: channel.config.webhook_url ?? "",
     bot_token: channel.config.bot_token ?? "",
     chat_id: channel.config.chat_id ?? "",
@@ -221,6 +450,20 @@ function buildConfig(): ChannelConfig {
   return config;
 }
 
+/**
+ * resourceScopeInput maps the scope draft onto the request pair. The empty
+ * pair clears a stored override (both halves are always sent together).
+ */
+function resourceScopeInput(): { resource_type: string; resource_id: string } {
+  if (form.value.resourceType === "") {
+    return { resource_type: "", resource_id: "" };
+  }
+  return {
+    resource_type: form.value.resourceType,
+    resource_id: form.value.resourceId,
+  };
+}
+
 /** handleSave creates or updates the channel. */
 async function handleSave(): Promise<void> {
   saving.value = true;
@@ -230,6 +473,8 @@ async function handleSave(): Promise<void> {
       await channelsStore.update(editingId.value, {
         name: form.value.name.trim(),
         enabled: form.value.enabled,
+        events: [...form.value.events],
+        ...resourceScopeInput(),
         config: buildConfig(),
       });
       message.success("Channel updated");
@@ -238,6 +483,8 @@ async function handleSave(): Promise<void> {
         name: form.value.name.trim(),
         kind: form.value.kind,
         enabled: form.value.enabled,
+        events: [...form.value.events],
+        ...resourceScopeInput(),
         config: buildConfig(),
       });
       message.success("Channel created");
@@ -303,10 +550,26 @@ function configSummary(channel: NotificationChannel): string {
   }
 }
 
+/** scopeLabel renders the channel's resource scope for the card header. */
+function scopeLabel(channel: NotificationChannel): string {
+  if (!channel.resource_type || !channel.resource_id) {
+    return "Team-wide";
+  }
+  const resources =
+    channel.resource_type === "application"
+      ? resourceApplications.value
+      : resourceDatabases.value;
+  const name =
+    resources.find((resource) => resource.id === channel.resource_id)?.name ??
+    channel.resource_id;
+  return channel.resource_type === "application" ? `App: ${name}` : `Database: ${name}`;
+}
+
 watch(
   () => teamsStore.activeTeamId,
   () => {
     void channelsStore.fetchChannels().catch(() => undefined);
+    void loadResources(teamsStore.activeTeamId);
   },
 );
 
@@ -316,7 +579,10 @@ onMounted(async () => {
   // The selection watcher already reloaded the list when ensureTeams changed
   // the active team; only an unchanged selection needs an explicit first read.
   if (teamsStore.activeTeamId === selectionBeforeLoad) {
-    await channelsStore.fetchChannels().catch(() => undefined);
+    await Promise.all([
+      channelsStore.fetchChannels().catch(() => undefined),
+      loadResources(teamsStore.activeTeamId),
+    ]);
   }
 });
 </script>
@@ -397,6 +663,7 @@ onMounted(async () => {
               <NSpace align="center" :size="10">
                 <NText strong>{{ channel.name }}</NText>
                 <NTag size="small" round>{{ kindLabel(channel.kind) }}</NTag>
+                <NTag size="small" round>{{ scopeLabel(channel) }}</NTag>
                 <NTag
                   :type="channel.enabled ? 'success' : 'default'"
                   size="small"
@@ -639,15 +906,67 @@ onMounted(async () => {
             </NFormItem>
           </template>
 
+          <NFormItem label="Events">
+            <div class="field-stack">
+              <NSelect
+                v-model:value="form.events"
+                multiple
+                :options="eventOptions"
+                placeholder="Select at least one event"
+                aria-label="Events"
+              />
+              <NText v-if="form.events.length === 0" type="error" class="small">
+                Select at least one event.
+              </NText>
+              <NText
+                v-else-if="outOfScopeWarning !== ''"
+                type="warning"
+                class="small"
+                data-testid="events-out-of-scope"
+              >
+                {{ outOfScopeWarning }}
+              </NText>
+              <NText v-else depth="3" class="small">
+                {{ eventsHint }}
+              </NText>
+            </div>
+          </NFormItem>
+
+          <NFormItem label="Resource scope">
+            <div class="field-stack">
+              <NSelect
+                :value="form.resourceType"
+                :options="scopeOptions"
+                aria-label="Resource scope"
+                @update:value="(value: string) => selectScope(value)"
+              />
+              <NSelect
+                v-if="form.resourceType !== ''"
+                v-model:value="form.resourceId"
+                :options="resourcePickerOptions"
+                filterable
+                :placeholder="
+                  form.resourceType === 'application'
+                    ? 'Select an application'
+                    : 'Select a database'
+                "
+                aria-label="Resource"
+              />
+              <NText v-if="unavailableScopeHint !== ''" depth="3" class="small">
+                {{ unavailableScopeHint }}
+              </NText>
+            </div>
+          </NFormItem>
+
           <NFormItem label="Enabled">
             <NSwitch v-model:value="form.enabled" aria-label="Channel enabled" />
           </NFormItem>
         </NForm>
         <NText depth="3" class="small">
           Secrets travel once, are sealed server-side and are never displayed
-          again — a read only returns the mask. New channels subscribe to all
-          four events ({{ allNotificationEvents.length }}); the backend keeps
-          that subscription.
+          again — a read only returns the mask. A team-wide channel receives
+          every selected event; a scoped channel only receives events of the
+          selected resource.
         </NText>
       </NSpace>
       <template #footer>
@@ -656,7 +975,7 @@ onMounted(async () => {
           <NButton
             type="primary"
             :loading="saving"
-            :disabled="form.name.trim() === ''"
+            :disabled="!canSubmit"
             @click="void handleSave()"
           >
             {{ editing ? "Save" : "Create channel" }}
@@ -717,6 +1036,13 @@ onMounted(async () => {
 
 .small {
   font-size: var(--text-xs);
+}
+
+.field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
 }
 
 @media (max-width: 860px) {

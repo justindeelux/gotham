@@ -1,4 +1,4 @@
-import { http } from "./http";
+import { http, teamHeaders } from "./http";
 import { isApiError } from "./servers";
 
 /**
@@ -227,11 +227,14 @@ export async function rollbackDeployment(
 }
 
 /**
- * listApplications returns the caller's applications, newest first
- * (GET /applications → 200).
+ * listApplications returns one team's applications, newest first
+ * (GET /applications → 200). An empty teamId reads the caller's personal
+ * team, matching the other pre-teams surfaces.
  */
-export async function listApplications(): Promise<Application[]> {
-  const response = await http.get<ApplicationListEnvelope>("/applications");
+export async function listApplications(teamId = ""): Promise<Application[]> {
+  const response = await http.get<ApplicationListEnvelope>("/applications", {
+    headers: teamHeaders(teamId),
+  });
   return response.data.applications ?? [];
 }
 

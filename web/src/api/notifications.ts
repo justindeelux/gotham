@@ -1,4 +1,4 @@
-import { http } from "./http";
+import { http, teamHeaders } from "./http";
 import { isApiError } from "./servers";
 
 /**
@@ -82,6 +82,13 @@ export interface ChannelInput {
   kind?: NotificationKind;
   enabled?: boolean;
   events?: NotificationEventKey[];
+  /**
+   * Resource override pair: both empty (or omitted) means team-wide, an
+   * application/database pair scopes the channel to one resource. On update
+   * the two must be named together.
+   */
+  resource_type?: string;
+  resource_id?: string;
   config?: ChannelConfig;
 }
 
@@ -100,11 +107,6 @@ interface ChannelListEnvelope {
 }
 interface TestEnvelope {
   check: TestResult;
-}
-
-/** teamHeaders scopes a call to one team; empty means the personal team. */
-function teamHeaders(teamId: string): Record<string, string> {
-  return teamId ? { "X-Team-Id": teamId } : {};
 }
 
 /** listChannels returns one team's channels, oldest first. */

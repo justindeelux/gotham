@@ -67,3 +67,31 @@
 - **Deliverables:** `.goreleaser.yaml`, `release.yml` workflow (runs on `v*` tags), `deploy/install.sh`, guides (in README or `docs/install.md`).
 - **Verify:** tag `v0.1.0` on the test repo → release has all assets → run the install script on a clean VPS (Ubuntu 22.04) → CP runs + login works.
 - **Depends on:** BE-9.1 (signer), Phase 1 (login UI for testing).
+
+## M9 evidence
+
+Proven today:
+
+- Signed `v0.1.0` GitHub release with exactly 14 assets; all four
+  `gotham{,-agent}-manifest-{amd64,arm64}.txt` verify with the pinned key, and
+  the GitHub-reported digests equal the signed `sha256=` values.
+- Clean Ubuntu 22.04 container install of the control plane, plus re-install with
+  no operator additions; the signed manifest/digest chain is covered end to end
+  by `deploy/test-release-install.sh`.
+- Real two-agent systemd remote-update proof (`deploy/verify-agent-update.sh`
+  C1–C4 plus NEG1/NEG2: a tampered asset and a broken-but-signed release both
+  refuse and roll back).
+- Ed25519 verify → digest → hardlink swap → health-check → rollback on the CP
+  (`updatecore` unit/e2e suites and `deploy/verify-systemd.sh` on the box).
+
+Pending (the coordinator tags `v0.1.1` next):
+
+- Apply a real *newer* GitHub-hosted release through `gotham update apply` and
+  roll back once (closes the real-release gap for the control plane).
+- Apply an agent release rollout against the real CDN.
+- Exercise the unattended `AUTO_UPDATE` loop.
+
+The non-blocking residual register (M4 beta-channel binding, LOW-4 mutual agent
+channel, key rotation/revocation, the shared release runner, I5, the
+`GOTHAM_UPDATE_CURRENT` pin) is tracked in `docs/TODO.md` → Phase 9 residuals and
+`deploy/README.md` → Known residuals.

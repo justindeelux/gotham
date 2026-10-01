@@ -41,7 +41,7 @@ test.describe("domains", () => {
   // registered node, so the run scales with the node rows the smoke seeds and
   // was recorded at 26-34 s on the shared self-hosted runner, straddling the
   // 30 s default. Raise the per-test budget rather than loosen one assertion:
-  // nodes are seeded on an unreachable loopback address (seedNodeIP) so each
+  // nodes are seeded on an unreachable loopback address (seedNodeAddress) so each
   // resync fails fast, but the flow is legitimately long.
   test.describe.configure({ timeout: 60_000 });
 

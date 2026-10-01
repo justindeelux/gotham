@@ -61,10 +61,13 @@ const emit = defineEmits<{
 const serversStore = useServersStore();
 const message = useMessage();
 
-// The install one-liner mirrors deploy/install-agent.sh's release base URL.
-const releaseBaseUrl =
-  "https://github.com/justindeelux/gotham/releases/latest/download";
-const installCommand = `curl -fsSL ${releaseBaseUrl}/install-agent.sh | sudo sh`;
+// The installer is not a release asset and needs its sibling files
+// (deploy/release-verify.sh, gotham-agent-updater.conf, ...), so the wizard
+// points at the documented checkout flow instead of a `curl | sh` one-liner
+// that would 404. Keep this a single copy-pasteable block.
+const installCommand =
+  "git clone --depth 1 https://github.com/justindeelux/gotham /tmp/gotham " +
+  "&& sudo /tmp/gotham/deploy/install-agent.sh";
 
 const stepNames = ["Connect", "Validate", "Install", "Finish"];
 
@@ -605,8 +608,11 @@ function resetWizard(): void {
             </NAlert>
 
             <NText depth="2">
-              SSH into the node and run the installer. It downloads the agent,
-              installs the systemd unit, and registers with the control plane.
+              SSH into the node and run the installer from the checkout. It
+              downloads the agent, installs the systemd unit, and registers with
+              the control plane. Pass the control plane's CA certificate with
+              --ca (copy it from the control plane first) — the installer fails
+              closed without it.
             </NText>
 
             <NSpace align="center" :size="8">

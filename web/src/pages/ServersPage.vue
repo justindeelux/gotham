@@ -486,13 +486,13 @@ onUnmounted(() => {
       <template #header-extra>
         <code class="inline-code">deploy/install-agent.sh</code>
       </template>
-      <pre class="install-cmd"><code>curl -fsSL https://get.gotham.dev/install.sh | sudo sh -s -- \
-  --cp-addr cp.gotham.dev:9442 \
-  --node-id new-node-01
+      <pre class="install-cmd"><code>scp root@&lt;cp-host&gt;:/var/lib/gotham/ca/ca.crt .
+git clone --depth 1 https://github.com/justindeelux/gotham /tmp/gotham
+sudo GOTHAM_AGENT_CP_ADDR=&lt;cp-host&gt;:9442 GOTHAM_AGENT_NODE_ID=&lt;node&gt; \
+  /tmp/gotham/deploy/install-agent.sh --ca ./ca.crt
 
-# The script downloads the arch-matched binary, verifies the checksum +
-# Ed25519 signature, writes /etc/gotham/agent.crt issued by the
-# control-plane CA, then enables the systemd unit.
+# The installer verifies the signed manifest + digest, writes
+# /etc/gotham/ca.crt, then enables the systemd unit.
 systemctl status gotham-agent</code></pre>
       <div class="callouts">
         <div class="callout">
@@ -500,11 +500,11 @@ systemctl status gotham-agent</code></pre>
             <GothamIcon name="shield" />
           </NIcon>
           <div>
-            <h4>Mutual mTLS</h4>
+            <h4>Server-authenticated TLS</h4>
             <p>
-              The control plane's internal CA signs a dedicated certificate for
-              each agent at <code class="inline-code">Register</code> time. An
-              agent only accepts commands from an authenticated control plane.
+              The control plane signs its listener with its internal CA, and the
+              agent verifies it against the copied <code class="inline-code">ca.crt</code>.
+              An agent client certificate (mutual TLS) is planned.
             </p>
           </div>
         </div>

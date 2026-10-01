@@ -71,8 +71,11 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	}
 	if privatePEM != "" {
 		// A deploy key is an SSH credential: over http(s) it would
-		// authenticate nothing, so a URL the wizard prefilled from the
-		// provider is rewritten to its SSH shape first.
+		// authenticate nothing, so an http(s) URL is rewritten to its SSH
+		// shape first. This is the fallback for rows that still carry an
+		// https URL (API clients, applications created before BE-4.4b); the
+		// wizard stores the provider's own ssh_url for private repositories,
+		// which passes through with its port intact.
 		url = sshCloneURL(url)
 	}
 	branch := strings.TrimSpace(app.Branch)
@@ -233,10 +236,13 @@ func shellQuote(value string) string {
 // shape — ssh://, scp-like git@host:path, and development-local paths — is
 // returned unchanged.
 //
-// The port is dropped because a web port does not identify an SSH port (a
+// The rewrite is the compatibility path for a deploy key on an https row: the
+// FE stores the provider's own ssh_url for private repositories (BE-4.4b), so
+// the URL the cloner uses is normally already authoritative. For an https row
+// the port is dropped because a web port does not identify an SSH port (a
 // self-hosted instance is often reached on 443 through a proxy while sshd
-// listens on 22); an application that needs a non-default SSH port must store
-// an ssh:// clone URL of its own.
+// listens on 22); an application that needs a non-default SSH port stores an
+// ssh:// clone URL of its own, which passes through verbatim.
 func sshCloneURL(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {

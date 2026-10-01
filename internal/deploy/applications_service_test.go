@@ -1,8 +1,12 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -485,6 +489,163 @@ func TestServiceDeleteApplicationWithoutNode(t *testing.T) {
 	}
 	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("get after delete err = %v, want ErrNotFound", err)
+	}
+}
+
+// newHookService builds a service over repo whose hook lifecycle is hooks (or
+// a closure answering nil when hooks itself is nil).
+func newHookService(t *testing.T, repo *fakeRepository, hooks HookLifecycle) *Service {
+	t.Helper()
+	svc := NewService(Config{
+		Repository: repo,
+		Secret:     testSecretKey,
+		Logger:     discardLogger(),
+		Hooks:      func() HookLifecycle { return hooks },
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+	return svc
+}
+
+// TestServiceDeleteApplicationRemovesProviderHook pins the BE-4.4 delete
+// lifecycle: the provider hook goes before the application row (afterwards it
+// is unreachable), but only after the deploy key detach, so a failed key
+// detach still aborts the delete with both sides in step.
+func TestServiceDeleteApplicationRemovesProviderHook(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	var events []string
+	repo := &fakeRepository{app: app, events: &events}
+	hooks := &fakeHookLifecycle{events: &events}
+	svc := newHookService(t, repo, hooks)
+
+	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if hooks.removeCalls != 1 || len(hooks.removed) != 1 || hooks.removed[0] != app.ID {
+		t.Fatalf("removals = %v (%d calls), want one for %s", hooks.removed, hooks.removeCalls, app.ID)
+	}
+	if got, want := strings.Join(events, ","), "hook removed,application deleted"; got != want {
+		t.Errorf("operation order = %q, want %q", got, want)
+	}
+	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("get after delete err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestServiceDeleteApplicationSkipsHookWithoutProvider pins the other half: a
+// pasted public URL has no provider hook, so the delete makes no hook call.
+func TestServiceDeleteApplicationSkipsHookWithoutProvider(t *testing.T) {
+	for _, provider := range []string{"", "public"} {
+		t.Run("provider "+provider, func(t *testing.T) {
+			userID := uuid.New()
+			app := testApplication(userID)
+			app.Provider = provider
+			repo := &fakeRepository{app: app}
+			hooks := &fakeHookLifecycle{}
+			svc := newHookService(t, repo, hooks)
+
+			if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+				t.Fatalf("delete: %v", err)
+			}
+			if hooks.removeCalls != 0 {
+				t.Errorf("hook removals = %d, want 0", hooks.removeCalls)
+			}
+		})
+	}
+}
+
+// TestServiceDeleteApplicationSurvivesHookRemovalFailure pins the outage
+// semantics: a provider the control plane cannot reach must never make an
+// application undeletable. The failure is logged with the orphan's provider
+// and repository (the reconciliation record) and the delete proceeds.
+func TestServiceDeleteApplicationSurvivesHookRemovalFailure(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	hooks := &fakeHookLifecycle{removeErr: errors.New("provider unavailable")}
+
+	var logs bytes.Buffer
+	svc := NewService(Config{
+		Repository: repo,
+		Secret:     testSecretKey,
+		Logger:     slog.New(slog.NewTextHandler(&logs, nil)),
+		Hooks:      func() HookLifecycle { return hooks },
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+		t.Fatalf("delete must not depend on the provider: %v", err)
+	}
+	if hooks.removeCalls != 1 {
+		t.Errorf("hook removals = %d, want the one failed attempt", hooks.removeCalls)
+	}
+	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("get after delete err = %v, want ErrNotFound", err)
+	}
+	logged := logs.String()
+	for _, want := range []string{app.Provider, app.Repo, app.ID.String()} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log = %q, want the orphaned hook named by %q", logged, want)
+		}
+	}
+}
+
+// TestServiceDeleteApplicationWithoutHookLifecycle pins the unwired install
+// (no provider service, or a closure answering nil): deletes keep working.
+func TestServiceDeleteApplicationWithoutHookLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		hooks func() HookLifecycle
+	}{
+		{"no closure", nil},
+		{"closure answers nil", func() HookLifecycle { return nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			userID := uuid.New()
+			app := testApplication(userID)
+			repo := &fakeRepository{app: app}
+			svc := NewService(Config{
+				Repository: repo,
+				Secret:     testSecretKey,
+				Logger:     discardLogger(),
+				Hooks:      tc.hooks,
+			})
+			t.Cleanup(func() { _ = svc.Close() })
+
+			if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
+				t.Fatalf("delete: %v", err)
+			}
+			if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
+				t.Errorf("get after delete err = %v, want ErrNotFound", err)
+			}
+		})
+	}
+}
+
+// TestServiceInstallHookDelegatesToLifecycle pins the create-side entry point
+// the route calls: without a request there is no callback origin, so a
+// non-request caller must use the explicit webhook route.
+func TestServiceInstallHookDelegatesToLifecycle(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	hooks := &fakeHookLifecycle{}
+	svc := newHookService(t, &fakeRepository{}, hooks)
+	req := httptest.NewRequest(http.MethodPost, applicationsPath, nil)
+
+	if err := svc.InstallHook(context.Background(), userID, appID, req); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if hooks.installCalls != 1 || hooks.installedFor != appID {
+		t.Errorf("installs = %d for %s, want one for %s", hooks.installCalls, hooks.installedFor, appID)
+	}
+}
+
+// TestServiceInstallHookWithoutLifecycleIsNoop pins the unwired install: no
+// lifecycle means nothing to do, not an error.
+func TestServiceInstallHookWithoutLifecycleIsNoop(t *testing.T) {
+	svc := newTestService(t, &fakeRepository{})
+	req := httptest.NewRequest(http.MethodPost, applicationsPath, nil)
+	if err := svc.InstallHook(context.Background(), uuid.New(), uuid.New(), req); err != nil {
+		t.Fatalf("install without a lifecycle = %v, want nil", err)
 	}
 }
 

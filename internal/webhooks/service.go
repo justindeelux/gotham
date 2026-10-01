@@ -280,6 +280,28 @@ func (s *Service) DeleteWebhook(ctx context.Context, userID, appID uuid.UUID) (b
 	return true, nil
 }
 
+// InstallHook implements deploy.HookLifecycle: it installs the push hook of an
+// application using the public origin of the create request, exactly like the
+// explicit POST /v1/applications/{id}/webhooks route (see callbackBaseURL).
+// The deploy create path calls it; a non-request caller uses that route.
+func (s *Service) InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) error {
+	_, err := s.CreateWebhook(ctx, userID, appID, callbackBaseURL(r))
+	return err
+}
+
+// RemoveHook implements deploy.HookLifecycle: it removes the application's
+// hook from the Git host and then its stored row, tolerating an application
+// that never had one. A host failure is returned so the caller can log it,
+// but the application delete itself is not blocked on it.
+func (s *Service) RemoveHook(ctx context.Context, userID, appID uuid.UUID) error {
+	_, err := s.DeleteWebhook(ctx, userID, appID)
+	return err
+}
+
+// Compile-time guarantee that Service satisfies the application-lifecycle
+// hook seam.
+var _ deploy.HookLifecycle = (*Service)(nil)
+
 // application loads an application the caller may access through its active
 // team: a row of another team answers ErrNotFound so application IDs cannot be
 // probed, and a write needs an owner/admin role (a creator who was demoted to

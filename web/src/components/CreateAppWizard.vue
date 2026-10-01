@@ -27,6 +27,7 @@ import type {
   StorageMapping,
 } from "../api/applications";
 import { useProvidersStore } from "../stores/providers";
+import type { ProviderRepo } from "../api/providers";
 import { useServersStore } from "../stores/servers";
 import EnvEditor from "./EnvEditor.vue";
 import StorageEditor from "./StorageEditor.vue";
@@ -234,13 +235,29 @@ watch(
   },
 );
 
+/**
+ * cloneUrlFor picks the clone URL stored for a provider repository (BE-4.4b).
+ * A private repository is cloned with an SSH deploy key, so the provider's own
+ * ssh_url — authoritative for the host and any non-default SSH port — is
+ * stored instead of an https URL the backend would have to rewrite. A public
+ * repository keeps its https URL, which the cloner can fetch anonymously
+ * (with or without a deploy key).
+ */
+function cloneUrlFor(repo: ProviderRepo): string {
+  const ssh = repo.ssh_url?.trim() ?? "";
+  if (repo.private && ssh !== "") {
+    return ssh;
+  }
+  return repo.clone_url;
+}
+
 /** handleRepoSelect prefills branch, clone URL and a name from the repo. */
 function handleRepoSelect(fullName: string): void {
   const repo = providersStore.reposOf(form.providerId).find((item) => item.full_name === fullName);
   if (!repo) {
     return;
   }
-  form.cloneUrl = repo.clone_url;
+  form.cloneUrl = cloneUrlFor(repo);
   if (repo.default_branch) {
     form.branch = repo.default_branch;
   }

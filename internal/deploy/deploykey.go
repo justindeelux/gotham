@@ -109,7 +109,7 @@ func deployKeyTarget(app Application) providers.HookTarget {
 // registered for: without a provider connection and a repository identifier
 // there is no API to call (a pasted public URL is cloned anonymously).
 func validateDeployKeyTarget(app Application) error {
-	if !supportedDeployKeyProvider(app.Provider) {
+	if !supportedSourceProvider(app.Provider) {
 		return fmt.Errorf("%w: application provider %q cannot register deploy keys", ErrValidation, app.Provider)
 	}
 	if strings.TrimSpace(app.Repo) == "" {
@@ -118,9 +118,10 @@ func validateDeployKeyTarget(app Application) error {
 	return nil
 }
 
-// supportedDeployKeyProvider reports whether a provider name has deploy-key
-// implementations (exactly the SourceProvider set).
-func supportedDeployKeyProvider(provider string) bool {
+// supportedSourceProvider reports whether a provider name has source-provider
+// implementations: the Git hosts whose deploy keys, webhooks and repository
+// APIs Gotham can call (exactly the providers.SourceProvider set).
+func supportedSourceProvider(provider string) bool {
 	switch provider {
 	case providers.NameGitHub, providers.NameGitLab, providers.NameGitea:
 		return true

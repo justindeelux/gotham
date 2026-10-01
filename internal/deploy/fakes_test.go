@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,6 +79,17 @@ type fakeRepository struct {
 	// states records every persisted deployment state in order, so tests can
 	// assert the exact state-machine walk.
 	states []State
+
+	// events, when set, records repository operations so tests can pin their
+	// ordering against the hook lifecycle calls.
+	events *[]string
+}
+
+// record appends one repository operation to the shared test event log.
+func (r *fakeRepository) record(event string) {
+	if r.events != nil {
+		*r.events = append(*r.events, event)
+	}
 }
 
 // staleDeploymentError mirrors the message the boot-time sweep SQL writes.
@@ -208,6 +220,7 @@ func (r *fakeRepository) UpdateApplication(_ context.Context, app Application) (
 func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.record("application deleted")
 	if r.app.ID == appID {
 		r.app = Application{}
 	}
@@ -891,4 +904,41 @@ func testEnv(t *testing.T) ([]EnvVar, []Secret) {
 	}
 	return []EnvVar{{Key: "FOO", Value: "bar"}},
 		[]Secret{{Key: "API_TOKEN", Ciphertext: sealed}}
+}
+
+// fakeHookLifecycle is a scriptable HookLifecycle. It records installs and
+// removals, can fail a removal (the provider-outage case) and appends to a
+// shared event log so a test can pin ordering against repository operations.
+type fakeHookLifecycle struct {
+	mu           sync.Mutex
+	installCalls int
+	removeCalls  int
+	removeErr    error
+	installedFor uuid.UUID
+	removed      []uuid.UUID
+	events       *[]string
+}
+
+// Compile-time guarantee that fakeHookLifecycle satisfies the seam.
+var _ HookLifecycle = (*fakeHookLifecycle)(nil)
+
+// InstallHook implements HookLifecycle.
+func (f *fakeHookLifecycle) InstallHook(_ context.Context, _ uuid.UUID, appID uuid.UUID, _ *http.Request) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.installCalls++
+	f.installedFor = appID
+	return nil
+}
+
+// RemoveHook implements HookLifecycle.
+func (f *fakeHookLifecycle) RemoveHook(_ context.Context, _ uuid.UUID, appID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removeCalls++
+	f.removed = append(f.removed, appID)
+	if f.events != nil {
+		*f.events = append(*f.events, "hook removed")
+	}
+	return f.removeErr
 }

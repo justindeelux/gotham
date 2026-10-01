@@ -1,10 +1,12 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -162,6 +164,103 @@ func TestRoutesCreateApplicationRejectsBadInput(t *testing.T) {
 				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
 			}
 		})
+	}
+}
+
+// TestRoutesCreateApplicationInstallsProviderHook pins the BE-4.4 create
+// lifecycle: an application created with a supported provider and a repository
+// installs its push hook through the service, which is what lets a push
+// trigger auto-deploys without the caller touching the webhook route.
+func TestRoutesCreateApplicationInstallsProviderHook(t *testing.T) {
+	userID, serverID := uuid.New(), uuid.New()
+	app := sampleApplication()
+	app.UserID = userID
+	svc := &fakeDeployService{application: app}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
+		strings.NewReader(strings.Replace(applicationBody, "%s", serverID.String(), 1))))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if svc.installCalls != 1 {
+		t.Fatalf("hook installs = %d, want 1", svc.installCalls)
+	}
+	if svc.installedFor != app.ID || svc.seenUser != userID {
+		t.Errorf("install saw app %s / user %s, want %s / %s",
+			svc.installedFor, svc.seenUser, app.ID, userID)
+	}
+}
+
+// TestRoutesCreateApplicationSkipsHookWithoutProvider pins the other half: a
+// pasted public URL (provider "public" or empty) has no provider hook, so the
+// route must not call the lifecycle at all.
+func TestRoutesCreateApplicationSkipsHookWithoutProvider(t *testing.T) {
+	for _, provider := range []string{"", "public", "manual"} {
+		t.Run("provider "+provider, func(t *testing.T) {
+			userID, serverID := uuid.New(), uuid.New()
+			app := sampleApplication()
+			app.UserID, app.Provider = userID, provider
+			svc := &fakeDeployService{application: app}
+			srv := newRouteServer(svc, alwaysUser(userID))
+
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
+				strings.NewReader(strings.Replace(applicationBody, "%s", serverID.String(), 1))))
+
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+			}
+			if svc.installCalls != 0 {
+				t.Errorf("hook installs = %d, want 0", svc.installCalls)
+			}
+		})
+	}
+}
+
+// TestRoutesCreateApplicationSurvivesHookFailure pins the failure semantics:
+// the application row is already committed, so a provider outage, missing
+// credentials or an unusable callback cannot turn the create into an error
+// (the caller would retry and create a duplicate). The failure is logged —
+// visible, never silently dropped — and the explicit idempotent webhook route
+// retries it.
+func TestRoutesCreateApplicationSurvivesHookFailure(t *testing.T) {
+	userID, serverID := uuid.New(), uuid.New()
+	app := sampleApplication()
+	app.UserID = userID
+	svc := &fakeDeployService{application: app, installErr: errors.New("provider unavailable")}
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
+		strings.NewReader(strings.Replace(applicationBody, "%s", serverID.String(), 1))))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body applicationEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Application.ID != app.ID.String() {
+		t.Errorf("application id = %q, want %q", body.Application.ID, app.ID)
+	}
+	if svc.installCalls != 1 {
+		t.Errorf("hook installs = %d, want the one failed attempt", svc.installCalls)
+	}
+	if strings.Contains(rec.Body.String(), "provider unavailable") {
+		t.Error("the provider failure leaked into the response body")
+	}
+	logged := logs.String()
+	if !strings.Contains(logged, "webhook not installed") || !strings.Contains(logged, app.ID.String()) {
+		t.Errorf("log = %q, want a warning naming the application and the failed hook install", logged)
 	}
 }
 

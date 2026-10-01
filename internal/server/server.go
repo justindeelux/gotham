@@ -436,6 +436,16 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 		}
 		return s.webhooks.CleanupApplication(ctx, appID)
 	}
+	// The automatic hook lifecycle (BE-4.4) is resolved lazily for the same
+	// reason: webhookService consumes the deploy service as its deployer, so
+	// it can only be built after this one. Until then the closures answer nil
+	// and application create/delete simply skip hook management.
+	cfg.Hooks = func() deploy.HookLifecycle {
+		if s.webhooks == nil {
+			return nil
+		}
+		return s.webhooks
+	}
 	return deploy.NewDefaultService(cfg)
 }
 

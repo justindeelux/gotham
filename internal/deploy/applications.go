@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -115,6 +116,23 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		s.syncProxy(ctx, created)
 	}
 	return created, nil
+}
+
+// InstallHook installs the provider hook that triggers automatic deploys of
+// a freshly created application (BE-4.4). It is deliberately best effort:
+// the application row is already committed, so a provider outage, missing
+// credentials or an unusable callback origin must not fail the create and
+// leave the caller with an application it does not know exists. The route
+// logs the failure (never silently drops it) and the explicit idempotent
+// POST /v1/applications/{id}/webhooks route is the retry path. Without a
+// wired hook lifecycle the call is a no-op, and the route skips it entirely
+// for applications whose provider has no hook to install.
+func (s *Service) InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) error {
+	lifecycle := s.hookLifecycle()
+	if lifecycle == nil {
+		return nil
+	}
+	return lifecycle.InstallHook(ctx, userID, appID, r)
 }
 
 // ListApplications returns the active team's applications, newest first.
@@ -229,8 +247,10 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 // DeleteApplication removes an application together with everything that hangs
 // off it. Its deploy key is detached first — on the Git host and then in the
 // database — so a host failure aborts the delete while both sides still agree;
-// the container stop stays best effort: a control plane that cannot reach the
-// node must still be able to delete an application.
+// the provider hook is removed best effort (a host failure is logged and the
+// delete proceeds, so a provider outage cannot make an application
+// undeletable); the container stop stays best effort: a control plane that
+// cannot reach the node must still be able to delete an application.
 func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error {
 	if !Enabled() {
 		return ErrDisabled
@@ -259,6 +279,21 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 		}
 	} else if err := s.detachDeployKey(ctx, app); err != nil {
 		return err
+	}
+	// Remove the provider hook (BE-4.4) after the key and before the row.
+	// Unlike the deploy key, a host failure does NOT abort the delete: an
+	// auto-deploy hook left on a provider the control plane cannot reach must
+	// never make a legitimate application undeletable. The warning names
+	// provider and repository so the orphaned hook can be removed on the Git
+	// host; while the application still exists, DELETE /applications/{id}/webhooks
+	// is the retry path. A preview sibling never holds its own hook.
+	if !app.IsPreview && supportedSourceProvider(app.Provider) && strings.TrimSpace(app.Repo) != "" {
+		if lifecycle := s.hookLifecycle(); lifecycle != nil {
+			if err := lifecycle.RemoveHook(ctx, userID, app.ID); err != nil {
+				s.logger.Warn("deploy: provider hook could not be removed; the application still deletes",
+					"application_id", app.ID, "provider", app.Provider, "repo", app.Repo, "error", err)
+			}
+		}
 	}
 	s.stopBestEffort(ctx, app)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {

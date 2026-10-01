@@ -92,12 +92,14 @@ func (f *p4Fixture) commit(t *testing.T, marker, dockerfile string) {
 	git(t, f.dir, "commit", "--no-gpg-sign", "-m", marker)
 }
 
-// requireGit skips the test when no git binary is available: the control plane
-// clones with the git binary, so the suite cannot run without it.
+// requireGit fails the opted-in test when no git binary is available: the
+// control plane clones with the git binary, so the suite cannot run without
+// it. It is only reached behind the requireE2E gate, where a missing tool is
+// an infrastructure failure, never a green skip (CI runners ship git).
 func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git not available: %v", err)
+		t.Fatalf("GOTHAM_E2E=1 requires git: %v", err)
 	}
 }
 

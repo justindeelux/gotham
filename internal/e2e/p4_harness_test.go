@@ -32,9 +32,11 @@ import (
 
 // Phase 4 (QA-4.1) environment knobs. Only GOTHAM_E2E is required: the DSN
 // defaults to the dev database of deploy/compose.dev.yml, Redis and the Docker
-// socket to their usual local addresses. Every precondition that is missing
-// skips the test instead of failing it, so a plain `go test ./...` (and a box
-// without Docker, Redis or Postgres) stays green.
+// socket to their usual local addresses. The harness runs only behind the
+// requireE2E gate, so GOTHAM_E2E=1 is already an explicit opt-in: a missing
+// Postgres, Redis or Docker fails the run with a clear message instead of
+// skipping it green. A plain `go test ./...` (and a box without the three)
+// stays green because the gate itself skips when the feature is off.
 const (
 	e2eDSNEnv      = "GOTHAM_TEST_DSN"
 	defaultE2EDSN  = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
@@ -190,10 +192,15 @@ func (stubInstaller) DeleteWebhook(context.Context, providers.HookTarget, string
 
 // newP4Harness boots the whole stack for one Phase 4 test: PostgreSQL (migrated),
 // Docker, Redis, the local agent, the deploy and webhook services and the HTTP
-// surface they are mounted on. Missing infrastructure skips the test.
+// surface they are mounted on. The caller is already behind requireE2E, so a
+// missing precondition fails the test instead of skipping it green.
 func newP4Harness(t *testing.T) *p4Harness {
 	t.Helper()
 	requireE2E(t)
+	// Register the dangling-image cleanup first: t.Cleanup is LIFO, so it runs
+	// after every per-application cleanup has dropped its build tags and the
+	// legacy builder's intermediate layers are visible as untagged images.
+	removeNewDanglingImages(t)
 	// The fixture repository is a directory on this machine; production keeps
 	// local clone sources disabled (see deploy.devLocalClone).
 	t.Setenv(cloneLocalEnv, "true")
@@ -204,15 +211,17 @@ func newP4Harness(t *testing.T) *p4Harness {
 	defer cancel()
 
 	// 1. PostgreSQL: the suite proves the real schema — applications,
-	// deployments and the webhook dedupe ledger — so an unreachable database
-	// skips, the way the repository integration tests do.
+	// deployments and the webhook dedupe ledger. GOTHAM_E2E=1 is an explicit
+	// opt-in, so an unreachable database fails. The diagnostic is deliberately
+	// generic: pgx/goose errors can embed the connection string, credentials
+	// included.
 	dsn := p4DSN()
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available at %s: %v (run: docker compose -f deploy/compose.dev.yml up -d)", dsn, err)
+		t.Fatalf("GOTHAM_E2E=1 requires a reachable, migrated Postgres (run: docker compose -f deploy/compose.dev.yml up -d); check %s", e2eDSNEnv)
 	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
-		t.Skipf("Postgres not available at %s: %v", dsn, err)
+		t.Fatalf("GOTHAM_E2E=1 requires a reachable Postgres (run: docker compose -f deploy/compose.dev.yml up -d); check %s", e2eDSNEnv)
 	}
 	t.Cleanup(pool.Close)
 	st := store.New(pool)
@@ -220,13 +229,13 @@ func newP4Harness(t *testing.T) *p4Harness {
 	// 2. Docker: the agent builds and runs on the local daemon.
 	engine, err := agent.NewDockerClient(e2eDockerSock())
 	if err != nil {
-		t.Fatalf("docker client for %s: %v", e2eDockerSock(), err)
+		t.Fatalf("GOTHAM_E2E=1: docker client for %s: %v", e2eDockerSock(), err)
 	}
 	versionCtx, versionCancel := context.WithTimeout(ctx, 10*time.Second)
 	_, err = engine.Version(versionCtx)
 	versionCancel()
 	if err != nil {
-		t.Skipf("docker daemon unreachable at %s: %v (start Docker and run: docker compose -f deploy/compose.dev.yml up -d)",
+		t.Fatalf("GOTHAM_E2E=1 requires a reachable Docker daemon at %s: %v (start Docker and run: docker compose -f deploy/compose.dev.yml up -d)",
 			e2eDockerSock(), err)
 	}
 
@@ -237,7 +246,7 @@ func newP4Harness(t *testing.T) *p4Harness {
 	pingErr := rdb.Ping(pingCtx).Err()
 	pingCancel()
 	if pingErr != nil {
-		t.Skipf("redis unreachable at %s: %v (run: docker compose -f deploy/compose.dev.yml up -d)",
+		t.Fatalf("GOTHAM_E2E=1 requires a reachable Redis at %s: %v (run: docker compose -f deploy/compose.dev.yml up -d)",
 			e2eRedisAddr(), pingErr)
 	}
 
@@ -622,6 +631,65 @@ func removeImages(t *testing.T, ref string) {
 			t.Logf("cleanup: docker rmi %s: %v: %s", image, err, strings.TrimSpace(string(removed)))
 		}
 	}
+}
+
+// danglingImageIDs returns the short ids of every untagged image the daemon
+// holds.
+func danglingImageIDs(docker string) (map[string]bool, error) {
+	var stderr bytes.Buffer
+	command := exec.Command(docker, "images", "-q", "--filter", "dangling=true")
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker images --filter dangling=true: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	ids := map[string]bool{}
+	for _, id := range strings.Fields(string(output)) {
+		ids[id] = true
+	}
+	return ids, nil
+}
+
+// removeNewDanglingImages registers cleanup of the dangling images this run's
+// builds leave behind. removeImages drops the built tags, but the legacy
+// builder's intermediate layers survive as untagged images no tag-based
+// cleanup can see; only the ids that appear during the test are removed, so
+// unrelated untagged images (and their searchable cache) outlive the run.
+// Cleanup is LIFO: registering this before any build makes it run after every
+// per-application tag has been dropped, including on failed tests.
+//
+// ponytail: daemon-wide id diff — a concurrent builder on the same daemon
+// could lose a fresh intermediate; scope per-build if that ever bites.
+func removeNewDanglingImages(t *testing.T) {
+	t.Helper()
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Logf("cleanup: docker CLI not found, remove dangling build images manually")
+		return
+	}
+	before, err := danglingImageIDs(docker)
+	if err != nil {
+		t.Logf("cleanup: list dangling images before the run: %v", err)
+		return
+	}
+	t.Cleanup(func() {
+		after, err := danglingImageIDs(docker)
+		if err != nil {
+			t.Logf("cleanup: list dangling images: %v", err)
+			return
+		}
+		for id := range after {
+			if before[id] {
+				continue
+			}
+			// One rmi can cascade-remove untagged parents, so later ids in
+			// this set may already be gone; that is not a cleanup failure.
+			if output, err := exec.Command(docker, "rmi", "-f", id).CombinedOutput(); err != nil &&
+				!strings.Contains(string(output), "No such image") {
+				t.Logf("cleanup: docker rmi -f %s: %v: %s", id, err, strings.TrimSpace(string(output)))
+			}
+		}
+	})
 }
 
 // containsAny reports whether s carries at least one of the substrings.

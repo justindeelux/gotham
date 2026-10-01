@@ -73,6 +73,9 @@ func TestP8PreviewLifecycle(t *testing.T) {
 
 	// 2. The sibling application is a real row cloned from the base config.
 	sibling := h.applicationByName(t, app.Name+"-pr-7")
+	// The webhook service created the sibling, not createApplication, so its
+	// containers and built images need their own cleanup.
+	h.removeAppArtifacts(t, sibling.ID)
 	if sibling.Branch != "feature/preview" || sibling.BaseDomain != wantHost {
 		t.Fatalf("sibling = %+v, want the PR branch on %s", sibling, wantHost)
 	}

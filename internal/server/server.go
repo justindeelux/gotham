@@ -400,8 +400,27 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 	if proxySvc != nil {
 		cfg.Proxy = proxySvc
 	}
-	if notifier, ok := s.notify.(deploy.Notifier); ok {
-		cfg.Notifier = notifier
+	// Terminal deployment results fan out to the BE-8.3 notification
+	// dispatcher and the previews terminal-comment hook. The preview hook
+	// reads s.webhooks lazily (built after the deploy service, like
+	// PreviewCleanup) and runs detached, so a Git host can never slow the
+	// deploy worker. Its semantics do not change BE-8.3 delivery.
+	var notifier deploy.Notifier
+	if n, ok := s.notify.(deploy.Notifier); ok {
+		notifier = n
+	}
+	cfg.Notifier = deployNotifier{
+		primary: notifier,
+		preview: func(result deploy.DeployResult) {
+			if s.webhooks == nil {
+				return
+			}
+			go func() {
+				notifyCtx, cancel := context.WithTimeout(context.Background(), previewNotifyTimeout)
+				defer cancel()
+				s.webhooks.DeployFinished(notifyCtx, result)
+			}()
+		},
 	}
 	// Preview siblings hang off the base application outside the deploy
 	// schema; they are torn down before the base row is deleted, and a
@@ -417,6 +436,29 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 		return s.webhooks.CleanupApplication(ctx, appID)
 	}
 	return deploy.NewDefaultService(cfg)
+}
+
+// previewNotifyTimeout bounds the detached preview terminal-comment hook: a
+// slow lookup or Git host is cut off instead of accumulating goroutines.
+const previewNotifyTimeout = 15 * time.Second
+
+// deployNotifier fans one terminal deployment result out to the configured
+// notifier (BE-8.3) and the previews terminal-comment hook (BE-8.1). The
+// preview hook returns immediately (it dispatches its own goroutine), and a
+// nil primary leaves BE-8.3 semantics untouched.
+type deployNotifier struct {
+	primary deploy.Notifier
+	preview func(result deploy.DeployResult)
+}
+
+// DeployFinished implements deploy.Notifier.
+func (n deployNotifier) DeployFinished(ctx context.Context, result deploy.DeployResult) {
+	if n.primary != nil {
+		n.primary.DeployFinished(ctx, result)
+	}
+	if n.preview != nil {
+		n.preview(result)
+	}
 }
 
 // webhookService builds the webhook domain service for the HTTP wiring from

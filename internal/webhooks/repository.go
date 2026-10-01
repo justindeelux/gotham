@@ -239,6 +239,11 @@ type Repository interface {
 	// GetPreview returns the preview binding of one pull request, or
 	// ErrNotFound when the PR has no preview yet.
 	GetPreview(ctx context.Context, appID uuid.UUID, prNumber int) (Preview, error)
+	// GetPreviewByApplication returns the live binding a preview sibling
+	// application backs, or ErrNotFound. The terminal deploy comment hook uses
+	// it; a sibling backs at most one binding, and a deleted binding is not a
+	// target.
+	GetPreviewByApplication(ctx context.Context, previewAppID uuid.UUID) (Preview, error)
 	// UpsertPreview stores or refreshes the binding without the promotion
 	// fence. It is the seeding seam for tests and the audit tooling; the
 	// delivery path uses ClaimPreviewDelivery + WritePreviewBinding.
@@ -463,6 +468,18 @@ func (r *storeRepository) WritePreviewBinding(ctx context.Context, write Preview
 // GetPreview loads the preview binding of one (application, pull request).
 func (r *storeRepository) GetPreview(ctx context.Context, appID uuid.UUID, prNumber int) (Preview, error) {
 	row, err := r.store.GetPreviewDeploy(ctx, pgUUID(appID), int32(prNumber))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Preview{}, ErrNotFound
+		}
+		return Preview{}, err
+	}
+	return previewFromRow(row), nil
+}
+
+// GetPreviewByApplication loads the live binding a preview sibling backs.
+func (r *storeRepository) GetPreviewByApplication(ctx context.Context, previewAppID uuid.UUID) (Preview, error) {
+	row, err := r.store.GetLivePreviewDeployBySibling(ctx, pgUUID(previewAppID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Preview{}, ErrNotFound

@@ -56,6 +56,37 @@ func (q *Queries) CountLivePreviews(ctx context.Context, arg CountLivePreviewsPa
 	return count, err
 }
 
+const getLivePreviewDeployBySibling = `-- name: GetLivePreviewDeployBySibling :one
+SELECT id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
+WHERE preview_application_id = $1 AND state <> 'deleted'
+LIMIT 1
+`
+
+// The live binding a preview sibling application backs: the terminal deploy
+// hook resolves the pull request through it. A sibling backs at most one
+// binding, and a deleted binding is the audit trail, not a comment target.
+func (q *Queries) GetLivePreviewDeployBySibling(ctx context.Context, previewApplicationID pgtype.UUID) (PreviewDeploy, error) {
+	row := q.db.QueryRow(ctx, getLivePreviewDeployBySibling, previewApplicationID)
+	var i PreviewDeploy
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.TeamID,
+		&i.Provider,
+		&i.Repo,
+		&i.PrNumber,
+		&i.Branch,
+		&i.HeadSha,
+		&i.PreviewApplicationID,
+		&i.Host,
+		&i.State,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getPreviewDelivery = `-- name: GetPreviewDelivery :one
 SELECT id, application_id, pr_number, kind, head_sha, delivery_id, received_at, expires_at FROM preview_deliveries WHERE id = $1 AND expires_at > clock_timestamp()
 `
@@ -109,6 +140,33 @@ func (q *Queries) GetPreviewDeploy(ctx context.Context, arg GetPreviewDeployPara
 		&i.DeletedAt,
 	)
 	return i, err
+}
+
+const hasLivePreviewClose = `-- name: HasLivePreviewClose :one
+SELECT EXISTS (
+    SELECT 1 FROM preview_deliveries
+    WHERE application_id = $1
+      AND pr_number = $2
+      AND kind = 'close'
+      AND expires_at > clock_timestamp()
+) AS live
+`
+
+type HasLivePreviewCloseParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	PrNumber      int32       `json:"pr_number"`
+}
+
+// The promotion fence's close check (F-1): a live close reservation owns the
+// pull request even before any binding exists, so a start that claimed before
+// the close can never promote after it. An expired marker (a crashed close
+// delivery) fences nothing; the promotion's own lease fence still stops a
+// stale worker.
+func (q *Queries) HasLivePreviewClose(ctx context.Context, arg HasLivePreviewCloseParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasLivePreviewClose, arg.ApplicationID, arg.PrNumber)
+	var live bool
+	err := row.Scan(&live)
+	return live, err
 }
 
 const listClosingPreviewDeploys = `-- name: ListClosingPreviewDeploys :many

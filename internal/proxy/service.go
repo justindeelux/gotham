@@ -991,7 +991,7 @@ func resolveRouteCertificate(app ProxiedApplication, domain string, providers ma
 			// The wildcard must cover the routed host: keep the host as the
 			// main name and request `*.base` for a base inside the provider's
 			// zones.
-			base, ok := wildcardBase(domain, access.provider.Zones)
+			base, ok := WildcardBase(domain, access.provider.Zones)
 			if !ok {
 				return nil, "the wildcard base is not inside any zone served by the DNS provider"
 			}

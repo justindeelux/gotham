@@ -298,9 +298,9 @@ func TestWildcardBase(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			base, ok := wildcardBase(tc.host, tc.zones)
+			base, ok := WildcardBase(tc.host, tc.zones)
 			if ok != tc.ok || base != tc.want {
-				t.Fatalf("wildcardBase(%q, %v) = (%q, %v), want (%q, %v)", tc.host, tc.zones, base, ok, tc.want, tc.ok)
+				t.Fatalf("WildcardBase(%q, %v) = (%q, %v), want (%q, %v)", tc.host, tc.zones, base, ok, tc.want, tc.ok)
 			}
 			if ok && MatchZone(tc.zones, base) == "" {
 				t.Fatalf("base %q is not inside a configured zone %v", base, tc.zones)

@@ -745,7 +745,72 @@ func failedComment(host string) string {
 		"Check the application's deployment log for details."
 }
 
+// succeededComment is the badge comment of a preview whose deployment reached
+// the running state.
+func succeededComment(host string) string {
+	return "Preview deployment is live: http://" + host
+}
+
+// failedDeployComment is the badge comment of a preview whose deployment
+// failed terminally (as opposed to a delivery that never queued one).
+func failedDeployComment(host string) string {
+	return "Preview deployment failed for http://" + host + ".\n\n" +
+		"Check the application's deployment log for details."
+}
+
 // deletedComment is the badge comment of a torn-down preview.
 func deletedComment() string {
 	return "Preview deployment removed."
+}
+
+// DeployFinished implements deploy.Notifier for the preview surface: a
+// terminal deployment of a preview sibling updates the pull request's badge
+// comment. The binding lookup by sibling application ID makes an unrelated
+// (non-preview) deployment a no-op, and a binding a close already owns or
+// completed is skipped so the close comment is never overwritten. Best effort:
+// a lookup or comment failure is logged and never fails a deployment. The
+// server wiring calls it detached from the deploy worker.
+func (s *Service) DeployFinished(ctx context.Context, result deploy.DeployResult) {
+	if s == nil || s.repo == nil || s.commenter == nil {
+		return
+	}
+	if result.State != deploy.StateRunning && result.State != deploy.StateFailed {
+		return
+	}
+	binding, err := s.repo.GetPreviewByApplication(ctx, result.ApplicationID)
+	if err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			s.logger.Warn("webhooks: preview terminal comment lookup failed",
+				"application_id", result.ApplicationID, "error", err)
+		}
+		return
+	}
+	if binding.State != PreviewActive {
+		return
+	}
+	base, err := s.repo.GetApplication(ctx, binding.ApplicationID)
+	if err != nil {
+		s.logger.Warn("webhooks: preview terminal comment application lookup failed",
+			"application_id", binding.ApplicationID, "error", err)
+		return
+	}
+	host := strings.TrimSpace(result.Host)
+	if host == "" {
+		host = binding.Host
+	}
+	target := Target{
+		ApplicationID: base.ID,
+		UserID:        base.UserID,
+		TeamID:        base.TeamID,
+		Provider:      base.Provider,
+		Repo:          base.Repo,
+		CloneURL:      base.CloneURL,
+		Name:          base.Name,
+		BaseDomain:    base.BaseDomain,
+	}
+	if result.State == deploy.StateRunning {
+		s.previewComment(ctx, target, binding.PRNumber, succeededComment(host))
+		return
+	}
+	s.previewComment(ctx, target, binding.PRNumber, failedDeployComment(host))
 }

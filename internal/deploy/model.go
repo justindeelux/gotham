@@ -80,6 +80,27 @@ type Secret struct {
 	CreatedAt     time.Time
 }
 
+// CertificateIntent is the slice of a domain_certificates row the preview
+// clone copies onto a sibling: the per-application certificate configuration.
+// The preview surface only ever clones an enabled wildcard DNS-01 intent; the
+// exported shape keeps the repository seam free of proxy types.
+type CertificateIntent struct {
+	ApplicationID uuid.UUID
+	Domain        string
+	Enabled       bool
+	// Challenge is "http-01" or "dns-01" (proxy.ChallengeMode values).
+	Challenge     string
+	DNSProviderID uuid.UUID
+	Wildcard      bool
+}
+
+// DNSProviderInfo is the slice of a dns_providers row the preview clone needs:
+// the zones the credential may certify in, and whether the provider is usable.
+type DNSProviderInfo struct {
+	Zones   []string
+	Enabled bool
+}
+
 // Storage is a persistent directory on the node mounted into the container.
 type Storage struct {
 	ID            uuid.UUID

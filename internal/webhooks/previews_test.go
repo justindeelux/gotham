@@ -1902,3 +1902,157 @@ func TestRetryableFailureReleasesTheReservation(t *testing.T) {
 func TestPreviewProvisionerContract(t *testing.T) {
 	var _ PreviewProvisioner = (*deploy.Service)(nil)
 }
+
+// TestNoBindingCloseBlocksTheRacingPromote is the F-1 regression at the domain
+// level: a close that claimed while no binding existed yet must refuse the
+// in-flight open's promotion, and no live binding may appear behind it. After
+// the close clears its ledger the same revision reopens.
+func TestNoBindingCloseBlocksTheRacingPromote(t *testing.T) {
+	t.Setenv(FeatureEnv, "true")
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	svc := newTestServiceWith(Config{
+		Repository: repo, Installer: &fakeInstaller{}, Deployer: deployer,
+		Provisioner: deployer, Commenter: &fakeCommenter{}, Logger: discardLogger(),
+	})
+
+	// The open claimed first and holds its in-flight lease; the binding does
+	// not exist yet (the worker is provisioning).
+	openClaim, err := repo.ClaimPreviewDelivery(context.Background(), PreviewClaim{
+		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart,
+		HeadSHA: "head-a", LiveLimit: maxLivePreviewsPerApplication,
+	})
+	if err != nil || !openClaim.Approved {
+		t.Fatalf("open claim = %+v / %v, want approved", openClaim, err)
+	}
+	// The close claimed second, still seeing no binding.
+	closeClaim, err := repo.ClaimPreviewDelivery(context.Background(), PreviewClaim{
+		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationClose,
+		LiveLimit: maxLivePreviewsPerApplication,
+	})
+	if err != nil || !closeClaim.Approved {
+		t.Fatalf("close claim = %+v / %v, want approved", closeClaim, err)
+	}
+
+	// The in-flight open's promotion is refused: the close owns the PR.
+	promoted, err := repo.WritePreviewBinding(context.Background(), PreviewBindingWrite{
+		ApplicationID: repo.app.ID, PRNumber: 7,
+		ReservationID: openClaim.Reservation.ID, LeaseHeadSHA: "head-a", HeadSHA: "head-a",
+		State: PreviewActive, ConsumeLease: true, LiveLimit: maxLivePreviewsPerApplication,
+	})
+	if err != nil {
+		t.Fatalf("WritePreviewBinding: %v", err)
+	}
+	if promoted.Refused != BindingRefusedClosing {
+		t.Fatalf("promotion = %+v, want refused closing", promoted)
+	}
+	if _, err := repo.GetPreview(context.Background(), repo.app.ID, 7); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("binding after the refused promotion = %v, want none", err)
+	}
+
+	// A start delivery arriving during the close answers retryable instead of
+	// provisioning a sibling the close cannot see.
+	body := githubPRBody("opened", 7, "feat/x", "main", "head-b")
+	if _, err := receive(t, svc, body); !errors.Is(err, ErrRetryable) {
+		t.Fatalf("open during the close = %v, want ErrRetryable", err)
+	}
+	if got := deployer.provisionCount(); got != 0 {
+		t.Fatalf("siblings provisioned = %d, want none while the close owns the PR", got)
+	}
+
+	// The close completes on its no-binding path: the ledger clear removes the
+	// marker (and the stale lease), so the same revision reopens normally.
+	if err := repo.ClearPreviewDeliveries(context.Background(), repo.app.ID, 7); err != nil {
+		t.Fatalf("ClearPreviewDeliveries: %v", err)
+	}
+	reopen, err := repo.ClaimPreviewDelivery(context.Background(), PreviewClaim{
+		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart,
+		HeadSHA: "head-b", LiveLimit: maxLivePreviewsPerApplication,
+	})
+	if err != nil || !reopen.Approved {
+		t.Fatalf("reopen claim = %+v / %v, want approved", reopen, err)
+	}
+	written, err := repo.WritePreviewBinding(context.Background(), PreviewBindingWrite{
+		ApplicationID: repo.app.ID, PRNumber: 7,
+		ReservationID: reopen.Reservation.ID, LeaseHeadSHA: "head-b", HeadSHA: "head-b",
+		State: PreviewActive, ConsumeLease: true, LiveLimit: maxLivePreviewsPerApplication,
+	})
+	if err != nil || written.Refused != "" {
+		t.Fatalf("reopen promotion = %+v / %v, want stored", written, err)
+	}
+	if preview, err := repo.GetPreview(context.Background(), repo.app.ID, 7); err != nil || preview.State != PreviewActive {
+		t.Fatalf("binding after the reopen = %+v / %v, want active", preview, err)
+	}
+}
+
+// TestDeployFinishedUpdatesThePreviewComment is the terminal-state comment
+// regression: a terminal running/failed deploy of a preview sibling updates its
+// pull request's comment, while an unrelated application and a preview a close
+// already owns produce none.
+func TestDeployFinishedUpdatesThePreviewComment(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	deployer := &fakeDeployer{}
+	commenter := &fakeCommenter{}
+	svc := newPreviewService(t, repo, deployer, commenter)
+
+	sibling := uuid.New()
+	if _, err := repo.UpsertPreview(context.Background(), Preview{
+		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
+		Repo: repo.app.Repo, PRNumber: 7, Host: "pr-7-gotham.apps.example.com",
+		PreviewApplicationID: sibling, State: PreviewActive,
+	}); err != nil {
+		t.Fatalf("UpsertPreview: %v", err)
+	}
+
+	// A terminal running deploy reports success on the right PR.
+	svc.DeployFinished(context.Background(), deploy.DeployResult{
+		ApplicationID: sibling, State: deploy.StateRunning, Host: "pr-7-gotham.apps.example.com",
+	})
+	if got := commenter.commentCount(); got != 1 {
+		t.Fatalf("comments after running = %d, want 1", got)
+	}
+	commenter.mu.Lock()
+	number, body, target := commenter.numbers[0], commenter.bodies[0], commenter.targets[0]
+	commenter.mu.Unlock()
+	if number != 7 || !strings.Contains(body, "live") {
+		t.Errorf("running comment = PR %d %q, want PR 7 to report the preview live", number, body)
+	}
+	if target.UserID != repo.app.UserID || target.Repo != repo.app.Repo {
+		t.Errorf("comment target = %+v, want the base application's identity", target)
+	}
+
+	// A terminal failed deploy reports the failure on the same PR.
+	svc.DeployFinished(context.Background(), deploy.DeployResult{
+		ApplicationID: sibling, State: deploy.StateFailed, Host: "pr-7-gotham.apps.example.com",
+	})
+	if got := commenter.commentCount(); got != 2 {
+		t.Fatalf("comments after failed = %d, want 2", got)
+	}
+	commenter.mu.Lock()
+	number, body = commenter.numbers[1], commenter.bodies[1]
+	commenter.mu.Unlock()
+	if number != 7 || !strings.Contains(body, "failed") {
+		t.Errorf("failed comment = PR %d %q, want PR 7 to report the failure", number, body)
+	}
+
+	// An unrelated application (no preview binding) comments nothing.
+	svc.DeployFinished(context.Background(), deploy.DeployResult{
+		ApplicationID: uuid.New(), State: deploy.StateRunning, Host: "other.example.com",
+	})
+	if got := commenter.commentCount(); got != 2 {
+		t.Fatalf("comments after an unrelated deploy = %d, want no extra comment", got)
+	}
+
+	// A binding a close already owns is never overwritten.
+	repo.mu.Lock()
+	closing := repo.previews[previewKey(repo.app.ID, 7)]
+	closing.State = PreviewClosing
+	repo.previews[previewKey(repo.app.ID, 7)] = closing
+	repo.mu.Unlock()
+	svc.DeployFinished(context.Background(), deploy.DeployResult{
+		ApplicationID: sibling, State: deploy.StateRunning, Host: "pr-7-gotham.apps.example.com",
+	})
+	if got := commenter.commentCount(); got != 2 {
+		t.Fatalf("comments after a closing preview's deploy = %d, want no close overwrite", got)
+	}
+}

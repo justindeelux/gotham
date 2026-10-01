@@ -1151,6 +1151,135 @@ func TestStoreClaimConcurrencyRespectsTheCap(t *testing.T) {
 	}
 }
 
+// TestStoreNoBindingCloseRefusesTheRacingPromote is the F-1 database-level
+// interleave: claim (start) → claim (close, no binding yet) → bind. The close
+// marker must refuse the promotion, no live binding may appear behind it, and
+// once the close clears the ledger the same revision must reopen.
+func TestStoreNoBindingCloseRefusesTheRacingPromote(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openClaimFixture(t, ctx)
+	userID, baseID := claimFixture(t, ctx, st)
+
+	const pr = 7
+	open, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-a", LiveLimit: 5,
+	})
+	if err != nil || !open.Approved {
+		t.Fatalf("open claim = %+v / %v, want approved", open, err)
+	}
+	closeClaim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, Kind: store.PreviewClaimClose,
+		LiveLimit: 5,
+	})
+	if err != nil || !closeClaim.Approved {
+		t.Fatalf("close claim = %+v / %v, want approved", closeClaim, err)
+	}
+
+	// The in-flight open's promotion is refused: the close owns the PR.
+	write, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, ReservationID: open.Reservation.ID,
+		LeaseHeadSHA: "head-a", HeadSHA: "head-a", State: "active",
+		ConsumeLease: true, LiveLimit: 5,
+	})
+	if err != nil {
+		t.Fatalf("WritePreviewBinding: %v", err)
+	}
+	if write.Refused != store.PreviewWriteClosingRefused {
+		t.Fatalf("racing promotion = %+v, want refused closing", write)
+	}
+	var bindings int
+	if err := st.DB.QueryRow(ctx,
+		"SELECT count(*) FROM preview_deploys WHERE application_id = $1 AND pr_number = $2",
+		pgUUID(baseID), pr,
+	).Scan(&bindings); err != nil {
+		t.Fatalf("count bindings: %v", err)
+	}
+	if bindings != 0 {
+		t.Fatalf("bindings = %d, want none behind the close", bindings)
+	}
+	// A start arriving while the close is live answers retryable.
+	again, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-a", LiveLimit: 5,
+	})
+	if err != nil || !again.Retryable {
+		t.Fatalf("start during the close = %+v / %v, want retryable", again, err)
+	}
+
+	// The no-binding close completes (its ledger clear); the same delivery
+	// reopens and promotes.
+	if err := st.ClearPreviewDeliveries(ctx, pgUUID(baseID), pr); err != nil {
+		t.Fatalf("ClearPreviewDeliveries: %v", err)
+	}
+	reopen, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, Kind: store.PreviewClaimStart,
+		HeadSHA: "head-a", LiveLimit: 5,
+	})
+	if err != nil || !reopen.Approved {
+		t.Fatalf("reopen claim = %+v / %v, want approved", reopen, err)
+	}
+	written, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
+		ApplicationID: pgUUID(baseID), PrNumber: pr, ReservationID: reopen.Reservation.ID,
+		LeaseHeadSHA: "head-a", HeadSHA: "head-a", TeamID: pgUUID(userID), State: "active",
+		ConsumeLease: true, LiveLimit: 5,
+	})
+	if err != nil || written.Refused != "" {
+		t.Fatalf("reopen promotion = %+v / %v, want stored", written, err)
+	}
+	if written.Binding.State != "active" || written.Binding.HeadSha != "head-a" {
+		t.Fatalf("reopened binding = %+v", written.Binding)
+	}
+}
+
+// TestStoreUpsertPreviewDeployTakesTheApplicationLock is the F-2 regression:
+// the exported upsert serializes with the other preview transitions on the
+// per-application row lock — it must wait for a lock holder, and succeed once
+// the lock is released.
+func TestStoreUpsertPreviewDeployTakesTheApplicationLock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openClaimFixture(t, ctx)
+	userID, baseID := claimFixture(t, ctx, st)
+
+	params := sqlc.UpsertPreviewDeployParams{
+		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
+		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
+		Host: "pr-7.example.com", State: "active",
+	}
+
+	// Hold the application lock in an outer transaction: an unlocked upsert
+	// would slip past it.
+	tx, err := st.DB.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin lock holder: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var locked pgtype.UUID
+	if err := tx.QueryRow(ctx, "SELECT id FROM applications WHERE id = $1 FOR UPDATE", pgUUID(baseID)).Scan(&locked); err != nil {
+		t.Fatalf("take the application lock: %v", err)
+	}
+
+	blockedCtx, cancelBlocked := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelBlocked()
+	if _, err := st.UpsertPreviewDeploy(blockedCtx, params); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("upsert under a held application lock = %v, want the lock to block it", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("release the application lock: %v", err)
+	}
+
+	// Without contention the upsert stores the binding.
+	stored, err := st.UpsertPreviewDeploy(ctx, params)
+	if err != nil {
+		t.Fatalf("UpsertPreviewDeploy: %v", err)
+	}
+	if stored.PrNumber != 7 || stored.HeadSha != "head-a" {
+		t.Fatalf("stored binding = %+v", stored)
+	}
+}
+
 // createApplicationParams builds the row the webhook tests watch. The ID comes
 // from the database default, so callers read it back from the returned row.
 func createApplicationParams(userID uuid.UUID) sqlc.CreateApplicationParams {

@@ -303,7 +303,7 @@ func (s *sslService) validateCertificate(ctx context.Context, draft certificateD
 		// The wildcard base must sit inside a configured zone so the challenge
 		// record can be written there, and the generated request always keeps
 		// the exact host as the main name because a wildcard matches one label.
-		if base, ok := wildcardBase(draft.domain, provider.Zones); !ok {
+		if base, ok := WildcardBase(draft.domain, provider.Zones); !ok {
 			return fmt.Errorf("%w: the wildcard base is not inside any zone served by the DNS provider", ErrValidation)
 		} else if MatchZone(provider.Zones, base) == "" {
 			return fmt.Errorf("%w: the wildcard base %q is not inside any zone served by the DNS provider", ErrValidation, base)

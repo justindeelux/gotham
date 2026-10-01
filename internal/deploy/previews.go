@@ -92,7 +92,68 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 		return Application{}, err
 	}
 	s.copyDeployKey(ctx, base, created)
+	s.cloneWildcardCertificate(ctx, base, created)
 	return created, nil
+}
+
+// cloneWildcardCertificate copies the base application's enabled wildcard
+// DNS-01 certificate intent onto its preview sibling, so the preview is served
+// over HTTPS through the same DNS provider instead of staying HTTP-only. The
+// clone is deliberately narrow:
+//
+//   - only an enabled wildcard intent with a DNS provider is cloned (wildcards
+//     require DNS-01, and a plain HTTP-01 intent names the base host only);
+//   - the base intent must still record the base application's current
+//     base_domain (a stale record never activates the base route either);
+//   - the preview host must be certifiable through the provider's DNS zones,
+//     so the sibling never gets an intent that can only stay HTTP-only.
+//
+// The sibling's intent records the preview host, which is exactly what the
+// route generator needs to activate HTTPS for the sibling (the exact host is
+// always the main certificate name). Best effort: a failure logs and leaves
+// the preview HTTP-only. The row cascades away with the sibling application
+// (domain_certificates.application_id ON DELETE CASCADE), so teardown never
+// orphans an intent.
+func (s *Service) cloneWildcardCertificate(ctx context.Context, base, preview Application) {
+	intent, err := s.repo.GetCertificateIntent(ctx, base.ID)
+	if err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			s.logger.Warn("deploy: preview certificate intent lookup failed",
+				"application_id", base.ID, "error", err)
+		}
+		return
+	}
+	if !intent.Enabled || !intent.Wildcard ||
+		intent.Challenge != string(proxy.ChallengeDNS01) || intent.DNSProviderID == uuid.Nil {
+		return
+	}
+	if proxy.NormalizeDomain(intent.Domain) != proxy.NormalizeDomain(base.BaseDomain) {
+		return
+	}
+	provider, err := s.repo.GetDNSProviderInfo(ctx, intent.DNSProviderID)
+	if err != nil {
+		s.logger.Warn("deploy: preview certificate provider lookup failed",
+			"application_id", base.ID, "provider_id", intent.DNSProviderID, "error", err)
+		return
+	}
+	if !provider.Enabled {
+		return
+	}
+	host := proxy.NormalizeDomain(preview.BaseDomain)
+	if _, ok := proxy.WildcardBase(host, provider.Zones); !ok {
+		return
+	}
+	if err := s.repo.CreateCertificateIntent(ctx, CertificateIntent{
+		ApplicationID: preview.ID,
+		Domain:        host,
+		Enabled:       true,
+		Challenge:     string(proxy.ChallengeDNS01),
+		DNSProviderID: intent.DNSProviderID,
+		Wildcard:      true,
+	}); err != nil {
+		s.logger.Warn("deploy: could not clone the preview certificate intent",
+			"application_id", preview.ID, "error", err)
+	}
 }
 
 // copyDeployKey re-registers the base application's deploy key on the preview

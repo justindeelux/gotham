@@ -78,6 +78,16 @@ type Repository interface {
 	// cloner. An application without a key answers "" and no error, which is
 	// what keeps anonymous cloning the default.
 	DeployKeyPrivatePEM(ctx context.Context, appID uuid.UUID) (string, error)
+	// GetCertificateIntent returns an application's certificate configuration,
+	// or ErrNotFound when it has none. The preview clone reads it to copy an
+	// enabled wildcard DNS-01 intent onto the sibling.
+	GetCertificateIntent(ctx context.Context, appID uuid.UUID) (CertificateIntent, error)
+	// GetDNSProviderInfo returns the zones and usability of one DNS provider,
+	// or ErrNotFound (the certificate FK keeps a referenced row alive).
+	GetDNSProviderInfo(ctx context.Context, providerID uuid.UUID) (DNSProviderInfo, error)
+	// CreateCertificateIntent stores one application's certificate
+	// configuration. The per-application unique index is a conflict.
+	CreateCertificateIntent(ctx context.Context, in CertificateIntent) error
 }
 
 // storeRepository adapts *store.Store to Repository. secret opens sealed
@@ -458,6 +468,59 @@ func (r *storeRepository) DeployKeyPrivatePEM(ctx context.Context, appID uuid.UU
 		return "", fmt.Errorf("deploy: open deploy private key: %w", err)
 	}
 	return privatePEM, nil
+}
+
+// GetCertificateIntent loads an application's certificate configuration, or
+// ErrNotFound.
+func (r *storeRepository) GetCertificateIntent(ctx context.Context, appID uuid.UUID) (CertificateIntent, error) {
+	row, err := r.store.GetDomainCertificateByApplication(ctx, pgUUID(appID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return CertificateIntent{}, ErrNotFound
+		}
+		return CertificateIntent{}, fmt.Errorf("deploy: get certificate intent: %w", err)
+	}
+	return CertificateIntent{
+		ApplicationID: uuidFromPG(row.ApplicationID),
+		Domain:        row.Domain,
+		Enabled:       row.Enabled,
+		Challenge:     row.Challenge,
+		DNSProviderID: uuidFromPG(row.DnsProviderID),
+		Wildcard:      row.Wildcard,
+	}, nil
+}
+
+// GetDNSProviderInfo loads the zones and usability of one DNS provider, or
+// ErrNotFound.
+func (r *storeRepository) GetDNSProviderInfo(ctx context.Context, providerID uuid.UUID) (DNSProviderInfo, error) {
+	row, err := r.store.GetDNSProvider(ctx, pgUUID(providerID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DNSProviderInfo{}, ErrNotFound
+		}
+		return DNSProviderInfo{}, fmt.Errorf("deploy: get DNS provider: %w", err)
+	}
+	return DNSProviderInfo{Zones: append([]string{}, row.Zones...), Enabled: row.Enabled}, nil
+}
+
+// CreateCertificateIntent stores one application's certificate configuration.
+// The one-certificate-per-application index surfaces as ErrConflict.
+func (r *storeRepository) CreateCertificateIntent(ctx context.Context, in CertificateIntent) error {
+	_, err := r.store.CreateDomainCertificate(ctx, sqlc.CreateDomainCertificateParams{
+		ApplicationID: pgUUID(in.ApplicationID),
+		Domain:        in.Domain,
+		Enabled:       in.Enabled,
+		Challenge:     in.Challenge,
+		DnsProviderID: pgUUID(in.DNSProviderID),
+		Wildcard:      in.Wildcard,
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: the application already has a certificate configuration", ErrConflict)
+		}
+		return fmt.Errorf("deploy: create certificate intent: %w", err)
+	}
+	return nil
 }
 
 // applicationFromRow maps a sqlc row to the domain model. A NULL server_id

@@ -55,6 +55,13 @@ type fakeRepository struct {
 	// answer the cloner's lookup the way the sealed row does.
 	deployKeys map[uuid.UUID]fakeDeployKey
 
+	// certificates mirrors domain_certificates (one intent per application);
+	// dnsProviders mirrors the provider rows the preview clone validates
+	// against. certErr fails every certificate write (the best-effort test).
+	certificates []CertificateIntent
+	dnsProviders map[uuid.UUID]DNSProviderInfo
+	certErr      error
+
 	// unknownServers names servers ServerExists must report as missing.
 	unknownServers map[uuid.UUID]bool
 	// serverTeams maps a registered server to its team; an entry without a
@@ -239,6 +246,13 @@ func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) e
 	}
 	r.storages = storages
 	delete(r.deployKeys, appID)
+	certificates := make([]CertificateIntent, 0, len(r.certificates))
+	for _, cert := range r.certificates {
+		if cert.ApplicationID != appID {
+			certificates = append(certificates, cert)
+		}
+	}
+	r.certificates = certificates
 	return nil
 }
 
@@ -531,6 +545,64 @@ func (r *fakeRepository) DeployKeyPrivatePEM(_ context.Context, appID uuid.UUID)
 		return "", nil
 	}
 	return stored.privatePEM, nil
+}
+
+// GetCertificateIntent implements Repository.
+func (r *fakeRepository) GetCertificateIntent(_ context.Context, appID uuid.UUID) (CertificateIntent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.getErr != nil {
+		return CertificateIntent{}, r.getErr
+	}
+	for _, cert := range r.certificates {
+		if cert.ApplicationID == appID {
+			return cert, nil
+		}
+	}
+	return CertificateIntent{}, ErrNotFound
+}
+
+// GetDNSProviderInfo implements Repository.
+func (r *fakeRepository) GetDNSProviderInfo(_ context.Context, providerID uuid.UUID) (DNSProviderInfo, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.getErr != nil {
+		return DNSProviderInfo{}, r.getErr
+	}
+	info, ok := r.dnsProviders[providerID]
+	if !ok {
+		return DNSProviderInfo{}, ErrNotFound
+	}
+	return DNSProviderInfo{Zones: append([]string{}, info.Zones...), Enabled: info.Enabled}, nil
+}
+
+// CreateCertificateIntent implements Repository with the one-intent-per-
+// application unique index.
+func (r *fakeRepository) CreateCertificateIntent(_ context.Context, in CertificateIntent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.certErr != nil {
+		return r.certErr
+	}
+	for _, cert := range r.certificates {
+		if cert.ApplicationID == in.ApplicationID {
+			return fmt.Errorf("%w: the application already has a certificate configuration", ErrConflict)
+		}
+	}
+	r.certificates = append(r.certificates, in)
+	return nil
+}
+
+// certificateIntent returns the stored intent of an application (test helper).
+func (r *fakeRepository) certificateIntent(appID uuid.UUID) (CertificateIntent, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, cert := range r.certificates {
+		if cert.ApplicationID == appID {
+			return cert, true
+		}
+	}
+	return CertificateIntent{}, false
 }
 
 // hasDeployKey reports whether an application holds a deploy key (test helper).

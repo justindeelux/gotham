@@ -23,6 +23,13 @@ on:
     tags:
       - "v*"
 
+# A tag cannot be re-pushed under the same name while a release runs, so the
+# group only guards against a manual duplicate dispatch; never cancel in
+# progress — a killed release could leave a draft or half-published state.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

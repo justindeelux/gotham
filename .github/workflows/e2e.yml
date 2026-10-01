@@ -5,6 +5,9 @@ name: E2E
 # in its own workflow instead of the unit-test job. The tests are gated by
 # GOTHAM_E2E=1 and skip when a precondition is missing, which keeps ci.yml green
 # on machines without Docker.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 on:
   workflow_dispatch:
   push:

@@ -93,11 +93,11 @@ func newUpdater(cfg Config, log *slog.Logger, version func() string, setVersion 
 	if cfg.BinaryPath == "" {
 		return nil, nil
 	}
-	publicKey, err := updatecore.LoadPublicKey()
+	publicKeys, err := updatecore.LoadPublicKeys()
 	if err != nil {
 		return nil, nil
 	}
-	verifier, err := updatecore.NewVerifier(publicKey)
+	verifier, err := updatecore.NewVerifierSet(publicKeys...)
 	if err != nil {
 		return nil, err
 	}

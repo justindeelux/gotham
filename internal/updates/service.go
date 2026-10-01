@@ -59,11 +59,14 @@ type Service interface {
 
 // Config wires a self-update Service.
 type Config struct {
-	Current      string
-	Repo         string
-	BaseURL      string
-	Channel      Channel
-	PublicKey    ed25519.PublicKey
+	Current string
+	Repo    string
+	BaseURL string
+	Channel Channel
+	// PublicKeys is the release key ring (current first, then the
+	// pre-positioned next key). A release manifest verifies when any key
+	// signed it. Empty leaves Apply fail-closed.
+	PublicKeys   []ed25519.PublicKey
 	BinaryPath   string
 	OldPath      string
 	LockPath     string
@@ -142,8 +145,8 @@ func NewService(cfg Config) (Service, error) {
 		ArtifactTimeout: cfg.DownloadTimeout,
 		MaxBytes:        cfg.MaxBytes,
 	}
-	if cfg.PublicKey != nil {
-		verifier, err := NewVerifier(cfg.PublicKey)
+	if len(cfg.PublicKeys) > 0 {
+		verifier, err := NewVerifierSet(cfg.PublicKeys...)
 		if err != nil {
 			return nil, err
 		}

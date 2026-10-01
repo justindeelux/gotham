@@ -5,6 +5,7 @@
 | `install.sh` | Signed one-line control-plane installer (INFRA-9.1) |
 | `release-verify.sh` | Shared signature + digest verification for the installers |
 | `gotham-signing-key.pub` | Published release signing public key (embedded in the binaries and installers) |
+| `release-key-rotation.md` | Runbook: the embedded current + next key ring, planned rotation, compromise/loss recovery |
 | `test-release-install.sh` | Local (no GitHub) dry run of the sign → serve → verify → install chain |
 | `gotham.service` | Control-plane systemd unit |
 | `gotham-update.sh` | Privileged restart/healthcheck/rollback wrapper (shared; installed as `gotham-update` for the CP and `gotham-agent-update` for the agent) |
@@ -217,12 +218,16 @@ TLS; agents installed before that go offline until they are reinstalled with
   control plane; the control plane does not yet verify a client certificate.
   Making the channel mutual waits on the registration bootstrap acquiring a
   client credential.
-- **Single embedded release key: no rotation or revocation (R1, MED).** If
-  `GOTHAM_UPDATE_SIGNING_KEY` is lost or compromised, every installed node must
-  be reinstalled to trust a new key (the trust anchor is compiled into the
-  binary and pinned in the installers). Upgrade path: embed a current + next key
-  set so a rotation can ship through a release signed by the old key; keep the
-  offline backup and write a compromise runbook.
+- **Key ring shipped; remote revocation of a compromised key still needs
+  upgrades (R1, residual).** Every release binary now embeds the current plus an
+  optional pre-positioned next key (`updatecore.NextPublicKey`), verifies
+  manifests against any key in the ring, and the release workflow validates and
+  asserts the next key when configured — see `release-key-rotation.md`. A lost
+  key is recoverable by promoting the pre-shipped next key through a release the
+  installed fleet already trusts. What remains is inherent: a **compromised**
+  current key cannot be revoked on a node that has not yet received a ring
+  release (the anchor is compiled in), so those nodes still need an upgrade or
+  reinstall; the runbook covers the emergency sequencing.
 - **`GOTHAM_UPDATE_CURRENT` pins the reported version (INFO).** The server
   honours it and `/etc/gotham/gotham.env` is root-owned, so it is not a
   downgrade path, but an operator who sets it by mistake pins the "current"

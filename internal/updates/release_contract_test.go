@@ -45,6 +45,47 @@ func TestReleasePublicKeyConsistency(t *testing.T) {
 	}
 }
 
+// TestReleaseKeyRingContract pins the embedded key-ring contract: both release
+// binaries embed the current key plus the optional pre-positioned next key, and
+// the workflow validates the next key (parses as 32 raw bytes, differs from the
+// current) and asserts its embed in every binary before publishing. A release
+// that embedded a partial ring would leave nodes unable to verify the promoted
+// key without a fleet reinstall.
+func TestReleaseKeyRingContract(t *testing.T) {
+	cfg := readRepoFile(t, ".goreleaser.yaml")
+	for _, want := range []string{
+		"updatecore.PublicKey={{ .Env.GOTHAM_UPDATE_PUBLIC_KEY }}",
+		"updatecore.NextPublicKey={{ .Env.GOTHAM_UPDATE_NEXT_PUBLIC_KEY }}",
+	} {
+		if got := strings.Count(cfg, want); got != 2 {
+			t.Errorf(".goreleaser.yaml embeds %q %d times, want one per binary (2)", want, got)
+		}
+	}
+
+	workflow := readRepoFile(t, ".github/workflows/release.yml")
+	// The optional secret must reach every step that consumes it: the
+	// validation step, the GoReleaser build environment, and the per-binary
+	// embed assertion. Pinning the exact count means dropping any one of them
+	// (which would let a ring-less release ship while the secret is set, since
+	// the assert step's `if [ -n ... ]` guard would see an unset variable)
+	// fails this test.
+	secretEnv := "GOTHAM_UPDATE_NEXT_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_NEXT_PUBLIC_KEY }}"
+	if got := strings.Count(workflow, secretEnv); got != 3 {
+		t.Errorf(".github/workflows/release.yml passes the next-key secret %d times, want 3 (validate, GoReleaser build, embed assert)", got)
+	}
+	for _, want := range []string{
+		// The next key must decode to 32 raw bytes and differ from the current.
+		`[ "$decoded" = "32" ]`,
+		`[ "$next" != "$GOTHAM_UPDATE_PUBLIC_KEY" ]`,
+		// Every built binary must embed the configured next key.
+		`grep -aqF "$GOTHAM_UPDATE_NEXT_PUBLIC_KEY" "$bin"`,
+	} {
+		if got := strings.Count(workflow, want); got != 1 {
+			t.Errorf(".github/workflows/release.yml contains %q %d times, want exactly 1", want, got)
+		}
+	}
+}
+
 // TestReleaseAssetNamingContract pins the asset names GoReleaser produces to the
 // names the update checkers resolve and the installers verify. Renaming any one
 // of these without the others breaks self-update silently.

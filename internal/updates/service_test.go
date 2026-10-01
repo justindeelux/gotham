@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/justindeelux/gotham/updatecore"
 )
 
 // newTestService wires a Service at a fixture release server with a no-op
@@ -54,6 +56,64 @@ func TestServiceUpToDate(t *testing.T) {
 	}
 	if result.Applied || result.Version != "v1.0.0" {
 		t.Fatalf("Apply = %+v, want a no-op", result)
+	}
+}
+
+// TestServiceApplierUsesKeyRing proves the embedded current + next key ring
+// flows through FromEnv into the applier: a manifest signed by the
+// pre-positioned next key verifies, and an unknown key is refused.
+func TestServiceApplierUsesKeyRing(t *testing.T) {
+	current, _, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey (current): %v", err)
+	}
+	next, nextPrivate, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey (next): %v", err)
+	}
+	originalCurrent, originalNext := updatecore.PublicKey, updatecore.NextPublicKey
+	t.Cleanup(func() { updatecore.PublicKey, updatecore.NextPublicKey = originalCurrent, originalNext })
+	updatecore.PublicKey = updatecore.EncodePublicKeyBase64(current)
+	updatecore.NextPublicKey = updatecore.EncodePublicKeyBase64(next)
+	t.Setenv(PublicKeyEnv, "")
+
+	cfg, err := FromEnv("v1.0.0", nil)
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	dir := t.TempDir()
+	cfg.BinaryPath = filepath.Join(dir, "gotham")
+	cfg.LockPath = filepath.Join(dir, "update.lock")
+	cfg.StatusPath = filepath.Join(dir, "status", "update.status")
+	cfg.PendingPath = filepath.Join(dir, "update.pending")
+	svc, err := NewService(cfg)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	inner, ok := svc.(*service)
+	if !ok || inner.applier == nil || inner.applier.Verifier == nil {
+		t.Fatal("NewService did not wire the applier verifier from the key ring")
+	}
+
+	payload := []byte("signed manifest")
+	ringSigner, err := NewSigner(nextPrivate)
+	if err != nil {
+		t.Fatalf("NewSigner (next): %v", err)
+	}
+	if err := inner.applier.Verifier.Verify(payload, []byte(ringSigner.SignBase64(payload))); err != nil {
+		t.Fatalf("the applier refused a manifest signed by the next key: %v", err)
+	}
+
+	_, unknownPrivate, err := updatecore.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey (unknown): %v", err)
+	}
+	unknownSigner, err := NewSigner(unknownPrivate)
+	if err != nil {
+		t.Fatalf("NewSigner (unknown): %v", err)
+	}
+	if err := inner.applier.Verifier.Verify(payload, unknownSigner.Sign(payload)); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("the applier accepted an unknown key: %v", err)
 	}
 }
 

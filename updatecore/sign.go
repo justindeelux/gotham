@@ -37,6 +37,21 @@ const PublicKeyEnv = "GOTHAM_UPDATE_PUBLIC_KEY"
 // is never embedded, read or logged by this package.
 var PublicKey = ""
 
+// NextPublicKey is the pre-positioned release-signing Ed25519 public key for the
+// next rotation, base64 (standard) encoded, injected at build time:
+//
+//	-ldflags "-X github.com/justindeelux/gotham/updatecore.NextPublicKey=<base64>"
+//
+// It may be empty (no rotation pre-positioned). A binary with an embedded next
+// key accepts releases signed by either the current or the next key, so a
+// rotation can ship through a release signed by the old key before the new key
+// is needed. An old binary cannot learn a key retroactively, which is why the
+// next key must ship in a release before the signing key is promoted.
+//
+// Like PublicKey, it is base64 raw 32 bytes (`cmd/signer keygen` prints the
+// value). A malformed embedded key fails closed rather than being ignored.
+var NextPublicKey = ""
+
 // ErrNoPublicKey is returned when no usable release public key is configured.
 var ErrNoPublicKey = errors.New("updates: no release public key configured")
 
@@ -71,30 +86,54 @@ func (s *Signer) PublicKey() ed25519.PublicKey {
 	return s.key.Public().(ed25519.PublicKey)
 }
 
-// Verifier verifies detached Ed25519 signatures with a release public key.
+// Verifier verifies detached Ed25519 signatures against a release key set: the
+// current key, plus the pre-positioned next key when one is embedded. A release
+// verifies when any key in the set signed it.
 type Verifier struct {
-	key ed25519.PublicKey
+	keys []ed25519.PublicKey
 }
 
-// NewVerifier wraps a public key. It fails closed on a wrong-sized key.
+// NewVerifier wraps a single release public key. It fails closed on a
+// wrong-sized key and keeps the single-key callers (cmd/signer verify) working.
 func NewVerifier(key ed25519.PublicKey) (*Verifier, error) {
-	if len(key) != ed25519.PublicKeySize {
-		return nil, errors.New("updates: invalid Ed25519 public key")
+	return NewVerifierSet(key)
+}
+
+// NewVerifierSet wraps a release key set (the ring). It fails closed on an
+// empty set or a wrong-sized key, so a binary that cannot prove a signature
+// refuses the update rather than accepting it.
+func NewVerifierSet(keys ...ed25519.PublicKey) (*Verifier, error) {
+	if len(keys) == 0 {
+		return nil, ErrNoPublicKey
 	}
-	return &Verifier{key: key}, nil
+	ring := make([]ed25519.PublicKey, 0, len(keys))
+	for _, key := range keys {
+		if len(key) != ed25519.PublicKeySize {
+			return nil, errors.New("updates: invalid Ed25519 public key")
+		}
+		ring = append(ring, key)
+	}
+	return &Verifier{keys: ring}, nil
 }
 
 // Verify checks that sig (standard base64, or the raw 64 bytes) is a valid
-// Ed25519 signature over data.
+// Ed25519 signature over data by any key in the set. An empty set fails closed
+// with ErrNoPublicKey; a signature that no key produced fails with
+// ErrBadSignature.
 func (v *Verifier) Verify(data, sig []byte) error {
+	if v == nil || len(v.keys) == 0 {
+		return ErrNoPublicKey
+	}
 	decoded, err := decodeSignature(sig)
 	if err != nil {
 		return err
 	}
-	if !ed25519.Verify(v.key, data, decoded) {
-		return ErrBadSignature
+	for _, key := range v.keys {
+		if ed25519.Verify(key, data, decoded) {
+			return nil
+		}
 	}
-	return nil
+	return ErrBadSignature
 }
 
 // GenerateKey creates a fresh Ed25519 keypair.
@@ -178,15 +217,55 @@ func ParsePublicKey(raw string) (ed25519.PublicKey, error) {
 	return nil, errors.New("updates: unrecognised public key format")
 }
 
-// LoadPublicKey resolves the release public key. An embedded key (set at build
-// time) is authoritative and the environment override is ignored; only when no
-// key is embedded does GOTHAM_UPDATE_PUBLIC_KEY apply (development builds).
-// With neither set it fails closed.
-func LoadPublicKey() (ed25519.PublicKey, error) {
-	if embedded := strings.TrimSpace(PublicKey); embedded != "" {
-		return ParsePublicKey(embedded)
+// LoadPublicKeys resolves the release key ring: the embedded current key
+// (PublicKey) plus the optional pre-positioned next key (NextPublicKey), in
+// that order. An embedded ring is authoritative and the environment override is
+// ignored; only when nothing is embedded does GOTHAM_UPDATE_PUBLIC_KEY apply
+// (development builds). With neither set it fails closed.
+//
+// The embedded current key is required whenever anything is embedded: a binary
+// carrying a next key but no current key cannot have been signed by the release
+// it trusts, so it fails closed instead of trusting the next key alone. A
+// malformed embedded key (current or next) also fails closed.
+func LoadPublicKeys() ([]ed25519.PublicKey, error) {
+	embedded := strings.TrimSpace(PublicKey)
+	next := strings.TrimSpace(NextPublicKey)
+	if embedded == "" && next == "" {
+		dev, err := ParsePublicKey(strings.TrimSpace(os.Getenv(PublicKeyEnv)))
+		if err != nil {
+			return nil, err
+		}
+		return []ed25519.PublicKey{dev}, nil
 	}
-	return ParsePublicKey(strings.TrimSpace(os.Getenv(PublicKeyEnv)))
+	if embedded == "" {
+		return nil, fmt.Errorf("%w: embedded next release key without a current key", ErrNoPublicKey)
+	}
+	current, err := ParsePublicKey(embedded)
+	if err != nil {
+		return nil, fmt.Errorf("updates: embedded current public key: %w", err)
+	}
+	ring := []ed25519.PublicKey{current}
+	if next != "" {
+		nextKey, err := ParsePublicKey(next)
+		if err != nil {
+			return nil, fmt.Errorf("updates: embedded next public key: %w", err)
+		}
+		if !nextKey.Equal(current) {
+			ring = append(ring, nextKey)
+		}
+	}
+	return ring, nil
+}
+
+// LoadPublicKey resolves the single release public key (the embedded current
+// key, or the development override). It is the compatibility path for
+// single-key callers; LoadPublicKeys is the full ring.
+func LoadPublicKey() (ed25519.PublicKey, error) {
+	keys, err := LoadPublicKeys()
+	if err != nil {
+		return nil, err
+	}
+	return keys[0], nil
 }
 
 // EncodePublicKeyBase64 renders the raw public key for ldflags embedding.

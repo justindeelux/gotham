@@ -41,6 +41,10 @@ builds:
       # matches deploy/gotham-signing-key.pub, so a release can never ship a
       # keyless (i.e. update-disabled) binary.
       - -X github.com/justindeelux/gotham/updatecore.PublicKey={{ .Env.GOTHAM_UPDATE_PUBLIC_KEY }}
+      # Pre-positioned key for the next rotation (optional; empty when unset).
+      # Both binaries must embed the same ring, otherwise a node could carry
+      # the current key but not the next one. See deploy/release-key-rotation.md.
+      - -X github.com/justindeelux/gotham/updatecore.NextPublicKey={{ .Env.GOTHAM_UPDATE_NEXT_PUBLIC_KEY }}
 
   - id: gotham-agent
     binary: gotham-agent
@@ -59,6 +63,7 @@ builds:
       - -s -w
       - -X main.version={{ .Version }}
       - -X github.com/justindeelux/gotham/updatecore.PublicKey={{ .Env.GOTHAM_UPDATE_PUBLIC_KEY }}
+      - -X github.com/justindeelux/gotham/updatecore.NextPublicKey={{ .Env.GOTHAM_UPDATE_NEXT_PUBLIC_KEY }}
 
 # Raw binaries, named exactly as the update checkers resolve them.
 archives:

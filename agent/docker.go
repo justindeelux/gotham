@@ -603,6 +603,13 @@ func (c *DockerClient) doRaw(ctx context.Context, method, path string, body io.R
 // daemon is unreachable.
 func dockerTransportError(method, path string, err error) error {
 	path = redactQuerySecrets(path)
+	// http.Client.Do wraps transport failures in *url.Error, whose Error()
+	// embeds the full request URL including the (secret) buildargs query.
+	// Unwrap it so the value can never reach the error text.
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("docker: %s %s: %w", method, path, err)
 	}

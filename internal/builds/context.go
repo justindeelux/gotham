@@ -118,9 +118,8 @@ func buildContextTar(spec contextSpec) ([]byte, error) {
 		if !protected && ignore.ignored(rebased(prefix, name)) {
 			// Descend into an excluded directory when a later negation could
 			// re-include a child (Docker keeps `docs/keep.md` for
-			// `docs` + `!docs/keep.md`), or when the protected Dockerfile
-			// lives below it.
-			if isDir && !ignore.hasNegations && !protected {
+			// `docs` + `!docs/keep.md`).
+			if isDir && !ignore.hasNegations {
 				return filepath.SkipDir
 			}
 			return nil
@@ -297,22 +296,17 @@ type ignorePattern struct {
 	negate  bool
 }
 
-// ignoreMatch is the outcome of evaluating every pattern against one path.
-type ignoreMatch struct {
-	set      bool
-	excluded bool
-}
-
 // loadDockerIgnore reads and compiles the dockerignore for a context. A missing
-// file is not an error: there is simply nothing to exclude. A non-regular file
-// (for example a symlink to /dev/zero) is treated as absent, and the read is
-// capped so a huge file cannot exhaust memory.
+// file is not an error: there is simply nothing to exclude. A symlink is
+// followed (the Docker CLI does), but a non-regular target (a device, FIFO or
+// directory) is treated as absent, and the read is capped so a huge file cannot
+// exhaust memory.
 func loadDockerIgnore(ignoreDir, root string) (dockerIgnore, error) {
 	if strings.TrimSpace(ignoreDir) == "" {
 		ignoreDir = root
 	}
 	fullPath := filepath.Join(ignoreDir, dockerIgnoreFile)
-	info, err := os.Lstat(fullPath)
+	info, err := os.Stat(fullPath)
 	if errors.Is(err, fs.ErrNotExist) {
 		return dockerIgnore{}, nil
 	}
@@ -330,7 +324,8 @@ func loadDockerIgnore(ignoreDir, root string) (dockerIgnore, error) {
 		return dockerIgnore{}, fmt.Errorf("builds: open %s: %w", dockerIgnoreFile, err)
 	}
 	defer func() { _ = file.Close() }()
-	// Guard against the path becoming a non-regular file between Lstat and Open.
+	// Guard against the target becoming non-regular between Stat and Open (for
+	// example a symlink swapped to /dev/zero).
 	if opened, statErr := file.Stat(); statErr != nil || !opened.Mode().IsRegular() {
 		return dockerIgnore{}, nil
 	}
@@ -347,10 +342,10 @@ func loadDockerIgnore(ignoreDir, root string) (dockerIgnore, error) {
 // parseDockerIgnore compiles .dockerignore lines. A UTF-8 BOM is stripped
 // (the Docker CLI strips it, and without this the first rule would carry the
 // BOM and never match). Blank lines and comments are skipped; a leading `!`
-// negates (re-includes); a leading or trailing `/` is normalised away, so
-// `cache/` matches a path named `cache` whether or not it is a directory,
-// matching Docker's Clean. Pattern syntax is Docker's subset of shell globs
-// (see matchContextPattern).
+// negates (re-includes); the pattern is path.Clean-ed like Docker, so `cache/`,
+// `./cache`, `a//b` and `a/./b` normalise, and patterns escaping the root are
+// dropped. Pattern syntax is Docker's subset of shell globs (see
+// matchContextPattern).
 func parseDockerIgnore(content string) dockerIgnore {
 	content = strings.TrimPrefix(content, "\ufeff")
 	compiled := dockerIgnore{}
@@ -368,10 +363,8 @@ func parseDockerIgnore(content string) dockerIgnore {
 				continue
 			}
 		}
-		line = strings.TrimRight(line, "/")
-		line = strings.TrimPrefix(line, "./")
-		line = strings.TrimPrefix(line, "/")
-		if line == "" {
+		line = strings.TrimPrefix(path.Clean(line), "/")
+		if line == "" || line == "." || line == ".." || strings.HasPrefix(line, "../") {
 			continue
 		}
 		parsed.pattern = line
@@ -381,34 +374,43 @@ func parseDockerIgnore(content string) dockerIgnore {
 }
 
 // ignored reports whether rel (slash-separated, relative to the ignore root) is
-// excluded. A pattern that matches any ancestor excludes the whole subtree,
-// and a later negated pattern that matches the path or an ancestor re-includes
-// it, so `docs` + `!docs/keep.md` keeps `docs/keep.md` (the Docker behaviour).
+// excluded. Patterns are evaluated in file order; a pattern matches when it
+// matches the path or any of its ancestors, and the last matching pattern in
+// file order decides. So `docs` + `!docs/keep.md` keeps `docs/keep.md`, while
+// `!important/keep.txt` + `important` excludes `important/keep.txt` (the later
+// ancestor exclusion wins) — both matching the Docker CLI.
 func (d dockerIgnore) ignored(rel string) bool {
-	parts := strings.Split(rel, "/")
+	prefixes := pathPrefixes(rel)
 	excluded := false
 	matched := false
-	for i := 1; i <= len(parts); i++ {
-		if match := d.lastMatch(strings.Join(parts[:i], "/")); match.set {
-			excluded = match.excluded
-			matched = true
+	for _, p := range d.patterns {
+		if !matchesAnyPrefix(p.pattern, prefixes) {
+			continue
 		}
+		excluded = !p.negate
+		matched = true
 	}
 	return matched && excluded
 }
 
-// lastMatch evaluates every pattern against one path, letting the last matching
-// pattern decide.
-func (d dockerIgnore) lastMatch(rel string) ignoreMatch {
-	var out ignoreMatch
-	for _, p := range d.patterns {
-		if !matchContextPattern(p.pattern, rel) {
-			continue
-		}
-		out.set = true
-		out.excluded = !p.negate
+// pathPrefixes returns rel and each of its ancestors, shallowest first.
+func pathPrefixes(rel string) []string {
+	parts := strings.Split(rel, "/")
+	prefixes := make([]string, 0, len(parts))
+	for i := 1; i <= len(parts); i++ {
+		prefixes = append(prefixes, strings.Join(parts[:i], "/"))
 	}
-	return out
+	return prefixes
+}
+
+// matchesAnyPrefix reports whether pattern matches any prefix.
+func matchesAnyPrefix(pattern string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if matchContextPattern(pattern, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchContextPattern matches a Docker ignore pattern against a

@@ -336,6 +336,78 @@ func TestDockerfileBuildDockerignoreOracleE2E(t *testing.T) {
 	}
 }
 
+// TestDockerfileBuildDockerignoreOrderE2E is the round-2 U2 oracle: a later
+// ancestor exclusion must beat an earlier full-path negation, matching the
+// Docker CLI.
+func TestDockerfileBuildDockerignoreOrderE2E(t *testing.T) {
+	if os.Getenv("GOTHAM_E2E") != "1" {
+		t.Skip("set GOTHAM_E2E=1 to run live Docker builds")
+	}
+	builder := requireDocker(t)
+
+	cases := []struct {
+		name     string
+		ignore   string
+		files    map[string]string
+		excluded []string
+		included []string
+	}{
+		{
+			name:     "negation then directory",
+			ignore:   "!important/keep.txt\nimportant\n",
+			files:    map[string]string{"important/keep.txt": "x\n"},
+			excluded: []string{"important/keep.txt"},
+		},
+		{
+			name:     "negation then glob ancestor",
+			ignore:   "!**\nnode_modules\n",
+			files:    map[string]string{"node_modules/x": "x\n", "app.js": "y\n"},
+			excluded: []string{"node_modules/x"},
+			included: []string{"app.js"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTestFile(t, filepath.Join(dir, "Dockerfile"), "FROM scratch\nCOPY . /app\n")
+			writeTestFile(t, filepath.Join(dir, ".dockerignore"), tc.ignore)
+			for name, content := range tc.files {
+				writeTestFile(t, filepath.Join(dir, filepath.FromSlash(name)), content)
+			}
+
+			files := buildContextImageE2E(t, builder, dir)
+			for _, name := range tc.excluded {
+				if _, ok := files["app/"+name]; ok {
+					t.Errorf("%s must be excluded", name)
+				}
+			}
+			for _, name := range tc.included {
+				if _, ok := files["app/"+name]; !ok {
+					t.Errorf("%s must be included", name)
+				}
+			}
+		})
+	}
+}
+
+// buildContextImageE2E builds dir through the local builder and returns the
+// paths in the image's /app.
+func buildContextImageE2E(t *testing.T, builder *LocalDockerBuilder, dir string) map[string]struct{} {
+	t.Helper()
+	contextTar, err := buildContextTar(contextSpec{root: dir})
+	if err != nil {
+		t.Fatalf("buildContextTar: %v", err)
+	}
+	ref := "gotham/e2e-order:" + uuid.NewString()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, err := builder.Build(ctx, contextTar, ImageBuildOptions{Tag: ref, Dockerfile: "Dockerfile"}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Command("docker", "rmi", "-f", ref).Run() })
+	return exportedRootfsFiles(t, ref, "app")
+}
+
 // TestDockerfileBuildFailedStepLeavesNoContainerE2E is the live C1-5
 // regression: a failed RUN step must not leave an intermediate container.
 func TestDockerfileBuildFailedStepLeavesNoContainerE2E(t *testing.T) {

@@ -292,47 +292,53 @@ func (s *ServerService) ResetHostKey(ctx context.Context, id uuid.UUID) (*Server
 	if err != nil {
 		return nil, fmt.Errorf("clear host key: %w", err)
 	}
-	s.logger.Info("servers: host key pin reset", "server_id", id.String(), "actor_team_id", actorTeamID(ctx))
+	scope := teams.ScopeFor(ctx, uuid.Nil)
+	s.logger.Info("servers: host key pin reset",
+		"server_id", id.String(),
+		"actor_team_id", scope.TeamID.String(),
+		"actor_user_id", scope.UserID.String(),
+	)
 	return serverFromRow(updated), nil
 }
 
 // pinHostKey persists a first-use host key fingerprint with compare-and-set
-// semantics. When the row was pinned in the meantime (a racing validation, or a
-// reset-then-repin), it re-reads the row and fails closed unless the stored
-// fingerprint matches the observed one.
+// semantics. When the CAS affects 0 rows the node was pinned (or unpinned)
+// concurrently: it re-reads and either accepts a stored match, fails closed on
+// a mismatch, or retries once when the row was cleared in the window. A pin
+// that never lands is an error, so a node is never reported ready un-pinned.
 func (s *ServerService) pinHostKey(ctx context.Context, id uuid.UUID, fingerprint string) error {
-	if _, err := s.store.PinServerHostKey(ctx, sqlc.PinServerHostKeyParams{
-		ID:                 pgUUID(id),
-		HostKeyFingerprint: &fingerprint,
-	}); err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := s.store.PinServerHostKey(ctx, sqlc.PinServerHostKeyParams{
+			ID:                 pgUUID(id),
+			HostKeyFingerprint: &fingerprint,
+		}); err == nil {
+			// The fingerprint is public; log it so operators can audit the
+			// first pin. A routine pin is Info; only resets/mismatches Warn.
+			s.logger.Info("servers: host key pinned on first use",
+				"server_id", id.String(),
+				"host_key_fingerprint", fingerprint,
+			)
+			return nil
+		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("persist host key fingerprint: %w", err)
 		}
-		// Lost the race: another writer pinned the node first.
+
+		// Lost the CAS: another writer touched the row first.
 		row, readErr := s.store.GetServerByID(ctx, pgUUID(id))
 		if readErr != nil {
 			return fmt.Errorf("persist host key fingerprint: %w", readErr)
 		}
-		if stored := fingerprintOf(row.HostKeyFingerprint); stored != "" && stored != fingerprint {
+		switch stored := fingerprintOf(row.HostKeyFingerprint); {
+		case stored == fingerprint:
+			return nil // someone else pinned the same key: benign
+		case stored != "":
 			return fmt.Errorf("host key changed while pinning: got %s, want %s", fingerprint, stored)
+		default:
+			// The row was cleared in the window (an operator reset landed):
+			// loop and re-run the CAS so the pin is not silently skipped.
 		}
-		return nil
 	}
-	// The fingerprint is public; log it so operators can audit the first pin.
-	s.logger.Warn("servers: host key pinned on first use",
-		"server_id", id.String(),
-		"host_key_fingerprint", fingerprint,
-	)
-	return nil
-}
-
-// actorTeamID renders the caller's active team for audit logs, or "" when there
-// is no team scope.
-func actorTeamID(ctx context.Context) string {
-	if teamID := teams.ScopeFor(ctx, uuid.Nil).TeamID; teamID != uuid.Nil {
-		return teamID.String()
-	}
-	return ""
+	return fmt.Errorf("persist host key fingerprint: node %s was cleared repeatedly while pinning", id)
 }
 
 // AddPrivateKey encrypts and stores an SSH private key.

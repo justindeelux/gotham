@@ -249,6 +249,68 @@ func TestServicePinHostKeyIsCompareAndSet(t *testing.T) {
 	}
 }
 
+// TestServiceValidateFailsClosedWhenPinWriteFails proves Validate's wiring: a
+// pin write that fails during a first-use validation returns ErrValidation and
+// leaves the node not-ready, rather than reporting success behind an
+// unpersisted pin.
+func TestServiceValidateFailsClosedWhenPinWriteFails(t *testing.T) {
+	service, st := newTestService(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	addr, _, stop := startSSHProbeServer(t, "unused", false)
+	defer stop()
+	host, port := target(t, addr)
+
+	key, err := service.AddPrivateKey(ctx, "cas-fail-key", string(testPrivateKeyPEM(t)))
+	if err != nil {
+		t.Fatalf("AddPrivateKey: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM private_keys WHERE id = $1", pgUUID(key.ID)); err != nil {
+			t.Logf("cleanup delete private key: %v", err)
+		}
+	})
+
+	created, err := service.Add(ctx, uuid.New(), "pinfail-node", host, port, "root", key.ID)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if err := st.DeleteServer(cleanupCtx, pgUUID(created.ID)); err != nil {
+			t.Logf("cleanup delete server: %v", err)
+		}
+	})
+
+	// Force every pin write to fail for this validation.
+	st.BeforePinServerHostKey = func() error { return errors.New("pin write forced to fail") }
+	t.Cleanup(func() { st.BeforePinServerHostKey = nil })
+
+	_, err = service.Validate(ctx, created.ID, ValidateAuth{})
+	if err == nil {
+		t.Fatal("Validate reported success although the pin write failed")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Errorf("err = %v, want it wrapped in ErrValidation", err)
+	}
+
+	fetched, err := service.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if fetched.Status == StatusReady {
+		t.Errorf("status = %q, want not-ready after a failed pin write", fetched.Status)
+	}
+	if fetched.HostKeyFingerprint != nil {
+		t.Errorf("HostKeyFingerprint = %v, want nil (no pin persisted)", fetched.HostKeyFingerprint)
+	}
+}
+
 // TestServiceValidateMissingServer checks that validating an unknown server
 // returns ErrNotFound rather than an SSH error.
 func TestServiceValidateMissingServer(t *testing.T) {

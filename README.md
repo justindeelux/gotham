@@ -185,6 +185,26 @@ a few operational knobs directly from the environment:
 
 ---
 
+## 3.1 Host-key trust (upgrade note)
+
+Gotham verifies the host key of every remote it talks to. This is a behaviour
+change for existing installations; the failure mode is fail-closed.
+
+| Situation | After upgrade |
+|---|---|
+| **Password-auth node**, first validation | 422 `"ssh: host … is not pinned"`. Send `trust_host_key: true` on `POST /v1/servers/{id}/validate` to accept and pin the key once. Later validations need no flag. |
+| **Key-auth node**, first validation | Transparently TOFU-pins the host key. Later validations fail closed if the key changes; reset with `DELETE /v1/servers/{id}/host-key` and revalidate. |
+| **Keyed clone** from github.com, gitlab.com, bitbucket.org, `ssh.github.com:443` | Works — those keys are embedded. |
+| **Keyed clone** from any other host (e.g. GitHub Enterprise, self-hosted GitLab) | Fails closed: add the host's key to the file named by `GOTHAM_KNOWN_HOSTS` (0600, operator-owned) and retry. |
+
+A first TOFU pin is logged (`servers: host key pinned on first use` with the
+fingerprint) so operators can audit which key was trusted. There is an inherent
+residual — an on-path attacker present at the *very first* validation, before any
+pin exists, can win the pin; revalidate over a trusted path and reset if you
+suspect it.
+
+---
+
 ## 4. Development Plan
 
 Development is phased — one file per phase in `docs/plan/`. See

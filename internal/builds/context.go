@@ -67,13 +67,21 @@ type contextSpec struct {
 // preserved as symlink entries, and the total size is bounded so a huge
 // repository cannot exhaust the control plane's memory.
 func buildContextTar(spec contextSpec) ([]byte, error) {
+	data, _, err := buildContextTarPeak(spec)
+	return data, err
+}
+
+// buildContextTarPeak is buildContextTar plus the peak number of retained
+// per-pattern match-state values, which the bounded-memory regression test
+// asserts stays O(tree depth).
+func buildContextTarPeak(spec contextSpec) ([]byte, int, error) {
 	dir := spec.root
 	info, err := os.Stat(dir)
 	if err != nil {
-		return nil, fmt.Errorf("%w: stat %s: %v", ErrValidation, dir, err)
+		return nil, 0, fmt.Errorf("%w: stat %s: %v", ErrValidation, dir, err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("%w: %s is not a directory", ErrValidation, dir)
+		return nil, 0, fmt.Errorf("%w: %s is not a directory", ErrValidation, dir)
 	}
 
 	limit := spec.maxBytes
@@ -82,7 +90,7 @@ func buildContextTar(spec contextSpec) ([]byte, error) {
 	}
 	ignore, err := loadDockerIgnore(spec.ignoreDir, dir)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	// Patterns come from ignoreDir but paths are packed relative to root, so
 	// match against the path rebased onto ignoreDir.
@@ -168,7 +176,7 @@ func buildContextTar(spec contextSpec) ([]byte, error) {
 		}
 	})
 	if err != nil {
-		return nil, fmt.Errorf("builds: pack context %s: %w", dir, err)
+		return nil, 0, fmt.Errorf("builds: pack context %s: %w", dir, err)
 	}
 
 	for _, name := range sortedKeys(spec.extra) {
@@ -179,17 +187,17 @@ func buildContextTar(spec contextSpec) ([]byte, error) {
 			Size:     int64(len(content)),
 			Typeflag: tar.TypeReg,
 		}); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if _, err := tw.Write(content); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
 	if err := tw.Close(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return buf.Bytes(), nil
+	return buf.Bytes(), dirStates.peakRetained(), nil
 }
 
 // ignorePrefix returns the slash-separated path from ignoreDir to root, or ""
@@ -419,26 +427,19 @@ func parseDockerIgnore(content string) dockerIgnore {
 // `!important/keep.txt` keep it — both verified against the Docker CLI.
 func (d dockerIgnore) matchState(rel string, parent []bool) (bool, []bool) {
 	state := make([]bool, len(d.patterns))
-	excluded := false
-	for i, p := range d.patterns {
-		matched := i < len(parent) && parent[i]
-		if !matched {
-			if p.negate != excluded {
-				continue
-			}
-			matched = matchContextPattern(p.pattern, rel)
-		}
-		state[i] = matched
-		if matched {
-			excluded = !p.negate
-		}
-	}
+	excluded := d.match(rel, parent, state)
 	return excluded, state
 }
 
 // excludedOnly is matchState without allocating the per-pattern state, for
 // entries (files and symlinks) whose children never need it.
 func (d dockerIgnore) excludedOnly(rel string, parent []bool) bool {
+	return d.match(rel, parent, nil)
+}
+
+// match is the shared state machine. It writes each pattern's result into state
+// when state is non-nil; a nil state keeps the file path allocation-free.
+func (d dockerIgnore) match(rel string, parent, state []bool) bool {
 	excluded := false
 	for i, p := range d.patterns {
 		matched := i < len(parent) && parent[i]
@@ -447,6 +448,9 @@ func (d dockerIgnore) excludedOnly(rel string, parent []bool) bool {
 				continue
 			}
 			matched = matchContextPattern(p.pattern, rel)
+		}
+		if state != nil {
+			state[i] = matched
 		}
 		if matched {
 			excluded = !p.negate
@@ -461,6 +465,8 @@ func (d dockerIgnore) excludedOnly(rel string, parent []bool) bool {
 // ever live and memory is O(tree depth), not O(number of directories).
 type dirStateChain struct {
 	states [][]bool
+	total  int
+	peak   int
 }
 
 // parent returns the match state of the directory at depth-1 (nil at the root).
@@ -471,22 +477,24 @@ func (c *dirStateChain) parent(depth int) []bool {
 	return nil
 }
 
-// set stores the match state for a directory at the given depth.
+// set stores the match state for a directory at the given depth, replacing any
+// stale state at that depth from a previous subtree.
 func (c *dirStateChain) set(depth int, state []bool) {
 	for len(c.states) <= depth {
 		c.states = append(c.states, nil)
 	}
+	c.total -= len(c.states[depth])
 	c.states[depth] = state
+	c.total += len(state)
+	if c.total > c.peak {
+		c.peak = c.total
+	}
 }
 
-// retained reports the number of match-state values currently held; used by the
-// bounded-memory regression test.
-func (c *dirStateChain) retained() int {
-	total := 0
-	for _, state := range c.states {
-		total += len(state)
-	}
-	return total
+// peakRetained reports the greatest number of match-state values held at once,
+// which the bounded-memory test asserts stays O(tree depth × patterns).
+func (c *dirStateChain) peakRetained() int {
+	return c.peak
 }
 
 // ignoredPath reports whether a standalone path (for example a symlink's
@@ -513,23 +521,38 @@ func pathPrefixes(rel string) []string {
 // matchContextPattern matches a Docker ignore pattern against a
 // context-relative path. `*` and `?` match within one path segment and `**`
 // matches any number of segments (including none), which covers Docker's
-// documented syntax. A trailing `/**` is a prefix match on `dir/` (moby's
-// prefixMatch): it matches everything under dir but not dir itself, so
-// `secrets/**` + `!secrets` keeps the subtree excluded. Escapes and
-// `[`-classes beyond path.Match are not supported; a pattern that path.Match
-// cannot parse simply does not match.
+// documented syntax. A trailing `/**` matches a proper ancestor of rel (moby's
+// prefixMatch / `prefix/.*` regexp), so it matches everything under the prefix
+// but never a path equal to the prefix itself. Escapes and `[`-classes beyond
+// path.Match are not supported; a pattern that path.Match cannot parse simply
+// does not match.
 func matchContextPattern(pattern, rel string) bool {
 	pattern = strings.TrimRight(pattern, "/")
 	if pattern == "" {
 		return false
 	}
-	// A purely literal trailing /**: moby compiles it to prefixMatch. A glob in
-	// the prefix (e.g. `**/**` or `*.js/**`) instead compiles to a regexp and is
-	// left to matchSegments.
-	if dir, ok := strings.CutSuffix(pattern, "/**"); ok && dir != "" && !strings.ContainsAny(dir, "*?[") {
-		return strings.HasPrefix(rel, dir+"/")
+	if prefix, ok := strings.CutSuffix(pattern, "/**"); ok && prefix != "" {
+		// A prefix already ending in a ** segment has absorbed the separator,
+		// so the pattern is equivalent to that prefix.
+		if prefix == "**" || strings.HasSuffix(prefix, "/**") {
+			return matchContextPattern(prefix, rel)
+		}
+		return matchesProperAncestor(prefix, rel)
 	}
 	return matchSegments(strings.Split(pattern, "/"), strings.Split(rel, "/"))
+}
+
+// matchesProperAncestor reports whether prefix matches a proper ancestor of
+// rel, so a trailing /** never matches rel itself.
+func matchesProperAncestor(prefix, rel string) bool {
+	segments := strings.Split(rel, "/")
+	pattern := strings.Split(prefix, "/")
+	for i := 1; i < len(segments); i++ {
+		if matchSegments(pattern, segments[:i]) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchSegments matches pattern segments against name segments with a

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -602,30 +603,72 @@ func TestBuildContextTarDockerIgnoreTrailingDoubleStar(t *testing.T) {
 			t.Error("a/** must match a/b")
 		}
 	})
+
+	// Round-5 U1: a glob prefix must also require a proper ancestor, so
+	// `*.js/**` does not match a file named `a.js` (Docker includes it).
+	t.Run("glob prefix does not match the prefix itself", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTestFile(t, filepath.Join(dir, ".dockerignore"), "*.js/**\n")
+		writeTestFile(t, filepath.Join(dir, "a.js"), "file\n")
+		writeTestFile(t, filepath.Join(dir, "dir.js", "x"), "x\n")
+
+		data, err := buildContextTar(contextSpec{root: dir})
+		if err != nil {
+			t.Fatalf("buildContextTar: %v", err)
+		}
+		files := readContextTar(t, data)
+		if _, ok := files["a.js"]; !ok {
+			t.Error("*.js/** must not match a.js itself")
+		}
+		if _, ok := files["dir.js/x"]; ok {
+			t.Error("*.js/** must match dir.js/x")
+		}
+	})
+
+	// Round-5 U1 fail-open side: `*.js/**` + `!d.js` must still exclude d.js/x.
+	t.Run("glob prefix with negation excludes the child", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTestFile(t, filepath.Join(dir, ".dockerignore"), "*.js/**\n!d.js\n")
+		writeTestFile(t, filepath.Join(dir, "d.js", "x"), "x\n")
+
+		data, err := buildContextTar(contextSpec{root: dir})
+		if err != nil {
+			t.Fatalf("buildContextTar: %v", err)
+		}
+		if _, ok := readContextTar(t, data)["d.js/x"]; ok {
+			t.Error("*.js/** + !d.js must keep d.js/x excluded")
+		}
+	})
 }
 
-// TestDirStateChainBoundedMemory is the round-4 U2 regression: the walk keeps
-// only the current ancestor chain, so the retained match state is bounded by
-// tree depth, not by the number of directories (which is attacker-controlled
-// through the repository layout).
-func TestDirStateChainBoundedMemory(t *testing.T) {
-	const patterns = 4000
-	var chain dirStateChain
+// TestBuildContextTarWalkerStateBounded is the round-4/5 U2 regression: it
+// drives the real walker over a wide tree and asserts the peak retained
+// per-pattern match state stays O(tree depth), not O(number of directories).
+func TestBuildContextTarWalkerStateBounded(t *testing.T) {
+	const (
+		dirs     = 200
+		patterns = 1000
+	)
+	dir := t.TempDir()
+	for i := 0; i < dirs; i++ {
+		writeTestFile(t, filepath.Join(dir, fmt.Sprintf("d%04d", i), "f.txt"), "x")
+	}
+	var ignore strings.Builder
+	for i := 0; i < patterns; i++ {
+		fmt.Fprintf(&ignore, "pattern-%d.txt\n", i)
+	}
+	writeTestFile(t, filepath.Join(dir, ".dockerignore"), ignore.String())
 
-	// A wide, shallow tree: 2000 sibling directories at depth 0.
-	for i := 0; i < 2000; i++ {
-		chain.set(0, make([]bool, patterns))
+	_, peak, err := buildContextTarPeak(contextSpec{root: dir})
+	if err != nil {
+		t.Fatalf("buildContextTarPeak: %v", err)
 	}
-	if got := chain.retained(); got != patterns {
-		t.Fatalf("retained = %d; want %d (one state at depth 0, not one per directory)", got, patterns)
+	// The walker must have retained at least the depth-0 state (otherwise the
+	// probe is not observing it), and at most a couple of pattern-sized states.
+	if peak < patterns {
+		t.Fatalf("peak retained match state = %d; want >= %d (walker did not record state)", peak, patterns)
 	}
-
-	// A deep chain retains one state per depth.
-	const depth = 50
-	for d := 1; d < depth; d++ {
-		chain.set(d, make([]bool, patterns))
-	}
-	if got, want := chain.retained(), depth*patterns; got != want {
-		t.Fatalf("retained = %d; want %d (bounded by depth)", got, want)
+	if peak > 2*patterns {
+		t.Fatalf("peak retained match state = %d; want <= %d (O(depth), not O(directories))", peak, 2*patterns)
 	}
 }

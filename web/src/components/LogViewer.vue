@@ -158,6 +158,13 @@ function handleMessage(message: WebSocketMessage): void {
     return;
   }
 
+  // End of a replay batch: stop accepting tagged history so a later viewer's
+  // replay is never rendered on top of this viewer's lines (round-4 U1).
+  if (message.payload?.type === "replay_end") {
+    acceptReplay = false;
+    return;
+  }
+
   if (message.kind === "notice") {
     appendLine({
       id: ++lineId,
@@ -184,12 +191,17 @@ function handleMessage(message: WebSocketMessage): void {
   }
 
   const ts = formatTimestamp(payload?.ts, message.receivedAt);
-  // Replayed history must not duplicate lines on a viewer that already has
-  // content (a reconnect re-POSTs the start, and a second viewer's replay is
-  // broadcast to the room). The decision is made once per start, so all frames
-  // of one replay render together for a late viewer (round-3 U1).
-  if (payload?.replay === true && !acceptReplay) {
-    return;
+  if (payload?.replay === true) {
+    // Accept tagged history only for the batch this viewer's own start
+    // requested. The server's replay_end marker (or the first live frame
+    // below) closes the window, so a later viewer's batch is never rendered
+    // here (round-4 U1).
+    if (!acceptReplay) {
+      return;
+    }
+  } else {
+    // A live frame ends the replay window even if no marker arrives.
+    acceptReplay = false;
   }
   for (const piece of splitLines(text)) {
     appendLine({ id: ++lineId, ts, text: piece, kind: "line" });

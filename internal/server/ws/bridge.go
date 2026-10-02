@@ -76,6 +76,13 @@ func resumedNotice(channel string) []byte {
 	return payload
 }
 
+// replayEndNotice frames the end of a replay batch so a client can close its
+// accept-replay window (round-4 U1).
+func replayEndNotice(channel string) []byte {
+	payload, _ := json.Marshal(Message{Channel: channel, Type: TypeReplayEnd})
+	return payload
+}
+
 // logPayload frames one log chunk for WS clients.
 func logPayload(channel string, data []byte) []byte {
 	payload, _ := json.Marshal(Message{Channel: channel, Type: TypeLog, Data: string(data)})

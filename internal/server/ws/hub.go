@@ -28,6 +28,9 @@ const (
 	// TypeResumed tells subscribers that a previously interrupted log stream is
 	// delivering again after the transport recovered (round-2 U3).
 	TypeResumed = "resumed"
+	// TypeReplayEnd closes a replay batch: clients stop accepting tagged history
+	// after it (round-4 U1).
+	TypeReplayEnd = "replay_end"
 	// TypePing is the server heartbeat. It is a no-op for clients that do not
 	// know the type; its purpose is to keep a write in flight so a dead peer
 	// fails the connection's write deadline (see handler.serveConn).

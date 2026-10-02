@@ -137,11 +137,13 @@ func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID
 		// The caller subscribes before starting (see LogViewer), so the replay
 		// reaches the new viewer. Frames are tagged Replay so a viewer that
 		// already has content skips them instead of duplicating history
-		// (round-2 U1).
+		// (round-2 U1); the end marker closes the batch so an existing viewer
+		// never renders a later batch (round-4 U1).
 		for _, msg := range replay {
 			msg.Replay = true
 			_ = rt.pub.Publish(rt.ctx, channel, mustJSON(msg))
 		}
+		_ = rt.pub.Publish(rt.ctx, channel, replayEndNotice(channel))
 		return nil
 	}
 	ctx, cancel := context.WithCancel(rt.ctx)

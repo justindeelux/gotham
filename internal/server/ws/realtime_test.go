@@ -53,37 +53,53 @@ func TestStartLogStreamIdempotentAndCleansUp(t *testing.T) {
 	channel := LogChannel("srv-rt", "ctr")
 	client := rt.Hub.newClient()
 	rt.Hub.subscribe(client, channel)
+	waitForCondition(t, 2*time.Second, "subscription", func() bool {
+		return rt.Hub.Subscribers(channel) == 1
+	})
 
-	streamer := fakeStreamer{stream: &fakeLogStream{
-		chunks: [][]byte{[]byte("hello\n")},
-		fail:   io.EOF,
-	}}
-	opener := func(context.Context) (LogStreamer, io.Closer, error) { return streamer, nil, nil }
+	// A live stream (one chunk, then stays open) so idempotency is observed
+	// before it ends.
+	opener := func(context.Context) (LogStreamer, io.Closer, error) { return tailStreamer{}, nil, nil }
 	req := &agentv1.StreamLogsRequest{ContainerId: "ctr", Follow: true}
 
 	if err := rt.StartLogStream(opener, "srv-rt", "ctr", req); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
+	if msg := nextClientFrame(t, client); msg.Type != TypeLog || msg.Data != "tail\n" {
+		t.Fatalf("frame = %+v, want a log frame", msg)
+	}
+	// A repeat start while the stream is live shares it (idempotent).
 	if err := rt.StartLogStream(opener, "srv-rt", "ctr", req); err != nil {
 		t.Fatalf("second StartLogStream: %v", err)
 	}
 	if got := rt.ActiveStreams(); got != 1 {
 		t.Errorf("ActiveStreams = %d, want 1 (idempotent)", got)
 	}
+}
 
-	select {
-	case payload := <-client.send:
-		var msg Message
-		if err := json.Unmarshal(payload, &msg); err != nil {
-			t.Fatalf("unmarshal frame: %v", err)
-		}
-		if msg.Type != TypeLog || msg.Data != "hello\n" {
-			t.Errorf("frame = %+v, want a log frame with %q", msg, "hello\n")
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("no log frame reached the hub subscriber")
+// TestStreamRemovedAfterEOF verifies a stream that ends is removed from the
+// active set.
+func TestStreamRemovedAfterEOF(t *testing.T) {
+	rt := mountFallback(t)
+
+	channel := LogChannel("srv-rt", "eof")
+	client := rt.Hub.newClient()
+	rt.Hub.subscribe(client, channel)
+	waitForCondition(t, 2*time.Second, "subscription", func() bool {
+		return rt.Hub.Subscribers(channel) == 1
+	})
+
+	streamer := fakeStreamer{stream: &fakeLogStream{
+		chunks: [][]byte{[]byte("hello\n")},
+		fail:   io.EOF,
+	}}
+	opener := func(context.Context) (LogStreamer, io.Closer, error) { return streamer, nil, nil }
+	if err := rt.StartLogStream(opener, "srv-rt", "eof", &agentv1.StreamLogsRequest{ContainerId: "eof"}); err != nil {
+		t.Fatalf("StartLogStream: %v", err)
 	}
-
+	if msg := nextClientFrame(t, client); msg.Type != TypeLog || msg.Data != "hello\n" {
+		t.Fatalf("frame = %+v, want a log frame with %q", msg, "hello\n")
+	}
 	waitForCondition(t, 3*time.Second, "stream cleanup", func() bool {
 		return rt.ActiveStreams() == 0
 	})
@@ -311,6 +327,47 @@ func TestReplayEmitsAllBufferedFrames(t *testing.T) {
 		if msg.Type != TypeLog || msg.Data != want || !msg.Replay {
 			t.Fatalf("replay frame %d = %+v, want tagged %q", i, msg, want)
 		}
+	}
+}
+
+// TestReplayEndMarkerClosesTheBatch is the round-4 U1 server guard: a replay
+// batch is terminated by an explicit end marker, so the client can close its
+// accept-replay window and never render a later viewer's batch.
+func TestReplayEndMarkerClosesTheBatch(t *testing.T) {
+	rt := mountFallback(t)
+
+	channel := LogChannel("srv-rt", "batch")
+	opener := func(context.Context) (LogStreamer, io.Closer, error) { return tailStreamer{}, nil, nil }
+	req := &agentv1.StreamLogsRequest{ContainerId: "batch"}
+
+	first := rt.Hub.newClient()
+	rt.Hub.subscribe(first, channel)
+	waitForCondition(t, 2*time.Second, "first subscription", func() bool {
+		return rt.Hub.Subscribers(channel) == 1
+	})
+	if err := rt.StartLogStream(opener, "srv-rt", "batch", req); err != nil {
+		t.Fatalf("StartLogStream: %v", err)
+	}
+	if live := nextClientFrame(t, first); live.Type != TypeLog || live.Replay {
+		t.Fatalf("first viewer frame = %+v, want an untagged live frame", live)
+	}
+
+	late := rt.Hub.newClient()
+	rt.Hub.subscribe(late, channel)
+	waitForCondition(t, 2*time.Second, "late subscription", func() bool {
+		return rt.Hub.Subscribers(channel) == 2
+	})
+	if err := rt.StartLogStream(opener, "srv-rt", "batch", req); err != nil {
+		t.Fatalf("repeat StartLogStream: %v", err)
+	}
+
+	tagged := nextClientFrame(t, late)
+	if tagged.Type != TypeLog || !tagged.Replay {
+		t.Fatalf("replay frame = %+v, want a tagged log frame", tagged)
+	}
+	marker := nextClientFrame(t, late)
+	if marker.Type != TypeReplayEnd || marker.Channel != channel {
+		t.Fatalf("batch end frame = %+v, want %q on %q", marker, TypeReplayEnd, channel)
 	}
 }
 

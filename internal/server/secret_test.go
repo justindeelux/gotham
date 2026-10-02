@@ -18,6 +18,10 @@ func TestEnsureSecretKey(t *testing.T) {
 		t.Fatal("ensureSecretKey(\"\") returned an empty key")
 	}
 
+	if got, generated := ensureSecretKey("   "); !generated || got == "" || got == "   " {
+		t.Fatalf("ensureSecretKey(whitespace) = (%q, %v), want a fresh generated key", got, generated)
+	}
+
 	other, _ := ensureSecretKey("")
 	if other == got {
 		t.Fatal("ensureSecretKey(\"\") returned the same ephemeral key twice")

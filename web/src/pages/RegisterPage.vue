@@ -211,28 +211,18 @@ async function handleSubmit(): Promise<void> {
   <div class="auth-page">
     <div class="auth-card">
       <NSpace vertical :size="16">
-        <div
+        <nav
           v-if="authStore.registrationOpen"
           class="auth-switch"
-          role="tablist"
           aria-label="Sign in or create an account"
         >
-          <RouterLink
-            :to="authSwitchTarget(route, 'login')"
-            role="tab"
-            aria-selected="false"
-          >
+          <RouterLink :to="authSwitchTarget(route, 'login')">
             Sign in
           </RouterLink>
-          <RouterLink
-            to="/register"
-            class="is-active"
-            role="tab"
-            aria-selected="true"
-          >
+          <RouterLink to="/register" class="is-active" aria-current="page">
             Create account
           </RouterLink>
-        </div>
+        </nav>
 
         <div>
           <h2 class="auth-title">Create account</h2>

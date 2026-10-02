@@ -19,13 +19,12 @@ import { useServersStore } from "../stores/servers";
 import { relativeTime } from "../utils/format";
 
 /**
- * Deployment is the typed seam for the future deployments store
- * (Phase 4). The recent-deploys widget renders an explicit empty state
- * until that store exists — never fabricated rows.
+ * Deployment is the typed seam for a deployments store that does not exist
+ * yet. The recent-deploys widget renders an explicit empty state until that
+ * store exists — never fabricated rows.
  *
- * TODO(phase-4): add web/src/stores/deployments.ts backed by the
- * deployments API, replace `deployments` below with live data, and
- * remove the empty state.
+ * TODO: add web/src/stores/deployments.ts backed by the deployments API,
+ * replace `deployments` below with live data, and remove the empty state.
  */
 interface Deployment {
   id: string;
@@ -176,15 +175,15 @@ onMounted(() => {
       </NCard>
 
       <NCard class="kpi" title="Running applications" size="small">
-        <NEmpty size="small" description="No applications yet — ships in Phase 4" />
+        <NEmpty size="small" description="No applications data yet" />
       </NCard>
 
       <NCard class="kpi" title="Deploys in 24h" size="small">
-        <NEmpty size="small" description="No deploys yet — ships in Phase 4" />
+        <NEmpty size="small" description="No deploy data yet" />
       </NCard>
 
       <NCard class="kpi" title="SSL certificates" size="small">
-        <NEmpty size="small" description="No certificates yet — ships in Phase 6" />
+        <NEmpty size="small" description="No certificate data yet" />
       </NCard>
     </div>
 
@@ -197,7 +196,7 @@ onMounted(() => {
         <NCard size="small">
           <NEmpty
             v-if="deployments.length === 0"
-            description="No deployments yet — ships in Phase 4"
+            description="No deployments yet"
           >
             <template #extra>
               <NText depth="3">
@@ -209,7 +208,7 @@ onMounted(() => {
           <NSpace vertical :size="12">
             <div class="card-foot">
               <NText depth="3">Queue: no data yet</NText>
-              <NText depth="3">Build pipeline ships in Phase 4</NText>
+              <NText depth="3">Build history is not wired up yet</NText>
             </div>
           </NSpace>
         </NCard>
@@ -350,7 +349,7 @@ onMounted(() => {
         <NCard size="small" title="Team activity" class="aside-card">
           <NEmpty
             size="small"
-            description="No team activity yet — ships in Phase 8"
+            description="No team activity yet"
           />
         </NCard>
 

@@ -7,7 +7,6 @@ import {
   NInput,
   NSpace,
   NText,
-  NTooltip,
   useMessage,
 } from "naive-ui";
 import type { FormInst, FormRules } from "naive-ui";
@@ -90,28 +89,18 @@ onMounted(() => {
   <div class="auth-page">
     <div class="auth-card">
       <NSpace vertical :size="16">
-        <div
+        <nav
           v-if="authStore.registrationOpen"
           class="auth-switch"
-          role="tablist"
           aria-label="Sign in or create an account"
         >
-          <RouterLink
-            to="/login"
-            class="is-active"
-            role="tab"
-            aria-selected="true"
-          >
+          <RouterLink to="/login" class="is-active" aria-current="page">
             Sign in
           </RouterLink>
-          <RouterLink
-            :to="authSwitchTarget(route, 'register')"
-            role="tab"
-            aria-selected="false"
-          >
+          <RouterLink :to="authSwitchTarget(route, 'register')">
             Create account
           </RouterLink>
-        </div>
+        </nav>
 
         <div>
           <h2 class="auth-title">Sign in</h2>
@@ -156,14 +145,8 @@ onMounted(() => {
           </NButton>
 
           <div class="auth-row">
-            <NTooltip trigger="hover">
-              <template #trigger>
-                <span class="auth-disabled-wrap">
-                  <NButton text disabled>Forgot password?</NButton>
-                </span>
-              </template>
-              Password reset is not available yet.
-            </NTooltip>
+            <NButton text disabled>Forgot password?</NButton>
+            <span class="auth-hint">Password reset is not available yet.</span>
           </div>
 
           <div class="auth-divider" aria-hidden="true">
@@ -248,13 +231,16 @@ onMounted(() => {
 
 .auth-row {
   display: flex;
-  justify-content: flex-start;
+  align-items: center;
+  gap: 8px;
   margin-top: 12px;
 }
 
-.auth-disabled-wrap {
-  display: inline-flex;
-  cursor: not-allowed;
+/* The reason the disabled control is inert is visible, not hover-only, so it
+   reaches keyboard and touch users too (B4-17). */
+.auth-hint {
+  font-size: var(--text-xs);
+  color: var(--muted);
 }
 
 .auth-divider {

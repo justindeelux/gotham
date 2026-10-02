@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -106,6 +107,12 @@ type ServerService struct {
 	updater   AgentUpdateOfferer
 	// agentUpdate is the agent version map and rollout marker (BE-9.2).
 	agentUpdate agentUpdateState
+
+	// metricMu guards lastMetricAt, the per-node timestamp of the last
+	// persisted time-series sample. It bounds an unauthenticated heartbeat
+	// flood's growth of server_metrics without touching the live snapshot.
+	metricMu     sync.Mutex
+	lastMetricAt map[string]time.Time
 }
 
 // NewService builds a ServerService. When secret is empty an ephemeral
@@ -133,6 +140,7 @@ func NewService(cfg Config) *ServerService {
 		agentUpdate: agentUpdateState{
 			agents: map[string]AgentVersion{},
 		},
+		lastMetricAt: map[string]time.Time{},
 	}
 }
 
@@ -359,13 +367,21 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 }
 
 // RegisterNode handles an agent Register call: it finds or creates the server
-// for the node, records the reported capabilities, and issues an agent
-// certificate from the CA (when one is configured).
+// for the node, records the reported capabilities, and returns the CP version.
+//
+// It does not issue a certificate: a node certificate is only ever issued from
+// a CSR bound to the authenticated identity (Gateway.Register). A certificate
+// signed for a control-plane-generated key would be unusable because the CP
+// never hands that key over, so the no-CSR case returns no certificate and the
+// agent falls back to its own (self-signed) key.
 func (s *ServerService) RegisterNode(ctx context.Context, req *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error) {
-	if req == nil || strings.TrimSpace(req.GetNodeId()) == "" {
-		return nil, fmt.Errorf("%w: node_id is required", ErrValidation)
+	if req == nil {
+		return nil, fmt.Errorf("%w: request is required", ErrValidation)
 	}
 	nodeID := strings.TrimSpace(req.GetNodeId())
+	if err := validateNodeID(nodeID); err != nil {
+		return nil, err
+	}
 
 	row, err := s.store.GetServerByNodeID(ctx, &nodeID)
 	switch {
@@ -393,18 +409,8 @@ func (s *ServerService) RegisterNode(ctx context.Context, req *agentv1.RegisterR
 		return nil, fmt.Errorf("record agent info: %w", err)
 	}
 
-	var cert []byte
-	if s.authority != nil {
-		cert, err = s.authority.IssueAgentCert(nodeID)
-		if err != nil {
-			return nil, fmt.Errorf("issue agent certificate: %w", err)
-		}
-	} else {
-		s.logger.Warn("servers: no CA configured; agent registration returned no certificate", "node_id", nodeID)
-	}
-
 	s.logger.Info("servers: node registered", "node_id", nodeID, "server_id", updated.ID.String())
-	return &agentv1.RegisterResponse{Cert: cert, CpVersion: s.version}, nil
+	return &agentv1.RegisterResponse{CpVersion: s.version}, nil
 }
 
 // RecordHeartbeat records one heartbeat message from the node identified by

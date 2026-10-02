@@ -67,7 +67,17 @@ residuals — full detail in `deploy/README.md` → Known residuals:
 - [ ] **LOW-4 agent channel not mutual.** The gRPC listener accepts any peer
   (`VerifyClientCertIfGiven`); mutual TLS waits on the registration bootstrap
   acquiring a client credential. No bootstrap credential exists yet — the
-  remaining owner/design decision, not a polishing task.
+  remaining owner/design decision, not a polishing task. FX-3 hardened the
+  verifiable subset: CSR SANs are bound to the registered node identity, a
+  presented client certificate must match `req.NodeId`, node ids/SANs are capped
+  and Register/heartbeat are rate-limited per peer. The two residuals that still
+  need the bootstrap credential are: (a) the very first Register/heartbeat is
+  still self-asserted (metadata `node-id`) because it presents no client
+  certificate; and (b) **certificate revocation is absent** — there is no CRL or
+  OCSP and no revoked-serial set checked at agent-dial time, so a compromised
+  node certificate stays valid until it expires. The mitigration in place is the
+  shorter 90-day agent leaf (down from one year) plus the agent's re-registration
+  before expiry; a real revocation path is deferred with mutual TLS.
 - [x] **Release key rotation/revocation.** Closed in PR #92 (`0e63090`): a
   current + next key ring is embedded in both binaries, verification is
   fail-closed across the set, the release workflow validates/embeds the optional

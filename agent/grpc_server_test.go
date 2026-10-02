@@ -321,9 +321,10 @@ func TestDockerServerStreamLogs(t *testing.T) {
 
 func TestServerServeAndShutdown(t *testing.T) {
 	fake := &fakeDockerClient{containers: []*agentv1.ContainerInfo{{Id: "abc"}}}
-	// Development mode: no certificate and no CA → plaintext listener, which
-	// is what the control plane's insecure dial expects.
-	creds, err := ServerCredentials(nil, nil, "")
+	// Development mode: no certificate and no CA with the explicit insecure
+	// opt-in → plaintext listener on loopback, which is what the control
+	// plane's insecure development dial expects.
+	creds, err := ServerCredentials(nil, nil, "", true)
 	if err != nil {
 		t.Fatalf("ServerCredentials: %v", err)
 	}
@@ -365,4 +366,37 @@ func TestServerServeAndShutdown(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("server did not shut down")
 	}
+}
+
+// TestNewServerRefusesPlaintextOffLoopback is the FX-3 item-9 guard: a
+// plaintext listener must stay on loopback, while a TLS listener may bind
+// anywhere.
+func TestNewServerRefusesPlaintextOffLoopback(t *testing.T) {
+	fake := &fakeDockerClient{}
+
+	for _, addr := range []string{"0.0.0.0:0", ":0", "[::]:0"} {
+		if _, err := NewServer(addr, nil, NewDockerServer(fake, discardLogger()), discardLogger()); err == nil {
+			t.Errorf("NewServer(plaintext, %q) = nil error, want loopback refusal", addr)
+		}
+	}
+
+	server, err := NewServer("127.0.0.1:0", nil, NewDockerServer(fake, discardLogger()), discardLogger())
+	if err != nil {
+		t.Fatalf("NewServer(plaintext, loopback) = %v; want success", err)
+	}
+	t.Cleanup(func() { _ = server.ln.Close() })
+
+	certPEM, keyPEM, err := generateSelfSigned()
+	if err != nil {
+		t.Fatalf("generateSelfSigned: %v", err)
+	}
+	creds, err := ServerCredentials(certPEM, keyPEM, "", false)
+	if err != nil {
+		t.Fatalf("ServerCredentials: %v", err)
+	}
+	tlsServer, err := NewServer("0.0.0.0:0", creds, NewDockerServer(fake, discardLogger()), discardLogger())
+	if err != nil {
+		t.Fatalf("NewServer(TLS, wildcard) = %v; want success", err)
+	}
+	t.Cleanup(func() { _ = tlsServer.ln.Close() })
 }

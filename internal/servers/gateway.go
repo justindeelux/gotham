@@ -3,12 +3,14 @@ package servers
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,6 +61,11 @@ type Gateway struct {
 	logger     *slog.Logger
 	tlsEnabled bool
 	stopOnce   sync.Once
+
+	// Per-peer rate limits bound the unauthenticated Register/heartbeat
+	// surface. Tests may replace them with tighter limits.
+	registerLimiter  *peerRateLimiter
+	heartbeatLimiter *peerRateLimiter
 }
 
 // NewGateway builds the gRPC server and its transport credentials. When an
@@ -80,10 +87,12 @@ func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 	}
 
 	g := &Gateway{
-		addr:      addr,
-		authority: cfg.Authority,
-		service:   cfg.Service,
-		logger:    logger,
+		addr:             addr,
+		authority:        cfg.Authority,
+		service:          cfg.Service,
+		logger:           logger,
+		registerLimiter:  newPeerRateLimiter(registerRateLimit, registerBurst),
+		heartbeatLimiter: newPeerRateLimiter(heartbeatRateLimit, heartbeatBurst),
 	}
 
 	opts := make([]grpc.ServerOption, 0, 1)
@@ -158,15 +167,36 @@ func (g *Gateway) Addr() string {
 
 // Register handles an agent registration.
 //
-// When the agent supplies a CSR and this gateway has a CA, the certificate is
-// issued for the CSR's public key (and its SANs) instead of the node-id-only
-// fallback the service issues by default. The CSR is validated before the
-// registry is touched, so a malformed request fails without side effects. The
-// node identity recorded in the registry is always req.NodeId.
+// The node identity recorded in the registry is always req.NodeId, but it is
+// bound to the authenticated peer when one is available: a caller presenting a
+// client certificate whose identity differs is refused. When the agent also
+// supplies a CSR, the certificate is issued for req.NodeId's own public key
+// (the CSR's SANs must match it; see Authority.IssueAgentCertFromCSR) rather
+// than the CSR's self-asserted SAN list. The CSR is validated before the
+// registry is touched, so a malformed request fails without side effects.
+//
+// The bootstrap case carries no client certificate yet, so this is the
+// verifiable subset of the identity binding; full mutual identity waits on the
+// LOW-4 registration bootstrap credential (docs/TODO.md).
 func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error) {
+	if !g.registerLimiter.allow(peerHost(ctx)) {
+		g.logger.Warn("servers: registration rate limit exceeded", "peer", peerAddress(ctx))
+		return nil, status.Error(codes.ResourceExhausted, "too many registration attempts")
+	}
+
+	nodeID := strings.TrimSpace(req.GetNodeId())
+	if err := validateNodeID(nodeID); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if identity := authenticatedNodeID(ctx); identity != "" && identity != nodeID {
+		g.logger.Warn("servers: register node_id does not match the authenticated peer",
+			"node_id", nodeID, "peer_identity", identity, "peer", peerAddress(ctx))
+		return nil, status.Error(codes.PermissionDenied, "node_id does not match the authenticated peer")
+	}
+
 	var csrCert []byte
 	if len(req.GetCsr()) > 0 && g.authority != nil {
-		cert, err := g.authority.IssueAgentCertFromCSR(req.GetCsr())
+		cert, err := g.authority.IssueAgentCertFromCSR(req.GetCsr(), nodeID)
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
@@ -175,7 +205,7 @@ func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*
 
 	resp, err := g.service.RegisterNode(ctx, req)
 	if err != nil {
-		return nil, toGRPCError(err)
+		return nil, g.registerError(nodeID, err)
 	}
 	if csrCert != nil {
 		resp.Cert = csrCert
@@ -183,13 +213,40 @@ func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*
 	return resp, nil
 }
 
+// registerError logs an unexpected registry failure before it is collapsed to
+// Internal, then maps the domain sentinels to gRPC status codes.
+func (g *Gateway) registerError(nodeID string, err error) error {
+	if !isDomainError(err) {
+		g.logger.Error("servers: register failed", "node_id", nodeID, "error", err)
+	}
+	return toGRPCError(err)
+}
+
+// isDomainError reports whether err maps to a caller-visible status rather than
+// the opaque Internal error.
+func isDomainError(err error) bool {
+	return errors.Is(err, ErrValidation) ||
+		errors.Is(err, ErrNoCredentials) ||
+		errors.Is(err, ErrNotFound) ||
+		errors.Is(err, ErrConflict)
+}
+
 // Heartbeat consumes the client stream, recording a heartbeat per message, and
-// acknowledges once the stream closes.
+// acknowledges once the stream closes. The node identity comes from the
+// authenticated peer certificate when present; otherwise from the node-id
+// metadata the bootstrap connection carries. When both are present and differ,
+// the stream is refused.
 func (g *Gateway) Heartbeat(stream grpc.ClientStreamingServer[agentv1.HeartbeatRequest, agentv1.HeartbeatResponse]) error {
 	ctx := stream.Context()
-	nodeID := nodeIDFromContext(ctx)
+	peer := peerAddress(ctx)
+	limiterKey := peerHost(ctx)
+
+	nodeID, err := g.heartbeatIdentity(ctx, peer)
+	if err != nil {
+		return err
+	}
 	if nodeID == "" {
-		g.logger.Warn("servers: heartbeat from unidentifiable peer", "peer", peerAddress(ctx))
+		g.logger.Warn("servers: heartbeat from unidentifiable peer", "peer", peer)
 	}
 
 	for {
@@ -199,6 +256,9 @@ func (g *Gateway) Heartbeat(stream grpc.ClientStreamingServer[agentv1.HeartbeatR
 		}
 		if err != nil {
 			return err
+		}
+		if !g.heartbeatLimiter.allow(limiterKey) {
+			return status.Error(codes.ResourceExhausted, "heartbeat rate limit exceeded")
 		}
 		if nodeID == "" {
 			continue
@@ -211,6 +271,22 @@ func (g *Gateway) Heartbeat(stream grpc.ClientStreamingServer[agentv1.HeartbeatR
 			g.logger.Warn("servers: heartbeat", "node_id", nodeID, "error", err)
 		}
 	}
+}
+
+// heartbeatIdentity resolves the node id for a heartbeat stream and rejects a
+// metadata identity that contradicts the authenticated peer certificate.
+func (g *Gateway) heartbeatIdentity(ctx context.Context, peer string) (string, error) {
+	authenticated := authenticatedNodeID(ctx)
+	claimed := metadataNodeID(ctx)
+	if authenticated != "" && claimed != "" && authenticated != claimed {
+		g.logger.Warn("servers: heartbeat node_id does not match the authenticated peer",
+			"node_id", claimed, "peer_identity", authenticated, "peer", peer)
+		return "", status.Error(codes.PermissionDenied, "node_id does not match the authenticated peer")
+	}
+	if authenticated != "" {
+		return authenticated, nil
+	}
+	return claimed, nil
 }
 
 // RequestUpdate answers an agent's update query. It compares the reported
@@ -278,33 +354,60 @@ func (a *Authority) serverCredentials(addr string, extraHosts []string) (credent
 	}), nil
 }
 
-// nodeIDFromContext identifies the calling node: mTLS peer certificate first
-// (SAN/CN), falling back to the node-id metadata header used by the insecure
-// development listener.
-func nodeIDFromContext(ctx context.Context) string {
-	if p, ok := peer.FromContext(ctx); ok && p.AuthInfo != nil {
-		if tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo); ok {
-			certs := tlsInfo.State.PeerCertificates
-			if len(certs) > 0 {
-				cert := certs[0]
-				switch {
-				case len(cert.DNSNames) > 0:
-					return cert.DNSNames[0]
-				case len(cert.IPAddresses) > 0:
-					return cert.IPAddresses[0].String()
-				case cert.Subject.CommonName != "":
-					return cert.Subject.CommonName
-				}
-			}
-		}
+// authenticatedNodeID returns the node identity proven by a presented mTLS
+// client certificate, or "" when the peer presented none. It is the only
+// identity the gateway can trust without the LOW-4 bootstrap credential.
+func authenticatedNodeID(ctx context.Context) string {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.AuthInfo == nil {
+		return ""
 	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok || len(tlsInfo.State.PeerCertificates) == 0 {
+		return ""
+	}
+	return certIdentity(tlsInfo.State.PeerCertificates[0])
+}
 
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if values := md.Get(nodeIDMetadataKey); len(values) > 0 {
-			return values[0]
-		}
+// certIdentity derives the node identity a client certificate asserts: the
+// first DNS SAN, then the first IP SAN, then the subject common name.
+func certIdentity(cert *x509.Certificate) string {
+	switch {
+	case len(cert.DNSNames) > 0:
+		return cert.DNSNames[0]
+	case len(cert.IPAddresses) > 0:
+		return cert.IPAddresses[0].String()
+	default:
+		return cert.Subject.CommonName
 	}
-	return ""
+}
+
+// metadataNodeID returns the node-id metadata header used by the bootstrap
+// connection. An over-long value is ignored rather than trusted.
+func metadataNodeID(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	values := md.Get(nodeIDMetadataKey)
+	if len(values) == 0 {
+		return ""
+	}
+	nodeID := strings.TrimSpace(values[0])
+	if len(nodeID) > maxNodeIDLength {
+		return ""
+	}
+	return nodeID
+}
+
+// nodeIDFromContext identifies the calling node: the authenticated mTLS peer
+// certificate first, falling back to the node-id metadata header used by the
+// insecure development listener.
+func nodeIDFromContext(ctx context.Context) string {
+	if identity := authenticatedNodeID(ctx); identity != "" {
+		return identity
+	}
+	return metadataNodeID(ctx)
 }
 
 // peerAddress renders the caller address for diagnostics.
@@ -313,6 +416,17 @@ func peerAddress(ctx context.Context) string {
 		return p.Addr.String()
 	}
 	return "unknown"
+}
+
+// peerHost returns the calling peer's host (without the ephemeral port), so a
+// peer cannot rotate ports to escape the per-peer rate limits. A non-host:port
+// address (for example the in-memory bufconn transport) is returned unchanged.
+func peerHost(ctx context.Context) string {
+	addr := peerAddress(ctx)
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
 }
 
 // serverHosts derives the SAN host list for the listener certificate: the

@@ -59,36 +59,6 @@ func TestAuthorityGeneratePersistReload(t *testing.T) {
 	}
 }
 
-func TestIssueAgentCertVerifiesAndCarriesSAN(t *testing.T) {
-	authority, err := LoadOrCreateAuthority(t.TempDir())
-	if err != nil {
-		t.Fatalf("LoadOrCreateAuthority: %v", err)
-	}
-
-	certPEM, err := authority.IssueAgentCert("node-42")
-	if err != nil {
-		t.Fatalf("IssueAgentCert: %v", err)
-	}
-
-	cert := parseCertPEM(t, certPEM)
-	if _, err := cert.Verify(x509.VerifyOptions{
-		DNSName:   "node-42",
-		Roots:     authority.Pool(),
-		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}); err != nil {
-		t.Fatalf("issued cert failed verification: %v", err)
-	}
-
-	sans := cert.DNSNames
-	if len(sans) != 1 || sans[0] != "node-42" {
-		t.Fatalf("DNS SANs = %v, want [node-42]", sans)
-	}
-
-	if _, err := authority.IssueAgentCert(""); err == nil {
-		t.Fatal("IssueAgentCert with empty node id = nil error, want error")
-	}
-}
-
 func TestIssueServerAndClientCerts(t *testing.T) {
 	authority, err := LoadOrCreateAuthority(t.TempDir())
 	if err != nil {
@@ -166,7 +136,7 @@ func TestIssueAgentCertFromCSRRoundtrip(t *testing.T) {
 		DNSNames: []string{"node-42"},
 	})
 
-	certPEM, err := authority.IssueAgentCertFromCSR(csrPEM)
+	certPEM, err := authority.IssueAgentCertFromCSR(csrPEM, "node-42")
 	if err != nil {
 		t.Fatalf("IssueAgentCertFromCSR: %v", err)
 	}
@@ -203,16 +173,18 @@ func TestIssueAgentCertFromCSRAddsCommonNameSAN(t *testing.T) {
 	csrPEM := testCSR(t, testKey(t), &x509.CertificateRequest{
 		Subject: pkix.Name{CommonName: "node-9"},
 	})
-	cert := parseCertPEM(t, mustIssueFromCSR(t, authority, csrPEM))
+	cert := parseCertPEM(t, mustIssueFromCSR(t, authority, csrPEM, "node-9"))
 	if len(cert.DNSNames) != 1 || cert.DNSNames[0] != "node-9" {
 		t.Fatalf("DNS SANs = %v, want [node-9]", cert.DNSNames)
 	}
 
-	// An IP common name must become an IP SAN so address-based verification works.
+	// An IP node id must become an IP SAN so address-based verification works.
 	ipCSR := testCSR(t, testKey(t), &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: "10.0.0.9"},
+		Subject:     pkix.Name{CommonName: "10.0.0.9"},
+		DNSNames:    []string{"10.0.0.9"},
+		IPAddresses: []net.IP{net.ParseIP("10.0.0.9")},
 	})
-	ipCert := parseCertPEM(t, mustIssueFromCSR(t, authority, ipCSR))
+	ipCert := parseCertPEM(t, mustIssueFromCSR(t, authority, ipCSR, "10.0.0.9"))
 	if len(ipCert.IPAddresses) != 1 || !ipCert.IPAddresses[0].Equal(net.ParseIP("10.0.0.9")) {
 		t.Fatalf("IP SANs = %v, want [10.0.0.9]", ipCert.IPAddresses)
 	}
@@ -241,7 +213,7 @@ func TestIssueAgentCertFromCSRTampered(t *testing.T) {
 	der[len(der)-1] ^= 0xff
 	tampered := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 
-	if _, err := authority.IssueAgentCertFromCSR(tampered); !errors.Is(err, ErrValidation) {
+	if _, err := authority.IssueAgentCertFromCSR(tampered, "node-tamper"); !errors.Is(err, ErrValidation) {
 		t.Fatalf("IssueAgentCertFromCSR(tampered) = %v, want ErrValidation", err)
 	}
 }
@@ -257,20 +229,140 @@ func TestIssueAgentCertFromCSRRejectsEmpty(t *testing.T) {
 		"not pem":    []byte("garbage"),
 		"no subject": testCSR(t, testKey(t), &x509.CertificateRequest{}),
 	} {
-		if _, err := authority.IssueAgentCertFromCSR(csr); !errors.Is(err, ErrValidation) {
+		if _, err := authority.IssueAgentCertFromCSR(csr, "node-x"); !errors.Is(err, ErrValidation) {
 			t.Errorf("IssueAgentCertFromCSR(%s) = %v, want ErrValidation", name, err)
 		}
 	}
 }
 
+// TestIssueAgentCertFromCSRRejectsUnboundSANs is the FX-3 item-1 rejection
+// matrix: a certificate is only issued for the enrolled identity, and a CSR
+// carrying a foreign common name, extra/wildcard SANs or an oversized SAN set
+// is refused.
+func TestIssueAgentCertFromCSRRejectsUnboundSANs(t *testing.T) {
+	authority, err := LoadOrCreateAuthority(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateAuthority: %v", err)
+	}
+	ip := net.ParseIP("10.0.0.9")
+
+	tests := []struct {
+		name   string
+		nodeID string
+		csr    *x509.CertificateRequest
+	}{
+		{
+			name:   "common name mismatch",
+			nodeID: "node-1",
+			csr:    &x509.CertificateRequest{Subject: pkix.Name{CommonName: "node-2"}, DNSNames: []string{"node-1"}},
+		},
+		{
+			name:   "missing common name",
+			nodeID: "node-1",
+			csr:    &x509.CertificateRequest{DNSNames: []string{"node-1"}},
+		},
+		{
+			name:   "extra dns san",
+			nodeID: "node-1",
+			csr:    &x509.CertificateRequest{Subject: pkix.Name{CommonName: "node-1"}, DNSNames: []string{"node-1", "victim.example.com"}},
+		},
+		{
+			name:   "wildcard dns san",
+			nodeID: "node-1",
+			csr:    &x509.CertificateRequest{Subject: pkix.Name{CommonName: "node-1"}, DNSNames: []string{"*.example.com"}},
+		},
+		{
+			name:   "foreign ip san",
+			nodeID: "node-1",
+			csr:    &x509.CertificateRequest{Subject: pkix.Name{CommonName: "node-1"}, DNSNames: []string{"node-1"}, IPAddresses: []net.IP{ip}},
+		},
+		{
+			name:   "wildcard node id",
+			nodeID: "*.example.com",
+			csr:    &x509.CertificateRequest{Subject: pkix.Name{CommonName: "*.example.com"}, DNSNames: []string{"*.example.com"}},
+		},
+		{
+			name:   "ip node id with mismatched ip san",
+			nodeID: "10.0.0.9",
+			csr:    &x509.CertificateRequest{Subject: pkix.Name{CommonName: "10.0.0.9"}, DNSNames: []string{"10.0.0.9"}, IPAddresses: []net.IP{net.ParseIP("10.0.0.10")}},
+		},
+		{
+			name:   "oversized san set",
+			nodeID: "node-1",
+			csr: &x509.CertificateRequest{
+				Subject:     pkix.Name{CommonName: "node-1"},
+				DNSNames:    []string{"node-1"},
+				IPAddresses: []net.IP{ip, ip, ip, ip, ip, ip, ip, ip},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			csrPEM := testCSR(t, testKey(t), tt.csr)
+			if _, err := authority.IssueAgentCertFromCSR(csrPEM, tt.nodeID); !errors.Is(err, ErrValidation) {
+				t.Fatalf("IssueAgentCertFromCSR = %v, want ErrValidation", err)
+			}
+		})
+	}
+
+	// A correctly bound CSR is accepted and carries exactly the node identity.
+	valid := testCSR(t, testKey(t), &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: "node-1"},
+		DNSNames: []string{"node-1"},
+	})
+	cert := parseCertPEM(t, mustIssueFromCSR(t, authority, valid, "node-1"))
+	if len(cert.DNSNames) != 1 || cert.DNSNames[0] != "node-1" || len(cert.IPAddresses) != 0 {
+		t.Fatalf("issued SANs = dns %v ip %v, want [node-1] and no IP", cert.DNSNames, cert.IPAddresses)
+	}
+}
+
 // mustIssueFromCSR issues an agent certificate from csrPEM, failing on error.
-func mustIssueFromCSR(t *testing.T, authority *Authority, csrPEM []byte) []byte {
+func mustIssueFromCSR(t *testing.T, authority *Authority, csrPEM []byte, nodeID string) []byte {
 	t.Helper()
-	certPEM, err := authority.IssueAgentCertFromCSR(csrPEM)
+	certPEM, err := authority.IssueAgentCertFromCSR(csrPEM, nodeID)
 	if err != nil {
 		t.Fatalf("IssueAgentCertFromCSR: %v", err)
 	}
 	return certPEM
+}
+
+// TestLoadAuthorityFailsClosedOnIncompletePair is the FX-3 item-2 guard: half a
+// CA pair must never silently downgrade to a plaintext listener.
+func TestLoadAuthorityFailsClosedOnIncompletePair(t *testing.T) {
+	dir := t.TempDir()
+	authority, err := LoadOrCreateAuthority(dir)
+	if err != nil {
+		t.Fatalf("LoadOrCreateAuthority: %v", err)
+	}
+	certPath := filepath.Join(dir, caCertFile)
+	keyPath := filepath.Join(dir, caKeyFile)
+
+	// Certificate without key.
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatalf("remove key: %v", err)
+	}
+	if _, err := LoadAuthority(dir); err == nil {
+		t.Error("LoadAuthority(cert only) = nil error, want fail-closed")
+	}
+	if _, err := LoadOrCreateAuthority(dir); err == nil {
+		t.Error("LoadOrCreateAuthority(cert only) = nil error, want fail-closed")
+	}
+
+	// Key without certificate.
+	if err := os.WriteFile(keyPath, authority.CACertPEM(), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	if err := os.Remove(certPath); err != nil {
+		t.Fatalf("remove cert: %v", err)
+	}
+	if _, err := LoadAuthority(dir); err == nil {
+		t.Error("LoadAuthority(key only) = nil error, want fail-closed")
+	}
+
+	// A truly empty directory still means "no CA configured".
+	if loaded, err := LoadAuthority(t.TempDir()); err != nil || loaded != nil {
+		t.Errorf("LoadAuthority(empty) = (%v, %v), want (nil, nil)", loaded, err)
+	}
 }
 
 // TestUniqueStringsTrims pins N1: environment-provided SAN hosts

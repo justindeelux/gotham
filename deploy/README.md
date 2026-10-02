@@ -87,6 +87,8 @@ reinstall keeps the existing CA. `gotham serve` loads it and the gRPC gateway
 runs TLS, presenting a server certificate signed by the CA and accepting a client
 certificate when one is presented. Without a CA (only when an operator runs
 `gotham serve` directly) the gateway falls back to plaintext and logs a warning.
+A directory holding exactly one of `ca.crt`/`ca.key` is an **incomplete CA** and
+is refused at startup rather than silently downgraded to plaintext.
 
 The listener certificate SANs are the operator-declared hosts
 (`install.sh --cp-host <name-or-ip>` repeated, or `GOTHAM_GRPC_HOSTS=<a,b>`)
@@ -105,7 +107,10 @@ sudo deploy/install-agent.sh --ca ./ca.crt
 ```
 
 `install-agent.sh` fails closed without a CA; `--insecure` is the
-development-only override that leaves the agent channel in plaintext.
+development-only override that leaves the agent channel in plaintext. The agent
+itself also fails closed: with no CA it refuses to start unless
+`GOTHAM_AGENT_INSECURE=true`, and its plaintext listener is confined to
+loopback.
 
 Re-running `install.sh` on a pre-existing plaintext control plane flips it to
 TLS; agents installed before that go offline until they are reinstalled with

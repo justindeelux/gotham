@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -208,9 +209,14 @@ type Server struct {
 }
 
 // NewServer binds addr and registers the DockerService implementation plus any
-// optional services. The caller must call Serve to begin accepting
-// connections.
+// optional services. When creds is nil the listener runs in development
+// plaintext and is confined to loopback: a plaintext Docker control channel
+// must never be reachable off-host. The caller must call Serve to begin
+// accepting connections.
 func NewServer(addr string, creds credentials.TransportCredentials, impl agentv1.DockerServiceServer, log *slog.Logger, options ...ServerOption) (*Server, error) {
+	if creds == nil && !isLoopbackListenAddr(addr) {
+		return nil, fmt.Errorf("agent: refusing to serve plaintext on non-loopback address %q", addr)
+	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("agent: listen %s: %w", addr, err)
@@ -227,7 +233,29 @@ func NewServer(addr string, creds credentials.TransportCredentials, impl agentv1
 	if log == nil {
 		log = slog.Default()
 	}
+	if creds == nil {
+		log.Warn("agent: serving plaintext on loopback (development only)", "addr", listener.Addr().String())
+	}
 	return &Server{grpc: server, ln: listener, log: log}, nil
+}
+
+// isLoopbackListenAddr reports whether a listen address is confined to the
+// loopback interface ("127.0.0.1:9443", "[::1]:9443", "localhost:9443"). An
+// empty or wildcard host is not loopback.
+func isLoopbackListenAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Addr returns the bound listener address.

@@ -9,7 +9,7 @@ func clearAgentEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		envCPAddr, envNodeID, envListenAddr, envCA, envCertDir,
-		envKey, envDockerSock, envComposeRoot, envLogLevel, envDockerHost,
+		envKey, envInsecure, envDockerSock, envComposeRoot, envLogLevel, envDockerHost,
 	} {
 		t.Setenv(key, "")
 	}
@@ -17,6 +17,7 @@ func clearAgentEnv(t *testing.T) {
 
 func TestLoadDefaults(t *testing.T) {
 	clearAgentEnv(t)
+	t.Setenv(envCA, "/etc/gotham/ca.pem")
 
 	cfg, err := Load()
 	if err != nil {
@@ -40,8 +41,40 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.NodeID == "" {
 		t.Error("NodeID is empty; want hostname fallback")
 	}
-	if cfg.CA != "" {
-		t.Errorf("CA = %q; want empty", cfg.CA)
+	if cfg.CA != "/etc/gotham/ca.pem" {
+		t.Errorf("CA = %q", cfg.CA)
+	}
+	if cfg.Insecure {
+		t.Error("Insecure = true; want false by default")
+	}
+}
+
+// TestLoadRejectsPlaintextWithoutOptIn is the FX-3 item-9 guard: no CA and no
+// explicit insecure opt-in must fail closed rather than dial/serve plaintext.
+func TestLoadRejectsPlaintextWithoutOptIn(t *testing.T) {
+	clearAgentEnv(t)
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load(no CA, no insecure) = nil error, want fail-closed")
+	}
+
+	// The opt-in alone is not enough: the listener must stay on loopback.
+	clearAgentEnv(t)
+	t.Setenv(envInsecure, "true")
+	t.Setenv(envListenAddr, "0.0.0.0:9443")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load(insecure, wildcard listen) = nil error, want loopback refusal")
+	}
+
+	clearAgentEnv(t)
+	t.Setenv(envInsecure, "true")
+	t.Setenv(envListenAddr, "127.0.0.1:9443")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(insecure, loopback) = %v; want success", err)
+	}
+	if !cfg.Insecure {
+		t.Error("Insecure = false; want true after opt-in")
 	}
 }
 
@@ -92,6 +125,8 @@ func TestLoadOverrides(t *testing.T) {
 
 func TestLoadFallsBackToDockerHost(t *testing.T) {
 	clearAgentEnv(t)
+	t.Setenv(envInsecure, "true")
+	t.Setenv(envListenAddr, "127.0.0.1:9443")
 	t.Setenv(envDockerHost, "tcp://127.0.0.1:2375")
 
 	cfg, err := Load()

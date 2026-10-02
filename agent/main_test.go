@@ -33,6 +33,8 @@ func TestMain(m *testing.M) {
 		"GOTHAM_AGENT_UPDATE_BACKOFF": filepath.Join(sandbox, "update.backoff"),
 		"GOTHAM_AGENT_AUTO_UPDATE":    "false",
 		"GOTHAM_UPDATE_PUBLIC_KEY":    "",
+		"GOTHAM_AGENT_INSECURE":       "true",
+		"GOTHAM_AGENT_LISTEN_ADDR":    "127.0.0.1:9443",
 	} {
 		if err := os.Setenv(key, value); err != nil {
 			fmt.Fprintf(os.Stderr, "agent TestMain: setenv %s: %v\n", key, err)

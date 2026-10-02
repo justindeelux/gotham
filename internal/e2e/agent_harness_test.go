@@ -45,7 +45,7 @@ func startLocalAgentWithOptions(t *testing.T, ctx context.Context, engine *agent
 	if err != nil {
 		t.Fatalf("agent CSR: %v", err)
 	}
-	certPEM, err := authority.IssueAgentCertFromCSR(csrPEM)
+	certPEM, err := authority.IssueAgentCertFromCSR(csrPEM, nodeID)
 	if err != nil {
 		t.Fatalf("issue agent certificate: %v", err)
 	}
@@ -57,7 +57,7 @@ func startLocalAgentWithOptions(t *testing.T, ctx context.Context, engine *agent
 	if err := os.WriteFile(caPath, authority.CACertPEM(), 0o600); err != nil {
 		t.Fatalf("write CA: %v", err)
 	}
-	serverCreds, err := agent.ServerCredentials(certPEM, keyPEM, caPath)
+	serverCreds, err := agent.ServerCredentials(certPEM, keyPEM, caPath, false)
 	if err != nil {
 		t.Fatalf("agent server credentials: %v", err)
 	}

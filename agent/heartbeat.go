@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"crypto"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -21,6 +24,12 @@ const (
 	defaultHeartbeatInterval = 10 * time.Second
 	defaultMinBackoff        = time.Second
 	defaultMaxBackoff        = 30 * time.Second
+	// defaultRegisterTimeout bounds a single registration attempt so a stalled
+	// control plane cannot pin the loop (and block backoff/heartbeats).
+	defaultRegisterTimeout = 30 * time.Second
+	// defaultRenewBefore re-registers for a fresh certificate this long before
+	// the current leaf expires.
+	defaultRenewBefore = 30 * 24 * time.Hour
 	// dockerCallTimeout bounds best-effort Docker calls made from the loop.
 	dockerCallTimeout = 5 * time.Second
 	// nodeIDMetadataKey carries the node identity on RPCs where the gateway
@@ -31,13 +40,18 @@ const (
 // Agent connects to the control plane, registers this node and streams
 // heartbeats, reconnecting with backoff when the connection drops.
 type Agent struct {
-	cfg         Config
-	log         *slog.Logger
-	docker      dockerClient
-	sampler     *stats.Sampler
-	interval    time.Duration
-	minBackoff  time.Duration
-	maxBackoff  time.Duration
+	cfg        Config
+	log        *slog.Logger
+	docker     dockerClient
+	sampler    *stats.Sampler
+	interval   time.Duration
+	minBackoff time.Duration
+	maxBackoff time.Duration
+	// registerTimeout bounds one Register attempt.
+	registerTimeout time.Duration
+	// renewBefore is how long before the served certificate's expiry the agent
+	// re-registers for a fresh one.
+	renewBefore time.Duration
 	dialOptions []grpc.DialOption
 
 	versionMu sync.Mutex
@@ -77,20 +91,41 @@ func WithDialOptions(options ...grpc.DialOption) Option {
 	}
 }
 
+// WithRegisterTimeout overrides the per-attempt registration deadline.
+func WithRegisterTimeout(timeout time.Duration) Option {
+	return func(a *Agent) {
+		if timeout > 0 {
+			a.registerTimeout = timeout
+		}
+	}
+}
+
+// WithRenewBefore overrides how long before certificate expiry the agent
+// re-registers for a fresh one.
+func WithRenewBefore(d time.Duration) Option {
+	return func(a *Agent) {
+		if d > 0 {
+			a.renewBefore = d
+		}
+	}
+}
+
 // NewAgent returns an Agent that reports Docker state through docker.
 func NewAgent(cfg Config, log *slog.Logger, docker dockerClient, options ...Option) *Agent {
 	if log == nil {
 		log = slog.Default()
 	}
 	agent := &Agent{
-		cfg:        cfg,
-		log:        log,
-		docker:     docker,
-		sampler:    stats.New(),
-		interval:   defaultHeartbeatInterval,
-		minBackoff: defaultMinBackoff,
-		maxBackoff: defaultMaxBackoff,
-		version:    cfg.Version,
+		cfg:             cfg,
+		log:             log,
+		docker:          docker,
+		sampler:         stats.New(),
+		interval:        defaultHeartbeatInterval,
+		minBackoff:      defaultMinBackoff,
+		maxBackoff:      defaultMaxBackoff,
+		registerTimeout: defaultRegisterTimeout,
+		renewBefore:     defaultRenewBefore,
+		version:         cfg.Version,
 	}
 	for _, option := range options {
 		option(agent)
@@ -176,11 +211,20 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 			}
 		}
 
+		// Run the current registration for a bounded session: when the issued
+		// certificate approaches expiry the session ends so the outer loop
+		// re-registers and the listener picks up a fresh certificate.
+		renewIn := a.renewalDelay(response.GetCert())
+
 		// Poll for a signed update alongside the heartbeat stream. The poll
 		// stops when the heartbeat stream ends so a reconnect starts a fresh
 		// one; the download never blocks the heartbeat because it runs on its
 		// own goroutine.
 		hbCtx, hbCancel := context.WithCancel(ctx)
+		sessionCtx, sessionCancel := context.WithCancel(hbCtx)
+		if renewIn > 0 {
+			sessionCtx, sessionCancel = context.WithTimeout(hbCtx, renewIn)
+		}
 		var updateWG sync.WaitGroup
 		if a.updater != nil {
 			updateWG.Add(1)
@@ -190,11 +234,16 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 			}()
 		}
 
-		heartbeatErr := a.heartbeat(ctx, client)
+		heartbeatErr := a.heartbeat(sessionCtx, client)
+		sessionCancel()
 		hbCancel()
 		updateWG.Wait()
 		if heartbeatErr != nil && ctx.Err() == nil {
-			a.log.Warn("heartbeat stream ended; reconnecting", "error", heartbeatErr)
+			if errors.Is(heartbeatErr, context.DeadlineExceeded) {
+				a.log.Info("certificate renewal due; re-registering", "renew_in", renewIn.String())
+			} else {
+				a.log.Warn("heartbeat stream ended; reconnecting", "error", heartbeatErr)
+			}
 		}
 		if ctx.Err() != nil {
 			return nil
@@ -220,9 +269,35 @@ func (a *Agent) dialOptionsFor() ([]grpc.DialOption, error) {
 	return append(options, a.dialOptions...), nil
 }
 
-// register sends a single Register RPC.
+// register sends a single Register RPC bounded by the per-attempt deadline so
+// a stalled control plane cannot block the reconnect loop.
 func (a *Agent) register(ctx context.Context, client agentv1.AgentServiceClient) (*agentv1.RegisterResponse, error) {
-	return client.Register(ctx, a.registerRequest(ctx))
+	callCtx, cancel := context.WithTimeout(ctx, a.registerTimeout)
+	defer cancel()
+	return client.Register(callCtx, a.registerRequest(callCtx))
+}
+
+// renewalDelay returns how long to keep the current registration before
+// re-registering for a fresh certificate, or 0 when the certificate cannot be
+// parsed. It renews renewBefore ahead of the leaf's expiry, with a one-minute
+// floor so a near-expiry certificate still retries promptly.
+func (a *Agent) renewalDelay(certPEM []byte) time.Duration {
+	if len(certPEM) == 0 || a.renewBefore <= 0 {
+		return 0
+	}
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return 0
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return 0
+	}
+	renewIn := time.Until(cert.NotAfter) - a.renewBefore
+	if renewIn < time.Second {
+		renewIn = time.Second
+	}
+	return renewIn
 }
 
 // registerRequest assembles the node's static identity and capabilities.
@@ -285,15 +360,19 @@ func (a *Agent) certificateRequest() ([]byte, error) {
 }
 
 // heartbeat opens the Heartbeat client stream and sends a sample immediately
-// and then once per interval until the stream fails or ctx is canceled.
+// and then once per interval until the stream fails or ctx is canceled. The
+// stream runs on its own cancellable context, canceled on return, so a
+// reconnect never leaves a stream (and its transport) alive.
 func (a *Agent) heartbeat(ctx context.Context, client agentv1.AgentServiceClient) error {
 	// The bootstrap connection presents no client certificate, so the gateway
 	// learns the node identity from metadata to attribute heartbeats.
-	streamCtx := metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, a.cfg.NodeID)
+	streamCtx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, a.cfg.NodeID))
+	defer cancel()
 	stream, err := client.Heartbeat(streamCtx)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = stream.CloseSend() }()
 	ticker := time.NewTicker(a.interval)
 	defer ticker.Stop()
 
@@ -303,7 +382,6 @@ func (a *Agent) heartbeat(ctx context.Context, client agentv1.AgentServiceClient
 		}
 		select {
 		case <-ctx.Done():
-			_ = stream.CloseSend()
 			return ctx.Err()
 		case <-ticker.C:
 		}

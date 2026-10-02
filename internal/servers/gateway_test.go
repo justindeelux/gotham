@@ -1,16 +1,22 @@
 package servers
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -87,6 +93,14 @@ func newTestServiceWithAuthority(t *testing.T) (*ServerService, *store.Store, *A
 // a client connection.
 func startTestGateway(t *testing.T, service *ServerService) *grpc.ClientConn {
 	t.Helper()
+	_, conn := startTestGatewayInstance(t, service)
+	return conn
+}
+
+// startTestGatewayInstance is startTestGateway but also returns the gateway, so
+// tests can tighten its per-peer rate limits.
+func startTestGatewayInstance(t *testing.T, service *ServerService) (*Gateway, *grpc.ClientConn) {
+	t.Helper()
 
 	gateway, err := NewGateway(GatewayConfig{
 		Service: service,
@@ -116,7 +130,7 @@ func startTestGateway(t *testing.T, service *ServerService) *grpc.ClientConn {
 		t.Fatalf("grpc.NewClient: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return conn
+	return gateway, conn
 }
 
 // uniqueNodeID returns a node id that will not collide with other tests.
@@ -143,8 +157,10 @@ func TestGatewayRegisterCreatesServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if len(resp.GetCert()) == 0 {
-		t.Error("Register returned an empty certificate")
+	// A certificate is only ever issued from a CSR bound to the node identity;
+	// this gateway has no authority configured, so the response carries none.
+	if len(resp.GetCert()) != 0 {
+		t.Error("Register returned a certificate without a CSR or a CA")
 	}
 	if resp.GetCpVersion() != "test" {
 		t.Errorf("cp_version = %q, want test", resp.GetCpVersion())
@@ -182,8 +198,8 @@ func TestGatewayRegisterCreatesServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Register: %v", err)
 	}
-	if len(second.GetCert()) == 0 {
-		t.Error("second Register returned an empty certificate")
+	if len(second.GetCert()) != 0 {
+		t.Error("second Register returned a certificate without a CSR")
 	}
 	reregistered, err := st.GetServerByNodeID(ctx, &nodeID)
 	if err != nil {
@@ -547,4 +563,250 @@ func TestGatewayRequestUpdate(t *testing.T) {
 			t.Errorf("rollout = false during an active rollout")
 		}
 	})
+}
+
+// startAuthorityGateway serves service over TLS with authority and returns the
+// listener address.
+func startAuthorityGateway(t *testing.T, service *ServerService, authority *Authority) string {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	gateway, err := NewGateway(GatewayConfig{
+		Addr:      "127.0.0.1:0",
+		Authority: authority,
+		Service:   service,
+		Logger:    discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if err := gateway.Start(ctx); err != nil {
+		t.Fatalf("gateway.Start: %v", err)
+	}
+	t.Cleanup(gateway.Stop)
+	return gateway.listener.Addr().String()
+}
+
+// TestGatewayHeartbeatRejectsIdentityMismatch rejects a heartbeat whose
+// metadata node id contradicts the authenticated peer certificate (FX-3 item 3).
+func TestGatewayHeartbeatRejectsIdentityMismatch(t *testing.T) {
+	service, _, authority := newTestServiceWithAuthority(t)
+	addr := startAuthorityGateway(t, service, authority)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	clientCertPEM, clientKeyPEM, err := authority.IssueClientCert("attacker")
+	if err != nil {
+		t.Fatalf("IssueClientCert: %v", err)
+	}
+	keyPair, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
+	if err != nil {
+		t.Fatalf("load client keypair: %v", err)
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{keyPair},
+		RootCAs:      authority.Pool(),
+		ServerName:   "localhost",
+		MinVersion:   tls.VersionTLS12,
+	})))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	streamCtx := metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, "victim")
+	stream, err := agentv1.NewAgentServiceClient(conn).Heartbeat(streamCtx)
+	if err == nil {
+		_ = stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()})
+		_, err = stream.CloseAndRecv()
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Heartbeat with a mismatched identity = %v, want PermissionDenied", err)
+	}
+}
+
+// TestGatewayRegisterWithCSRIssuesBoundCert is the FX-3 item-1 end-to-end path:
+// a CSR bound to the registered node id yields a usable certificate, and the
+// registry row is created.
+func TestGatewayRegisterWithCSRIssuesBoundCert(t *testing.T) {
+	service, st, authority := newTestServiceWithAuthority(t)
+	addr := startAuthorityGateway(t, service, authority)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(authority.Pool(), "")))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	nodeID := uniqueNodeID("node-csr")
+	csr := testCSR(t, testKey(t), &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: nodeID},
+		DNSNames: []string{nodeID},
+	})
+	resp, err := agentv1.NewAgentServiceClient(conn).Register(ctx, &agentv1.RegisterRequest{
+		NodeId: nodeID,
+		Os:     "linux",
+		Csr:    csr,
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if len(resp.GetCert()) == 0 {
+		t.Fatal("Register with a bound CSR returned no certificate")
+	}
+	cert := parseCertPEM(t, resp.GetCert())
+	if _, err := cert.Verify(x509.VerifyOptions{
+		DNSName:   nodeID,
+		Roots:     authority.Pool(),
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		t.Fatalf("issued certificate failed verification: %v", err)
+	}
+
+	row, err := st.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = st.DeleteServer(cleanupCtx, row.ID)
+	})
+}
+
+// TestGatewayRegisterRejectsIdentityMismatch is the FX-3 item-3 guard: a peer
+// that presents a client certificate cannot register under another node id.
+func TestGatewayRegisterRejectsIdentityMismatch(t *testing.T) {
+	service, st, authority := newTestServiceWithAuthority(t)
+	addr := startAuthorityGateway(t, service, authority)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	clientCertPEM, clientKeyPEM, err := authority.IssueClientCert("attacker")
+	if err != nil {
+		t.Fatalf("IssueClientCert: %v", err)
+	}
+	keyPair, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
+	if err != nil {
+		t.Fatalf("load client keypair: %v", err)
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{keyPair},
+		RootCAs:      authority.Pool(),
+		ServerName:   "localhost",
+		MinVersion:   tls.VersionTLS12,
+	})))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	client := agentv1.NewAgentServiceClient(conn)
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: "victim", Os: "linux"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Register as victim = %v, want PermissionDenied", err)
+	}
+
+	// The authenticated identity itself is accepted.
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: "attacker", Os: "linux"}); err != nil {
+		t.Fatalf("Register as the authenticated identity: %v", err)
+	}
+	identity := "attacker"
+	row, err := st.GetServerByNodeID(ctx, &identity)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = st.DeleteServer(cleanupCtx, row.ID)
+	})
+}
+
+// TestGatewayRegisterRejectsLongNodeID is the FX-3 item-4 cap on node_id.
+func TestGatewayRegisterRejectsLongNodeID(t *testing.T) {
+	service, _ := newTestService(t)
+	conn := startTestGateway(t, service)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := agentv1.NewAgentServiceClient(conn).Register(ctx, &agentv1.RegisterRequest{
+		NodeId: strings.Repeat("a", maxNodeIDLength+1),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Register(long node id) = %v, want InvalidArgument", err)
+	}
+}
+
+// TestGatewayRegisterRateLimited is the FX-3 item-4 per-peer registration cap.
+func TestGatewayRegisterRateLimited(t *testing.T) {
+	service, _ := newTestService(t)
+	gateway, conn := startTestGatewayInstance(t, service)
+	gateway.registerLimiter = newPeerRateLimiter(rate.Limit(0), 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := agentv1.NewAgentServiceClient(conn)
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: uniqueNodeID("rl-1")}); err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: uniqueNodeID("rl-2")}); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("second Register = %v, want ResourceExhausted", err)
+	}
+}
+
+// TestGatewayHeartbeatRateLimited is the FX-3 item-4 per-peer heartbeat cap.
+func TestGatewayHeartbeatRateLimited(t *testing.T) {
+	service, _ := newTestService(t)
+	gateway, conn := startTestGatewayInstance(t, service)
+	gateway.heartbeatLimiter = newPeerRateLimiter(rate.Limit(0), 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	nodeID := uniqueNodeID("node-hb-rl")
+	client := agentv1.NewAgentServiceClient(conn)
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	stream, err := client.Heartbeat(metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, nodeID))
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if err := stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()}); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	// The second message exhausts the burst; the server closes the stream with
+	// ResourceExhausted, surfaced on the next send or close.
+	_ = stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()})
+	if _, err := stream.CloseAndRecv(); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("Heartbeat after burst = %v, want ResourceExhausted", err)
+	}
+}
+
+// TestRegisterErrorLogsUnexpected is the FX-3 item-6 guard: an unexpected
+// registry failure is logged before it is collapsed to Internal.
+func TestRegisterErrorLogsUnexpected(t *testing.T) {
+	var buf bytes.Buffer
+	gateway := &Gateway{logger: slog.New(slog.NewTextHandler(&buf, nil))}
+
+	if err := gateway.registerError("node-1", errors.New("db exploded")); status.Code(err) != codes.Internal {
+		t.Fatalf("registerError = %v, want Internal", err)
+	}
+	if !strings.Contains(buf.String(), "db exploded") {
+		t.Errorf("unexpected error was not logged: %q", buf.String())
+	}
+
+	buf.Reset()
+	if err := gateway.registerError("node-1", fmt.Errorf("%w: bad", ErrValidation)); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("registerError(validation) = %v, want InvalidArgument", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("a domain error was logged: %q", buf.String())
+	}
 }

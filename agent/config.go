@@ -20,6 +20,7 @@ const (
 	envCA          = "GOTHAM_AGENT_CA"
 	envCertDir     = "GOTHAM_AGENT_CERT_DIR"
 	envKey         = "GOTHAM_AGENT_KEY"
+	envInsecure    = "GOTHAM_AGENT_INSECURE"
 	envDockerSock  = "GOTHAM_AGENT_DOCKER_SOCK"
 	envComposeRoot = "GOTHAM_AGENT_COMPOSE_ROOT"
 	envLogLevel    = "GOTHAM_AGENT_LOG_LEVEL"
@@ -83,8 +84,13 @@ type Config struct {
 	// ListenAddr is the address the agent's DockerService gRPC server binds.
 	ListenAddr string
 	// CA is the PEM bundle used to verify the CP server. An empty value selects
-	// insecure transport for local development.
+	// insecure transport for local development and is only accepted together
+	// with Insecure.
 	CA string
+	// Insecure is the explicit development opt-in for a channel with no CA:
+	// it allows plaintext and requires the listener to stay on loopback. It is
+	// set from GOTHAM_AGENT_INSECURE=true; there is no implicit plaintext path.
+	Insecure bool
 	// CertDir stores the certificate and private key received or generated at
 	// registration.
 	CertDir string
@@ -144,6 +150,7 @@ func Load() (Config, error) {
 		NodeID:      envOr(envNodeID, hostname()),
 		ListenAddr:  envOr(envListenAddr, defaultListenAddr),
 		CA:          os.Getenv(envCA),
+		Insecure:    strings.EqualFold(strings.TrimSpace(os.Getenv(envInsecure)), "true"),
 		CertDir:     envOr(envCertDir, defaultCertDir),
 		KeyFile:     os.Getenv(envKey),
 		DockerSock:  dockerSock(),
@@ -174,6 +181,14 @@ func Load() (Config, error) {
 	}
 	if cfg.NodeID == "" {
 		return Config{}, fmt.Errorf("%s must not be empty", envNodeID)
+	}
+	if cfg.CA == "" {
+		if !cfg.Insecure {
+			return Config{}, fmt.Errorf("%s is required; set %s=true only for local development", envCA, envInsecure)
+		}
+		if !isLoopbackListenAddr(cfg.ListenAddr) {
+			return Config{}, fmt.Errorf("%s must be a loopback address when %s=true, got %q", envListenAddr, envInsecure, cfg.ListenAddr)
+		}
 	}
 	return cfg, nil
 }

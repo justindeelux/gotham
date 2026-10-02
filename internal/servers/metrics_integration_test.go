@@ -295,6 +295,63 @@ func TestHeartbeatSkipsMetricsWhenDisabled(t *testing.T) {
 
 // addMetricsNode creates a node for the metrics tests and deletes it on
 // cleanup (its samples cascade).
+// TestHeartbeatAggregatesSamples is the FX-3 item-4 bound on metrics growth:
+// samples closer together than heartbeatSampleInterval are dropped while the
+// servers row still carries the latest snapshot.
+func TestHeartbeatAggregatesSamples(t *testing.T) {
+	service, st := newTestService(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	nodeID := uniqueNodeID("node-metrics-agg")
+	if _, err := service.RegisterNode(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux"}); err != nil {
+		t.Fatalf("RegisterNode: %v", err)
+	}
+	row, err := st.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = st.DeleteServer(cleanupCtx, row.ID)
+	})
+
+	base := time.Now().UTC()
+	for _, sample := range []struct {
+		cpu float64
+		at  time.Time
+	}{
+		{0.1, base},
+		{0.2, base.Add(time.Second)},      // inside the interval: dropped
+		{0.3, base.Add(11 * time.Second)}, // outside the interval: kept
+	} {
+		if err := service.RecordHeartbeat(ctx, nodeID, &agentv1.HeartbeatRequest{
+			CpuUsage: sample.cpu,
+			SentAt:   timestamppb.New(sample.at),
+		}); err != nil {
+			t.Fatalf("RecordHeartbeat: %v", err)
+		}
+	}
+
+	updated, err := st.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID after heartbeats: %v", err)
+	}
+	if updated.CpuUsage == nil || *updated.CpuUsage != 0.3 {
+		t.Errorf("cpu_usage = %v, want 0.3 (the snapshot always updates)", updated.CpuUsage)
+	}
+
+	var count int
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM server_metrics WHERE server_id = $1", row.ID).Scan(&count); err != nil {
+		t.Fatalf("count metrics: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("metrics rows = %d, want 2 (the 1s-gap sample must be dropped)", count)
+	}
+}
+
 func addMetricsNode(t *testing.T, ctx context.Context, service *ServerService, st *store.Store, name string) *Server {
 	t.Helper()
 	server, err := service.Add(ctx, uuid.New(), name, "127.0.0.1", 22, "root", uuid.Nil)

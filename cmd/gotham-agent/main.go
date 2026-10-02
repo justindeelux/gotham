@@ -14,6 +14,7 @@ import (
 
 	"github.com/justindeelux/gotham/agent"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
+	"google.golang.org/grpc/credentials"
 )
 
 // version is the reported build version. Released binaries override it with
@@ -105,29 +106,43 @@ func runServe() int {
 	runErr := make(chan error, 1)
 
 	startServer := func(response *agentv1.RegisterResponse) error {
-		var startErr error
-		serverOnce.Do(func() {
-			certPath := ""
-			devPlaintext := len(response.GetCert()) == 0 && cfg.CA == ""
-			if devPlaintext {
-				log.Warn("control plane returned no certificate; serving plaintext in development mode")
-			} else if len(response.GetCert()) == 0 {
-				log.Warn("control plane returned no certificate; using a self-signed certificate")
+		// Persist a freshly issued certificate on every registration so a
+		// renewal is visible to the running listener, which reads the file on
+		// each handshake. A persistence failure falls back to the in-memory
+		// certificate (reload disabled).
+		certPEM := response.GetCert()
+		certPath := ""
+		if len(certPEM) > 0 {
+			if written, err := agent.SaveAgentCert(cfg.CertDir, certPEM); err != nil {
+				log.Warn("failed to persist agent certificate", "error", err)
 			} else {
-				written, err := agent.SaveAgentCert(cfg.CertDir, response.GetCert())
-				if err != nil {
-					startErr = err
-					return
-				}
 				certPath = written
 			}
+		}
 
+		var startErr error
+		serverOnce.Do(func() {
 			keyPEM, err := agent.LoadOrGenerateKey(cfg.KeyFile, cfg.CertDir)
 			if err != nil {
 				startErr = err
 				return
 			}
-			creds, err := agent.ServerCredentials(response.GetCert(), keyPEM, cfg.CA)
+
+			var creds credentials.TransportCredentials
+			switch {
+			case len(certPEM) > 0 && certPath != "":
+				// File-backed credentials reload on every handshake, so a
+				// re-issued certificate takes effect without a restart.
+				creds, err = agent.ServerCredentialsFromFiles(certPath, agent.KeyPath(cfg.KeyFile, cfg.CertDir), cfg.CA)
+			case len(certPEM) > 0:
+				creds, err = agent.ServerCredentials(certPEM, keyPEM, cfg.CA, false)
+			case cfg.CA == "":
+				log.Warn("control plane returned no certificate; serving plaintext on loopback in development mode")
+				creds, err = agent.ServerCredentials(nil, nil, "", cfg.Insecure)
+			default:
+				log.Warn("control plane returned no certificate; using a self-signed certificate")
+				creds, err = agent.ServerCredentials(nil, nil, cfg.CA, false)
+			}
 			if err != nil {
 				startErr = err
 				return

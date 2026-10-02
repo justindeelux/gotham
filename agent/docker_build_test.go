@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -804,11 +805,13 @@ func TestRegistryAuthFilesArePrivate(t *testing.T) {
 		t.Errorf("htpasswd = %q; want a gotham bcrypt entry", string(htpasswd))
 	}
 
-	// A matching credential must not be rewritten (keeping the bind mount's
-	// inode stable), and must stay stable across reloads.
-	before, err := os.Stat(htpasswdPath)
+	// A matching credential must not be rewritten (the bind mount's inode and
+	// bytes stay put), and must stay stable across reloads. Compare the bytes:
+	// an in-place rewrite keeps the inode, so only a fresh bcrypt salt in the
+	// content reveals one.
+	before, err := os.ReadFile(htpasswdPath)
 	if err != nil {
-		t.Fatalf("stat htpasswd: %v", err)
+		t.Fatalf("read htpasswd before reload: %v", err)
 	}
 	again, againPath, reusedAgain, err := prepareRegistryAuth(dir)
 	if err != nil {
@@ -820,12 +823,12 @@ func TestRegistryAuthFilesArePrivate(t *testing.T) {
 	if againPath != htpasswdPath || !reusedAgain {
 		t.Errorf("reload path/reused = %q/%v; want %q/true", againPath, reusedAgain, htpasswdPath)
 	}
-	after, err := os.Stat(htpasswdPath)
+	after, err := os.ReadFile(htpasswdPath)
 	if err != nil {
-		t.Fatalf("stat htpasswd after reload: %v", err)
+		t.Fatalf("read htpasswd after reload: %v", err)
 	}
-	if !os.SameFile(before, after) {
-		t.Error("a matching credential was rewritten (inode changed)")
+	if !bytes.Equal(before, after) {
+		t.Error("a matching credential was rewritten: the htpasswd bytes changed")
 	}
 }
 
@@ -998,6 +1001,38 @@ func TestEnsureRegistryCredentialPullPathDoesNotWrite(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("pull path wrote %d files to the state dir; want none", len(entries))
+	}
+}
+
+// TestEnsureRegistryCredentialStaysAnonymousWhenHtpasswdStale pins the
+// registryHtpasswdMatches guard in persistedRegistryAuth: a stored credential
+// whose htpasswd no longer matches must not be attached, and the pull path must
+// not repair or recreate anything.
+func TestEnsureRegistryCredentialStaysAnonymousWhenHtpasswdStale(t *testing.T) {
+	stateDir, htpasswdPath := seedRegistryState(t)
+	engine := &registryTestEngine{exists: true, running: true, managed: true, hostPort: "5000", publishedPort: "5000"}
+	client := newTestDockerClientWithStateDir(t, engine.handler(t), stateDir)
+
+	const corrupted = "gotham:not-a-bcrypt-hash\n"
+	if err := os.WriteFile(htpasswdPath, []byte(corrupted), 0o600); err != nil {
+		t.Fatalf("corrupt htpasswd: %v", err)
+	}
+
+	if err := client.ensureRegistryCredentialFor(context.Background(), "127.0.0.1:5000/gotham/web:dep"); err != nil {
+		t.Fatalf("pull path: %v", err)
+	}
+	if client.registryAuth.Username != "" {
+		t.Error("pull path attached a credential although the htpasswd is stale")
+	}
+	if engine.removals != 0 || engine.creates != 0 {
+		t.Errorf("pull path recreated the registry: removals=%d creates=%d", engine.removals, engine.creates)
+	}
+	content, err := os.ReadFile(htpasswdPath)
+	if err != nil {
+		t.Fatalf("read htpasswd: %v", err)
+	}
+	if string(content) != corrupted {
+		t.Error("pull path rewrote the stale htpasswd")
 	}
 }
 

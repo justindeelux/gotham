@@ -51,8 +51,8 @@ func NewLocalDockerBuilderWithHost(host string) (*LocalDockerBuilder, error) {
 }
 
 // dockerHostEnv normalises a Docker endpoint into a DOCKER_HOST value for a
-// child process. An empty host and the default socket are left empty so the CLI
-// uses its own default.
+// child process. An empty host is left empty so the CLI uses its own default; a
+// bare socket path is prefixed with unix://.
 func dockerHostEnv(host string) string {
 	host = strings.TrimSpace(host)
 	switch {

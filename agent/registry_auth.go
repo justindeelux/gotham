@@ -195,11 +195,10 @@ func writeRegistryHtpasswd(path string, auth registryAuth) error {
 	return writeSecretFile(path, []byte(line))
 }
 
-// writeSecretFile overwrites path in place (O_TRUNC), never temp+rename. The
-// htpasswd file is bind-mounted; PrepareRegistryAuth is only reached under the
-// registry bootstrap lock, and EnsureRegistry recreates the container whenever
-// the credential was rewritten, so the running container never observes a
-// half-written file and picks up the new inode on recreation.
+// writeSecretFile overwrites path in place (O_TRUNC), never temp+rename: the
+// htpasswd file is bind-mounted, so a rename would leave the running container
+// attached to the old inode. Callers hold the registry bootstrap lock, and
+// EnsureRegistry recreates the container whenever the file content changed.
 func writeSecretFile(path string, data []byte) error {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, registryAuthFileMode)
 	if err != nil {

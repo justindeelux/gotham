@@ -143,3 +143,58 @@ func readFile(t *testing.T, path string) string {
 	}
 	return string(content)
 }
+
+// TestRunRedactsBuildArgValues is the C1-13 regression: the logged command line
+// must not expose build-arg values (they may be secrets).
+func TestRunRedactsBuildArgValues(t *testing.T) {
+	dir := t.TempDir()
+	fakeCLI(t, RailpackCLI, "echo building")
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+
+	var logs bytes.Buffer
+	if err := Run(context.Background(), Railpack, Options{
+		Dir:       dir,
+		Tag:       "gotham/app:dep",
+		BuildArgs: map[string]string{"API_TOKEN": "s3cr3t-value"},
+		LogWriter: &logs,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if strings.Contains(logs.String(), "s3cr3t-value") {
+		t.Fatalf("deploy log leaked the build-arg value: %q", logs.String())
+	}
+	if !strings.Contains(logs.String(), "API_TOKEN=***") {
+		t.Errorf("deploy log does not show the redacted key: %q", logs.String())
+	}
+}
+
+func TestRedactedCommandLine(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "separate flag",
+			args: []string{"build", "--env", "TOKEN=abc", "."},
+			want: "$ pack build --env TOKEN=*** .",
+		},
+		{
+			name: "inline flag",
+			args: []string{"build", "--env=TOKEN=abc"},
+			want: "$ pack build --env=TOKEN=***",
+		},
+		{
+			name: "non build-arg keeps value",
+			args: []string{"build", "--name", "gotham/app:dep"},
+			want: "$ pack build --name gotham/app:dep",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactedCommandLine("pack", tt.args); got != tt.want {
+				t.Errorf("redactedCommandLine = %q; want %q", got, tt.want)
+			}
+		})
+	}
+}

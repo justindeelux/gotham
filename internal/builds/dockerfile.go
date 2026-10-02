@@ -43,7 +43,7 @@ func (e *DockerfileEngine) Build(ctx context.Context, opts BuildOptions) (ImageR
 	if !ok {
 		return ImageRef{}, fmt.Errorf("%w: no Dockerfile in %s", ErrValidation, opts.RepoDir)
 	}
-	contextTar, err := buildContextTar(opts.RepoDir, nil)
+	contextTar, err := buildContextTar(contextSpec{root: opts.RepoDir, keep: dockerfile})
 	if err != nil {
 		return ImageRef{}, err
 	}

@@ -125,6 +125,9 @@ func TestDockerClientBuild(t *testing.T) {
 	if gotQuery.Get("rm") != "1" {
 		t.Errorf("rm = %q", gotQuery.Get("rm"))
 	}
+	if gotQuery.Get("forcerm") != "1" {
+		t.Errorf("forcerm = %q; want 1", gotQuery.Get("forcerm"))
+	}
 	if gotQuery.Get("buildargs") != `{"NODE_ENV":"production"}` {
 		t.Errorf("buildargs = %q", gotQuery.Get("buildargs"))
 	}
@@ -171,6 +174,69 @@ func TestDockerClientBuildReportsDaemonError(t *testing.T) {
 	}, func([]byte) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "status 500") {
 		t.Fatalf("err = %v, want status 500", err)
+	}
+}
+
+// TestDockerClientBuildRedactsBuildArgsInError is the U5 regression: a failing
+// build must not echo the buildargs JSON (which can carry secrets) in its
+// error.
+func TestDockerClientBuildRedactsBuildArgsInError(t *testing.T) {
+	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"cannot connect to daemon"}`))
+	}))
+
+	err := client.Build(context.Background(), BuildOptions{
+		Tag:       "gotham/web:dep-1",
+		BuildArgs: map[string]string{"API_TOKEN": "s3cr3t-value"},
+		Context:   strings.NewReader("tar"),
+	}, func([]byte) error { return nil })
+	if err == nil {
+		t.Fatal("expected build error")
+	}
+	if strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Fatalf("error leaked a build-arg value: %v", err)
+	}
+	if !strings.Contains(err.Error(), "REDACTED") {
+		t.Fatalf("error should show the masked buildargs: %v", err)
+	}
+}
+
+func TestRedactQuerySecrets(t *testing.T) {
+	in := "/build?t=gotham%2Fweb%3Adep&buildargs=%7B%22TOKEN%22%3A%22secret%22%7D"
+	got := redactQuerySecrets(in)
+	if strings.Contains(got, "secret") {
+		t.Fatalf("redactQuerySecrets(%q) = %q; still contains the secret", in, got)
+	}
+	if !strings.Contains(got, "buildargs=REDACTED") {
+		t.Fatalf("redactQuerySecrets(%q) = %q; want buildargs=REDACTED", in, got)
+	}
+	if got := redactQuerySecrets("/_ping"); got != "/_ping" {
+		t.Fatalf("redactQuerySecrets(no query) = %q; want unchanged", got)
+	}
+}
+
+// TestDockerClientBuildRedactsBuildArgsInTransportError is the round-2 U1
+// regression: a dead daemon's *url.Error embeds the request URL (including the
+// buildargs query); the returned error must not expose the value.
+func TestDockerClientBuildRedactsBuildArgsInTransportError(t *testing.T) {
+	client, err := NewDockerClient("http://127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("new docker client: %v", err)
+	}
+	err = client.Build(context.Background(), BuildOptions{
+		Tag:       "gotham/web:dep-1",
+		BuildArgs: map[string]string{"API_TOKEN": "s3cr3t-value"},
+		Context:   strings.NewReader("tar"),
+	}, func([]byte) error { return nil })
+	if err == nil {
+		t.Fatal("expected a transport error")
+	}
+	if strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Fatalf("error leaked a build-arg value: %v", err)
+	}
+	if !errors.Is(err, ErrDockerUnavailable) {
+		t.Fatalf("err = %v; want ErrDockerUnavailable", err)
 	}
 }
 

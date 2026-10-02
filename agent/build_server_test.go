@@ -42,6 +42,11 @@ type fakeBuildClient struct {
 	toolchainArgs    map[string]string
 	toolchainErr     error
 	toolchainCalls   int
+
+	pruneCalls  int
+	pruneApp    string
+	pruneDeploy string
+	pruneErr    error
 }
 
 func (f *fakeBuildClient) EnsureRegistry(context.Context) (string, error) {
@@ -108,6 +113,13 @@ func (f *fakeBuildClient) ImageDigest(_ context.Context, ref string) (string, er
 		return "sha256:deadbeef", nil
 	}
 	return f.digest, nil
+}
+
+func (f *fakeBuildClient) PruneAppImages(_ context.Context, appID, keepDeploy string) error {
+	f.pruneCalls++
+	f.pruneApp = appID
+	f.pruneDeploy = keepDeploy
+	return f.pruneErr
 }
 
 // newBuildServiceClient starts an in-process BuildService server backed by
@@ -234,6 +246,9 @@ func TestBuildServerBuildImage(t *testing.T) {
 	}
 	if fake.digestRef != "127.0.0.1:5000/gotham/web:dep-1" {
 		t.Fatalf("digest ref = %q", fake.digestRef)
+	}
+	if fake.pruneCalls != 1 || fake.pruneApp != "web" || fake.pruneDeploy != "dep-1" {
+		t.Fatalf("prune call = (%d, %q, %q); want (1, web, dep-1)", fake.pruneCalls, fake.pruneApp, fake.pruneDeploy)
 	}
 
 	joined := strings.Join(logs, "")
@@ -460,5 +475,24 @@ func TestBuildServerPushError(t *testing.T) {
 	}
 	if !strings.Contains(status.Convert(err).Message(), "registry write denied") {
 		t.Fatalf("message = %q", status.Convert(err).Message())
+	}
+}
+
+// TestBuildServerPruneFailureDoesNotFailBuild pins the best-effort contract:
+// image retention runs after a successful push, and a cleanup failure is
+// logged, never surfaced as a build failure.
+func TestBuildServerPruneFailureDoesNotFailBuild(t *testing.T) {
+	fake := &fakeBuildClient{pruneErr: errors.New("daemon busy")}
+	client, _ := newBuildServiceClient(t, fake)
+
+	_, result, err := runBuild(t, client, &agentv1.BuildMeta{AppId: "web", DeployId: "dep-1"}, nil)
+	if err != nil {
+		t.Fatalf("build image: %v", err)
+	}
+	if result == nil {
+		t.Fatal("result is missing")
+	}
+	if fake.pruneCalls != 1 {
+		t.Fatalf("prune calls = %d; want 1", fake.pruneCalls)
 	}
 }

@@ -62,9 +62,21 @@ func (e *StaticEngine) Build(ctx context.Context, opts BuildOptions) (ImageRef, 
 	if e.builder == nil {
 		return ImageRef{}, fmt.Errorf("%w: no image builder configured", ErrValidation)
 	}
-	contextTar, err := buildContextTar(root, map[string][]byte{
-		staticDockerfile: staticDockerfileContent(),
-		".dockerignore":  []byte(staticDockerIgnore),
+	// The repository's .dockerignore is honoured from the repository root even
+	// when the site is rooted at public/: patterns are matched repository-
+	// relative, so `public/.env` excludes public/.env while a bare `index.html`
+	// matches only the repository root and cannot break a public/ site. The
+	// synthesized .dockerignore keeps Dockerfile.gotham (and itself) out of the
+	// served site: the daemon does not exclude a named Dockerfile from COPY on
+	// its own, but it does when the file is listed in the context's
+	// .dockerignore.
+	contextTar, err := buildContextTar(contextSpec{
+		root:      root,
+		ignoreDir: opts.RepoDir,
+		extra: map[string][]byte{
+			staticDockerfile: staticDockerfileContent(),
+			".dockerignore":  []byte(staticDockerIgnore),
+		},
 	})
 	if err != nil {
 		return ImageRef{}, err

@@ -89,6 +89,9 @@ func (c *DockerClient) Build(ctx context.Context, opts BuildOptions, emit func([
 	query.Set("t", opts.Tag)
 	query.Set("dockerfile", dockerfile)
 	query.Set("rm", "1")
+	// forcerm removes intermediate containers from failed build steps too; rm
+	// alone leaves them behind, accumulating one per failed deploy.
+	query.Set("forcerm", "1")
 	if len(opts.BuildArgs) > 0 {
 		encoded, err := json.Marshal(opts.BuildArgs)
 		if err != nil {

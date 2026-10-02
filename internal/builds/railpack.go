@@ -95,7 +95,7 @@ func (e *RailpackEngine) Build(ctx context.Context, opts BuildOptions) (ImageRef
 // extracts the context, runs the toolchain and pushes the image, so a
 // control-plane host does not need the CLI installed.
 func runToolchainOnBuilder(ctx context.Context, builder ImageBuilder, kind EngineKind, opts BuildOptions, tag string) (ImageRef, error) {
-	contextTar, err := buildContextTar(opts.RepoDir, nil)
+	contextTar, err := buildContextTar(contextSpec{root: opts.RepoDir})
 	if err != nil {
 		return ImageRef{}, err
 	}

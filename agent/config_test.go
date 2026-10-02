@@ -11,7 +11,7 @@ func clearAgentEnv(t *testing.T) {
 	for _, key := range []string{
 		envCPAddr, envNodeID, envListenAddr, envCA, envCertDir,
 		envKey, envInsecure, envDockerSock, envComposeRoot, envLogLevel, envDockerHost,
-		envManagedVolumeRoot, envSharedManagedVolumeRoot, envProxyRoot,
+		envManagedVolumeRoot, envSharedManagedVolumeRoot,
 	} {
 		t.Setenv(key, "")
 	}
@@ -39,9 +39,6 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ManagedVolumeRoot != defaultManagedVolumeRoot {
 		t.Errorf("ManagedVolumeRoot = %q; want %q", cfg.ManagedVolumeRoot, defaultManagedVolumeRoot)
-	}
-	if cfg.ProxyRoot != defaultTraefikDir {
-		t.Errorf("ProxyRoot = %q; want %q", cfg.ProxyRoot, defaultTraefikDir)
 	}
 	if cfg.LogLevel != defaultLogLevel {
 		t.Errorf("LogLevel = %q; want %q", cfg.LogLevel, defaultLogLevel)
@@ -101,7 +98,6 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(envComposeRoot, "/srv/gotham/compose")
 	t.Setenv(envLogLevel, "debug")
 	t.Setenv(envManagedVolumeRoot, "/srv/gotham/volumes")
-	t.Setenv(envProxyRoot, "/srv/gotham/traefik")
 
 	cfg, err := Load()
 	if err != nil {
@@ -137,9 +133,6 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.ManagedVolumeRoot != "/srv/gotham/volumes" {
 		t.Errorf("ManagedVolumeRoot = %q", cfg.ManagedVolumeRoot)
 	}
-	if cfg.ProxyRoot != "/srv/gotham/traefik" {
-		t.Errorf("ProxyRoot = %q", cfg.ProxyRoot)
-	}
 }
 
 func TestLoadFallsBackToDockerHost(t *testing.T) {
@@ -170,7 +163,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"node id with slash", envNodeID, "bad/id"},
 		{"overlong node id", envNodeID, strings.Repeat("a", maxNodeIDLength+1)},
 		{"relative managed volume root", envManagedVolumeRoot, "data/volumes"},
-		{"relative proxy root", envProxyRoot, "data/traefik"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

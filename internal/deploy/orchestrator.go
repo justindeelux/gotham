@@ -447,6 +447,7 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 	if err != nil {
 		return err
 	}
+	warnLegacyStorageResolution(o.logger, st.app.ID, storages)
 	request, err := buildRunRequest(st.app, st.dep, envVars, secrets, storages, o.secret)
 	if err != nil {
 		return err

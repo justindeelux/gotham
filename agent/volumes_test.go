@@ -145,12 +145,11 @@ func TestValidateContainerVolumesFailsClosedOnLstatError(t *testing.T) {
 // input rather than an internal failure.
 func TestDockerServerRejectsOutOfRootBind(t *testing.T) {
 	root := t.TempDir()
-	proxyRoot := t.TempDir()
 	appID := uuid.New()
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
 	agentv1.RegisterDockerServiceServer(server, NewDockerServer(&fakeDockerClient{}, discardLogger(),
-		WithManagedVolumeRoot(root), WithProxyVolumeRoot(proxyRoot)))
+		WithManagedVolumeRoot(root)))
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
 
@@ -187,7 +186,7 @@ func TestDockerServerRejectsOutOfRootBind(t *testing.T) {
 	proxy := &agentv1.CreateContainerRequest{
 		Image:   "traefik",
 		Name:    defaultTraefikContainerName,
-		Volumes: []string{filepath.Join(proxyRoot, "conf") + ":/etc/traefik:ro"},
+		Volumes: []string{filepath.Join(defaultTraefikDir, "conf") + ":/etc/traefik:ro"},
 		Labels:  map[string]string{labelComponent: componentProxy, "gotham.managed": "true"},
 	}
 	if _, err := client.RunImage(context.Background(), proxy); err != nil {

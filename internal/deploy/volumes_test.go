@@ -282,3 +282,48 @@ func TestWarnManagedVolumeRoot(t *testing.T) {
 		}
 	})
 }
+
+// TestManagedHostPathRejectsForgedNamespace pins Q1: a value that already
+// carries this application's prefix is accepted only when its suffix is
+// sanitized; a forged suffix (a colon, a space, an empty or traversal suffix)
+// is rejected instead of reaching the Docker spec verbatim.
+func TestManagedHostPathRejectsForgedNamespace(t *testing.T) {
+	root := t.TempDir()
+	appID := uuid.New()
+	prefix := appNamedVolumePrefix + appID.String() + "-"
+
+	for _, host := range []string{prefix + "x:/etc", prefix + "a b", prefix, prefix + ".."} {
+		if _, err := managedHostPath(root, appID, "data", host); !errors.Is(err, ErrValidation) {
+			t.Errorf("managedHostPath(%q) err = %v, want ErrValidation", host, err)
+		}
+		if _, err := normalizeStorages(appID, []Storage{{Name: "data", HostPath: host, ContainerPath: "/data"}}); !errors.Is(err, ErrValidation) {
+			t.Errorf("normalizeStorages(%q) err = %v, want ErrValidation", host, err)
+		}
+	}
+
+	sanitized := prefix + "a-b"
+	got, err := managedHostPath(root, appID, "data", sanitized)
+	if err != nil || got != sanitized {
+		t.Errorf("sanitized = %q, %v; want it unchanged", got, err)
+	}
+}
+
+// TestWarnLegacyStorageResolution pins Q3: a pre-change bare named volume warns
+// once at deploy, while an already-normalized row does not.
+func TestWarnLegacyStorageResolution(t *testing.T) {
+	appID := uuid.New()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	warnLegacyStorageResolution(logger, appID, []Storage{{Name: "data", HostPath: "cache"}})
+	if !strings.Contains(logs.String(), "re-namespaced at deploy") {
+		t.Errorf("logs = %q, want a deploy-time rename warning", logs.String())
+	}
+
+	logs.Reset()
+	normalized := appNamedVolumePrefix + appID.String() + "-cache"
+	warnLegacyStorageResolution(logger, appID, []Storage{{Name: "data", HostPath: normalized}})
+	if logs.Len() != 0 {
+		t.Errorf("logs = %q, want none for an already-normalized row", logs.String())
+	}
+}

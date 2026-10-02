@@ -62,8 +62,6 @@
 #                                 accepts (default /var/lib/gotham/volumes);
 #                                 falls back to the shared GOTHAM_MANAGED_VOLUME_ROOT.
 #                                 Every application bind must live in <root>/<app id>.
-#   GOTHAM_AGENT_PROXY_ROOT       node Traefik directory the proxy container may
-#                                 mount (default /var/lib/gotham-agent/traefik)
 # The agent's release public key is embedded at build time; GOTHAM_UPDATE_PUBLIC_KEY
 # is the development override and applies only when no key is embedded.
 

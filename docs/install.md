@@ -193,7 +193,6 @@ Useful agent installer flags and variables:
 | `GOTHAM_AGENT_CA` | The agent-side path the installer writes (`/etc/gotham/ca.crt`). It is **not** read from the ambient environment; on a reinstall the installer keeps the value already in `agent.env`. Use `--ca`/`GOTHAM_AGENT_CA_FILE` to change it. |
 | `GOTHAM_AGENT_UPDATE_CHANNEL` | Release channel this node accepts, `stable` (default) or `beta`; an offer with a different or empty channel is refused. |
 | `GOTHAM_AGENT_MANAGED_VOLUME_ROOT` | Parent of every application bind mount the node accepts (default `/var/lib/gotham/volumes`); falls back to the shared `GOTHAM_MANAGED_VOLUME_ROOT`. Must match the control plane. |
-| `GOTHAM_AGENT_PROXY_ROOT` | Node Traefik directory the proxy container may mount (default `/var/lib/gotham-agent/traefik`); also the proxy service's config root. |
 
 `GOTHAM_AGENT_CP_ADDR` must use a name or IP that is one of the control plane's
 listener SANs (see [Control plane](#control-plane)); otherwise the TLS handshake

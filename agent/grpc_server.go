@@ -70,16 +70,6 @@ func WithManagedVolumeRoot(root string) DockerServerOption {
 	}
 }
 
-// WithProxyVolumeRoot sets the node directory a proxy container may mount
-// (defaultTraefikDir). It exists so a relocated proxy root is mirrored here.
-func WithProxyVolumeRoot(root string) DockerServerOption {
-	return func(s *DockerServer) {
-		if strings.TrimSpace(root) != "" {
-			s.proxyVolumeRoot = root
-		}
-	}
-}
-
 // NewDockerServer returns a DockerService implementation backed by docker.
 func NewDockerServer(docker dockerClient, log *slog.Logger, options ...DockerServerOption) *DockerServer {
 	if log == nil {

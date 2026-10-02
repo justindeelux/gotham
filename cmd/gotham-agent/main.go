@@ -150,10 +150,9 @@ func runServe() int {
 				return
 			}
 			server, err := agent.NewServer(cfg.ListenAddr, creds, agent.NewDockerServer(docker, log,
-				agent.WithManagedVolumeRoot(cfg.ManagedVolumeRoot),
-				agent.WithProxyVolumeRoot(cfg.ProxyRoot)), log,
+				agent.WithManagedVolumeRoot(cfg.ManagedVolumeRoot)), log,
 				agent.WithBuildService(agent.NewBuildServer(docker, log)),
-				agent.WithProxyService(agent.NewProxyServer(agent.ProxyServerConfig{Root: cfg.ProxyRoot, Logger: log})),
+				agent.WithProxyService(agent.NewProxyServer(agent.ProxyServerConfig{Logger: log})),
 				agent.WithComposeService(agent.NewComposeServer(agent.ComposeServerConfig{
 					Root:       cfg.ComposeRoot,
 					DockerHost: cfg.DockerSock,

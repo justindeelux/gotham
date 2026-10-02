@@ -81,13 +81,19 @@ func managedHostPath(root string, appID uuid.UUID, name, host string) (string, e
 		if appID == uuid.Nil {
 			return "", fmt.Errorf("%w: storage %q named volume needs an application id", ErrValidation, name)
 		}
-		// Idempotent: a name already carrying this application's namespace is
-		// returned unchanged, so normalizing an already-normalized row (a
-		// GET→PUT round-trip) cannot double the prefix.
-		if strings.HasPrefix(host, appNamedVolumePrefix+appID.String()+"-") {
-			return host, nil
+		prefix := appNamedVolumePrefix + appID.String() + "-"
+		if strings.HasPrefix(host, prefix) {
+			// Idempotent ONLY when the suffix is already sanitized, so a
+			// round-tripped name is accepted while a forged value such as
+			// "gotham-app-<id>-x:/etc" or "...-a b" is rejected rather than
+			// reaching the Docker spec verbatim.
+			suffix := strings.TrimPrefix(host, prefix)
+			if suffix != "" && suffix == storageDirName(suffix) {
+				return host, nil
+			}
+			return "", fmt.Errorf("%w: storage %q named volume %q is malformed", ErrValidation, name, host)
 		}
-		return appNamedVolumePrefix + appID.String() + "-" + storageDirName(host), nil
+		return prefix + storageDirName(host), nil
 	}
 	if err := validateHostBind(root, appID, name, host); err != nil {
 		return "", err
@@ -199,4 +205,29 @@ func storageDirName(name string) string {
 		return "volume"
 	}
 	return cleaned
+}
+
+// warnLegacyStorageResolution logs once per deploy when a stored storage row
+// resolves to a different Docker mount source than it was saved with: a
+// pre-FX-5a bare named volume is re-namespaced at deploy time even without a
+// re-save, so the old volume is silently no longer mounted. An
+// already-normalized row resolves to itself and does not warn.
+func warnLegacyStorageResolution(logger *slog.Logger, appID uuid.UUID, storages []Storage) {
+	if logger == nil {
+		return
+	}
+	root := managedVolumeRoot()
+	for _, storage := range storages {
+		host := strings.TrimSpace(storage.HostPath)
+		if host == "" || strings.HasPrefix(host, "/") {
+			continue
+		}
+		resolved, err := managedHostPath(root, appID, storage.Name, host)
+		if err != nil || resolved == host {
+			continue
+		}
+		logger.Warn("deploy: legacy storage named volume re-namespaced at deploy; the old volume's data is not mounted",
+			"application_id", appID, "storage", storage.Name,
+			"previous_volume", host, "volume", resolved)
+	}
 }

@@ -158,6 +158,89 @@ func TestBackupEnforcesOwnership(t *testing.T) {
 	if _, err := fixture.manager.GetBackup(context.Background(), stranger, fixture.database.ID, uuid.New()); !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetBackup err = %v, want ErrNotFound", err)
 	}
+	if _, err := fixture.manager.ListRestores(context.Background(), stranger, fixture.database.ID, 0); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ListRestores err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestListRestoresReturnsDurableHistory is the D3-7 service regression: the
+// restore rows of the database come back newest first, bounded by the page
+// size, and another database's rows are excluded.
+func TestListRestoresReturnsDurableHistory(t *testing.T) {
+	fixture := newBackupFixture(t)
+	older := fixture.backups.seedRestore(Restore{
+		DatabaseID: fixture.database.ID,
+		BackupID:   uuid.New(),
+		Status:     RestoreFailed,
+		Error:      "interrupted",
+		CreatedAt:  time.Now().UTC().Add(-time.Hour),
+	})
+	newer := fixture.backups.seedRestore(Restore{
+		DatabaseID: fixture.database.ID,
+		BackupID:   uuid.New(),
+		Status:     RestoreCompleted,
+		CreatedAt:  time.Now().UTC(),
+	})
+	fixture.backups.seedRestore(Restore{
+		DatabaseID: uuid.New(),
+		BackupID:   uuid.New(),
+		Status:     RestoreCompleted,
+		CreatedAt:  time.Now().UTC(),
+	})
+
+	all, err := fixture.manager.ListRestores(context.Background(), fixture.userID, fixture.database.ID, 0)
+	if err != nil {
+		t.Fatalf("ListRestores: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("restores = %d, want 2", len(all))
+	}
+	if all[0].ID != newer.ID || all[1].ID != older.ID {
+		t.Errorf("order = %s, %s; want %s, %s", all[0].ID, all[1].ID, newer.ID, older.ID)
+	}
+
+	limited, err := fixture.manager.ListRestores(context.Background(), fixture.userID, fixture.database.ID, 1)
+	if err != nil {
+		t.Fatalf("ListRestores limited: %v", err)
+	}
+	if len(limited) != 1 || limited[0].ID != newer.ID {
+		t.Errorf("limited = %+v, want the newest row only", limited)
+	}
+}
+
+// TestUpdateTargetClearsOptionalFields is the D3-5 regression: an explicit
+// empty region/prefix clears the stored value, while an absent field keeps it.
+func TestUpdateTargetClearsOptionalFields(t *testing.T) {
+	fixture := newBackupFixture(t)
+	ctx := context.Background()
+	target, err := fixture.manager.CreateTarget(ctx, fixture.userID, TargetRequest{
+		Name: "r2", Kind: "s3", Endpoint: "https://s3.example.com",
+		Region: strPtr("auto"), Bucket: "b", Prefix: strPtr("pg/"),
+		AccessKey: "ak", SecretKey: "sk",
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+
+	// Absent optional fields keep the stored values.
+	kept, err := fixture.manager.UpdateTarget(ctx, fixture.userID, target.ID, TargetRequest{Name: "renamed"})
+	if err != nil {
+		t.Fatalf("UpdateTarget(keep): %v", err)
+	}
+	if kept.Region != "auto" || kept.Prefix != "pg/" {
+		t.Errorf("region/prefix = %q/%q, want the stored values kept", kept.Region, kept.Prefix)
+	}
+
+	// An explicit empty value clears it.
+	cleared, err := fixture.manager.UpdateTarget(ctx, fixture.userID, target.ID, TargetRequest{
+		Region: strPtr(""), Prefix: strPtr(""),
+	})
+	if err != nil {
+		t.Fatalf("UpdateTarget(clear): %v", err)
+	}
+	if cleared.Region != "" || cleared.Prefix != "" {
+		t.Errorf("region/prefix = %q/%q, want both cleared", cleared.Region, cleared.Prefix)
+	}
 }
 
 func TestBackupUsesObjectStoreSeam(t *testing.T) {
@@ -412,9 +495,9 @@ func TestTargetCredentialsAreSealed(t *testing.T) {
 		Name:      "r2",
 		Kind:      "s3",
 		Endpoint:  "https://account.r2.cloudflarestorage.com",
-		Region:    "auto",
+		Region:    strPtr("auto"),
 		Bucket:    "gotham-backups",
-		Prefix:    "pg-orders/",
+		Prefix:    strPtr("pg-orders/"),
 		AccessKey: "R2AK7f3c9a2b51de84",
 		SecretKey: "b7d41e90c3f5a28e6d0194bc7a3e52f0",
 	})
@@ -817,7 +900,7 @@ func TestUpdateTargetS3FieldsWithoutCredentialsKeepsStoredKeys(t *testing.T) {
 	updated, err := fixture.manager.UpdateTarget(ctx, fixture.userID, created.ID, TargetRequest{
 		Endpoint: "https://account2.r2.cloudflarestorage.com",
 		Bucket:   "gotham-backups-v2",
-		Prefix:   "pg-orders/",
+		Prefix:   strPtr("pg-orders/"),
 	})
 	if err != nil {
 		t.Fatalf("credential-less s3 update: %v", err)

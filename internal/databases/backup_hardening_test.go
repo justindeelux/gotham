@@ -519,7 +519,7 @@ func TestUpdateTargetLocksDestinationWithCompletedBackups(t *testing.T) {
 
 	// Renaming and changing the (read-irrelevant) prefix stay allowed.
 	if _, err := fixture.manager.UpdateTarget(ctx, fixture.userID, target.ID, TargetRequest{
-		Name: "renamed", Prefix: "new-prefix/",
+		Name: "renamed", Prefix: strPtr("new-prefix/"),
 	}); err != nil {
 		t.Fatalf("name/prefix update: %v", err)
 	}

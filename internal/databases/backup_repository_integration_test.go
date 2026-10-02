@@ -374,6 +374,88 @@ func TestListBackupsByDatabaseRespectsLimit(t *testing.T) {
 	}
 }
 
+// TestListRestoresByDatabaseRespectsLimit is the D3-7 integration regression:
+// the query returns a database's restores newest first, hides a soft-deleted
+// database's rows, and never exceeds the requested bound.
+func TestListRestoresByDatabaseRespectsLimit(t *testing.T) {
+	_, st := integrationEnv(t)
+	repo := newStoreBackupRepository(st)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	databaseRepo := newStoreRepository(st)
+
+	newDatabase := func(name string) Database {
+		database, err := databaseRepo.CreateDatabase(ctx, Database{
+			ID:          uuid.New(),
+			UserID:      ownerID,
+			ServerID:    serverID,
+			Name:        name,
+			Engine:      EnginePostgres,
+			Version:     "16-alpine",
+			Status:      StatusRunning,
+			StoragePath: "gotham-db-" + uuid.New().String(),
+			CreatedAt:   time.Now().UTC(),
+			UpdatedAt:   time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("CreateDatabase(%s): %v", name, err)
+		}
+		return database
+	}
+
+	live := newDatabase("restore-live")
+	removed := newDatabase("restore-removed")
+
+	seedRestore := func(databaseID uuid.UUID) Restore {
+		restore, err := repo.CreateRestore(ctx, Restore{
+			ID:         uuid.New(),
+			DatabaseID: databaseID,
+			BackupID:   uuid.New(),
+			Status:     RestoreRunning,
+		})
+		if err != nil {
+			t.Fatalf("CreateRestore: %v", err)
+		}
+		return restore
+	}
+
+	older := seedRestore(live.ID)
+	// Distinct created_at values so the newest-first assertion is deterministic.
+	time.Sleep(2 * time.Millisecond)
+	newer := seedRestore(live.ID)
+	seedRestore(removed.ID)
+	if _, err := databaseRepo.SoftDeleteDatabase(ctx, removed.ID); err != nil {
+		t.Fatalf("SoftDeleteDatabase: %v", err)
+	}
+
+	limited, err := repo.ListRestoresByDatabase(ctx, live.ID, 1)
+	if err != nil {
+		t.Fatalf("ListRestoresByDatabase(limit): %v", err)
+	}
+	if len(limited) != 1 || limited[0].ID != newer.ID {
+		t.Errorf("limited = %+v, want only the newest restore %s", limited, newer.ID)
+	}
+
+	all, err := repo.ListRestoresByDatabase(ctx, live.ID, maxBackupListLimit)
+	if err != nil {
+		t.Fatalf("ListRestoresByDatabase: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("live list = %d rows, want 2", len(all))
+	}
+	if all[0].ID != newer.ID || all[1].ID != older.ID {
+		t.Errorf("order = %s, %s; want %s, %s", all[0].ID, all[1].ID, newer.ID, older.ID)
+	}
+
+	hidden, err := repo.ListRestoresByDatabase(ctx, removed.ID, maxBackupListLimit)
+	if err != nil {
+		t.Fatalf("ListRestoresByDatabase(deleted): %v", err)
+	}
+	if len(hidden) != 0 {
+		t.Errorf("soft-deleted database returned %d restores, want 0", len(hidden))
+	}
+}
+
 // TestHasBackupsForTargetCountsLiveRuns exercises the destination lock query:
 // a running run locks the target (it will record the old destination), and a
 // target with no live or completed run does not.

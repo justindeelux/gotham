@@ -26,8 +26,10 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { describeBackupError } from "../api/backups";
 import type {
+  BackupSchedule,
   BackupTargetKind,
   DatabaseBackup,
+  DatabaseRestore,
 } from "../api/backups";
 import { describeDatabaseError } from "../api/databases";
 import type { Database } from "../api/databases";
@@ -37,6 +39,7 @@ import { useBackupsStore } from "../stores/backups";
 import { useDatabasesStore } from "../stores/databases";
 import { useServersStore } from "../stores/servers";
 import { formatBytes, relativeTime } from "../utils/format";
+import { advanceRestoreStatuses } from "../utils/restoreOutcomes";
 
 const route = useRoute();
 const router = useRouter();
@@ -51,6 +54,12 @@ const renameOpen = ref(false);
 const renameValue = ref("");
 const renaming = ref(false);
 const revealed = ref(false);
+
+// The detail page owns its own load state: the list store's flags describe the
+// polling list, not this row's fetch, so a failed detail load would otherwise
+// render an empty shell with no explanation.
+const pageLoading = ref(false);
+const pageError = ref<string | null>(null);
 
 const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/;
 
@@ -135,14 +144,19 @@ function copyCredential(field: CredentialField, label: string): void {
 /** fetchAll loads the row, its credentials and the node list. */
 async function fetchAll(): Promise<void> {
   if (!dbId.value) {
+    pageError.value = "No database selected.";
     return;
   }
+  pageLoading.value = true;
+  pageError.value = null;
   try {
     await databasesStore.fetchDatabase(dbId.value);
   } catch (error) {
-    message.error(describeDatabaseError(error));
+    pageError.value = describeDatabaseError(error);
+    pageLoading.value = false;
     return;
   }
+  pageLoading.value = false;
   try {
     await databasesStore.fetchCredentials(dbId.value);
   } catch {
@@ -227,6 +241,7 @@ const restoring = ref(false);
 const scheduleCron = ref("");
 const scheduleTargetId = ref("");
 const scheduleEnabled = ref(true);
+const editingScheduleId = ref<string | null>(null);
 
 const targetEditingId = ref<string | null>(null);
 const targetName = ref("");
@@ -259,6 +274,34 @@ const hasRunningBackup = computed<boolean>(() =>
   backups.value.some((item) => item.status === "running"),
 );
 
+/** restores renders the durable restore runs newest first. */
+const restores = computed<DatabaseRestore[]>(() => {
+  const list = backupsStore.restoresOf(dbId.value);
+  return [...list].sort((a, b) => b.created_at.localeCompare(a.created_at));
+});
+
+// Restores queued in this tab but not yet observed in a list response. They
+// keep the poll alive when the first post-queue list fetch fails, and are
+// dropped once a list reports them.
+const pendingRestoreIds = ref<Set<string>>(new Set());
+
+/** hasRunningRestore keeps the poll alive until a queued restore finishes. */
+const hasRunningRestore = computed<boolean>(
+  () =>
+    pendingRestoreIds.value.size > 0 ||
+    restores.value.some((item) => item.status === "running"),
+);
+
+// Last status seen per restore id, so a running→terminal transition can toast
+// exactly once. Kept outside reactivity: it is bookkeeping, not UI state.
+const lastRestoreStatus = new Map<string, string>();
+
+// Monotonic token for the restore poll: it gates the poll's own notify, so an
+// older overlapping poll cannot announce a status a newer one already handled.
+// The store write itself is unconditional; the monotonic seen-status map in
+// advanceRestoreStatuses is what stops a stale list from re-arming a toast.
+let restorePollEpoch = 0;
+
 /** backupTargetOptions lists the destination choices for backup-now. */
 const backupTargetOptions = computed<SelectOption[]>(() => {
   const options: SelectOption[] = [
@@ -278,9 +321,9 @@ const scheduleTargetOptions = computed<SelectOption[]>(
   () => backupTargetOptions.value,
 );
 
-/** statusTagType maps a backup status to a Naive UI tag type. */
+/** statusTagType maps a backup or restore status to a Naive UI tag type. */
 function statusTagType(
-  status: DatabaseBackup["status"],
+  status: DatabaseBackup["status"] | DatabaseRestore["status"],
 ): "success" | "warning" | "error" {
   if (status === "completed") {
     return "success";
@@ -299,33 +342,94 @@ function targetLabel(targetId: string | undefined): string {
   return backupsStore.targetOf(targetId)?.name ?? "deleted target";
 }
 
-/** fetchBackupTab loads backups, schedules and targets for the tab. */
+/** fetchBackupTab loads backups, restores, schedules and targets for the tab. */
 async function fetchBackupTab(): Promise<void> {
   if (!dbId.value) {
     return;
   }
   await Promise.allSettled([
     backupsStore.fetchBackups(dbId.value),
+    backupsStore.fetchRestores(dbId.value),
     backupsStore.fetchSchedules(dbId.value),
     backupsStore.fetchTargets(),
   ]);
+  // Seed the status of every restore the first fetch returned, so a restore
+  // that was already running when the tab opened still toasts on completion
+  // instead of being skipped by the first-poll "previous === undefined" case.
+  // advanceRestoreStatuses is monotonic, so a slow stale GET cannot re-arm a
+  // toast a poll already fired.
+  notifyRestoreOutcomes();
 }
 
 /** stopBackupPolling clears the running-job refresh interval. */
 function stopBackupPolling(): void {
+  // No epoch bump here: stopping because a restore just completed must not
+  // suppress the poll that observed it (that poll still has to notify). The
+  // poll epoch is bumped only when a new poll starts.
   if (backupPollTimer !== null) {
     clearInterval(backupPollTimer);
     backupPollTimer = null;
   }
 }
 
-/** syncBackupPolling refreshes every 5s while a backup is running. */
+/** reconcilePendingRestores drops queued ids once a list reports them. */
+function reconcilePendingRestores(): void {
+  if (pendingRestoreIds.value.size === 0) {
+    return;
+  }
+  const seen = new Set(restores.value.map((item) => item.id));
+  const next = new Set<string>();
+  for (const id of pendingRestoreIds.value) {
+    if (!seen.has(id)) {
+      next.add(id);
+    }
+  }
+  if (next.size !== pendingRestoreIds.value.size) {
+    pendingRestoreIds.value = next;
+  }
+}
+
+/** notifyRestoreOutcomes toasts a restore that just reached a terminal state. */
+function notifyRestoreOutcomes(): void {
+  reconcilePendingRestores();
+  for (const outcome of advanceRestoreStatuses(
+    lastRestoreStatus,
+    restores.value,
+  )) {
+    if (outcome.status === "completed") {
+      message.success("Restore completed");
+    } else {
+      message.error(outcome.error || "Restore failed");
+    }
+  }
+}
+
+/** pollRunningJobs refreshes backups and restores while either has a live job. */
+async function pollRunningJobs(id: string): Promise<void> {
+  const epoch = ++restorePollEpoch;
+  await Promise.allSettled([
+    backupsStore.refreshBackups(id),
+    backupsStore.refreshRestores(id),
+  ]);
+  // An older overlapping poll was superseded: ignore its notify. The completion
+  // itself still fires from the watcher below, which is not epoch-gated.
+  if (epoch !== restorePollEpoch) {
+    return;
+  }
+  notifyRestoreOutcomes();
+}
+
+/** syncBackupPolling refreshes every 5s while a backup or restore is running. */
 function syncBackupPolling(): void {
   stopBackupPolling();
-  if (activeTab.value === "backups" && hasRunningBackup.value && dbId.value) {
+  if (
+    activeTab.value === "backups" &&
+    (hasRunningBackup.value || hasRunningRestore.value) &&
+    dbId.value
+  ) {
     const id = dbId.value;
     backupPollTimer = setInterval(() => {
-      void backupsStore.refreshBackups(id);
+      void pollRunningJobs(id);
     }, 5_000);
   }
 }
@@ -363,18 +467,55 @@ async function handleRestoreConfirm(): Promise<void> {
   }
   restoring.value = true;
   try {
-    await backupsStore.restore(dbId.value, restoreCandidate.value.id);
+    const queued = await backupsStore.restore(
+      dbId.value,
+      restoreCandidate.value.id,
+    );
     message.success("Restore queued · the database is stopped while it runs");
     restoreOpen.value = false;
     restoreCandidate.value = null;
+    // Seed the queued status from the 202 answer: the row can reach a terminal
+    // state before the first list fetch, and the transition would otherwise be
+    // missed. The pending id also keeps polling alive if that fetch fails.
+    if (queued.restore_id) {
+      lastRestoreStatus.set(queued.restore_id, queued.status);
+      pendingRestoreIds.value = new Set(pendingRestoreIds.value).add(
+        queued.restore_id,
+      );
+    }
+    // refreshRestores swallows a failed read (the queue already succeeded), so
+    // a transient list error cannot hide the "queued" result or skip the poll.
+    await backupsStore.refreshRestores(dbId.value);
+    notifyRestoreOutcomes();
   } catch (error) {
     message.error(describeBackupError(error));
   } finally {
+    syncBackupPolling();
     restoring.value = false;
   }
 }
 
-/** handleCreateSchedule stores one cron entry for this database. */
+/** resetScheduleForm clears the schedule editor back to a create. */
+function resetScheduleForm(): void {
+  editingScheduleId.value = null;
+  scheduleCron.value = "";
+  scheduleTargetId.value = "";
+  scheduleEnabled.value = true;
+}
+
+/** openScheduleEdit prefills the editor from an existing schedule. */
+function openScheduleEdit(schedule: BackupSchedule): void {
+  editingScheduleId.value = schedule.id;
+  scheduleCron.value = schedule.cron;
+  // A schedule may outlive its target; only prefill an id that still exists,
+  // or saving would PATCH a dead target and 404.
+  scheduleTargetId.value = backupsStore.targetOf(schedule.target_id)
+    ? schedule.target_id ?? ""
+    : "";
+  scheduleEnabled.value = schedule.enabled;
+}
+
+/** handleCreateSchedule creates or updates one cron entry. */
 async function handleCreateSchedule(): Promise<void> {
   const cron = scheduleCron.value.trim();
   if (cron === "") {
@@ -382,31 +523,39 @@ async function handleCreateSchedule(): Promise<void> {
     return;
   }
   try {
-    await backupsStore.addSchedule(dbId.value, {
-      cron,
-      target_id: scheduleTargetId.value,
-      enabled: scheduleEnabled.value,
-    });
-    message.success(`Schedule saved · next run computed from ${cron}`);
-    scheduleCron.value = "";
+    if (editingScheduleId.value !== null) {
+      await backupsStore.editSchedule(dbId.value, editingScheduleId.value, {
+        cron,
+        target_id: scheduleTargetId.value,
+        enabled: scheduleEnabled.value,
+      });
+      message.success(`Schedule updated · next run computed from ${cron}`);
+    } else {
+      await backupsStore.addSchedule(dbId.value, {
+        cron,
+        target_id: scheduleTargetId.value,
+        enabled: scheduleEnabled.value,
+      });
+      message.success(`Schedule saved · next run computed from ${cron}`);
+    }
+    resetScheduleForm();
   } catch (error) {
     message.error(describeBackupError(error));
   }
 }
 
-/** handleToggleSchedule flips one schedule, resending its cron. */
+/**
+ * handleToggleSchedule flips one schedule. It sends only cron and enabled: the
+ * stored target is left untouched, so a schedule whose target was deleted can
+ * still be paused instead of failing the PATCH with a 404.
+ */
 async function handleToggleSchedule(
   scheduleId: string,
   cron: string,
-  targetId: string | undefined,
   enabled: boolean,
 ): Promise<void> {
   try {
-    await backupsStore.editSchedule(dbId.value, scheduleId, {
-      cron,
-      target_id: targetId ?? "",
-      enabled,
-    });
+    await backupsStore.editSchedule(dbId.value, scheduleId, { cron, enabled });
     message.success(enabled ? "Schedule enabled" : "Schedule paused");
   } catch (error) {
     message.error(describeBackupError(error));
@@ -417,6 +566,9 @@ async function handleToggleSchedule(
 async function handleDeleteSchedule(scheduleId: string): Promise<void> {
   try {
     await backupsStore.removeSchedule(dbId.value, scheduleId);
+    if (editingScheduleId.value === scheduleId) {
+      resetScheduleForm();
+    }
     message.success("Schedule deleted");
   } catch (error) {
     message.error(describeBackupError(error));
@@ -451,6 +603,9 @@ function openTargetEdit(targetId: string): void {
   targetPrefix.value = target.prefix ?? "";
   targetAccessKey.value = "";
   targetSecretKey.value = "";
+  // The last test result described the stored configuration; editing may
+  // change it, so a stale "connected" must not survive the edit.
+  delete targetTests.value[targetId];
 }
 
 /** handleSaveTarget creates or updates a target from the editor. */
@@ -497,6 +652,7 @@ async function handleSaveTarget(): Promise<void> {
         access_key: targetAccessKey.value,
         secret_key: targetSecretKey.value,
       });
+      delete targetTests.value[targetEditingId.value];
       message.success(`Target "${name}" updated`);
     }
     resetTargetForm();
@@ -509,6 +665,15 @@ async function handleSaveTarget(): Promise<void> {
 async function handleDeleteTarget(targetId: string, name: string): Promise<void> {
   try {
     await backupsStore.removeTarget(targetId);
+    // Drop any selection or editor reference to the deleted target, or the
+    // next backup/schedule action would PATCH a dead id and 404.
+    if (backupTargetId.value === targetId) {
+      backupTargetId.value = "";
+    }
+    if (scheduleTargetId.value === targetId) {
+      scheduleTargetId.value = "";
+    }
+    delete targetTests.value[targetId];
     message.success(`Target "${name}" deleted`);
   } catch (error) {
     message.error(describeBackupError(error));
@@ -540,6 +705,9 @@ watch(dbId, () => {
   restoreOpen.value = false;
   restoreCandidate.value = null;
   resetTargetForm();
+  resetScheduleForm();
+  lastRestoreStatus.clear();
+  pendingRestoreIds.value = new Set();
   stopBackupPolling();
   void fetchAll();
 });
@@ -552,6 +720,13 @@ watch(activeTab, () => {
 });
 
 watch(hasRunningBackup, () => {
+  syncBackupPolling();
+});
+
+watch(hasRunningRestore, () => {
+  // Notify before the stop: a completion flips this to false and stops the
+  // interval, and the toast must still fire for the poll that observed it.
+  notifyRestoreOutcomes();
   syncBackupPolling();
 });
 
@@ -574,14 +749,23 @@ onUnmounted(() => {
       <span class="muted mono">{{ database?.name ?? shortId }}</span>
     </nav>
 
-    <NSpin :show="databasesStore.loading">
+    <NSpin :show="pageLoading">
       <NAlert
-        v-if="databasesStore.error"
+        v-if="pageError"
         type="error"
         :show-icon="true"
         style="margin-bottom: 12px"
       >
-        {{ databasesStore.error }}
+        {{ pageError }}
+      </NAlert>
+      <NAlert
+        v-else-if="!pageLoading && !database"
+        type="warning"
+        :show-icon="true"
+        style="margin-bottom: 12px"
+      >
+        Database not found. It may have been deleted or belong to another
+        account.
       </NAlert>
 
       <div class="page-head">
@@ -767,14 +951,19 @@ onUnmounted(() => {
                   >
                     Refresh
                   </NButton>
-                  <NButton
-                    size="small"
-                    type="primary"
-                    :loading="backupsStore.backupsActing"
-                    @click="() => void handleBackupNow()"
-                  >
-                    Backup now
-                  </NButton>
+                  <NPopconfirm @positive-click="() => void handleBackupNow()">
+                    <template #trigger>
+                      <NButton
+                        size="small"
+                        type="primary"
+                        :loading="backupsStore.backupsActing"
+                      >
+                        Backup now
+                      </NButton>
+                    </template>
+                    A backup stops this database while the dump runs, so it is
+                    briefly unavailable. Continue?
+                  </NPopconfirm>
                 </NSpace>
               </template>
               <NAlert
@@ -816,7 +1005,11 @@ onUnmounted(() => {
                           {{ backup.type }}
                         </NTag>
                         <NText class="mono" depth="3">
-                          {{ formatBytes(backup.size) }}
+                          {{
+                            backup.status === "running"
+                              ? "size pending"
+                              : formatBytes(backup.size)
+                          }}
                         </NText>
                       </NSpace>
                       <NText class="mono backup-row__location">
@@ -880,6 +1073,58 @@ onUnmounted(() => {
               </NSpin>
             </NCard>
 
+            <NCard v-if="restores.length > 0" title="Restore history">
+              <template #header-extra>
+                <NText depth="3">Durable result of each queued restore</NText>
+              </template>
+              <NAlert
+                v-if="backupsStore.restoresError"
+                type="error"
+                :show-icon="true"
+                style="margin-bottom: 12px"
+              >
+                {{ backupsStore.restoresError }}
+              </NAlert>
+              <NSpin :show="backupsStore.restoresLoading">
+                <NSpace vertical :size="12" style="width: 100%">
+                  <div
+                    v-for="restore in restores"
+                    :key="restore.id"
+                    class="backup-row"
+                  >
+                    <div class="backup-row__main">
+                      <NSpace align="center" :size="8">
+                        <NTag :type="statusTagType(restore.status)" size="small">
+                          {{ restore.status }}
+                        </NTag>
+                        <NText class="mono" depth="3">
+                          backup {{ restore.backup_id.slice(0, 8) }}
+                        </NText>
+                      </NSpace>
+                      <NText
+                        v-if="restore.error"
+                        type="error"
+                        class="backup-row__error"
+                      >
+                        {{ restore.error }}
+                      </NText>
+                      <NText depth="3">
+                        <span :title="restore.created_at">
+                          {{ relativeTime(restore.created_at) }}
+                        </span>
+                        <span v-if="restore.finished_at">
+                          · finished
+                          <span :title="restore.finished_at">
+                            {{ relativeTime(restore.finished_at) }}
+                          </span>
+                        </span>
+                      </NText>
+                    </div>
+                  </div>
+                </NSpace>
+              </NSpin>
+            </NCard>
+
             <NCard title="Schedules">
               <template #header-extra>
                 <NText depth="3">Cron in the control plane</NText>
@@ -935,7 +1180,6 @@ onUnmounted(() => {
                             void handleToggleSchedule(
                               schedule.id,
                               schedule.cron,
-                              schedule.target_id,
                               enabled,
                             )
                         "
@@ -943,6 +1187,9 @@ onUnmounted(() => {
                         <template #checked>On</template>
                         <template #unchecked>Off</template>
                       </NSwitch>
+                      <NButton size="small" secondary @click="openScheduleEdit(schedule)">
+                        Edit
+                      </NButton>
                       <NPopconfirm
                         @positive-click="
                           () => void handleDeleteSchedule(schedule.id)
@@ -964,6 +1211,9 @@ onUnmounted(() => {
                 />
               </NSpin>
               <div class="schedule-form">
+                <NText strong>
+                  {{ editingScheduleId === null ? "New schedule" : "Edit schedule" }}
+                </NText>
                 <NSpace align="center" :size="8">
                   <NButton
                     v-for="preset in CRON_PRESETS"
@@ -998,7 +1248,15 @@ onUnmounted(() => {
                     :disabled="scheduleCron.trim() === ''"
                     @click="() => void handleCreateSchedule()"
                   >
-                    Add schedule
+                    {{
+                      editingScheduleId === null ? "Add schedule" : "Save schedule"
+                    }}
+                  </NButton>
+                  <NButton
+                    v-if="editingScheduleId !== null"
+                    @click="resetScheduleForm()"
+                  >
+                    Cancel
                   </NButton>
                 </div>
               </div>

@@ -101,6 +101,13 @@ interface CredentialsEnvelope {
   credentials: DatabaseCredentials;
 }
 
+/**
+ * Provisioning pulls an engine image and starts a container, which waits on
+ * the node agent for 30-90s — far beyond the shared 15s request timeout. The
+ * create call therefore overrides the timeout for itself only.
+ */
+const provisioningTimeoutMs = 120_000;
+
 /** Created database together with the credentials generated for it. */
 export interface CreatedDatabase {
   database: Database;
@@ -148,6 +155,7 @@ export async function createDatabase(
   const response = await http.post<CreateDatabaseEnvelope>(
     "/databases",
     body,
+    { timeout: provisioningTimeoutMs },
   );
   return {
     database: response.data.database,

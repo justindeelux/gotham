@@ -75,7 +75,7 @@ const dotPulse = computed<boolean>(() => pulsing.has(props.status));
 }
 
 .dot--stopped {
-  background: var(--warning);
+  background: var(--warn);
 }
 
 .dot--error {

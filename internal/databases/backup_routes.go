@@ -46,6 +46,22 @@ type restoreEnvelope struct {
 	Restore RestoreResult `json:"restore"`
 }
 
+// restoreResponse is the wire representation of one durable restore run.
+type restoreResponse struct {
+	ID         string        `json:"id"`
+	DatabaseID string        `json:"database_id"`
+	BackupID   string        `json:"backup_id"`
+	Status     RestoreStatus `json:"status"`
+	Error      string        `json:"error,omitempty"`
+	CreatedAt  time.Time     `json:"created_at"`
+	FinishedAt *time.Time    `json:"finished_at,omitempty"`
+}
+
+// restoreListEnvelope wraps a restore list.
+type restoreListEnvelope struct {
+	Restores []restoreResponse `json:"restores"`
+}
+
 // scheduleResponse is the wire representation of a schedule.
 type scheduleResponse struct {
 	ID         string     `json:"id"`
@@ -135,6 +151,7 @@ type backupHandler struct {
 //	GET    /v1/databases/{id}/backups
 //	GET    /v1/databases/{id}/backups/{backupId}
 //	DELETE /v1/databases/{id}/backups/{backupId}
+//	GET    /v1/databases/{id}/restores
 //	GET    /v1/databases/{id}/schedules
 //	POST   /v1/databases/{id}/schedules
 //	PATCH  /v1/databases/{id}/schedules/{scheduleId}
@@ -166,6 +183,7 @@ func MountBackups(r chi.Router, dbAuth func(http.Handler) http.Handler, targetAu
 		protected.Get("/v1/databases/{id}/backups", h.listBackups)
 		protected.Get("/v1/databases/{id}/backups/{backupId}", h.getBackup)
 		protected.Delete("/v1/databases/{id}/backups/{backupId}", h.deleteBackup)
+		protected.Get("/v1/databases/{id}/restores", h.listRestores)
 		protected.Get("/v1/databases/{id}/schedules", h.listSchedules)
 		protected.Post("/v1/databases/{id}/schedules", h.createSchedule)
 		protected.Patch("/v1/databases/{id}/schedules/{scheduleId}", h.updateSchedule)
@@ -263,6 +281,31 @@ func (h *backupHandler) getBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, backupEnvelope{Backup: newBackupResponse(backup)})
+}
+
+// listRestores serves GET .../databases/{id}/restores: the durable restore
+// history of the database, newest first, bounded by the same ?limit= page size
+// as the backup list. It is how a client follows a queued restore (HTTP 202)
+// to its terminal completed/failed state.
+func (h *backupHandler) listRestores(w http.ResponseWriter, r *http.Request) {
+	userID, databaseID, ok := h.databaseParams(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := h.optionalLimit(w, r)
+	if !ok {
+		return
+	}
+	restores, err := h.svc.ListRestores(r.Context(), userID, databaseID, limit)
+	if err != nil {
+		h.writeBackupError(w, err)
+		return
+	}
+	response := make([]restoreResponse, 0, len(restores))
+	for _, restore := range restores {
+		response = append(response, newRestoreResponse(restore))
+	}
+	writeJSON(w, http.StatusOK, restoreListEnvelope{Restores: response})
 }
 
 // deleteBackup serves DELETE .../databases/{id}/backups/{backupId}: the
@@ -551,6 +594,23 @@ func newBackupResponse(backup Backup) backupResponse {
 	}
 	if !backup.FinishedAt.IsZero() {
 		finished := backup.FinishedAt
+		response.FinishedAt = &finished
+	}
+	return response
+}
+
+// newRestoreResponse maps a durable restore to its wire representation.
+func newRestoreResponse(restore Restore) restoreResponse {
+	response := restoreResponse{
+		ID:         restore.ID.String(),
+		DatabaseID: restore.DatabaseID.String(),
+		BackupID:   restore.BackupID.String(),
+		Status:     restore.Status,
+		Error:      restore.Error,
+		CreatedAt:  restore.CreatedAt,
+	}
+	if !restore.FinishedAt.IsZero() {
+		finished := restore.FinishedAt
 		response.FinishedAt = &finished
 	}
 	return response

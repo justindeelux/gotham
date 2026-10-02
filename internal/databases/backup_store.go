@@ -64,6 +64,33 @@ var (
 	}
 )
 
+// fsyncDirChain flushes the entry of dir and every ancestor up to and including
+// root. MkdirAll can create several levels in one call, and the file's own
+// directory entry is only reachable after each created level's entry is
+// durable.
+func fsyncDirChain(dir, root string) error {
+	dir, root = filepath.Clean(dir), filepath.Clean(root)
+	for {
+		if err := fsyncDir(dir); err != nil {
+			return err
+		}
+		if dir == root || !pathWithin(root, dir) {
+			return nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
+	}
+}
+
+// pathWithin reports whether dir is root or lives under it.
+func pathWithin(root, dir string) bool {
+	rel, err := filepath.Rel(root, dir)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // newLocalStore returns a store rooted at dir, creating it if needed.
 func newLocalStore(dir string) (*localStore, error) {
 	if strings.TrimSpace(dir) == "" {
@@ -118,10 +145,10 @@ func (s *localStore) Put(_ context.Context, key string, data io.Reader, size int
 		_ = os.Remove(target)
 		return "", fmt.Errorf("databases: wrote %d bytes, expected %d", written, size)
 	}
-	// The file is durable; flushing its directory makes the name reachable
-	// after a crash, so the completion write that follows cannot outlive the
-	// artifact it describes.
-	if err := fsyncDir(filepath.Dir(target)); err != nil {
+	// The file is durable; flushing its directory and each ancestor MkdirAll
+	// created makes the name reachable after a crash, so the completion write
+	// that follows cannot outlive the artifact it describes.
+	if err := fsyncDirChain(filepath.Dir(target), s.dir); err != nil {
 		_ = os.Remove(target)
 		return "", fmt.Errorf("databases: flush backup directory: %w", err)
 	}

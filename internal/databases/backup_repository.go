@@ -24,6 +24,11 @@ import (
 type BackupRepository interface {
 	// CreateBackup stores a new run, always in the running state.
 	CreateBackup(ctx context.Context, backup Backup) (Backup, error)
+	// CreateBackupWithTarget stores a new run and, when it references a storage
+	// target, returns the target row read under a shared lock in the same
+	// transaction. The returned target is the configuration the destination
+	// lock observed, so a concurrent destination edit cannot strand the run.
+	CreateBackupWithTarget(ctx context.Context, backup Backup) (Backup, *BackupTarget, error)
 	// GetBackup returns a run joined to a live database, or ErrNotFound.
 	GetBackup(ctx context.Context, backupID uuid.UUID) (Backup, error)
 	// ListBackupsByDatabase returns up to limit of a database's runs, newest
@@ -119,6 +124,34 @@ func (r *storeBackupRepository) CreateBackup(ctx context.Context, backup Backup)
 		return Backup{}, fmt.Errorf("databases: create backup: %w", err)
 	}
 	return backupFromRow(row), nil
+}
+
+// CreateBackupWithTarget implements BackupRepository.
+func (r *storeBackupRepository) CreateBackupWithTarget(ctx context.Context, backup Backup) (Backup, *BackupTarget, error) {
+	row, target, err := r.store.CreateBackupWithTarget(ctx, sqlc.CreateBackupParams{
+		ID:          pgUUID(backup.ID),
+		DatabaseID:  pgUUID(backup.DatabaseID),
+		ScheduleID:  pgUUID(backup.ScheduleID),
+		Type:        string(backup.Type),
+		Status:      string(backup.Status),
+		Size:        backup.Size,
+		Location:    backup.Location,
+		TargetID:    pgUUID(backup.TargetID),
+		ContainerID: backup.ContainerID,
+		Error:       backup.Error,
+		FinishedAt:  timeToPG(backup.FinishedAt),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Backup{}, nil, ErrNotFound
+		}
+		return Backup{}, nil, fmt.Errorf("databases: create backup: %w", err)
+	}
+	if target == nil {
+		return backupFromRow(row), nil, nil
+	}
+	live := targetFromRow(*target)
+	return backupFromRow(row), &live, nil
 }
 
 // GetBackup implements BackupRepository, mapping a missing row to ErrNotFound.
@@ -383,7 +416,7 @@ func (r *storeBackupRepository) UpdateBackupTarget(ctx context.Context, target B
 
 // UpdateBackupTargetWithSecrets implements BackupRepository.
 func (r *storeBackupRepository) UpdateBackupTargetWithSecrets(ctx context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error) {
-	row, err := r.store.UpdateBackupTargetWithSecrets(ctx, sqlc.UpdateBackupTargetParams{
+	row, stranded, err := r.store.UpdateBackupTargetWithSecrets(ctx, sqlc.UpdateBackupTargetParams{
 		ID:       pgUUID(target.ID),
 		Name:     target.Name,
 		Kind:     string(target.Kind),
@@ -400,6 +433,9 @@ func (r *storeBackupRepository) UpdateBackupTargetWithSecrets(ctx context.Contex
 			return BackupTarget{}, ErrNotFound
 		}
 		return BackupTarget{}, fmt.Errorf("databases: update backup target: %w", err)
+	}
+	if stranded {
+		return BackupTarget{}, ErrTargetStranded
 	}
 	return targetFromRow(row), nil
 }

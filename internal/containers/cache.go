@@ -59,23 +59,65 @@ func (c *RedisCache) Get(ctx context.Context, serverID uuid.UUID) ([]Container, 
 	if err != nil {
 		return nil, false, err
 	}
-	var containers []Container
-	if err := json.Unmarshal(raw, &containers); err != nil {
+	containers, err := decodeContainers(raw)
+	if err != nil {
 		return nil, false, err
-	}
-	if containers == nil {
-		containers = []Container{}
 	}
 	return containers, true, nil
 }
 
 // Set caches the list with the default TTL.
 func (c *RedisCache) Set(ctx context.Context, serverID uuid.UUID, containers []Container) error {
-	raw, err := json.Marshal(containers)
+	raw, err := encodeContainers(containers)
 	if err != nil {
 		return err
 	}
 	return c.client.Set(ctx, c.key(serverID), raw, c.ttl).Err()
+}
+
+// cachedContainer is the cache's wire form of a Container. Container's public
+// JSON tags deliberately hide internal evidence (labels, mounts, restart
+// policy) from API responses, so a plain json.Marshal would strip them and a
+// cache hit would look like a container with no labels — silently defeating any
+// caller that reads them. The cache therefore round-trips the full record
+// through this codec.
+type cachedContainer struct {
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Image         string            `json:"image"`
+	State         string            `json:"state"`
+	Status        string            `json:"status"`
+	Ports         []string          `json:"ports"`
+	Created       *time.Time        `json:"created,omitempty"`
+	PortsReported bool              `json:"ports_reported,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	Mounts        []ContainerMount  `json:"mounts,omitempty"`
+	RestartPolicy string            `json:"restart_policy,omitempty"`
+}
+
+// encodeContainers serialises a list for the cache, preserving internal
+// evidence that Container's API tags omit. cachedContainer has the same fields
+// as Container but with JSON tags, so the conversion is a reinterpretation.
+func encodeContainers(containers []Container) ([]byte, error) {
+	cached := make([]cachedContainer, 0, len(containers))
+	for _, container := range containers {
+		cached = append(cached, cachedContainer(container))
+	}
+	return json.Marshal(cached)
+}
+
+// decodeContainers reverses encodeContainers. The list is never nil so the API
+// renders [] rather than null.
+func decodeContainers(raw []byte) ([]Container, error) {
+	var cached []cachedContainer
+	if err := json.Unmarshal(raw, &cached); err != nil {
+		return nil, err
+	}
+	containers := make([]Container, 0, len(cached))
+	for _, item := range cached {
+		containers = append(containers, Container(item))
+	}
+	return containers, nil
 }
 
 // Invalidate drops the cached list for a server after a mutation.

@@ -30,10 +30,9 @@ func (m *BackupManager) startRun(ctx context.Context, database Database, target 
 	// a database can belong to a team: a member could otherwise back up a
 	// database they share to their own S3 target, and the read path — which
 	// resolves the target by the database owner — would then 404 on every
-	// restore. Only the database owner's S3 targets are usable, so any
-	// accepted run is restorable by the database's team. Local targets carry
-	// their bytes as a file:// location and need no target to read back, so
-	// they are not bound to the database owner.
+	// restore. An S3 target is therefore usable only when its owner is the
+	// database owner (a member's own local target is still fine: it records a
+	// file:// location that needs no target to read back).
 	if target != nil && target.Kind == TargetS3 && target.UserID != database.UserID {
 		return Backup{}, ErrNotFound
 	}
@@ -51,17 +50,14 @@ func (m *BackupManager) startRun(ctx context.Context, database Database, target 
 	if target != nil {
 		backup.TargetID = target.ID
 	}
-	stored, err := m.backups.CreateBackup(ctx, backup)
+	stored, liveTarget, err := m.backups.CreateBackupWithTarget(ctx, backup)
 	if err != nil {
 		m.release(database.ID)
 		return Backup{}, err
 	}
-	var targetCopy *BackupTarget
-	if target != nil {
-		targetCopy = &BackupTarget{}
-		*targetCopy = *target
-	}
-	go m.runBackup(stored, database, targetCopy)
+	// liveTarget is the target read under the same row lock as the run insert,
+	// so a concurrent destination edit cannot strand this run.
+	go m.runBackup(stored, database, liveTarget)
 	return stored, nil
 }
 
@@ -487,7 +483,7 @@ func (m *BackupManager) sweepJobContainers() {
 	}
 	removed := 0
 	for _, serverID := range serverIDs {
-		list, err := m.containers.List(ctx, serverID)
+		list, err := m.listContainersFresh(ctx, serverID)
 		if err != nil {
 			m.logger.Warn("databases: container sweep could not list node containers",
 				"server_id", serverID.String(), "error", err)
@@ -504,6 +500,20 @@ func (m *BackupManager) sweepJobContainers() {
 	if removed > 0 {
 		m.logger.Info("databases: removed leftover backup job containers", "count", removed)
 	}
+}
+
+// listContainersFresh reads a node's containers straight from the agent when
+// the service supports it. The startup sweep must not read the List cache: a
+// hit serves an earlier snapshot (and an older binary cached containers whose
+// labels were dropped), so a crash's leftover job container could be missed.
+func (m *BackupManager) listContainersFresh(ctx context.Context, serverID uuid.UUID) ([]containers.Container, error) {
+	type freshLister interface {
+		ListFresh(ctx context.Context, serverID uuid.UUID) ([]containers.Container, error)
+	}
+	if lister, ok := m.containers.(freshLister); ok {
+		return lister.ListFresh(ctx, serverID)
+	}
+	return m.containers.List(ctx, serverID)
 }
 
 // isStaleJobContainer reports whether c is a temporary backup job container

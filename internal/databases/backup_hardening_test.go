@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -82,6 +83,63 @@ func TestBackupRejectsTargetOfAnotherTeamMember(t *testing.T) {
 // pointerTo is a small helper for the tri-state target field.
 func pointerTo(value string) *string { return &value }
 
+// TestUpdateScheduleTargetOwnership is the U7/U5 regression: an explicit target
+// the database owner does not own is refused, but a legacy schedule that
+// already stores such a target can still be edited (and disabled) without
+// naming the target.
+func TestUpdateScheduleTargetOwnership(t *testing.T) {
+	owner, member := uuid.New(), uuid.New()
+	teamID := uuid.New()
+
+	databaseRepo := newFakeRepository()
+	database := databaseRepo.seed(Database{
+		UserID: owner, TeamID: teamID, ServerID: databaseRepo.seedServer(),
+		Name: "shared-db", Engine: EnginePostgres, Status: StatusRunning,
+		ContainerID: "db-container", StoragePath: VolumeName(uuid.New()),
+	})
+	backupRepo := newFakeBackupRepository()
+	manager := NewBackupService(BackupConfig{
+		Repository:         backupRepo,
+		DatabaseRepository: databaseRepo,
+		Containers:         &fakeContainers{},
+		ObjectStore:        newFakeObjectStore(),
+		Secret:             testSecret,
+		Logger:             discardLogger(),
+	})
+	t.Cleanup(func() { _ = manager.Close() })
+
+	memberTarget := backupRepo.seedTarget(BackupTarget{
+		UserID: member, Name: "member-s3", Kind: TargetS3, Endpoint: "http://minio:9000", Bucket: "b",
+	})
+	schedule := backupRepo.seedSchedule(BackupSchedule{
+		DatabaseID: database.ID, Cron: "0 2 * * *", TargetID: memberTarget.ID,
+		Enabled: true, NextRunAt: time.Now().UTC().Add(time.Hour),
+	})
+	ctx := teams.WithScope(context.Background(), teams.Scope{
+		UserID: member, TeamID: teamID, Role: teams.RoleAdmin,
+	})
+
+	// A cron-only update does not name the target, so the legacy stored target
+	// is not re-validated and the schedule can be disabled.
+	disabled := false
+	updated, err := manager.UpdateSchedule(ctx, member, database.ID, schedule.ID, ScheduleRequest{
+		Cron: "0 3 * * *", Enabled: &disabled,
+	})
+	if err != nil {
+		t.Fatalf("cron-only UpdateSchedule: %v", err)
+	}
+	if updated.Enabled || updated.TargetID != memberTarget.ID {
+		t.Errorf("updated = %+v, want disabled with the stored target kept", updated)
+	}
+
+	// Naming the cross-owner target is refused.
+	if _, err := manager.UpdateSchedule(ctx, member, database.ID, schedule.ID, ScheduleRequest{
+		Cron: "0 4 * * *", TargetID: pointerTo(memberTarget.ID.String()),
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-owner target UpdateSchedule err = %v, want ErrNotFound", err)
+	}
+}
+
 // waitForBackupDone blocks until a run reaches a terminal state.
 func waitForBackupDone(t *testing.T, repo *fakeBackupRepository, backupID uuid.UUID) Backup {
 	t.Helper()
@@ -96,9 +154,9 @@ func waitForBackupDone(t *testing.T, repo *fakeBackupRepository, backupID uuid.U
 	return Backup{}
 }
 
-// TestNextCronTimeSurvivesSpringForward is the D2-8 regression: crossing the
-// America/New_York spring-forward gap used to leave the cursor stuck, looping
-// forever. The call must return promptly and strictly after the input.
+// TestNextCronTimeSurvivesSpringForward is the D2-8/U2 regression: a slot
+// inside the spring-forward gap must fire at the first valid instant after the
+// gap (not be skipped) and the scan must return promptly.
 func TestNextCronTimeSurvivesSpringForward(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
@@ -116,19 +174,99 @@ func TestNextCronTimeSurvivesSpringForward(t *testing.T) {
 		next, err := nextCronTime("0 2 * * *", after, loc)
 		done <- answer{next: next, err: err}
 	}()
+	var got answer
 	select {
-	case got := <-done:
-		if got.err != nil {
-			t.Fatalf("nextCronTime: %v", got.err)
-		}
-		if !got.next.After(after) {
-			t.Errorf("next = %v, want strictly after %v", got.next, after)
-		}
-		if got.next.Hour() != 2 || got.next.Minute() != 0 {
-			t.Errorf("next = %v, want the next 02:00 local", got.next)
-		}
+	case got = <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("nextCronTime did not return across the spring-forward gap")
+	}
+	if got.err != nil {
+		t.Fatalf("nextCronTime: %v", got.err)
+	}
+	want := time.Date(2025, 3, 9, 3, 0, 0, 0, loc)
+	if !got.next.Equal(want) {
+		t.Errorf("next = %v, want %v (first instant after the gap)", got.next, want)
+	}
+	if !got.next.After(after) {
+		t.Errorf("next = %v, want strictly after %v", got.next, after)
+	}
+}
+
+// TestNextCronTimeFallBackDoesNotRepeatHour pins the no-duplicate rule: a
+// wall-clock slot in the repeated fall-back hour fires once, not at both
+// occurrences.
+func TestNextCronTimeFallBackDoesNotRepeatHour(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	// 2025-11-02 02:00 EDT -> 01:00 EST: 01:00-01:59 occurs twice.
+	after := time.Date(2025, 11, 1, 12, 0, 0, 0, loc)
+
+	first, err := nextCronTime("30 1 * * *", after, loc)
+	if err != nil {
+		t.Fatalf("first nextCronTime: %v", err)
+	}
+	wantFirst := time.Date(2025, 11, 2, 1, 30, 0, 0, loc)
+	if !first.Equal(wantFirst) {
+		t.Fatalf("first = %v, want %v (EDT occurrence)", first, wantFirst)
+	}
+	// The second occurrence (01:30 EST) is the same wall-clock slot and must
+	// not fire again; the next run is the following day.
+	second, err := nextCronTime("30 1 * * *", first, loc)
+	if err != nil {
+		t.Fatalf("second nextCronTime: %v", err)
+	}
+	wantSecond := time.Date(2025, 11, 3, 1, 30, 0, 0, loc)
+	if !second.Equal(wantSecond) {
+		t.Errorf("second = %v, want %v (no repeat of the 01:30 wall slot)", second, wantSecond)
+	}
+}
+
+// TestNextCronTimeSpringForwardDoesNotMissDay pins the no-missed rule: the
+// day whose slot is swallowed by the gap still produces exactly one run, at
+// the first valid instant after the gap, and the following day resumes the
+// normal wall clock.
+func TestNextCronTimeSpringForwardDoesNotMissDay(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	after := time.Date(2025, 3, 8, 12, 0, 0, 0, loc)
+
+	first, err := nextCronTime("30 2 * * *", after, loc)
+	if err != nil {
+		t.Fatalf("nextCronTime: %v", err)
+	}
+	want := time.Date(2025, 3, 9, 3, 0, 0, 0, loc)
+	if !first.Equal(want) {
+		t.Fatalf("next = %v, want %v (gap day not missed)", first, want)
+	}
+	second, err := nextCronTime("30 2 * * *", first, loc)
+	if err != nil {
+		t.Fatalf("second nextCronTime: %v", err)
+	}
+	wantSecond := time.Date(2025, 3, 10, 2, 30, 0, 0, loc)
+	if !second.Equal(wantSecond) {
+		t.Errorf("second = %v, want %v", second, wantSecond)
+	}
+}
+
+// TestNextCronTimeStepsToNextTopOfHour is the U4 regression: the fallback
+// across a gap must land on the next top of the hour, not skip past it.
+func TestNextCronTimeStepsToNextTopOfHour(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	after := time.Date(2025, 3, 9, 1, 30, 0, 0, loc) // gap is 02:00-03:00
+	got, err := nextCronTime("0 3 * * *", after, loc)
+	if err != nil {
+		t.Fatalf("nextCronTime: %v", err)
+	}
+	want := time.Date(2025, 3, 9, 3, 0, 0, 0, loc)
+	if !got.Equal(want) {
+		t.Errorf("next = %v, want %v (same day, not skipped)", got, want)
 	}
 }
 
@@ -173,6 +311,43 @@ func TestLocalStoreRemovesArtifactWhenFlushFails(t *testing.T) {
 	}
 	if _, statErr := os.Stat(root + "/k"); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("a failed flush left an artifact behind: %v", statErr)
+	}
+}
+
+// TestLocalStoreFlushesCreatedAncestors is the U6 regression: MkdirAll can
+// create several levels for one artifact, and each created level's directory
+// entry must be flushed for the artifact to be reachable after a crash.
+func TestLocalStoreFlushesCreatedAncestors(t *testing.T) {
+	root := t.TempDir()
+	store, err := newLocalStore(root)
+	if err != nil {
+		t.Fatalf("newLocalStore: %v", err)
+	}
+	originalDir := fsyncDir
+	t.Cleanup(func() { fsyncDir = originalDir })
+	var synced []string
+	fsyncDir = func(dir string) error {
+		synced = append(synced, dir)
+		return originalDir(dir)
+	}
+
+	key := "databases/" + uuid.NewString() + "/artifact.gz"
+	if _, err := store.Put(context.Background(), key, bytes.NewReader([]byte("x")), 1); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	leaf := filepath.Dir(filepath.Join(root, filepath.FromSlash(key)))
+	want := []string{leaf, filepath.Dir(leaf), root}
+	for _, dir := range want {
+		found := false
+		for _, got := range synced {
+			if got == dir {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("did not flush directory %s; flushed %v", dir, synced)
+		}
 	}
 }
 
@@ -322,9 +497,16 @@ func TestSweepJobContainers(t *testing.T) {
 
 	fixture.containers.mu.Lock()
 	removes := append([]string(nil), fixture.containers.removes...)
+	freshLists := fixture.containers.freshLists
 	fixture.containers.mu.Unlock()
 	if len(removes) != 1 || removes[0] != "leftover-backup" {
 		t.Errorf("removed %v, want exactly [leftover-backup]", removes)
+	}
+	// U1: the sweep must read the node directly, not the List cache (a cache
+	// hit can serve containers whose labels were dropped by an older cache
+	// encoding).
+	if freshLists == 0 {
+		t.Error("the sweep used the cached List instead of ListFresh")
 	}
 }
 

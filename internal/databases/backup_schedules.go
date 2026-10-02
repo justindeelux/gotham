@@ -100,7 +100,10 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, 
 	targetID := schedule.TargetID
 	switch {
 	case req.TargetID == nil:
-		// Field absent: keep the stored target. nil can never clear.
+		// Field absent: keep the stored target. nil can never clear, and the
+		// stored target is not re-validated: a legacy schedule whose target no
+		// longer passes the ownership invariant must still be editable (for
+		// example disabled).
 	case strings.TrimSpace(*req.TargetID) == "":
 		// Explicit clear: scheduled runs return to the local directory.
 		targetID = uuid.Nil
@@ -108,11 +111,11 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, 
 		if targetID, err = m.ownedTargetID(ctx, userID, *req.TargetID); err != nil {
 			return BackupSchedule{}, err
 		}
-	}
-	// Whatever the caller did not change, the stored target (from the create
-	// path or a previous update) still has to belong to the database owner.
-	if err := m.targetOwnedByDatabase(ctx, targetID, database.UserID); err != nil {
-		return BackupSchedule{}, err
+		// The caller is choosing a target, so it must be usable for this
+		// database (see startRun).
+		if err := m.targetOwnedByDatabase(ctx, targetID, database.UserID); err != nil {
+			return BackupSchedule{}, err
+		}
 	}
 	enabled := schedule.Enabled
 	if req.Enabled != nil {

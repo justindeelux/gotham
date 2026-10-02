@@ -140,10 +140,13 @@ const maxCronSteps = 500_000
 // schedule does not iterate over four years of minutes, and it refuses an
 // expression that can never fire (for example February 30th).
 //
-// A DST transition can make a wall-clock boundary (midnight, or the
-// spring-forward hour) unrepresentable. Go's time.Date then returns an instant
-// at or before the cursor, which would make the scan spin forever; nextDay and
-// nextHour fall back to a fixed step so the cursor always advances.
+// The scan walks the local *wall clock*, not absolute time, and treats each
+// wall-clock slot as served at most once. A fall-back day therefore does not
+// fire a repeated hour twice (the second occurrence of a slot whose wall clock
+// is already behind the cursor is skipped), and a slot inside a spring-forward
+// gap fires at the first valid instant after the gap instead of being missed.
+// Walking wall time also makes the scan incapable of stalling on a
+// transition, so the bounded step cap is only a safety net.
 func nextCronTime(expression string, after time.Time, loc *time.Location) (time.Time, error) {
 	spec, err := parseCron(expression)
 	if err != nil {
@@ -152,49 +155,118 @@ func nextCronTime(expression string, after time.Time, loc *time.Location) (time.
 	if loc == nil {
 		loc = time.Local
 	}
-	cursor := after.In(loc).Truncate(time.Minute).Add(time.Minute)
+	// The cursor carries the local calendar fields as a synthetic UTC time so
+	// calendar arithmetic never lands on a DST transition.
+	afterLocal := after.In(loc).Truncate(time.Minute)
+	cursor := wallClockOf(afterLocal).Add(time.Minute)
 	limit := cursor.AddDate(4, 0, 0)
 
 	for steps := 0; cursor.Before(limit) && steps < maxCronSteps; steps++ {
 		if !spec.fields[3].has(int(cursor.Month())) {
-			cursor = nextDay(cursor, loc)
+			cursor = nextWallDay(cursor)
 			continue
 		}
 		if !spec.dayMatches(cursor) {
-			cursor = nextDay(cursor, loc)
+			cursor = nextWallDay(cursor)
 			continue
 		}
 		if !spec.fields[1].has(cursor.Hour()) {
-			cursor = nextHour(cursor, loc)
+			cursor = cursor.Truncate(time.Hour).Add(time.Hour)
 			continue
 		}
 		if !spec.fields[0].has(cursor.Minute()) {
 			cursor = cursor.Add(time.Minute)
 			continue
 		}
-		return cursor, nil
+		if instant, ok := slotInstant(cursor, after, loc); ok {
+			return instant, nil
+		}
+		// The slot's instants are all at/before the cursor (a repeated hour
+		// already served); move on to the next slot.
+		cursor = cursor.Add(time.Minute)
 	}
 	return time.Time{}, fmt.Errorf("%w: cron expression %q never runs", ErrValidation, expression)
 }
 
-// nextDay returns the start of the following day in loc, falling back to a
-// one-hour step when a DST transition makes midnight unrepresentable.
-func nextDay(cursor time.Time, loc *time.Location) time.Time {
-	next := time.Date(cursor.Year(), cursor.Month(), cursor.Day()+1, 0, 0, 0, 0, loc)
-	if next.After(cursor) {
-		return next
-	}
-	return cursor.Add(time.Hour)
+// wallClockOf returns the local calendar fields of t as a synthetic UTC time,
+// so Add and AddDate move through the calendar without DST interference.
+func wallClockOf(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, time.UTC)
 }
 
-// nextHour returns the top of the following hour in loc, falling back to a
-// one-hour step across the nonexistent spring-forward hour.
-func nextHour(cursor time.Time, loc *time.Location) time.Time {
-	next := time.Date(cursor.Year(), cursor.Month(), cursor.Day(), cursor.Hour()+1, 0, 0, 0, loc)
-	if next.After(cursor) {
-		return next
+// nextWallDay returns midnight of the following calendar day.
+func nextWallDay(cursor time.Time) time.Time {
+	return time.Date(cursor.Year(), cursor.Month(), cursor.Day()+1, 0, 0, 0, 0, time.UTC)
+}
+
+// slotInstant resolves a matching wall-clock slot to a concrete instant
+// strictly after `after`. A normal slot has one instant; a fall-back slot may
+// have two, and the earliest one after `after` is returned; a spring-forward
+// slot has none and resolves to the first instant after the gap. ok is false
+// when every occurrence is at or before `after`.
+func slotInstant(wall, after time.Time, loc *time.Location) (time.Time, bool) {
+	year, month, day := wall.Date()
+	first := time.Date(year, month, day, wall.Hour(), wall.Minute(), 0, 0, loc)
+	if !sameWall(first, wall, loc) {
+		return afterGap(wall, loc)
 	}
-	return cursor.Add(time.Hour)
+	if first.After(after) {
+		return first, true
+	}
+	// The first occurrence is behind `after`: a fall-back repeated hour. A
+	// repeated wall clock appears at most twice, so a bounded minute walk
+	// finds the later occurrence if the transition has not been left yet.
+	candidate := first.Add(time.Minute)
+	for i := 0; i < 4*60; i++ {
+		if candidate.After(after) && sameWall(candidate, wall, loc) {
+			return candidate, true
+		}
+		candidate = candidate.Add(time.Minute)
+	}
+	return time.Time{}, false
+}
+
+// afterGap resolves a wall-clock slot swallowed by a DST gap to the first
+// valid instant at the end of the gap: the first local wall clock strictly
+// after the requested slot. Go's time.Date reports a gap slot with the
+// pre-transition offset, so a bounded real-time walk crosses the transition.
+func afterGap(wall time.Time, loc *time.Location) (time.Time, bool) {
+	year, month, day := wall.Date()
+	candidate := time.Date(year, month, day, wall.Hour(), wall.Minute(), 0, 0, loc)
+	for i := 0; i < 4*60; i++ {
+		if wallBefore(wall, candidate.In(loc)) {
+			return candidate, true
+		}
+		candidate = candidate.Add(time.Minute)
+	}
+	return time.Time{}, false
+}
+
+// sameWall reports whether instant falls on the same local wall-clock minute
+// as wall.
+func sameWall(instant, wall time.Time, loc *time.Location) bool {
+	local := instant.In(loc)
+	return local.Year() == wall.Year() &&
+		local.Month() == wall.Month() &&
+		local.Day() == wall.Day() &&
+		local.Hour() == wall.Hour() &&
+		local.Minute() == wall.Minute()
+}
+
+// wallBefore reports whether wall clock a precedes wall clock b.
+func wallBefore(a, b time.Time) bool {
+	switch {
+	case a.Year() != b.Year():
+		return a.Year() < b.Year()
+	case a.Month() != b.Month():
+		return a.Month() < b.Month()
+	case a.Day() != b.Day():
+		return a.Day() < b.Day()
+	case a.Hour() != b.Hour():
+		return a.Hour() < b.Hour()
+	default:
+		return a.Minute() < b.Minute()
+	}
 }
 
 // dayMatches applies the day-of-month/day-of-week rule of classic cron: a

@@ -422,6 +422,9 @@ type fakeContainers struct {
 	// listed is the container list the health wait observes. An empty state
 	// means "the container is not running yet".
 	listed []containers.Container
+	// freshLists counts ListFresh calls (the uncached read the backup sweep
+	// must use).
+	freshLists int
 
 	// suppressRunning keeps Run from publishing the container as running, so
 	// a test can drive the healthcheck timeout.
@@ -452,6 +455,20 @@ func (f *fakeContainers) setRunning(id string) {
 func (f *fakeContainers) List(context.Context, uuid.UUID) ([]containers.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	list := make([]containers.Container, len(f.listed))
+	copy(list, f.listed)
+	return list, nil
+}
+
+// ListFresh serves the uncached read the backup sweep prefers, recording the
+// call so a test can prove the sweep did not read the List cache.
+func (f *fakeContainers) ListFresh(context.Context, uuid.UUID) ([]containers.Container, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.freshLists++
 	if f.listErr != nil {
 		return nil, f.listErr
 	}

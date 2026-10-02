@@ -55,6 +55,21 @@ RETURNING *;
 SELECT * FROM backup_targets
 WHERE id = $1;
 
+-- name: GetBackupTargetForShare :one
+-- Run start locks the target it references, so a concurrent destination edit
+-- (which takes FOR UPDATE) cannot commit between the target read and the run
+-- row insert.
+SELECT * FROM backup_targets
+WHERE id = $1
+FOR SHARE;
+
+-- name: GetBackupTargetForUpdate :one
+-- The destination-edit transaction locks the target row before checking for
+-- referencing runs and updating, closing the check-then-act window.
+SELECT * FROM backup_targets
+WHERE id = $1
+FOR UPDATE;
+
 -- name: ListBackupTargetsByUser :many
 SELECT * FROM backup_targets
 WHERE user_id = $1

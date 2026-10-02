@@ -43,6 +43,13 @@ type Store struct {
 	// commits a replacement from it to prove both reads observe one snapshot.
 	// Production leaves it nil.
 	AfterEnvReadBeforeSecrets func()
+
+	// BeforeBackupRunCommit is a nil-by-default test seam invoked inside
+	// CreateBackupWithTarget after the target row's shared lock is held and
+	// before the run is inserted. A test blocks it to hold a run open and
+	// prove a concurrent destination edit serializes behind the run.
+	// Production leaves it nil.
+	BeforeBackupRunCommit func()
 }
 
 // New wires a Store to an existing pool.

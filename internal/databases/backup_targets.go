@@ -72,7 +72,6 @@ func (m *BackupManager) UpdateTarget(ctx context.Context, userID, targetID uuid.
 	if err != nil {
 		return BackupTarget{}, err
 	}
-	before := *target
 	if err := applyTargetRequest(target, req); err != nil {
 		return BackupTarget{}, err
 	}
@@ -85,42 +84,21 @@ func (m *BackupManager) UpdateTarget(ctx context.Context, userID, targetID uuid.
 			return BackupTarget{}, s3CredentialsRequired()
 		}
 	}
-	// A recorded location names the endpoint and bucket it was written to, so
-	// moving the target would strand every completed backup that still reads
-	// from it and every running run that will record the old destination. The
-	// destination is immutable once a run references it; a new target is the
-	// escape hatch.
-	if targetDestinationChanged(before, *target) {
-		hasBackups, err := m.backups.HasBackupsForTarget(ctx, targetID)
-		if err != nil {
-			return BackupTarget{}, err
-		}
-		if hasBackups {
-			return BackupTarget{}, fmt.Errorf(
-				"%w: this target has backups; create a new target instead of moving it", ErrTargetStranded)
-		}
-	}
 	sealed, err := sealTargetSecrets(m.secret, target.ID, req.AccessKey, req.SecretKey)
 	if err != nil {
 		return BackupTarget{}, err
 	}
 	target.UpdatedAt = m.now()
+	// The write locks the target row and refuses a destination change while a
+	// run references it, in the same transaction. A recorded location names the
+	// endpoint and bucket it was written to, so moving the target would strand
+	// every completed backup and every run still in flight; a new target is the
+	// escape hatch.
 	updated, err := m.backups.UpdateBackupTargetWithSecrets(ctx, *target, sealed)
 	if err != nil {
 		return BackupTarget{}, err
 	}
 	return updated, nil
-}
-
-// targetDestinationChanged reports whether the fields that decide where
-// artifacts live changed. Prefix is excluded: a recorded location already
-// carries the full object key, so changing the prefix cannot strand an
-// existing backup.
-func targetDestinationChanged(before, after BackupTarget) bool {
-	return before.Kind != after.Kind ||
-		before.Endpoint != after.Endpoint ||
-		before.Region != after.Region ||
-		before.Bucket != after.Bucket
 }
 
 // DeleteTarget implements BackupService. Backups that used the target keep

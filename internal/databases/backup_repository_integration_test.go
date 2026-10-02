@@ -2,10 +2,13 @@ package databases
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/store"
 )
 
 // TestBackupRepositoryRoundTrip exercises the SQL behind the backup
@@ -376,4 +379,143 @@ func TestHasBackupsForTargetCountsLiveRuns(t *testing.T) {
 	if has, err := repo.HasBackupsForTarget(ctx, targetID); err != nil || has {
 		t.Fatalf("failed-only target has = %v (%v), want false", has, err)
 	}
+}
+
+// seedRaceTarget creates a target and a database for the lock interleaving
+// tests and returns them.
+func seedRaceTarget(t *testing.T, st *store.Store, repo *storeBackupRepository, ownerID, serverID uuid.UUID) (BackupTarget, Database) {
+	t.Helper()
+	ctx := context.Background()
+	targetID := uuid.New()
+	target, err := repo.CreateBackupTargetWithSecrets(ctx, BackupTarget{
+		ID: targetID, UserID: ownerID, Name: "race-" + uuid.New().String()[:8],
+		Kind: TargetS3, Endpoint: "https://old", Bucket: "old",
+	}, []TargetSecret{{TargetID: targetID, Key: targetSecretAccessKey, Ciphertext: "sealed"}})
+	if err != nil {
+		t.Fatalf("CreateBackupTargetWithSecrets: %v", err)
+	}
+	database, err := newStoreRepository(st).CreateDatabase(ctx, Database{
+		ID:          uuid.New(),
+		UserID:      ownerID,
+		ServerID:    serverID,
+		Name:        "race-db-" + uuid.New().String()[:8],
+		Engine:      EnginePostgres,
+		Version:     "16-alpine",
+		Status:      StatusRunning,
+		StoragePath: "gotham-db-" + uuid.New().String(),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	return target, database
+}
+
+// TestBackupRunWaitsForDestinationEditLock is the U3 regression, edit-first
+// direction: while a destination edit holds the target row, a run that
+// references the target blocks, and after the edit commits the run carries the
+// post-edit configuration.
+func TestBackupRunWaitsForDestinationEditLock(t *testing.T) {
+	_, st := integrationEnv(t)
+	repo := newStoreBackupRepository(st)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	target, database := seedRaceTarget(t, st, repo, ownerID, serverID)
+
+	tx, err := st.DB.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT id FROM backup_targets WHERE id = $1 FOR UPDATE", target.ID); err != nil {
+		t.Fatalf("lock target: %v", err)
+	}
+
+	type runResult struct {
+		target *BackupTarget
+		err    error
+	}
+	done := make(chan runResult, 1)
+	go func() {
+		_, live, err := repo.CreateBackupWithTarget(ctx, Backup{
+			ID: uuid.New(), DatabaseID: database.ID, TargetID: target.ID,
+			Type: BackupManual, Status: BackupRunning,
+		})
+		done <- runResult{target: live, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		t.Fatalf("run did not wait for the destination edit lock: %+v", res)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if _, err := tx.Exec(ctx, "UPDATE backup_targets SET endpoint = 'https://new', bucket = 'new' WHERE id = $1", target.ID); err != nil {
+		t.Fatalf("move target: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("run after edit: %v", res.err)
+	}
+	if res.target == nil || res.target.Endpoint != "https://new" || res.target.Bucket != "new" {
+		t.Fatalf("run target = %+v, want the post-edit destination", res.target)
+	}
+}
+
+// TestDestinationEditWaitsForRunLock is the U3 regression, run-first
+// direction: while a run holds the target row, the destination edit blocks;
+// once the run commits, the edit sees the running backup and is refused.
+func TestDestinationEditWaitsForRunLock(t *testing.T) {
+	_, st := integrationEnv(t)
+	repo := newStoreBackupRepository(st)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	target, database := seedRaceTarget(t, st, repo, ownerID, serverID)
+
+	runLocked := make(chan struct{})
+	release := make(chan struct{})
+	st.BeforeBackupRunCommit = func() {
+		close(runLocked)
+		<-release
+	}
+	t.Cleanup(func() { st.BeforeBackupRunCommit = nil })
+
+	runDone := make(chan error, 1)
+	go func() {
+		_, _, err := repo.CreateBackupWithTarget(ctx, Backup{
+			ID: uuid.New(), DatabaseID: database.ID, TargetID: target.ID,
+			Type: BackupManual, Status: BackupRunning,
+		})
+		runDone <- err
+	}()
+	<-runLocked
+
+	editDone := make(chan error, 1)
+	go func() {
+		_, err := repo.UpdateBackupTargetWithSecrets(ctx, BackupTarget{
+			ID: target.ID, Name: target.Name, Kind: TargetS3,
+			Endpoint: "https://new", Bucket: "new",
+		}, nil)
+		editDone <- err
+	}()
+
+	select {
+	case err := <-editDone:
+		t.Fatalf("destination edit did not wait for the run lock: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-runDone; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if err := <-editDone; !errors.Is(err, ErrTargetStranded) {
+		t.Fatalf("edit err = %v, want ErrTargetStranded once the run exists", err)
+	}
+	assertTargetState(t, repo, ctx, target.ID, target.Name, "https://old", "old")
 }

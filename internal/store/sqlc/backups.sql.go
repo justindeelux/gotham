@@ -376,6 +376,59 @@ func (q *Queries) GetBackupTarget(ctx context.Context, id pgtype.UUID) (BackupTa
 	return i, err
 }
 
+const getBackupTargetForShare = `-- name: GetBackupTargetForShare :one
+SELECT id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at FROM backup_targets
+WHERE id = $1
+FOR SHARE
+`
+
+// Run start locks the target it references, so a concurrent destination edit
+// (which takes FOR UPDATE) cannot commit between the target read and the run
+// row insert.
+func (q *Queries) GetBackupTargetForShare(ctx context.Context, id pgtype.UUID) (BackupTarget, error) {
+	row := q.db.QueryRow(ctx, getBackupTargetForShare, id)
+	var i BackupTarget
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.Kind,
+		&i.Endpoint,
+		&i.Region,
+		&i.Bucket,
+		&i.Prefix,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getBackupTargetForUpdate = `-- name: GetBackupTargetForUpdate :one
+SELECT id, user_id, name, kind, endpoint, region, bucket, prefix, created_at, updated_at FROM backup_targets
+WHERE id = $1
+FOR UPDATE
+`
+
+// The destination-edit transaction locks the target row before checking for
+// referencing runs and updating, closing the check-then-act window.
+func (q *Queries) GetBackupTargetForUpdate(ctx context.Context, id pgtype.UUID) (BackupTarget, error) {
+	row := q.db.QueryRow(ctx, getBackupTargetForUpdate, id)
+	var i BackupTarget
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.Kind,
+		&i.Endpoint,
+		&i.Region,
+		&i.Bucket,
+		&i.Prefix,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const hasBackupsForTarget = `-- name: HasBackupsForTarget :one
 SELECT EXISTS (
     SELECT 1 FROM backups

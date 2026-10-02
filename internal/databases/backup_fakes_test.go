@@ -222,6 +222,26 @@ func (r *fakeBackupRepository) CreateBackup(_ context.Context, backup Backup) (B
 	return r.seedBackupLocked(backup), nil
 }
 
+// CreateBackupWithTarget implements BackupRepository: a run that references a
+// target returns the target row that a locked read would observe.
+func (r *fakeBackupRepository) CreateBackupWithTarget(_ context.Context, backup Backup) (Backup, *BackupTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.createBackupErr != nil {
+		return Backup{}, nil, r.createBackupErr
+	}
+	stored := r.seedBackupLocked(backup)
+	if backup.TargetID == uuid.Nil {
+		return stored, nil, nil
+	}
+	target, ok := r.targets[backup.TargetID]
+	if !ok {
+		return Backup{}, nil, ErrNotFound
+	}
+	live := target
+	return stored, &live, nil
+}
+
 // seedBackupLocked is seedBackup for callers already holding the lock.
 func (r *fakeBackupRepository) seedBackupLocked(backup Backup) Backup {
 	if backup.ID == uuid.Nil {
@@ -519,15 +539,24 @@ func (r *fakeBackupRepository) UpdateBackupTarget(_ context.Context, target Back
 }
 
 // UpdateBackupTargetWithSecrets implements BackupRepository as one atomic
-// step: a credential failure leaves the previous configuration in place.
+// step: a credential failure leaves the previous configuration in place, and a
+// destination change while a run references the target is refused.
 func (r *fakeBackupRepository) UpdateBackupTargetWithSecrets(_ context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.targets[target.ID]; !ok {
+	current, ok := r.targets[target.ID]
+	if !ok {
 		return BackupTarget{}, ErrNotFound
 	}
 	if r.secretErr != nil {
 		return BackupTarget{}, r.secretErr
+	}
+	if fakeDestinationChanged(current, target) {
+		for _, backup := range r.backups {
+			if backup.TargetID == target.ID && (backup.Status == BackupRunning || backup.Status == BackupCompleted) {
+				return BackupTarget{}, ErrTargetStranded
+			}
+		}
 	}
 	r.targets[target.ID] = target
 	for _, secret := range secrets {
@@ -537,6 +566,14 @@ func (r *fakeBackupRepository) UpdateBackupTargetWithSecrets(_ context.Context, 
 		r.upsertSecretLocked(secret)
 	}
 	return target, nil
+}
+
+// fakeDestinationChanged mirrors the store's destination comparison.
+func fakeDestinationChanged(current, next BackupTarget) bool {
+	return current.Kind != next.Kind ||
+		current.Endpoint != next.Endpoint ||
+		current.Region != next.Region ||
+		current.Bucket != next.Bucket
 }
 
 // HasBackupsForTarget implements BackupRepository.

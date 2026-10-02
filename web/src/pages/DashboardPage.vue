@@ -10,7 +10,7 @@ import {
   NTag,
   NText,
 } from "naive-ui";
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted } from "vue";
 import { RouterLink } from "vue-router";
 
 import type { Server } from "../api/servers";
@@ -120,10 +120,6 @@ onMounted(() => {
     // The store already exposes the error; alert rendering is enough here.
   });
   serversStore.pollServers();
-});
-
-onUnmounted(() => {
-  serversStore.stopPolling();
 });
 </script>
 

@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/justindeelux/gotham/internal/store/sqlc"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -301,5 +303,126 @@ func TestServicePassphraseProtectedKeyValidation(t *testing.T) {
 	// Validation alone never sets last_seen: that is the agent's heartbeat.
 	if fetched.LastSeen != nil {
 		t.Errorf("last_seen after SSH validation = %v, want nil (A4-15)", fetched.LastSeen)
+	}
+}
+
+// TestServiceValidateReadyNodeKeepsReady covers fix round 1 U2: re-validating a
+// ready node must not leave it stuck in `validating`. The status is restored
+// from the node's fresh heartbeat.
+func TestServiceValidateReadyNodeKeepsReady(t *testing.T) {
+	service, st := newTestService(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	addr, _, stop := startSSHProbeServer(t, "unused", false)
+	defer stop()
+	host, port := target(t, addr)
+
+	key, err := service.AddPrivateKey(ctx, "ready-key", string(testPrivateKeyPEM(t)))
+	if err != nil {
+		t.Fatalf("AddPrivateKey: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM private_keys WHERE id = $1", pgUUID(key.ID)); err != nil {
+			t.Logf("cleanup delete private key: %v", err)
+		}
+	})
+
+	created, err := service.Add(ctx, uuid.New(), "ready-node", host, port, "root", key.ID)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if err := st.DeleteServer(cleanupCtx, pgUUID(created.ID)); err != nil {
+			t.Logf("cleanup delete server: %v", err)
+		}
+	})
+
+	// Attach a node id and give the node a fresh heartbeat so it is ready.
+	nodeID := uniqueNodeID("ready-node-id")
+	if _, err := st.DB.Exec(ctx, "UPDATE servers SET node_id = $2 WHERE id = $1", pgUUID(created.ID), nodeID); err != nil {
+		t.Fatalf("attach node id: %v", err)
+	}
+	if err := service.RecordHeartbeat(ctx, nodeID, &agentv1.HeartbeatRequest{CpuUsage: 0.1}); err != nil {
+		t.Fatalf("RecordHeartbeat: %v", err)
+	}
+	before, err := service.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get before validate: %v", err)
+	}
+	if before.Status != StatusReady {
+		t.Fatalf("status before validate = %q, want %q", before.Status, StatusReady)
+	}
+
+	// Re-validation succeeds and must restore ready, not leave validating.
+	result, err := service.Validate(ctx, created.ID, ValidateAuth{})
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if result.Server.Status != StatusReady {
+		t.Errorf("response status after validation = %q, want %q", result.Server.Status, StatusReady)
+	}
+	after, err := service.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get after validate: %v", err)
+	}
+	if after.Status != StatusReady {
+		t.Errorf("status after validating a ready node = %q, want %q", after.Status, StatusReady)
+	}
+}
+
+// TestServerStatusAfterValidationTransitions covers the atomic status restore
+// directly, including the mid-validation heartbeat case (a fresh last_seen must
+// win over the pending an agentless validation would set).
+func TestServerStatusAfterValidationTransitions(t *testing.T) {
+	service, st := newTestService(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	created, err := service.Add(ctx, uuid.New(), "transition-node", "10.99.0.1", 22, "root", uuid.Nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if err := st.DeleteServer(cleanupCtx, pgUUID(created.ID)); err != nil {
+			t.Logf("cleanup delete server: %v", err)
+		}
+	})
+
+	cutoff := service.now().Add(-heartbeatOfflineAfter)
+	transition := func(t *testing.T, lastSeen *time.Time) string {
+		t.Helper()
+		if _, err := st.DB.Exec(ctx, "UPDATE servers SET status = 'validating', last_seen = $2 WHERE id = $1",
+			pgUUID(created.ID), lastSeen); err != nil {
+			t.Fatalf("seed last_seen: %v", err)
+		}
+		row, err := st.SetServerStatusAfterValidation(ctx, sqlc.SetServerStatusAfterValidationParams{
+			ID:       pgUUID(created.ID),
+			LastSeen: pgtype.Timestamptz{Time: cutoff, Valid: true},
+		})
+		if err != nil {
+			t.Fatalf("SetServerStatusAfterValidation: %v", err)
+		}
+		return row.Status
+	}
+
+	if got := transition(t, nil); got != StatusPending {
+		t.Errorf("never seen -> %q, want %q", got, StatusPending)
+	}
+	stale := service.now().Add(-heartbeatOfflineAfter - time.Minute)
+	if got := transition(t, &stale); got != StatusOffline {
+		t.Errorf("stale heartbeat -> %q, want %q", got, StatusOffline)
+	}
+	fresh := service.now().Add(-time.Second)
+	if got := transition(t, &fresh); got != StatusReady {
+		t.Errorf("fresh heartbeat -> %q, want %q", got, StatusReady)
 	}
 }

@@ -36,8 +36,9 @@ test("the server rail keeps polling after leaving the dashboard", async ({
   await page.getByRole("link", { name: "Applications" }).click();
   await expect(page).toHaveURL(/\/applications$/);
 
-  // ApplicationsPage never starts the poll. Two further list polls prove the
-  // rail re-armed the interval after the dashboard's unmount stopped it.
+  // ApplicationsPage never starts the poll, and the rail owns the interval, so
+  // two further list polls prove navigation did not freeze it (the round-0
+  // regression had the outgoing dashboard stop the shared timer).
   await page.waitForResponse(isServerListPoll, { timeout: 15_000 });
   await page.waitForResponse(isServerListPoll, { timeout: 15_000 });
 });

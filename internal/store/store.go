@@ -390,6 +390,14 @@ func (s *Store) SetServerStatus(ctx context.Context, params sqlc.SetServerStatus
 	return s.queries.SetServerStatus(ctx, params)
 }
 
+// SetServerStatusAfterValidation derives a node's status from its last heartbeat
+// at the moment of the write (ready when fresh, offline when stale, pending when
+// never seen) and returns the updated row. It is atomic so a heartbeat landing
+// during validation is never clobbered.
+func (s *Store) SetServerStatusAfterValidation(ctx context.Context, params sqlc.SetServerStatusAfterValidationParams) (sqlc.Server, error) {
+	return s.queries.SetServerStatusAfterValidation(ctx, params)
+}
+
 // PinServerHostKey pins a node's SSH host key fingerprint only when the node is
 // still unpinned, and returns the updated row. It answers pgx.ErrNoRows when a
 // pin already exists, so the caller can re-read and fail closed on a mismatch.

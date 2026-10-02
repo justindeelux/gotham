@@ -101,6 +101,24 @@ SET status = $2,
 WHERE id = $1
 RETURNING *;
 
+-- name: SetServerStatusAfterValidation :one
+-- Restores a node's status after a successful SSH validation. Ready is reserved
+-- for a live agent heartbeat, so the status is derived from last_seen at the
+-- moment of the write: a heartbeat that landed during the validation (fresh
+-- last_seen) keeps the node ready, a node seen before but now past the window
+-- goes offline, and a node never seen stays pending. Deriving it in one
+-- statement means a concurrent heartbeat cannot be clobbered by a stale read
+-- (A4-15/B4-9, fix round 1 U2).
+UPDATE servers
+SET status = CASE
+        WHEN last_seen IS NOT NULL AND last_seen >= $2 THEN 'ready'
+        WHEN last_seen IS NOT NULL THEN 'offline'
+        ELSE 'pending'
+    END,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: PinServerHostKey :one
 -- Pins the TOFU host key fingerprint of a node only when it is still unpinned.
 -- A stale first-use validation then cannot overwrite a pin written by a racing

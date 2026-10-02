@@ -480,7 +480,7 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		}
 	}
 
-	updated, err := s.store.UpdateServerAgentInfo(ctx, sqlc.UpdateServerAgentInfoParams{
+	if _, err := s.store.UpdateServerAgentInfo(ctx, sqlc.UpdateServerAgentInfoParams{
 		ID:            pgUUID(id),
 		NodeID:        row.NodeID,
 		Os:            strPtr(info.OS),
@@ -488,22 +488,22 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		Arch:          strPtr(info.Arch),
 		TotalMem:      ptrInt64(info.TotalMem),
 		TotalDisk:     ptrInt64(info.TotalDisk),
-	})
-	if err != nil {
+	}); err != nil {
 		return result, fmt.Errorf("record agent info: %w", err)
 	}
 
-	// SSH reachability is not agent readiness: a successful validation leaves a
-	// node pending until its agent heartbeats (A4-15/B4-9). A node whose agent is
-	// already heartbeating keeps its ready status.
-	if server.Status != StatusReady {
-		updated, err = s.store.SetServerStatus(ctx, sqlc.SetServerStatusParams{
-			ID:     pgUUID(id),
-			Status: StatusPending,
-		})
-		if err != nil {
-			return result, fmt.Errorf("record server status: %w", err)
-		}
+	// SSH reachability is not agent readiness: restore the node's status from
+	// its last heartbeat at the moment of the write (A4-15/B4-9). A previously
+	// ready node with a live agent stays ready; a node that heartbeated during
+	// the validation stays ready; an agentless node is pending; a node whose
+	// agent stopped is offline. Deriving it in one statement prevents a
+	// concurrent heartbeat from being clobbered (fix round 1 U2).
+	updated, err := s.store.SetServerStatusAfterValidation(ctx, sqlc.SetServerStatusAfterValidationParams{
+		ID:       pgUUID(id),
+		LastSeen: pgtype.Timestamptz{Time: s.now().Add(-heartbeatOfflineAfter), Valid: true},
+	})
+	if err != nil {
+		return result, fmt.Errorf("record server status: %w", err)
 	}
 
 	s.logger.Info("servers: validation succeeded", "server_id", id.String(), "docker_version", info.DockerVersion)

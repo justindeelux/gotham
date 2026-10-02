@@ -437,6 +437,60 @@ func (q *Queries) SetServerStatus(ctx context.Context, arg SetServerStatusParams
 	return i, err
 }
 
+const setServerStatusAfterValidation = `-- name: SetServerStatusAfterValidation :one
+UPDATE servers
+SET status = CASE
+        WHEN last_seen IS NOT NULL AND last_seen >= $2 THEN 'ready'
+        WHEN last_seen IS NOT NULL THEN 'offline'
+        ELSE 'pending'
+    END,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint
+`
+
+type SetServerStatusAfterValidationParams struct {
+	ID       pgtype.UUID        `json:"id"`
+	LastSeen pgtype.Timestamptz `json:"last_seen"`
+}
+
+// Restores a node's status after a successful SSH validation. Ready is reserved
+// for a live agent heartbeat, so the status is derived from last_seen at the
+// moment of the write: a heartbeat that landed during the validation (fresh
+// last_seen) keeps the node ready, a node seen before but now past the window
+// goes offline, and a node never seen stays pending. Deriving it in one
+// statement means a concurrent heartbeat cannot be clobbered by a stale read
+// (A4-15/B4-9, fix round 1 U2).
+func (q *Queries) SetServerStatusAfterValidation(ctx context.Context, arg SetServerStatusAfterValidationParams) (Server, error) {
+	row := q.db.QueryRow(ctx, setServerStatusAfterValidation, arg.ID, arg.LastSeen)
+	var i Server
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Ip,
+		&i.Port,
+		&i.SshUser,
+		&i.SshKeyID,
+		&i.Status,
+		&i.NodeID,
+		&i.Os,
+		&i.DockerVersion,
+		&i.Arch,
+		&i.TotalMem,
+		&i.TotalDisk,
+		&i.CpuUsage,
+		&i.MemUsage,
+		&i.DiskUsage,
+		&i.ContainerCount,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TeamID,
+		&i.HostKeyFingerprint,
+	)
+	return i, err
+}
+
 const updateServerAgentInfo = `-- name: UpdateServerAgentInfo :one
 UPDATE servers
 SET node_id = $2,

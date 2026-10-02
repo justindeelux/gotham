@@ -217,6 +217,89 @@ async function loadModule(relativePath) {
   };
 }
 
+// ── load the real servers store with a stubbed API ───────────────────────
+// The pure ordering guard alone does not prove the store wires it up: deleting
+// markMutation() from addServer/removeServer/validate, or bypassing admit() in
+// loadServerList, would still pass the pure checks. esbuild stubs
+// ../api/servers so the real store runs against a controllable API, and pinia
+// is bundled in the same module graph so setActivePinia reaches the instance.
+async function loadServersStore() {
+  const directory = await mkdtemp(join(tmpdir(), "gotham-servers-check-"));
+  const outfile = join(directory, "store.mjs");
+  await build({
+    stdin: {
+      contents: [
+        'import { createPinia, setActivePinia } from "pinia";',
+        'import { useServersStore } from "./servers";',
+        "export { createPinia, setActivePinia, useServersStore };",
+      ].join("\n"),
+      resolveDir: new URL("../src/stores", import.meta.url).pathname,
+      loader: "ts",
+    },
+    outfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "stub-servers-api",
+        setup(build) {
+          build.onResolve({ filter: /\/api\/servers$/ }, () => ({
+            path: "stub-servers-api",
+            namespace: "stub",
+          }));
+          build.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
+            contents: [
+              "const api = () => globalThis.__gothamServersApi;",
+              "export const listServers = (...a) => api().listServers(...a);",
+              "export const createServer = (...a) => api().createServer(...a);",
+              "export const deleteServer = (...a) => api().deleteServer(...a);",
+              "export const validateServer = (...a) => api().validateServer(...a);",
+              "export const describeServerError = (...a) => api().describeServerError(...a);",
+            ].join("\n"),
+            loader: "js",
+          }));
+        },
+      },
+    ],
+  });
+  const module = await import(pathToFileURL(outfile).href);
+  return {
+    module,
+    cleanup: () => rm(directory, { recursive: true, force: true }),
+  };
+}
+
+/** deferred returns a promise with external resolve/reject handles. */
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** makeServersApi returns a controllable stub of ../api/servers. */
+function makeServersApi() {
+  return {
+    listServers: async () => [],
+    createServer: async () => ({ id: "created" }),
+    deleteServer: async () => {},
+    validateServer: async () => ({
+      ok: true,
+      checks: [],
+      server: null,
+      message: "",
+    }),
+    describeServerError: (error) =>
+      error instanceof Error ? error.message : String(error),
+  };
+}
+
 async function main() {
   if (typeof WebSocket === "undefined") {
     throw new Error("global WebSocket is unavailable; Node 22+ is required");
@@ -227,6 +310,7 @@ async function main() {
     "../src/composables/logChannelBuffers.ts",
   );
   const serverListSync = await loadModule("../src/stores/serverListSync.ts");
+  const serversStoreHarness = await loadServersStore();
   const {
     useWebSocket,
     computeBackoffDelay,
@@ -241,6 +325,8 @@ async function main() {
     isFrameForChannel,
   } = channelBuffers.module;
   const { createServerListSync } = serverListSync.module;
+  const { useServersStore, createPinia, setActivePinia } =
+    serversStoreHarness.module;
 
   console.log("pure helpers");
   await check("backoff doubles then caps", () => {
@@ -678,10 +764,74 @@ async function main() {
     assert(sync.admit(poll) === false, "pre-validate poll refused");
   });
 
+  console.log("servers store wiring (A4-16/B4-5, fix round 1 U3)");
+  await check("removeServer drops a row a stale in-flight poll still carries", async () => {
+    const api = makeServersApi();
+    globalThis.__gothamServersApi = api;
+    setActivePinia(createPinia());
+    const store = useServersStore();
+    const row = { id: "s1", name: "node", status: "ready" };
+    store.servers = [row];
+
+    const pending = deferred();
+    let listCalls = 0;
+    api.listServers = () => {
+      listCalls += 1;
+      return listCalls === 1 ? pending.promise : Promise.resolve([]);
+    };
+    api.deleteServer = async () => {};
+
+    const fetch = store.fetchServers();
+    await store.removeServer("s1");
+    // The poll was in flight before the delete and still carries the row.
+    pending.resolve([row]);
+    await fetch;
+
+    assert(
+      !store.servers.some((server) => server.id === "s1"),
+      "a stale poll resurrected the deleted row",
+    );
+  });
+  await check("validate merges a row a stale in-flight poll would clobber", async () => {
+    const api = makeServersApi();
+    globalThis.__gothamServersApi = api;
+    setActivePinia(createPinia());
+    const store = useServersStore();
+    const original = { id: "s1", name: "node", status: "pending" };
+    const updated = { id: "s1", name: "node", status: "ready" };
+    store.servers = [original];
+
+    const pending = deferred();
+    let listCalls = 0;
+    api.listServers = () => {
+      listCalls += 1;
+      return listCalls === 1 ? pending.promise : Promise.resolve([original]);
+    };
+    api.validateServer = async () => ({
+      ok: true,
+      checks: [],
+      server: updated,
+      message: "",
+    });
+
+    const fetch = store.fetchServers();
+    await store.validate("s1");
+    assert(store.servers[0].status === "ready", "the validate merge was not applied");
+    // The pre-validate poll resolves with the old state.
+    pending.resolve([original]);
+    await fetch;
+
+    assert(
+      store.servers[0].status === "ready",
+      "a stale poll clobbered the validate merge",
+    );
+  });
+
   await server.close();
   await composable.cleanup();
   await channelBuffers.cleanup();
   await serverListSync.cleanup();
+  await serversStoreHarness.cleanup();
 
   const failed = results.filter((r) => !r.ok);
   console.log(

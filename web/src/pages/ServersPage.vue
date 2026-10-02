@@ -12,7 +12,7 @@ import {
   NSpin,
   useMessage,
 } from "naive-ui";
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { describeServerError } from "../api/servers";
@@ -289,10 +289,6 @@ watch(
   },
   { immediate: true },
 );
-
-onUnmounted(() => {
-  serversStore.stopPolling();
-});
 </script>
 
 <template>

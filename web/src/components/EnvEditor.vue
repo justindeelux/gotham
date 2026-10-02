@@ -3,12 +3,13 @@ import { NButton, NIcon, NInput, NText } from "naive-ui";
 import { computed } from "vue";
 
 import type { EnvVar } from "../api/applications";
+import { isSecretValue } from "../utils/envSecret";
 import GothamIcon from "./GothamIcon.vue";
 
 /**
  * Key/value editor for the plain environment variables sent to the container.
- * Values starting with `secret:` name a sealed secret (stored AES-256-GCM in
- * the `secrets` table) and are never returned by the API.
+ * Values carrying the `secret:` prefix name a sealed secret (stored AES-256-GCM
+ * in the `secrets` table) and are never returned by the API.
  */
 
 interface Props {
@@ -27,11 +28,6 @@ const rows = computed<EnvVar[]>(() => props.modelValue);
 /** isValidKey enforces the backend-adjacent KEY shape ^[A-Z][A-Z0-9_]*$. */
 function isValidKey(key: string): boolean {
   return KEY_PATTERN.test(key.trim());
-}
-
-/** isSecretValue reports a `secret:` reference to a sealed secret. */
-function isSecretValue(value: string): boolean {
-  return value.trim().startsWith("secret:");
 }
 
 /** updateRow replaces one row, keeping the array immutable for v-model. */

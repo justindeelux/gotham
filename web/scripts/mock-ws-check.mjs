@@ -217,6 +217,66 @@ async function loadModule(relativePath) {
   };
 }
 
+/**
+ * loadStoreModule bundles the applications store with its HTTP API stubbed and
+ * pinia/vue kept external, so the real store logic can be driven with a fake
+ * `listDeployments` and fake timers. The temp dir lives under web/ so the
+ * external bare imports resolve to the project's own node_modules.
+ */
+async function loadStoreModule() {
+  const directory = await mkdtemp(
+    join(new URL("..", import.meta.url).pathname, ".tmp-store-"),
+  );
+  const outfile = join(directory, "store.mjs");
+  const fakeApplications = `
+    const activeStates = new Set(["queued","cloning","building","pushing","starting"]);
+    export function isActiveDeployment(d) { return activeStates.has(d.state); }
+    export function describeApplicationError(e) { return String((e && e.message) || e); }
+    export async function listDeployments(appId) { return globalThis.__fx14a.listDeployments(appId); }
+    export async function getApplication() { throw new Error("unused"); }
+    export async function getEnv() { throw new Error("unused"); }
+    export async function getStorages() { throw new Error("unused"); }
+    export async function replaceEnv() { throw new Error("unused"); }
+    export async function replaceStorages() { throw new Error("unused"); }
+    export async function rollbackDeployment() { throw new Error("unused"); }
+    export async function startApplication() { throw new Error("unused"); }
+    export async function stopApplication() { throw new Error("unused"); }
+    export async function triggerDeploy() { throw new Error("unused"); }
+  `;
+  await build({
+    entryPoints: [
+      new URL("../src/stores/applications.ts", import.meta.url).pathname,
+    ],
+    outfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    logLevel: "silent",
+    external: ["pinia", "vue"],
+    plugins: [
+      {
+        name: "fake-applications",
+        setup(buildApi) {
+          buildApi.onResolve({ filter: /api\/applications$/ }, (args) => ({
+            path: args.path,
+            namespace: "fake-applications",
+          }));
+          buildApi.onLoad(
+            { filter: /.*/, namespace: "fake-applications" },
+            () => ({ contents: fakeApplications, loader: "js" }),
+          );
+        },
+      },
+    ],
+  });
+  const module = await import(pathToFileURL(outfile).href);
+  return {
+    module,
+    cleanup: () => rm(directory, { recursive: true, force: true }),
+  };
+}
+
 async function main() {
   if (typeof WebSocket === "undefined") {
     throw new Error("global WebSocket is unavailable; Node 22+ is required");
@@ -643,9 +703,252 @@ async function main() {
     assert(buffer.pending.length === 1, "paused notice queued, not rendered");
   });
 
+  console.log("FX-14a pure logic");
+  const deployPipeline = await loadModule("../src/utils/deployPipeline.ts");
+  const envSecret = await loadModule("../src/utils/envSecret.ts");
+  const requestGeneration = await loadModule("../src/utils/requestGeneration.ts");
+  const polling = await loadModule("../src/utils/polling.ts");
+  const wizardValidation = await loadModule("../src/utils/wizardValidation.ts");
+  const inFlightGuard = await loadModule("../src/composables/useInFlightGuard.ts");
+
+  await check("a failed pipeline claims no completed stage (C4-3)", () => {
+    const { pipelineStepsFor } = deployPipeline.module;
+    const failed = pipelineStepsFor({
+      id: "d",
+      application_id: "a",
+      kind: "deploy",
+      state: "failed",
+      image_tag: "",
+      registry_image: "",
+      digest: "",
+      error: "boom",
+      attempt: 1,
+      container_id: "",
+      rollback_from: "",
+      started_at: null,
+      finished_at: null,
+      created_at: "",
+      updated_at: "",
+    });
+    assert(
+      failed.every((step) => step.mood !== "is-done"),
+      "no stage is marked done on failure",
+    );
+    assert(
+      failed.some((step) => step.mood === "is-failed"),
+      "the failure is rendered (is-failed is reachable)",
+    );
+    assert(
+      failed[failed.length - 1].name === "failed",
+      "the failed node is terminal",
+    );
+  });
+
+  await check("pipeline progress maps running and mid-flight states (C4-3)", () => {
+    const { pipelineStepsFor } = deployPipeline.module;
+    const base = {
+      id: "d",
+      application_id: "a",
+      kind: "deploy",
+      state: "building",
+      image_tag: "",
+      registry_image: "",
+      digest: "",
+      error: "",
+      attempt: 1,
+      container_id: "",
+      rollback_from: "",
+      started_at: null,
+      finished_at: null,
+      created_at: "",
+      updated_at: "",
+    };
+    const building = pipelineStepsFor({ ...base });
+    assert(building[0].mood === "is-done", "queued done");
+    assert(building[1].mood === "is-done", "cloning done");
+    assert(building[2].mood === "is-active", "building active");
+    assert(building[3].mood === "" && building[4].mood === "", "later stages todo");
+    const running = pipelineStepsFor({ ...base, state: "running" });
+    assert(
+      running.every((step) => step.mood === "is-done"),
+      "a running deploy shows every stage done",
+    );
+    const rollback = pipelineStepsFor({ ...base, kind: "rollback", state: "starting" });
+    assert(
+      rollback.map((step) => step.name).join(",") === "queued,pushing,starting,running",
+      "rollback skips cloning and building",
+    );
+  });
+
+  await check("secret badge matches the API's untrimmed prefix (C4-11)", () => {
+    const { isSecretValue } = envSecret.module;
+    assert(isSecretValue("secret:db-url"), "plain reference is sealed");
+    assert(isSecretValue("secret:"), "empty reference still carries the prefix");
+    assert(!isSecretValue(" secret:db-url"), "leading whitespace is plaintext to the API");
+    assert(!isSecretValue("production"), "plain value is not sealed");
+  });
+
+  await check("a superseded request token is rejected (C4-1 / B4-8)", () => {
+    const { createRequestGeneration } = requestGeneration.module;
+    const generation = createRequestGeneration();
+    const inFlight = generation.current();
+    assert(generation.isCurrent(inFlight), "in-flight request is current");
+    generation.bump(); // application switch / wizard close
+    assert(!generation.isCurrent(inFlight), "the late response is discarded");
+    assert(generation.isCurrent(generation.current()), "new owner is current");
+  });
+
+  await check("polling cadence is fast active and slow idle (C4-12 / C4-13)", () => {
+    const { desiredPollIntervalMs, ACTIVE_POLL_INTERVAL_MS, IDLE_POLL_INTERVAL_MS } =
+      polling.module;
+    assert(desiredPollIntervalMs(true) === ACTIVE_POLL_INTERVAL_MS, "active fast");
+    assert(desiredPollIntervalMs(false) === IDLE_POLL_INTERVAL_MS, "idle slow");
+    assert(IDLE_POLL_INTERVAL_MS > ACTIVE_POLL_INTERVAL_MS, "idle is slower");
+  });
+
+  await check("env keys warn without blocking and dropped rows are counted (C4-7)", () => {
+    const { hasEnvKeyWarnings, countDroppedEnvRows, isRecommendedEnvKey } =
+      wizardValidation.module;
+    assert(isRecommendedEnvKey("NODE_ENV"), "conventional key recommended");
+    assert(!isRecommendedEnvKey("node_env"), "lowercase deviates");
+    assert(
+      hasEnvKeyWarnings([{ key: "NODE_ENV", value: "x" }]) === false,
+      "conventional keys do not warn",
+    );
+    assert(
+      hasEnvKeyWarnings([{ key: "node_env", value: "x" }]) === true,
+      "a deviating key warns",
+    );
+    assert(
+      hasEnvKeyWarnings([{ key: "", value: "x" }]) === false,
+      "nameless rows are reported separately, not as key warnings",
+    );
+    assert(
+      countDroppedEnvRows([
+        { key: "", value: "kept-value" },
+        { key: "", value: "" },
+        { key: "OK", value: "v" },
+      ]) === 1,
+      "only a nameless row carrying a value is a silent drop",
+    );
+  });
+
+  await check("a wizard reset clears its in-flight flags and token (U1 / B4-8)", () => {
+    const { useInFlightGuard } = inFlightGuard.module;
+    const guard = useInFlightGuard();
+    const token = guard.begin();
+    guard.creating.value = true;
+    guard.validating.value = true;
+    guard.reset();
+    assert(guard.creating.value === false, "creating cleared on reset");
+    assert(guard.validating.value === false, "validating cleared on reset");
+    assert(guard.isCurrent(token) === false, "the in-flight request is stale");
+  });
+
+  console.log("store polling guards (U2 / C4-12 / C4-13)");
+  const storeModule = await loadStoreModule();
+  const { useApplicationsStore } = storeModule.module;
+  const { createPinia, setActivePinia } = await import("pinia");
+  setActivePinia(createPinia());
+  const store = useApplicationsStore();
+
+  await check("a fetch that resolves after teardown re-arms no timer (U2)", async () => {
+    const scheduled = [];
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    globalThis.setInterval = (fn, ms) => {
+      const handle = { fn, ms };
+      scheduled.push(handle);
+      return handle;
+    };
+    globalThis.clearInterval = () => {};
+    let resolveList;
+    globalThis.__fx14a = {
+      listDeployments: () =>
+        new Promise((resolve) => {
+          resolveList = resolve;
+        }),
+    };
+    try {
+      const pending = store.fetchDeployments("store-app-a");
+      store.stopAllPolling(); // the user left the page while the load was in flight
+      resolveList([
+        {
+          id: "d1",
+          application_id: "store-app-a",
+          kind: "deploy",
+          state: "building",
+        },
+      ]);
+      await pending;
+      assert(scheduled.length === 0, "no timer armed after teardown");
+      assert(
+        store.deploymentsOf("store-app-a").length === 0,
+        "the late response is not cached",
+      );
+    } finally {
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+      delete globalThis.__fx14a;
+    }
+  });
+
+  await check("active and idle deployments arm the right cadence (C4-13)", async () => {
+    const scheduled = [];
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    globalThis.setInterval = (fn, ms) => {
+      const handle = { fn, ms };
+      scheduled.push(handle);
+      return handle;
+    };
+    globalThis.clearInterval = () => {};
+    let deployments = [
+      {
+        id: "d1",
+        application_id: "store-app-b",
+        kind: "deploy",
+        state: "building",
+      },
+    ];
+    globalThis.__fx14a = { listDeployments: async () => deployments };
+    try {
+      await store.fetchDeployments("store-app-b");
+      assert(
+        scheduled.length === 1 && scheduled[0].ms === 3000,
+        `active cadence was ${scheduled[0]?.ms}`,
+      );
+      deployments = [
+        {
+          id: "d1",
+          application_id: "store-app-b",
+          kind: "deploy",
+          state: "running",
+        },
+      ];
+      await store.refreshDeployments("store-app-b");
+      assert(
+        scheduled.length === 2 && scheduled[1].ms === 15000,
+        `idle cadence was ${scheduled[1]?.ms}`,
+      );
+      store.stopAllPolling();
+    } finally {
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+      delete globalThis.__fx14a;
+    }
+  });
+
   await server.close();
   await composable.cleanup();
   await channelBuffers.cleanup();
+  await deployPipeline.cleanup();
+  await envSecret.cleanup();
+  await requestGeneration.cleanup();
+  await polling.cleanup();
+  await wizardValidation.cleanup();
+  await inFlightGuard.cleanup();
+  await storeModule.cleanup();
 
   const failed = results.filter((r) => !r.ok);
   console.log(

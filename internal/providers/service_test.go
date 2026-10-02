@@ -9,7 +9,74 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 )
+
+// fakeSource is a deterministic SourceProvider for runWithToken and truncation
+// tests. Every call records the token it was given and, when mutate is set,
+// rotates it to simulate an oauth2 refresh.
+type fakeSource struct {
+	mutate    bool
+	truncated bool
+	repos     []Repo
+	latest    *oauth2.Token
+}
+
+func (f *fakeSource) record(tok *oauth2.Token) {
+	if f.mutate {
+		tok.AccessToken = "fresh-token"
+		tok.RefreshToken = "rotated-refresh"
+	}
+	f.latest = tok
+}
+
+func (f *fakeSource) Name() string { return NameGitHub }
+
+func (f *fakeSource) ExchangeToken(context.Context, string) (*oauth2.Token, error) {
+	return &oauth2.Token{AccessToken: "exchanged"}, nil
+}
+
+func (f *fakeSource) AuthCodeURL(string) string { return "" }
+
+func (f *fakeSource) ListRepos(_ context.Context, tok *oauth2.Token) ([]Repo, error) {
+	f.record(tok)
+	return f.repos, nil
+}
+
+func (f *fakeSource) ListBranches(context.Context, *oauth2.Token, string) ([]Branch, error) {
+	return nil, nil
+}
+
+func (f *fakeSource) CreateWebhook(_ context.Context, tok *oauth2.Token, _ string, _ Webhook) (string, error) {
+	f.record(tok)
+	return "1", nil
+}
+
+func (f *fakeSource) DeleteWebhook(_ context.Context, tok *oauth2.Token, _, _ string) error {
+	f.record(tok)
+	return nil
+}
+
+func (f *fakeSource) CreatePullRequestComment(_ context.Context, tok *oauth2.Token, _ string, _ int, _ string) error {
+	f.record(tok)
+	return nil
+}
+
+func (f *fakeSource) AddDeployKey(_ context.Context, tok *oauth2.Token, _ string, _ DeployKey) (string, error) {
+	f.record(tok)
+	return "1", nil
+}
+
+func (f *fakeSource) RemoveDeployKey(_ context.Context, tok *oauth2.Token, _, _ string) error {
+	f.record(tok)
+	return nil
+}
+
+// Token reports the last token the source saw, without refreshing.
+func (f *fakeSource) Token() *oauth2.Token { return f.latest }
+
+// Truncated reports whether the last listing hit a bound.
+func (f *fakeSource) Truncated() bool { return f.truncated }
 
 // seedProvider stores a connected provider in repo and returns it.
 func seedProvider(t *testing.T, repo *fakeRepo, p Provider) Provider {
@@ -353,7 +420,7 @@ func TestServicePersistsRefreshedToken(t *testing.T) {
 		Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true,
 		Factories: map[string]Factory{
 			NameGitHub: func(p Provider) (SourceProvider, error) {
-				s := newGitHubSource(p)
+				s := newGitHubSource(p, true)
 				s.config.Endpoint.TokenURL = tokenSrv.URL
 				return s, nil
 			},
@@ -446,7 +513,7 @@ func TestServiceAuthorizeAndConnect(t *testing.T) {
 		Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true,
 		Factories: map[string]Factory{
 			NameGitHub: func(p Provider) (SourceProvider, error) {
-				s := newGitHubSource(p)
+				s := newGitHubSource(p, true)
 				s.config.Endpoint.TokenURL = tokenSrv.URL
 				return s, nil
 			},
@@ -487,5 +554,214 @@ func TestServiceConnectRejectsForgedState(t *testing.T) {
 
 	if _, err := svc.Connect(context.Background(), provider.UserID, provider.ID, "code", "forged"); !errors.Is(err, ErrValidation) {
 		t.Fatalf("error = %v, want ErrValidation", err)
+	}
+}
+
+// TestServicePersistsRefreshedTokenDespiteCancelledContext is the U4
+// regression: the persist must survive a request whose context was cancelled
+// (client disconnect / HTTP cap), or GitLab's rotated refresh token is lost.
+func TestServicePersistsRefreshedTokenDespiteCancelledContext(t *testing.T) {
+	repo := newFakeRepo()
+	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: "https://api.github.com"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	source := &fakeSource{mutate: true, repos: []Repo{{ExternalID: "1", FullName: "o/r"}}}
+	svc := NewService(Config{
+		Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true,
+		Factories: map[string]Factory{NameGitHub: func(Provider) (SourceProvider, error) {
+			// Simulate the client disconnecting during the call.
+			cancel()
+			return source, nil
+		}},
+	})
+
+	// The factory cancels the context while the source is built; the persist
+	// after the call must still run on a detached context.
+	if _, err := svc.ListRepos(ctx, provider.UserID, provider.ID); err != nil {
+		t.Fatalf("ListRepos: %v", err)
+	}
+	stored := repo.providers[provider.ID]
+	if stored.AccessToken != "fresh-token" || stored.RefreshToken != "rotated-refresh" {
+		t.Fatalf("stored token = %q / %q, want the rotated pair persisted on a cancelled request",
+			stored.AccessToken, stored.RefreshToken)
+	}
+}
+
+// TestServiceTruncatedListingSkipsCache is the U5 regression: a truncated
+// listing must not overwrite the previous complete cache.
+func TestServiceTruncatedListingSkipsCache(t *testing.T) {
+	repo := newFakeRepo()
+	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: "https://api.github.com"})
+	repo.cached[provider.ID] = []Repo{{ExternalID: "old", FullName: "o/old"}}
+
+	source := &fakeSource{truncated: true, repos: []Repo{{ExternalID: "partial", FullName: "o/partial"}}}
+	svc := NewService(Config{
+		Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true,
+		Factories: map[string]Factory{NameGitHub: func(Provider) (SourceProvider, error) { return source, nil }},
+	})
+
+	repos, err := svc.ListRepos(context.Background(), provider.UserID, provider.ID)
+	if err != nil {
+		t.Fatalf("ListRepos: %v", err)
+	}
+	if len(repos) != 1 || repos[0].FullName != "o/partial" {
+		t.Fatalf("repos = %+v, want the live partial list", repos)
+	}
+	if _, ok := repo.replaced[provider.ID]; ok {
+		t.Fatalf("truncated listing replaced the cache: %+v", repo.replaced[provider.ID])
+	}
+	if cached := repo.cached[provider.ID]; len(cached) != 1 || cached[0].FullName != "o/old" {
+		t.Fatalf("cache = %+v, want the previous complete list", cached)
+	}
+}
+
+// TestRunWithTokenPersistsAcrossPaths is the U8 table test: every provider call
+// path persists a rotated token, and an unchanged token is not written.
+func TestRunWithTokenPersistsAcrossPaths(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  bool
+		invoke  func(svc *Service, userID, providerID uuid.UUID) error
+		wantPut int
+	}{
+		{
+			name: "list repos", mutate: true,
+			invoke: func(svc *Service, userID, providerID uuid.UUID) error {
+				_, err := svc.ListRepos(context.Background(), userID, providerID)
+				return err
+			},
+			wantPut: 1,
+		},
+		{
+			name: "create webhook", mutate: true,
+			invoke: func(svc *Service, userID, _ uuid.UUID) error {
+				_, err := svc.CreateWebhook(context.Background(),
+					HookTarget{UserID: userID, Provider: NameGitHub, Repo: "o/r", CloneURL: "https://github.com/o/r.git"},
+					Webhook{URL: "https://cp.example/api/v1/webhooks/github", Secret: "s"})
+				return err
+			},
+			wantPut: 1,
+		},
+		{
+			name: "delete webhook", mutate: true,
+			invoke: func(svc *Service, userID, _ uuid.UUID) error {
+				return svc.DeleteWebhook(context.Background(),
+					HookTarget{UserID: userID, Provider: NameGitHub, Repo: "o/r", CloneURL: "https://github.com/o/r.git"}, "1")
+			},
+			wantPut: 1,
+		},
+		{
+			name: "comment", mutate: true,
+			invoke: func(svc *Service, userID, _ uuid.UUID) error {
+				return svc.CreatePullRequestComment(context.Background(),
+					HookTarget{UserID: userID, Provider: NameGitHub, Repo: "o/r", CloneURL: "https://github.com/o/r.git"}, 1, "hi")
+			},
+			wantPut: 1,
+		},
+		{
+			name: "add deploy key", mutate: true,
+			invoke: func(svc *Service, userID, _ uuid.UUID) error {
+				_, err := svc.AddDeployKey(context.Background(),
+					HookTarget{UserID: userID, Provider: NameGitHub, Repo: "o/r", CloneURL: "https://github.com/o/r.git"},
+					DeployKey{Title: "t", Key: "k"})
+				return err
+			},
+			wantPut: 1,
+		},
+		{
+			name: "remove deploy key", mutate: true,
+			invoke: func(svc *Service, userID, _ uuid.UUID) error {
+				return svc.RemoveDeployKey(context.Background(),
+					HookTarget{UserID: userID, Provider: NameGitHub, Repo: "o/r", CloneURL: "https://github.com/o/r.git"}, "1")
+			},
+			wantPut: 1,
+		},
+		{
+			name: "unchanged token is not written", mutate: false,
+			invoke: func(svc *Service, userID, providerID uuid.UUID) error {
+				_, err := svc.ListRepos(context.Background(), userID, providerID)
+				return err
+			},
+			wantPut: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newFakeRepo()
+			provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: "https://api.github.com"})
+			source := &fakeSource{mutate: tc.mutate}
+			svc := NewService(Config{
+				Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true,
+				Factories: map[string]Factory{NameGitHub: func(Provider) (SourceProvider, error) { return source, nil }},
+			})
+
+			if err := tc.invoke(svc, provider.UserID, provider.ID); err != nil {
+				t.Fatalf("invoke: %v", err)
+			}
+			if repo.updateTokenCalls != tc.wantPut {
+				t.Fatalf("UpdateToken calls = %d, want %d", repo.updateTokenCalls, tc.wantPut)
+			}
+			if tc.wantPut == 1 {
+				stored := repo.providers[provider.ID]
+				if stored.AccessToken != "fresh-token" || stored.RefreshToken != "rotated-refresh" {
+					t.Fatalf("stored token = %q / %q", stored.AccessToken, stored.RefreshToken)
+				}
+			}
+		})
+	}
+}
+
+// TestConnectStatePerUserCapAndRedeem covers U7/U8: one account cannot exhaust
+// the store, redeem is bound to the exact user and provider, and redeeming
+// frees a slot.
+func TestConnectStatePerUserCapAndRedeem(t *testing.T) {
+	states := newConnectState()
+	user := uuid.New()
+	provider := uuid.New()
+
+	// A foreign user or provider cannot redeem its own guess.
+	foreignUser, err := states.new(user, provider)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if states.redeem(foreignUser, uuid.New(), provider) {
+		t.Error("redeem with a foreign user returned true")
+	}
+	foreignProvider, err := states.new(user, provider)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if states.redeem(foreignProvider, user, uuid.New()) {
+		t.Error("redeem with a foreign provider returned true")
+	}
+
+	// Fill to the per-user cap.
+	var last string
+	for i := 0; i < connectStatePerUser; i++ {
+		state, err := states.new(user, provider)
+		if err != nil {
+			t.Fatalf("new #%d: %v", i, err)
+		}
+		last = state
+	}
+	if _, err := states.new(user, provider); !errors.Is(err, ErrTooManyRequests) {
+		t.Fatalf("over-cap new: error = %v, want ErrTooManyRequests", err)
+	}
+
+	// The correct pair redeems once and frees a slot.
+	if !states.redeem(last, user, provider) {
+		t.Fatal("redeem with the bound pair returned false")
+	}
+	if states.redeem(last, user, provider) {
+		t.Error("replaying a redeemed state returned true")
+	}
+	if _, err := states.new(user, provider); err != nil {
+		t.Fatalf("new after redeem: %v", err)
+	}
+
+	// Another user is unaffected by the first user's cap.
+	if _, err := states.new(uuid.New(), uuid.New()); err != nil {
+		t.Fatalf("new for another user: %v", err)
 	}
 }

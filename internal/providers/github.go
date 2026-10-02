@@ -50,23 +50,28 @@ type gitHubBranch struct {
 // gitHubSource implements SourceProvider against the GitHub REST API.
 type gitHubSource struct {
 	tokenTracking
+	listingState
 	apiBase string
 }
 
 // newGitHubSource builds the GitHub implementation for one stored connection.
-func newGitHubSource(p Provider) *gitHubSource {
+// allowUnsafe disables the outbound guards for the loopback hosts tests use.
+func newGitHubSource(p Provider, allowUnsafe bool) *gitHubSource {
 	apiBase := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
 	if apiBase == "" {
 		apiBase = gitHubDefaultAPIBase
 	}
 	return &gitHubSource{
-		tokenTracking: tokenTracking{config: &oauth2.Config{
-			ClientID:     p.ClientID,
-			ClientSecret: p.ClientSecret,
-			RedirectURL:  p.RedirectURL,
-			Scopes:       splitScopes(p.Scopes, gitHubDefaultScopes),
-			Endpoint:     oauth2.Endpoint{AuthURL: gitHubAuthURL, TokenURL: gitHubTokenURL},
-		}},
+		tokenTracking: tokenTracking{
+			config: &oauth2.Config{
+				ClientID:     p.ClientID,
+				ClientSecret: p.ClientSecret,
+				RedirectURL:  p.RedirectURL,
+				Scopes:       splitScopes(p.Scopes, gitHubDefaultScopes),
+				Endpoint:     oauth2.Endpoint{AuthURL: gitHubAuthURL, TokenURL: gitHubTokenURL},
+			},
+			allowUnsafe: allowUnsafe,
+		},
 		apiBase: apiBase,
 	}
 }
@@ -88,8 +93,12 @@ func (p *gitHubSource) AuthCodeURL(state string) string {
 }
 
 // ListRepos returns every repository the token can reach, including private
-// ones. Pagination is bounded by maxRepoPages.
+// ones. Pagination is bounded by maxRepoPages; a listing that hits the bound is
+// marked truncated so the caller keeps the previous cache.
 func (p *gitHubSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo, error) {
+	ctx, cancel := withListingTimeout(ctx)
+	defer cancel()
+
 	client := p.client(ctx, tok)
 	repos := make([]Repo, 0)
 	for page := 1; page <= maxRepoPages; page++ {
@@ -118,6 +127,7 @@ func (p *gitHubSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo
 			return repos, nil
 		}
 	}
+	p.truncated = true
 	return repos, nil
 }
 
@@ -127,6 +137,9 @@ func (p *gitHubSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo
 	if err := validateRepo(repo, 2); err != nil {
 		return nil, err
 	}
+	ctx, cancel := withListingTimeout(ctx)
+	defer cancel()
+
 	client := p.client(ctx, tok)
 	branches := make([]Branch, 0)
 	for page := 1; page <= maxRepoPages; page++ {
@@ -150,6 +163,7 @@ func (p *gitHubSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo
 			return branches, nil
 		}
 	}
+	p.truncated = true
 	return branches, nil
 }
 

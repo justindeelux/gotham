@@ -23,6 +23,11 @@ const (
 	gitLabPageSize = 100
 )
 
+// gitLabOffsetLimit is GitLab's maximum offset (page-1)*per_page for offset
+// pagination; a request past it answers 400. It is a variable so a test can
+// exercise the ceiling without 500 requests.
+var gitLabOffsetLimit = 50000
+
 // gitLabProject is the subset of the GitLab project object this provider uses.
 type gitLabProject struct {
 	ID                int64   `json:"id"`
@@ -47,11 +52,13 @@ type gitLabBranch struct {
 // gitLabSource implements SourceProvider against the GitLab REST API.
 type gitLabSource struct {
 	tokenTracking
+	listingState
 	apiBase string
 }
 
 // newGitLabSource builds the GitLab implementation for one stored connection.
-func newGitLabSource(p Provider) *gitLabSource {
+// allowUnsafe disables the outbound guards for the loopback hosts tests use.
+func newGitLabSource(p Provider, allowUnsafe bool) *gitLabSource {
 	base := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
 	apiBase := gitLabAPIBase
 	authURL := gitLabDefaultBase + "/oauth/authorize"
@@ -62,13 +69,16 @@ func newGitLabSource(p Provider) *gitLabSource {
 		tokenURL = base + "/oauth/token"
 	}
 	return &gitLabSource{
-		tokenTracking: tokenTracking{config: &oauth2.Config{
-			ClientID:     p.ClientID,
-			ClientSecret: p.ClientSecret,
-			RedirectURL:  p.RedirectURL,
-			Scopes:       splitScopes(p.Scopes, gitLabDefaultScopes),
-			Endpoint:     oauth2.Endpoint{AuthURL: authURL, TokenURL: tokenURL},
-		}},
+		tokenTracking: tokenTracking{
+			config: &oauth2.Config{
+				ClientID:     p.ClientID,
+				ClientSecret: p.ClientSecret,
+				RedirectURL:  p.RedirectURL,
+				Scopes:       splitScopes(p.Scopes, gitLabDefaultScopes),
+				Endpoint:     oauth2.Endpoint{AuthURL: authURL, TokenURL: tokenURL},
+			},
+			allowUnsafe: allowUnsafe,
+		},
 		apiBase: apiBase,
 	}
 }
@@ -89,13 +99,22 @@ func (p *gitLabSource) AuthCodeURL(state string) string {
 	return p.config.AuthCodeURL(state)
 }
 
+// gitLabPastOffsetLimit reports whether page is past GitLab's 50k offset
+// ceiling (the only case where a mid-listing 400 means "end of list").
+func gitLabPastOffsetLimit(page int) bool {
+	return (page-1)*gitLabPageSize >= gitLabOffsetLimit
+}
+
 // ListRepos returns the projects the token's user is a member of, including
 // private ones. membership=true keeps the listing to the user's own projects
 // instead of enumerating the entire instance catalogue, and pagination is
 // bounded by maxRepoPages. GitLab caps offset pagination at 50k projects and
-// answers 400 past that; the listing then returns what it has instead of
-// failing.
+// answers 400 past that; the listing then returns what it has, marked
+// truncated, instead of failing.
 func (p *gitLabSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo, error) {
+	ctx, cancel := withListingTimeout(ctx)
+	defer cancel()
+
 	client := p.client(ctx, tok)
 	repos := make([]Repo, 0)
 	for page := 1; page <= maxRepoPages; page++ {
@@ -106,8 +125,9 @@ func (p *gitLabSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo
 
 		var batch []gitLabProject
 		if err := getJSON(ctx, client, NameGitLab, endpoint, "application/json", &batch); err != nil {
-			if page > 1 && isBadRequest(err) {
-				return repos, nil // past GitLab's offset ceiling
+			if page > 1 && gitLabPastOffsetLimit(page) && isBadRequest(err) {
+				p.truncated = true
+				return repos, nil // GitLab's offset ceiling
 			}
 			return nil, err
 		}
@@ -131,6 +151,7 @@ func (p *gitLabSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo
 			return repos, nil
 		}
 	}
+	p.truncated = true
 	return repos, nil
 }
 
@@ -140,6 +161,9 @@ func (p *gitLabSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo
 	if err := validateRepo(repo, 2); err != nil {
 		return nil, err
 	}
+	ctx, cancel := withListingTimeout(ctx)
+	defer cancel()
+
 	client := p.client(ctx, tok)
 	branches := make([]Branch, 0)
 	for page := 1; page <= maxRepoPages; page++ {
@@ -150,8 +174,9 @@ func (p *gitLabSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo
 
 		var batch []gitLabBranch
 		if err := getJSON(ctx, client, NameGitLab, endpoint, "application/json", &batch); err != nil {
-			if page > 1 && isBadRequest(err) {
-				return branches, nil // past GitLab's offset ceiling
+			if page > 1 && gitLabPastOffsetLimit(page) && isBadRequest(err) {
+				p.truncated = true
+				return branches, nil // GitLab's offset ceiling
 			}
 			return nil, err
 		}
@@ -166,6 +191,7 @@ func (p *gitLabSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo
 			return branches, nil
 		}
 	}
+	p.truncated = true
 	return branches, nil
 }
 

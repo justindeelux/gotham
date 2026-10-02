@@ -37,6 +37,8 @@ type fakeRepo struct {
 	cached    map[uuid.UUID][]Repo
 	replaced  map[uuid.UUID][]Repo
 	replaceFn func(providerID uuid.UUID, repos []Repo) error
+
+	updateTokenCalls int
 }
 
 // newFakeRepo builds an empty fake repository.
@@ -74,11 +76,15 @@ func (f *fakeRepo) List(_ context.Context, userID uuid.UUID) ([]Provider, error)
 	return out, nil
 }
 
-func (f *fakeRepo) UpdateToken(_ context.Context, id uuid.UUID, accessToken, refreshToken string, expiresAt *time.Time) (Provider, error) {
+func (f *fakeRepo) UpdateToken(ctx context.Context, id uuid.UUID, accessToken, refreshToken string, expiresAt *time.Time) (Provider, error) {
+	if err := ctx.Err(); err != nil {
+		return Provider{}, err
+	}
 	p, ok := f.providers[id]
 	if !ok {
 		return Provider{}, ErrNotFound
 	}
+	f.updateTokenCalls++
 	p.AccessToken = accessToken
 	p.RefreshToken = refreshToken
 	p.TokenExpiresAt = expiresAt

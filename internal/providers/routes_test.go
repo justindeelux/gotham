@@ -192,6 +192,7 @@ func TestRoutesServiceErrors(t *testing.T) {
 		{"not found", ErrNotFound, http.StatusNotFound},
 		{"not connected", ErrNotConnected, http.StatusConflict},
 		{"unsupported", ErrUnsupported, http.StatusBadRequest},
+		{"rate limited", ErrTooManyRequests, http.StatusTooManyRequests},
 		{"provider api", &httpError{provider: NameGitHub, url: "https://api.github.com", status: 500}, http.StatusBadGateway},
 		{"internal", errors.New("boom"), http.StatusInternalServerError},
 	}

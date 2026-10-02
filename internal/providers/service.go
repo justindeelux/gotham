@@ -69,6 +69,13 @@ type tokenReporter interface {
 	Token() *oauth2.Token
 }
 
+// truncationReporter is implemented by provider sources that can report whether
+// their last listing hit a page/offset bound. The service then keeps the
+// previous cache instead of overwriting it with a partial list.
+type truncationReporter interface {
+	Truncated() bool
+}
+
 // Factory builds a SourceProvider for a stored connection.
 type Factory func(p Provider) (SourceProvider, error)
 
@@ -100,7 +107,7 @@ func NewService(cfg Config) *Service {
 		logger = slog.Default()
 	}
 
-	factories := defaultFactories()
+	factories := defaultFactories(cfg.AllowUnsafeBaseURL)
 	for name, factory := range cfg.Factories {
 		factories[name] = factory
 	}
@@ -286,6 +293,17 @@ func (s *Service) ListRepos(ctx context.Context, userID, providerID uuid.UUID) (
 		return nil, err
 	}
 
+	truncated := false
+	if reporter, ok := source.(truncationReporter); ok {
+		truncated = reporter.Truncated()
+	}
+	if truncated {
+		s.logger.Warn("providers: repo listing truncated; keeping the previous cache",
+			"provider_id", providerID.String(),
+			"repos", len(repos))
+		return repos, nil
+	}
+
 	if err := s.repo.ReplaceRepos(ctx, providerID, repos); err != nil {
 		s.logger.Warn("providers: cache repo list failed",
 			"provider_id", providerID.String(),
@@ -390,16 +408,20 @@ func (s *Service) runWithToken(ctx context.Context, source SourceProvider, conne
 	return err
 }
 
-// persistRefreshedToken stores a token oauth2 rotated during a call. It is
-// best-effort: a failed write is logged and the call result is unaffected, but
-// the next call may then retry the refresh.
+// persistRefreshedToken stores a token oauth2 rotated during a call. It runs on
+// a context detached from the request, because the write must survive a request
+// that hit the HTTP cap or a disconnected client: GitLab rotates both tokens,
+// so losing the rotated pair ends in invalid_grant. It is best-effort: a failed
+// write is logged and the call result is unaffected.
 func (s *Service) persistRefreshedToken(ctx context.Context, connection Provider, tok *oauth2.Token) {
 	if tok == nil || (tok.AccessToken == connection.AccessToken &&
 		tok.RefreshToken == connection.RefreshToken &&
 		sameExpiry(tok.Expiry, connection.TokenExpiresAt)) {
 		return
 	}
-	if _, err := s.repo.UpdateToken(ctx, connection.ID, tok.AccessToken, tok.RefreshToken, tokenExpiry(tok)); err != nil {
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, err := s.repo.UpdateToken(persistCtx, connection.ID, tok.AccessToken, tok.RefreshToken, tokenExpiry(tok)); err != nil {
 		s.logger.Warn("providers: persist refreshed token failed",
 			"provider_id", connection.ID.String(), "error", err)
 	}
@@ -568,12 +590,13 @@ func (s *Service) sourceProvider(p Provider) (SourceProvider, error) {
 	return factory(p)
 }
 
-// defaultFactories returns the built-in provider implementations.
-func defaultFactories() map[string]Factory {
+// defaultFactories returns the built-in provider implementations. allowUnsafe
+// disables the outbound guards for the loopback hosts tests use.
+func defaultFactories(allowUnsafe bool) map[string]Factory {
 	return map[string]Factory{
-		NameGitHub: func(p Provider) (SourceProvider, error) { return newGitHubSource(p), nil },
-		NameGitLab: func(p Provider) (SourceProvider, error) { return newGitLabSource(p), nil },
-		NameGitea:  func(p Provider) (SourceProvider, error) { return newGiteaSource(p), nil },
+		NameGitHub: func(p Provider) (SourceProvider, error) { return newGitHubSource(p, allowUnsafe), nil },
+		NameGitLab: func(p Provider) (SourceProvider, error) { return newGitLabSource(p, allowUnsafe), nil },
+		NameGitea:  func(p Provider) (SourceProvider, error) { return newGiteaSource(p, allowUnsafe), nil },
 	}
 }
 
@@ -581,20 +604,26 @@ func defaultFactories() map[string]Factory {
 // redeemable.
 const connectStateTTL = 10 * time.Minute
 
-// connectStateCapacity bounds outstanding authorizations, so a flood of starts
-// cannot grow the store without limit. Expired entries are swept on write.
+// connectStateCapacity bounds outstanding authorizations across all users, so a
+// flood of starts cannot grow the store without limit. Expired entries are
+// swept on write.
 const connectStateCapacity = 10000
 
-// errConnectStateFull reports that the connect-state store hit its cap.
-var errConnectStateFull = errors.New("providers: connect state store full")
+// connectStatePerUser bounds one account's outstanding authorizations, so a
+// single owner cannot mint states until the global cap and make every other
+// user's Authorize fail.
+const connectStatePerUser = 20
 
 // connectState keeps issued OAuth connect states in memory, each bound to the
 // user and provider connection that started the flow. It is single-use and
 // expires after connectStateTTL. There is no background goroutine: expired
-// entries are swept opportunistically on the next write.
+// entries are swept opportunistically on the next write. The store is
+// process-local, so a multi-instance control plane would need to share it
+// (Redis/DB) before running provider connects on more than one node.
 type connectState struct {
 	mu      sync.Mutex
 	entries map[string]connectStateEntry
+	byUser  map[uuid.UUID]int
 	now     func() time.Time
 }
 
@@ -607,10 +636,16 @@ type connectStateEntry struct {
 
 // newConnectState builds an empty store.
 func newConnectState() *connectState {
-	return &connectState{entries: make(map[string]connectStateEntry), now: time.Now}
+	return &connectState{
+		entries: make(map[string]connectStateEntry),
+		byUser:  make(map[uuid.UUID]int),
+		now:     time.Now,
+	}
 }
 
-// new mints a random single-use state bound to userID and providerID.
+// new mints a random single-use state bound to userID and providerID. It
+// answers ErrTooManyRequests when the user's or the global cap is reached, so a
+// caller gets a 429 rather than a 500 for everyone.
 func (s *connectState) new(userID, providerID uuid.UUID) (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
@@ -620,10 +655,10 @@ func (s *connectState) new(userID, providerID uuid.UUID) (string, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.entries) >= connectStateCapacity {
+	if s.byUser[userID] >= connectStatePerUser || len(s.entries) >= connectStateCapacity {
 		s.sweepLocked(s.now())
-		if len(s.entries) >= connectStateCapacity {
-			return "", errConnectStateFull
+		if s.byUser[userID] >= connectStatePerUser || len(s.entries) >= connectStateCapacity {
+			return "", ErrTooManyRequests
 		}
 	}
 	s.entries[state] = connectStateEntry{
@@ -631,6 +666,7 @@ func (s *connectState) new(userID, providerID uuid.UUID) (string, error) {
 		providerID: providerID,
 		expiresAt:  s.now().Add(connectStateTTL),
 	}
+	s.byUser[userID]++
 	return state, nil
 }
 
@@ -645,10 +681,19 @@ func (s *connectState) redeem(state string, userID, providerID uuid.UUID) bool {
 		return false
 	}
 	delete(s.entries, state)
+	s.releaseLocked(entry.userID)
 	if s.now().After(entry.expiresAt) {
 		return false
 	}
 	return entry.userID == userID && entry.providerID == providerID
+}
+
+// releaseLocked decrements a user's outstanding count; the caller holds the lock.
+func (s *connectState) releaseLocked(userID uuid.UUID) {
+	s.byUser[userID]--
+	if s.byUser[userID] <= 0 {
+		delete(s.byUser, userID)
+	}
 }
 
 // sweepLocked drops expired entries; the caller holds the lock.
@@ -656,6 +701,7 @@ func (s *connectState) sweepLocked(now time.Time) {
 	for state, entry := range s.entries {
 		if now.After(entry.expiresAt) {
 			delete(s.entries, state)
+			s.releaseLocked(entry.userID)
 		}
 	}
 }

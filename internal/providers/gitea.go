@@ -44,24 +44,29 @@ type giteaBranch struct {
 // giteaSource implements SourceProvider against the Gitea REST API.
 type giteaSource struct {
 	tokenTracking
+	listingState
 	apiBase string
 }
 
 // newGiteaSource builds the Gitea implementation for one stored connection. The
 // base URL must be set (validated by the service) because Gitea is self-hosted.
-func newGiteaSource(p Provider) *giteaSource {
+// allowUnsafe disables the outbound guards for the loopback hosts tests use.
+func newGiteaSource(p Provider, allowUnsafe bool) *giteaSource {
 	base := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
 	return &giteaSource{
-		tokenTracking: tokenTracking{config: &oauth2.Config{
-			ClientID:     p.ClientID,
-			ClientSecret: p.ClientSecret,
-			RedirectURL:  p.RedirectURL,
-			Scopes:       splitScopes(p.Scopes, giteaDefaultScopes),
-			Endpoint: oauth2.Endpoint{
-				AuthURL:  base + "/login/oauth/authorize",
-				TokenURL: base + "/login/oauth/access_token",
+		tokenTracking: tokenTracking{
+			config: &oauth2.Config{
+				ClientID:     p.ClientID,
+				ClientSecret: p.ClientSecret,
+				RedirectURL:  p.RedirectURL,
+				Scopes:       splitScopes(p.Scopes, giteaDefaultScopes),
+				Endpoint: oauth2.Endpoint{
+					AuthURL:  base + "/login/oauth/authorize",
+					TokenURL: base + "/login/oauth/access_token",
+				},
 			},
-		}},
+			allowUnsafe: allowUnsafe,
+		},
 		apiBase: base + "/api/v1",
 	}
 }
@@ -83,8 +88,12 @@ func (p *giteaSource) AuthCodeURL(state string) string {
 }
 
 // ListRepos returns every repository visible to the token, including private
-// ones. Pagination is bounded by maxRepoPages.
+// ones. Pagination is bounded by maxRepoPages; a listing that hits the bound is
+// marked truncated so the caller keeps the previous cache.
 func (p *giteaSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo, error) {
+	ctx, cancel := withListingTimeout(ctx)
+	defer cancel()
+
 	client := p.client(ctx, tok)
 	repos := make([]Repo, 0)
 	for page := 1; page <= maxRepoPages; page++ {
@@ -110,6 +119,7 @@ func (p *giteaSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo,
 			return repos, nil
 		}
 	}
+	p.truncated = true
 	return repos, nil
 }
 
@@ -119,6 +129,9 @@ func (p *giteaSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo 
 	if err := validateRepo(repo, 2); err != nil {
 		return nil, err
 	}
+	ctx, cancel := withListingTimeout(ctx)
+	defer cancel()
+
 	client := p.client(ctx, tok)
 	branches := make([]Branch, 0)
 	for page := 1; page <= maxRepoPages; page++ {
@@ -139,6 +152,7 @@ func (p *giteaSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo 
 			return branches, nil
 		}
 	}
+	p.truncated = true
 	return branches, nil
 }
 

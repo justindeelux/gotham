@@ -285,6 +285,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: "provider is not connected"})
 	case errors.Is(err, ErrUnsupported), errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrTooManyRequests):
+		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "too many pending requests"})
 	case errors.As(err, &httpErr):
 		h.logger.Warn("providers: provider API error", "error", err)
 		writeJSON(w, http.StatusBadGateway, errorBody{Message: "provider unavailable"})

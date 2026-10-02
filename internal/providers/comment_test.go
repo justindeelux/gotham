@@ -26,7 +26,7 @@ func TestGitHubSourceCreatePullRequestComment(t *testing.T) {
 		writeJSONTest(t, w, map[string]any{"id": 1})
 	})
 
-	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, true)
 	if err := source.CreatePullRequestComment(context.Background(), staticToken, "o/r", 7, "preview started"); err != nil {
 		t.Fatalf("CreatePullRequestComment: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestGitLabSourceCreatePullRequestComment(t *testing.T) {
 		writeJSONTest(t, w, map[string]any{"id": 2})
 	})
 
-	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"})
+	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"}, true)
 	source.apiBase = srv.URL
 	if err := source.CreatePullRequestComment(context.Background(), staticToken, "group/project", 9, "preview started"); err != nil {
 		t.Fatalf("CreatePullRequestComment: %v", err)
@@ -100,7 +100,7 @@ func TestGiteaSourceCreatePullRequestComment(t *testing.T) {
 		writeJSONTest(t, w, map[string]any{"id": 3})
 	})
 
-	source := newGiteaSource(Provider{BaseURL: srv.URL})
+	source := newGiteaSource(Provider{BaseURL: srv.URL}, true)
 	if err := source.CreatePullRequestComment(context.Background(), staticToken, "t/r", 4, "preview started"); err != nil {
 		t.Fatalf("CreatePullRequestComment: %v", err)
 	}

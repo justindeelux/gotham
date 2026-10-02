@@ -128,12 +128,16 @@ export async function deleteServer(id: string): Promise<void> {
 
 /**
  * validateServer runs the SSH probes. A 422 is a normal outcome rather than an
- * error, so both status codes resolve to a {@link ValidateOutcome}.
+ * error, so both status codes resolve to a {@link ValidateOutcome}. passphrase
+ * decrypts a passphrase-protected key for this run only.
  */
-export async function validateServer(id: string): Promise<ValidateOutcome> {
+export async function validateServer(
+  id: string,
+  passphrase?: string,
+): Promise<ValidateOutcome> {
   const response: AxiosResponse<ValidateResponse> = await http.post<ValidateResponse>(
     `/servers/${id}/validate`,
-    {},
+    passphrase ? { passphrase } : {},
     {
       timeout: validateTimeoutMs,
       validateStatus: (status) => status === 200 || status === 422,

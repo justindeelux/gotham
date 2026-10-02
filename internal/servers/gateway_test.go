@@ -194,8 +194,10 @@ func TestGatewayRegisterCreatesServer(t *testing.T) {
 	if row.DockerVersion == nil || *row.DockerVersion != "24.0.7" {
 		t.Errorf("docker_version = %v, want 24.0.7", row.DockerVersion)
 	}
-	if row.Status != StatusReady {
-		t.Errorf("status = %q, want %q", row.Status, StatusReady)
+	// Registration records capabilities but leaves the node pending: ready is
+	// reserved for an authenticated agent heartbeat (A4-15/B4-9).
+	if row.Status != StatusPending {
+		t.Errorf("status = %q, want %q", row.Status, StatusPending)
 	}
 
 	// A second Register for the same node id must update, not duplicate.

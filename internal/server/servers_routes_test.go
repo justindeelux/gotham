@@ -24,6 +24,7 @@ type fakeServerService struct {
 	failAdd        error
 	validateResult *servers.ValidationResult
 	validateErr    error
+	lastAuth       servers.ValidateAuth
 	metrics        []servers.MetricPoint
 	metricsErr     error
 }
@@ -90,7 +91,11 @@ func (f *fakeServerService) Delete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (f *fakeServerService) Validate(_ context.Context, id uuid.UUID, _ servers.ValidateAuth) (*servers.ValidationResult, error) {
+func (f *fakeServerService) Validate(_ context.Context, id uuid.UUID, auth servers.ValidateAuth) (*servers.ValidationResult, error) {
+	f.mu.Lock()
+	f.lastAuth = auth
+	f.mu.Unlock()
+
 	if f.validateErr != nil {
 		return f.validateResult, f.validateErr
 	}
@@ -281,6 +286,25 @@ func TestValidateServerRouteSuccess(t *testing.T) {
 	}
 	if body.Server == nil || body.Server.Status != servers.StatusReady {
 		t.Errorf("server = %+v, want status ready", body.Server)
+	}
+}
+
+func TestValidateServerRouteForwardsPassphrase(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-pw")
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/validate",
+		`{"passphrase":"s3cret"}`, authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	fake.mu.Lock()
+	got := fake.lastAuth.Passphrase
+	fake.mu.Unlock()
+	if got != "s3cret" {
+		t.Errorf("passphrase forwarded to the service = %q, want s3cret", got)
 	}
 }
 

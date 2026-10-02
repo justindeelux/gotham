@@ -160,6 +160,22 @@ func testPrivateKeyPEM(t *testing.T) []byte {
 	return pem.EncodeToMemory(block)
 }
 
+// testEncryptedPrivateKeyPEM generates an ed25519 key and returns its OpenSSH
+// PEM encrypted with passphrase.
+func testEncryptedPrivateKeyPEM(t *testing.T, passphrase string) []byte {
+	t.Helper()
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(privateKey, "", []byte(passphrase))
+	if err != nil {
+		t.Fatalf("marshal encrypted private key: %v", err)
+	}
+	return pem.EncodeToMemory(block)
+}
+
 // target splits a host:port address into a probe target.
 func target(t *testing.T, addr string) (string, int) {
 	t.Helper()
@@ -357,6 +373,57 @@ func TestValidateNodeRefusesUnpinnedHost(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not pinned") {
 		t.Errorf("err = %v, want it to report the host is not pinned", err)
+	}
+}
+
+// TestValidateNodeStopsAtDeadlineOnStalledHandshake covers A4-14: a peer that
+// accepts the TCP connection and then never completes the SSH handshake must not
+// hang validation past the run's deadline.
+func TestValidateNodeStopsAtDeadlineOnStalledHandshake(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	released := make(chan struct{})
+	defer close(released)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		// Hold the connection open, answering nothing.
+		<-released
+		_ = conn.Close()
+	}()
+
+	host, port := target(t, listener.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, _, _, err = ValidateNode(ctx, host, port, "root", SSHAuth{Password: "x"}, HostKeyPolicy{AcceptUnpinned: true})
+	if err == nil {
+		t.Fatal("ValidateNode against a stalled handshake returned nil error")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("ValidateNode took %s, want it bounded near the 300ms context deadline", elapsed)
+	}
+}
+
+// TestParsePrivateKeyPassphrase covers the parser's passphrase branches.
+func TestParsePrivateKeyPassphrase(t *testing.T) {
+	pemBytes := testEncryptedPrivateKeyPEM(t, "s3cret")
+
+	if _, err := parsePrivateKey(pemBytes, ""); err == nil || !strings.Contains(err.Error(), "passphrase") {
+		t.Fatalf("parsePrivateKey without a passphrase = %v, want a passphrase-required error", err)
+	}
+	if _, err := parsePrivateKey(pemBytes, "s3cret"); err != nil {
+		t.Fatalf("parsePrivateKey with the passphrase: %v", err)
+	}
+	if _, err := parsePrivateKey(pemBytes, "wrong"); err == nil {
+		t.Fatal("parsePrivateKey with the wrong passphrase returned nil error")
 	}
 }
 

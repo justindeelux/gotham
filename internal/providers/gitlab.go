@@ -46,7 +46,7 @@ type gitLabBranch struct {
 
 // gitLabSource implements SourceProvider against the GitLab REST API.
 type gitLabSource struct {
-	config  *oauth2.Config
+	tokenTracking
 	apiBase string
 }
 
@@ -62,13 +62,13 @@ func newGitLabSource(p Provider) *gitLabSource {
 		tokenURL = base + "/oauth/token"
 	}
 	return &gitLabSource{
-		config: &oauth2.Config{
+		tokenTracking: tokenTracking{config: &oauth2.Config{
 			ClientID:     p.ClientID,
 			ClientSecret: p.ClientSecret,
 			RedirectURL:  p.RedirectURL,
 			Scopes:       splitScopes(p.Scopes, gitLabDefaultScopes),
 			Endpoint:     oauth2.Endpoint{AuthURL: authURL, TokenURL: tokenURL},
-		},
+		}},
 		apiBase: apiBase,
 	}
 }
@@ -78,21 +78,37 @@ func (p *gitLabSource) Name() string { return NameGitLab }
 
 // ExchangeToken completes the OAuth2 flow with GitLab.
 func (p *gitLabSource) ExchangeToken(ctx context.Context, code string) (*oauth2.Token, error) {
+	ctx, cancel := withProviderTimeout(ctx)
+	defer cancel()
 	return p.config.Exchange(ctx, code)
 }
 
-// ListRepos returns every project visible to the token, including private ones.
+// AuthCodeURL builds the authorization URL for state. It satisfies the
+// authorizer seam used by the connect flow.
+func (p *gitLabSource) AuthCodeURL(state string) string {
+	return p.config.AuthCodeURL(state)
+}
+
+// ListRepos returns the projects the token's user is a member of, including
+// private ones. membership=true keeps the listing to the user's own projects
+// instead of enumerating the entire instance catalogue, and pagination is
+// bounded by maxRepoPages. GitLab caps offset pagination at 50k projects and
+// answers 400 past that; the listing then returns what it has instead of
+// failing.
 func (p *gitLabSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo, error) {
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	repos := make([]Repo, 0)
-	for page := 1; ; page++ {
+	for page := 1; page <= maxRepoPages; page++ {
 		endpoint := fmt.Sprintf(
-			"%s/projects?per_page=%d&page=%d&order_by=last_activity_at&sort=desc",
+			"%s/projects?membership=true&per_page=%d&page=%d&order_by=last_activity_at&sort=desc",
 			p.apiBase, gitLabPageSize, page,
 		)
 
 		var batch []gitLabProject
 		if err := getJSON(ctx, client, NameGitLab, endpoint, "application/json", &batch); err != nil {
+			if page > 1 && isBadRequest(err) {
+				return repos, nil // past GitLab's offset ceiling
+			}
 			return nil, err
 		}
 		for _, item := range batch {
@@ -115,16 +131,18 @@ func (p *gitLabSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo
 			return repos, nil
 		}
 	}
+	return repos, nil
 }
 
 // ListBranches returns the branches of repo ("group/project", nested allowed).
+// Pagination is bounded by maxRepoPages.
 func (p *gitLabSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo string) ([]Branch, error) {
 	if err := validateRepo(repo, 2); err != nil {
 		return nil, err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	branches := make([]Branch, 0)
-	for page := 1; ; page++ {
+	for page := 1; page <= maxRepoPages; page++ {
 		endpoint := fmt.Sprintf(
 			"%s/projects/%s/repository/branches?per_page=%d&page=%d",
 			p.apiBase, escapeProjectPath(repo), gitLabPageSize, page,
@@ -132,6 +150,9 @@ func (p *gitLabSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo
 
 		var batch []gitLabBranch
 		if err := getJSON(ctx, client, NameGitLab, endpoint, "application/json", &batch); err != nil {
+			if page > 1 && isBadRequest(err) {
+				return branches, nil // past GitLab's offset ceiling
+			}
 			return nil, err
 		}
 		for _, item := range batch {
@@ -145,6 +166,7 @@ func (p *gitLabSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo
 			return branches, nil
 		}
 	}
+	return branches, nil
 }
 
 // CreateWebhook installs a push hook on repo ("group/project", nested allowed)
@@ -154,7 +176,7 @@ func (p *gitLabSource) CreateWebhook(ctx context.Context, tok *oauth2.Token, rep
 	if err := validateRepo(repo, 1); err != nil {
 		return "", err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	payload := map[string]any{
 		"url":         hook.URL,
 		"token":       hook.Secret,
@@ -188,7 +210,7 @@ func (p *gitLabSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, rep
 	if err := validateHookID(hookID); err != nil {
 		return err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	endpoint := fmt.Sprintf("%s/projects/%s/hooks/%s", p.apiBase, escapeProjectPath(repo), hookID)
 	if err := doJSON(ctx, client, NameGitLab, http.MethodDelete, endpoint, "application/json", nil, nil); err != nil {
 		if isNotFound(err) {
@@ -209,7 +231,7 @@ func (p *gitLabSource) CreatePullRequestComment(ctx context.Context, tok *oauth2
 	if err := validateComment(number, body); err != nil {
 		return err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	endpoint := fmt.Sprintf("%s/projects/%s/merge_requests/%d/notes", p.apiBase, escapeProjectPath(repo), number)
 	payload := map[string]string{"body": body}
 	return doJSON(ctx, client, NameGitLab, http.MethodPost, endpoint, "application/json", payload, nil)
@@ -225,7 +247,7 @@ func (p *gitLabSource) AddDeployKey(ctx context.Context, tok *oauth2.Token, repo
 	if err := validateDeployKey(key); err != nil {
 		return "", err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	payload := map[string]any{
 		"title": key.Title,
 		"key":   key.Key,
@@ -253,7 +275,7 @@ func (p *gitLabSource) RemoveDeployKey(ctx context.Context, tok *oauth2.Token, r
 	if err := validateDeployKeyID(keyID); err != nil {
 		return err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	endpoint := fmt.Sprintf("%s/projects/%s/deploy_keys/%s", p.apiBase, escapeProjectPath(repo), keyID)
 	if err := doJSON(ctx, client, NameGitLab, http.MethodDelete, endpoint, "application/json", nil, nil); err != nil {
 		if isNotFound(err) {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -35,7 +37,7 @@ func TestServiceListReposCaches(t *testing.T) {
 
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: srv.URL})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	repos, err := svc.ListRepos(context.Background(), provider.UserID, provider.ID)
 	if err != nil {
@@ -57,7 +59,7 @@ func TestServiceListReposFallsBackToCache(t *testing.T) {
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: srv.URL})
 	repo.cached[provider.ID] = []Repo{{ExternalID: "9", FullName: "o/cached"}}
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	repos, err := svc.ListRepos(context.Background(), provider.UserID, provider.ID)
 	if err != nil {
@@ -73,7 +75,7 @@ func TestServiceListReposNotConnected(t *testing.T) {
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: "http://irrelevant"})
 	provider.AccessToken = ""
 	repo.providers[provider.ID] = provider
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	if _, err := svc.ListRepos(context.Background(), provider.UserID, provider.ID); !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("error = %v, want ErrNotConnected", err)
@@ -83,7 +85,7 @@ func TestServiceListReposNotConnected(t *testing.T) {
 func TestServiceListReposUnsupportedProvider(t *testing.T) {
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: "bitbucket"})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	if _, err := svc.ListRepos(context.Background(), provider.UserID, provider.ID); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("error = %v, want ErrUnsupported", err)
@@ -93,7 +95,7 @@ func TestServiceListReposUnsupportedProvider(t *testing.T) {
 func TestServiceListReposGiteaRequiresBaseURL(t *testing.T) {
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitea})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	if _, err := svc.ListRepos(context.Background(), provider.UserID, provider.ID); !errors.Is(err, ErrValidation) {
 		t.Fatalf("error = %v, want ErrValidation", err)
@@ -103,7 +105,7 @@ func TestServiceListReposGiteaRequiresBaseURL(t *testing.T) {
 func TestServiceListReposNotFound(t *testing.T) {
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	if _, err := svc.ListRepos(context.Background(), uuid.New(), provider.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("error = %v, want ErrNotFound", err)
@@ -113,7 +115,7 @@ func TestServiceListReposNotFound(t *testing.T) {
 func TestServiceList(t *testing.T) {
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	list, err := svc.List(context.Background(), provider.UserID)
 	if err != nil {
@@ -140,7 +142,7 @@ func TestServiceCreateWebhookInstallsOnStoredConnection(t *testing.T) {
 
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: srv.URL})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	hookID, err := svc.CreateWebhook(context.Background(), HookTarget{
 		UserID:   provider.UserID,
@@ -190,7 +192,7 @@ func TestServiceCreateWebhookConnectionProblems(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := NewService(Config{Repository: tc.repo, Logger: discardLogger()})
+			svc := newTestService(tc.repo)
 			_, err := svc.CreateWebhook(context.Background(), tc.target,
 				Webhook{URL: "https://cp.example/api/v1/webhooks/github", Secret: "s"})
 			if !errors.Is(err, tc.want) {
@@ -203,7 +205,7 @@ func TestServiceCreateWebhookConnectionProblems(t *testing.T) {
 func TestServiceCreateWebhookValidatesCallbackURL(t *testing.T) {
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	_, err := svc.CreateWebhook(context.Background(), HookTarget{
 		UserID: provider.UserID, Provider: NameGitHub, Repo: "o/r",
@@ -223,7 +225,7 @@ func TestServiceDeleteWebhookRemovesHook(t *testing.T) {
 
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: srv.URL})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 	target := HookTarget{
 		UserID: provider.UserID, Provider: NameGitHub,
 		CloneURL: "https://github.com/o/r.git", Repo: "o/r",
@@ -324,5 +326,166 @@ func TestChooseConnection(t *testing.T) {
 				t.Errorf("picked %q, want %q", got.BaseURL, tc.want.BaseURL)
 			}
 		})
+	}
+}
+
+// TestServicePersistsRefreshedToken is the C1-10 regression: oauth2 refreshes
+// an expired token in memory during a call, and the service must write the
+// rotated pair back so the next call does not present a consumed refresh token.
+func TestServicePersistsRefreshedToken(t *testing.T) {
+	tokenSrv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSONTest(t, w, map[string]any{
+			"access_token": "fresh-token", "refresh_token": "rotated-refresh",
+			"token_type": "bearer", "expires_in": 3600,
+		})
+	})
+	apiSrv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSONTest(t, w, []map[string]any{{"id": 1, "name": "gotham", "full_name": "o/gotham"}})
+	})
+
+	repo := newFakeRepo()
+	past := time.Now().Add(-time.Hour)
+	provider := seedProvider(t, repo, Provider{
+		Name: NameGitHub, BaseURL: apiSrv.URL,
+		RefreshToken: "old-refresh", TokenExpiresAt: &past,
+	})
+	svc := NewService(Config{
+		Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true,
+		Factories: map[string]Factory{
+			NameGitHub: func(p Provider) (SourceProvider, error) {
+				s := newGitHubSource(p)
+				s.config.Endpoint.TokenURL = tokenSrv.URL
+				return s, nil
+			},
+		},
+	})
+
+	if _, err := svc.ListRepos(context.Background(), provider.UserID, provider.ID); err != nil {
+		t.Fatalf("ListRepos: %v", err)
+	}
+	stored := repo.providers[provider.ID]
+	if stored.AccessToken != "fresh-token" || stored.RefreshToken != "rotated-refresh" {
+		t.Fatalf("stored token = %q / %q, want the refreshed pair", stored.AccessToken, stored.RefreshToken)
+	}
+	if stored.TokenExpiresAt == nil || !stored.TokenExpiresAt.After(time.Now()) {
+		t.Fatalf("stored expiry = %v, want a future time", stored.TokenExpiresAt)
+	}
+}
+
+// TestServiceCreateProvider is the C1-11 regression: a connection can be
+// created through the production service path.
+func TestServiceCreateProvider(t *testing.T) {
+	repo := newFakeRepo()
+	userID := uuid.New()
+	svc := newTestService(repo)
+
+	created, err := svc.Create(context.Background(), userID, CreateProviderInput{
+		Name: NameGitHub, BaseURL: "https://api.github.com",
+		ClientID: "client-id", ClientSecret: "client-secret",
+		RedirectURL: "https://cp.example/oauth/callback", Scopes: "repo",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID == uuid.Nil || created.UserID != userID || created.Name != NameGitHub {
+		t.Fatalf("created = %+v", created)
+	}
+	stored := repo.providers[created.ID]
+	if stored.ClientSecret != "client-secret" || stored.AccessToken != "" {
+		t.Fatalf("stored = %+v, want the app config and no token", stored)
+	}
+}
+
+// TestServiceRejectsUnsafeBaseURL covers C1-15 at the create and use boundary.
+func TestServiceRejectsUnsafeBaseURL(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+
+	_, err := svc.Create(context.Background(), uuid.New(), CreateProviderInput{
+		Name: NameGitea, BaseURL: "http://169.254.169.254",
+		ClientID: "id", ClientSecret: "s", RedirectURL: "https://cp.example/cb",
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create with a metadata base_url: error = %v, want ErrValidation", err)
+	}
+
+	// A row written out of band with a loopback base_url is refused at use.
+	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: "http://127.0.0.1:1"})
+	if _, err := svc.ListRepos(context.Background(), provider.UserID, provider.ID); !errors.Is(err, ErrValidation) {
+		t.Fatalf("ListRepos with a loopback base_url: error = %v, want ErrValidation", err)
+	}
+}
+
+// TestServiceAuthorizeAndConnect is the C1-11 regression: the OAuth start and
+// completion path exchanges the code and stores the tokens.
+func TestServiceAuthorizeAndConnect(t *testing.T) {
+	var gotCode string
+	tokenSrv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotCode = r.Form.Get("code")
+		writeJSONTest(t, w, map[string]any{
+			"access_token": "connected-token", "refresh_token": "connected-refresh",
+			"token_type": "bearer", "expires_in": 3600,
+		})
+	})
+	apiSrv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSONTest(t, w, []map[string]any{})
+	})
+
+	repo := newFakeRepo()
+	userID := uuid.New()
+	provider, err := repo.Create(context.Background(), Provider{
+		ID: uuid.New(), UserID: userID, Name: NameGitHub, BaseURL: apiSrv.URL,
+		ClientID: "client-id", ClientSecret: "client-secret",
+		RedirectURL: "https://cp.example/oauth/callback",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	svc := NewService(Config{
+		Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true,
+		Factories: map[string]Factory{
+			NameGitHub: func(p Provider) (SourceProvider, error) {
+				s := newGitHubSource(p)
+				s.config.Endpoint.TokenURL = tokenSrv.URL
+				return s, nil
+			},
+		},
+	})
+
+	url, state, err := svc.Authorize(context.Background(), userID, provider.ID)
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	if state == "" || !strings.Contains(url, "state="+state) || !strings.Contains(url, "client_id=client-id") {
+		t.Fatalf("authorize url = %q, state = %q", url, state)
+	}
+
+	connected, err := svc.Connect(context.Background(), userID, provider.ID, "the-code", state)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if !connected.Connected() || connected.AccessToken != "connected-token" {
+		t.Fatalf("connected = %+v, want the exchanged token", connected)
+	}
+	if gotCode != "the-code" {
+		t.Fatalf("provider saw code %q, want the-code", gotCode)
+	}
+
+	// The state is single-use: replaying it is refused.
+	if _, err := svc.Connect(context.Background(), userID, provider.ID, "the-code", state); !errors.Is(err, ErrValidation) {
+		t.Fatalf("replayed Connect: error = %v, want ErrValidation", err)
+	}
+}
+
+// TestServiceConnectRejectsForgedState proves a state that was never issued
+// cannot complete a connection.
+func TestServiceConnectRejectsForgedState(t *testing.T) {
+	repo := newFakeRepo()
+	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: "https://api.github.com"})
+	svc := newTestService(repo)
+
+	if _, err := svc.Connect(context.Background(), provider.UserID, provider.ID, "code", "forged"); !errors.Is(err, ErrValidation) {
+		t.Fatalf("error = %v, want ErrValidation", err)
 	}
 }

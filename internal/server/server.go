@@ -391,9 +391,12 @@ func (s *Server) routes() (http.Handler, error) {
 		// client joins the room.
 		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger, s.authorizeLogSubscription)
 
-		// Source providers (GitHub/GitLab/Gitea): list connections and repos.
+		// Source providers (GitHub/GitLab/Gitea): list connections and repos,
+		// plus create/connect. The method-based scope boundary keeps reads on
+		// the read scope and the create/connect mutations on the deploy scope,
+		// so a read-only API token cannot add a connection.
 		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger)
-		providers.Mount(api, s.readScopeAuth, UserIDFromContext, providerSvc)
+		providers.Mount(api, s.resourceScopeAuth, UserIDFromContext, providerSvc)
 
 		// Application deploy orchestration (BE-4.3): a nil service (no
 		// database) or FEATURE_APPLICATIONS=false mounts nothing, so Phases

@@ -135,13 +135,13 @@ func (r *storeRepository) UpdateToken(ctx context.Context, id uuid.UUID, accessT
 	return r.providerFromRow(row)
 }
 
-// ReplaceRepos swaps the cached repository list of a provider.
+// ReplaceRepos swaps the cached repository list of a provider. The new list is
+// built fully before the store replaces the old one in a single transaction, so
+// a failed or partial refresh leaves the previous complete list intact.
 func (r *storeRepository) ReplaceRepos(ctx context.Context, providerID uuid.UUID, repos []Repo) error {
-	if err := r.store.DeleteRepoCacheByProvider(ctx, pgUUID(providerID)); err != nil {
-		return fmt.Errorf("providers: clear repo cache: %w", err)
-	}
+	params := make([]sqlc.UpsertRepoCacheParams, 0, len(repos))
 	for _, repo := range repos {
-		if _, err := r.store.UpsertRepoCache(ctx, sqlc.UpsertRepoCacheParams{
+		params = append(params, sqlc.UpsertRepoCacheParams{
 			ProviderID:    pgUUID(providerID),
 			ExternalID:    repo.ExternalID,
 			Name:          repo.Name,
@@ -151,9 +151,10 @@ func (r *storeRepository) ReplaceRepos(ctx context.Context, providerID uuid.UUID
 			CloneUrl:      repo.CloneURL,
 			SshUrl:        repo.SSHURL,
 			HtmlUrl:       repo.HTMLURL,
-		}); err != nil {
-			return fmt.Errorf("providers: cache repo: %w", err)
-		}
+		})
+	}
+	if err := r.store.ReplaceRepoCache(ctx, pgUUID(providerID), params); err != nil {
+		return fmt.Errorf("providers: replace repo cache: %w", err)
 	}
 	return nil
 }

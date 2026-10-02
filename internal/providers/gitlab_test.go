@@ -51,6 +51,71 @@ func TestGitLabSourceListRepos(t *testing.T) {
 	}
 }
 
+// TestGitLabSourceListReposMembershipAndOffsetLimit is the C1-8 regression:
+// the listing must ask only for the user's member projects and must stop
+// gracefully at GitLab's 50k offset ceiling instead of failing.
+func TestGitLabSourceListReposMembershipAndOffsetLimit(t *testing.T) {
+	var sawMembership bool
+	var requests int
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Query().Get("membership") != "true" {
+			t.Errorf("membership = %q, want true", r.URL.Query().Get("membership"))
+		}
+		sawMembership = true
+		if r.URL.Query().Get("page") == "1" {
+			batch := make([]map[string]any, 0, gitLabPageSize)
+			for i := 0; i < gitLabPageSize; i++ {
+				batch = append(batch, map[string]any{
+					"id": i, "name": "r", "path_with_namespace": "o/r", "visibility": "private",
+				})
+			}
+			writeJSONTest(t, w, batch)
+			return
+		}
+		// Past the offset ceiling GitLab answers 400.
+		w.WriteHeader(http.StatusBadRequest)
+	})
+
+	source := newGitLabSource(Provider{BaseURL: srv.URL})
+	repos, err := source.ListRepos(context.Background(), staticToken)
+	if err != nil {
+		t.Fatalf("ListRepos: %v", err)
+	}
+	if !sawMembership {
+		t.Fatal("listing never asked for membership")
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2 (page 1 then the offset-limit 400)", requests)
+	}
+	if len(repos) != gitLabPageSize {
+		t.Fatalf("len(repos) = %d, want the first page", len(repos))
+	}
+}
+
+// TestGitLabSourceListReposBounded proves the loop is bounded even when the
+// instance keeps returning full pages.
+func TestGitLabSourceListReposBounded(t *testing.T) {
+	var requests int
+	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		batch := make([]map[string]any, 0, gitLabPageSize)
+		for i := 0; i < gitLabPageSize; i++ {
+			batch = append(batch, map[string]any{"id": i, "name": "r", "path_with_namespace": "o/r"})
+		}
+		writeJSONTest(t, w, batch)
+	})
+
+	source := newGitLabSource(Provider{BaseURL: srv.URL})
+	repos, err := source.ListRepos(context.Background(), staticToken)
+	if err != nil {
+		t.Fatalf("ListRepos: %v", err)
+	}
+	if requests != maxRepoPages || len(repos) != maxRepoPages*gitLabPageSize {
+		t.Fatalf("requests = %d, repos = %d, want the %d-page cap", requests, len(repos), maxRepoPages)
+	}
+}
+
 func TestGitLabSourceListBranches(t *testing.T) {
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/repository/branches") {

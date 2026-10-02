@@ -47,3 +47,40 @@ func (s *Store) ListRepoCacheByProvider(ctx context.Context, providerID pgtype.U
 func (s *Store) DeleteRepoCacheByProvider(ctx context.Context, providerID pgtype.UUID) error {
 	return s.queries.DeleteRepoCacheByProvider(ctx, providerID)
 }
+
+// ReplaceRepoCache atomically replaces a provider's cached repositories. It
+// locks the provider row, clears the old list and inserts the new one in one
+// transaction, so a partial failure leaves the previous complete list intact
+// and two concurrent refreshes for the same provider serialize instead of
+// interleaving. BeforeRepoCacheInsert, when set, can force a failure after the
+// clear to exercise the rollback.
+func (s *Store) ReplaceRepoCache(ctx context.Context, providerID pgtype.UUID, repos []sqlc.UpsertRepoCacheParams) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Lock the parent row: a second replacement for the same provider waits
+	// here rather than deleting between this clear and its inserts.
+	var locked pgtype.UUID
+	if err := tx.QueryRow(ctx, "SELECT id FROM providers WHERE id = $1 FOR UPDATE", providerID).Scan(&locked); err != nil {
+		return err
+	}
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.DeleteRepoCacheByProvider(ctx, providerID); err != nil {
+		return err
+	}
+	if s.BeforeRepoCacheInsert != nil {
+		if err := s.BeforeRepoCacheInsert(); err != nil {
+			return err
+		}
+	}
+	for _, repo := range repos {
+		if _, err := queries.UpsertRepoCache(ctx, repo); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}

@@ -8,12 +8,31 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // maxResponseBytes bounds how much of a provider response is decoded.
 const maxResponseBytes = 4 << 20 // 4 MiB
+
+// maxRepoPages bounds how many pages a repository/branch listing walks. A
+// provider that never returns a short page — a hostile or misconfigured
+// self-hosted instance — must not make the control plane allocate without
+// limit. At the largest provider page size this caps a listing at 50k items;
+// GitLab additionally stops itself at its 50k offset ceiling.
+const maxRepoPages = 500
+
+// providerHTTPTimeout bounds one provider HTTP call. It is a variable so a test
+// can shorten it; production keeps the sane default.
+var providerHTTPTimeout = 15 * time.Second
+
+// withProviderTimeout bounds a provider call with the shared timeout while
+// preserving any shorter deadline the caller already set on ctx.
+func withProviderTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, providerHTTPTimeout)
+}
 
 // httpError is a non-2xx response from a provider API. Handlers map it to a
 // gateway status instead of leaking the provider body.
@@ -31,6 +50,9 @@ func (e *httpError) Error() string {
 // getJSON performs a GET with the given Accept header and decodes the JSON body
 // into dst. A non-2xx status yields *httpError.
 func getJSON(ctx context.Context, client *http.Client, provider, url, accept string, dst any) error {
+	ctx, cancel := withProviderTimeout(ctx)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("providers: %s request: %w", provider, err)
@@ -73,6 +95,9 @@ func doJSON(ctx context.Context, client *http.Client, provider, method, url, acc
 		body = bytes.NewReader(encoded)
 	}
 
+	ctx, cancel := withProviderTimeout(ctx)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return fmt.Errorf("providers: %s request: %w", provider, err)
@@ -110,6 +135,51 @@ func doJSON(ctx context.Context, client *http.Client, provider, method, url, acc
 func isNotFound(err error) bool {
 	var httpErr *httpError
 	return errors.As(err, &httpErr) && httpErr.status == http.StatusNotFound
+}
+
+// isBadRequest reports whether err is an *httpError with status 400. GitLab
+// answers 400 once offset pagination passes its 50k ceiling; the caller treats
+// that as the end of a listing instead of a failure.
+func isBadRequest(err error) bool {
+	var httpErr *httpError
+	return errors.As(err, &httpErr) && httpErr.status == http.StatusBadRequest
+}
+
+// validateBaseURL checks a stored base_url before it is used as an outbound
+// target. An empty value is allowed (the provider's public host). A non-empty
+// value must be an absolute http(s) URL with no userinfo, and — unless
+// allowUnsafe is set — must not be a loopback, link-local, metadata or
+// unspecified literal address. Private (RFC1918/ULA) hosts stay allowed because
+// self-hosted GitLab/Gitea instances legitimately live there; hostnames are
+// left to DNS, matching the notifications outbound guard.
+func validateBaseURL(raw string, allowUnsafe bool) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("%w: base_url must be an absolute http(s) URL", ErrValidation)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("%w: base_url must not contain userinfo", ErrValidation)
+	}
+	if allowUnsafe {
+		return nil
+	}
+
+	host := strings.Trim(parsed.Hostname(), "[]")
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() ||
+			addr.IsMulticast() || addr.IsUnspecified() {
+			return fmt.Errorf("%w: base_url must not point at a loopback, link-local or metadata address", ErrValidation)
+		}
+	}
+	switch strings.ToLower(host) {
+	case "metadata.google.internal", "metadata":
+		return fmt.Errorf("%w: base_url must not point at a metadata service", ErrValidation)
+	}
+	return nil
 }
 
 // validateRepo rejects a repository identifier that could escape the intended

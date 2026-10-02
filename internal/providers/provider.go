@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -149,6 +150,34 @@ func (p Provider) token() *oauth2.Token {
 	}
 	if p.TokenExpiresAt != nil {
 		tok.Expiry = *p.TokenExpiresAt
+	}
+	return tok
+}
+
+// tokenTracking builds oauth2 clients and remembers the token source, so a
+// refresh performed during a call can be read back and persisted. Embedding it
+// promotes config on each source implementation.
+type tokenTracking struct {
+	config *oauth2.Config
+	source oauth2.TokenSource
+}
+
+// client returns an oauth2 client for tok and records its token source.
+func (t *tokenTracking) client(ctx context.Context, tok *oauth2.Token) *http.Client {
+	t.source = t.config.TokenSource(ctx, tok)
+	return oauth2.NewClient(ctx, t.source)
+}
+
+// Token returns the latest token the recorded source holds, or nil when no call
+// has been made. It lets the service persist a refresh that happened inside the
+// client oauth2 built for the call.
+func (t *tokenTracking) Token() *oauth2.Token {
+	if t.source == nil {
+		return nil
+	}
+	tok, err := t.source.Token()
+	if err != nil {
+		return nil
 	}
 	return tok
 }

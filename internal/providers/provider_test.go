@@ -49,6 +49,9 @@ func newFakeRepo() *fakeRepo {
 }
 
 func (f *fakeRepo) Create(_ context.Context, p Provider) (Provider, error) {
+	if p.ID == uuid.Nil {
+		p.ID = uuid.New()
+	}
 	f.providers[p.ID] = p
 	return p, nil
 }
@@ -104,4 +107,10 @@ func serve(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// newTestService builds a Service that permits the loopback base URLs the
+// httptest fakes use. Production leaves the escape hatch off.
+func newTestService(repo Repository) *Service {
+	return NewService(Config{Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true})
 }

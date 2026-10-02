@@ -42,6 +42,30 @@ func TestGiteaSourceListRepos(t *testing.T) {
 	}
 }
 
+// TestGiteaSourceListReposBounded is the C1-8 regression for the third
+// provider: a self-hosted instance that keeps returning full pages cannot make
+// the listing loop forever.
+func TestGiteaSourceListReposBounded(t *testing.T) {
+	var requests int
+	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		batch := make([]map[string]any, 0, giteaPageSize)
+		for i := 0; i < giteaPageSize; i++ {
+			batch = append(batch, map[string]any{"id": i, "name": "r", "full_name": "o/r"})
+		}
+		writeJSONTest(t, w, batch)
+	})
+
+	source := newGiteaSource(Provider{BaseURL: srv.URL})
+	repos, err := source.ListRepos(context.Background(), staticToken)
+	if err != nil {
+		t.Fatalf("ListRepos: %v", err)
+	}
+	if requests != maxRepoPages || len(repos) != maxRepoPages*giteaPageSize {
+		t.Fatalf("requests = %d, repos = %d, want the %d-page cap", requests, len(repos), maxRepoPages)
+	}
+}
+
 func TestGiteaSourceListBranches(t *testing.T) {
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/repos/team/gotham/branches" {

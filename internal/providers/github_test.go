@@ -80,6 +80,32 @@ func TestGitHubSourceListReposPagination(t *testing.T) {
 	}
 }
 
+// TestGitHubSourceListReposBounded is the C1-8 regression: a provider that
+// never returns a short page must not make the listing loop forever.
+func TestGitHubSourceListReposBounded(t *testing.T) {
+	var requests int
+	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		batch := make([]map[string]any, 0, gitHubPageSize)
+		for i := 0; i < gitHubPageSize; i++ {
+			batch = append(batch, map[string]any{"id": i, "name": "r", "full_name": "o/r"})
+		}
+		writeJSONTest(t, w, batch)
+	})
+
+	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	repos, err := source.ListRepos(context.Background(), staticToken)
+	if err != nil {
+		t.Fatalf("ListRepos: %v", err)
+	}
+	if requests != maxRepoPages {
+		t.Fatalf("requests = %d, want the %d-page cap", requests, maxRepoPages)
+	}
+	if len(repos) != maxRepoPages*gitHubPageSize {
+		t.Fatalf("len(repos) = %d, want %d", len(repos), maxRepoPages*gitHubPageSize)
+	}
+}
+
 func TestGitHubSourceListBranches(t *testing.T) {
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/justindeelux/gotham/branches" {

@@ -38,6 +38,12 @@ type Store struct {
 	// leaves it nil.
 	BeforeCollectionClear func()
 
+	// BeforeRepoCacheInsert is a nil-by-default test seam invoked inside
+	// ReplaceRepoCache after the cache clear and before the inserts. A non-nil
+	// error aborts the transaction so a test can prove a failed refresh leaves
+	// the previous repository list intact. Production leaves it nil.
+	BeforeRepoCacheInsert func() error
+
 	// AfterEnvReadBeforeSecrets is a nil-by-default test seam invoked inside
 	// ListEnvConfigByApp between the env-var read and the secret read. A test
 	// commits a replacement from it to prove both reads observe one snapshot.

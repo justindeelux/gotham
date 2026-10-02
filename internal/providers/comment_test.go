@@ -125,7 +125,7 @@ func TestServiceCreatePullRequestCommentUsesStoredConnection(t *testing.T) {
 
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: srv.URL})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	target := HookTarget{
 		UserID: provider.UserID, Provider: NameGitHub,

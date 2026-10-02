@@ -228,7 +228,7 @@ func TestServiceAddDeployKey(t *testing.T) {
 
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: srv.URL})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	id, err := svc.AddDeployKey(context.Background(), HookTarget{
 		UserID:   provider.UserID,
@@ -253,7 +253,7 @@ func TestServiceRemoveDeployKey(t *testing.T) {
 
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: srv.URL})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 	target := HookTarget{UserID: provider.UserID, Provider: NameGitHub, Repo: "o/r"}
 
 	if err := svc.RemoveDeployKey(context.Background(), target, "5"); err != nil {
@@ -272,7 +272,7 @@ func TestServiceRemoveDeployKey(t *testing.T) {
 // the deploy routes translate into statuses.
 func TestServiceAddDeployKeyConnectionErrors(t *testing.T) {
 	repo := newFakeRepo()
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	_, err := svc.AddDeployKey(context.Background(), HookTarget{
 		UserID:   uuid.New(),

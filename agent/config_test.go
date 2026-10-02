@@ -148,6 +148,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"bad cp addr", envCPAddr, "not-a-host-port"},
 		{"bad log level", envLogLevel, "loud"},
 		{"wildcard node id", envNodeID, "bad*id"},
+		{"node id with space", envNodeID, "bad id"},
+		{"node id with slash", envNodeID, "bad/id"},
 		{"overlong node id", envNodeID, strings.Repeat("a", maxNodeIDLength+1)},
 	}
 	for _, tt := range tests {
@@ -158,6 +160,21 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 				t.Fatalf("Load() = nil error; want error for %s=%q", tt.key, tt.val)
 			}
 		})
+	}
+}
+
+// TestValidNodeID mirrors the control plane's node-id gate so the agent rejects
+// identities the CP would always refuse.
+func TestValidNodeID(t *testing.T) {
+	for _, ok := range []string{"node-1", "10.0.0.9", "2001:db8::1", "cp.example.com"} {
+		if !validNodeID(ok) {
+			t.Errorf("validNodeID(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"", "bad*id", "bad id", "bad/id", "bad\\id", "bad\x00id", strings.Repeat("a", maxNodeIDLength+1)} {
+		if validNodeID(bad) {
+			t.Errorf("validNodeID(%q) = true, want false", bad)
+		}
 	}
 }
 

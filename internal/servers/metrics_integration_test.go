@@ -399,12 +399,12 @@ func TestHeartbeatClampsFutureSentAt(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("metrics rows = %d, want 2", count)
 	}
-	var earliest time.Time
-	if err := st.DB.QueryRow(ctx, "SELECT min(recorded_at) FROM server_metrics WHERE server_id = $1", row.ID).Scan(&earliest); err != nil {
-		t.Fatalf("min recorded_at: %v", err)
+	var latest time.Time
+	if err := st.DB.QueryRow(ctx, "SELECT max(recorded_at) FROM server_metrics WHERE server_id = $1", row.ID).Scan(&latest); err != nil {
+		t.Fatalf("max recorded_at: %v", err)
 	}
-	if earliest.After(base.Add(time.Minute)) {
-		t.Errorf("stored sample = %v, want it clamped near the server clock %v", earliest, base)
+	if latest.After(base.Add(time.Minute)) {
+		t.Errorf("stored sample = %v, want the hostile future sent_at clamped near the server clock %v", latest, base)
 	}
 }
 

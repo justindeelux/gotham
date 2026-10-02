@@ -171,7 +171,7 @@ func runServe() int {
 				}
 			}()
 		})
-		if !reloadable && certPath != "" {
+		if !reloadable && len(certPEM) > 0 {
 			log.Warn("certificate reload is disabled for this process; a renewed certificate needs a restart",
 				"cert", certPath)
 		}

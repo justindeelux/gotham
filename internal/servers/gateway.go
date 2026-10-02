@@ -419,10 +419,11 @@ func peerAddress(ctx context.Context) string {
 }
 
 // peerHost returns the calling peer's host (without the ephemeral port), so a
-// peer cannot rotate ports to escape the per-peer rate limits. An IPv6 address
-// is folded to its /64 so one allocation cannot mint unlimited keys. A
-// non-host:port address (for example the in-memory bufconn transport) is
-// returned unchanged.
+// peer cannot rotate ports to escape the per-peer rate limits. The address is
+// kept whole (not folded to a prefix): the limiter's maxPeerBuckets cap already
+// bounds memory, whereas folding an IPv6 /64 would let one busy neighbour
+// starve every agent in that prefix. A non-host:port address (for example the
+// in-memory bufconn transport) is returned unchanged.
 func peerHost(ctx context.Context) string {
 	addr := peerAddress(ctx)
 	host, _, err := net.SplitHostPort(addr)
@@ -431,10 +432,7 @@ func peerHost(ctx context.Context) string {
 	}
 	host = strings.Trim(host, "[]")
 	if ip := net.ParseIP(host); ip != nil {
-		if v4 := ip.To4(); v4 != nil {
-			return v4.String()
-		}
-		return (net.IP)(ip.To16().Mask(net.CIDRMask(64, 128))).String() + "/64"
+		return ip.String()
 	}
 	return host
 }

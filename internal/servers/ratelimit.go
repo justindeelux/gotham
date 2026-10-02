@@ -82,11 +82,14 @@ func (p *peerRateLimiter) evictOldestLocked() {
 	var (
 		oldestKey  string
 		oldestSeen time.Time
+		found      bool
 	)
 	for peer, bucket := range p.buckets {
-		if oldestKey == "" || bucket.seen.Before(oldestSeen) {
-			oldestKey, oldestSeen = peer, bucket.seen
+		if !found || bucket.seen.Before(oldestSeen) {
+			oldestKey, oldestSeen, found = peer, bucket.seen, true
 		}
 	}
-	delete(p.buckets, oldestKey)
+	if found {
+		delete(p.buckets, oldestKey)
+	}
 }

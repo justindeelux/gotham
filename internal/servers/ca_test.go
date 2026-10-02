@@ -371,6 +371,9 @@ func TestLoadAuthorityFailsClosedOnIncompletePair(t *testing.T) {
 	if _, err := LoadAuthority(odd); err == nil {
 		t.Error("LoadAuthority(key is a directory) = nil error, want failure")
 	}
+	if _, err := LoadOrCreateAuthority(odd); err == nil {
+		t.Error("LoadOrCreateAuthority(key is a directory) = nil error, want failure")
+	}
 
 	// A truly empty directory still means "no CA configured".
 	if loaded, err := LoadAuthority(t.TempDir()); err != nil || loaded != nil {

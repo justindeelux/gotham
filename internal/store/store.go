@@ -84,7 +84,7 @@ func (s *Store) RevokeSessionIfLive(ctx context.Context, refreshHash string) (bo
 //
 // The token is genuine reuse only when, under the lock, the presented row
 // still exists, is revoked, and carries the account's current credential
-// version. A deleted row (reset or logout purge) or a stale post-reset chain
+// version. A deleted row (a password reset) or a stale post-reset chain
 // (an obsolete credential version) returns false without touching any session,
 // so freshly authenticated sessions are never killed by a stale replay.
 func (s *Store) RevokeFamilyIfStolen(ctx context.Context, userID pgtype.UUID, refreshHash string) (bool, error) {

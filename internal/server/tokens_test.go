@@ -62,6 +62,24 @@ func (f *fakeTokenService) Create(_ context.Context, userID uuid.UUID, name stri
 	return &created, nil
 }
 
+func (f *fakeTokenService) Get(_ context.Context, userID, id uuid.UUID) (*auth.APIToken, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	record, ok := f.tokens[id]
+	if !ok || record.owner != userID || record.revoked {
+		return nil, auth.ErrNotFound
+	}
+	return &auth.APIToken{
+		ID:         record.created.ID,
+		Name:       record.created.Name,
+		Scopes:     record.created.Scopes,
+		LastUsedAt: record.lastUsed,
+		RevokedAt:  fakeRevokedAt(record),
+		CreatedAt:  record.created.CreatedAt,
+	}, nil
+}
+
 func (f *fakeTokenService) List(_ context.Context, userID uuid.UUID) ([]auth.APIToken, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

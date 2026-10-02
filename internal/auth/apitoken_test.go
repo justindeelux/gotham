@@ -325,3 +325,33 @@ func TestScopesContain(t *testing.T) {
 		})
 	}
 }
+
+// TestCanGrantScopes pins the token-minting subset rule: a token may only grant
+// scopes it holds, with a more privileged scope covering the ones below it
+// (deploy grants read; only admin grants admin).
+func TestCanGrantScopes(t *testing.T) {
+	tests := map[string]struct {
+		held      []string
+		requested []string
+		want      bool
+	}{
+		"read grants read":          {held: []string{"read"}, requested: []string{"read"}, want: true},
+		"read cannot grant deploy":  {held: []string{"read"}, requested: []string{"deploy"}, want: false},
+		"read cannot grant admin":   {held: []string{"read"}, requested: []string{"admin"}, want: false},
+		"deploy grants deploy":      {held: []string{"deploy"}, requested: []string{"deploy"}, want: true},
+		"deploy grants read":        {held: []string{"deploy"}, requested: []string{"read"}, want: true},
+		"deploy cannot grant admin": {held: []string{"deploy"}, requested: []string{"admin"}, want: false},
+		"admin grants admin":        {held: []string{"admin"}, requested: []string{"admin"}, want: true},
+		"admin grants read":         {held: []string{"admin"}, requested: []string{"read"}, want: true},
+		"empty request always ok":   {held: []string{"read"}, requested: nil, want: true},
+		"mixed partial":             {held: []string{"read", "deploy"}, requested: []string{"read", "admin"}, want: false},
+	}
+
+	for label, tc := range tests {
+		t.Run(label, func(t *testing.T) {
+			if got := CanGrantScopes(tc.held, tc.requested); got != tc.want {
+				t.Errorf("CanGrantScopes(%v, %v) = %v, want %v", tc.held, tc.requested, got, tc.want)
+			}
+		})
+	}
+}

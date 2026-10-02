@@ -149,6 +149,13 @@ repeated against this shared box's CP/agent yet.
   operator must set `PLATFORM_ADMINS` (or mint an admin-scoped token) to manage
   global DNS providers. Per-application certificates and redirects are not
   affected: they stay with the owning team's `owner`/`admin` members.
+- **API-token scopes (FX-2c):** the resource routes enforce the token scope
+  boundary — reads (`GET`/`HEAD`) need `read`, mutations need `deploy`, and
+  platform-management surfaces need `admin`. The decrypted database credentials
+  read (`GET /api/v1/databases/{id}/credentials`) requires `deploy`, not `read`,
+  because it returns the database and root passwords; application environment
+  reads (`GET /api/v1/applications/{id}/env`) stay `read`. JWT sessions hold
+  every scope, so the SPA is unaffected.
 - Development mode: when there is no CA (empty `GOTHAM_CA_DIR`), the control
   plane dials agents over plaintext and the agent serves its DockerService
   without TLS. As soon as a CA exists, registration issues certificates and

@@ -418,7 +418,7 @@ func newP5Harness(t *testing.T) *p5Harness {
 	requireAuth := func(next http.Handler) http.Handler { return next }
 	router := chi.NewRouter()
 	router.Route("/api", func(r chi.Router) {
-		databases.Mount(r, requireAuth, userIDFunc, databaseSvc)
+		databases.Mount(r, requireAuth, requireAuth, userIDFunc, databaseSvc)
 		databases.MountBackups(r, requireAuth, requireAuth, userIDFunc, backupSvc)
 	})
 	httpServer := httptest.NewServer(router)

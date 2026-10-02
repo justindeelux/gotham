@@ -68,8 +68,8 @@ type handler struct {
 //	GET /v1/providers
 //	GET /v1/providers/{id}/repos
 //
-// auth wraps the group (the server passes its RequireAuth); a nil svc is a
-// no-op so the control plane can call Mount unconditionally.
+// auth wraps the group (the server passes its RequireAuth + read scope); a nil
+// svc is a no-op so the control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc ProviderService) {
 	if svc == nil {
 		return

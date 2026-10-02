@@ -137,6 +137,27 @@ func (s *APITokenService) List(ctx context.Context, userID uuid.UUID) ([]APIToke
 	return tokens, nil
 }
 
+// Get returns the metadata of an owned, active token. A token that does not
+// exist, is not owned by userID, or is already revoked returns ErrNotFound.
+// The HTTP layer uses it to enforce the scope-grant subset rule on rotation.
+func (s *APITokenService) Get(ctx context.Context, userID, id uuid.UUID) (*APIToken, error) {
+	row, err := s.store.GetAPITokenByIDAndUser(ctx, sqlc.GetAPITokenByIDAndUserParams{
+		ID:     pgUUID(id),
+		UserID: pgUUID(userID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("auth: get api token: %w", err)
+	}
+	if row.RevokedAt.Valid {
+		return nil, ErrNotFound
+	}
+	token := toAPIToken(row)
+	return &token, nil
+}
+
 // Revoke marks an owned, active token as revoked. A token that does not exist,
 // is not owned by userID, or is already revoked returns ErrNotFound.
 func (s *APITokenService) Revoke(ctx context.Context, userID, id uuid.UUID) error {
@@ -230,6 +251,47 @@ func ScopesContain(scopes []string, required ...string) bool {
 		}
 	}
 	return true
+}
+
+// scopeGrantRank orders the scopes by privilege: admin ⊇ deploy ⊇ read. A
+// higher scope authorizes every lower one on a route, and a token may grant
+// every scope at or below its own when minting.
+var scopeGrantRank = map[string]int{
+	ScopeRead:   1,
+	ScopeDeploy: 2,
+	ScopeAdmin:  3,
+}
+
+// ScopesAuthorize reports whether scopes grant every scope in required under
+// the scope hierarchy admin ⊇ deploy ⊇ read: an admin token authorizes read
+// and deploy, a deploy token authorizes read. Route enforcement uses this;
+// ScopesContain stays the strict, exact-membership predicate for callers that
+// need it (the platform-operator check).
+func ScopesAuthorize(scopes []string, required ...string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	maxHeld := 0
+	for _, scope := range scopes {
+		if rank, ok := scopeGrantRank[scope]; ok && rank > maxHeld {
+			maxHeld = rank
+		}
+	}
+	for _, scope := range required {
+		rank, ok := scopeGrantRank[scope]
+		if !ok || maxHeld < rank {
+			return false
+		}
+	}
+	return true
+}
+
+// CanGrantScopes reports whether a token holding held may mint or rotate a
+// token carrying every scope in requested. It is the minting view of the same
+// scope hierarchy: deploy may grant read/deploy, only admin may grant admin. A
+// JWT session holds every scope, so the HTTP layer skips this check for it.
+func CanGrantScopes(held, requested []string) bool {
+	return ScopesAuthorize(held, requested...)
 }
 
 // NormalizeScopes validates, trims and de-duplicates requested scopes,

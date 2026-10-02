@@ -100,10 +100,13 @@ func (f *fakeDatabaseService) action(verb string, userID, databaseID uuid.UUID) 
 // passthroughAuth stands in for RequireAuth in route tests.
 func passthroughAuth(next http.Handler) http.Handler { return next }
 
+// passthroughScope stands in for the server's deploy-scope middleware.
+func passthroughScope(next http.Handler) http.Handler { return next }
+
 // newRouteServer mounts the database routes with a no-op auth middleware.
 func newRouteServer(svc DatabaseService, userID UserIDFunc) http.Handler {
 	r := chi.NewRouter()
-	Mount(r, passthroughAuth, userID, svc)
+	Mount(r, passthroughAuth, passthroughScope, userID, svc)
 	return r
 }
 
@@ -459,7 +462,7 @@ func TestMountIsNoopWhenDisabled(t *testing.T) {
 
 	t.Run("nil service", func(t *testing.T) {
 		r := chi.NewRouter()
-		Mount(r, passthroughAuth, alwaysUser(userID), nil)
+		Mount(r, passthroughAuth, passthroughScope, alwaysUser(userID), nil)
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, databasePath(uuid.Nil, ""), nil))
 		if rec.Code != http.StatusNotFound {
@@ -470,7 +473,7 @@ func TestMountIsNoopWhenDisabled(t *testing.T) {
 	t.Run("feature disabled", func(t *testing.T) {
 		t.Setenv(FeatureEnv, "false")
 		r := chi.NewRouter()
-		Mount(r, passthroughAuth, alwaysUser(userID), &fakeDatabaseService{})
+		Mount(r, passthroughAuth, passthroughScope, alwaysUser(userID), &fakeDatabaseService{})
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, databasePath(uuid.Nil, ""), nil))
 		if rec.Code != http.StatusNotFound {

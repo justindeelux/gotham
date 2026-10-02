@@ -87,11 +87,11 @@ type handler struct {
 //	GET  /v1/templates/{slug}
 //	POST /v1/templates/{slug}/render
 //
-// auth wraps the group: the server passes the same admin-scoped wrapper the
-// services routes use, because a rendered document is deployed through the
-// service surface and mutates node state there. The surface itself is
-// stateless and read-only (a render touches no user row and executes nothing),
-// so no user accessor is needed.
+// auth wraps the group: the server passes the resource scope boundary the
+// services routes use (reads need read, the render mutation needs deploy),
+// because a rendered document is deployed through the service surface. The
+// surface itself is stateless and read-only (a render touches no user row and
+// executes nothing), so no user accessor is needed.
 //
 // FEATURE_SERVICES=false mounts nothing (404), matching services.Mount; when
 // the flag is flipped off after mounting, every call answers 503 through the

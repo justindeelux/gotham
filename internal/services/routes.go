@@ -140,9 +140,9 @@ type handler struct {
 //	GET    /v1/services/{id}/containers
 //	GET    /v1/services/{id}/logs
 //
-// auth wraps the group: the server passes its admin-scoped wrapper, because a
-// service runs arbitrary compose on a node (bind mounts, published ports) and
-// that is a stronger capability than the container routes. A nil svc or
+// auth wraps the group: the server passes its team chain plus the resource
+// scope boundary (reads need read, mutations need deploy), because a service
+// runs arbitrary compose on a node (bind mounts, published ports). A nil svc or
 // FEATURE_SERVICES=false mounts nothing, so the control plane can call Mount
 // unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc ServiceService) {

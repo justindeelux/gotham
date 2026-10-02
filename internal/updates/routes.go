@@ -61,9 +61,10 @@ type handler struct {
 //	GET  /v1/updates/check   (any authenticated caller)
 //	POST /v1/updates/apply   (platform operator only)
 //
-// auth is the server's RequireAuth chain; adminAuth is the server's
-// RequireAuth + RequirePlatformAdmin chain, because applying an update replaces
-// the whole runtime and must not be reachable from a plain session. isAdmin
+// auth is the server's RequireAuth + read-scope chain (the check is a read);
+// adminAuth is the server's RequireAuth + RequirePlatformAdmin chain, because
+// applying an update replaces the whole runtime and must not be reachable from
+// a plain session. isAdmin
 // reports whether the (already authenticated) caller is a platform operator, so
 // release notes and filesystem-path details are only exposed to operators. A
 // nil svc or FEATURE_UPDATES=false mounts nothing, so the control plane can call

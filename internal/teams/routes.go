@@ -131,9 +131,11 @@ type handler struct {
 //	POST   /v1/invites/accept
 //
 // auth wraps the group. A nil svc or FEATURE_TEAMS=false mounts nothing, so the
-// control plane can call Mount unconditionally. The routes carry no admin scope:
-// they are the standard per-team role surface, and every handler's authorization
-// comes from the caller's role in the team the path names.
+// control plane can call Mount unconditionally. The server passes its
+// admin-scoped chain: the team-management surface is an admin/platform surface
+// for API tokens (a read or deploy token is refused), while a JWT session holds
+// every scope. On top of that, every handler's authorization comes from the
+// caller's role in the team the path names.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc TeamService) {
 	if svc == nil || !Enabled() {
 		return

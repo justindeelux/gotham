@@ -1,10 +1,25 @@
 import { expect, test } from "./fixtures";
+import type { Page } from "@playwright/test";
 import {
   loadAccount,
   seedNodeAddress,
   storageStatePath,
   uniqueSuffix,
 } from "./support";
+
+/** stampSpaMarker tags the JS context so a full-page reload is detectable. */
+async function stampSpaMarker(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (window as Window & { __spa?: number }).__spa = 1;
+  });
+}
+
+/** spaMarkerSurvived is false only after a real document reload. */
+async function spaMarkerSurvived(page: Page): Promise<boolean> {
+  return page.evaluate(
+    () => (window as Window & { __spa?: number }).__spa === 1,
+  );
+}
 
 /**
  * FX-15a regression suite for the app shell, navigation and auth-screen states.
@@ -105,19 +120,42 @@ test.describe("app shell", () => {
     await expect(page.getByRole("dialog")).toBeVisible();
   });
 
-  test("a failed logout still redirects to the sign-in page", async ({
+  test("a failed logout still redirects in-app from the topbar", async ({
     page,
   }) => {
-    // B3-3: a failed refresh-token revoke must not block navigation. The
-    // session is cleared locally in `finally`, so the guard lets /login render.
+    // B3-3: a failed revoke must not block navigation or degrade into a hard
+    // document reload. `window.__spa` survives only a client-side redirect; a
+    // `location.assign("/login")` (the 401 expire fallback) would wipe it.
     await page.route("**/api/v1/auth/logout", (route) =>
       route.fulfill({ status: 400, contentType: "application/json", body: "{}" }),
     );
     await page.goto("/dashboard");
+    await stampSpaMarker(page);
 
     await page.locator(".topbar").getByRole("button", { name: "Account" }).click();
     await page.getByText("Sign out", { exact: true }).click();
     await expect(page).toHaveURL(/\/login$/);
+    expect(await spaMarkerSurvived(page)).toBe(true);
+  });
+
+  test("a failed logout still redirects in-app from the sidebar card", async ({
+    page,
+  }) => {
+    // B3-3 covers both sign-out handlers: the sidebar MeCard owns its own
+    // logout path, so it needs the same protection and its own check.
+    await page.route("**/api/v1/auth/logout", (route) =>
+      route.fulfill({ status: 400, contentType: "application/json", body: "{}" }),
+    );
+    await page.goto("/dashboard");
+    await stampSpaMarker(page);
+
+    await page
+      .locator(".sidebar-foot")
+      .getByRole("button", { name: "Account" })
+      .click();
+    await page.getByText("Sign out", { exact: true }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    expect(await spaMarkerSurvived(page)).toBe(true);
   });
 
   test("a rail avatar links to that server's detail route", async ({
@@ -166,6 +204,24 @@ test.describe("app shell", () => {
     await page.getByPlaceholder("Search by name, IP, OS…").fill("no-such-node-zzzz");
     await expect(
       page.getByText("No nodes match the current filters", { exact: true }),
+    ).toBeVisible();
+  });
+
+  test("servers first-run state says no servers yet", async ({ page }) => {
+    // B4-16: the zero-servers branch must not reuse the filtered-miss copy.
+    // Intercepting the list makes the branch deterministic regardless of rows
+    // seeded by other specs on a shared database.
+    await page.route("**/api/v1/servers", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ servers: [] }),
+      }),
+    );
+    await page.goto("/servers");
+    await expect(page.getByText("No servers yet", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Add your first server over SSH to begin.", { exact: true }),
     ).toBeVisible();
   });
 });

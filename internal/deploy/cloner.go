@@ -402,6 +402,8 @@ func redactCloneError(msg string) string {
 // neither can leave a suffix behind. It is best effort — a hostile URL is never
 // trusted, only hidden. Userinfo containing whitespace cannot be matched
 // without swallowing unrelated diagnostic text, and such a URL is rejected by
-// git/curl, so it cannot carry a working credential. This is deliberately
-// bounded, so a credential-free message is never mangled.
+// git/curl, so it cannot carry a working credential. A credential-free message
+// is never mangled beyond hiding a userinfo-shaped token: a bare '@' in a path
+// or query (https://example.com/~user/repo@v2.git) is accepted over-redaction,
+// which is safe — see TestRedactCloneURLAndError.
 var userinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s]+@`)

@@ -981,8 +981,9 @@ func TestCloneRedactsURLCredentials(t *testing.T) {
 func TestCloneRedactsBeforeTruncation(t *testing.T) {
 	const secret = "secretpw"
 	app := testApplication(uuid.New())
-	// The URL is 31 bytes and the suffix is 380, so the last 400 bytes of the
-	// pre-redaction output begin at offset 11, inside the userinfo.
+	// The URL is 31 bytes and the suffix is 380, so had tail run first the last
+	// 400 bytes would begin at offset 11, inside the userinfo. Clone redacts
+	// before truncating, which is exactly the regression this test pins.
 	output := "https://user:" + secret + "@host/repo" + strings.Repeat("B", 380)
 	run := func(context.Context, []string, []string) ([]byte, error) {
 		return []byte(output), errors.New("exit status 128")
@@ -1037,6 +1038,15 @@ func TestRedactCloneURLAndError(t *testing.T) {
 	plain := "fatal: repository 'https://github.com/acme/demo.git/' not found"
 	if got := redactCloneError(plain); got != plain {
 		t.Errorf("redactCloneError mangled a credential-free message: %q", got)
+	}
+	// Accepted, safe over-redaction: a credential-free URL whose path carries
+	// an '@' is read as userinfo and hidden. There is no credential to leak and
+	// the alternative (leaving it) risks missing a real one, so this tradeoff
+	// is pinned rather than fixed.
+	overRedacted := "fatal: repository 'https://example.com/~user/repo@v2.git/' not found"
+	wantOverRedacted := "fatal: repository 'https://***@v2.git/' not found"
+	if got := redactCloneError(overRedacted); got != wantOverRedacted {
+		t.Errorf("redactCloneError(%q) = %q, want the accepted over-redaction %q", overRedacted, got, wantOverRedacted)
 	}
 }
 

@@ -98,6 +98,7 @@ func newOrchestrator(cfg Config) *Orchestrator {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	warnManagedVolumeRoot(logger)
 	// The repository doubles as the cloner's deploy-key resolver, so a key
 	// lookup and a deployment share one connection pool (and one secret).
 	repo := cfg.repository()

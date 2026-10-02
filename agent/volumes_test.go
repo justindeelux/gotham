@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -17,79 +18,52 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// TestValidateContainerVolumes pins the node-side confinement: an absolute
-// bind must live inside <root>/<appID>; named volumes pass; dangerous targets
-// and unidentified binds are refused.
+// volumeRequest builds a create request carrying volumes and labels.
+func volumeRequest(labels map[string]string, volumes ...string) *agentv1.CreateContainerRequest {
+	return &agentv1.CreateContainerRequest{Volumes: volumes, Labels: labels}
+}
+
+// TestValidateContainerVolumes pins the node-side rule per component: an
+// application bind is a direct child of <root>/<appID> and its named volumes
+// are namespaced; a proxy may mount the node's proxy directory; other managed
+// containers (database, backup) may use named volumes but no host bind.
 func TestValidateContainerVolumes(t *testing.T) {
 	root := t.TempDir()
+	proxyRoot := t.TempDir()
 	appID := uuid.New()
 	appDir := filepath.Join(root, appID.String())
+	appLabels := map[string]string{labelAppID: appID.String()}
+	proxyLabels := map[string]string{labelComponent: componentProxy}
+	managedLabels := map[string]string{"gotham.managed": "true"}
 
 	cases := []struct {
 		name    string
-		volumes []string
-		labels  map[string]string
+		req     *agentv1.CreateContainerRequest
 		wantErr bool
 	}{
-		{
-			name:    "bind inside the app directory",
-			volumes: []string{filepath.Join(appDir, "data") + ":/var/lib/app"},
-			labels:  map[string]string{labelAppID: appID.String()},
-		},
-		{
-			name:    "bind outside the managed root",
-			volumes: []string{"/data/app:/var/lib/app"},
-			labels:  map[string]string{labelAppID: appID.String()},
-			wantErr: true,
-		},
-		{
-			name:    "docker socket",
-			volumes: []string{"/var/run/docker.sock:/var/run/docker.sock"},
-			labels:  map[string]string{labelAppID: appID.String()},
-			wantErr: true,
-		},
-		{
-			name:    "etc escape",
-			volumes: []string{"/etc:/etc"},
-			labels:  map[string]string{labelAppID: appID.String()},
-			wantErr: true,
-		},
-		{
-			name:    "traversal out of the app directory",
-			volumes: []string{filepath.Join(appDir, "..", "..", "etc") + ":/etc"},
-			labels:  map[string]string{labelAppID: appID.String()},
-			wantErr: true,
-		},
-		{
-			name:    "bind without an application label",
-			volumes: []string{filepath.Join(appDir, "data") + ":/var/lib/app"},
-			labels:  map[string]string{},
-			wantErr: true,
-		},
-		{
-			name:    "non-uuid application label",
-			volumes: []string{filepath.Join(appDir, "data") + ":/var/lib/app"},
-			labels:  map[string]string{labelAppID: "../.."},
-			wantErr: true,
-		},
-		{
-			name:    "named volume",
-			volumes: []string{"gotham-data:/var/lib/app"},
-			labels:  map[string]string{labelAppID: appID.String()},
-		},
-		{
-			name:    "no volumes",
-			volumes: nil,
-			labels:  map[string]string{labelAppID: appID.String()},
-		},
+		{name: "app direct child", req: volumeRequest(appLabels, filepath.Join(appDir, "data")+":/var/lib/app")},
+		{name: "app outside the root", req: volumeRequest(appLabels, "/data/app:/var/lib/app"), wantErr: true},
+		{name: "app docker socket", req: volumeRequest(appLabels, "/var/run/docker.sock:/var/run/docker.sock"), wantErr: true},
+		{name: "app etc", req: volumeRequest(appLabels, "/etc:/etc"), wantErr: true},
+		{name: "app traversal", req: volumeRequest(appLabels, filepath.Join(appDir, "..", "..", "etc")+":/etc"), wantErr: true},
+		{name: "app nested child", req: volumeRequest(appLabels, filepath.Join(appDir, "a", "b")+":/data"), wantErr: true},
+		{name: "app directory itself", req: volumeRequest(appLabels, appDir+":/data"), wantErr: true},
+		{name: "app namespaced named volume", req: volumeRequest(appLabels, appNamedVolumePrefix+appID.String()+"-data:/var/lib/app")},
+		{name: "app bare named volume", req: volumeRequest(appLabels, "shared:/var/lib/app"), wantErr: true},
+		{name: "app bind without a label", req: volumeRequest(map[string]string{}, filepath.Join(appDir, "data")+":/data"), wantErr: true},
+		{name: "app non-uuid label", req: volumeRequest(map[string]string{labelAppID: "../.."}, filepath.Join(appDir, "data")+":/data"), wantErr: true},
+		{name: "proxy config directory", req: volumeRequest(proxyLabels, filepath.Join(proxyRoot, "conf")+":/etc/traefik:ro")},
+		{name: "proxy acme child", req: volumeRequest(proxyLabels, filepath.Join(proxyRoot, "conf", "acme")+":/acme")},
+		{name: "proxy outside its root", req: volumeRequest(proxyLabels, "/data/conf:/etc/traefik"), wantErr: true},
+		{name: "proxy etc", req: volumeRequest(proxyLabels, "/etc:/etc/traefik"), wantErr: true},
+		{name: "database named volume", req: volumeRequest(managedLabels, "gotham-db-x:/var/lib/postgresql/data")},
+		{name: "database absolute bind", req: volumeRequest(managedLabels, "/data/x:/var/lib/postgresql/data"), wantErr: true},
+		{name: "no volumes", req: volumeRequest(appLabels)},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateContainerVolumes(root, &agentv1.CreateContainerRequest{
-				Volumes: tc.volumes,
-				Labels:  tc.labels,
-			})
+			err := validateContainerVolumes(root, proxyRoot, tc.req)
 			if tc.wantErr && !errors.Is(err, ErrInvalidVolumeBind) {
 				t.Fatalf("err = %v, want ErrInvalidVolumeBind", err)
 			}
@@ -100,16 +74,73 @@ func TestValidateContainerVolumes(t *testing.T) {
 	}
 }
 
+// TestValidateContainerVolumesRejectsSymlinks pins the fail-closed walk on the
+// node: a symlink at the bind path (live or dangling) or an app directory that
+// is itself a symlink is refused.
+func TestValidateContainerVolumesRejectsSymlinks(t *testing.T) {
+	root := t.TempDir()
+	proxyRoot := t.TempDir()
+	appID := uuid.New()
+	appDir := filepath.Join(root, appID.String())
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	labels := map[string]string{labelAppID: appID.String()}
+
+	live := filepath.Join(appDir, "live")
+	if err := os.Symlink("/etc", live); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := validateContainerVolumes(root, proxyRoot, volumeRequest(labels, live+":/data")); !errors.Is(err, ErrInvalidVolumeBind) {
+		t.Fatalf("live symlink err = %v, want ErrInvalidVolumeBind", err)
+	}
+	dangling := filepath.Join(appDir, "dangling")
+	if err := os.Symlink("/nonexistent", dangling); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if err := validateContainerVolumes(root, proxyRoot, volumeRequest(labels, dangling+":/data")); !errors.Is(err, ErrInvalidVolumeBind) {
+		t.Fatalf("dangling symlink err = %v, want ErrInvalidVolumeBind", err)
+	}
+
+	// The app directory itself is a symlink.
+	otherRoot := t.TempDir()
+	otherApp := uuid.New()
+	if err := os.Symlink("/etc", filepath.Join(otherRoot, otherApp.String())); err != nil {
+		t.Fatalf("symlink app dir: %v", err)
+	}
+	otherLabels := map[string]string{labelAppID: otherApp.String()}
+	if err := validateContainerVolumes(otherRoot, proxyRoot, volumeRequest(otherLabels, filepath.Join(otherRoot, otherApp.String(), "child")+":/data")); !errors.Is(err, ErrInvalidVolumeBind) {
+		t.Fatalf("symlinked app dir err = %v, want ErrInvalidVolumeBind", err)
+	}
+}
+
+// TestValidateContainerVolumesFailsClosedOnLstatError pins that a non-ENOENT
+// Lstat error is refused (here ENOTDIR: the app path is a regular file).
+func TestValidateContainerVolumesFailsClosedOnLstatError(t *testing.T) {
+	root := t.TempDir()
+	proxyRoot := t.TempDir()
+	appID := uuid.New()
+	appDir := filepath.Join(root, appID.String())
+	if err := os.WriteFile(appDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	labels := map[string]string{labelAppID: appID.String()}
+	if err := validateContainerVolumes(root, proxyRoot, volumeRequest(labels, filepath.Join(appDir, "child")+":/data")); !errors.Is(err, ErrInvalidVolumeBind) {
+		t.Fatalf("err = %v, want ErrInvalidVolumeBind for a non-directory component", err)
+	}
+}
+
 // TestDockerServerRejectsOutOfRootBind drives the rule through the gRPC
 // surface and pins the InvalidArgument mapping, so the control plane sees bad
 // input rather than an internal failure.
 func TestDockerServerRejectsOutOfRootBind(t *testing.T) {
 	root := t.TempDir()
+	proxyRoot := t.TempDir()
 	appID := uuid.New()
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
 	agentv1.RegisterDockerServiceServer(server, NewDockerServer(&fakeDockerClient{}, discardLogger(),
-		WithManagedVolumeRoot(root)))
+		WithManagedVolumeRoot(root), WithProxyVolumeRoot(proxyRoot)))
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
 
@@ -141,5 +172,14 @@ func TestDockerServerRejectsOutOfRootBind(t *testing.T) {
 	}
 	if _, err := client.RunImage(context.Background(), inside); err != nil {
 		t.Fatalf("in-root bind run = %v, want accepted", err)
+	}
+
+	proxy := &agentv1.CreateContainerRequest{
+		Image:   "traefik",
+		Volumes: []string{filepath.Join(proxyRoot, "conf") + ":/etc/traefik:ro"},
+		Labels:  map[string]string{labelComponent: componentProxy},
+	}
+	if _, err := client.RunImage(context.Background(), proxy); err != nil {
+		t.Fatalf("proxy bind run = %v, want accepted", err)
 	}
 }

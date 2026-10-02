@@ -13,6 +13,10 @@
 #   GOTHAM_OAUTH_GITHUB_REDIRECT_URL,
 #   GOTHAM_GRPC_ADDR, GOTHAM_CA_DIR, GOTHAM_SECRET_KEY
 #   GOTHAM_GRPC_HOSTS     extra gRPC listener SAN hosts, comma-separated
+#   GOTHAM_MANAGED_VOLUME_ROOT  parent of application bind mounts (default
+#                          /var/lib/gotham/volumes); every application bind must
+#                          live in <root>/<app id>. The node must agree via
+#                          GOTHAM_AGENT_MANAGED_VOLUME_ROOT.
 #
 # Self-update variables (read directly, not from this file):
 #   FEATURE_UPDATES        kill switch for the update surface (default on)
@@ -54,6 +58,10 @@
 #   GOTHAM_AGENT_UPDATE_RETRY     agent retry marker (default /var/lib/gotham-agent/update.retry)
 #   GOTHAM_AGENT_UPDATE_BACKOFF   agent failed-attempt count (default /var/lib/gotham-agent/update.backoff)
 #   GOTHAM_AGENT_HEALTH_ADDR      loopback health endpoint (default 127.0.0.1:8001)
+#   GOTHAM_AGENT_MANAGED_VOLUME_ROOT  parent of application bind mounts the node
+#                                 accepts (default /var/lib/gotham/volumes);
+#                                 falls back to the shared GOTHAM_MANAGED_VOLUME_ROOT.
+#                                 Every application bind must live in <root>/<app id>.
 # The agent's release public key is embedded at build time; GOTHAM_UPDATE_PUBLIC_KEY
 # is the development override and applies only when no key is embedded.
 

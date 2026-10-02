@@ -1,7 +1,9 @@
 package deploy
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,6 +23,12 @@ const defaultManagedVolumeRoot = "/var/lib/gotham/volumes"
 // root.
 const envManagedVolumeRoot = "GOTHAM_MANAGED_VOLUME_ROOT"
 
+// appNamedVolumePrefix namespaces every Docker named volume an application
+// uses, so two applications (or two teams) can never share a bare name and an
+// application can never mount a managed database volume (gotham-db-*) or
+// another reserved volume.
+const appNamedVolumePrefix = "gotham-app-"
+
 // storageDirInvalid matches anything outside a safe single path segment.
 var storageDirInvalid = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
@@ -35,6 +43,16 @@ func managedVolumeRoot() string {
 	return filepath.Clean(root)
 }
 
+// warnManagedVolumeRoot logs one startup warning when the root is not
+// configured, so an operator running without GOTHAM_MANAGED_VOLUME_ROOT knows
+// which implicit default the control plane and node must agree on.
+func warnManagedVolumeRoot(logger *slog.Logger) {
+	if strings.TrimSpace(os.Getenv(envManagedVolumeRoot)) == "" {
+		logger.Warn("deploy: GOTHAM_MANAGED_VOLUME_ROOT is unset; using the default managed volume root",
+			"root", defaultManagedVolumeRoot)
+	}
+}
+
 // appVolumeDir is the directory every bind of one application must live under.
 func appVolumeDir(root string, appID uuid.UUID) string {
 	return filepath.Join(filepath.Clean(root), appID.String())
@@ -43,9 +61,10 @@ func appVolumeDir(root string, appID uuid.UUID) string {
 // managedHostPath resolves the host source of one storage row:
 //
 //   - an empty host path is a managed bind: <root>/<appID>/<name>;
-//   - a non-absolute host path is a Docker named volume and is passed through
-//     unchanged (named volumes are not host binds and need no confinement);
-//   - an absolute host path is a bind and must resolve inside <root>/<appID>.
+//   - a non-absolute host path is a Docker named volume, namespaced per
+//     application as gotham-app-<appID>-<name>;
+//   - an absolute host path is a bind and must be a direct child of
+//     <root>/<appID>.
 func managedHostPath(root string, appID uuid.UUID, name, host string) (string, error) {
 	if host == "" {
 		if appID == uuid.Nil {
@@ -53,11 +72,14 @@ func managedHostPath(root string, appID uuid.UUID, name, host string) (string, e
 		}
 		return filepath.Join(appVolumeDir(root, appID), storageDirName(name)), nil
 	}
+	if !strings.HasPrefix(host, "/") {
+		if appID == uuid.Nil {
+			return "", fmt.Errorf("%w: storage %q named volume needs an application id", ErrValidation, name)
+		}
+		return appNamedVolumePrefix + appID.String() + "-" + storageDirName(host), nil
+	}
 	if err := validateHostBind(root, appID, name, host); err != nil {
 		return "", err
-	}
-	if !strings.HasPrefix(host, "/") {
-		return host, nil
 	}
 	return filepath.Clean(host), nil
 }
@@ -65,7 +87,8 @@ func managedHostPath(root string, appID uuid.UUID, name, host string) (string, e
 // validateHostBind rejects a host bind that escapes the application's managed
 // directory or names a known-dangerous host location. A non-absolute host (a
 // named volume) and an empty host (a derived managed path) are accepted: they
-// are not host binds.
+// are not host binds. An explicit bind must be a DIRECT child of
+// <root>/<appID> and no path component may be a symlink.
 func validateHostBind(root string, appID uuid.UUID, name, host string) error {
 	if host == "" || !strings.HasPrefix(host, "/") {
 		return nil
@@ -78,14 +101,68 @@ func validateHostBind(root string, appID uuid.UUID, name, host string) error {
 	}
 	base := appVolumeDir(root, appID)
 	cleaned := filepath.Clean(host)
-	if !withinPath(base, cleaned) {
-		return fmt.Errorf("%w: storage %q host path %q must be inside %s", ErrValidation, name, host, base)
+	if cleaned == base {
+		return fmt.Errorf("%w: storage %q host path %q must name a child of %s", ErrValidation, name, host, base)
 	}
-	// A symlink already living inside the app directory could point elsewhere;
-	// Docker resolves it at mount time. Re-check the resolved target when the
-	// path exists (a not-yet-created path cannot be a symlink).
-	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil && !withinPath(base, resolved) {
-		return fmt.Errorf("%w: storage %q host path %q resolves outside %s", ErrValidation, name, host, base)
+	if filepath.Dir(cleaned) != base {
+		return fmt.Errorf("%w: storage %q host path %q must be a direct child of %s", ErrValidation, name, host, base)
+	}
+	if err := rejectSymlinkComponents(base, cleaned); err != nil {
+		return fmt.Errorf("%w: storage %q host path %q: %v", ErrValidation, name, host, err)
+	}
+	return nil
+}
+
+// errMissing signals that a path component does not exist yet; everything at
+// or below it is therefore absent and safe to create.
+var errMissing = errors.New("missing")
+
+// rejectSymlinkComponents Lstat-walks base and every component of path below
+// it, rejecting any symlink. The walk starts at base (not "/") so a legitimate
+// system symlink such as macOS's /var → /private/var never affects an
+// operator-configured root, while a symlink the container itself could plant
+// inside its managed directory is still caught. A missing component is
+// accepted (Docker creates it as a real directory); any other Lstat error
+// fails closed.
+func rejectSymlinkComponents(base, path string) error {
+	current := filepath.Clean(base)
+	if err := checkNotSymlink(current); err != nil {
+		if errors.Is(err, errMissing) {
+			return nil
+		}
+		return err
+	}
+	rel, err := filepath.Rel(current, filepath.Clean(path))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("%s escapes %s", path, base)
+	}
+	for _, component := range strings.Split(rel, string(os.PathSeparator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		if err := checkNotSymlink(current); err != nil {
+			if errors.Is(err, errMissing) {
+				return nil
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// checkNotSymlink reports errMissing for a nonexistent path, a symlink error
+// for a symlink, and any other Lstat failure unchanged (fail closed).
+func checkNotSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errMissing
+		}
+		return fmt.Errorf("inspect %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink", path)
 	}
 	return nil
 }
@@ -103,17 +180,9 @@ func isDangerousHostPath(host string) bool {
 	return filepath.Base(cleaned) == "docker.sock"
 }
 
-// withinPath reports whether path is base or a descendant of base.
-func withinPath(base, path string) bool {
-	if path == base {
-		return true
-	}
-	return strings.HasPrefix(path, base+string(os.PathSeparator))
-}
-
-// storageDirName turns a storage name into a safe single path segment for the
-// derived managed path. Names are unique per application, so collisions are
-// only possible after sanitization (e.g. "a b" and "a-b").
+// storageDirName turns a storage (or named-volume) name into a safe single
+// path segment. Sanitized names may collide (e.g. "a b" and "a-b"); callers
+// reject the collision rather than sharing one directory.
 func storageDirName(name string) string {
 	cleaned := strings.Trim(storageDirInvalid.ReplaceAllString(strings.TrimSpace(name), "-"), ".-")
 	if cleaned == "" {

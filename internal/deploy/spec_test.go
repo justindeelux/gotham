@@ -253,14 +253,20 @@ func TestBuildRunRequestValidation(t *testing.T) {
 	}
 
 	// A non-absolute source is a Docker named volume: it is not a host bind
-	// and passes through unconfined.
+	// and is namespaced to the application.
 	named := []Storage{{Name: "data", HostPath: "gotham-data", ContainerPath: "/var/lib/app"}}
 	req, err := buildRunRequest(app, dep, nil, nil, named, "")
 	if err != nil {
 		t.Fatalf("named volume error = %v, want accepted", err)
 	}
-	if want := []string{"gotham-data:/var/lib/app"}; !equalStrings(req.Volumes, want) {
+	wantNamed := appNamedVolumePrefix + app.ID.String() + "-gotham-data" + ":/var/lib/app"
+	if want := []string{wantNamed}; !equalStrings(req.Volumes, want) {
 		t.Errorf("Volumes = %v, want %v", req.Volumes, want)
+	}
+
+	nested := []Storage{{Name: "data", HostPath: filepath.Join(managedVolumeRoot(), app.ID.String(), "a", "b"), ContainerPath: "/var/lib/app"}}
+	if _, err := buildRunRequest(app, dep, nil, nil, nested, ""); !errors.Is(err, ErrValidation) {
+		t.Errorf("nested bind error = %v, want ErrValidation", err)
 	}
 
 	sealed, err := providers.SealSecret("right-key", "value")

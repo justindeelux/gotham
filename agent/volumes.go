@@ -13,61 +13,188 @@ import (
 )
 
 // ErrInvalidVolumeBind marks a volume bind the node refuses: an absolute host
-// source outside the application's managed directory, a known-dangerous source
-// such as the Docker socket, or a bind with no owning application. The
-// DockerService error mapper turns it into InvalidArgument.
+// source outside the allowed location, a known-dangerous source such as the
+// Docker socket, a named volume not scoped to its application, or a bind with
+// no owning application. The DockerService error mapper turns it into
+// InvalidArgument.
 var ErrInvalidVolumeBind = errors.New("docker: invalid volume bind")
 
-// labelAppID is the control plane's application label. The node uses it to
-// confine a bind to <managed root>/<app id>, independently of the control
-// plane (defense in depth against a compromised or stale control plane).
-const labelAppID = "gotham.app_id"
+// Control-plane labels the node classifies a container by. The node uses them
+// to confine binds independently of the control plane (defense in depth
+// against a compromised or stale control plane).
+const (
+	// labelAppID is the control plane's application label (deploy.labelAppID).
+	labelAppID = "gotham.app_id"
+	// labelComponent marks a managed container's role. The proxy mounts the
+	// node's own Traefik directory, which is not an application bind.
+	labelComponent = "gotham.component"
+	// componentProxy is the managed proxy container.
+	componentProxy = "proxy"
+)
+
+// appNamedVolumePrefix namespaces every application named volume
+// (deploy.appNamedVolumePrefix): a bare name can never alias another
+// application's volume or a managed database volume (gotham-db-*).
+const appNamedVolumePrefix = "gotham-app-"
 
 // validateContainerVolumes enforces the managed-volume rule on a container
-// request before it reaches Docker. A non-absolute source is a Docker named
-// volume and is left alone; every absolute source must resolve inside the
-// application's managed directory.
-func validateContainerVolumes(root string, req *agentv1.CreateContainerRequest) error {
+// request before it reaches Docker, per component:
+//
+//   - a proxy container may mount the node's own proxy directory;
+//   - an application container may mount binds under <managed root>/<app id>
+//     and named volumes namespaced to that application;
+//   - every other managed container (database, backup job) may use named
+//     volumes but no host bind.
+//
+// A bind that cannot be attributed is refused; validation is never skipped.
+func validateContainerVolumes(root, proxyRoot string, req *agentv1.CreateContainerRequest) error {
 	volumes := req.GetVolumes()
 	if len(volumes) == 0 {
 		return nil
 	}
-	appID := strings.TrimSpace(req.GetLabels()[labelAppID])
+	labels := req.GetLabels()
+	component := strings.TrimSpace(labels[labelComponent])
+	appID := strings.TrimSpace(labels[labelAppID])
 	for _, spec := range volumes {
 		host := bindSource(spec)
 		if host == "" {
 			return fmt.Errorf("%w: %q has no source", ErrInvalidVolumeBind, spec)
 		}
-		if !strings.HasPrefix(host, "/") {
-			continue // named volume: not a host path
+		switch {
+		case component == componentProxy:
+			if err := validateProxyBind(proxyRoot, host); err != nil {
+				return err
+			}
+		case appID != "":
+			if err := validateAppVolume(root, appID, host); err != nil {
+				return err
+			}
+		default:
+			// A managed database or backup container: named volumes only. An
+			// absolute bind on such a container is never legitimate.
+			if strings.HasPrefix(host, "/") {
+				return fmt.Errorf("%w: host path %q is not allowed on a non-application container", ErrInvalidVolumeBind, host)
+			}
 		}
-		if err := validateVolumeBind(root, appID, host); err != nil {
+	}
+	return nil
+}
+
+// validateAppVolume checks one mount of an application container: an absolute
+// host bind must be a direct child of <root>/<app id>; a named volume must be
+// namespaced to the same application.
+func validateAppVolume(root, appID, host string) error {
+	if !strings.HasPrefix(host, "/") {
+		id, err := parseAppID(appID)
+		if err != nil {
+			return err
+		}
+		if !strings.HasPrefix(host, appNamedVolumePrefix+id.String()+"-") {
+			return fmt.Errorf("%w: named volume %q is not scoped to application %s", ErrInvalidVolumeBind, host, id)
+		}
+		return nil
+	}
+	if isDangerousHostPath(host) {
+		return fmt.Errorf("%w: host path %q is not allowed", ErrInvalidVolumeBind, host)
+	}
+	id, err := parseAppID(appID)
+	if err != nil {
+		return err
+	}
+	base := filepath.Join(filepath.Clean(root), id.String())
+	cleaned := filepath.Clean(host)
+	if cleaned == base {
+		return fmt.Errorf("%w: host path %q must name a child of %s", ErrInvalidVolumeBind, host, base)
+	}
+	if filepath.Dir(cleaned) != base {
+		return fmt.Errorf("%w: host path %q must be a direct child of %s", ErrInvalidVolumeBind, host, base)
+	}
+	if err := rejectSymlinkComponents(base, cleaned); err != nil {
+		return fmt.Errorf("%w: host path %q: %v", ErrInvalidVolumeBind, host, err)
+	}
+	return nil
+}
+
+// validateProxyBind checks a proxy container mount: it must live inside the
+// node's own proxy directory (the configuration and ACME directories) and no
+// component may be a symlink. The proxy uses no named volumes.
+func validateProxyBind(proxyRoot, host string) error {
+	if !strings.HasPrefix(host, "/") {
+		return nil
+	}
+	if isDangerousHostPath(host) {
+		return fmt.Errorf("%w: host path %q is not allowed", ErrInvalidVolumeBind, host)
+	}
+	base := filepath.Clean(proxyRoot)
+	cleaned := filepath.Clean(host)
+	if !withinPath(base, cleaned) {
+		return fmt.Errorf("%w: proxy host path %q must be inside %s", ErrInvalidVolumeBind, host, base)
+	}
+	if err := rejectSymlinkComponents(base, cleaned); err != nil {
+		return fmt.Errorf("%w: proxy host path %q: %v", ErrInvalidVolumeBind, host, err)
+	}
+	return nil
+}
+
+// parseAppID validates the application label as a canonical UUID, so a
+// manipulated label cannot redirect the confinement root.
+func parseAppID(appID string) (uuid.UUID, error) {
+	id, err := uuid.Parse(appID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("%w: application label %q is not an id", ErrInvalidVolumeBind, appID)
+	}
+	return id, nil
+}
+
+// errMissing signals that a path component does not exist yet; everything at
+// or below it is therefore absent and safe to create.
+var errMissing = errors.New("missing")
+
+// rejectSymlinkComponents Lstat-walks base and every component of path below
+// it, rejecting any symlink. The walk starts at base (not "/") so a legitimate
+// system symlink such as macOS's /var → /private/var never affects the
+// operator-configured root, while a symlink a container could plant inside its
+// managed directory is still caught. A missing component is accepted; any
+// other Lstat error fails closed.
+func rejectSymlinkComponents(base, path string) error {
+	current := filepath.Clean(base)
+	if err := checkNotSymlink(current); err != nil {
+		if errors.Is(err, errMissing) {
+			return nil
+		}
+		return err
+	}
+	rel, err := filepath.Rel(current, filepath.Clean(path))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("%s escapes %s", path, base)
+	}
+	for _, component := range strings.Split(rel, string(os.PathSeparator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		if err := checkNotSymlink(current); err != nil {
+			if errors.Is(err, errMissing) {
+				return nil
+			}
 			return err
 		}
 	}
 	return nil
 }
 
-// validateVolumeBind re-checks one absolute host bind: it must name the
-// application's own managed directory and no dangerous host location.
-func validateVolumeBind(root, appID, host string) error {
-	if isDangerousHostPath(host) {
-		return fmt.Errorf("%w: host path %q is not allowed", ErrInvalidVolumeBind, host)
-	}
-	if appID == "" {
-		return fmt.Errorf("%w: host path %q has no application label", ErrInvalidVolumeBind, host)
-	}
-	id, err := uuid.Parse(appID)
+// checkNotSymlink reports errMissing for a nonexistent path, a symlink error
+// for a symlink, and any other Lstat failure unchanged (fail closed).
+func checkNotSymlink(path string) error {
+	info, err := os.Lstat(path)
 	if err != nil {
-		return fmt.Errorf("%w: application label %q is not an id", ErrInvalidVolumeBind, appID)
+		if os.IsNotExist(err) {
+			return errMissing
+		}
+		return fmt.Errorf("inspect %s: %w", path, err)
 	}
-	base := filepath.Join(filepath.Clean(root), id.String())
-	cleaned := filepath.Clean(host)
-	if !withinPath(base, cleaned) {
-		return fmt.Errorf("%w: host path %q must be inside %s", ErrInvalidVolumeBind, host, base)
-	}
-	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil && !withinPath(base, resolved) {
-		return fmt.Errorf("%w: host path %q resolves outside %s", ErrInvalidVolumeBind, host, base)
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink", path)
 	}
 	return nil
 }

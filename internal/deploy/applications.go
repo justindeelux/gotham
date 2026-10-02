@@ -389,6 +389,7 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 	if _, err := s.application(ctx, userID, appID, true); err != nil {
 		return nil, err
 	}
+	s.warnBlankedStorages(ctx, appID, storages)
 	normalized, err := normalizeStorages(appID, storages)
 	if err != nil {
 		return nil, err
@@ -397,6 +398,28 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 		return nil, err
 	}
 	return s.GetStorages(ctx, userID, appID)
+}
+
+// warnBlankedStorages logs when a save clears a previously explicit host path.
+// The new binding derives a fresh managed directory, so the data on the old
+// path is left behind; the warning is the only signal an operator gets, since
+// moving or copying the data is intentionally out of scope.
+func (s *Service) warnBlankedStorages(ctx context.Context, appID uuid.UUID, next []Storage) {
+	existing, err := s.repo.ListStorages(ctx, appID)
+	if err != nil {
+		return
+	}
+	byName := make(map[string]Storage, len(existing))
+	for _, row := range existing {
+		byName[row.Name] = row
+	}
+	for _, row := range next {
+		previous, ok := byName[strings.TrimSpace(row.Name)]
+		if ok && strings.TrimSpace(previous.HostPath) != "" && strings.TrimSpace(row.HostPath) == "" {
+			s.logger.Warn("deploy: storage host path blanked; existing data is not moved to the managed path",
+				"application_id", appID, "storage", previous.Name, "previous_host_path", previous.HostPath)
+		}
+	}
 }
 
 // Stop stops the container of the application's newest deployment.
@@ -648,6 +671,7 @@ func normalizeStorages(appID uuid.UUID, storages []Storage) ([]Storage, error) {
 	root := managedVolumeRoot()
 	normalized := make([]Storage, 0, len(storages))
 	seen := make(map[string]bool, len(storages))
+	seenDirs := make(map[string]string, len(storages))
 	for _, storage := range storages {
 		row := Storage{
 			Name:          strings.TrimSpace(storage.Name),
@@ -661,6 +685,14 @@ func normalizeStorages(appID uuid.UUID, storages []Storage) ([]Storage, error) {
 			return nil, fmt.Errorf("%w: duplicate storage name %q", ErrValidation, row.Name)
 		}
 		seen[row.Name] = true
+		// Two distinct names that sanitize to the same directory would share
+		// one host path once derived; reject rather than silently fuse them.
+		dir := storageDirName(row.Name)
+		if other, ok := seenDirs[dir]; ok {
+			return nil, fmt.Errorf("%w: storage names %q and %q map to the same managed directory %q",
+				ErrValidation, other, row.Name, dir)
+		}
+		seenDirs[dir] = row.Name
 		host, err := managedHostPath(root, appID, row.Name, row.HostPath)
 		if err != nil {
 			return nil, err

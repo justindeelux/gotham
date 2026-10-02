@@ -50,19 +50,32 @@ type DockerServer struct {
 	docker dockerClient
 	log    *slog.Logger
 	// volumeRoot is the parent of every application bind mount the node
-	// accepts; a request carrying a bind outside it is refused.
+	// accepts; a request carrying an application bind outside it is refused.
 	volumeRoot string
+	// proxyVolumeRoot is the node's own Traefik directory: a proxy container
+	// may mount it (the config and ACME directories), unlike an application.
+	proxyVolumeRoot string
 }
 
 // DockerServerOption tunes a DockerServer.
 type DockerServerOption func(*DockerServer)
 
-// WithManagedVolumeRoot confines every bind DockerServer accepts to
-// <root>/<app id>. Pass the configured Config.ManagedVolumeRoot.
+// WithManagedVolumeRoot confines every application bind DockerServer accepts
+// to <root>/<app id>. Pass the configured Config.ManagedVolumeRoot.
 func WithManagedVolumeRoot(root string) DockerServerOption {
 	return func(s *DockerServer) {
 		if strings.TrimSpace(root) != "" {
 			s.volumeRoot = root
+		}
+	}
+}
+
+// WithProxyVolumeRoot sets the node directory a proxy container may mount
+// (defaultTraefikDir). It exists so a relocated proxy root is mirrored here.
+func WithProxyVolumeRoot(root string) DockerServerOption {
+	return func(s *DockerServer) {
+		if strings.TrimSpace(root) != "" {
+			s.proxyVolumeRoot = root
 		}
 	}
 }
@@ -72,7 +85,12 @@ func NewDockerServer(docker dockerClient, log *slog.Logger, options ...DockerSer
 	if log == nil {
 		log = slog.Default()
 	}
-	server := &DockerServer{docker: docker, log: log, volumeRoot: defaultManagedVolumeRoot}
+	server := &DockerServer{
+		docker:          docker,
+		log:             log,
+		volumeRoot:      defaultManagedVolumeRoot,
+		proxyVolumeRoot: defaultTraefikDir,
+	}
 	for _, option := range options {
 		option(server)
 	}
@@ -126,7 +144,7 @@ func (s *DockerServer) CreateContainer(ctx context.Context, req *agentv1.CreateC
 	if req.GetImage() == "" {
 		return nil, status.Error(codes.InvalidArgument, "image is required")
 	}
-	if err := validateContainerVolumes(s.volumeRoot, req); err != nil {
+	if err := validateContainerVolumes(s.volumeRoot, s.proxyVolumeRoot, req); err != nil {
 		return nil, dockerError("create container", err)
 	}
 	id, err := s.docker.CreateContainer(ctx, req)
@@ -141,7 +159,7 @@ func (s *DockerServer) RunImage(ctx context.Context, req *agentv1.CreateContaine
 	if req.GetImage() == "" {
 		return nil, status.Error(codes.InvalidArgument, "image is required")
 	}
-	if err := validateContainerVolumes(s.volumeRoot, req); err != nil {
+	if err := validateContainerVolumes(s.volumeRoot, s.proxyVolumeRoot, req); err != nil {
 		return nil, dockerError("run image", err)
 	}
 	id, err := s.docker.RunImage(ctx, req)

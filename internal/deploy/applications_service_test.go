@@ -256,6 +256,16 @@ func TestServiceCreateApplicationValidation(t *testing.T) {
 			},
 			wantErr: ErrValidation,
 		},
+		{
+			name: "storage names that sanitize to one directory",
+			mutate: func(in *CreateApplicationInput, _ *fakeRepository, _ uuid.UUID) {
+				in.Storage = []Storage{
+					{Name: "a b", HostPath: "", ContainerPath: "/var/lib/a"},
+					{Name: "a-b", HostPath: "", ContainerPath: "/var/lib/b"},
+				}
+			},
+			wantErr: ErrValidation,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

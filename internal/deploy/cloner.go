@@ -164,15 +164,17 @@ func runGit(ctx context.Context, argv []string, env []string) ([]byte, error) {
 
 // deployKeyFiles is the per-deployment materialisation of a deploy private
 // key: one 0600 file inside a fresh private directory, removed as soon as the
-// clone returns. The key is never written anywhere else and never logged.
+// clone returns. The key is never written anywhere else and never logged. The
+// directory also holds the pinned known_hosts the clone verifies against.
 type deployKeyFiles struct {
-	dir     string
-	keyPath string
+	dir            string
+	keyPath        string
+	knownHostsPath string
 }
 
 // newDeployKeyFiles writes the PEM private key into a fresh private directory
-// (0700 by os.MkdirTemp) and returns it. The directory also holds the
-// known_hosts the clone accepts its first host key into.
+// (0700 by os.MkdirTemp) and returns it together with the pinned known_hosts
+// materialised next to it.
 func newDeployKeyFiles(privatePEM string) (*deployKeyFiles, error) {
 	dir, err := os.MkdirTemp("", "gotham-deploy-key-*")
 	if err != nil {
@@ -190,10 +192,15 @@ func newDeployKeyFiles(privatePEM string) (*deployKeyFiles, error) {
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("deploy: protect deploy key: %w", err)
 	}
-	return &deployKeyFiles{dir: dir, keyPath: keyPath}, nil
+	knownHostsPath, err := materializeKnownHosts(dir)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, err
+	}
+	return &deployKeyFiles{dir: dir, keyPath: keyPath, knownHostsPath: knownHostsPath}, nil
 }
 
-// remove deletes the ephemeral key and the known_hosts it accepted into.
+// remove deletes the ephemeral key and the known_hosts materialised with it.
 func (f *deployKeyFiles) remove() {
 	_ = os.RemoveAll(f.dir)
 }
@@ -213,14 +220,15 @@ func withoutEnv(env []string, name string) []string {
 }
 
 // sshEnv returns env plus GIT_SSH_COMMAND: ssh offering only this key
-// (IdentitiesOnly), reading the ephemeral file and accepting host keys into
-// the ephemeral known_hosts — the control plane neither touches ~/.ssh nor
+// (IdentitiesOnly), verifying against the pinned ephemeral known_hosts, and
+// refusing an unknown host key (StrictHostKeyChecking=yes) unless the explicit
+// dev flag re-enables accept-new — the control plane neither touches ~/.ssh nor
 // prompts during a clone.
 func (f *deployKeyFiles) sshEnv(env []string) []string {
 	command := "ssh -i " + shellQuote(f.keyPath) +
 		" -o IdentitiesOnly=yes" +
-		" -o UserKnownHostsFile=" + shellQuote(filepath.Join(f.dir, "known_hosts")) +
-		" -o StrictHostKeyChecking=accept-new"
+		" -o UserKnownHostsFile=" + shellQuote(f.knownHostsPath) +
+		" -o StrictHostKeyChecking=" + strictHostKeyChecking(devAcceptNewHostKeys())
 	return append(env, "GIT_SSH_COMMAND="+command)
 }
 

@@ -338,6 +338,18 @@ func (s *Store) SetServerStatus(ctx context.Context, params sqlc.SetServerStatus
 	return s.queries.SetServerStatus(ctx, params)
 }
 
+// SetServerHostKey pins a node's SSH host key fingerprint and returns the
+// updated row.
+func (s *Store) SetServerHostKey(ctx context.Context, params sqlc.SetServerHostKeyParams) (sqlc.Server, error) {
+	return s.queries.SetServerHostKey(ctx, params)
+}
+
+// ClearServerHostKey forgets a node's pinned SSH host key and returns the
+// updated row.
+func (s *Store) ClearServerHostKey(ctx context.Context, id pgtype.UUID) (sqlc.Server, error) {
+	return s.queries.ClearServerHostKey(ctx, id)
+}
+
 // CreatePrivateKey stores an encrypted SSH private key and returns its metadata.
 func (s *Store) CreatePrivateKey(ctx context.Context, params sqlc.CreatePrivateKeyParams) (sqlc.CreatePrivateKeyRow, error) {
 	return s.queries.CreatePrivateKey(ctx, params)

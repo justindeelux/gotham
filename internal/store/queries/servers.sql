@@ -54,3 +54,20 @@ SET status = $2,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: SetServerHostKey :one
+-- Pins (or replaces) the TOFU host key fingerprint of a node.
+UPDATE servers
+SET host_key_fingerprint = $2,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ClearServerHostKey :one
+-- Forgets the pinned host key so the next validation re-pins it (operator reset
+-- after a legitimate host key rotation).
+UPDATE servers
+SET host_key_fingerprint = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;

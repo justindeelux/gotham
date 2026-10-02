@@ -101,12 +101,19 @@ func (c *secretCipher) gcm() (cipher.AEAD, error) {
 // implementation instead of growing a second one. The cost of re-deriving the
 // key per call is one SHA-256 hash.
 func SealSecret(secret, plain string) (string, error) {
+	if secret == "" && plain != "" {
+		return "", errEmptySecret
+	}
 	return newSecretCipher(secret).seal(plain)
 }
 
 // OpenSecret reverses SealSecret. A wrong secret, a corrupted value or
-// truncated ciphertext fails authentication and returns an error.
+// truncated ciphertext fails authentication and returns an error. An empty
+// secret is refused whenever there is a value to open, mirroring SealSecret.
 func OpenSecret(secret, encoded string) (string, error) {
+	if secret == "" && encoded != "" {
+		return "", errEmptySecret
+	}
 	return newSecretCipher(secret).open(encoded)
 }
 

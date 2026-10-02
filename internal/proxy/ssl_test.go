@@ -386,12 +386,13 @@ func TestCredentialCryptographyRefusesEmptySecret(t *testing.T) {
 		t.Fatalf("sealCredential with a whitespace secret = %v, want ErrSecret", err)
 	}
 	// A legacy row could have been sealed with the public empty key before
-	// this guard existed; it must not be opened under it either.
-	weak, err := providers.SealSecret("", "legacy-token")
-	if err != nil {
-		t.Fatalf("providers.SealSecret: %v", err)
+	// the guards existed; it must not be opened under it either. providers
+	// now refuses the empty key outright, so the legacy blob cannot be
+	// recreated through the public API, and openCredential refuses first.
+	if _, err := providers.OpenSecret("", "legacy-ciphertext"); err == nil {
+		t.Fatal("providers.OpenSecret accepted the public empty key")
 	}
-	if _, err := openCredential("", weak); !errors.Is(err, ErrSecret) {
+	if _, err := openCredential("", "legacy-ciphertext"); !errors.Is(err, ErrSecret) {
 		t.Fatalf("openCredential with an empty secret = %v, want ErrSecret", err)
 	}
 	sealed, err := sealCredential("real-key", "cf-token")

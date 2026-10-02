@@ -118,7 +118,7 @@ func NewService(cfg Config) *ServerService {
 	}
 
 	secret := cfg.Secret
-	if secret == "" {
+	if strings.TrimSpace(secret) == "" {
 		secret = randomSecret()
 		logger.Warn("GOTHAM_SECRET_KEY is empty; generated an ephemeral key — stored SSH private keys will not survive a restart")
 	}

@@ -41,6 +41,16 @@ func newTestServer(t *testing.T, db, redis Pinger) *Server {
 	return s
 }
 
+// TestNewResolvesSecretKey pins the wiring invariant behind the empty-key fix:
+// a server constructed without GOTHAM_SECRET_KEY still holds a non-empty
+// credential key, so no sealing site can fall back to SHA-256("").
+func TestNewResolvesSecretKey(t *testing.T) {
+	s := newTestServer(t, stubPinger{}, stubPinger{})
+	if s.secretKey == "" {
+		t.Fatal("server resolved an empty credential secret key")
+	}
+}
+
 // getHealthz performs GET /healthz against the server handler.
 func getHealthz(t *testing.T, s *Server) *httptest.ResponseRecorder {
 	t.Helper()

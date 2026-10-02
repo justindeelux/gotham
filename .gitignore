@@ -19,6 +19,7 @@ web/dist/
 .env.*
 !.env.example
 config.local.yaml
+gotham.yaml
 
 # orca workspaces (repo root only; backend code may use ws/ package paths)
 /ws/

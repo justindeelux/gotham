@@ -76,6 +76,8 @@ func runServe() int {
 
 	logger, levelVar := server.NewLoggerWithLevel(cfg.Log)
 	cfg.SetLogger(logger)
+	// Only log.level is hot-reloaded; the handler's format is fixed at startup,
+	// so a changed log.format takes effect after a restart.
 	cfg.Watch(func() {
 		levelVar.Set(server.ParseLevel(cfg.Snapshot().Log.Level))
 	})
@@ -284,7 +286,7 @@ func runMigrate(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := store.Migrate(ctx, cfg.Database.DSN, command); err != nil {
+	if err := store.MigrateFailFast(ctx, cfg.Database.DSN, command); err != nil {
 		fmt.Fprintf(os.Stderr, "migrate %s: %v\n", command, err)
 		return exitError
 	}

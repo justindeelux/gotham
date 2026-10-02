@@ -18,7 +18,7 @@ Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node a
 | State / HTTP | Pinia + axios |
 | UI kit | Naive UI |
 | Auth | JWT + OAuth2 (GitHub, GitLab), argon2id, TOTP later |
-| Config | viper (YAML / ENV, hot reload) |
+| Config | viper (YAML / ENV, hot reload of log level) |
 | Self-update | Built-in atomic swap + Ed25519 signed manifest (GitHub Releases) |
 | CI/CD | GitHub Actions + GoReleaser |
 

@@ -29,12 +29,12 @@
 
 ## BE-0.2 — Config + logging + HTTP server — `ws/p0-config`
 
-- **Context brief:** work on `cmd/gotham/` and `internal/server/`. Configure via viper: read `gotham.yaml` (default), then override with ENV (prefix `GOTHAM_`), support hot-reload (watch file, log on reload). Logging uses `log/slog` with JSON handler, level from config.
+- **Context brief:** work on `cmd/gotham/` and `internal/server/`. Configure via viper: read `gotham.yaml` (default), then override with ENV (prefix `GOTHAM_`), support hot-reload of the log level (watch file, log on reload). Logging uses `log/slog` with JSON handler, level from config.
 - **Deliverables:**
   - `internal/config/` (may temporarily live in `internal/server/config.go` if a separate package is not needed yet): config structs `Server{Addr, Port}`, `Database{DSN}`, `Redis{Addr}`, `Log{Level}`.
   - Chi router with middleware: request log, recover, request ID; route `GET /healthz` (ping DB + Redis, return JSON).
   - `cmd/gotham/main.go`: read config → init logger → serve (graceful shutdown on SIGTERM/SIGINT).
-- **Verify:** `go run ./cmd/gotham serve` → `curl localhost:8000/healthz` returns 200; change the level in config + send SIGHUP → log level changes.
+- **Verify:** `go run ./cmd/gotham serve` → `curl localhost:8000/healthz` returns 200; change `log.level` in config → log level changes (fsnotify, no SIGHUP needed; `log.format` needs a restart).
 - **Depends on:** INFRA-0.1.
 
 ## BE-0.3 — Store: goose + sqlc + pgx — `ws/p0-store`

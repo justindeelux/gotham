@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -103,16 +104,19 @@ func (c *DockerClient) PruneAppImages(ctx context.Context, appID, keepDeploy str
 		candidates = append(candidates, appImage{ID: image.ID, Ref: ref, Created: image.Created})
 	}
 
+	var errs []error
 	for _, stale := range selectStaleImages(candidates, keepTag, active, defaultImageHistory) {
 		ref := stale.ID
 		if ref == "" {
 			ref = stale.Ref
 		}
 		if err := c.removeImage(ctx, ref); err != nil {
-			return fmt.Errorf("docker: remove stale image %s: %w", ref, err)
+			// Keep going: a persistently failing oldest image must not block
+			// reclaiming everything older than it.
+			errs = append(errs, fmt.Errorf("docker: remove stale image %s: %w", ref, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // activeImageRefs returns the ids and names of the images referenced by any
@@ -136,9 +140,10 @@ func (c *DockerClient) activeImageRefs(ctx context.Context) (map[string]struct{}
 }
 
 // selectStaleImages returns the images to remove. The image being deployed
-// (keepTag) and every active image are always kept; of the rest, the newest
-// history images are kept and everything older is removed. The input is copied,
-// so the caller's slice is not reordered.
+// (keepTag) and every active image are always kept and do not consume the
+// budget; of the remaining images, the newest history are kept and everything
+// older is removed. The input is copied, so the caller's slice is not
+// reordered.
 func selectStaleImages(images []appImage, keepTag string, active map[string]struct{}, history int) []appImage {
 	sorted := append([]appImage(nil), images...)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -152,7 +157,6 @@ func selectStaleImages(images []appImage, keepTag string, active map[string]stru
 	var stale []appImage
 	for _, image := range sorted {
 		if image.Ref == keepTag || imageActive(image, active) {
-			kept++
 			continue
 		}
 		if kept < history {

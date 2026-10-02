@@ -550,7 +550,7 @@ func registryOwnsImage(addr, image string) bool {
 func (c *DockerClient) doRegistryRequest(ctx context.Context, method, path, authHeader string) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
 	if err != nil {
-		return nil, fmt.Errorf("docker: %s %s: %w", method, path, err)
+		return nil, fmt.Errorf("docker: %s %s: %w", method, redactQuerySecrets(path), err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(registryAuthHeader, authHeader)
@@ -584,7 +584,7 @@ func (c *DockerClient) doHeader(ctx context.Context, method, path string, body i
 func (c *DockerClient) doRaw(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
-		return nil, fmt.Errorf("docker: %s %s: %w", method, path, err)
+		return nil, fmt.Errorf("docker: %s %s: %w", method, redactQuerySecrets(path), err)
 	}
 	if body != nil && contentType != "" {
 		request.Header.Set("Content-Type", contentType)
@@ -602,6 +602,7 @@ func (c *DockerClient) doRaw(ctx context.Context, method, path string, body io.R
 // report Canceled/DeadlineExceeded; every other transport failure means the
 // daemon is unreachable.
 func dockerTransportError(method, path string, err error) error {
+	path = redactQuerySecrets(path)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("docker: %s %s: %w", method, path, err)
 	}
@@ -613,12 +614,29 @@ func dockerTransportError(method, path string, err error) error {
 // image so the gRPC boundary can answer the right code.
 func statusError(method, path string, response *http.Response) error {
 	defer func() { _ = response.Body.Close() }()
+	path = redactQuerySecrets(path)
 	raw, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
 	message := strings.TrimSpace(string(raw))
 	if response.StatusCode == http.StatusNotFound {
 		return notFoundError(method, path, message)
 	}
 	return fmt.Errorf("docker: %s %s: status %d: %s", method, path, response.StatusCode, message)
+}
+
+// redactQuerySecrets masks request query parameters that can carry secrets (the
+// Docker build's buildargs JSON) so an error message can never expose them. The
+// real request still sends the value.
+func redactQuerySecrets(path string) string {
+	question := strings.IndexByte(path, '?')
+	if question < 0 {
+		return path
+	}
+	values, err := url.ParseQuery(path[question+1:])
+	if err != nil || !values.Has("buildargs") {
+		return path
+	}
+	values.Set("buildargs", "REDACTED")
+	return path[:question+1] + values.Encode()
 }
 
 // notFoundError classifies a Docker 404. A container miss is ErrDockerNotFound.

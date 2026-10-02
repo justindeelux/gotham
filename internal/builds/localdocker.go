@@ -108,6 +108,12 @@ func (b *LocalDockerBuilder) Build(ctx context.Context, contextTar []byte, opts 
 
 	response, err := b.http.Do(request)
 	if err != nil {
+		// *url.Error embeds the full URL, including the buildargs query, which
+		// can carry secrets; unwrap it so an error message never exposes them.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
 		return ImageBuildResult{}, fmt.Errorf("docker build: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strconv"
 	"testing"
 )
 
@@ -41,22 +42,29 @@ func TestSelectStaleImages(t *testing.T) {
 			name:    "newest kept older removed",
 			keep:    app + ":dep-5",
 			active:  map[string]struct{}{"id-4": {}},
-			history: 3,
-			want:    []string{"id-1", "id-2"},
+			history: 2,
+			want:    []string{"id-1"},
 		},
 		{
 			name:    "active image never removed even when oldest",
 			keep:    app + ":dep-5",
 			active:  map[string]struct{}{"id-1": {}},
 			history: 1,
-			want:    []string{"id-2", "id-3", "id-4"},
+			want:    []string{"id-2", "id-3"},
 		},
 		{
 			name:    "current deploy never removed",
 			keep:    app + ":dep-1",
 			active:  map[string]struct{}{"id-5": {}},
-			history: 2,
+			history: 1,
 			want:    []string{"id-2", "id-3"},
+		},
+		{
+			name:    "protected images do not consume the history budget",
+			keep:    app + ":dep-5",
+			active:  map[string]struct{}{"id-4": {}},
+			history: 2,
+			want:    []string{"id-1"},
 		},
 		{
 			name:    "zero history keeps only protected images",
@@ -98,7 +106,8 @@ func TestDockerClientPruneAppImages(t *testing.T) {
 		{ID: "sha256:h5", RepoTags: []string{"gotham/web:dep-3"}, Created: 300},
 		{ID: "sha256:old", RepoTags: []string{"gotham/web:dep-2"}, Created: 200},
 		{ID: "sha256:older", RepoTags: []string{"gotham/web:dep-1"}, Created: 100},
-		{ID: "sha256:other", RepoTags: []string{"gotham/api:dep-9"}, Created: 50},
+		{ID: "sha256:oldest", RepoTags: []string{"gotham/web:dep-0"}, Created: 50},
+		{ID: "sha256:other", RepoTags: []string{"gotham/api:dep-9"}, Created: 25},
 	}
 
 	var removed []string
@@ -122,7 +131,7 @@ func TestDockerClientPruneAppImages(t *testing.T) {
 		t.Fatalf("PruneAppImages: %v", err)
 	}
 	sort.Strings(removed)
-	want := []string{"sha256:old", "sha256:older"}
+	want := []string{"sha256:oldest"}
 	if len(removed) != len(want) {
 		t.Fatalf("removed = %v; want %v", removed, want)
 	}
@@ -130,6 +139,59 @@ func TestDockerClientPruneAppImages(t *testing.T) {
 		if removed[i] != want[i] {
 			t.Fatalf("removed = %v; want %v", removed, want)
 		}
+	}
+}
+
+// TestPruneAppImagesContinuesAfterRemovalError is the U9 regression: one
+// failing removal must not prevent the older images from being reclaimed, and
+// the failure is still reported.
+func TestPruneAppImagesContinuesAfterRemovalError(t *testing.T) {
+	type image struct {
+		ID       string   `json:"Id"`
+		RepoTags []string `json:"RepoTags"`
+		Created  int64    `json:"Created"`
+	}
+	images := []image{
+		{ID: "sha256:new", RepoTags: []string{"gotham/web:dep-9"}, Created: 900},
+	}
+	// Seven non-protected images; the newest five are kept, so dep-3, dep-2 and
+	// dep-1 are removed. dep-3 fails; dep-2 and dep-1 must still be removed.
+	for i := 8; i >= 1; i-- {
+		name := "dep-" + strconv.Itoa(i)
+		images = append(images, image{
+			ID:       "sha256:" + name,
+			RepoTags: []string{"gotham/web:" + name},
+			Created:  int64(i * 100),
+		})
+	}
+
+	var deleted []string
+	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/images/json":
+			_ = json.NewEncoder(w).Encode(images)
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/json":
+			_ = json.NewEncoder(w).Encode([]map[string]string{})
+		case r.Method == http.MethodDelete && r.URL.Path == "/images/sha256:dep-3":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"message":"daemon busy"}`))
+		case r.Method == http.MethodDelete:
+			deleted = append(deleted, r.URL.Path[len("/images/"):])
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"Deleted":"ok"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	err := client.PruneAppImages(context.Background(), "web", "dep-9")
+	if err == nil {
+		t.Fatal("PruneAppImages should report the failed removal")
+	}
+	sort.Strings(deleted)
+	want := []string{"sha256:dep-1", "sha256:dep-2"}
+	if len(deleted) != len(want) || deleted[0] != want[0] || deleted[1] != want[1] {
+		t.Fatalf("deleted = %v; want the two removals after the failure: %v", deleted, want)
 	}
 }
 

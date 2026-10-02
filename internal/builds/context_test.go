@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildContextTar(t *testing.T) {
@@ -224,4 +226,156 @@ func readTarHeaders(t *testing.T, data []byte) map[string]tar.Header {
 		out[header.Name] = *header
 	}
 	return out
+}
+
+// TestBuildContextTarDockerIgnoreBOM is the U1 regression: a BOM-encoded
+// .dockerignore must not turn its first rule into a non-matching pattern.
+func TestBuildContextTarDockerIgnoreBOM(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "\ufeff.env\n")
+	writeTestFile(t, filepath.Join(dir, ".env"), "SECRET=leaked\n")
+	writeTestFile(t, filepath.Join(dir, "keep.txt"), "ok\n")
+
+	data, err := buildContextTar(contextSpec{root: dir})
+	if err != nil {
+		t.Fatalf("buildContextTar: %v", err)
+	}
+	files := readContextTar(t, data)
+	if _, ok := files[".env"]; ok {
+		t.Error("the first rule after a BOM must still apply (.env excluded)")
+	}
+	if _, ok := files["keep.txt"]; !ok {
+		t.Error("keep.txt is missing")
+	}
+}
+
+// TestBuildContextTarIgnoresSymlinkedDockerIgnore is the U2 regression: a
+// symlinked .dockerignore (for example -> /dev/zero) is treated as absent
+// rather than followed and read.
+func TestBuildContextTarIgnoresSymlinkedDockerIgnore(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "real-ignore"), ".env\n")
+	if err := os.Symlink("real-ignore", filepath.Join(dir, ".dockerignore")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	writeTestFile(t, filepath.Join(dir, ".env"), "SECRET=leaked\n")
+
+	data, err := buildContextTar(contextSpec{root: dir})
+	if err != nil {
+		t.Fatalf("buildContextTar: %v", err)
+	}
+	if _, ok := readContextTar(t, data)[".env"]; !ok {
+		t.Error("a symlinked .dockerignore must be treated as absent, not followed")
+	}
+}
+
+// TestBuildContextTarRejectsOversizedDockerIgnore is the U2 memory-bound
+// regression: a huge .dockerignore fails with a clear validation error.
+func TestBuildContextTarRejectsOversizedDockerIgnore(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, ".dockerignore"), strings.Repeat("a", int(maxDockerIgnoreBytes)+1))
+
+	_, err := buildContextTar(contextSpec{root: dir})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("buildContextTar(oversized .dockerignore) error = %v; want ErrValidation", err)
+	}
+}
+
+// TestBuildContextTarDockerIgnoreRepoRelative is the U3 regression: when the
+// ignore file lives above the context root, patterns are matched
+// repository-relative, so `public/.env` excludes public/.env while a bare
+// `index.html` matches only the repository root and does not break a public/
+// site.
+func TestBuildContextTarDockerIgnoreRepoRelative(t *testing.T) {
+	repo := t.TempDir()
+	writeTestFile(t, filepath.Join(repo, ".dockerignore"), ".env\npublic/secret.txt\nindex.html\n")
+	writeTestFile(t, filepath.Join(repo, "public", "index.html"), "<h1>x</h1>\n")
+	writeTestFile(t, filepath.Join(repo, "public", ".env"), "FLAT=survives\n")
+	writeTestFile(t, filepath.Join(repo, "public", "secret.txt"), "SECRET=excluded\n")
+	writeTestFile(t, filepath.Join(repo, "public", "app.js"), "x\n")
+
+	data, err := buildContextTar(contextSpec{root: filepath.Join(repo, "public"), ignoreDir: repo})
+	if err != nil {
+		t.Fatalf("buildContextTar: %v", err)
+	}
+	files := readContextTar(t, data)
+	if _, ok := files["secret.txt"]; ok {
+		t.Error("public/secret.txt must be excluded by the repository-relative rule")
+	}
+	if _, ok := files["index.html"]; !ok {
+		t.Error("bare index.html is repository-root-relative and must not match public/index.html")
+	}
+	if _, ok := files[".env"]; !ok {
+		t.Error("bare .env is repository-root-relative and must not match public/.env")
+	}
+	if _, ok := files["app.js"]; !ok {
+		t.Error("app.js is missing")
+	}
+}
+
+// TestBuildContextTarDockerIgnoreNegationReincludes is the U6 regression:
+// `docs` + `!docs/keep.md` must keep docs/keep.md (the Docker oracle keeps it)
+// while dropping the rest of the subtree.
+func TestBuildContextTarDockerIgnoreNegationReincludes(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "docs\n!docs/keep.md\n")
+	writeTestFile(t, filepath.Join(dir, "docs", "keep.md"), "keep\n")
+	writeTestFile(t, filepath.Join(dir, "docs", "drop.md"), "drop\n")
+	writeTestFile(t, filepath.Join(dir, "top.md"), "top\n")
+
+	data, err := buildContextTar(contextSpec{root: dir})
+	if err != nil {
+		t.Fatalf("buildContextTar: %v", err)
+	}
+	files := readContextTar(t, data)
+	if _, ok := files["docs/keep.md"]; !ok {
+		t.Error("a negated child must be re-included under an excluded directory")
+	}
+	if _, ok := files["docs/drop.md"]; ok {
+		t.Error("the rest of the excluded directory must stay out")
+	}
+	if _, ok := files["top.md"]; !ok {
+		t.Error("an unrelated file must survive")
+	}
+}
+
+// TestBuildContextTarDockerIgnoreTrailingSlashMatchesFile is the U7 regression:
+// Docker Cleans `cache/` to `cache`, so it excludes a regular file named cache
+// as well as a directory.
+func TestBuildContextTarDockerIgnoreTrailingSlashMatchesFile(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "cache/\n")
+	writeTestFile(t, filepath.Join(dir, "cache"), "regular file\n")
+	writeTestFile(t, filepath.Join(dir, "cachedir", "x"), "x\n")
+
+	data, err := buildContextTar(contextSpec{root: dir})
+	if err != nil {
+		t.Fatalf("buildContextTar: %v", err)
+	}
+	files := readContextTar(t, data)
+	if _, ok := files["cache"]; ok {
+		t.Error("cache/ must also match a regular file named cache")
+	}
+	if _, ok := files["cachedir/x"]; !ok {
+		t.Error("cachedir/x must survive: the pattern is an exact path match")
+	}
+}
+
+// TestMatchContextPatternBoundedTime is the U4 regression: many `**` segments
+// must not make matching exponential. A broken implementation would run for
+// hours here; the timeout fails the test instead.
+func TestMatchContextPatternBoundedTime(t *testing.T) {
+	pattern := strings.Repeat("**/", 25) + "needle"
+	name := strings.Repeat("a/", 60) + "needle"
+
+	done := make(chan bool, 1)
+	go func() { done <- matchContextPattern(pattern, name) }()
+	select {
+	case got := <-done:
+		if !got {
+			t.Error("pattern should match a name ending in needle")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("matchContextPattern did not finish; ** matching is not memoized")
+	}
 }

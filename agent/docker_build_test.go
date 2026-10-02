@@ -177,6 +177,45 @@ func TestDockerClientBuildReportsDaemonError(t *testing.T) {
 	}
 }
 
+// TestDockerClientBuildRedactsBuildArgsInError is the U5 regression: a failing
+// build must not echo the buildargs JSON (which can carry secrets) in its
+// error.
+func TestDockerClientBuildRedactsBuildArgsInError(t *testing.T) {
+	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"cannot connect to daemon"}`))
+	}))
+
+	err := client.Build(context.Background(), BuildOptions{
+		Tag:       "gotham/web:dep-1",
+		BuildArgs: map[string]string{"API_TOKEN": "s3cr3t-value"},
+		Context:   strings.NewReader("tar"),
+	}, func([]byte) error { return nil })
+	if err == nil {
+		t.Fatal("expected build error")
+	}
+	if strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Fatalf("error leaked a build-arg value: %v", err)
+	}
+	if !strings.Contains(err.Error(), "REDACTED") {
+		t.Fatalf("error should show the masked buildargs: %v", err)
+	}
+}
+
+func TestRedactQuerySecrets(t *testing.T) {
+	in := "/build?t=gotham%2Fweb%3Adep&buildargs=%7B%22TOKEN%22%3A%22secret%22%7D"
+	got := redactQuerySecrets(in)
+	if strings.Contains(got, "secret") {
+		t.Fatalf("redactQuerySecrets(%q) = %q; still contains the secret", in, got)
+	}
+	if !strings.Contains(got, "buildargs=REDACTED") {
+		t.Fatalf("redactQuerySecrets(%q) = %q; want buildargs=REDACTED", in, got)
+	}
+	if got := redactQuerySecrets("/_ping"); got != "/_ping" {
+		t.Fatalf("redactQuerySecrets(no query) = %q; want unchanged", got)
+	}
+}
+
 func TestDockerClientBuildReportsStreamError(t *testing.T) {
 	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSONStream(t, w, map[string]string{"stream": "Step 1/1 : FROM nowhere:latest\n"},

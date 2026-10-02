@@ -51,32 +51,18 @@ func TestGitLabSourceListRepos(t *testing.T) {
 	}
 }
 
-// TestGitLabSourceListReposMembershipAndOffsetLimit is the C1-8 regression:
-// the listing must ask only for the user's member projects and must stop
-// gracefully at GitLab's offset ceiling — but only there, not on any 400.
-func TestGitLabSourceListReposMembershipAndOffsetLimit(t *testing.T) {
-	oldLimit := gitLabOffsetLimit
-	gitLabOffsetLimit = gitLabPageSize // page 2 is past the ceiling
-	t.Cleanup(func() { gitLabOffsetLimit = oldLimit })
-
+// TestGitLabSourceListReposMembership is the C1-8 regression: the listing must
+// ask only for the user's member projects instead of the whole catalogue.
+func TestGitLabSourceListReposMembership(t *testing.T) {
 	var requests int
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if r.URL.Query().Get("membership") != "true" {
 			t.Errorf("membership = %q, want true", r.URL.Query().Get("membership"))
 		}
-		if r.URL.Query().Get("page") == "1" {
-			batch := make([]map[string]any, 0, gitLabPageSize)
-			for i := 0; i < gitLabPageSize; i++ {
-				batch = append(batch, map[string]any{
-					"id": i, "name": "r", "path_with_namespace": "o/r", "visibility": "private",
-				})
-			}
-			writeJSONTest(t, w, batch)
-			return
-		}
-		// At the offset ceiling GitLab answers 400.
-		w.WriteHeader(http.StatusBadRequest)
+		writeJSONTest(t, w, []map[string]any{
+			{"id": 1, "name": "r", "path_with_namespace": "o/r", "visibility": "private"},
+		})
 	})
 
 	source := newGitLabSource(Provider{BaseURL: srv.URL}, true)
@@ -84,19 +70,16 @@ func TestGitLabSourceListReposMembershipAndOffsetLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRepos: %v", err)
 	}
-	if requests != 2 {
-		t.Fatalf("requests = %d, want 2 (page 1 then the ceiling 400)", requests)
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
 	}
-	if len(repos) != gitLabPageSize {
-		t.Fatalf("len(repos) = %d, want the first page", len(repos))
-	}
-	if !source.Truncated() {
-		t.Error("listing at the offset ceiling is not marked truncated")
+	if len(repos) != 1 || repos[0].FullName != "o/r" {
+		t.Fatalf("repos = %+v", repos)
 	}
 }
 
-// TestGitLabSourceListReposSpurious400Fails proves a mid-listing 400 before the
-// offset ceiling is a real failure, not a silently truncated success.
+// TestGitLabSourceListReposSpurious400Fails proves a mid-listing 400 is a real
+// failure, not a silently truncated success.
 func TestGitLabSourceListReposSpurious400Fails(t *testing.T) {
 	var requests int
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {

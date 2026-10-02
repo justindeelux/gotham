@@ -204,6 +204,14 @@ func (t *tokenTracking) client(ctx context.Context, tok *oauth2.Token) *http.Cli
 	return client
 }
 
+// exchangeContext applies the guarded base client to a token exchange.
+// oauth2.Config.Exchange runs on the client carried by the context and falls
+// back to http.DefaultClient otherwise, which would skip the dial/redirect
+// guards entirely.
+func (t *tokenTracking) exchangeContext(ctx context.Context) context.Context {
+	return providerHTTPContext(ctx, t.allowUnsafe)
+}
+
 // Token returns the latest token the recorded source held, or nil when no call
 // has been made. It never refreshes.
 func (t *tokenTracking) Token() *oauth2.Token {

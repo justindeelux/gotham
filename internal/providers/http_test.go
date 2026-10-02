@@ -47,9 +47,10 @@ func TestValidateBaseURL(t *testing.T) {
 		{"localhost trailing dot rejected", "http://localhost.:3000", false, true},
 		{"localhost subdomain rejected", "http://foo.localhost", false, true},
 		{"cgnat metadata rejected", "http://100.100.100.200", false, true},
-		{"cgnat range rejected", "http://100.64.0.1", false, true},
+		{"cgnat range allowed", "http://100.64.0.1", false, false},
 		{"ula metadata rejected", "http://[fd00:ec2::254]", false, true},
-		{"ula range rejected", "http://[fd12::1]", false, true},
+		{"ula range allowed", "http://[fd12::1]", false, false},
+		{"tailscale ula allowed", "http://[fd7a:115c:a1e0::1]", false, false},
 		{"userinfo rejected", "https://user:pass@gitea.example", false, true},
 		{"non-http scheme rejected", "ftp://gitea.example", false, true},
 		{"relative rejected", "gitea.example", false, true},
@@ -87,6 +88,9 @@ func TestProviderDialControl(t *testing.T) {
 		{"10.0.0.5:80", false},
 		{"192.168.1.10:443", false},
 		{"8.8.8.8:443", false},
+		{"100.64.0.1:80", false},
+		{"[fd12::1]:80", false},
+		{"[fd7a:115c:a1e0::1]:80", false},
 	}
 	for _, tc := range cases {
 		err := control("tcp", tc.addr, nil)
@@ -149,7 +153,9 @@ func TestProviderRedirectRefusedEndToEnd(t *testing.T) {
 				http.Redirect(w, r, target.URL+"/steal", status)
 			})
 
-			client := &http.Client{CheckRedirect: checkProviderRedirect(false)}
+			// allowUnsafe lets the loopback host check pass, so the refusal
+			// here can only come from the cross-origin condition.
+			client := &http.Client{CheckRedirect: checkProviderRedirect(true)}
 			req, err := http.NewRequest(http.MethodPost, origin.URL, strings.NewReader("secret-body"))
 			if err != nil {
 				t.Fatalf("new request: %v", err)
@@ -189,23 +195,29 @@ func TestProviderRedirectSameOriginAllowed(t *testing.T) {
 }
 
 // TestProviderClientRefusesCrossOriginRedirect proves the guard is wired into
-// the client the sources actually use, not just the helper.
+// the client the sources actually use, not just the helper. It drives 302 and
+// 307 through the real source client with allowUnsafe, so only the cross-origin
+// condition can refuse (the reviewer's U3 case).
 func TestProviderClientRefusesCrossOriginRedirect(t *testing.T) {
-	var targetHits int32
-	target := serve(t, func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&targetHits, 1)
-		w.WriteHeader(http.StatusOK)
-	})
-	origin := serve(t, func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL+"/steal", http.StatusFound)
-	})
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var targetHits int32
+			target := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+				atomic.AddInt32(&targetHits, 1)
+				w.WriteHeader(http.StatusOK)
+			})
+			origin := serve(t, func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target.URL+"/steal", status)
+			})
 
-	source := newGitHubSource(Provider{BaseURL: origin.URL}, true)
-	if _, err := source.ListRepos(context.Background(), staticToken); err == nil {
-		t.Fatal("the provider client followed a cross-origin redirect")
-	}
-	if atomic.LoadInt32(&targetHits) != 0 {
-		t.Fatal("the redirect target was reached")
+			source := newGitHubSource(Provider{BaseURL: origin.URL}, true)
+			if _, err := source.ListRepos(context.Background(), staticToken); err == nil {
+				t.Fatal("the provider client followed a cross-origin redirect")
+			}
+			if atomic.LoadInt32(&targetHits) != 0 {
+				t.Fatal("the redirect target was reached")
+			}
+		})
 	}
 }
 
@@ -225,6 +237,52 @@ func TestProviderDialGuardRefusesLoopbackSource(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&requests); got != 0 {
 		t.Fatalf("the loopback provider was reached %d times, want 0", got)
+	}
+}
+
+// TestProviderExchangeIsGuarded is the round-2 U1 regression: the token
+// exchange must run on the guarded client, not oauth2's http.DefaultClient
+// fallback. In strict mode a loopback token endpoint must never be reached.
+func TestProviderExchangeIsGuarded(t *testing.T) {
+	var hits int32
+	tokenSrv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		writeJSONTest(t, w, map[string]any{"access_token": "exchanged", "token_type": "bearer"})
+	})
+
+	makers := map[string]func(allowUnsafe bool) SourceProvider{
+		NameGitHub: func(unsafe bool) SourceProvider {
+			s := newGitHubSource(Provider{ClientID: "id", ClientSecret: "s"}, unsafe)
+			s.config.Endpoint.TokenURL = tokenSrv.URL
+			return s
+		},
+		NameGitLab: func(unsafe bool) SourceProvider {
+			return newGitLabSource(Provider{BaseURL: tokenSrv.URL, ClientID: "id", ClientSecret: "s"}, unsafe)
+		},
+		NameGitea: func(unsafe bool) SourceProvider {
+			return newGiteaSource(Provider{BaseURL: tokenSrv.URL, ClientID: "id", ClientSecret: "s"}, unsafe)
+		},
+	}
+
+	for name, makeSource := range makers {
+		t.Run(name+" strict refuses", func(t *testing.T) {
+			before := atomic.LoadInt32(&hits)
+			if _, err := makeSource(false).ExchangeToken(context.Background(), "code"); err == nil {
+				t.Fatal("strict exchange succeeded against a loopback token endpoint")
+			}
+			if got := atomic.LoadInt32(&hits); got != before {
+				t.Fatalf("the loopback token endpoint was reached %d times", got-before)
+			}
+		})
+		t.Run(name+" allowUnsafe exchanges", func(t *testing.T) {
+			tok, err := makeSource(true).ExchangeToken(context.Background(), "code")
+			if err != nil {
+				t.Fatalf("ExchangeToken with allowUnsafe: %v", err)
+			}
+			if tok.AccessToken != "exchanged" {
+				t.Fatalf("access token = %q, want exchanged", tok.AccessToken)
+			}
+		})
 	}
 }
 
@@ -250,7 +308,7 @@ func TestProviderHTTPTimeout(t *testing.T) {
 	if _, err := source.ListRepos(context.Background(), staticToken); err == nil {
 		t.Fatal("ListRepos against a hung provider: no error, want a timeout")
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("hung call took %v, want it bounded by the timeout", elapsed)
 	}
 	if got := atomic.LoadInt32(&requests); got != 1 {
@@ -281,7 +339,7 @@ func TestProviderHTTPHonorsCallerDeadline(t *testing.T) {
 	if _, err := source.ListRepos(ctx, staticToken); err == nil {
 		t.Fatal("ListRepos with an expired caller context: no error, want a timeout")
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("call took %v, want it bounded by the caller deadline", elapsed)
 	}
 }
@@ -320,7 +378,7 @@ func TestProviderRefreshBounded(t *testing.T) {
 	if _, err := source.ListRepos(context.Background(), expired); err == nil {
 		t.Fatal("ListRepos with a hanging token endpoint: no error, want a timeout")
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("refresh call took %v, want it bounded by the timeout", elapsed)
 	}
 	if got := atomic.LoadInt32(&tokenHits); got == 0 {
@@ -359,7 +417,7 @@ func TestProviderListingDeadline(t *testing.T) {
 	if _, err := source.ListRepos(context.Background(), staticToken); err == nil {
 		t.Fatal("ListRepos with a slow provider: no error, want the listing deadline")
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("listing took %v, want it bounded by the listing deadline", elapsed)
 	}
 	if got := atomic.LoadInt32(&requests); got == 0 {

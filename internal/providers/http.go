@@ -43,12 +43,14 @@ var providerListingTimeout = 2 * time.Minute
 // providerRedirectLimit bounds followed redirects; the stdlib default is 10.
 const providerRedirectLimit = 10
 
-// cgnatPrefix and ulaPrefix are address ranges that host cloud metadata
-// services (Alibaba 100.100.100.200 in CGNAT, AWS fd00:ec2::254 in ULA). They
-// are treated as unsafe outbound targets.
+// metadataV4 and metadataV6 are the known cloud metadata endpoints that live
+// inside otherwise-legitimate private ranges (Alibaba 100.100.100.200 in
+// CGNAT, AWS fd00:ec2::254 in ULA). The ranges themselves stay allowed so
+// self-hosted IPv6-ULA/Tailscale providers keep working; only these two
+// addresses are refused.
 var (
-	cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
-	ulaPrefix   = netip.MustParsePrefix("fc00::/7")
+	metadataV4 = netip.MustParseAddr("100.100.100.200")
+	metadataV6 = netip.MustParseAddr("fd00:ec2::254")
 )
 
 // withProviderTimeout bounds a provider call with the shared timeout while
@@ -64,15 +66,15 @@ func withListingTimeout(ctx context.Context) (context.Context, context.CancelFun
 
 // unsafeAddr reports whether a resolved address must not be dialed: loopback,
 // link-local (including the IPv4 169.254.169.254 and IPv6 fe80::/10 metadata
-// services), multicast, unspecified, or the CGNAT/ULA ranges that host cloud
-// metadata endpoints.
+// services), multicast, unspecified, or one of the two known cloud metadata
+// endpoints that sit inside otherwise-allowed private ranges.
 func unsafeAddr(addr netip.Addr) bool {
 	addr = addr.Unmap()
 	switch {
 	case addr.IsLoopback(), addr.IsLinkLocalUnicast(), addr.IsLinkLocalMulticast(),
 		addr.IsMulticast(), addr.IsUnspecified():
 		return true
-	case cgnatPrefix.Contains(addr), ulaPrefix.Contains(addr):
+	case addr == metadataV4 || addr == metadataV6:
 		return true
 	default:
 		return false
@@ -264,22 +266,15 @@ func isNotFound(err error) bool {
 	return errors.As(err, &httpErr) && httpErr.status == http.StatusNotFound
 }
 
-// isBadRequest reports whether err is an *httpError with status 400. GitLab
-// answers 400 once offset pagination passes its 50k ceiling; the caller treats
-// that as the end of a listing instead of a failure.
-func isBadRequest(err error) bool {
-	var httpErr *httpError
-	return errors.As(err, &httpErr) && httpErr.status == http.StatusBadRequest
-}
-
 // validateBaseURL checks a stored base_url before it is used as an outbound
 // target. An empty value is allowed (the provider's public host). A non-empty
 // value must be an absolute http(s) URL with no userinfo, and — unless
 // allowUnsafe is set — must not name localhost, a metadata hostname, or a
-// loopback/link-local/metadata/unspecified/CGNAT/ULA literal address. IPv4
-// private (RFC1918) hosts stay allowed because self-hosted GitLab/Gitea
-// instances legitimately live there. A hostname that is not a literal is left
-// to the dial-time guard, which sees the resolved IP.
+// loopback/link-local/metadata/unspecified literal address. Private IPv4
+// (RFC1918), CGNAT and IPv6 ULA hosts stay allowed because self-hosted
+// GitLab/Gitea (and Tailscale) instances legitimately live there. A hostname
+// that is not a literal is left to the dial-time guard, which sees the
+// resolved IP.
 func validateBaseURL(raw string, allowUnsafe bool) error {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {

@@ -81,7 +81,7 @@ func (p *gitHubSource) Name() string { return NameGitHub }
 
 // ExchangeToken completes the OAuth2 flow with GitHub.
 func (p *gitHubSource) ExchangeToken(ctx context.Context, code string) (*oauth2.Token, error) {
-	ctx, cancel := withProviderTimeout(ctx)
+	ctx, cancel := withProviderTimeout(p.exchangeContext(ctx))
 	defer cancel()
 	return p.config.Exchange(ctx, code)
 }

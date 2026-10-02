@@ -23,11 +23,6 @@ const (
 	gitLabPageSize = 100
 )
 
-// gitLabOffsetLimit is GitLab's maximum offset (page-1)*per_page for offset
-// pagination; a request past it answers 400. It is a variable so a test can
-// exercise the ceiling without 500 requests.
-var gitLabOffsetLimit = 50000
-
 // gitLabProject is the subset of the GitLab project object this provider uses.
 type gitLabProject struct {
 	ID                int64   `json:"id"`
@@ -88,7 +83,7 @@ func (p *gitLabSource) Name() string { return NameGitLab }
 
 // ExchangeToken completes the OAuth2 flow with GitLab.
 func (p *gitLabSource) ExchangeToken(ctx context.Context, code string) (*oauth2.Token, error) {
-	ctx, cancel := withProviderTimeout(ctx)
+	ctx, cancel := withProviderTimeout(p.exchangeContext(ctx))
 	defer cancel()
 	return p.config.Exchange(ctx, code)
 }
@@ -99,18 +94,12 @@ func (p *gitLabSource) AuthCodeURL(state string) string {
 	return p.config.AuthCodeURL(state)
 }
 
-// gitLabPastOffsetLimit reports whether page is past GitLab's 50k offset
-// ceiling (the only case where a mid-listing 400 means "end of list").
-func gitLabPastOffsetLimit(page int) bool {
-	return (page-1)*gitLabPageSize >= gitLabOffsetLimit
-}
-
 // ListRepos returns the projects the token's user is a member of, including
 // private ones. membership=true keeps the listing to the user's own projects
-// instead of enumerating the entire instance catalogue, and pagination is
-// bounded by maxRepoPages. GitLab caps offset pagination at 50k projects and
-// answers 400 past that; the listing then returns what it has, marked
-// truncated, instead of failing.
+// instead of enumerating the entire instance catalogue. GitLab caps offset
+// pagination at 50k projects, but maxRepoPages stops the walk first (500 pages
+// × 100 = 50k), so a repository listing is bounded before GitLab can answer
+// 400. A listing that hits the page bound is marked truncated.
 func (p *gitLabSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo, error) {
 	ctx, cancel := withListingTimeout(ctx)
 	defer cancel()
@@ -125,10 +114,6 @@ func (p *gitLabSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo
 
 		var batch []gitLabProject
 		if err := getJSON(ctx, client, NameGitLab, endpoint, "application/json", &batch); err != nil {
-			if page > 1 && gitLabPastOffsetLimit(page) && isBadRequest(err) {
-				p.truncated = true
-				return repos, nil // GitLab's offset ceiling
-			}
 			return nil, err
 		}
 		for _, item := range batch {
@@ -174,10 +159,6 @@ func (p *gitLabSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo
 
 		var batch []gitLabBranch
 		if err := getJSON(ctx, client, NameGitLab, endpoint, "application/json", &batch); err != nil {
-			if page > 1 && gitLabPastOffsetLimit(page) && isBadRequest(err) {
-				p.truncated = true
-				return branches, nil // GitLab's offset ceiling
-			}
 			return nil, err
 		}
 		for _, item := range batch {

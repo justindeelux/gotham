@@ -76,7 +76,7 @@ func (p *giteaSource) Name() string { return NameGitea }
 
 // ExchangeToken completes the OAuth2 flow with Gitea.
 func (p *giteaSource) ExchangeToken(ctx context.Context, code string) (*oauth2.Token, error) {
-	ctx, cancel := withProviderTimeout(ctx)
+	ctx, cancel := withProviderTimeout(p.exchangeContext(ctx))
 	defer cancel()
 	return p.config.Exchange(ctx, code)
 }

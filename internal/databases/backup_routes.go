@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -226,13 +227,19 @@ func (h *backupHandler) restore(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, restoreEnvelope{Restore: result})
 }
 
-// listBackups serves GET .../databases/{id}/backups.
+// listBackups serves GET .../databases/{id}/backups. The response is a
+// bounded page of the newest runs; ?limit= selects the page size and is capped
+// server-side.
 func (h *backupHandler) listBackups(w http.ResponseWriter, r *http.Request) {
 	userID, databaseID, ok := h.databaseParams(w, r)
 	if !ok {
 		return
 	}
-	backups, err := h.svc.ListBackups(r.Context(), userID, databaseID)
+	limit, ok := h.optionalLimit(w, r)
+	if !ok {
+		return
+	}
+	backups, err := h.svc.ListBackups(r.Context(), userID, databaseID, limit)
 	if err != nil {
 		h.writeBackupError(w, err)
 		return
@@ -501,9 +508,29 @@ func (h *backupHandler) writeBackupError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a backup or restore is already running for this database"})
 	case errors.Is(err, ErrBackupNotCompleted):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrTargetStranded):
+		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrConflict):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "a storage target with that name already exists"})
 	default:
 		h.writeServiceError(w, err)
 	}
+}
+
+// optionalLimit parses the ?limit= page size of a listing. An absent or zero
+// value selects the default page size; a non-numeric or negative value is a
+// 400. Values above the server maximum are clamped by the service.
+func (h *backupHandler) optionalLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("limit"))
+	if raw == "" {
+		return 0, true
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 0 {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid limit"})
+		return 0, false
+	}
+	return limit, true
 }
 
 // newBackupResponse maps a domain backup to its wire representation.

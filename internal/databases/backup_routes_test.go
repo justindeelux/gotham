@@ -33,6 +33,8 @@ type fakeBackupService struct {
 	restoreReq      RestoreRequest
 	createSchedule  ScheduleRequest
 	targetReq       TargetRequest
+	// listLimit echoes the page size the last list call carried.
+	listLimit int
 }
 
 // Compile-time guarantee.
@@ -51,8 +53,9 @@ func (f *fakeBackupService) CreateBackup(_ context.Context, _, _ uuid.UUID, req 
 	return f.backup, nil
 }
 
-func (f *fakeBackupService) ListBackups(_ context.Context, _, _ uuid.UUID) ([]Backup, error) {
+func (f *fakeBackupService) ListBackups(_ context.Context, _, _ uuid.UUID, limit int) ([]Backup, error) {
 	f.record("listBackups")
+	f.listLimit = limit
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -364,6 +367,19 @@ func TestBackupListGetDeleteRoutes(t *testing.T) {
 	rec = backupRequest(t, handler, http.MethodGet, "/v1/databases/"+id.String()+"/backups/"+backupID.String(), "")
 	if rec.Code != http.StatusOK {
 		t.Errorf("get status = %d", rec.Code)
+	}
+
+	// ?limit= reaches the service; a non-numeric limit is a 400.
+	rec = backupRequest(t, handler, http.MethodGet, "/v1/databases/"+id.String()+"/backups?limit=7", "")
+	if rec.Code != http.StatusOK {
+		t.Errorf("limited list status = %d", rec.Code)
+	}
+	if svc.listLimit != 7 {
+		t.Errorf("service limit = %d, want 7", svc.listLimit)
+	}
+	rec = backupRequest(t, handler, http.MethodGet, "/v1/databases/"+id.String()+"/backups?limit=abc", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid limit status = %d, want 400", rec.Code)
 	}
 
 	rec = backupRequest(t, handler, http.MethodDelete, "/v1/databases/"+id.String()+"/backups/"+backupID.String(), "")

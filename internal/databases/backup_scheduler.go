@@ -131,10 +131,19 @@ func parseCronField(expression string, min, max int) (cronField, bool, error) {
 	return field, any, nil
 }
 
+// maxCronSteps bounds the scan independently of the four-year window, so a
+// pathological expression can never spin the scheduler.
+const maxCronSteps = 500_000
+
 // nextCronTime returns the first time strictly after `after`, evaluated in
 // loc, that matches the expression. It walks day → hour → minute so a yearly
 // schedule does not iterate over four years of minutes, and it refuses an
 // expression that can never fire (for example February 30th).
+//
+// A DST transition can make a wall-clock boundary (midnight, or the
+// spring-forward hour) unrepresentable. Go's time.Date then returns an instant
+// at or before the cursor, which would make the scan spin forever; nextDay and
+// nextHour fall back to a fixed step so the cursor always advances.
 func nextCronTime(expression string, after time.Time, loc *time.Location) (time.Time, error) {
 	spec, err := parseCron(expression)
 	if err != nil {
@@ -146,17 +155,17 @@ func nextCronTime(expression string, after time.Time, loc *time.Location) (time.
 	cursor := after.In(loc).Truncate(time.Minute).Add(time.Minute)
 	limit := cursor.AddDate(4, 0, 0)
 
-	for cursor.Before(limit) {
+	for steps := 0; cursor.Before(limit) && steps < maxCronSteps; steps++ {
 		if !spec.fields[3].has(int(cursor.Month())) {
-			cursor = time.Date(cursor.Year(), cursor.Month(), cursor.Day()+1, 0, 0, 0, 0, loc)
+			cursor = nextDay(cursor, loc)
 			continue
 		}
 		if !spec.dayMatches(cursor) {
-			cursor = time.Date(cursor.Year(), cursor.Month(), cursor.Day()+1, 0, 0, 0, 0, loc)
+			cursor = nextDay(cursor, loc)
 			continue
 		}
 		if !spec.fields[1].has(cursor.Hour()) {
-			cursor = time.Date(cursor.Year(), cursor.Month(), cursor.Day(), cursor.Hour()+1, 0, 0, 0, loc)
+			cursor = nextHour(cursor, loc)
 			continue
 		}
 		if !spec.fields[0].has(cursor.Minute()) {
@@ -166,6 +175,26 @@ func nextCronTime(expression string, after time.Time, loc *time.Location) (time.
 		return cursor, nil
 	}
 	return time.Time{}, fmt.Errorf("%w: cron expression %q never runs", ErrValidation, expression)
+}
+
+// nextDay returns the start of the following day in loc, falling back to a
+// one-hour step when a DST transition makes midnight unrepresentable.
+func nextDay(cursor time.Time, loc *time.Location) time.Time {
+	next := time.Date(cursor.Year(), cursor.Month(), cursor.Day()+1, 0, 0, 0, 0, loc)
+	if next.After(cursor) {
+		return next
+	}
+	return cursor.Add(time.Hour)
+}
+
+// nextHour returns the top of the following hour in loc, falling back to a
+// one-hour step across the nonexistent spring-forward hour.
+func nextHour(cursor time.Time, loc *time.Location) time.Time {
+	next := time.Date(cursor.Year(), cursor.Month(), cursor.Day(), cursor.Hour()+1, 0, 0, 0, loc)
+	if next.After(cursor) {
+		return next
+	}
+	return cursor.Add(time.Hour)
 }
 
 // dayMatches applies the day-of-month/day-of-week rule of classic cron: a

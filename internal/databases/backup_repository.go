@@ -26,8 +26,10 @@ type BackupRepository interface {
 	CreateBackup(ctx context.Context, backup Backup) (Backup, error)
 	// GetBackup returns a run joined to a live database, or ErrNotFound.
 	GetBackup(ctx context.Context, backupID uuid.UUID) (Backup, error)
-	// ListBackupsByDatabase returns a database's runs, newest first.
-	ListBackupsByDatabase(ctx context.Context, databaseID uuid.UUID) ([]Backup, error)
+	// ListBackupsByDatabase returns up to limit of a database's runs, newest
+	// first. The list is a bounded page: the table grows without bound, so a
+	// caller must always cap how much history it loads.
+	ListBackupsByDatabase(ctx context.Context, databaseID uuid.UUID, limit int) ([]Backup, error)
 	// ListRunningBackups returns every run still marked running, oldest
 	// first: the boot-time reconciliation sweep marks them failed.
 	ListRunningBackups(ctx context.Context) ([]Backup, error)
@@ -57,14 +59,24 @@ type BackupRepository interface {
 	// CreateBackupTarget stores a storage target (credentials are separate
 	// sealed rows).
 	CreateBackupTarget(ctx context.Context, target BackupTarget) (BackupTarget, error)
+	// CreateBackupTargetWithSecrets stores a target and its sealed credentials
+	// in one transaction, so no half-credentialed target is observable.
+	CreateBackupTargetWithSecrets(ctx context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error)
 	// GetBackupTarget returns one target.
 	GetBackupTarget(ctx context.Context, targetID uuid.UUID) (BackupTarget, error)
 	// ListBackupTargetsByUser returns a user's targets, newest first.
 	ListBackupTargetsByUser(ctx context.Context, userID uuid.UUID) ([]BackupTarget, error)
 	// UpdateBackupTarget persists the mutable configuration.
 	UpdateBackupTarget(ctx context.Context, target BackupTarget) (BackupTarget, error)
+	// UpdateBackupTargetWithSecrets persists the configuration and upserts the
+	// sealed credentials in one transaction, so the config and the credentials
+	// it belongs to are never observed as a mixed pair.
+	UpdateBackupTargetWithSecrets(ctx context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error)
 	// DeleteBackupTarget removes a target owned by userID, or ErrNotFound.
 	DeleteBackupTarget(ctx context.Context, targetID, userID uuid.UUID) (BackupTarget, error)
+	// HasBackupsForTarget reports whether a running or completed run reads
+	// from the target, which locks its destination against edits.
+	HasBackupsForTarget(ctx context.Context, targetID uuid.UUID) (bool, error)
 
 	// CreateTargetSecret stores one sealed credential of a target.
 	CreateTargetSecret(ctx context.Context, secret TargetSecret) (TargetSecret, error)
@@ -122,8 +134,8 @@ func (r *storeBackupRepository) GetBackup(ctx context.Context, backupID uuid.UUI
 }
 
 // ListBackupsByDatabase implements BackupRepository.
-func (r *storeBackupRepository) ListBackupsByDatabase(ctx context.Context, databaseID uuid.UUID) ([]Backup, error) {
-	rows, err := r.store.ListBackupsByDatabase(ctx, pgUUID(databaseID))
+func (r *storeBackupRepository) ListBackupsByDatabase(ctx context.Context, databaseID uuid.UUID, limit int) ([]Backup, error) {
+	rows, err := r.store.ListBackupsByDatabase(ctx, pgUUID(databaseID), int32(limit))
 	if err != nil {
 		return nil, fmt.Errorf("databases: list backups: %w", err)
 	}
@@ -300,6 +312,27 @@ func (r *storeBackupRepository) CreateBackupTarget(ctx context.Context, target B
 	return targetFromRow(row), nil
 }
 
+// CreateBackupTargetWithSecrets implements BackupRepository.
+func (r *storeBackupRepository) CreateBackupTargetWithSecrets(ctx context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error) {
+	row, err := r.store.CreateBackupTargetWithSecrets(ctx, sqlc.CreateBackupTargetParams{
+		ID:       pgUUID(target.ID),
+		UserID:   pgUUID(target.UserID),
+		Name:     target.Name,
+		Kind:     string(target.Kind),
+		Endpoint: target.Endpoint,
+		Region:   target.Region,
+		Bucket:   target.Bucket,
+		Prefix:   target.Prefix,
+	}, targetSecretParams(secrets))
+	if err != nil {
+		if isUniqueViolation(err) {
+			return BackupTarget{}, ErrConflict
+		}
+		return BackupTarget{}, fmt.Errorf("databases: create backup target: %w", err)
+	}
+	return targetFromRow(row), nil
+}
+
 // GetBackupTarget implements BackupRepository.
 func (r *storeBackupRepository) GetBackupTarget(ctx context.Context, targetID uuid.UUID) (BackupTarget, error) {
 	row, err := r.store.GetBackupTarget(ctx, pgUUID(targetID))
@@ -346,6 +379,65 @@ func (r *storeBackupRepository) UpdateBackupTarget(ctx context.Context, target B
 		return BackupTarget{}, fmt.Errorf("databases: update backup target: %w", err)
 	}
 	return targetFromRow(row), nil
+}
+
+// UpdateBackupTargetWithSecrets implements BackupRepository.
+func (r *storeBackupRepository) UpdateBackupTargetWithSecrets(ctx context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error) {
+	row, err := r.store.UpdateBackupTargetWithSecrets(ctx, sqlc.UpdateBackupTargetParams{
+		ID:       pgUUID(target.ID),
+		Name:     target.Name,
+		Kind:     string(target.Kind),
+		Endpoint: target.Endpoint,
+		Region:   target.Region,
+		Bucket:   target.Bucket,
+		Prefix:   target.Prefix,
+	}, targetSecretParams(secrets))
+	if err != nil {
+		if isUniqueViolation(err) {
+			return BackupTarget{}, ErrConflict
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BackupTarget{}, ErrNotFound
+		}
+		return BackupTarget{}, fmt.Errorf("databases: update backup target: %w", err)
+	}
+	return targetFromRow(row), nil
+}
+
+// HasBackupsForTarget implements BackupRepository.
+func (r *storeBackupRepository) HasBackupsForTarget(ctx context.Context, targetID uuid.UUID) (bool, error) {
+	exists, err := r.store.HasBackupsForTarget(ctx, pgUUID(targetID))
+	if err != nil {
+		return false, fmt.Errorf("databases: check target backups: %w", err)
+	}
+	return exists, nil
+}
+
+// ListServerIDs implements backupServerLister: every managed node id, so the
+// boot-time sweep can find leftover job containers across nodes.
+func (r *storeBackupRepository) ListServerIDs(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := r.store.ListServers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("databases: list servers: %w", err)
+	}
+	ids := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, uuidFromPG(row.ID))
+	}
+	return ids, nil
+}
+
+// targetSecretParams maps sealed credentials onto their upsert parameters.
+func targetSecretParams(secrets []TargetSecret) []sqlc.UpsertBackupTargetSecretParams {
+	params := make([]sqlc.UpsertBackupTargetSecretParams, 0, len(secrets))
+	for _, secret := range secrets {
+		params = append(params, sqlc.UpsertBackupTargetSecretParams{
+			TargetID:   pgUUID(secret.TargetID),
+			Key:        secret.Key,
+			Ciphertext: secret.Ciphertext,
+		})
+	}
+	return params
 }
 
 // DeleteBackupTarget implements BackupRepository. The update query filters by

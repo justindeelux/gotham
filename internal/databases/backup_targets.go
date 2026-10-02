@@ -51,11 +51,12 @@ func (m *BackupManager) CreateTarget(ctx context.Context, userID uuid.UUID, req 
 	}
 	now := m.now()
 	target.CreatedAt, target.UpdatedAt = now, now
-	created, err := m.backups.CreateBackupTarget(ctx, target)
+	sealed, err := sealTargetSecrets(m.secret, target.ID, req.AccessKey, req.SecretKey)
 	if err != nil {
 		return BackupTarget{}, err
 	}
-	if err := m.sealTargetCredentials(ctx, created, req); err != nil {
+	created, err := m.backups.CreateBackupTargetWithSecrets(ctx, target, sealed)
+	if err != nil {
 		return BackupTarget{}, err
 	}
 	return created, nil
@@ -71,6 +72,7 @@ func (m *BackupManager) UpdateTarget(ctx context.Context, userID, targetID uuid.
 	if err != nil {
 		return BackupTarget{}, err
 	}
+	before := *target
 	if err := applyTargetRequest(target, req); err != nil {
 		return BackupTarget{}, err
 	}
@@ -83,15 +85,42 @@ func (m *BackupManager) UpdateTarget(ctx context.Context, userID, targetID uuid.
 			return BackupTarget{}, s3CredentialsRequired()
 		}
 	}
-	target.UpdatedAt = m.now()
-	updated, err := m.backups.UpdateBackupTarget(ctx, *target)
+	// A recorded location names the endpoint and bucket it was written to, so
+	// moving the target would strand every completed backup that still reads
+	// from it and every running run that will record the old destination. The
+	// destination is immutable once a run references it; a new target is the
+	// escape hatch.
+	if targetDestinationChanged(before, *target) {
+		hasBackups, err := m.backups.HasBackupsForTarget(ctx, targetID)
+		if err != nil {
+			return BackupTarget{}, err
+		}
+		if hasBackups {
+			return BackupTarget{}, fmt.Errorf(
+				"%w: this target has backups; create a new target instead of moving it", ErrTargetStranded)
+		}
+	}
+	sealed, err := sealTargetSecrets(m.secret, target.ID, req.AccessKey, req.SecretKey)
 	if err != nil {
 		return BackupTarget{}, err
 	}
-	if err := m.sealTargetCredentials(ctx, updated, req); err != nil {
+	target.UpdatedAt = m.now()
+	updated, err := m.backups.UpdateBackupTargetWithSecrets(ctx, *target, sealed)
+	if err != nil {
 		return BackupTarget{}, err
 	}
 	return updated, nil
+}
+
+// targetDestinationChanged reports whether the fields that decide where
+// artifacts live changed. Prefix is excluded: a recorded location already
+// carries the full object key, so changing the prefix cannot strand an
+// existing backup.
+func targetDestinationChanged(before, after BackupTarget) bool {
+	return before.Kind != after.Kind ||
+		before.Endpoint != after.Endpoint ||
+		before.Region != after.Region ||
+		before.Bucket != after.Bucket
 }
 
 // DeleteTarget implements BackupService. Backups that used the target keep
@@ -296,26 +325,6 @@ func openTargetSecrets(secret string, secrets []TargetSecret) (string, string, e
 	return accessKey, secretKey, nil
 }
 
-// sealTargetCredentials writes the credentials a request carried, replacing
-// whatever is stored under the same key. A request without non-blank
-// credentials is a no-op, so resending a masked value cannot wipe a stored
-// key.
-func (m *BackupManager) sealTargetCredentials(ctx context.Context, target BackupTarget, req TargetRequest) error {
-	if strings.TrimSpace(req.AccessKey) == "" && strings.TrimSpace(req.SecretKey) == "" {
-		return nil
-	}
-	sealed, err := sealTargetSecrets(m.secret, target.ID, req.AccessKey, req.SecretKey)
-	if err != nil {
-		return err
-	}
-	for _, item := range sealed {
-		if _, err := m.backups.UpsertTargetSecret(ctx, item); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // applyTargetRequest copies the request onto the target, keeping stored
 // values for fields the request leaves empty, and validates the resulting
 // configuration. Credentials are handled separately by the callers.
@@ -390,4 +399,24 @@ func (m *BackupManager) ownedTargetID(ctx context.Context, userID uuid.UUID, raw
 		return uuid.Nil, err
 	}
 	return targetID, nil
+}
+
+// targetOwnedByDatabase reports whether a target may store a database's
+// backups. An S3 target is resolved through the database owner on the read
+// path, so it must belong to that owner; a local target records a file://
+// location and is readable regardless of who owns it. It returns ErrNotFound
+// for an inconsistent pair, so the caller cannot probe a target it could never
+// use.
+func (m *BackupManager) targetOwnedByDatabase(ctx context.Context, targetID, databaseOwner uuid.UUID) error {
+	if targetID == uuid.Nil {
+		return nil
+	}
+	target, err := m.backups.GetBackupTarget(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	if target.Kind == TargetS3 && target.UserID != databaseOwner {
+		return ErrNotFound
+	}
+	return nil
 }

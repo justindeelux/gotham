@@ -26,6 +26,17 @@ func (m *BackupManager) startRun(ctx context.Context, database Database, target 
 	if err := m.backupsReady(); err != nil {
 		return Backup{}, err
 	}
+	// Ownership must be consistent end to end. A target is user-global, while
+	// a database can belong to a team: a member could otherwise back up a
+	// database they share to their own S3 target, and the read path — which
+	// resolves the target by the database owner — would then 404 on every
+	// restore. Only the database owner's S3 targets are usable, so any
+	// accepted run is restorable by the database's team. Local targets carry
+	// their bytes as a file:// location and need no target to read back, so
+	// they are not bound to the database owner.
+	if target != nil && target.Kind == TargetS3 && target.UserID != database.UserID {
+		return Backup{}, ErrNotFound
+	}
 	if !m.claim(database.ID) {
 		return Backup{}, ErrBackupInFlight
 	}
@@ -427,6 +438,93 @@ func (m *BackupManager) removeJobContainer(serverID uuid.UUID, containerID strin
 		m.logger.Warn("databases: could not remove the job container",
 			"container_id", containerID, "error", err)
 	}
+}
+
+// backupServerLister is the slice of the repository the startup container
+// sweep needs: every managed node id. It is separate from BackupRepository so
+// the backup persistence contract stays about backup tables.
+type backupServerLister interface {
+	ListServerIDs(ctx context.Context) ([]uuid.UUID, error)
+}
+
+// sweepJobContainers removes temporary job containers a crashed control plane
+// left behind. It runs once at construction, after the stale-run sweep: a
+// container is removed only when neither its database is leased by a live job
+// nor its run is still running, so a job this process is actively driving is
+// never killed.
+func (m *BackupManager) sweepJobContainers() {
+	if m == nil || m.containers == nil || m.backups == nil {
+		return
+	}
+	lister, ok := m.backups.(backupServerLister)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	liveRuns := map[uuid.UUID]bool{}
+	running, err := m.backups.ListRunningBackups(ctx)
+	if err != nil {
+		m.logger.Warn("databases: container sweep could not list running backups", "error", err)
+		return
+	}
+	for _, backup := range running {
+		liveRuns[backup.ID] = true
+	}
+
+	leased := map[uuid.UUID]bool{}
+	m.mu.Lock()
+	for id := range m.inflight {
+		leased[id] = true
+	}
+	m.mu.Unlock()
+
+	serverIDs, err := lister.ListServerIDs(ctx)
+	if err != nil {
+		m.logger.Warn("databases: container sweep could not list servers", "error", err)
+		return
+	}
+	removed := 0
+	for _, serverID := range serverIDs {
+		list, err := m.containers.List(ctx, serverID)
+		if err != nil {
+			m.logger.Warn("databases: container sweep could not list node containers",
+				"server_id", serverID.String(), "error", err)
+			continue
+		}
+		for _, container := range list {
+			if !isStaleJobContainer(container, leased, liveRuns) {
+				continue
+			}
+			m.removeJobContainer(serverID, container.ID)
+			removed++
+		}
+	}
+	if removed > 0 {
+		m.logger.Info("databases: removed leftover backup job containers", "count", removed)
+	}
+}
+
+// isStaleJobContainer reports whether c is a temporary backup job container
+// the sweep may remove. Containers of another role (the database container
+// itself) and containers still leased by a live run are never selected.
+func isStaleJobContainer(c containers.Container, leased, liveRuns map[uuid.UUID]bool) bool {
+	if c.Labels[labelManaged] != "true" {
+		return false
+	}
+	switch c.Labels[labelRole] {
+	case roleBackup, roleRestore, roleStage:
+	default:
+		return false
+	}
+	if id, err := uuid.Parse(c.Labels[labelDatabaseID]); err == nil && leased[id] {
+		return false
+	}
+	if id, err := uuid.Parse(c.Labels[labelBackupID]); err == nil && liveRuns[id] {
+		return false
+	}
+	return true
 }
 
 // pauseDatabase stops the database container before a job mounts its volume,

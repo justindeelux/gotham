@@ -17,7 +17,18 @@ SELECT b.*
 FROM backups b
     JOIN databases d ON d.id = b.database_id
 WHERE b.database_id = $1 AND d.deleted_at IS NULL
-ORDER BY b.created_at DESC, b.id DESC;
+ORDER BY b.created_at DESC, b.id DESC
+LIMIT $2;
+
+-- name: HasBackupsForTarget :one
+-- A target whose destination changed would strand every backup that records
+-- (or is about to record) a location against the old endpoint/bucket, so the
+-- update path asks this first. A running backup counts: it captured the old
+-- configuration and will finish by recording the old destination.
+SELECT EXISTS (
+    SELECT 1 FROM backups
+    WHERE target_id = $1 AND status IN ('running', 'completed')
+) AS has_backups;
 
 -- name: FinishBackup :one
 UPDATE backups

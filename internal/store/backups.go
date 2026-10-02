@@ -23,9 +23,18 @@ func (s *Store) GetBackup(ctx context.Context, id pgtype.UUID) (sqlc.Backup, err
 	return s.queries.GetBackup(ctx, id)
 }
 
-// ListBackupsByDatabase returns a database's runs, newest first.
-func (s *Store) ListBackupsByDatabase(ctx context.Context, databaseID pgtype.UUID) ([]sqlc.Backup, error) {
-	return s.queries.ListBackupsByDatabase(ctx, databaseID)
+// ListBackupsByDatabase returns up to limit of a database's runs, newest first.
+func (s *Store) ListBackupsByDatabase(ctx context.Context, databaseID pgtype.UUID, limit int32) ([]sqlc.Backup, error) {
+	return s.queries.ListBackupsByDatabase(ctx, sqlc.ListBackupsByDatabaseParams{
+		DatabaseID: databaseID,
+		Limit:      limit,
+	})
+}
+
+// HasBackupsForTarget reports whether any running or completed run references
+// the target, which locks its destination against edits.
+func (s *Store) HasBackupsForTarget(ctx context.Context, targetID pgtype.UUID) (bool, error) {
+	return s.queries.HasBackupsForTarget(ctx, targetID)
 }
 
 // ListRunningBackups returns every run the control plane left running.
@@ -100,6 +109,58 @@ func (s *Store) ListBackupTargetsByUser(ctx context.Context, userID pgtype.UUID)
 // UpdateBackupTarget persists a target's configuration and returns the row.
 func (s *Store) UpdateBackupTarget(ctx context.Context, params sqlc.UpdateBackupTargetParams) (sqlc.BackupTarget, error) {
 	return s.queries.UpdateBackupTarget(ctx, params)
+}
+
+// CreateBackupTargetWithSecrets stores a target and its sealed credentials in
+// one transaction, so a failed credential write can never leave a target
+// without the pair its kind requires.
+func (s *Store) CreateBackupTargetWithSecrets(ctx context.Context, target sqlc.CreateBackupTargetParams, secrets []sqlc.UpsertBackupTargetSecretParams) (sqlc.BackupTarget, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.BackupTarget{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	row, err := queries.CreateBackupTarget(ctx, target)
+	if err != nil {
+		return sqlc.BackupTarget{}, err
+	}
+	for _, secret := range secrets {
+		if _, err := queries.UpsertBackupTargetSecret(ctx, secret); err != nil {
+			return sqlc.BackupTarget{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.BackupTarget{}, err
+	}
+	return row, nil
+}
+
+// UpdateBackupTargetWithSecrets persists a target's configuration and upserts
+// the supplied sealed credentials in one transaction, so no observer can see
+// the new configuration paired with the previous credentials.
+func (s *Store) UpdateBackupTargetWithSecrets(ctx context.Context, target sqlc.UpdateBackupTargetParams, secrets []sqlc.UpsertBackupTargetSecretParams) (sqlc.BackupTarget, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.BackupTarget{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	row, err := queries.UpdateBackupTarget(ctx, target)
+	if err != nil {
+		return sqlc.BackupTarget{}, err
+	}
+	for _, secret := range secrets {
+		if _, err := queries.UpsertBackupTargetSecret(ctx, secret); err != nil {
+			return sqlc.BackupTarget{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.BackupTarget{}, err
+	}
+	return row, nil
 }
 
 // DeleteBackupTarget removes a target owned by userID, returning pgx.ErrNoRows

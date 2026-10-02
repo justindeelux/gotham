@@ -376,6 +376,24 @@ func (q *Queries) GetBackupTarget(ctx context.Context, id pgtype.UUID) (BackupTa
 	return i, err
 }
 
+const hasBackupsForTarget = `-- name: HasBackupsForTarget :one
+SELECT EXISTS (
+    SELECT 1 FROM backups
+    WHERE target_id = $1 AND status IN ('running', 'completed')
+) AS has_backups
+`
+
+// A target whose destination changed would strand every backup that records
+// (or is about to record) a location against the old endpoint/bucket, so the
+// update path asks this first. A running backup counts: it captured the old
+// configuration and will finish by recording the old destination.
+func (q *Queries) HasBackupsForTarget(ctx context.Context, targetID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasBackupsForTarget, targetID)
+	var has_backups bool
+	err := row.Scan(&has_backups)
+	return has_backups, err
+}
+
 const listBackupSchedulesByDatabase = `-- name: ListBackupSchedulesByDatabase :many
 SELECT s.id, s.database_id, s.cron, s.target_id, s.enabled, s.last_run_at, s.next_run_at, s.created_at, s.updated_at
 FROM backup_schedules s
@@ -489,10 +507,16 @@ FROM backups b
     JOIN databases d ON d.id = b.database_id
 WHERE b.database_id = $1 AND d.deleted_at IS NULL
 ORDER BY b.created_at DESC, b.id DESC
+LIMIT $2
 `
 
-func (q *Queries) ListBackupsByDatabase(ctx context.Context, databaseID pgtype.UUID) ([]Backup, error) {
-	rows, err := q.db.Query(ctx, listBackupsByDatabase, databaseID)
+type ListBackupsByDatabaseParams struct {
+	DatabaseID pgtype.UUID `json:"database_id"`
+	Limit      int32       `json:"limit"`
+}
+
+func (q *Queries) ListBackupsByDatabase(ctx context.Context, arg ListBackupsByDatabaseParams) ([]Backup, error) {
+	rows, err := q.db.Query(ctx, listBackupsByDatabase, arg.DatabaseID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

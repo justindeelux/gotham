@@ -52,7 +52,7 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("backup = %+v", backup)
 	}
 
-	listed, err := repo.ListBackupsByDatabase(ctx, database.ID)
+	listed, err := repo.ListBackupsByDatabase(ctx, database.ID, maxBackupListLimit)
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("ListBackupsByDatabase = %d rows (%v), want 1", len(listed), err)
 	}
@@ -192,5 +192,188 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 	}
 	if _, err := repo.GetBackupSchedule(ctx, late.ID); err != ErrNotFound {
 		t.Errorf("GetBackupSchedule after soft delete err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestBackupTargetWriteIsAtomic is the D2-11 regression against a real
+// PostgreSQL: a failing half of the write must roll the other half back, so no
+// mixed configuration/credential pair is observable.
+func TestBackupTargetWriteIsAtomic(t *testing.T) {
+	_, st := integrationEnv(t)
+	repo := newStoreBackupRepository(st)
+	ctx := context.Background()
+	ownerID, _ := seedUserAndServer(t, st)
+
+	suffix := uuid.New().String()[:8]
+	firstName := "atomic-a-" + suffix
+	targetID := uuid.New()
+	if _, err := repo.CreateBackupTargetWithSecrets(ctx, BackupTarget{
+		ID: targetID, UserID: ownerID, Name: firstName,
+		Kind: TargetS3, Endpoint: "https://old", Bucket: "old",
+	}, []TargetSecret{
+		{TargetID: targetID, Key: targetSecretAccessKey, Ciphertext: "old-access"},
+		{TargetID: targetID, Key: targetSecretSecretKey, Ciphertext: "old-secret"},
+	}); err != nil {
+		t.Fatalf("CreateBackupTargetWithSecrets: %v", err)
+	}
+	secondName := "atomic-b-" + suffix
+	if _, err := repo.CreateBackupTargetWithSecrets(ctx, BackupTarget{
+		ID: uuid.New(), UserID: ownerID, Name: secondName, Kind: TargetLocal,
+	}, nil); err != nil {
+		t.Fatalf("CreateBackupTargetWithSecrets(second): %v", err)
+	}
+
+	// A config failure (duplicate name) must not leave the new credentials.
+	if _, err := repo.UpdateBackupTargetWithSecrets(ctx, BackupTarget{
+		ID: targetID, Name: secondName, Kind: TargetS3, Endpoint: "https://moved", Bucket: "moved",
+	}, []TargetSecret{
+		{TargetID: targetID, Key: targetSecretAccessKey, Ciphertext: "new-access"},
+	}); err == nil {
+		t.Fatal("expected the duplicate name to fail the transaction")
+	}
+	assertTargetState(t, repo, ctx, targetID, firstName, "https://old", "old")
+	assertSecret(t, repo, ctx, targetID, targetSecretAccessKey, "old-access")
+
+	// A credential failure (foreign target) must not leave the new config.
+	if _, err := repo.UpdateBackupTargetWithSecrets(ctx, BackupTarget{
+		ID: targetID, Name: firstName, Kind: TargetS3, Endpoint: "https://moved", Bucket: "moved",
+	}, []TargetSecret{
+		{TargetID: targetID, Key: targetSecretAccessKey, Ciphertext: "newer-access"},
+		{TargetID: uuid.New(), Key: targetSecretSecretKey, Ciphertext: "bad-fk"},
+	}); err == nil {
+		t.Fatal("expected the foreign secret to fail the transaction")
+	}
+	assertTargetState(t, repo, ctx, targetID, firstName, "https://old", "old")
+	assertSecret(t, repo, ctx, targetID, targetSecretAccessKey, "old-access")
+}
+
+// assertTargetState checks the stored configuration of a target.
+func assertTargetState(t *testing.T, repo *storeBackupRepository, ctx context.Context, targetID uuid.UUID, name, endpoint, bucket string) {
+	t.Helper()
+	got, err := repo.GetBackupTarget(ctx, targetID)
+	if err != nil {
+		t.Fatalf("GetBackupTarget: %v", err)
+	}
+	if got.Name != name || got.Endpoint != endpoint || got.Bucket != bucket {
+		t.Errorf("target = (%q, %q, %q), want (%q, %q, %q)", got.Name, got.Endpoint, got.Bucket, name, endpoint, bucket)
+	}
+}
+
+// assertSecret checks one stored sealed credential's ciphertext.
+func assertSecret(t *testing.T, repo *storeBackupRepository, ctx context.Context, targetID uuid.UUID, key, ciphertext string) {
+	t.Helper()
+	secrets, err := repo.ListTargetSecrets(ctx, targetID)
+	if err != nil {
+		t.Fatalf("ListTargetSecrets: %v", err)
+	}
+	for _, secret := range secrets {
+		if secret.Key == key {
+			if secret.Ciphertext != ciphertext {
+				t.Errorf("secret %s = %q, want %q", key, secret.Ciphertext, ciphertext)
+			}
+			return
+		}
+	}
+	t.Errorf("secret %s is missing", key)
+}
+
+// TestListBackupsByDatabaseRespectsLimit is the D2-14 regression: the query
+// must never return more rows than the requested bound.
+func TestListBackupsByDatabaseRespectsLimit(t *testing.T) {
+	_, st := integrationEnv(t)
+	repo := newStoreBackupRepository(st)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+
+	database, err := newStoreRepository(st).CreateDatabase(ctx, Database{
+		ID:          uuid.New(),
+		UserID:      ownerID,
+		ServerID:    serverID,
+		Name:        "backup-limit",
+		Engine:      EnginePostgres,
+		Version:     "16-alpine",
+		Status:      StatusRunning,
+		StoragePath: "gotham-db-" + uuid.New().String(),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := repo.CreateBackup(ctx, Backup{
+			ID: uuid.New(), DatabaseID: database.ID,
+			Type: BackupManual, Status: BackupCompleted,
+		}); err != nil {
+			t.Fatalf("CreateBackup: %v", err)
+		}
+	}
+	limited, err := repo.ListBackupsByDatabase(ctx, database.ID, 2)
+	if err != nil {
+		t.Fatalf("ListBackupsByDatabase: %v", err)
+	}
+	if len(limited) != 2 {
+		t.Errorf("limited list = %d rows, want 2", len(limited))
+	}
+	all, err := repo.ListBackupsByDatabase(ctx, database.ID, maxBackupListLimit)
+	if err != nil {
+		t.Fatalf("ListBackupsByDatabase(all): %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("full list = %d rows, want 3", len(all))
+	}
+}
+
+// TestHasBackupsForTargetCountsLiveRuns exercises the destination lock query:
+// a running run locks the target (it will record the old destination), and a
+// target with no live or completed run does not.
+func TestHasBackupsForTargetCountsLiveRuns(t *testing.T) {
+	_, st := integrationEnv(t)
+	repo := newStoreBackupRepository(st)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+
+	targetID := uuid.New()
+	if _, err := repo.CreateBackupTargetWithSecrets(ctx, BackupTarget{
+		ID: targetID, UserID: ownerID, Name: "lock-" + uuid.New().String()[:8], Kind: TargetLocal,
+	}, nil); err != nil {
+		t.Fatalf("CreateBackupTargetWithSecrets: %v", err)
+	}
+	if has, err := repo.HasBackupsForTarget(ctx, targetID); err != nil || has {
+		t.Fatalf("empty target has = %v (%v), want false", has, err)
+	}
+
+	database, err := newStoreRepository(st).CreateDatabase(ctx, Database{
+		ID:          uuid.New(),
+		UserID:      ownerID,
+		ServerID:    serverID,
+		Name:        "backup-lock",
+		Engine:      EnginePostgres,
+		Version:     "16-alpine",
+		Status:      StatusRunning,
+		StoragePath: "gotham-db-" + uuid.New().String(),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+	running, err := repo.CreateBackup(ctx, Backup{
+		ID: uuid.New(), DatabaseID: database.ID, TargetID: targetID,
+		Type: BackupManual, Status: BackupRunning,
+	})
+	if err != nil {
+		t.Fatalf("CreateBackup: %v", err)
+	}
+	if has, err := repo.HasBackupsForTarget(ctx, targetID); err != nil || !has {
+		t.Fatalf("running target has = %v (%v), want true", has, err)
+	}
+	if _, err := repo.FinishBackup(ctx, Backup{
+		ID: running.ID, Status: BackupFailed, FinishedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("FinishBackup: %v", err)
+	}
+	if has, err := repo.HasBackupsForTarget(ctx, targetID); err != nil || has {
+		t.Fatalf("failed-only target has = %v (%v), want false", has, err)
 	}
 }

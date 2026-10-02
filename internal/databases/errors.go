@@ -34,4 +34,7 @@ var (
 	// ErrBackupNotCompleted — only a completed backup can be restored, and a
 	// completed one always has its bytes (409).
 	ErrBackupNotCompleted = errors.New("databases: backup cannot be restored")
+	// ErrTargetStranded — a storage target's destination cannot change while
+	// completed backups still read from it (409).
+	ErrTargetStranded = errors.New("databases: storage target destination is locked")
 )

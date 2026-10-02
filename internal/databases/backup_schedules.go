@@ -32,7 +32,8 @@ func (m *BackupManager) ListSchedules(ctx context.Context, userID, databaseID uu
 // the first run computed before anything is written, so an invalid cron
 // never reaches the table.
 func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
-	if _, err := m.database(ctx, userID, databaseID, true); err != nil {
+	database, err := m.database(ctx, userID, databaseID, true)
+	if err != nil {
 		return BackupSchedule{}, err
 	}
 	cron := strings.TrimSpace(req.Cron)
@@ -43,6 +44,9 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID u
 	targetID := uuid.Nil
 	if req.TargetID != nil {
 		if targetID, err = m.ownedTargetID(ctx, userID, *req.TargetID); err != nil {
+			return BackupSchedule{}, err
+		}
+		if err := m.targetOwnedByDatabase(ctx, targetID, database.UserID); err != nil {
 			return BackupSchedule{}, err
 		}
 	}
@@ -77,7 +81,8 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID u
 // empty string clears it (runs go to the local backup directory) and an id
 // replaces it with an owned target.
 func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, scheduleID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
-	if _, err := m.database(ctx, userID, databaseID, true); err != nil {
+	database, err := m.database(ctx, userID, databaseID, true)
+	if err != nil {
 		return BackupSchedule{}, err
 	}
 	schedule, err := m.backups.GetBackupSchedule(ctx, scheduleID)
@@ -103,6 +108,11 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, 
 		if targetID, err = m.ownedTargetID(ctx, userID, *req.TargetID); err != nil {
 			return BackupSchedule{}, err
 		}
+	}
+	// Whatever the caller did not change, the stored target (from the create
+	// path or a previous update) still has to belong to the database owner.
+	if err := m.targetOwnedByDatabase(ctx, targetID, database.UserID); err != nil {
+		return BackupSchedule{}, err
 	}
 	enabled := schedule.Enabled
 	if req.Enabled != nil {

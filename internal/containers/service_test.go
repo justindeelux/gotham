@@ -3,6 +3,7 @@ package containers
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -62,6 +63,7 @@ type mockDockerClient struct {
 	removes   int
 	pulls     int
 	runs      int
+	closes    int
 	listResp  *agentv1.ListContainersResponse
 	listErr   error
 	actionErr error
@@ -69,6 +71,11 @@ type mockDockerClient struct {
 	runID     string
 	runErr    error
 	runSeen   *agentv1.CreateContainerRequest
+	// logsChunks are delivered by StreamLogs before logsTerminal; logsOpenErr
+	// fails the StreamLogs call itself.
+	logsChunks   [][]byte
+	logsTerminal error
+	logsOpenErr  error
 }
 
 func (m *mockDockerClient) ListContainers(context.Context, *agentv1.ListContainersRequest, ...grpc.CallOption) (*agentv1.ListContainersResponse, error) {
@@ -135,7 +142,46 @@ func (m *mockDockerClient) RunImage(_ context.Context, req *agentv1.CreateContai
 }
 
 func (m *mockDockerClient) StreamLogs(context.Context, *agentv1.StreamLogsRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.LogChunk], error) {
-	return nil, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.logsOpenErr != nil {
+		return nil, m.logsOpenErr
+	}
+	return &fakeLogStream{chunks: m.logsChunks, err: m.logsTerminal}, nil
+}
+
+// Close lets the service's per-operation close path release the mock, and lets
+// a test count how many connections were closed.
+func (m *mockDockerClient) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closes++
+	return nil
+}
+
+// closeCount returns how many times Close was called.
+func (m *mockDockerClient) closeCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.closes
+}
+
+// fakeLogStream is a minimal server-streaming client for Logs tests. Only Recv
+// is exercised; the embedded nil grpc.ClientStream satisfies the rest of the
+// interface.
+type fakeLogStream struct {
+	grpc.ClientStream
+	chunks [][]byte
+	err    error
+}
+
+func (f *fakeLogStream) Recv() (*agentv1.LogChunk, error) {
+	if len(f.chunks) > 0 {
+		chunk := f.chunks[0]
+		f.chunks = f.chunks[1:]
+		return &agentv1.LogChunk{Data: chunk}, nil
+	}
+	return nil, f.err
 }
 
 func (m *mockDockerClient) counts() (lists, starts, pulls, runs int) {
@@ -471,6 +517,257 @@ func TestRPCErrorMapping(t *testing.T) {
 	mock.listErr = status.Error(codes.Internal, "boom")
 	if _, err := svc.List(ctx, server.ID); err == nil || errors.Is(err, ErrAgentUnavailable) {
 		t.Errorf("List internal: %v, want passthrough error", err)
+	}
+}
+
+// TestConnectionsClosedPerOperation is the B1-1 guard: every operation that
+// dials an agent must close the connection it owns, so repeated ops do not
+// accumulate gRPC connections.
+func TestConnectionsClosedPerOperation(t *testing.T) {
+	registry := newFakeRegistry()
+	server := registry.seed()
+	mock := &mockDockerClient{}
+	dials := 0
+	svc := NewService(Config{
+		Registry: registry,
+		Dial: func(context.Context, *servers.Server) (DockerClient, error) {
+			dials++
+			return mock, nil
+		},
+		Cache: newFakeCache(),
+	})
+	ctx := context.Background()
+
+	if err := svc.Start(ctx, server.ID, "abc"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := svc.Stop(ctx, server.ID, "abc"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, err := svc.ListFresh(ctx, server.ID); err != nil {
+		t.Fatalf("ListFresh: %v", err)
+	}
+
+	if dials != 3 {
+		t.Errorf("dials = %d; want 3 (one per operation)", dials)
+	}
+	if closes := mock.closeCount(); closes != 3 {
+		t.Errorf("closes = %d; want 3 (each dialed connection closed)", closes)
+	}
+}
+
+// deadlineDockerClient records the deadline of the context it is called with
+// and blocks until it is done, so a test can prove the configured RPC timeout
+// reaches the agent call.
+type deadlineDockerClient struct {
+	*mockDockerClient
+	seen time.Duration
+}
+
+func (m *deadlineDockerClient) ListContainers(ctx context.Context, _ *agentv1.ListContainersRequest, _ ...grpc.CallOption) (*agentv1.ListContainersResponse, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		m.seen = time.Until(deadline)
+	}
+	select {
+	case <-ctx.Done():
+		return nil, status.Error(codes.DeadlineExceeded, ctx.Err().Error())
+	case <-time.After(5 * time.Second):
+		return nil, status.Error(codes.DeadlineExceeded, "no deadline propagated")
+	}
+}
+
+// TestRPCTimeoutReachesAgentCall is the B1-3 guard: the derived RPC deadline
+// must be the context handed to the agent call, not the caller's unbounded
+// context.
+func TestRPCTimeoutReachesAgentCall(t *testing.T) {
+	registry := newFakeRegistry()
+	server := registry.seed()
+	mock := &deadlineDockerClient{mockDockerClient: &mockDockerClient{}}
+	svc := NewService(Config{
+		Registry:   registry,
+		Dial:       func(context.Context, *servers.Server) (DockerClient, error) { return mock, nil },
+		Cache:      newFakeCache(),
+		RPCTimeout: 50 * time.Millisecond,
+	})
+
+	start := time.Now()
+	if _, err := svc.List(context.Background(), server.ID); !errors.Is(err, ErrAgentUnavailable) {
+		t.Fatalf("List = %v; want ErrAgentUnavailable", err)
+	}
+	if mock.seen == 0 || mock.seen > time.Second {
+		t.Errorf("rpc context deadline = %v; want ~50ms", mock.seen)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("List took %v; the RPC deadline did not reach the agent call", elapsed)
+	}
+}
+
+// deadlineRecordingClient records the deadline of the context each agent call
+// receives, so a test can prove the configured timeout reaches every op, not
+// just the listing.
+type deadlineRecordingClient struct {
+	*mockDockerClient
+	mu        sync.Mutex
+	deadlines map[string]time.Duration
+}
+
+func (m *deadlineRecordingClient) record(name string, ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if deadline, ok := ctx.Deadline(); ok {
+		m.deadlines[name] = time.Until(deadline)
+	} else {
+		m.deadlines[name] = 0
+	}
+}
+
+func (m *deadlineRecordingClient) deadline(name string) time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.deadlines[name]
+}
+
+func (m *deadlineRecordingClient) ListContainers(ctx context.Context, _ *agentv1.ListContainersRequest, _ ...grpc.CallOption) (*agentv1.ListContainersResponse, error) {
+	m.record("list", ctx)
+	return &agentv1.ListContainersResponse{}, nil
+}
+
+func (m *deadlineRecordingClient) StartContainer(ctx context.Context, _ *agentv1.ContainerActionRequest, _ ...grpc.CallOption) (*agentv1.ContainerActionResponse, error) {
+	m.record("start", ctx)
+	return &agentv1.ContainerActionResponse{}, nil
+}
+
+func (m *deadlineRecordingClient) StopContainer(ctx context.Context, _ *agentv1.ContainerActionRequest, _ ...grpc.CallOption) (*agentv1.ContainerActionResponse, error) {
+	m.record("stop", ctx)
+	return &agentv1.ContainerActionResponse{}, nil
+}
+
+func (m *deadlineRecordingClient) RestartContainer(ctx context.Context, _ *agentv1.ContainerActionRequest, _ ...grpc.CallOption) (*agentv1.ContainerActionResponse, error) {
+	m.record("restart", ctx)
+	return &agentv1.ContainerActionResponse{}, nil
+}
+
+func (m *deadlineRecordingClient) RemoveContainer(ctx context.Context, _ *agentv1.ContainerActionRequest, _ ...grpc.CallOption) (*agentv1.ContainerActionResponse, error) {
+	m.record("remove", ctx)
+	return &agentv1.ContainerActionResponse{}, nil
+}
+
+func (m *deadlineRecordingClient) PullImage(ctx context.Context, _ *agentv1.PullImageRequest, _ ...grpc.CallOption) (*agentv1.PullImageResponse, error) {
+	m.record("pull", ctx)
+	return &agentv1.PullImageResponse{}, nil
+}
+
+func (m *deadlineRecordingClient) RunImage(ctx context.Context, _ *agentv1.CreateContainerRequest, _ ...grpc.CallOption) (*agentv1.ContainerActionResponse, error) {
+	m.record("run", ctx)
+	return &agentv1.ContainerActionResponse{ContainerId: "new-id"}, nil
+}
+
+func (m *deadlineRecordingClient) StreamLogs(ctx context.Context, _ *agentv1.StreamLogsRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.LogChunk], error) {
+	m.record("logs", ctx)
+	return &fakeLogStream{err: io.EOF}, nil
+}
+
+// TestRPCDeadlineReachesAllOps is the U3 guard for B1-3: every operation —
+// lifecycle, list, pull, run and the logs open call — must pass a bounded
+// context to the agent, not the caller's unbounded one.
+func TestRPCDeadlineReachesAllOps(t *testing.T) {
+	registry := newFakeRegistry()
+	server := registry.seed()
+	mock := &deadlineRecordingClient{
+		mockDockerClient: &mockDockerClient{},
+		deadlines:        map[string]time.Duration{},
+	}
+	svc := NewService(Config{
+		Registry:    registry,
+		Dial:        func(context.Context, *servers.Server) (DockerClient, error) { return mock, nil },
+		Cache:       newFakeCache(),
+		RPCTimeout:  5 * time.Second,
+		PullTimeout: 5 * time.Second,
+		LogTimeout:  5 * time.Second,
+	})
+	ctx := context.Background()
+
+	if err := svc.Start(ctx, server.ID, "abc"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := svc.Stop(ctx, server.ID, "abc"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := svc.Restart(ctx, server.ID, "abc"); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	if err := svc.Remove(ctx, server.ID, "abc"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := svc.ListFresh(ctx, server.ID); err != nil {
+		t.Fatalf("ListFresh: %v", err)
+	}
+	if err := svc.Pull(ctx, server.ID, "nginx:latest"); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if _, err := svc.Run(ctx, server.ID, RunOptions{Image: "nginx:latest"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	chunks, streamErr, err := svc.Logs(ctx, server.ID, "abc", true)
+	if err != nil {
+		t.Fatalf("Logs: %v", err)
+	}
+	for range chunks {
+	}
+	if err := <-streamErr; err != nil {
+		t.Fatalf("Logs stream: %v", err)
+	}
+
+	for _, op := range []string{"start", "stop", "restart", "remove", "list", "pull", "run", "logs"} {
+		if d := mock.deadline(op); d <= 0 {
+			t.Errorf("%s saw no deadline; the RPC timeout did not reach the agent call", op)
+		}
+	}
+}
+
+// TestLogsSurfacesStreamError is the A3-5 guard: a terminal agent stream error
+// is reported to the caller after the chunks that did arrive.
+func TestLogsSurfacesStreamError(t *testing.T) {
+	registry := newFakeRegistry()
+	server := registry.seed()
+	mock := &mockDockerClient{
+		logsChunks:   [][]byte{[]byte("partial")},
+		logsTerminal: status.Error(codes.Unavailable, "agent stream broke"),
+	}
+	svc := fixture(registry, mock, newFakeCache())
+
+	chunks, streamErr, err := svc.Logs(context.Background(), server.ID, "abc", true)
+	if err != nil {
+		t.Fatalf("Logs: %v", err)
+	}
+	var got []byte
+	for chunk := range chunks {
+		got = append(got, chunk...)
+	}
+	if string(got) != "partial" {
+		t.Errorf("chunks = %q; want partial", got)
+	}
+	if err := <-streamErr; !errors.Is(err, ErrAgentUnavailable) {
+		t.Fatalf("stream error = %v; want ErrAgentUnavailable", err)
+	}
+	if closes := mock.closeCount(); closes != 1 {
+		t.Errorf("closes = %d; want 1 (the stream connection must be closed)", closes)
+	}
+}
+
+// TestLogsOpenErrorClosesClient is the U3 guard for the Logs open-error path:
+// a failed StreamLogs call must still close the dialed connection.
+func TestLogsOpenErrorClosesClient(t *testing.T) {
+	registry := newFakeRegistry()
+	server := registry.seed()
+	mock := &mockDockerClient{logsOpenErr: status.Error(codes.Unavailable, "no stream")}
+	svc := fixture(registry, mock, newFakeCache())
+
+	if _, _, err := svc.Logs(context.Background(), server.ID, "abc", true); err == nil {
+		t.Fatal("Logs with an open error = nil; want an error")
+	}
+	if closes := mock.closeCount(); closes != 1 {
+		t.Errorf("closes = %d; want 1 (the failed stream connection must be closed)", closes)
 	}
 }
 

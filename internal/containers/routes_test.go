@@ -88,23 +88,25 @@ func (f *fakeService) Run(_ context.Context, _ uuid.UUID, opts RunOptions) (stri
 
 // Logs streams the configured payload (default: nothing) and closes the
 // channel, which is what the agent does when a container's stream ends.
-func (f *fakeService) Logs(_ context.Context, _ uuid.UUID, _ string, _ bool) (<-chan []byte, error) {
+func (f *fakeService) Logs(_ context.Context, _ uuid.UUID, _ string, _ bool) (<-chan []byte, <-chan error, error) {
 	f.record("logs")
 	f.mu.Lock()
 	chunks := f.logs
 	err := f.logErr
 	f.mu.Unlock()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make(chan []byte)
+	streamErr := make(chan error, 1)
 	go func() {
 		defer close(out)
+		defer close(streamErr)
 		for _, chunk := range chunks {
 			out <- chunk
 		}
 	}()
-	return out, nil
+	return out, streamErr, nil
 }
 
 // passthroughAuth stands in for RequireAuth in route tests.

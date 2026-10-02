@@ -97,6 +97,24 @@ func TestBackupFailureIsRecordedAndDatabaseRestarted(t *testing.T) {
 	}
 }
 
+// TestBackupFailsWhenLogStreamBreaks is the U3 guard for the A3-5 CP fix: a
+// terminal agent stream error must fail the backup instead of being treated as
+// a clean dump.
+func TestBackupFailsWhenLogStreamBreaks(t *testing.T) {
+	fixture := newBackupFixture(t)
+	fixture.containers.mu.Lock()
+	fixture.containers.logStreamErr = errors.New("agent stream broke")
+	fixture.containers.mu.Unlock()
+
+	backup := fixture.queueBackup(t)
+	if backup.Status != BackupFailed {
+		t.Fatalf("status = %q (%s), want failed", backup.Status, backup.Error)
+	}
+	if !strings.Contains(backup.Error, "agent stream broke") {
+		t.Errorf("error = %q, want the stream failure", backup.Error)
+	}
+}
+
 func TestBackupLeavesStoppedDatabaseStopped(t *testing.T) {
 	fixture := newBackupFixture(t)
 	// No container listed: the database is stopped before the job runs.

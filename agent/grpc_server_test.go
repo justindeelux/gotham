@@ -20,15 +20,16 @@ import (
 
 // fakeDockerClient is a configurable dockerClient for server tests.
 type fakeDockerClient struct {
-	containers []*agentv1.ContainerInfo
-	version    string
-	err        error
-	logs       []byte
-	started    []string
-	stopped    []string
-	restarted  []string
-	removed    []string
-	createdID  string
+	containers   []*agentv1.ContainerInfo
+	version      string
+	err          error
+	logs         []byte
+	logStreamErr error
+	started      []string
+	stopped      []string
+	restarted    []string
+	removed      []string
+	createdID    string
 }
 
 func (f *fakeDockerClient) Version(context.Context) (string, error) {
@@ -100,12 +101,17 @@ func (f *fakeDockerClient) RunImage(_ context.Context, _ *agentv1.CreateContaine
 	return id, nil
 }
 
-func (f *fakeDockerClient) Logs(context.Context, string, bool, int64) (<-chan []byte, error) {
+func (f *fakeDockerClient) Logs(context.Context, string, bool, int64) (<-chan LogMessage, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	chunks := make(chan []byte, 1)
-	chunks <- f.logs
+	chunks := make(chan LogMessage, 2)
+	if len(f.logs) > 0 {
+		chunks <- LogMessage{Data: f.logs}
+	}
+	if f.logStreamErr != nil {
+		chunks <- LogMessage{Err: f.logStreamErr}
+	}
 	close(chunks)
 	return chunks, nil
 }
@@ -274,6 +280,9 @@ func TestDockerServerErrorMapping(t *testing.T) {
 	}{
 		{"internal", errors.New("boom"), codes.Internal},
 		{"invalid port mapping", fmt.Errorf("%w: %q", ErrInvalidPortMapping, "80:0"), codes.InvalidArgument},
+		{"docker not found", fmt.Errorf("%w: missing", ErrDockerNotFound), codes.NotFound},
+		{"image not found", fmt.Errorf("%w: missing", ErrDockerImageNotFound), codes.InvalidArgument},
+		{"daemon unavailable", fmt.Errorf("%w: connection refused", ErrDockerUnavailable), codes.Unavailable},
 		{"canceled", context.Canceled, codes.Canceled},
 		{"deadline", context.DeadlineExceeded, codes.DeadlineExceeded},
 	}
@@ -316,6 +325,34 @@ func TestDockerServerStreamLogs(t *testing.T) {
 	}
 	if string(data) != "payload" {
 		t.Errorf("logs = %q; want payload", data)
+	}
+}
+
+// TestDockerServerStreamLogsBrokenStream is the A3-5 guard: a decoder error
+// after a chunk must surface as a gRPC status, not a clean EOF, so the control
+// plane never treats a truncated stream as success.
+func TestDockerServerStreamLogsBrokenStream(t *testing.T) {
+	fake := &fakeDockerClient{logs: []byte("partial"), logStreamErr: errors.New("connection reset")}
+	client := newDockerServiceClient(t, fake)
+
+	stream, err := client.StreamLogs(context.Background(), &agentv1.StreamLogsRequest{
+		ContainerId: "abc",
+		Follow:      true,
+	})
+	if err != nil {
+		t.Fatalf("StreamLogs: %v", err)
+	}
+
+	chunk, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("first Recv: %v", err)
+	}
+	if string(chunk.GetData()) != "partial" {
+		t.Errorf("first chunk = %q; want partial", chunk.GetData())
+	}
+
+	if _, err := stream.Recv(); status.Code(err) != codes.Internal {
+		t.Errorf("terminal code = %v; want Internal (err=%v)", status.Code(err), err)
 	}
 }
 

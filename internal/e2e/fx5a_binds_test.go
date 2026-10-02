@@ -38,8 +38,8 @@ func (fakeBindDocker) CreateContainer(context.Context, *agentv1.CreateContainerR
 func (fakeBindDocker) RunImage(context.Context, *agentv1.CreateContainerRequest) (string, error) {
 	return "created", nil
 }
-func (fakeBindDocker) Logs(context.Context, string, bool, int64) (<-chan []byte, error) {
-	ch := make(chan []byte)
+func (fakeBindDocker) Logs(context.Context, string, bool, int64) (<-chan agent.LogMessage, error) {
+	ch := make(chan agent.LogMessage)
 	close(ch)
 	return ch, nil
 }

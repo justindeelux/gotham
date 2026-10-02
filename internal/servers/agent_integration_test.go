@@ -319,8 +319,8 @@ func (f *e2eDockerClient) CreateContainer(context.Context, *agentv1.CreateContai
 func (f *e2eDockerClient) RunImage(context.Context, *agentv1.CreateContainerRequest) (string, error) {
 	return "e2e-created", nil
 }
-func (f *e2eDockerClient) Logs(context.Context, string, bool, int64) (<-chan []byte, error) {
-	chunks := make(chan []byte)
+func (f *e2eDockerClient) Logs(context.Context, string, bool, int64) (<-chan agent.LogMessage, error) {
+	chunks := make(chan agent.LogMessage)
 	close(chunks)
 	return chunks, nil
 }

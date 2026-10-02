@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
 
+	"github.com/justindeelux/gotham/internal/clientip"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
 )
@@ -313,6 +314,48 @@ func TestRoutesDeliveryRateLimited(t *testing.T) {
 	}
 	if deployer.deployCount() != 2 {
 		t.Errorf("deployments = %d, want 2", deployer.deployCount())
+	}
+}
+
+// TestRoutesDeliveryClientIPBehindTrustedProxy pins that the delivery limiter
+// keys on X-Forwarded-For when the direct peer is a trusted proxy: distinct
+// forwarded clients behind one proxy do not share a bucket.
+func TestRoutesDeliveryClientIPBehindTrustedProxy(t *testing.T) {
+	const secret = "hook-secret"
+	repo := newFakeRepository().withTarget()
+	trusted, err := clientip.Parse([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatalf("clientip.Parse: %v", err)
+	}
+	svc := NewService(Config{
+		Repository:     repo,
+		Installer:      &fakeInstaller{},
+		Deployer:       &fakeDeployer{},
+		Logger:         discardLogger(),
+		Limit:          rate.Every(time.Hour),
+		Burst:          1,
+		TrustedProxies: trusted,
+	})
+	srv := newRouteServer(svc, repo.app.UserID)
+
+	post := func(client, commit string) int {
+		push := pushBody(commit)
+		headers := githubPushHeaders(secret, push, "delivery-"+commit)
+		rec := httptest.NewRecorder()
+		req := deliveryRequest(providers.NameGitHub, push, headers, "127.0.0.1:5000")
+		req.Header.Set("X-Forwarded-For", client)
+		srv.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if got := post("203.0.113.1", "c1"); got != http.StatusAccepted {
+		t.Fatalf("first client status = %d, want 202", got)
+	}
+	if got := post("203.0.113.2", "c2"); got != http.StatusAccepted {
+		t.Fatalf("second client status = %d, want 202 (separate bucket)", got)
+	}
+	if got := post("203.0.113.1", "c3"); got != http.StatusTooManyRequests {
+		t.Fatalf("repeat client status = %d, want 429", got)
 	}
 }
 

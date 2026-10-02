@@ -23,12 +23,15 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
+
+	"github.com/justindeelux/gotham/internal/clientip"
 )
 
 // Environment variables recognised by Load.
 const (
 	EnvServerAddr            = "GOTHAM_SERVER_ADDR"
 	EnvServerPort            = "GOTHAM_SERVER_PORT"
+	EnvTrustedProxies        = "GOTHAM_TRUSTED_PROXIES"
 	EnvDatabaseDSN           = "GOTHAM_DATABASE_DSN"
 	EnvRedisAddr             = "GOTHAM_REDIS_ADDR"
 	EnvLogLevel              = "GOTHAM_LOG_LEVEL"
@@ -83,6 +86,11 @@ const (
 type Server struct {
 	Addr string
 	Port int
+	// TrustedProxies lists the CIDRs/IPs of reverse proxies in front of the
+	// control plane (comma-separated via GOTHAM_TRUSTED_PROXIES). Their
+	// forwarded headers are honored; headers from any other peer are ignored.
+	// Empty trusts no peer, which keeps direct-connection behavior unchanged.
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
 }
 
 // Database holds PostgreSQL connection settings.
@@ -304,6 +312,7 @@ func newViper() *viper.Viper {
 	for key, env := range map[string]string{
 		"server.addr":               EnvServerAddr,
 		"server.port":               EnvServerPort,
+		"server.trusted_proxies":    EnvTrustedProxies,
 		"database.dsn":              EnvDatabaseDSN,
 		"redis.addr":                EnvRedisAddr,
 		"grpc.addr":                 EnvGRPCAddr,
@@ -436,6 +445,9 @@ func validate(values Values) error {
 	}
 	if values.Server.Port < minPort || values.Server.Port > maxPort {
 		return fmt.Errorf("server.port must be between %d and %d, got %d", minPort, maxPort, values.Server.Port)
+	}
+	if _, err := clientip.Parse(values.Server.TrustedProxies); err != nil {
+		return fmt.Errorf("server.trusted_proxies: %w", err)
 	}
 	return nil
 }

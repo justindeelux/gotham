@@ -1,12 +1,13 @@
 package server
 
 import (
-	"net"
 	"net/http"
 	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
+
+	"github.com/justindeelux/gotham/internal/clientip"
 )
 
 // Auth rate-limit tuning: a per-IP token bucket refilling five requests per
@@ -121,7 +122,7 @@ func (l *ipRateLimiter) Close() {
 // rateLimit rejects requests from clients that exhaust their bucket.
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.authLimiter.allow(clientIP(r)) {
+		if !s.authLimiter.allow(clientip.ClientIP(r, s.trustedProxies)) {
 			writeJSON(w, http.StatusTooManyRequests, apiError{Message: "too many requests"})
 			return
 		}
@@ -133,20 +134,10 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 // their bucket.
 func (s *Server) refreshRateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.refreshLimiter.allow(clientIP(r)) {
+		if !s.refreshLimiter.allow(clientip.ClientIP(r, s.trustedProxies)) {
 			writeJSON(w, http.StatusTooManyRequests, apiError{Message: "too many requests"})
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// clientIP extracts the peer IP from RemoteAddr, falling back to the raw value
-// when it is not in host:port form.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

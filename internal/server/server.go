@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/auth"
+	"github.com/justindeelux/gotham/internal/clientip"
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/databases"
@@ -38,8 +40,17 @@ import (
 // shutdownTimeout bounds graceful shutdown after the context is cancelled.
 const shutdownTimeout = 5 * time.Second
 
-// readHeaderTimeout bounds how long a client may take to send request headers.
-const readHeaderTimeout = 10 * time.Second
+// HTTP server timeouts. ReadHeaderTimeout bounds a slow request header;
+// readTimeout bounds reading the whole request (headers plus body) so a slow
+// body cannot pin a connection. idleTimeout bounds keep-alive connections
+// between requests. WriteTimeout is deliberately unset: the services log
+// stream and the WebSocket endpoint are long-lived, and a write deadline would
+// cut a quiet but healthy stream (see Run).
+const (
+	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 30 * time.Second
+	idleTimeout       = 120 * time.Second
+)
 
 // Health status values reported by /healthz.
 const (
@@ -89,6 +100,11 @@ type Server struct {
 	router            http.Handler
 	closer            func()
 
+	// trustedProxies are the peers whose X-Forwarded-For / X-Forwarded-Proto
+	// headers are honored for client-IP keying and scheme detection. Empty
+	// trusts no peer.
+	trustedProxies []netip.Prefix
+
 	// oauthCodes holds one-time OAuth exchange codes and their browser binding.
 	oauthCodes *oauthCodeStore
 }
@@ -116,6 +132,11 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	limiter := newDefaultAuthLimiter()
 	refreshLimiter := newDefaultRefreshLimiter()
 
+	trustedProxies, err := clientip.Parse(snap.Server.TrustedProxies)
+	if err != nil {
+		return nil, fmt.Errorf("server: trusted proxies: %w", err)
+	}
+
 	// Prefer the store's pool so the control plane does not open a second
 	// PostgreSQL connection just for the health check.
 	var db Pinger
@@ -140,6 +161,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		persistence:       st,
 		authLimiter:       limiter,
 		refreshLimiter:    refreshLimiter,
+		trustedProxies:    trustedProxies,
 	}
 	s.closer = func() {
 		// The deploy service owns its worker pool and realtime publisher;
@@ -195,7 +217,7 @@ func (s *Server) Handler() http.Handler {
 // app, while /healthz and /api keep their own handling.
 func (s *Server) routes() (http.Handler, error) {
 	r := chi.NewRouter()
-	r.Use(securityHeaders)
+	r.Use(s.securityHeaders)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 	r.Use(s.requestLogger())
@@ -521,11 +543,12 @@ func (s *Server) webhookService(providerSvc providers.ProviderService) *webhooks
 		return nil
 	}
 	cfg := webhooks.Config{
-		Store:     s.persistence,
-		Installer: installer,
-		Deployer:  deployer,
-		Secret:    s.secretKey,
-		Logger:    s.logger,
+		Store:          s.persistence,
+		Installer:      installer,
+		Deployer:       deployer,
+		Secret:         s.secretKey,
+		Logger:         s.logger,
+		TrustedProxies: s.trustedProxies,
 	}
 	// Preview siblings are provisioned through the deploy service (clone +
 	// system delete) and the badge comment through the provider service. Both
@@ -900,6 +923,11 @@ func (s *Server) Run(ctx context.Context) error {
 		Addr:              addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
+		// WriteTimeout is intentionally unset: the service log stream
+		// (?follow=true) and the WebSocket route stay open indefinitely, and
+		// a write deadline would close a quiet but healthy stream.
 	}
 
 	errCh := make(chan error, 1)

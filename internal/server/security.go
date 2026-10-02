@@ -1,21 +1,44 @@
 package server
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 // contentSecurityPolicy is a conservative, static-safe policy that still allows
 // the embedded Vite SPA: same-origin scripts and styles plus the inline styles
-// Naive UI injects at runtime.
-const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+// Naive UI injects at runtime. base-uri/object-src/frame-ancestors close the
+// injected-base-tag, plugin-content and framing vectors.
+const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+
+// hstsHeader pins browsers to HTTPS. It is emitted only on secure requests
+// (direct TLS or a trusted proxy's X-Forwarded-Proto: https); a direct-HTTP
+// deployment behind a proxy that does not forward the scheme must set HSTS at
+// the proxy instead.
+const hstsHeader = "max-age=31536000"
 
 // securityHeaders sets the baseline security response headers on every
 // response, including errors and the SPA shell.
-func securityHeaders(next http.Handler) http.Handler {
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := w.Header()
 		header.Set("X-Content-Type-Options", "nosniff")
 		header.Set("X-Frame-Options", "DENY")
 		header.Set("Referrer-Policy", "no-referrer")
 		header.Set("Content-Security-Policy", contentSecurityPolicy)
+		if s.isSecureRequest(r) {
+			header.Set("Strict-Transport-Security", hstsHeader)
+		}
+		if isCredentialPath(r.URL.Path) {
+			header.Set("Cache-Control", "no-store")
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isCredentialPath reports whether path must never be cached: the auth surface
+// (login, OAuth, refresh, logout) and the API-token routes carry credentials or
+// freshly minted secrets in the request or response body.
+func isCredentialPath(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/auth/") || strings.HasPrefix(path, "/api/v1/tokens")
 }

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,6 +67,9 @@ type Service struct {
 	// checks and before the atomic rotation, so a test can commit a reset
 	// plus a fresh login into that window deterministically.
 	beforeRotate func()
+	// verifyPassword is a seam over VerifyPassword so a test can observe that
+	// the unknown-email and passwordless paths still run a real verification.
+	verifyPassword func(encoded, password string) (bool, error)
 }
 
 // New builds a Service. The clock is injectable so tests can exercise expiry
@@ -74,7 +78,7 @@ func New(st *store.Store, signer *Signer, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{store: st, signer: signer, logger: logger, now: time.Now}
+	return &Service{store: st, signer: signer, logger: logger, now: time.Now, verifyPassword: VerifyPassword}
 }
 
 // InviteAcceptor is the teams-domain slice the invite-registration path
@@ -198,15 +202,22 @@ func (s *Service) Login(ctx context.Context, email, password string) (*AuthResul
 	user, err := s.store.GetUserByEmail(ctx, normalized)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			// Burn a real argon2id verification so an unknown email costs the
+			// same as a known one; otherwise response latency is an account
+			// oracle (A2-5).
+			s.spendPasswordCheck(password)
 			return nil, ErrInvalidCredentials
 		}
 		return nil, fmt.Errorf("auth: get user: %w", err)
 	}
 	if user.PasswordHash == nil {
+		// A passwordless (OAuth-only) account must be indistinguishable from a
+		// wrong password, including its timing.
+		s.spendPasswordCheck(password)
 		return nil, ErrInvalidCredentials
 	}
 
-	ok, err := VerifyPassword(*user.PasswordHash, password)
+	ok, err := s.verifyPassword(*user.PasswordHash, password)
 	if err != nil {
 		s.logger.Error("auth: verify password", "error", err)
 		return nil, ErrInvalidCredentials
@@ -234,6 +245,28 @@ func (s *Service) Login(ctx context.Context, email, password string) (*AuthResul
 	}
 
 	return s.issue(ctx, current)
+}
+
+// dummyPasswordHash is a fixed argon2id hash with the production parameters,
+// computed once. The login miss paths verify against it so they pay the same
+// argon2id cost as a genuine check and cannot be timed to reveal whether an
+// account exists (A2-5). A failure to hash is effectively impossible
+// (crypto/rand); an empty value simply makes the dummy check return early
+// rather than weakening the real paths.
+var dummyPasswordHash = sync.OnceValue(func() string {
+	hash, err := HashPassword("gotham-login-timing-placeholder")
+	if err != nil {
+		return ""
+	}
+	return hash
+})
+
+// spendPasswordCheck runs one argon2id verification against the dummy hash.
+// The result is always false; only the work matters.
+func (s *Service) spendPasswordCheck(password string) {
+	if _, err := s.verifyPassword(dummyPasswordHash(), password); err != nil {
+		s.logger.Error("auth: dummy password verification", "error", err)
+	}
 }
 
 // Refresh rotates a refresh token: the presented session is revoked and a new

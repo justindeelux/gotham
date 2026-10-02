@@ -7,6 +7,12 @@ import {
   startContainerLogStream,
 } from "../api/containers";
 import { getAccessToken } from "../api/token";
+import {
+  activateChannel,
+  createChannelLogBufferStore,
+  isFrameForChannel,
+} from "../composables/logChannelBuffers";
+import type { ChannelLogBuffer } from "../composables/logChannelBuffers";
 import type { WebSocketMessage } from "../composables/useWebSocket";
 import { useWebSocket } from "../composables/useWebSocket";
 
@@ -63,6 +69,8 @@ const pending = ref<LogLine[]>([]);
 const isPaused = ref(false);
 const isFollowing = ref(true);
 const logBody = ref<HTMLElement | null>(null);
+/** Rendered/paused lines keyed by channel, so a switch cannot mix streams. */
+const channelBuffers = createChannelLogBufferStore<LogLine>();
 
 let lineId = 0;
 let scrollQueued = false;
@@ -92,6 +100,14 @@ function clearReplayTimer(): void {
   }
 }
 
+/** resetReplayState drops any in-flight replay window for the previous channel. */
+function resetReplayState(): void {
+  clearReplayTimer();
+  acceptReplay = false;
+  replayRemaining = null;
+  replayAccepted = 0;
+}
+
 const channelName = computed<string>(
   () => props.channel || `logs:${props.serverId}:${props.containerId}`,
 );
@@ -105,7 +121,7 @@ const {
   clearBuffer: clearStreamBuffer,
 } = useWebSocket({
   url: props.wsPath,
-  token: getAccessToken(),
+  token: getAccessToken,
   onMessage: handleMessage,
 });
 
@@ -139,6 +155,12 @@ const statusClasses = computed<Record<string, boolean>>(() => ({
 
 /** handleMessage converts a hub frame into zero or more rendered lines. */
 function handleMessage(message: WebSocketMessage): void {
+  // Frames already in flight for the channel just left must not render under
+  // the new channel's title (B2-2 / C4-4).
+  if (!isFrameForChannel(message.channel, channelName.value)) {
+    return;
+  }
+
   // Start the agent stream only once the server has acknowledged this
   // channel's subscription: the hub room must have a member before the agent's
   // historical tail is published, or the first lines are lost (U2).
@@ -330,8 +352,9 @@ function toggleFollow(): void {
 
 /** clearLines drops the rendered buffer and the shared frame buffer. */
 function clearLines(): void {
-  lines.value = [];
-  pending.value = [];
+  // Truncate in place so the per-channel store keeps the same array identity.
+  lines.value.length = 0;
+  pending.value.length = 0;
   clearStreamBuffer();
 }
 
@@ -403,6 +426,21 @@ watch(channelName, (next, previous) => {
   if (previous) {
     unsubscribeChannel(previous);
   }
+  clearStreamBuffer();
+  resetReplayState();
+  // Re-scope the rendered buffer to the new channel: a switch must not
+  // concatenate the two streams, and switching back restores the old one
+  // (B2-2 / C4-4).
+  const buffer: ChannelLogBuffer<LogLine> = activateChannel(
+    channelBuffers,
+    previous ?? "",
+    next,
+    { lines: lines.value, pending: pending.value },
+  );
+  lines.value = buffer.lines;
+  pending.value = buffer.pending;
+  isPaused.value = false;
+  isFollowing.value = true;
   // The subscribed ack (handleMessage) starts the stream for the new channel.
   subscribeChannel(next);
 });

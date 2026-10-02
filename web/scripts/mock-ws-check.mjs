@@ -197,14 +197,12 @@ const subscribeFrames = (state) =>
     }
   });
 
-// ── load the composable through esbuild ──────────────────────────────────
-async function loadComposable() {
+// ── load a TypeScript module through esbuild ─────────────────────────────
+async function loadModule(relativePath) {
   const directory = await mkdtemp(join(tmpdir(), "gotham-ws-check-"));
-  const outfile = join(directory, "useWebSocket.mjs");
+  const outfile = join(directory, "module.mjs");
   await build({
-    entryPoints: [
-      new URL("../src/composables/useWebSocket.ts", import.meta.url).pathname,
-    ],
+    entryPoints: [new URL(relativePath, import.meta.url).pathname],
     outfile,
     bundle: true,
     format: "esm",
@@ -224,12 +222,17 @@ async function main() {
     throw new Error("global WebSocket is unavailable; Node 22+ is required");
   }
 
-  const { module, cleanup } = await loadComposable();
+  const composable = await loadModule("../src/composables/useWebSocket.ts");
+  const channelBuffers = await loadModule(
+    "../src/composables/logChannelBuffers.ts",
+  );
   const {
     useWebSocket,
     computeBackoffDelay,
     buildWebSocketUrl,
-  } = module;
+  } = composable.module;
+  const { activateChannel, createChannelLogBufferStore, isFrameForChannel } =
+    channelBuffers.module;
 
   console.log("pure helpers");
   await check("backoff doubles then caps", () => {
@@ -394,8 +397,175 @@ async function main() {
     assert(failing.messages.value.length === 0, "no fabricated frames");
   });
 
+  // ── FX-12b regressions ─────────────────────────────────────────────────
+  console.log("token refresh on reconnect (B2-3)");
+  await check("a reconnect re-resolves the token getter", async () => {
+    const tokenServer = await startMockServer();
+    let token = "expired-jwt";
+    const client2 = useWebSocket({
+      url: tokenServer.url,
+      token: () => token,
+      baseDelayMs: 10,
+      maxDelayMs: 20,
+      maxRetries: 3,
+      jitter: false,
+    });
+    try {
+      client2.connect();
+      await waitFor(() => client2.status.value === "open");
+      assert(
+        tokenServer.state.requests[0] === "/api/v1/ws?token=expired-jwt",
+        `first request was ${tokenServer.state.requests[0]}`,
+      );
+      token = "refreshed-jwt";
+      tokenServer.latest().close(1011);
+      await waitFor(() => tokenServer.state.requests.length >= 2);
+      assert(
+        tokenServer.state.requests[1] === "/api/v1/ws?token=refreshed-jwt",
+        `reconnect request was ${tokenServer.state.requests[1]}`,
+      );
+    } finally {
+      client2.close();
+      await tokenServer.close();
+    }
+  });
+
+  console.log("denied frames (B2-6)");
+  await check("a denied frame is delivered as a typed error", async () => {
+    const deniedServer = await startMockServer();
+    const seen = [];
+    const client3 = useWebSocket({
+      url: deniedServer.url,
+      token: "t",
+      baseDelayMs: 10,
+      maxDelayMs: 20,
+      maxRetries: 1,
+      onMessage: (message) => seen.push(message),
+    });
+    try {
+      client3.connect();
+      await waitFor(() => client3.status.value === "open");
+      deniedServer
+        .latest()
+        .send(
+          JSON.stringify({ channel: "logs:s:d", type: "denied", data: "cap" }),
+        );
+      await waitFor(() => seen.length >= 1);
+      assert(seen[0].kind === "denied", `kind was ${seen[0].kind}`);
+      assert(seen[0].payload?.data === "cap", "server reason preserved");
+      assert(client3.messages.value.length === 1, "not silently dropped");
+    } finally {
+      client3.close();
+      await deniedServer.close();
+    }
+  });
+
+  console.log("buffer byte cap (B2-9)");
+  await check("the buffer is byte-capped as well as frame-capped", async () => {
+    const capServer = await startMockServer();
+    const client4 = useWebSocket({
+      url: capServer.url,
+      token: "t",
+      baseDelayMs: 10,
+      maxDelayMs: 20,
+      maxRetries: 1,
+      bufferLimit: 100,
+      bufferByteLimit: 500,
+    });
+    try {
+      client4.connect();
+      await waitFor(() => client4.status.value === "open");
+      const chunk = "x".repeat(200);
+      for (let i = 0; i < 5; i += 1) {
+        capServer
+          .latest()
+          .send(
+            JSON.stringify({ channel: "c", type: "log", data: `${chunk}${i}` }),
+          );
+      }
+      await waitFor(
+        () =>
+          client4.messages.value.length >= 1 &&
+          client4.messages.value.length < 5,
+      );
+      const bytes = client4.messages.value.reduce((n, m) => n + m.raw.length, 0);
+      assert(bytes <= 500, `buffered ${bytes} bytes over the cap`);
+      assert(client4.messages.value.length >= 1, "kept the newest frame");
+    } finally {
+      client4.close();
+      await capServer.close();
+    }
+  });
+
+  console.log("single socket invariant (B2-10)");
+  await check("a re-entrant connect closes the superseded socket", async () => {
+    const RealWebSocket = globalThis.WebSocket;
+    const instances = [];
+    class FakeWebSocket {
+      constructor(url) {
+        this.url = url;
+        this.readyState = 0;
+        this.closed = false;
+        instances.push(this);
+      }
+      close() {
+        this.closed = true;
+        this.readyState = 3;
+      }
+      send() {}
+    }
+    globalThis.WebSocket = FakeWebSocket;
+    let client5 = null;
+    try {
+      client5 = useWebSocket({
+        url: "ws://fake/api/v1/ws",
+        token: "t",
+        baseDelayMs: 10,
+        maxDelayMs: 20,
+        maxRetries: 5,
+        jitter: false,
+      });
+      client5.connect();
+      assert(instances.length === 1, "first socket opened");
+      instances[0].onerror?.();
+      await waitFor(() => instances.length === 2, { timeout: 1000 });
+      assert(!instances[1].closed, "retry socket live before the re-entrant connect");
+      client5.connect();
+      assert(instances.length === 3, "re-entrant connect opened a socket");
+      assert(instances[1].closed === true, "superseded socket was closed");
+    } finally {
+      client5?.close();
+      globalThis.WebSocket = RealWebSocket;
+    }
+  });
+
+  console.log("per-channel log buffers (B2-2 / C4-4)");
+  await check("switching channel scopes the rendered buffer", () => {
+    const store = createChannelLogBufferStore();
+    const a = { lines: [{ id: 1 }], pending: [] };
+    const b = activateChannel(store, "chan-a", "chan-b", a);
+    assert(b.lines.length === 0, "a new channel starts empty");
+    b.lines.push({ id: 2 });
+    const back = activateChannel(store, "chan-b", "chan-a", b);
+    assert(back === a, "a seen channel reuses its buffer");
+    assert(
+      back.lines.length === 1 && back.lines[0].id === 1,
+      "the previous channel's lines are preserved, not concatenated",
+    );
+    assert(
+      b.lines.length === 1 && b.lines[0].id === 2,
+      "the second channel keeps its own line",
+    );
+  });
+  await check("frames from the previous channel are dropped", () => {
+    assert(isFrameForChannel("chan-a", "chan-b") === false, "stale dropped");
+    assert(isFrameForChannel("chan-b", "chan-b") === true, "active kept");
+    assert(isFrameForChannel(null, "chan-b") === true, "channel-less kept");
+  });
+
   await server.close();
-  await cleanup();
+  await composable.cleanup();
+  await channelBuffers.cleanup();
 
   const failed = results.filter((r) => !r.ok);
   console.log(

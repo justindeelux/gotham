@@ -179,8 +179,8 @@ func Load() (Config, error) {
 	if cfg.CertDir == "" {
 		return Config{}, fmt.Errorf("%s must not be empty", envCertDir)
 	}
-	if cfg.NodeID == "" {
-		return Config{}, fmt.Errorf("%s must not be empty", envNodeID)
+	if !validNodeID(cfg.NodeID) {
+		return Config{}, fmt.Errorf("%s %q is not a valid node id", envNodeID, cfg.NodeID)
 	}
 	if cfg.CA == "" {
 		if !cfg.Insecure {
@@ -240,6 +240,19 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// maxNodeIDLength is the DNS name maximum, matching the control plane's
+// servers.validateNodeID.
+const maxNodeIDLength = 253
+
+// validNodeID mirrors the control plane's node-id gate so an agent fails fast
+// at startup instead of retrying an identity every Register will reject.
+func validNodeID(nodeID string) bool {
+	if nodeID == "" || len(nodeID) > maxNodeIDLength {
+		return false
+	}
+	return !strings.ContainsAny(nodeID, "*\\/\x00") && !strings.ContainsAny(nodeID, " \t\r\n")
 }
 
 // updateIntervalFromEnv parses the agent update poll interval, defaulting to 5m.

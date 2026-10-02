@@ -65,7 +65,14 @@ func LoadAuthority(dir string) (*Authority, error) {
 	}
 	certPath := filepath.Join(dir, caCertFile)
 	keyPath := filepath.Join(dir, caKeyFile)
-	certExists, keyExists := fileExists(certPath), fileExists(keyPath)
+	certExists, err := fileState(certPath)
+	if err != nil {
+		return nil, err
+	}
+	keyExists, err := fileState(keyPath)
+	if err != nil {
+		return nil, err
+	}
 	switch {
 	case certExists && keyExists:
 		return loadAuthority(certPath, keyPath)
@@ -97,7 +104,14 @@ func LoadOrCreateAuthority(dir string) (*Authority, error) {
 	certPath := filepath.Join(dir, caCertFile)
 	keyPath := filepath.Join(dir, caKeyFile)
 
-	certExists, keyExists := fileExists(certPath), fileExists(keyPath)
+	certExists, err := fileState(certPath)
+	if err != nil {
+		return nil, err
+	}
+	keyExists, err := fileState(keyPath)
+	if err != nil {
+		return nil, err
+	}
 	switch {
 	case certExists && keyExists:
 		return loadAuthority(certPath, keyPath)
@@ -506,8 +520,21 @@ func writeFile(path string, data []byte) error {
 	return nil
 }
 
-// fileExists reports whether path exists and is a regular file.
-func fileExists(path string) bool {
+// fileState reports whether path is an existing regular file. A path that
+// cannot be stat'd for any reason other than "does not exist" — a permission
+// error, an I/O error, or a directory sitting where a file belongs — is an
+// error: treating it as "absent" is what would let a broken CA load as a
+// plaintext listener.
+func fileState(path string) (bool, error) {
 	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return false, fmt.Errorf("servers: %s is a directory, not a file", path)
+	}
+	return true, nil
 }

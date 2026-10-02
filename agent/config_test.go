@@ -2,6 +2,7 @@ package agent
 
 import (
 	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -146,6 +147,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}{
 		{"bad cp addr", envCPAddr, "not-a-host-port"},
 		{"bad log level", envLogLevel, "loud"},
+		{"wildcard node id", envNodeID, "bad*id"},
+		{"overlong node id", envNodeID, strings.Repeat("a", maxNodeIDLength+1)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -348,7 +348,7 @@ func TestLoadAuthorityFailsClosedOnIncompletePair(t *testing.T) {
 		t.Error("LoadOrCreateAuthority(cert only) = nil error, want fail-closed")
 	}
 
-	// Key without certificate.
+	// A key without certificate.
 	if err := os.WriteFile(keyPath, authority.CACertPEM(), 0o600); err != nil {
 		t.Fatalf("write key: %v", err)
 	}
@@ -357,6 +357,19 @@ func TestLoadAuthorityFailsClosedOnIncompletePair(t *testing.T) {
 	}
 	if _, err := LoadAuthority(dir); err == nil {
 		t.Error("LoadAuthority(key only) = nil error, want fail-closed")
+	}
+
+	// A directory where a file belongs is a stat failure, not an absent CA:
+	// it must not be reported as "no CA configured".
+	odd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(odd, caCertFile), authority.CACertPEM(), 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(odd, caKeyFile), 0o700); err != nil {
+		t.Fatalf("mkdir key: %v", err)
+	}
+	if _, err := LoadAuthority(odd); err == nil {
+		t.Error("LoadAuthority(key is a directory) = nil error, want failure")
 	}
 
 	// A truly empty directory still means "no CA configured".

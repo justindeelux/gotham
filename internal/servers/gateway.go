@@ -419,14 +419,24 @@ func peerAddress(ctx context.Context) string {
 }
 
 // peerHost returns the calling peer's host (without the ephemeral port), so a
-// peer cannot rotate ports to escape the per-peer rate limits. A non-host:port
-// address (for example the in-memory bufconn transport) is returned unchanged.
+// peer cannot rotate ports to escape the per-peer rate limits. An IPv6 address
+// is folded to its /64 so one allocation cannot mint unlimited keys. A
+// non-host:port address (for example the in-memory bufconn transport) is
+// returned unchanged.
 func peerHost(ctx context.Context) string {
 	addr := peerAddress(ctx)
-	if host, _, err := net.SplitHostPort(addr); err == nil {
-		return host
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
 	}
-	return addr
+	host = strings.Trim(host, "[]")
+	if ip := net.ParseIP(host); ip != nil {
+		if v4 := ip.To4(); v4 != nil {
+			return v4.String()
+		}
+		return (net.IP)(ip.To16().Mask(net.CIDRMask(64, 128))).String() + "/64"
+	}
+	return host
 }
 
 // serverHosts derives the SAN host list for the listener certificate: the

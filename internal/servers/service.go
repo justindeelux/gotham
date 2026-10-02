@@ -108,11 +108,13 @@ type ServerService struct {
 	// agentUpdate is the agent version map and rollout marker (BE-9.2).
 	agentUpdate agentUpdateState
 
-	// metricMu guards lastMetricAt, the per-node timestamp of the last
-	// persisted time-series sample. It bounds an unauthenticated heartbeat
+	// metricMu guards lastMetricAt, the per-node wall-clock timestamp of the
+	// last persisted time-series sample. It bounds an unauthenticated heartbeat
 	// flood's growth of server_metrics without touching the live snapshot.
 	metricMu     sync.Mutex
 	lastMetricAt map[string]time.Time
+	// now is the clock, overridable in tests.
+	now func() time.Time
 }
 
 // NewService builds a ServerService. When secret is empty an ephemeral
@@ -141,6 +143,7 @@ func NewService(cfg Config) *ServerService {
 			agents: map[string]AgentVersion{},
 		},
 		lastMetricAt: map[string]time.Time{},
+		now:          time.Now,
 	}
 }
 

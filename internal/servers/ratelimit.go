@@ -55,6 +55,9 @@ func (p *peerRateLimiter) allow(peer string) bool {
 	if !ok {
 		if len(p.buckets) >= maxPeerBuckets {
 			p.sweepLocked(now)
+			if len(p.buckets) >= maxPeerBuckets {
+				p.evictOldestLocked()
+			}
 		}
 		bucket = &peerBucket{limiter: rate.NewLimiter(p.limit, p.burst)}
 		p.buckets[peer] = bucket
@@ -70,4 +73,20 @@ func (p *peerRateLimiter) sweepLocked(now time.Time) {
 			delete(p.buckets, peer)
 		}
 	}
+}
+
+// evictOldestLocked removes the least-recently-seen bucket so the map never
+// exceeds maxPeerBuckets under a flood of fresh peers. The caller holds the
+// mutex.
+func (p *peerRateLimiter) evictOldestLocked() {
+	var (
+		oldestKey  string
+		oldestSeen time.Time
+	)
+	for peer, bucket := range p.buckets {
+		if oldestKey == "" || bucket.seen.Before(oldestSeen) {
+			oldestKey, oldestSeen = peer, bucket.seen
+		}
+	}
+	delete(p.buckets, oldestKey)
 }

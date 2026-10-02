@@ -220,8 +220,9 @@ func TestServerCredentialsFromFilesReloads(t *testing.T) {
 		t.Fatalf("first handshake serial = %d, want 101", got)
 	}
 
-	// Rewrite the certificate; the same credentials must present the new leaf.
-	if err := os.WriteFile(certPath, certB, 0o600); err != nil {
+	// Rewrite the certificate through the atomic saver; the same credentials
+	// must present the new leaf.
+	if err := savePEM(certPath, certB); err != nil {
 		t.Fatalf("rewrite cert B: %v", err)
 	}
 	if got := peerSerial(t, addr); got != 202 {

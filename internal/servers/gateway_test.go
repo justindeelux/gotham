@@ -340,15 +340,17 @@ func TestGatewayHeartbeatUpdatesMetrics(t *testing.T) {
 		t.Errorf("last_seen = %+v, want a set timestamp", updated.LastSeen)
 	}
 
-	// Each heartbeat message appends exactly one time-series sample, stamped
-	// with the message's sent_at and carrying the reported I/O rates.
+	// The heartbeat path aggregates time-series samples on the server wall
+	// clock: two messages sent back-to-back persist a single sample, while the
+	// servers row keeps the newest snapshot. The sample is stamped with the
+	// message's sent_at.
 	var count int
 	if err := st.DB.QueryRow(ctx,
 		"SELECT count(*) FROM server_metrics WHERE server_id = $1", row.ID).Scan(&count); err != nil {
 		t.Fatalf("count server_metrics: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("server_metrics rows = %d, want one per heartbeat (2)", count)
+	if count != 1 {
+		t.Errorf("server_metrics rows = %d, want 1 (samples inside %s are dropped)", count, heartbeatSampleInterval)
 	}
 	var (
 		cpu float64

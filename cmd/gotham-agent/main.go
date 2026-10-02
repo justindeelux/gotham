@@ -101,6 +101,7 @@ func runServe() int {
 
 	var (
 		serverOnce sync.Once
+		reloadable bool
 		waitGroup  sync.WaitGroup
 	)
 	runErr := make(chan error, 1)
@@ -134,6 +135,7 @@ func runServe() int {
 				// File-backed credentials reload on every handshake, so a
 				// re-issued certificate takes effect without a restart.
 				creds, err = agent.ServerCredentialsFromFiles(certPath, agent.KeyPath(cfg.KeyFile, cfg.CertDir), cfg.CA)
+				reloadable = true
 			case len(certPEM) > 0:
 				creds, err = agent.ServerCredentials(certPEM, keyPEM, cfg.CA, false)
 			case cfg.CA == "":
@@ -169,6 +171,10 @@ func runServe() int {
 				}
 			}()
 		})
+		if !reloadable && certPath != "" {
+			log.Warn("certificate reload is disabled for this process; a renewed certificate needs a restart",
+				"cert", certPath)
+		}
 		return startErr
 	}
 

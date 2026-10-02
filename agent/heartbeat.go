@@ -221,7 +221,8 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 		// one; the download never blocks the heartbeat because it runs on its
 		// own goroutine.
 		hbCtx, hbCancel := context.WithCancel(ctx)
-		sessionCtx, sessionCancel := context.WithCancel(hbCtx)
+		sessionCtx := hbCtx
+		var sessionCancel context.CancelFunc
 		if renewIn > 0 {
 			sessionCtx, sessionCancel = context.WithTimeout(hbCtx, renewIn)
 		}
@@ -235,7 +236,9 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 		}
 
 		heartbeatErr := a.heartbeat(sessionCtx, client)
-		sessionCancel()
+		if sessionCancel != nil {
+			sessionCancel()
+		}
 		hbCancel()
 		updateWG.Wait()
 		if heartbeatErr != nil && ctx.Err() == nil {
@@ -279,8 +282,10 @@ func (a *Agent) register(ctx context.Context, client agentv1.AgentServiceClient)
 
 // renewalDelay returns how long to keep the current registration before
 // re-registering for a fresh certificate, or 0 when the certificate cannot be
-// parsed. It renews renewBefore ahead of the leaf's expiry, with a one-minute
-// floor so a near-expiry certificate still retries promptly.
+// parsed. It renews renewBefore ahead of the leaf's expiry, with a one-second
+// floor: a certificate already inside renewBefore nags for a re-issue rather
+// than hot-looping, and a successful issue (a 90-day leaf) immediately moves
+// the next renewal far out.
 func (a *Agent) renewalDelay(certPEM []byte) time.Duration {
 	if len(certPEM) == 0 || a.renewBefore <= 0 {
 		return 0

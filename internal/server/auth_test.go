@@ -399,6 +399,10 @@ func TestAuthLogoutPersistenceFailure(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("logout status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
 	}
+	// The OAuth protocol cookies are cleared on the failure path too.
+	if flow := setCookieValue(rec, auth.FlowCookieName); flow == nil || flow.MaxAge >= 0 {
+		t.Fatalf("logout 500 did not clear the flow cookie: %+v", flow)
+	}
 }
 
 // TestAuthLogoutRejectsMalformedBody: a malformed body is a 400, not a silent
@@ -409,6 +413,10 @@ func TestAuthLogoutRejectsMalformedBody(t *testing.T) {
 	malformed := doRequest(t, s, http.MethodPost, "/api/v1/auth/logout", `{`, "")
 	if malformed.Code != http.StatusBadRequest {
 		t.Fatalf("malformed logout status = %d, want 400", malformed.Code)
+	}
+	// The OAuth protocol cookies are cleared on the malformed-body path too.
+	if flow := setCookieValue(malformed, auth.FlowCookieName); flow == nil || flow.MaxAge >= 0 {
+		t.Fatalf("logout 400 did not clear the flow cookie: %+v", flow)
 	}
 
 	unknown := doRequest(t, s, http.MethodPost, "/api/v1/auth/logout",

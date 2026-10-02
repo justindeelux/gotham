@@ -241,12 +241,17 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
-// handleLogout revokes the presented session. A malformed body answers 400;
-// a well-formed unknown or already-revoked token answers 204, so clients
-// cannot probe which refresh tokens exist. A persistence failure answers 500:
-// reporting success would leave the refresh token usable while the client
-// believes it is signed out.
+// handleLogout revokes the presented session and always clears the OAuth
+// protocol cookies. A malformed body answers 400; a well-formed unknown or
+// already-revoked token answers 204, so clients cannot probe which refresh
+// tokens exist. A persistence failure answers 500: reporting success would
+// leave the refresh token usable while the client believes it is signed out.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Clear the OAuth protocol cookies on every logout response (204, 400,
+	// 500): a browser that attempted to log out must never be able to redeem
+	// a pending OAuth exchange, whatever the outcome.
+	s.clearOAuthCookies(w, r)
+
 	var req refreshTokenRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid request body"})
@@ -258,8 +263,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
 		return
 	}
-	// A logged-out browser must not be able to redeem a pending OAuth exchange.
-	s.clearOAuthCookies(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 

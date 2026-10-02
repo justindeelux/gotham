@@ -53,6 +53,9 @@ func testCredentials() Credentials {
 	}
 }
 
+// strPtr returns a pointer to s, for the tri-state optional target fields.
+func strPtr(s string) *string { return &s }
+
 // containsEnv reports whether the env list carries the given prefix.
 func containsEnv(env []string, prefix string) bool {
 	for _, entry := range env {
@@ -464,6 +467,27 @@ func (r *fakeBackupRepository) ListRunningRestores(_ context.Context) ([]Restore
 	for _, id := range r.restoreOrder {
 		if restore := r.restores[id]; restore.Status == RestoreRunning {
 			list = append(list, restore)
+		}
+	}
+	return list, nil
+}
+
+// ListRestoresByDatabase implements BackupRepository, newest first and bounded
+// like the SQL query.
+func (r *fakeBackupRepository) ListRestoresByDatabase(_ context.Context, databaseID uuid.UUID, limit int) ([]Restore, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.listRestoresErr != nil {
+		return nil, r.listRestoresErr
+	}
+	list := make([]Restore, 0, len(r.restoreOrder))
+	for i := len(r.restoreOrder) - 1; i >= 0; i-- {
+		restore := r.restores[r.restoreOrder[i]]
+		if restore.DatabaseID == databaseID {
+			list = append(list, restore)
+		}
+		if limit > 0 && len(list) == limit {
+			break
 		}
 	}
 	return list, nil

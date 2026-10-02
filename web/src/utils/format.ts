@@ -53,7 +53,7 @@ export function toPercent(value: number | null | undefined): number {
   return Math.round(Math.min(Math.max(scaled, 0), 100));
 }
 
-/** relativeTime renders an ISO timestamp as a short "x ago" string. */
+/** relativeTime renders an ISO timestamp as a short "x ago" / "in x" string. */
 export function relativeTime(iso: string | null | undefined): string {
   if (!iso) {
     return "never";
@@ -64,32 +64,39 @@ export function relativeTime(iso: string | null | undefined): string {
     return "unknown";
   }
 
-  const seconds = Math.round((Date.now() - then) / 1000);
+  const deltaSeconds = Math.round((Date.now() - then) / 1000);
+  const future = deltaSeconds < 0;
+  const seconds = Math.abs(deltaSeconds);
+
+  /** unit renders the magnitude with the direction that fits the timestamp. */
+  const unit = (value: number, suffix: string): string =>
+    future ? `in ${value}${suffix}` : `${value}${suffix} ago`;
+
   if (seconds < 45) {
-    return "just now";
+    return future ? "in a moment" : "just now";
   }
 
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) {
-    return `${minutes}m ago`;
+    return unit(minutes, "m");
   }
 
   const hours = Math.round(minutes / 60);
   if (hours < 24) {
-    return `${hours}h ago`;
+    return unit(hours, "h");
   }
 
   const days = Math.round(hours / 24);
   if (days < 30) {
-    return `${days}d ago`;
+    return unit(days, "d");
   }
 
   const months = Math.round(days / 30);
   if (months < 12) {
-    return `${months}mo ago`;
+    return unit(months, "mo");
   }
 
-  return `${Math.round(months / 12)}y ago`;
+  return unit(Math.round(months / 12), "y");
 }
 
 /** formatDate renders an ISO timestamp as a short absolute date ("28 Sep 2026"). */

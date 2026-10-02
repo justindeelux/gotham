@@ -114,6 +114,12 @@ func (s *Store) ListRunningRestores(ctx context.Context) ([]sqlc.Restore, error)
 	return s.queries.ListRunningRestores(ctx)
 }
 
+// ListRestoresByDatabase returns up to limit restore runs of a live database,
+// newest first.
+func (s *Store) ListRestoresByDatabase(ctx context.Context, params sqlc.ListRestoresByDatabaseParams) ([]sqlc.Restore, error) {
+	return s.queries.ListRestoresByDatabase(ctx, params)
+}
+
 // CreateBackupSchedule stores a schedule with its computed next run.
 func (s *Store) CreateBackupSchedule(ctx context.Context, params sqlc.CreateBackupScheduleParams) (sqlc.BackupSchedule, error) {
 	return s.queries.CreateBackupSchedule(ctx, params)

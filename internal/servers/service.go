@@ -295,10 +295,19 @@ func (s *ServerService) ResetHostKey(ctx context.Context, id uuid.UUID) (*Server
 	scope := teams.ScopeFor(ctx, uuid.Nil)
 	s.logger.Info("servers: host key pin reset",
 		"server_id", id.String(),
-		"actor_team_id", scope.TeamID.String(),
-		"actor_user_id", scope.UserID.String(),
+		"actor_team_id", scopeID(scope.TeamID),
+		"actor_user_id", scopeID(scope.UserID),
 	)
 	return serverFromRow(updated), nil
+}
+
+// scopeID renders a scope UUID for audit logs, leaving it empty when the caller
+// had no team/user scope, so logs never show the zero UUID as an actor.
+func scopeID(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }
 
 // pinHostKey persists a first-use host key fingerprint with compare-and-set

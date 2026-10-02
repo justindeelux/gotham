@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
@@ -249,6 +250,85 @@ func TestServicePinHostKeyIsCompareAndSet(t *testing.T) {
 	}
 }
 
+// TestServicePinHostKeyRetryBranch covers the lost-CAS retry: a row cleared by
+// a concurrent reset is re-pinned on the retry, and a row cleared on every
+// attempt is a bounded error rather than a silent skip.
+func TestServicePinHostKeyRetryBranch(t *testing.T) {
+	service, st := newTestService(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	newNode := func(t *testing.T, name string) uuid.UUID {
+		t.Helper()
+		created, err := service.Add(ctx, uuid.New(), name, "127.0.0.1", 22, "root", uuid.Nil)
+		if err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			if err := st.DeleteServer(cleanupCtx, pgUUID(created.ID)); err != nil {
+				t.Logf("cleanup delete server: %v", err)
+			}
+		})
+		return created.ID
+	}
+
+	// The seam simulates a lost CAS: returning pgx.ErrNoRows is exactly what a
+	// concurrent writer makes PinServerHostKey report, so the retry path runs
+	// without a real race. The row state (empty vs. pinned) drives the outcome.
+
+	t.Run("clear once then retry succeeds", func(t *testing.T) {
+		id := newNode(t, "retry-once-node")
+		calls := 0
+		st.BeforePinServerHostKey = func() error {
+			calls++
+			if calls == 1 {
+				// The first attempt loses the CAS against a cleared row; the
+				// retry sees the row still unpinned and pins it.
+				return pgx.ErrNoRows
+			}
+			return nil
+		}
+		t.Cleanup(func() { st.BeforePinServerHostKey = nil })
+
+		if err := service.pinHostKey(ctx, id, "SHA256:new"); err != nil {
+			t.Fatalf("pinHostKey retry: %v", err)
+		}
+		row, err := st.GetServerByID(ctx, pgUUID(id))
+		if err != nil {
+			t.Fatalf("GetServerByID: %v", err)
+		}
+		if stored := fingerprintOf(row.HostKeyFingerprint); stored != "SHA256:new" {
+			t.Errorf("stored fingerprint = %q, want SHA256:new after the retry", stored)
+		}
+	})
+
+	t.Run("clear repeatedly is a bounded error", func(t *testing.T) {
+		id := newNode(t, "retry-loop-node")
+		// Every attempt loses the CAS to an empty row: the loop is bounded and
+		// reports an error instead of skipping the pin.
+		st.BeforePinServerHostKey = func() error { return pgx.ErrNoRows }
+		t.Cleanup(func() { st.BeforePinServerHostKey = nil })
+
+		err := service.pinHostKey(ctx, id, "SHA256:new")
+		if err == nil {
+			t.Fatal("pinHostKey reported success although the pin never landed")
+		}
+		if !strings.Contains(err.Error(), "cleared repeatedly") {
+			t.Errorf("err = %v, want the bounded repeatedly-cleared error", err)
+		}
+		row, readErr := st.GetServerByID(ctx, pgUUID(id))
+		if readErr != nil {
+			t.Fatalf("GetServerByID: %v", readErr)
+		}
+		if row.HostKeyFingerprint != nil {
+			t.Errorf("HostKeyFingerprint = %v, want nil (no pin persisted)", row.HostKeyFingerprint)
+		}
+	})
+}
+
 // TestServiceValidateFailsClosedWhenPinWriteFails proves Validate's wiring: a
 // pin write that fails during a first-use validation returns ErrValidation and
 // leaves the node not-ready, rather than reporting success behind an
@@ -297,6 +377,9 @@ func TestServiceValidateFailsClosedWhenPinWriteFails(t *testing.T) {
 	}
 	if !errors.Is(err, ErrValidation) {
 		t.Errorf("err = %v, want it wrapped in ErrValidation", err)
+	}
+	if !strings.Contains(err.Error(), "pin write forced to fail") {
+		t.Errorf("err = %v, want the failure to come from the forced seam", err)
 	}
 
 	fetched, err := service.Get(ctx, created.ID)

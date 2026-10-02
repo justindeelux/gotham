@@ -1011,12 +1011,17 @@ func TestSSHHostKeyVerification(t *testing.T) {
 		if out, err := run(path, true); err != nil {
 			t.Fatalf("accept-new refused an unknown host key: %v\n%s", err, out)
 		}
-		data, err := os.ReadFile(path)
+		// Ubuntu's ssh_config enables HashKnownHosts, so the learned entry is
+		// hashed (|1|…) and a plain-text contains check fails there. ssh-keygen
+		// -F resolves hashed and plain entries alike.
+		keygen, err := exec.LookPath("ssh-keygen")
 		if err != nil {
-			t.Fatalf("read known_hosts after accept-new: %v", err)
+			t.Skip("ssh-keygen binary is not available")
 		}
-		if !strings.Contains(string(data), "127.0.0.1") {
-			t.Errorf("accept-new did not learn the host key:\n%s", data)
+		out, err := exec.Command(keygen, "-F", "[127.0.0.1]:"+portStr, "-f", path).CombinedOutput()
+		if err != nil {
+			data, _ := os.ReadFile(path)
+			t.Errorf("accept-new did not learn the host key (%v, output %q):\n%s", err, out, data)
 		}
 	})
 }

@@ -17,17 +17,38 @@ import (
 	"testing"
 )
 
-// newTestDockerClient returns a DockerClient bound to server.
+// newTestDockerClient returns a DockerClient bound to server with a fresh
+// registry state directory.
 func newTestDockerClient(t *testing.T, handler http.Handler) *DockerClient {
+	t.Helper()
+	return newTestDockerClientWithStateDir(t, handler, t.TempDir())
+}
+
+// newTestDockerClientWithStateDir returns a DockerClient bound to server using
+// stateDir for registry credentials, so a test can pre-seed and inspect it.
+func newTestDockerClientWithStateDir(t *testing.T, handler http.Handler, stateDir string) *DockerClient {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
-	client, err := NewDockerClient(server.URL, WithRegistryStateDir(t.TempDir()))
+	client, err := NewDockerClient(server.URL, WithRegistryStateDir(stateDir))
 	if err != nil {
 		t.Fatalf("new docker client: %v", err)
 	}
 	return client
+}
+
+// seedRegistryState pre-creates the registry credential in a fresh state dir so
+// a pre-existing container is treated as reusable, and returns the dir and the
+// htpasswd mount source the container must report.
+func seedRegistryState(t *testing.T) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	_, htpasswdPath, _, err := prepareRegistryAuth(dir)
+	if err != nil {
+		t.Fatalf("seed registry state: %v", err)
+	}
+	return dir, htpasswdPath
 }
 
 // writeJSONStream writes Docker-style JSON messages followed by a newline.
@@ -306,6 +327,10 @@ type registryTestEngine struct {
 	networkExists bool
 	networkCreate int
 	networkMode   string
+	// htpasswdSource is the bind source the running container reports for the
+	// htpasswd mount. Empty means no mount is reported (a container that must
+	// be recreated).
+	htpasswdSource string
 }
 
 // inspectPayload renders a GET /containers/{name}/json response.
@@ -328,6 +353,13 @@ func (e *registryTestEngine) inspectPayload() map[string]any {
 			{"HostIp": registryHostIP, "HostPort": e.publishedPort},
 		}
 	}
+	var mounts []map[string]string
+	if e.htpasswdSource != "" {
+		mounts = append(mounts, map[string]string{
+			"Source":      e.htpasswdSource,
+			"Destination": registryHtpasswdPath,
+		})
+	}
 	return map[string]any{
 		"State":  map[string]any{"Running": e.running, "StartedAt": startedAt},
 		"Config": map[string]any{"Labels": labels},
@@ -343,6 +375,7 @@ func (e *registryTestEngine) inspectPayload() map[string]any {
 			"Ports":    ports,
 			"Networks": map[string]any{networkMode: map[string]any{}},
 		},
+		"Mounts": mounts,
 	}
 }
 
@@ -412,6 +445,12 @@ func (e *registryTestEngine) handler(t *testing.T) http.Handler {
 			e.hostPort = ""
 			if bindings := e.created.HostConfig.PortBindings[registryPort+"/tcp"]; len(bindings) == 1 {
 				e.hostPort = bindings[0].HostPort
+			}
+			e.htpasswdSource = ""
+			for _, bind := range e.created.HostConfig.Binds {
+				if strings.HasSuffix(bind, ":"+registryHtpasswdPath+":ro") {
+					e.htpasswdSource = strings.TrimSuffix(bind, ":"+registryHtpasswdPath+":ro")
+				}
 			}
 			writeJSONStream(t, w, map[string]string{"Id": "registry-1"})
 
@@ -506,11 +545,12 @@ func TestDockerClientEnsureRegistryBootstraps(t *testing.T) {
 }
 
 func TestDockerClientEnsureRegistryReusesRunningContainer(t *testing.T) {
+	stateDir, htpasswdPath := seedRegistryState(t)
 	engine := &registryTestEngine{
 		exists: true, running: true, managed: true,
-		hostPort: "5001", publishedPort: "5001",
+		hostPort: "5001", publishedPort: "5001", htpasswdSource: htpasswdPath,
 	}
-	client := newTestDockerClient(t, engine.handler(t))
+	client := newTestDockerClientWithStateDir(t, engine.handler(t), stateDir)
 
 	address, err := client.EnsureRegistry(context.Background())
 	if err != nil {
@@ -525,9 +565,38 @@ func TestDockerClientEnsureRegistryReusesRunningContainer(t *testing.T) {
 	}
 }
 
+// TestDockerClientEnsureRegistryRecreatesOnStaleCredentialMount covers the
+// persistent-container/stale-htpasswd case: the running container mounts a
+// different htpasswd source (a new state dir, or the file was regenerated), so
+// it must be recreated rather than left 401ing.
+func TestDockerClientEnsureRegistryRecreatesOnStaleCredentialMount(t *testing.T) {
+	engine := &registryTestEngine{
+		exists: true, running: true, managed: true,
+		hostPort: "5001", publishedPort: "5001",
+		htpasswdSource: filepath.Join(t.TempDir(), registryHtpasswdFilename),
+	}
+	client := newTestDockerClientWithStateDir(t, engine.handler(t), t.TempDir())
+
+	address, err := client.EnsureRegistry(context.Background())
+	if err != nil {
+		t.Fatalf("ensure registry: %v", err)
+	}
+	if address != "127.0.0.1:"+engine.hostPort {
+		t.Fatalf("address = %q", address)
+	}
+	if engine.removals != 1 || engine.pulls != 1 || engine.creates != 1 || engine.starts != 1 {
+		t.Fatalf("removals = %d, pulls = %d, creates = %d, starts = %d; want 1 each",
+			engine.removals, engine.pulls, engine.creates, engine.starts)
+	}
+	if !strings.HasSuffix(engine.htpasswdSource, registryHtpasswdFilename) {
+		t.Errorf("recreated htpasswd source = %q", engine.htpasswdSource)
+	}
+}
+
 func TestDockerClientEnsureRegistryRestartsStoppedContainer(t *testing.T) {
-	engine := &registryTestEngine{exists: true, running: false, managed: true, hostPort: "5001"}
-	client := newTestDockerClient(t, engine.handler(t))
+	stateDir, htpasswdPath := seedRegistryState(t)
+	engine := &registryTestEngine{exists: true, running: false, managed: true, hostPort: "5001", htpasswdSource: htpasswdPath}
+	client := newTestDockerClientWithStateDir(t, engine.handler(t), stateDir)
 
 	address, err := client.EnsureRegistry(context.Background())
 	if err != nil {
@@ -610,11 +679,12 @@ func TestDockerClientEnsureRegistryRejectsUnmanagedContainer(t *testing.T) {
 }
 
 func TestDockerClientEnsureRegistryDropsContainerThatNeverStarted(t *testing.T) {
+	stateDir, htpasswdPath := seedRegistryState(t)
 	engine := &registryTestEngine{
 		exists: true, running: false, managed: true,
-		hostPort: "5001", startFails: true,
+		hostPort: "5001", startFails: true, htpasswdSource: htpasswdPath,
 	}
-	client := newTestDockerClient(t, engine.handler(t))
+	client := newTestDockerClientWithStateDir(t, engine.handler(t), stateDir)
 
 	if _, err := client.EnsureRegistry(context.Background()); err == nil {
 		t.Fatal("first call: want start error")
@@ -636,11 +706,12 @@ func TestDockerClientEnsureRegistryDropsContainerThatNeverStarted(t *testing.T) 
 }
 
 func TestDockerClientEnsureRegistryRequiresPublishedPort(t *testing.T) {
+	stateDir, htpasswdPath := seedRegistryState(t)
 	engine := &registryTestEngine{
 		exists: true, running: true, managed: true,
-		hostPort: "5001", publishedPort: "",
+		hostPort: "5001", publishedPort: "", htpasswdSource: htpasswdPath,
 	}
-	client := newTestDockerClient(t, engine.handler(t))
+	client := newTestDockerClientWithStateDir(t, engine.handler(t), stateDir)
 
 	_, err := client.EnsureRegistry(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "no published port") {
@@ -668,9 +739,12 @@ func TestStripImageTag(t *testing.T) {
 // the htpasswd only carries a bcrypt hash, never the plaintext password.
 func TestRegistryAuthFilesArePrivate(t *testing.T) {
 	dir := t.TempDir()
-	auth, htpasswdPath, err := prepareRegistryAuth(dir)
+	auth, htpasswdPath, reused, err := prepareRegistryAuth(dir)
 	if err != nil {
 		t.Fatalf("prepare registry auth: %v", err)
+	}
+	if reused {
+		t.Error("first call reported the credential as reused")
 	}
 	if auth.Username != registryAuthUser || len(auth.Password) < 16 {
 		t.Fatalf("auth = %+v", auth)
@@ -681,8 +755,10 @@ func TestRegistryAuthFilesArePrivate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stat %s: %v", path, err)
 		}
-		if got := info.Mode().Perm(); got != registryAuthFileMode {
-			t.Errorf("%s mode = %#o, want %#o", path, got, registryAuthFileMode)
+		// Literal 0600: comparing against the constant would keep the test
+		// green if the constant changed.
+		if got := info.Mode().Perm(); got != os.FileMode(0o600) {
+			t.Errorf("%s mode = %#o, want %#o", path, got, os.FileMode(0o600))
 		}
 	}
 
@@ -697,13 +773,58 @@ func TestRegistryAuthFilesArePrivate(t *testing.T) {
 		t.Errorf("htpasswd = %q; want a gotham bcrypt entry", string(htpasswd))
 	}
 
-	// The credential is stable across reloads so a restart does not lose it.
-	again, _, err := prepareRegistryAuth(dir)
+	// A matching credential must not be rewritten (keeping the bind mount's
+	// inode stable), and must stay stable across reloads.
+	before, err := os.Stat(htpasswdPath)
+	if err != nil {
+		t.Fatalf("stat htpasswd: %v", err)
+	}
+	again, againPath, reusedAgain, err := prepareRegistryAuth(dir)
 	if err != nil {
 		t.Fatalf("reload registry auth: %v", err)
 	}
 	if again.Password != auth.Password || again.Username != auth.Username {
 		t.Error("reload changed the credential")
+	}
+	if againPath != htpasswdPath || !reusedAgain {
+		t.Errorf("reload path/reused = %q/%v; want %q/true", againPath, reusedAgain, htpasswdPath)
+	}
+	after, err := os.Stat(htpasswdPath)
+	if err != nil {
+		t.Fatalf("stat htpasswd after reload: %v", err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Error("a matching credential was rewritten")
+	}
+}
+
+// TestPrepareRegistryAuthRejectsRelativeStateDirStillResolves checks a relative
+// state dir is absolutised, so the htpasswd bind source is not treated as a
+// named volume by Docker.
+func TestPrepareRegistryAuthRejectsRelativeStateDirStillResolves(t *testing.T) {
+	root := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	_, htpasswdPath, _, err := prepareRegistryAuth("./data/agent")
+	if err != nil {
+		t.Fatalf("prepare relative state dir: %v", err)
+	}
+	if !filepath.IsAbs(htpasswdPath) {
+		t.Fatalf("htpasswd path = %q; want absolute", htpasswdPath)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd after chdir: %v", err)
+	}
+	if !strings.HasPrefix(htpasswdPath, cwd) {
+		t.Errorf("htpasswd path = %q; want it under %q", htpasswdPath, cwd)
 	}
 }
 
@@ -771,6 +892,45 @@ func TestEnsureRegistryRequiresStateDir(t *testing.T) {
 	}
 }
 
+// TestEnsureRegistryCredentialRequiresLiveRegistry checks the lazy credential
+// load only attaches the credential when a live registry actually publishes the
+// address named by the image, so a stale reference cannot hand the credential
+// to another local process.
+func TestEnsureRegistryCredentialRequiresLiveRegistry(t *testing.T) {
+	image := "127.0.0.1:5000/gotham/web:dep"
+
+	// No container: no credential.
+	absent := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	}))
+	if err := absent.ensureRegistryCredentialFor(context.Background(), image); err != nil {
+		t.Fatalf("absent registry: %v", err)
+	}
+	if absent.registryAuth.Username != "" {
+		t.Error("credential attached without a live registry")
+	}
+
+	// A live registry on a different port than the image: no credential.
+	other := &registryTestEngine{exists: true, running: true, managed: true, hostPort: "5001", publishedPort: "5001"}
+	mismatch := newTestDockerClient(t, other.handler(t))
+	if err := mismatch.ensureRegistryCredentialFor(context.Background(), image); err != nil {
+		t.Fatalf("mismatched registry: %v", err)
+	}
+	if mismatch.registryAuth.Username != "" {
+		t.Error("credential attached for a mismatched registry address")
+	}
+
+	// A live registry publishing the image's address: credential attached.
+	match := &registryTestEngine{exists: true, running: true, managed: true, hostPort: "5000", publishedPort: "5000"}
+	live := newTestDockerClient(t, match.handler(t))
+	if err := live.ensureRegistryCredentialFor(context.Background(), image); err != nil {
+		t.Fatalf("live registry: %v", err)
+	}
+	if live.registryAuth.Username == "" || live.registryAuth.Address != "127.0.0.1:5000" {
+		t.Errorf("registry auth = %+v; want the live credential", live.registryAuth)
+	}
+}
+
 // TestRegistryIsolated pins the isolation predicate: only the dedicated
 // registry network counts, so a container on the default bridge is recreated.
 func TestRegistryIsolated(t *testing.T) {
@@ -794,6 +954,64 @@ func TestRegistryIsolated(t *testing.T) {
 	}
 	if registryIsolated(&multi) {
 		t.Error("a container on two networks must not be isolated")
+	}
+}
+
+// TestRegistryBindingExplicit pins the loopback requirement: a wildcard, empty
+// or non-loopback host IP must be recreated rather than trusted.
+func TestRegistryBindingExplicit(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		hostIP string
+		want   bool
+	}{
+		{name: "loopback", hostIP: registryHostIP, want: true},
+		{name: "wildcard", hostIP: "0.0.0.0", want: false},
+		{name: "empty", hostIP: "", want: false},
+		{name: "other", hostIP: "10.0.0.1", want: false},
+	} {
+		var info containerRuntimeInfo
+		info.HostConfig.PortBindings = map[string][]dockerPortBinding{
+			registryPort + "/tcp": {{HostIP: tc.hostIP, HostPort: "5001"}},
+		}
+		if got := registryBindingExplicit(&info); got != tc.want {
+			t.Errorf("%s: registryBindingExplicit = %v; want %v", tc.name, got, tc.want)
+		}
+	}
+	var none containerRuntimeInfo
+	if registryBindingExplicit(&none) {
+		t.Error("a missing binding must not be explicit")
+	}
+}
+
+// TestEnsureRegistryNetworkConflictRechecksLabel checks a 409 from the network
+// create is followed by a label verification, so a concurrent create that lost
+// the race to an unrelated network is still refused.
+func TestEnsureRegistryNetworkConflictRechecksLabel(t *testing.T) {
+	gets := 0
+	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/networks/"+registryNetworkName:
+			gets++
+			if gets == 1 {
+				http.NotFound(w, r)
+				return
+			}
+			writeJSONStream(t, w, map[string]any{
+				"Name":   registryNetworkName,
+				"Labels": map[string]string{"operator": "true"},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/networks/create":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"message":"Conflict"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	_, err := client.EnsureRegistry(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "not managed by gotham") {
+		t.Fatalf("err = %v; want an unmanaged-network error after the 409", err)
 	}
 }
 

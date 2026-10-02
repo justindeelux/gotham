@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -223,16 +222,19 @@ func (c *DockerClient) ImageDigest(ctx context.Context, ref string) (string, err
 // dedicated network so workloads cannot reach it; afterwards the existing
 // container is reused, restarting it when it is stopped.
 //
-// A container that was created with an auto-assigned port (which some daemons
-// cannot reach) or that predates the isolated-network/authenticated layout is
-// recreated. The registry is configured with an htpasswd credential generated
-// on the node and stored mode 0600 in the agent state dir; EnsureRegistry also
-// caches the credential so every subsequent push/pull is authenticated.
+// A container that was created with an auto-assigned or non-loopback port,
+// that predates the isolated-network/authenticated layout, that mounts a
+// different htpasswd file, or whose credential was just (re)generated (a state
+// wipe or a deleted htpasswd file means the running container holds the wrong
+// inode) is recreated. The registry is configured with an htpasswd credential
+// generated on the node and stored mode 0600 in the agent state dir;
+// EnsureRegistry also caches the credential so every subsequent push/pull is
+// authenticated.
 func (c *DockerClient) EnsureRegistry(ctx context.Context) (string, error) {
 	c.registryMu.Lock()
 	defer c.registryMu.Unlock()
 
-	auth, _, err := prepareRegistryAuth(c.registryStateDir)
+	auth, htpasswdPath, reused, err := prepareRegistryAuth(c.registryStateDir)
 	if err != nil {
 		return "", err
 	}
@@ -243,7 +245,7 @@ func (c *DockerClient) EnsureRegistry(ctx context.Context) (string, error) {
 	info, err := c.inspectRegistryContainer(ctx)
 	switch {
 	case errors.Is(err, errContainerNotFound):
-		if err := c.bootstrapRegistry(ctx); err != nil {
+		if err := c.bootstrapRegistry(ctx, htpasswdPath); err != nil {
 			return "", err
 		}
 		if info, err = c.inspectRegistryContainer(ctx); err != nil {
@@ -253,11 +255,12 @@ func (c *DockerClient) EnsureRegistry(ctx context.Context) (string, error) {
 		return "", err
 	case !registryManaged(info):
 		return "", fmt.Errorf("docker: container %s exists but is not managed by gotham", registryContainerName)
-	case !registryBindingExplicit(info) || !registryIsolated(info):
+	case !registryBindingExplicit(info) || !registryIsolated(info) ||
+		!registryMountsPath(info, htpasswdPath) || !reused:
 		if err := c.removeRegistryContainer(ctx, info); err != nil {
 			return "", err
 		}
-		if err := c.bootstrapRegistry(ctx); err != nil {
+		if err := c.bootstrapRegistry(ctx, htpasswdPath); err != nil {
 			return "", err
 		}
 		if info, err = c.inspectRegistryContainer(ctx); err != nil {
@@ -294,29 +297,13 @@ func (c *DockerClient) EnsureRegistry(ctx context.Context) (string, error) {
 // missing. A network that already exists under that name must be managed by
 // gotham, so an unrelated operator network is never adopted.
 func (c *DockerClient) ensureRegistryNetwork(ctx context.Context) error {
-	path := "/networks/" + registryNetworkName
-	response, err := c.doRaw(ctx, http.MethodGet, path, nil, "")
+	exists, err := c.registryNetworkExists(ctx)
 	if err != nil {
-		return fmt.Errorf("docker: inspect registry network: %w", err)
+		return err
 	}
-	if response.StatusCode == http.StatusOK {
-		defer func() { _ = response.Body.Close() }()
-		var network struct {
-			Labels map[string]string `json:"Labels"`
-		}
-		if err := json.NewDecoder(response.Body).Decode(&network); err != nil {
-			return fmt.Errorf("docker: decode registry network: %w", err)
-		}
-		if network.Labels["gotham.managed"] != "true" {
-			return fmt.Errorf("docker: network %s exists but is not managed by gotham", registryNetworkName)
-		}
+	if exists {
 		return nil
 	}
-	if response.StatusCode != http.StatusNotFound {
-		return statusError(http.MethodGet, path, response)
-	}
-	_, _ = io.Copy(io.Discard, response.Body)
-	_ = response.Body.Close()
 
 	body := map[string]any{
 		"Name":           registryNetworkName,
@@ -332,16 +319,21 @@ func (c *DockerClient) ensureRegistryNetwork(ctx context.Context) error {
 		return fmt.Errorf("docker: marshal registry network body: %w", err)
 	}
 	createPath := "/networks/create"
-	response, err = c.doRaw(ctx, http.MethodPost, createPath, bytes.NewReader(encoded), "application/json")
+	response, err := c.doRaw(ctx, http.MethodPost, createPath, bytes.NewReader(encoded), "application/json")
 	if err != nil {
 		return fmt.Errorf("docker: create registry network: %w", err)
 	}
-	defer func() { _ = response.Body.Close() }()
-	// CheckDuplicate makes a concurrent create return 409, which is success.
 	if response.StatusCode == http.StatusConflict {
+		// CheckDuplicate means a concurrent create lost the race. Re-inspect
+		// the winner and enforce the managed label rather than adopting it.
 		_, _ = io.Copy(io.Discard, response.Body)
+		_ = response.Body.Close()
+		if _, err := c.registryNetworkExists(ctx); err != nil {
+			return err
+		}
 		return nil
 	}
+	defer func() { _ = response.Body.Close() }()
 	if !dockerOK(response.StatusCode) {
 		return statusError(http.MethodPost, createPath, response)
 	}
@@ -349,10 +341,40 @@ func (c *DockerClient) ensureRegistryNetwork(ctx context.Context) error {
 	return nil
 }
 
+// registryNetworkExists inspects the dedicated network. It returns false when
+// the network does not exist yet, an error when it exists but is not managed by
+// gotham, and true when it is safe to use.
+func (c *DockerClient) registryNetworkExists(ctx context.Context) (bool, error) {
+	path := "/networks/" + registryNetworkName
+	response, err := c.doRaw(ctx, http.MethodGet, path, nil, "")
+	if err != nil {
+		return false, fmt.Errorf("docker: inspect registry network: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, response.Body)
+		return false, nil
+	}
+	if !dockerOK(response.StatusCode) {
+		return false, statusError(http.MethodGet, path, response)
+	}
+	var network struct {
+		Labels map[string]string `json:"Labels"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&network); err != nil {
+		return false, fmt.Errorf("docker: decode registry network: %w", err)
+	}
+	if network.Labels["gotham.managed"] != "true" {
+		return true, fmt.Errorf("docker: network %s exists but is not managed by gotham", registryNetworkName)
+	}
+	return true, nil
+}
+
 // bootstrapRegistry pulls registry:2 and creates the registry container on a
-// free loopback port. A create conflict means a concurrent build bootstrapped
-// it first, which is reported as success.
-func (c *DockerClient) bootstrapRegistry(ctx context.Context) error {
+// free loopback port, mounting htpasswdPath as its credential. A create
+// conflict means a concurrent build bootstrapped it first, which is reported as
+// success.
+func (c *DockerClient) bootstrapRegistry(ctx context.Context, htpasswdPath string) error {
 	port, err := pickRegistryPort()
 	if err != nil {
 		return err
@@ -360,7 +382,7 @@ func (c *DockerClient) bootstrapRegistry(ctx context.Context) error {
 	if err := c.PullImage(ctx, registryImage); err != nil {
 		return fmt.Errorf("docker: pull %s: %w", registryImage, err)
 	}
-	if err := c.createRegistryContainer(ctx, port); err != nil {
+	if err := c.createRegistryContainer(ctx, port, htpasswdPath); err != nil {
 		if errors.Is(err, errContainerExists) {
 			return nil
 		}
@@ -416,8 +438,9 @@ func (c *DockerClient) inspectRegistryContainer(ctx context.Context) (*container
 // createRegistryContainer creates the registry container: its port is published
 // on loopback only, it joins the dedicated registry network (not the default
 // bridge), and it requires the generated htpasswd credential mounted read-only.
-func (c *DockerClient) createRegistryContainer(ctx context.Context, port string) error {
-	htpasswdPath := filepath.Join(c.registryStateDir, registryHtpasswdFilename)
+// htpasswdPath must be absolute: Docker treats a relative bind source as a named
+// volume.
+func (c *DockerClient) createRegistryContainer(ctx context.Context, port, htpasswdPath string) error {
 	body := dockerCreateBody{
 		Image: registryImage,
 		Env: []string{
@@ -504,6 +527,16 @@ type containerRuntimeInfo struct {
 		Ports    map[string][]dockerPortBinding `json:"Ports"`
 		Networks map[string]struct{}            `json:"Networks"`
 	} `json:"NetworkSettings"`
+	// Mounts is the resolved bind/volume list. The htpasswd bind's source is
+	// the agent state directory path; a container that predates a state-dir
+	// change mounts a stale source and must be recreated.
+	Mounts []dockerMountBinding `json:"Mounts"`
+}
+
+// dockerMountBinding is one resolved mount of an inspected container.
+type dockerMountBinding struct {
+	Source      string `json:"Source"`
+	Destination string `json:"Destination"`
 }
 
 // dockerPortBinding is one published host port of an inspected container.
@@ -519,10 +552,24 @@ func registryManaged(info *containerRuntimeInfo) bool {
 }
 
 // registryBindingExplicit reports whether the registry port was bound to an
-// explicit host port rather than one the daemon assigned.
+// explicit loopback host port. A binding to 0.0.0.0 or an empty host IP is
+// rejected so it is recreated loopback-only.
 func registryBindingExplicit(info *containerRuntimeInfo) bool {
 	bindings := info.HostConfig.PortBindings[registryPort+"/tcp"]
-	return len(bindings) > 0 && bindings[0].HostPort != ""
+	return len(bindings) > 0 && bindings[0].HostIP == registryHostIP && bindings[0].HostPort != ""
+}
+
+// registryMountsPath reports whether the running registry mounts want at the
+// htpasswd destination. A different source means the container holds a stale
+// credential file (for example after a state-directory change) and must be
+// recreated.
+func registryMountsPath(info *containerRuntimeInfo, want string) bool {
+	for _, mount := range info.Mounts {
+		if mount.Destination == registryHtpasswdPath && mount.Source == want {
+			return true
+		}
+	}
+	return false
 }
 
 // registryIsolated reports whether the registry is attached to the dedicated

@@ -134,9 +134,13 @@ func run(ctx context.Context, name string, args []string, opts Options) error {
 	}
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = opts.Dir
-	if strings.TrimSpace(opts.DockerHost) != "" {
-		command.Env = append(os.Environ(), "DOCKER_HOST="+opts.DockerHost)
-	}
+	// The toolchain is tenant-influenced, so it runs with a stripped
+	// environment: only what the CLI needs, never the agent's own secrets
+	// (the registry credential and the agent TLS key live in the state dir the
+	// process also reads). A toolchain compromise still means node compromise
+	// because it runs as the agent user; dedicated-user/userns sandboxing is a
+	// tracked follow-up.
+	command.Env = toolchainEnv(opts.DockerHost)
 	// The same writer on both streams keeps the tool's output together;
 	// os/exec serialises the writes when Stdout and Stderr are equal.
 	command.Stdout = sink
@@ -149,6 +153,25 @@ func run(ctx context.Context, name string, args []string, opts Options) error {
 		return fmt.Errorf("%s build: %w", name, err)
 	}
 	return nil
+}
+
+// toolchainEnv builds the minimal environment passed to a toolchain process.
+// Only PATH (to resolve the CLI and its own helpers), HOME and TMPDIR, the
+// BuildKit address Railpack needs, and the explicit Docker host are inherited;
+// every other variable — in particular agent/control-plane secrets — is
+// stripped. Env is never nil, so the child does not inherit the parent's
+// environment by default.
+func toolchainEnv(dockerHost string) []string {
+	env := make([]string, 0, 5)
+	for _, key := range []string{"PATH", "HOME", "TMPDIR", "BUILDKIT_HOST"} {
+		if value := os.Getenv(key); value != "" {
+			env = append(env, key+"="+value)
+		}
+	}
+	if strings.TrimSpace(dockerHost) != "" {
+		env = append(env, "DOCKER_HOST="+dockerHost)
+	}
+	return env
 }
 
 // buildEnvFlags renders build arguments as sorted `--env KEY=VALUE` flag pairs.

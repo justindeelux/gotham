@@ -218,7 +218,7 @@ func TestRegistryLiveAuthAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensure registry: %v", err)
 	}
-	auth, _, err := prepareRegistryAuth(stateDir)
+	auth, _, _, err := prepareRegistryAuth(stateDir)
 	if err != nil {
 		t.Fatalf("read registry credential: %v", err)
 	}

@@ -93,6 +93,36 @@ echo building`, argsFile))
 	}
 }
 
+// TestRunStripsInheritedSecrets checks the toolchain runs with a minimal
+// environment: a parent secret must not leak, while the toolchain's own inputs
+// (Docker/BuildKit addresses) are passed through.
+func TestRunStripsInheritedSecrets(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+	t.Setenv("GOTHAM_SECRET_SENTINEL", "leak-me")
+
+	if err := Run(context.Background(), Railpack, Options{
+		Dir:        dir,
+		Tag:        "gotham/app:dep",
+		DockerHost: "unix:///var/run/docker.sock",
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	env := readFile(t, envFile)
+	if strings.Contains(env, "GOTHAM_SECRET_SENTINEL") {
+		t.Error("toolchain inherited a parent secret")
+	}
+	if !strings.Contains(env, "DOCKER_HOST=unix:///var/run/docker.sock") {
+		t.Errorf("child env missing DOCKER_HOST:\n%s", env)
+	}
+	if !strings.Contains(env, "BUILDKIT_HOST=docker-container://buildkit") {
+		t.Errorf("child env missing BUILDKIT_HOST:\n%s", env)
+	}
+}
+
 // fakeCLI writes an executable shell stub named name and prepends its directory
 // to PATH for the test.
 func fakeCLI(t *testing.T, name, body string) {

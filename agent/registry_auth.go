@@ -61,41 +61,79 @@ func (a registryAuth) header() (string, error) {
 }
 
 // prepareRegistryAuth writes (or reloads) the node-local registry credential in
-// stateDir and returns it alongside the host path of the htpasswd file. It is
-// idempotent: a stored credential is reused so a restart keeps the same
-// password, and the htpasswd file is rewritten every time so a deleted file
-// self-heals. The returned credential has an empty Address; the caller sets it
-// once the published port is known.
-func prepareRegistryAuth(stateDir string) (registryAuth, string, error) {
-	stateDir = strings.TrimSpace(stateDir)
-	if stateDir == "" {
-		return registryAuth{}, "", errors.New("docker: registry state dir is required to authenticate the node registry")
+// stateDir and returns it alongside the host path of the htpasswd file and
+// whether that file already matched the credential. It is idempotent: a stored
+// credential is reused so a restart keeps the same password, and the htpasswd
+// file is only rewritten when it is missing or no longer matches, so a
+// concurrent reader never observes a truncated file. The returned credential
+// has an empty Address; the caller sets it once the published port is known.
+//
+// stateDir is resolved to an absolute path: Docker treats a relative bind
+// source as a named volume and rejects it.
+func prepareRegistryAuth(stateDir string) (registryAuth, string, bool, error) {
+	resolved, err := resolveRegistryStateDir(stateDir)
+	if err != nil {
+		return registryAuth{}, "", false, err
 	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return registryAuth{}, "", fmt.Errorf("docker: create registry state dir: %w", err)
+	if err := os.MkdirAll(resolved, 0o700); err != nil {
+		return registryAuth{}, "", false, fmt.Errorf("docker: create registry state dir: %w", err)
 	}
 
-	credentialPath := filepath.Join(stateDir, registryCredentialFilename)
-	htpasswdPath := filepath.Join(stateDir, registryHtpasswdFilename)
+	credentialPath := filepath.Join(resolved, registryCredentialFilename)
+	htpasswdPath := filepath.Join(resolved, registryHtpasswdFilename)
 
 	auth, err := readRegistryAuth(credentialPath)
 	if err != nil {
-		return registryAuth{}, "", err
+		return registryAuth{}, "", false, err
 	}
-	if auth.Password == "" || auth.Username == "" {
-		password, err := randomRegistryPassword()
-		if err != nil {
-			return registryAuth{}, "", err
+
+	reused := auth.Username != "" && auth.Password != "" && registryHtpasswdMatches(htpasswdPath, auth)
+	if !reused {
+		if auth.Username == "" || auth.Password == "" {
+			password, err := randomRegistryPassword()
+			if err != nil {
+				return registryAuth{}, "", false, err
+			}
+			auth = registryAuth{Username: registryAuthUser, Password: password}
+			if err := writeRegistryCredential(credentialPath, auth); err != nil {
+				return registryAuth{}, "", false, err
+			}
 		}
-		auth = registryAuth{Username: registryAuthUser, Password: password}
-		if err := writeRegistryCredential(credentialPath, auth); err != nil {
-			return registryAuth{}, "", err
+		// Written in place (never temp+rename): the file is bind-mounted, so a
+		// rename would swap the inode the running container sees.
+		if err := writeRegistryHtpasswd(htpasswdPath, auth); err != nil {
+			return registryAuth{}, "", false, err
 		}
 	}
-	if err := writeRegistryHtpasswd(htpasswdPath, auth); err != nil {
-		return registryAuth{}, "", err
+	return auth, htpasswdPath, reused, nil
+}
+
+// resolveRegistryStateDir validates and absolutises the agent state directory.
+func resolveRegistryStateDir(stateDir string) (string, error) {
+	stateDir = strings.TrimSpace(stateDir)
+	if stateDir == "" {
+		return "", errors.New("docker: registry state dir is required to authenticate the node registry")
 	}
-	return auth, htpasswdPath, nil
+	absolute, err := filepath.Abs(stateDir)
+	if err != nil {
+		return "", fmt.Errorf("docker: resolve registry state dir: %w", err)
+	}
+	return absolute, nil
+}
+
+// registryHtpasswdMatches reports whether the htpasswd file exists and already
+// carries a bcrypt entry for auth. A missing, truncated or stale file fails the
+// check so the caller rewrites it.
+func registryHtpasswdMatches(path string, auth registryAuth) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	user, hash, found := strings.Cut(strings.TrimSpace(string(data)), ":")
+	if !found || user != auth.Username || hash == "" {
+		return false
+	}
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(auth.Password)) == nil
 }
 
 // readRegistryAuth loads a persisted credential, returning the zero value when

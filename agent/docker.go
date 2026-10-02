@@ -232,7 +232,7 @@ func (c *DockerClient) PullImage(ctx context.Context, image string) error {
 	query := url.Values{}
 	query.Set("fromImage", image)
 
-	if err := c.ensureRegistryCredentialFor(image); err != nil {
+	if err := c.ensureRegistryCredentialFor(ctx, image); err != nil {
 		return err
 	}
 	authHeader, err := c.registryAuthHeader(image)
@@ -407,8 +407,11 @@ func (c *DockerClient) registryAuthHeader(image string) (string, error) {
 // ensureRegistryCredentialFor loads the persisted registry credential when
 // image targets the node-local registry but no credential is cached yet — for
 // example an agent that restarted between a build and the deploy's confirming
-// pull. Images for any other registry are left anonymous.
-func (c *DockerClient) ensureRegistryCredentialFor(image string) error {
+// pull. The address is taken from the image reference, so it is first confirmed
+// against the live registry container's published address; a stale reference
+// (or a different local process on the same port) is left anonymous rather than
+// handed the node credential.
+func (c *DockerClient) ensureRegistryCredentialFor(ctx context.Context, image string) error {
 	c.mu.Lock()
 	cached := c.registryAuth
 	c.mu.Unlock()
@@ -428,7 +431,17 @@ func (c *DockerClient) ensureRegistryCredentialFor(image string) error {
 	if cached.Username != "" {
 		return nil
 	}
-	auth, _, err := prepareRegistryAuth(c.registryStateDir)
+
+	info, err := c.inspectRegistryContainer(ctx)
+	if err != nil {
+		// No live gotham-managed registry to authenticate against.
+		return nil
+	}
+	if registryHostPort(info) != addr {
+		return nil
+	}
+
+	auth, _, _, err := prepareRegistryAuth(c.registryStateDir)
 	if err != nil {
 		return err
 	}

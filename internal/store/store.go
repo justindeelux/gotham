@@ -21,10 +21,9 @@ type Store struct {
 	queries *sqlc.Queries
 
 	// BeforeFamilyRevoke is a nil-by-default test seam. RevokeFamilyIfStolen
-	// calls it after classifying the presented session and before revoking the
-	// family, so a test can prove the classification and the revocation share
-	// one critical section (the per-user lock is still held). Production leaves
-	// it nil.
+	// calls it after revoking the family and before committing, so a test can
+	// prove the revocation itself runs under the per-user lock (the hook sees
+	// the lock still held). Production leaves it nil.
 	BeforeFamilyRevoke func()
 }
 
@@ -125,11 +124,14 @@ func (s *Store) RevokeFamilyIfStolen(ctx context.Context, userID pgtype.UUID, re
 	if presented.CredentialVersion != user.CredentialVersion {
 		return false, nil // obsolete post-reset chain: plain 401
 	}
-	if s.BeforeFamilyRevoke != nil {
-		s.BeforeFamilyRevoke()
-	}
 	if err := queries.RevokeUserSessions(ctx, presented.UserID); err != nil {
 		return false, err
+	}
+	if s.BeforeFamilyRevoke != nil {
+		// The seam sits after the revocation and before the commit: a hook
+		// that observes the lock still held proves the revocation itself ran
+		// under the per-user lock and not merely the classification.
+		s.BeforeFamilyRevoke()
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err

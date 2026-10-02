@@ -313,10 +313,25 @@ func (m *BackupManager) reconcileStaleBackups() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	stale, err := m.backups.ListRunningBackups(ctx)
-	if err != nil {
-		m.logger.Warn("databases: stale backup sweep failed", "error", err)
-	} else {
+	// Fetch both lists before mutating anything. A database with an
+	// interrupted restore must never be resumed: the restore may have written
+	// partial data, and the backup branch must not override the restore
+	// branch's "keep stopped". When the restore list cannot be read the
+	// resume is suppressed too, because a partial restore might be hidden.
+	stale, backupErr := m.backups.ListRunningBackups(ctx)
+	if backupErr != nil {
+		m.logger.Warn("databases: stale backup sweep failed", "error", backupErr)
+	}
+	restores, restoreErr := m.backups.ListRunningRestores(ctx)
+	if restoreErr != nil {
+		m.logger.Warn("databases: stale restore sweep failed", "error", restoreErr)
+	}
+	restoring := make(map[uuid.UUID]bool, len(restores))
+	for _, restore := range restores {
+		restoring[restore.DatabaseID] = true
+	}
+
+	if backupErr == nil {
 		for _, backup := range stale {
 			// A held lease means a job is still live in this process: leave
 			// its row and resources entirely to that job.
@@ -337,17 +352,16 @@ func (m *BackupManager) reconcileStaleBackups() {
 			m.logger.Info("databases: marked stale backup failed",
 				"backup_id", backup.ID.String(), "database_id", backup.DatabaseID.String())
 			// Release the volume, then restore the pre-job state: the dump
-			// paused the database only when it was running.
+			// paused the database only when it was running. A database with an
+			// interrupted restore is never resumed.
 			database, ok := m.releaseInterrupted(ctx, backup.DatabaseID)
-			if ok && backup.WasRunning {
+			if ok && backup.WasRunning && restoreErr == nil && !restoring[backup.DatabaseID] {
 				m.resumeAfterSweep(ctx, database)
 			}
 		}
 	}
 
-	restores, err := m.backups.ListRunningRestores(ctx)
-	if err != nil {
-		m.logger.Warn("databases: stale restore sweep failed", "error", err)
+	if restoreErr != nil {
 		return
 	}
 	for _, restore := range restores {
@@ -368,12 +382,16 @@ func (m *BackupManager) reconcileStaleBackups() {
 		m.logger.Info("databases: marked stale restore failed",
 			"restore_id", restore.ID.String(), "database_id", restore.DatabaseID.String())
 		// An interrupted restore may have written partial data: clean up the
-		// volume, keep the database stopped and mark the failure. Never resume
-		// it — that is the D2-2 invariant.
+		// volume and its staged artifact, keep the database stopped and mark
+		// the failure. Never resume it — that is the D2-2 invariant.
 		database, ok := m.releaseInterrupted(ctx, restore.DatabaseID)
-		if ok {
-			m.markError(ctx, database, errors.New("control plane restarted during the restore"))
+		if !ok {
+			continue
 		}
+		if staged, pathErr := stagingPath(database, restore.BackupID); pathErr == nil {
+			m.removeStagedArtifact(database, staged)
+		}
+		m.markError(ctx, database, errors.New("control plane restarted during the restore"))
 	}
 }
 

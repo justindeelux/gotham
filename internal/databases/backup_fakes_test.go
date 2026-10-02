@@ -308,18 +308,26 @@ func (r *fakeBackupRepository) ListRunningBackups(_ context.Context) ([]Backup, 
 	return list, nil
 }
 
-// FinishBackup implements BackupRepository.
+// FinishBackup implements BackupRepository. Like the SQL update, it touches
+// only the terminal columns, so the was_running observation survives the write.
 func (r *fakeBackupRepository) FinishBackup(_ context.Context, backup Backup) (Backup, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.finishBackupErr != nil {
 		return Backup{}, r.finishBackupErr
 	}
-	if _, ok := r.backups[backup.ID]; !ok {
+	stored, ok := r.backups[backup.ID]
+	if !ok {
 		return Backup{}, ErrNotFound
 	}
-	r.backups[backup.ID] = backup
-	return backup, nil
+	stored.Status = backup.Status
+	stored.Size = backup.Size
+	stored.Location = backup.Location
+	stored.Error = backup.Error
+	stored.ContainerID = backup.ContainerID
+	stored.FinishedAt = backup.FinishedAt
+	r.backups[backup.ID] = stored
+	return stored, nil
 }
 
 // DeleteBackup implements BackupRepository.
@@ -374,18 +382,23 @@ func (r *fakeBackupRepository) CreateRestore(_ context.Context, restore Restore)
 	return restore, nil
 }
 
-// FinishRestore implements BackupRepository.
+// FinishRestore implements BackupRepository. Like the SQL update, it touches
+// only the terminal columns.
 func (r *fakeBackupRepository) FinishRestore(_ context.Context, restore Restore) (Restore, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.finishRestoreErr != nil {
 		return Restore{}, r.finishRestoreErr
 	}
-	if _, ok := r.restores[restore.ID]; !ok {
+	stored, ok := r.restores[restore.ID]
+	if !ok {
 		return Restore{}, ErrNotFound
 	}
-	r.restores[restore.ID] = restore
-	return restore, nil
+	stored.Status = restore.Status
+	stored.Error = restore.Error
+	stored.FinishedAt = restore.FinishedAt
+	r.restores[restore.ID] = stored
+	return stored, nil
 }
 
 // ListRunningRestores implements BackupRepository, oldest first.

@@ -140,16 +140,14 @@ func (m *BackupManager) dump(ctx context.Context, database Database, target *Bac
 	if err != nil {
 		return "", 0, "", err
 	}
-	wasRunning, err := m.pauseDatabase(ctx, database)
+	// Observe the pre-job state, persist it, then stop. Persisting before the
+	// stop closes the crash window: a crash after the stop still leaves
+	// was_running=true, so the sweep restarts the database the job paused. A
+	// failed record write is a hard job failure; the deferred resume then runs
+	// against a still-running container, where Start is a harmless no-op.
+	wasRunning, err := m.databaseRunning(ctx, database)
 	if err != nil {
 		return "", 0, "", err
-	}
-	// Persist the pause observation before anything else can crash: the
-	// boot-time sweep restarts a database only when the job itself stopped it,
-	// never one the user had already stopped.
-	if recordErr := m.backups.SetBackupWasRunning(ctx, runID, wasRunning); recordErr != nil {
-		m.logger.Warn("databases: could not record the pre-backup database state",
-			"backup_id", runID.String(), "database_id", database.ID.String(), "error", recordErr)
 	}
 	if wasRunning {
 		defer func() {
@@ -158,6 +156,14 @@ func (m *BackupManager) dump(ctx context.Context, database Database, target *Bac
 					"database_id", database.ID.String(), "error", resumeErr)
 			}
 		}()
+	}
+	if recordErr := m.backups.SetBackupWasRunning(ctx, runID, wasRunning); recordErr != nil {
+		return "", 0, "", fmt.Errorf("databases: record the pre-backup database state: %w", recordErr)
+	}
+	if wasRunning {
+		if err := m.stopDatabase(ctx, database); err != nil {
+			return "", 0, "", err
+		}
 	}
 
 	options, err := engine.DumpOptions(database, credentials, runID.String())
@@ -473,10 +479,9 @@ func (m *BackupManager) removeJobContainer(serverID uuid.UUID, containerID strin
 	}
 }
 
-// pauseDatabase stops the database container before a job mounts its volume,
-// reporting whether it was running. A database without a container (row
-// created, container gone) needs no pause.
-func (m *BackupManager) pauseDatabase(ctx context.Context, database Database) (bool, error) {
+// databaseRunning reports whether the database container is listed as running.
+// A database without a container (row created, container gone) is not running.
+func (m *BackupManager) databaseRunning(ctx context.Context, database Database) (bool, error) {
 	if database.ContainerID == "" {
 		return false, nil
 	}
@@ -484,18 +489,36 @@ func (m *BackupManager) pauseDatabase(ctx context.Context, database Database) (b
 	if err != nil {
 		return false, mapContainerError(err)
 	}
-	running := false
 	for _, item := range list {
 		if item.ID == database.ContainerID {
-			running = item.State == "running"
-			break
+			return item.State == "running", nil
 		}
 	}
-	if !running {
-		return false, nil
+	return false, nil
+}
+
+// stopDatabase stops the database container so a job can mount its volume. A
+// database without a container needs no stop.
+func (m *BackupManager) stopDatabase(ctx context.Context, database Database) error {
+	if database.ContainerID == "" {
+		return nil
 	}
 	if err := m.containers.Stop(ctx, database.ServerID, database.ContainerID); err != nil {
-		return false, mapContainerError(err)
+		return mapContainerError(err)
+	}
+	return nil
+}
+
+// pauseDatabase stops the database container before a restore mounts its
+// volume, reporting whether it was running. A database without a container
+// needs no pause.
+func (m *BackupManager) pauseDatabase(ctx context.Context, database Database) (bool, error) {
+	running, err := m.databaseRunning(ctx, database)
+	if err != nil || !running {
+		return false, err
+	}
+	if err := m.stopDatabase(ctx, database); err != nil {
+		return false, err
 	}
 	return true, nil
 }

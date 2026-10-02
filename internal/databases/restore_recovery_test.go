@@ -272,9 +272,20 @@ func TestReconcileSweepsInterruptedRestore(t *testing.T) {
 
 	fixture.containers.mu.Lock()
 	starts := fixture.containers.starts
+	runs := append([]containers.RunOptions(nil), fixture.containers.runs...)
 	fixture.containers.mu.Unlock()
 	if starts != 0 {
 		t.Errorf("starts = %d, want 0: an interrupted restore was resumed", starts)
+	}
+	// The sweep must remove the staged .part the crashed restore left behind.
+	cleanups := 0
+	for _, opts := range runs {
+		if opts.Labels[labelRole] == roleStage && strings.Contains(opts.Name, "cleanup") {
+			cleanups++
+		}
+	}
+	if cleanups == 0 {
+		t.Error("the restore sweep did not clean the staged artifact")
 	}
 	database, err := fixture.databases.GetDatabase(context.Background(), fixture.database.ID)
 	if err != nil {
@@ -306,6 +317,73 @@ func TestReconcileDoesNotStartUserStoppedDatabase(t *testing.T) {
 	fixture.containers.mu.Unlock()
 	if starts != 0 {
 		t.Errorf("starts = %d, want 0: a user-stopped database was restarted", starts)
+	}
+}
+
+// TestReconcileCompoundStaleRowsNeverResume is the U1 (round 2) regression:
+// when a database has both a stale backup (was_running=true) and a stale
+// restore, the backup branch must not resume the database onto the restore's
+// partial data. It stays stopped and error.
+func TestReconcileCompoundStaleRowsNeverResume(t *testing.T) {
+	fixture := newBackupFixture(t)
+	if _, err := fixture.backups.CreateBackup(context.Background(), Backup{
+		DatabaseID: fixture.database.ID,
+		Type:       BackupManual,
+		Status:     BackupRunning,
+		WasRunning: true,
+	}); err != nil {
+		t.Fatalf("seed running backup: %v", err)
+	}
+	fixture.backups.seedRestore(Restore{
+		DatabaseID: fixture.database.ID,
+		BackupID:   uuid.New(),
+		Status:     RestoreRunning,
+	})
+
+	fixture.manager.reconcileStaleBackups()
+
+	fixture.containers.mu.Lock()
+	starts := fixture.containers.starts
+	fixture.containers.mu.Unlock()
+	if starts != 0 {
+		t.Errorf("starts = %d, want 0: a compound stale pair resumed onto partial data", starts)
+	}
+	database, err := fixture.databases.GetDatabase(context.Background(), fixture.database.ID)
+	if err != nil {
+		t.Fatalf("GetDatabase: %v", err)
+	}
+	if database.Status != StatusError {
+		t.Errorf("database status = %q, want %q", database.Status, StatusError)
+	}
+}
+
+// TestReconcileSkipsRestoreWithLiveLease pins the restore-loop lease check:
+// a restore row whose job is still live must not be clobbered or cleaned.
+func TestReconcileSkipsRestoreWithLiveLease(t *testing.T) {
+	fixture := newBackupFixture(t)
+	live := fixture.backups.seedRestore(Restore{
+		DatabaseID: fixture.database.ID,
+		BackupID:   uuid.New(),
+		Status:     RestoreRunning,
+	})
+	if !fixture.manager.claimRestore(fixture.database.ID) {
+		t.Fatal("could not claim the live restore lease")
+	}
+	defer fixture.manager.release(fixture.database.ID)
+
+	fixture.manager.reconcileStaleBackups()
+
+	if got, _ := fixture.backups.getRestore(live.ID); got.Status != RestoreRunning {
+		t.Errorf("live restore status = %q, want %q: the sweep clobbered a live job", got.Status, RestoreRunning)
+	}
+	fixture.containers.mu.Lock()
+	starts, removes := fixture.containers.starts, append([]string(nil), fixture.containers.removes...)
+	fixture.containers.mu.Unlock()
+	if starts != 0 {
+		t.Errorf("starts = %d, want 0", starts)
+	}
+	if len(removes) != 0 {
+		t.Errorf("removes = %v, want none", removes)
 	}
 }
 
@@ -427,6 +505,99 @@ func TestRestoreHoldsJobLease(t *testing.T) {
 		RestoreRequest{BackupID: completed.ID}); !errors.Is(err, ErrBackupInFlight) {
 		t.Errorf("RestoreBackup during a backup = %v, want ErrBackupInFlight", err)
 	}
+}
+
+// TestBackupRecordsWasRunning is the U3 (round 2) regression: the dump must
+// persist the observed pre-job state. Replacing SetBackupWasRunning with a
+// no-op must fail the running case.
+func TestBackupRecordsWasRunning(t *testing.T) {
+	t.Run("running", func(t *testing.T) {
+		fixture := newBackupFixture(t)
+		backup := fixture.queueBackup(t)
+		got, _ := fixture.backups.getBackup(backup.ID)
+		if !got.WasRunning {
+			t.Error("WasRunning = false, want true for a running database")
+		}
+	})
+
+	t.Run("stopped", func(t *testing.T) {
+		fixture := newBackupFixture(t)
+		fixture.containers.mu.Lock()
+		fixture.containers.listed = nil
+		fixture.containers.mu.Unlock()
+		backup := fixture.queueBackup(t)
+		got, _ := fixture.backups.getBackup(backup.ID)
+		if got.WasRunning {
+			t.Error("WasRunning = true, want false for a stopped database")
+		}
+	})
+}
+
+// failingReader yields a few bytes and then an error, modelling an artifact
+// download that dies mid-stream during staging.
+type failingReader struct{ done bool }
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, errors.New("artifact stream failed")
+	}
+	r.done = true
+	return copy(p, "partial"), nil
+}
+
+// readerObjectStore serves a fixed reader from Get.
+type readerObjectStore struct{ reader io.ReadCloser }
+
+// Compile-time guarantee.
+var _ ObjectStore = (*readerObjectStore)(nil)
+
+func (s *readerObjectStore) Kind() string { return "s3" }
+
+func (s *readerObjectStore) Put(context.Context, string, io.Reader, int64) (string, error) {
+	return locationS3Prefix + "bucket/reader", nil
+}
+
+func (s *readerObjectStore) Get(context.Context, string) (io.ReadCloser, error) {
+	return s.reader, nil
+}
+
+func (s *readerObjectStore) Delete(context.Context, string) error { return nil }
+
+// TestStagingFailureCleansStagedArtifact is the U4 (round 2) regression for
+// the staging-failure branch: a download that errors mid-stream must still
+// trigger the staged-artifact cleanup container.
+func TestStagingFailureCleansStagedArtifact(t *testing.T) {
+	fixture := newBackupFixture(t)
+	backup := fixture.backups.seedBackup(Backup{
+		DatabaseID: fixture.database.ID,
+		Status:     BackupCompleted,
+		Location:   locationS3Prefix + "bucket/reader",
+	})
+	fixture.manager.objects = &readerObjectStore{reader: io.NopCloser(&failingReader{})}
+
+	result, err := fixture.manager.RestoreBackup(context.Background(), fixture.userID, fixture.database.ID,
+		RestoreRequest{BackupID: backup.ID})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	waitFor(t, "the restore to fail", func() bool {
+		restore, ok := fixture.backups.getRestore(result.RestoreID)
+		return ok && restore.Status != RestoreRunning
+	})
+
+	fixture.containers.mu.Lock()
+	runs := append([]containers.RunOptions(nil), fixture.containers.runs...)
+	fixture.containers.mu.Unlock()
+	cleanups := 0
+	for _, opts := range runs {
+		if opts.Labels[labelRole] == roleStage && strings.Contains(opts.Name, "cleanup") {
+			cleanups++
+		}
+	}
+	if cleanups == 0 {
+		t.Error("a mid-stream staging failure did not clean the staged artifact")
+	}
+	assertDatabaseError(t, fixture)
 }
 
 // containsString reports whether list holds want.

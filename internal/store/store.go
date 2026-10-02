@@ -337,6 +337,26 @@ func (s *Store) GetServerByNodeID(ctx context.Context, nodeID *string) (sqlc.Ser
 	return s.queries.GetServerByNodeID(ctx, nodeID)
 }
 
+// UpsertServerByNodeID inserts or refreshes the node registered under its node
+// id and returns the single canonical row. Concurrent registrations of the same
+// node converge through the node_id unique constraint instead of duplicating.
+func (s *Store) UpsertServerByNodeID(ctx context.Context, params sqlc.UpsertServerByNodeIDParams) (sqlc.Server, error) {
+	return s.queries.UpsertServerByNodeID(ctx, params)
+}
+
+// ClaimServerByNodeID associates a node identity with an unclaimed
+// operator-created row (node_id NULL) whose address matches. It answers
+// pgx.ErrNoRows when there is no unclaimed candidate.
+func (s *Store) ClaimServerByNodeID(ctx context.Context, params sqlc.ClaimServerByNodeIDParams) (sqlc.Server, error) {
+	return s.queries.ClaimServerByNodeID(ctx, params)
+}
+
+// MarkStaleServersOffline flips ready nodes whose last heartbeat predates cutoff
+// to offline.
+func (s *Store) MarkStaleServersOffline(ctx context.Context, cutoff pgtype.Timestamptz) error {
+	return s.queries.MarkStaleServersOffline(ctx, cutoff)
+}
+
 // ListServers returns every managed node, newest first.
 func (s *Store) ListServers(ctx context.Context) ([]sqlc.Server, error) {
 	return s.queries.ListServers(ctx)
@@ -353,8 +373,9 @@ func (s *Store) DeleteServer(ctx context.Context, id pgtype.UUID) error {
 	return s.queries.DeleteServer(ctx, id)
 }
 
-// UpdateServerAgentInfo records the agent capabilities reported at Register and
-// returns the updated row.
+// UpdateServerAgentInfo records the capabilities reported by an SSH validation
+// or an agent registration and returns the updated row. It never changes status
+// or last_seen: only a heartbeat marks a node ready.
 func (s *Store) UpdateServerAgentInfo(ctx context.Context, params sqlc.UpdateServerAgentInfoParams) (sqlc.Server, error) {
 	return s.queries.UpdateServerAgentInfo(ctx, params)
 }

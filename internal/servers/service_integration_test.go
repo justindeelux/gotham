@@ -72,12 +72,15 @@ func TestServiceLifecycleWithValidation(t *testing.T) {
 		}
 	}
 
+	// SSH validation records inventory but does not make the node ready: ready
+	// means an authenticated agent heartbeat (A4-15/B4-9). An agentless node
+	// stays pending after a successful SSH probe.
 	fetched, err := service.Get(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if fetched.Status != StatusReady {
-		t.Errorf("status after validation = %q, want %q", fetched.Status, StatusReady)
+	if fetched.Status != StatusPending {
+		t.Errorf("status after validation = %q, want %q", fetched.Status, StatusPending)
 	}
 	if fetched.DockerVersion == nil || *fetched.DockerVersion != "24.0.7" {
 		t.Errorf("DockerVersion = %v, want 24.0.7", fetched.DockerVersion)

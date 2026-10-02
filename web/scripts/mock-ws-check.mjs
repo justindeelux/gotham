@@ -226,6 +226,7 @@ async function main() {
   const channelBuffers = await loadModule(
     "../src/composables/logChannelBuffers.ts",
   );
+  const serverListSync = await loadModule("../src/stores/serverListSync.ts");
   const {
     useWebSocket,
     computeBackoffDelay,
@@ -239,6 +240,7 @@ async function main() {
     flushPendingLines,
     isFrameForChannel,
   } = channelBuffers.module;
+  const { createServerListSync } = serverListSync.module;
 
   console.log("pure helpers");
   await check("backoff doubles then caps", () => {
@@ -643,9 +645,43 @@ async function main() {
     assert(buffer.pending.length === 1, "paused notice queued, not rendered");
   });
 
+  console.log("server list ordering guard (A4-16/B4-5)");
+  await check("an out-of-order older poll cannot overwrite a newer one", () => {
+    const sync = createServerListSync();
+    const older = sync.begin();
+    const newer = sync.begin();
+    assert(sync.admit(newer) === true, "newer response applied");
+    assert(sync.admit(older) === false, "older response rejected");
+  });
+  await check("a poll predating a local mutation is rejected", () => {
+    const sync = createServerListSync();
+    const stale = sync.begin();
+    sync.markMutation();
+    assert(sync.admit(stale) === false, "pre-mutation response rejected");
+    const fresh = sync.begin();
+    assert(sync.admit(fresh) === true, "post-mutation response applied");
+  });
+  await check("a deleted row is not resurrected by an in-flight poll", () => {
+    const sync = createServerListSync();
+    const poll = sync.begin();
+    // removeServer filters the row locally while the poll is in flight.
+    sync.markMutation();
+    assert(sync.admit(poll) === false, "stale list with the deleted row refused");
+    const next = sync.begin();
+    assert(sync.admit(next) === true, "fresh list accepted");
+  });
+  await check("a validate merge is not clobbered by an in-flight poll", () => {
+    const sync = createServerListSync();
+    const poll = sync.begin();
+    // validate() merges the updated row and invalidates the poll.
+    sync.markMutation();
+    assert(sync.admit(poll) === false, "pre-validate poll refused");
+  });
+
   await server.close();
   await composable.cleanup();
   await channelBuffers.cleanup();
+  await serverListSync.cleanup();
 
   const failed = results.filter((r) => !r.ok);
   console.log(

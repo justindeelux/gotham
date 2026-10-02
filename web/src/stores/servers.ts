@@ -9,6 +9,7 @@ import {
   validateServer,
 } from "../api/servers";
 import type { CreateServerInput, Server, ValidateOutcome } from "../api/servers";
+import { createServerListSync } from "./serverListSync";
 
 /** Polling cadence for the server list, in milliseconds. */
 const pollIntervalMs = 5_000;
@@ -22,6 +23,10 @@ export const useServersStore = defineStore("servers", () => {
   // singleton so a single handle is enough for the whole app.
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  // Ordering guard: a poll response older than a newer one, or predating a
+  // local mutation, must not replace the list (A4-16/B4-5).
+  const listSync = createServerListSync();
+
   /** applyServer merges one server into the in-memory list in place. */
   function applyServer(updated: Server): void {
     const index = servers.value.findIndex((item) => item.id === updated.id);
@@ -32,12 +37,26 @@ export const useServersStore = defineStore("servers", () => {
     servers.value[index] = updated;
   }
 
+  /**
+   * loadServerList fetches the list and applies it only when the ordering guard
+   * admits the response. It returns the fetched list either way.
+   */
+  async function loadServerList(): Promise<Server[]> {
+    const token = listSync.begin();
+    const list = await listServers();
+    if (listSync.admit(token)) {
+      servers.value = list;
+      error.value = null;
+    }
+    return list;
+  }
+
   /** fetchServers loads the list, toggling the loading flag. */
   async function fetchServers(): Promise<void> {
     loading.value = true;
     error.value = null;
     try {
-      servers.value = await listServers();
+      await loadServerList();
     } catch (err) {
       error.value = describeServerError(err);
       throw err;
@@ -49,8 +68,7 @@ export const useServersStore = defineStore("servers", () => {
   /** refreshServers reloads the list without toggling the loading flag. */
   async function refreshServers(): Promise<void> {
     try {
-      servers.value = await listServers();
-      error.value = null;
+      await loadServerList();
     } catch (err) {
       error.value = describeServerError(err);
     }
@@ -80,6 +98,9 @@ export const useServersStore = defineStore("servers", () => {
   /** addServer creates a server and refreshes the list. */
   async function addServer(input: CreateServerInput): Promise<Server> {
     const created = await createServer(input);
+    // Invalidate any poll that started before the create: its response would
+    // not include the new row.
+    listSync.markMutation();
     await refreshServers();
     return created;
   }
@@ -87,13 +108,19 @@ export const useServersStore = defineStore("servers", () => {
   /** removeServer deletes a server and drops it from the list. */
   async function removeServer(id: string): Promise<void> {
     await deleteServer(id);
+    // Invalidate in-flight polls so a pre-delete response cannot resurrect the
+    // deleted row.
+    listSync.markMutation();
     servers.value = servers.value.filter((item) => item.id !== id);
   }
 
   /** validate runs the probes, merging the updated server into the list. */
-  async function validate(id: string): Promise<ValidateOutcome> {
-    const outcome = await validateServer(id);
+  async function validate(id: string, passphrase?: string): Promise<ValidateOutcome> {
+    const outcome = await validateServer(id, passphrase);
     if (outcome.server) {
+      // Invalidate in-flight polls so they cannot clobber the merge with older
+      // state.
+      listSync.markMutation();
       applyServer(outcome.server);
     }
     return outcome;

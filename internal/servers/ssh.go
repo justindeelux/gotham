@@ -221,11 +221,23 @@ func parsePrivateKey(pemBytes []byte, passphrase string) (ssh.Signer, error) {
 }
 
 // dialSSH opens the TCP connection and completes the SSH handshake, honouring
-// the context deadline.
+// the context deadline. The deadline is applied to the connection itself, not
+// just the dial, so the key exchange (NewClientConn) and every later session
+// read are bounded too: a peer that accepts TCP then stalls cannot hang
+// validation past the run's deadline (A4-14).
 func dialSSH(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
+		return nil, err
+	}
+
+	deadline := time.Now().Add(sshDialTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		deadline = ctxDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
 

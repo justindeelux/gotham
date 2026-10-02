@@ -66,13 +66,16 @@ onMounted(() => {
   serversStore.pollServers();
 });
 
-// A page may stop the shared poll timer on unmount; re-arm it so the rail
-// keeps showing live status on every route.
+// A page may stop the shared poll timer on unmount. Re-arm it after the route
+// transition settles (flush: "post") so the outgoing page's onUnmounted cannot
+// clear the interval the rail just restarted — with the default pre-flush the
+// re-arm ran first and navigation froze the rail dots (B4-7).
 watch(
   () => route.path,
   () => {
     serversStore.pollServers();
   },
+  { flush: "post" },
 );
 
 onUnmounted(() => {

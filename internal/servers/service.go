@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/store"
@@ -33,6 +34,12 @@ const (
 
 // defaultSSHPort is used when a create request omits the port.
 const defaultSSHPort = 22
+
+// heartbeatOfflineAfter bounds how long a ready node may go without an agent
+// heartbeat before it is reported offline. The agent heartbeats every 10s, so
+// three missed cycles mark a node unreachable without waiting on the gateway's
+// 2-minute idle-stream timeout.
+const heartbeatOfflineAfter = 30 * time.Second
 
 // Server is a managed node. It is the domain representation, decoupled from the
 // sqlc row so the HTTP and gRPC layers never see storage types.
@@ -85,6 +92,10 @@ type ValidationResult struct {
 type ValidateAuth struct {
 	KeyID    uuid.UUID
 	Password string
+	// Passphrase decrypts a passphrase-protected private key for this run only.
+	// It is never persisted; a key stored without its passphrase is unusable
+	// until the caller supplies one at validation time.
+	Passphrase string
 	// TrustHostKey is the operator's explicit consent to trust an unpinned host
 	// key on this run. It is required for password auth to a node that has
 	// never been validated (there is no key to TOFU-pin against) and is
@@ -218,6 +229,7 @@ func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip stri
 // legacy node (team_id NULL). Without a team scope it returns every server,
 // which is the pre-teams behavior.
 func (s *ServerService) List(ctx context.Context) ([]Server, error) {
+	s.sweepOffline(ctx)
 	scope := teams.ScopeFor(ctx, uuid.Nil)
 	var (
 		rows []sqlc.Server
@@ -243,6 +255,7 @@ func (s *ServerService) List(ctx context.Context) ([]Server, error) {
 // answers ErrNotFound so node IDs cannot be probed; a legacy node (team_id
 // NULL) stays readable by every authenticated caller.
 func (s *ServerService) Get(ctx context.Context, id uuid.UUID) (*Server, error) {
+	s.sweepOffline(ctx)
 	row, err := s.store.GetServerByID(ctx, pgUUID(id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -480,6 +493,19 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		return result, fmt.Errorf("record agent info: %w", err)
 	}
 
+	// SSH reachability is not agent readiness: a successful validation leaves a
+	// node pending until its agent heartbeats (A4-15/B4-9). A node whose agent is
+	// already heartbeating keeps its ready status.
+	if server.Status != StatusReady {
+		updated, err = s.store.SetServerStatus(ctx, sqlc.SetServerStatusParams{
+			ID:     pgUUID(id),
+			Status: StatusPending,
+		})
+		if err != nil {
+			return result, fmt.Errorf("record server status: %w", err)
+		}
+	}
+
 	s.logger.Info("servers: validation succeeded", "server_id", id.String(), "docker_version", info.DockerVersion)
 	return &ValidationResult{Checks: checks, Server: serverFromRow(updated)}, nil
 }
@@ -501,34 +527,89 @@ func (s *ServerService) RegisterNode(ctx context.Context, req *agentv1.RegisterR
 		return nil, err
 	}
 
-	row, err := s.store.GetServerByNodeID(ctx, &nodeID)
-	switch {
-	case err == nil:
-		// Existing registration: refresh capabilities below.
-	case errors.Is(err, pgx.ErrNoRows):
-		row, err = s.createRegisteredServer(ctx, nodeID)
+	// Registration is fenced on the node identity: concurrent registers of the
+	// same node converge on one row. An unclaimed operator-created row whose
+	// address matches is claimed first so enrollment updates it instead of
+	// inserting a duplicate; otherwise the node-id unique constraint makes the
+	// upsert conflict-safe. Either way a race cannot leave a duplicate or an
+	// orphan node_id NULL row (A4-12).
+	os, dockerVersion, arch := strPtr(req.GetOs()), strPtr(req.GetDockerVersion()), strPtr(req.GetArch())
+	totalMem, totalDisk := ptrInt64(req.GetTotalMem()), ptrInt64(req.GetTotalDisk())
+
+	if claimed, err := s.claimUnregisteredServer(ctx, nodeID); err != nil {
+		return nil, err
+	} else if claimed.ID.Valid {
+		updated, err := s.store.UpdateServerAgentInfo(ctx, sqlc.UpdateServerAgentInfoParams{
+			ID:            claimed.ID,
+			NodeID:        &nodeID,
+			Os:            os,
+			DockerVersion: dockerVersion,
+			Arch:          arch,
+			TotalMem:      totalMem,
+			TotalDisk:     totalDisk,
+		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("record agent info: %w", err)
 		}
-	default:
-		return nil, fmt.Errorf("lookup server by node id: %w", err)
+		s.logger.Info("servers: node claimed unregistered server",
+			"node_id", nodeID, "server_id", updated.ID.String())
+		return &agentv1.RegisterResponse{CpVersion: s.version}, nil
 	}
 
-	updated, err := s.store.UpdateServerAgentInfo(ctx, sqlc.UpdateServerAgentInfoParams{
-		ID:            row.ID,
+	updated, err := s.store.UpsertServerByNodeID(ctx, sqlc.UpsertServerByNodeIDParams{
+		Name:          nodeID,
+		Ip:            ipFromNodeID(nodeID),
+		Port:          defaultSSHPort,
 		NodeID:        &nodeID,
-		Os:            strPtr(req.GetOs()),
-		DockerVersion: strPtr(req.GetDockerVersion()),
-		Arch:          strPtr(req.GetArch()),
-		TotalMem:      ptrInt64(req.GetTotalMem()),
-		TotalDisk:     ptrInt64(req.GetTotalDisk()),
+		Os:            os,
+		DockerVersion: dockerVersion,
+		Arch:          arch,
+		TotalMem:      totalMem,
+		TotalDisk:     totalDisk,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("record agent info: %w", err)
+		return nil, fmt.Errorf("register node: %w", err)
 	}
 
 	s.logger.Info("servers: node registered", "node_id", nodeID, "server_id", updated.ID.String())
 	return &agentv1.RegisterResponse{CpVersion: s.version}, nil
+}
+
+// claimUnregisteredServer associates a node identity with an unclaimed
+// operator-created server row whose address matches the node id (an IP literal
+// or a hostname the operator entered). It returns a zero Server (ID.Valid false)
+// when there is nothing to claim. A unique clash (an operator row and an
+// already-registered row share the address) is treated as "nothing to claim":
+// the caller's upsert then targets the existing node row.
+func (s *ServerService) claimUnregisteredServer(ctx context.Context, nodeID string) (sqlc.Server, error) {
+	if nodeID == "" {
+		return sqlc.Server{}, nil
+	}
+	row, err := s.store.ClaimServerByNodeID(ctx, sqlc.ClaimServerByNodeIDParams{NodeID: &nodeID, Ip: nodeID})
+	switch {
+	case err == nil:
+		return row, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return sqlc.Server{}, nil
+	default:
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
+			return sqlc.Server{}, nil
+		}
+		return sqlc.Server{}, fmt.Errorf("claim server for node %s: %w", nodeID, err)
+	}
+}
+
+// uniqueViolation is PostgreSQL's unique_violation SQLSTATE.
+const uniqueViolation = "23505"
+
+// ipFromNodeID returns the node id when it is an IP literal, or "" otherwise,
+// so a hostname node is stored with an empty address rather than a bogus one.
+func ipFromNodeID(nodeID string) string {
+	if net.ParseIP(nodeID) != nil {
+		return nodeID
+	}
+	return ""
 }
 
 // RecordHeartbeat records one heartbeat message from the node identified by
@@ -580,25 +661,16 @@ func (s *ServerService) RecordHeartbeat(ctx context.Context, nodeID string, req 
 	return nil
 }
 
-// createRegisteredServer creates the registry row for a node that registered
-// before it was added by an operator.
-func (s *ServerService) createRegisteredServer(ctx context.Context, nodeID string) (sqlc.Server, error) {
-	ip := ""
-	if net.ParseIP(nodeID) != nil {
-		ip = nodeID
+// sweepOffline flips ready nodes whose last heartbeat is older than
+// heartbeatOfflineAfter to offline. It runs on the read path so every list and
+// detail response carries the live status the FE already understands (A4-6). A
+// sweep failure is logged, never surfaced: a stale status is better than a
+// failed read.
+func (s *ServerService) sweepOffline(ctx context.Context) {
+	cutoff := s.now().Add(-heartbeatOfflineAfter)
+	if err := s.store.MarkStaleServersOffline(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true}); err != nil {
+		s.logger.Warn("servers: offline sweep", "error", err)
 	}
-	row, err := s.store.CreateServer(ctx, sqlc.CreateServerParams{
-		Name:     nodeID,
-		Ip:       ip,
-		Port:     defaultSSHPort,
-		SshUser:  "",
-		SshKeyID: pgtype.UUID{},
-	})
-	if err != nil {
-		return sqlc.Server{}, fmt.Errorf("create server for node %s: %w", nodeID, err)
-	}
-	s.logger.Info("servers: created server for unregistered node", "node_id", nodeID, "server_id", row.ID.String())
-	return row, nil
 }
 
 // credentials resolves the SSH credentials for a validation run.
@@ -607,19 +679,20 @@ func (s *ServerService) credentials(ctx context.Context, row sqlc.Server, auth V
 	case auth.Password != "":
 		return SSHAuth{Password: auth.Password}, nil
 	case auth.KeyID != uuid.Nil:
-		return s.loadKeyAuth(ctx, pgUUID(auth.KeyID), true)
+		return s.loadKeyAuth(ctx, pgUUID(auth.KeyID), auth.Passphrase, true)
 	default:
 		if !row.SshKeyID.Valid {
 			return SSHAuth{}, fmt.Errorf("%w: server has no SSH key", ErrNoCredentials)
 		}
-		return s.loadKeyAuth(ctx, row.SshKeyID, false)
+		return s.loadKeyAuth(ctx, row.SshKeyID, auth.Passphrase, false)
 	}
 }
 
-// loadKeyAuth loads and decrypts a private key into an SSHAuth. explicit
+// loadKeyAuth loads and decrypts a private key into an SSHAuth. passphrase
+// decrypts a passphrase-protected PEM for this run and is never stored. explicit
 // distinguishes an operator-supplied key ID from the server's attached key so
 // the error text matches the cause.
-func (s *ServerService) loadKeyAuth(ctx context.Context, id pgtype.UUID, explicit bool) (SSHAuth, error) {
+func (s *ServerService) loadKeyAuth(ctx context.Context, id pgtype.UUID, passphrase string, explicit bool) (SSHAuth, error) {
 	key, err := s.store.GetPrivateKeyByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -635,7 +708,7 @@ func (s *ServerService) loadKeyAuth(ctx context.Context, id pgtype.UUID, explici
 	if err != nil {
 		return SSHAuth{}, fmt.Errorf("decrypt ssh key: %w", err)
 	}
-	return SSHAuth{PrivateKeyPEM: []byte(plain)}, nil
+	return SSHAuth{PrivateKeyPEM: []byte(plain), Passphrase: passphrase}, nil
 }
 
 // setStatus updates a server's status, logging but not failing on error.

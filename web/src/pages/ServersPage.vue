@@ -13,7 +13,7 @@ import {
   useMessage,
 } from "naive-ui";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
 import { describeServerError } from "../api/servers";
 import type { Server } from "../api/servers";
@@ -24,6 +24,7 @@ import { useServersStore } from "../stores/servers";
 import { formatBytes, relativeTime, toPercent } from "../utils/format";
 
 const router = useRouter();
+const route = useRoute();
 const serversStore = useServersStore();
 const message = useMessage();
 
@@ -274,6 +275,20 @@ onMounted(() => {
   });
   serversStore.pollServers();
 });
+
+// The dashboard's "Add server" CTA deep-links here with ?add=1. Open the wizard
+// once and strip the flag with a replace, so a refresh or a back navigation
+// does not reopen it (B4-3).
+watch(
+  () => route.query.add,
+  (value) => {
+    if (value === "1") {
+      wizardOpen.value = true;
+      void router.replace({ name: "servers" });
+    }
+  },
+  { immediate: true },
+);
 
 onUnmounted(() => {
   serversStore.stopPolling();

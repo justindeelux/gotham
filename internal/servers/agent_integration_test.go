@@ -138,7 +138,9 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 		t.Fatalf("issued agent certificate failed verification: %v", err)
 	}
 
-	// 2. The registry now holds a ready server for the node.
+	// 2. The registry now holds the node's row with its reported capabilities.
+	// Registration alone does not make a node ready: ready means a live agent
+	// heartbeat (A4-15/B4-9), asserted after step 3.
 	row := waitForServer(t, st, nodeID)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -150,15 +152,16 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 	if row.NodeID == nil || *row.NodeID != nodeID {
 		t.Fatalf("server node_id = %v, want %q", row.NodeID, nodeID)
 	}
-	if row.Status != StatusReady {
-		t.Errorf("server status = %q, want %q", row.Status, StatusReady)
-	}
 	if row.DockerVersion == nil || *row.DockerVersion != "24.0.7" {
 		t.Errorf("docker_version = %v, want 24.0.7", row.DockerVersion)
 	}
 
-	// 3. Heartbeats flow through the gateway and update metrics/last_seen.
+	// 3. Heartbeats flow through the gateway and update metrics/last_seen; the
+	// first recorded heartbeat is what marks the node ready.
 	updated := waitForHeartbeat(t, st, nodeID)
+	if updated.Status != StatusReady {
+		t.Errorf("server status after heartbeat = %q, want %q", updated.Status, StatusReady)
+	}
 	if updated.CpuUsage == nil || updated.MemUsage == nil || updated.DiskUsage == nil {
 		t.Errorf("metrics not recorded: cpu=%v mem=%v disk=%v", updated.CpuUsage, updated.MemUsage, updated.DiskUsage)
 	}

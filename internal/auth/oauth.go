@@ -17,16 +17,21 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// StateCookieName is the cookie carrying the OAuth anti-CSRF state between the
-// login redirect and the provider callback. The HTTP layer owns writing it; the
-// name lives here so both sides agree.
-const StateCookieName = "gotham_oauth_state"
-
-// FlowCookieName is the cookie binding a login flow to the browser that started
-// it. It is set beside the state cookie and must accompany the one-time exchange
-// code that redeems the session, so a crafted callback URL cannot plant a
-// session in another browser. The HTTP layer owns writing it.
-const FlowCookieName = "gotham_oauth_flow"
+// OAuth protocol cookie names. On a secure request the server uses the
+// __Host- prefixed names: browsers require Secure, Path=/ and no Domain for a
+// __Host- cookie, so a sibling subdomain cannot plant a shadowing cookie. The
+// plain names are used over insecure (development) HTTP, where the __Host-
+// prefix cannot be enforced.
+const (
+	// StateCookieName is the anti-CSRF state cookie on insecure requests.
+	StateCookieName = "gotham_oauth_state"
+	// FlowCookieName binds a login flow to the browser on insecure requests.
+	FlowCookieName = "gotham_oauth_flow"
+	// StateCookieNameSecure is the __Host- state cookie used over HTTPS.
+	StateCookieNameSecure = "__Host-gotham_oauth_state"
+	// FlowCookieNameSecure is the __Host- flow cookie used over HTTPS.
+	FlowCookieNameSecure = "__Host-gotham_oauth_flow"
+)
 
 // OAuth state bookkeeping. A state is single-use and expires after stateTTL;
 // expired entries are swept by a background goroutine.

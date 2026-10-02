@@ -35,7 +35,13 @@ const oauthRandomBytes = 32
 const (
 	oauthExchangeTTL           = 60 * time.Second
 	oauthExchangeCleanupPeriod = time.Minute
+	// oauthExchangeCapacity bounds how many pending exchange codes the store
+	// keeps, so a flood of callbacks cannot grow it without limit.
+	oauthExchangeCapacity = 10000
 )
+
+// errOAuthCodeStoreFull reports that the exchange-code store hit its cap.
+var errOAuthCodeStoreFull = errors.New("oauth: exchange code store full")
 
 // oauthFailureRedirect is where a failed callback sends the browser. The query
 // never carries error details so nothing is leaked to logs or referrers.
@@ -112,15 +118,15 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	queryState := r.URL.Query().Get("state")
 	code := r.URL.Query().Get("code")
 
-	cookie, err := r.Cookie(auth.StateCookieName)
-	if err != nil || queryState == "" || !constantTimeEqual(cookie.Value, queryState) {
+	cookieValue, ok := oauthCookieValue(r, oauthStateCookieName(r))
+	if !ok || queryState == "" || !constantTimeEqual(cookieValue, queryState) {
 		s.logger.Warn("oauth: state cookie mismatch", "provider", provider)
 		s.redirectOAuthFailure(w, r)
 		return
 	}
 
-	flow, err := r.Cookie(auth.FlowCookieName)
-	if err != nil || flow.Value == "" {
+	flowValue, ok := oauthCookieValue(r, oauthFlowCookieName(r))
+	if !ok || flowValue == "" {
 		s.logger.Warn("oauth: flow cookie missing", "provider", provider)
 		s.redirectOAuthFailure(w, r)
 		return
@@ -133,7 +139,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exchangeCode, err := s.oauthCodes.NewCode(result, flow.Value)
+	exchangeCode, err := s.oauthCodes.NewCode(result, flowValue)
 	if err != nil {
 		s.logger.Error("oauth: issue exchange code", "provider", provider, "error", err)
 		s.redirectOAuthFailure(w, r)
@@ -154,13 +160,13 @@ func (s *Server) handleOAuthExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flow, err := r.Cookie(auth.FlowCookieName)
-	if err != nil || flow.Value == "" {
+	flowValue, ok := oauthCookieValue(r, oauthFlowCookieName(r))
+	if !ok || flowValue == "" {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
 	}
 
-	result, ok := s.oauthCodes.Exchange(req.Code, flow.Value)
+	result, ok := s.oauthCodes.Exchange(req.Code, flowValue)
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
@@ -196,9 +202,14 @@ func (s *Server) oauthRedirectBase() string {
 // redirectOAuthFailure clears both OAuth cookies and redirects to the login
 // page.
 func (s *Server) redirectOAuthFailure(w http.ResponseWriter, r *http.Request) {
+	s.clearOAuthCookies(w, r)
+	http.Redirect(w, r, oauthFailureRedirect, http.StatusFound)
+}
+
+// clearOAuthCookies expires both OAuth protocol cookies on the response.
+func (s *Server) clearOAuthCookies(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, oauthStateCookie(r, "", -1))
 	http.SetCookie(w, oauthFlowCookie(r, "", -1))
-	http.Redirect(w, r, oauthFailureRedirect, http.StatusFound)
 }
 
 // newOAuthFlowBinding mints a random value binding the browser that started the
@@ -211,17 +222,53 @@ func newOAuthFlowBinding() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// oauthStateCookie builds the state cookie. It is HttpOnly, SameSite=Lax, and
-// Secure only when the request is served over HTTPS so local HTTP development
-// still works.
+// oauthStateCookie builds the state cookie with the name for the request's
+// scheme: the __Host- name over HTTPS, the plain name over insecure HTTP.
 func oauthStateCookie(r *http.Request, value string, maxAge int) *http.Cookie {
-	return oauthCookie(r, auth.StateCookieName, value, maxAge)
+	return oauthCookie(r, oauthStateCookieName(r), value, maxAge)
 }
 
-// oauthFlowCookie builds the flow-binding cookie. It carries the same
-// protections as the state cookie.
+// oauthFlowCookie builds the flow-binding cookie with the name for the
+// request's scheme.
 func oauthFlowCookie(r *http.Request, value string, maxAge int) *http.Cookie {
-	return oauthCookie(r, auth.FlowCookieName, value, maxAge)
+	return oauthCookie(r, oauthFlowCookieName(r), value, maxAge)
+}
+
+// oauthStateCookieName selects the state cookie name for the request's scheme.
+// Over HTTPS the __Host- prefix makes the cookie immune to shadowing by a
+// sibling subdomain, which cannot set a __Host- cookie with a Domain.
+func oauthStateCookieName(r *http.Request) string {
+	if isSecureRequest(r) {
+		return auth.StateCookieNameSecure
+	}
+	return auth.StateCookieName
+}
+
+// oauthFlowCookieName selects the flow cookie name for the request's scheme.
+func oauthFlowCookieName(r *http.Request) string {
+	if isSecureRequest(r) {
+		return auth.FlowCookieNameSecure
+	}
+	return auth.FlowCookieName
+}
+
+// oauthCookieValue returns the single value of the OAuth protocol cookie named
+// name. It fails closed when the cookie is absent or appears more than once: a
+// planted duplicate cannot win the read, which is the best-effort defense for
+// insecure HTTP where the __Host- prefix cannot be enforced.
+func oauthCookieValue(r *http.Request, name string) (string, bool) {
+	value := ""
+	count := 0
+	for _, cookie := range r.Cookies() {
+		if cookie.Name == name {
+			count++
+			value = cookie.Value
+		}
+	}
+	if count != 1 {
+		return "", false
+	}
+	return value, true
 }
 
 // oauthCookie builds an OAuth protocol cookie: HttpOnly, SameSite=Lax, and
@@ -295,12 +342,15 @@ func (s *oauthCodeStore) NewCode(result *auth.AuthResult, binding string) (strin
 	code := base64.RawURLEncoding.EncodeToString(buf)
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.entries) >= oauthExchangeCapacity {
+		return "", errOAuthCodeStoreFull
+	}
 	s.entries[code] = oauthExchangeEntry{
 		result:    result,
 		binding:   binding,
 		expiresAt: s.now().Add(oauthExchangeTTL),
 	}
-	s.mu.Unlock()
 
 	return code, nil
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -49,6 +50,24 @@ func newOAuthTestServer(t *testing.T, cfg *config.Config, oauth OAuthService) *S
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s, err := New(cfg, logger, nil, oauth, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(s.closer)
+
+	s.db = stubPinger{}
+	s.redis = stubPinger{}
+	return s
+}
+
+// newOAuthTestServerWithAuth builds a Server with both the fake auth service
+// and the OAuth service, so tests can exercise cookie clearing on the password
+// flows and the exchange endpoint together.
+func newOAuthTestServerWithAuth(t *testing.T, cfg *config.Config, oauth OAuthService) *Server {
+	t.Helper()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s, err := New(cfg, logger, newFakeAuthService(), oauth, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -225,13 +244,28 @@ func TestOAuthLoginSecureCookieOverTLS(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 
-	for _, name := range []string{auth.StateCookieName, auth.FlowCookieName} {
+	// Over HTTPS the cookies use the __Host- prefix, which requires Secure,
+	// Path=/ and no Domain; a sibling subdomain therefore cannot shadow them.
+	for _, name := range []string{auth.StateCookieNameSecure, auth.FlowCookieNameSecure} {
 		cookie := setCookieValue(rec, name)
 		if cookie == nil {
 			t.Fatalf("%s cookie not set", name)
 		}
 		if !cookie.Secure {
 			t.Errorf("%s cookie is not Secure behind an HTTPS proxy", name)
+		}
+		if cookie.Path != "/" {
+			t.Errorf("%s cookie Path = %q, want /", name, cookie.Path)
+		}
+		if cookie.Domain != "" {
+			t.Errorf("%s cookie Domain = %q, want empty (__Host- forbids it)", name, cookie.Domain)
+		}
+	}
+
+	// The insecure plain names must not be set on a secure request.
+	for _, name := range []string{auth.StateCookieName, auth.FlowCookieName} {
+		if cookie := setCookieValue(rec, name); cookie != nil {
+			t.Errorf("secure request set insecure cookie %s", name)
 		}
 	}
 }
@@ -514,5 +548,155 @@ func TestOAuthLoginNotFoundBodyIsJSON(t *testing.T) {
 	}
 	if body.Message == "" {
 		t.Error("404 body has an empty message")
+	}
+}
+
+// TestOAuthCallbackRejectsDuplicateFlowCookie pins the HTTP-dev defense: a
+// planted duplicate flow cookie must fail the read closed rather than win.
+func TestOAuthCallbackRejectsDuplicateFlowCookie(t *testing.T) {
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/auth/oauth/github/callback?state=test-state&code=code", nil)
+	req.AddCookie(&http.Cookie{Name: auth.StateCookieName, Value: "test-state"})
+	req.AddCookie(&http.Cookie{Name: auth.FlowCookieName, Value: testOAuthFlow})
+	req.AddCookie(&http.Cookie{Name: auth.FlowCookieName, Value: "planted-flow"})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != oauthFailureRedirect {
+		t.Fatalf("Location = %q, want %s", loc, oauthFailureRedirect)
+	}
+}
+
+// TestOAuthExchangeRejectsDuplicateFlowCookie pins the same defense on the
+// exchange endpoint.
+func TestOAuthExchangeRejectsDuplicateFlowCookie(t *testing.T) {
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
+	code := issueExchangeCode(t, s)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/exchange",
+		strings.NewReader(`{"code":`+strconv.Quote(code)+`}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: auth.FlowCookieName, Value: testOAuthFlow})
+	req.AddCookie(&http.Cookie{Name: auth.FlowCookieName, Value: "planted-flow"})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestOAuthExchangeRejectedAfterLogout proves logout clears the flow cookie so
+// a pending exchange is no longer redeemable.
+func TestOAuthExchangeRejectedAfterLogout(t *testing.T) {
+	s := newOAuthTestServerWithAuth(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
+	code := issueExchangeCode(t, s)
+
+	logout := doRequest(t, s, http.MethodPost, "/api/v1/auth/logout",
+		`{"refresh_token":"refresh-token"}`, "")
+	if logout.Code != http.StatusNoContent {
+		t.Fatalf("logout status = %d, want 204", logout.Code)
+	}
+	flow := setCookieValue(logout, auth.FlowCookieName)
+	if flow == nil || flow.MaxAge >= 0 {
+		t.Fatalf("logout did not clear the flow cookie: %+v", flow)
+	}
+	if state := setCookieValue(logout, auth.StateCookieName); state == nil || state.MaxAge >= 0 {
+		t.Fatalf("logout did not clear the state cookie: %+v", state)
+	}
+
+	if rec := oauthExchangePost(t, s, code, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("exchange after logout status = %d, want 401", rec.Code)
+	}
+}
+
+// TestOAuthExchangeRejectedAfterPasswordLogin proves a password login clears
+// the flow cookie so a pending exchange cannot replace the new session.
+func TestOAuthExchangeRejectedAfterPasswordLogin(t *testing.T) {
+	s := newOAuthTestServerWithAuth(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
+	code := issueExchangeCode(t, s)
+
+	login := doRequest(t, s, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"user@example.com","password":"password123"}`, "")
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status = %d, want 200 (body %s)", login.Code, login.Body.String())
+	}
+	flow := setCookieValue(login, auth.FlowCookieName)
+	if flow == nil || flow.MaxAge >= 0 {
+		t.Fatalf("login did not clear the flow cookie: %+v", flow)
+	}
+
+	if rec := oauthExchangePost(t, s, code, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("exchange after login status = %d, want 401", rec.Code)
+	}
+}
+
+// TestOAuthExchangeRateLimit pins that the exchange endpoint shares the auth
+// limiter.
+func TestOAuthExchangeRateLimit(t *testing.T) {
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
+
+	old := s.authLimiter
+	limiter := newIPRateLimiter(rate.Limit(0), 2)
+	s.authLimiter = limiter
+	t.Cleanup(func() {
+		limiter.Close()
+		old.Close()
+	})
+
+	got := []int{
+		oauthExchangePost(t, s, "unknown", testOAuthFlow).Code,
+		oauthExchangePost(t, s, "unknown", testOAuthFlow).Code,
+		oauthExchangePost(t, s, "unknown", testOAuthFlow).Code,
+	}
+	want := []int{http.StatusUnauthorized, http.StatusUnauthorized, http.StatusTooManyRequests}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("request %d status = %d, want %d (all: %v)", i+1, got[i], want[i], got)
+		}
+	}
+}
+
+// TestOAuthCodeStoreCleanup pins that the sweep drops expired codes.
+func TestOAuthCodeStoreCleanup(t *testing.T) {
+	store := newOAuthCodeStore()
+	t.Cleanup(store.Close)
+
+	base := time.Now()
+	store.now = func() time.Time { return base }
+
+	code, err := store.NewCode(defaultOAuthResult(), testOAuthFlow)
+	if err != nil {
+		t.Fatalf("NewCode: %v", err)
+	}
+
+	store.cleanup(base.Add(oauthExchangeTTL + time.Second))
+
+	store.mu.Lock()
+	_, present := store.entries[code]
+	store.mu.Unlock()
+	if present {
+		t.Fatal("cleanup left an expired exchange code behind")
+	}
+}
+
+// TestOAuthCodeStoreCapacity pins the exchange-code capacity cap.
+func TestOAuthCodeStoreCapacity(t *testing.T) {
+	store := newOAuthCodeStore()
+	t.Cleanup(store.Close)
+
+	for i := 0; i < oauthExchangeCapacity; i++ {
+		if _, err := store.NewCode(defaultOAuthResult(), testOAuthFlow); err != nil {
+			t.Fatalf("NewCode #%d: %v", i, err)
+		}
+	}
+
+	if _, err := store.NewCode(defaultOAuthResult(), testOAuthFlow); !errors.Is(err, errOAuthCodeStoreFull) {
+		t.Fatalf("NewCode past capacity error = %v, want errOAuthCodeStoreFull", err)
 	}
 }

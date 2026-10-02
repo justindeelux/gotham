@@ -7,16 +7,22 @@ import {
 } from "naive-ui";
 import type { GlobalThemeOverrides } from "naive-ui";
 import { onMounted } from "vue";
-import { RouterView } from "vue-router";
+import { RouterView, useRoute } from "vue-router";
 
 import { useAuthStore } from "./stores/auth";
 
 const authStore = useAuthStore();
+const route = useRoute();
 
 // A session restored from localStorage may not carry the account (OAuth mints
 // the token pair before the SPA loads it). Refresh it once on mount so the shell
-// does not render a placeholder until a manual reload (A2-17).
+// does not render a placeholder until a manual reload (A2-17/F3). Skip it on the
+// callback route, where the exchange installs a fresh session that this delayed
+// response could otherwise overwrite.
 onMounted(() => {
+  if (route.path === "/oauth/callback") {
+    return;
+  }
   if (authStore.isAuthenticated && authStore.user === null) {
     void authStore.fetchMe().catch(() => {});
   }

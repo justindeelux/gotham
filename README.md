@@ -179,7 +179,29 @@ a few operational knobs directly from the environment:
 | `FEATURE_PREVIEWS` | on | Handle `pull_request` deliveries: deploy each PR as a sibling application under the base domain and remove it when the PR closes. Previews copy plain env vars only — sealed secrets and storages stay with the base application — and fork pull requests are never previewed. Off: PR deliveries are acknowledged without action, the preview listing route is unmounted and the orphan sweep does not run; push deliveries are unaffected. Hooks installed before the feature (or with it off) subscribe to `push` only and must be deleted and re-installed to receive `pull_request` events. |
 | `FEATURE_PROXY` | on | Mount the Traefik/SSL/redirect surface. |
 | `FEATURE_TEAMS` | on | Mount the teams and invites routes. Off: every request resolves to the caller's personal team and the team-management routes are unmounted. |
+| `GOTHAM_KNOWN_HOSTS` | unset | Extra `known_hosts` file merged over the embedded github.com/gitlab.com/bitbucket.org/`[ssh.github.com]:443` keys when cloning an application over SSH. Point it at a self-hosted Git host's pinned host key (e.g. GitHub Enterprise); the clone still checks host keys strictly (`StrictHostKeyChecking=yes`). This file is a trust anchor: keep it `0600` and operator/root-owned — the control plane never writes to it, and warns when it is group/world-writable. |
+| `GOTHAM_DEV_ACCEPT_NEW_HOST_KEYS` | unset | Test/dev only: `true` changes the keyed clone to `StrictHostKeyChecking=accept-new`, trusting an unseen host key. Never enable it in production — it reopens the MITM gap. |
 | `PLATFORM_ADMINS` | unset | Comma-separated account emails allowed to use the **platform-global** proxy operations (node-wide `POST /v1/proxy/sync`, DNS-provider CRUD) with a session. Unset denies every session; an admin-scoped API token always passes. **Operators must list themselves here** (or mint an admin-scoped token) to manage global DNS providers — per-application certificate and redirect management stays with the owning team. |
+
+---
+
+## 3.1 Host-key trust (upgrade note)
+
+Gotham verifies the host key of every remote it talks to. This is a behaviour
+change for existing installations; the failure mode is fail-closed.
+
+| Situation | After upgrade |
+|---|---|
+| **Password-auth node**, first validation | 422 `"ssh: host … is not pinned"`. Send `trust_host_key: true` on `POST /v1/servers/{id}/validate` to accept and pin the key once. Later validations need no flag. |
+| **Key-auth node**, first validation | Transparently TOFU-pins the host key. Later validations fail closed if the key changes; reset with `DELETE /v1/servers/{id}/host-key` and revalidate. |
+| **Keyed clone** from github.com, gitlab.com, bitbucket.org, `ssh.github.com:443` | Works — those keys are embedded. |
+| **Keyed clone** from any other host (e.g. GitHub Enterprise, self-hosted GitLab) | Fails closed: add the host's key to the file named by `GOTHAM_KNOWN_HOSTS` (0600, operator-owned) and retry. |
+
+A first TOFU pin is logged (`servers: host key pinned on first use` with the
+fingerprint) so operators can audit which key was trusted. There is an inherent
+residual — an on-path attacker present at the *very first* validation, before any
+pin exists, can win the pin; revalidate over a trusted path and reset if you
+suspect it.
 
 ---
 

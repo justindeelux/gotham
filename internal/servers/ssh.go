@@ -53,27 +53,66 @@ type CheckResult struct {
 	Detail string `json:"detail"`
 }
 
+// HostKeyPolicy is the host-key trust decision for one validation run.
+type HostKeyPolicy struct {
+	// Pinned is the expected host key fingerprint in OpenSSH SHA256 form
+	// ("SHA256:..."). Empty means the node has no pin yet.
+	Pinned string
+	// AcceptUnpinned trusts a node whose key is not yet pinned: TOFU after a
+	// successful public-key validation, or an operator's explicit trust for
+	// password auth. It is ignored once Pinned is set.
+	AcceptUnpinned bool
+}
+
+// hostKeyVerifier implements ssh.HostKeyCallback. It remembers the presented
+// fingerprint so a first-use pin can be persisted, and fails closed on a pin
+// mismatch.
+type hostKeyVerifier struct {
+	pinned         string
+	acceptUnpinned bool
+	observed       string
+}
+
+// check accepts the key only when it matches the pin, or when the host is
+// unpinned and the policy allows trusting it on first use.
+func (v *hostKeyVerifier) check(hostname string, _ net.Addr, key ssh.PublicKey) error {
+	v.observed = ssh.FingerprintSHA256(key)
+	switch {
+	case v.pinned == "":
+		if !v.acceptUnpinned {
+			return fmt.Errorf("ssh: host %s is not pinned; refusing to trust %s", hostname, v.observed)
+		}
+		return nil
+	case v.observed == v.pinned:
+		return nil
+	default:
+		return fmt.Errorf("ssh: host key for %s changed: got %s, want %s", hostname, v.observed, v.pinned)
+	}
+}
+
 // ValidateNode dials the node over SSH and runs the fixed set of probe
-// commands. It returns one CheckResult per probe (docker, cpu, ram, disk) and
-// the gathered NodeInfo. A failed SSH connection is returned as an error; a
-// failed individual probe is reported as a CheckResult so the other probes
-// still run.
-func ValidateNode(ctx context.Context, ip string, port int, user string, auth SSHAuth) ([]CheckResult, NodeInfo, error) {
+// commands. It returns one CheckResult per probe (docker, cpu, ram, disk), the
+// gathered NodeInfo, and the host key fingerprint the node presented (empty
+// when no handshake completed). A failed SSH connection is returned as an
+// error; a failed individual probe is reported as a CheckResult so the other
+// probes still run.
+func ValidateNode(ctx context.Context, ip string, port int, user string, auth SSHAuth, policy HostKeyPolicy) ([]CheckResult, NodeInfo, string, error) {
 	var info NodeInfo
 
 	if ip == "" {
-		return nil, info, fmt.Errorf("%w: ip is required", ErrValidation)
+		return nil, info, "", fmt.Errorf("%w: ip is required", ErrValidation)
 	}
 	if user == "" {
-		return nil, info, fmt.Errorf("%w: ssh user is required", ErrValidation)
+		return nil, info, "", fmt.Errorf("%w: ssh user is required", ErrValidation)
 	}
 	if port <= 0 {
 		port = 22
 	}
 
-	cfg, err := sshClientConfig(user, auth)
+	verifier := &hostKeyVerifier{pinned: policy.Pinned, acceptUnpinned: policy.AcceptUnpinned}
+	cfg, err := sshClientConfig(user, auth, verifier)
 	if err != nil {
-		return nil, info, err
+		return nil, info, "", err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, sshDialTimeout)
@@ -82,7 +121,7 @@ func ValidateNode(ctx context.Context, ip string, port int, user string, auth SS
 	addr := net.JoinHostPort(ip, strconv.Itoa(port))
 	client, err := dialSSH(ctx, addr, cfg)
 	if err != nil {
-		return nil, info, fmt.Errorf("ssh dial %s: %w", addr, err)
+		return nil, info, verifier.observed, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
 	defer func() { _ = client.Close() }()
 
@@ -132,12 +171,13 @@ func ValidateNode(ctx context.Context, ip string, port int, user string, auth SS
 		checks = append(checks, CheckResult{Name: checkDisk, OK: false, Detail: "could not parse df output: " + strings.TrimSpace(out)})
 	}
 
-	return checks, info, nil
+	return checks, info, verifier.observed, nil
 }
 
 // sshClientConfig builds the SSH client configuration for the given credentials.
-// Private-key auth is preferred; password auth is the fallback.
-func sshClientConfig(user string, auth SSHAuth) (*ssh.ClientConfig, error) {
+// Private-key auth is preferred; password auth is the fallback. Host keys are
+// verified by verifier, never blindly accepted.
+func sshClientConfig(user string, auth SSHAuth, verifier *hostKeyVerifier) (*ssh.ClientConfig, error) {
 	methods := make([]ssh.AuthMethod, 0, 2)
 
 	if len(auth.PrivateKeyPEM) > 0 {
@@ -155,11 +195,9 @@ func sshClientConfig(user string, auth SSHAuth) (*ssh.ClientConfig, error) {
 	}
 
 	return &ssh.ClientConfig{
-		User: user,
-		Auth: methods,
-		// Nodes present self-signed host keys; pinned host keys land with the
-		// agent trust model in a later phase.
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		User:            user,
+		Auth:            methods,
+		HostKeyCallback: verifier.check,
 		Timeout:         sshDialTimeout,
 	}, nil
 }

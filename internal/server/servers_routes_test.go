@@ -116,6 +116,19 @@ func (f *fakeServerService) Validate(_ context.Context, id uuid.UUID, _ servers.
 	}, nil
 }
 
+func (f *fakeServerService) ResetHostKey(_ context.Context, id uuid.UUID) (*servers.Server, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	item, ok := f.items[id]
+	if !ok {
+		return nil, servers.ErrNotFound
+	}
+	item.HostKeyFingerprint = nil
+	f.items[id] = item
+	return &item, nil
+}
+
 func (f *fakeServerService) AddPrivateKey(_ context.Context, name, privateKeyPEM string) (*servers.PrivateKey, error) {
 	if name == "" || privateKeyPEM == "" {
 		return nil, fmt.Errorf("%w: name and private_key are required", servers.ErrValidation)
@@ -309,6 +322,37 @@ func TestValidateServerRouteNoCredentials(t *testing.T) {
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/validate", "", authHeader)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestResetServerHostKeyRoute(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-8")
+
+	fingerprint := "SHA256:abc"
+	fake.mu.Lock()
+	item := fake.items[id]
+	item.HostKeyFingerprint = &fingerprint
+	fake.items[id] = item
+	fake.mu.Unlock()
+
+	rec := doRequest(t, s, http.MethodDelete, "/api/v1/servers/"+id.String()+"/host-key", "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var body serverEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Server.HostKeyFingerprint != nil {
+		t.Errorf("host_key_fingerprint = %q, want null after reset", *body.Server.HostKeyFingerprint)
+	}
+
+	rec = doRequest(t, s, http.MethodDelete, "/api/v1/servers/"+uuid.New().String()+"/host-key", "", authHeader)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown status = %d, want 404", rec.Code)
 	}
 }
 

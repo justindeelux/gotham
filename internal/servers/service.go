@@ -58,8 +58,11 @@ type Server struct {
 	DiskUsage      *float64
 	ContainerCount *int64
 	LastSeen       *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// HostKeyFingerprint is the TOFU-pinned SSH host key of the node, in
+	// OpenSSH SHA256 form. nil until the node has been validated once.
+	HostKeyFingerprint *string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // PrivateKey is the metadata of a stored SSH private key. The encrypted
@@ -81,6 +84,11 @@ type ValidationResult struct {
 type ValidateAuth struct {
 	KeyID    uuid.UUID
 	Password string
+	// TrustHostKey is the operator's explicit consent to trust an unpinned host
+	// key on this run. It is required for password auth to a node that has
+	// never been validated (there is no key to TOFU-pin against) and is
+	// ignored once the node is pinned.
+	TrustHostKey bool
 }
 
 // Config wires a ServerService.
@@ -261,6 +269,87 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// ResetHostKey forgets a node's pinned SSH host key, so the next validation
+// re-pins it. It is the operator escape hatch after a legitimate host key
+// rotation; a team member cannot reset a node outside their team.
+func (s *ServerService) ResetHostKey(ctx context.Context, id uuid.UUID) (*Server, error) {
+	row, err := s.store.GetServerByID(ctx, pgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get server: %w", err)
+	}
+	server := serverFromRow(row)
+	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, true); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return nil, err
+		}
+		return nil, ErrNotFound
+	}
+
+	updated, err := s.store.ClearServerHostKey(ctx, pgUUID(id))
+	if err != nil {
+		return nil, fmt.Errorf("clear host key: %w", err)
+	}
+	scope := teams.ScopeFor(ctx, uuid.Nil)
+	s.logger.Info("servers: host key pin reset",
+		"server_id", id.String(),
+		"actor_team_id", scopeID(scope.TeamID),
+		"actor_user_id", scopeID(scope.UserID),
+	)
+	return serverFromRow(updated), nil
+}
+
+// scopeID renders a scope UUID for audit logs, leaving it empty when the caller
+// had no team/user scope, so logs never show the zero UUID as an actor.
+func scopeID(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
+}
+
+// pinHostKey persists a first-use host key fingerprint with compare-and-set
+// semantics. When the CAS affects 0 rows the node was pinned (or unpinned)
+// concurrently: it re-reads and either accepts a stored match, fails closed on
+// a mismatch, or retries once when the row was cleared in the window. A pin
+// that never lands is an error, so a node is never reported ready un-pinned.
+func (s *ServerService) pinHostKey(ctx context.Context, id uuid.UUID, fingerprint string) error {
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := s.store.PinServerHostKey(ctx, sqlc.PinServerHostKeyParams{
+			ID:                 pgUUID(id),
+			HostKeyFingerprint: &fingerprint,
+		}); err == nil {
+			// The fingerprint is public; log it so operators can audit the
+			// first pin. A routine pin is Info; only resets/mismatches Warn.
+			s.logger.Info("servers: host key pinned on first use",
+				"server_id", id.String(),
+				"host_key_fingerprint", fingerprint,
+			)
+			return nil
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("persist host key fingerprint: %w", err)
+		}
+
+		// Lost the CAS: another writer touched the row first.
+		row, readErr := s.store.GetServerByID(ctx, pgUUID(id))
+		if readErr != nil {
+			return fmt.Errorf("persist host key fingerprint: %w", readErr)
+		}
+		switch stored := fingerprintOf(row.HostKeyFingerprint); {
+		case stored == fingerprint:
+			return nil // someone else pinned the same key: benign
+		case stored != "":
+			return fmt.Errorf("host key changed while pinning: got %s, want %s", fingerprint, stored)
+		default:
+			// The row was cleared in the window (an operator reset landed):
+			// loop and re-run the CAS so the pin is not silently skipped.
+		}
+	}
+	return fmt.Errorf("persist host key fingerprint: node %s was cleared repeatedly while pinning", id)
+}
+
 // AddPrivateKey encrypts and stores an SSH private key.
 func (s *ServerService) AddPrivateKey(ctx context.Context, name, privateKeyPEM string) (*PrivateKey, error) {
 	name = strings.TrimSpace(name)
@@ -319,9 +408,21 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		return nil, err
 	}
 
+	// A pinned node is always verified against its pin. An unpinned node is
+	// trusted on first use for public-key auth, or when the operator explicitly
+	// asked for it. TOFU is inherent: an on-path attacker present at the very
+	// first validation can win the pin (the deploy key proves the caller holds
+	// a credential, not that the peer is the intended host). Password auth is
+	// refused unless the operator opts in, because a first-use MITM there also
+	// captures the node password.
+	policy := HostKeyPolicy{Pinned: fingerprintOf(row.HostKeyFingerprint)}
+	if policy.Pinned == "" {
+		policy.AcceptUnpinned = len(credentials.PrivateKeyPEM) > 0 || auth.TrustHostKey
+	}
+
 	s.setStatus(ctx, id, StatusValidating)
 
-	checks, info, err := ValidateNode(ctx, server.IP, server.Port, server.SSHUser, credentials)
+	checks, info, fingerprint, err := ValidateNode(ctx, server.IP, server.Port, server.SSHUser, credentials, policy)
 	result := &ValidationResult{Checks: checks, Server: server}
 
 	if err != nil {
@@ -338,6 +439,20 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 			s.setStatus(ctx, id, StatusError)
 			result.Server.Status = StatusError
 			return result, fmt.Errorf("%w: %s check failed: %s", ErrValidation, check.Name, check.Detail)
+		}
+	}
+
+	// The handshake succeeded against a host that is now trusted: persist the
+	// TOFU pin so every later validation fails closed on a different key. A
+	// first pin only (fingerprint != policy.Pinned) and only when the row is
+	// still unpinned: a racing validation that pinned a different key must not
+	// be overwritten. A failed or losing pin write fails the validation — the
+	// node never reports ready without a durable pin.
+	if fingerprint != "" && fingerprint != policy.Pinned {
+		if err := s.pinHostKey(ctx, id, fingerprint); err != nil {
+			s.setStatus(ctx, id, StatusError)
+			result.Server.Status = StatusError
+			return result, fmt.Errorf("%w: %v", ErrValidation, err)
 		}
 	}
 
@@ -524,26 +639,27 @@ func (s *ServerService) setStatus(ctx context.Context, id uuid.UUID, status stri
 // serverFromRow maps a sqlc row to the domain type.
 func serverFromRow(row sqlc.Server) *Server {
 	server := &Server{
-		ID:             uuidFromPG(row.ID),
-		Name:           row.Name,
-		IP:             row.Ip,
-		Port:           int(row.Port),
-		SSHUser:        row.SshUser,
-		TeamID:         uuidFromPG(row.TeamID),
-		Status:         row.Status,
-		NodeID:         row.NodeID,
-		OS:             row.Os,
-		DockerVersion:  row.DockerVersion,
-		Arch:           row.Arch,
-		TotalMem:       row.TotalMem,
-		TotalDisk:      row.TotalDisk,
-		CPUUsage:       row.CpuUsage,
-		MemUsage:       row.MemUsage,
-		DiskUsage:      row.DiskUsage,
-		ContainerCount: row.ContainerCount,
-		LastSeen:       timePtr(row.LastSeen),
-		CreatedAt:      row.CreatedAt.Time,
-		UpdatedAt:      row.UpdatedAt.Time,
+		ID:                 uuidFromPG(row.ID),
+		Name:               row.Name,
+		IP:                 row.Ip,
+		Port:               int(row.Port),
+		SSHUser:            row.SshUser,
+		TeamID:             uuidFromPG(row.TeamID),
+		Status:             row.Status,
+		NodeID:             row.NodeID,
+		OS:                 row.Os,
+		DockerVersion:      row.DockerVersion,
+		Arch:               row.Arch,
+		TotalMem:           row.TotalMem,
+		TotalDisk:          row.TotalDisk,
+		CPUUsage:           row.CpuUsage,
+		MemUsage:           row.MemUsage,
+		DiskUsage:          row.DiskUsage,
+		ContainerCount:     row.ContainerCount,
+		LastSeen:           timePtr(row.LastSeen),
+		HostKeyFingerprint: row.HostKeyFingerprint,
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
 	}
 	if row.SshKeyID.Valid {
 		keyID := uuidFromPG(row.SshKeyID)
@@ -585,6 +701,14 @@ func timePtr(ts pgtype.Timestamptz) *time.Time {
 	}
 	t := ts.Time
 	return &t
+}
+
+// fingerprintOf dereferences a nullable fingerprint column.
+func fingerprintOf(fp *string) string {
+	if fp == nil {
+		return ""
+	}
+	return *fp
 }
 
 // strPtr returns a pointer to s, or nil when s is empty.

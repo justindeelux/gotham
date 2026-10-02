@@ -26,8 +26,8 @@ type sshProbeServer struct {
 }
 
 // startSSHProbeServer starts the server on a random localhost port and returns
-// its address plus a stop function.
-func startSSHProbeServer(t *testing.T, password string, dockerMissing bool) (string, func()) {
+// its address, the SHA256 fingerprint of its host key, and a stop function.
+func startSSHProbeServer(t *testing.T, password string, dockerMissing bool) (string, string, func()) {
 	t.Helper()
 
 	_, hostKey, err := ed25519.GenerateKey(rand.Reader)
@@ -70,7 +70,7 @@ func startSSHProbeServer(t *testing.T, password string, dockerMissing bool) (str
 		}
 	}()
 
-	return server.listener.Addr().String(), func() { _ = server.listener.Close() }
+	return server.listener.Addr().String(), ssh.FingerprintSHA256(signer.PublicKey()), func() { _ = server.listener.Close() }
 }
 
 // handle performs the SSH handshake and answers session exec requests.
@@ -189,14 +189,14 @@ func checkByName(t *testing.T, checks []CheckResult, name string) CheckResult {
 }
 
 func TestValidateNodeHappyPath(t *testing.T) {
-	addr, stop := startSSHProbeServer(t, "unused", false)
+	addr, _, stop := startSSHProbeServer(t, "unused", false)
 	defer stop()
 	host, port := target(t, addr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	checks, info, err := ValidateNode(ctx, host, port, "root", SSHAuth{PrivateKeyPEM: testPrivateKeyPEM(t)})
+	checks, info, _, err := ValidateNode(ctx, host, port, "root", SSHAuth{PrivateKeyPEM: testPrivateKeyPEM(t)}, HostKeyPolicy{AcceptUnpinned: true})
 	if err != nil {
 		t.Fatalf("ValidateNode: %v", err)
 	}
@@ -224,11 +224,11 @@ func TestValidateNodeHappyPath(t *testing.T) {
 }
 
 func TestValidateNodePasswordFallback(t *testing.T) {
-	addr, stop := startSSHProbeServer(t, "hunter2", false)
+	addr, _, stop := startSSHProbeServer(t, "hunter2", false)
 	defer stop()
 	host, port := target(t, addr)
 
-	checks, _, err := ValidateNode(context.Background(), host, port, "root", SSHAuth{Password: "hunter2"})
+	checks, _, _, err := ValidateNode(context.Background(), host, port, "root", SSHAuth{Password: "hunter2"}, HostKeyPolicy{AcceptUnpinned: true})
 	if err != nil {
 		t.Fatalf("ValidateNode: %v", err)
 	}
@@ -238,11 +238,11 @@ func TestValidateNodePasswordFallback(t *testing.T) {
 }
 
 func TestValidateNodeDockerMissing(t *testing.T) {
-	addr, stop := startSSHProbeServer(t, "hunter2", true)
+	addr, _, stop := startSSHProbeServer(t, "hunter2", true)
 	defer stop()
 	host, port := target(t, addr)
 
-	checks, _, err := ValidateNode(context.Background(), host, port, "root", SSHAuth{Password: "hunter2"})
+	checks, _, _, err := ValidateNode(context.Background(), host, port, "root", SSHAuth{Password: "hunter2"}, HostKeyPolicy{AcceptUnpinned: true})
 	if err != nil {
 		t.Fatalf("ValidateNode: %v", err)
 	}
@@ -260,29 +260,103 @@ func TestValidateNodeDockerMissing(t *testing.T) {
 }
 
 func TestValidateNodeAuthFailure(t *testing.T) {
-	addr, stop := startSSHProbeServer(t, "correct-password", false)
+	addr, _, stop := startSSHProbeServer(t, "correct-password", false)
 	defer stop()
 	host, port := target(t, addr)
 
-	_, _, err := ValidateNode(context.Background(), host, port, "root", SSHAuth{Password: "wrong-password"})
+	_, _, _, err := ValidateNode(context.Background(), host, port, "root", SSHAuth{Password: "wrong-password"}, HostKeyPolicy{AcceptUnpinned: true})
 	if err == nil {
 		t.Fatal("ValidateNode with wrong password = nil error, want handshake failure")
 	}
 }
 
 func TestValidateNodeNoCredentials(t *testing.T) {
-	_, _, err := ValidateNode(context.Background(), "127.0.0.1", 22, "root", SSHAuth{})
+	_, _, _, err := ValidateNode(context.Background(), "127.0.0.1", 22, "root", SSHAuth{}, HostKeyPolicy{})
 	if !errors.Is(err, ErrNoCredentials) {
 		t.Fatalf("ValidateNode with no credentials = %v, want ErrNoCredentials", err)
 	}
 }
 
 func TestValidateNodeRejectsBadInput(t *testing.T) {
-	if _, _, err := ValidateNode(context.Background(), "", 22, "root", SSHAuth{Password: "x"}); !errors.Is(err, ErrValidation) {
+	if _, _, _, err := ValidateNode(context.Background(), "", 22, "root", SSHAuth{Password: "x"}, HostKeyPolicy{}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("empty ip = %v, want ErrValidation", err)
 	}
-	if _, _, err := ValidateNode(context.Background(), "127.0.0.1", 22, "", SSHAuth{Password: "x"}); !errors.Is(err, ErrValidation) {
+	if _, _, _, err := ValidateNode(context.Background(), "127.0.0.1", 22, "", SSHAuth{Password: "x"}, HostKeyPolicy{}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("empty user = %v, want ErrValidation", err)
+	}
+}
+
+// TestValidateNodePinsHostKey covers the first-use (TOFU) path: an unpinned host
+// the policy trusts reports the fingerprint the caller must persist.
+func TestValidateNodePinsHostKey(t *testing.T) {
+	addr, wantFingerprint, stop := startSSHProbeServer(t, "hunter2", false)
+	defer stop()
+	host, port := target(t, addr)
+
+	_, _, fingerprint, err := ValidateNode(context.Background(), host, port, "root",
+		SSHAuth{Password: "hunter2"}, HostKeyPolicy{AcceptUnpinned: true})
+	if err != nil {
+		t.Fatalf("ValidateNode: %v", err)
+	}
+	if fingerprint != wantFingerprint {
+		t.Errorf("fingerprint = %q, want %q", fingerprint, wantFingerprint)
+	}
+	if !strings.HasPrefix(fingerprint, "SHA256:") {
+		t.Errorf("fingerprint = %q, want the OpenSSH SHA256 form", fingerprint)
+	}
+}
+
+// TestValidateNodePinnedHostKeyAccepted proves a pinned host key validates even
+// when the policy would not trust an unpinned host.
+func TestValidateNodePinnedHostKeyAccepted(t *testing.T) {
+	addr, fingerprint, stop := startSSHProbeServer(t, "hunter2", false)
+	defer stop()
+	host, port := target(t, addr)
+
+	checks, _, got, err := ValidateNode(context.Background(), host, port, "root",
+		SSHAuth{Password: "hunter2"}, HostKeyPolicy{Pinned: fingerprint})
+	if err != nil {
+		t.Fatalf("ValidateNode with a matching pin: %v", err)
+	}
+	if got != fingerprint {
+		t.Errorf("fingerprint = %q, want %q", got, fingerprint)
+	}
+	if !checkByName(t, checks, checkDocker).OK {
+		t.Error("docker check did not pass with a pinned host key")
+	}
+}
+
+// TestValidateNodePinnedHostKeyChangeFailsClosed proves a MITM cannot swap the
+// node's key after the first pin: validation is refused.
+func TestValidateNodePinnedHostKeyChangeFailsClosed(t *testing.T) {
+	addr, _, stop := startSSHProbeServer(t, "hunter2", false)
+	defer stop()
+	host, port := target(t, addr)
+
+	_, _, _, err := ValidateNode(context.Background(), host, port, "root",
+		SSHAuth{Password: "hunter2"}, HostKeyPolicy{Pinned: "SHA256:0000000000000000000000000000000000000000000"})
+	if err == nil {
+		t.Fatal("ValidateNode accepted a changed host key")
+	}
+	if !strings.Contains(err.Error(), "changed") {
+		t.Errorf("err = %v, want it to report a changed host key", err)
+	}
+}
+
+// TestValidateNodeRefusesUnpinnedHost covers the password-auth default: with no
+// pin and no explicit operator trust, an unknown host is refused.
+func TestValidateNodeRefusesUnpinnedHost(t *testing.T) {
+	addr, _, stop := startSSHProbeServer(t, "hunter2", false)
+	defer stop()
+	host, port := target(t, addr)
+
+	_, _, _, err := ValidateNode(context.Background(), host, port, "root",
+		SSHAuth{Password: "hunter2"}, HostKeyPolicy{})
+	if err == nil {
+		t.Fatal("ValidateNode trusted an unpinned host without explicit consent")
+	}
+	if !strings.Contains(err.Error(), "not pinned") {
+		t.Errorf("err = %v, want it to report the host is not pinned", err)
 	}
 }
 

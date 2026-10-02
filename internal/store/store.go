@@ -25,6 +25,11 @@ type Store struct {
 	// prove the revocation itself runs under the per-user lock (the hook sees
 	// the lock still held). Production leaves it nil.
 	BeforeFamilyRevoke func()
+
+	// BeforePinServerHostKey is a nil-by-default test seam invoked before the
+	// TOFU pin write; a non-nil error aborts the write, so a test can force it
+	// to fail. Production leaves it nil.
+	BeforePinServerHostKey func() error
 }
 
 // New wires a Store to an existing pool.
@@ -336,6 +341,25 @@ func (s *Store) UpdateServerMetrics(ctx context.Context, params sqlc.UpdateServe
 // SetServerStatus updates a node's lifecycle status and returns the updated row.
 func (s *Store) SetServerStatus(ctx context.Context, params sqlc.SetServerStatusParams) (sqlc.Server, error) {
 	return s.queries.SetServerStatus(ctx, params)
+}
+
+// PinServerHostKey pins a node's SSH host key fingerprint only when the node is
+// still unpinned, and returns the updated row. It answers pgx.ErrNoRows when a
+// pin already exists, so the caller can re-read and fail closed on a mismatch.
+// The BeforePinServerHostKey test seam, when set, can fail the write.
+func (s *Store) PinServerHostKey(ctx context.Context, params sqlc.PinServerHostKeyParams) (sqlc.Server, error) {
+	if s.BeforePinServerHostKey != nil {
+		if err := s.BeforePinServerHostKey(); err != nil {
+			return sqlc.Server{}, err
+		}
+	}
+	return s.queries.PinServerHostKey(ctx, params)
+}
+
+// ClearServerHostKey forgets a node's pinned SSH host key and returns the
+// updated row.
+func (s *Store) ClearServerHostKey(ctx context.Context, id pgtype.UUID) (sqlc.Server, error) {
+	return s.queries.ClearServerHostKey(ctx, id)
 }
 
 // CreatePrivateKey stores an encrypted SSH private key and returns its metadata.

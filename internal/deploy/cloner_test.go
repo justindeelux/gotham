@@ -1,9 +1,15 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestValidateCloneURL(t *testing.T) {
@@ -104,6 +111,27 @@ func sshCommandKeyPath(env []string) string {
 	return ""
 }
 
+// sshCommandKnownHostsPath extracts the UserKnownHostsFile path from a captured
+// GIT_SSH_COMMAND.
+func sshCommandKnownHostsPath(env []string) string {
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "GIT_SSH_COMMAND=") {
+			continue
+		}
+		command := strings.TrimPrefix(entry, "GIT_SSH_COMMAND=")
+		_, rest, ok := strings.Cut(command, "UserKnownHostsFile='")
+		if !ok {
+			return ""
+		}
+		path, _, ok := strings.Cut(rest, "'")
+		if !ok {
+			return ""
+		}
+		return path
+	}
+	return ""
+}
+
 // hasEntry reports whether env carries a variable with the given name.
 func hasEntry(env []string, name string) bool {
 	for _, entry := range env {
@@ -155,10 +183,22 @@ func TestGitSourceCloneWithDeployKey(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "repo")
 
 	var gotArgv, gotEnv []string
-	var keyPath string
+	var keyPath, knownHostsPath string
+	var knownHostsContent []byte
 	run := func(_ context.Context, argv, env []string) ([]byte, error) {
 		gotArgv = append([]string(nil), argv...)
 		gotEnv = append([]string(nil), env...)
+
+		// The ephemeral directory is removed as soon as Clone returns, so the
+		// known_hosts is captured here rather than after the call.
+		knownHostsPath = sshCommandKnownHostsPath(env)
+		if knownHostsPath != "" {
+			if data, readErr := os.ReadFile(knownHostsPath); readErr == nil {
+				knownHostsContent = data
+			} else {
+				t.Errorf("read known_hosts: %v", readErr)
+			}
+		}
 
 		keyPath = sshCommandKeyPath(env)
 		if keyPath == "" {
@@ -217,13 +257,23 @@ func TestGitSourceCloneWithDeployKey(t *testing.T) {
 			command = strings.TrimPrefix(entry, "GIT_SSH_COMMAND=")
 		}
 	}
-	for _, option := range []string{"-i '", "IdentitiesOnly=yes", "StrictHostKeyChecking=accept-new", "UserKnownHostsFile="} {
+	for _, option := range []string{"-i '", "IdentitiesOnly=yes", "StrictHostKeyChecking=yes", "UserKnownHostsFile="} {
 		if !strings.Contains(command, option) {
 			t.Errorf("GIT_SSH_COMMAND = %q, want it to contain %q", command, option)
 		}
 	}
 	if keyPath != "" && !strings.Contains(command, "-i '"+keyPath+"'") {
 		t.Errorf("GIT_SSH_COMMAND = %q, want it to carry -i %q", command, keyPath)
+	}
+	// The pinned provider keys must be present in the known_hosts the clone
+	// verifies against, so github.com/gitlab.com work without operator setup.
+	if knownHostsPath == "" {
+		t.Fatal("GIT_SSH_COMMAND carries no UserKnownHostsFile path")
+	}
+	for _, host := range []string{"github.com", "gitlab.com"} {
+		if !strings.Contains(string(knownHostsContent), host+" ssh-ed25519 ") {
+			t.Errorf("known_hosts is missing the pinned %s key:\n%s", host, knownHostsContent)
+		}
 	}
 	if !hasEntry(gotEnv, ambientEnvName) {
 		t.Errorf("env = %v, want the ambient %s preserved", gotEnv, ambientEnvName)
@@ -651,4 +701,327 @@ func TestRunGitChildDiesHelper(t *testing.T) {
 	}
 	fmt.Fprintln(os.Stderr, "helper: the child never reported its pid")
 	os.Exit(2)
+}
+
+// TestGitSourceKnownHostsPolicy pins the keyed clone's host-key policy: the
+// embedded provider keys are always present, strict checking is the default,
+// accept-new only appears under the dev flag, and GOTHAM_KNOWN_HOSTS is merged.
+func TestGitSourceKnownHostsPolicy(t *testing.T) {
+	privatePEM, _, _, err := generateDeployKeyPair("gotham:deploy:test")
+	if err != nil {
+		t.Fatalf("generateDeployKeyPair: %v", err)
+	}
+	app := testApplication(uuid.New())
+
+	clone := func(t *testing.T, dir string) (command, knownHosts string) {
+		t.Helper()
+		run := func(_ context.Context, _ []string, env []string) ([]byte, error) {
+			for _, entry := range env {
+				if strings.HasPrefix(entry, "GIT_SSH_COMMAND=") {
+					command = strings.TrimPrefix(entry, "GIT_SSH_COMMAND=")
+				}
+			}
+			path := sshCommandKnownHostsPath(env)
+			if path == "" {
+				t.Error("GIT_SSH_COMMAND carries no UserKnownHostsFile path")
+				return nil, nil
+			}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Errorf("read known_hosts: %v", readErr)
+				return nil, nil
+			}
+			knownHosts = string(data)
+			return nil, nil
+		}
+		source := gitSource{keys: &staticKeyResolver{pem: privatePEM}, run: run}
+		if err := source.Clone(context.Background(), app, dir, nil); err != nil {
+			t.Fatalf("Clone: %v", err)
+		}
+		return command, knownHosts
+	}
+
+	t.Run("strict by default", func(t *testing.T) {
+		command, knownHosts := clone(t, filepath.Join(t.TempDir(), "repo"))
+		if !strings.Contains(command, "StrictHostKeyChecking=yes") {
+			t.Errorf("GIT_SSH_COMMAND = %q, want StrictHostKeyChecking=yes", command)
+		}
+		if strings.Contains(command, "accept-new") {
+			t.Errorf("GIT_SSH_COMMAND = %q, want no accept-new by default", command)
+		}
+		// The host-wide known_hosts and KnownHostsCommand must not be trusted:
+		// the ephemeral pinned set is the only anchor.
+		if !strings.Contains(command, "GlobalKnownHostsFile=/dev/null") {
+			t.Errorf("GIT_SSH_COMMAND = %q, want GlobalKnownHostsFile=/dev/null", command)
+		}
+		for _, host := range []string{
+			"github.com ssh-ed25519", "gitlab.com ssh-ed25519",
+			"bitbucket.org ssh-ed25519", "[ssh.github.com]:443 ssh-ed25519",
+		} {
+			if !strings.Contains(knownHosts, host) {
+				t.Errorf("known_hosts is missing the pinned %q key:\n%s", host, knownHosts)
+			}
+		}
+	})
+
+	t.Run("dev flag warns", func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		t.Setenv(devAcceptNewHostKeysEnv, "true")
+		run := func(context.Context, []string, []string) ([]byte, error) { return nil, nil }
+		source := gitSource{keys: &staticKeyResolver{pem: privatePEM}, run: run, logger: logger}
+		if err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil); err != nil {
+			t.Fatalf("Clone: %v", err)
+		}
+		if !strings.Contains(buf.String(), devAcceptNewHostKeysEnv) {
+			t.Errorf("warn log = %q, want it to name %s", buf.String(), devAcceptNewHostKeysEnv)
+		}
+	})
+
+	t.Run("world-writable operator file warns", func(t *testing.T) {
+		operatorFile := filepath.Join(t.TempDir(), "operator_known_hosts")
+		if err := os.WriteFile(operatorFile, []byte("git.internal ssh-ed25519 AAAA\n"), 0o600); err != nil {
+			t.Fatalf("write operator known_hosts: %v", err)
+		}
+		// WriteFile honours the umask; chmod makes the world-writable mode
+		// deterministic across environments.
+		if err := os.Chmod(operatorFile, 0o666); err != nil {
+			t.Fatalf("chmod operator known_hosts: %v", err)
+		}
+		t.Setenv(knownHostsEnv, operatorFile)
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		run := func(context.Context, []string, []string) ([]byte, error) { return nil, nil }
+		source := gitSource{keys: &staticKeyResolver{pem: privatePEM}, run: run, logger: logger}
+		if err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil); err != nil {
+			t.Fatalf("Clone: %v", err)
+		}
+		if !strings.Contains(buf.String(), "group/world-writable") {
+			t.Errorf("warn log = %q, want a group/world-writable warning", buf.String())
+		}
+	})
+
+	t.Run("accept-new only under the dev flag", func(t *testing.T) {
+		t.Setenv(devAcceptNewHostKeysEnv, "true")
+		command, _ := clone(t, filepath.Join(t.TempDir(), "repo"))
+		if !strings.Contains(command, "StrictHostKeyChecking=accept-new") {
+			t.Errorf("GIT_SSH_COMMAND = %q, want accept-new under %s", command, devAcceptNewHostKeysEnv)
+		}
+	})
+
+	t.Run("operator known_hosts merged", func(t *testing.T) {
+		operatorFile := filepath.Join(t.TempDir(), "operator_known_hosts")
+		entry := "git.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBtestoperatorkey\n"
+		if err := os.WriteFile(operatorFile, []byte(entry), 0o600); err != nil {
+			t.Fatalf("write operator known_hosts: %v", err)
+		}
+		t.Setenv(knownHostsEnv, operatorFile)
+
+		command, knownHosts := clone(t, filepath.Join(t.TempDir(), "repo"))
+		if !strings.Contains(command, "StrictHostKeyChecking=yes") {
+			t.Errorf("GIT_SSH_COMMAND = %q, want strict checking with an operator file", command)
+		}
+		if !strings.Contains(knownHosts, "git.internal ssh-ed25519") {
+			t.Errorf("known_hosts is missing the operator entry:\n%s", knownHosts)
+		}
+		if !strings.Contains(knownHosts, "github.com") {
+			t.Errorf("known_hosts dropped the embedded provider keys:\n%s", knownHosts)
+		}
+	})
+}
+
+// stubSSHHost is a minimal in-process SSH server used to exercise OpenSSH host
+// key verification with the exact options the cloner builds.
+type stubSSHHost struct {
+	listener net.Listener
+	hostKey  ssh.PublicKey
+}
+
+// startStubSSHHost starts the server on a random loopback port.
+func startStubSSHHost(t *testing.T) *stubSSHHost {
+	t.Helper()
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate host key: %v", err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("host signer: %v", err)
+	}
+	config := &ssh.ServerConfig{
+		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
+			return nil, nil // accept any public key
+		},
+	}
+	config.AddHostKey(signer)
+
+	host := &stubSSHHost{hostKey: signer.PublicKey()}
+	host.listener, err = net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() {
+		for {
+			conn, acceptErr := host.listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go host.handle(conn, config)
+		}
+	}()
+	t.Cleanup(func() { _ = host.listener.Close() })
+	return host
+}
+
+// handle performs the handshake and answers exec requests with success.
+func (h *stubSSHHost) handle(conn net.Conn, config *ssh.ServerConfig) {
+	defer func() { _ = conn.Close() }()
+
+	sshConn, chans, reqs, err := ssh.NewServerConn(conn, config)
+	if err != nil {
+		return
+	}
+	defer func() { _ = sshConn.Close() }()
+	go ssh.DiscardRequests(reqs)
+
+	for newChannel := range chans {
+		if newChannel.ChannelType() != "session" {
+			_ = newChannel.Reject(ssh.UnknownChannelType, "only sessions are supported")
+			continue
+		}
+		channel, requests, err := newChannel.Accept()
+		if err != nil {
+			continue
+		}
+		go func() {
+			defer func() { _ = channel.Close() }()
+			for request := range requests {
+				if request.Type != "exec" {
+					_ = request.Reply(false, nil)
+					continue
+				}
+				_ = request.Reply(true, nil)
+				_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: 0}))
+				return
+			}
+		}()
+	}
+}
+
+// knownHostsEntry renders a non-default-port known_hosts line for key.
+func knownHostsEntry(host string, port int, key ssh.PublicKey) string {
+	return "[" + host + "]:" + strconv.Itoa(port) + " " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
+}
+
+// writeOpenSSHKey writes a fresh ed25519 OpenSSH private key to path.
+func writeOpenSSHKey(t *testing.T, path string) {
+	t.Helper()
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatalf("marshal private key: %v", err)
+	}
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
+		t.Fatalf("write private key: %v", err)
+	}
+}
+
+// TestSSHHostKeyVerification runs the real OpenSSH client with the known_hosts
+// and StrictHostKeyChecking options the cloner builds against an in-process
+// host presenting an unknown key: strict refuses it, a pin accepts it, and
+// accept-new learns it.
+func TestSSHHostKeyVerification(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the ssh client stand-in is POSIX-only")
+	}
+	sshBin, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("ssh binary is not available")
+	}
+
+	host := startStubSSHHost(t)
+	_, portStr, err := net.SplitHostPort(host.listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split host address: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parse port %q: %v", portStr, err)
+	}
+
+	clientKey := filepath.Join(t.TempDir(), "id_ed25519")
+	writeOpenSSHKey(t, clientKey)
+
+	run := func(knownHostsPath string, acceptNew bool) (string, error) {
+		// Mirror the options the cloner's GIT_SSH_COMMAND sets, plus BatchMode
+		// so a prompt can never block the test.
+		args := []string{
+			"-i", clientKey,
+			"-o", "IdentitiesOnly=yes",
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=5",
+			"-o", "UserKnownHostsFile=" + knownHostsPath,
+			"-o", "StrictHostKeyChecking=" + strictHostKeyChecking(acceptNew),
+			"-p", portStr,
+			"tester@127.0.0.1",
+			"true",
+		}
+		out, runErr := exec.Command(sshBin, args...).CombinedOutput()
+		return string(out), runErr
+	}
+
+	newKnownHosts := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "known_hosts")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("write empty known_hosts: %v", err)
+		}
+		return path
+	}
+
+	t.Run("unknown key refused", func(t *testing.T) {
+		out, err := run(newKnownHosts(t), false)
+		if err == nil {
+			t.Fatalf("ssh accepted an unknown host key; output:\n%s", out)
+		}
+		if !strings.Contains(out, "Host key verification failed") {
+			t.Errorf("output = %q, want a host key verification failure", out)
+		}
+	})
+
+	t.Run("pinned key accepted", func(t *testing.T) {
+		path := newKnownHosts(t)
+		line := knownHostsEntry("127.0.0.1", port, host.hostKey) + "\n"
+		if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+			t.Fatalf("write pinned known_hosts: %v", err)
+		}
+		if out, err := run(path, false); err != nil {
+			t.Fatalf("ssh refused the pinned host key: %v\n%s", err, out)
+		}
+	})
+
+	t.Run("accept-new learns the key", func(t *testing.T) {
+		path := newKnownHosts(t)
+		if out, err := run(path, true); err != nil {
+			t.Fatalf("accept-new refused an unknown host key: %v\n%s", err, out)
+		}
+		// Ubuntu's ssh_config enables HashKnownHosts, so the learned entry is
+		// hashed (|1|…) and a plain-text contains check fails there. ssh-keygen
+		// -F resolves hashed and plain entries alike.
+		keygen, err := exec.LookPath("ssh-keygen")
+		if err != nil {
+			t.Skip("ssh-keygen binary is not available")
+		}
+		out, err := exec.Command(keygen, "-F", "[127.0.0.1]:"+portStr, "-f", path).CombinedOutput()
+		if err != nil {
+			data, _ := os.ReadFile(path)
+			t.Errorf("accept-new did not learn the host key (%v, output %q):\n%s", err, out, data)
+		}
+	})
 }

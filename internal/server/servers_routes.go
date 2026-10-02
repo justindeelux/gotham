@@ -24,6 +24,7 @@ type ServerService interface {
 	Get(ctx context.Context, id uuid.UUID) (*servers.Server, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	Validate(ctx context.Context, id uuid.UUID, auth servers.ValidateAuth) (*servers.ValidationResult, error)
+	ResetHostKey(ctx context.Context, id uuid.UUID) (*servers.Server, error)
 	AddPrivateKey(ctx context.Context, name, privateKeyPEM string) (*servers.PrivateKey, error)
 	Metrics(ctx context.Context, id uuid.UUID, from, to time.Time, step string) ([]servers.MetricPoint, error)
 }
@@ -41,6 +42,9 @@ type createServerRequest struct {
 type validateServerRequest struct {
 	SSHKeyID string `json:"ssh_key_id"`
 	Password string `json:"password"`
+	// TrustHostKey is the operator's explicit consent to trust an unpinned host
+	// key, required for the first password validation of a node.
+	TrustHostKey bool `json:"trust_host_key"`
 }
 
 // createPrivateKeyRequest is the body of POST /api/v1/private-keys.
@@ -69,8 +73,10 @@ type serverDTO struct {
 	DiskUsage      *float64   `json:"disk_usage,omitempty"`
 	ContainerCount *int64     `json:"container_count,omitempty"`
 	LastSeen       *time.Time `json:"last_seen,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	// HostKeyFingerprint is the TOFU-pinned SSH host key (SHA256), when known.
+	HostKeyFingerprint *string   `json:"host_key_fingerprint,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // serverEnvelope wraps a single server.
@@ -169,6 +175,7 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 		protected.Get("/v1/servers/{id}", s.handleGetServer)
 		protected.Delete("/v1/servers/{id}", s.handleDeleteServer)
 		protected.Post("/v1/servers/{id}/validate", s.handleValidateServer)
+		protected.Delete("/v1/servers/{id}/host-key", s.handleResetHostKey)
 		protected.Post("/v1/private-keys", s.handleCreatePrivateKey)
 		// The metrics range route is part of the servers surface but rides its
 		// own kill switch: FEATURE_METRICS=false mounts nothing here.
@@ -278,7 +285,11 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.servers.Validate(r.Context(), id, servers.ValidateAuth{KeyID: keyID, Password: req.Password})
+	result, err := s.servers.Validate(r.Context(), id, servers.ValidateAuth{
+		KeyID:        keyID,
+		Password:     req.Password,
+		TrustHostKey: req.TrustHostKey,
+	})
 	if err != nil {
 		// A failed check is a 422 with the structured check list; a missing
 		// server or bad request maps to 404/400.
@@ -317,6 +328,23 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 		Checks: result.Checks,
 		Server: serverDTOPtr(result.Server),
 	})
+}
+
+// handleResetHostKey forgets a server's pinned SSH host key, so the next
+// validation re-pins it. It is the operator escape hatch after a legitimate
+// host key rotation; a changed key otherwise fails validation closed.
+func (s *Server) handleResetHostKey(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	updated, err := s.servers.ResetHostKey(r.Context(), id)
+	if err != nil {
+		s.writeServerError(w, "reset host key", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, serverEnvelope{Server: newServerDTO(updated)})
 }
 
 // handleCreatePrivateKey stores an encrypted SSH private key.
@@ -551,25 +579,26 @@ func (s *Server) decodeOptionalJSON(w http.ResponseWriter, r *http.Request, dst 
 // newServerDTO maps a domain server to its wire representation.
 func newServerDTO(server *servers.Server) serverDTO {
 	dto := serverDTO{
-		ID:             server.ID.String(),
-		Name:           server.Name,
-		IP:             server.IP,
-		Port:           server.Port,
-		SSHUser:        server.SSHUser,
-		Status:         server.Status,
-		NodeID:         server.NodeID,
-		OS:             server.OS,
-		DockerVersion:  server.DockerVersion,
-		Arch:           server.Arch,
-		TotalMem:       server.TotalMem,
-		TotalDisk:      server.TotalDisk,
-		CPUUsage:       server.CPUUsage,
-		MemUsage:       server.MemUsage,
-		DiskUsage:      server.DiskUsage,
-		ContainerCount: server.ContainerCount,
-		LastSeen:       server.LastSeen,
-		CreatedAt:      server.CreatedAt,
-		UpdatedAt:      server.UpdatedAt,
+		ID:                 server.ID.String(),
+		Name:               server.Name,
+		IP:                 server.IP,
+		Port:               server.Port,
+		SSHUser:            server.SSHUser,
+		Status:             server.Status,
+		NodeID:             server.NodeID,
+		OS:                 server.OS,
+		DockerVersion:      server.DockerVersion,
+		Arch:               server.Arch,
+		TotalMem:           server.TotalMem,
+		TotalDisk:          server.TotalDisk,
+		CPUUsage:           server.CPUUsage,
+		MemUsage:           server.MemUsage,
+		DiskUsage:          server.DiskUsage,
+		ContainerCount:     server.ContainerCount,
+		LastSeen:           server.LastSeen,
+		HostKeyFingerprint: server.HostKeyFingerprint,
+		CreatedAt:          server.CreatedAt,
+		UpdatedAt:          server.UpdatedAt,
 	}
 	if server.SSHKeyID != nil {
 		keyID := server.SSHKeyID.String()

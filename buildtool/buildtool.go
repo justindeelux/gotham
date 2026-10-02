@@ -145,7 +145,7 @@ func run(ctx context.Context, name string, args []string, opts Options) error {
 	// os/exec serialises the writes when Stdout and Stderr are equal.
 	command.Stdout = sink
 	command.Stderr = sink
-	_, _ = io.WriteString(sink, "$ "+name+" "+strings.Join(args, " ")+"\n")
+	_, _ = io.WriteString(sink, redactedCommandLine(name, args)+"\n")
 	if err := command.Run(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("%s build: %w", name, ctxErr)
@@ -193,11 +193,40 @@ func buildEnvFlags(args map[string]string) []string {
 	return flags
 }
 
+// redactedCommandLine renders a command for the deploy log with build-arg
+// values masked. Build args may carry secrets, so only the key is logged; the
+// real value is still passed to the toolchain on the command line.
+func redactedCommandLine(name string, args []string) string {
+	redacted := make([]string, len(args))
+	copy(redacted, args)
+	for i := range redacted {
+		switch {
+		case redacted[i] == "--env" && i+1 < len(redacted):
+			redacted[i+1] = redactBuildArg(redacted[i+1])
+		case strings.HasPrefix(redacted[i], "--env="):
+			redacted[i] = "--env=" + redactBuildArg(strings.TrimPrefix(redacted[i], "--env="))
+		}
+	}
+	return "$ " + name + " " + strings.Join(redacted, " ")
+}
+
+// redactBuildArg masks the value of a KEY=VALUE build argument, leaving the key
+// visible.
+func redactBuildArg(arg string) string {
+	key, _, ok := strings.Cut(arg, "=")
+	if !ok {
+		return arg
+	}
+	return key + "=***"
+}
+
 // ExtractTar writes an uncompressed build-context tar into dir. Entries that
 // escape dir (an absolute path or a `..` component) are rejected, so a
 // compromised control plane cannot write outside the extraction root. Symlinks
-// and other non-regular entries are skipped, matching the control plane's
-// context packaging.
+// and other non-regular entries are skipped: the Dockerfile/static context may
+// carry symlinks for the Docker daemon, but recreating one here before later
+// entries are written would allow a tar-slip through the link target, so the
+// language-toolchain path deliberately drops them.
 func ExtractTar(dir string, source io.Reader) error {
 	if strings.TrimSpace(dir) == "" {
 		return errors.New("buildtool: empty extraction directory")

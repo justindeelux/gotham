@@ -35,6 +35,7 @@ type buildClient interface {
 	TagImage(ctx context.Context, source, repository, tag string) error
 	PushImage(ctx context.Context, repository, tag string, emit func([]byte) error) error
 	ImageDigest(ctx context.Context, ref string) (string, error)
+	PruneAppImages(ctx context.Context, appID, keepDeploy string) error
 }
 
 // BuildServer implements agentv1.BuildServiceServer on top of a buildClient.
@@ -153,6 +154,14 @@ func (s *BuildServer) BuildImage(stream agentv1.BuildService_BuildImageServer) e
 	digest, err := s.docker.ImageDigest(ctx, registryImage)
 	if err != nil {
 		return fail(err)
+	}
+
+	// Retention is best-effort: the deploy is already built and pushed, so a
+	// cleanup failure must not turn a successful build into a failed one.
+	if err := s.docker.PruneAppImages(ctx, meta.GetAppId(), meta.GetDeployId()); err != nil {
+		s.log.Warn("image retention failed",
+			slog.String("app", meta.GetAppId()),
+			slog.String("error", err.Error()))
 	}
 
 	if err := stream.Send(&agentv1.BuildImageResponse{

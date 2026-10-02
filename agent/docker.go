@@ -796,6 +796,7 @@ type dockerContainerSummary struct {
 	ID      string               `json:"Id"`
 	Names   []string             `json:"Names"`
 	Image   string               `json:"Image"`
+	ImageID string               `json:"ImageID"`
 	Status  string               `json:"Status"`
 	State   string               `json:"State"`
 	Created int64                `json:"Created"`

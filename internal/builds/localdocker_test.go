@@ -1,12 +1,16 @@
 package builds
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -120,7 +124,7 @@ func TestLocalDockerBuilderE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	contextTar, err := buildContextTar(e2eDockerfileDir(t), nil)
+	contextTar, err := buildContextTar(contextSpec{root: e2eDockerfileDir(t)})
 	if err != nil {
 		t.Fatalf("buildContextTar: %v", err)
 	}
@@ -229,7 +233,7 @@ func TestLocalDockerBuilderToolchainPassesDockerHost(t *testing.T) {
 
 	srcDir := t.TempDir()
 	writeTestFile(t, filepath.Join(srcDir, "package.json"), "{}\n")
-	contextTar, err := buildContextTar(srcDir, nil)
+	contextTar, err := buildContextTar(contextSpec{root: srcDir})
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
@@ -250,4 +254,126 @@ func TestLocalDockerBuilderToolchainPassesDockerHost(t *testing.T) {
 	if got := readFakeCLI(t, envFile); got != server.URL {
 		t.Errorf("DOCKER_HOST = %q; want %q", got, server.URL)
 	}
+}
+
+// TestDockerfileBuildObeysDockerignoreE2E is the live C1-1 regression: a
+// credential excluded by the repository's .dockerignore must not appear in the
+// built image, while an ordinary file must. It exports the image rootfs and
+// inspects the archive, so it needs no shell in the built image.
+func TestDockerfileBuildObeysDockerignoreE2E(t *testing.T) {
+	if os.Getenv("GOTHAM_E2E") != "1" {
+		t.Skip("set GOTHAM_E2E=1 to run live Docker builds")
+	}
+	builder := requireDocker(t)
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "Dockerfile"), "FROM scratch\nCOPY . /app\n")
+	writeTestFile(t, filepath.Join(dir, ".dockerignore"), ".env\n")
+	writeTestFile(t, filepath.Join(dir, ".env"), "TOKEN=leaked\n")
+	writeTestFile(t, filepath.Join(dir, "app.txt"), "ok\n")
+
+	contextTar, err := buildContextTar(contextSpec{root: dir})
+	if err != nil {
+		t.Fatalf("buildContextTar: %v", err)
+	}
+	ref := "gotham/e2e-ignore:" + uuid.NewString()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, err := builder.Build(ctx, contextTar, ImageBuildOptions{Tag: ref, Dockerfile: "Dockerfile"}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Command("docker", "rmi", "-f", ref).Run() })
+
+	files := exportedRootfsFiles(t, ref, "app")
+	if _, leaked := files["app/.env"]; leaked {
+		t.Error(".dockerignore-ignored .env leaked into the image")
+	}
+	if _, ok := files["app/app.txt"]; !ok {
+		t.Error("non-ignored app.txt is missing from the image")
+	}
+}
+
+// TestDockerfileBuildFailedStepLeavesNoContainerE2E is the live C1-5
+// regression: a failed RUN step must not leave an intermediate container.
+func TestDockerfileBuildFailedStepLeavesNoContainerE2E(t *testing.T) {
+	if os.Getenv("GOTHAM_E2E") != "1" {
+		t.Skip("set GOTHAM_E2E=1 to run live Docker builds")
+	}
+	builder := requireDocker(t)
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "Dockerfile"), "FROM scratch\nRUN [\"/bin/false\"]\n")
+
+	contextTar, err := buildContextTar(contextSpec{root: dir})
+	if err != nil {
+		t.Fatalf("buildContextTar: %v", err)
+	}
+	before := dockerContainerIDs(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	_, err = builder.Build(ctx, contextTar, ImageBuildOptions{Tag: "gotham/e2e-fail:" + uuid.NewString(), Dockerfile: "Dockerfile"})
+	if err == nil {
+		t.Fatal("failing Dockerfile built successfully")
+	}
+	for id := range dockerContainerIDs(t) {
+		if _, existed := before[id]; !existed {
+			t.Errorf("failed build left intermediate container %s", id)
+		}
+	}
+}
+
+// dockerCLI runs a docker subcommand and returns its trimmed stdout.
+func dockerCLI(t *testing.T, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("docker", args...).Output()
+	if err != nil {
+		t.Skipf("docker %s unavailable: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// dockerContainerIDs lists every container id on the daemon.
+func dockerContainerIDs(t *testing.T) map[string]struct{} {
+	t.Helper()
+	ids := make(map[string]struct{})
+	for _, line := range strings.Split(dockerCLI(t, "ps", "-aq"), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			ids[line] = struct{}{}
+		}
+	}
+	return ids
+}
+
+// exportedRootfsFiles exports an image's flattened rootfs and returns the paths
+// under prefix. The temporary container is removed on cleanup.
+func exportedRootfsFiles(t *testing.T, image, prefix string) map[string]struct{} {
+	t.Helper()
+	id := dockerCLI(t, "create", image, "/true")
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", id).Run() })
+
+	cmd := exec.Command("docker", "export", id)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("export pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("export start: %v", err)
+	}
+	files := make(map[string]struct{})
+	reader := tar.NewReader(stdout)
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read export archive: %v", err)
+		}
+		name := strings.TrimPrefix(header.Name, "./")
+		if strings.HasPrefix(name, prefix+"/") {
+			files[name] = struct{}{}
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("docker export: %v", err)
+	}
+	return files
 }

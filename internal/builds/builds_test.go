@@ -181,6 +181,32 @@ func TestRegistryBuildDockerfile(t *testing.T) {
 	}
 }
 
+// TestRegistryBuildDockerfileHonorsDockerIgnore is the engine-level C1-1
+// regression: the Dockerfile engine filters credentials listed in the
+// repository's .dockerignore while keeping the Dockerfile the builder needs.
+func TestRegistryBuildDockerfileHonorsDockerIgnore(t *testing.T) {
+	repoDir := t.TempDir()
+	writeTestFile(t, filepath.Join(repoDir, "Dockerfile"), "FROM scratch\nCOPY . /app\n")
+	writeTestFile(t, filepath.Join(repoDir, ".dockerignore"), "Dockerfile\n.env\n")
+	writeTestFile(t, filepath.Join(repoDir, ".env"), "TOKEN=secret\n")
+	writeTestFile(t, filepath.Join(repoDir, "app.txt"), "ok\n")
+
+	builder := &mockBuilder{}
+	if _, err := NewRegistry(builder).Build(context.Background(), testOptions(repoDir)); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	files := readContextTar(t, builder.lastTar)
+	if _, ok := files["Dockerfile"]; !ok {
+		t.Error("context is missing the Dockerfile the builder needs")
+	}
+	if _, ok := files["app.txt"]; !ok {
+		t.Error("context is missing a non-ignored file")
+	}
+	if _, ok := files[".env"]; ok {
+		t.Error("context must not contain an ignored credential")
+	}
+}
+
 func TestRegistryBuildStatic(t *testing.T) {
 	repoDir := t.TempDir()
 	writeTestFile(t, filepath.Join(repoDir, "index.html"), "<h1>hi</h1>\n")

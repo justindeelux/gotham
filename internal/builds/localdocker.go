@@ -87,6 +87,9 @@ func (b *LocalDockerBuilder) Build(ctx context.Context, contextTar []byte, opts 
 	query.Set("t", opts.Tag)
 	query.Set("dockerfile", dockerfile)
 	query.Set("rm", "1")
+	// forcerm also removes the intermediate containers of failed steps, so a
+	// failed build does not leak a container per attempt.
+	query.Set("forcerm", "1")
 	if opts.Target != "" {
 		query.Set("target", opts.Target)
 	}

@@ -125,6 +125,9 @@ func TestDockerClientBuild(t *testing.T) {
 	if gotQuery.Get("rm") != "1" {
 		t.Errorf("rm = %q", gotQuery.Get("rm"))
 	}
+	if gotQuery.Get("forcerm") != "1" {
+		t.Errorf("forcerm = %q; want 1", gotQuery.Get("forcerm"))
+	}
 	if gotQuery.Get("buildargs") != `{"NODE_ENV":"production"}` {
 		t.Errorf("buildargs = %q", gotQuery.Get("buildargs"))
 	}

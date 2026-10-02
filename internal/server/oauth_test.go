@@ -853,3 +853,48 @@ func TestOAuthLogoutClearsBothCookieNameSets(t *testing.T) {
 		t.Error("__Host- deletion is not Secure")
 	}
 }
+
+// TestOAuthCallbackRejectsInsecureRequestForHTTPSOrigin pins H1: an HTTP
+// callback on an HTTPS deployment is refused before any cookie or code is
+// trusted.
+func TestOAuthCallbackRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
+	cfg := defaultOAuthConfig()
+	cfg.OAuth.GitHub.RedirectURL = "https://gotham.example/api/v1/auth/oauth/github/callback"
+	s := newOAuthTestServer(t, cfg, &fakeOAuthService{callback: defaultOAuthResult()})
+
+	rec := oauthRawRequest(t, s, http.MethodGet,
+		"/api/v1/auth/oauth/github/callback?state=test-state&code=auth-code", "", false,
+		&http.Cookie{Name: auth.StateCookieName, Value: "test-state"},
+		&http.Cookie{Name: auth.FlowCookieName, Value: testOAuthFlow})
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if loc != oauthFailureRedirect {
+		t.Fatalf("Location = %q, want %s", loc, oauthFailureRedirect)
+	}
+	if strings.Contains(loc, "code=") {
+		t.Errorf("rejected callback leaked an exchange code: %s", loc)
+	}
+}
+
+// TestOAuthExchangeRejectsInsecureRequestForHTTPSOrigin pins H1: an HTTP
+// redemption on an HTTPS deployment is refused even for a code minted over
+// HTTPS.
+func TestOAuthExchangeRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
+	cfg := defaultOAuthConfig()
+	cfg.OAuth.GitHub.RedirectURL = "https://gotham.example/api/v1/auth/oauth/github/callback"
+	s := newOAuthTestServer(t, cfg, &fakeOAuthService{callback: defaultOAuthResult()})
+
+	callback := oauthRawRequest(t, s, http.MethodGet,
+		"/api/v1/auth/oauth/github/callback?state=test-state&code=auth-code", "", true,
+		&http.Cookie{Name: auth.StateCookieNameSecure, Value: "test-state"},
+		&http.Cookie{Name: auth.FlowCookieNameSecure, Value: testOAuthFlow})
+	code := exchangeCodeFromLocation(t, callback.Header().Get("Location"))
+
+	rec := oauthExchangePost(t, s, code, testOAuthFlow)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+	}
+}

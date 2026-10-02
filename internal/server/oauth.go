@@ -76,6 +76,14 @@ func (s *Server) mountOAuthRoutes(api chi.Router) {
 	})
 }
 
+// insecureOAuthRejected reports whether an insecure request must not take part
+// in an OAuth flow because the configured redirect base is HTTPS. The plain
+// cookies such a request sets are shadowable by a sibling host, so the flow is
+// refused on every leg (login, callback, exchange).
+func (s *Server) insecureOAuthRejected(r *http.Request) bool {
+	return !isSecureRequest(r) && strings.HasPrefix(s.oauthRedirectBase(), "https://")
+}
+
 // handleOAuthLogin starts the authorization flow: it asks the service to mint a
 // state, binds the browser to the flow with a state cookie and a random flow
 // cookie, and redirects to the provider. Unknown or disabled providers answer
@@ -87,7 +95,7 @@ func (s *Server) mountOAuthRoutes(api chi.Router) {
 func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 	provider := chi.URLParam(r, "provider")
 
-	if !isSecureRequest(r) && strings.HasPrefix(s.oauthRedirectBase(), "https://") {
+	if s.insecureOAuthRejected(r) {
 		s.logger.Warn("oauth: insecure login rejected", "provider", provider)
 		s.redirectOAuthFailure(w, r)
 		return
@@ -128,6 +136,14 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	queryState := r.URL.Query().Get("state")
 	code := r.URL.Query().Get("code")
 
+	// An insecure callback on an HTTPS deployment is refused before any cookie
+	// or code is trusted (H1).
+	if s.insecureOAuthRejected(r) {
+		s.logger.Warn("oauth: insecure callback rejected", "provider", provider)
+		s.redirectOAuthFailure(w, r)
+		return
+	}
+
 	cookieValue, ok := oauthCookieValue(r, oauthStateCookieName(r))
 	if !ok || queryState == "" || !constantTimeEqual(cookieValue, queryState) {
 		s.logger.Warn("oauth: state cookie mismatch", "provider", provider)
@@ -165,6 +181,13 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 // callback withheld. The flow cookie must match the value stored with the code;
 // a missing, wrong, expired, or already-redeemed code answers a generic 401.
 func (s *Server) handleOAuthExchange(w http.ResponseWriter, r *http.Request) {
+	// An insecure redemption on an HTTPS deployment is refused before the code
+	// is consumed (H1).
+	if s.insecureOAuthRejected(r) {
+		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+		return
+	}
+
 	var req oauthExchangeRequest
 	if !s.decodeJSON(w, r, &req) {
 		return

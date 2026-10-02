@@ -406,8 +406,9 @@ func (s *ServerService) AddPrivateKey(ctx context.Context, name, privateKeyPEM s
 }
 
 // Validate runs the SSH probes against a server and, on success, records the
-// gathered agent info and marks the server ready. auth selects the credentials;
-// when it is empty the server's stored key is used.
+// gathered agent info and restores the status derived from the node's last
+// heartbeat. auth selects the credentials; when it is empty the server's stored
+// key is used.
 //
 // It returns the per-check results even when validation fails, together with an
 // error wrapping ErrValidation (or ErrNotFound / ErrNoCredentials).
@@ -489,6 +490,17 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		TotalMem:      ptrInt64(info.TotalMem),
 		TotalDisk:     ptrInt64(info.TotalDisk),
 	}); err != nil {
+		// The SSH run succeeded but the inventory write failed. Restore the
+		// heartbeat-derived status so the node does not stay stuck in
+		// validating; a restore failure is logged and the original error is
+		// still returned (fix round 2 U1).
+		if _, restoreErr := s.store.SetServerStatusAfterValidation(ctx, sqlc.SetServerStatusAfterValidationParams{
+			ID:       pgUUID(id),
+			LastSeen: pgtype.Timestamptz{Time: s.now().Add(-heartbeatOfflineAfter), Valid: true},
+		}); restoreErr != nil {
+			s.logger.Warn("servers: restore status after agent-info failure",
+				"server_id", id.String(), "error", restoreErr)
+		}
 		return result, fmt.Errorf("record agent info: %w", err)
 	}
 

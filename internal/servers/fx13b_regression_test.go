@@ -426,3 +426,60 @@ func TestServerStatusAfterValidationTransitions(t *testing.T) {
 		t.Errorf("fresh heartbeat -> %q, want %q", got, StatusReady)
 	}
 }
+
+// TestServiceValidateRestoresStatusWhenAgentInfoWriteFails covers fix round 2
+// U1: a failure to record the SSH inventory must not leave the node stuck in
+// validating.
+func TestServiceValidateRestoresStatusWhenAgentInfoWriteFails(t *testing.T) {
+	service, st := newTestService(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	addr, _, stop := startSSHProbeServer(t, "unused", false)
+	defer stop()
+	host, port := target(t, addr)
+
+	key, err := service.AddPrivateKey(ctx, "info-fail-key", string(testPrivateKeyPEM(t)))
+	if err != nil {
+		t.Fatalf("AddPrivateKey: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM private_keys WHERE id = $1", pgUUID(key.ID)); err != nil {
+			t.Logf("cleanup delete private key: %v", err)
+		}
+	})
+
+	created, err := service.Add(ctx, uuid.New(), "info-fail-node", host, port, "root", key.ID)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if err := st.DeleteServer(cleanupCtx, pgUUID(created.ID)); err != nil {
+			t.Logf("cleanup delete server: %v", err)
+		}
+	})
+
+	// The SSH probes succeed, but recording the inventory fails.
+	st.BeforeUpdateServerAgentInfo = func() error { return errors.New("agent info write forced to fail") }
+	t.Cleanup(func() { st.BeforeUpdateServerAgentInfo = nil })
+
+	if _, err := service.Validate(ctx, created.ID, ValidateAuth{}); err == nil {
+		t.Fatal("Validate reported success although the inventory write failed")
+	}
+
+	fetched, err := service.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if fetched.Status == StatusValidating {
+		t.Errorf("status = %q, want it restored, not stuck in validating", fetched.Status)
+	}
+	if fetched.Status != StatusPending {
+		t.Errorf("status = %q, want %q (agentless node)", fetched.Status, StatusPending)
+	}
+}

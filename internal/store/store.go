@@ -31,6 +31,11 @@ type Store struct {
 	// to fail. Production leaves it nil.
 	BeforePinServerHostKey func() error
 
+	// BeforeUpdateServerAgentInfo is a nil-by-default test seam invoked before
+	// the inventory write; a non-nil error aborts it, so a test can exercise
+	// Validate's restore-on-failure path. Production leaves it nil.
+	BeforeUpdateServerAgentInfo func() error
+
 	// BeforeCollectionClear is a nil-by-default test seam invoked inside the
 	// collection-replace transactions after the parent row lock and before the
 	// clear/insert. A test blocks it to hold a replacement open and prove that
@@ -375,8 +380,14 @@ func (s *Store) DeleteServer(ctx context.Context, id pgtype.UUID) error {
 
 // UpdateServerAgentInfo records the capabilities reported by an SSH validation
 // or an agent registration and returns the updated row. It never changes status
-// or last_seen: only a heartbeat marks a node ready.
+// or last_seen: only a heartbeat marks a node ready. The
+// BeforeUpdateServerAgentInfo test seam, when set, can fail the write.
 func (s *Store) UpdateServerAgentInfo(ctx context.Context, params sqlc.UpdateServerAgentInfoParams) (sqlc.Server, error) {
+	if s.BeforeUpdateServerAgentInfo != nil {
+		if err := s.BeforeUpdateServerAgentInfo(); err != nil {
+			return sqlc.Server{}, err
+		}
+	}
 	return s.queries.UpdateServerAgentInfo(ctx, params)
 }
 

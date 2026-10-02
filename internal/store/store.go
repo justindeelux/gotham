@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -73,16 +74,62 @@ func (s *Store) RevokeSessionIfLive(ctx context.Context, refreshHash string) (bo
 // reuse detection calls it when a replayed token reveals a possible theft:
 // every device is forced to re-authenticate. Already-revoked rows are left
 // untouched.
+//
+// It takes the per-user session lock first, so a concurrent RotateSession
+// cannot insert a replacement after this transaction's snapshot has read the
+// user's live sessions. Under READ COMMITTED alone the replacement would be
+// invisible to the UPDATE and survive the family revocation.
 func (s *Store) RevokeUserSessions(ctx context.Context, userID pgtype.UUID) error {
-	return s.queries.RevokeUserSessions(ctx, userID)
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.LockUserSessions(ctx, sessionLockKey(userID)); err != nil {
+		return err
+	}
+	if err := queries.RevokeUserSessions(ctx, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // RotateSession atomically revokes the presented live session and inserts its
 // replacement in one statement, so a failed insert or a cancelled request
 // cannot consume the user's only refresh token. It returns pgx.ErrNoRows when
 // the presented session was no longer live, leaving no replacement behind.
-func (s *Store) RotateSession(ctx context.Context, params sqlc.RotateSessionParams) (sqlc.Session, error) {
-	return s.queries.RotateSession(ctx, params)
+//
+// The statement runs inside the same per-user session lock as
+// RevokeUserSessions, so a family revocation racing this rotation either runs
+// entirely before it or entirely after it — never between the revoke and the
+// insert.
+func (s *Store) RotateSession(ctx context.Context, userID pgtype.UUID, params sqlc.RotateSessionParams) (sqlc.Session, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.Session{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.LockUserSessions(ctx, sessionLockKey(userID)); err != nil {
+		return sqlc.Session{}, err
+	}
+	session, err := queries.RotateSession(ctx, params)
+	if err != nil {
+		return sqlc.Session{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.Session{}, err
+	}
+	return session, nil
+}
+
+// sessionLockKey is the advisory-lock key shared by every session mutation for
+// one account.
+func sessionLockKey(userID pgtype.UUID) string {
+	return uuid.UUID(userID.Bytes).String()
 }
 
 // DeleteStaleSessions drops sessions that expired before expiredBefore and

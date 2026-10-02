@@ -58,11 +58,19 @@ SELECT r.user_id, sqlc.arg(new_refresh_hash), sqlc.arg(expires_at), sqlc.arg(cre
 FROM revoked AS r
 RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version;
 
+-- name: LockUserSessions :exec
+-- LockUserSessions takes the transaction-scoped advisory lock that serializes
+-- session changes for one user. Both the family-revocation path and the
+-- rotation acquire it first, so a rotation cannot insert a replacement after a
+-- reuse-detection snapshot has already read the user's live sessions.
+SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(user_id)::text, 0));
+
 -- name: DeleteStaleSessions :execrows
 -- DeleteStaleSessions drops sessions that expired before the retention cutoff
--- and revoked sessions whose revocation predates the reuse window. The rejected
--- rows stay for that window so a replayed token can still revoke its family
--- before the row is forgotten.
+-- and revoked sessions whose revocation predates the reuse window. A revoked
+-- row is governed only by the revoked cutoff: its expiry must not shrink the
+-- reuse-detection window. The rejected rows stay for that window so a replayed
+-- token can still revoke its family before the row is forgotten.
 DELETE FROM sessions
-WHERE expires_at < sqlc.arg(expired_before)
+WHERE (revoked_at IS NULL AND expires_at < sqlc.arg(expired_before))
    OR (revoked_at IS NOT NULL AND revoked_at < sqlc.arg(revoked_before));

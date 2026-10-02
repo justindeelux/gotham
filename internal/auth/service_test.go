@@ -228,6 +228,49 @@ func TestServiceRefreshRotation(t *testing.T) {
 	}
 }
 
+// TestServiceRefreshExpiredDoesNotRevokeFamily: a merely expired, never-revoked
+// token is not evidence of theft, so it gets a plain 401 and leaves the user's
+// live sessions alone. A rotated-away (revoked) replay is covered by
+// TestServiceRefreshRotation.
+func TestServiceRefreshExpiredDoesNotRevokeFamily(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	email := uniqueEmail("expired-no-revoke")
+	cleanupUser(t, st, email)
+
+	live, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	userID, err := uuid.Parse(live.User.ID)
+	if err != nil {
+		t.Fatalf("parse user ID: %v", err)
+	}
+	user, err := st.GetUserByID(ctx, pgUUID(userID))
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+
+	expiredToken := "expired-" + uuid.NewString()
+	if _, err := st.DB.Exec(ctx, `
+		INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
+		VALUES ($1, $2, now() - interval '1 hour', $3)`,
+		user.ID, hashRefreshToken(expiredToken), user.CredentialVersion); err != nil {
+		t.Fatalf("insert expired session: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, expiredToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Refresh(expired) error = %v, want ErrUnauthorized", err)
+	}
+
+	// The live session must survive: a revoked replay is theft, an expired one
+	// is not.
+	if _, err := svc.Refresh(ctx, live.RefreshToken); err != nil {
+		t.Fatalf("live session was revoked by an expired-token replay: %v", err)
+	}
+}
+
 func TestServiceLogoutRevokesSession(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()

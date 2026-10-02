@@ -236,11 +236,12 @@ func (s *Service) Login(ctx context.Context, email, password string) (*AuthResul
 // session plus token pair is issued in one atomic store operation, so a failed
 // replacement cannot consume the user's only token. Any unusable token returns
 // ErrUnauthorized. Presenting a session that is still on record but already
-// revoked or expired is treated as refresh-token theft: every live session for
-// the account is revoked and the event is logged without token material. A
-// session whose credential version is older than the account's current version
-// (a password reset committed after it was minted) is refused as well, so the
-// old chain cannot mint a replacement under the new credential.
+// revoked (a rotated-away token) is treated as refresh-token theft: every live
+// session for the account is revoked and the event is logged without token
+// material. A merely expired token is not proof of theft and gets a plain 401.
+// A session whose credential version is older than the account's current
+// version (a password reset committed after it was minted) is refused as well,
+// so the old chain cannot mint a replacement under the new credential.
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult, error) {
 	if refreshToken == "" {
 		return nil, ErrUnauthorized
@@ -254,10 +255,13 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 		}
 		return nil, fmt.Errorf("auth: get session: %w", err)
 	}
-	if session.RevokedAt.Valid || !session.ExpiresAt.Valid || s.now().After(session.ExpiresAt.Time) {
-		// A known-but-unusable session is a replayed (already rotated) or
-		// expired token: treat it as theft and end every session.
+	if session.RevokedAt.Valid {
+		// A replayed, already-rotated token is reuse: end every session.
 		s.revokeSessionFamily(ctx, session.UserID)
+		return nil, ErrUnauthorized
+	}
+	if !session.ExpiresAt.Valid || s.now().After(session.ExpiresAt.Time) {
+		// A merely expired token is not proof of theft: no family action.
 		return nil, ErrUnauthorized
 	}
 
@@ -292,7 +296,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.store.RotateSession(ctx, sqlc.RotateSessionParams{
+	if _, err := s.store.RotateSession(ctx, session.UserID, sqlc.RotateSessionParams{
 		RevokedRefreshHash: hash,
 		NewRefreshHash:     refreshHashNext,
 		ExpiresAt:          pgTimestamp(s.now().Add(refreshTokenTTL)),

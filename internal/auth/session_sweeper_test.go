@@ -63,6 +63,9 @@ func TestSessionSweeperSweepsStaleSessions(t *testing.T) {
 	createSession("expired-stale", now.Add(-8*24*time.Hour), time.Time{})
 	createSession("revoked-recent", now.Add(time.Hour), now.Add(-24*time.Hour))
 	createSession("revoked-stale", now.Add(time.Hour), now.Add(-31*24*time.Hour))
+	// A row revoked yesterday but expired long ago must survive: the 30-day
+	// reuse window is measured from revocation, not expiry.
+	createSession("revoked-recent-expired", now.Add(-10*24*time.Hour), now.Add(-24*time.Hour))
 
 	sweeper := NewSessionSweeper(st, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	sweeper.now = func() time.Time { return now }
@@ -79,7 +82,7 @@ func TestSessionSweeperSweepsStaleSessions(t *testing.T) {
 	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM sessions WHERE user_id = $1", user.ID).Scan(&remaining); err != nil {
 		t.Fatalf("count sessions: %v", err)
 	}
-	if remaining != 3 {
-		t.Fatalf("sessions remaining = %d, want the 3 fresh/recent rows", remaining)
+	if remaining != 4 {
+		t.Fatalf("sessions remaining = %d, want the 4 fresh/recent rows", remaining)
 	}
 }

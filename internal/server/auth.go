@@ -240,14 +240,16 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
-// handleLogout revokes the presented session. Unknown and already-revoked
-// tokens are not errors and answer 204, so clients cannot probe which refresh
-// tokens exist, but a persistence failure answers 500: reporting success would
-// leave the refresh token usable while the client believes it is signed out.
+// handleLogout revokes the presented session. A malformed body answers 400;
+// a well-formed unknown or already-revoked token answers 204, so clients
+// cannot probe which refresh tokens exist. A persistence failure answers 500:
+// reporting success would leave the refresh token usable while the client
+// believes it is signed out.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	var req refreshTokenRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		s.logger.Debug("auth: logout body", "error", err)
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid request body"})
+		return
 	}
 
 	if err := s.auth.Logout(r.Context(), req.RefreshToken); err != nil {

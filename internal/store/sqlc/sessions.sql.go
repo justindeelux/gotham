@@ -46,7 +46,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 
 const deleteStaleSessions = `-- name: DeleteStaleSessions :execrows
 DELETE FROM sessions
-WHERE expires_at < $1
+WHERE (revoked_at IS NULL AND expires_at < $1)
    OR (revoked_at IS NOT NULL AND revoked_at < $2)
 `
 
@@ -56,9 +56,10 @@ type DeleteStaleSessionsParams struct {
 }
 
 // DeleteStaleSessions drops sessions that expired before the retention cutoff
-// and revoked sessions whose revocation predates the reuse window. The rejected
-// rows stay for that window so a replayed token can still revoke its family
-// before the row is forgotten.
+// and revoked sessions whose revocation predates the reuse window. A revoked
+// row is governed only by the revoked cutoff: its expiry must not shrink the
+// reuse-detection window. The rejected rows stay for that window so a replayed
+// token can still revoke its family before the row is forgotten.
 func (q *Queries) DeleteStaleSessions(ctx context.Context, arg DeleteStaleSessionsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteStaleSessions, arg.ExpiredBefore, arg.RevokedBefore)
 	if err != nil {
@@ -98,6 +99,19 @@ func (q *Queries) GetSessionByRefreshHash(ctx context.Context, refreshHash strin
 		&i.CredentialVersion,
 	)
 	return i, err
+}
+
+const lockUserSessions = `-- name: LockUserSessions :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+// LockUserSessions takes the transaction-scoped advisory lock that serializes
+// session changes for one user. Both the family-revocation path and the
+// rotation acquire it first, so a rotation cannot insert a replacement after a
+// reuse-detection snapshot has already read the user's live sessions.
+func (q *Queries) LockUserSessions(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, lockUserSessions, userID)
+	return err
 }
 
 const revokeSession = `-- name: RevokeSession :exec

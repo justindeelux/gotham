@@ -290,9 +290,11 @@ func TestAuthRefreshAndLogout(t *testing.T) {
 		t.Fatalf("logout status = %d, want 204", logout.Code)
 	}
 
-	empty := doRequest(t, s, http.MethodPost, "/api/v1/auth/logout", "", "")
-	if empty.Code != http.StatusNoContent {
-		t.Fatalf("empty logout status = %d, want 204", empty.Code)
+	// A malformed or partial body is rejected rather than treated as an
+	// unknown token: no token-existence oracle.
+	malformed := doRequest(t, s, http.MethodPost, "/api/v1/auth/logout", ``, "")
+	if malformed.Code != http.StatusBadRequest {
+		t.Fatalf("malformed logout status = %d, want 400", malformed.Code)
 	}
 }
 
@@ -396,6 +398,23 @@ func TestAuthLogoutPersistenceFailure(t *testing.T) {
 		`{"refresh_token":"refresh-token"}`, "")
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("logout status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAuthLogoutRejectsMalformedBody: a malformed body is a 400, not a silent
+// 204; a well-formed unknown token stays an idempotent 204 (no oracle).
+func TestAuthLogoutRejectsMalformedBody(t *testing.T) {
+	s := newTestAuthServer(t)
+
+	malformed := doRequest(t, s, http.MethodPost, "/api/v1/auth/logout", `{`, "")
+	if malformed.Code != http.StatusBadRequest {
+		t.Fatalf("malformed logout status = %d, want 400", malformed.Code)
+	}
+
+	unknown := doRequest(t, s, http.MethodPost, "/api/v1/auth/logout",
+		`{"refresh_token":"never-seen"}`, "")
+	if unknown.Code != http.StatusNoContent {
+		t.Fatalf("unknown-token logout status = %d, want 204", unknown.Code)
 	}
 }
 

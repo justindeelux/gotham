@@ -40,12 +40,13 @@ var (
 	// leaking the provider's response.
 	ErrProvider = errors.New("webhooks: provider call failed")
 	// ErrRetryable is returned when a delivery could not be acted on because a
-	// conflicting deployment is running or a transient dependency failed, and
-	// the delivery was NOT recorded as handled. The route answers 503 so the
-	// revision stays visible as a failed delivery and the Git host can
-	// redeliver it; the preview reservation is released first, so the retry
-	// can reserve again — except for a no-binding close whose ledger clear
-	// failed, which keeps its marker (see errCloseFenceHeld).
+	// conflicting deployment is running, a duplicate's winning claim is not yet
+	// durable, or a transient dependency failed, and the delivery was NOT
+	// recorded as handled. The route answers 503 so the revision stays visible
+	// as a failed delivery and the Git host can redeliver it; the push claim
+	// (or preview reservation) is released first, so the retry can claim
+	// again — except for a no-binding close whose ledger clear failed, which
+	// keeps its marker (see errCloseFenceHeld).
 	ErrRetryable = errors.New("webhooks: delivery can be retried")
 	// errCloseFenceHeld marks a no-binding close whose ledger clear failed
 	// (MEDIUM-1). That reservation is the only fence over a racing open, so it

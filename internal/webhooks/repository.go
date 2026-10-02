@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -194,7 +195,8 @@ type Repository interface {
 	// application it belongs to, secrets opened.
 	Targets(ctx context.Context, provider, repo string) ([]Target, error)
 	// ClaimEvent records a delivery. A duplicate commit SHA or delivery ID
-	// surfaces as ErrDuplicate and must stop the delivery.
+	// surfaces as ErrDuplicate together with the existing event, whose
+	// DeploymentID tells the caller whether the winning claim is durable.
 	ClaimEvent(ctx context.Context, event Event) (Event, error)
 	// ReleaseEvent removes a claim whose deployment was never queued, so the
 	// host's retry of that delivery is not mistaken for spam.
@@ -280,14 +282,19 @@ type Application struct {
 type storeRepository struct {
 	store  *store.Store
 	secret string
+	logger *slog.Logger
 }
 
 // newStoreRepository builds the PostgreSQL-backed repository. secret is the
 // key providers.SealSecret seals hook secrets with; an empty value keeps the
 // behaviour of the deploy package (deterministic, configuration-dependent key)
-// rather than silently invalidating installed hooks on restart.
-func newStoreRepository(st *store.Store, secret string) *storeRepository {
-	return &storeRepository{store: st, secret: secret}
+// rather than silently invalidating installed hooks on restart. logger is used
+// to surface a hook whose secret cannot be opened (never its material).
+func newStoreRepository(st *store.Store, secret string, logger *slog.Logger) *storeRepository {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &storeRepository{store: st, secret: secret, logger: logger}
 }
 
 // GetApplication loads one application by ID.
@@ -371,7 +378,12 @@ func (r *storeRepository) Targets(ctx context.Context, provider, repo string) ([
 		if err != nil {
 			// A secret that cannot be opened (rotated key, corrupted row) can
 			// never verify a delivery; skip the target instead of failing the
-			// whole request and hiding the remaining ones.
+			// whole request and hiding the remaining ones. Log it: otherwise
+			// every delivery to this hook answers 401 with no trace of why
+			// automatic deploys silently stopped working.
+			r.logger.Warn("webhooks: stored hook secret could not be opened; deliveries for this hook cannot be verified",
+				"application_id", uuidFromPG(row.ApplicationID), "provider", row.Provider,
+				"repo", row.Repo, "hook_id", row.HookID, "error", err)
 			continue
 		}
 		targets = append(targets, Target{
@@ -392,8 +404,10 @@ func (r *storeRepository) Targets(ctx context.Context, provider, repo string) ([
 	return targets, nil
 }
 
-// ClaimEvent records a delivery, mapping the partial unique indexes to
-// ErrDuplicate.
+// ClaimEvent records a delivery. A duplicate commit SHA or delivery ID
+// surfaces as ErrDuplicate together with the existing event, so the caller can
+// tell whether the winning claim already produced a deployment (a durable
+// no-op) or is still in flight (the duplicate must not be acknowledged yet).
 func (r *storeRepository) ClaimEvent(ctx context.Context, event Event) (Event, error) {
 	row, err := r.store.CreateWebhookEvent(ctx, sqlc.CreateWebhookEventParams{
 		ApplicationID: pgUUID(event.ApplicationID),
@@ -404,10 +418,30 @@ func (r *storeRepository) ClaimEvent(ctx context.Context, event Event) (Event, e
 		CommitSha:     event.CommitSHA,
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if !isUniqueViolation(err) {
+			return Event{}, err
+		}
+		existing, lookupErr := r.store.GetWebhookEventForDelivery(ctx, sqlc.GetWebhookEventForDeliveryParams{
+			ApplicationID: pgUUID(event.ApplicationID),
+			CommitSha:     event.CommitSHA,
+			DeliveryID:    event.DeliveryID,
+		})
+		if lookupErr != nil {
+			// The colliding claim was released concurrently: report the
+			// duplicate with no row, which the caller answers retryable.
 			return Event{}, ErrDuplicate
 		}
-		return Event{}, err
+		return Event{
+			ID:            uuidFromPG(existing.ID),
+			ApplicationID: uuidFromPG(existing.ApplicationID),
+			Provider:      existing.Provider,
+			Event:         existing.Event,
+			DeliveryID:    existing.DeliveryID,
+			Ref:           existing.Ref,
+			CommitSHA:     existing.CommitSha,
+			DeploymentID:  uuidFromPG(existing.DeploymentID),
+			ReceivedAt:    timeFromPG(existing.ReceivedAt),
+		}, ErrDuplicate
 	}
 	return Event{
 		ID:            uuidFromPG(row.ID),
@@ -417,6 +451,7 @@ func (r *storeRepository) ClaimEvent(ctx context.Context, event Event) (Event, e
 		DeliveryID:    row.DeliveryID,
 		Ref:           row.Ref,
 		CommitSHA:     row.CommitSha,
+		DeploymentID:  uuidFromPG(row.DeploymentID),
 		ReceivedAt:    timeFromPG(row.ReceivedAt),
 	}, nil
 }

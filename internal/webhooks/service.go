@@ -33,14 +33,12 @@ const (
 	// StatusQueued means a deployment was started for this delivery.
 	StatusQueued = "queued"
 	// StatusDuplicate means the commit SHA (or delivery ID) was already
-	// handled: an anti-spam no-op, not an error.
+	// handled AND its deployment is durable: an anti-spam no-op, not an error.
+	// A duplicate whose winner is still in flight is a retryable error instead.
 	StatusDuplicate = "duplicate"
 	// StatusIgnored means the delivery verified but asks for no build (ping,
 	// tag push, another branch, deleted ref).
 	StatusIgnored = "ignored"
-	// StatusSkipped means the delivery verified but the deploy service refused
-	// it without failing (a deployment is already running).
-	StatusSkipped = "skipped"
 	// StatusDeleted means a closed pull request tore its preview down.
 	StatusDeleted = "deleted"
 )
@@ -143,7 +141,7 @@ func NewService(cfg Config) *Service {
 	}
 	repo := cfg.Repository
 	if repo == nil && cfg.Store != nil {
-		repo = newStoreRepository(cfg.Store, cfg.Secret)
+		repo = newStoreRepository(cfg.Store, cfg.Secret, logger)
 	}
 	now := cfg.Now
 	if now == nil {
@@ -424,7 +422,10 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 	if branch == "" {
 		return Delivery{Status: StatusIgnored, Reason: "ref"}, nil
 	}
-	if !strings.EqualFold(branch, target.Branch) {
+	// Branch names are case-sensitive: a push to "Main" must not consume the
+	// claim of an application watching "main" (the clone still checks out the
+	// configured branch, so the two are different targets).
+	if branch != target.Branch {
 		return Delivery{Status: StatusIgnored, Reason: "branch"}, nil
 	}
 
@@ -438,7 +439,15 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 	})
 	switch {
 	case errors.Is(err, ErrDuplicate):
-		return Delivery{Status: StatusDuplicate, Reason: "commit already handled"}, nil
+		// The claim is only a durable no-op once the winning delivery has
+		// actually queued its deployment. While the winner is still in flight —
+		// or about to release its claim after a conflict — acknowledging this
+		// duplicate would let the commit be dropped if the winner releases.
+		// Answer retryable so the host redelivers and re-checks later.
+		if event.DeploymentID != uuid.Nil {
+			return Delivery{Status: StatusDuplicate, Reason: "commit already handled"}, nil
+		}
+		return Delivery{}, fmt.Errorf("%w: the delivery is still being handled", ErrRetryable)
 	case err != nil:
 		return Delivery{}, err
 	}
@@ -450,7 +459,11 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 		// host's retry of this delivery through.
 		s.releaseClaim(ctx, event)
 		if errors.Is(err, deploy.ErrConflict) {
-			return Delivery{Status: StatusSkipped, Reason: "deployment in progress"}, nil
+			// A build is already running for this application, so the push
+			// cannot be serviced now. A 200 would be recorded as delivered and
+			// the commit silently dropped: answer 503 so the Git host
+			// redelivers the same event once the active build finishes.
+			return Delivery{}, fmt.Errorf("%w: a deployment is already running", ErrRetryable)
 		}
 		return Delivery{}, err
 	}

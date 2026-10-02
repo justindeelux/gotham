@@ -238,8 +238,8 @@ func (r *fakeRepository) ClaimEvent(_ context.Context, event Event) (Event, erro
 	if key == "" {
 		key = uuid.NewString() // nothing to dedupe by: every delivery is new
 	}
-	if _, taken := r.claims[key]; taken {
-		return Event{}, ErrDuplicate
+	if existing, taken := r.claims[key]; taken {
+		return existing, ErrDuplicate
 	}
 	event.ID = uuid.New()
 	event.ReceivedAt = time.Now().UTC()
@@ -866,6 +866,13 @@ func (f *fakeDeployer) DeleteSystemApplication(_ context.Context, appID uuid.UUI
 	}
 	f.deleted = append(f.deleted, appID)
 	return nil
+}
+
+// setErr replaces the scripted DeploySystem error.
+func (f *fakeDeployer) setErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
 }
 
 // deployCount reports how many deployments were queued.

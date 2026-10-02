@@ -29,6 +29,16 @@ INSERT INTO webhook_events (application_id, provider, event, delivery_id, ref, c
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
+-- name: GetWebhookEventForDelivery :one
+SELECT * FROM webhook_events
+WHERE application_id = $1
+  AND (
+    (sqlc.arg(commit_sha)::text <> '' AND commit_sha = sqlc.arg(commit_sha)::text)
+    OR (sqlc.arg(delivery_id)::text <> '' AND delivery_id = sqlc.arg(delivery_id)::text)
+  )
+ORDER BY received_at DESC
+LIMIT 1;
+
 -- name: UpdateWebhookEventDeployment :exec
 UPDATE webhook_events
 SET deployment_id = $2

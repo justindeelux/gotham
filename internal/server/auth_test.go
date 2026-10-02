@@ -418,6 +418,20 @@ func TestAuthLogoutRejectsMalformedBody(t *testing.T) {
 	}
 }
 
+// TestAuthLogoutRejectsTrailingJSON: a well-formed first value followed by
+// trailing input must not revoke the token. The store fake is armed to fail if
+// Logout is reached, so a 400 proves it was never called.
+func TestAuthLogoutRejectsTrailingJSON(t *testing.T) {
+	s := newTestAuthServer(t)
+	s.auth = &fakeAuthService{user: newFakeAuthService().user, logoutErr: errors.New("logout must not be called")}
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/auth/logout",
+		`{"refresh_token":"live-token"} {`, "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("trailing-JSON logout status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSecurityHeaders(t *testing.T) {
 	s := newTestAuthServer(t)
 

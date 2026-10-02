@@ -62,6 +62,10 @@ type Service struct {
 	// password and before re-reading the credential version, so a test can
 	// commit a password reset into that window deterministically.
 	afterPasswordVerified func()
+	// beforeRotate is a test seam: Refresh runs it after the credential
+	// checks and before the atomic rotation, so a test can commit a reset
+	// plus a fresh login into that window deterministically.
+	beforeRotate func()
 }
 
 // New builds a Service. The clock is injectable so tests can exercise expiry
@@ -296,6 +300,9 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 	if err != nil {
 		return nil, err
 	}
+	if s.beforeRotate != nil {
+		s.beforeRotate()
+	}
 	if _, err := s.store.RotateSession(ctx, session.UserID, sqlc.RotateSessionParams{
 		RevokedRefreshHash: hash,
 		NewRefreshHash:     refreshHashNext,
@@ -303,10 +310,16 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 		CredentialVersion:  user.CredentialVersion,
 	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// The session stopped being live between the read and the
-			// rotation — a concurrent rotation or a password reset won the
-			// race. Treat the replay as reuse and refuse.
-			s.revokeSessionFamily(ctx, session.UserID)
+			// The row stopped being live between the read and the rotation.
+			// Re-read it to tell a replay/rotation race (the row is still
+			// present and revoked) from a password reset or logout purge (the
+			// row is gone), which must not revoke a freshly authenticated
+			// session minted after the reset.
+			if latest, readErr := s.store.GetSessionByRefreshHash(ctx, hash); readErr == nil && latest.RevokedAt.Valid {
+				s.revokeSessionFamily(ctx, session.UserID)
+			} else if readErr != nil && !errors.Is(readErr, pgx.ErrNoRows) {
+				s.logger.Error("auth: re-read conflicted session", "error", readErr, "user_id", uuid.UUID(session.UserID.Bytes))
+			}
 			return nil, ErrUnauthorized
 		}
 		return nil, fmt.Errorf("auth: rotate session: %w", err)

@@ -81,6 +81,60 @@ func TestServiceRefreshRejectsStaleCredentialVersion(t *testing.T) {
 	}
 }
 
+// TestServiceRefreshConflictAfterResetDoesNotRevokeFreshSession covers the R1
+// race: the presented session was read live, then a password reset deletes it
+// and the user logs in again. The pending rotation loses with pgx.ErrNoRows on
+// a deleted row, which must be a plain 401 — not a family revocation that kills
+// the freshly authenticated session.
+func TestServiceRefreshConflictAfterResetDoesNotRevokeFreshSession(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	email := uniqueEmail("refresh-reset-race")
+	cleanupUser(t, st, email)
+
+	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	userID, err := uuid.Parse(registered.User.ID)
+	if err != nil {
+		t.Fatalf("parse user ID: %v", err)
+	}
+
+	newHash, err := HashPassword("rotated-password")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+
+	// In the window between the session read and the rotation: reset the
+	// password (deleting the presented session) and log in again.
+	var fresh *AuthResult
+	svc.beforeRotate = func() {
+		if err := st.ResetUserPassword(ctx, pgUUID(userID), email, newHash); err != nil {
+			t.Errorf("reset during refresh: %v", err)
+		}
+		fresh, err = svc.Login(ctx, email, "rotated-password")
+		if err != nil {
+			t.Errorf("login during refresh: %v", err)
+		}
+	}
+
+	if _, err := svc.Refresh(ctx, registered.RefreshToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("stale Refresh error = %v, want ErrUnauthorized", err)
+	}
+	svc.beforeRotate = nil
+
+	if fresh == nil || fresh.RefreshToken == "" {
+		t.Fatal("fresh login did not mint a session")
+	}
+	// The fresh session must survive: the stale refresh lost to a deleted
+	// row, not to a replay.
+	if _, err := svc.Refresh(ctx, fresh.RefreshToken); err != nil {
+		t.Fatalf("fresh session was revoked by the stale refresh conflict: %v", err)
+	}
+}
+
 // TestServiceLoginRefusesVersionBumpDuringVerify covers the login window: the
 // reset commits while the password is being verified, so the old password
 // checked out but the session must not be minted under the new credential.

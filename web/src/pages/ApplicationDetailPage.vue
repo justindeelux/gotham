@@ -31,7 +31,6 @@ import { describeApplicationError } from "../api/applications";
 import type {
   Application,
   Deployment,
-  DeploymentState,
   EnvVar,
   StorageMapping,
 } from "../api/applications";
@@ -51,7 +50,9 @@ import StorageEditor from "../components/StorageEditor.vue";
 import { useMediaQuery } from "../composables/useMediaQuery";
 import { useApplicationsStore } from "../stores/applications";
 import { useServersStore } from "../stores/servers";
+import { pipelineStepsFor } from "../utils/deployPipeline";
 import { relativeTime } from "../utils/format";
+import { createRequestGeneration } from "../utils/requestGeneration";
 
 const route = useRoute();
 const message = useMessage();
@@ -68,9 +69,19 @@ const rollingBack = ref(false);
 const envDraft = ref<EnvVar[]>([]);
 const envLoading = ref(false);
 const envError = ref<string | null>(null);
+// `envLoadedFor` names the application whose environment actually loaded. Save
+// is only enabled while it matches the current application, so an empty draft
+// from a failed read (or a draft left over from another application) can never
+// be written over unknown data.
+const envLoadedFor = ref<string>("");
 const storagesDraft = ref<StorageMapping[]>([]);
 const storagesLoading = ref(false);
 const storagesError = ref<string | null>(null);
+const storagesLoadedFor = ref<string>("");
+
+// Invalidates in-flight config reads when the route's application changes, so
+// a late response cannot overwrite the new application's draft.
+const draftGeneration = createRequestGeneration();
 
 // Previews (FE-8.1). `previewsLoaded` is only set by a successful read, so an
 // unavailable list can never render as a confirmed-empty one: a failure keeps
@@ -160,47 +171,8 @@ const deploymentOptions = computed<Array<{ label: string; value: string }>>(() =
   })),
 );
 
-/** PIPELINE_ORDER is the canonical state walk from state.go. */
-const PIPELINE_ORDER: DeploymentState[] = [
-  "queued",
-  "cloning",
-  "building",
-  "pushing",
-  "starting",
-  "running",
-];
-
 /** pipelineSteps maps the latest deployment onto done/active/todo/failed. */
-const pipelineSteps = computed<Array<{ name: DeploymentState; mood: string }>>(() => {
-  const current = latest.value;
-  if (!current) {
-    return [];
-  }
-  // Rollbacks skip cloning and building: they redeploy a pushed image.
-  const order =
-    current.kind === "rollback"
-      ? PIPELINE_ORDER.filter((name) => name !== "cloning" && name !== "building")
-      : PIPELINE_ORDER;
-  const currentIndex = order.indexOf(current.state);
-  return order.map((name, index) => {
-    if (current.state === "failed") {
-      if (index < order.length - 1 && (currentIndex === -1 || index <= currentIndex)) {
-        return { name, mood: "is-done" };
-      }
-      if (currentIndex !== -1 && index === currentIndex) {
-        return { name, mood: "is-failed" };
-      }
-      return { name, mood: "" };
-    }
-    if (index < currentIndex || current.state === "running") {
-      return { name, mood: current.state === "running" || index < currentIndex ? "is-done" : "" };
-    }
-    if (index === currentIndex) {
-      return { name, mood: "is-active" };
-    }
-    return { name, mood: "" };
-  });
-});
+const pipelineSteps = computed(() => pipelineStepsFor(latest.value));
 
 /** durationText renders started→finished (or started→now) as a short span. */
 function durationText(deployment: Deployment): string {
@@ -428,29 +400,62 @@ async function fetchAll(): Promise<void> {
 
 /** loadEnv refreshes the environment draft shown in the editor. */
 async function loadEnv(): Promise<void> {
+  const target = appId.value;
+  if (target === "") {
+    return;
+  }
+  const token = draftGeneration.current();
   envLoading.value = true;
   envError.value = null;
   try {
-    envDraft.value = [...(await appsStore.fetchEnv(appId.value))];
+    const env = await appsStore.fetchEnv(target);
+    if (!draftGeneration.isCurrent(token) || target !== appId.value) {
+      return; // superseded by an application switch
+    }
+    envDraft.value = [...env];
+    envLoadedFor.value = target;
   } catch (error) {
-    envDraft.value = [];
+    if (!draftGeneration.isCurrent(token) || target !== appId.value) {
+      return;
+    }
+    // Never present a failed read as an empty collection: keep the draft in an
+    // error state and clear envLoadedFor so Save stays disabled until a
+    // successful read. An unknown server state is never overwritten.
     envError.value = describeApplicationError(error);
+    envLoadedFor.value = "";
   } finally {
-    envLoading.value = false;
+    if (draftGeneration.isCurrent(token) && target === appId.value) {
+      envLoading.value = false;
+    }
   }
 }
 
 /** loadStorages refreshes the volume draft shown in the editor. */
 async function loadStorages(): Promise<void> {
+  const target = appId.value;
+  if (target === "") {
+    return;
+  }
+  const token = draftGeneration.current();
   storagesLoading.value = true;
   storagesError.value = null;
   try {
-    storagesDraft.value = [...(await appsStore.fetchStorages(appId.value))];
+    const storages = await appsStore.fetchStorages(target);
+    if (!draftGeneration.isCurrent(token) || target !== appId.value) {
+      return;
+    }
+    storagesDraft.value = [...storages];
+    storagesLoadedFor.value = target;
   } catch (error) {
-    storagesDraft.value = [];
+    if (!draftGeneration.isCurrent(token) || target !== appId.value) {
+      return;
+    }
     storagesError.value = describeApplicationError(error);
+    storagesLoadedFor.value = "";
   } finally {
-    storagesLoading.value = false;
+    if (draftGeneration.isCurrent(token) && target === appId.value) {
+      storagesLoading.value = false;
+    }
   }
 }
 
@@ -485,24 +490,46 @@ async function loadPreviews(): Promise<void> {
 
 /** handleSaveEnv replaces the whole environment collection. */
 async function handleSaveEnv(): Promise<void> {
+  const target = appId.value;
+  // Refuse to write a draft that does not belong to the current application:
+  // an empty or stale draft must never replace unknown server-side data.
+  if (target === "" || envLoadedFor.value !== target) {
+    return;
+  }
   envError.value = null;
   try {
-    envDraft.value = [...(await appsStore.saveEnv(appId.value, envDraft.value))];
+    const saved = await appsStore.saveEnv(target, envDraft.value);
+    if (target !== appId.value) {
+      return;
+    }
+    envDraft.value = [...saved];
     message.success("Environment saved. New variables apply to the next deploy.");
   } catch (error) {
+    if (target !== appId.value) {
+      return;
+    }
     envError.value = describeApplicationError(error);
   }
 }
 
 /** handleSaveStorages replaces the whole storage collection. */
 async function handleSaveStorages(): Promise<void> {
+  const target = appId.value;
+  if (target === "" || storagesLoadedFor.value !== target) {
+    return;
+  }
   storagesError.value = null;
   try {
-    storagesDraft.value = [
-      ...(await appsStore.saveStorages(appId.value, storagesDraft.value)),
-    ];
+    const saved = await appsStore.saveStorages(target, storagesDraft.value);
+    if (target !== appId.value) {
+      return;
+    }
+    storagesDraft.value = [...saved];
     message.success("Volumes saved. They persist on the node across deploys.");
   } catch (error) {
+    if (target !== appId.value) {
+      return;
+    }
     storagesError.value = describeApplicationError(error);
   }
 }
@@ -560,12 +587,19 @@ function openRollback(): void {
 }
 
 watch(appId, () => {
+  // Invalidate any in-flight config read for the previous application.
+  draftGeneration.bump();
   activeTab.value = "overview";
   logDeploymentId.value = "";
+  logServerId.value = "";
   envDraft.value = [];
   envError.value = null;
+  envLoadedFor.value = "";
+  envLoading.value = false;
   storagesDraft.value = [];
   storagesError.value = null;
+  storagesLoadedFor.value = "";
+  storagesLoading.value = false;
   previews.value = [];
   previewsLoaded.value = false;
   previewsError.value = null;
@@ -828,7 +862,7 @@ onUnmounted(() => {
                 type="primary"
                 size="small"
                 :loading="appsStore.savingEnv"
-                :disabled="envLoading"
+                :disabled="envLoading || envLoadedFor !== appId"
                 @click="handleSaveEnv"
               >
                 Save
@@ -840,7 +874,10 @@ onUnmounted(() => {
                 type="error"
                 :show-icon="true"
               >
-                {{ envError }}
+                <NSpace align="center" :size="12" wrap>
+                  <span>{{ envError }}</span>
+                  <NButton size="small" @click="void loadEnv()">Retry</NButton>
+                </NSpace>
               </NAlert>
               <NSpin :show="envLoading">
                 <EnvEditor v-model="envDraft" />
@@ -862,7 +899,7 @@ onUnmounted(() => {
                 type="primary"
                 size="small"
                 :loading="appsStore.savingStorages"
-                :disabled="storagesLoading"
+                :disabled="storagesLoading || storagesLoadedFor !== appId"
                 @click="handleSaveStorages"
               >
                 Save
@@ -874,7 +911,10 @@ onUnmounted(() => {
                 type="error"
                 :show-icon="true"
               >
-                {{ storagesError }}
+                <NSpace align="center" :size="12" wrap>
+                  <span>{{ storagesError }}</span>
+                  <NButton size="small" @click="void loadStorages()">Retry</NButton>
+                </NSpace>
               </NAlert>
               <NSpin :show="storagesLoading">
                 <StorageEditor v-model="storagesDraft" />

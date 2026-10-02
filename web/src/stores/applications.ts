@@ -21,9 +21,13 @@ import type {
   EnvVar,
   StorageMapping,
 } from "../api/applications";
+import { desiredPollIntervalMs } from "../utils/polling";
 
-/** Polling cadence for an in-flight deployment, in milliseconds. */
-const activePollIntervalMs = 3_000;
+/** One deployment-history poll timer per application. */
+interface PollEntry {
+  handle: ReturnType<typeof setInterval>;
+  active: boolean;
+}
 
 export const useApplicationsStore = defineStore("applications", () => {
   const applicationsById = ref<Record<string, Application>>({});
@@ -36,9 +40,12 @@ export const useApplicationsStore = defineStore("applications", () => {
   const savingEnv = ref(false);
   const savingStorages = ref(false);
 
-  // One poll timer per application with an in-flight deployment; the store
-  // instance is a singleton so a single map is enough for the whole app.
-  const pollTimers = new Map<string, ReturnType<typeof setInterval>>();
+  // One poll timer per application; the store instance is a singleton so a
+  // single map is enough for the whole app. `pollEpoch` invalidates in-flight
+  // refreshes when polling is torn down, so a late response cannot restart a
+  // timer after the component unmounted.
+  const pollTimers = new Map<string, PollEntry>();
+  let pollEpoch = 0;
 
   /** applicationOf returns the cached application, if one was fetched. */
   function applicationOf(appId: string): Application | null {
@@ -101,13 +108,26 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /** refreshDeployments reloads the history without toggling loading. */
+  /**
+   * refreshDeployments reloads the history without toggling loading. A
+   * response that resolves after polling was torn down (an application switch
+   * or unmount) is discarded: applying it would restart a timer the owner
+   * already cancelled.
+   */
   async function refreshDeployments(appId: string): Promise<void> {
+    const epoch = pollEpoch;
     try {
-      deploymentsByApp.value[appId] = await listDeployments(appId);
+      const deployments = await listDeployments(appId);
+      if (epoch !== pollEpoch) {
+        return;
+      }
+      deploymentsByApp.value[appId] = deployments;
       error.value = null;
       settlePolling(appId);
     } catch (err) {
+      if (epoch !== pollEpoch) {
+        return;
+      }
       error.value = describeApplicationError(err);
     }
   }
@@ -154,38 +174,47 @@ export const useApplicationsStore = defineStore("applications", () => {
   }
 
   /**
-   * settlePolling starts the 3s poll while a deployment is in flight and
-   * stops it once every deployment reached a terminal state.
+   * settlePolling ensures the application has a history poll at the cadence
+   * its state calls for: fast while a deployment is in flight, slow when idle
+   * so a deployment triggered elsewhere (a provider webhook, another session)
+   * is still discovered. The cadence is re-evaluated on every fetch, so an
+   * active deployment switches the timer to fast and a finished one back to
+   * idle.
    */
   function settlePolling(appId: string): void {
     const active = activeDeployment(appId) !== null;
-    const timer = pollTimers.get(appId) ?? null;
-    if (active && timer === null) {
-      pollTimers.set(
-        appId,
-        setInterval(() => {
-          void refreshDeployments(appId);
-        }, activePollIntervalMs),
-      );
-    } else if (!active && timer !== null) {
-      clearInterval(timer);
-      pollTimers.delete(appId);
+    const entry = pollTimers.get(appId) ?? null;
+    if (entry !== null && entry.active === active) {
+      return;
     }
+    if (entry !== null) {
+      clearInterval(entry.handle);
+    }
+    pollTimers.set(appId, {
+      active,
+      handle: setInterval(() => {
+        void refreshDeployments(appId);
+      }, desiredPollIntervalMs(active)),
+    });
   }
 
   /** stopPolling clears the timer of one application; safe when idle. */
   function stopPolling(appId: string): void {
-    const timer = pollTimers.get(appId) ?? null;
-    if (timer !== null) {
-      clearInterval(timer);
+    const entry = pollTimers.get(appId) ?? null;
+    if (entry !== null) {
+      clearInterval(entry.handle);
       pollTimers.delete(appId);
     }
   }
 
-  /** stopAllPolling clears every deployment timer; safe when idle. */
+  /**
+   * stopAllPolling clears every deployment timer and invalidates in-flight
+   * refreshes, so a late response cannot restart polling after teardown.
+   */
   function stopAllPolling(): void {
-    for (const timer of pollTimers.values()) {
-      clearInterval(timer);
+    pollEpoch += 1;
+    for (const entry of pollTimers.values()) {
+      clearInterval(entry.handle);
     }
     pollTimers.clear();
   }

@@ -29,6 +29,11 @@ import type {
 import { useProvidersStore } from "../stores/providers";
 import type { ProviderRepo } from "../api/providers";
 import { useServersStore } from "../stores/servers";
+import { useApplicationsStore } from "../stores/applications";
+import {
+  countDroppedEnvRows,
+  hasEnvKeyWarnings,
+} from "../utils/wizardValidation";
 import EnvEditor from "./EnvEditor.vue";
 import StorageEditor from "./StorageEditor.vue";
 
@@ -60,6 +65,7 @@ const emit = defineEmits<{
 
 const providersStore = useProvidersStore();
 const serversStore = useServersStore();
+const appsStore = useApplicationsStore();
 const message = useMessage();
 
 const PUBLIC_PROVIDER = "public";
@@ -194,10 +200,15 @@ const runtimeValid = computed<boolean>(() => {
   return domain === "" || DOMAIN_PATTERN.test(domain);
 });
 
-/** envValid warns on malformed keys without blocking the review step. */
-const envValid = computed<boolean>(() =>
-  form.env.every((row) => row.key.trim() === "" || /^[A-Z][A-Z0-9_]*$/.test(row.key.trim())),
-);
+/**
+ * Environment names are warn-only: the API accepts any structurally valid
+ * name, so the wizard must not block one it accepts. The alert names rows that
+ * deviate from the convention; nameless rows are reported because the payload
+ * drops them.
+ */
+const envKeyWarnings = computed<boolean>(() => hasEnvKeyWarnings(form.env));
+
+const droppedEnvRows = computed<number>(() => countDroppedEnvRows(form.env));
 
 const canContinue = computed<boolean>(() => {
   switch (step.value) {
@@ -240,10 +251,18 @@ watch(
     form.cloneUrl = "";
     sourceError.value = "";
     if (providerId !== "" && providerId !== PUBLIC_PROVIDER) {
-      void providersStore.fetchRepos(providerId).catch(() => undefined);
+      void loadRepos();
     }
   },
 );
+
+/** loadRepos fetches the selected provider's repositories; the store exposes any error. */
+async function loadRepos(): Promise<void> {
+  if (form.providerId === "" || form.providerId === PUBLIC_PROVIDER) {
+    return;
+  }
+  await providersStore.fetchRepos(form.providerId).catch(() => undefined);
+}
 
 /**
  * cloneUrlFor returns the clone URL stored for a provider repository
@@ -300,13 +319,25 @@ function buildPayload(): CreateApplicationInput {
   };
 }
 
-/** handleSubmit posts the wizard payload and reports the backend answer. */
+/** handleSubmit posts the wizard payload, queues the first deploy and reports. */
 async function handleSubmit(): Promise<void> {
   errorMessage.value = "";
   submitting.value = true;
   try {
     const { application, webhook } = await createApplication(buildPayload());
-    message.success(`Application "${application.name}" created`);
+    // The create route only stores the row; "Create & deploy" must queue the
+    // first deployment explicitly and surface whether it was queued.
+    try {
+      await appsStore.deploy(application.id);
+      message.success(`Application "${application.name}" created and first deploy queued`);
+    } catch (deployError) {
+      message.warning(
+        `Application "${application.name}" was created, but the first deploy could not be queued: ${describeApplicationError(
+          deployError,
+        )}`,
+        { duration: 8000 },
+      );
+    }
     if (webhook && !webhook.installed) {
       message.warning(
         `Automatic deploys are off: ${
@@ -439,6 +470,17 @@ function resetWizard(): void {
               <template #feedback>
                 <span class="field-hint">Private repos deploy with an SSH deploy key.</span>
               </template>
+              <NAlert
+                v-if="providersStore.reposError"
+                type="error"
+                :show-icon="true"
+                style="margin-top: 8px"
+              >
+                <NSpace align="center" :size="12" wrap>
+                  <span>{{ providersStore.reposError }}</span>
+                  <NButton size="small" @click="void loadRepos()">Retry</NButton>
+                </NSpace>
+              </NAlert>
             </NFormItem>
 
             <NAlert v-if="sourceError" type="warning" :show-icon="true">
@@ -539,8 +581,15 @@ function resetWizard(): void {
               <NText strong>Volumes</NText>
               <StorageEditor v-model="form.storage" />
             </div>
-            <NAlert v-if="!envValid" type="warning" :show-icon="false">
-              One or more variable names do not match ^[A-Z][A-Z0-9_]*$ — fix them before deploying.
+            <NAlert v-if="envKeyWarnings" type="warning" :show-icon="false">
+              One or more variable names do not follow the usual
+              ^[A-Z][A-Z0-9_]*$ convention. The API accepts them, so they are
+              not blocked — but a non-standard name may not be injected as you
+              expect.
+            </NAlert>
+            <NAlert v-if="droppedEnvRows > 0" type="warning" :show-icon="false">
+              {{ droppedEnvRows }} variable row{{ droppedEnvRows === 1 ? "" : "s" }}
+              without a name will be ignored on create.
             </NAlert>
           </NSpace>
 
@@ -563,6 +612,10 @@ function resetWizard(): void {
               Creating posts the payload to the applications API, then the
               first deploy queues immediately.
             </NText>
+            <NAlert v-if="droppedEnvRows > 0" type="warning" :show-icon="false">
+              {{ droppedEnvRows }} nameless variable row{{ droppedEnvRows === 1 ? "" : "s" }}
+              will be ignored on create.
+            </NAlert>
           </NSpace>
         </div>
 
@@ -581,7 +634,7 @@ function resetWizard(): void {
             <NButton
               type="primary"
               :loading="submitting"
-              :disabled="!sourceValid || !runtimeValid || !envValid"
+              :disabled="!sourceValid || !runtimeValid"
               @click="handleSubmit"
             >
               Create &amp; deploy

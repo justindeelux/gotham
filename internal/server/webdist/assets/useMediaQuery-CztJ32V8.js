@@ -1,1 +1,0 @@
-import{g as i,a4 as r,q as s}from"./index-D0Ie7bkF.js";function d(t){const n=s(!1);let e=null;const a=o=>{n.value=o.matches};return i(()=>{typeof window>"u"||!window.matchMedia||(e=window.matchMedia(t),n.value=e.matches,e.addEventListener("change",a))}),r(()=>{e?.removeEventListener("change",a),e=null}),n}export{d as u};

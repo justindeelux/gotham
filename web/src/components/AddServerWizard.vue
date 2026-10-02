@@ -25,6 +25,7 @@ import type { CheckResult, Server, ServerCheckName } from "../api/servers";
 import ServerStatusTag from "./ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
 import { formatBytes } from "../utils/format";
+import { createRequestGeneration } from "../utils/requestGeneration";
 
 interface Props {
   show: boolean;
@@ -93,6 +94,10 @@ const validateMessage = ref("");
 const validationPassed = ref(false);
 const fixedChecks = ref<FixedCheck[]>(makeIdleChecks());
 const createdServer = ref<Server | null>(null);
+
+// Invalidates in-flight create/validate responses when the wizard is reset or
+// closed, so a late answer cannot repopulate a wizard the user already left.
+const wizardGeneration = createRequestGeneration();
 
 const form = reactive<ConnectionForm>({
   name: "",
@@ -164,6 +169,9 @@ const rules = computed<FormRules>(() => ({
       ? { required: true, message: "Enter an existing key ID.", trigger: ["input", "blur"] }
       : [],
 }));
+
+/** hasCreatedServer reports whether the connection step already registered a node. */
+const hasCreatedServer = computed<boolean>(() => createdServer.value !== null);
 
 /** currentServer prefers the polled store copy so status flips live. */
 const currentServer = computed<Server | null>(() => {
@@ -245,6 +253,29 @@ watch(step, (value) => {
   }
 });
 
+// Editing the connection details invalidates a previous validation: a pass for
+// the old values must never unlock install for the new ones.
+const connectionSnapshot = computed<string>(() =>
+  JSON.stringify([
+    form.name,
+    form.ip,
+    form.port,
+    form.sshUser,
+    form.keyMode,
+    form.keyName,
+    form.privateKey,
+    form.keyId,
+  ]),
+);
+watch(connectionSnapshot, () => {
+  if (!createdServer.value) {
+    return;
+  }
+  validationPassed.value = false;
+  validateMessage.value = "";
+  fixedChecks.value = makeIdleChecks();
+});
+
 /** makeIdleChecks returns the fixed probe list in the idle state. */
 function makeIdleChecks(): FixedCheck[] {
   return FIXED_CHECK_LABELS.map((item) => ({
@@ -286,6 +317,13 @@ function isValidHost(value: string): boolean {
 
 /** handleCreate optionally stores a key, then registers the server. */
 async function handleCreate(): Promise<void> {
+  // Back from the validate step must not register the node twice: an already
+  // created server just advances to validation again.
+  if (createdServer.value) {
+    step.value = 1;
+    return;
+  }
+
   errorMessage.value = "";
   try {
     await formRef.value?.validate();
@@ -293,6 +331,7 @@ async function handleCreate(): Promise<void> {
     return;
   }
 
+  const token = wizardGeneration.current();
   creating.value = true;
   try {
     let keyId: string | null = null;
@@ -314,13 +353,21 @@ async function handleCreate(): Promise<void> {
       ssh_key_id: keyId,
     });
 
+    if (!wizardGeneration.isCurrent(token)) {
+      return; // the wizard was closed while the create was in flight
+    }
     createdServer.value = server;
     emit("created", server);
     step.value = 1;
   } catch (error) {
+    if (!wizardGeneration.isCurrent(token)) {
+      return;
+    }
     errorMessage.value = describeServerError(error);
   } finally {
-    creating.value = false;
+    if (wizardGeneration.isCurrent(token)) {
+      creating.value = false;
+    }
   }
 }
 
@@ -331,8 +378,12 @@ async function handleValidate(): Promise<void> {
     return;
   }
 
+  const token = wizardGeneration.current();
   validating.value = true;
   validateMessage.value = "";
+  // A retry starts from "not passed": a previous pass must never remain
+  // visible (or unlock Continue) while the new probe runs or after it fails.
+  validationPassed.value = false;
   fixedChecks.value = FIXED_CHECK_LABELS.map((item) => ({
     name: item.name,
     label: item.label,
@@ -341,6 +392,9 @@ async function handleValidate(): Promise<void> {
   }));
   try {
     const outcome = await serversStore.validate(server.id);
+    if (!wizardGeneration.isCurrent(token)) {
+      return; // the wizard was closed while the probe was in flight
+    }
     applyCheckResults(outcome.checks);
     validateMessage.value = outcome.message;
     validationPassed.value = outcome.ok;
@@ -348,10 +402,16 @@ async function handleValidate(): Promise<void> {
       message.success("Validation passed");
     }
   } catch (error) {
+    if (!wizardGeneration.isCurrent(token)) {
+      return;
+    }
     fixedChecks.value = makeIdleChecks();
     validateMessage.value = describeServerError(error);
+    validationPassed.value = false;
   } finally {
-    validating.value = false;
+    if (wizardGeneration.isCurrent(token)) {
+      validating.value = false;
+    }
   }
 }
 
@@ -381,6 +441,8 @@ function handleShowChange(value: boolean): void {
 
 /** resetWizard returns every field to its initial value. */
 function resetWizard(): void {
+  // Any in-flight create/validate belongs to the wizard being reset.
+  wizardGeneration.bump();
   step.value = 0;
   form.name = "";
   form.ip = "";
@@ -451,89 +513,136 @@ function resetWizard(): void {
             @submit.prevent="handleCreate"
           >
             <NSpace vertical :size="4">
-              <NFormItem label="Node name" path="name">
-                <NInput v-model:value="form.name" placeholder="build-node-03" />
-                <template #feedback>
-                  <span class="field-hint">A short unique name, e.g. build-node-03.</span>
-                </template>
+              <NAlert v-if="hasCreatedServer" type="info" :show-icon="true">
+                This node is already registered. Changing the connection
+                details here does not update it — delete and re-add the node to
+                change them. Continue without creating a duplicate.
+              </NAlert>
+
+              <NFormItem
+                label="Node name"
+                path="name"
+                :label-props="{ for: 'add-server-name' }"
+              >
+                <NInput
+                  v-model:value="form.name"
+                  placeholder="build-node-03"
+                  :input-props="{ id: 'add-server-name', 'aria-label': 'Node name' }"
+                />
+                <span class="field-hint">A short unique name, e.g. build-node-03.</span>
               </NFormItem>
 
               <NSpace :size="12">
-                <NFormItem label="IP address / hostname" path="ip" class="grow">
-                  <NInput v-model:value="form.ip" placeholder="203.0.113.90" />
-                  <template #feedback>
-                    <span class="field-hint">IPv4 or hostname, e.g. 203.0.113.90 or node3.internal.</span>
-                  </template>
+                <NFormItem
+                  label="IP address / hostname"
+                  path="ip"
+                  class="grow"
+                  :label-props="{ for: 'add-server-ip' }"
+                >
+                  <NInput
+                    v-model:value="form.ip"
+                    placeholder="203.0.113.90"
+                    :input-props="{ id: 'add-server-ip', 'aria-label': 'IP address or hostname' }"
+                  />
+                  <span class="field-hint">IPv4 or hostname, e.g. 203.0.113.90 or node3.internal.</span>
                 </NFormItem>
-                <NFormItem label="SSH port" path="port" style="width: 120px">
+                <NFormItem
+                  label="SSH port"
+                  path="port"
+                  style="width: 120px"
+                  :label-props="{ for: 'add-server-port' }"
+                >
                   <NInputNumber
                     v-model:value="form.port"
                     :min="1"
                     :max="65535"
                     placeholder="22"
+                    :input-props="{ id: 'add-server-port', 'aria-label': 'SSH port' }"
                   />
-                  <template #feedback>
-                    <span class="field-hint">Usually 22.</span>
-                  </template>
+                  <span class="field-hint">Usually 22.</span>
                 </NFormItem>
               </NSpace>
 
-              <NFormItem label="SSH user" path="sshUser">
-                <NInput v-model:value="form.sshUser" placeholder="root" />
-                <template #feedback>
-                  <span class="field-hint">The Unix user the control plane connects as.</span>
-                </template>
+              <NFormItem
+                label="SSH user"
+                path="sshUser"
+                :label-props="{ for: 'add-server-ssh-user' }"
+              >
+                <NInput
+                  v-model:value="form.sshUser"
+                  placeholder="root"
+                  :input-props="{ id: 'add-server-ssh-user', 'aria-label': 'SSH user' }"
+                />
+                <span class="field-hint">The Unix user the control plane connects as.</span>
               </NFormItem>
 
               <NFormItem label="SSH key">
-                <NRadioGroup v-model:value="form.keyMode" size="small">
+                <NRadioGroup
+                  v-model:value="form.keyMode"
+                  size="small"
+                  aria-label="SSH key mode"
+                >
                   <NRadioButton value="new">Paste a new key</NRadioButton>
                   <NRadioButton value="existing">Use an existing key ID</NRadioButton>
                 </NRadioGroup>
-                <template #feedback>
-                  <span class="field-hint">Key listing is not exposed by the API yet — paste the key material or a known key ID.</span>
-                </template>
+                <span class="field-hint">Key listing is not exposed by the API yet — paste the key material or a known key ID.</span>
               </NFormItem>
 
               <template v-if="form.keyMode === 'new'">
-                <NFormItem label="Key name" path="keyName">
-                  <NInput v-model:value="form.keyName" placeholder="deploy-key" />
-                  <template #feedback>
-                    <span class="field-hint">A label so you can reuse the key for other nodes.</span>
-                  </template>
+                <NFormItem
+                  label="Key name"
+                  path="keyName"
+                  :label-props="{ for: 'add-server-key-name' }"
+                >
+                  <NInput
+                    v-model:value="form.keyName"
+                    placeholder="deploy-key"
+                    :input-props="{ id: 'add-server-key-name', 'aria-label': 'Key name' }"
+                  />
+                  <span class="field-hint">A label so you can reuse the key for other nodes.</span>
                 </NFormItem>
-                <NFormItem label="Private key (PEM)" path="privateKey">
+                <NFormItem
+                  label="Private key (PEM)"
+                  path="privateKey"
+                  :label-props="{ for: 'add-server-private-key' }"
+                >
                   <NInput
                     v-model:value="form.privateKey"
                     type="textarea"
                     :autosize="{ minRows: 4, maxRows: 10 }"
                     placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                    :input-props="{ id: 'add-server-private-key', 'aria-label': 'Private key (PEM)' }"
                   />
-                  <template #feedback>
-                    <span class="field-hint">Ed25519 or RSA in PEM format. Stored encrypted, never returned.</span>
-                  </template>
+                  <span class="field-hint">Ed25519 or RSA in PEM format. Stored encrypted, never returned.</span>
                 </NFormItem>
-                <NFormItem label="Key passphrase (if any)" path="passphrase">
+                <NFormItem
+                  label="Key passphrase (if any)"
+                  path="passphrase"
+                  :label-props="{ for: 'add-server-passphrase' }"
+                >
                   <NInput
                     v-model:value="form.passphrase"
                     type="password"
                     show-password-on="click"
                     placeholder="Leave empty for unencrypted keys"
+                    :input-props="{ id: 'add-server-passphrase', 'aria-label': 'Key passphrase' }"
                   />
-                  <template #feedback>
-                    <span class="field-hint">The API does not accept a passphrase yet — passphrase-protected keys will fail validation.</span>
-                  </template>
+                  <span class="field-hint">The API does not accept a passphrase yet — passphrase-protected keys will fail validation.</span>
                 </NFormItem>
               </template>
 
-              <NFormItem v-else label="Key ID" path="keyId">
+              <NFormItem
+                v-else
+                label="Key ID"
+                path="keyId"
+                :label-props="{ for: 'add-server-key-id' }"
+              >
                 <NInput
                   v-model:value="form.keyId"
                   placeholder="00000000-0000-0000-0000-000000000000"
+                  :input-props="{ id: 'add-server-key-id', 'aria-label': 'Key ID' }"
                 />
-                <template #feedback>
-                  <span class="field-hint">The UUID of a key already stored on the control plane.</span>
-                </template>
+                <span class="field-hint">The UUID of a key already stored on the control plane.</span>
               </NFormItem>
 
               <NText depth="3">
@@ -672,7 +781,7 @@ function resetWizard(): void {
           <template v-if="step === 0">
             <NButton @click="closeWizard">Cancel</NButton>
             <NButton type="primary" :loading="creating" @click="handleCreate">
-              Create &amp; continue
+              {{ hasCreatedServer ? "Continue" : "Create & continue" }}
             </NButton>
           </template>
           <template v-else-if="step === 1">
@@ -701,6 +810,8 @@ function resetWizard(): void {
 
 <style scoped>
 .field-hint {
+  display: block;
+  margin-top: 4px;
   font-size: var(--text-xs);
   color: var(--meta);
 }

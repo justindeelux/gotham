@@ -643,9 +643,143 @@ async function main() {
     assert(buffer.pending.length === 1, "paused notice queued, not rendered");
   });
 
+  console.log("FX-14a pure logic");
+  const deployPipeline = await loadModule("../src/utils/deployPipeline.ts");
+  const envSecret = await loadModule("../src/utils/envSecret.ts");
+  const requestGeneration = await loadModule("../src/utils/requestGeneration.ts");
+  const polling = await loadModule("../src/utils/polling.ts");
+  const wizardValidation = await loadModule("../src/utils/wizardValidation.ts");
+
+  await check("a failed pipeline claims no completed stage (C4-3)", () => {
+    const { pipelineStepsFor } = deployPipeline.module;
+    const failed = pipelineStepsFor({
+      id: "d",
+      application_id: "a",
+      kind: "deploy",
+      state: "failed",
+      image_tag: "",
+      registry_image: "",
+      digest: "",
+      error: "boom",
+      attempt: 1,
+      container_id: "",
+      rollback_from: "",
+      started_at: null,
+      finished_at: null,
+      created_at: "",
+      updated_at: "",
+    });
+    assert(
+      failed.every((step) => step.mood !== "is-done"),
+      "no stage is marked done on failure",
+    );
+    assert(
+      failed.some((step) => step.mood === "is-failed"),
+      "the failure is rendered (is-failed is reachable)",
+    );
+    assert(
+      failed[failed.length - 1].name === "failed",
+      "the failed node is terminal",
+    );
+  });
+
+  await check("pipeline progress maps running and mid-flight states (C4-3)", () => {
+    const { pipelineStepsFor } = deployPipeline.module;
+    const base = {
+      id: "d",
+      application_id: "a",
+      kind: "deploy",
+      state: "building",
+      image_tag: "",
+      registry_image: "",
+      digest: "",
+      error: "",
+      attempt: 1,
+      container_id: "",
+      rollback_from: "",
+      started_at: null,
+      finished_at: null,
+      created_at: "",
+      updated_at: "",
+    };
+    const building = pipelineStepsFor({ ...base });
+    assert(building[0].mood === "is-done", "queued done");
+    assert(building[1].mood === "is-done", "cloning done");
+    assert(building[2].mood === "is-active", "building active");
+    assert(building[3].mood === "" && building[4].mood === "", "later stages todo");
+    const running = pipelineStepsFor({ ...base, state: "running" });
+    assert(
+      running.every((step) => step.mood === "is-done"),
+      "a running deploy shows every stage done",
+    );
+    const rollback = pipelineStepsFor({ ...base, kind: "rollback", state: "starting" });
+    assert(
+      rollback.map((step) => step.name).join(",") === "queued,pushing,starting,running",
+      "rollback skips cloning and building",
+    );
+  });
+
+  await check("secret badge matches the API's untrimmed prefix (C4-11)", () => {
+    const { isSecretValue } = envSecret.module;
+    assert(isSecretValue("secret:db-url"), "plain reference is sealed");
+    assert(isSecretValue("secret:"), "empty reference still carries the prefix");
+    assert(!isSecretValue(" secret:db-url"), "leading whitespace is plaintext to the API");
+    assert(!isSecretValue("production"), "plain value is not sealed");
+  });
+
+  await check("a superseded request token is rejected (C4-1 / B4-8)", () => {
+    const { createRequestGeneration } = requestGeneration.module;
+    const generation = createRequestGeneration();
+    const inFlight = generation.current();
+    assert(generation.isCurrent(inFlight), "in-flight request is current");
+    generation.bump(); // application switch / wizard close
+    assert(!generation.isCurrent(inFlight), "the late response is discarded");
+    assert(generation.isCurrent(generation.current()), "new owner is current");
+  });
+
+  await check("polling cadence is fast active and slow idle (C4-12 / C4-13)", () => {
+    const { desiredPollIntervalMs, ACTIVE_POLL_INTERVAL_MS, IDLE_POLL_INTERVAL_MS } =
+      polling.module;
+    assert(desiredPollIntervalMs(true) === ACTIVE_POLL_INTERVAL_MS, "active fast");
+    assert(desiredPollIntervalMs(false) === IDLE_POLL_INTERVAL_MS, "idle slow");
+    assert(IDLE_POLL_INTERVAL_MS > ACTIVE_POLL_INTERVAL_MS, "idle is slower");
+  });
+
+  await check("env keys warn without blocking and dropped rows are counted (C4-7)", () => {
+    const { hasEnvKeyWarnings, countDroppedEnvRows, isRecommendedEnvKey } =
+      wizardValidation.module;
+    assert(isRecommendedEnvKey("NODE_ENV"), "conventional key recommended");
+    assert(!isRecommendedEnvKey("node_env"), "lowercase deviates");
+    assert(
+      hasEnvKeyWarnings([{ key: "NODE_ENV", value: "x" }]) === false,
+      "conventional keys do not warn",
+    );
+    assert(
+      hasEnvKeyWarnings([{ key: "node_env", value: "x" }]) === true,
+      "a deviating key warns",
+    );
+    assert(
+      hasEnvKeyWarnings([{ key: "", value: "x" }]) === false,
+      "nameless rows are reported separately, not as key warnings",
+    );
+    assert(
+      countDroppedEnvRows([
+        { key: "", value: "kept-value" },
+        { key: "", value: "" },
+        { key: "OK", value: "v" },
+      ]) === 1,
+      "only a nameless row carrying a value is a silent drop",
+    );
+  });
+
   await server.close();
   await composable.cleanup();
   await channelBuffers.cleanup();
+  await deployPipeline.cleanup();
+  await envSecret.cleanup();
+  await requestGeneration.cleanup();
+  await polling.cleanup();
+  await wizardValidation.cleanup();
 
   const failed = results.filter((r) => !r.ok);
   console.log(

@@ -7,9 +7,10 @@ import (
 
 // contentSecurityPolicy is a conservative, static-safe policy that still allows
 // the embedded Vite SPA: same-origin scripts and styles plus the inline styles
-// Naive UI injects at runtime. base-uri/object-src/frame-ancestors close the
-// injected-base-tag, plugin-content and framing vectors.
-const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+// Naive UI injects at runtime. base-uri/object-src/form-action/frame-ancestors
+// close the injected-base-tag, plugin-content, form-hijack and framing vectors;
+// form-action does not fall back to default-src, so it is stated explicitly.
+const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'"
 
 // hstsHeader pins browsers to HTTPS. It is emitted only on secure requests
 // (direct TLS or a trusted proxy's X-Forwarded-Proto: https); a direct-HTTP

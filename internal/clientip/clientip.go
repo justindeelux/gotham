@@ -2,6 +2,11 @@
 // behind a trusted reverse proxy, without trusting forwarded headers from an
 // untrusted peer. An empty trusted set means no peer is trusted: forwarded
 // headers are ignored and only the direct connection is reported.
+//
+// Trust is only as narrow as the configured prefixes: every host inside a
+// trusted prefix can present forwarded headers as if it were a proxy, so list
+// the proxy's exact IPs where possible. The proxy must also set/replace
+// X-Forwarded-Proto and append the client to X-Forwarded-For.
 package clientip
 
 import (
@@ -27,6 +32,10 @@ func Parse(entries []string) ([]netip.Prefix, error) {
 			if err != nil {
 				return nil, fmt.Errorf("invalid trusted proxy %q: %w", entry, err)
 			}
+			prefix, err = unmapPrefix(prefix)
+			if err != nil {
+				return nil, fmt.Errorf("invalid trusted proxy %q: %w", entry, err)
+			}
 			prefixes = append(prefixes, prefix.Masked())
 			continue
 		}
@@ -47,9 +56,11 @@ func Parse(entries []string) ([]netip.Prefix, error) {
 // configured). When the peer is trusted, the header is walked right to left —
 // nearest proxy first — and the first address that is not itself a trusted
 // proxy is the client; a spoofed leftmost entry is therefore ignored because
-// the trusted proxy's appended entry sits to its right. Malformed entries are
-// skipped. When the header is absent, malformed, or entirely trusted, the peer
-// address is the fallback.
+// the trusted proxy's appended entry sits to its right. Entries and their
+// optional ports are parsed; an unparseable entry stops the walk and the peer
+// is returned, so a chain the proxy left unverifiable cannot fall through to an
+// attacker-chosen address. When the header is absent or entirely trusted, the
+// peer address is the fallback.
 func ClientIP(r *http.Request, trusted []netip.Prefix) string {
 	peer := peerHost(r.RemoteAddr)
 	peerAddr, err := netip.ParseAddr(peer)
@@ -65,11 +76,13 @@ func ClientIP(r *http.Request, trusted []netip.Prefix) string {
 
 	hops := forwardedFor(r.Header.Values("X-Forwarded-For"))
 	for i := len(hops) - 1; i >= 0; i-- {
-		addr, err := netip.ParseAddr(hops[i])
-		if err != nil {
-			continue
+		addr, ok := parseHop(hops[i])
+		if !ok {
+			// A hop we cannot parse makes the rest of the chain
+			// unverifiable: fall back to the direct peer instead of
+			// trusting an attacker-chosen entry further left.
+			return peer
 		}
-		addr = addr.Unmap()
 		if !isTrusted(addr, trusted) {
 			return addr.String()
 		}
@@ -80,7 +93,8 @@ func ClientIP(r *http.Request, trusted []netip.Prefix) string {
 // IsSecure reports whether the request reached the server over HTTPS. A direct
 // TLS connection always counts. X-Forwarded-Proto: https is honored only when
 // the direct peer is a trusted proxy, so a client cannot claim HTTPS by sending
-// the header itself.
+// the header itself. The nearest value (the last) decides, so a proxy that
+// appends rather than replaces cannot let a client-supplied value win.
 func IsSecure(r *http.Request, trusted []netip.Prefix) bool {
 	if r.TLS != nil {
 		return true
@@ -89,7 +103,7 @@ func IsSecure(r *http.Request, trusted []netip.Prefix) bool {
 	if err != nil || !isTrusted(peerAddr.Unmap(), trusted) {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+	return strings.EqualFold(lastForwardedProto(r.Header.Values("X-Forwarded-Proto")), "https")
 }
 
 // peerHost extracts the host from RemoteAddr, falling back to the raw value
@@ -115,6 +129,55 @@ func forwardedFor(values []string) []string {
 		}
 	}
 	return hops
+}
+
+// lastForwardedProto returns the last scheme token across repeated and
+// comma-separated X-Forwarded-Proto headers — the hop nearest this server.
+func lastForwardedProto(values []string) string {
+	last := ""
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				last = part
+			}
+		}
+	}
+	return last
+}
+
+// parseHop parses one X-Forwarded-For entry, stripping an optional port
+// (host:port, [v6]:port) or brackets around a bare IPv6 address. It fails when
+// the remainder is not an address, so the caller stops walking rather than
+// trusting a left entry it cannot verify.
+func parseHop(raw string) (netip.Addr, bool) {
+	entry := strings.TrimSpace(raw)
+	if entry == "" {
+		return netip.Addr{}, false
+	}
+	if host, _, err := net.SplitHostPort(entry); err == nil {
+		entry = host
+	} else {
+		entry = strings.Trim(entry, "[]")
+	}
+	addr, err := netip.ParseAddr(entry)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
+}
+
+// unmapPrefix converts an IPv4-mapped IPv6 prefix (::ffff:a.b.c.d/n) into its
+// IPv4 equivalent so it can match unmapped IPv4 peers; other prefixes are
+// returned unchanged.
+func unmapPrefix(prefix netip.Prefix) (netip.Prefix, error) {
+	if !prefix.Addr().Is4In6() {
+		return prefix, nil
+	}
+	bits := prefix.Bits() - 96
+	if bits < 0 {
+		return netip.Prefix{}, fmt.Errorf("invalid mapped prefix length %d", prefix.Bits())
+	}
+	return netip.PrefixFrom(prefix.Addr().Unmap(), bits), nil
 }
 
 // isTrusted reports whether addr falls inside any trusted prefix.

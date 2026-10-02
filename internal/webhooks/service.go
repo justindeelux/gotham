@@ -321,7 +321,7 @@ func (s *Service) deleteWebhook(ctx context.Context, userID, appID uuid.UUID, fo
 // explicit POST /v1/applications/{id}/webhooks route (see callbackBaseURL).
 // The deploy create path calls it; a non-request caller uses that route.
 func (s *Service) InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) error {
-	_, err := s.CreateWebhook(ctx, userID, appID, callbackBaseURL(r))
+	_, err := s.CreateWebhook(ctx, userID, appID, s.callbackBaseURL(r))
 	return err
 }
 

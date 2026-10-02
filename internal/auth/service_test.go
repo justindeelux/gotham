@@ -186,8 +186,12 @@ func TestServiceLoginMissStillVerifies(t *testing.T) {
 	ctx := context.Background()
 
 	calls := 0
+	var firstEncoded string
 	svc.verifyPassword = func(encoded, password string) (bool, error) {
 		calls++
+		if calls == 1 {
+			firstEncoded = encoded
+		}
 		return VerifyPassword(encoded, password)
 	}
 
@@ -196,6 +200,12 @@ func TestServiceLoginMissStillVerifies(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("unknown-email verifications = %d, want 1", calls)
+	}
+	if firstEncoded == "" {
+		t.Fatal("miss path verified against an empty hash (verification short-circuited)")
+	}
+	if _, _, _, err := decodeHash(firstEncoded); err != nil {
+		t.Fatalf("dummy hash %q is not decodable: %v", firstEncoded, err)
 	}
 
 	email := uniqueEmail("passwordless")

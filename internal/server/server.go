@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -136,6 +137,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	if err != nil {
 		return nil, fmt.Errorf("server: trusted proxies: %w", err)
 	}
+	warnTrustedProxyConfig(logger, trustedProxies, snap, oauthService != nil)
 
 	// Prefer the store's pool so the control plane does not open a second
 	// PostgreSQL connection just for the health check.
@@ -205,6 +207,24 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	s.router = router
 
 	return s, nil
+}
+
+// warnTrustedProxyConfig logs the two configuration footguns around
+// GOTHAM_TRUSTED_PROXIES: prefixes broad enough that a host inside them can
+// spoof forwarded client addresses, and a missing configuration on a
+// deployment that likely sits behind a TLS-terminating proxy (OAuth enabled or
+// an https redirect base), where X-Forwarded-Proto is then ignored and secure
+// cookies are downgraded.
+func warnTrustedProxyConfig(logger *slog.Logger, trusted []netip.Prefix, snap config.Values, oauth bool) {
+	for _, prefix := range trusted {
+		if prefix.Bits() <= 8 {
+			logger.Warn("GOTHAM_TRUSTED_PROXIES contains an overly broad prefix; every host it covers can spoof the forwarded client address and scheme. List the proxy's exact IPs.",
+				"prefix", prefix.String())
+		}
+	}
+	if len(trusted) == 0 && (oauth || strings.HasPrefix(snap.OAuth.GitHub.RedirectURL, "https://")) {
+		logger.Warn("no trusted proxies configured: X-Forwarded-For and X-Forwarded-Proto are ignored. Behind a TLS-terminating proxy this downgrades secure cookies and makes OAuth fail closed; set GOTHAM_TRUSTED_PROXIES to the proxy's address.")
+	}
 }
 
 // Handler returns the server's HTTP handler. It is exposed mainly for tests.

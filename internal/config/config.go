@@ -90,6 +90,9 @@ type Server struct {
 	// control plane (comma-separated via GOTHAM_TRUSTED_PROXIES). Their
 	// forwarded headers are honored; headers from any other peer are ignored.
 	// Empty trusts no peer, which keeps direct-connection behavior unchanged.
+	// List the proxy's exact IPs where possible: every host inside a trusted
+	// prefix can spoof the forwarded client address. A change requires a
+	// restart; the watcher only re-applies logging.
 	TrustedProxies []string `mapstructure:"trusted_proxies"`
 }
 

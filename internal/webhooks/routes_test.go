@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -82,6 +83,69 @@ func managementRequest(method, path string) *http.Request {
 	req := httptest.NewRequest(method, path, nil)
 	req.Header.Set("Authorization", "Bearer token")
 	return req
+}
+
+// TestRoutesCreateWebhookIgnoresUntrustedForwardedScheme pins L6: an untrusted
+// peer cannot redirect the hook callback to https by sending X-Forwarded-Proto.
+func TestRoutesCreateWebhookIgnoresUntrustedForwardedScheme(t *testing.T) {
+	repo := newFakeRepository()
+	installer := &fakeInstaller{}
+	srv := newRouteServer(newTestService(repo, installer, &fakeDeployer{}), repo.app.UserID)
+	path := "/v1/applications/" + repo.app.ID.String() + "/webhooks"
+
+	req := managementRequest(http.MethodPost, path)
+	req.Host = "cp.example.com"
+	req.RemoteAddr = "203.0.113.7:1234"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if len(installer.created) != 1 {
+		t.Fatalf("provider installs = %d, want 1", len(installer.created))
+	}
+	if got, want := installer.created[0].URL, "http://cp.example.com/api/v1/webhooks/github"; got != want {
+		t.Errorf("hook url = %q, want %q (untrusted peer must not force https)", got, want)
+	}
+}
+
+// TestRoutesCreateWebhookTrustedProxyScheme pins that a trusted proxy's
+// X-Forwarded-Proto is honored for the callback origin.
+func TestRoutesCreateWebhookTrustedProxyScheme(t *testing.T) {
+	repo := newFakeRepository()
+	installer := &fakeInstaller{}
+	trusted, err := clientip.Parse([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatalf("clientip.Parse: %v", err)
+	}
+	svc := newTestServiceWith(Config{
+		Repository:     repo,
+		Installer:      installer,
+		Deployer:       &fakeDeployer{},
+		Logger:         discardLogger(),
+		TrustedProxies: trusted,
+	})
+	srv := newRouteServer(svc, repo.app.UserID)
+	path := "/v1/applications/" + repo.app.ID.String() + "/webhooks"
+
+	req := managementRequest(http.MethodPost, path)
+	req.Host = "cp.example.com"
+	req.RemoteAddr = "127.0.0.1:5000"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if len(installer.created) != 1 {
+		t.Fatalf("provider installs = %d, want 1", len(installer.created))
+	}
+	if got, want := installer.created[0].URL, "https://cp.example.com/api/v1/webhooks/github"; got != want {
+		t.Errorf("hook url = %q, want %q", got, want)
+	}
 }
 
 func TestRoutesDeliveryValidSignaturePerProvider(t *testing.T) {
@@ -542,7 +606,7 @@ func TestRoutesCreateWebhookIsIdempotent(t *testing.T) {
 		t.Helper()
 		req := managementRequest(http.MethodPost, path)
 		req.Host = "cp.example.com"
-		req.Header.Set("X-Forwarded-Proto", "https")
+		req.TLS = &tls.ConnectionState{}
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, req)
 		if rec.Code != http.StatusCreated {

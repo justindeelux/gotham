@@ -46,6 +46,17 @@ func TestParse(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("ipv4-mapped cidr is unmapped", func(t *testing.T) {
+		got := mustParse(t, "::ffff:10.0.0.0/104")
+		want := netip.MustParsePrefix("10.0.0.0/8")
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("Parse = %v, want %v", got, want)
+		}
+		if !got[0].Contains(netip.MustParseAddr("10.1.2.3")) {
+			t.Error("unmapped prefix does not contain an IPv4 address")
+		}
+	})
 }
 
 func TestClientIP(t *testing.T) {
@@ -100,11 +111,32 @@ func TestClientIP(t *testing.T) {
 			want:    "10.0.0.1",
 		},
 		{
-			name:    "malformed hops are skipped",
+			name:    "malformed hops left of a parsable untrusted hop are irrelevant",
 			remote:  "10.0.0.1:1234",
 			trusted: private,
 			xff:     []string{"garbage, 198.51.100.4"},
 			want:    "198.51.100.4",
+		},
+		{
+			name:    "hop with a port is parsed",
+			remote:  "10.0.0.1:1234",
+			trusted: private,
+			xff:     []string{"198.51.100.4:5678"},
+			want:    "198.51.100.4",
+		},
+		{
+			name:    "bracketed ipv6 hop with a port is parsed",
+			remote:  "10.0.0.1:1234",
+			trusted: private,
+			xff:     []string{"[2001:db8::9]:5678"},
+			want:    "2001:db8::9",
+		},
+		{
+			name:    "unparseable hop stops the walk and falls back to the peer",
+			remote:  "10.0.0.1:1234",
+			trusted: private,
+			xff:     []string{"198.51.100.4, garbage"},
+			want:    "10.0.0.1",
 		},
 		{
 			name:   "no trusted proxies keeps remoteaddr behavior",
@@ -156,6 +188,14 @@ func TestIsSecure(t *testing.T) {
 		}
 		return req
 	}
+	appendProto := func(remote string, protos ...string) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = remote
+		for _, proto := range protos {
+			req.Header.Add("X-Forwarded-Proto", proto)
+		}
+		return req
+	}
 
 	cases := []struct {
 		name    string
@@ -168,6 +208,9 @@ func TestIsSecure(t *testing.T) {
 		{"http forwarded by a trusted peer is insecure", newReq("127.0.0.1:1234", false, "http"), private, false},
 		{"direct tls is secure regardless of peer", newReq("203.0.113.7:1234", true, ""), private, true},
 		{"no trusted proxies ignores the header", newReq("127.0.0.1:1234", false, "https"), nil, false},
+		{"client-supplied https overridden by an appended http", appendProto("127.0.0.1:1234", "https", "http"), private, false},
+		{"client-supplied http followed by an appended https", appendProto("127.0.0.1:1234", "http", "https"), private, true},
+		{"comma-separated last value decides", appendProto("127.0.0.1:1234", "https, http"), private, false},
 	}
 
 	for _, tc := range cases {

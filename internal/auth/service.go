@@ -78,6 +78,9 @@ func New(st *store.Store, signer *Signer, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// Warm the dummy hash once here so the first login miss does not pay an
+	// extra argon2 derivation and reveal itself through timing.
+	_ = dummyPasswordHash()
 	return &Service{store: st, signer: signer, logger: logger, now: time.Now, verifyPassword: VerifyPassword}
 }
 
@@ -248,9 +251,9 @@ func (s *Service) Login(ctx context.Context, email, password string) (*AuthResul
 }
 
 // dummyPasswordHash is a fixed argon2id hash with the production parameters,
-// computed once. The login miss paths verify against it so they pay the same
-// argon2id cost as a genuine check and cannot be timed to reveal whether an
-// account exists (A2-5). A failure to hash is effectively impossible
+// computed once (warmed by New). The login miss paths verify against it so they
+// pay the same argon2id cost as a genuine check and cannot be timed to reveal
+// whether an account exists (A2-5). A failure to hash is effectively impossible
 // (crypto/rand); an empty value simply makes the dummy check return early
 // rather than weakening the real paths.
 var dummyPasswordHash = sync.OnceValue(func() string {

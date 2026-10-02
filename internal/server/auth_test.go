@@ -461,7 +461,7 @@ func TestSecurityHeaders(t *testing.T) {
 	// The hardened directives are pinned literally, so dropping one from the
 	// shared constant does not silently weaken the policy.
 	csp := rec.Header().Get("Content-Security-Policy")
-	for _, directive := range []string{"base-uri 'self'", "object-src 'none'", "frame-ancestors 'none'"} {
+	for _, directive := range []string{"base-uri 'self'", "object-src 'none'", "form-action 'self'", "frame-ancestors 'none'"} {
 		if !strings.Contains(csp, directive) {
 			t.Errorf("Content-Security-Policy %q missing %q", csp, directive)
 		}

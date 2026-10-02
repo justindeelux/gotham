@@ -73,7 +73,8 @@ func (f *fakeLogDialer) DialDockerClient(context.Context, uuid.UUID, ...servers.
 
 // startLogStreamRequest builds the POST request with chi URL params and the
 // authenticated user in its context.
-func startLogStreamRequest(serverID, containerID string, userID uuid.UUID) *http.Request {
+func startLogStreamRequest(serverID string, userID uuid.UUID) *http.Request {
+	const containerID = "ctr"
 	req := httptest.NewRequest(http.MethodPost,
 		"/v1/servers/"+serverID+"/containers/"+containerID+"/logs/stream", nil)
 	rctx := chi.NewRouteContext()
@@ -125,7 +126,7 @@ func TestHandleStartLogStreamWiresPublisher(t *testing.T) {
 
 	s := &Server{servers: dialer, realtime: rt, logger: logger}
 	rec := httptest.NewRecorder()
-	s.handleStartLogStream(rec, startLogStreamRequest(serverID.String(), "ctr", uuid.New()))
+	s.handleStartLogStream(rec, startLogStreamRequest(serverID.String(), uuid.New()))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusAccepted, rec.Body.String())
 	}
@@ -151,10 +152,37 @@ func TestHandleStartLogStreamRejectsUnknownNode(t *testing.T) {
 
 	s := &Server{servers: newFakeServerService(), realtime: rt, logger: logger}
 	rec := httptest.NewRecorder()
-	s.handleStartLogStream(rec, startLogStreamRequest(uuid.New().String(), "ctr", uuid.New()))
+	s.handleStartLogStream(rec, startLogStreamRequest(uuid.New().String(), uuid.New()))
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// TestHandleStartLogStreamForeignNodeIsNotFound is the U5 regression: a node
+// the caller cannot access is indistinguishable from a missing one (both 404),
+// matching the server's node-existence policy.
+func TestHandleStartLogStreamForeignNodeIsNotFound(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	base := newFakeServerService()
+	serverID := uuid.New()
+	base.items[serverID] = servers.Server{
+		ID:     serverID,
+		Name:   "node",
+		Status: servers.StatusReady,
+		TeamID: uuid.New(),
+	}
+
+	rt := ws.Mount(chi.NewRouter(), nil, "", logger, nil)
+	t.Cleanup(rt.Close)
+
+	// A team service with no membership for the caller denies the node.
+	s := &Server{servers: base, realtime: rt, logger: logger, teamService: newFakeTeamService()}
+	rec := httptest.NewRecorder()
+	s.handleStartLogStream(rec, startLogStreamRequest(serverID.String(), uuid.New()))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d for a foreign node", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -171,7 +199,7 @@ func TestHandleStartLogStreamRequiresAgentDialer(t *testing.T) {
 
 	s := &Server{servers: base, realtime: rt, logger: logger}
 	rec := httptest.NewRecorder()
-	s.handleStartLogStream(rec, startLogStreamRequest(serverID.String(), "ctr", uuid.New()))
+	s.handleStartLogStream(rec, startLogStreamRequest(serverID.String(), uuid.New()))
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)

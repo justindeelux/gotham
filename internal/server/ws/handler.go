@@ -40,6 +40,10 @@ const (
 	writeWait                 = 10 * time.Second
 	pingPeriod                = 25 * time.Second
 	maxSubscriptionsPerClient = 32
+	// authCacheTTL bounds how long an accepted node authorization is reused on
+	// one connection. Denials are never cached, so a revoked user loses access
+	// within the TTL and a newly granted user is admitted immediately (U1).
+	authCacheTTL = 30 * time.Second
 )
 
 // SubscriptionAuthorizer authorizes one log subscription for the authenticated
@@ -55,10 +59,11 @@ type Handler struct {
 	authorize SubscriptionAuthorizer
 	logger    *slog.Logger
 
-	// writeWait and pingPeriod are fields so tests can shorten them; NewHandler
-	// sets the production defaults.
-	writeWait  time.Duration
-	pingPeriod time.Duration
+	// writeWait, pingPeriod and authCacheTTL are fields so tests can shorten
+	// them; NewHandler sets the production defaults.
+	writeWait    time.Duration
+	pingPeriod   time.Duration
+	authCacheTTL time.Duration
 }
 
 // NewHandler builds a handler bound to hub. verify may be nil, in which case
@@ -69,12 +74,13 @@ func NewHandler(hub *Hub, verifier TokenVerifier, logger *slog.Logger, authorize
 		logger = slog.Default()
 	}
 	return &Handler{
-		hub:        hub,
-		verify:     verifier,
-		authorize:  authorize,
-		logger:     logger,
-		writeWait:  writeWait,
-		pingPeriod: pingPeriod,
+		hub:          hub,
+		verify:       verifier,
+		authorize:    authorize,
+		logger:       logger,
+		writeWait:    writeWait,
+		pingPeriod:   pingPeriod,
+		authCacheTTL: authCacheTTL,
 	}
 }
 
@@ -126,12 +132,20 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 
 	client := h.hub.newClient()
 	defer h.hub.remove(client)
+	// A connection that upgraded after the hub shut down must not linger: Run
+	// has returned, so nothing else will kick it (U9).
+	select {
+	case <-h.hub.done:
+		return
+	default:
+	}
 
 	// Per-connection state: the accepted subscriptions (also the cap), and the
-	// authorization result per node. Caching the node check means N channels
-	// on one node cost one authorization instead of N DB reads (B1-10).
+	// time-bounded authorization result per node. Caching an allow means N
+	// channels on one node cost one authorization instead of N DB reads
+	// (B1-10); denials are not cached so they can be re-checked (U1).
 	subs := make(map[string]bool, 8)
-	authorized := make(map[uuid.UUID]bool, 4)
+	authorized := make(map[uuid.UUID]authDecision, 4)
 
 	for _, channel := range initialChannels(request) {
 		h.subscribeChannel(conn, client, channel, request.Context(), userID, subs, authorized)
@@ -186,7 +200,7 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 
 // subscribeChannel validates and joins one channel, enforcing the
 // per-connection subscription cap.
-func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel string, ctx context.Context, userID uuid.UUID, subs map[string]bool, authorized map[uuid.UUID]bool) {
+func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel string, ctx context.Context, userID uuid.UUID, subs map[string]bool, authorized map[uuid.UUID]authDecision) {
 	if subs[channel] {
 		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeSubscribed})
 		return
@@ -260,12 +274,23 @@ func pumpRequests(receive func(*clientRequest) error, incoming chan<- clientRequ
 // WebSocket upgrade.
 type userIDKey struct{}
 
-// channelAllowed authorizes one subscription, reusing a per-connection cache
-// of node decisions so repeat channels on one node do not re-read the DB. Only
-// logs:{serverID}:{containerID} channels reach a node; every other channel is
-// a pure client-side room name. A nil authorizer (tests, non-DB builds) allows
-// everything, matching the pre-teams compatibility paths elsewhere.
-func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uuid.UUID, authorized map[uuid.UUID]bool) bool {
+// authDecision is a cached allow for one node, valid until expiry.
+type authDecision struct {
+	allowed bool
+	expiry  time.Time
+}
+
+// channelAllowed authorizes one subscription, reusing a per-connection,
+// time-bounded cache of node decisions so repeat channels on one node do not
+// re-read the DB. Only logs:{serverID}:{containerID} channels reach a node;
+// every other channel is a pure client-side room name. A nil authorizer
+// (tests, non-DB builds) allows everything, matching the pre-teams
+// compatibility paths elsewhere.
+//
+// Denials are never cached (U1): a user removed from a team is re-checked and
+// loses access within authCacheTTL, and a user added after a denial is admitted
+// on the next attempt.
+func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uuid.UUID, authorized map[uuid.UUID]authDecision) bool {
 	if h.authorize == nil {
 		return true
 	}
@@ -273,17 +298,16 @@ func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uui
 	if !ok {
 		return true
 	}
-	if allowed, seen := authorized[serverID]; seen {
-		return allowed
+	if decision, seen := authorized[serverID]; seen && time.Now().Before(decision.expiry) {
+		return decision.allowed
 	}
-	err := h.authorize(ctx, serverID, userID)
-	if err != nil {
+	if err := h.authorize(ctx, serverID, userID); err != nil {
 		h.logger.Debug("ws: subscription denied",
 			"channel", channel, "user_id", userID.String(), "error", err)
-		authorized[serverID] = false
+		delete(authorized, serverID)
 		return false
 	}
-	authorized[serverID] = true
+	authorized[serverID] = authDecision{allowed: true, expiry: time.Now().Add(h.authCacheTTL)}
 	return true
 }
 

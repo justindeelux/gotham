@@ -2,9 +2,12 @@ package ws
 
 import (
 	"bytes"
+	"net"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"golang.org/x/net/websocket"
 )
 
 // waitForCondition polls cond until it is true or the deadline expires.
@@ -94,5 +97,51 @@ func TestSlowClientDisconnected(t *testing.T) {
 	})
 	if hub.Drops() == 0 {
 		t.Error("Drops() = 0, want the discarded frames to be observable")
+	}
+}
+
+// TestBroadcastSaturationCounted is the U4 regression: when the hub's own
+// broadcast queue is full (nothing draining it), the discarded frame is counted
+// rather than silently lost.
+func TestBroadcastSaturationCounted(t *testing.T) {
+	hub := NewHub() // no Run: the broadcast queue fills up
+	for i := 0; i < 300; i++ {
+		hub.Broadcast("logs:srv:ctr", []byte("x"))
+	}
+	if hub.Drops() == 0 {
+		t.Fatal("saturated broadcasts were not counted (U4)")
+	}
+}
+
+// TestConnectionUpgradedAfterHubCloseIsDropped is the U9 regression: a
+// connection whose upgrade races Hub.Close must be closed promptly instead of
+// lingering with an unregistered client that nothing will ever kick.
+func TestConnectionUpgradedAfterHubCloseIsDropped(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+	handler := NewHandler(hub, stubVerifier{token: testToken}, nil, nil)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	hub.Close()
+
+	conn, err := websocket.Dial(wsURL(server, "/?token="+testToken), "", "http://localhost/")
+	if err != nil {
+		// The handshake itself may already be refused; either way the
+		// connection was not retained.
+		return
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	var msg Message
+	recvErr := websocket.JSON.Receive(conn, &msg)
+	if recvErr == nil {
+		t.Fatalf("received %+v after hub close, want the connection dropped", msg)
+	}
+	if ne, ok := recvErr.(net.Error); ok && ne.Timeout() {
+		t.Fatal("connection was not dropped promptly after hub close (U9)")
 	}
 }

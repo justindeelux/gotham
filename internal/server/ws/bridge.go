@@ -122,6 +122,12 @@ type messageStream struct {
 // so an unreachable Redis surfaces as an error here.
 type subscribeFunc func(ctx context.Context) (messageStream, error)
 
+// bridgeStableAfter is how long a subscription must stay up before its
+// reconnect backoff is reset. A Redis that accepts then immediately drops keeps
+// backing off instead of hot-looping at the minimum with a warning each time
+// (U8).
+const bridgeStableAfter = 5 * time.Second
+
 // Bridge subscribes to the Redis log channels and forwards every message into
 // the hub. One bridge serves all channels via a pattern subscription, and its
 // supervisor reconnects with bounded backoff whenever the subscription drops.
@@ -130,9 +136,10 @@ type Bridge struct {
 	rdb    *redis.Client
 	logger *slog.Logger
 
-	subscribe  subscribeFunc
-	minBackoff time.Duration
-	maxBackoff time.Duration
+	subscribe   subscribeFunc
+	minBackoff  time.Duration
+	maxBackoff  time.Duration
+	stableAfter time.Duration
 }
 
 // NewBridge builds a Redis-to-hub bridge. The caller runs Run. A nil logger
@@ -142,11 +149,12 @@ func NewBridge(hub *Hub, rdb *redis.Client, logger *slog.Logger) *Bridge {
 		logger = slog.Default()
 	}
 	b := &Bridge{
-		hub:        hub,
-		rdb:        rdb,
-		logger:     logger,
-		minBackoff: bridgeMinBackoff,
-		maxBackoff: bridgeMaxBackoff,
+		hub:         hub,
+		rdb:         rdb,
+		logger:      logger,
+		minBackoff:  bridgeMinBackoff,
+		maxBackoff:  bridgeMaxBackoff,
+		stableAfter: bridgeStableAfter,
 	}
 	b.subscribe = b.redisSubscribe
 	return b
@@ -177,6 +185,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			backoff = b.backoffAfterCycle(backoff, 0)
 			b.logRetry("ws: redis bridge subscribe failed", err, backoff)
 			if !sleepContext(ctx, backoff) {
 				return ctx.Err()
@@ -185,18 +194,31 @@ func (b *Bridge) Run(ctx context.Context) error {
 			continue
 		}
 
-		backoff = b.minBackoff // a successful subscribe resets the ceiling
+		started := time.Now()
 		err = b.forward(ctx, stream.messages)
 		stream.close()
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// Reset the backoff only after a subscription that stayed up, so a
+		// Redis that accepts then drops does not retry at the minimum forever.
+		backoff = b.backoffAfterCycle(backoff, time.Since(started))
 		b.logRetry("ws: redis bridge disconnected", err, backoff)
 		if !sleepContext(ctx, backoff) {
 			return ctx.Err()
 		}
 		backoff = nextBackoff(backoff, b.maxBackoff)
 	}
+}
+
+// backoffAfterCycle returns the delay to use for the next retry: the minimum
+// once the subscription stayed up for stableAfter, otherwise the current delay
+// unchanged (U8).
+func (b *Bridge) backoffAfterCycle(current, stableFor time.Duration) time.Duration {
+	if stableFor >= b.stableAfter {
+		return b.minBackoff
+	}
+	return current
 }
 
 // forward copies messages into the hub until the subscription closes or ctx

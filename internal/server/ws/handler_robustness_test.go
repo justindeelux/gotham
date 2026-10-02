@@ -124,3 +124,87 @@ func TestAuthorizationCachedPerConnection(t *testing.T) {
 		t.Errorf("authorize calls = %d, want 1 (cached per node)", got)
 	}
 }
+
+// TestAuthorizationRevocationAfterTTL is the U1 regression: an allow is cached
+// only for authCacheTTL, so a user removed from a team loses access on the next
+// re-check instead of keeping it for the whole connection.
+func TestAuthorizationRevocationAfterTTL(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+	t.Cleanup(hub.Close)
+
+	nodeID := uuid.New()
+	userID := uuid.New()
+	var allow atomic.Bool
+	allow.Store(true)
+	authorize := func(_ context.Context, serverID, user uuid.UUID) error {
+		if serverID != nodeID || user != userID || !allow.Load() {
+			return errors.New("not a member of this team")
+		}
+		return nil
+	}
+
+	handler := NewHandler(hub, subjectVerifier{token: testToken, userID: userID}, nil, authorize)
+	handler.authCacheTTL = 30 * time.Millisecond
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	conn := dial(t, wsURL(server, "/?token="+testToken+"&channel="+LogChannel(nodeID.String(), "a")))
+	if msg := receive(t, conn); msg.Type != TypeSubscribed {
+		t.Fatalf("first subscription = %+v, want subscribed", msg)
+	}
+
+	allow.Store(false)
+	// Within the TTL the cached allow still admits a second channel on the node.
+	if err := websocket.JSON.Send(conn, clientRequest{Subscribe: LogChannel(nodeID.String(), "b")}); err != nil {
+		t.Fatalf("second subscribe: %v", err)
+	}
+	if msg := receive(t, conn); msg.Type != TypeSubscribed {
+		t.Fatalf("subscription within TTL = %+v, want subscribed", msg)
+	}
+
+	// After the TTL the re-check sees the revocation.
+	time.Sleep(40 * time.Millisecond)
+	if err := websocket.JSON.Send(conn, clientRequest{Subscribe: LogChannel(nodeID.String(), "c")}); err != nil {
+		t.Fatalf("third subscribe: %v", err)
+	}
+	if msg := receive(t, conn); msg.Type != TypeDenied {
+		t.Fatalf("subscription after TTL = %+v, want denied", msg)
+	}
+}
+
+// TestAuthorizationGrantAfterDenial is the U1 regression for the other
+// direction: denials are not cached, so a user added after being denied is
+// admitted on the next attempt.
+func TestAuthorizationGrantAfterDenial(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+	t.Cleanup(hub.Close)
+
+	nodeID := uuid.New()
+	userID := uuid.New()
+	var allow atomic.Bool
+	authorize := func(_ context.Context, serverID, user uuid.UUID) error {
+		if serverID != nodeID || user != userID || !allow.Load() {
+			return errors.New("not a member of this team")
+		}
+		return nil
+	}
+
+	handler := NewHandler(hub, subjectVerifier{token: testToken, userID: userID}, nil, authorize)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	conn := dial(t, wsURL(server, "/?token="+testToken+"&channel="+LogChannel(nodeID.String(), "a")))
+	if msg := receive(t, conn); msg.Type != TypeDenied {
+		t.Fatalf("subscription while denied = %+v, want denied", msg)
+	}
+
+	allow.Store(true)
+	if err := websocket.JSON.Send(conn, clientRequest{Subscribe: LogChannel(nodeID.String(), "a")}); err != nil {
+		t.Fatalf("retry subscribe: %v", err)
+	}
+	if msg := receive(t, conn); msg.Type != TypeSubscribed {
+		t.Fatalf("subscription after grant = %+v, want subscribed", msg)
+	}
+}

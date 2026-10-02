@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -11,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/server/ws"
-	"github.com/justindeelux/gotham/internal/servers"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -42,11 +40,9 @@ func (s *Server) handleStartLogStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.authorizeLogSubscription(r.Context(), serverID, userID); err != nil {
-		if errors.Is(err, servers.ErrNotFound) {
-			writeJSON(w, http.StatusNotFound, apiError{Message: "not found"})
-			return
-		}
-		writeJSON(w, http.StatusForbidden, apiError{Message: "not a member of this team"})
+		// A missing node and a node the caller cannot access are reported
+		// identically, matching the server's indistinguishable-node policy (U5).
+		writeJSON(w, http.StatusNotFound, apiError{Message: "not found"})
 		return
 	}
 

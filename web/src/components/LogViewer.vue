@@ -114,6 +114,17 @@ const statusClasses = computed<Record<string, boolean>>(() => ({
 
 /** handleMessage converts a hub frame into zero or more rendered lines. */
 function handleMessage(message: WebSocketMessage): void {
+  // Start the agent stream only once the server has acknowledged this
+  // channel's subscription: the hub room must have a member before the agent's
+  // historical tail is published, or the first lines are lost (U2).
+  if (
+    message.payload?.type === "subscribed" &&
+    message.channel === channelName.value
+  ) {
+    requestStreamStart();
+    return;
+  }
+
   if (message.kind === "notice") {
     appendLine({
       id: ++lineId,
@@ -294,13 +305,14 @@ watch(channelName, (next, previous) => {
   if (previous) {
     unsubscribeChannel(previous);
   }
-  requestStreamStart();
+  // The subscribed ack (handleMessage) starts the stream for the new channel.
   subscribeChannel(next);
 });
 
 onMounted(() => {
   connectStream();
-  requestStreamStart();
+  // The start call fires on the subscribed ack, not here, so the hub room is
+  // populated before the agent tail is published.
   subscribeChannel(channelName.value);
 });
 

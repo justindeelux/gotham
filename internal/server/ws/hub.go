@@ -242,7 +242,9 @@ func (h *Hub) Broadcast(channel string, payload []byte) {
 	case h.broadcast <- broadcast{channel: channel, payload: payload}:
 	case <-h.done:
 	default:
-		// Hub saturated: drop rather than block log streaming.
+		// Hub saturated: drop rather than block log streaming, but make the
+		// discard observable (U4).
+		h.dropped.Add(1)
 	}
 }
 

@@ -2,6 +2,7 @@ package ws
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -15,18 +16,35 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// Log stream reaper tuning. A stream started for a viewer is cancelled once
-// the channel has had no hub subscribers for streamIdleGrace, so a client that
-// vanishes without unsubscribing cannot leak an agent stream (B2-1/B1-8).
+// Log stream tuning.
+//
+//   - A stream is cancelled once its channel has had no hub subscribers for
+//     streamIdleGrace, so a client that vanishes without unsubscribing cannot
+//     leak an agent stream (B2-1/B1-8).
+//   - streamReplayLines bounds the per-channel replay ring, so a viewer that
+//     opens (or reopens) after the first tail was published still sees the last
+//     lines instead of an empty drawer (U2).
+//   - publish retries keep the agent stream alive while the Redis transport is
+//     down and a subscriber is still listening (U3).
 var (
-	streamIdleCheck = 5 * time.Second
-	streamIdleGrace = 30 * time.Second
+	streamIdleCheck         = 5 * time.Second
+	streamIdleGrace         = 30 * time.Second
+	streamReplayLines       = 200
+	streamPublishMinBackoff = 250 * time.Millisecond
+	streamPublishMaxBackoff = 5 * time.Second
 )
 
 // LogStreamOpener dials (or otherwise obtains) a log streamer. A non-nil
 // closer is closed when the stream ends, so the opener owns the connection
 // lifecycle.
 type LogStreamOpener func(ctx context.Context) (LogStreamer, io.Closer, error)
+
+// managedStream is one active agent log stream plus its replay ring.
+type managedStream struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	replay *replayBuffer
+}
 
 // Realtime owns the mounted realtime resources: the hub, the optional Redis
 // client, the supervised bridge and the active log streams. Close releases all
@@ -44,7 +62,7 @@ type Realtime struct {
 	bridgeWG sync.WaitGroup
 
 	streamsMu sync.Mutex
-	streams   map[string]context.CancelFunc
+	streams   map[string]*managedStream
 	streamsWG sync.WaitGroup
 }
 
@@ -68,7 +86,7 @@ func Mount(api chi.Router, verifier TokenVerifier, redisAddr string, logger *slo
 		logger:  logger,
 		ctx:     ctx,
 		cancel:  cancel,
-		streams: make(map[string]context.CancelFunc),
+		streams: make(map[string]*managedStream),
 	}
 
 	if RealtimeEnabled() && strings.TrimSpace(redisAddr) != "" {
@@ -91,13 +109,6 @@ func Mount(api chi.Router, verifier TokenVerifier, redisAddr string, logger *slo
 	return rt
 }
 
-// Publisher returns the publisher the realtime path uses (Redis when enabled,
-// the hub directly otherwise), so callers start streams without knowing which
-// transport is active.
-func (rt *Realtime) Publisher() Publisher {
-	return rt.pub
-}
-
 // ActiveStreams reports how many agent log streams the manager is running.
 // Exposed for tests and diagnostics.
 func (rt *Realtime) ActiveStreams() int {
@@ -107,10 +118,12 @@ func (rt *Realtime) ActiveStreams() int {
 }
 
 // StartLogStream begins bridging an agent log stream for one container into
-// the realtime publisher. It is idempotent per channel: while a stream is
-// active the call is a no-op, so every viewer/retry shares one agent stream.
-// The stream is cancelled when the control plane shuts down or the channel has
-// no subscribers for the idle grace.
+// the realtime publisher. It is idempotent per channel while a stream is live:
+// the call replays the channel's recent lines to the (already subscribed)
+// caller instead of starting a second agent stream. A stale entry (its context
+// already cancelled) is replaced, so a POST racing the reaper still gets a
+// working stream (U6). The stream is cancelled when the control plane shuts
+// down or the channel has no subscribers for the idle grace.
 func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID string, req *agentv1.StreamLogsRequest) error {
 	if opener == nil {
 		return errors.New("ws: log stream opener is nil")
@@ -118,12 +131,19 @@ func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID
 	channel := LogChannel(serverID, containerID)
 
 	rt.streamsMu.Lock()
-	if _, ok := rt.streams[channel]; ok {
+	if entry, ok := rt.streams[channel]; ok && entry.ctx.Err() == nil {
+		replay := entry.replay.snapshot()
 		rt.streamsMu.Unlock()
+		// The caller subscribes before starting (see LogViewer), so the replay
+		// reaches the new viewer's room.
+		for _, payload := range replay {
+			_ = rt.pub.Publish(rt.ctx, channel, payload)
+		}
 		return nil
 	}
 	ctx, cancel := context.WithCancel(rt.ctx)
-	rt.streams[channel] = cancel
+	entry := &managedStream{ctx: ctx, cancel: cancel, replay: newReplayBuffer(streamReplayLines)}
+	rt.streams[channel] = entry
 	rt.streamsMu.Unlock()
 
 	rt.streamsWG.Add(2) // the stream forwarder and its idle reaper
@@ -133,18 +153,22 @@ func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID
 	}()
 	go func() {
 		defer rt.streamsWG.Done()
-		rt.runStream(ctx, cancel, channel, opener, serverID, containerID, req)
+		rt.runStream(entry, channel, opener, serverID, containerID, req)
 	}()
 	return nil
 }
 
-// runStream opens the agent stream and forwards it until it ends or ctx is
-// cancelled, then removes the channel from the active set.
-func (rt *Realtime) runStream(ctx context.Context, cancel context.CancelFunc, channel string, opener LogStreamOpener, serverID, containerID string, req *agentv1.StreamLogsRequest) {
-	defer cancel()
+// runStream opens the agent stream and forwards it until it ends or the stream
+// context is cancelled, then removes the channel from the active set. It only
+// removes its own entry, so a replacement started after a reap is untouched.
+func (rt *Realtime) runStream(entry *managedStream, channel string, opener LogStreamOpener, serverID, containerID string, req *agentv1.StreamLogsRequest) {
+	ctx := entry.ctx
+	defer entry.cancel()
 	defer func() {
 		rt.streamsMu.Lock()
-		delete(rt.streams, channel)
+		if rt.streams[channel] == entry {
+			delete(rt.streams, channel)
+		}
 		rt.streamsMu.Unlock()
 	}()
 
@@ -157,11 +181,26 @@ func (rt *Realtime) runStream(ctx context.Context, cancel context.CancelFunc, ch
 	if closer != nil {
 		defer func() { _ = closer.Close() }()
 	}
+
+	// The resilient publisher keeps the agent stream alive through a Redis
+	// outage while a subscriber is still listening (U3); the recorder keeps the
+	// replay ring for late viewers (U2).
+	pub := recordingPublisher{
+		inner: resilientPublisher{
+			inner:      rt.pub,
+			hub:        rt.Hub,
+			logger:     rt.logger,
+			minBackoff: streamPublishMinBackoff,
+			maxBackoff: streamPublishMaxBackoff,
+		},
+		ring: entry.replay,
+	}
+
 	// PublishStream only returns once the stream has ended (always with a
-	// non-nil reason), so log it unless the shutdown cancelled the stream.
-	streamErr := PublishStream(ctx, streamer, rt.pub, serverID, containerID, req)
+	// non-nil reason). A live-context end is unexpected, so it is a warning.
+	streamErr := PublishStream(ctx, streamer, pub, serverID, containerID, req)
 	if ctx.Err() == nil {
-		rt.logger.Debug("ws: log stream ended", "channel", channel, "error", streamErr)
+		rt.logger.Warn("ws: log stream ended", "channel", channel, "error", streamErr)
 	}
 }
 
@@ -197,8 +236,8 @@ func (rt *Realtime) Close() {
 	rt.cancel()
 
 	rt.streamsMu.Lock()
-	for channel, cancel := range rt.streams {
-		cancel()
+	for channel, entry := range rt.streams {
+		entry.cancel()
 		delete(rt.streams, channel)
 	}
 	rt.streamsMu.Unlock()
@@ -209,4 +248,98 @@ func (rt *Realtime) Close() {
 		_ = rt.rdb.Close()
 	}
 	rt.Hub.Close()
+}
+
+// recordingPublisher stores successfully published log frames in a replay ring.
+type recordingPublisher struct {
+	inner Publisher
+	ring  *replayBuffer
+}
+
+func (p recordingPublisher) Publish(ctx context.Context, channel string, payload []byte) error {
+	if err := p.inner.Publish(ctx, channel, payload); err != nil {
+		return err
+	}
+	p.ring.add(payload)
+	return nil
+}
+
+// resilientPublisher retries a failed publish with bounded backoff while the
+// stream context is live and the channel still has subscribers. On the first
+// failure it broadcasts a disconnect notice straight to the hub (bypassing the
+// failed Redis transport), so the viewer sees the interruption instead of a
+// silently stalled "Streaming" state (U3).
+type resilientPublisher struct {
+	inner      Publisher
+	hub        *Hub
+	logger     *slog.Logger
+	minBackoff time.Duration
+	maxBackoff time.Duration
+}
+
+func (p resilientPublisher) Publish(ctx context.Context, channel string, payload []byte) error {
+	backoff := p.minBackoff
+	notified := false
+	for {
+		err := p.inner.Publish(ctx, channel, payload)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+		if p.hub.Subscribers(channel) == 0 {
+			return err
+		}
+		if !notified {
+			p.hub.Broadcast(channel, disconnectNotice(channel, "log stream interrupted: "+err.Error()))
+			p.logger.Warn("ws: log publish failed, retrying", "channel", channel, "error", err)
+			notified = true
+		}
+		if !sleepContext(ctx, backoff) {
+			return err
+		}
+		backoff = nextBackoff(backoff, p.maxBackoff)
+	}
+}
+
+// replayBuffer holds the most recent log frames of one channel.
+type replayBuffer struct {
+	mu   sync.Mutex
+	max  int
+	data [][]byte
+}
+
+// newReplayBuffer builds a ring holding at most max log frames.
+func newReplayBuffer(max int) *replayBuffer {
+	if max < 0 {
+		max = 0
+	}
+	return &replayBuffer{max: max}
+}
+
+// add stores a log frame; disconnect notices and any non-log frame are ignored.
+func (r *replayBuffer) add(payload []byte) {
+	if r.max == 0 {
+		return
+	}
+	var msg Message
+	if err := json.Unmarshal(payload, &msg); err != nil || msg.Type != TypeLog {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.data = append(r.data, payload)
+	if len(r.data) > r.max {
+		r.data = r.data[len(r.data)-r.max:]
+	}
+}
+
+// snapshot returns a copy of the buffered frames, oldest first.
+func (r *replayBuffer) snapshot() [][]byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([][]byte, len(r.data))
+	copy(out, r.data)
+	return out
 }

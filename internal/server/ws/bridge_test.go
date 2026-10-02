@@ -84,6 +84,23 @@ func TestBridgeReconnectsAfterFailures(t *testing.T) {
 	})
 }
 
+// TestBridgeBackoffAfterCycle is the U8 regression: the reconnect backoff is
+// reset only after a subscription stayed up for stableAfter, so a Redis that
+// accepts then immediately drops keeps backing off.
+func TestBridgeBackoffAfterCycle(t *testing.T) {
+	bridge := NewBridge(NewHub(), nil, slog.Default())
+	bridge.minBackoff = 250 * time.Millisecond
+	bridge.maxBackoff = 30 * time.Second
+	bridge.stableAfter = 5 * time.Second
+
+	if got := bridge.backoffAfterCycle(10*time.Second, 6*time.Second); got != bridge.minBackoff {
+		t.Errorf("stable cycle backoff = %s, want %s", got, bridge.minBackoff)
+	}
+	if got := bridge.backoffAfterCycle(10*time.Second, time.Second); got != 10*time.Second {
+		t.Errorf("unstable cycle backoff = %s, want it unchanged", got)
+	}
+}
+
 // TestBridgeRunStopsOnCancel verifies the supervisor returns promptly once its
 // context ends, so Realtime.Close does not hang on the bridge goroutine.
 func TestBridgeRunStopsOnCancel(t *testing.T) {

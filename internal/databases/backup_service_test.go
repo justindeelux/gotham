@@ -321,6 +321,35 @@ func TestBackupPG18MountPath(t *testing.T) {
 	}
 }
 
+// TestPG18StageAndCleanupMounts pins the two job paths a partial revert misses:
+// stageChunk (the restore staging container) and removeStagedArtifact (the
+// post-failure cleanup container) must both use the versioned mount for
+// PostgreSQL 18, not only backupJobOptions/stagingDir.
+func TestPG18StageAndCleanupMounts(t *testing.T) {
+	fixture := newBackupFixture(t)
+	database := fixture.database
+	database.Version = "18-alpine"
+	want := database.StoragePath + ":" + postgres18MountPath
+	staged := postgres18MountPath + "/" + stagingDirName + "/" + database.ID.String() + ".part"
+
+	if err := fixture.manager.stageChunk(context.Background(), database, database.ID, []byte("chunk-0"), staged, 0); err != nil {
+		t.Fatalf("stageChunk: %v", err)
+	}
+	fixture.manager.removeStagedArtifact(database, staged)
+
+	fixture.containers.mu.Lock()
+	runs := append([]containers.RunOptions(nil), fixture.containers.runs...)
+	fixture.containers.mu.Unlock()
+	if len(runs) != 2 {
+		t.Fatalf("job runs = %d, want 2 (stage + cleanup)", len(runs))
+	}
+	for i, run := range runs {
+		if len(run.Volumes) != 1 || run.Volumes[0] != want {
+			t.Errorf("run %d volumes = %v, want [%s]", i, run.Volumes, want)
+		}
+	}
+}
+
 func TestRestoreRejectsIncompleteBackup(t *testing.T) {
 	fixture := newBackupFixture(t)
 	backup := fixture.backups.seedBackup(Backup{

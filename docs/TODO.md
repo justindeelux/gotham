@@ -219,3 +219,11 @@ Proven:
   deliberate opt-ins (DNS-01) still skip, and build images are cleaned up on
   success and failure; the shared-daemon dangling-sweep caveat is documented
   in-code.
+- [ ] **FX-9: reap backup artifacts (local files, node volumes, S3 objects) for
+  purged databases.** FX-8b removes a deleted database's volume and purges its
+  row on the grace-window sweep, but the `backups`/`backup_schedules` cascade
+  does not remove stored artifacts. Backups of a soft-deleted database are
+  already filtered from every read (`backup_repository` joins
+  `d.deleted_at IS NULL`), so those objects are orphaned at soft-delete time.
+  Reaping needs the backup service's object-store/target resolution; the cascade
+  is documented in `internal/databases/repository.go` and `retention.go`.

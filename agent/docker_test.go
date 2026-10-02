@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -643,6 +644,65 @@ func TestDockerClientDaemonDown(t *testing.T) {
 
 	if _, err := client.Version(context.Background()); !errors.Is(err, ErrDockerUnavailable) {
 		t.Fatalf("closed daemon = %v; want ErrDockerUnavailable", err)
+	}
+}
+
+// TestNotFoundErrorClassification is the U2/U3 guard: the image sentinel is
+// scoped to the pull and create paths, the create match is image-specific, and
+// the build helpers keep the container classification.
+func TestNotFoundErrorClassification(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		message string
+		want    error
+	}{
+		{"container", "/containers/abc/start", "No such container: abc", ErrDockerNotFound},
+		{"create missing image", "/containers/create", "No such image: nope:latest", ErrDockerImageNotFound},
+		{"create with name", "/containers/create?name=web", "No such image: nope:latest", ErrDockerImageNotFound},
+		{"create missing network", "/containers/create", "network gotham-net not found", ErrDockerNotFound},
+		{"pull missing repository", "/images/create", "pull access denied for nope", ErrDockerImageNotFound},
+		{"tag build helper", "/images/nope/tag", "No such image: nope:latest", ErrDockerNotFound},
+		{"push build helper", "/images/nope/push", "manifest unknown", ErrDockerNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := notFoundError("POST", tt.path, tt.message)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("notFoundError(%q) = %v; want %v", tt.path, err, tt.want)
+			}
+		})
+	}
+}
+
+// TestDecodeLogStreamTruncatedAfterValidFrame is the U4 guard: a partial header
+// after at least one valid multiplexed frame is a truncated stream, not raw
+// data with a clean end.
+func TestDecodeLogStreamTruncatedAfterValidFrame(t *testing.T) {
+	// A valid frame (stream 1, size 1, payload "a") followed by a partial
+	// header [1,0,0] and EOF.
+	source := bytes.NewReader([]byte{1, 0, 0, 0, 0, 0, 0, 1, 'a', 1, 0, 0})
+	out := make(chan LogMessage)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		defer close(out)
+		decodeLogStream(ctx, source, out)
+	}()
+
+	var got []byte
+	var streamErr error
+	for message := range out {
+		got = append(got, message.Data...)
+		if message.Err != nil {
+			streamErr = message.Err
+		}
+	}
+	if string(got) != "a" {
+		t.Errorf("data = %q; want %q", got, "a")
+	}
+	if streamErr == nil {
+		t.Fatal("truncated header after a valid frame reported as a clean end")
 	}
 }
 

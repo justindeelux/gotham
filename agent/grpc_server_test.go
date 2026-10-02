@@ -281,6 +281,7 @@ func TestDockerServerErrorMapping(t *testing.T) {
 		{"internal", errors.New("boom"), codes.Internal},
 		{"invalid port mapping", fmt.Errorf("%w: %q", ErrInvalidPortMapping, "80:0"), codes.InvalidArgument},
 		{"docker not found", fmt.Errorf("%w: missing", ErrDockerNotFound), codes.NotFound},
+		{"image not found", fmt.Errorf("%w: missing", ErrDockerImageNotFound), codes.InvalidArgument},
 		{"daemon unavailable", fmt.Errorf("%w: connection refused", ErrDockerUnavailable), codes.Unavailable},
 		{"canceled", context.Canceled, codes.Canceled},
 		{"deadline", context.DeadlineExceeded, codes.DeadlineExceeded},

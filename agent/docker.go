@@ -33,9 +33,10 @@ const runCleanupTimeout = 30 * time.Second
 // as bad input instead of an internal failure.
 var ErrInvalidPortMapping = errors.New("docker: invalid port mapping")
 
-// ErrDockerNotFound marks a Docker API 404 (a missing container, image or
-// network). The DockerService error mapper turns it into NotFound so the
-// control plane can answer 404 instead of 500.
+// ErrDockerNotFound marks a Docker API 404 for a missing container or network.
+// The DockerService error mapper turns it into NotFound so the control plane
+// can answer 404 instead of 500. Missing images and repositories are split out
+// into ErrDockerImageNotFound.
 var ErrDockerNotFound = errors.New("docker: not found")
 
 // ErrDockerUnavailable marks a transport failure reaching the Docker daemon
@@ -595,22 +596,19 @@ func statusError(method, path string, response *http.Response) error {
 	return fmt.Errorf("docker: %s %s: status %d: %s", method, path, response.StatusCode, message)
 }
 
-// notFoundError classifies a Docker 404. A container-scoped miss is
-// ErrDockerNotFound; a missing image or repository is ErrDockerImageNotFound so
-// a bad image reference is not reported as a missing container. The message is
-// matched first (Docker's own wording), then the operation.
+// notFoundError classifies a Docker 404. A container miss is ErrDockerNotFound.
+// Only the pull path (/images/create) and a create whose image is absent
+// (/containers/create with Docker's "No such image") are ErrDockerImageNotFound;
+// the build helpers (tag, push, digest) and every other operation keep the
+// container classification, so a 404 on a freshly built image stays NotFound.
 func notFoundError(method, path, message string) error {
 	lower := strings.ToLower(message)
 	switch {
 	case strings.Contains(lower, "no such container"):
 		return fmt.Errorf("%w: docker: %s %s: status 404: %s", ErrDockerNotFound, method, path, message)
-	case strings.Contains(lower, "no such image"),
-		strings.Contains(lower, "manifest unknown"),
-		strings.Contains(lower, "not found"),
-		strings.Contains(lower, "pull access denied"),
-		strings.Contains(lower, "repository does not exist"):
+	case strings.HasPrefix(path, "/images/create"):
 		return fmt.Errorf("%w: docker: %s %s: status 404: %s", ErrDockerImageNotFound, method, path, message)
-	case path == "/containers/create" || strings.HasPrefix(path, "/images/"):
+	case strings.HasPrefix(path, "/containers/create") && strings.Contains(lower, "no such image"):
 		return fmt.Errorf("%w: docker: %s %s: status 404: %s", ErrDockerImageNotFound, method, path, message)
 	default:
 		return fmt.Errorf("%w: docker: %s %s: status 404: %s", ErrDockerNotFound, method, path, message)
@@ -642,6 +640,10 @@ type LogMessage struct {
 func decodeLogStream(ctx context.Context, source io.Reader, out chan<- LogMessage) {
 	reader := bufio.NewReader(source)
 	header := make([]byte, 8)
+	// sawFrame records that at least one well-formed multiplexed frame has
+	// been read. After that, a partial header is a truncated multiplexed
+	// stream, not a short raw line.
+	sawFrame := false
 	for {
 		first, err := reader.Peek(1)
 		if err != nil {
@@ -665,8 +667,15 @@ func decodeLogStream(ctx context.Context, source io.Reader, out chan<- LogMessag
 			case errors.Is(err, io.EOF):
 				return
 			case errors.Is(err, io.ErrUnexpectedEOF):
-				// Fewer than eight bytes: too short for a multiplexed header,
-				// so this is a short raw line. Deliver what arrived.
+				if sawFrame {
+					// A partial header after a valid frame is a truncated
+					// multiplexed stream, not a short raw line.
+					report(ctx, out, fmt.Errorf("truncated log frame: %w", err))
+					return
+				}
+				// Fewer than eight bytes before any frame: too short for a
+				// multiplexed header, so this is a short raw line. Deliver
+				// what arrived.
 				if n > 0 && !emit(ctx, out, header[:n]) {
 					return
 				}
@@ -687,6 +696,7 @@ func decodeLogStream(ctx context.Context, source io.Reader, out chan<- LogMessag
 			copyRaw(ctx, reader, out)
 			return
 		}
+		sawFrame = true
 		payload := make([]byte, size)
 		n, err = io.ReadFull(reader, payload)
 		if n > 0 && !emit(ctx, out, payload[:n]) {

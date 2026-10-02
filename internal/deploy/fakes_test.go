@@ -81,6 +81,16 @@ type fakeRepository struct {
 	// advance past a state the database never saw).
 	failUpdateState State
 
+	// updateErrAfterPersist, when non-empty, persists the row for that state
+	// and then returns an error: an ambiguous write that committed but reported
+	// failure. forceFail must not downgrade the committed terminal row.
+	updateErrAfterPersist State
+
+	// onGetApplication, when set, runs after GetApplication resolves the row
+	// (without holding the repository lock) but before returning it, so a test
+	// can land a concurrent write between two reads.
+	onGetApplication func()
+
 	// createDeploymentNotify, when set, receives a token on every
 	// CreateDeployment call so a test can detect when a submit crossed the
 	// queue boundary (the serialization regression).
@@ -111,22 +121,39 @@ const staleDeploymentError = "control plane restarted before the deployment fini
 // Compile-time guarantee that fakeRepository satisfies the seam.
 var _ Repository = (*fakeRepository)(nil)
 
-// GetApplication implements Repository.
+// GetApplication implements Repository. The row is resolved under the lock and
+// onGetApplication, when set, runs after it is released but before the snapshot
+// is returned — letting a test land a concurrent write between a caller's read
+// and the caller's next read.
 func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (Application, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.getErr != nil {
-		return Application{}, r.getErr
+		err := r.getErr
+		r.mu.Unlock()
+		return Application{}, err
 	}
+	var (
+		app Application
+		ok  bool
+	)
 	if r.app.ID != uuid.Nil && r.app.ID == appID {
-		return r.app, nil
-	}
-	for _, app := range r.apps {
-		if app.ID == appID {
-			return app, nil
+		app, ok = r.app, true
+	} else {
+		for _, candidate := range r.apps {
+			if candidate.ID == appID {
+				app, ok = candidate, true
+				break
+			}
 		}
 	}
-	return Application{}, ErrNotFound
+	r.mu.Unlock()
+	if r.onGetApplication != nil {
+		r.onGetApplication()
+	}
+	if !ok {
+		return Application{}, ErrNotFound
+	}
+	return app, nil
 }
 
 // ListApplications implements Repository: the active team's applications, or
@@ -475,6 +502,9 @@ func (r *fakeRepository) UpdateDeployment(_ context.Context, dep Deployment) (De
 			dep.UpdatedAt = time.Now().UTC()
 			r.deployments[i] = dep
 			r.states = append(r.states, dep.State)
+			if r.updateErrAfterPersist != "" && dep.State == r.updateErrAfterPersist {
+				return Deployment{}, errors.New("update deployment: injected post-commit failure")
+			}
 			return dep, nil
 		}
 	}
@@ -875,12 +905,16 @@ func (m *mockNode) Start(_ context.Context, containerID string) error {
 	return m.startErr
 }
 
-// Remove implements Node.
+// Remove implements Node. A configured removeErr leaves the container in place,
+// like an agent that cannot be reached.
 func (m *mockNode) Remove(_ context.Context, containerID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.removeCalls++
 	m.removed = append(m.removed, containerID)
+	if m.removeErr != nil {
+		return m.removeErr
+	}
 	kept := m.listed[:0]
 	for _, candidate := range m.listed {
 		if candidate.GetId() != containerID {
@@ -895,7 +929,7 @@ func (m *mockNode) Remove(_ context.Context, containerID string) error {
 		}
 	}
 	m.orphans = keptOrphans
-	return m.removeErr
+	return nil
 }
 
 // Containers implements Node, exposing the seeded containers, the orphans a

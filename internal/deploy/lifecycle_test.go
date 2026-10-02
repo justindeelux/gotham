@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +38,29 @@ func (g *gatedNode) Start(ctx context.Context, containerID string) error {
 	g.entered.Do(func() { close(g.gate) })
 	<-g.release
 	return g.mockNode.Start(ctx, containerID)
+}
+
+// blockingNode is a mock agent whose Stop blocks until its context ends,
+// returning ErrAgentUnavailable, so a test can exercise the manual-control
+// timeout.
+type blockingNode struct {
+	*mockNode
+	stopStarted chan struct{}
+}
+
+// newBlockingNode returns a mock agent whose Stop never answers on its own.
+func newBlockingNode() *blockingNode {
+	return &blockingNode{mockNode: newMockNode(), stopStarted: make(chan struct{}, 1)}
+}
+
+// Stop blocks until ctx is done, then reports the agent unreachable.
+func (b *blockingNode) Stop(ctx context.Context, _ string) error {
+	select {
+	case b.stopStarted <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return fmt.Errorf("%w: %v", ErrAgentUnavailable, ctx.Err())
 }
 
 // dialPerServer returns a DialFunc that hands out the node registered for each
@@ -461,11 +485,11 @@ func TestUpdateApplicationRefusesMoveWhileDeploying(t *testing.T) {
 	}
 }
 
-// TestManualControlUsesServerAfterMove checks that a manual start issued after
-// the application moved runs against the node it is now bound to, not the
-// previous one. The submit-level stale-snapshot regression is covered by
-// TestSubmitUsesFreshApplicationAfterMove.
-func TestManualControlUsesServerAfterMove(t *testing.T) {
+// TestManualControlReadsServerUnderLock pins the control-container re-read: a
+// concurrent move that lands after the first read but before the lock is held
+// must still make the manual call target the node the application is bound to
+// once the lock is held.
+func TestManualControlReadsServerUnderLock(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
 	repo := &fakeRepository{app: app}
@@ -473,6 +497,21 @@ func TestManualControlUsesServerAfterMove(t *testing.T) {
 	newNode := newMockNode()
 	newServer := uuid.New()
 	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateRunning, ContainerID: oldNode.containerID})
+
+	// The first GetApplication (before the lock) returns the old server; the
+	// hook moves the stored row immediately afterwards, so only the re-read
+	// under the lock sees the new server.
+	var once sync.Once
+	repo.onGetApplication = func() {
+		once.Do(func() {
+			moved := app
+			moved.ServerID = newServer
+			repo.mu.Lock()
+			repo.app = moved
+			repo.mu.Unlock()
+		})
+	}
+
 	svc := NewService(Config{
 		Repository: repo,
 		Secret:     testSecretKey,
@@ -481,18 +520,43 @@ func TestManualControlUsesServerAfterMove(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = svc.Close() })
 
-	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID,
-		UpdateApplicationInput{ServerID: &newServer}); err != nil {
-		t.Fatalf("move: %v", err)
-	}
 	if _, err := svc.Start(context.Background(), userID, app.ID); err != nil {
-		t.Fatalf("start after the move: %v", err)
+		t.Fatalf("start: %v", err)
 	}
 	if newNode.startCalls != 1 {
-		t.Errorf("new node start calls = %d, want the manual start to use the current server", newNode.startCalls)
+		t.Errorf("new node start calls = %d, want the manual start to use the server read under the lock", newNode.startCalls)
 	}
 	if oldNode.startCalls != 0 {
-		t.Errorf("old node start calls = %d, want 0 (the application no longer runs there)", oldNode.startCalls)
+		t.Errorf("old node start calls = %d, want 0 (a stale pre-lock snapshot must not be used)", oldNode.startCalls)
+	}
+}
+
+// TestManualControlBoundedByTimeout is the T2 regression: a hung agent must not
+// pin the application lock; the manual call is bounded by ControlTimeout.
+func TestManualControlBoundedByTimeout(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	node := newBlockingNode()
+	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateRunning, ContainerID: node.containerID})
+	svc := NewService(Config{
+		Repository:     repo,
+		Secret:         testSecretKey,
+		Logger:         discardLogger(),
+		Dial:           dialAlways(node),
+		ControlTimeout: 30 * time.Millisecond,
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	started := time.Now()
+	_, err := svc.Stop(ctx, userID, app.ID)
+	if !errors.Is(err, ErrAgentUnavailable) {
+		t.Fatalf("err = %v, want ErrAgentUnavailable", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Errorf("stop took %s, want the 30ms control timeout to bound it", elapsed)
 	}
 }
 
@@ -516,5 +580,112 @@ func TestOrchestratorFailFromQueuedSetsStartedAt(t *testing.T) {
 	}
 	if stored.StartedAt.IsZero() {
 		t.Error("started_at is zero on a failure from queued")
+	}
+}
+
+// TestOrchestratorReconcilesOrphanFromDifferentDeployment is the T1 regression:
+// an orphan a lost Run response left behind (its deployment id never recorded)
+// survives while the agent is down; a later deploy must clear it by app label
+// before starting, or a pinned host port wedges every later deploy.
+func TestOrchestratorReconcilesOrphanFromDifferentDeployment(t *testing.T) {
+	app := testApplication(uuid.New())
+	repo := &fakeRepository{app: app}
+	first := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+
+	node := newMockNode()
+	node.runFailures = 1
+	node.runErrLeavesContainer = true
+	node.removeErr = errors.New("agent down")
+	o := newTestOrchestrator(Config{
+		Repository:  repo,
+		Source:      &fakeSource{},
+		Dial:        dialAlways(node),
+		MaxAttempts: 1,
+	})
+
+	o.run(context.Background(), job{app: app, dep: first})
+	if stored, _ := repo.deployment(first.ID); stored.State != StateFailed {
+		t.Fatalf("first state = %s, want failed", stored.State)
+	}
+	if len(node.orphans) != 1 {
+		t.Fatalf("orphans = %d, want the one left by the lost response", len(node.orphans))
+	}
+
+	// The agent recovers. The next deployment must remove the orphan — whose
+	// deployment id differs — before it starts.
+	node.removeErr = nil
+	node.runFailures = 0
+	node.runErrLeavesContainer = false
+	second := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+	o.run(context.Background(), job{app: app, dep: second})
+
+	if stored, _ := repo.deployment(second.ID); stored.State != StateRunning {
+		t.Errorf("second state = %s, want running after the orphan was cleared", stored.State)
+	}
+	if len(node.orphans) != 0 {
+		t.Errorf("orphans = %d, want 0 (the app-label reconcile clears the orphan)", len(node.orphans))
+	}
+	if !containsString(node.removed, "orphan-"+containerName(app, first)) {
+		t.Errorf("removed = %v, want the orphan removed by app label", node.removed)
+	}
+}
+
+// TestTransitionKeepsStateOnPersistFailure pins the transition copy-on-write:
+// a failed persist must not advance the in-memory state past what the database
+// stored.
+func TestTransitionKeepsStateOnPersistFailure(t *testing.T) {
+	app := testApplication(uuid.New())
+	repo := &fakeRepository{app: app, failUpdateState: StateCloning}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+	o := newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}, Dial: dialAlways(newMockNode())})
+	st := &runState{app: app, dep: dep, log: func(string) {}}
+
+	if err := o.transition(context.Background(), st, StateCloning); err == nil {
+		t.Fatal("transition succeeded although the persist failed")
+	}
+	if st.dep.State != StateQueued {
+		t.Errorf("in-memory state = %s, want queued after a failed persist", st.dep.State)
+	}
+}
+
+// TestForceFailKeepsCommittedRunning pins the forceFail guard: an ambiguous
+// write that committed the running state but reported an error must not be
+// downgraded to failed by the failure path.
+func TestForceFailKeepsCommittedRunning(t *testing.T) {
+	app := testApplication(uuid.New())
+	repo := &fakeRepository{app: app, updateErrAfterPersist: StateRunning}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+	node := newMockNode()
+	o := newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}, Dial: dialAlways(node)})
+
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	stored, _ := repo.deployment(dep.ID)
+	if stored.State != StateRunning {
+		t.Fatalf("state = %s, want running (an ambiguously committed write must not be downgraded)", stored.State)
+	}
+}
+
+// TestDeleteSystemApplicationRefusesWhileDeploying covers the preview teardown
+// in-flight guard: a preview with a non-terminal deployment answers ErrConflict
+// and no container is removed.
+func TestDeleteSystemApplicationRefusesWhileDeploying(t *testing.T) {
+	app := testApplication(uuid.New())
+	app.IsPreview = true
+	repo := &fakeRepository{app: app}
+	node := newMockNode()
+	// Build the service first so the stale sweep does not fail the row.
+	svc := newNodeService(t, repo, node)
+	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateStarting, ContainerID: node.containerID})
+
+	err := svc.DeleteSystemApplication(context.Background(), app.ID)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrConflict while a deployment is in flight", err)
+	}
+	if _, err := repo.GetApplication(context.Background(), app.ID); err != nil {
+		t.Errorf("the preview must survive a refused teardown: %v", err)
+	}
+	if node.removeCalls != 0 {
+		t.Errorf("removed %v, want no container touched while a deployment is in flight", node.removed)
 	}
 }

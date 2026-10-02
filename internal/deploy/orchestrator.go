@@ -255,6 +255,10 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 		o.fail(ctx, st, err)
 		return
 	}
+	// execute persisted the terminal running state, so the deployment row is
+	// terminal here: removeRetired and syncProxy are idempotent best-effort
+	// follow-ups that cannot change the outcome.
+	//
 	// The replacement is live: remove the retired container so its layers do not
 	// accumulate. Best effort — rollback redeploys the registry image, not the
 	// container, and the removal preserves named volumes and bind directories.
@@ -454,7 +458,8 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 	}
 	// A build that produced no registry reference has no image the node can
 	// pull: refuse before stopping the live release rather than discovering it
-	// after the replacement starts.
+	// after the replacement starts. This duplicates the push step's guard on
+	// purpose: startContainer is the retirement boundary and must stand alone.
 	if strings.TrimSpace(st.dep.RegistryImage) == "" {
 		return fmt.Errorf("%w: image %s was not pushed to the node registry; refusing to retire the running container",
 			ErrValidation, st.dep.ImageTag)
@@ -465,21 +470,20 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 			return err
 		}
 	}
-	// A retried start (a lost Run response) may have left a container named for
-	// this deployment behind; reconcile before Run so the deterministic name is
-	// free and no untracked container survives the retry.
-	o.removeDeploymentContainers(ctx, st)
+	// Clear any other container of this application before Run. A lost Run
+	// response whose id was never recorded would otherwise keep the
+	// deterministic name and, with a pinned host port, that port — wedging
+	// every later deploy. Detached and bounded like the other cleanup paths.
+	o.reconcileDetached(ctx, st)
 
 	st.log("starting container " + request.Name + " from " + request.Image)
 	containerID, err := st.node.Run(ctx, request)
 	if err != nil {
 		// The create may have succeeded before the failure; remove whatever it
-		// left so it cannot outlive the run untracked. Use a detached, bounded
-		// context: a step timeout or shutdown cancels ctx, and that is exactly
-		// when an untracked container is most likely.
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
-		o.removeDeploymentContainers(cleanupCtx, st)
-		cancel()
+		// left so it cannot outlive the run untracked. reconcileDetached is
+		// itself detached and bounded, so a step timeout or shutdown (exactly
+		// when an untracked container is most likely) still cleans up.
+		o.reconcileDetached(ctx, st)
 		return err
 	}
 	st.dep.ContainerID = containerID
@@ -519,25 +523,51 @@ func (o *Orchestrator) containerPresent(ctx context.Context, st *runState, conta
 		return false, err
 	}
 	for _, candidate := range containers {
-		id := candidate.GetId()
-		if id == containerID || strings.HasPrefix(containerID, id) || strings.HasPrefix(id, containerID) {
+		if sameContainer(candidate.GetId(), containerID) {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
-// removeDeploymentContainers removes every container already carrying this
-// deployment's label, left behind by a create whose start (or response) was
-// lost. Best effort: a listing or removal failure is logged, never fatal.
-func (o *Orchestrator) removeDeploymentContainers(ctx context.Context, st *runState) {
+// sameContainer reports whether two Docker ids refer to the same container,
+// tolerating the short-id prefixes the agent may report.
+func sameContainer(a, b string) bool {
+	if a == "" || b == "" {
+		return a == b
+	}
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+}
+
+// reconcileDetached runs reconcileApplicationContainers on a bounded context
+// detached from the run, so a cancelled step or shutdown still lets the
+// best-effort cleanup reach the node.
+func (o *Orchestrator) reconcileDetached(ctx context.Context, st *runState) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
+	defer cancel()
+	o.reconcileApplicationContainers(cleanupCtx, st)
+}
+
+// reconcileApplicationContainers removes every container of this application
+// except the one the deployment replaces (st.previous, already retired). It is
+// what clears an orphan left by a lost Run response whose deployment id was
+// never recorded: such an orphan keeps its deterministic name and, with a
+// pinned host port, that port, so it would otherwise wedge every later deploy.
+// It is safe under the current fencing — delete, a move and manual control are
+// refused while this deployment is non-terminal, so no other release of the
+// application can be live — and st.previous is kept until the replacement is
+// confirmed. Best effort: a listing or removal failure is logged, never fatal.
+func (o *Orchestrator) reconcileApplicationContainers(ctx context.Context, st *runState) {
 	containers, err := st.node.Containers(ctx)
 	if err != nil {
-		st.log("could not list containers to reconcile the deployment: " + truncateError(err))
+		st.log("could not list containers to reconcile the application: " + truncateError(err))
 		return
 	}
 	for _, candidate := range containers {
-		if candidate.GetLabels()[labelDeploymentID] != st.dep.ID.String() {
+		if candidate.GetLabels()[labelAppID] != st.app.ID.String() {
+			continue
+		}
+		if st.previous != "" && sameContainer(candidate.GetId(), st.previous) {
 			continue
 		}
 		if err := st.node.Remove(ctx, candidate.GetId()); err != nil {

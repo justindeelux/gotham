@@ -366,6 +366,12 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 		s.logger.Warn("deploy: deploy key could not be detached; the application still deletes",
 			"application_id", app.ID, "provider", app.Provider, "repo", app.Repo, "error", err)
 	}
+	// Containers are removed before the row: the row is the only durable record
+	// of the application's containers, so a row-delete failure after a
+	// successful removal leaves no container behind (the accepted trade; the
+	// caller retries the delete). A container left on a previous node by a move
+	// is out of reach here — the move stopped it best effort and deployments do
+	// not record their node (see the report).
 	s.removeApplicationContainers(ctx, app)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {
 		return err
@@ -490,7 +496,9 @@ func (s *Service) Start(ctx context.Context, userID, appID uuid.UUID) (Deploymen
 // controlContainer runs one manual container operation through the node seam.
 // The deployment row is left untouched: it identifies the release, and its
 // state must keep describing that release (a stop would otherwise break
-// rollback target selection).
+// rollback target selection). The agent call is bounded by ControlTimeout; a
+// call that exhausts the bound answers ErrAgentUnavailable, which the client
+// may safely retry (start/stop are idempotent).
 func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID, start bool) (Deployment, error) {
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
@@ -514,7 +522,11 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 	if err != nil {
 		return Deployment{}, err
 	}
-	node, err := s.dialNode(ctx, app.ServerID)
+	// Bound the agent call so a hung agent cannot pin the application lock and
+	// stall every deploy, move and delete for this application.
+	callCtx, cancel := context.WithTimeout(ctx, s.controlTimeout)
+	defer cancel()
+	node, err := s.dialNode(callCtx, app.ServerID)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -524,9 +536,9 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 		}
 	}()
 	if start {
-		err = node.Start(ctx, target.ContainerID)
+		err = node.Start(callCtx, target.ContainerID)
 	} else {
-		err = node.Stop(ctx, target.ContainerID)
+		err = node.Stop(callCtx, target.ContainerID)
 	}
 	if err != nil {
 		return Deployment{}, err

@@ -118,7 +118,7 @@ func TestStoreFamilyRevocationSerializesWithRotation(t *testing.T) {
 	// block on the session lock instead of snapshotting before C exists.
 	done := make(chan error, 1)
 	go func() { done <- st.RevokeUserSessions(ctx, user.ID) }()
-	waitForBlockedRevoke(t, ctx, st)
+	waitForBlockedSessionLock(t, ctx, st)
 
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit rotation: %v", err)
@@ -136,12 +136,55 @@ func TestStoreFamilyRevocationSerializesWithRotation(t *testing.T) {
 	}
 }
 
-// waitForBlockedRevoke blocks until the family-revocation path is waiting on
-// the per-user advisory lock, so the test commits the rotation at a
+// TestStoreRotateSessionTakesSessionLock pins the rotation side of the
+// serialization: with the per-user lock held by an outer transaction, a
+// rotation must block on the advisory wait and complete only after the lock is
+// released. Deleting the LockUserSessions call from Store.RotateSession makes
+// this test fail, because the rotation would no longer wait.
+func TestStoreRotateSessionTakesSessionLock(t *testing.T) {
+	st, ctx := openVersionTestStore(t)
+	user, _ := versionTestUser(t, ctx, st, "rotate-lock")
+	presented := versionTestSession(t, ctx, st, user.ID, user.CredentialVersion)
+
+	// Hold the per-user lock while the rotation starts.
+	blocker, err := st.DB.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin blocker: %v", err)
+	}
+	defer func() { _ = blocker.Rollback(ctx) }()
+	if err := sqlc.New(blocker).LockUserSessions(ctx, uuid.UUID(user.ID.Bytes).String()); err != nil {
+		t.Fatalf("lock user sessions: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := st.RotateSession(ctx, user.ID, rotateParams(presented.RefreshHash, uuid.NewString(), user.CredentialVersion))
+		done <- err
+	}()
+	waitForBlockedSessionLock(t, ctx, st)
+
+	if err := blocker.Commit(ctx); err != nil {
+		t.Fatalf("release session lock: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("RotateSession: %v", err)
+	}
+
+	revoked, err := st.GetSessionByRefreshHash(ctx, presented.RefreshHash)
+	if err != nil {
+		t.Fatalf("GetSessionByRefreshHash(presented): %v", err)
+	}
+	if !revoked.RevokedAt.Valid {
+		t.Fatal("rotation did not revoke the presented session")
+	}
+}
+
+// waitForBlockedSessionLock blocks until some session mutation is waiting on
+// the per-user advisory lock, so a test can release an outer lock at a
 // deterministic point. The blocked statement is the lock SELECT itself; seeing
 // no advisory waiter within the deadline means the two paths are not
 // serialized.
-func waitForBlockedRevoke(t *testing.T, ctx context.Context, st *store.Store) {
+func waitForBlockedSessionLock(t *testing.T, ctx context.Context, st *store.Store) {
 	t.Helper()
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -159,7 +202,7 @@ func waitForBlockedRevoke(t *testing.T, ctx context.Context, st *store.Store) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("family revocation never blocked on the session lock")
+			t.Fatal("session mutation never blocked on the session lock")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

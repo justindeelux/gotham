@@ -16,8 +16,9 @@ import (
 const (
 	// SessionSweepInterval is how often the stale-session sweep runs.
 	SessionSweepInterval = time.Hour
-	// sessionExpiredRetention keeps expired sessions for a grace period so a
-	// late replay is still detected before the row is forgotten.
+	// sessionExpiredRetention is only a deletion buffer for expired rows: an
+	// expired, never-revoked token is deliberately a plain 401 (no family
+	// action), so keeping the row longer serves no detection purpose.
 	sessionExpiredRetention = 7 * 24 * time.Hour
 	// sessionRevokedRetention is the reuse-detection window: a revoked token
 	// stays on record this long so replaying it can still revoke its family.

@@ -58,8 +58,9 @@ type DeleteStaleSessionsParams struct {
 // DeleteStaleSessions drops sessions that expired before the retention cutoff
 // and revoked sessions whose revocation predates the reuse window. A revoked
 // row is governed only by the revoked cutoff: its expiry must not shrink the
-// reuse-detection window. The rejected rows stay for that window so a replayed
-// token can still revoke its family before the row is forgotten.
+// reuse-detection window, and revoked rows stay the full 30 days so a replayed
+// token can still revoke its family. The expired cutoff only buffers
+// plain-expired rows before deletion.
 func (q *Queries) DeleteStaleSessions(ctx context.Context, arg DeleteStaleSessionsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteStaleSessions, arg.ExpiredBefore, arg.RevokedBefore)
 	if err != nil {

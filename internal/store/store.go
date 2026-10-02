@@ -134,8 +134,9 @@ func sessionLockKey(userID pgtype.UUID) string {
 
 // DeleteStaleSessions drops sessions that expired before expiredBefore and
 // revoked sessions whose revocation predates revokedBefore, returning how many
-// rows were removed. Rejected rows stay for a retention window so a replayed
-// token can still revoke its family before the row is forgotten.
+// rows were removed. A revoked row stays for the full reuse window so a
+// replayed token can still revoke its family; the expired cutoff only buffers
+// plain-expired rows before deletion.
 func (s *Store) DeleteStaleSessions(ctx context.Context, expiredBefore, revokedBefore time.Time) (int64, error) {
 	return s.queries.DeleteStaleSessions(ctx, sqlc.DeleteStaleSessionsParams{
 		ExpiredBefore: pgtype.Timestamptz{Time: expiredBefore, Valid: true},

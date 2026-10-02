@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -205,6 +206,34 @@ type Service struct {
 	hooks func() HookLifecycle
 	// hookTimeout bounds one hook call (see Config.HookTimeout).
 	hookTimeout time.Duration
+	// locks serializes the operations that must not interleave on one
+	// application: deployment submission, manual container control, an update
+	// that moves the application between nodes, and deletion.
+	locks appLocks
+}
+
+// appLocks holds one mutex per application so different applications proceed
+// concurrently. Entries are never reclaimed; they are bounded by the number of
+// applications and one pointer each.
+type appLocks struct {
+	mu    sync.Mutex
+	locks map[uuid.UUID]*sync.Mutex
+}
+
+// lock acquires the mutex of one application and returns its release.
+func (l *appLocks) lock(appID uuid.UUID) func() {
+	l.mu.Lock()
+	if l.locks == nil {
+		l.locks = make(map[uuid.UUID]*sync.Mutex)
+	}
+	mu, ok := l.locks[appID]
+	if !ok {
+		mu = &sync.Mutex{}
+		l.locks[appID] = mu
+	}
+	l.mu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 // Compile-time guarantee that Service satisfies the route-level contract.
@@ -487,10 +516,14 @@ func (s *Service) previousContainer(ctx context.Context, appID uuid.UUID) string
 // submit persists a queued deployment, enqueues its run and returns the row.
 // It is the single queue boundary of deploy, rollback and system deploys, so
 // the stored application→node check runs here: no queue path can hand the
-// worker an application bound to another team's node. When the queue rejects
-// the job the row is marked failed immediately, so it never sits in a
-// non-terminal state and blocks the active-deployment index.
+// worker an application bound to another team's node. The application lock is
+// held across the active-deployment check, the create and the enqueue so a
+// manual start/stop, a move or a delete cannot interleave between them.
+// When the queue rejects the job the row is marked failed immediately, so it
+// never sits in a non-terminal state and blocks the active-deployment index.
 func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (Deployment, error) {
+	unlock := s.locks.lock(app.ID)
+	defer unlock()
 	if err := s.checkStoredTarget(ctx, app); err != nil {
 		return Deployment{}, err
 	}

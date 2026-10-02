@@ -485,8 +485,8 @@ func TestServiceDeleteApplication(t *testing.T) {
 	if err := svc.DeleteApplication(context.Background(), userID, app.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if node.stopCalls != 1 || len(node.stopped) != 1 || node.stopped[0] != node.containerID {
-		t.Errorf("stopped = %v (%d calls), want the running container", node.stopped, node.stopCalls)
+	if node.removeCalls != 1 || len(node.removed) != 1 || node.removed[0] != node.containerID {
+		t.Errorf("removed = %v (%d calls), want the running container", node.removed, node.removeCalls)
 	}
 	if _, err := svc.GetApplication(context.Background(), userID, app.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("get after delete err = %v, want ErrNotFound", err)

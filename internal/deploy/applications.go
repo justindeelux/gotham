@@ -183,6 +183,11 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if err != nil {
 		return Application{}, err
 	}
+	// Serialize with deployment submission and manual control: a move may stop
+	// the container on the previous node, and that must not race a deploy that
+	// is selecting or retiring a target.
+	unlock := s.locks.lock(app.ID)
+	defer unlock()
 	previousServer := app.ServerID
 	previousDomain, previousPort, previousHostPort := app.BaseDomain, app.Port, app.HostPort
 	if in.Name != nil {
@@ -241,6 +246,13 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	// whose route may have disappeared (a move, a changed domain, a cleared
 	// domain) is refreshed too, so no stale route is left behind.
 	moved := updated.ServerID != previousServer
+	if moved {
+		// The application is now bound to another node; stop the container it
+		// left behind on the previous one (best effort — an unreachable node
+		// must not fail the move). Deployments do not record their node, so the
+		// newest recorded container is the one that ran there.
+		s.stopContainerOnNode(ctx, previousServer, s.latestContainer(ctx, app.ID))
+	}
 	routingChanged := updated.BaseDomain != previousDomain || updated.Port != previousPort ||
 		updated.HostPort != previousHostPort
 	targets := make(map[uuid.UUID]bool, 2)
@@ -257,21 +269,31 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 }
 
 // DeleteApplication removes an application together with everything that hangs
-// off it. Its provider hook is detached first and the delete fails closed on a
+// off it. An application with a non-terminal deployment is refused with
+// ErrConflict: deleting it would cascade the deployment row while the worker
+// may be mid-run, orphaning a container no later deploy or delete can reach.
+// Its provider hook is detached first and the delete fails closed on a
 // removal failure, so nothing that would break the still-live application has
 // been mutated when it aborts (the escape hatch for a hook whose provider is
 // gone is ForgetWebhook, DELETE .../webhooks?force=true). The deploy key is
 // detached next, best effort: once the hook is gone, a host failure must not
 // leave a live application without automatic deploys (the local row cascades
 // with the application and the warning names the remote key). The container
-// stop stays best effort too: a control plane that cannot reach the node must
-// still be able to delete an application.
+// removal stays best effort too: a control plane that cannot reach the node
+// must still be able to delete an application.
 func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error {
 	if !Enabled() {
 		return ErrDisabled
 	}
 	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
+		return err
+	}
+	// Serialize with deployment submission and manual control: the in-flight
+	// check and the cascade must be atomic with respect to a new deployment.
+	unlock := s.locks.lock(app.ID)
+	defer unlock()
+	if err := s.rejectInFlight(ctx, app.ID); err != nil {
 		return err
 	}
 	// Preview siblings hang off this application outside the deploy schema
@@ -323,7 +345,7 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 		s.logger.Warn("deploy: deploy key could not be detached; the application still deletes",
 			"application_id", app.ID, "provider", app.Provider, "repo", app.Repo, "error", err)
 	}
-	s.stopBestEffort(ctx, app)
+	s.removeApplicationContainers(ctx, app)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {
 		return err
 	}
@@ -456,6 +478,12 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 	if err != nil {
 		return Deployment{}, err
 	}
+	// Hold the application lock across target selection and the agent call: a
+	// concurrent deploy must not retire the selected container between the
+	// in-flight check and a delayed start/stop, which would restart a retired
+	// release (leaving two running).
+	unlock := s.locks.lock(app.ID)
+	defer unlock()
 	target, err := s.controlTarget(ctx, app)
 	if err != nil {
 		return Deployment{}, err
@@ -505,30 +533,48 @@ func (s *Service) controlTarget(ctx context.Context, app Application) (Deploymen
 	return Deployment{}, fmt.Errorf("%w: application has no running container", ErrNotFound)
 }
 
-// stopBestEffort stops the application's current container, swallowing every
-// failure: deletion must not depend on the node being reachable.
-func (s *Service) stopBestEffort(ctx context.Context, app Application) {
-	if app.ServerID == uuid.Nil || s.dial == nil {
-		return
-	}
-	container := ""
-	deployments, err := s.repo.ListDeployments(ctx, app.ID)
+// rejectInFlight returns ErrConflict when the application has a non-terminal
+// deployment: its container is being replaced right now, so a manual control
+// or a delete must wait for it to finish. It is the delete-side mirror of
+// controlTarget's guard.
+func (s *Service) rejectInFlight(ctx context.Context, appID uuid.UUID) error {
+	deployments, err := s.repo.ListDeployments(ctx, appID)
 	if err != nil {
-		s.logger.Warn("deploy: lookup container for delete failed", "application_id", app.ID, "error", err)
-		return
+		return err
+	}
+	for _, dep := range deployments { // newest first
+		if !dep.State.Terminal() {
+			return fmt.Errorf("%w: a deployment is in progress", ErrConflict)
+		}
+	}
+	return nil
+}
+
+// latestContainer returns the newest container any deployment of the
+// application started ("" when there is none).
+func (s *Service) latestContainer(ctx context.Context, appID uuid.UUID) string {
+	deployments, err := s.repo.ListDeployments(ctx, appID)
+	if err != nil {
+		s.logger.Warn("deploy: lookup container failed", "application_id", appID, "error", err)
+		return ""
 	}
 	for _, dep := range deployments {
 		if dep.ContainerID != "" {
-			container = dep.ContainerID
-			break
+			return dep.ContainerID
 		}
 	}
-	if container == "" {
+	return ""
+}
+
+// stopContainerOnNode stops one container on one node, swallowing every
+// failure: a move must not depend on the previous node being reachable.
+func (s *Service) stopContainerOnNode(ctx context.Context, serverID uuid.UUID, containerID string) {
+	if serverID == uuid.Nil || containerID == "" || s.dial == nil {
 		return
 	}
-	node, err := s.dialNode(ctx, app.ServerID)
+	node, err := s.dialNode(ctx, serverID)
 	if err != nil {
-		s.logger.Warn("deploy: best-effort stop skipped", "application_id", app.ID, "error", err)
+		s.logger.Warn("deploy: best-effort stop skipped", "server_id", serverID, "error", err)
 		return
 	}
 	defer func() {
@@ -536,8 +582,60 @@ func (s *Service) stopBestEffort(ctx context.Context, app Application) {
 			s.logger.Debug("deploy: close agent connection", "error", err)
 		}
 	}()
-	if err := node.Stop(ctx, container); err != nil {
-		s.logger.Warn("deploy: best-effort stop failed", "application_id", app.ID, "error", err)
+	if err := node.Stop(ctx, containerID); err != nil {
+		s.logger.Warn("deploy: best-effort stop failed", "container_id", containerID, "error", err)
+	}
+}
+
+// removeApplicationContainers removes every container of an application from
+// its node, swallowing every failure: deletion must not depend on the node
+// being reachable. Containers are found by the gotham.app_id label so a
+// container orphaned by a failed deploy or a lost response is reached too; the
+// recorded deployment container IDs are removed as well, which also covers a
+// node that cannot list containers. Rollback images and persistent bind
+// directories survive (the agent's Remove removes only the container and its
+// anonymous volumes).
+func (s *Service) removeApplicationContainers(ctx context.Context, app Application) {
+	if app.ServerID == uuid.Nil || s.dial == nil {
+		return
+	}
+	targets := make(map[string]bool, 2)
+	deployments, err := s.repo.ListDeployments(ctx, app.ID)
+	if err != nil {
+		s.logger.Warn("deploy: lookup containers for delete failed", "application_id", app.ID, "error", err)
+	}
+	for _, dep := range deployments {
+		if dep.ContainerID != "" {
+			targets[dep.ContainerID] = true
+		}
+	}
+
+	node, err := s.dialNode(ctx, app.ServerID)
+	if err != nil {
+		s.logger.Warn("deploy: best-effort container removal skipped", "application_id", app.ID, "error", err)
+		return
+	}
+	defer func() {
+		if err := node.Close(); err != nil {
+			s.logger.Debug("deploy: close agent connection", "error", err)
+		}
+	}()
+	containers, listErr := node.Containers(ctx)
+	if listErr != nil {
+		s.logger.Warn("deploy: container listing failed during delete; removing recorded containers only",
+			"application_id", app.ID, "error", listErr)
+	} else {
+		for _, candidate := range containers {
+			if candidate.GetLabels()[labelAppID] == app.ID.String() {
+				targets[candidate.GetId()] = true
+			}
+		}
+	}
+	for id := range targets {
+		if err := node.Remove(ctx, id); err != nil {
+			s.logger.Warn("deploy: best-effort container removal failed",
+				"application_id", app.ID, "container_id", id, "error", err)
+		}
 	}
 }
 

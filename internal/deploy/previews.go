@@ -224,13 +224,21 @@ func (s *Service) DeleteSystemApplication(ctx context.Context, appID uuid.UUID) 
 	if !app.IsPreview {
 		return fmt.Errorf("%w: application %s is not a preview", ErrValidation, appID)
 	}
+	// Serialize with deployment submission and manual control, and refuse while
+	// a deployment is in flight: the teardown removes the container and
+	// cascades the row, which would orphan a container the worker is replacing.
+	unlock := s.locks.lock(app.ID)
+	defer unlock()
+	if err := s.rejectInFlight(ctx, app.ID); err != nil {
+		return err
+	}
 	// Local key rows go first: a failure aborts before the application row
 	// disappears, so the teardown (and its binding) stays retryable and no
 	// orphan private key is left behind.
 	if _, err := s.repo.DeleteDeployKey(ctx, appID); err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
-	s.stopBestEffort(ctx, app)
+	s.removeApplicationContainers(ctx, app)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {
 		return err
 	}

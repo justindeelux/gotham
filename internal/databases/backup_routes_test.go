@@ -222,6 +222,7 @@ func TestBackupRoutesRequireAuthentication(t *testing.T) {
 		{http.MethodPost, "/v1/databases/" + id.String() + "/backup", ""},
 		{http.MethodGet, "/v1/databases/" + id.String() + "/backups", ""},
 		{http.MethodPost, "/v1/databases/" + id.String() + "/restore", `{"backup_id":"` + uuid.New().String() + `"}`},
+		{http.MethodGet, "/v1/databases/" + id.String() + "/restores", ""},
 		{http.MethodGet, "/v1/databases/backup-targets", ""},
 	} {
 		rec := backupRequest(t, handler, request.method, request.path, request.body)

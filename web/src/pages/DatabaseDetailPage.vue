@@ -288,6 +288,10 @@ const hasRunningRestore = computed<boolean>(() =>
 // exactly once. Kept outside reactivity: it is bookkeeping, not UI state.
 const lastRestoreStatus = new Map<string, string>();
 
+// Monotonic token for the restore poll: a response whose token is no longer
+// current is discarded so overlapping polls cannot revert the cached status.
+let restorePollEpoch = 0;
+
 /** backupTargetOptions lists the destination choices for backup-now. */
 const backupTargetOptions = computed<SelectOption[]>(() => {
   const options: SelectOption[] = [
@@ -339,10 +343,17 @@ async function fetchBackupTab(): Promise<void> {
     backupsStore.fetchSchedules(dbId.value),
     backupsStore.fetchTargets(),
   ]);
+  // Seed the status of every restore the first fetch returned, so a restore
+  // that was already running when the tab opened still toasts on completion
+  // instead of being skipped by the first-poll "previous === undefined" case.
+  notifyRestoreOutcomes();
 }
 
 /** stopBackupPolling clears the running-job refresh interval. */
 function stopBackupPolling(): void {
+  // Invalidate any in-flight poll so its late response cannot re-toast after
+  // polling has stopped (or restarted).
+  restorePollEpoch += 1;
   if (backupPollTimer !== null) {
     clearInterval(backupPollTimer);
     backupPollTimer = null;
@@ -367,10 +378,16 @@ function notifyRestoreOutcomes(): void {
 
 /** pollRunningJobs refreshes backups and restores while either has a live job. */
 async function pollRunningJobs(id: string): Promise<void> {
+  const epoch = ++restorePollEpoch;
   await Promise.allSettled([
     backupsStore.refreshBackups(id),
     backupsStore.refreshRestores(id),
   ]);
+  // A newer poll (or a stop) superseded this one: its response is older, so
+  // ignoring it stops an out-of-order completion from re-firing the toast.
+  if (epoch !== restorePollEpoch) {
+    return;
+  }
   notifyRestoreOutcomes();
 }
 
@@ -426,11 +443,14 @@ async function handleRestoreConfirm(): Promise<void> {
     message.success("Restore queued · the database is stopped while it runs");
     restoreOpen.value = false;
     restoreCandidate.value = null;
-    await backupsStore.fetchRestores(dbId.value);
-    syncBackupPolling();
+    // refreshRestores swallows a failed read (the queue already succeeded), so
+    // a transient list error cannot hide the "queued" result or skip the poll.
+    await backupsStore.refreshRestores(dbId.value);
+    notifyRestoreOutcomes();
   } catch (error) {
     message.error(describeBackupError(error));
   } finally {
+    syncBackupPolling();
     restoring.value = false;
   }
 }

@@ -30,25 +30,7 @@ import type {
   UpdateBackupScheduleInput,
   UpdateBackupTargetInput,
 } from "../api/backups";
-
-/**
- * mergeBackups folds a server list into the cached one by id. A server row
- * always wins for a known id, but a local `running` row the server has not
- * reported yet is kept: the list endpoint can lag a just-queued run, and
- * dropping it would stop the page's running-job poll early.
- */
-function mergeBackups(
-  existing: DatabaseBackup[],
-  incoming: DatabaseBackup[],
-): DatabaseBackup[] {
-  const byId = new Map(incoming.map((item) => [item.id, item]));
-  for (const item of existing) {
-    if (item.status === "running" && !byId.has(item.id)) {
-      byId.set(item.id, item);
-    }
-  }
-  return [...byId.values()];
-}
+import { mergeBackupsById } from "../utils/storeMerge";
 
 export const useBackupsStore = defineStore("backups", () => {
   const backupsById = ref<Record<string, DatabaseBackup[]>>({});
@@ -99,7 +81,7 @@ export const useBackupsStore = defineStore("backups", () => {
     backupsError.value = null;
     try {
       const server = await listBackups(databaseId);
-      backupsById.value[databaseId] = mergeBackups(
+      backupsById.value[databaseId] = mergeBackupsById(
         backupsById.value[databaseId] ?? [],
         server,
       );
@@ -115,7 +97,7 @@ export const useBackupsStore = defineStore("backups", () => {
   async function refreshBackups(databaseId: string): Promise<void> {
     try {
       const server = await listBackups(databaseId);
-      backupsById.value[databaseId] = mergeBackups(
+      backupsById.value[databaseId] = mergeBackupsById(
         backupsById.value[databaseId] ?? [],
         server,
       );

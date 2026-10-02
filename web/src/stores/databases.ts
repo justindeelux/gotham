@@ -18,6 +18,7 @@ import type {
   Database,
   DatabaseCredentials,
 } from "../api/databases";
+import { mergeDatabasesById } from "../utils/storeMerge";
 
 /** Polling cadence for the database list, in milliseconds. */
 const pollIntervalMs = 5_000;
@@ -40,19 +41,22 @@ export const useDatabasesStore = defineStore("databases", () => {
   // it would clobber the row this tab just created.
   let mutationGeneration = 0;
 
+  // Ids this tab deleted. A list response that started before the delete must
+  // not resurrect them; the set is cleared when a fresh authoritative list
+  // (same generation) replaces the array.
+  const deletedIds = new Set<string>();
+
   /**
-   * mergeById folds a server list into the local one: a server row wins for a
-   * known id, and a local-only row (a just-created database the list has not
-   * caught up with) is preserved.
+   * applyServerList writes a server list, merging when a local mutation
+   * happened while it was in flight.
    */
-  function mergeById(server: Database[], local: Database[]): Database[] {
-    const byId = new Map(server.map((item) => [item.id, item]));
-    for (const item of local) {
-      if (!byId.has(item.id)) {
-        byId.set(item.id, item);
-      }
+  function applyServerList(server: Database[], generation: number): void {
+    if (generation === mutationGeneration) {
+      databases.value = server;
+      deletedIds.clear();
+      return;
     }
-    return [...byId.values()];
+    databases.value = mergeDatabasesById(server, databases.value, deletedIds);
   }
 
   /** applyDatabase merges one database into the in-memory list in place. */
@@ -71,11 +75,7 @@ export const useDatabasesStore = defineStore("databases", () => {
     error.value = null;
     const generation = mutationGeneration;
     try {
-      const server = await listDatabases();
-      databases.value =
-        generation === mutationGeneration
-          ? server
-          : mergeById(server, databases.value);
+      applyServerList(await listDatabases(), generation);
     } catch (err) {
       error.value = describeDatabaseError(err);
       throw err;
@@ -88,11 +88,7 @@ export const useDatabasesStore = defineStore("databases", () => {
   async function refreshDatabases(): Promise<void> {
     const generation = mutationGeneration;
     try {
-      const server = await listDatabases();
-      databases.value =
-        generation === mutationGeneration
-          ? server
-          : mergeById(server, databases.value);
+      applyServerList(await listDatabases(), generation);
       error.value = null;
     } catch (err) {
       error.value = describeDatabaseError(err);
@@ -169,6 +165,7 @@ export const useDatabasesStore = defineStore("databases", () => {
       await deleteDatabase(id);
       databases.value = databases.value.filter((item) => item.id !== id);
       delete credentialsById.value[id];
+      deletedIds.add(id);
       mutationGeneration += 1;
     } finally {
       acting.value = false;

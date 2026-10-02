@@ -62,10 +62,12 @@ function isoOffset(deltaSeconds) {
 async function main() {
   const format = await loadModule("../src/utils/format.ts");
   const targetBody = await loadModule("../src/utils/backupTarget.ts");
+  const storeMerge = await loadModule("../src/utils/storeMerge.ts");
 
   try {
     const { relativeTime } = format.module;
     const { toTargetBody } = targetBody.module;
+    const { mergeBackupsById, mergeDatabasesById } = storeMerge.module;
 
     await check("D3-3: a past timestamp still reads as 'ago'", () => {
       assert(relativeTime(isoOffset(-2 * 3600)) === "2h ago", "2h past");
@@ -110,9 +112,39 @@ async function main() {
       const body = toTargetBody({ name: "t" });
       assert(!("region" in body) && !("prefix" in body), "absent stays absent");
     });
+
+    await check("D3-15/U4: a queued running backup is kept and sorted first", () => {
+      const queued = { id: "queued", status: "running", created_at: "2026-10-03T12:00:00Z" };
+      const older = { id: "older", status: "completed", created_at: "2026-10-03T10:00:00Z" };
+      const merged = mergeBackupsById([queued], [older]);
+      assert(merged.length === 2, "both rows survive");
+      assert(merged[0].id === "queued", "the queued row is first, not appended");
+    });
+
+    await check("D3-15: the server wins for a known id", () => {
+      const local = { id: "b1", status: "running", created_at: "2026-10-03T12:00:00Z" };
+      const server = { id: "b1", status: "completed", created_at: "2026-10-03T12:00:00Z" };
+      const merged = mergeBackupsById([local], [server]);
+      assert(merged.length === 1 && merged[0].status === "completed", "server status wins");
+    });
+
+    await check("U3: a stale list cannot resurrect a deleted database", () => {
+      const stale = [{ id: "deleted" }, { id: "live" }];
+      const merged = mergeDatabasesById(stale, [], new Set(["deleted"]));
+      assert(merged.length === 1 && merged[0].id === "live", "deleted id is dropped");
+    });
+
+    await check("D3-15: a local-only database is preserved, server wins otherwise", () => {
+      const server = [{ id: "live", name: "server-name" }];
+      const local = [{ id: "live", name: "local-name" }, { id: "fresh", name: "fresh" }];
+      const merged = mergeDatabasesById(server, local);
+      assert(merged.length === 2, "local-only row kept");
+      assert(merged.find((d) => d.id === "live").name === "server-name", "server wins");
+    });
   } finally {
     await format.cleanup();
     await targetBody.cleanup();
+    await storeMerge.cleanup();
   }
 
   const failed = results.filter((r) => !r.ok);

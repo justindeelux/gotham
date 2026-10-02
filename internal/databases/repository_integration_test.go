@@ -335,3 +335,106 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("ServerExists(nil) = %v, %v, want false", exists, err)
 	}
 }
+
+// TestRepositoryRetentionQueries exercises the SQL the retention sweep depends
+// on: the <= cutoff boundary, oldest-first order, purge idempotence, the
+// live-row guard, and the documented cascade of the database's backup rows.
+func TestRepositoryRetentionQueries(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+
+	makeDB := func(name string) Database {
+		now := time.Now().UTC()
+		created, err := repo.CreateDatabase(ctx, Database{
+			ID:          uuid.New(),
+			UserID:      ownerID,
+			ServerID:    serverID,
+			Name:        name,
+			Engine:      EnginePostgres,
+			Status:      StatusCreating,
+			StoragePath: "gotham-db-" + uuid.New().String(),
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		})
+		if err != nil {
+			t.Fatalf("CreateDatabase(%s): %v", name, err)
+		}
+		return created
+	}
+	old := makeDB("retention-old")
+	boundary := makeDB("retention-boundary")
+	fresh := makeDB("retention-fresh")
+	live := makeDB("retention-live")
+
+	cutoff := time.Now().UTC().Truncate(time.Millisecond)
+	setDeletedAt := func(id uuid.UUID, at time.Time) {
+		t.Helper()
+		if _, err := st.DB.Exec(ctx,
+			"UPDATE databases SET deleted_at = $2, status = 'deleting', updated_at = now() WHERE id = $1",
+			pgUUID(id), at); err != nil {
+			t.Fatalf("set deleted_at: %v", err)
+		}
+	}
+	setDeletedAt(old.ID, cutoff.Add(-time.Hour))
+	setDeletedAt(boundary.ID, cutoff) // inclusive: deleted_at <= cutoff
+	setDeletedAt(fresh.ID, cutoff.Add(time.Hour))
+
+	// Pin the cascade the purge relies on: a backup and a schedule row for the
+	// expired database must vanish with it.
+	if _, err := st.DB.Exec(ctx,
+		"INSERT INTO backups (database_id, status, size, location, type) VALUES ($1, 'completed', 10, 'file:///tmp/fx8b', 'manual')",
+		pgUUID(old.ID)); err != nil {
+		t.Fatalf("insert backup: %v", err)
+	}
+	if _, err := st.DB.Exec(ctx,
+		"INSERT INTO backup_schedules (database_id, cron, next_run_at) VALUES ($1, '0 0 * * *', now())",
+		pgUUID(old.ID)); err != nil {
+		t.Fatalf("insert backup schedule: %v", err)
+	}
+
+	expired, err := repo.ListExpiredDatabases(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("ListExpiredDatabases: %v", err)
+	}
+	if len(expired) != 2 || expired[0].ID != old.ID || expired[1].ID != boundary.ID {
+		t.Fatalf("expired = %+v, want [old boundary] oldest-first and inclusive of the boundary", expired)
+	}
+
+	if err := repo.PurgeDatabase(ctx, old.ID); err != nil {
+		t.Fatalf("PurgeDatabase: %v", err)
+	}
+	var rows int
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM databases WHERE id = $1", pgUUID(old.ID)).Scan(&rows); err != nil {
+		t.Fatalf("count database: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("database rows = %d, want 0 after purge", rows)
+	}
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM backups WHERE database_id = $1", pgUUID(old.ID)).Scan(&rows); err != nil {
+		t.Fatalf("count backups: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("backup rows = %d, want 0 (the purge must cascade)", rows)
+	}
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM backup_schedules WHERE database_id = $1", pgUUID(old.ID)).Scan(&rows); err != nil {
+		t.Fatalf("count schedules: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("schedule rows = %d, want 0 (the purge must cascade)", rows)
+	}
+
+	// Idempotent: a second purge is a no-op, and a live row is never removed.
+	if err := repo.PurgeDatabase(ctx, old.ID); err != nil {
+		t.Errorf("second PurgeDatabase = %v, want nil", err)
+	}
+	if err := repo.PurgeDatabase(ctx, live.ID); err != nil {
+		t.Errorf("PurgeDatabase(live) = %v, want nil", err)
+	}
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM databases WHERE id = $1", pgUUID(live.ID)).Scan(&rows); err != nil {
+		t.Fatalf("count live database: %v", err)
+	}
+	if rows != 1 {
+		t.Errorf("live rows = %d, want 1 (a live database must never be purged)", rows)
+	}
+}

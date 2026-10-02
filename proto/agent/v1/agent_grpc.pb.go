@@ -284,6 +284,7 @@ const (
 	DockerService_StopContainer_FullMethodName    = "/agent.v1.DockerService/StopContainer"
 	DockerService_RestartContainer_FullMethodName = "/agent.v1.DockerService/RestartContainer"
 	DockerService_RemoveContainer_FullMethodName  = "/agent.v1.DockerService/RemoveContainer"
+	DockerService_RemoveVolume_FullMethodName     = "/agent.v1.DockerService/RemoveVolume"
 	DockerService_PullImage_FullMethodName        = "/agent.v1.DockerService/PullImage"
 	DockerService_CreateContainer_FullMethodName  = "/agent.v1.DockerService/CreateContainer"
 	DockerService_RunImage_FullMethodName         = "/agent.v1.DockerService/RunImage"
@@ -305,6 +306,14 @@ type DockerServiceClient interface {
 	// Named volumes are never removed: deleting a resource must not delete its
 	// data (Phase 5 database soft delete relies on this).
 	RemoveContainer(ctx context.Context, in *ContainerActionRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
+	// RemoveVolume deletes one named volume. It exists for the Phase 5 database
+	// grace-window expiry: a soft-deleted database keeps its volume for the
+	// retention window and this is the only way the control plane can remove it.
+	// The agent confines the call to Gotham-managed database volumes (the
+	// "gotham-db-" prefix) so a compromised control plane cannot delete arbitrary
+	// node storage. Removal is idempotent: a volume that is already gone is
+	// reported as success.
+	RemoveVolume(ctx context.Context, in *VolumeActionRequest, opts ...grpc.CallOption) (*VolumeActionResponse, error)
 	PullImage(ctx context.Context, in *PullImageRequest, opts ...grpc.CallOption) (*PullImageResponse, error)
 	CreateContainer(ctx context.Context, in *CreateContainerRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
 	RunImage(ctx context.Context, in *CreateContainerRequest, opts ...grpc.CallOption) (*ContainerActionResponse, error)
@@ -365,6 +374,16 @@ func (c *dockerServiceClient) RemoveContainer(ctx context.Context, in *Container
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ContainerActionResponse)
 	err := c.cc.Invoke(ctx, DockerService_RemoveContainer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dockerServiceClient) RemoveVolume(ctx context.Context, in *VolumeActionRequest, opts ...grpc.CallOption) (*VolumeActionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VolumeActionResponse)
+	err := c.cc.Invoke(ctx, DockerService_RemoveVolume_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -435,6 +454,14 @@ type DockerServiceServer interface {
 	// Named volumes are never removed: deleting a resource must not delete its
 	// data (Phase 5 database soft delete relies on this).
 	RemoveContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error)
+	// RemoveVolume deletes one named volume. It exists for the Phase 5 database
+	// grace-window expiry: a soft-deleted database keeps its volume for the
+	// retention window and this is the only way the control plane can remove it.
+	// The agent confines the call to Gotham-managed database volumes (the
+	// "gotham-db-" prefix) so a compromised control plane cannot delete arbitrary
+	// node storage. Removal is idempotent: a volume that is already gone is
+	// reported as success.
+	RemoveVolume(context.Context, *VolumeActionRequest) (*VolumeActionResponse, error)
 	PullImage(context.Context, *PullImageRequest) (*PullImageResponse, error)
 	CreateContainer(context.Context, *CreateContainerRequest) (*ContainerActionResponse, error)
 	RunImage(context.Context, *CreateContainerRequest) (*ContainerActionResponse, error)
@@ -465,6 +492,9 @@ func (UnimplementedDockerServiceServer) RestartContainer(context.Context, *Conta
 }
 func (UnimplementedDockerServiceServer) RemoveContainer(context.Context, *ContainerActionRequest) (*ContainerActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveContainer not implemented")
+}
+func (UnimplementedDockerServiceServer) RemoveVolume(context.Context, *VolumeActionRequest) (*VolumeActionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveVolume not implemented")
 }
 func (UnimplementedDockerServiceServer) PullImage(context.Context, *PullImageRequest) (*PullImageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PullImage not implemented")
@@ -589,6 +619,24 @@ func _DockerService_RemoveContainer_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DockerService_RemoveVolume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VolumeActionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DockerServiceServer).RemoveVolume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DockerService_RemoveVolume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DockerServiceServer).RemoveVolume(ctx, req.(*VolumeActionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DockerService_PullImage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PullImageRequest)
 	if err := dec(in); err != nil {
@@ -680,6 +728,10 @@ var DockerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveContainer",
 			Handler:    _DockerService_RemoveContainer_Handler,
+		},
+		{
+			MethodName: "RemoveVolume",
+			Handler:    _DockerService_RemoveVolume_Handler,
 		},
 		{
 			MethodName: "PullImage",

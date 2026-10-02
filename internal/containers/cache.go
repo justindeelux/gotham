@@ -93,6 +93,7 @@ type cachedContainer struct {
 	Labels        map[string]string `json:"labels,omitempty"`
 	Mounts        []ContainerMount  `json:"mounts,omitempty"`
 	RestartPolicy string            `json:"restart_policy,omitempty"`
+	Health        string            `json:"health,omitempty"`
 }
 
 // encodeContainers serialises a list for the cache, preserving internal

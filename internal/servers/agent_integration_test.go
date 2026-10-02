@@ -306,10 +306,11 @@ func (f *e2eDockerClient) ListContainers(context.Context, bool) ([]*agentv1.Cont
 	return f.containers, nil
 }
 
-func (f *e2eDockerClient) Start(context.Context, string) error   { return nil }
-func (f *e2eDockerClient) Stop(context.Context, string) error    { return nil }
-func (f *e2eDockerClient) Restart(context.Context, string) error { return nil }
-func (f *e2eDockerClient) Remove(context.Context, string) error  { return nil }
+func (f *e2eDockerClient) Start(context.Context, string) error        { return nil }
+func (f *e2eDockerClient) Stop(context.Context, string) error         { return nil }
+func (f *e2eDockerClient) Restart(context.Context, string) error      { return nil }
+func (f *e2eDockerClient) Remove(context.Context, string) error       { return nil }
+func (f *e2eDockerClient) RemoveVolume(context.Context, string) error { return nil }
 func (f *e2eDockerClient) PullImage(context.Context, string) error {
 	return nil
 }

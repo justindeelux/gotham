@@ -444,7 +444,7 @@ func backupJobOptions(
 	if err != nil {
 		return containers.RunOptions{}, err
 	}
-	volume := engine.VolumeSpec()
+	volume := volumeSpecFor(engine, db.Version)
 	if strings.TrimSpace(volume.MountPath) == "" {
 		return containers.RunOptions{}, fmt.Errorf("%w: engine reports no data directory", ErrValidation)
 	}
@@ -520,7 +520,7 @@ func stagingDir(db Database) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	mount := engine.VolumeSpec().MountPath
+	mount := volumeSpecFor(engine, db.Version).MountPath
 	if strings.TrimSpace(mount) == "" {
 		return "", fmt.Errorf("%w: engine reports no data directory", ErrValidation)
 	}

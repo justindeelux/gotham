@@ -48,13 +48,17 @@ type VolumeSpec struct {
 type Probe string
 
 const (
-	// ProbeState judges readiness from the container state reported by the
-	// agent's ListContainers — the only probe the current agent contract can
-	// evaluate (there is no Exec RPC yet).
+	// ProbeHealth judges readiness from the container's native Docker
+	// healthcheck, which runs the engine's probe command inside the container
+	// and reports "healthy" only once it passes. It is the only probe the
+	// current agent contract can evaluate end to end.
+	ProbeHealth Probe = "health"
+	// ProbeState judges readiness from the bare container state. It is the
+	// pre-healthcheck behavior, kept only as the fallback for a container with
+	// no healthcheck.
 	ProbeState Probe = "state"
-	// ProbeExec is an in-container command probe. It is carried by the spec
-	// for the agent contract that gains Exec; today it documents how each
-	// engine is really pinged.
+	// ProbeExec is an in-container command probe driven by the control plane.
+	// It is carried by the spec for an agent contract that gains an Exec RPC.
 	ProbeExec Probe = "exec"
 )
 
@@ -70,13 +74,14 @@ const (
 
 // Healthcheck describes how the control plane waits for a fresh container.
 type Healthcheck struct {
-	// Probe is the readiness strategy (ProbeState today).
+	// Probe is the readiness strategy (ProbeHealth today).
 	Probe Probe
 	// Command is the canonical in-container probe with credential
 	// placeholders, e.g. pg_isready -U {{username}}. Use CommandFor to render
-	// it; the control plane records it because the agent cannot exec yet.
+	// it; the rendered command becomes the container's native Docker
+	// healthcheck, so Docker evaluates the engine readiness signal.
 	Command []string
-	// Timeout bounds the wait for the container to report "running".
+	// Timeout bounds the wait for the engine to report healthy.
 	Timeout time.Duration
 }
 
@@ -122,6 +127,17 @@ type DatabaseEngine interface {
 type CommandSpec interface {
 	// Command returns the container command for the given credentials.
 	Command(c Credentials) []string
+}
+
+// VersionedVolumeSpec is an optional extension of DatabaseEngine for engines
+// whose data directory moved in a later major version. The service type-asserts
+// it when it builds the run payload and falls back to VolumeSpec otherwise.
+// PostgreSQL 18 moved the declared VOLUME from /var/lib/postgresql/data to
+// /var/lib/postgresql (PGDATA becomes /var/lib/postgresql/18/docker), and the
+// 18+ entrypoint refuses to start when the old path is mounted.
+type VersionedVolumeSpec interface {
+	// VolumeSpecFor returns the data directory for a specific image tag.
+	VolumeSpecFor(version string) VolumeSpec
 }
 
 // engineOrder fixes the registry order used by EngineNames (the API list and

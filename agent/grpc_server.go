@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"regexp"
 	"strings"
 	"time"
 
@@ -38,6 +39,7 @@ type dockerClient interface {
 	Stop(ctx context.Context, id string) error
 	Restart(ctx context.Context, id string) error
 	Remove(ctx context.Context, id string) error
+	RemoveVolume(ctx context.Context, name string) error
 	PullImage(ctx context.Context, image string) error
 	CreateContainer(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	RunImage(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
@@ -129,6 +131,33 @@ func (s *DockerServer) RestartContainer(ctx context.Context, req *agentv1.Contai
 // can retry a delete without checking the container first.
 func (s *DockerServer) RemoveContainer(ctx context.Context, req *agentv1.ContainerActionRequest) (*agentv1.ContainerActionResponse, error) {
 	return s.containerAction(ctx, req, "remove", s.docker.Remove)
+}
+
+// dbVolumePattern pins the only named-volume namespace RemoveVolume may touch:
+// a database volume is "gotham-db-{database id}". The control plane names it,
+// so a compromised control plane cannot use this call as a generic node
+// storage deletion primitive.
+var dbVolumePattern = regexp.MustCompile(`^gotham-db-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// RemoveVolume deletes one managed database volume. The name is validated
+// against the gotham-db-{uuid} shape before Docker is reached, so the call
+// cannot delete an arbitrary volume even if the control plane is compromised.
+// Removal is idempotent: a volume that is already gone is success.
+func (s *DockerServer) RemoveVolume(ctx context.Context, req *agentv1.VolumeActionRequest) (*agentv1.VolumeActionResponse, error) {
+	name := req.GetName()
+	if strings.TrimSpace(name) == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume name is required")
+	}
+	// Match the raw name: the pattern is anchored, so a padded or
+	// suffix-injected name ("x-gotham-db-…", "…\n") is rejected rather than
+	// normalised into something Docker would accept.
+	if !dbVolumePattern.MatchString(name) {
+		return nil, status.Errorf(codes.InvalidArgument, "remove volume: %q is not a managed database volume", name)
+	}
+	if err := s.docker.RemoveVolume(ctx, name); err != nil {
+		return nil, dockerError("remove volume", err)
+	}
+	return &agentv1.VolumeActionResponse{}, nil
 }
 
 // PullImage pulls an image onto the node.

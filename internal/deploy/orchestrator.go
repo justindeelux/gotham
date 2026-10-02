@@ -474,8 +474,12 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 	containerID, err := st.node.Run(ctx, request)
 	if err != nil {
 		// The create may have succeeded before the failure; remove whatever it
-		// left so it cannot outlive the run untracked.
-		o.removeDeploymentContainers(ctx, st)
+		// left so it cannot outlive the run untracked. Use a detached, bounded
+		// context: a step timeout or shutdown cancels ctx, and that is exactly
+		// when an untracked container is most likely.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
+		o.removeDeploymentContainers(cleanupCtx, st)
+		cancel()
 		return err
 	}
 	st.dep.ContainerID = containerID
@@ -676,11 +680,19 @@ func (o *Orchestrator) fail(ctx context.Context, st *runState, cause error) {
 // forceFail writes the terminal failed state unconditionally, emitting the
 // transition event only when it is a real edge. It is the failure-path
 // counterpart of transition: it must succeed even when the in-memory state no
-// longer admits a legal edge to failed.
+// longer admits a legal edge to failed. It refuses to downgrade a row that a
+// previous ambiguous write already committed terminal (running or failed).
 func (o *Orchestrator) forceFail(ctx context.Context, st *runState) error {
 	from := st.dep.State
+	if current, err := o.repo.GetDeployment(ctx, st.dep.ApplicationID, st.dep.ID); err == nil && current.State.Terminal() {
+		st.dep = current
+		return nil
+	}
 	next := st.dep
 	next.State = StateFailed
+	if from == StateQueued && next.StartedAt.IsZero() {
+		next.StartedAt = time.Now().UTC()
+	}
 	if next.FinishedAt.IsZero() {
 		next.FinishedAt = time.Now().UTC()
 	}

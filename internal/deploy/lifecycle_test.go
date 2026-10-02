@@ -353,3 +353,168 @@ func containsString(values []string, want string) bool {
 	}
 	return false
 }
+
+// TestSubmitUsesFreshApplicationAfterMove is the review regression for the
+// stale snapshot: a caller that loaded the application before a move must not
+// have the worker deploy to the previous node. submit re-reads the stored row
+// under the application lock.
+func TestSubmitUsesFreshApplicationAfterMove(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID) // snapshot on the old server
+	repo := &fakeRepository{app: app}
+	oldNode := newMockNode()
+	newNode := newMockNode()
+	newServer := uuid.New()
+
+	// The move lands after the caller took its snapshot.
+	moved := app
+	moved.ServerID = newServer
+	if _, err := repo.UpdateApplication(context.Background(), moved); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	var mu sync.Mutex
+	var dialed []uuid.UUID
+	svc := NewService(Config{
+		Repository: repo,
+		Secret:     testSecretKey,
+		Logger:     discardLogger(),
+		Emitter:    NewEmitter(&recordPublisher{}),
+		Dial: func(_ context.Context, serverID uuid.UUID) (Node, error) {
+			mu.Lock()
+			dialed = append(dialed, serverID)
+			mu.Unlock()
+			switch serverID {
+			case app.ServerID:
+				return oldNode, nil
+			case newServer:
+				return newNode, nil
+			default:
+				return nil, ErrServerNotFound
+			}
+		},
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	// stale is the caller's pre-move snapshot; submit must ignore it in favour
+	// of the stored row.
+	stale := app
+	created, err := svc.submit(context.Background(), stale, Deployment{Kind: KindDeploy, State: StateQueued})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var stored Deployment
+	for {
+		var ok bool
+		stored, ok = repo.deployment(created.ID)
+		if ok && stored.State.Terminal() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("deployment did not reach a terminal state: %+v", stored)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	mu.Lock()
+	got := append([]uuid.UUID(nil), dialed...)
+	mu.Unlock()
+	for _, id := range got {
+		if id == app.ServerID {
+			t.Errorf("worker dialed the previous server %s; submit used a stale snapshot", app.ServerID)
+		}
+	}
+	var sawNew bool
+	for _, id := range got {
+		sawNew = sawNew || id == newServer
+	}
+	if !sawNew {
+		t.Errorf("dialed = %v, want the fresh server %s", got, newServer)
+	}
+}
+
+// TestUpdateApplicationRefusesMoveWhileDeploying is the review regression for
+// the move path: changing the server while a deployment is non-terminal would
+// leave an untracked container on the previous node, so it is refused like a
+// delete or a manual control.
+func TestUpdateApplicationRefusesMoveWhileDeploying(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	node := newMockNode()
+	// Build the service first so the stale sweep does not fail the row.
+	svc := newNodeService(t, repo, node)
+	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateStarting, ContainerID: node.containerID})
+	newServer := uuid.New()
+
+	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID,
+		UpdateApplicationInput{ServerID: &newServer}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrConflict while a deployment is in flight", err)
+	}
+	got, err := svc.GetApplication(context.Background(), userID, app.ID)
+	if err != nil {
+		t.Fatalf("get application: %v", err)
+	}
+	if got.ServerID != app.ServerID {
+		t.Errorf("server = %s, want the move refused and the old server %s kept", got.ServerID, app.ServerID)
+	}
+}
+
+// TestManualControlUsesServerAfterMove checks that a manual start issued after
+// the application moved runs against the node it is now bound to, not the
+// previous one. The submit-level stale-snapshot regression is covered by
+// TestSubmitUsesFreshApplicationAfterMove.
+func TestManualControlUsesServerAfterMove(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	oldNode := newMockNode()
+	newNode := newMockNode()
+	newServer := uuid.New()
+	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateRunning, ContainerID: oldNode.containerID})
+	svc := NewService(Config{
+		Repository: repo,
+		Secret:     testSecretKey,
+		Logger:     discardLogger(),
+		Dial:       dialPerServer(map[uuid.UUID]Node{app.ServerID: oldNode, newServer: newNode}),
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID,
+		UpdateApplicationInput{ServerID: &newServer}); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if _, err := svc.Start(context.Background(), userID, app.ID); err != nil {
+		t.Fatalf("start after the move: %v", err)
+	}
+	if newNode.startCalls != 1 {
+		t.Errorf("new node start calls = %d, want the manual start to use the current server", newNode.startCalls)
+	}
+	if oldNode.startCalls != 0 {
+		t.Errorf("old node start calls = %d, want 0 (the application no longer runs there)", oldNode.startCalls)
+	}
+}
+
+// TestOrchestratorFailFromQueuedSetsStartedAt is the review regression for
+// forceFail: a failure before the run ever leaves queued (for example a dial
+// failure) still records the deployment start clock.
+func TestOrchestratorFailFromQueuedSetsStartedAt(t *testing.T) {
+	app := testApplication(uuid.New())
+	repo := &fakeRepository{app: app}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+
+	node := newMockNode()
+	dial, _ := dialScript(node, 100, nil)
+	o := newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}, Dial: dial, MaxAttempts: 1})
+
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	stored, _ := repo.deployment(dep.ID)
+	if stored.State != StateFailed {
+		t.Fatalf("state = %s, want failed", stored.State)
+	}
+	if stored.StartedAt.IsZero() {
+		t.Error("started_at is zero on a failure from queued")
+	}
+}

@@ -197,9 +197,11 @@ func (s *Service) copyDeployKey(ctx context.Context, base, preview Application) 
 // touched: a preview reuses its base application's deploy key, so removing it
 // would break the base (and every sibling). The local deploy key rows are
 // deleted explicitly first — deleting the application only cascades the
-// mapping, which would strand the sealed private key row. Stopping the
-// container stays best effort, exactly like the user-facing delete, so an
-// unreachable node cannot block the teardown. An application that is already
+// mapping, which would strand the sealed private key row. A deployment that is
+// in flight is refused with ErrConflict (the teardown removes the container and
+// cascades the row); the callers retry or the preview sweep picks it up. An
+// unreachable node never blocks the teardown: the container removal stays best
+// effort, exactly like the user-facing delete. An application that is already
 // gone is a success (the teardown must be idempotent).
 func (s *Service) DeleteSystemApplication(ctx context.Context, appID uuid.UUID) error {
 	if !Enabled() {
@@ -227,8 +229,17 @@ func (s *Service) DeleteSystemApplication(ctx context.Context, appID uuid.UUID) 
 	// Serialize with deployment submission and manual control, and refuse while
 	// a deployment is in flight: the teardown removes the container and
 	// cascades the row, which would orphan a container the worker is replacing.
+	// Re-read under the lock so a concurrent move cannot leave the teardown
+	// targeting the previous node.
 	unlock := s.locks.lock(app.ID)
 	defer unlock()
+	app, err = s.repo.GetApplication(ctx, appID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return err
+	}
 	if err := s.rejectInFlight(ctx, app.ID); err != nil {
 		return err
 	}

@@ -524,6 +524,17 @@ func (s *Service) previousContainer(ctx context.Context, appID uuid.UUID) string
 func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (Deployment, error) {
 	unlock := s.locks.lock(app.ID)
 	defer unlock()
+	// Re-read the stored row under the lock: the caller's snapshot was taken
+	// before it, so a concurrent update (a move to another node, a cleared
+	// server) must not leave the worker deploying to a stale target.
+	fresh, err := s.repo.GetApplication(ctx, app.ID)
+	if err != nil {
+		return Deployment{}, err
+	}
+	app = fresh
+	if err := validateDeployTarget(app); err != nil {
+		return Deployment{}, err
+	}
 	if err := s.checkStoredTarget(ctx, app); err != nil {
 		return Deployment{}, err
 	}

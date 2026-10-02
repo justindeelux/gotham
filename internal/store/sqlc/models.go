@@ -299,6 +299,16 @@ type ReposCache struct {
 	CachedAt      pgtype.Timestamptz `json:"cached_at"`
 }
 
+type Restore struct {
+	ID         pgtype.UUID        `json:"id"`
+	DatabaseID pgtype.UUID        `json:"database_id"`
+	BackupID   pgtype.UUID        `json:"backup_id"`
+	Status     string             `json:"status"`
+	Error      string             `json:"error"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+}
+
 type Secret struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`

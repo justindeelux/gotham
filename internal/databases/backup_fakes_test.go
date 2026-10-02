@@ -96,6 +96,8 @@ type fakeBackupRepository struct {
 
 	backups       map[uuid.UUID]Backup
 	backupOrder   []uuid.UUID
+	restores      map[uuid.UUID]Restore
+	restoreOrder  []uuid.UUID
 	schedules     map[uuid.UUID]BackupSchedule
 	scheduleOrder []uuid.UUID
 	targets       map[uuid.UUID]BackupTarget
@@ -107,6 +109,8 @@ type fakeBackupRepository struct {
 	listBackupErr     error
 	finishBackupErr   error
 	deleteBackupErr   error
+	createRestoreErr  error
+	finishRestoreErr  error
 	dueErr            error
 	createScheduleErr error
 	markErr           error
@@ -120,10 +124,37 @@ var _ BackupRepository = (*fakeBackupRepository)(nil)
 func newFakeBackupRepository() *fakeBackupRepository {
 	return &fakeBackupRepository{
 		backups:   make(map[uuid.UUID]Backup),
+		restores:  make(map[uuid.UUID]Restore),
 		schedules: make(map[uuid.UUID]BackupSchedule),
 		targets:   make(map[uuid.UUID]BackupTarget),
 		secrets:   make(map[uuid.UUID][]TargetSecret),
 	}
+}
+
+// seedRestore stores a restore directly, defaulting to a completed one.
+func (r *fakeBackupRepository) seedRestore(restore Restore) Restore {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if restore.ID == uuid.Nil {
+		restore.ID = uuid.New()
+	}
+	if restore.Status == "" {
+		restore.Status = RestoreCompleted
+	}
+	if restore.CreatedAt.IsZero() {
+		restore.CreatedAt = time.Now().UTC()
+	}
+	r.restores[restore.ID] = restore
+	r.restoreOrder = append(r.restoreOrder, restore.ID)
+	return restore
+}
+
+// getRestore is the test-side accessor.
+func (r *fakeBackupRepository) getRestore(id uuid.UUID) (Restore, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	restore, ok := r.restores[id]
+	return restore, ok
 }
 
 // seedBackup stores a run directly, defaulting to a completed one.
@@ -310,6 +341,54 @@ func (r *fakeBackupRepository) DeleteBackup(_ context.Context, backupID uuid.UUI
 		}
 	}
 	return backup, nil
+}
+
+// CreateRestore implements BackupRepository.
+func (r *fakeBackupRepository) CreateRestore(_ context.Context, restore Restore) (Restore, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.createRestoreErr != nil {
+		return Restore{}, r.createRestoreErr
+	}
+	if restore.ID == uuid.Nil {
+		restore.ID = uuid.New()
+	}
+	if restore.CreatedAt.IsZero() {
+		restore.CreatedAt = time.Now().UTC()
+	}
+	r.restores[restore.ID] = restore
+	r.restoreOrder = append(r.restoreOrder, restore.ID)
+	return restore, nil
+}
+
+// FinishRestore implements BackupRepository.
+func (r *fakeBackupRepository) FinishRestore(_ context.Context, restore Restore) (Restore, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.finishRestoreErr != nil {
+		return Restore{}, r.finishRestoreErr
+	}
+	if _, ok := r.restores[restore.ID]; !ok {
+		return Restore{}, ErrNotFound
+	}
+	r.restores[restore.ID] = restore
+	return restore, nil
+}
+
+// ListRunningRestores implements BackupRepository, oldest first.
+func (r *fakeBackupRepository) ListRunningRestores(_ context.Context) ([]Restore, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.listBackupErr != nil {
+		return nil, r.listBackupErr
+	}
+	list := make([]Restore, 0, len(r.restoreOrder))
+	for _, id := range r.restoreOrder {
+		if restore := r.restores[id]; restore.Status == RestoreRunning {
+			list = append(list, restore)
+		}
+	}
+	return list, nil
 }
 
 // CreateBackupSchedule implements BackupRepository.

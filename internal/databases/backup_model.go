@@ -64,6 +64,38 @@ type Backup struct {
 	FinishedAt time.Time
 }
 
+// RestoreStatus is the lifecycle of one restore run:
+//
+//	running → completed | failed
+//
+// The row exists so an interrupted restore is recoverable: the boot-time sweep
+// finds the running ones, marks them failed and cleans up the resources they
+// may still hold.
+type RestoreStatus string
+
+const (
+	// RestoreRunning — the artifact is being staged or applied.
+	RestoreRunning RestoreStatus = "running"
+	// RestoreCompleted — the artifact was applied; the row is durable.
+	RestoreCompleted RestoreStatus = "completed"
+	// RestoreFailed — the job failed; Error says why.
+	RestoreFailed RestoreStatus = "failed"
+)
+
+// Restore is one run of a backup's restore job. It is separate from Backup so
+// a restore never mutates the dump it came from and survives the deletion of
+// that dump's row (backup_id carries no foreign key).
+type Restore struct {
+	ID         uuid.UUID
+	DatabaseID uuid.UUID
+	BackupID   uuid.UUID
+	Status     RestoreStatus
+	// Error holds a bounded failure summary when Status is failed.
+	Error      string
+	CreatedAt  time.Time
+	FinishedAt time.Time
+}
+
 // BackupSchedule is one cron entry of the automatic backups. next_run_at is
 // denormalised from Cron on every write, so the scheduler is a single
 // due-time query instead of evaluating expressions at tick time.

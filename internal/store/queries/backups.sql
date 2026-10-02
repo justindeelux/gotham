@@ -137,3 +137,23 @@ RETURNING *;
 SELECT * FROM backups
 WHERE status = 'running'
 ORDER BY created_at ASC;
+
+-- name: CreateRestore :one
+INSERT INTO restores (id, database_id, backup_id, status)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
+
+-- name: FinishRestore :one
+UPDATE restores
+SET status = $2,
+    error = $3,
+    finished_at = $4
+WHERE id = $1
+RETURNING *;
+
+-- name: ListRunningRestores :many
+-- Boot-time recovery: a restore left running by a crashed control plane can
+-- never finish; the sweep fails it and releases its resources.
+SELECT * FROM restores
+WHERE status = 'running'
+ORDER BY created_at ASC;

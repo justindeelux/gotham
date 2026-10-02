@@ -94,20 +94,38 @@ func (m *BackupManager) runBackup(backup Backup, database Database, target *Back
 }
 
 // runRestore is the restore job: download the artifact, stage it onto the
-// database volume in chunks and apply it from a temporary container.
-func (m *BackupManager) runRestore(backup Backup, database Database) {
+// database volume in chunks and apply it from a temporary container. It
+// persists the terminal state on the restore row so an interrupted run is
+// recoverable after a restart.
+func (m *BackupManager) runRestore(restore Restore, backup Backup, database Database) {
 	defer m.release(database.ID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), m.jobTimeout)
 	defer cancel()
 
-	if err := m.restore(ctx, database, backup); err != nil {
+	err := m.restore(ctx, database, backup)
+	finished := restore
+	finished.FinishedAt = m.now()
+	if err != nil {
+		finished.Status = RestoreFailed
+		finished.Error = boundedDiag(err.Error())
 		m.logger.Error("databases: restore failed",
-			"backup_id", backup.ID.String(), "database_id", database.ID.String(), "error", err)
-		return
+			"restore_id", restore.ID.String(), "backup_id", backup.ID.String(),
+			"database_id", database.ID.String(), "error", err)
+	} else {
+		finished.Status = RestoreCompleted
+		m.logger.Info("databases: restore completed",
+			"restore_id", restore.ID.String(), "backup_id", backup.ID.String(),
+			"database_id", database.ID.String())
 	}
-	m.logger.Info("databases: restore completed",
-		"backup_id", backup.ID.String(), "database_id", database.ID.String())
+
+	// The job context may already be expired; the row write gets its own.
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer finishCancel()
+	if _, ferr := m.backups.FinishRestore(finishCtx, finished); ferr != nil {
+		m.logger.Error("databases: could not record the restore outcome",
+			"restore_id", restore.ID.String(), "error", ferr)
+	}
 }
 
 // dump stops the database, runs the engine's dump job on the node, compresses
@@ -187,9 +205,15 @@ func (m *BackupManager) dump(ctx context.Context, database Database, target *Bac
 	return location, size, containerID, nil
 }
 
-// restore downloads the artifact, stages it onto the volume in bounded
-// chunks and runs the engine's restore job, with the database stopped
-// throughout so the temporary container is the only writer.
+// restore downloads the artifact, stages it onto the volume in bounded chunks
+// and runs the engine's restore job, with the database stopped throughout so
+// the temporary container is the only writer.
+//
+// The database is resumed only after a successful restore. MySQL, MongoDB and
+// the Redis tar path are not transactional, so a job that fails partway can
+// leave a partial data directory; restarting the container into that state
+// would serve half-restored data. On failure the database stays stopped, is
+// marked error with the cause, and the staged artifact is removed.
 func (m *BackupManager) restore(ctx context.Context, database Database, backup Backup) error {
 	store, err := m.storeForLocation(ctx, backup, &database)
 	if err != nil {
@@ -205,15 +229,29 @@ func (m *BackupManager) restore(ctx context.Context, database Database, backup B
 	if err != nil {
 		return err
 	}
-	if wasRunning {
-		defer func() {
-			if resumeErr := m.resumeDatabase(context.Background(), database); resumeErr != nil {
-				m.logger.Error("databases: could not restart the database after the restore",
-					"database_id", database.ID.String(), "error", resumeErr)
-			}
-		}()
-	}
 
+	if err := m.applyRestore(ctx, database, backup, artifact); err != nil {
+		if wasRunning {
+			// Never restart into a half-restored volume: the database stays
+			// stopped and its row carries the failure.
+			m.markError(context.Background(), database, err)
+		}
+		return err
+	}
+	if wasRunning {
+		if resumeErr := m.resumeDatabase(context.Background(), database); resumeErr != nil {
+			m.logger.Error("databases: could not restart the database after the restore",
+				"database_id", database.ID.String(), "error", resumeErr)
+			m.markError(context.Background(), database, resumeErr)
+		}
+	}
+	return nil
+}
+
+// applyRestore stages the artifact onto the database volume and runs the
+// engine's restore job. It removes the staged artifact on any failure so a
+// retry starts from a clean volume.
+func (m *BackupManager) applyRestore(ctx context.Context, database Database, backup Backup, artifact io.Reader) error {
 	staged, err := stagingPath(database, backup.ID)
 	if err != nil {
 		return err

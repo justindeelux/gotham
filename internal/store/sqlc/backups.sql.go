@@ -174,6 +174,39 @@ func (q *Queries) CreateBackupTargetSecret(ctx context.Context, arg CreateBackup
 	return i, err
 }
 
+const createRestore = `-- name: CreateRestore :one
+INSERT INTO restores (id, database_id, backup_id, status)
+VALUES ($1, $2, $3, $4)
+RETURNING id, database_id, backup_id, status, error, created_at, finished_at
+`
+
+type CreateRestoreParams struct {
+	ID         pgtype.UUID `json:"id"`
+	DatabaseID pgtype.UUID `json:"database_id"`
+	BackupID   pgtype.UUID `json:"backup_id"`
+	Status     string      `json:"status"`
+}
+
+func (q *Queries) CreateRestore(ctx context.Context, arg CreateRestoreParams) (Restore, error) {
+	row := q.db.QueryRow(ctx, createRestore,
+		arg.ID,
+		arg.DatabaseID,
+		arg.BackupID,
+		arg.Status,
+	)
+	var i Restore
+	err := row.Scan(
+		&i.ID,
+		&i.DatabaseID,
+		&i.BackupID,
+		&i.Status,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
 const deleteBackup = `-- name: DeleteBackup :one
 DELETE FROM backups
 WHERE id = $1
@@ -295,6 +328,42 @@ func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (Bac
 		&i.Location,
 		&i.TargetID,
 		&i.ContainerID,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const finishRestore = `-- name: FinishRestore :one
+UPDATE restores
+SET status = $2,
+    error = $3,
+    finished_at = $4
+WHERE id = $1
+RETURNING id, database_id, backup_id, status, error, created_at, finished_at
+`
+
+type FinishRestoreParams struct {
+	ID         pgtype.UUID        `json:"id"`
+	Status     string             `json:"status"`
+	Error      string             `json:"error"`
+	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+}
+
+func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (Restore, error) {
+	row := q.db.QueryRow(ctx, finishRestore,
+		arg.ID,
+		arg.Status,
+		arg.Error,
+		arg.FinishedAt,
+	)
+	var i Restore
+	err := row.Scan(
+		&i.ID,
+		&i.DatabaseID,
+		&i.BackupID,
+		&i.Status,
 		&i.Error,
 		&i.CreatedAt,
 		&i.FinishedAt,
@@ -589,6 +658,42 @@ func (q *Queries) ListRunningBackups(ctx context.Context) ([]Backup, error) {
 			&i.Location,
 			&i.TargetID,
 			&i.ContainerID,
+			&i.Error,
+			&i.CreatedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRunningRestores = `-- name: ListRunningRestores :many
+SELECT id, database_id, backup_id, status, error, created_at, finished_at FROM restores
+WHERE status = 'running'
+ORDER BY created_at ASC
+`
+
+// Boot-time recovery: a restore left running by a crashed control plane can
+// never finish; the sweep fails it and releases its resources.
+func (q *Queries) ListRunningRestores(ctx context.Context) ([]Restore, error) {
+	rows, err := q.db.Query(ctx, listRunningRestores)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Restore{}
+	for rows.Next() {
+		var i Restore
+		if err := rows.Scan(
+			&i.ID,
+			&i.DatabaseID,
+			&i.BackupID,
+			&i.Status,
 			&i.Error,
 			&i.CreatedAt,
 			&i.FinishedAt,

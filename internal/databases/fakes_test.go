@@ -463,6 +463,7 @@ func (f *fakeContainers) List(context.Context, uuid.UUID) ([]containers.Containe
 func (f *fakeContainers) Start(context.Context, uuid.UUID, string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls = append(f.calls, "start")
 	f.starts++
 	return f.startErr
 }

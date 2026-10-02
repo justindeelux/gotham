@@ -69,7 +69,7 @@ type BackupEngine interface {
 var backupEngines = map[string]BackupEngine{
 	EnginePostgres: postgresBackupEngine{},
 	EngineMySQL:    mysqlBackupEngine{},
-	EngineMariaDB:  mysqlBackupEngine{},
+	EngineMariaDB:  mysqlBackupEngine{mariadb: true},
 	EngineMongoDB:  mongoBackupEngine{},
 	EngineRedis:    redisBackupEngine{},
 }
@@ -175,13 +175,35 @@ fi
 exit "$status"`
 }
 
-// mysqlBackupEngine serves MySQL and MariaDB: both images share the same
-// environment, entrypoint and tooling, so one implementation backs two
-// engine names.
-type mysqlBackupEngine struct{}
+// mysqlBackupEngine serves MySQL and MariaDB. The two images share the same
+// environment and entrypoint, but MariaDB 11.0 removed the mysql, mysqldump
+// and mysqladmin symlinks from the official image, so the tool names are
+// selected per engine instead of assuming the MySQL spelling.
+type mysqlBackupEngine struct {
+	// mariadb selects the MariaDB tool names (mariadbd, mariadb-admin,
+	// mariadb-dump, mariadb) over the MySQL ones.
+	mariadb bool
+}
 
-func (mysqlBackupEngine) Name() string          { return EngineMySQL }
+func (e mysqlBackupEngine) Name() string {
+	if e.mariadb {
+		return EngineMariaDB
+	}
+	return EngineMySQL
+}
+
 func (mysqlBackupEngine) DumpExtension() string { return "sql" }
+
+// bins returns the engine's tool names: the server argument for the image
+// entrypoint, the ping tool, the dump tool and the client. MariaDB 11.0+
+// removed the MySQL symlinks from the official image, so a hardcoded
+// `mysqldump`/`mysql` fails there.
+func (e mysqlBackupEngine) bins() (server, ping, dump, client string) {
+	if e.mariadb {
+		return "mariadbd", "mariadb-admin", "mariadb-dump", "mariadb"
+	}
+	return "mysqld", "mysqladmin", "mysqldump", "mysql"
+}
 
 // DumpOptions implements BackupEngine.
 func (e mysqlBackupEngine) DumpOptions(db Database, c Credentials, runID string) (containers.RunOptions, error) {
@@ -193,21 +215,23 @@ func (e mysqlBackupEngine) RestoreOptions(db Database, c Credentials, runID, sta
 	return backupJobOptions(db, c, tempJobName(roleRestore, runID), roleRestore, runID, stagedPath, e.restoreScript())
 }
 
-func (mysqlBackupEngine) dumpScript() string {
-	return `set -u
+// mysqlDumpScript is the dump script with named tool placeholders. It is a
+// template rather than a Sprintf format because the script itself carries
+// printf '%s' format strings.
+const mysqlDumpScript = `set -u
 id="$GOTHAM_RUN_ID"
 log=/tmp/gotham-engine.log
 tmp=/tmp/gotham-payload
 status=1
-/usr/local/bin/docker-entrypoint.sh mysqld >"$log" 2>&1 &
+/usr/local/bin/docker-entrypoint.sh __SERVER__ >"$log" 2>&1 &
 i=0
-until mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/null 2>&1; do
+until __PING__ ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/null 2>&1; do
   i=$((i + 1))
   if [ "$i" -gt 240 ]; then break; fi
   sleep 1
 done
-if mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/null 2>&1; then
-  mysqldump -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --routines --events --triggers --databases "$MYSQL_DATABASE" >"$tmp" 2>>"$log"
+if __PING__ ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/null 2>&1; then
+  __DUMP__ -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --routines --events --triggers --databases "$MYSQL_DATABASE" >"$tmp" 2>>"$log"
   status=$?
 fi
 if [ "$status" -eq 0 ]; then
@@ -221,10 +245,13 @@ else
   tail -n 40 "$log"
 fi
 exit "$status"`
-}
 
-func (mysqlBackupEngine) restoreScript() string {
-	return `set -u
+// mysqlRestoreScript is the restore script with named tool placeholders. The
+// client is invoked without preselecting the database: the dump carries
+// `--databases`, so its CREATE DATABASE/USE statements recreate a database
+// that no longer exists. Selecting `$MYSQL_DATABASE` first would fail against
+// a dropped database before the archive could recreate it.
+const mysqlRestoreScript = `set -u
 id="$GOTHAM_RUN_ID"
 staged="$GOTHAM_STAGED"
 log=/tmp/gotham-engine.log
@@ -239,16 +266,16 @@ else
   status=3
 fi
 if [ "$status" -eq 0 ]; then
-  /usr/local/bin/docker-entrypoint.sh mysqld >"$log" 2>&1 &
+  /usr/local/bin/docker-entrypoint.sh __SERVER__ >"$log" 2>&1 &
   i=0
-  until mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/null 2>&1; do
+  until __PING__ ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/null 2>&1; do
     i=$((i + 1))
     if [ "$i" -gt 240 ]; then break; fi
     sleep 1
   done
-  if mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/null 2>&1; then
+  if __PING__ ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/null 2>&1; then
     if gunzip -c "$payload" >"$archive" 2>>"$log"; then
-      mysql -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" <"$archive" 2>>"$log"
+      __CLIENT__ -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" <"$archive" 2>>"$log"
       status=$?
     else
       status=5
@@ -264,6 +291,15 @@ else
   tail -n 40 "$log"
 fi
 exit "$status"`
+
+func (e mysqlBackupEngine) dumpScript() string {
+	server, ping, dump, _ := e.bins()
+	return strings.NewReplacer("__SERVER__", server, "__PING__", ping, "__DUMP__", dump).Replace(mysqlDumpScript)
+}
+
+func (e mysqlBackupEngine) restoreScript() string {
+	server, ping, _, client := e.bins()
+	return strings.NewReplacer("__SERVER__", server, "__PING__", ping, "__CLIENT__", client).Replace(mysqlRestoreScript)
 }
 
 // mongoBackupEngine dumps to a BSON archive (mongodump --archive) and

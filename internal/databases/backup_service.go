@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -70,6 +69,10 @@ type BackupConfig struct {
 	// nil disables notifications, which is also the
 	// FEATURE_NOTIFICATIONS=false path.
 	Notifier BackupNotifier
+	// Leases, when set, is the job exclusion registry shared with the database
+	// service of the same control plane. Nil creates a private registry, so a
+	// manager built without the database service still excludes its own jobs.
+	Leases *JobLeases
 }
 
 // BackupService is the control-plane surface the HTTP layer depends on. It is
@@ -131,6 +134,9 @@ type RestoreRequest struct {
 
 // RestoreResult reports a queued restore.
 type RestoreResult struct {
+	// RestoreID is the persisted restore record; it is what the boot-time
+	// sweep and the operator use to follow the run.
+	RestoreID  uuid.UUID    `json:"restore_id"`
 	BackupID   uuid.UUID    `json:"backup_id"`
 	DatabaseID uuid.UUID    `json:"database_id"`
 	Location   string       `json:"location"`
@@ -195,10 +201,11 @@ type BackupManager struct {
 	schedulerInt time.Duration
 	notifier     BackupNotifier
 
-	// inflight holds one job per database: a dump stops the container, so a
-	// second job must never race it. The scheduler reads it as well.
-	mu       sync.Mutex
-	inflight map[uuid.UUID]bool
+	// leases holds one job per database: a dump stops the container, so a
+	// second job — or a lifecycle Start/Restart — must never race it. The
+	// registry is shared with the database service when the control plane
+	// wires both (see Config.Leases).
+	leases *JobLeases
 }
 
 // Compile-time guarantee that BackupManager satisfies the route-level
@@ -237,12 +244,17 @@ func NewBackupService(cfg BackupConfig) *BackupManager {
 		databaseRepo = newStoreRepository(cfg.Store)
 	}
 
+	leases := cfg.Leases
+	if leases == nil {
+		leases = NewJobLeases()
+	}
 	manager := &BackupManager{
 		Service: NewService(Config{
 			Repository: databaseRepo,
 			Containers: cfg.Containers,
 			Secret:     cfg.Secret,
 			Logger:     logger,
+			Leases:     leases,
 		}),
 		backups:      backupRepo,
 		objects:      cfg.ObjectStore,
@@ -252,7 +264,7 @@ func NewBackupService(cfg BackupConfig) *BackupManager {
 		logger:       logger,
 		schedulerInt: interval,
 		notifier:     cfg.Notifier,
-		inflight:     make(map[uuid.UUID]bool),
+		leases:       leases,
 	}
 	manager.scheduler = newBackupScheduler(manager, interval)
 	return manager
@@ -289,41 +301,120 @@ func (m *BackupManager) Close() error {
 	return nil
 }
 
-// reconcileStaleBackups runs once at construction. A run left in the running
-// state by a crashed control plane can never finish, and a database the
-// crash paused for the job may still be stopped: the sweep marks the run
-// failed and best-effort resumes the container.
+// reconcileStaleBackups runs once at construction. A backup or restore left in
+// the running state by a crashed control plane can never finish, and a
+// database the crash paused for the job may still be stopped. The sweep marks
+// every stale run failed, cleans up any orphan job container still holding the
+// volume, and only then best-effort resumes the container.
 func (m *BackupManager) reconcileStaleBackups() {
 	if m.backups == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
 	stale, err := m.backups.ListRunningBackups(ctx)
 	if err != nil {
 		m.logger.Warn("databases: stale backup sweep failed", "error", err)
+	} else {
+		for _, backup := range stale {
+			failed := backup
+			failed.Status = BackupFailed
+			failed.Error = "control plane restarted during the backup"
+			failed.FinishedAt = m.now()
+			if _, err := m.backups.FinishBackup(ctx, failed); err != nil {
+				m.logger.Warn("databases: could not fail a stale backup",
+					"backup_id", backup.ID.String(), "error", err)
+				continue
+			}
+			m.logger.Info("databases: marked stale backup failed",
+				"backup_id", backup.ID.String(), "database_id", backup.DatabaseID.String())
+			m.recoverInterrupted(ctx, backup.DatabaseID)
+		}
+	}
+
+	restores, err := m.backups.ListRunningRestores(ctx)
+	if err != nil {
+		m.logger.Warn("databases: stale restore sweep failed", "error", err)
 		return
 	}
-	for _, backup := range stale {
-		failed := backup
-		failed.Status = BackupFailed
-		failed.Error = "control plane restarted during the backup"
+	for _, restore := range restores {
+		failed := restore
+		failed.Status = RestoreFailed
+		failed.Error = "control plane restarted during the restore"
 		failed.FinishedAt = m.now()
-		if _, err := m.backups.FinishBackup(ctx, failed); err != nil {
-			m.logger.Warn("databases: could not fail a stale backup",
-				"backup_id", backup.ID.String(), "error", err)
+		if _, err := m.backups.FinishRestore(ctx, failed); err != nil {
+			m.logger.Warn("databases: could not fail a stale restore",
+				"restore_id", restore.ID.String(), "error", err)
 			continue
 		}
-		m.logger.Info("databases: marked stale backup failed",
-			"backup_id", backup.ID.String(), "database_id", backup.DatabaseID.String())
-		database, err := m.repo.GetDatabase(ctx, backup.DatabaseID)
-		if err != nil {
+		m.logger.Info("databases: marked stale restore failed",
+			"restore_id", restore.ID.String(), "database_id", restore.DatabaseID.String())
+		m.recoverInterrupted(ctx, restore.DatabaseID)
+	}
+}
+
+// recoverInterrupted releases a database from an interrupted job: orphan job
+// containers are removed first — a leftover job container still holds the
+// volume, so starting the database under it would race the half-written
+// restore — and only then is the container resumed.
+func (m *BackupManager) recoverInterrupted(ctx context.Context, databaseID uuid.UUID) {
+	// A held lease means a job is still live in this process; it — not the
+	// sweep — owns the volume, so leave the database to that job.
+	if kind := m.leases.Held(databaseID); kind != "" {
+		m.logger.Warn("databases: not recovering a database with a live job",
+			"database_id", databaseID.String(), "lease", string(kind))
+		return
+	}
+	database, err := m.repo.GetDatabase(ctx, databaseID)
+	if err != nil {
+		return
+	}
+	m.cleanupOrphanJobs(ctx, database)
+	if err := m.resumeDatabase(ctx, database); err != nil {
+		m.logger.Warn("databases: could not resume a database after a stale job",
+			"database_id", database.ID.String(), "error", err)
+	}
+}
+
+// cleanupOrphanJobs removes any temporary backup/restore container still
+// running on the database's node. The job lease is in memory and empty after a
+// restart, so a leftover labelled container is the durable evidence that a
+// crashed job still owns the volume.
+func (m *BackupManager) cleanupOrphanJobs(ctx context.Context, database Database) {
+	if m.containers == nil || database.ServerID == uuid.Nil {
+		return
+	}
+	list, err := m.containers.List(ctx, database.ServerID)
+	if err != nil {
+		m.logger.Warn("databases: could not list job containers for recovery",
+			"database_id", database.ID.String(), "error", err)
+		return
+	}
+	for _, item := range list {
+		if !isOrphanJobContainer(item, database.ID) {
 			continue
 		}
-		if err := m.resumeDatabase(ctx, database); err != nil {
-			m.logger.Warn("databases: could not resume a database after a stale backup",
-				"database_id", database.ID.String(), "error", err)
+		if err := m.containers.Remove(ctx, database.ServerID, item.ID); err != nil &&
+			!errors.Is(err, containers.ErrContainerNotFound) {
+			m.logger.Warn("databases: could not remove an orphan job container",
+				"database_id", database.ID.String(), "container_id", item.ID, "error", err)
 		}
+	}
+}
+
+// isOrphanJobContainer reports whether a listed container is a temporary
+// backup/restore job of databaseID. The database container itself carries no
+// gotham.role label, so it is never matched.
+func isOrphanJobContainer(item containers.Container, databaseID uuid.UUID) bool {
+	if item.Labels[labelManaged] != "true" || item.Labels[labelDatabaseID] != databaseID.String() {
+		return false
+	}
+	switch item.Labels[labelRole] {
+	case roleBackup, roleRestore, roleStage:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -444,11 +535,24 @@ func (m *BackupManager) RestoreBackup(ctx context.Context, userID, databaseID uu
 	if backup.Status != BackupCompleted {
 		return RestoreResult{}, fmt.Errorf("%w: only a completed backup can be restored", ErrBackupNotCompleted)
 	}
-	if !m.claim(database.ID) {
+	if !m.claimRestore(database.ID) {
 		return RestoreResult{}, ErrBackupInFlight
 	}
-	go m.runRestore(backup, database)
+	restore := Restore{
+		ID:         uuid.New(),
+		DatabaseID: database.ID,
+		BackupID:   backup.ID,
+		Status:     RestoreRunning,
+		CreatedAt:  m.now(),
+	}
+	stored, err := m.backups.CreateRestore(ctx, restore)
+	if err != nil {
+		m.release(database.ID)
+		return RestoreResult{}, err
+	}
+	go m.runRestore(stored, backup, database)
 	return RestoreResult{
+		RestoreID:  stored.ID,
 		BackupID:   backup.ID,
 		DatabaseID: database.ID,
 		Location:   backup.Location,
@@ -466,23 +570,20 @@ func (m *BackupManager) databaseCredentials(ctx context.Context, database Databa
 	return openCredentials(m.secret, secrets)
 }
 
-// claim marks a database as busy. Backup and restore both stop the
+// claim marks a database as busy with a dump. Backup and restore both stop the
 // container, so exactly one job may hold the claim at a time.
 func (m *BackupManager) claim(databaseID uuid.UUID) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.inflight[databaseID] {
-		return false
-	}
-	m.inflight[databaseID] = true
-	return true
+	return m.leases.Claim(databaseID, JobLeaseBackup)
+}
+
+// claimRestore marks a database busy with a restore.
+func (m *BackupManager) claimRestore(databaseID uuid.UUID) bool {
+	return m.leases.Claim(databaseID, JobLeaseRestore)
 }
 
 // release drops a database's claim; releasing an unclaimed id is a no-op.
 func (m *BackupManager) release(databaseID uuid.UUID) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.inflight, databaseID)
+	m.leases.Release(databaseID)
 }
 
 // resolveLocalBackupDir picks the local backup directory: an explicit

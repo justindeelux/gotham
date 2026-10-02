@@ -91,15 +91,19 @@ type Server struct {
 	deploy            deploy.DeployService
 	proxy             proxy.ProxyService
 	backups           databases.BackupService
-	notify            notifications.NotificationService
-	webhooks          *webhooks.Service
-	metrics           *servers.MetricsSweeper
-	sessionSweeper    *auth.SessionSweeper
-	updates           updates.Service
-	authLimiter       *ipRateLimiter
-	refreshLimiter    *ipRateLimiter
-	router            http.Handler
-	closer            func()
+	// jobLeases is the exclusion registry shared by the database service and
+	// the backup manager: a backup/restore owns the volume while a lifecycle
+	// Start/Restart is refused, and vice versa.
+	jobLeases      *databases.JobLeases
+	notify         notifications.NotificationService
+	webhooks       *webhooks.Service
+	metrics        *servers.MetricsSweeper
+	sessionSweeper *auth.SessionSweeper
+	updates        updates.Service
+	authLimiter    *ipRateLimiter
+	refreshLimiter *ipRateLimiter
+	router         http.Handler
+	closer         func()
 
 	// trustedProxies are the peers whose X-Forwarded-For / X-Forwarded-Proto
 	// headers are honored for client-IP keying and scheme detection. Empty
@@ -164,6 +168,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		authLimiter:       limiter,
 		refreshLimiter:    refreshLimiter,
 		trustedProxies:    trustedProxies,
+		jobLeases:         databases.NewJobLeases(),
 	}
 	s.closer = func() {
 		// The deploy service owns its worker pool and realtime publisher;
@@ -684,6 +689,7 @@ func (s *Server) databaseService(containerService containers.ContainerService) d
 		Containers: containerService,
 		Secret:     s.secretKey,
 		Logger:     s.logger,
+		Leases:     s.jobLeases,
 	})
 }
 
@@ -701,6 +707,7 @@ func (s *Server) backupService(containerService containers.ContainerService) dat
 		Containers: containerService,
 		Secret:     s.secretKey,
 		Logger:     s.logger,
+		Leases:     s.jobLeases,
 	}
 	if notifier, ok := s.notify.(databases.BackupNotifier); ok {
 		cfg.Notifier = notifier

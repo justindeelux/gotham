@@ -600,6 +600,92 @@ func startAuthorityGateway(t *testing.T, service *ServerService, authority *Auth
 	return gateway.listener.Addr().String()
 }
 
+// TestGatewayRegisterRejectsReservedNodeIDAliases is the FX-3 C1 guard: an
+// equivalent spelling of a reserved identity (mapped IPv6, alternate IPv6,
+// uppercase, trailing dot) must not slip past the lookup.
+func TestGatewayRegisterRejectsReservedNodeIDAliases(t *testing.T) {
+	service, _, authority := newTestServiceWithAuthority(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	gateway, err := NewGateway(GatewayConfig{
+		Addr:      "127.0.0.1:0",
+		Hosts:     []string{"cp.example.com"},
+		Authority: authority,
+		Service:   service,
+		Logger:    discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	// The alias matrix exceeds the production register burst; this test checks
+	// identity rejection, not rate limiting.
+	gateway.registerLimiter = newPeerRateLimiter(registerRateLimit, 64)
+	if err := gateway.Start(ctx); err != nil {
+		t.Fatalf("gateway.Start: %v", err)
+	}
+	t.Cleanup(gateway.Stop)
+
+	conn, err := grpc.NewClient(gateway.listener.Addr().String(),
+		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(authority.Pool(), "")))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := agentv1.NewAgentServiceClient(conn)
+
+	aliases := []string{
+		"::ffff:127.0.0.1", // IPv4-mapped IPv6 of 127.0.0.1
+		"0:0:0:0:0:0:0:1",  // alternate spelling of ::1
+		"LOCALHOST",        // uppercase
+		"localhost.",       // trailing dot (FQDN)
+		"CP.EXAMPLE.COM.",  // uppercase + trailing dot
+		"::0001",           // padded IPv6 loopback
+	}
+	for _, alias := range aliases {
+		_, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: alias, Os: "linux"})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Errorf("Register(%q) = %v, want PermissionDenied", alias, err)
+		}
+	}
+}
+
+// TestReservedNodeIDMessageIsActionable is the FX-3 C2 guard: a co-located agent
+// whose default node id is the machine hostname gets an error naming
+// GOTHAM_AGENT_NODE_ID rather than a bare "reserved".
+func TestReservedNodeIDMessageIsActionable(t *testing.T) {
+	if !strings.Contains(reservedNodeIDMessage, "GOTHAM_AGENT_NODE_ID") {
+		t.Errorf("reservedNodeIDMessage = %q, want it to name GOTHAM_AGENT_NODE_ID", reservedNodeIDMessage)
+	}
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		t.Skip("hostname unavailable")
+	}
+	g := &Gateway{reservedNodeIDs: reservedNodeIDSet("127.0.0.1:0", nil)}
+	if !g.isReservedNodeID(hostname) {
+		t.Fatalf("the machine hostname %q is not reserved", hostname)
+	}
+}
+
+// TestCanonicalNodeID pins the canonicalization used by the reserved lookup.
+func TestCanonicalNodeID(t *testing.T) {
+	cases := map[string]string{
+		"LOCALHOST":        "localhost",
+		"localhost.":       "localhost",
+		"cp.example.com.":  "cp.example.com",
+		"::ffff:127.0.0.1": "127.0.0.1",
+		"0:0:0:0:0:0:0:1":  "::1",
+		"::0001":           "::1",
+		"2001:0db8::1":     "2001:db8::1",
+		" node-1 ":         "node-1",
+	}
+	for in, want := range cases {
+		if got := canonicalNodeID(in); got != want {
+			t.Errorf("canonicalNodeID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestGatewayHeartbeatRejectsIdentityMismatch rejects a heartbeat whose
 // metadata node id contradicts the authenticated peer certificate (FX-3 item 3).
 func TestGatewayHeartbeatRejectsIdentityMismatch(t *testing.T) {
@@ -885,8 +971,10 @@ func TestGatewayHeartbeatIdleDeadline(t *testing.T) {
 }
 
 // TestGatewayLimitsStreamsAndMessages pins the gRPC caps (FX-3 R2). The
-// oversized-message path is exercised against the served gateway; the stream cap
-// is asserted on the constants and wired by construction.
+// oversized-message path is exercised against the served gateway. The concurrent
+// stream cap is constant-only here: the gRPC client's lazy stream setup makes a
+// 65th-stream assertion slow and transport-dependent, so it is covered by the
+// constant check plus the wiring in NewGateway.
 func TestGatewayLimitsStreamsAndMessages(t *testing.T) {
 	if maxConcurrentStreams != 64 || maxRecvMsgSize != 1<<20 {
 		t.Fatalf("gateway caps = %d/%d, want 64/1MiB", maxConcurrentStreams, maxRecvMsgSize)

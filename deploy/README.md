@@ -114,6 +114,11 @@ itself also fails closed: with no CA it refuses to start unless
 `GOTHAM_AGENT_INSECURE=true`, and its plaintext listener is confined to
 loopback.
 
+`GOTHAM_AGENT_NODE_ID` must differ from the control plane's own listener
+identities (its hostname and addresses): the CP refuses to register those, so a
+co-located install must set an explicit distinct node id. See `docs/install.md`,
+"Node agent".
+
 Re-running `install.sh` on a pre-existing plaintext control plane flips it to
 TLS; agents installed before that go offline until they are reinstalled with
 `--ca` (see `docs/install.md`, "Upgrading an existing control plane").

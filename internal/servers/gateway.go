@@ -222,7 +222,7 @@ func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*
 	if g.isReservedNodeID(nodeID) {
 		g.logger.Warn("servers: register node_id is reserved for the control plane listener",
 			"node_id", nodeID, "peer", peerAddress(ctx))
-		return nil, status.Error(codes.PermissionDenied, "node_id is reserved for the control plane listener")
+		return nil, status.Error(codes.PermissionDenied, reservedNodeIDMessage)
 	}
 
 	var csrCert []byte
@@ -508,24 +508,45 @@ func peerHost(ctx context.Context) string {
 
 // reservedNodeIDSet builds the set of CP listener identities that must never be
 // enrollable as nodes: registration would otherwise mint a CP-impersonation
-// certificate. Literal bind addresses are added so a wildcard bind still
-// protects its loopback form.
+// certificate. Each identity is canonicalized so equivalent spellings cannot
+// slip past the lookup, and the literal bind address is added so a wildcard bind
+// still protects its loopback form.
 func reservedNodeIDSet(addr string, extraHosts []string) map[string]bool {
 	ids := map[string]bool{}
 	for _, host := range serverHosts(addr, extraHosts) {
-		ids[strings.ToLower(host)] = true
+		ids[canonicalNodeID(host)] = true
 	}
 	if _, _, err := net.SplitHostPort(addr); err == nil {
-		ids[strings.ToLower(addr)] = true
+		ids[canonicalNodeID(addr)] = true
 	}
 	return ids
 }
 
-// isReservedNodeID reports whether nodeID names the CP's own listener. The list
-// is a short-term guard; a role-separated CA/bootstrap credential is the real
-// fix (LOW-4).
+// reservedNodeIDMessage is the error for an enrollable id that names the CP's
+// own listener. It names the fix so a co-located agent (whose default node id is
+// the hostname) is actionable rather than a bare "reserved".
+const reservedNodeIDMessage = "node_id is reserved for the control plane listener; " +
+	"set a distinct GOTHAM_AGENT_NODE_ID for this node (it must not match the control plane's own hostname or address)"
+
+// canonicalNodeID normalizes a node id / host for identity comparison: it
+// lowercases, trims one trailing dot (a fully qualified name), and, when the
+// result parses as an IP address, uses the canonical form. Without this,
+// "::ffff:127.0.0.1" and "0:0:0:0:0:0:0:1" (both equal 127.0.0.1 / ::1) would
+// enroll as distinct node ids and mint a control-plane certificate.
+func canonicalNodeID(id string) string {
+	id = strings.ToLower(strings.TrimSpace(id))
+	id = strings.TrimSuffix(id, ".")
+	if ip := net.ParseIP(id); ip != nil {
+		return ip.String()
+	}
+	return id
+}
+
+// isReservedNodeID reports whether nodeID names the CP's own listener. Both the
+// candidate and the set are canonicalized first. The list is a short-term guard;
+// a role-separated CA/bootstrap credential is the real fix (LOW-4).
 func (g *Gateway) isReservedNodeID(nodeID string) bool {
-	return g.reservedNodeIDs[strings.ToLower(nodeID)]
+	return g.reservedNodeIDs[canonicalNodeID(nodeID)]
 }
 
 // serverHosts derives the SAN host list for the listener certificate: the

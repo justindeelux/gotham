@@ -492,7 +492,9 @@ func loadAuthority(certPath, keyPath string) (*Authority, error) {
 // checkCAKeyPermissions refuses a CA private key readable beyond its owner. The
 // CA signs every agent certificate; a group- or world-readable key lets a local
 // user mint certificates for any node, so a loose mode is a hard error rather
-// than a warning.
+// than a warning. The check is a Stat-then-ReadFile, so a local attacker who can
+// already write the CA directory could swap the file between the two; that
+// attacker can read the key regardless, so the TOCTOU is not a material risk.
 func checkCAKeyPermissions(keyPath string) error {
 	info, err := os.Stat(keyPath)
 	if err != nil {

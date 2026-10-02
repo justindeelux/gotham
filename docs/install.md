@@ -196,6 +196,19 @@ Useful agent installer flags and variables:
 listener SANs (see [Control plane](#control-plane)); otherwise the TLS handshake
 fails and the node never registers.
 
+`GOTHAM_AGENT_NODE_ID` must not name the control plane itself. The CP refuses to
+register its own listener identities (its bind host, the loopback names, its
+machine hostname and every `GOTHAM_GRPC_HOSTS` entry, compared after
+canonicalization), because accepting one would issue a certificate that
+impersonates the control plane. On a **co-located** install — the agent on the
+same host as the CP — the agent's default node id is that hostname, so set an
+explicit distinct value:
+
+```sh
+sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=worker-1 \
+    gotham/deploy/install-agent.sh --ca ./ca.crt
+```
+
 ## Updates and rollback
 
 Releases are verified with the public key embedded in the running binary, so no

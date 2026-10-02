@@ -21,10 +21,12 @@ const serverDrainTimeout = 5 * time.Second
 
 // Stream and message caps for the agent's gRPC server, matching the control
 // plane's gateway: one peer must not open unbounded streams or push oversized
-// messages.
+// messages. The receive cap must exceed maxComposeYAML (1 MiB) with room for
+// gRPC framing, otherwise a compose document at the application limit would be
+// rejected by the transport before its own validation.
 const (
 	agentMaxConcurrentStreams = 64
-	agentMaxRecvMsgSize       = 1 << 20
+	agentMaxRecvMsgSize       = 2 << 20
 )
 
 // dockerClient is the subset of DockerClient the gRPC server needs. It is an

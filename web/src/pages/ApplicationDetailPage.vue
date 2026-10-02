@@ -496,16 +496,19 @@ async function handleSaveEnv(): Promise<void> {
   if (target === "" || envLoadedFor.value !== target) {
     return;
   }
+  const token = draftGeneration.current();
   envError.value = null;
   try {
     const saved = await appsStore.saveEnv(target, envDraft.value);
-    if (target !== appId.value) {
+    // Guard by generation as well as id: A→B→A must not let A's old save
+    // response overwrite the draft B's navigation reloaded.
+    if (target !== appId.value || !draftGeneration.isCurrent(token)) {
       return;
     }
     envDraft.value = [...saved];
     message.success("Environment saved. New variables apply to the next deploy.");
   } catch (error) {
-    if (target !== appId.value) {
+    if (target !== appId.value || !draftGeneration.isCurrent(token)) {
       return;
     }
     envError.value = describeApplicationError(error);
@@ -518,16 +521,17 @@ async function handleSaveStorages(): Promise<void> {
   if (target === "" || storagesLoadedFor.value !== target) {
     return;
   }
+  const token = draftGeneration.current();
   storagesError.value = null;
   try {
     const saved = await appsStore.saveStorages(target, storagesDraft.value);
-    if (target !== appId.value) {
+    if (target !== appId.value || !draftGeneration.isCurrent(token)) {
       return;
     }
     storagesDraft.value = [...saved];
     message.success("Volumes saved. They persist on the node across deploys.");
   } catch (error) {
-    if (target !== appId.value) {
+    if (target !== appId.value || !draftGeneration.isCurrent(token)) {
       return;
     }
     storagesError.value = describeApplicationError(error);

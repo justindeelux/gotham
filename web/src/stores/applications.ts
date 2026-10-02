@@ -95,12 +95,20 @@ export const useApplicationsStore = defineStore("applications", () => {
 
   /** fetchDeployments loads the deployment history of one application. */
   async function fetchDeployments(appId: string): Promise<void> {
+    const epoch = pollEpoch;
     loading.value = true;
     error.value = null;
     try {
-      deploymentsByApp.value[appId] = await listDeployments(appId);
+      const deployments = await listDeployments(appId);
+      if (epoch !== pollEpoch) {
+        return; // the page was left while this initial load was in flight
+      }
+      deploymentsByApp.value[appId] = deployments;
       settlePolling(appId);
     } catch (err) {
+      if (epoch !== pollEpoch) {
+        return;
+      }
       error.value = describeApplicationError(err);
       throw err;
     } finally {

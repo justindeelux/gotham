@@ -217,6 +217,66 @@ async function loadModule(relativePath) {
   };
 }
 
+/**
+ * loadStoreModule bundles the applications store with its HTTP API stubbed and
+ * pinia/vue kept external, so the real store logic can be driven with a fake
+ * `listDeployments` and fake timers. The temp dir lives under web/ so the
+ * external bare imports resolve to the project's own node_modules.
+ */
+async function loadStoreModule() {
+  const directory = await mkdtemp(
+    join(new URL("..", import.meta.url).pathname, ".tmp-store-"),
+  );
+  const outfile = join(directory, "store.mjs");
+  const fakeApplications = `
+    const activeStates = new Set(["queued","cloning","building","pushing","starting"]);
+    export function isActiveDeployment(d) { return activeStates.has(d.state); }
+    export function describeApplicationError(e) { return String((e && e.message) || e); }
+    export async function listDeployments(appId) { return globalThis.__fx14a.listDeployments(appId); }
+    export async function getApplication() { throw new Error("unused"); }
+    export async function getEnv() { throw new Error("unused"); }
+    export async function getStorages() { throw new Error("unused"); }
+    export async function replaceEnv() { throw new Error("unused"); }
+    export async function replaceStorages() { throw new Error("unused"); }
+    export async function rollbackDeployment() { throw new Error("unused"); }
+    export async function startApplication() { throw new Error("unused"); }
+    export async function stopApplication() { throw new Error("unused"); }
+    export async function triggerDeploy() { throw new Error("unused"); }
+  `;
+  await build({
+    entryPoints: [
+      new URL("../src/stores/applications.ts", import.meta.url).pathname,
+    ],
+    outfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    logLevel: "silent",
+    external: ["pinia", "vue"],
+    plugins: [
+      {
+        name: "fake-applications",
+        setup(buildApi) {
+          buildApi.onResolve({ filter: /api\/applications$/ }, (args) => ({
+            path: args.path,
+            namespace: "fake-applications",
+          }));
+          buildApi.onLoad(
+            { filter: /.*/, namespace: "fake-applications" },
+            () => ({ contents: fakeApplications, loader: "js" }),
+          );
+        },
+      },
+    ],
+  });
+  const module = await import(pathToFileURL(outfile).href);
+  return {
+    module,
+    cleanup: () => rm(directory, { recursive: true, force: true }),
+  };
+}
+
 async function main() {
   if (typeof WebSocket === "undefined") {
     throw new Error("global WebSocket is unavailable; Node 22+ is required");
@@ -649,6 +709,7 @@ async function main() {
   const requestGeneration = await loadModule("../src/utils/requestGeneration.ts");
   const polling = await loadModule("../src/utils/polling.ts");
   const wizardValidation = await loadModule("../src/utils/wizardValidation.ts");
+  const inFlightGuard = await loadModule("../src/composables/useInFlightGuard.ts");
 
   await check("a failed pipeline claims no completed stage (C4-3)", () => {
     const { pipelineStepsFor } = deployPipeline.module;
@@ -772,6 +833,112 @@ async function main() {
     );
   });
 
+  await check("a wizard reset clears its in-flight flags and token (U1 / B4-8)", () => {
+    const { useInFlightGuard } = inFlightGuard.module;
+    const guard = useInFlightGuard();
+    const token = guard.begin();
+    guard.creating.value = true;
+    guard.validating.value = true;
+    guard.reset();
+    assert(guard.creating.value === false, "creating cleared on reset");
+    assert(guard.validating.value === false, "validating cleared on reset");
+    assert(guard.isCurrent(token) === false, "the in-flight request is stale");
+  });
+
+  console.log("store polling guards (U2 / C4-12 / C4-13)");
+  const storeModule = await loadStoreModule();
+  const { useApplicationsStore } = storeModule.module;
+  const { createPinia, setActivePinia } = await import("pinia");
+  setActivePinia(createPinia());
+  const store = useApplicationsStore();
+
+  await check("a fetch that resolves after teardown re-arms no timer (U2)", async () => {
+    const scheduled = [];
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    globalThis.setInterval = (fn, ms) => {
+      const handle = { fn, ms };
+      scheduled.push(handle);
+      return handle;
+    };
+    globalThis.clearInterval = () => {};
+    let resolveList;
+    globalThis.__fx14a = {
+      listDeployments: () =>
+        new Promise((resolve) => {
+          resolveList = resolve;
+        }),
+    };
+    try {
+      const pending = store.fetchDeployments("store-app-a");
+      store.stopAllPolling(); // the user left the page while the load was in flight
+      resolveList([
+        {
+          id: "d1",
+          application_id: "store-app-a",
+          kind: "deploy",
+          state: "building",
+        },
+      ]);
+      await pending;
+      assert(scheduled.length === 0, "no timer armed after teardown");
+      assert(
+        store.deploymentsOf("store-app-a").length === 0,
+        "the late response is not cached",
+      );
+    } finally {
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+      delete globalThis.__fx14a;
+    }
+  });
+
+  await check("active and idle deployments arm the right cadence (C4-13)", async () => {
+    const scheduled = [];
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    globalThis.setInterval = (fn, ms) => {
+      const handle = { fn, ms };
+      scheduled.push(handle);
+      return handle;
+    };
+    globalThis.clearInterval = () => {};
+    let deployments = [
+      {
+        id: "d1",
+        application_id: "store-app-b",
+        kind: "deploy",
+        state: "building",
+      },
+    ];
+    globalThis.__fx14a = { listDeployments: async () => deployments };
+    try {
+      await store.fetchDeployments("store-app-b");
+      assert(
+        scheduled.length === 1 && scheduled[0].ms === 3000,
+        `active cadence was ${scheduled[0]?.ms}`,
+      );
+      deployments = [
+        {
+          id: "d1",
+          application_id: "store-app-b",
+          kind: "deploy",
+          state: "running",
+        },
+      ];
+      await store.refreshDeployments("store-app-b");
+      assert(
+        scheduled.length === 2 && scheduled[1].ms === 15000,
+        `idle cadence was ${scheduled[1]?.ms}`,
+      );
+      store.stopAllPolling();
+    } finally {
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+      delete globalThis.__fx14a;
+    }
+  });
+
   await server.close();
   await composable.cleanup();
   await channelBuffers.cleanup();
@@ -780,6 +947,8 @@ async function main() {
   await requestGeneration.cleanup();
   await polling.cleanup();
   await wizardValidation.cleanup();
+  await inFlightGuard.cleanup();
+  await storeModule.cleanup();
 
   const failed = results.filter((r) => !r.ok);
   console.log(

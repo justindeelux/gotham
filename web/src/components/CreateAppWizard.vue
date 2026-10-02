@@ -389,6 +389,9 @@ function resetWizard(): void {
   errorMessage.value = "";
   sourceError.value = "";
   submitting.value = false;
+  // The provider store is a singleton: a stale repo error must not survive
+  // into the next wizard with a Retry that no longer applies.
+  providersStore.reposError = null;
 }
 </script>
 

@@ -24,8 +24,8 @@ import {
 import type { CheckResult, Server, ServerCheckName } from "../api/servers";
 import ServerStatusTag from "./ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
+import { useInFlightGuard } from "../composables/useInFlightGuard";
 import { formatBytes } from "../utils/format";
-import { createRequestGeneration } from "../utils/requestGeneration";
 
 interface Props {
   show: boolean;
@@ -87,8 +87,6 @@ const FIXED_CHECK_LABELS: Array<{ name: ServerCheckName; label: string }> = [
 
 const step = ref(0);
 const formRef = ref<FormInst | null>(null);
-const creating = ref(false);
-const validating = ref(false);
 const errorMessage = ref("");
 const validateMessage = ref("");
 const validationPassed = ref(false);
@@ -96,8 +94,11 @@ const fixedChecks = ref<FixedCheck[]>(makeIdleChecks());
 const createdServer = ref<Server | null>(null);
 
 // Invalidates in-flight create/validate responses when the wizard is reset or
-// closed, so a late answer cannot repopulate a wizard the user already left.
-const wizardGeneration = createRequestGeneration();
+// closed, and clears their loading flags, so a late answer cannot repopulate a
+// wizard the user already left or leave it stuck loading.
+const inFlight = useInFlightGuard();
+const creating = inFlight.creating;
+const validating = inFlight.validating;
 
 const form = reactive<ConnectionForm>({
   name: "",
@@ -331,7 +332,7 @@ async function handleCreate(): Promise<void> {
     return;
   }
 
-  const token = wizardGeneration.current();
+  const token = inFlight.begin();
   creating.value = true;
   try {
     let keyId: string | null = null;
@@ -353,19 +354,19 @@ async function handleCreate(): Promise<void> {
       ssh_key_id: keyId,
     });
 
-    if (!wizardGeneration.isCurrent(token)) {
+    if (!inFlight.isCurrent(token)) {
       return; // the wizard was closed while the create was in flight
     }
     createdServer.value = server;
     emit("created", server);
     step.value = 1;
   } catch (error) {
-    if (!wizardGeneration.isCurrent(token)) {
+    if (!inFlight.isCurrent(token)) {
       return;
     }
     errorMessage.value = describeServerError(error);
   } finally {
-    if (wizardGeneration.isCurrent(token)) {
+    if (inFlight.isCurrent(token)) {
       creating.value = false;
     }
   }
@@ -378,7 +379,7 @@ async function handleValidate(): Promise<void> {
     return;
   }
 
-  const token = wizardGeneration.current();
+  const token = inFlight.begin();
   validating.value = true;
   validateMessage.value = "";
   // A retry starts from "not passed": a previous pass must never remain
@@ -392,7 +393,7 @@ async function handleValidate(): Promise<void> {
   }));
   try {
     const outcome = await serversStore.validate(server.id);
-    if (!wizardGeneration.isCurrent(token)) {
+    if (!inFlight.isCurrent(token)) {
       return; // the wizard was closed while the probe was in flight
     }
     applyCheckResults(outcome.checks);
@@ -402,14 +403,14 @@ async function handleValidate(): Promise<void> {
       message.success("Validation passed");
     }
   } catch (error) {
-    if (!wizardGeneration.isCurrent(token)) {
+    if (!inFlight.isCurrent(token)) {
       return;
     }
     fixedChecks.value = makeIdleChecks();
     validateMessage.value = describeServerError(error);
     validationPassed.value = false;
   } finally {
-    if (wizardGeneration.isCurrent(token)) {
+    if (inFlight.isCurrent(token)) {
       validating.value = false;
     }
   }
@@ -441,8 +442,9 @@ function handleShowChange(value: boolean): void {
 
 /** resetWizard returns every field to its initial value. */
 function resetWizard(): void {
-  // Any in-flight create/validate belongs to the wizard being reset.
-  wizardGeneration.bump();
+  // Invalidate any in-flight create/validate and clear its loading flags, so a
+  // reopen never inherits a stuck button from the request it abandoned.
+  inFlight.reset();
   step.value = 0;
   form.name = "";
   form.ip = "";

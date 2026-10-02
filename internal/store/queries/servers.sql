@@ -55,12 +55,15 @@ SET status = $2,
 WHERE id = $1
 RETURNING *;
 
--- name: SetServerHostKey :one
--- Pins (or replaces) the TOFU host key fingerprint of a node.
+-- name: PinServerHostKey :one
+-- Pins the TOFU host key fingerprint of a node only when it is still unpinned.
+-- A stale first-use validation then cannot overwrite a pin written by a racing
+-- validation; 0 rows means the node was pinned in the meantime and the caller
+-- must re-read and fail closed on a mismatch.
 UPDATE servers
 SET host_key_fingerprint = $2,
     updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND host_key_fingerprint IS NULL
 RETURNING *;
 
 -- name: ClearServerHostKey :one

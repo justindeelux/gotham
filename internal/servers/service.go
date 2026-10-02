@@ -292,8 +292,47 @@ func (s *ServerService) ResetHostKey(ctx context.Context, id uuid.UUID) (*Server
 	if err != nil {
 		return nil, fmt.Errorf("clear host key: %w", err)
 	}
-	s.logger.Info("servers: host key pin reset", "server_id", id.String())
+	s.logger.Info("servers: host key pin reset", "server_id", id.String(), "actor_team_id", actorTeamID(ctx))
 	return serverFromRow(updated), nil
+}
+
+// pinHostKey persists a first-use host key fingerprint with compare-and-set
+// semantics. When the row was pinned in the meantime (a racing validation, or a
+// reset-then-repin), it re-reads the row and fails closed unless the stored
+// fingerprint matches the observed one.
+func (s *ServerService) pinHostKey(ctx context.Context, id uuid.UUID, fingerprint string) error {
+	if _, err := s.store.PinServerHostKey(ctx, sqlc.PinServerHostKeyParams{
+		ID:                 pgUUID(id),
+		HostKeyFingerprint: &fingerprint,
+	}); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("persist host key fingerprint: %w", err)
+		}
+		// Lost the race: another writer pinned the node first.
+		row, readErr := s.store.GetServerByID(ctx, pgUUID(id))
+		if readErr != nil {
+			return fmt.Errorf("persist host key fingerprint: %w", readErr)
+		}
+		if stored := fingerprintOf(row.HostKeyFingerprint); stored != "" && stored != fingerprint {
+			return fmt.Errorf("host key changed while pinning: got %s, want %s", fingerprint, stored)
+		}
+		return nil
+	}
+	// The fingerprint is public; log it so operators can audit the first pin.
+	s.logger.Warn("servers: host key pinned on first use",
+		"server_id", id.String(),
+		"host_key_fingerprint", fingerprint,
+	)
+	return nil
+}
+
+// actorTeamID renders the caller's active team for audit logs, or "" when there
+// is no team scope.
+func actorTeamID(ctx context.Context) string {
+	if teamID := teams.ScopeFor(ctx, uuid.Nil).TeamID; teamID != uuid.Nil {
+		return teamID.String()
+	}
+	return ""
 }
 
 // AddPrivateKey encrypts and stores an SSH private key.
@@ -355,9 +394,12 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 	}
 
 	// A pinned node is always verified against its pin. An unpinned node is
-	// trusted on first use only for public-key auth (the key proves intent), or
-	// when the operator explicitly asked for it — never for an implicit
-	// password validation, which is the MITM credential-capture path.
+	// trusted on first use for public-key auth, or when the operator explicitly
+	// asked for it. TOFU is inherent: an on-path attacker present at the very
+	// first validation can win the pin (the deploy key proves the caller holds
+	// a credential, not that the peer is the intended host). Password auth is
+	// refused unless the operator opts in, because a first-use MITM there also
+	// captures the node password.
 	policy := HostKeyPolicy{Pinned: fingerprintOf(row.HostKeyFingerprint)}
 	if policy.Pinned == "" {
 		policy.AcceptUnpinned = len(credentials.PrivateKeyPEM) > 0 || auth.TrustHostKey
@@ -386,13 +428,16 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 	}
 
 	// The handshake succeeded against a host that is now trusted: persist the
-	// TOFU pin so every later validation fails closed on a different key.
+	// TOFU pin so every later validation fails closed on a different key. A
+	// first pin only (fingerprint != policy.Pinned) and only when the row is
+	// still unpinned: a racing validation that pinned a different key must not
+	// be overwritten. A failed or losing pin write fails the validation — the
+	// node never reports ready without a durable pin.
 	if fingerprint != "" && fingerprint != policy.Pinned {
-		if _, pinErr := s.store.SetServerHostKey(ctx, sqlc.SetServerHostKeyParams{
-			ID:                 pgUUID(id),
-			HostKeyFingerprint: &fingerprint,
-		}); pinErr != nil {
-			s.logger.Warn("servers: persist host key fingerprint", "server_id", id.String(), "error", pinErr)
+		if err := s.pinHostKey(ctx, id, fingerprint); err != nil {
+			s.setStatus(ctx, id, StatusError)
+			result.Server.Status = StatusError
+			return result, fmt.Errorf("%w: %v", ErrValidation, err)
 		}
 	}
 

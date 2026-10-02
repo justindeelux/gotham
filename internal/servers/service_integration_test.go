@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
 // TestServiceLifecycleWithValidation exercises the full stack against the dev
@@ -193,6 +195,57 @@ func TestServicePasswordAuthRequiresHostKeyTrust(t *testing.T) {
 	}
 	if fetched.HostKeyFingerprint == nil || *fetched.HostKeyFingerprint != fingerprint {
 		t.Errorf("HostKeyFingerprint = %v, want %q", fetched.HostKeyFingerprint, fingerprint)
+	}
+}
+
+// TestServicePinHostKeyIsCompareAndSet proves the first-use pin cannot
+// overwrite an existing pin: a racing validation that observed a different key
+// must fail closed, not clobber the stored pin.
+func TestServicePinHostKeyIsCompareAndSet(t *testing.T) {
+	service, st := newTestService(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	created, err := service.Add(ctx, uuid.New(), "cas-node", "127.0.0.1", 22, "root", uuid.Nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if err := st.DeleteServer(cleanupCtx, pgUUID(created.ID)); err != nil {
+			t.Logf("cleanup delete server: %v", err)
+		}
+	})
+
+	// Simulate the winner of the race having pinned one key...
+	if _, err := st.PinServerHostKey(ctx, sqlc.PinServerHostKeyParams{
+		ID:                 pgUUID(created.ID),
+		HostKeyFingerprint: strPtr("SHA256:winner"),
+	}); err != nil {
+		t.Fatalf("seed pin: %v", err)
+	}
+
+	// ...then a stale validation that observed a different key must fail.
+	err = service.pinHostKey(ctx, created.ID, "SHA256:loser")
+	if err == nil {
+		t.Fatal("pinHostKey overwrote an existing pin")
+	}
+	if !strings.Contains(err.Error(), "changed while pinning") {
+		t.Errorf("err = %v, want a changed-while-pinning error", err)
+	}
+
+	// A concurrent validation that observed the same key is a benign no-op.
+	if err := service.pinHostKey(ctx, created.ID, "SHA256:winner"); err != nil {
+		t.Fatalf("pinHostKey with the same key: %v", err)
+	}
+	row, err := st.GetServerByID(ctx, pgUUID(created.ID))
+	if err != nil {
+		t.Fatalf("GetServerByID: %v", err)
+	}
+	if stored := fingerprintOf(row.HostKeyFingerprint); stored != "SHA256:winner" {
+		t.Errorf("stored fingerprint = %q, want SHA256:winner (the pin was overwritten)", stored)
 	}
 }
 

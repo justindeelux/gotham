@@ -1,12 +1,14 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -747,10 +749,56 @@ func TestGitSourceKnownHostsPolicy(t *testing.T) {
 		if strings.Contains(command, "accept-new") {
 			t.Errorf("GIT_SSH_COMMAND = %q, want no accept-new by default", command)
 		}
-		for _, host := range []string{"github.com", "gitlab.com"} {
-			if !strings.Contains(knownHosts, host+" ssh-ed25519 ") {
-				t.Errorf("known_hosts is missing the pinned %s key:\n%s", host, knownHosts)
+		// The host-wide known_hosts and KnownHostsCommand must not be trusted:
+		// the ephemeral pinned set is the only anchor.
+		if !strings.Contains(command, "GlobalKnownHostsFile=/dev/null") {
+			t.Errorf("GIT_SSH_COMMAND = %q, want GlobalKnownHostsFile=/dev/null", command)
+		}
+		for _, host := range []string{
+			"github.com ssh-ed25519", "gitlab.com ssh-ed25519",
+			"bitbucket.org ssh-ed25519", "[ssh.github.com]:443 ssh-ed25519",
+		} {
+			if !strings.Contains(knownHosts, host) {
+				t.Errorf("known_hosts is missing the pinned %q key:\n%s", host, knownHosts)
 			}
+		}
+	})
+
+	t.Run("dev flag warns", func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		t.Setenv(devAcceptNewHostKeysEnv, "true")
+		run := func(context.Context, []string, []string) ([]byte, error) { return nil, nil }
+		source := gitSource{keys: &staticKeyResolver{pem: privatePEM}, run: run, logger: logger}
+		if err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil); err != nil {
+			t.Fatalf("Clone: %v", err)
+		}
+		if !strings.Contains(buf.String(), devAcceptNewHostKeysEnv) {
+			t.Errorf("warn log = %q, want it to name %s", buf.String(), devAcceptNewHostKeysEnv)
+		}
+	})
+
+	t.Run("world-writable operator file warns", func(t *testing.T) {
+		operatorFile := filepath.Join(t.TempDir(), "operator_known_hosts")
+		if err := os.WriteFile(operatorFile, []byte("git.internal ssh-ed25519 AAAA\n"), 0o600); err != nil {
+			t.Fatalf("write operator known_hosts: %v", err)
+		}
+		// WriteFile honours the umask; chmod makes the world-writable mode
+		// deterministic across environments.
+		if err := os.Chmod(operatorFile, 0o666); err != nil {
+			t.Fatalf("chmod operator known_hosts: %v", err)
+		}
+		t.Setenv(knownHostsEnv, operatorFile)
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		run := func(context.Context, []string, []string) ([]byte, error) { return nil, nil }
+		source := gitSource{keys: &staticKeyResolver{pem: privatePEM}, run: run, logger: logger}
+		if err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil); err != nil {
+			t.Fatalf("Clone: %v", err)
+		}
+		if !strings.Contains(buf.String(), "group/world-writable") {
+			t.Errorf("warn log = %q, want a group/world-writable warning", buf.String())
 		}
 	})
 

@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -48,6 +49,8 @@ type gitSource struct {
 	keys deployKeyResolver
 	// run executes git; nil selects the real binary.
 	run cloneRunner
+	// logger records host-key trust downgrades; nil selects slog.Default.
+	logger *slog.Logger
 }
 
 // Compile-time guarantee that gitSource satisfies the Source seam.
@@ -95,7 +98,15 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	// the keyed branch below adds back exactly one.
 	env := withoutEnv(os.Environ(), "GIT_SSH_COMMAND")
 	if privatePEM != "" {
-		files, err := newDeployKeyFiles(privatePEM)
+		if devAcceptNewHostKeys() {
+			// A stray value in the service environment silently downgrades
+			// every keyed clone; make it visible on each clone.
+			s.log().Warn("deploy: keyed clone trusts unseen host keys",
+				"reason", devAcceptNewHostKeysEnv+" is set",
+				"risk", "the clone accepts any host key; disable this in production",
+			)
+		}
+		files, err := newDeployKeyFiles(privatePEM, s.log())
 		if err != nil {
 			return err
 		}
@@ -127,6 +138,14 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		log("repository cloned (" + branch + ")")
 	}
 	return nil
+}
+
+// log returns the cloner's logger, defaulting to slog.Default.
+func (s gitSource) log() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.Default()
 }
 
 // deployKeyPEM resolves the application's deploy private key, turning a
@@ -175,7 +194,7 @@ type deployKeyFiles struct {
 // newDeployKeyFiles writes the PEM private key into a fresh private directory
 // (0700 by os.MkdirTemp) and returns it together with the pinned known_hosts
 // materialised next to it.
-func newDeployKeyFiles(privatePEM string) (*deployKeyFiles, error) {
+func newDeployKeyFiles(privatePEM string, logger *slog.Logger) (*deployKeyFiles, error) {
 	dir, err := os.MkdirTemp("", "gotham-deploy-key-*")
 	if err != nil {
 		return nil, fmt.Errorf("deploy: deploy key workspace: %w", err)
@@ -192,7 +211,7 @@ func newDeployKeyFiles(privatePEM string) (*deployKeyFiles, error) {
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("deploy: protect deploy key: %w", err)
 	}
-	knownHostsPath, err := materializeKnownHosts(dir)
+	knownHostsPath, err := materializeKnownHosts(dir, logger)
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, err
@@ -225,9 +244,13 @@ func withoutEnv(env []string, name string) []string {
 // dev flag re-enables accept-new — the control plane neither touches ~/.ssh nor
 // prompts during a clone.
 func (f *deployKeyFiles) sshEnv(env []string) []string {
+	// GlobalKnownHostsFile=/dev/null ignores the host-wide
+	// /etc/ssh/ssh_known_hosts and KnownHostsCommand, so the ephemeral pinned
+	// set (embedded + GOTHAM_KNOWN_HOSTS) is the only trust anchor.
 	command := "ssh -i " + shellQuote(f.keyPath) +
 		" -o IdentitiesOnly=yes" +
 		" -o UserKnownHostsFile=" + shellQuote(f.knownHostsPath) +
+		" -o GlobalKnownHostsFile=/dev/null" +
 		" -o StrictHostKeyChecking=" + strictHostKeyChecking(devAcceptNewHostKeys())
 	return append(env, "GIT_SSH_COMMAND="+command)
 }

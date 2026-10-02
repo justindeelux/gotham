@@ -338,10 +338,11 @@ func (s *Store) SetServerStatus(ctx context.Context, params sqlc.SetServerStatus
 	return s.queries.SetServerStatus(ctx, params)
 }
 
-// SetServerHostKey pins a node's SSH host key fingerprint and returns the
-// updated row.
-func (s *Store) SetServerHostKey(ctx context.Context, params sqlc.SetServerHostKeyParams) (sqlc.Server, error) {
-	return s.queries.SetServerHostKey(ctx, params)
+// PinServerHostKey pins a node's SSH host key fingerprint only when the node is
+// still unpinned, and returns the updated row. It answers pgx.ErrNoRows when a
+// pin already exists, so the caller can re-read and fail closed on a mismatch.
+func (s *Store) PinServerHostKey(ctx context.Context, params sqlc.PinServerHostKeyParams) (sqlc.Server, error) {
+	return s.queries.PinServerHostKey(ctx, params)
 }
 
 // ClearServerHostKey forgets a node's pinned SSH host key and returns the

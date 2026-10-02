@@ -103,7 +103,7 @@ func newOrchestrator(cfg Config) *Orchestrator {
 	repo := cfg.repository()
 	source := cfg.Source
 	if source == nil {
-		source = gitSource{keys: repo}
+		source = gitSource{keys: repo, logger: logger}
 	}
 	emitter := cfg.Emitter
 	if emitter == nil {

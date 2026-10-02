@@ -3,6 +3,7 @@ package deploy
 import (
 	_ "embed"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,9 @@ var defaultKnownHosts string
 
 const (
 	// knownHostsEnv points at an additional known_hosts file, merged over the
-	// embedded set. Operators add their self-hosted Git host's key here.
+	// embedded set. Operators add their self-hosted Git host's key here. It is
+	// a trust anchor: it must be 0600 and owned by the control-plane operator
+	// (or root); the cloner only reads it, never writes to it.
 	knownHostsEnv = "GOTHAM_KNOWN_HOSTS"
 	// devAcceptNewHostKeysEnv re-enables StrictHostKeyChecking=accept-new.
 	// Test/dev only: it makes the cloner trust a previously unseen host key,
@@ -48,9 +51,19 @@ func strictHostKeyChecking(acceptNew bool) string {
 // The set is the embedded public-provider keys plus, when GOTHAM_KNOWN_HOSTS is
 // set, the operator's file appended verbatim. The file lives with the ephemeral
 // deploy key and is removed with it.
-func materializeKnownHosts(dir string) (string, error) {
+func materializeKnownHosts(dir string, logger *slog.Logger) (string, error) {
 	content := defaultKnownHosts
 	if extra := knownHostsFile(); extra != "" {
+		// A group/world-writable trust anchor can be replaced by an attacker
+		// with local access to the host key. Warn rather than fail: the
+		// operator may have a deliberate (if unwise) setup.
+		if info, statErr := os.Stat(extra); statErr == nil && info.Mode().Perm()&0o022 != 0 {
+			logger.Warn("deploy: operator known_hosts is group/world-writable",
+				"path", extra,
+				"mode", fmt.Sprintf("%04o", info.Mode().Perm()),
+				"risk", "any local user can replace the pinned host keys; chmod 600",
+			)
+		}
 		data, err := os.ReadFile(extra)
 		if err != nil {
 			return "", fmt.Errorf("deploy: read %s (%s): %w", knownHostsEnv, extra, err)

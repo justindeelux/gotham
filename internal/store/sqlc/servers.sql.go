@@ -278,22 +278,25 @@ func (q *Queries) ListServersByTeam(ctx context.Context, teamID pgtype.UUID) ([]
 	return items, nil
 }
 
-const setServerHostKey = `-- name: SetServerHostKey :one
+const pinServerHostKey = `-- name: PinServerHostKey :one
 UPDATE servers
 SET host_key_fingerprint = $2,
     updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND host_key_fingerprint IS NULL
 RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint
 `
 
-type SetServerHostKeyParams struct {
+type PinServerHostKeyParams struct {
 	ID                 pgtype.UUID `json:"id"`
 	HostKeyFingerprint *string     `json:"host_key_fingerprint"`
 }
 
-// Pins (or replaces) the TOFU host key fingerprint of a node.
-func (q *Queries) SetServerHostKey(ctx context.Context, arg SetServerHostKeyParams) (Server, error) {
-	row := q.db.QueryRow(ctx, setServerHostKey, arg.ID, arg.HostKeyFingerprint)
+// Pins the TOFU host key fingerprint of a node only when it is still unpinned.
+// A stale first-use validation then cannot overwrite a pin written by a racing
+// validation; 0 rows means the node was pinned in the meantime and the caller
+// must re-read and fail closed on a mismatch.
+func (q *Queries) PinServerHostKey(ctx context.Context, arg PinServerHostKeyParams) (Server, error) {
+	row := q.db.QueryRow(ctx, pinServerHostKey, arg.ID, arg.HostKeyFingerprint)
 	var i Server
 	err := row.Scan(
 		&i.ID,

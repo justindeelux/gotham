@@ -2,6 +2,10 @@
 import { NButton } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import {
+  describeContainerError,
+  startContainerLogStream,
+} from "../api/containers";
 import { getAccessToken } from "../api/token";
 import type { WebSocketMessage } from "../composables/useWebSocket";
 import { useWebSocket } from "../composables/useWebSocket";
@@ -25,6 +29,12 @@ interface Props {
   subtitle?: string;
   /** Explicit channel override; defaults to `logs:{serverId}:{containerId}`. */
   channel?: string;
+  /**
+   * When true, ask the control plane to bridge the agent log stream on mount.
+   * Only valid for raw container logs (`logs:{serverId}:{containerId}`); the
+   * deploy-log wrapper leaves it off because its channel is already published.
+   */
+  autoStartStream?: boolean;
   /** Realtime endpoint path. */
   wsPath?: string;
   /** Maximum rendered lines before the oldest are dropped. */
@@ -35,6 +45,7 @@ const props = withDefaults(defineProps<Props>(), {
   title: "",
   subtitle: "",
   channel: "",
+  autoStartStream: false,
   wsPath: "/api/v1/ws",
   maxLines: 2000,
 });
@@ -55,6 +66,31 @@ const logBody = ref<HTMLElement | null>(null);
 
 let lineId = 0;
 let scrollQueued = false;
+/**
+ * Replay-window state, decided once per start (round-3/4/5 U1):
+ *  - `acceptReplay`: whether tagged history should render at all (the viewer
+ *    was empty when its start was requested).
+ *  - `replayRemaining`: the frame count the start response reported, or null
+ *    until it arrives (tagged frames may beat the HTTP response).
+ *  - `replayAccepted`: how many tagged frames have rendered in this window.
+ * A live frame never closes the window; the count, the server's `replay_end`
+ * marker, or the timeout do.
+ */
+let acceptReplay = false;
+let replayRemaining: number | null = null;
+let replayAccepted = 0;
+let replayTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Fallback window for a replay whose counted frames never arrive, in ms. */
+const replayWindowMs = 5_000;
+
+/** clearReplayTimer cancels the fallback replay-window timeout. */
+function clearReplayTimer(): void {
+  if (replayTimer !== null) {
+    clearTimeout(replayTimer);
+    replayTimer = null;
+  }
+}
 
 const channelName = computed<string>(
   () => props.channel || `logs:${props.serverId}:${props.containerId}`,
@@ -103,6 +139,51 @@ const statusClasses = computed<Record<string, boolean>>(() => ({
 
 /** handleMessage converts a hub frame into zero or more rendered lines. */
 function handleMessage(message: WebSocketMessage): void {
+  // Start the agent stream only once the server has acknowledged this
+  // channel's subscription: the hub room must have a member before the agent's
+  // historical tail is published, or the first lines are lost (U2).
+  if (
+    message.payload?.type === "subscribed" &&
+    message.channel === channelName.value
+  ) {
+    requestStreamStart();
+    return;
+  }
+
+  // A denied subscription (authorization or the per-connection cap) never
+  // joins the room, so the drawer would otherwise wait forever: surface the
+  // server's reason as a notice (round-2 U4).
+  if (message.payload?.type === "denied") {
+    const reason =
+      typeof message.payload.data === "string" ? message.payload.data : "";
+    appendLine({
+      id: ++lineId,
+      ts: formatTimestamp(null, message.receivedAt),
+      text: reason ? `Subscription denied: ${reason}` : "Subscription denied",
+      kind: "notice",
+    });
+    return;
+  }
+
+  // A transport recovery notice closes out the interruption notice.
+  if (message.payload?.type === "resumed") {
+    appendLine({
+      id: ++lineId,
+      ts: formatTimestamp(null, message.receivedAt),
+      text: "Log stream resumed",
+      kind: "notice",
+    });
+    return;
+  }
+
+  // End of a replay batch: stop accepting tagged history so a later viewer's
+  // replay is never rendered on top of this viewer's lines (round-4/5 U1).
+  if (message.payload?.type === "replay_end") {
+    acceptReplay = false;
+    clearReplayTimer();
+    return;
+  }
+
   if (message.kind === "notice") {
     appendLine({
       id: ++lineId,
@@ -129,6 +210,20 @@ function handleMessage(message: WebSocketMessage): void {
   }
 
   const ts = formatTimestamp(payload?.ts, message.receivedAt);
+  if (payload?.replay === true) {
+    // Accept tagged history only for the batch this viewer's own start
+    // requested, sized by the server-reported count. Live (untagged) frames do
+    // not close the window, so an interleaved live frame cannot truncate the
+    // history (round-5 U1).
+    if (!acceptReplay) {
+      return;
+    }
+    replayAccepted += 1;
+    if (replayRemaining !== null && replayAccepted >= replayRemaining) {
+      acceptReplay = false;
+      clearReplayTimer();
+    }
+  }
   for (const piece of splitLines(text)) {
     appendLine({ id: ++lineId, ts, text: piece, kind: "line" });
   }
@@ -257,19 +352,70 @@ function downloadLog(): void {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * requestStreamStart asks the control plane to bridge this container's agent
+ * log stream into the realtime channel. The viewer only subscribes otherwise,
+ * so without this call a raw container produces no frames (B2-1). A failure is
+ * surfaced as a notice rather than leaving the drawer silently empty.
+ */
+function requestStreamStart(): void {
+  if (!props.autoStartStream || !props.serverId || !props.containerId) {
+    return;
+  }
+  // Decide once per start whether replayed history should render: a late,
+  // empty viewer accepts it; a viewer that already has lines (reconnect) does
+  // not, so no duplicate lines. The server reports how many tagged frames it
+  // published for this start; until the response arrives, tagged frames are
+  // accepted optimistically (they can beat the HTTP response).
+  clearReplayTimer();
+  acceptReplay = lines.value.length === 0 && pending.value.length === 0;
+  replayRemaining = null;
+  replayAccepted = 0;
+
+  if (acceptReplay) {
+    replayTimer = setTimeout(() => {
+      acceptReplay = false;
+      replayTimer = null;
+    }, replayWindowMs);
+  }
+
+  void startContainerLogStream(props.serverId, props.containerId)
+    .then((replay) => {
+      replayRemaining = replay;
+      if (replay === 0 || replayAccepted >= replay) {
+        acceptReplay = false;
+        clearReplayTimer();
+      }
+    })
+    .catch((error: unknown) => {
+      acceptReplay = false;
+      clearReplayTimer();
+      appendLine({
+        id: ++lineId,
+        ts: formatTimestamp(null, Date.now()),
+        text: `Could not start log stream: ${describeContainerError(error)}`,
+        kind: "notice",
+      });
+    });
+}
+
 watch(channelName, (next, previous) => {
   if (previous) {
     unsubscribeChannel(previous);
   }
+  // The subscribed ack (handleMessage) starts the stream for the new channel.
   subscribeChannel(next);
 });
 
 onMounted(() => {
   connectStream();
+  // The start call fires on the subscribed ack, not here, so the hub room is
+  // populated before the agent tail is published.
   subscribeChannel(channelName.value);
 });
 
 onBeforeUnmount(() => {
+  clearReplayTimer();
   closeStream(1000, "viewer unmounted");
 });
 </script>

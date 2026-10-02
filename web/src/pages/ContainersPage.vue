@@ -378,6 +378,7 @@ onUnmounted(() => {
           :container-id="selected.id"
           :title="selected.name"
           :subtitle="selected.image"
+          :auto-start-stream="true"
         />
       </NDrawerContent>
     </NDrawer>

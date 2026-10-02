@@ -8,6 +8,7 @@ import { isApiError } from "./servers";
  *   POST /servers/{id}/containers/{containerID}/start
  *   POST /servers/{id}/containers/{containerID}/stop
  *   POST /servers/{id}/containers/{containerID}/restart
+ *   POST /servers/{id}/containers/{containerID}/logs/stream
  *   POST /servers/{id}/images/pull
  *   POST /servers/{id}/containers/run
  *
@@ -142,6 +143,27 @@ export async function runContainer(
     input,
   );
   return response.data.container_id;
+}
+
+/**
+ * startContainerLogStream asks the control plane to bridge one container's
+ * agent log stream into the realtime channel. Call it after the viewer's
+ * subscription is acknowledged, so the hub room has a member before the agent
+ * tail is published. It is idempotent per container, so repeated mounts share
+ * one agent stream, and the stream is reaped once no WebSocket subscriber
+ * remains. The returned number is how many replay frames the server published
+ * for this start (0 for a fresh stream or an empty ring), which sizes the
+ * viewer's replay window.
+ */
+export async function startContainerLogStream(
+  serverId: string,
+  containerId: string,
+): Promise<number> {
+  const response = await http.post<{ channel: string; replay?: number }>(
+    `/servers/${serverId}/containers/${encodeURIComponent(containerId)}/logs/stream`,
+    {},
+  );
+  return response.data.replay ?? 0;
 }
 
 /** describeContainerError maps a thrown error to a user-facing message. */

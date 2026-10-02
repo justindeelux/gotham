@@ -2,14 +2,14 @@ package ws
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 	"golang.org/x/net/websocket"
 
 	"github.com/justindeelux/gotham/internal/auth"
@@ -33,6 +33,19 @@ func RealtimeEnabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv(RealtimeEnv)), "false")
 }
 
+// Connection hardening defaults. writeWait bounds every frame write so a
+// non-reading client fails instead of pinning the handler; pingPeriod keeps a
+// write in flight so a dead peer is noticed even while the log is quiet.
+const (
+	writeWait                 = 10 * time.Second
+	pingPeriod                = 25 * time.Second
+	maxSubscriptionsPerClient = 32
+	// authCacheTTL bounds how long an accepted node authorization is reused on
+	// one connection. Denials are never cached, so a revoked user loses access
+	// within the TTL and a newly granted user is admitted immediately (U1).
+	authCacheTTL = 30 * time.Second
+)
+
 // SubscriptionAuthorizer authorizes one log subscription for the authenticated
 // user. Returning an error refuses the channel (the client gets a "denied"
 // frame and never joins the room). A nil authorizer keeps the pre-teams
@@ -45,6 +58,12 @@ type Handler struct {
 	verify    TokenVerifier
 	authorize SubscriptionAuthorizer
 	logger    *slog.Logger
+
+	// writeWait, pingPeriod and authCacheTTL are fields so tests can shorten
+	// them; NewHandler sets the production defaults.
+	writeWait    time.Duration
+	pingPeriod   time.Duration
+	authCacheTTL time.Duration
 }
 
 // NewHandler builds a handler bound to hub. verify may be nil, in which case
@@ -54,38 +73,15 @@ func NewHandler(hub *Hub, verifier TokenVerifier, logger *slog.Logger, authorize
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{hub: hub, verify: verifier, authorize: authorize, logger: logger}
-}
-
-// Mount registers WS /api/v1/ws on the /api router, starts the hub and —
-// unless REALTIME_ENABLED=false — the Redis pub/sub bridge on
-// logs:{serverID}:{containerID} (config key redis.addr). authorize gates every
-// log subscription on the node's team; nil leaves subscriptions open. It
-// returns the hub so publishers can broadcast without Redis. Mount is intended
-// as a one-line call from Server.routes.
-func Mount(api chi.Router, verifier TokenVerifier, redisAddr string, logger *slog.Logger, authorize SubscriptionAuthorizer) *Hub {
-	hub := NewHub()
-	go hub.Run()
-
-	if logger == nil {
-		logger = slog.Default()
+	return &Handler{
+		hub:          hub,
+		verify:       verifier,
+		authorize:    authorize,
+		logger:       logger,
+		writeWait:    writeWait,
+		pingPeriod:   pingPeriod,
+		authCacheTTL: authCacheTTL,
 	}
-
-	if RealtimeEnabled() && strings.TrimSpace(redisAddr) != "" {
-		rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
-		bridge := NewBridge(hub, rdb)
-		go func() {
-			if err := bridge.Run(context.Background()); err != nil && err != context.Canceled {
-				logger.Warn("ws: redis bridge stopped", "error", err)
-			}
-		}()
-	} else {
-		logger.Info("ws: realtime bridge disabled, clients should poll")
-	}
-
-	handler := NewHandler(hub, verifier, logger, authorize)
-	api.Get("/v1/ws", handler.ServeHTTP)
-	return hub
 }
 
 // ServeHTTP authenticates the query token, then upgrades to WebSocket.
@@ -136,27 +132,37 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 
 	client := h.hub.newClient()
 	defer h.hub.remove(client)
+	// A connection that upgraded after the hub shut down must not linger: Run
+	// has returned, so nothing else will kick it (U9).
+	select {
+	case <-h.hub.done:
+		return
+	default:
+	}
+
+	// Per-connection state: the accepted subscriptions (also the cap), and the
+	// time-bounded authorization result per node. Caching an allow means N
+	// channels on one node cost one authorization instead of N DB reads
+	// (B1-10); denials are not cached so they can be re-checked (U1).
+	subs := make(map[string]bool, 8)
+	authorized := make(map[uuid.UUID]authDecision, 4)
 
 	for _, channel := range initialChannels(request) {
-		if !h.allowChannel(request.Context(), channel, userID) {
-			_ = websocket.JSON.Send(conn, Message{Channel: channel, Type: TypeDenied})
-			continue
-		}
-		h.hub.subscribe(client, channel)
-		_ = websocket.JSON.Send(conn, Message{Channel: channel, Type: TypeSubscribed})
+		h.subscribeChannel(conn, client, channel, request.Context(), userID, subs, authorized)
 	}
 
 	incoming := make(chan clientRequest, 8)
+	connDone := make(chan struct{})
+	defer close(connDone)
 	go func() {
 		defer close(incoming)
-		for {
-			var req clientRequest
-			if err := websocket.JSON.Receive(conn, &req); err != nil {
-				return
-			}
-			incoming <- req
-		}
+		pumpRequests(func(req *clientRequest) error {
+			return websocket.JSON.Receive(conn, req)
+		}, incoming, connDone)
 	}()
+
+	ticker := time.NewTicker(h.pingPeriod)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -164,7 +170,7 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 			if !ok {
 				return
 			}
-			if _, err := conn.Write(payload); err != nil {
+			if !h.writeRaw(conn, payload) {
 				return
 			}
 		case req, ok := <-incoming:
@@ -173,15 +179,93 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 			}
 			switch {
 			case req.Subscribe != "":
-				if !h.allowChannel(request.Context(), req.Subscribe, userID) {
-					_ = websocket.JSON.Send(conn, Message{Channel: req.Subscribe, Type: TypeDenied})
-					continue
-				}
-				h.hub.subscribe(client, req.Subscribe)
-				_ = websocket.JSON.Send(conn, Message{Channel: req.Subscribe, Type: TypeSubscribed})
+				h.subscribeChannel(conn, client, req.Subscribe, request.Context(), userID, subs, authorized)
 			case req.Unsubscribe != "":
-				h.hub.unsubscribe(client, req.Unsubscribe)
+				if subs[req.Unsubscribe] {
+					delete(subs, req.Unsubscribe)
+					h.hub.unsubscribe(client, req.Unsubscribe)
+				}
 			}
+		case <-client.kick:
+			h.logger.Warn("ws: disconnecting slow client",
+				"user_id", userID.String(), "subscriptions", len(subs))
+			return
+		case <-ticker.C:
+			if !h.writeRaw(conn, mustJSON(Message{Type: TypePing})) {
+				return
+			}
+		}
+	}
+}
+
+// subscribeChannel validates and joins one channel, enforcing the
+// per-connection subscription cap.
+func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel string, ctx context.Context, userID uuid.UUID, subs map[string]bool, authorized map[uuid.UUID]authDecision) {
+	if subs[channel] {
+		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeSubscribed})
+		return
+	}
+	if len(subs) >= maxSubscriptionsPerClient {
+		h.logger.Warn("ws: subscription limit reached",
+			"user_id", userID.String(), "channel", channel, "limit", maxSubscriptionsPerClient)
+		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeDenied, Data: "subscription limit reached"})
+		return
+	}
+	if !h.channelAllowed(ctx, channel, userID, authorized) {
+		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeDenied})
+		return
+	}
+	h.hub.subscribe(client, channel)
+	subs[channel] = true
+	_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeSubscribed})
+}
+
+// writeMessage writes one JSON frame under the connection's write deadline.
+func (h *Handler) writeMessage(conn *websocket.Conn, msg Message) error {
+	return h.writeFrame(conn, mustJSON(msg))
+}
+
+// writeRaw writes a pre-marshalled frame under the connection's write
+// deadline. It reports false when the write failed or timed out.
+func (h *Handler) writeRaw(conn *websocket.Conn, payload []byte) bool {
+	return h.writeFrame(conn, payload) == nil
+}
+
+func (h *Handler) writeFrame(conn *websocket.Conn, payload []byte) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(h.writeWait)); err != nil {
+		return err
+	}
+	if _, err := conn.Write(payload); err != nil {
+		h.logger.Debug("ws: client write failed", "error", err)
+		return err
+	}
+	return nil
+}
+
+// mustJSON marshals a frame; Message is always marshallable, so a failure is
+// impossible and is panicked rather than swallowed.
+func mustJSON(msg Message) []byte {
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		panic(err)
+	}
+	return payload
+}
+
+// pumpRequests forwards frames from receive into incoming until receive fails
+// or stop closes. The select on stop is what lets the reader exit
+// deterministically when the main loop has already returned while the reader
+// was blocked on a full incoming (B1-6).
+func pumpRequests(receive func(*clientRequest) error, incoming chan<- clientRequest, stop <-chan struct{}) {
+	for {
+		var req clientRequest
+		if err := receive(&req); err != nil {
+			return
+		}
+		select {
+		case incoming <- req:
+		case <-stop:
+			return
 		}
 	}
 }
@@ -190,11 +274,23 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 // WebSocket upgrade.
 type userIDKey struct{}
 
-// allowChannel authorizes one subscription: only logs:{serverID}:{containerID}
-// channels reach a node, and every other channel is a pure client-side room
-// name. A nil authorizer (tests, non-DB builds) allows everything, matching the
-// pre-teams compatibility paths elsewhere.
-func (h *Handler) allowChannel(ctx context.Context, channel string, userID uuid.UUID) bool {
+// authDecision is a cached allow for one node, valid until expiry.
+type authDecision struct {
+	allowed bool
+	expiry  time.Time
+}
+
+// channelAllowed authorizes one subscription, reusing a per-connection,
+// time-bounded cache of node decisions so repeat channels on one node do not
+// re-read the DB. Only logs:{serverID}:{containerID} channels reach a node;
+// every other channel is a pure client-side room name. A nil authorizer
+// (tests, non-DB builds) allows everything, matching the pre-teams
+// compatibility paths elsewhere.
+//
+// Denials are never cached (U1): a user removed from a team is re-checked and
+// loses access within authCacheTTL, and a user added after a denial is admitted
+// on the next attempt.
+func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uuid.UUID, authorized map[uuid.UUID]authDecision) bool {
 	if h.authorize == nil {
 		return true
 	}
@@ -202,11 +298,16 @@ func (h *Handler) allowChannel(ctx context.Context, channel string, userID uuid.
 	if !ok {
 		return true
 	}
+	if decision, seen := authorized[serverID]; seen && time.Now().Before(decision.expiry) {
+		return decision.allowed
+	}
 	if err := h.authorize(ctx, serverID, userID); err != nil {
 		h.logger.Debug("ws: subscription denied",
 			"channel", channel, "user_id", userID.String(), "error", err)
+		delete(authorized, serverID)
 		return false
 	}
+	authorized[serverID] = authDecision{allowed: true, expiry: time.Now().Add(h.authCacheTTL)}
 	return true
 }
 

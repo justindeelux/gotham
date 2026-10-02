@@ -75,10 +75,17 @@ type Repository interface {
 	// CreateDeployKey stores the mapping row together with the private key it
 	// points at, sealed with providers.SealSecret (the private_keys contract).
 	CreateDeployKey(ctx context.Context, key DeployKey, privateKeyPEM string) (DeployKey, error)
-	// DeleteDeployKey removes an application's deploy key: the mapping row and
-	// the private key it points at. It returns the removed mapping, or
-	// ErrNotFound when there was nothing to delete.
-	DeleteDeployKey(ctx context.Context, appID uuid.UUID) (DeployKey, error)
+	// DeleteDeployKey removes the deploy key the caller read: the mapping row
+	// and the private key it points at. The delete is fenced on key.ID, so a
+	// stale concurrent delete cannot remove a replacement key created after the
+	// read. It returns the removed mapping, or ErrNotFound when the fenced row
+	// was already gone.
+	DeleteDeployKey(ctx context.Context, key DeployKey) (DeployKey, error)
+	// DeletePrivateKey removes one sealed private key row by ID (its FK
+	// cascades the deploy-key mapping). It is the orphan-cleanup fallback when
+	// the fenced mapping delete fails before the application cascade would
+	// strand the sealed key.
+	DeletePrivateKey(ctx context.Context, privateKeyID uuid.UUID) error
 	// DeployKeyPrivatePEM opens an application's deploy private key for the
 	// cloner. An application without a key answers "" and no error, which is
 	// what keeps anonymous cloning the default.
@@ -470,10 +477,11 @@ func (r *storeRepository) CreateDeployKey(ctx context.Context, key DeployKey, pr
 	return deployKeyFromRow(row), nil
 }
 
-// DeleteDeployKey removes an application's deploy key: the mapping row and the
-// private key it points at. An already-removed key answers ErrNotFound.
-func (r *storeRepository) DeleteDeployKey(ctx context.Context, appID uuid.UUID) (DeployKey, error) {
-	row, err := r.store.DeleteApplicationDeployKey(ctx, pgUUID(appID))
+// DeleteDeployKey removes the deploy key the caller read, fenced on its mapping
+// ID. A stale delete whose row was replaced matches nothing and answers
+// ErrNotFound, leaving the replacement intact.
+func (r *storeRepository) DeleteDeployKey(ctx context.Context, key DeployKey) (DeployKey, error) {
+	row, err := r.store.DeleteApplicationDeployKey(ctx, pgUUID(key.ID), pgUUID(key.ApplicationID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return DeployKey{}, ErrNotFound
@@ -481,6 +489,15 @@ func (r *storeRepository) DeleteDeployKey(ctx context.Context, appID uuid.UUID) 
 		return DeployKey{}, fmt.Errorf("deploy: delete deploy key: %w", err)
 	}
 	return deployKeyFromRow(row), nil
+}
+
+// DeletePrivateKey removes one sealed private key row by ID. It is idempotent:
+// an already-gone row is not an error.
+func (r *storeRepository) DeletePrivateKey(ctx context.Context, privateKeyID uuid.UUID) error {
+	if err := r.store.DeletePrivateKey(ctx, pgUUID(privateKeyID)); err != nil {
+		return fmt.Errorf("deploy: delete private key: %w", err)
+	}
+	return nil
 }
 
 // DeployKeyPrivatePEM opens an application's deploy private key for the

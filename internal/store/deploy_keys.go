@@ -52,9 +52,11 @@ func (s *Store) GetApplicationDeployKey(ctx context.Context, applicationID pgtyp
 // DeleteApplicationDeployKey removes an application's deploy key: the mapping
 // row and the private key it points at, in one transaction, and returns the
 // mapping that was removed (pgx.ErrNoRows when there was nothing to delete).
-// Deleting the private key first would cascade the mapping away, so the
-// mapping is read back explicitly before both rows go.
-func (s *Store) DeleteApplicationDeployKey(ctx context.Context, applicationID pgtype.UUID) (sqlc.ApplicationDeployKey, error) {
+// The delete is fenced on the mapping ID the caller read, so a stale concurrent
+// delete cannot remove a replacement key created in the meantime. Deleting the
+// private key first would cascade the mapping away, so the mapping is read back
+// explicitly before both rows go.
+func (s *Store) DeleteApplicationDeployKey(ctx context.Context, keyID, applicationID pgtype.UUID) (sqlc.ApplicationDeployKey, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return sqlc.ApplicationDeployKey{}, err
@@ -62,7 +64,10 @@ func (s *Store) DeleteApplicationDeployKey(ctx context.Context, applicationID pg
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	queries := s.queries.WithTx(tx)
-	row, err := queries.DeleteApplicationDeployKey(ctx, applicationID)
+	row, err := queries.DeleteApplicationDeployKey(ctx, sqlc.DeleteApplicationDeployKeyParams{
+		ID:            keyID,
+		ApplicationID: applicationID,
+	})
 	if err != nil {
 		return sqlc.ApplicationDeployKey{}, err
 	}
@@ -73,4 +78,11 @@ func (s *Store) DeleteApplicationDeployKey(ctx context.Context, applicationID pg
 		return sqlc.ApplicationDeployKey{}, err
 	}
 	return row, nil
+}
+
+// DeletePrivateKey removes one sealed private key row. It is idempotent: a row
+// that is already gone is not an error. The FK from application_deploy_keys
+// cascades the mapping away with it.
+func (s *Store) DeletePrivateKey(ctx context.Context, privateKeyID pgtype.UUID) error {
+	return s.queries.DeletePrivateKey(ctx, privateKeyID)
 }

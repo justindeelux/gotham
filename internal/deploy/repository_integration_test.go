@@ -171,15 +171,16 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 		t.Errorf("private_keys rows = %d, want 1 (the failed insert must roll back)", orphanCheck)
 	}
 
-	// Deleting takes the mapping and the private key with it, once.
-	removed, err := repo.DeleteDeployKey(ctx, appID)
+	// Deleting takes the mapping and the private key with it, once. The delete
+	// is fenced on the mapping ID that was read: replaying it is a no-op.
+	removed, err := repo.DeleteDeployKey(ctx, got)
 	if err != nil {
 		t.Fatalf("DeleteDeployKey: %v", err)
 	}
 	if removed.ID != created.ID {
 		t.Errorf("removed = %+v, want the stored mapping", removed)
 	}
-	if _, err := repo.DeleteDeployKey(ctx, appID); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.DeleteDeployKey(ctx, got); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second delete error = %v, want ErrNotFound", err)
 	}
 	if pem, err := repo.DeployKeyPrivatePEM(ctx, appID); err != nil || pem != "" {

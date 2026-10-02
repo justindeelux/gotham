@@ -91,6 +91,12 @@ type fakeRepository struct {
 	// can land a concurrent write between two reads.
 	onGetApplication func()
 
+	// onGetDeployKey, when set, runs after GetDeployKey resolves the row
+	// (without holding the repository lock) but before returning it, so a test
+	// can land a concurrent delete/replace between the read and the fenced
+	// delete.
+	onGetDeployKey func()
+
 	// createDeploymentNotify, when set, receives a token on every
 	// CreateDeployment call so a test can detect when a submit crossed the
 	// queue boundary (the serialization regression).
@@ -98,6 +104,10 @@ type fakeRepository struct {
 
 	// deployKeyErr fails every deploy-key write (tests the rollback with).
 	deployKeyErr error
+
+	// deleteDeployKeyErr fails the local deploy-key detach (tests the
+	// sealed-key orphan cleanup with).
+	deleteDeployKeyErr error
 
 	// listDeploymentsErr, when set, fails every ListDeployments call (the
 	// unresolved-previous-container regression).
@@ -591,11 +601,17 @@ type fakeDeployKey struct {
 	key DeployKey
 }
 
-// GetDeployKey implements Repository, keeping one key per application.
+// GetDeployKey implements Repository, keeping one key per application. The
+// optional onGetDeployKey hook runs without the lock so a test can interleave a
+// concurrent delete/replace before the returned row is used.
 func (r *fakeRepository) GetDeployKey(_ context.Context, appID uuid.UUID) (DeployKey, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	stored, ok := r.deployKeys[appID]
+	hook := r.onGetDeployKey
+	r.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	if !ok {
 		return DeployKey{}, ErrNotFound
 	}
@@ -628,19 +644,37 @@ func (r *fakeRepository) CreateDeployKey(_ context.Context, key DeployKey, priva
 	return key, nil
 }
 
-// DeleteDeployKey implements Repository with the store's cascade: the mapping
-// and the private key it points at go together.
-func (r *fakeRepository) DeleteDeployKey(_ context.Context, appID uuid.UUID) (DeployKey, error) {
+// DeleteDeployKey implements Repository with the store's fenced cascade: the
+// delete matches only the mapping ID the caller read, and the mapping and its
+// private key go together.
+func (r *fakeRepository) DeleteDeployKey(_ context.Context, key DeployKey) (DeployKey, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.record("deploy key detached")
-	stored, ok := r.deployKeys[appID]
-	if !ok {
+	if r.deleteDeployKeyErr != nil {
+		return DeployKey{}, r.deleteDeployKeyErr
+	}
+	stored, ok := r.deployKeys[key.ApplicationID]
+	if !ok || stored.key.ID != key.ID {
 		return DeployKey{}, ErrNotFound
 	}
-	delete(r.deployKeys, appID)
+	delete(r.deployKeys, key.ApplicationID)
 	delete(r.privateKeys, stored.key.PrivateKeyID)
 	return stored.key, nil
+}
+
+// DeletePrivateKey implements Repository: removing the sealed row cascades the
+// mapping that points at it.
+func (r *fakeRepository) DeletePrivateKey(_ context.Context, privateKeyID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.privateKeys, privateKeyID)
+	for appID, stored := range r.deployKeys {
+		if stored.key.PrivateKeyID == privateKeyID {
+			delete(r.deployKeys, appID)
+		}
+	}
+	return nil
 }
 
 // DeployKeyPrivatePEM implements Repository: "" for an application without a

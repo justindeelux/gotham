@@ -575,6 +575,13 @@ func (h *handler) createDeployKey(w http.ResponseWriter, r *http.Request) {
 	}
 	key, err := h.svc.CreateDeployKey(r.Context(), userID, appID)
 	if err != nil {
+		// A conflict here is the concurrent-create race (the service is
+		// idempotent for an application that already has a key), not a
+		// deployment: the shared ErrConflict text would be wrong.
+		if errors.Is(err, ErrConflict) {
+			writeJSON(w, http.StatusConflict, errorBody{Message: "a deploy key already exists for this application"})
+			return
+		}
 		h.writeServiceError(w, err)
 		return
 	}

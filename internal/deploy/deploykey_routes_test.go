@@ -135,6 +135,28 @@ func TestRoutesDeployKeyErrors(t *testing.T) {
 	}
 }
 
+// TestRoutesCreateDeployKeyConflictMessage pins C3-11: a conflict from
+// POST /deploy-key is the concurrent-create race, so the response must not
+// claim "a deployment is already in progress".
+func TestRoutesCreateDeployKeyConflictMessage(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	svc := &fakeDeployService{createKeyErr: ErrConflict}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, deployKeyPath(appID), nil))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+	if containsMessage(rec.Body.String(), "a deployment is already in progress") {
+		t.Errorf("body = %s, want deploy-key-specific conflict text", rec.Body.String())
+	}
+	if !containsMessage(rec.Body.String(), "a deploy key already exists for this application") {
+		t.Errorf("body = %s, want the deploy-key conflict message", rec.Body.String())
+	}
+}
+
 // containsMessage reports whether the response body carries a message.
 func containsMessage(body, needle string) bool {
 	var parsed errorBody

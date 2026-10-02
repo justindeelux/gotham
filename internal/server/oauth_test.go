@@ -78,10 +78,19 @@ func newOAuthTestServerWithAuth(t *testing.T, cfg *config.Config, oauth OAuthSer
 	return s
 }
 
-// defaultOAuthConfig is the minimal config used by OAuth handler tests.
+// defaultOAuthConfig is the config used by OAuth handler tests: it opts into
+// plain-HTTP development with an explicit http:// redirect base, so the
+// insecure-request guard does not reject the HTTP tests (L1).
 func defaultOAuthConfig() *config.Config {
 	return &config.Config{
-		Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}},
+		Values: config.Values{
+			Server: config.Server{Addr: "127.0.0.1", Port: 0},
+			OAuth: config.OAuth{
+				GitHub: config.OAuthGitHub{
+					RedirectURL: "http://localhost:8000/api/v1/auth/oauth/github/callback",
+				},
+			},
+		},
 	}
 }
 
@@ -896,5 +905,40 @@ func TestOAuthExchangeRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
 	rec := oauthExchangePost(t, s, code, testOAuthFlow)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// The rejected attempt must not have consumed the code: the same code still
+	// redeems over HTTPS.
+	allowed := oauthRawRequest(t, s, http.MethodPost, "/api/v1/auth/oauth/exchange",
+		`{"code":`+strconv.Quote(code)+`}`, true,
+		&http.Cookie{Name: auth.FlowCookieNameSecure, Value: testOAuthFlow})
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("secure exchange of the same code = %d, want 200 (body %s)", allowed.Code, allowed.Body.String())
+	}
+}
+
+// TestOAuthEmptyRedirectBaseRequiresHTTPS pins L1: with no usable redirect base
+// the guard fails closed for insecure requests, while a secure request is
+// allowed.
+func TestOAuthEmptyRedirectBaseRequiresHTTPS(t *testing.T) {
+	cfg := &config.Config{
+		Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}},
+	}
+	s := newOAuthTestServer(t, cfg, &fakeOAuthService{})
+
+	insecure := oauthRequest(t, s, "/api/v1/auth/oauth/github/login")
+	if insecure.Code != http.StatusFound {
+		t.Fatalf("insecure login status = %d, want 302", insecure.Code)
+	}
+	if loc := insecure.Header().Get("Location"); loc != oauthFailureRedirect {
+		t.Fatalf("insecure login Location = %q, want %s", loc, oauthFailureRedirect)
+	}
+
+	secure := oauthRawRequest(t, s, http.MethodGet, "/api/v1/auth/oauth/github/login", "", true)
+	if secure.Code != http.StatusFound {
+		t.Fatalf("secure login status = %d, want 302", secure.Code)
+	}
+	if loc := secure.Header().Get("Location"); loc == oauthFailureRedirect {
+		t.Fatalf("secure login was rejected with the empty base: %s", loc)
 	}
 }

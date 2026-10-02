@@ -44,6 +44,15 @@ class StaleRefreshError extends Error {
   }
 }
 
+/**
+ * isStaleRefreshError reports whether error is a stale-refresh rejection, i.e.
+ * a newer session replaced the one a refresh or retry was working on. Callers
+ * must not expire the replacement session for it.
+ */
+export function isStaleRefreshError(error: unknown): boolean {
+  return error instanceof StaleRefreshError;
+}
+
 /** Endpoints that must never trigger a refresh-and-retry on 401. */
 const noRefreshPaths = [
   "/auth/login",
@@ -79,14 +88,22 @@ http.interceptors.response.use(
 
     if (shouldRefresh(error, config)) {
       config._retry = true;
+      // Set once the refresh succeeds; used to tell whether a newer session
+      // replaced this one between the refresh and a failed retry.
+      let tokenBeforeRetry: string | null | undefined;
       try {
         const accessToken = await refreshAccessToken();
         config.headers.set("Authorization", `Bearer ${accessToken}`);
+        tokenBeforeRetry = getRefreshToken();
         return await http.request(config);
       } catch (refreshError) {
-        // A stale refresh means a newer session replaced this one mid-flight:
-        // keep it instead of clearing it.
-        if (!(refreshError instanceof StaleRefreshError)) {
+        // A stale refresh, or a retry that failed after a newer session
+        // replaced this one, must not clear the newer session.
+        const stale = refreshError instanceof StaleRefreshError;
+        const replacedAfterRefresh =
+          tokenBeforeRetry !== undefined &&
+          getRefreshToken() !== tokenBeforeRetry;
+        if (!stale && !replacedAfterRefresh) {
           expireSession();
         }
       }

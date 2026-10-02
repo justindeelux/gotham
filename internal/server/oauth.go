@@ -77,11 +77,17 @@ func (s *Server) mountOAuthRoutes(api chi.Router) {
 }
 
 // insecureOAuthRejected reports whether an insecure request must not take part
-// in an OAuth flow because the configured redirect base is HTTPS. The plain
-// cookies such a request sets are shadowable by a sibling host, so the flow is
-// refused on every leg (login, callback, exchange).
+// in an OAuth flow. The plain cookies such a request sets are shadowable by a
+// sibling host, so the flow is refused on every leg (login, callback, exchange)
+// unless the deployment explicitly opts into plain-HTTP development with an
+// http:// redirect base. An empty or unparseable base is treated as requiring
+// HTTPS (fail closed).
 func (s *Server) insecureOAuthRejected(r *http.Request) bool {
-	return !isSecureRequest(r) && strings.HasPrefix(s.oauthRedirectBase(), "https://")
+	if isSecureRequest(r) {
+		return false
+	}
+	base := s.oauthRedirectBase()
+	return base == "" || strings.HasPrefix(base, "https://")
 }
 
 // handleOAuthLogin starts the authorization flow: it asks the service to mint a

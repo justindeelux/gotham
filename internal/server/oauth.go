@@ -80,8 +80,18 @@ func (s *Server) mountOAuthRoutes(api chi.Router) {
 // state, binds the browser to the flow with a state cookie and a random flow
 // cookie, and redirects to the provider. Unknown or disabled providers answer
 // 404.
+//
+// An insecure request must not start a flow that returns to an HTTPS origin:
+// the plain cookies it would set are shadowable by a sibling host, so such a
+// flow is refused outright.
 func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 	provider := chi.URLParam(r, "provider")
+
+	if !isSecureRequest(r) && strings.HasPrefix(s.oauthRedirectBase(), "https://") {
+		s.logger.Warn("oauth: insecure login rejected", "provider", provider)
+		s.redirectOAuthFailure(w, r)
+		return
+	}
 
 	url, state, err := s.oauth.Begin(r.Context(), provider, s.oauthRedirectBase())
 	if err != nil {
@@ -139,7 +149,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exchangeCode, err := s.oauthCodes.NewCode(result, flowValue)
+	exchangeCode, err := s.oauthCodes.NewCode(result, flowValue, isSecureRequest(r))
 	if err != nil {
 		s.logger.Error("oauth: issue exchange code", "provider", provider, "error", err)
 		s.redirectOAuthFailure(w, r)
@@ -166,7 +176,7 @@ func (s *Server) handleOAuthExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, ok := s.oauthCodes.Exchange(req.Code, flowValue)
+	result, ok := s.oauthCodes.Exchange(req.Code, flowValue, isSecureRequest(r))
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
@@ -206,10 +216,19 @@ func (s *Server) redirectOAuthFailure(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, oauthFailureRedirect, http.StatusFound)
 }
 
-// clearOAuthCookies expires both OAuth protocol cookies on the response.
+// clearOAuthCookies expires both OAuth protocol cookies under both name sets,
+// so a pending cookie issued under the other scheme (a plain HTTP cookie) is
+// cleared by an HTTPS logout and vice versa. The __Host- deletions carry
+// Secure/Path=/ and are ignored where they do not apply.
 func (s *Server) clearOAuthCookies(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, oauthStateCookie(r, "", -1))
-	http.SetCookie(w, oauthFlowCookie(r, "", -1))
+	for _, name := range []string{
+		auth.StateCookieName,
+		auth.FlowCookieName,
+		auth.StateCookieNameSecure,
+		auth.FlowCookieNameSecure,
+	} {
+		http.SetCookie(w, oauthCookie(r, name, "", -1))
+	}
 }
 
 // newOAuthFlowBinding mints a random value binding the browser that started the
@@ -272,8 +291,9 @@ func oauthCookieValue(r *http.Request, name string) (string, bool) {
 }
 
 // oauthCookie builds an OAuth protocol cookie: HttpOnly, SameSite=Lax, and
-// Secure only when the request is served over HTTPS so local HTTP development
-// still works.
+// Secure when the request is served over HTTPS. A __Host- cookie is always
+// Secure even for an insecure deletion, so the browser recognises it as a
+// deletion of the HTTPS-issued cookie.
 func oauthCookie(r *http.Request, name, value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     name,
@@ -282,8 +302,17 @@ func oauthCookie(r *http.Request, name, value string, maxAge int) *http.Cookie {
 		MaxAge:   maxAge,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   isSecureRequest(r),
+		Secure:   oauthCookieSecure(r, name),
 	}
+}
+
+// oauthCookieSecure reports whether a cookie with name should carry Secure: a
+// __Host- cookie always does; otherwise it follows the request scheme.
+func oauthCookieSecure(r *http.Request, name string) bool {
+	if strings.HasPrefix(name, "__Host-") {
+		return true
+	}
+	return isSecureRequest(r)
 }
 
 // isSecureRequest reports whether the request reached us over HTTPS, directly or
@@ -313,10 +342,12 @@ type oauthCodeStore struct {
 }
 
 // oauthExchangeEntry is one callback result waiting to be claimed by the browser
-// that started the flow.
+// that started the flow. secure records whether the callback arrived over TLS so
+// the exchange cannot be downgraded to plain HTTP.
 type oauthExchangeEntry struct {
 	result    *auth.AuthResult
 	binding   string
+	secure    bool
 	expiresAt time.Time
 }
 
@@ -332,9 +363,9 @@ func newOAuthCodeStore() *oauthCodeStore {
 	return s
 }
 
-// NewCode mints a random one-time code bound to binding and remembers result
-// until TTL expiry.
-func (s *oauthCodeStore) NewCode(result *auth.AuthResult, binding string) (string, error) {
+// NewCode mints a random one-time code bound to binding and the request scheme
+// (secure) and remembers result until TTL expiry.
+func (s *oauthCodeStore) NewCode(result *auth.AuthResult, binding string, secure bool) (string, error) {
 	buf := make([]byte, oauthRandomBytes)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("oauth: generate exchange code: %w", err)
@@ -349,6 +380,7 @@ func (s *oauthCodeStore) NewCode(result *auth.AuthResult, binding string) (strin
 	s.entries[code] = oauthExchangeEntry{
 		result:    result,
 		binding:   binding,
+		secure:    secure,
 		expiresAt: s.now().Add(oauthExchangeTTL),
 	}
 
@@ -356,9 +388,10 @@ func (s *oauthCodeStore) NewCode(result *auth.AuthResult, binding string) (strin
 }
 
 // Exchange consumes code and returns the token pair only when binding matches
-// the value stored at callback time (constant-time). It reports ok=false for an
-// unknown, already-consumed, expired, or foreign code.
-func (s *oauthCodeStore) Exchange(code, binding string) (*auth.AuthResult, bool) {
+// the value stored at callback time (constant-time) and the request scheme
+// matches the one recorded at callback (no downgrade). It reports ok=false for
+// an unknown, already-consumed, expired, foreign, or scheme-mismatched code.
+func (s *oauthCodeStore) Exchange(code, binding string, secure bool) (*auth.AuthResult, bool) {
 	s.mu.Lock()
 	entry, ok := s.entries[code]
 	if ok {
@@ -370,6 +403,9 @@ func (s *oauthCodeStore) Exchange(code, binding string) (*auth.AuthResult, bool)
 		return nil, false
 	}
 	if s.now().After(entry.expiresAt) {
+		return nil, false
+	}
+	if entry.secure != secure {
 		return nil, false
 	}
 	if !constantTimeEqual(entry.binding, binding) {

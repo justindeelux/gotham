@@ -32,6 +32,18 @@ const requestTimeout = 15_000;
 /** Refresh endpoint, addressed relative to the current origin. */
 const refreshPath = "/api/v1/auth/refresh";
 
+/**
+ * StaleRefreshError marks a refresh whose session was replaced while it was in
+ * flight (for example by the OAuth exchange). Callers must not expire the newer
+ * session on it.
+ */
+class StaleRefreshError extends Error {
+  constructor() {
+    super("session changed during refresh");
+    this.name = "StaleRefreshError";
+  }
+}
+
 /** Endpoints that must never trigger a refresh-and-retry on 401. */
 const noRefreshPaths = [
   "/auth/login",
@@ -71,8 +83,12 @@ http.interceptors.response.use(
         const accessToken = await refreshAccessToken();
         config.headers.set("Authorization", `Bearer ${accessToken}`);
         return await http.request(config);
-      } catch {
-        expireSession();
+      } catch (refreshError) {
+        // A stale refresh means a newer session replaced this one mid-flight:
+        // keep it instead of clearing it.
+        if (!(refreshError instanceof StaleRefreshError)) {
+          expireSession();
+        }
       }
     }
 
@@ -111,12 +127,25 @@ function refreshAccessToken(): Promise<string> {
       { timeout: requestTimeout, headers: { Accept: "application/json" } },
     )
     .then((response) => {
+      // A newer session landed while this refresh was in flight: keep it rather
+      // than overwriting it with the stale rotation.
+      if (getRefreshToken() !== refreshToken) {
+        throw new StaleRefreshError();
+      }
       setSession({
         user: response.data.user ?? null,
         accessToken: response.data.access_token,
         refreshToken: response.data.refresh_token,
       });
       return response.data.access_token;
+    })
+    .catch((error) => {
+      // A failed refresh for a session that is already gone must not clear the
+      // newer session.
+      if (getRefreshToken() !== refreshToken) {
+        throw new StaleRefreshError();
+      }
+      throw error;
     })
     .finally(() => {
       refreshPromise = null;

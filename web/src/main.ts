@@ -9,4 +9,8 @@ const app = createApp(App);
 
 app.use(createPinia());
 app.use(router);
+
+// Resolve the initial navigation before mounting so route-dependent startup
+// (App.vue's session hydration) observes the real route rather than "/" (G3).
+await router.isReady();
 app.mount("#app");

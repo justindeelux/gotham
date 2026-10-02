@@ -670,7 +670,7 @@ func TestOAuthCodeStoreCleanup(t *testing.T) {
 	base := time.Now()
 	store.now = func() time.Time { return base }
 
-	code, err := store.NewCode(defaultOAuthResult(), testOAuthFlow)
+	code, err := store.NewCode(defaultOAuthResult(), testOAuthFlow, false)
 	if err != nil {
 		t.Fatalf("NewCode: %v", err)
 	}
@@ -691,12 +691,165 @@ func TestOAuthCodeStoreCapacity(t *testing.T) {
 	t.Cleanup(store.Close)
 
 	for i := 0; i < oauthExchangeCapacity; i++ {
-		if _, err := store.NewCode(defaultOAuthResult(), testOAuthFlow); err != nil {
+		if _, err := store.NewCode(defaultOAuthResult(), testOAuthFlow, false); err != nil {
 			t.Fatalf("NewCode #%d: %v", i, err)
 		}
 	}
 
-	if _, err := store.NewCode(defaultOAuthResult(), testOAuthFlow); !errors.Is(err, errOAuthCodeStoreFull) {
+	if _, err := store.NewCode(defaultOAuthResult(), testOAuthFlow, false); !errors.Is(err, errOAuthCodeStoreFull) {
 		t.Fatalf("NewCode past capacity error = %v, want errOAuthCodeStoreFull", err)
+	}
+}
+
+// oauthRawRequest performs an OAuth request with an explicit scheme and cookies,
+// for tests that exercise the HTTPS/HTTP cookie-name and scheme binding.
+func oauthRawRequest(t *testing.T, s *Server, method, path, body string, secure bool, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if secure {
+		req.Header.Set("X-Forwarded-Proto", "https")
+	}
+	for _, cookie := range cookies {
+		req.AddCookie(cookie)
+	}
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+// TestOAuthLoginRejectsInsecureFlowForHTTPSOrigin pins G1: an insecure request
+// must not start a flow that returns to an HTTPS origin.
+func TestOAuthLoginRejectsInsecureFlowForHTTPSOrigin(t *testing.T) {
+	cfg := defaultOAuthConfig()
+	cfg.OAuth.GitHub.RedirectURL = "https://gotham.example/api/v1/auth/oauth/github/callback"
+	s := newOAuthTestServer(t, cfg, &fakeOAuthService{})
+
+	rec := oauthRequest(t, s, "/api/v1/auth/oauth/github/login")
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != oauthFailureRedirect {
+		t.Fatalf("Location = %q, want %s", loc, oauthFailureRedirect)
+	}
+}
+
+// TestOAuthExchangeRejectsSchemeDowngrade pins G1: a code issued over HTTPS
+// cannot be redeemed over plain HTTP, even with the matching binding value.
+func TestOAuthExchangeRejectsSchemeDowngrade(t *testing.T) {
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
+
+	callback := oauthRawRequest(t, s, http.MethodGet,
+		"/api/v1/auth/oauth/github/callback?state=test-state&code=auth-code", "", true,
+		&http.Cookie{Name: auth.StateCookieNameSecure, Value: "test-state"},
+		&http.Cookie{Name: auth.FlowCookieNameSecure, Value: testOAuthFlow})
+	if callback.Code != http.StatusFound {
+		t.Fatalf("callback status = %d, want 302", callback.Code)
+	}
+	code := exchangeCodeFromLocation(t, callback.Header().Get("Location"))
+
+	downgrade := oauthExchangePost(t, s, code, testOAuthFlow)
+	if downgrade.Code != http.StatusUnauthorized {
+		t.Fatalf("downgraded exchange status = %d, want 401 (body %s)", downgrade.Code, downgrade.Body.String())
+	}
+}
+
+// TestOAuthExchangeSecureFlow proves the HTTPS path works end to end with the
+// __Host- cookie names.
+func TestOAuthExchangeSecureFlow(t *testing.T) {
+	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
+
+	login := oauthRawRequest(t, s, http.MethodGet, "/api/v1/auth/oauth/github/login", "", true)
+	if login.Code != http.StatusFound {
+		t.Fatalf("login status = %d, want 302", login.Code)
+	}
+	flow := setCookieValue(login, auth.FlowCookieNameSecure)
+	if flow == nil {
+		t.Fatal("secure flow cookie not set")
+	}
+
+	callback := oauthRawRequest(t, s, http.MethodGet,
+		"/api/v1/auth/oauth/github/callback?state=test-state&code=auth-code", "", true,
+		&http.Cookie{Name: auth.StateCookieNameSecure, Value: "test-state"},
+		&http.Cookie{Name: auth.FlowCookieNameSecure, Value: flow.Value})
+	code := exchangeCodeFromLocation(t, callback.Header().Get("Location"))
+
+	exchange := oauthRawRequest(t, s, http.MethodPost, "/api/v1/auth/oauth/exchange",
+		`{"code":`+strconv.Quote(code)+`}`, true,
+		&http.Cookie{Name: auth.FlowCookieNameSecure, Value: flow.Value})
+	if exchange.Code != http.StatusOK {
+		t.Fatalf("secure exchange status = %d, want 200 (body %s)", exchange.Code, exchange.Body.String())
+	}
+}
+
+// TestOAuthHTTPDevFlowEndToEnd proves the explicit http redirect-base path still
+// works end to end over plain HTTP.
+func TestOAuthHTTPDevFlowEndToEnd(t *testing.T) {
+	cfg := defaultOAuthConfig()
+	cfg.OAuth.GitHub.RedirectURL = "http://localhost:8000/api/v1/auth/oauth/github/callback"
+	s := newOAuthTestServer(t, cfg, &fakeOAuthService{callback: defaultOAuthResult()})
+
+	login := oauthRawRequest(t, s, http.MethodGet, "/api/v1/auth/oauth/github/login", "", false)
+	if login.Code != http.StatusFound {
+		t.Fatalf("login status = %d, want 302 (body %s)", login.Code, login.Body.String())
+	}
+	flow := setCookieValue(login, auth.FlowCookieName)
+	if flow == nil {
+		t.Fatal("plain flow cookie not set")
+	}
+
+	callback := oauthRawRequest(t, s, http.MethodGet,
+		"/api/v1/auth/oauth/github/callback?state=test-state&code=auth-code", "", false,
+		&http.Cookie{Name: auth.StateCookieName, Value: "test-state"},
+		&http.Cookie{Name: auth.FlowCookieName, Value: flow.Value})
+	code := exchangeCodeFromLocation(t, callback.Header().Get("Location"))
+
+	exchange := oauthRawRequest(t, s, http.MethodPost, "/api/v1/auth/oauth/exchange",
+		`{"code":`+strconv.Quote(code)+`}`, false,
+		&http.Cookie{Name: auth.FlowCookieName, Value: flow.Value})
+	if exchange.Code != http.StatusOK {
+		t.Fatalf("HTTP dev exchange status = %d, want 200 (body %s)", exchange.Code, exchange.Body.String())
+	}
+}
+
+// TestOAuthLogoutClearsBothCookieNameSets pins G2: an HTTPS logout clears the
+// plain HTTP pair too (and vice versa).
+func TestOAuthLogoutClearsBothCookieNameSets(t *testing.T) {
+	s := newOAuthTestServerWithAuth(t, defaultOAuthConfig(), &fakeOAuthService{})
+
+	// An HTTP login leaves the plain pair in the browser.
+	login := oauthRawRequest(t, s, http.MethodGet, "/api/v1/auth/oauth/github/login", "", false)
+	if setCookieValue(login, auth.FlowCookieName) == nil {
+		t.Fatal("plain flow cookie not set")
+	}
+
+	// An HTTPS logout must clear both name sets.
+	logout := oauthRawRequest(t, s, http.MethodPost, "/api/v1/auth/logout",
+		`{"refresh_token":"refresh-token"}`, true)
+	if logout.Code != http.StatusNoContent {
+		t.Fatalf("logout status = %d, want 204", logout.Code)
+	}
+	for _, name := range []string{
+		auth.StateCookieName,
+		auth.FlowCookieName,
+		auth.StateCookieNameSecure,
+		auth.FlowCookieNameSecure,
+	} {
+		cookie := setCookieValue(logout, name)
+		if cookie == nil || cookie.MaxAge >= 0 {
+			t.Errorf("%s not cleared: %+v", name, cookie)
+		}
+	}
+	if cookie := setCookieValue(logout, auth.FlowCookieNameSecure); cookie != nil && !cookie.Secure {
+		t.Error("__Host- deletion is not Secure")
 	}
 }

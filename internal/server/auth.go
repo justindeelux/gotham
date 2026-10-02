@@ -186,6 +186,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A registration starts a fresh session: drop any pending OAuth exchange
+	// cookies so a stalled callback cannot overwrite it.
+	s.clearOAuthCookies(w, r)
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
@@ -210,6 +213,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A password login replaces any pending OAuth exchange: drop the protocol
+	// cookies so a paused callback link cannot redeem after the fact.
+	s.clearOAuthCookies(w, r)
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
@@ -245,6 +251,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if err := s.auth.Logout(r.Context(), req.RefreshToken); err != nil {
 		s.logger.Warn("auth: logout", "error", err)
 	}
+	// A logged-out browser must not be able to redeem a pending OAuth exchange.
+	s.clearOAuthCookies(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 

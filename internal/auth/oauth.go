@@ -17,10 +17,21 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// StateCookieName is the cookie carrying the OAuth anti-CSRF state between the
-// login redirect and the provider callback. The HTTP layer owns writing it; the
-// name lives here so both sides agree.
-const StateCookieName = "gotham_oauth_state"
+// OAuth protocol cookie names. On a secure request the server uses the
+// __Host- prefixed names: browsers require Secure, Path=/ and no Domain for a
+// __Host- cookie, so a sibling subdomain cannot plant a shadowing cookie. The
+// plain names are used over insecure (development) HTTP, where the __Host-
+// prefix cannot be enforced.
+const (
+	// StateCookieName is the anti-CSRF state cookie on insecure requests.
+	StateCookieName = "gotham_oauth_state"
+	// FlowCookieName binds a login flow to the browser on insecure requests.
+	FlowCookieName = "gotham_oauth_flow"
+	// StateCookieNameSecure is the __Host- state cookie used over HTTPS.
+	StateCookieNameSecure = "__Host-gotham_oauth_state"
+	// FlowCookieNameSecure is the __Host- flow cookie used over HTTPS.
+	FlowCookieNameSecure = "__Host-gotham_oauth_flow"
+)
 
 // OAuth state bookkeeping. A state is single-use and expires after stateTTL;
 // expired entries are swept by a background goroutine.
@@ -28,7 +39,14 @@ const (
 	oauthStateTTL           = 10 * time.Minute
 	oauthStateCleanupPeriod = time.Minute
 	oauthStateBytes         = 32
+	// oauthStateCapacity bounds how many outstanding states the store keeps, so
+	// a flood of login starts cannot grow it without limit. NewState refuses
+	// once the cap is hit; the caller answers a generic error.
+	oauthStateCapacity = 10000
 )
+
+// errStateStoreFull reports that the OAuth state store hit its capacity cap.
+var errStateStoreFull = errors.New("auth: oauth state store full")
 
 // OAuthProvider abstracts an OAuth2 identity provider so the service can drive
 // several of them uniformly.
@@ -242,7 +260,7 @@ func newStateStore() *stateStore {
 }
 
 // NewState mints a random state bound to provider and remembers it until TTL
-// expiry.
+// expiry. It refuses with errStateStoreFull once the store is at capacity.
 func (s *stateStore) NewState(provider string) (string, error) {
 	buf := make([]byte, oauthStateBytes)
 	if _, err := rand.Read(buf); err != nil {
@@ -251,11 +269,14 @@ func (s *stateStore) NewState(provider string) (string, error) {
 	state := base64.RawURLEncoding.EncodeToString(buf)
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.entries) >= oauthStateCapacity {
+		return "", errStateStoreFull
+	}
 	s.entries[state] = oauthStateEntry{
 		provider:  provider,
 		expiresAt: s.now().Add(oauthStateTTL),
 	}
-	s.mu.Unlock()
 
 	return state, nil
 }

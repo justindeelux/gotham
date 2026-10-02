@@ -78,13 +78,24 @@ export const useAuthStore = defineStore("auth", () => {
     clearStoredSession();
   }
 
-  /** fetchMe refreshes the account from GET /auth/me, clearing on 401. */
+  /**
+   * fetchMe refreshes the account from GET /auth/me, clearing on 401. A
+   * response that resolves after the session changed (for example the OAuth
+   * exchange installed a new one) is discarded so it cannot overwrite it.
+   */
   async function fetchMe(): Promise<void> {
+    const tokenAtStart = accessToken.value;
     try {
       const response = await http.get<{ user: User }>("/auth/me");
+      if (accessToken.value !== tokenAtStart) {
+        return;
+      }
       user.value = response.data.user;
       persist();
     } catch (error) {
+      if (accessToken.value !== tokenAtStart) {
+        return;
+      }
       if (isUnauthorized(error)) {
         clearSession();
       }

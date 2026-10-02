@@ -32,8 +32,34 @@ const requestTimeout = 15_000;
 /** Refresh endpoint, addressed relative to the current origin. */
 const refreshPath = "/api/v1/auth/refresh";
 
+/**
+ * StaleRefreshError marks a refresh whose session was replaced while it was in
+ * flight (for example by the OAuth exchange). Callers must not expire the newer
+ * session on it.
+ */
+class StaleRefreshError extends Error {
+  constructor() {
+    super("session changed during refresh");
+    this.name = "StaleRefreshError";
+  }
+}
+
+/**
+ * isStaleRefreshError reports whether error is a stale-refresh rejection, i.e.
+ * a newer session replaced the one a refresh or retry was working on. Callers
+ * must not expire the replacement session for it.
+ */
+export function isStaleRefreshError(error: unknown): boolean {
+  return error instanceof StaleRefreshError;
+}
+
 /** Endpoints that must never trigger a refresh-and-retry on 401. */
-const noRefreshPaths = ["/auth/login", "/auth/register", "/auth/refresh"];
+const noRefreshPaths = [
+  "/auth/login",
+  "/auth/register",
+  "/auth/refresh",
+  "/auth/oauth/exchange",
+];
 
 /** Shared axios instance for the `/api/v1` control-plane API. */
 export const http: AxiosInstance = axios.create({
@@ -62,12 +88,31 @@ http.interceptors.response.use(
 
     if (shouldRefresh(error, config)) {
       config._retry = true;
+      // Identity of the session that starts the refresh. A replacement installed
+      // at any point before this handler decides to expire must survive.
+      const tokenBeforeRefresh = getRefreshToken();
+      // Identity after a successful refresh (the rotated token), used to tell
+      // whether a replacement landed before a failed retry.
+      let tokenBeforeRetry: string | null | undefined;
       try {
         const accessToken = await refreshAccessToken();
         config.headers.set("Authorization", `Bearer ${accessToken}`);
+        tokenBeforeRetry = getRefreshToken();
         return await http.request(config);
-      } catch {
-        expireSession();
+      } catch (refreshError) {
+        if (!(refreshError instanceof StaleRefreshError)) {
+          // The refresh (or a retry after it) failed. Expire only if the
+          // session that started it is still current: a replacement installed
+          // meanwhile is preserved. After a successful refresh the rotated
+          // token is that session's identity, otherwise the pre-refresh one is.
+          const sessionAtFailure =
+            tokenBeforeRetry !== undefined
+              ? tokenBeforeRetry
+              : tokenBeforeRefresh;
+          if (getRefreshToken() === sessionAtFailure) {
+            expireSession();
+          }
+        }
       }
     }
 
@@ -106,12 +151,25 @@ function refreshAccessToken(): Promise<string> {
       { timeout: requestTimeout, headers: { Accept: "application/json" } },
     )
     .then((response) => {
+      // A newer session landed while this refresh was in flight: keep it rather
+      // than overwriting it with the stale rotation.
+      if (getRefreshToken() !== refreshToken) {
+        throw new StaleRefreshError();
+      }
       setSession({
         user: response.data.user ?? null,
         accessToken: response.data.access_token,
         refreshToken: response.data.refresh_token,
       });
       return response.data.access_token;
+    })
+    .catch((error) => {
+      // A failed refresh for a session that is already gone must not clear the
+      // newer session.
+      if (getRefreshToken() !== refreshToken) {
+        throw new StaleRefreshError();
+      }
+      throw error;
     })
     .finally(() => {
       refreshPromise = null;

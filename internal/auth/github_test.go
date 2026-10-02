@@ -59,7 +59,12 @@ func TestGitHubProviderIdentityVerifiedFallback(t *testing.T) {
 			_, _ = w.Write([]byte(`{}`))
 			return
 		}
-		_, _ = w.Write([]byte(`[{"email":"verified@example.com","primary":false,"verified":true}]`))
+		// An unverified primary must be skipped in favour of the verified
+		// secondary address.
+		_, _ = w.Write([]byte(`[
+			{"email":"unverified-primary@example.com","primary":true,"verified":false},
+			{"email":"verified@example.com","primary":false,"verified":true}
+		]`))
 	}))
 	defer srv.Close()
 
@@ -71,6 +76,25 @@ func TestGitHubProviderIdentityVerifiedFallback(t *testing.T) {
 	}
 	if identity.Email != "verified@example.com" {
 		t.Errorf("Email = %q, want verified@example.com", identity.Email)
+	}
+}
+
+func TestGitHubProviderIdentityRejectsUnverifiedPrimary(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/user" {
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		// GitHub lets a user set an address primary before verifying it, so a
+		// primary-but-unverified address must never authenticate the account.
+		_, _ = w.Write([]byte(`[{"email":"victim@example.com","primary":true,"verified":false}]`))
+	}))
+	defer srv.Close()
+
+	provider := newTestGitHubProvider(t, srv.URL)
+
+	if _, err := provider.Identity(context.Background(), &oauth2.Token{AccessToken: "token"}); !errors.Is(err, ErrMissingEmail) {
+		t.Fatalf("Identity error = %v, want ErrMissingEmail", err)
 	}
 }
 

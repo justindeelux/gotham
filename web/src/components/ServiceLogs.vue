@@ -2,9 +2,9 @@
 import { NButton, NSelect, NTooltip } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 
-import { expireSession, refreshSession } from "../api/http";
+import { expireSession, isStaleRefreshError, refreshSession } from "../api/http";
 import { describeServiceError, serviceLogsPath } from "../api/services";
-import { getAccessToken } from "../api/token";
+import { getAccessToken, getRefreshToken } from "../api/token";
 
 /**
  * Live log terminal for one compose service.
@@ -160,13 +160,21 @@ async function openStream(signal: AbortSignal): Promise<Response> {
 
   let response = await request();
   if (response.status === 401) {
+    // The session that starts the refresh; a replacement installed before this
+    // handler decides to expire must survive.
+    const tokenBeforeRefresh = getRefreshToken();
     try {
       await refreshSession();
-    } catch {
-      // Same exit as the axios interceptor: drop the session and redirect to
-      // the login page instead of leaving the reader on a dead session.
-      expireSession();
-      throw new Error(sessionExpiredMessage);
+    } catch (error) {
+      const stillCurrent = getRefreshToken() === tokenBeforeRefresh;
+      if (!isStaleRefreshError(error) && stillCurrent) {
+        // Genuine auth failure for the current session: drop it and redirect to
+        // the login page instead of leaving the reader on a dead session.
+        expireSession();
+        throw new Error(sessionExpiredMessage);
+      }
+      // A newer session replaced this one mid-refresh: keep it and retry the
+      // request with its token below.
     }
     response = await request();
   }

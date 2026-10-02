@@ -86,6 +86,9 @@ type Server struct {
 	authLimiter       *ipRateLimiter
 	router            http.Handler
 	closer            func()
+
+	// oauthCodes holds one-time OAuth exchange codes and their browser binding.
+	oauthCodes *oauthCodeStore
 }
 
 // New constructs a Server bound to cfg and logging through logger. The
@@ -128,6 +131,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		redis:             redisClient,
 		auth:              authService,
 		oauth:             oauthService,
+		oauthCodes:        newOAuthCodeStore(),
 		tokens:            tokenService,
 		servers:           serverService,
 		persistence:       st,
@@ -158,6 +162,9 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		limiter.Close()
 		if oauthService != nil {
 			oauthService.Close()
+		}
+		if s.oauthCodes != nil {
+			s.oauthCodes.Close()
 		}
 	}
 

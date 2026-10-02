@@ -62,6 +62,17 @@ type fakeRepository struct {
 	secretWrites int
 	secretFail   error
 
+	// statusErr, when set, fails UpdateDatabaseStatus. statusErrFor narrows it
+	// to one target status (empty = every status), so a test can fail the
+	// "running" transition while the "error" transition still succeeds.
+	statusErr    error
+	statusErrFor Status
+
+	// softDeleteContainerID, when set, records a container id on the row at
+	// the moment it is soft-deleted, modelling a provision that persisted its
+	// container id between delete's read and its soft-delete.
+	softDeleteContainerID string
+
 	// afterCreate runs after a row is stored, letting a test interleave a
 	// concurrent action (a delete that races provisioning) deterministically.
 	afterCreate func(Database)
@@ -188,7 +199,10 @@ func (r *fakeRepository) liveRow(databaseID uuid.UUID) (Database, bool) {
 
 // UpdateDatabaseName implements Repository, scoped to the name column so it
 // cannot clobber a concurrent status or container-id write.
-func (r *fakeRepository) UpdateDatabaseName(_ context.Context, databaseID uuid.UUID, name string) (Database, error) {
+func (r *fakeRepository) UpdateDatabaseName(ctx context.Context, databaseID uuid.UUID, name string) (Database, error) {
+	if err := ctx.Err(); err != nil {
+		return Database{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.updateError(); err != nil {
@@ -212,7 +226,10 @@ func (r *fakeRepository) UpdateDatabaseName(_ context.Context, databaseID uuid.U
 }
 
 // UpdateDatabaseContainer implements Repository, scoped to the container id.
-func (r *fakeRepository) UpdateDatabaseContainer(_ context.Context, databaseID uuid.UUID, containerID string) (Database, error) {
+func (r *fakeRepository) UpdateDatabaseContainer(ctx context.Context, databaseID uuid.UUID, containerID string) (Database, error) {
+	if err := ctx.Err(); err != nil {
+		return Database{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.updateError(); err != nil {
@@ -229,11 +246,17 @@ func (r *fakeRepository) UpdateDatabaseContainer(_ context.Context, databaseID u
 }
 
 // UpdateDatabaseStatus implements Repository, scoped to the status column.
-func (r *fakeRepository) UpdateDatabaseStatus(_ context.Context, databaseID uuid.UUID, status Status) (Database, error) {
+func (r *fakeRepository) UpdateDatabaseStatus(ctx context.Context, databaseID uuid.UUID, status Status) (Database, error) {
+	if err := ctx.Err(); err != nil {
+		return Database{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.updateError(); err != nil {
 		return Database{}, err
+	}
+	if r.statusErr != nil && (r.statusErrFor == "" || r.statusErrFor == status) {
+		return Database{}, r.statusErr
 	}
 	stored, ok := r.liveRow(databaseID)
 	if !ok {
@@ -262,7 +285,10 @@ func (r *fakeRepository) PublicPortInUse(_ context.Context, serverID uuid.UUID, 
 }
 
 // DeleteDatabaseSecrets implements Repository.
-func (r *fakeRepository) DeleteDatabaseSecrets(_ context.Context, databaseID uuid.UUID) error {
+func (r *fakeRepository) DeleteDatabaseSecrets(ctx context.Context, databaseID uuid.UUID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.deleteSecretsErr != nil {
@@ -273,7 +299,10 @@ func (r *fakeRepository) DeleteDatabaseSecrets(_ context.Context, databaseID uui
 }
 
 // SoftDeleteDatabase implements Repository.
-func (r *fakeRepository) SoftDeleteDatabase(_ context.Context, databaseID uuid.UUID) (Database, error) {
+func (r *fakeRepository) SoftDeleteDatabase(ctx context.Context, databaseID uuid.UUID) (Database, error) {
+	if err := ctx.Err(); err != nil {
+		return Database{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.softDeleteErr != nil {
@@ -282,6 +311,11 @@ func (r *fakeRepository) SoftDeleteDatabase(_ context.Context, databaseID uuid.U
 	database, ok := r.databases[databaseID]
 	if !ok || !r.live(database) {
 		return Database{}, ErrNotFound
+	}
+	// Model a provisioning write that persisted its container id after the
+	// delete read: the returned row carries the id at delete time.
+	if r.softDeleteContainerID != "" && database.ContainerID == "" {
+		database.ContainerID = r.softDeleteContainerID
 	}
 	database.Status = StatusDeleting
 	database.DeletedAt = time.Now().UTC()
@@ -447,7 +481,10 @@ func (f *fakeContainers) Restart(context.Context, uuid.UUID, string) error {
 	return f.restartErr
 }
 
-func (f *fakeContainers) Remove(_ context.Context, serverID uuid.UUID, containerID string) error {
+func (f *fakeContainers) Remove(ctx context.Context, serverID uuid.UUID, containerID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "remove")

@@ -33,6 +33,12 @@ func Enabled() bool {
 // when the engine declares no interval of its own.
 const defaultHealthPoll = 500 * time.Millisecond
 
+// cleanupTimeout bounds every cancel-independent cleanup write (mark error,
+// roll back credentials, remove a container). A client disconnect or proxy
+// timeout must not leave a row creating or a container unmanaged, so these
+// run on a context detached from the request but with their own deadline.
+const cleanupTimeout = 30 * time.Second
+
 // namePattern is the API-facing database name: a Docker-safe identifier of
 // 1–63 characters. It is also what the derived SQL identifier is built from.
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
@@ -292,10 +298,18 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	}
 	updated, err = s.repo.UpdateDatabaseStatus(ctx, stored.ID, StatusRunning)
 	if err != nil {
-		// The row was soft-deleted while provisioning (the status write is
-		// fenced on the row being live); remove the container so delete's
-		// promise holds even though the provisioning path lost the race.
-		s.removeContainer(ctx, stored.ServerID, stored.ContainerID)
+		if errors.Is(err, ErrNotFound) {
+			// The row was soft-deleted while provisioning (the status write is
+			// fenced on the row being live): delete has won and the container
+			// must go with it.
+			s.removeContainer(ctx, stored.ServerID, stored.ContainerID)
+			return Database{}, Credentials{}, err
+		}
+		// Any other failure is transient, not a delete: keep the container so
+		// the row stays recoverable (Start can still reach it) and mark the
+		// row terminal error. Removing the container here would strand a
+		// healthy database that a single failed UPDATE should not destroy.
+		s.markError(ctx, stored, err)
 		return Database{}, Credentials{}, err
 	}
 	return updated, credentials, nil
@@ -569,12 +583,22 @@ func (s *Service) setStatus(ctx context.Context, database Database, status Statu
 	return s.repo.UpdateDatabaseStatus(ctx, database.ID, status)
 }
 
+// cleanupContext returns a context detached from the request cancellation
+// (context.WithoutCancel) but bounded by cleanupTimeout, so cleanup writes and
+// container removals finish even after a client disconnect while still having
+// a deadline of their own.
+func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+}
+
 // markError flips a database to the error state after a failed provision or
 // lifecycle action. Failures are logged only: the original error is what the
 // caller sees, and a second write must not mask it. A fenced write means the
 // row was deleted while the action was in flight — the intended outcome for a
 // lost race with delete.
 func (s *Service) markError(ctx context.Context, database Database, cause error) {
+	ctx, cancel := cleanupContext(ctx)
+	defer cancel()
 	if _, err := s.repo.UpdateDatabaseStatus(ctx, database.ID, StatusError); err != nil {
 		s.logger.Error("databases: could not mark the database as errored",
 			"database_id", database.ID.String(), "error", err)
@@ -601,6 +625,8 @@ func (s *Service) ensureImage(ctx context.Context, database Database, image stri
 // create is being abandoned. Failures are logged only: the create error is
 // what the caller sees, and a stray ciphertext row is not a credential leak.
 func (s *Service) rollbackCredentials(ctx context.Context, database Database) {
+	ctx, cancel := cleanupContext(ctx)
+	defer cancel()
 	if err := s.repo.DeleteDatabaseSecrets(ctx, database.ID); err != nil {
 		s.logger.Warn("databases: could not roll back credentials after a failed create",
 			"database_id", database.ID.String(), "error", err)
@@ -615,6 +641,8 @@ func (s *Service) removeContainer(ctx context.Context, serverID uuid.UUID, conta
 	if strings.TrimSpace(containerID) == "" {
 		return
 	}
+	ctx, cancel := cleanupContext(ctx)
+	defer cancel()
 	if err := s.containers.Remove(ctx, serverID, containerID); err != nil &&
 		!errors.Is(err, containers.ErrContainerNotFound) &&
 		!errors.Is(err, containers.ErrServerNotFound) {

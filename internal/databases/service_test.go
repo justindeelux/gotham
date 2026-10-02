@@ -1102,6 +1102,149 @@ func TestCreateMapsDockerPortConflict(t *testing.T) {
 	}
 }
 
+// TestCreateStatusWriteTransientFailureKeepsContainer (U1): only a fenced
+// (not-found) status write means delete won. Any other status-write failure is
+// transient, so the row becomes terminal error and the healthy container is
+// kept recoverable instead of being destroyed by one failed UPDATE.
+func TestCreateStatusWriteTransientFailureKeepsContainer(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{runID: "container-1"}
+	svc := newTestService(repo, cs)
+	owner := uuid.New()
+
+	var createdID uuid.UUID
+	repo.afterCreate = func(d Database) { createdID = d.ID }
+	repo.statusErrFor = StatusRunning
+	repo.statusErr = errors.New("transient status write failure")
+
+	if _, _, err := svc.Create(context.Background(), owner, CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID,
+	}); err == nil {
+		t.Fatal("Create should fail on a transient status write")
+	}
+
+	row, err := svc.Get(context.Background(), owner, createdID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if row.Status != StatusError {
+		t.Errorf("status = %q, want a terminal error", row.Status)
+	}
+	if row.ContainerID != "container-1" {
+		t.Errorf("container_id = %q, want the healthy container kept", row.ContainerID)
+	}
+	cs.mu.Lock()
+	removes := append([]string(nil), cs.removes...)
+	cs.mu.Unlock()
+	if len(removes) != 0 {
+		t.Errorf("removes = %v, want the container kept for recovery", removes)
+	}
+}
+
+// TestCreateStatusWriteFencedByDeleteRemovesContainer (U1): the fenced case —
+// the status write reports ErrNotFound because delete won — still removes the
+// container.
+func TestCreateStatusWriteFencedByDeleteRemovesContainer(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{runID: "container-1"}
+	svc := newTestService(repo, cs)
+
+	repo.statusErrFor = StatusRunning
+	repo.statusErr = ErrNotFound
+
+	if _, _, err := svc.Create(context.Background(), uuid.New(), CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID,
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Create error = %v, want ErrNotFound", err)
+	}
+	cs.mu.Lock()
+	removes := append([]string(nil), cs.removes...)
+	cs.mu.Unlock()
+	if len(removes) != 1 || removes[0] != "container-1" {
+		t.Fatalf("removes = %v, want the fenced container removed", removes)
+	}
+}
+
+// TestCreateCleanupSurvivesRequestCancellation (U2): a client disconnect
+// during provisioning must not leave a row creating or a container
+// unmanaged — cleanup runs on a context detached from the request.
+func TestCreateCleanupSurvivesRequestCancellation(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{runID: "container-1"}
+	svc := newTestService(repo, cs)
+	owner := uuid.New()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var createdID uuid.UUID
+	repo.afterCreate = func(d Database) { createdID = d.ID }
+	// Cancel the request while the container is starting: the container-id
+	// write then fails with context.Canceled.
+	cs.afterRun = cancel
+
+	if _, _, err := svc.Create(ctx, owner, CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID,
+	}); err == nil {
+		t.Fatal("Create should fail once the request context is canceled")
+	}
+
+	row, err := svc.Get(context.Background(), owner, createdID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if row.Status != StatusError {
+		t.Errorf("status = %q, want error (cleanup must ignore the cancel)", row.Status)
+	}
+	cs.mu.Lock()
+	removes := append([]string(nil), cs.removes...)
+	servers := append([]uuid.UUID(nil), cs.removeServers...)
+	cs.mu.Unlock()
+	if len(removes) != 1 || removes[0] != "container-1" {
+		t.Errorf("removes = %v, want the started container removed despite the cancel", removes)
+	}
+	if len(servers) != 1 || servers[0] != serverID {
+		t.Errorf("remove servers = %v, want %s", servers, serverID)
+	}
+}
+
+// TestDeleteRemovesContainerPersistedAfterRead (U4): a provision that persists
+// its container id between Delete's read and its soft delete is still removed
+// — exactly once.
+func TestDeleteRemovesContainerPersistedAfterRead(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{}
+	svc := newTestService(repo, cs)
+	owner := uuid.New()
+	row := repo.seed(Database{
+		UserID: owner, ServerID: serverID, Name: "orders",
+		Engine: EnginePostgres, Status: StatusCreating,
+	})
+	// The provision persists its container id as the delete lands; the row
+	// returned by the soft delete carries it.
+	repo.softDeleteContainerID = "late-container"
+
+	if err := svc.Delete(context.Background(), owner, row.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	cs.mu.Lock()
+	removes := append([]string(nil), cs.removes...)
+	servers := append([]uuid.UUID(nil), cs.removeServers...)
+	cs.mu.Unlock()
+	if len(removes) != 1 || removes[0] != "late-container" {
+		t.Fatalf("removes = %v, want exactly the late-persisted container", removes)
+	}
+	if len(servers) != 1 || servers[0] != serverID {
+		t.Errorf("remove servers = %v, want %s", servers, serverID)
+	}
+	if _, err := svc.Get(context.Background(), owner, row.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get = %v, want the row to stay deleted", err)
+	}
+}
+
 // errOf runs fn and returns its error, which keeps the ownership table
 // readable.
 func errOf(fn func() error) error { return fn() }

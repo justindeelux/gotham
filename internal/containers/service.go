@@ -521,6 +521,12 @@ var portConflictMarkers = []string{
 
 // isPortConflictMessage reports whether a Docker (or agent) error message
 // describes a host-port bind collision.
+//
+// Scope: the heuristic applies to every container RPC mapped through
+// mapRPCError, not just Run. The current agent proto carries no typed
+// port-conflict error, so the daemon text is the only signal across gRPC; a
+// false positive can only reclassify an Internal failure as a conflict, and
+// it is replaced by a typed status the moment the proto grows one.
 func isPortConflictMessage(message string) bool {
 	message = strings.ToLower(message)
 	for _, marker := range portConflictMarkers {

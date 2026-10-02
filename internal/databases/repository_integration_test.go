@@ -258,6 +258,34 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("other user's list = %+v, want their one row", otherList)
 	}
 
+	// A soft-deleted row no longer reserves its port: the SQL fence must
+	// ignore it in PublicPortInUse (adding this row after the list check
+	// keeps the earlier counts stable).
+	portRow, err := repo.CreateDatabase(ctx, Database{
+		ID:          uuid.New(),
+		UserID:      ownerID,
+		ServerID:    serverID,
+		Name:        "port-check",
+		Engine:      EnginePostgres,
+		Status:      StatusCreating,
+		PublicPort:  5555,
+		StoragePath: "gotham-db-" + uuid.New().String(),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase (port-check): %v", err)
+	}
+	if inUse, err := repo.PublicPortInUse(ctx, serverID, 5555); err != nil || !inUse {
+		t.Errorf("PublicPortInUse(port-check live) = %v, %v, want true", inUse, err)
+	}
+	if _, err := repo.SoftDeleteDatabase(ctx, portRow.ID); err != nil {
+		t.Fatalf("SoftDeleteDatabase (port-check): %v", err)
+	}
+	if inUse, err := repo.PublicPortInUse(ctx, serverID, 5555); err != nil || inUse {
+		t.Errorf("PublicPortInUse(port-check deleted) = %v, %v, want false", inUse, err)
+	}
+
 	// Soft delete hides the row and frees the name for reuse.
 	deleted, err := repo.SoftDeleteDatabase(ctx, renamed.ID)
 	if err != nil {
@@ -271,6 +299,20 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	}
 	if _, err := repo.SoftDeleteDatabase(ctx, renamed.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second SoftDeleteDatabase = %v, want ErrNotFound", err)
+	}
+	// The fence is the SQL WHERE deleted_at IS NULL, not the fake: every
+	// scoped provisioning write must report no row on a soft-deleted row.
+	if _, err := repo.UpdateDatabaseName(ctx, renamed.ID, "zombie"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateDatabaseName after delete = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.UpdateDatabaseContainer(ctx, renamed.ID, "zombie-container"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateDatabaseContainer after delete = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.UpdateDatabaseStatus(ctx, renamed.ID, StatusRunning); !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateDatabaseStatus after delete = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.GetDatabase(ctx, renamed.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("row resurrected after fenced writes: %v", err)
 	}
 	recreated := renamed
 	recreated.ID = uuid.New()

@@ -6,6 +6,11 @@ import "context"
 type ImageBuildOptions struct {
 	// Tag is the fully qualified image tag the builder must apply.
 	Tag string
+	// Engine names the build engine the builder must run. The zero value and
+	// EngineDockerfile/EngineStatic mean "build the context as a Dockerfile";
+	// EngineRailpack and EngineBuildpacks mean "run the toolchain in the
+	// extracted context".
+	Engine EngineKind
 	// Dockerfile is the Dockerfile path relative to the context root.
 	Dockerfile string
 	// BuildArgs are passed as --build-arg pairs.

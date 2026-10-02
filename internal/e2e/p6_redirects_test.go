@@ -57,7 +57,7 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	defer cancel()
 	logger := testLogger(t)
 
-	engine, err := agent.NewDockerClient(e2eDockerSock())
+	engine, err := agent.NewDockerClient(e2eDockerSock(), agent.WithRegistryStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("docker client for %s: %v", e2eDockerSock(), err)
 	}

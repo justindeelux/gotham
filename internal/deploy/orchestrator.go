@@ -400,17 +400,15 @@ func (o *Orchestrator) build(ctx context.Context, st *runState) error {
 	return nil
 }
 
-// push makes sure the built image is usable from the node. A build that ran
-// on the node already pushed to the node-local registry, so this confirms the
-// reference resolves; a control-plane toolchain build (railpack/buildpacks)
-// has no transport to the node yet — the agent exposes no image-upload RPC and
-// the node registry binds loopback only — so the reference is logged and the
-// start step will fail clearly when the node cannot see the image.
+// push makes sure the built image is usable from the node before any running
+// container is retired. Every engine now builds through the node and returns a
+// registry reference, so a missing reference is a hard error: retiring the
+// previous container and only then discovering the image is absent would take
+// the application down with no replacement.
 func (o *Orchestrator) push(ctx context.Context, st *runState) error {
 	if strings.TrimSpace(st.dep.RegistryImage) == "" {
-		st.log("image " + st.dep.ImageTag + " was built on the control plane; " +
-			"no node registry push is possible for this engine — it must already be present on the node")
-		return nil
+		return fmt.Errorf("%w: image %s was not pushed to the node registry; refusing to retire the running container",
+			ErrValidation, st.dep.ImageTag)
 	}
 	if err := st.node.Pull(ctx, st.dep.RegistryImage); err != nil {
 		return err

@@ -52,15 +52,15 @@ func TestEngineDetectMatrix(t *testing.T) {
 		{"static/dockerfile", NewStaticEngine(nil), "dockerfile", false},
 		{"static/empty", NewStaticEngine(nil), "empty", false},
 
-		{"railpack/node", NewRailpackEngine(), "node", true},
-		{"railpack/go", NewRailpackEngine(), "go", true},
-		{"railpack/cnb", NewRailpackEngine(), "cnb", false},
-		{"railpack/static", NewRailpackEngine(), "static", false},
-		{"railpack/dockerfile", NewRailpackEngine(), "dockerfile", false},
+		{"railpack/node", NewRailpackEngine(nil), "node", true},
+		{"railpack/go", NewRailpackEngine(nil), "go", true},
+		{"railpack/cnb", NewRailpackEngine(nil), "cnb", false},
+		{"railpack/static", NewRailpackEngine(nil), "static", false},
+		{"railpack/dockerfile", NewRailpackEngine(nil), "dockerfile", false},
 
-		{"buildpacks/cnb", NewBuildpacksEngine(), "cnb", true},
-		{"buildpacks/node", NewBuildpacksEngine(), "node", false},
-		{"buildpacks/static", NewBuildpacksEngine(), "static", false},
+		{"buildpacks/cnb", NewBuildpacksEngine(nil), "cnb", true},
+		{"buildpacks/node", NewBuildpacksEngine(nil), "node", false},
+		{"buildpacks/static", NewBuildpacksEngine(nil), "static", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -75,8 +75,8 @@ func TestEngineDetectExplicitHint(t *testing.T) {
 	dirs := buildFixtures(t)
 	engines := []BuildEngine{
 		NewDockerfileEngine(nil),
-		NewRailpackEngine(),
-		NewBuildpacksEngine(),
+		NewRailpackEngine(nil),
+		NewBuildpacksEngine(nil),
 		NewStaticEngine(nil),
 	}
 	// An explicit hint selects the named engine without inspecting the tree.

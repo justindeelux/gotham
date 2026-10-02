@@ -1708,7 +1708,12 @@ type BuildMeta struct {
 	// Empty means "Dockerfile".
 	Dockerfile string `protobuf:"bytes,3,opt,name=dockerfile,proto3" json:"dockerfile,omitempty"`
 	// build_args are forwarded to the Docker build as --build-arg values.
-	BuildArgs     map[string]string `protobuf:"bytes,4,rep,name=build_args,json=buildArgs,proto3" json:"build_args,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	BuildArgs map[string]string `protobuf:"bytes,4,rep,name=build_args,json=buildArgs,proto3" json:"build_args,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// engine selects what the node runs against the uploaded context: empty,
+	// "dockerfile" (the default) or "static" build the context as a Dockerfile;
+	// "railpack" and "buildpacks" run that toolchain on the node, so a build
+	// engine that needs a language toolchain is not tied to the control plane.
+	Engine        string `protobuf:"bytes,5,opt,name=engine,proto3" json:"engine,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1769,6 +1774,13 @@ func (x *BuildMeta) GetBuildArgs() map[string]string {
 		return x.BuildArgs
 	}
 	return nil
+}
+
+func (x *BuildMeta) GetEngine() string {
+	if x != nil {
+		return x.Engine
+	}
+	return ""
 }
 
 // BuildImageResponse is one message of a BuildImage stream: either a build
@@ -2767,7 +2779,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x11BuildImageRequest\x12)\n" +
 	"\x04meta\x18\x01 \x01(\v2\x13.agent.v1.BuildMetaH\x00R\x04meta\x12%\n" +
 	"\rcontext_chunk\x18\x02 \x01(\fH\x00R\fcontextChunkB\x06\n" +
-	"\x04part\"\xe0\x01\n" +
+	"\x04part\"\xf8\x01\n" +
 	"\tBuildMeta\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x1b\n" +
 	"\tdeploy_id\x18\x02 \x01(\tR\bdeployId\x12\x1e\n" +
@@ -2775,7 +2787,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"dockerfile\x18\x03 \x01(\tR\n" +
 	"dockerfile\x12A\n" +
 	"\n" +
-	"build_args\x18\x04 \x03(\v2\".agent.v1.BuildMeta.BuildArgsEntryR\tbuildArgs\x1a<\n" +
+	"build_args\x18\x04 \x03(\v2\".agent.v1.BuildMeta.BuildArgsEntryR\tbuildArgs\x12\x16\n" +
+	"\x06engine\x18\x05 \x01(\tR\x06engine\x1a<\n" +
 	"\x0eBuildArgsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x80\x01\n" +

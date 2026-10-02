@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -34,16 +35,68 @@ var ErrInvalidPortMapping = errors.New("docker: invalid port mapping")
 type DockerClient struct {
 	http    *http.Client
 	baseURL string
+	// dockerHost is target normalised to a DOCKER_HOST value, exported to the
+	// language toolchains (pack, railpack) the node runs.
+	dockerHost string
+	// registryStateDir holds the node-local registry credentials. Empty
+	// disables authenticated registry bootstrap.
+	registryStateDir string
+
+	// mu guards registryAuth, cached by EnsureRegistry and reused by every
+	// push/pull of a node-registry image.
+	mu           sync.Mutex
+	registryAuth registryAuth
+	// registryMu serialises registry bootstrap so concurrent builds do not
+	// race creating the network, the htpasswd file or the container.
+	registryMu sync.Mutex
+}
+
+// DockerClientOption tunes a DockerClient.
+type DockerClientOption func(*DockerClient)
+
+// WithRegistryStateDir sets the directory that holds the node-local registry
+// credential (the agent state directory). An empty value leaves the registry
+// unauthenticated and EnsureRegistry fails closed.
+func WithRegistryStateDir(dir string) DockerClientOption {
+	return func(c *DockerClient) {
+		c.registryStateDir = strings.TrimSpace(dir)
+	}
 }
 
 // NewDockerClient builds a client for target, a Docker endpoint string as
 // understood by newDockerTransport. An empty target uses the default socket.
-func NewDockerClient(target string) (*DockerClient, error) {
+func NewDockerClient(target string, options ...DockerClientOption) (*DockerClient, error) {
 	transport, baseURL, err := newDockerTransport(target)
 	if err != nil {
 		return nil, err
 	}
-	return &DockerClient{http: &http.Client{Transport: transport}, baseURL: baseURL}, nil
+	client := &DockerClient{
+		http:       &http.Client{Transport: transport},
+		baseURL:    baseURL,
+		dockerHost: dockerHostFromTarget(target),
+	}
+	for _, option := range options {
+		option(client)
+	}
+	return client, nil
+}
+
+// dockerHostFromTarget normalises a Docker endpoint into a DOCKER_HOST value
+// for child processes. The default socket and an empty target are left empty so
+// the CLI uses its own default.
+func dockerHostFromTarget(target string) string {
+	target = strings.TrimSpace(target)
+	switch {
+	case target == "":
+		return ""
+	case strings.HasPrefix(target, "unix://"), strings.HasPrefix(target, "tcp://"),
+		strings.HasPrefix(target, "http://"), strings.HasPrefix(target, "https://"):
+		return target
+	case strings.HasPrefix(target, "/"):
+		return "unix://" + target
+	default:
+		return target
+	}
 }
 
 // Version returns the Docker Engine version reported by GET /version.
@@ -179,7 +232,14 @@ func (c *DockerClient) PullImage(ctx context.Context, image string) error {
 	query := url.Values{}
 	query.Set("fromImage", image)
 
-	response, err := c.do(ctx, http.MethodPost, "/images/create?"+query.Encode(), nil)
+	if err := c.ensureRegistryCredentialFor(ctx, image); err != nil {
+		return err
+	}
+	authHeader, err := c.registryAuthHeader(image)
+	if err != nil {
+		return err
+	}
+	response, err := c.doRegistryRequest(ctx, http.MethodPost, "/images/create?"+query.Encode(), authHeader)
 	if err != nil {
 		return err
 	}
@@ -317,25 +377,132 @@ func (c *DockerClient) do(ctx context.Context, method, path string, body io.Read
 	return c.doHeader(ctx, method, path, body, "application/json")
 }
 
-// doRegistry issues an image push with the anonymous X-Registry-Auth header
-// and validates the HTTP status. The engine rejects a push that carries no
-// auth header at all (moby/moby#50614, Docker 28+), and Gotham holds no
-// per-registry credentials, so the empty auth config is the right value for
-// the node-local registry. The caller owns the response body.
+// doRegistry issues an image push with the node-local registry credential (the
+// anonymous config when none is configured) and validates the HTTP status. The
+// engine rejects a push that carries no auth header at all (moby/moby#50614,
+// Docker 28+), so a header is always sent. The caller owns the response body.
 func (c *DockerClient) doRegistry(ctx context.Context, path string) (*http.Response, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, nil)
+	authHeader, err := c.registryAuthHeader("")
 	if err != nil {
-		return nil, fmt.Errorf("docker: POST %s: %w", path, err)
+		return nil, err
+	}
+	return c.doRegistryRequest(ctx, http.MethodPost, path, authHeader)
+}
+
+// registryAuthHeader returns the X-Registry-Auth value for an image operation.
+// The cached node-local registry credential is used when it owns image (or when
+// image is empty, meaning a push to the node registry); every other image,
+// including the registry:2 bootstrap pull from Docker Hub, is anonymous so the
+// node credential is never leaked to another registry.
+func (c *DockerClient) registryAuthHeader(image string) (string, error) {
+	c.mu.Lock()
+	reg := c.registryAuth
+	c.mu.Unlock()
+	if reg.Username == "" || (image != "" && !registryOwnsImage(reg.Address, image)) {
+		return anonymousRegistryAuth, nil
+	}
+	return reg.header()
+}
+
+// ensureRegistryCredentialFor loads the persisted registry credential when
+// image targets the node-local registry but no credential is cached yet — for
+// example an agent that restarted between a build and the deploy's confirming
+// pull. The address is taken from the image reference, so it is first confirmed
+// against the live registry container's published address; a stale reference
+// (or a different local process on the same port) is left anonymous rather than
+// handed the node credential.
+func (c *DockerClient) ensureRegistryCredentialFor(ctx context.Context, image string) error {
+	c.mu.Lock()
+	cached := c.registryAuth
+	c.mu.Unlock()
+	if cached.Username != "" {
+		return nil
+	}
+	addr := loopbackRegistryAddress(image)
+	if addr == "" {
+		return nil
+	}
+	c.registryMu.Lock()
+	defer c.registryMu.Unlock()
+	// Re-check under the lock: a concurrent EnsureRegistry may have cached it.
+	c.mu.Lock()
+	cached = c.registryAuth
+	c.mu.Unlock()
+	if cached.Username != "" {
+		return nil
+	}
+
+	info, err := c.inspectRegistryContainer(ctx)
+	if err != nil {
+		// No live gotham-managed registry to authenticate against.
+		return nil
+	}
+	if !registryManaged(info) || registryHostPort(info) != addr {
+		return nil
+	}
+
+	auth, ok, err := persistedRegistryAuth(c.registryStateDir)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		// No stored credential yet, or the htpasswd no longer matches: leave
+		// this pull anonymous. EnsureRegistry owns credential generation and
+		// container recreation, so the pull path never writes.
+		return nil
+	}
+	auth.Address = addr
+	c.mu.Lock()
+	c.registryAuth = auth
+	c.mu.Unlock()
+	return nil
+}
+
+// loopbackRegistryAddress returns the host:port of image when it targets the
+// node-local registry published on loopback, or "" for every other image. The
+// node registry is always published on registryHostIP, so requiring that
+// prefix distinguishes it from a Docker Hub or third-party reference.
+func loopbackRegistryAddress(image string) string {
+	ref := strings.TrimSpace(image)
+	slash := strings.Index(ref, "/")
+	if slash < 0 {
+		return ""
+	}
+	host := ref[:slash]
+	if strings.HasPrefix(host, registryHostIP+":") {
+		return host
+	}
+	return ""
+}
+
+// registryOwnsImage reports whether image is hosted by the node-local registry
+// at addr. The registry always carries a host:port, so a prefix match is exact.
+func registryOwnsImage(addr, image string) bool {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return false
+	}
+	ref := strings.TrimSpace(image)
+	return ref == addr || strings.HasPrefix(ref, addr+"/")
+}
+
+// doRegistryRequest issues a registry operation with an explicit
+// X-Registry-Auth header and validates the HTTP status. The caller owns the
+// response body.
+func (c *DockerClient) doRegistryRequest(ctx context.Context, method, path, authHeader string) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("docker: %s %s: %w", method, path, err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set(registryAuthHeader, anonymousRegistryAuth)
+	request.Header.Set(registryAuthHeader, authHeader)
 
 	response, err := c.http.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("docker: POST %s: %w", path, err)
+		return nil, fmt.Errorf("docker: %s %s: %w", method, path, err)
 	}
 	if !dockerOK(response.StatusCode) {
-		return nil, statusError(http.MethodPost, path, response)
+		return nil, statusError(method, path, response)
 	}
 	return response, nil
 }
@@ -505,6 +672,9 @@ type dockerHostConfig struct {
 	Binds         []string                `json:"Binds,omitempty"`
 	PortBindings  map[string][]dockerPort `json:"PortBindings,omitempty"`
 	RestartPolicy *dockerRestartPolicy    `json:"RestartPolicy,omitempty"`
+	// NetworkMode pins the container to one network. The registry uses it to
+	// stay off the default bridge that workloads share.
+	NetworkMode string `json:"NetworkMode,omitempty"`
 }
 
 // dockerPort is one host-side port binding.

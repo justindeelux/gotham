@@ -2,7 +2,10 @@ package builds
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,5 +181,73 @@ func TestStaticEngineE2E(t *testing.T) {
 	}
 	if ref.Digest == "" {
 		t.Error("Build returned an empty digest")
+	}
+}
+
+// TestLocalDockerBuilderDockerHost pins the endpoint handed to toolchain CLIs:
+// the toolchain runs with a stripped environment, so the builder must carry a
+// usable DOCKER_HOST itself.
+func TestLocalDockerBuilderDockerHost(t *testing.T) {
+	for _, tc := range []struct{ host, want string }{
+		{host: "", want: ""},
+		{host: "/var/run/docker.sock", want: "unix:///var/run/docker.sock"},
+		{host: "unix:///run/docker.sock", want: "unix:///run/docker.sock"},
+		{host: "tcp://127.0.0.1:2375", want: "tcp://127.0.0.1:2375"},
+	} {
+		builder, err := NewLocalDockerBuilderWithHost(tc.host)
+		if err != nil {
+			t.Fatalf("NewLocalDockerBuilderWithHost(%q): %v", tc.host, err)
+		}
+		if builder.dockerHost != tc.want {
+			t.Errorf("dockerHost(%q) = %q; want %q", tc.host, builder.dockerHost, tc.want)
+		}
+	}
+}
+
+// TestLocalDockerBuilderToolchainPassesDockerHost runs a fake railpack through
+// buildToolchain and checks the builder hands the CLI its DOCKER_HOST, since
+// the toolchain environment is stripped of the parent's variables.
+func TestLocalDockerBuilderToolchainPassesDockerHost(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "docker-host")
+	fakeCLI(t, railpackCLI, fmt.Sprintf(`printf '%%s' "$DOCKER_HOST" > '%s'`, envFile))
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+
+	var digestPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		digestPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Id":          "sha256:config",
+			"RepoDigests": []string{"gotham/app@sha256:feedface"},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	builder, err := NewLocalDockerBuilderWithHost(server.URL)
+	if err != nil {
+		t.Fatalf("new builder: %v", err)
+	}
+
+	srcDir := t.TempDir()
+	writeTestFile(t, filepath.Join(srcDir, "package.json"), "{}\n")
+	contextTar, err := buildContextTar(srcDir, nil)
+	if err != nil {
+		t.Fatalf("build context: %v", err)
+	}
+
+	result, err := builder.Build(context.Background(), contextTar, ImageBuildOptions{
+		Tag:    "gotham/app:dep",
+		Engine: EngineRailpack,
+	})
+	if err != nil {
+		t.Fatalf("toolchain build: %v", err)
+	}
+	if result.Digest != "gotham/app@sha256:feedface" {
+		t.Errorf("digest = %q; want gotham/app@sha256:feedface", result.Digest)
+	}
+	if digestPath != "/images/gotham/app:dep/json" {
+		t.Errorf("digest path = %q", digestPath)
+	}
+	if got := readFakeCLI(t, envFile); got != server.URL {
+		t.Errorf("DOCKER_HOST = %q; want %q", got, server.URL)
 	}
 }

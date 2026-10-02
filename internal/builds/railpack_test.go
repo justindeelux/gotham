@@ -85,7 +85,7 @@ echo "railpack: start command missing" >&2
 	opts.LogWriter = &logs
 	opts.BuildArgs = map[string]string{"GO_VERSION": "1.22", "A_FLAG": "1"}
 
-	ref, err := NewRegistry(builder).Build(context.Background(), opts)
+	ref, err := NewRegistry(nil).Build(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -96,7 +96,7 @@ echo "railpack: start command missing" >&2
 		t.Errorf("Tag = %q; want %q", ref.Tag, want)
 	}
 	if builder.calls != 0 {
-		t.Errorf("ImageBuilder called %d times; the CLI path must not use it", builder.calls)
+		t.Errorf("ImageBuilder called %d times; want 0", builder.calls)
 	}
 
 	log := logs.String()
@@ -125,7 +125,7 @@ func TestRailpackBuildRequiresBuildKit(t *testing.T) {
 	t.Setenv("BUILDKIT_HOST", "")
 
 	builder := &mockBuilder{}
-	_, err := NewRegistry(builder).Build(context.Background(), testOptions(repoDir))
+	_, err := NewRegistry(nil).Build(context.Background(), testOptions(repoDir))
 	if !errors.Is(err, ErrCLIMissing) {
 		t.Fatalf("Build error = %v; want ErrCLIMissing", err)
 	}
@@ -150,7 +150,7 @@ exit 1`)
 	opts := testOptions(repoDir)
 	opts.LogWriter = &logs
 
-	ref, err := NewRailpackEngine().Build(context.Background(), opts)
+	ref, err := NewRailpackEngine(nil).Build(context.Background(), opts)
 	if err == nil {
 		t.Fatal("Build succeeded although the CLI failed")
 	}
@@ -187,7 +187,7 @@ while :; do :; done`, startedFile))
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := NewRailpackEngine().Build(ctx, opts)
+		_, err := NewRailpackEngine(nil).Build(ctx, opts)
 		done <- err
 	}()
 

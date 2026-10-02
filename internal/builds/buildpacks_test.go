@@ -43,7 +43,7 @@ echo "[builder] no compatible buildpacks" >&2
 	opts.LogWriter = &logs
 	opts.BuildArgs = map[string]string{"GOPRIVATE": "example.com"}
 
-	ref, err := NewRegistry(builder).Build(context.Background(), opts)
+	ref, err := NewRegistry(nil).Build(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -54,7 +54,7 @@ echo "[builder] no compatible buildpacks" >&2
 		t.Errorf("Tag = %q; want %q", ref.Tag, want)
 	}
 	if builder.calls != 0 {
-		t.Errorf("ImageBuilder called %d times; the CLI path must not use it", builder.calls)
+		t.Errorf("ImageBuilder called %d times; want 0", builder.calls)
 	}
 
 	log := logs.String()
@@ -76,7 +76,7 @@ func TestBuildpacksBuildCLIMissing(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	repoDir := buildpacksMarkerRepo(t)
 
-	_, err := NewBuildpacksEngine().Build(context.Background(), testOptions(repoDir))
+	_, err := NewBuildpacksEngine(nil).Build(context.Background(), testOptions(repoDir))
 	if !errors.Is(err, ErrCLIMissing) {
 		t.Fatalf("Build error = %v; want ErrCLIMissing", err)
 	}
@@ -95,7 +95,7 @@ exit 1`)
 	opts.BuildPack = EngineBuildpacks
 	opts.LogWriter = &logs
 
-	ref, err := NewBuildpacksEngine().Build(context.Background(), opts)
+	ref, err := NewBuildpacksEngine(nil).Build(context.Background(), opts)
 	if err == nil {
 		t.Fatal("Build succeeded although the CLI failed")
 	}

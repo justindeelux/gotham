@@ -88,7 +88,7 @@ func runServe() int {
 		}()
 	}
 
-	docker, err := agent.NewDockerClient(cfg.DockerSock)
+	docker, err := agent.NewDockerClient(cfg.DockerSock, agent.WithRegistryStateDir(cfg.CertDir))
 	if err != nil {
 		log.Error("docker client", "error", err)
 		return exitError

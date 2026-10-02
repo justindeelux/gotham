@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/justindeelux/gotham/buildtool"
 )
 
 // LocalDockerBuilder builds images against a local Docker daemon through the
@@ -20,6 +22,9 @@ import (
 type LocalDockerBuilder struct {
 	http    *http.Client
 	baseURL string
+	// dockerHost is the DOCKER_HOST value handed to a toolchain CLI. The
+	// toolchain runs with a stripped environment, so it cannot inherit it.
+	dockerHost string
 }
 
 // Compile-time guarantee that the local builder satisfies the seam.
@@ -38,7 +43,26 @@ func NewLocalDockerBuilderWithHost(host string) (*LocalDockerBuilder, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &LocalDockerBuilder{http: &http.Client{Transport: transport}, baseURL: baseURL}, nil
+	return &LocalDockerBuilder{
+		http:       &http.Client{Transport: transport},
+		baseURL:    baseURL,
+		dockerHost: dockerHostEnv(host),
+	}, nil
+}
+
+// dockerHostEnv normalises a Docker endpoint into a DOCKER_HOST value for a
+// child process. An empty host is left empty so the CLI uses its own default; a
+// bare socket path is prefixed with unix://.
+func dockerHostEnv(host string) string {
+	host = strings.TrimSpace(host)
+	switch {
+	case host == "":
+		return ""
+	case strings.HasPrefix(host, "/"):
+		return "unix://" + host
+	default:
+		return host
+	}
 }
 
 // Build implements ImageBuilder by POSTing the context tarball to the daemon's
@@ -50,6 +74,9 @@ func (b *LocalDockerBuilder) Build(ctx context.Context, contextTar []byte, opts 
 	}
 	if strings.TrimSpace(opts.Tag) == "" {
 		return ImageBuildResult{}, fmt.Errorf("%w: empty image tag", ErrValidation)
+	}
+	if opts.Engine == EngineRailpack || opts.Engine == EngineBuildpacks {
+		return b.buildToolchain(ctx, contextTar, opts)
 	}
 	dockerfile := opts.Dockerfile
 	if strings.TrimSpace(dockerfile) == "" {
@@ -97,6 +124,41 @@ func (b *LocalDockerBuilder) Build(ctx context.Context, contextTar []byte, opts 
 			return result, digestErr
 		}
 		digest = stream.digest
+	}
+	result.Digest = digest
+	return result, nil
+}
+
+// buildToolchain extracts the raw source context to a temporary directory and
+// runs the toolchain in this process, then reports the built image's digest.
+// It is the dev/test counterpart of the node agent's toolchain build. The
+// toolchain runs with a stripped environment, so the builder passes its Docker
+// endpoint explicitly as DOCKER_HOST.
+func (b *LocalDockerBuilder) buildToolchain(ctx context.Context, contextTar []byte, opts ImageBuildOptions) (ImageBuildResult, error) {
+	dir, err := os.MkdirTemp("", "gotham-buildtool-*")
+	if err != nil {
+		return ImageBuildResult{}, fmt.Errorf("docker build: create toolchain dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	if err := buildtool.ExtractTar(dir, bytes.NewReader(contextTar)); err != nil {
+		return ImageBuildResult{}, err
+	}
+	var logs bytes.Buffer
+	runErr := buildtool.Run(ctx, buildtool.Engine(opts.Engine), buildtool.Options{
+		Dir:        dir,
+		Tag:        opts.Tag,
+		BuildArgs:  opts.BuildArgs,
+		LogWriter:  &logs,
+		DockerHost: b.dockerHost,
+	})
+	result := ImageBuildResult{Logs: logs.String()}
+	if runErr != nil {
+		return result, runErr
+	}
+	digest, err := b.imageDigest(ctx, opts.Tag)
+	if err != nil {
+		return result, err
 	}
 	result.Digest = digest
 	return result, nil

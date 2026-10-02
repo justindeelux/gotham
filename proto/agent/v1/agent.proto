@@ -383,6 +383,11 @@ message BuildMeta {
   string dockerfile = 3;
   // build_args are forwarded to the Docker build as --build-arg values.
   map<string, string> build_args = 4;
+  // engine selects what the node runs against the uploaded context: empty,
+  // "dockerfile" (the default) or "static" build the context as a Dockerfile;
+  // "railpack" and "buildpacks" run that toolchain on the node, so a build
+  // engine that needs a language toolchain is not tied to the control plane.
+  string engine = 5;
 }
 
 // BuildImageResponse is one message of a BuildImage stream: either a build

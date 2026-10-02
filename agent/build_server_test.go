@@ -35,6 +35,13 @@ type fakeBuildClient struct {
 	pushRepo     string
 	pushTag      string
 	digestRef    string
+
+	toolchainEngine  string
+	toolchainTag     string
+	toolchainContext []byte
+	toolchainArgs    map[string]string
+	toolchainErr     error
+	toolchainCalls   int
 }
 
 func (f *fakeBuildClient) EnsureRegistry(context.Context) (string, error) {
@@ -61,6 +68,22 @@ func (f *fakeBuildClient) Build(_ context.Context, opts BuildOptions, emit func(
 		}
 	}
 	return f.buildErr
+}
+
+func (f *fakeBuildClient) RunToolchain(_ context.Context, engine string, contextTar io.Reader, tag string, buildArgs map[string]string, emit func([]byte) error) error {
+	f.toolchainCalls++
+	f.toolchainEngine = engine
+	f.toolchainTag = tag
+	f.toolchainArgs = buildArgs
+	processed, err := io.ReadAll(contextTar)
+	if err != nil {
+		return err
+	}
+	f.toolchainContext = processed
+	if err := emit([]byte("toolchain " + engine + " on node\n")); err != nil {
+		return err
+	}
+	return f.toolchainErr
 }
 
 func (f *fakeBuildClient) TagImage(_ context.Context, source, repository, tag string) error {
@@ -243,6 +266,69 @@ func TestBuildServerBuildImageUsesDockerfileAndBuildArgs(t *testing.T) {
 	}
 	if fake.buildOpts.BuildArgs["NODE_ENV"] != "production" {
 		t.Fatalf("build args = %v", fake.buildOpts.BuildArgs)
+	}
+}
+
+// TestBuildServerRunsToolchainOnNode pins the remote-build fix: a railpack or
+// buildpacks engine is dispatched to the node's toolchain runner against the
+// uploaded context, then tagged and pushed like a Dockerfile build.
+func TestBuildServerRunsToolchainOnNode(t *testing.T) {
+	fake := &fakeBuildClient{digest: "sha256:tool"}
+	client, _ := newBuildServiceClient(t, fake)
+
+	meta := &agentv1.BuildMeta{
+		AppId:     "web",
+		DeployId:  "dep-1",
+		Engine:    "railpack",
+		BuildArgs: map[string]string{"GO_VERSION": "1.22"},
+	}
+	logs, result, err := runBuild(t, client, meta, [][]byte{[]byte("source-tar")})
+	if err != nil {
+		t.Fatalf("build image: %v", err)
+	}
+	if result == nil || result.GetDigest() != "sha256:tool" {
+		t.Fatalf("result = %+v", result)
+	}
+	if fake.toolchainCalls != 1 {
+		t.Fatalf("toolchain calls = %d; want 1", fake.toolchainCalls)
+	}
+	if fake.buildOpts != nil {
+		t.Fatalf("docker build ran for a toolchain engine: %+v", fake.buildOpts)
+	}
+	if fake.toolchainEngine != "railpack" {
+		t.Errorf("engine = %q; want railpack", fake.toolchainEngine)
+	}
+	if fake.toolchainTag != "127.0.0.1:5000/gotham/web:dep-1" {
+		t.Errorf("tag = %q", fake.toolchainTag)
+	}
+	if string(fake.toolchainContext) != "source-tar" {
+		t.Errorf("context = %q", fake.toolchainContext)
+	}
+	if fake.toolchainArgs["GO_VERSION"] != "1.22" {
+		t.Errorf("build args = %v", fake.toolchainArgs)
+	}
+	// The shared tag/push steps still run for a toolchain build.
+	if fake.pushRepo != "127.0.0.1:5000/gotham/web" || fake.pushTag != "dep-1" {
+		t.Errorf("push call = (%q, %q)", fake.pushRepo, fake.pushTag)
+	}
+	joined := strings.Join(logs, "")
+	for _, want := range []string{"running railpack build on the node\n", "toolchain railpack on node\n", "pushed 127.0.0.1:5000/gotham/web:dep-1\n"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("logs %q missing %q", joined, want)
+		}
+	}
+}
+
+func TestBuildServerRejectsUnknownEngine(t *testing.T) {
+	fake := &fakeBuildClient{}
+	client, _ := newBuildServiceClient(t, fake)
+
+	_, _, err := runBuild(t, client, &agentv1.BuildMeta{AppId: "web", DeployId: "dep-1", Engine: "wasm"}, nil)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want %v (err %v)", status.Code(err), codes.InvalidArgument, err)
+	}
+	if fake.buildOpts != nil || fake.toolchainCalls != 0 {
+		t.Fatal("build must not run for an unsupported engine")
 	}
 }
 

@@ -31,6 +31,8 @@
   - Internal registry: bootstrap a registry container on the node when a server is added; CP stores the info.
   - Tests: build a sample app (small Go app) with all 4 engines on the dev Docker.
 - **Verify:** run a build per engine → image appears in the internal registry; `docker pull` works.
+- **Registry isolation & auth (retro FX-5b):** the registry publishes its port on `127.0.0.1` only and joins a dedicated `gotham-registry` bridge network, so workload containers (default bridge) cannot reach it by container IP. It runs with an htpasswd credential generated on the node, stored mode 0600 in the agent state directory (`GOTHAM_AGENT_CERT_DIR`), and every agent push/pull uses it. The control plane never holds the credential: all image transfers are agent-mediated.
+- **Node-side toolchains (retro FX-5b):** Railpack and Buildpacks builds run **on the target node** via `BuildImage`, so the control-plane host does not need `railpack`/`pack`. A node building those engines must have the CLI on `PATH` and, for Railpack, a BuildKit daemon (`BUILDKIT_HOST`). A build whose image cannot reach the node registry fails the `pushing` step before the previous container is retired.
 - **Depends on:** Phase 3. Parallel with BE-4.1.
 
 ## BE-4.3 — Deploy orchestration — `ws/p4-deploy`

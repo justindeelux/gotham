@@ -520,12 +520,13 @@ func pathPrefixes(rel string) []string {
 
 // matchContextPattern matches a Docker ignore pattern against a
 // context-relative path. `*` and `?` match within one path segment and `**`
-// matches any number of segments (including none), which covers Docker's
-// documented syntax. A trailing `/**` matches a proper ancestor of rel (moby's
-// prefixMatch / `prefix/.*` regexp), so it matches everything under the prefix
-// but never a path equal to the prefix itself. Escapes and `[`-classes beyond
-// path.Match are not supported; a pattern that path.Match cannot parse simply
-// does not match.
+// matches any number of segments (including none) when it is a complete path
+// segment, which covers Docker's documented syntax. A trailing `/**` matches a
+// proper ancestor of rel (moby's prefixMatch / `prefix/.*` regexp), so it
+// matches everything under the prefix but never a path equal to the prefix
+// itself. Escapes, `[`-classes beyond path.Match, and a `**` glued to text
+// (e.g. `a**`, which Docker only defines as a standalone segment) are not
+// supported; a pattern path.Match cannot parse simply does not match.
 func matchContextPattern(pattern, rel string) bool {
 	pattern = strings.TrimRight(pattern, "/")
 	if pattern == "" {
@@ -536,6 +537,10 @@ func matchContextPattern(pattern, rel string) bool {
 		// so the pattern is equivalent to that prefix.
 		if prefix == "**" || strings.HasSuffix(prefix, "/**") {
 			return matchContextPattern(prefix, rel)
+		}
+		// Fast path for a literal prefix: no splits or allocation.
+		if !strings.ContainsAny(prefix, "*?[") {
+			return strings.HasPrefix(rel, prefix+"/")
 		}
 		return matchesProperAncestor(prefix, rel)
 	}

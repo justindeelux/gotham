@@ -641,6 +641,26 @@ func TestBuildContextTarDockerIgnoreTrailingDoubleStar(t *testing.T) {
 	})
 }
 
+// TestLiteralTrailingDoubleStarFastPathAllocs is the round-6 U1 regression: a
+// literal `dir/**` must take the allocation-free fast path on the file
+// (excludedOnly) hot path; the glob-prefix path may allocate via the ancestor
+// splits.
+func TestLiteralTrailingDoubleStarFastPathAllocs(t *testing.T) {
+	ignore := parseDockerIgnore("node_modules/**\n")
+	if !ignore.excludedOnly("node_modules/pkg/index.js", nil) {
+		t.Fatal("literal /** should exclude a path under the prefix")
+	}
+	if ignore.excludedOnly("node_modules", nil) {
+		t.Fatal("literal /** must not exclude the prefix path itself")
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		ignore.excludedOnly("node_modules/pkg/index.js", nil)
+	})
+	if allocs != 0 {
+		t.Fatalf("literal /** eval allocated %.1f allocs; want 0", allocs)
+	}
+}
+
 // TestBuildContextTarWalkerStateBounded is the round-4/5 U2 regression: it
 // drives the real walker over a wide tree and asserts the peak retained
 // per-pattern match state stays O(tree depth), not O(number of directories).

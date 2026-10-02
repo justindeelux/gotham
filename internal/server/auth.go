@@ -112,8 +112,8 @@ func (s *Server) mountAuthRoutes(api chi.Router) {
 
 		r.With(s.rateLimit).Post("/register", s.handleRegister)
 		r.With(s.rateLimit).Post("/login", s.handleLogin)
-		r.Post("/refresh", s.handleRefresh)
-		r.Post("/logout", s.handleLogout)
+		r.With(s.refreshRateLimit).Post("/refresh", s.handleRefresh)
+		r.With(s.refreshRateLimit).Post("/logout", s.handleLogout)
 
 		// Protected group: Phase 2+ can mount further authenticated routes here.
 		r.Group(func(protected chi.Router) {
@@ -240,8 +240,10 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
-// handleLogout revokes the presented session. It always answers 204 so clients
-// cannot probe which refresh tokens exist.
+// handleLogout revokes the presented session. Unknown and already-revoked
+// tokens are not errors and answer 204, so clients cannot probe which refresh
+// tokens exist, but a persistence failure answers 500: reporting success would
+// leave the refresh token usable while the client believes it is signed out.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	var req refreshTokenRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
@@ -249,7 +251,9 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.auth.Logout(r.Context(), req.RefreshToken); err != nil {
-		s.logger.Warn("auth: logout", "error", err)
+		s.logger.Error("auth: logout", "error", err)
+		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
+		return
 	}
 	// A logged-out browser must not be able to redeem a pending OAuth exchange.
 	s.clearOAuthCookies(w, r)

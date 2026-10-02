@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -66,6 +67,33 @@ func (s *Store) RevokeSessionIfLive(ctx context.Context, refreshHash string) (bo
 		return false, err
 	}
 	return true, nil
+}
+
+// RevokeUserSessions revokes every live refresh session of userID. Refresh-token
+// reuse detection calls it when a replayed token reveals a possible theft:
+// every device is forced to re-authenticate. Already-revoked rows are left
+// untouched.
+func (s *Store) RevokeUserSessions(ctx context.Context, userID pgtype.UUID) error {
+	return s.queries.RevokeUserSessions(ctx, userID)
+}
+
+// RotateSession atomically revokes the presented live session and inserts its
+// replacement in one statement, so a failed insert or a cancelled request
+// cannot consume the user's only refresh token. It returns pgx.ErrNoRows when
+// the presented session was no longer live, leaving no replacement behind.
+func (s *Store) RotateSession(ctx context.Context, params sqlc.RotateSessionParams) (sqlc.Session, error) {
+	return s.queries.RotateSession(ctx, params)
+}
+
+// DeleteStaleSessions drops sessions that expired before expiredBefore and
+// revoked sessions whose revocation predates revokedBefore, returning how many
+// rows were removed. Rejected rows stay for a retention window so a replayed
+// token can still revoke its family before the row is forgotten.
+func (s *Store) DeleteStaleSessions(ctx context.Context, expiredBefore, revokedBefore time.Time) (int64, error) {
+	return s.queries.DeleteStaleSessions(ctx, sqlc.DeleteStaleSessionsParams{
+		ExpiredBefore: pgtype.Timestamptz{Time: expiredBefore, Valid: true},
+		RevokedBefore: pgtype.Timestamptz{Time: revokedBefore, Valid: true},
+	})
 }
 
 // CountUsers returns the number of accounts. Zero means registration is open:

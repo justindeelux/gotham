@@ -30,3 +30,39 @@ SET revoked_at = now()
 WHERE refresh_hash = $1
   AND revoked_at IS NULL
 RETURNING id;
+
+-- name: RevokeUserSessions :exec
+-- RevokeUserSessions revokes every live session of a user. Refresh-token reuse
+-- detection calls it when a replayed token reveals a possible theft: every
+-- device is forced to re-authenticate.
+UPDATE sessions
+SET revoked_at = now()
+WHERE user_id = $1
+  AND revoked_at IS NULL;
+
+-- name: RotateSession :one
+-- RotateSession atomically revokes the presented live session and inserts its
+-- replacement in one statement, so a failed insert or a cancelled request
+-- cannot consume the user's only refresh token. Zero rows (pgx.ErrNoRows)
+-- means the presented session was already revoked or deleted, so the caller
+-- must refuse to issue a replacement.
+WITH revoked AS (
+    UPDATE sessions AS s
+    SET revoked_at = now()
+    WHERE s.refresh_hash = sqlc.arg(revoked_refresh_hash)
+      AND s.revoked_at IS NULL
+    RETURNING s.user_id
+)
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
+SELECT r.user_id, sqlc.arg(new_refresh_hash), sqlc.arg(expires_at), sqlc.arg(credential_version)
+FROM revoked AS r
+RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version;
+
+-- name: DeleteStaleSessions :execrows
+-- DeleteStaleSessions drops sessions that expired before the retention cutoff
+-- and revoked sessions whose revocation predates the reuse window. The rejected
+-- rows stay for that window so a replayed token can still revoke its family
+-- before the row is forgotten.
+DELETE FROM sessions
+WHERE expires_at < sqlc.arg(expired_before)
+   OR (revoked_at IS NOT NULL AND revoked_at < sqlc.arg(revoked_before));

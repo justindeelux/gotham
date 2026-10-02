@@ -25,6 +25,9 @@ var testUserID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
 // fakeAuthService is a deterministic AuthService for handler tests.
 type fakeAuthService struct {
 	user *auth.User
+	// logoutErr, when set, is returned by Logout to exercise persistence
+	// failures.
+	logoutErr error
 }
 
 func newFakeAuthService() *fakeAuthService {
@@ -70,7 +73,7 @@ func (f *fakeAuthService) Refresh(_ context.Context, refreshToken string) (*auth
 }
 
 func (f *fakeAuthService) Logout(_ context.Context, _ string) error {
-	return nil
+	return f.logoutErr
 }
 
 func (f *fakeAuthService) Me(_ context.Context, userID uuid.UUID) (*auth.User, error) {
@@ -348,6 +351,51 @@ func TestAuthRateLimit(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("request %d status = %d, want %d (all: %v)", i+1, got[i], want[i], got)
 		}
+	}
+}
+
+// TestAuthRefreshRateLimit: a tight refresh loop is throttled (the first burst
+// passes, the next answers 429), and logout shares the same bucket.
+func TestAuthRefreshRateLimit(t *testing.T) {
+	s := newTestAuthServer(t)
+
+	old := s.refreshLimiter
+	limiter := newIPRateLimiter(rate.Limit(0), 2)
+	s.refreshLimiter = limiter
+	t.Cleanup(func() {
+		limiter.Close()
+		old.Close()
+	})
+
+	body := `{"refresh_token":"refresh-token"}`
+	got := []int{
+		doRequest(t, s, http.MethodPost, "/api/v1/auth/refresh", body, "").Code,
+		doRequest(t, s, http.MethodPost, "/api/v1/auth/refresh", body, "").Code,
+		doRequest(t, s, http.MethodPost, "/api/v1/auth/refresh", body, "").Code,
+	}
+	want := []int{http.StatusOK, http.StatusOK, http.StatusTooManyRequests}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("request %d status = %d, want %d (all: %v)", i+1, got[i], want[i], got)
+		}
+	}
+
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/auth/logout", body, ""); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("logout after exhaustion status = %d, want 429", rec.Code)
+	}
+}
+
+// TestAuthLogoutPersistenceFailure: a failed revocation must not report
+// success, or the client would believe it is signed out while the refresh token
+// still works.
+func TestAuthLogoutPersistenceFailure(t *testing.T) {
+	s := newTestAuthServer(t)
+	s.auth = &fakeAuthService{user: newFakeAuthService().user, logoutErr: errors.New("database down")}
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/auth/logout",
+		`{"refresh_token":"refresh-token"}`, "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("logout status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 

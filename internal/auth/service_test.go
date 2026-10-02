@@ -209,11 +209,6 @@ func TestServiceRefreshRotation(t *testing.T) {
 		t.Fatal("Refresh reused the old refresh token, want rotation")
 	}
 
-	// The rotated-away token must no longer work.
-	if _, err := svc.Refresh(ctx, first.RefreshToken); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Refresh(old token) error = %v, want ErrUnauthorized", err)
-	}
-
 	// The new token must still work.
 	third, err := svc.Refresh(ctx, second.RefreshToken)
 	if err != nil {
@@ -221,6 +216,15 @@ func TestServiceRefreshRotation(t *testing.T) {
 	}
 	if third.RefreshToken == "" {
 		t.Fatal("Refresh(new token) returned an empty refresh token")
+	}
+
+	// Replaying the rotated-away first token is reuse detection: it is
+	// refused, and the whole family (including the live third token) dies.
+	if _, err := svc.Refresh(ctx, first.RefreshToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Refresh(replayed token) error = %v, want ErrUnauthorized", err)
+	}
+	if _, err := svc.Refresh(ctx, third.RefreshToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatal("the replacement survived reuse detection; the family was not revoked")
 	}
 }
 

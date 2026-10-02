@@ -66,6 +66,13 @@ const logBody = ref<HTMLElement | null>(null);
 
 let lineId = 0;
 let scrollQueued = false;
+/**
+ * Whether the current start should render replayed history. It is decided once
+ * per start (in requestStreamStart) rather than per frame, because the first
+ * replayed chunk makes `lines` non-empty and a per-frame check would then skip
+ * the rest of the history (round-3 U1).
+ */
+let acceptReplay = false;
 
 const channelName = computed<string>(
   () => props.channel || `logs:${props.serverId}:${props.containerId}`,
@@ -179,12 +186,9 @@ function handleMessage(message: WebSocketMessage): void {
   const ts = formatTimestamp(payload?.ts, message.receivedAt);
   // Replayed history must not duplicate lines on a viewer that already has
   // content (a reconnect re-POSTs the start, and a second viewer's replay is
-  // broadcast to the room). Skip it unless this viewer is still empty
-  // (round-2 U1).
-  if (
-    payload?.replay === true &&
-    (lines.value.length > 0 || pending.value.length > 0)
-  ) {
+  // broadcast to the room). The decision is made once per start, so all frames
+  // of one replay render together for a late viewer (round-3 U1).
+  if (payload?.replay === true && !acceptReplay) {
     return;
   }
   for (const piece of splitLines(text)) {
@@ -325,6 +329,10 @@ function requestStreamStart(): void {
   if (!props.autoStartStream || !props.serverId || !props.containerId) {
     return;
   }
+  // Decide once per start whether replayed history should render: a late,
+  // empty viewer accepts it; a viewer that already has lines (reconnect) does
+  // not, so no duplicate lines. Frames are tagged server-side (round-3 U1).
+  acceptReplay = lines.value.length === 0 && pending.value.length === 0;
   void startContainerLogStream(props.serverId, props.containerId).catch(
     (error: unknown) => {
       appendLine({

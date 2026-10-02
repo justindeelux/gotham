@@ -254,16 +254,22 @@ func (rt *Realtime) Close() {
 }
 
 // recordingPublisher stores successfully published log frames in a replay ring.
+// It records before publishing so that a frame a subscriber can already see is
+// also replayable; an undelivered frame (the publish ultimately failed) is
+// removed again.
 type recordingPublisher struct {
 	inner Publisher
 	ring  *replayBuffer
 }
 
 func (p recordingPublisher) Publish(ctx context.Context, channel string, payload []byte) error {
+	stored := p.ring.add(payload)
 	if err := p.inner.Publish(ctx, channel, payload); err != nil {
+		if stored {
+			p.ring.removeLast()
+		}
 		return err
 	}
-	p.ring.add(payload)
 	return nil
 }
 
@@ -293,7 +299,10 @@ func (p resilientPublisher) Publish(ctx context.Context, channel string, payload
 	for {
 		err := p.inner.Publish(ctx, channel, payload)
 		if err == nil {
-			if failed {
+			// Only a recovered log frame means logs are flowing again. A
+			// terminal disconnect-notice publish must not emit "resumed"
+			// immediately before the close frame (round-3 U3).
+			if failed && isLogPayload(payload) {
 				p.hub.Broadcast(channel, resumedNotice(channel))
 				p.logger.Info("ws: log publish recovered", "channel", channel)
 			}
@@ -318,6 +327,13 @@ func (p resilientPublisher) Publish(ctx context.Context, channel string, payload
 	}
 }
 
+// isLogPayload reports whether a framed payload is a log chunk (as opposed to
+// a disconnect or resumed notice).
+func isLogPayload(payload []byte) bool {
+	var msg Message
+	return json.Unmarshal(payload, &msg) == nil && msg.Type == TypeLog
+}
+
 // replayBuffer holds the most recent log frames of one channel.
 type replayBuffer struct {
 	mu   sync.Mutex
@@ -333,15 +349,15 @@ func newReplayBuffer(max int) *replayBuffer {
 	return &replayBuffer{max: max}
 }
 
-// add stores a log frame; disconnect/resumed notices and any non-log frame are
-// ignored.
-func (r *replayBuffer) add(payload []byte) {
+// add stores a log frame and reports whether it was stored. Disconnect/resumed
+// notices and any non-log frame are ignored.
+func (r *replayBuffer) add(payload []byte) bool {
 	if r.max == 0 {
-		return
+		return false
 	}
 	var msg Message
 	if err := json.Unmarshal(payload, &msg); err != nil || msg.Type != TypeLog {
-		return
+		return false
 	}
 	msg.Replay = false // history is stored untagged; replay tags on the way out
 	r.mu.Lock()
@@ -349,6 +365,18 @@ func (r *replayBuffer) add(payload []byte) {
 	r.data = append(r.data, msg)
 	if len(r.data) > r.max {
 		r.data = r.data[len(r.data)-r.max:]
+	}
+	return true
+}
+
+// removeLast drops the most recently added frame. The recording publisher is
+// the only producer for a channel, so this undoes the immediately preceding
+// add when that frame was never delivered.
+func (r *replayBuffer) removeLast() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if n := len(r.data); n > 0 {
+		r.data = r.data[:n-1]
 	}
 }
 

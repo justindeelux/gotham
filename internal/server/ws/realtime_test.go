@@ -167,8 +167,35 @@ func (s *tailStream) Recv() (*agentv1.LogChunk, error) {
 	return nil, s.ctx.Err()
 }
 
+// scriptedTailStreamer emits a fixed list of chunks, then blocks until the
+// stream context ends, so its whole history lands in the replay ring.
+type scriptedTailStreamer struct {
+	chunks [][]byte
+}
+
+func (s scriptedTailStreamer) StreamLogs(ctx context.Context, _ *agentv1.StreamLogsRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.LogChunk], error) {
+	return &scriptedTail{ctx: ctx, chunks: s.chunks}, nil
+}
+
+type scriptedTail struct {
+	grpc.ServerStreamingClient[agentv1.LogChunk]
+	ctx    context.Context
+	chunks [][]byte
+	pos    int
+}
+
+func (s *scriptedTail) Recv() (*agentv1.LogChunk, error) {
+	if s.pos < len(s.chunks) {
+		chunk := &agentv1.LogChunk{Data: s.chunks[s.pos]}
+		s.pos++
+		return chunk, nil
+	}
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
 // nextClientFrame reads and decodes one frame queued for a hub client.
-func nextClientFrame(t *testing.T, client *Client, timeout time.Duration) Message {
+func nextClientFrame(t *testing.T, client *Client) Message {
 	t.Helper()
 	select {
 	case payload := <-client.send:
@@ -177,7 +204,7 @@ func nextClientFrame(t *testing.T, client *Client, timeout time.Duration) Messag
 			t.Fatalf("unmarshal client frame: %v", err)
 		}
 		return msg
-	case <-time.After(timeout):
+	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for a client frame")
 		return Message{}
 	}
@@ -209,31 +236,81 @@ func TestStartLogStreamReplaysToLateViewer(t *testing.T) {
 
 	first := rt.Hub.newClient()
 	rt.Hub.subscribe(first, channel)
+	waitForCondition(t, 2*time.Second, "first subscription", func() bool {
+		return rt.Hub.Subscribers(channel) == 1
+	})
 	if err := rt.StartLogStream(opener, "srv-rt", "replay", req); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
-	live := nextClientFrame(t, first, 3*time.Second)
+	live := nextClientFrame(t, first)
 	if live.Type != TypeLog || live.Data != "tail\n" || live.Replay {
 		t.Fatalf("first viewer frame = %+v, want an untagged live tail", live)
 	}
 
 	second := rt.Hub.newClient()
 	rt.Hub.subscribe(second, channel)
+	waitForCondition(t, 2*time.Second, "second subscription", func() bool {
+		return rt.Hub.Subscribers(channel) == 2
+	})
 	if err := rt.StartLogStream(opener, "srv-rt", "replay", req); err != nil {
 		t.Fatalf("repeat StartLogStream: %v", err)
 	}
-	replayed := nextClientFrame(t, second, 3*time.Second)
+	replayed := nextClientFrame(t, second)
 	if replayed.Type != TypeLog || replayed.Data != "tail\n" || !replayed.Replay {
 		t.Fatalf("late viewer frame = %+v, want the replay-tagged tail", replayed)
 	}
 	// The first viewer receives the same replayed frame, but tagged, so the
 	// client will not render a duplicate.
-	duplicate := nextClientFrame(t, first, 3*time.Second)
+	duplicate := nextClientFrame(t, first)
 	if duplicate.Type != TypeLog || duplicate.Data != "tail\n" || !duplicate.Replay {
 		t.Fatalf("first viewer replay frame = %+v, want a replay-tagged tail", duplicate)
 	}
 	if got := rt.ActiveStreams(); got != 1 {
 		t.Errorf("ActiveStreams = %d, want 1 (shared stream)", got)
+	}
+}
+
+// TestReplayEmitsAllBufferedFrames is the round-3 U1 server-side guard: a
+// replay must deliver the whole ring, not just the first frame (the client
+// renders them as one batch decided at start).
+func TestReplayEmitsAllBufferedFrames(t *testing.T) {
+	rt := mountFallback(t)
+
+	channel := LogChannel("srv-rt", "multi")
+	chunks := [][]byte{[]byte("one\n"), []byte("two\n"), []byte("three\n")}
+	opener := func(context.Context) (LogStreamer, io.Closer, error) {
+		return scriptedTailStreamer{chunks: chunks}, nil, nil
+	}
+	req := &agentv1.StreamLogsRequest{ContainerId: "multi"}
+
+	first := rt.Hub.newClient()
+	rt.Hub.subscribe(first, channel)
+	waitForCondition(t, 2*time.Second, "first subscription", func() bool {
+		return rt.Hub.Subscribers(channel) == 1
+	})
+	if err := rt.StartLogStream(opener, "srv-rt", "multi", req); err != nil {
+		t.Fatalf("StartLogStream: %v", err)
+	}
+	for i, want := range []string{"one\n", "two\n", "three\n"} {
+		msg := nextClientFrame(t, first)
+		if msg.Type != TypeLog || msg.Data != want || msg.Replay {
+			t.Fatalf("live frame %d = %+v, want untagged %q", i, msg, want)
+		}
+	}
+
+	late := rt.Hub.newClient()
+	rt.Hub.subscribe(late, channel)
+	waitForCondition(t, 2*time.Second, "late subscription", func() bool {
+		return rt.Hub.Subscribers(channel) == 2
+	})
+	if err := rt.StartLogStream(opener, "srv-rt", "multi", req); err != nil {
+		t.Fatalf("repeat StartLogStream: %v", err)
+	}
+	for i, want := range []string{"one\n", "two\n", "three\n"} {
+		msg := nextClientFrame(t, late)
+		if msg.Type != TypeLog || msg.Data != want || !msg.Replay {
+			t.Fatalf("replay frame %d = %+v, want tagged %q", i, msg, want)
+		}
 	}
 }
 
@@ -320,6 +397,91 @@ func TestStartLogStreamRetriesPublishAndNotifies(t *testing.T) {
 	}
 	if flaky.callCount() < 3 {
 		t.Errorf("publish calls = %d, want the failed frame retried", flaky.callCount())
+	}
+}
+
+// failOnCallPublisher fails exactly one call (1-based), then delivers.
+type failOnCallPublisher struct {
+	mu     sync.Mutex
+	failOn int
+	calls  int
+	hub    *Hub
+}
+
+func (p *failOnCallPublisher) Publish(_ context.Context, channel string, payload []byte) error {
+	p.mu.Lock()
+	p.calls++
+	fail := p.calls == p.failOn
+	p.mu.Unlock()
+	if fail {
+		return errors.New("redis down")
+	}
+	p.hub.Broadcast(channel, payload)
+	return nil
+}
+
+// TestResumedOnlyForLogFrames is the round-3 U3 regression: recovering the
+// terminal disconnect notice must not emit a "resumed" notice immediately
+// before the close frame.
+func TestResumedOnlyForLogFrames(t *testing.T) {
+	oldMin, oldMax := streamPublishMinBackoff, streamPublishMaxBackoff
+	streamPublishMinBackoff, streamPublishMaxBackoff = time.Millisecond, 2*time.Millisecond
+	defer func() {
+		streamPublishMinBackoff, streamPublishMaxBackoff = oldMin, oldMax
+	}()
+
+	hub := NewHub()
+	go hub.Run()
+	t.Cleanup(hub.Close)
+
+	// Call 1 is the log frame (succeeds); call 2 is the terminal disconnect
+	// notice (fails once, then succeeds on retry).
+	pub := &failOnCallPublisher{failOn: 2, hub: hub}
+	rt := newManualRealtime(hub, pub)
+	t.Cleanup(rt.Close)
+
+	channel := LogChannel("srv-rt", "terminal")
+	client := hub.newClient()
+	hub.subscribe(client, channel)
+	waitForCondition(t, 2*time.Second, "subscription", func() bool {
+		return hub.Subscribers(channel) == 1
+	})
+
+	streamer := fakeStreamer{stream: &fakeLogStream{chunks: [][]byte{[]byte("hi\n")}, fail: io.EOF}}
+	opener := func(context.Context) (LogStreamer, io.Closer, error) { return streamer, nil, nil }
+	if err := rt.StartLogStream(opener, "srv-rt", "terminal", &agentv1.StreamLogsRequest{ContainerId: "terminal"}); err != nil {
+		t.Fatalf("StartLogStream: %v", err)
+	}
+	waitForCondition(t, 3*time.Second, "stream end", func() bool {
+		return rt.ActiveStreams() == 0
+	})
+
+	gotLog, gotNotice, gotResumed := false, false, false
+drain:
+	for {
+		select {
+		case payload := <-client.send:
+			var msg Message
+			if err := json.Unmarshal(payload, &msg); err != nil {
+				t.Fatalf("unmarshal frame: %v", err)
+			}
+			switch {
+			case msg.Type == TypeLog && msg.Data == "hi\n":
+				gotLog = true
+			case msg.Type == TypeDisconnect && strings.Contains(msg.Data, "interrupted"):
+				gotNotice = true
+			case msg.Type == TypeResumed:
+				gotResumed = true
+			}
+		case <-time.After(300 * time.Millisecond):
+			break drain
+		}
+	}
+	if !gotLog || !gotNotice {
+		t.Fatalf("missing frames: log=%v notice=%v", gotLog, gotNotice)
+	}
+	if gotResumed {
+		t.Fatal("resumed emitted for a non-log frame (round-3 U3)")
 	}
 }
 

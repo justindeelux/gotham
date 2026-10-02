@@ -252,23 +252,23 @@ async function handleSubmit(): Promise<void> {
         </NAlert>
 
         <NForm ref="formRef" :model="form" :rules="rules" @submit.prevent="handleSubmit">
-          <NFormItem label="Email" path="email">
+          <NFormItem label="Email" path="email" :label-props="{ for: 'register-email' }">
             <NInput
               v-model:value="form.email"
               placeholder="you@gotham.dev"
-              :input-props="{ autocomplete: 'email', type: 'email' }"
+              :input-props="{ id: 'register-email', autocomplete: 'email', type: 'email' }"
               @keyup.enter="handleSubmit"
             />
           </NFormItem>
 
-          <NFormItem label="Password" path="password">
+          <NFormItem label="Password" path="password" :label-props="{ for: 'register-password' }">
             <NSpace vertical :size="8" class="password-field">
               <NInput
                 v-model:value="form.password"
                 type="password"
                 show-password-on="click"
                 placeholder="At least 10 characters"
-                :input-props="{ autocomplete: 'new-password' }"
+                :input-props="{ id: 'register-password', autocomplete: 'new-password' }"
                 @keyup.enter="handleSubmit"
               />
               <div class="strength-row">
@@ -287,13 +287,17 @@ async function handleSubmit(): Promise<void> {
             </NSpace>
           </NFormItem>
 
-          <NFormItem label="Confirm password" path="confirmPassword">
+          <NFormItem
+            label="Confirm password"
+            path="confirmPassword"
+            :label-props="{ for: 'register-confirm-password' }"
+          >
             <NInput
               v-model:value="form.confirmPassword"
               type="password"
               show-password-on="click"
               placeholder="Repeat your password"
-              :input-props="{ autocomplete: 'new-password' }"
+              :input-props="{ id: 'register-confirm-password', autocomplete: 'new-password' }"
               @keyup.enter="handleSubmit"
             />
           </NFormItem>

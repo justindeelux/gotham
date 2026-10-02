@@ -28,6 +28,16 @@ const (
 // ErrUnknownMigrateCommand is returned by Migrate for an unsupported subcommand.
 var ErrUnknownMigrateCommand = errors.New("unknown migration command")
 
+// ErrMigrationInProgress is returned when another `gotham migrate` holds the
+// migration lock. The schema is shared, so the second run fails instead of
+// interleaving goose's bookkeeping with the first.
+var ErrMigrationInProgress = errors.New("another migration is already in progress")
+
+// migrationLockID is the session-level advisory lock that serializes migration
+// runs across processes. It is the CRC-32 of "gotham-migrate", kept distinct
+// from goose's own lock ID so an unrelated goose locker never collides.
+const migrationLockID int64 = 1026152518
+
 // IsMigrateCommand reports whether command is a supported migrate subcommand.
 func IsMigrateCommand(command string) bool {
 	switch command {
@@ -40,7 +50,27 @@ func IsMigrateCommand(command string) bool {
 
 // Migrate runs the embedded migrations against dsn. The schema is forward-only:
 // "down" exists for local development and rolls back a single version.
+//
+// "up" and "down" mutate the shared schema, so they hold a session-level
+// PostgreSQL advisory lock for the whole run and wait for any concurrent run to
+// finish, respecting ctx. The lock is released when the connection closes
+// (including on a crash). "status" only reads, so it runs without the lock.
+//
+// Callers that must not wait use MigrateFailFast.
 func Migrate(ctx context.Context, dsn, command string) error {
+	return migrate(ctx, dsn, command, false)
+}
+
+// MigrateFailFast is Migrate without the wait: when another run holds the
+// migration lock it returns ErrMigrationInProgress immediately. The CLI uses it
+// so a second `gotham migrate` fails clearly instead of queueing behind the
+// first. Test setup uses Migrate so parallel packages serialize on the lock.
+func MigrateFailFast(ctx context.Context, dsn, command string) error {
+	return migrate(ctx, dsn, command, true)
+}
+
+// migrate is the shared implementation behind Migrate and MigrateFailFast.
+func migrate(ctx context.Context, dsn, command string, failFast bool) error {
 	if !IsMigrateCommand(command) {
 		return fmt.Errorf("%w: %q", ErrUnknownMigrateCommand, command)
 	}
@@ -56,14 +86,34 @@ func Migrate(ctx context.Context, dsn, command string) error {
 		return fmt.Errorf("init migrations: %w", err)
 	}
 
-	switch command {
-	case MigrateUp:
-		return migrateUp(ctx, provider)
-	case MigrateDown:
-		return migrateDown(ctx, provider)
-	default:
+	if command == MigrateStatus {
 		return migrateStatus(ctx, provider)
 	}
+
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open migration lock connection: %w", err)
+	}
+	// Closing the connection ends the session and releases the advisory lock;
+	// no explicit unlock is needed, so a killed process cannot leave it held.
+	defer func() { _ = conn.Close() }()
+
+	if failFast {
+		var locked bool
+		if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", migrationLockID).Scan(&locked); err != nil {
+			return fmt.Errorf("acquire migration lock: %w", err)
+		}
+		if !locked {
+			return ErrMigrationInProgress
+		}
+	} else if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+
+	if command == MigrateUp {
+		return migrateUp(ctx, provider)
+	}
+	return migrateDown(ctx, provider)
 }
 
 // migrateUp applies every pending migration and reports what ran.

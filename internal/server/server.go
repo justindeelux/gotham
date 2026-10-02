@@ -256,10 +256,7 @@ func (s *Server) Handler() http.Handler {
 // app, while /healthz and /api keep their own handling.
 func (s *Server) routes() (http.Handler, error) {
 	r := chi.NewRouter()
-	r.Use(s.securityHeaders)
-	r.Use(middleware.RequestID)
-	r.Use(middleware.Recoverer)
-	r.Use(s.requestLogger())
+	s.baseMiddleware(r)
 
 	r.Get("/healthz", s.handleHealthz)
 
@@ -479,6 +476,17 @@ func (s *Server) routes() (http.Handler, error) {
 	r.NotFound(spa.ServeHTTP)
 
 	return r, nil
+}
+
+// baseMiddleware installs the cross-cutting middleware shared by every route.
+// The order is load-bearing: the request logger wraps the recoverer, so a panic
+// recovered below it still produces one structured request line (status 500)
+// instead of the line vanishing with the panic.
+func (s *Server) baseMiddleware(r chi.Router) {
+	r.Use(s.securityHeaders)
+	r.Use(middleware.RequestID)
+	r.Use(s.requestLogger())
+	r.Use(middleware.Recoverer)
 }
 
 // deployService builds the deploy domain service for the HTTP wiring: the

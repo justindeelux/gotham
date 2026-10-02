@@ -126,22 +126,22 @@ onMounted(() => {
         </NAlert>
 
         <NForm ref="formRef" :model="form" :rules="rules" @submit.prevent="handleSubmit">
-          <NFormItem label="Email" path="email">
+          <NFormItem label="Email" path="email" :label-props="{ for: 'login-email' }">
             <NInput
               v-model:value="form.email"
               placeholder="you@gotham.dev"
-              :input-props="{ autocomplete: 'username', type: 'email' }"
+              :input-props="{ id: 'login-email', autocomplete: 'username', type: 'email' }"
               @keyup.enter="handleSubmit"
             />
           </NFormItem>
 
-          <NFormItem label="Password" path="password">
+          <NFormItem label="Password" path="password" :label-props="{ for: 'login-password' }">
             <NInput
               v-model:value="form.password"
               type="password"
               show-password-on="click"
               placeholder="Your password"
-              :input-props="{ autocomplete: 'current-password' }"
+              :input-props="{ id: 'login-password', autocomplete: 'current-password' }"
               @keyup.enter="handleSubmit"
             />
           </NFormItem>

@@ -41,7 +41,13 @@ type redisPinger struct {
 }
 
 func newRedisPinger(addr string) *redisPinger {
-	return &redisPinger{client: redis.NewClient(&redis.Options{Addr: addr})}
+	return &redisPinger{client: redis.NewClient(&redis.Options{
+		Addr: addr,
+		// Respect the health-check deadline. Without this go-redis swaps in
+		// context.Background(), so a hung Redis blocks until the 5s socket
+		// timeout — past the advertised ~2s health budget.
+		ContextTimeoutEnabled: true,
+	})}
 }
 
 // Ping issues PING, honouring ctx plus the internal ping timeout.

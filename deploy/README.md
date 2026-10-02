@@ -85,10 +85,12 @@ which writes `ca.crt` + `ca.key` (`0600`) into `GOTHAM_CA_DIR`
 (`/var/lib/gotham/ca`, owned by the `gotham` service user) and is idempotent — a
 reinstall keeps the existing CA. `gotham serve` loads it and the gRPC gateway
 runs TLS, presenting a server certificate signed by the CA and accepting a client
-certificate when one is presented. Without a CA (only when an operator runs
-`gotham serve` directly) the gateway falls back to plaintext and logs a warning.
-A directory holding exactly one of `ca.crt`/`ca.key` is an **incomplete CA** and
-is refused at startup rather than silently downgraded to plaintext.
+certificate when one is presented. A directory holding exactly one of
+`ca.crt`/`ca.key` is an **incomplete CA** and is refused at startup rather than
+silently downgraded to plaintext, and a `ca.key` readable by group or others is
+refused too (it signs every agent certificate). With no CA at all, serve refuses
+to start unless the operator sets `GOTHAM_GRPC_INSECURE=true` (development only);
+only then does the gateway run plaintext and log a warning.
 
 The listener certificate SANs are the operator-declared hosts
 (`install.sh --cp-host <name-or-ip>` repeated, or `GOTHAM_GRPC_HOSTS=<a,b>`)

@@ -47,10 +47,11 @@ const (
 	EnvOAuthGitHubClientSecret = "GOTHAM_OAUTH_GITHUB_CLIENT_SECRET"
 	EnvOAuthGitHubRedirectURL  = "GOTHAM_OAUTH_GITHUB_REDIRECT_URL"
 
-	EnvGRPCAddr  = "GOTHAM_GRPC_ADDR"
-	EnvGRPCHosts = "GOTHAM_GRPC_HOSTS"
-	EnvCADir     = "GOTHAM_CA_DIR"
-	EnvSecretKey = "GOTHAM_SECRET_KEY"
+	EnvGRPCAddr     = "GOTHAM_GRPC_ADDR"
+	EnvGRPCHosts    = "GOTHAM_GRPC_HOSTS"
+	EnvGRPCInsecure = "GOTHAM_GRPC_INSECURE"
+	EnvCADir        = "GOTHAM_CA_DIR"
+	EnvSecretKey    = "GOTHAM_SECRET_KEY"
 
 	envPrefix = "GOTHAM"
 )
@@ -115,6 +116,11 @@ type GRPC struct {
 	// dialing by that name verifies. Empty by default; the loopback names and
 	// the machine hostname are always present.
 	Hosts []string `mapstructure:"hosts"`
+	// Insecure is the explicit development opt-in that lets the gateway start
+	// in plaintext when no CA is present. Production requires a CA; without one
+	// and without this flag, serve refuses to start the agent channel in
+	// plaintext. Set from GOTHAM_GRPC_INSECURE=true.
+	Insecure bool `mapstructure:"insecure"`
 }
 
 // CA holds the certificate authority settings.
@@ -320,6 +326,7 @@ func newViper() *viper.Viper {
 		"redis.addr":                EnvRedisAddr,
 		"grpc.addr":                 EnvGRPCAddr,
 		"grpc.hosts":                EnvGRPCHosts,
+		"grpc.insecure":             EnvGRPCInsecure,
 		"ca.dir":                    EnvCADir,
 		"secret_key":                EnvSecretKey,
 		"log.level":                 EnvLogLevel,

@@ -53,7 +53,10 @@ func TestLoadDefaults(t *testing.T) {
 // TestLoadRejectsPlaintextWithoutOptIn is the FX-3 item-9 guard: no CA and no
 // explicit insecure opt-in must fail closed rather than dial/serve plaintext.
 func TestLoadRejectsPlaintextWithoutOptIn(t *testing.T) {
+	// Loopback listen address so the failure is the missing opt-in, not the
+	// loopback check.
 	clearAgentEnv(t)
+	t.Setenv(envListenAddr, "127.0.0.1:9443")
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load(no CA, no insecure) = nil error, want fail-closed")

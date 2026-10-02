@@ -101,11 +101,16 @@ grpc:
   # hosts:
   #   - cp.example.com
   #   - 203.0.113.10
+  # Insecure is the explicit development opt-in that lets the gateway start in
+  # plaintext when no CA is present. Without a CA serve refuses to start unless
+  # this is true. Set from GOTHAM_GRPC_INSECURE=true.
+  # insecure: false
 
 # Certificate authority used to issue agent and control-plane mTLS certificates.
+# Without one, serve refuses to start unless GOTHAM_GRPC_INSECURE=true
+# (development only); the CA is required in production.
 ca:
-  # Directory holding ca.crt and ca.key. When the CA is absent the gateway
-  # falls back to an insecure listener (development only). Default: ./data/ca/
+  # Directory holding ca.crt and ca.key (ca.key must be 0600). Default: ./data/ca/
   dir: ./data/ca/
 
 # Secret used to encrypt stored SSH private keys (AES-256-GCM). When empty an

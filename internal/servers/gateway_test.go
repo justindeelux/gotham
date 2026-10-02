@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -101,11 +102,20 @@ func startTestGateway(t *testing.T, service *ServerService) *grpc.ClientConn {
 // tests can tighten its per-peer rate limits.
 func startTestGatewayInstance(t *testing.T, service *ServerService) (*Gateway, *grpc.ClientConn) {
 	t.Helper()
-
-	gateway, err := NewGateway(GatewayConfig{
+	return startTestGatewayWithConfig(t, GatewayConfig{
 		Service: service,
 		Logger:  discardLogger(),
 	})
+}
+
+// startTestGatewayWithConfig serves cfg over an in-memory connection.
+func startTestGatewayWithConfig(t *testing.T, cfg GatewayConfig) (*Gateway, *grpc.ClientConn) {
+	t.Helper()
+
+	if cfg.Logger == nil {
+		cfg.Logger = discardLogger()
+	}
+	gateway, err := NewGateway(cfg)
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -788,6 +798,130 @@ func TestGatewayHeartbeatRateLimited(t *testing.T) {
 	_ = stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()})
 	if _, err := stream.CloseAndRecv(); status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("Heartbeat after burst = %v, want ResourceExhausted", err)
+	}
+}
+
+// TestGatewayRegisterRejectsReservedNodeID is the FX-3 R1 short-term guard: a
+// peer cannot enroll the control plane's own listener identity, which would mint
+// a CP-impersonation certificate.
+func TestGatewayRegisterRejectsReservedNodeID(t *testing.T) {
+	service, st, authority := newTestServiceWithAuthority(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	gateway, err := NewGateway(GatewayConfig{
+		Addr:      "127.0.0.1:0",
+		Hosts:     []string{"cp.example.com"},
+		Authority: authority,
+		Service:   service,
+		Logger:    discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if err := gateway.Start(ctx); err != nil {
+		t.Fatalf("gateway.Start: %v", err)
+	}
+	t.Cleanup(gateway.Stop)
+
+	conn, err := grpc.NewClient(gateway.listener.Addr().String(),
+		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(authority.Pool(), "")))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := agentv1.NewAgentServiceClient(conn)
+
+	reserved := []string{"cp.example.com", "localhost", "127.0.0.1"}
+	for _, nodeID := range reserved {
+		_, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux"})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Errorf("Register(%q) = %v, want PermissionDenied", nodeID, err)
+		}
+		if _, lookupErr := st.GetServerByNodeID(ctx, &nodeID); lookupErr == nil {
+			t.Errorf("a registry row was created for the reserved id %q", nodeID)
+		}
+	}
+
+	// A non-reserved id is unaffected.
+	nodeID := uniqueNodeID("node-not-reserved")
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux"}); err != nil {
+		t.Fatalf("Register(%q) = %v, want success", nodeID, err)
+	}
+	row, err := st.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = st.DeleteServer(cleanupCtx, row.ID)
+	})
+}
+
+// TestGatewayHeartbeatIdleDeadline proves an idle Heartbeat stream is closed
+// rather than held open indefinitely (FX-3 R2).
+func TestGatewayHeartbeatIdleDeadline(t *testing.T) {
+	service, _ := newTestService(t)
+	_, conn := startTestGatewayWithConfig(t, GatewayConfig{
+		Service:       service,
+		Logger:        discardLogger(),
+		HeartbeatIdle: time.Second,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	stream, err := agentv1.NewAgentServiceClient(conn).Heartbeat(ctx)
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	// Stay quiet past the idle deadline; the server must close the stream
+	// rather than hold it open.
+	time.Sleep(3 * time.Second)
+	if _, err := stream.CloseAndRecv(); status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("idle Heartbeat = %v, want DeadlineExceeded", err)
+	}
+}
+
+// TestGatewayLimitsStreamsAndMessages pins the gRPC caps (FX-3 R2). The
+// oversized-message path is exercised against the served gateway; the stream cap
+// is asserted on the constants and wired by construction.
+func TestGatewayLimitsStreamsAndMessages(t *testing.T) {
+	if maxConcurrentStreams != 64 || maxRecvMsgSize != 1<<20 {
+		t.Fatalf("gateway caps = %d/%d, want 64/1MiB", maxConcurrentStreams, maxRecvMsgSize)
+	}
+	service, _ := newTestService(t)
+	conn := startTestGateway(t, service)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := agentv1.NewAgentServiceClient(conn).Register(ctx, &agentv1.RegisterRequest{
+		NodeId: uniqueNodeID("node-big"),
+		Os:     strings.Repeat("x", 2<<20),
+	}); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("oversized Register = %v, want ResourceExhausted", err)
+	}
+}
+
+// TestLoadAuthorityRejectsLooseKeyPermissions is the FX-3 R3 guard: a CA key
+// readable beyond its owner is refused.
+func TestLoadAuthorityRejectsLooseKeyPermissions(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := LoadOrCreateAuthority(dir); err != nil {
+		t.Fatalf("LoadOrCreateAuthority: %v", err)
+	}
+	keyPath := filepath.Join(dir, caKeyFile)
+	if err := os.Chmod(keyPath, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if _, err := LoadAuthority(dir); err == nil {
+		t.Error("LoadAuthority(0644 key) = nil error, want refusal")
+	}
+	if err := os.Chmod(keyPath, 0o600); err != nil {
+		t.Fatalf("chmod back: %v", err)
+	}
+	if _, err := LoadAuthority(dir); err != nil {
+		t.Errorf("LoadAuthority(0600 key) = %v, want success", err)
 	}
 }
 

@@ -188,6 +188,13 @@ func (a *Authority) Pool() *x509.CertPool {
 // key. A CSR whose common name, DNS SANs or IP SANs do not exactly match
 // nodeID, that carries a wildcard, or that carries an oversized SAN set is
 // rejected with an error wrapping ErrValidation.
+//
+// This binds a caller to one identity but does NOT prove ownership of it: the
+// node id is self-asserted on the bootstrap connection, so any caller can
+// enroll any *enrollable* id (the control-plane listener ids are refused
+// separately in Gateway.Register). A caller cannot obtain a certificate that is
+// valid for an identity other than the one it enrolled; it can still enroll
+// someone else's id until the LOW-4 bootstrap credential exists.
 func (a *Authority) IssueAgentCertFromCSR(csrPEM []byte, nodeID string) ([]byte, error) {
 	nodeID = strings.TrimSpace(nodeID)
 	if err := validateNodeID(nodeID); err != nil {
@@ -447,6 +454,9 @@ func createAuthority(dir, certPath, keyPath string) (*Authority, error) {
 
 // loadAuthority reads and parses a persisted CA.
 func loadAuthority(certPath, keyPath string) (*Authority, error) {
+	if err := checkCAKeyPermissions(keyPath); err != nil {
+		return nil, err
+	}
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
 		return nil, fmt.Errorf("read ca certificate: %w", err)
@@ -460,20 +470,38 @@ func loadAuthority(certPath, keyPath string) (*Authority, error) {
 		return nil, fmt.Errorf("parse ca certificate: %w", err)
 	}
 
-	keyPEM, err := os.ReadFile(keyPath)
-	if err != nil {
+	var (
+		keyPEM []byte
+		block  *pem.Block
+	)
+	if keyPEM, err = os.ReadFile(keyPath); err != nil {
 		return nil, fmt.Errorf("read ca key: %w", err)
 	}
-	keyBlock, _ := pem.Decode(keyPEM)
-	if keyBlock == nil {
+	block, _ = pem.Decode(keyPEM)
+	if block == nil {
 		return nil, fmt.Errorf("decode ca key %s: not PEM", keyPath)
 	}
-	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	key, err := x509.ParseECPrivateKey(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse ca key: %w", err)
 	}
 
 	return &Authority{cert: cert, key: key, pem: certPEM}, nil
+}
+
+// checkCAKeyPermissions refuses a CA private key readable beyond its owner. The
+// CA signs every agent certificate; a group- or world-readable key lets a local
+// user mint certificates for any node, so a loose mode is a hard error rather
+// than a warning.
+func checkCAKeyPermissions(keyPath string) error {
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		return fmt.Errorf("stat ca key: %w", err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return fmt.Errorf("servers: ca key %s has permissions %04o; must not be readable by group or others (chmod 0600)", keyPath, perm)
+	}
+	return nil
 }
 
 // leafPEM encodes a leaf certificate and its key as PEM.

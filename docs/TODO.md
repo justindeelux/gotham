@@ -68,16 +68,28 @@ residuals — full detail in `deploy/README.md` → Known residuals:
   (`VerifyClientCertIfGiven`); mutual TLS waits on the registration bootstrap
   acquiring a client credential. No bootstrap credential exists yet — the
   remaining owner/design decision, not a polishing task. FX-3 hardened the
-  verifiable subset: CSR SANs are bound to the registered node identity, a
-  presented client certificate must match `req.NodeId`, node ids/SANs are capped
-  and Register/heartbeat are rate-limited per peer. The two residuals that still
-  need the bootstrap credential are: (a) the very first Register/heartbeat is
-  still self-asserted (metadata `node-id`) because it presents no client
-  certificate; and (b) **certificate revocation is absent** — there is no CRL or
-  OCSP and no revoked-serial set checked at agent-dial time, so a compromised
-  node certificate stays valid until it expires. The mitigration in place is the
-  shorter 90-day agent leaf (down from one year) plus the agent's re-registration
-  before expiry; a real revocation path is deferred with mutual TLS.
+  verifiable subset. Residuals that still need the bootstrap credential:
+  - **Every** bootstrap Register/heartbeat is self-asserted (metadata
+    `node-id`), not just the first: the metadata is read on each stream, so a
+    caller can impersonate any enrolled node id at any time, not only at
+    enrollment.
+  - **CP-impersonation.** An unauthenticated peer can enroll any node id,
+    including the control plane's own listener hostname/IP, and receive a
+    CA-signed `serverAuth` certificate — usable to impersonate the CP toward
+    agents. The short-term guard (FX-3 R1) refuses the CP's own listener ids
+    (`serverHosts`) at Register; the real fix is a role-separated CA or a
+    bootstrap credential that binds the caller to the identity.
+  - **Revocation absent.** No CRL/OCSP and no revoked-serial set checked at
+    agent-dial time, so a compromised node certificate stays valid until it
+    expires; mitigated by the 90-day agent leaf and early renewal.
+  - **Per-IP limiter keying.** Register/heartbeat limits are keyed per peer IP
+    (port-independent, address kept whole); agents behind one NAT/egress IP
+    share a bucket, and an IPv6 host is its own key (bounded by the limiter's
+    4096-bucket cap, not folded to a prefix).
+  - **Unknown-node Register rows.** Each Register creates a registry row for the
+    node id (the documented auto-registration behavior), so an unauthenticated
+    peer can still grow the `servers` table within its per-peer rate limit; a
+    future bootstrap credential should gate row creation.
 - [x] **Release key rotation/revocation.** Closed in PR #92 (`0e63090`): a
   current + next key ring is embedded in both binaries, verification is
   fail-closed across the set, the release workflow validates/embeds the optional

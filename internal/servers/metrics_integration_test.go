@@ -330,17 +330,21 @@ func TestHeartbeatAggregatesSamples(t *testing.T) {
 		}
 	}
 
-	send(0.1, base)                  // accepted
-	send(0.2, base.Add(time.Second)) // dropped: no wall-clock gap
-	current = base.Add(11 * time.Second)
-	send(0.3, current) // accepted: outside the interval
+	// The throttle keys on the server wall clock, never on sent_at: a sample
+	// whose sent_at is far ahead but which arrives immediately must still be
+	// dropped.
+	send(0.1, base)                   // accepted
+	send(0.2, base.Add(24*time.Hour)) // dropped: same wall-clock slot
+	current = base.Add(heartbeatSampleInterval + time.Second)
+	send(0.3, current.Add(-24*time.Hour)) // accepted: new slot despite old sent_at
+	send(0.4, current.Add(time.Hour))     // dropped: same slot, future sent_at
 
 	updated, err := st.GetServerByNodeID(ctx, &nodeID)
 	if err != nil {
 		t.Fatalf("GetServerByNodeID after heartbeats: %v", err)
 	}
-	if updated.CpuUsage == nil || *updated.CpuUsage != 0.3 {
-		t.Errorf("cpu_usage = %v, want 0.3 (the snapshot always updates)", updated.CpuUsage)
+	if updated.CpuUsage == nil || *updated.CpuUsage != 0.4 {
+		t.Errorf("cpu_usage = %v, want 0.4 (the snapshot always updates)", updated.CpuUsage)
 	}
 
 	var count int
@@ -348,7 +352,7 @@ func TestHeartbeatAggregatesSamples(t *testing.T) {
 		t.Fatalf("count metrics: %v", err)
 	}
 	if count != 2 {
-		t.Errorf("metrics rows = %d, want 2 (the immediate sample must be dropped)", count)
+		t.Errorf("metrics rows = %d, want 2 (sent_at must not bypass the wall-clock throttle)", count)
 	}
 }
 

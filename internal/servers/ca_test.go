@@ -326,6 +326,34 @@ func mustIssueFromCSR(t *testing.T, authority *Authority, csrPEM []byte, nodeID 
 	return certPEM
 }
 
+// TestFileStateSurfacesStatErrors is the FX-3 R5 guard: only an absent file is
+// (false, nil); any other stat failure is an error, never silently "absent".
+func TestFileStateSurfacesStatErrors(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "present")
+	if err := os.WriteFile(existing, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if ok, err := fileState(existing); err != nil || !ok {
+		t.Errorf("fileState(existing) = (%v, %v), want (true, nil)", ok, err)
+	}
+	if ok, err := fileState(filepath.Join(dir, "missing")); err != nil || ok {
+		t.Errorf("fileState(missing) = (%v, %v), want (false, nil)", ok, err)
+	}
+	asDir := filepath.Join(dir, "adir")
+	if err := os.Mkdir(asDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := fileState(asDir); err == nil {
+		t.Error("fileState(directory) = nil error, want an error")
+	}
+	// A path under a non-directory cannot be stat'd: ENOTDIR, not NotExist.
+	notdir := filepath.Join(existing, "child")
+	if _, err := fileState(notdir); err == nil {
+		t.Error("fileState(ENOTDIR) = nil error, want an error")
+	}
+}
+
 // TestLoadAuthorityFailsClosedOnIncompletePair is the FX-3 item-2 guard: half a
 // CA pair must never silently downgrade to a plaintext listener.
 func TestLoadAuthorityFailsClosedOnIncompletePair(t *testing.T) {

@@ -19,6 +19,14 @@ import (
 // serverDrainTimeout bounds a graceful server stop before it is forced.
 const serverDrainTimeout = 5 * time.Second
 
+// Stream and message caps for the agent's gRPC server, matching the control
+// plane's gateway: one peer must not open unbounded streams or push oversized
+// messages.
+const (
+	agentMaxConcurrentStreams = 64
+	agentMaxRecvMsgSize       = 1 << 20
+)
+
 // dockerClient is the subset of DockerClient the gRPC server needs. It is an
 // interface so tests can substitute a fake.
 type dockerClient interface {
@@ -225,6 +233,10 @@ func NewServer(addr string, creds credentials.TransportCredentials, impl agentv1
 	if creds != nil {
 		serverOptions = append(serverOptions, grpc.Creds(creds))
 	}
+	// Bound streams and message size for the same reason as the control-plane
+	// gateway: the listener is reachable by the CP, and a compromised or buggy
+	// peer must not be able to exhaust the agent.
+	serverOptions = append(serverOptions, grpc.MaxConcurrentStreams(agentMaxConcurrentStreams), grpc.MaxRecvMsgSize(agentMaxRecvMsgSize))
 	server := grpc.NewServer(serverOptions...)
 	agentv1.RegisterDockerServiceServer(server, impl)
 	for _, option := range options {

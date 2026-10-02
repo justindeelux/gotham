@@ -336,7 +336,9 @@ func (a *Agent) registerRequest(ctx context.Context) *agentv1.RegisterRequest {
 	}
 	if csr, err := a.certificateRequest(); err != nil {
 		// The CSR is best effort: a node that cannot build one still
-		// registers and receives a certificate for its node id (dev fallback).
+		// registers. It then receives no certificate from the CP and serves
+		// its own self-signed key, so it is reachable only if the CP trusts
+		// that key out of band.
 		a.log.Warn("failed to build certificate signing request; registering without one", "error", err)
 	} else {
 		request.Csr = csr

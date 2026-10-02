@@ -137,10 +137,12 @@ func (s *ServerService) Metrics(ctx context.Context, id uuid.UUID, from, to time
 }
 
 // heartbeatSampleInterval is the minimum wall-clock gap between persisted
-// time-series samples for one node. An unauthenticated peer cannot grow
-// server_metrics faster than this no matter how many heartbeat messages it
-// sends; the live snapshot on the servers row still updates on every message.
-const heartbeatSampleInterval = 10 * time.Second
+// time-series samples for one node. It is set below the agent's 10s heartbeat
+// cadence so scheduling jitter does not randomly drop healthy samples (a 10s
+// interval against a 10s cadence would lose roughly half). An unauthenticated
+// peer still cannot grow server_metrics faster than this; the live snapshot on
+// the servers row updates on every message.
+const heartbeatSampleInterval = 5 * time.Second
 
 // metricClockSkew bounds how far a heartbeat's self-reported sent_at may differ
 // from the server clock before it is ignored for storage. A peer cannot push a

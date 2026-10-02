@@ -377,6 +377,24 @@ func TestLoadGRPCHostsFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadGRPCInsecureFromEnv(t *testing.T) {
+	clearGothamEnv(t)
+	chdir(t, t.TempDir())
+
+	if cfg, err := Load(); err != nil || cfg.GRPC.Insecure {
+		t.Fatalf("Load() = (%v, %v), want Insecure=false by default", cfg.GRPC.Insecure, err)
+	}
+
+	t.Setenv(EnvGRPCInsecure, "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.GRPC.Insecure {
+		t.Error("GRPC.Insecure = false, want true after GOTHAM_GRPC_INSECURE=true")
+	}
+}
+
 func TestLoadTrustedProxiesFromEnv(t *testing.T) {
 	clearGothamEnv(t)
 	chdir(t, t.TempDir())

@@ -32,6 +32,16 @@ const (
 	nodeIDMetadataKey = "node-id"
 	// gatewayGracefulStop bounds graceful shutdown before forcing a stop.
 	gatewayGracefulStop = 5 * time.Second
+	// maxConcurrentStreams caps streams per connection; an unauthenticated peer
+	// must not be able to open unbounded Heartbeat streams.
+	maxConcurrentStreams = 64
+	// maxRecvMsgSize caps a single inbound gRPC message (1 MiB): registration
+	// and heartbeat payloads are tiny.
+	maxRecvMsgSize = 1 << 20
+	// heartbeatIdleTimeout closes a Heartbeat stream that stops sending. The
+	// agent heartbeats every 10s, so a stream quiet for this long is dead or
+	// hostile.
+	heartbeatIdleTimeout = 2 * time.Minute
 )
 
 // GatewayConfig wires a Gateway.
@@ -45,6 +55,10 @@ type GatewayConfig struct {
 	// bind-address host, the loopback names and the machine hostname are always
 	// present.
 	Hosts []string
+	// HeartbeatIdle bounds how long a Heartbeat stream may stay quiet before the
+	// gateway closes it. Zero selects the production default; tests set a
+	// smaller value.
+	HeartbeatIdle time.Duration
 }
 
 // Gateway is the control-plane gRPC server. It implements AgentService (node
@@ -61,6 +75,12 @@ type Gateway struct {
 	logger     *slog.Logger
 	tlsEnabled bool
 	stopOnce   sync.Once
+
+	// reservedNodeIDs are the control plane's own listener hosts; enrolling one
+	// as a node would mint a CP-impersonation certificate (LOW-4 short-term
+	// guard). heartbeatIdle bounds an idle Heartbeat stream.
+	reservedNodeIDs map[string]bool
+	heartbeatIdle   time.Duration
 
 	// Per-peer rate limits bound the unauthenticated Register/heartbeat
 	// surface. Tests may replace them with tighter limits.
@@ -91,11 +111,17 @@ func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 		authority:        cfg.Authority,
 		service:          cfg.Service,
 		logger:           logger,
+		reservedNodeIDs:  reservedNodeIDSet(addr, cfg.Hosts),
+		heartbeatIdle:    cfg.HeartbeatIdle,
 		registerLimiter:  newPeerRateLimiter(registerRateLimit, registerBurst),
 		heartbeatLimiter: newPeerRateLimiter(heartbeatRateLimit, heartbeatBurst),
 	}
+	if g.heartbeatIdle <= 0 {
+		g.heartbeatIdle = heartbeatIdleTimeout
+	}
 
-	opts := make([]grpc.ServerOption, 0, 1)
+	opts := make([]grpc.ServerOption, 0, 3)
+	opts = append(opts, grpc.MaxConcurrentStreams(maxConcurrentStreams), grpc.MaxRecvMsgSize(maxRecvMsgSize))
 	if cfg.Authority != nil {
 		creds, err := cfg.Authority.serverCredentials(addr, cfg.Hosts)
 		if err != nil {
@@ -193,6 +219,11 @@ func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*
 			"node_id", nodeID, "peer_identity", identity, "peer", peerAddress(ctx))
 		return nil, status.Error(codes.PermissionDenied, "node_id does not match the authenticated peer")
 	}
+	if g.isReservedNodeID(nodeID) {
+		g.logger.Warn("servers: register node_id is reserved for the control plane listener",
+			"node_id", nodeID, "peer", peerAddress(ctx))
+		return nil, status.Error(codes.PermissionDenied, "node_id is reserved for the control plane listener")
+	}
 
 	var csrCert []byte
 	if len(req.GetCsr()) > 0 && g.authority != nil {
@@ -249,26 +280,64 @@ func (g *Gateway) Heartbeat(stream grpc.ClientStreamingServer[agentv1.HeartbeatR
 		g.logger.Warn("servers: heartbeat from unidentifiable peer", "peer", peer)
 	}
 
+	// Receive on a helper goroutine so the handler can apply an idle deadline;
+	// the goroutine exits when the stream's context is canceled after return.
+	type recvResult struct {
+		req *agentv1.HeartbeatRequest
+		err error
+	}
+	received := make(chan recvResult, 1)
+	go func() {
+		for {
+			req, err := stream.Recv()
+			select {
+			case received <- recvResult{req: req, err: err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	idleFor := g.heartbeatIdle
+	idle := time.NewTimer(idleFor)
+	defer idle.Stop()
+
 	for {
-		req, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			return stream.SendAndClose(&agentv1.HeartbeatResponse{ReceivedAt: timestamppb.Now()})
-		}
-		if err != nil {
-			return err
-		}
-		if !g.heartbeatLimiter.allow(limiterKey) {
-			return status.Error(codes.ResourceExhausted, "heartbeat rate limit exceeded")
-		}
-		if nodeID == "" {
-			continue
-		}
-		if err := g.service.RecordHeartbeat(ctx, nodeID, req); err != nil {
-			if errors.Is(err, ErrNotFound) {
-				g.logger.Warn("servers: heartbeat for unknown node", "node_id", nodeID)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-idle.C:
+			return status.Error(codes.DeadlineExceeded, "heartbeat stream idle")
+		case result := <-received:
+			if errors.Is(result.err, io.EOF) {
+				return stream.SendAndClose(&agentv1.HeartbeatResponse{ReceivedAt: timestamppb.Now()})
+			}
+			if result.err != nil {
+				return result.err
+			}
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
+			}
+			idle.Reset(idleFor)
+			if !g.heartbeatLimiter.allow(limiterKey) {
+				return status.Error(codes.ResourceExhausted, "heartbeat rate limit exceeded")
+			}
+			if nodeID == "" {
 				continue
 			}
-			g.logger.Warn("servers: heartbeat", "node_id", nodeID, "error", err)
+			if err := g.service.RecordHeartbeat(ctx, nodeID, result.req); err != nil {
+				if errors.Is(err, ErrNotFound) {
+					g.logger.Warn("servers: heartbeat for unknown node", "node_id", nodeID)
+					continue
+				}
+				g.logger.Warn("servers: heartbeat", "node_id", nodeID, "error", err)
+			}
 		}
 	}
 }
@@ -435,6 +504,28 @@ func peerHost(ctx context.Context) string {
 		return ip.String()
 	}
 	return host
+}
+
+// reservedNodeIDSet builds the set of CP listener identities that must never be
+// enrollable as nodes: registration would otherwise mint a CP-impersonation
+// certificate. Literal bind addresses are added so a wildcard bind still
+// protects its loopback form.
+func reservedNodeIDSet(addr string, extraHosts []string) map[string]bool {
+	ids := map[string]bool{}
+	for _, host := range serverHosts(addr, extraHosts) {
+		ids[strings.ToLower(host)] = true
+	}
+	if _, _, err := net.SplitHostPort(addr); err == nil {
+		ids[strings.ToLower(addr)] = true
+	}
+	return ids
+}
+
+// isReservedNodeID reports whether nodeID names the CP's own listener. The list
+// is a short-term guard; a role-separated CA/bootstrap credential is the real
+// fix (LOW-4).
+func (g *Gateway) isReservedNodeID(nodeID string) bool {
+	return g.reservedNodeIDs[strings.ToLower(nodeID)]
 }
 
 // serverHosts derives the SAN host list for the listener certificate: the

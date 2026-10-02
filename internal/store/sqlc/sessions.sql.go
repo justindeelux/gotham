@@ -44,6 +44,31 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 	return i, err
 }
 
+const deleteStaleSessions = `-- name: DeleteStaleSessions :execrows
+DELETE FROM sessions
+WHERE (revoked_at IS NULL AND expires_at < $1)
+   OR (revoked_at IS NOT NULL AND revoked_at < $2)
+`
+
+type DeleteStaleSessionsParams struct {
+	ExpiredBefore pgtype.Timestamptz `json:"expired_before"`
+	RevokedBefore pgtype.Timestamptz `json:"revoked_before"`
+}
+
+// DeleteStaleSessions drops sessions that expired before the retention cutoff
+// and revoked sessions whose revocation predates the reuse window. A revoked
+// row is governed only by the revoked cutoff: its expiry must not shrink the
+// reuse-detection window, and revoked rows stay the full 30 days so a replayed
+// token can still revoke its family. The expired cutoff only buffers
+// plain-expired rows before deletion.
+func (q *Queries) DeleteStaleSessions(ctx context.Context, arg DeleteStaleSessionsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStaleSessions, arg.ExpiredBefore, arg.RevokedBefore)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteUserSessions = `-- name: DeleteUserSessions :exec
 DELETE FROM sessions
 WHERE user_id = $1
@@ -77,6 +102,19 @@ func (q *Queries) GetSessionByRefreshHash(ctx context.Context, refreshHash strin
 	return i, err
 }
 
+const lockUserSessions = `-- name: LockUserSessions :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+// LockUserSessions takes the transaction-scoped advisory lock that serializes
+// session changes for one user. Both the family-revocation path and the
+// rotation acquire it first, so a rotation cannot insert a replacement after a
+// reuse-detection snapshot has already read the user's live sessions.
+func (q *Queries) LockUserSessions(ctx context.Context, userID string) error {
+	_, err := q.db.Exec(ctx, lockUserSessions, userID)
+	return err
+}
+
 const revokeSession = `-- name: RevokeSession :exec
 UPDATE sessions
 SET revoked_at = now()
@@ -106,4 +144,65 @@ func (q *Queries) RevokeSessionIfLive(ctx context.Context, refreshHash string) (
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const revokeUserSessions = `-- name: RevokeUserSessions :exec
+UPDATE sessions
+SET revoked_at = now()
+WHERE user_id = $1
+  AND revoked_at IS NULL
+`
+
+// RevokeUserSessions revokes every live session of a user. Refresh-token reuse
+// detection calls it when a replayed token reveals a possible theft: every
+// device is forced to re-authenticate.
+func (q *Queries) RevokeUserSessions(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, revokeUserSessions, userID)
+	return err
+}
+
+const rotateSession = `-- name: RotateSession :one
+WITH revoked AS (
+    UPDATE sessions AS s
+    SET revoked_at = now()
+    WHERE s.refresh_hash = $4
+      AND s.revoked_at IS NULL
+    RETURNING s.user_id
+)
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
+SELECT r.user_id, $1, $2, $3
+FROM revoked AS r
+RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version
+`
+
+type RotateSessionParams struct {
+	NewRefreshHash     string             `json:"new_refresh_hash"`
+	ExpiresAt          pgtype.Timestamptz `json:"expires_at"`
+	CredentialVersion  int32              `json:"credential_version"`
+	RevokedRefreshHash string             `json:"revoked_refresh_hash"`
+}
+
+// RotateSession atomically revokes the presented live session and inserts its
+// replacement in one statement, so a failed insert or a cancelled request
+// cannot consume the user's only refresh token. Zero rows (pgx.ErrNoRows)
+// means the presented session was already revoked or deleted, so the caller
+// must refuse to issue a replacement.
+func (q *Queries) RotateSession(ctx context.Context, arg RotateSessionParams) (Session, error) {
+	row := q.db.QueryRow(ctx, rotateSession,
+		arg.NewRefreshHash,
+		arg.ExpiresAt,
+		arg.CredentialVersion,
+		arg.RevokedRefreshHash,
+	)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RefreshHash,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+		&i.CredentialVersion,
+	)
+	return i, err
 }

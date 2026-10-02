@@ -62,6 +62,10 @@ type Service struct {
 	// password and before re-reading the credential version, so a test can
 	// commit a password reset into that window deterministically.
 	afterPasswordVerified func()
+	// beforeRotate is a test seam: Refresh runs it after the credential
+	// checks and before the atomic rotation, so a test can commit a reset
+	// plus a fresh login into that window deterministically.
+	beforeRotate func()
 }
 
 // New builds a Service. The clock is injectable so tests can exercise expiry
@@ -233,7 +237,12 @@ func (s *Service) Login(ctx context.Context, email, password string) (*AuthResul
 }
 
 // Refresh rotates a refresh token: the presented session is revoked and a new
-// session plus token pair is issued. Any unusable token returns ErrUnauthorized.
+// session plus token pair is issued in one atomic store operation, so a failed
+// replacement cannot consume the user's only token. Any unusable token returns
+// ErrUnauthorized. Presenting a session that is still on record but already
+// revoked (a rotated-away token) is treated as refresh-token theft: every live
+// session for the account is revoked and the event is logged without token
+// material. A merely expired token is not proof of theft and gets a plain 401.
 // A session whose credential version is older than the account's current
 // version (a password reset committed after it was minted) is refused as well,
 // so the old chain cannot mint a replacement under the new credential.
@@ -250,18 +259,15 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 		}
 		return nil, fmt.Errorf("auth: get session: %w", err)
 	}
-	if session.RevokedAt.Valid || !session.ExpiresAt.Valid || s.now().After(session.ExpiresAt.Time) {
+	if session.RevokedAt.Valid {
+		// A replayed revoked token. Classify and revoke atomically: only
+		// genuine reuse ends the family; a stale post-reset chain is a plain
+		// 401 so freshly authenticated sessions survive.
+		s.maybeRevokeFamily(ctx, session.UserID, hash)
 		return nil, ErrUnauthorized
 	}
-
-	live, err := s.store.RevokeSessionIfLive(ctx, hash)
-	if err != nil {
-		return nil, fmt.Errorf("auth: revoke session: %w", err)
-	}
-	if !live {
-		// The session disappeared between the read and the rotation — a
-		// password reset (or a concurrent rotation) won the race. Refuse,
-		// otherwise the old credential chain would outlive the reset.
+	if !session.ExpiresAt.Valid || s.now().After(session.ExpiresAt.Time) {
+		// A merely expired token is not proof of theft: no family action.
 		return nil, ErrUnauthorized
 	}
 
@@ -276,13 +282,69 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 	// sessions in one transaction. When the reset commits between the session
 	// read above and this user read, the delete finds the session already
 	// revoked (or gone), so only the version comparison stops the old chain
-	// from minting a replacement under the new credential (P-A5). The session
-	// was revoked above, so it cannot be presented again.
+	// from minting a replacement under the new credential (P-A5). Revoke the
+	// raced row so it cannot sit live until the sweep; a store failure is not
+	// fatal, as the version check refuses it on every retry anyway.
 	if session.CredentialVersion < user.CredentialVersion {
+		if err := s.store.RevokeSession(ctx, hash); err != nil {
+			s.logger.Error("auth: revoke stale session", "error", err, "user_id", uuid.UUID(user.ID.Bytes))
+		}
 		return nil, ErrUnauthorized
 	}
 
-	return s.issue(ctx, user)
+	// Sign before rotating: a signer failure must not consume the session.
+	accessToken, err := s.signAccessToken(user)
+	if err != nil {
+		return nil, err
+	}
+
+	refreshTokenNext, refreshHashNext, err := newRefreshToken()
+	if err != nil {
+		return nil, err
+	}
+	if s.beforeRotate != nil {
+		s.beforeRotate()
+	}
+	if _, err := s.store.RotateSession(ctx, session.UserID, sqlc.RotateSessionParams{
+		RevokedRefreshHash: hash,
+		NewRefreshHash:     refreshHashNext,
+		ExpiresAt:          pgTimestamp(s.now().Add(refreshTokenTTL)),
+		CredentialVersion:  user.CredentialVersion,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The row stopped being live between the read and the rotation.
+			// Classify it atomically: a rotation race (row revoked, current
+			// version) is reuse, while a reset purge (row deleted) or a stale
+			// post-reset chain is a plain 401 that leaves fresh sessions be.
+			s.maybeRevokeFamily(ctx, session.UserID, hash)
+			return nil, ErrUnauthorized
+		}
+		return nil, fmt.Errorf("auth: rotate session: %w", err)
+	}
+
+	return &AuthResult{
+		User:         toUser(user),
+		AccessToken:  accessToken,
+		ExpiresIn:    int64(accessTokenTTL / time.Second),
+		RefreshToken: refreshTokenNext,
+	}, nil
+}
+
+// maybeRevokeFamily classifies a replayed revoked token under the per-user
+// session lock and revokes the family only for genuine reuse (the row still
+// exists, is revoked, and carries the account's current credential version).
+// The classification and the revocation are one store transaction, so a
+// password reset cannot interleave. A store failure is logged and swallowed
+// because the caller is answering 401 either way.
+func (s *Service) maybeRevokeFamily(ctx context.Context, userID pgtype.UUID, refreshHash string) {
+	stolen, err := s.store.RevokeFamilyIfStolen(ctx, userID, refreshHash)
+	if err != nil {
+		s.logger.Error("auth: reuse revocation failed", "error", err, "user_id", uuid.UUID(userID.Bytes))
+		return
+	}
+	if stolen {
+		s.logger.Warn("auth: refresh token reuse detected; revoked all live sessions", "user_id", uuid.UUID(userID.Bytes))
+	}
 }
 
 // Logout revokes the session behind refreshToken. It is idempotent: an unknown
@@ -339,7 +401,7 @@ func (s *Service) issue(ctx context.Context, user sqlc.User) (*AuthResult, error
 		return nil, fmt.Errorf("auth: create session: %w", err)
 	}
 
-	accessToken, _, err := s.signer.IssueAccessToken(uuid.UUID(user.ID.Bytes), defaultRole)
+	accessToken, err := s.signAccessToken(user)
 	if err != nil {
 		return nil, err
 	}
@@ -350,6 +412,12 @@ func (s *Service) issue(ctx context.Context, user sqlc.User) (*AuthResult, error
 		ExpiresIn:    int64(accessTokenTTL / time.Second),
 		RefreshToken: refreshToken,
 	}, nil
+}
+
+// signAccessToken mints the short-lived JWT for user.
+func (s *Service) signAccessToken(user sqlc.User) (string, error) {
+	accessToken, _, err := s.signer.IssueAccessToken(uuid.UUID(user.ID.Bytes), defaultRole)
+	return accessToken, err
 }
 
 // newRefreshToken generates an opaque refresh token and the SHA-256 hash that is

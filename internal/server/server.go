@@ -82,8 +82,10 @@ type Server struct {
 	notify            notifications.NotificationService
 	webhooks          *webhooks.Service
 	metrics           *servers.MetricsSweeper
+	sessionSweeper    *auth.SessionSweeper
 	updates           updates.Service
 	authLimiter       *ipRateLimiter
+	refreshLimiter    *ipRateLimiter
 	router            http.Handler
 	closer            func()
 
@@ -112,6 +114,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	}
 	redisClient := newRedisPinger(snap.Redis.Addr)
 	limiter := newDefaultAuthLimiter()
+	refreshLimiter := newDefaultRefreshLimiter()
 
 	// Prefer the store's pool so the control plane does not open a second
 	// PostgreSQL connection just for the health check.
@@ -136,6 +139,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		servers:           serverService,
 		persistence:       st,
 		authLimiter:       limiter,
+		refreshLimiter:    refreshLimiter,
 	}
 	s.closer = func() {
 		// The deploy service owns its worker pool and realtime publisher;
@@ -149,6 +153,9 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		if s.metrics != nil {
 			s.metrics.Close()
 		}
+		if s.sessionSweeper != nil {
+			s.sessionSweeper.Close()
+		}
 		if closer, ok := s.notify.(interface{ Close() error }); ok {
 			_ = closer.Close()
 		}
@@ -160,6 +167,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		}
 		_ = redisClient.Close()
 		limiter.Close()
+		refreshLimiter.Close()
 		if oauthService != nil {
 			oauthService.Close()
 		}
@@ -222,6 +230,14 @@ func (s *Server) routes() (http.Handler, error) {
 		s.metrics = s.metricsRetention()
 		if s.metrics != nil {
 			s.metrics.Start()
+		}
+
+		// Refresh/logout sessions are pruned periodically: expired rows and
+		// revoked rows past the reuse-detection window are dead weight. The
+		// sweep mirrors the metrics retention and is stopped by the closer.
+		s.sessionSweeper = s.sessionRetention()
+		if s.sessionSweeper != nil {
+			s.sessionSweeper.Start()
 		}
 
 		// Teams (BE-8.2): the team service backs the teams/invites routes
@@ -676,6 +692,15 @@ func (s *Server) metricsRetention() *servers.MetricsSweeper {
 		return nil
 	}
 	return servers.NewMetricsSweeper(s.persistence, s.logger)
+}
+
+// sessionRetention builds the stale-session sweep. It returns nil without a
+// database (the handler tests) so no goroutine is started.
+func (s *Server) sessionRetention() *auth.SessionSweeper {
+	if s.persistence == nil {
+		return nil
+	}
+	return auth.NewSessionSweeper(s.persistence, s.logger)
 }
 
 // versionReporter exposes the control-plane build version without widening the

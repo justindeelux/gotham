@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -112,8 +113,8 @@ func (s *Server) mountAuthRoutes(api chi.Router) {
 
 		r.With(s.rateLimit).Post("/register", s.handleRegister)
 		r.With(s.rateLimit).Post("/login", s.handleLogin)
-		r.Post("/refresh", s.handleRefresh)
-		r.Post("/logout", s.handleLogout)
+		r.With(s.refreshRateLimit).Post("/refresh", s.handleRefresh)
+		r.With(s.refreshRateLimit).Post("/logout", s.handleLogout)
 
 		// Protected group: Phase 2+ can mount further authenticated routes here.
 		r.Group(func(protected chi.Router) {
@@ -240,19 +241,28 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
-// handleLogout revokes the presented session. It always answers 204 so clients
-// cannot probe which refresh tokens exist.
+// handleLogout revokes the presented session and always clears the OAuth
+// protocol cookies. A malformed body answers 400; a well-formed unknown or
+// already-revoked token answers 204, so clients cannot probe which refresh
+// tokens exist. A persistence failure answers 500: reporting success would
+// leave the refresh token usable while the client believes it is signed out.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Clear the OAuth protocol cookies on every logout response (204, 400,
+	// 500): a browser that attempted to log out must never be able to redeem
+	// a pending OAuth exchange, whatever the outcome.
+	s.clearOAuthCookies(w, r)
+
 	var req refreshTokenRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		s.logger.Debug("auth: logout body", "error", err)
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid request body"})
+		return
 	}
 
 	if err := s.auth.Logout(r.Context(), req.RefreshToken); err != nil {
-		s.logger.Warn("auth: logout", "error", err)
+		s.logger.Error("auth: logout", "error", err)
+		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
+		return
 	}
-	// A logged-out browser must not be able to redeem a pending OAuth exchange.
-	s.clearOAuthCookies(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -359,11 +369,22 @@ func (s *Server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) boo
 }
 
 // decodeJSONBody decodes a size-limited JSON body, rejecting unknown fields.
+// It requires exactly one JSON value: trailing input (a second document or
+// garbage after the first value) is an error, so a handler cannot succeed on a
+// body that is only partially valid.
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(dst)
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("auth: unexpected trailing JSON")
+	}
+	return nil
 }
 
 // newAuthResponse maps an auth result to its wire representation.

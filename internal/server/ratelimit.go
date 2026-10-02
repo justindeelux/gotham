@@ -16,6 +16,15 @@ const (
 	authRateInterval = 12 * time.Second // one token every 12s == 5/min
 )
 
+// Refresh rate-limit tuning: a per-IP token bucket refilling one request per
+// second with a burst of 30. Normal SPA rotation stays well under this, while
+// an authenticated client cannot loop /auth/refresh to grow the sessions table
+// without bound. Applied to refresh and logout.
+const (
+	refreshRateBurst    = 30
+	refreshRateInterval = time.Second
+)
+
 // Rate-limiter bookkeeping: idle per-IP buckets are evicted periodically.
 const (
 	rateLimiterCleanupInterval = time.Minute
@@ -42,6 +51,11 @@ type ipRateLimiter struct {
 // newDefaultAuthLimiter builds the production register/login limiter.
 func newDefaultAuthLimiter() *ipRateLimiter {
 	return newIPRateLimiter(rate.Every(authRateInterval), authRateBurst)
+}
+
+// newDefaultRefreshLimiter builds the production refresh/logout limiter.
+func newDefaultRefreshLimiter() *ipRateLimiter {
+	return newIPRateLimiter(rate.Every(refreshRateInterval), refreshRateBurst)
 }
 
 // newIPRateLimiter builds a limiter and starts its cleanup goroutine. Callers
@@ -108,6 +122,18 @@ func (l *ipRateLimiter) Close() {
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.authLimiter.allow(clientIP(r)) {
+			writeJSON(w, http.StatusTooManyRequests, apiError{Message: "too many requests"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// refreshRateLimit rejects refresh/logout requests from clients that exhaust
+// their bucket.
+func (s *Server) refreshRateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.refreshLimiter.allow(clientIP(r)) {
 			writeJSON(w, http.StatusTooManyRequests, apiError{Message: "too many requests"})
 			return
 		}

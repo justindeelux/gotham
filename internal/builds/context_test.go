@@ -471,3 +471,82 @@ func TestBuildContextTarDockerIgnoreCleansPatterns(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildContextTarDockerIgnoreChildVersusAncestor is the round-3 U1
+// regression: the threaded per-pattern state machine must match the Docker CLI
+// for a child exclusion plus a later/earlier ancestor negation. The previous
+// "match path or ancestor, last pattern wins" rule let `!logs` re-include
+// `logs/secret.log`; Docker keeps it excluded (and vice versa, so ordering does
+// not matter here).
+func TestBuildContextTarDockerIgnoreChildVersusAncestor(t *testing.T) {
+	cases := []struct {
+		name   string
+		ignore string
+	}{
+		{name: "exclusion then ancestor negation", ignore: "logs/secret.log\n!logs\n"},
+		{name: "ancestor negation then exclusion", ignore: "!logs\nlogs/secret.log\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTestFile(t, filepath.Join(dir, ".dockerignore"), tc.ignore)
+			writeTestFile(t, filepath.Join(dir, "logs", "secret.log"), "secret\n")
+			writeTestFile(t, filepath.Join(dir, "logs", "other.txt"), "other\n")
+
+			data, err := buildContextTar(contextSpec{root: dir})
+			if err != nil {
+				t.Fatalf("buildContextTar: %v", err)
+			}
+			files := readContextTar(t, data)
+			if _, ok := files["logs/secret.log"]; ok {
+				t.Error("logs/secret.log must stay excluded (Docker excludes it)")
+			}
+			if _, ok := files["logs/other.txt"]; !ok {
+				t.Error("logs/other.txt must be included")
+			}
+		})
+	}
+}
+
+// TestBuildContextTarDockerIgnoreDirectoryVariant is the round-3 U1 directory
+// variant: `logs/tmp` + `!logs` keeps logs/tmp excluded.
+func TestBuildContextTarDockerIgnoreDirectoryVariant(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "logs/tmp\n!logs\n")
+	writeTestFile(t, filepath.Join(dir, "logs", "tmp", "x"), "x\n")
+	writeTestFile(t, filepath.Join(dir, "logs", "other.txt"), "other\n")
+
+	data, err := buildContextTar(contextSpec{root: dir})
+	if err != nil {
+		t.Fatalf("buildContextTar: %v", err)
+	}
+	files := readContextTar(t, data)
+	if _, ok := files["logs/tmp/x"]; ok {
+		t.Error("logs/tmp/x must stay excluded")
+	}
+	if _, ok := files["logs/other.txt"]; !ok {
+		t.Error("logs/other.txt must be included")
+	}
+}
+
+// TestBuildContextTarIgnoresEscapingSymlinkedDockerIgnore is the round-3 U2
+// regression: a .dockerignore symlink that resolves outside the repository must
+// be ignored, so a hostile repo cannot read an arbitrary host file as patterns.
+func TestBuildContextTarIgnoresEscapingSymlinkedDockerIgnore(t *testing.T) {
+	outside := t.TempDir()
+	writeTestFile(t, filepath.Join(outside, "host-ignore"), ".env\n")
+
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(outside, "host-ignore"), filepath.Join(dir, ".dockerignore")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	writeTestFile(t, filepath.Join(dir, ".env"), "survives\n")
+
+	data, err := buildContextTar(contextSpec{root: dir})
+	if err != nil {
+		t.Fatalf("buildContextTar: %v", err)
+	}
+	if _, ok := readContextTar(t, data)[".env"]; !ok {
+		t.Error("a .dockerignore symlink escaping the repository must be ignored")
+	}
+}

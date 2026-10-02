@@ -365,6 +365,27 @@ func TestDockerfileBuildDockerignoreOrderE2E(t *testing.T) {
 			excluded: []string{"node_modules/x"},
 			included: []string{"app.js"},
 		},
+		{
+			name:     "exclusion then ancestor negation",
+			ignore:   "logs/secret.log\n!logs\n",
+			files:    map[string]string{"logs/secret.log": "s\n", "logs/other.txt": "o\n"},
+			excluded: []string{"logs/secret.log"},
+			included: []string{"logs/other.txt"},
+		},
+		{
+			name:     "ancestor negation then exclusion",
+			ignore:   "!logs\nlogs/secret.log\n",
+			files:    map[string]string{"logs/secret.log": "s\n", "logs/other.txt": "o\n"},
+			excluded: []string{"logs/secret.log"},
+			included: []string{"logs/other.txt"},
+		},
+		{
+			name:     "directory then ancestor negation",
+			ignore:   "logs/tmp\n!logs\n",
+			files:    map[string]string{"logs/tmp/x": "x\n", "logs/other.txt": "o\n"},
+			excluded: []string{"logs/tmp/x"},
+			included: []string{"logs/other.txt"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

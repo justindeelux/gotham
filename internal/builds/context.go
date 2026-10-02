@@ -91,6 +91,9 @@ func buildContextTar(spec contextSpec) ([]byte, error) {
 	var buf bytes.Buffer
 	limited := &limitedWriter{writer: &buf, limit: limit}
 	tw := tar.NewWriter(limited)
+	// Per-directory, per-pattern match state threaded down the walk to
+	// replicate moby/patternmatcher's parent-match inheritance.
+	dirStates := map[string][]bool{}
 
 	err = filepath.WalkDir(dir, func(p string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -115,7 +118,11 @@ func buildContextTar(spec contextSpec) ([]byte, error) {
 		// builder must be able to read it even when .dockerignore lists it.
 		protected := spec.keep != "" &&
 			(name == spec.keep || strings.HasPrefix(spec.keep, name+"/"))
-		if !protected && ignore.ignored(rebased(prefix, name)) {
+		excluded, state := ignore.matchState(rebased(prefix, name), dirStates[path.Dir(name)])
+		if isDir {
+			dirStates[name] = state
+		}
+		if !protected && excluded {
 			// Descend into an excluded directory when a later negation could
 			// re-include a child (Docker keeps `docs/keep.md` for
 			// `docs` + `!docs/keep.md`).
@@ -236,7 +243,7 @@ func writeSymlinkEntry(tw *tar.Writer, name, fullPath string, ignore dockerIgnor
 	if err != nil {
 		return err
 	}
-	if resolved, ok := contextRelativeTarget(name, target); ok && ignore.ignored(rebased(prefix, resolved)) {
+	if resolved, ok := contextRelativeTarget(name, target); ok && ignore.ignoredPath(rebased(prefix, resolved)) {
 		return nil
 	}
 	return tw.WriteHeader(&tar.Header{
@@ -298,7 +305,9 @@ type ignorePattern struct {
 
 // loadDockerIgnore reads and compiles the dockerignore for a context. A missing
 // file is not an error: there is simply nothing to exclude. A symlink is
-// followed (the Docker CLI does), but a non-regular target (a device, FIFO or
+// followed (the Docker CLI does) but only when it resolves inside the ignore
+// directory, so a hostile repository cannot make the control plane read an
+// arbitrary host file as patterns. A non-regular target (a device, FIFO or
 // directory) is treated as absent, and the read is capped so a huge file cannot
 // exhaust memory.
 func loadDockerIgnore(ignoreDir, root string) (dockerIgnore, error) {
@@ -306,7 +315,25 @@ func loadDockerIgnore(ignoreDir, root string) (dockerIgnore, error) {
 		ignoreDir = root
 	}
 	fullPath := filepath.Join(ignoreDir, dockerIgnoreFile)
-	info, err := os.Stat(fullPath)
+	resolved, err := filepath.EvalSymlinks(fullPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return dockerIgnore{}, nil
+	}
+	if err != nil {
+		return dockerIgnore{}, fmt.Errorf("builds: resolve %s: %w", dockerIgnoreFile, err)
+	}
+	base, err := filepath.EvalSymlinks(ignoreDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return dockerIgnore{}, nil
+		}
+		return dockerIgnore{}, fmt.Errorf("builds: resolve ignore root: %w", err)
+	}
+	if rel, relErr := filepath.Rel(base, resolved); relErr != nil || !filepath.IsLocal(rel) {
+		// The followed symlink escapes the repository: ignore it.
+		return dockerIgnore{}, nil
+	}
+	info, err := os.Stat(resolved)
 	if errors.Is(err, fs.ErrNotExist) {
 		return dockerIgnore{}, nil
 	}
@@ -316,7 +343,7 @@ func loadDockerIgnore(ignoreDir, root string) (dockerIgnore, error) {
 	if !info.Mode().IsRegular() {
 		return dockerIgnore{}, nil
 	}
-	file, err := os.Open(fullPath)
+	file, err := os.Open(resolved)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return dockerIgnore{}, nil
@@ -373,24 +400,42 @@ func parseDockerIgnore(content string) dockerIgnore {
 	return compiled
 }
 
-// ignored reports whether rel (slash-separated, relative to the ignore root) is
-// excluded. Patterns are evaluated in file order; a pattern matches when it
-// matches the path or any of its ancestors, and the last matching pattern in
-// file order decides. So `docs` + `!docs/keep.md` keeps `docs/keep.md`, while
-// `!important/keep.txt` + `important` excludes `important/keep.txt` (the later
-// ancestor exclusion wins) — both matching the Docker CLI.
-func (d dockerIgnore) ignored(rel string) bool {
-	prefixes := pathPrefixes(rel)
+// matchState reports whether rel is excluded and returns the per-pattern match
+// state to thread to rel's children. It replicates
+// moby/patternmatcher.MatchesUsingParentResults: a pattern already matched by an
+// ancestor stays matched (inherited), the state machine evaluates a negation
+// only while the path is excluded and a normal pattern only while it is not,
+// and the last matching pattern in file order decides. This is what makes
+// `logs/secret.log` + `!logs` exclude the file while `important` +
+// `!important/keep.txt` keep it — both verified against the Docker CLI.
+func (d dockerIgnore) matchState(rel string, parent []bool) (bool, []bool) {
+	state := make([]bool, len(d.patterns))
 	excluded := false
-	matched := false
-	for _, p := range d.patterns {
-		if !matchesAnyPrefix(p.pattern, prefixes) {
-			continue
+	for i, p := range d.patterns {
+		matched := i < len(parent) && parent[i]
+		if !matched {
+			if p.negate != excluded {
+				continue
+			}
+			matched = matchContextPattern(p.pattern, rel)
 		}
-		excluded = !p.negate
-		matched = true
+		state[i] = matched
+		if matched {
+			excluded = !p.negate
+		}
 	}
-	return matched && excluded
+	return excluded, state
+}
+
+// ignoredPath reports whether a standalone path (for example a symlink's
+// resolved target) is excluded, threading the ancestor states from the root.
+func (d dockerIgnore) ignoredPath(rel string) bool {
+	var parent []bool
+	excluded := false
+	for _, prefix := range pathPrefixes(rel) {
+		excluded, parent = d.matchState(prefix, parent)
+	}
+	return excluded
 }
 
 // pathPrefixes returns rel and each of its ancestors, shallowest first.
@@ -401,16 +446,6 @@ func pathPrefixes(rel string) []string {
 		prefixes = append(prefixes, strings.Join(parts[:i], "/"))
 	}
 	return prefixes
-}
-
-// matchesAnyPrefix reports whether pattern matches any prefix.
-func matchesAnyPrefix(pattern string, prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if matchContextPattern(pattern, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // matchContextPattern matches a Docker ignore pattern against a

@@ -14,4 +14,7 @@ app.use(router);
 // (App.vue's session hydration) observes the real route rather than "/" (G3).
 // A top-level `await` here leaves the built entry module pending forever (the
 // app never mounts, blank page); a promise chain is equivalent and bundle-safe.
-router.isReady().then(() => app.mount("#app"));
+// Mount even if the initial navigation rejects (for example a lazy chunk that
+// 404s after a deploy with stale hashed assets): the router guard still
+// redirects once navigation succeeds, and staying blank is worse.
+router.isReady().catch(() => {}).then(() => app.mount("#app"));

@@ -133,6 +133,22 @@ function shouldRefresh(
   return !noRefreshPaths.some((path) => url.includes(path));
 }
 
+/** Web Lock name serialising refresh across tabs. */
+const refreshLockName = "gotham-refresh";
+
+/**
+ * withRefreshLock runs task while holding a cross-tab Web Lock, so two tabs
+ * cannot present the same single-use refresh token at once. When the API is
+ * unavailable the fallback keeps the previous per-tab behaviour.
+ */
+function withRefreshLock<T>(task: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
+  if (!locks) {
+    return task();
+  }
+  return locks.request(refreshLockName, task) as Promise<T>;
+}
+
 /** refreshAccessToken rotates the refresh token, reusing one shared request. */
 function refreshAccessToken(): Promise<string> {
   if (refreshPromise) {
@@ -144,38 +160,57 @@ function refreshAccessToken(): Promise<string> {
     return Promise.reject(new Error("no refresh token available"));
   }
 
-  refreshPromise = axios
-    .post<AuthResult>(
+  // Per-tab single-flight: concurrent local callers share this promise, so the
+  // cross-tab lock is only acquired once per tab.
+  refreshPromise = withRefreshLock(() =>
+    rotateRefreshToken(refreshToken),
+  ).finally(() => {
+    refreshPromise = null;
+  });
+
+  return refreshPromise;
+}
+
+/**
+ * rotateRefreshToken consumes refreshToken under the cross-tab lock. It re-reads
+ * the stored token first: when another tab already rotated the session while
+ * this call waited for the lock, it returns that session's access token instead
+ * of replaying the now single-use token.
+ */
+async function rotateRefreshToken(refreshToken: string): Promise<string> {
+  if (getRefreshToken() !== refreshToken) {
+    const accessToken = getAccessToken();
+    if (!accessToken) {
+      throw new StaleRefreshError();
+    }
+    return accessToken;
+  }
+
+  try {
+    const response = await axios.post<AuthResult>(
       refreshPath,
       { refresh_token: refreshToken },
       { timeout: requestTimeout, headers: { Accept: "application/json" } },
-    )
-    .then((response) => {
-      // A newer session landed while this refresh was in flight: keep it rather
-      // than overwriting it with the stale rotation.
-      if (getRefreshToken() !== refreshToken) {
-        throw new StaleRefreshError();
-      }
-      setSession({
-        user: response.data.user ?? null,
-        accessToken: response.data.access_token,
-        refreshToken: response.data.refresh_token,
-      });
-      return response.data.access_token;
-    })
-    .catch((error) => {
-      // A failed refresh for a session that is already gone must not clear the
-      // newer session.
-      if (getRefreshToken() !== refreshToken) {
-        throw new StaleRefreshError();
-      }
-      throw error;
-    })
-    .finally(() => {
-      refreshPromise = null;
+    );
+    // A newer session landed while this refresh was in flight: keep it rather
+    // than overwriting it with the stale rotation.
+    if (getRefreshToken() !== refreshToken) {
+      throw new StaleRefreshError();
+    }
+    setSession({
+      user: response.data.user ?? null,
+      accessToken: response.data.access_token,
+      refreshToken: response.data.refresh_token,
     });
-
-  return refreshPromise;
+    return response.data.access_token;
+  } catch (error) {
+    // A failed refresh for a session that is already gone must not clear the
+    // newer session.
+    if (getRefreshToken() !== refreshToken) {
+      throw new StaleRefreshError();
+    }
+    throw error;
+  }
 }
 
 /**

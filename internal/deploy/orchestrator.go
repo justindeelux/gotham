@@ -439,11 +439,7 @@ func (o *Orchestrator) push(ctx context.Context, st *runState) error {
 // the deploy without taking the live release down. Retirement itself must be
 // confirmed — an unconfirmed stop would leave two releases running.
 func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
-	envVars, err := o.repo.ListEnvVars(ctx, st.app.ID)
-	if err != nil {
-		return err
-	}
-	secrets, err := o.repo.ListSecrets(ctx, st.app.ID)
+	envVars, secrets, err := o.repo.ListEnvConfig(ctx, st.app.ID)
 	if err != nil {
 		return err
 	}

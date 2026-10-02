@@ -879,11 +879,7 @@ func normalizeStorages(appID uuid.UUID, storages []Storage) ([]Storage, error) {
 // view of the environment, sorted by key. Secrets appear as their reference —
 // the ciphertext and the plaintext stay on the server.
 func (s *Service) envEntries(ctx context.Context, appID uuid.UUID) ([]EnvEntry, error) {
-	envVars, err := s.repo.ListEnvVars(ctx, appID)
-	if err != nil {
-		return nil, err
-	}
-	secrets, err := s.repo.ListSecrets(ctx, appID)
+	envVars, secrets, err := s.repo.ListEnvConfig(ctx, appID)
 	if err != nil {
 		return nil, err
 	}

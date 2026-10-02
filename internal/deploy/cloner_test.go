@@ -932,6 +932,124 @@ func writeOpenSSHKey(t *testing.T, path string) {
 	}
 }
 
+// TestCloneRedactsURLCredentials is the item-3 regression: a clone URL that
+// embeds a token must never reach the realtime deploy log — neither in the
+// command line the cloner echoes nor in the quoted git error tail.
+func TestCloneRedactsURLCredentials(t *testing.T) {
+	const token = "ghp_supersecrettoken123"
+	app := testApplication(uuid.New())
+	app.CloneURL = "https://x-access-token:" + token + "@github.com/acme/demo.git"
+
+	t.Run("log line", func(t *testing.T) {
+		var lines []string
+		run := func(context.Context, []string, []string) ([]byte, error) { return nil, nil }
+		source := gitSource{run: run}
+		if err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"),
+			func(line string) { lines = append(lines, line) }); err != nil {
+			t.Fatalf("Clone: %v", err)
+		}
+		joined := strings.Join(lines, "\n")
+		if strings.Contains(joined, token) {
+			t.Errorf("deploy log leaked the credential:\n%s", joined)
+		}
+		if !strings.Contains(joined, "github.com/acme/demo.git") {
+			t.Errorf("deploy log = %q, want the host and path still logged", joined)
+		}
+	})
+
+	t.Run("error tail", func(t *testing.T) {
+		run := func(context.Context, []string, []string) ([]byte, error) {
+			// A git version that echoes the URL it was handed, credential and all.
+			return []byte("fatal: unable to access '" + app.CloneURL + "': auth failed"), errors.New("exit status 128")
+		}
+		source := gitSource{run: run}
+		err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil)
+		if err == nil {
+			t.Fatal("Clone succeeded although git failed")
+		}
+		if strings.Contains(err.Error(), token) {
+			t.Errorf("error leaked the credential: %v", err)
+		}
+	})
+}
+
+// TestCloneRedactsBeforeTruncation is the fix-round-1 regression: the git error
+// tail is redacted BEFORE the 400-byte truncation, so a cut landing inside the
+// userinfo cannot expose the credential suffix (tail would otherwise start at
+// "ser:secretpw@host/…"). The trailing assertion pins that truncation actually
+// happened, so the test cannot pass by never exercising a cut.
+func TestCloneRedactsBeforeTruncation(t *testing.T) {
+	const secret = "secretpw"
+	app := testApplication(uuid.New())
+	// The URL is 31 bytes and the suffix is 380, so had tail run first the last
+	// 400 bytes would begin at offset 11, inside the userinfo. Clone redacts
+	// before truncating, which is exactly the regression this test pins.
+	output := "https://user:" + secret + "@host/repo" + strings.Repeat("B", 380)
+	run := func(context.Context, []string, []string) ([]byte, error) {
+		return []byte(output), errors.New("exit status 128")
+	}
+	source := gitSource{run: run}
+	err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil)
+	if err == nil {
+		t.Fatal("Clone succeeded although git failed")
+	}
+	if !strings.Contains(err.Error(), "…") {
+		t.Fatal("expected the error tail to be truncated")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("truncated error leaked the credential: %v", err)
+	}
+}
+
+// TestRedactCloneURLAndError pins the redaction shapes directly, so the
+// regex cannot silently widen (mangling harmless text) or narrow (leaving a
+// credential in place), and the parse-failure fallback never returns a
+// credential-bearing string raw.
+func TestRedactCloneURLAndError(t *testing.T) {
+	cases := []struct {
+		in       string
+		want     string
+		notLeaks []string
+	}{
+		{"https://user:pass@host/repo.git", "https://host/repo.git", []string{"user:pass"}},
+		{"https://token@host/repo.git", "https://host/repo.git", []string{"token@"}},
+		{"git@host:acme/demo.git", "git@host:acme/demo.git", nil},                                 // scp-like, no userinfo
+		{"https://host/repo.git", "https://host/repo.git", nil},                                   // nothing to strip
+		{"ssh://git@host/repo.git", "ssh://host/repo.git", []string{"git@"}},                      // userinfo (git) hidden too
+		{"https://user:p@ss@host/repo.git", "https://host/repo.git", []string{"p@ss", "ss@host"}}, // literal '@' in password
+		// url.Parse rejects the invalid escape; the fallback must still redact.
+		{"https://user:secret%zz@host/repo.git", "https://***@host/repo.git", []string{"secret"}},
+		// A raw '/' in the password also fails Parse and must be redacted by the
+		// fallback rather than returned raw.
+		{"https://user:pa/ss@host/repo.git", "https://***@host/repo.git", []string{"pa/ss"}},
+	}
+	for _, tc := range cases {
+		if got := redactCloneURL(tc.in); got != tc.want {
+			t.Errorf("redactCloneURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		got := redactCloneError("fatal: could not read from '" + tc.in + "'")
+		for _, leak := range tc.notLeaks {
+			if strings.Contains(got, leak) {
+				t.Errorf("redactCloneError(%q) left %q in %q", tc.in, leak, got)
+			}
+		}
+	}
+	// Harmless git diagnostics must survive untouched.
+	plain := "fatal: repository 'https://github.com/acme/demo.git/' not found"
+	if got := redactCloneError(plain); got != plain {
+		t.Errorf("redactCloneError mangled a credential-free message: %q", got)
+	}
+	// Accepted, safe over-redaction: a credential-free URL whose path carries
+	// an '@' is read as userinfo and hidden. There is no credential to leak and
+	// the alternative (leaving it) risks missing a real one, so this tradeoff
+	// is pinned rather than fixed.
+	overRedacted := "fatal: repository 'https://example.com/~user/repo@v2.git/' not found"
+	wantOverRedacted := "fatal: repository 'https://***@v2.git/' not found"
+	if got := redactCloneError(overRedacted); got != wantOverRedacted {
+		t.Errorf("redactCloneError(%q) = %q, want the accepted over-redaction %q", overRedacted, got, wantOverRedacted)
+	}
+}
+
 // TestSSHHostKeyVerification runs the real OpenSSH client with the known_hosts
 // and StrictHostKeyChecking options the cloner builds against an in-process
 // host presenting an unknown key: strict refuses it, a pin accepts it, and

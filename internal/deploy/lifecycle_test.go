@@ -689,3 +689,90 @@ func TestDeleteSystemApplicationRefusesWhileDeploying(t *testing.T) {
 		t.Errorf("removed %v, want no container touched while a deployment is in flight", node.removed)
 	}
 }
+
+// TestUnresolvedPreviousContainerFailsDeployClosed is the item-5 regression: a
+// deployment whose previous container cannot be resolved must not start. The
+// pre-Run reconcile removes every app-labelled container, so a blind job with
+// an empty previous would take the live release down; the submit fails closed
+// and the fresh row is terminal.
+func TestUnresolvedPreviousContainerFailsDeployClosed(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	node := newMockNode()
+	player := newNodeService(t, repo, node)
+	// The live release is recorded, but the list that would resolve it fails.
+	repo.listDeploymentsErr = errors.New("database unavailable")
+
+	if _, err := player.Deploy(context.Background(), userID, app.ID); err == nil {
+		t.Fatal("deploy succeeded although the previous container could not be resolved")
+	}
+	// The failed deploy must leave exactly one terminal row behind: without
+	// this, the loop below passes vacuously when Deploy fails before creating
+	// the deployment.
+	if len(repo.deployments) != 1 {
+		t.Fatalf("deployments = %d, want exactly one (the fresh failed row)", len(repo.deployments))
+	}
+	for _, dep := range repo.deployments {
+		if dep.ApplicationID != app.ID {
+			continue
+		}
+		if !dep.State.Terminal() {
+			t.Errorf("deployment state = %s, want a terminal failed row (never a blind run)", dep.State)
+			continue
+		}
+		if dep.State != StateFailed {
+			t.Errorf("deployment state = %s, want failed", dep.State)
+		}
+	}
+}
+
+// TestEnvReadUsesSingleSnapshotSeam is the item-1 regression: the runtime
+// payload must read plain vars and secrets from one snapshot (ListEnvConfig),
+// not from two separate collection reads that a concurrent replace can land
+// between and drop a key. The store-halves integration test proves the
+// snapshot is real; here we pin that the orchestrator takes the seam, and that
+// the assembled payload still carries both collections.
+func TestEnvReadUsesSingleSnapshotSeam(t *testing.T) {
+	app := testApplication(uuid.New())
+	repo := &fakeRepository{app: app}
+	envVars, secrets := testEnv(t) // plain FOO=bar + secret API_TOKEN
+	repo.envVars, repo.secrets = envVars, secrets
+	node := newMockNode()
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+
+	o := newTestOrchestrator(Config{Repository: repo, Source: &fakeSource{}, Dial: dialAlways(node)})
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	if stored, _ := repo.deployment(dep.ID); stored.State != StateRunning {
+		t.Fatalf("state = %s, want running", stored.State)
+	}
+	if repo.envConfigCalls != 1 {
+		t.Errorf("ListEnvConfig calls = %d, want 1 (the payload must use the single-snapshot seam)", repo.envConfigCalls)
+	}
+	if node.runCalls != 1 || len(node.requests) != 1 {
+		t.Fatalf("run calls = %d, want 1", node.runCalls)
+	}
+	env := strings.Join(node.requests[0].GetEnv(), "\n")
+	for _, want := range []string{"FOO=bar", "API_TOKEN=hunter2"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("run env = %q, want %q", env, want)
+		}
+	}
+}
+
+// TestPreviousContainerPropagatesError pins the repository seam: a listing
+// failure must surface, so callers can fail closed instead of racing the
+// reconcile with an empty previous.
+func TestPreviousContainerPropagatesError(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	repo.listDeploymentsErr = errors.New("boom")
+	svc := NewService(Config{Repository: repo, Secret: testSecretKey, Logger: discardLogger()})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	if _, err := svc.previousContainer(context.Background(), app.ID); err == nil {
+		t.Fatal("previousContainer hid the ListDeployments error")
+	}
+}

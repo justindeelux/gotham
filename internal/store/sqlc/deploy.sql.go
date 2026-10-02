@@ -603,6 +603,20 @@ func (q *Queries) ListStoragesByApp(ctx context.Context, applicationID pgtype.UU
 	return items, nil
 }
 
+const lockApplication = `-- name: LockApplication :exec
+SELECT id FROM applications WHERE id = $1 FOR UPDATE
+`
+
+// LockApplication takes a row lock on the parent application, serializing
+// mutations of its child collections (env vars, secrets, storages). Without
+// it, two transactions that clear an empty collection and then insert
+// disjoint keys both see nothing to delete and commit their union — a merge
+// where a replace was requested.
+func (q *Queries) LockApplication(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockApplication, id)
+	return err
+}
+
 const updateApplication = `-- name: UpdateApplication :one
 UPDATE applications
 SET name = $2,

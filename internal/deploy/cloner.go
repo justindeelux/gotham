@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -115,7 +116,7 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	}
 
 	if log != nil {
-		line := fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, url)
+		line := fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, redactCloneURL(url))
 		if privatePEM != "" {
 			line += " (using the application deploy key)"
 		}
@@ -132,7 +133,7 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		return fmt.Errorf("git clone: %w", ctx.Err())
 	}
 	if err != nil {
-		return fmt.Errorf("git clone: %w: %s", err, tail(string(output), 400))
+		return fmt.Errorf("git clone: %w: %s", err, tail(redactCloneError(string(output)), 400))
 	}
 	if log != nil {
 		log("repository cloned (" + branch + ")")
@@ -357,3 +358,52 @@ func tail(s string, n int) string {
 	}
 	return "…" + s[len(s)-n:]
 }
+
+// redactCloneURL removes the userinfo from a clone URL before it is logged:
+// an operator-supplied URL may carry a token
+// (https://x-access-token:ghp_…@host/repo) and the realtime deploy log is
+// visible to the application's team. It never returns a credential-bearing
+// string raw: a URL url.Parse rejects falls back to the regex redaction, and a
+// scp-like git@host:path (no userinfo to strip) is returned unchanged. The one
+// bound is whitespace, which cannot be part of a userinfo a git/curl client
+// could use (see userinfoPattern).
+func redactCloneURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		// An unparseable URL can still be logged verbatim by callers, so
+		// redact it by pattern rather than trusting Parse to have validated
+		// it. Only a string with an authority can carry userinfo.
+		if strings.Contains(raw, "://") {
+			return redactCloneError(raw)
+		}
+		return raw
+	}
+	if parsed.User == nil {
+		return raw
+	}
+	parsed.User = nil
+	return parsed.String()
+}
+
+// redactCloneError strips embedded credentials from a quoted git error tail:
+// some git versions echo the URL they were handed, so the token could reach
+// the deploy log through stderr even though the command line never logs it.
+// It runs on the untruncated output (see Clone), so a cut inside the userinfo
+// can never expose the remainder.
+func redactCloneError(msg string) string {
+	return userinfoPattern.ReplaceAllString(msg, "$1***@")
+}
+
+// userinfoPattern matches the credential half of a URL that carries one:
+// <scheme>://<user>:<password>@. The password is optional (a bare user or a
+// token-as-user must be hidden too). The negated class excludes only
+// whitespace: it crosses both a literal '/' and a literal '@' in the password,
+// so the match runs to the LAST '@' in the whitespace-delimited token and
+// neither can leave a suffix behind. It is best effort — a hostile URL is never
+// trusted, only hidden. Userinfo containing whitespace cannot be matched
+// without swallowing unrelated diagnostic text, and such a URL is rejected by
+// git/curl, so it cannot carry a working credential. A credential-free message
+// is never mangled beyond hiding a userinfo-shaped token: a bare '@' in a path
+// or query (https://example.com/~user/repo@v2.git) is accepted over-redaction,
+// which is safe — see TestRedactCloneURLAndError.
+var userinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s]+@`)

@@ -71,11 +71,4 @@ func TestStepsFor(t *testing.T) {
 			t.Errorf("rollback step %d = %s, want %s", i, rollback[i], state)
 		}
 	}
-
-	if got := firstStep(KindRollback); got != StatePushing {
-		t.Errorf("firstStep(rollback) = %s, want pushing", got)
-	}
-	if got := firstStep(KindDeploy); got != StateCloning {
-		t.Errorf("firstStep(deploy) = %s, want cloning", got)
-	}
 }

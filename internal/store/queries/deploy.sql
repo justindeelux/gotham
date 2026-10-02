@@ -98,6 +98,14 @@ SELECT * FROM storages
 WHERE application_id = $1
 ORDER BY name ASC;
 
+-- name: LockApplication :exec
+-- LockApplication takes a row lock on the parent application, serializing
+-- mutations of its child collections (env vars, secrets, storages). Without
+-- it, two transactions that clear an empty collection and then insert
+-- disjoint keys both see nothing to delete and commit their union — a merge
+-- where a replace was requested.
+SELECT id FROM applications WHERE id = $1 FOR UPDATE;
+
 -- name: ClearEnvVarsByApp :exec
 DELETE FROM env_vars WHERE application_id = $1;
 

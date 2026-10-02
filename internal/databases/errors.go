@@ -23,6 +23,9 @@ var (
 	ErrHealthcheck = errors.New("databases: healthcheck failed")
 	// ErrDisabled — FEATURE_DATABASES=false disables the whole feature (503).
 	ErrDisabled = errors.New("databases: feature disabled")
+	// ErrDatabaseBusy — a backup or restore job owns the database's volume, so
+	// a lifecycle action (Start/Restart) is refused (409).
+	ErrDatabaseBusy = errors.New("databases: a backup or restore is running")
 )
 
 // Backup-surface sentinels, mapped to HTTP statuses by the backup routes.

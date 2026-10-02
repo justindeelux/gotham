@@ -101,20 +101,38 @@ func (m *BackupManager) runBackup(backup Backup, database Database, target *Back
 }
 
 // runRestore is the restore job: download the artifact, stage it onto the
-// database volume in chunks and apply it from a temporary container.
-func (m *BackupManager) runRestore(backup Backup, database Database) {
+// database volume in chunks and apply it from a temporary container. It
+// persists the terminal state on the restore row so an interrupted run is
+// recoverable after a restart.
+func (m *BackupManager) runRestore(restore Restore, backup Backup, database Database) {
 	defer m.release(database.ID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), m.jobTimeout)
 	defer cancel()
 
-	if err := m.restore(ctx, database, backup); err != nil {
+	err := m.restore(ctx, database, backup)
+	finished := restore
+	finished.FinishedAt = m.now()
+	if err != nil {
+		finished.Status = RestoreFailed
+		finished.Error = boundedDiag(err.Error())
 		m.logger.Error("databases: restore failed",
-			"backup_id", backup.ID.String(), "database_id", database.ID.String(), "error", err)
-		return
+			"restore_id", restore.ID.String(), "backup_id", backup.ID.String(),
+			"database_id", database.ID.String(), "error", err)
+	} else {
+		finished.Status = RestoreCompleted
+		m.logger.Info("databases: restore completed",
+			"restore_id", restore.ID.String(), "backup_id", backup.ID.String(),
+			"database_id", database.ID.String())
 	}
-	m.logger.Info("databases: restore completed",
-		"backup_id", backup.ID.String(), "database_id", database.ID.String())
+
+	// The job context may already be expired; the row write gets its own.
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer finishCancel()
+	if _, ferr := m.backups.FinishRestore(finishCtx, finished); ferr != nil {
+		m.logger.Error("databases: could not record the restore outcome",
+			"restore_id", restore.ID.String(), "error", ferr)
+	}
 }
 
 // dump stops the database, runs the engine's dump job on the node, compresses
@@ -129,7 +147,12 @@ func (m *BackupManager) dump(ctx context.Context, database Database, target *Bac
 	if err != nil {
 		return "", 0, "", err
 	}
-	wasRunning, err := m.pauseDatabase(ctx, database)
+	// Observe the pre-job state, persist it, then stop. Persisting before the
+	// stop closes the crash window: a crash after the stop still leaves
+	// was_running=true, so the sweep restarts the database the job paused. A
+	// failed record write is a hard job failure; the deferred resume then runs
+	// against a still-running container, where Start is a harmless no-op.
+	wasRunning, err := m.databaseRunning(ctx, database)
 	if err != nil {
 		return "", 0, "", err
 	}
@@ -140,6 +163,14 @@ func (m *BackupManager) dump(ctx context.Context, database Database, target *Bac
 					"database_id", database.ID.String(), "error", resumeErr)
 			}
 		}()
+	}
+	if recordErr := m.backups.SetBackupWasRunning(ctx, runID, wasRunning); recordErr != nil {
+		return "", 0, "", fmt.Errorf("databases: record the pre-backup database state: %w", recordErr)
+	}
+	if wasRunning {
+		if err := m.stopDatabase(ctx, database); err != nil {
+			return "", 0, "", err
+		}
 	}
 
 	options, err := engine.DumpOptions(database, credentials, runID.String())
@@ -194,9 +225,15 @@ func (m *BackupManager) dump(ctx context.Context, database Database, target *Bac
 	return location, size, containerID, nil
 }
 
-// restore downloads the artifact, stages it onto the volume in bounded
-// chunks and runs the engine's restore job, with the database stopped
-// throughout so the temporary container is the only writer.
+// restore downloads the artifact, stages it onto the volume in bounded chunks
+// and runs the engine's restore job, with the database stopped throughout so
+// the temporary container is the only writer.
+//
+// The database is resumed only after a successful restore. MySQL, MongoDB and
+// the Redis tar path are not transactional, so a job that fails partway can
+// leave a partial data directory; restarting the container into that state
+// would serve half-restored data. On failure the database stays stopped, is
+// marked error with the cause, and the staged artifact is removed.
 func (m *BackupManager) restore(ctx context.Context, database Database, backup Backup) error {
 	store, err := m.storeForLocation(ctx, backup, &database)
 	if err != nil {
@@ -212,15 +249,28 @@ func (m *BackupManager) restore(ctx context.Context, database Database, backup B
 	if err != nil {
 		return err
 	}
-	if wasRunning {
-		defer func() {
-			if resumeErr := m.resumeDatabase(context.Background(), database); resumeErr != nil {
-				m.logger.Error("databases: could not restart the database after the restore",
-					"database_id", database.ID.String(), "error", resumeErr)
-			}
-		}()
-	}
 
+	if err := m.applyRestore(ctx, database, backup, artifact); err != nil {
+		// Never restart into a half-restored volume, and always surface the
+		// failure: the database stays stopped and its row carries the error,
+		// even when it was already stopped or has no container to pause.
+		m.markError(context.Background(), database, err)
+		return err
+	}
+	if wasRunning {
+		if resumeErr := m.resumeDatabase(context.Background(), database); resumeErr != nil {
+			m.logger.Error("databases: could not restart the database after the restore",
+				"database_id", database.ID.String(), "error", resumeErr)
+			m.markError(context.Background(), database, resumeErr)
+		}
+	}
+	return nil
+}
+
+// applyRestore stages the artifact onto the database volume and runs the
+// engine's restore job. It removes the staged artifact on any failure so a
+// retry starts from a clean volume.
+func (m *BackupManager) applyRestore(ctx context.Context, database Database, backup Backup, artifact io.Reader) error {
 	staged, err := stagingPath(database, backup.ID)
 	if err != nil {
 		return err
@@ -470,11 +520,9 @@ func (m *BackupManager) sweepJobContainers() {
 	}
 
 	leased := map[uuid.UUID]bool{}
-	m.mu.Lock()
-	for id := range m.inflight {
-		leased[id] = true
+	for _, databaseID := range m.leases.HeldIDs() {
+		leased[databaseID] = true
 	}
-	m.mu.Unlock()
 
 	serverIDs, err := lister.ListServerIDs(ctx)
 	if err != nil {
@@ -537,10 +585,9 @@ func isStaleJobContainer(c containers.Container, leased, liveRuns map[uuid.UUID]
 	return true
 }
 
-// pauseDatabase stops the database container before a job mounts its volume,
-// reporting whether it was running. A database without a container (row
-// created, container gone) needs no pause.
-func (m *BackupManager) pauseDatabase(ctx context.Context, database Database) (bool, error) {
+// databaseRunning reports whether the database container is listed as running.
+// A database without a container (row created, container gone) is not running.
+func (m *BackupManager) databaseRunning(ctx context.Context, database Database) (bool, error) {
 	if database.ContainerID == "" {
 		return false, nil
 	}
@@ -548,18 +595,36 @@ func (m *BackupManager) pauseDatabase(ctx context.Context, database Database) (b
 	if err != nil {
 		return false, mapContainerError(err)
 	}
-	running := false
 	for _, item := range list {
 		if item.ID == database.ContainerID {
-			running = item.State == "running"
-			break
+			return item.State == "running", nil
 		}
 	}
-	if !running {
-		return false, nil
+	return false, nil
+}
+
+// stopDatabase stops the database container so a job can mount its volume. A
+// database without a container needs no stop.
+func (m *BackupManager) stopDatabase(ctx context.Context, database Database) error {
+	if database.ContainerID == "" {
+		return nil
 	}
 	if err := m.containers.Stop(ctx, database.ServerID, database.ContainerID); err != nil {
-		return false, mapContainerError(err)
+		return mapContainerError(err)
+	}
+	return nil
+}
+
+// pauseDatabase stops the database container before a restore mounts its
+// volume, reporting whether it was running. A database without a container
+// needs no pause.
+func (m *BackupManager) pauseDatabase(ctx context.Context, database Database) (bool, error) {
+	running, err := m.databaseRunning(ctx, database)
+	if err != nil || !running {
+		return false, err
+	}
+	if err := m.stopDatabase(ctx, database); err != nil {
+		return false, err
 	}
 	return true, nil
 }

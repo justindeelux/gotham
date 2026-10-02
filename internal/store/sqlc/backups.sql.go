@@ -17,7 +17,7 @@ INSERT INTO backups (
     target_id, container_id, error, finished_at
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at
+RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running
 `
 
 type CreateBackupParams struct {
@@ -62,6 +62,7 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (Bac
 		&i.Error,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.WasRunning,
 	)
 	return i, err
 }
@@ -174,10 +175,43 @@ func (q *Queries) CreateBackupTargetSecret(ctx context.Context, arg CreateBackup
 	return i, err
 }
 
+const createRestore = `-- name: CreateRestore :one
+INSERT INTO restores (id, database_id, backup_id, status)
+VALUES ($1, $2, $3, $4)
+RETURNING id, database_id, backup_id, status, error, created_at, finished_at
+`
+
+type CreateRestoreParams struct {
+	ID         pgtype.UUID `json:"id"`
+	DatabaseID pgtype.UUID `json:"database_id"`
+	BackupID   pgtype.UUID `json:"backup_id"`
+	Status     string      `json:"status"`
+}
+
+func (q *Queries) CreateRestore(ctx context.Context, arg CreateRestoreParams) (Restore, error) {
+	row := q.db.QueryRow(ctx, createRestore,
+		arg.ID,
+		arg.DatabaseID,
+		arg.BackupID,
+		arg.Status,
+	)
+	var i Restore
+	err := row.Scan(
+		&i.ID,
+		&i.DatabaseID,
+		&i.BackupID,
+		&i.Status,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
 const deleteBackup = `-- name: DeleteBackup :one
 DELETE FROM backups
 WHERE id = $1
-RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at
+RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running
 `
 
 func (q *Queries) DeleteBackup(ctx context.Context, id pgtype.UUID) (Backup, error) {
@@ -196,6 +230,7 @@ func (q *Queries) DeleteBackup(ctx context.Context, id pgtype.UUID) (Backup, err
 		&i.Error,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.WasRunning,
 	)
 	return i, err
 }
@@ -261,7 +296,7 @@ SET status = $2,
     container_id = $6,
     finished_at = $7
 WHERE id = $1
-RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at
+RETURNING id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running
 `
 
 type FinishBackupParams struct {
@@ -298,12 +333,49 @@ func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (Bac
 		&i.Error,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.WasRunning,
+	)
+	return i, err
+}
+
+const finishRestore = `-- name: FinishRestore :one
+UPDATE restores
+SET status = $2,
+    error = $3,
+    finished_at = $4
+WHERE id = $1
+RETURNING id, database_id, backup_id, status, error, created_at, finished_at
+`
+
+type FinishRestoreParams struct {
+	ID         pgtype.UUID        `json:"id"`
+	Status     string             `json:"status"`
+	Error      string             `json:"error"`
+	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+}
+
+func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (Restore, error) {
+	row := q.db.QueryRow(ctx, finishRestore,
+		arg.ID,
+		arg.Status,
+		arg.Error,
+		arg.FinishedAt,
+	)
+	var i Restore
+	err := row.Scan(
+		&i.ID,
+		&i.DatabaseID,
+		&i.BackupID,
+		&i.Status,
+		&i.Error,
+		&i.CreatedAt,
+		&i.FinishedAt,
 	)
 	return i, err
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT b.id, b.database_id, b.schedule_id, b.type, b.status, b.size, b.location, b.target_id, b.container_id, b.error, b.created_at, b.finished_at
+SELECT b.id, b.database_id, b.schedule_id, b.type, b.status, b.size, b.location, b.target_id, b.container_id, b.error, b.created_at, b.finished_at, b.was_running
 FROM backups b
     JOIN databases d ON d.id = b.database_id
 WHERE b.id = $1 AND d.deleted_at IS NULL
@@ -325,6 +397,7 @@ func (q *Queries) GetBackup(ctx context.Context, id pgtype.UUID) (Backup, error)
 		&i.Error,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.WasRunning,
 	)
 	return i, err
 }
@@ -555,7 +628,7 @@ func (q *Queries) ListBackupTargetsByUser(ctx context.Context, userID pgtype.UUI
 }
 
 const listBackupsByDatabase = `-- name: ListBackupsByDatabase :many
-SELECT b.id, b.database_id, b.schedule_id, b.type, b.status, b.size, b.location, b.target_id, b.container_id, b.error, b.created_at, b.finished_at
+SELECT b.id, b.database_id, b.schedule_id, b.type, b.status, b.size, b.location, b.target_id, b.container_id, b.error, b.created_at, b.finished_at, b.was_running
 FROM backups b
     JOIN databases d ON d.id = b.database_id
 WHERE b.database_id = $1 AND d.deleted_at IS NULL
@@ -590,6 +663,7 @@ func (q *Queries) ListBackupsByDatabase(ctx context.Context, arg ListBackupsByDa
 			&i.Error,
 			&i.CreatedAt,
 			&i.FinishedAt,
+			&i.WasRunning,
 		); err != nil {
 			return nil, err
 		}
@@ -640,7 +714,7 @@ func (q *Queries) ListDueBackupSchedules(ctx context.Context, nextRunAt pgtype.T
 }
 
 const listRunningBackups = `-- name: ListRunningBackups :many
-SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at FROM backups
+SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running FROM backups
 WHERE status = 'running'
 ORDER BY created_at ASC
 `
@@ -666,6 +740,43 @@ func (q *Queries) ListRunningBackups(ctx context.Context) ([]Backup, error) {
 			&i.Location,
 			&i.TargetID,
 			&i.ContainerID,
+			&i.Error,
+			&i.CreatedAt,
+			&i.FinishedAt,
+			&i.WasRunning,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRunningRestores = `-- name: ListRunningRestores :many
+SELECT id, database_id, backup_id, status, error, created_at, finished_at FROM restores
+WHERE status = 'running'
+ORDER BY created_at ASC
+`
+
+// Boot-time recovery: a restore left running by a crashed control plane can
+// never finish; the sweep fails it and releases its resources.
+func (q *Queries) ListRunningRestores(ctx context.Context) ([]Restore, error) {
+	rows, err := q.db.Query(ctx, listRunningRestores)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Restore{}
+	for rows.Next() {
+		var i Restore
+		if err := rows.Scan(
+			&i.ID,
+			&i.DatabaseID,
+			&i.BackupID,
+			&i.Status,
 			&i.Error,
 			&i.CreatedAt,
 			&i.FinishedAt,
@@ -710,6 +821,24 @@ func (q *Queries) MarkBackupScheduleRun(ctx context.Context, arg MarkBackupSched
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const setBackupWasRunning = `-- name: SetBackupWasRunning :exec
+UPDATE backups
+SET was_running = $2
+WHERE id = $1
+`
+
+type SetBackupWasRunningParams struct {
+	ID         pgtype.UUID `json:"id"`
+	WasRunning bool        `json:"was_running"`
+}
+
+// Records the pre-job container state as observed by the pause, so the
+// boot-time sweep only restarts a database the job itself stopped.
+func (q *Queries) SetBackupWasRunning(ctx context.Context, arg SetBackupWasRunningParams) error {
+	_, err := q.db.Exec(ctx, setBackupWasRunning, arg.ID, arg.WasRunning)
+	return err
 }
 
 const updateBackupSchedule = `-- name: UpdateBackupSchedule :one

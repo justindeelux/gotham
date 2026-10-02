@@ -44,6 +44,17 @@ type BackupRepository interface {
 	FinishBackup(ctx context.Context, backup Backup) (Backup, error)
 	// DeleteBackup removes one run and returns the deleted row.
 	DeleteBackup(ctx context.Context, backupID uuid.UUID) (Backup, error)
+	// SetBackupWasRunning records whether the database was running when the
+	// dump paused it, so the boot-time sweep can restore the pre-job state.
+	SetBackupWasRunning(ctx context.Context, backupID uuid.UUID, wasRunning bool) error
+
+	// CreateRestore stores a new restore run, always in the running state.
+	CreateRestore(ctx context.Context, restore Restore) (Restore, error)
+	// FinishRestore persists the terminal state of a restore run.
+	FinishRestore(ctx context.Context, restore Restore) (Restore, error)
+	// ListRunningRestores returns every restore still marked running, oldest
+	// first: the boot-time reconciliation sweep marks them failed.
+	ListRunningRestores(ctx context.Context) ([]Restore, error)
 
 	// CreateBackupSchedule stores a schedule with its computed next run.
 	CreateBackupSchedule(ctx context.Context, schedule BackupSchedule) (BackupSchedule, error)
@@ -234,6 +245,61 @@ func (r *storeBackupRepository) DeleteBackup(ctx context.Context, backupID uuid.
 		return Backup{}, fmt.Errorf("databases: delete backup: %w", err)
 	}
 	return backupFromRow(row), nil
+}
+
+// SetBackupWasRunning implements BackupRepository.
+func (r *storeBackupRepository) SetBackupWasRunning(ctx context.Context, backupID uuid.UUID, wasRunning bool) error {
+	if err := r.store.SetBackupWasRunning(ctx, sqlc.SetBackupWasRunningParams{
+		ID:         pgUUID(backupID),
+		WasRunning: wasRunning,
+	}); err != nil {
+		return fmt.Errorf("databases: record backup was_running: %w", err)
+	}
+	return nil
+}
+
+// CreateRestore implements BackupRepository.
+func (r *storeBackupRepository) CreateRestore(ctx context.Context, restore Restore) (Restore, error) {
+	row, err := r.store.CreateRestore(ctx, sqlc.CreateRestoreParams{
+		ID:         pgUUID(restore.ID),
+		DatabaseID: pgUUID(restore.DatabaseID),
+		BackupID:   pgUUID(restore.BackupID),
+		Status:     string(restore.Status),
+	})
+	if err != nil {
+		return Restore{}, fmt.Errorf("databases: create restore: %w", err)
+	}
+	return restoreFromRow(row), nil
+}
+
+// FinishRestore implements BackupRepository.
+func (r *storeBackupRepository) FinishRestore(ctx context.Context, restore Restore) (Restore, error) {
+	row, err := r.store.FinishRestore(ctx, sqlc.FinishRestoreParams{
+		ID:         pgUUID(restore.ID),
+		Status:     string(restore.Status),
+		Error:      restore.Error,
+		FinishedAt: timeToPG(restore.FinishedAt),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Restore{}, ErrNotFound
+		}
+		return Restore{}, fmt.Errorf("databases: finish restore: %w", err)
+	}
+	return restoreFromRow(row), nil
+}
+
+// ListRunningRestores implements BackupRepository.
+func (r *storeBackupRepository) ListRunningRestores(ctx context.Context) ([]Restore, error) {
+	rows, err := r.store.ListRunningRestores(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("databases: list running restores: %w", err)
+	}
+	restores := make([]Restore, 0, len(rows))
+	for _, row := range rows {
+		restores = append(restores, restoreFromRow(row))
+	}
+	return restores, nil
 }
 
 // CreateBackupSchedule implements BackupRepository.
@@ -555,9 +621,23 @@ func backupFromRow(row sqlc.Backup) Backup {
 		Location:    row.Location,
 		TargetID:    uuidFromPG(row.TargetID),
 		ContainerID: row.ContainerID,
+		WasRunning:  row.WasRunning,
 		Error:       row.Error,
 		CreatedAt:   timeFromPG(row.CreatedAt),
 		FinishedAt:  timeFromPG(row.FinishedAt),
+	}
+}
+
+// restoreFromRow maps one sqlc restores row onto the domain type.
+func restoreFromRow(row sqlc.Restore) Restore {
+	return Restore{
+		ID:         uuidFromPG(row.ID),
+		DatabaseID: uuidFromPG(row.DatabaseID),
+		BackupID:   uuidFromPG(row.BackupID),
+		Status:     RestoreStatus(row.Status),
+		Error:      row.Error,
+		CreatedAt:  timeFromPG(row.CreatedAt),
+		FinishedAt: timeFromPG(row.FinishedAt),
 	}
 }
 

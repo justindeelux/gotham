@@ -93,6 +93,27 @@ func (s *Store) DeleteBackup(ctx context.Context, id pgtype.UUID) (sqlc.Backup, 
 	return s.queries.DeleteBackup(ctx, id)
 }
 
+// SetBackupWasRunning records the pre-job container state observed by the
+// dump's pause.
+func (s *Store) SetBackupWasRunning(ctx context.Context, params sqlc.SetBackupWasRunningParams) error {
+	return s.queries.SetBackupWasRunning(ctx, params)
+}
+
+// CreateRestore stores one restore run before its job starts.
+func (s *Store) CreateRestore(ctx context.Context, params sqlc.CreateRestoreParams) (sqlc.Restore, error) {
+	return s.queries.CreateRestore(ctx, params)
+}
+
+// FinishRestore persists the terminal state of a restore run and returns it.
+func (s *Store) FinishRestore(ctx context.Context, params sqlc.FinishRestoreParams) (sqlc.Restore, error) {
+	return s.queries.FinishRestore(ctx, params)
+}
+
+// ListRunningRestores returns every restore the control plane left running.
+func (s *Store) ListRunningRestores(ctx context.Context) ([]sqlc.Restore, error) {
+	return s.queries.ListRunningRestores(ctx)
+}
+
 // CreateBackupSchedule stores a schedule with its computed next run.
 func (s *Store) CreateBackupSchedule(ctx context.Context, params sqlc.CreateBackupScheduleParams) (sqlc.BackupSchedule, error) {
 	return s.queries.CreateBackupSchedule(ctx, params)

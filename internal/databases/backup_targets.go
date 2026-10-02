@@ -321,14 +321,14 @@ func applyTargetRequest(target *BackupTarget, req TargetRequest) error {
 	if endpoint := strings.TrimSpace(req.Endpoint); endpoint != "" {
 		target.Endpoint = endpoint
 	}
-	if region := strings.TrimSpace(req.Region); region != "" {
-		target.Region = region
+	if req.Region != nil {
+		target.Region = strings.TrimSpace(*req.Region)
 	}
 	if bucket := strings.TrimSpace(req.Bucket); bucket != "" {
 		target.Bucket = bucket
 	}
-	if prefix := strings.TrimSpace(req.Prefix); prefix != "" {
-		target.Prefix = prefix
+	if req.Prefix != nil {
+		target.Prefix = strings.TrimSpace(*req.Prefix)
 	}
 
 	if strings.TrimSpace(target.Name) == "" {

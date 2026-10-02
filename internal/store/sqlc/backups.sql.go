@@ -713,6 +713,50 @@ func (q *Queries) ListDueBackupSchedules(ctx context.Context, nextRunAt pgtype.T
 	return items, nil
 }
 
+const listRestoresByDatabase = `-- name: ListRestoresByDatabase :many
+SELECT r.id, r.database_id, r.backup_id, r.status, r.error, r.created_at, r.finished_at
+FROM restores r
+    JOIN databases d ON d.id = r.database_id
+WHERE r.database_id = $1 AND d.deleted_at IS NULL
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT $2
+`
+
+type ListRestoresByDatabaseParams struct {
+	DatabaseID pgtype.UUID `json:"database_id"`
+	Limit      int32       `json:"limit"`
+}
+
+// The durable restore history of one live database, newest first. Bounded by
+// the caller so the table cannot grow an unbounded response.
+func (q *Queries) ListRestoresByDatabase(ctx context.Context, arg ListRestoresByDatabaseParams) ([]Restore, error) {
+	rows, err := q.db.Query(ctx, listRestoresByDatabase, arg.DatabaseID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Restore{}
+	for rows.Next() {
+		var i Restore
+		if err := rows.Scan(
+			&i.ID,
+			&i.DatabaseID,
+			&i.BackupID,
+			&i.Status,
+			&i.Error,
+			&i.CreatedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRunningBackups = `-- name: ListRunningBackups :many
 SELECT id, database_id, schedule_id, type, status, size, location, target_id, container_id, error, created_at, finished_at, was_running FROM backups
 WHERE status = 'running'

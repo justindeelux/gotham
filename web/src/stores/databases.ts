@@ -18,6 +18,7 @@ import type {
   Database,
   DatabaseCredentials,
 } from "../api/databases";
+import { mergeDatabasesById } from "../utils/storeMerge";
 
 /** Polling cadence for the database list, in milliseconds. */
 const pollIntervalMs = 5_000;
@@ -35,6 +36,31 @@ export const useDatabasesStore = defineStore("databases", () => {
   // singleton so a single handle is enough for the whole app.
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  // Bumped by every local list mutation (create/delete). A list response that
+  // started before the mutation must merge instead of replacing the array, or
+  // it would clobber the row this tab just created.
+  let mutationGeneration = 0;
+
+  // Ids this tab deleted. A list response that started before the delete must
+  // not resurrect them; the set is intentionally never cleared while the store
+  // lives, because a stale pre-delete response can resolve after a fresh
+  // post-delete one. Growth is bounded by the session's deletions.
+  // ponytail: per-session set, cap/expire only if a long session deletes
+  // thousands of databases.
+  const deletedIds = new Set<string>();
+
+  /**
+   * applyServerList writes a server list, merging when a local mutation
+   * happened while it was in flight.
+   */
+  function applyServerList(server: Database[], generation: number): void {
+    if (generation === mutationGeneration) {
+      databases.value = server;
+      return;
+    }
+    databases.value = mergeDatabasesById(server, databases.value, deletedIds);
+  }
+
   /** applyDatabase merges one database into the in-memory list in place. */
   function applyDatabase(updated: Database): void {
     const index = databases.value.findIndex((item) => item.id === updated.id);
@@ -49,8 +75,9 @@ export const useDatabasesStore = defineStore("databases", () => {
   async function fetchDatabases(): Promise<void> {
     loading.value = true;
     error.value = null;
+    const generation = mutationGeneration;
     try {
-      databases.value = await listDatabases();
+      applyServerList(await listDatabases(), generation);
     } catch (err) {
       error.value = describeDatabaseError(err);
       throw err;
@@ -61,8 +88,9 @@ export const useDatabasesStore = defineStore("databases", () => {
 
   /** refreshDatabases reloads the list without toggling the loading flag. */
   async function refreshDatabases(): Promise<void> {
+    const generation = mutationGeneration;
     try {
-      databases.value = await listDatabases();
+      applyServerList(await listDatabases(), generation);
       error.value = null;
     } catch (err) {
       error.value = describeDatabaseError(err);
@@ -113,6 +141,7 @@ export const useDatabasesStore = defineStore("databases", () => {
       const created = await createDatabase(input);
       applyDatabase(created.database);
       credentialsById.value[created.database.id] = created.credentials;
+      mutationGeneration += 1;
       return created;
     } finally {
       acting.value = false;
@@ -138,6 +167,8 @@ export const useDatabasesStore = defineStore("databases", () => {
       await deleteDatabase(id);
       databases.value = databases.value.filter((item) => item.id !== id);
       delete credentialsById.value[id];
+      deletedIds.add(id);
+      mutationGeneration += 1;
     } finally {
       acting.value = false;
     }

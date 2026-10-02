@@ -10,6 +10,7 @@ import {
   deleteTarget,
   describeBackupError,
   listBackups,
+  listRestores,
   listSchedules,
   listTargets,
   restoreBackup,
@@ -23,17 +24,23 @@ import type {
   CreateBackupScheduleInput,
   CreateBackupTargetInput,
   DatabaseBackup,
+  DatabaseRestore,
   RestoreResult,
   TargetCheck,
   UpdateBackupScheduleInput,
   UpdateBackupTargetInput,
 } from "../api/backups";
+import { mergeBackupsById } from "../utils/storeMerge";
 
 export const useBackupsStore = defineStore("backups", () => {
   const backupsById = ref<Record<string, DatabaseBackup[]>>({});
   const backupsLoading = ref(false);
   const backupsError = ref<string | null>(null);
   const backupsActing = ref(false);
+
+  const restoresById = ref<Record<string, DatabaseRestore[]>>({});
+  const restoresLoading = ref(false);
+  const restoresError = ref<string | null>(null);
 
   const schedulesById = ref<Record<string, BackupSchedule[]>>({});
   const schedulesLoading = ref(false);
@@ -48,6 +55,11 @@ export const useBackupsStore = defineStore("backups", () => {
   /** backupsOf returns the cached runs of one database, if any. */
   function backupsOf(databaseId: string): DatabaseBackup[] {
     return backupsById.value[databaseId] ?? [];
+  }
+
+  /** restoresOf returns the cached restore runs of one database, if any. */
+  function restoresOf(databaseId: string): DatabaseRestore[] {
+    return restoresById.value[databaseId] ?? [];
   }
 
   /** schedulesOf returns the cached cron entries of one database, if any. */
@@ -68,7 +80,11 @@ export const useBackupsStore = defineStore("backups", () => {
     backupsLoading.value = true;
     backupsError.value = null;
     try {
-      backupsById.value[databaseId] = await listBackups(databaseId);
+      const server = await listBackups(databaseId);
+      backupsById.value[databaseId] = mergeBackupsById(
+        backupsById.value[databaseId] ?? [],
+        server,
+      );
     } catch (err) {
       backupsError.value = describeBackupError(err);
       throw err;
@@ -80,10 +96,38 @@ export const useBackupsStore = defineStore("backups", () => {
   /** refreshBackups reloads the runs without toggling the loading flag. */
   async function refreshBackups(databaseId: string): Promise<void> {
     try {
-      backupsById.value[databaseId] = await listBackups(databaseId);
+      const server = await listBackups(databaseId);
+      backupsById.value[databaseId] = mergeBackupsById(
+        backupsById.value[databaseId] ?? [],
+        server,
+      );
       backupsError.value = null;
     } catch (err) {
       backupsError.value = describeBackupError(err);
+    }
+  }
+
+  /** fetchRestores loads the durable restore runs of one database. */
+  async function fetchRestores(databaseId: string): Promise<void> {
+    restoresLoading.value = true;
+    restoresError.value = null;
+    try {
+      restoresById.value[databaseId] = await listRestores(databaseId);
+    } catch (err) {
+      restoresError.value = describeBackupError(err);
+      throw err;
+    } finally {
+      restoresLoading.value = false;
+    }
+  }
+
+  /** refreshRestores reloads the restore runs without toggling the flag. */
+  async function refreshRestores(databaseId: string): Promise<void> {
+    try {
+      restoresById.value[databaseId] = await listRestores(databaseId);
+      restoresError.value = null;
+    } catch (err) {
+      restoresError.value = describeBackupError(err);
     }
   }
 
@@ -315,6 +359,9 @@ export const useBackupsStore = defineStore("backups", () => {
     backupsLoading,
     backupsError,
     backupsActing,
+    restoresById,
+    restoresLoading,
+    restoresError,
     schedulesById,
     schedulesLoading,
     schedulesError,
@@ -324,10 +371,13 @@ export const useBackupsStore = defineStore("backups", () => {
     targetsError,
     targetsActing,
     backupsOf,
+    restoresOf,
     schedulesOf,
     targetOf,
     fetchBackups,
     refreshBackups,
+    fetchRestores,
+    refreshRestores,
     backupNow,
     removeBackup,
     restore,

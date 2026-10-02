@@ -1,5 +1,6 @@
 import { http } from "./http";
 import { isApiError } from "./servers";
+import { toTargetBody } from "../utils/backupTarget";
 
 /**
  * Typed client for the backup routes served by `internal/databases`
@@ -86,10 +87,29 @@ export interface BackupTarget {
 
 /** A queued restore as answered by POST .../restore (HTTP 202). */
 export interface RestoreResult {
+  restore_id: string;
   backup_id: string;
   database_id: string;
   location: string;
   status: BackupRunStatus;
+}
+
+/** Lifecycle of a durable restore run (see backup_model.go RestoreStatus). */
+export type RestoreStatus = "running" | "completed" | "failed";
+
+/**
+ * One durable restore run read back from GET .../restores. Unlike the 202
+ * answer this row survives, so a client can follow a queued restore to its
+ * completed/failed state.
+ */
+export interface DatabaseRestore {
+  id: string;
+  database_id: string;
+  backup_id: string;
+  status: RestoreStatus;
+  error?: string;
+  created_at: string;
+  finished_at?: string;
 }
 
 /** The answer of the "test connection" action (always HTTP 200). */
@@ -179,6 +199,11 @@ interface RestoreEnvelope {
   restore: RestoreResult;
 }
 
+/** Wire envelope for a restore list. */
+interface RestoreListEnvelope {
+  restores: DatabaseRestore[];
+}
+
 /** Wire envelope for a connection test. */
 interface TargetCheckEnvelope {
   check: TargetCheck;
@@ -236,6 +261,20 @@ export async function restoreBackup(
     { backup_id: backupId },
   );
   return response.data.restore;
+}
+
+/**
+ * listRestores returns the durable restore runs of one database, newest first.
+ * The 202 from restoreBackup is only the queue acknowledgement; this is how a
+ * caller learns whether the restore completed or failed.
+ */
+export async function listRestores(
+  databaseId: string,
+): Promise<DatabaseRestore[]> {
+  const response = await http.get<RestoreListEnvelope>(
+    `/databases/${databaseId}/restores`,
+  );
+  return response.data.restores ?? [];
 }
 
 /** listSchedules returns the cron entries of one database. */
@@ -352,26 +391,6 @@ export async function testTarget(targetId: string): Promise<TargetCheck> {
     {},
   );
   return response.data.check;
-}
-
-/**
- * toTargetBody drops empty optional fields so the server keeps the stored
- * values for everything the form leaves blank.
- */
-function toTargetBody(
-  input: CreateBackupTargetInput | UpdateBackupTargetInput,
-): Record<string, unknown> {
-  const body: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(input)) {
-    if (typeof value === "string") {
-      if (value.trim() !== "") {
-        body[key] = value;
-      }
-    } else if (value !== undefined) {
-      body[key] = value;
-    }
-  }
-  return body;
 }
 
 /** describeBackupError maps a thrown error to a user-facing message. */

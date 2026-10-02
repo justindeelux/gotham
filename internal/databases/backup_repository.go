@@ -55,6 +55,10 @@ type BackupRepository interface {
 	// ListRunningRestores returns every restore still marked running, oldest
 	// first: the boot-time reconciliation sweep marks them failed.
 	ListRunningRestores(ctx context.Context) ([]Restore, error)
+	// ListRestoresByDatabase returns up to limit of a database's restore runs,
+	// newest first, so a caller can follow a queued restore to its terminal
+	// state.
+	ListRestoresByDatabase(ctx context.Context, databaseID uuid.UUID, limit int) ([]Restore, error)
 
 	// CreateBackupSchedule stores a schedule with its computed next run.
 	CreateBackupSchedule(ctx context.Context, schedule BackupSchedule) (BackupSchedule, error)
@@ -294,6 +298,22 @@ func (r *storeBackupRepository) ListRunningRestores(ctx context.Context) ([]Rest
 	rows, err := r.store.ListRunningRestores(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("databases: list running restores: %w", err)
+	}
+	restores := make([]Restore, 0, len(rows))
+	for _, row := range rows {
+		restores = append(restores, restoreFromRow(row))
+	}
+	return restores, nil
+}
+
+// ListRestoresByDatabase implements BackupRepository.
+func (r *storeBackupRepository) ListRestoresByDatabase(ctx context.Context, databaseID uuid.UUID, limit int) ([]Restore, error) {
+	rows, err := r.store.ListRestoresByDatabase(ctx, sqlc.ListRestoresByDatabaseParams{
+		DatabaseID: pgUUID(databaseID),
+		Limit:      int32(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("databases: list restores: %w", err)
 	}
 	restores := make([]Restore, 0, len(rows))
 	for _, row := range rows {

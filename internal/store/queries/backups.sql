@@ -190,3 +190,13 @@ RETURNING *;
 SELECT * FROM restores
 WHERE status = 'running'
 ORDER BY created_at ASC;
+
+-- name: ListRestoresByDatabase :many
+-- The durable restore history of one live database, newest first. Bounded by
+-- the caller so the table cannot grow an unbounded response.
+SELECT r.*
+FROM restores r
+    JOIN databases d ON d.id = r.database_id
+WHERE r.database_id = $1 AND d.deleted_at IS NULL
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT $2;

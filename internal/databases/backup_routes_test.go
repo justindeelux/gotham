@@ -24,6 +24,7 @@ type fakeBackupService struct {
 	target    BackupTarget
 	targets   []BackupTarget
 	restore   RestoreResult
+	restores  []Restore
 	check     TargetCheck
 
 	err   error
@@ -82,6 +83,15 @@ func (f *fakeBackupService) RestoreBackup(_ context.Context, _, _ uuid.UUID, req
 		return RestoreResult{}, f.err
 	}
 	return f.restore, nil
+}
+
+func (f *fakeBackupService) ListRestores(_ context.Context, _, _ uuid.UUID, limit int) ([]Restore, error) {
+	f.record("listRestores")
+	f.listLimit = limit
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.restores, nil
 }
 
 func (f *fakeBackupService) ListSchedules(_ context.Context, _, _ uuid.UUID) ([]BackupSchedule, error) {
@@ -212,6 +222,7 @@ func TestBackupRoutesRequireAuthentication(t *testing.T) {
 		{http.MethodPost, "/v1/databases/" + id.String() + "/backup", ""},
 		{http.MethodGet, "/v1/databases/" + id.String() + "/backups", ""},
 		{http.MethodPost, "/v1/databases/" + id.String() + "/restore", `{"backup_id":"` + uuid.New().String() + `"}`},
+		{http.MethodGet, "/v1/databases/" + id.String() + "/restores", ""},
 		{http.MethodGet, "/v1/databases/backup-targets", ""},
 	} {
 		rec := backupRequest(t, handler, request.method, request.path, request.body)
@@ -339,6 +350,50 @@ func TestRestoreRoute(t *testing.T) {
 	if rec := backupRequest(t, handler, http.MethodPost, "/v1/databases/"+id.String()+"/restore",
 		`{"backup_id":"nope"}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("invalid backup id → %d, want 400", rec.Code)
+	}
+}
+
+// TestListRestoresRoute is the D3-7 regression: the durable restore rows are
+// exposed so a client can follow a queued restore to its terminal state.
+func TestListRestoresRoute(t *testing.T) {
+	user := uuid.New()
+	id := uuid.New()
+	backupID := uuid.New()
+	finished := time.Now().UTC()
+	svc := &fakeBackupService{restores: []Restore{
+		{ID: uuid.New(), DatabaseID: id, BackupID: backupID, Status: RestoreCompleted, CreatedAt: finished, FinishedAt: finished},
+		{ID: uuid.New(), DatabaseID: id, BackupID: backupID, Status: RestoreFailed, Error: "apply failed", CreatedAt: finished},
+	}}
+	handler := newBackupRouter(svc, user, true)
+
+	rec := backupRequest(t, handler, http.MethodGet, "/v1/databases/"+id.String()+"/restores?limit=5", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var envelope struct {
+		Restores []restoreResponse `json:"restores"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(envelope.Restores) != 2 {
+		t.Fatalf("restores = %d, want 2", len(envelope.Restores))
+	}
+	if envelope.Restores[0].Status != RestoreCompleted || envelope.Restores[0].BackupID != backupID.String() {
+		t.Errorf("first restore = %+v", envelope.Restores[0])
+	}
+	if envelope.Restores[1].Status != RestoreFailed || envelope.Restores[1].Error != "apply failed" {
+		t.Errorf("second restore = %+v", envelope.Restores[1])
+	}
+	if envelope.Restores[0].FinishedAt == nil {
+		t.Error("completed restore should carry finished_at")
+	}
+	if svc.listLimit != 5 {
+		t.Errorf("limit = %d, want 5", svc.listLimit)
+	}
+
+	if rec := backupRequest(t, handler, http.MethodGet, "/v1/databases/"+id.String()+"/restores?limit=-1", ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("negative limit → %d, want 400", rec.Code)
 	}
 }
 

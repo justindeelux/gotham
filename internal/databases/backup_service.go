@@ -98,6 +98,10 @@ type BackupService interface {
 	// RestoreBackup queues a restore of a completed backup into its database
 	// and returns as soon as the job is recorded.
 	RestoreBackup(ctx context.Context, userID, databaseID uuid.UUID, req RestoreRequest) (RestoreResult, error)
+	// ListRestores returns up to limit of a database's restore runs, newest
+	// first, so a caller can follow a queued restore to its durable terminal
+	// state.
+	ListRestores(ctx context.Context, userID, databaseID uuid.UUID, limit int) ([]Restore, error)
 
 	// ListSchedules returns a database's schedules, newest first.
 	ListSchedules(ctx context.Context, userID, databaseID uuid.UUID) ([]BackupSchedule, error)
@@ -175,15 +179,20 @@ type ScheduleRequest struct {
 // credentials untouched. An s3 target must always hold both halves: create
 // requires them in the request, and update requires them in the request or
 // already stored.
+//
+// Region and Prefix are the optional fields a caller can clear, so they are
+// tri-state on update: nil (field absent or null) leaves the stored value
+// unchanged, while a pointer to "" clears it. Endpoint and Bucket stay plain
+// strings because an s3 target must always carry both, so blank keeps them.
 type TargetRequest struct {
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
-	Endpoint  string `json:"endpoint,omitempty"`
-	Region    string `json:"region,omitempty"`
-	Bucket    string `json:"bucket,omitempty"`
-	Prefix    string `json:"prefix,omitempty"`
-	AccessKey string `json:"access_key,omitempty"`
-	SecretKey string `json:"secret_key,omitempty"`
+	Name      string  `json:"name"`
+	Kind      string  `json:"kind"`
+	Endpoint  string  `json:"endpoint,omitempty"`
+	Region    *string `json:"region,omitempty"`
+	Bucket    string  `json:"bucket,omitempty"`
+	Prefix    *string `json:"prefix,omitempty"`
+	AccessKey string  `json:"access_key,omitempty"`
+	SecretKey string  `json:"secret_key,omitempty"`
 }
 
 // TargetCheck is the answer of the "test connection" action.
@@ -510,6 +519,26 @@ func (m *BackupManager) ListBackups(ctx context.Context, userID, databaseID uuid
 		return []Backup{}, nil
 	}
 	return backups, nil
+}
+
+// ListRestores implements BackupService: the durable restore rows of one
+// database, newest first, so a client can follow a queued restore to its
+// terminal state.
+func (m *BackupManager) ListRestores(ctx context.Context, userID, databaseID uuid.UUID, limit int) ([]Restore, error) {
+	if err := m.backupsReady(); err != nil {
+		return nil, err
+	}
+	if _, err := m.database(ctx, userID, databaseID, false); err != nil {
+		return nil, err
+	}
+	restores, err := m.backups.ListRestoresByDatabase(ctx, databaseID, clampBackupListLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	if restores == nil {
+		return []Restore{}, nil
+	}
+	return restores, nil
 }
 
 // clampBackupListLimit turns a caller-supplied page size into a safe bound.

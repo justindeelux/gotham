@@ -15,13 +15,15 @@ WHERE refresh_hash = $1
   AND revoked_at IS NULL;
 
 -- name: DeleteSession :exec
--- DeleteSession removes the session with the given refresh hash. Logout uses it
--- instead of RevokeSession so a replayed logged-out token reaches the reuse
--- classifier as a deleted row: RevokeFamilyIfStolen returns false (nothing to
--- attribute), so the user's other live sessions survive and the refresh is a
--- plain 401.
+-- DeleteSession removes the session with the given refresh hash only while it
+-- is still live. Logout uses it instead of RevokeSession so a replayed
+-- logged-out token reaches the reuse classifier as a deleted row, not a revoked
+-- one: RevokeFamilyIfStolen returns false (nothing to attribute), so the user's
+-- other live sessions survive and the refresh is a plain 401. An already-rotated
+-- (revoked) row is left in place so its reuse-detection evidence survives.
 DELETE FROM sessions
-WHERE refresh_hash = $1;
+WHERE refresh_hash = $1
+  AND revoked_at IS NULL;
 
 -- name: DeleteUserSessions :exec
 -- DeleteUserSessions removes every session of a user, used after a password

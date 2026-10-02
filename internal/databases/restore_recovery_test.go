@@ -533,6 +533,58 @@ func TestBackupRecordsWasRunning(t *testing.T) {
 	})
 }
 
+// TestBackupAbortsBeforeStoppingWhenStateCannotBeRecorded is the U1 (round 3)
+// regression: the dump must durably record was_running before it stops the
+// database. A failed record write aborts the job with the database untouched,
+// which pins both the ordering and the abort branch.
+func TestBackupAbortsBeforeStoppingWhenStateCannotBeRecorded(t *testing.T) {
+	fixture := newBackupFixture(t)
+	fixture.backups.setWasRunningErr = errors.New("metadata store unavailable")
+
+	queued, err := fixture.manager.CreateBackup(context.Background(), fixture.userID, fixture.database.ID, CreateBackupRequest{})
+	if err != nil {
+		t.Fatalf("CreateBackup: %v", err)
+	}
+	finished := fixture.waitBackup(t, queued.ID)
+	if finished.Status != BackupFailed {
+		t.Errorf("status = %q, want %q", finished.Status, BackupFailed)
+	}
+	if !strings.Contains(finished.Error, "record the pre-backup database state") {
+		t.Errorf("error = %q, want the record-write cause", finished.Error)
+	}
+	fixture.containers.mu.Lock()
+	stops := fixture.containers.stops
+	fixture.containers.mu.Unlock()
+	if stops != 0 {
+		t.Errorf("stops = %d, want 0: the database was stopped before its state was recorded", stops)
+	}
+}
+
+// TestReconcileDoesNotResumeWhenRestoreListUnavailable is the U2 (round 3)
+// regression: when the running-restore list cannot be read, a stale backup
+// must not be resumed, because a partial restore might be hidden.
+func TestReconcileDoesNotResumeWhenRestoreListUnavailable(t *testing.T) {
+	fixture := newBackupFixture(t)
+	if _, err := fixture.backups.CreateBackup(context.Background(), Backup{
+		DatabaseID: fixture.database.ID,
+		Type:       BackupManual,
+		Status:     BackupRunning,
+		WasRunning: true,
+	}); err != nil {
+		t.Fatalf("seed running backup: %v", err)
+	}
+	fixture.backups.listRestoresErr = errors.New("metadata store unavailable")
+
+	fixture.manager.reconcileStaleBackups()
+
+	fixture.containers.mu.Lock()
+	starts := fixture.containers.starts
+	fixture.containers.mu.Unlock()
+	if starts != 0 {
+		t.Errorf("starts = %d, want 0: a backup was resumed while the restore list was unreadable", starts)
+	}
+}
+
 // failingReader yields a few bytes and then an error, modelling an artifact
 // download that dies mid-stream during staging.
 type failingReader struct{ done bool }

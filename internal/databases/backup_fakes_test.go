@@ -109,6 +109,8 @@ type fakeBackupRepository struct {
 	listBackupErr     error
 	finishBackupErr   error
 	deleteBackupErr   error
+	setWasRunningErr  error
+	listRestoresErr   error
 	createRestoreErr  error
 	finishRestoreErr  error
 	dueErr            error
@@ -355,6 +357,9 @@ func (r *fakeBackupRepository) DeleteBackup(_ context.Context, backupID uuid.UUI
 func (r *fakeBackupRepository) SetBackupWasRunning(_ context.Context, backupID uuid.UUID, wasRunning bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.setWasRunningErr != nil {
+		return r.setWasRunningErr
+	}
 	backup, ok := r.backups[backupID]
 	if !ok {
 		return ErrNotFound
@@ -405,8 +410,8 @@ func (r *fakeBackupRepository) FinishRestore(_ context.Context, restore Restore)
 func (r *fakeBackupRepository) ListRunningRestores(_ context.Context) ([]Restore, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.listBackupErr != nil {
-		return nil, r.listBackupErr
+	if r.listRestoresErr != nil {
+		return nil, r.listRestoresErr
 	}
 	list := make([]Restore, 0, len(r.restoreOrder))
 	for _, id := range r.restoreOrder {

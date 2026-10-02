@@ -386,12 +386,24 @@ export async function startApplication(appId: string): Promise<Deployment> {
 }
 
 /**
+ * Lifecycle action whose 404 has a specific meaning instead of "app missing".
+ * A stop/start 404 means there is no container in that state, not that the
+ * application row vanished (C4-18).
+ */
+export type ApplicationControlAction = "stop" | "start";
+
+/**
  * describeApplicationError maps a thrown error to a user-facing message. The
  * mapping mirrors `writeServiceError` in `internal/deploy/routes.go`: 404 is
  * a missing (or foreign) application, 409 an in-flight deployment, 502 an
- * unreachable node agent and 503 a disabled feature flag.
+ * unreachable node agent and 503 a disabled feature flag. `action` sharpens the
+ * 404 copy for the container lifecycle routes, where a 404 means "no container
+ * in the target state" rather than "application not found".
  */
-export function describeApplicationError(error: unknown): string {
+export function describeApplicationError(
+  error: unknown,
+  action?: ApplicationControlAction,
+): string {
   if (isApiError(error)) {
     if (error.status === 401) {
       return "Your session expired. Please sign in again.";
@@ -400,6 +412,12 @@ export function describeApplicationError(error: unknown): string {
       return error.message || "Invalid request. Check the highlighted fields and retry.";
     }
     if (error.status === 404) {
+      if (action === "stop") {
+        return "No running container to stop. It may already be stopped.";
+      }
+      if (action === "start") {
+        return "No container to start. Deploy the application first.";
+      }
       return "Application not found. It may have been deleted or belong to another account.";
     }
     if (error.status === 409) {

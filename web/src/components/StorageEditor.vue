@@ -3,6 +3,7 @@ import { NButton, NIcon, NInput, NText } from "naive-ui";
 import { computed } from "vue";
 
 import type { StorageMapping } from "../api/applications";
+import { useStableRowKeys } from "../composables/useStableRowKeys";
 import GothamIcon from "./GothamIcon.vue";
 
 /**
@@ -21,6 +22,7 @@ const emit = defineEmits<{
 }>();
 
 const rows = computed<StorageMapping[]>(() => props.modelValue);
+const { keys: rowKeys, insertAt, removeAt } = useStableRowKeys(() => rows.value.length);
 
 /** updateRow replaces one row, keeping the array immutable for v-model. */
 function updateRow(index: number, patch: Partial<StorageMapping>): void {
@@ -32,6 +34,7 @@ function updateRow(index: number, patch: Partial<StorageMapping>): void {
 
 /** addRow appends an empty row for the next volume. */
 function addRow(): void {
+  insertAt(rows.value.length);
   emit("update:modelValue", [
     ...rows.value,
     { name: "", host_path: "", container_path: "" },
@@ -40,6 +43,7 @@ function addRow(): void {
 
 /** removeRow drops one row by index. */
 function removeRow(index: number): void {
+  removeAt(index);
   emit("update:modelValue", rows.value.filter((_, rowIndex) => rowIndex !== index));
 }
 </script>
@@ -49,7 +53,11 @@ function removeRow(index: number): void {
     <div v-if="rows.length === 0" class="storage-editor__empty">
       <NText depth="3">No volumes yet. The container filesystem is ephemeral until a volume is added.</NText>
     </div>
-    <div v-for="(row, index) in rows" :key="index" class="storage-editor__row">
+    <div
+      v-for="(row, index) in rows"
+      :key="rowKeys[index] ?? index"
+      class="storage-editor__row"
+    >
       <NInput
         :value="row.name"
         class="mono"

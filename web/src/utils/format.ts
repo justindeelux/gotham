@@ -39,6 +39,12 @@ export function formatPercent(value: number | null | undefined): string {
   return `${clamped.toFixed(1)}%`;
 }
 
+/**
+ * USAGE_DANGER_PERCENT is the single danger threshold for CPU/RAM/disk meters.
+ * Kept here so the dashboard and the server list cannot drift apart (B4-13).
+ */
+export const USAGE_DANGER_PERCENT = 80;
+
 /** toPercent normalizes a usage reading to a 0-100 percentage.
  *
  * The proto contract (proto/agent/v1/agent.proto) defines heartbeat usage

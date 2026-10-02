@@ -7,6 +7,8 @@ import {
   NDrawer,
   NDrawerContent,
   NEmpty,
+  NIcon,
+  NInput,
   NSpace,
   NTag,
   NText,
@@ -27,6 +29,7 @@ import {
 } from "../api/containers";
 import { getServer } from "../api/servers";
 import { useMediaQuery } from "../composables/useMediaQuery";
+import GothamIcon from "../components/GothamIcon.vue";
 import LogViewer from "../components/LogViewer.vue";
 
 /** Polling cadence for the container list, in milliseconds. */
@@ -48,6 +51,46 @@ const pending = ref<Record<string, boolean>>({});
 
 const selected = ref<Container | null>(null);
 const drawerOpen = ref(false);
+
+/** Status chips mirroring the server-detail mockup toolbar. */
+type ContainerFilter = "all" | "running" | "exited";
+
+const activeFilter = ref<ContainerFilter>("all");
+const searchQuery = ref("");
+
+/** matchesFilter applies the active status chip to one container. */
+function matchesFilter(row: Container, filter: ContainerFilter): boolean {
+  switch (filter) {
+    case "running":
+      return isRunning(row.state);
+    case "exited":
+      return !isRunning(row.state);
+    case "all":
+    default:
+      return true;
+  }
+}
+
+/** filteredContainers applies the chip filter and the name/image search. */
+const filteredContainers = computed<Container[]>(() => {
+  const needle = searchQuery.value.trim().toLowerCase();
+  return containers.value.filter((row) => {
+    if (!matchesFilter(row, activeFilter.value)) {
+      return false;
+    }
+    if (needle === "") {
+      return true;
+    }
+    return `${row.name} ${row.image}`.toLowerCase().includes(needle);
+  });
+});
+
+/** filterCounts renders live chip counts; never invented. */
+const filterCounts = computed<Record<ContainerFilter, number>>(() => ({
+  all: containers.value.length,
+  running: containers.value.filter((row) => isRunning(row.state)).length,
+  exited: containers.value.filter((row) => !isRunning(row.state)).length,
+}));
 
 /** isNarrow tracks viewports where the fixed log drawer would overflow. */
 const isNarrow = useMediaQuery("(max-width: 760px)");
@@ -111,6 +154,24 @@ function portsCell(row: Container): VNode {
     return h(NText, { depth: 3 }, { default: () => "—" });
   }
   return h("span", { class: "mono" }, row.ports.join(", "));
+}
+
+/**
+ * statCell renders a per-container metric. The agent ContainerInfo contract
+ * carries no CPU/RAM reading yet, so the mockup's columns render an explicit
+ * em dash rather than a fabricated value.
+ */
+function statCell(): VNode {
+  return h(
+    "span",
+    { class: "mono muted", title: "Not reported by the agent yet" },
+    "—",
+  );
+}
+
+/** uptimeCell renders Docker's human uptime/status string for the row. */
+function uptimeCell(row: Container): VNode {
+  return h("span", { class: "mono muted" }, row.status || "—");
 }
 
 /** actionButton renders one start/stop/restart control for a row. */
@@ -195,6 +256,25 @@ const columns: DataTableColumns<Container> = [
     render: (row) => portsCell(row),
   },
   {
+    title: "CPU",
+    key: "cpu",
+    width: 80,
+    render: () => statCell(),
+  },
+  {
+    title: "RAM",
+    key: "ram",
+    width: 90,
+    render: () => statCell(),
+  },
+  {
+    title: "Uptime",
+    key: "uptime",
+    minWidth: 140,
+    ellipsis: { tooltip: true },
+    render: (row) => uptimeCell(row),
+  },
+  {
     title: "Actions",
     key: "actions",
     width: 220,
@@ -207,11 +287,21 @@ function rowKey(row: Container): string {
   return row.id;
 }
 
-/** rowProps makes the whole row clickable to open the log drawer. */
+/** rowProps makes the whole row clickable and keyboard-operable (B2-14). */
 function rowProps(row: Container): HTMLAttributes {
+  const label = row.name || row.id;
   return {
     style: "cursor: pointer;",
+    tabindex: 0,
+    role: "button",
+    "aria-label": `Open logs for ${label}`,
     onClick: () => openLogs(row),
+    onKeydown: (event: KeyboardEvent) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openLogs(row);
+      }
+    },
   };
 }
 
@@ -325,7 +415,7 @@ onUnmounted(() => {
     <nav class="breadcrumb" aria-label="Breadcrumb">
       <RouterLink to="/servers">Servers</RouterLink>
       <span class="breadcrumb__sep">/</span>
-      <span class="muted">{{ serverName || serverId }}</span>
+      <span class="muted" aria-current="page">{{ serverName || serverId }}</span>
     </nav>
 
     <NCard>
@@ -350,20 +440,69 @@ onUnmounted(() => {
         {{ error }}
       </NAlert>
 
+      <div class="toolbar">
+        <div class="filters" role="group" aria-label="Filter containers by status">
+          <button
+            class="chip"
+            type="button"
+            :class="{ 'is-active': activeFilter === 'all' }"
+            :aria-pressed="activeFilter === 'all'"
+            @click="activeFilter = 'all'"
+          >
+            All <span class="nav-count">{{ filterCounts.all }}</span>
+          </button>
+          <button
+            class="chip"
+            type="button"
+            :class="{ 'is-active': activeFilter === 'running' }"
+            :aria-pressed="activeFilter === 'running'"
+            @click="activeFilter = 'running'"
+          >
+            Running <span class="nav-count">{{ filterCounts.running }}</span>
+          </button>
+          <button
+            class="chip"
+            type="button"
+            :class="{ 'is-active': activeFilter === 'exited' }"
+            :aria-pressed="activeFilter === 'exited'"
+            @click="activeFilter = 'exited'"
+          >
+            Exited <span class="nav-count">{{ filterCounts.exited }}</span>
+          </button>
+        </div>
+        <NInput
+          v-model:value="searchQuery"
+          class="search-input"
+          placeholder="Search container or image…"
+          aria-label="Search containers"
+          clearable
+        >
+          <template #prefix>
+            <NIcon>
+              <GothamIcon name="search" />
+            </NIcon>
+          </template>
+        </NInput>
+      </div>
+
       <NDataTable
         :columns="columns"
-        :data="containers"
+        :data="filteredContainers"
         :loading="loading"
         :row-key="rowKey"
         :row-props="rowProps"
         :bordered="false"
-        :scroll-x="960"
+        :scroll-x="1200"
         :pagination="{ pageSize: 10 }"
       >
         <template #empty>
           <NEmpty
             :description="
-              loaded ? 'No containers on this node.' : 'Loading containers…'
+              !loaded
+                ? 'Loading containers…'
+                : containers.length === 0
+                  ? 'No containers on this node.'
+                  : 'No containers match the current filter.'
             "
           />
         </template>
@@ -395,5 +534,59 @@ onUnmounted(() => {
 
 .breadcrumb__sep {
   color: var(--meta);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard);
+}
+
+.chip:hover {
+  background: var(--hover-row);
+  color: var(--fg-2);
+  border-color: var(--border-soft);
+}
+
+.chip.is-active {
+  background: var(--selected-row);
+  color: var(--fg-2);
+  border-color: var(--border-soft);
+}
+
+.chip .nav-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.search-input {
+  margin-left: auto;
+  max-width: 280px;
 }
 </style>

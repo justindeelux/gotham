@@ -132,6 +132,19 @@ const latest = computed<Deployment | null>(() => appsStore.latestDeployment(appI
 
 const active = computed<Deployment | null>(() => appsStore.activeDeployment(appId.value));
 
+/**
+ * containerStopped tracks a stop/start the deployment row cannot express:
+ * stopping leaves the deployment state "running" (the release still describes
+ * the container), so the header tag and the Stop/Start buttons read this local
+ * truth instead of `latest.state` alone (C4-19).
+ */
+const containerStopped = ref(false);
+
+/** containerIsRunning is the live view of the newest deployment's container. */
+const containerIsRunning = computed<boolean>(
+  () => latest.value?.state === "running" && !containerStopped.value,
+);
+
 /** shortId renders the head of the application UUID for the header. */
 const shortId = computed<string>(() => appId.value.slice(0, 8));
 
@@ -566,9 +579,12 @@ async function handleRollback(): Promise<void> {
 async function handleStop(): Promise<void> {
   try {
     await appsStore.stopApp(appId.value);
+    // A stop leaves the deployment row "running"; reflect the live container
+    // so the tag flips and Stop disables (C4-19).
+    containerStopped.value = true;
     message.success("Stop signal sent");
   } catch (error) {
-    message.error(describeApplicationError(error));
+    message.error(describeApplicationError(error, "stop"));
   }
 }
 
@@ -576,9 +592,10 @@ async function handleStop(): Promise<void> {
 async function handleStart(): Promise<void> {
   try {
     await appsStore.startApp(appId.value);
+    containerStopped.value = false;
     message.success("Start signal sent");
   } catch (error) {
-    message.error(describeApplicationError(error));
+    message.error(describeApplicationError(error, "start"));
   }
 }
 
@@ -594,6 +611,7 @@ watch(appId, () => {
   // Invalidate any in-flight config read for the previous application.
   draftGeneration.bump();
   activeTab.value = "overview";
+  containerStopped.value = false;
   logDeploymentId.value = "";
   logServerId.value = "";
   envDraft.value = [];
@@ -611,6 +629,14 @@ watch(appId, () => {
   appsStore.stopAllPolling();
   void fetchAll();
 });
+
+// A new deployment's container supersedes any local stop/start override.
+watch(
+  () => latest.value?.id,
+  () => {
+    containerStopped.value = false;
+  },
+);
 
 onMounted(() => {
   void fetchAll();
@@ -645,10 +671,13 @@ onUnmounted(() => {
           <NSpace align="center" :size="10">
             <NText strong style="font-size: 20px" class="mono">{{ displayName || "Application" }}</NText>
             <DeploymentStatusTag
-              v-if="latest"
+              v-if="latest && !containerStopped"
               :state="latest.state"
               size="medium"
             />
+            <NTag v-else-if="containerStopped" type="default" size="medium" round>
+              stopped
+            </NTag>
           </NSpace>
           <NText depth="3" class="mono">{{ appId }}</NText>
         </div>
@@ -670,7 +699,7 @@ onUnmounted(() => {
             <template #trigger>
               <NButton
                 :loading="appsStore.acting"
-                :disabled="appsStore.acting || controlHint !== null"
+                :disabled="appsStore.acting || controlHint !== null || !containerIsRunning"
                 @click="handleStop"
               >
                 Stop
@@ -682,7 +711,7 @@ onUnmounted(() => {
             <template #trigger>
               <NButton
                 :loading="appsStore.acting"
-                :disabled="appsStore.acting || controlHint !== null"
+                :disabled="appsStore.acting || controlHint !== null || containerIsRunning"
                 @click="handleStart"
               >
                 Start

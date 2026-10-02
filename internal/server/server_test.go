@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/justindeelux/gotham/internal/config"
@@ -140,5 +142,50 @@ func TestNewRejectsNilDependencies(t *testing.T) {
 	}
 	if _, err := New(&config.Config{}, nil, nil, nil, nil, nil, nil); err == nil {
 		t.Error("New(cfg, nil) = nil error, want error")
+	}
+}
+
+// TestNewWarnsOnBroadTrustedProxy pins M1: an overly broad trusted prefix logs
+// a warning that any host inside it can spoof the forwarded client address.
+func TestNewWarnsOnBroadTrustedProxy(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	cfg := &config.Config{Values: config.Values{Server: config.Server{
+		Addr:           "127.0.0.1",
+		Port:           0,
+		TrustedProxies: []string{"10.0.0.0/8"},
+	}}}
+
+	s, err := New(cfg, logger, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(s.closer)
+
+	if !strings.Contains(buf.String(), "overly broad prefix") {
+		t.Errorf("log = %q, want an overly broad prefix warning", buf.String())
+	}
+}
+
+// TestNewWarnsOnMissingTrustedProxyForOAuth pins M2: an OAuth-enabled
+// deployment with no trusted proxies logs an upgrade warning.
+func TestNewWarnsOnMissingTrustedProxyForOAuth(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	cfg := &config.Config{Values: config.Values{
+		Server: config.Server{Addr: "127.0.0.1", Port: 0},
+		OAuth: config.OAuth{GitHub: config.OAuthGitHub{
+			RedirectURL: "https://gotham.example/api/v1/auth/oauth/github/callback",
+		}},
+	}}
+
+	s, err := New(cfg, logger, nil, &fakeOAuthService{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(s.closer)
+
+	if !strings.Contains(buf.String(), "no trusted proxies configured") {
+		t.Errorf("log = %q, want a missing trusted-proxy warning", buf.String())
 	}
 }

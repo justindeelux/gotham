@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/justindeelux/gotham/internal/auth"
+	"github.com/justindeelux/gotham/internal/clientip"
 )
 
 // oauthStateCookieMaxAge is the state cookie lifetime in seconds. It matches the
@@ -83,7 +84,7 @@ func (s *Server) mountOAuthRoutes(api chi.Router) {
 // http:// redirect base. An empty or unparseable base is treated as requiring
 // HTTPS (fail closed).
 func (s *Server) insecureOAuthRejected(r *http.Request) bool {
-	if isSecureRequest(r) {
+	if s.isSecureRequest(r) {
 		return false
 	}
 	base := s.oauthRedirectBase()
@@ -125,8 +126,8 @@ func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, oauthStateCookie(r, state, oauthStateCookieMaxAge))
-	http.SetCookie(w, oauthFlowCookie(r, binding, oauthFlowCookieMaxAge))
+	http.SetCookie(w, s.oauthStateCookie(r, state, oauthStateCookieMaxAge))
+	http.SetCookie(w, s.oauthFlowCookie(r, binding, oauthFlowCookieMaxAge))
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
@@ -150,14 +151,14 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cookieValue, ok := oauthCookieValue(r, oauthStateCookieName(r))
+	cookieValue, ok := oauthCookieValue(r, s.oauthStateCookieName(r))
 	if !ok || queryState == "" || !constantTimeEqual(cookieValue, queryState) {
 		s.logger.Warn("oauth: state cookie mismatch", "provider", provider)
 		s.redirectOAuthFailure(w, r)
 		return
 	}
 
-	flowValue, ok := oauthCookieValue(r, oauthFlowCookieName(r))
+	flowValue, ok := oauthCookieValue(r, s.oauthFlowCookieName(r))
 	if !ok || flowValue == "" {
 		s.logger.Warn("oauth: flow cookie missing", "provider", provider)
 		s.redirectOAuthFailure(w, r)
@@ -171,7 +172,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exchangeCode, err := s.oauthCodes.NewCode(result, flowValue, isSecureRequest(r))
+	exchangeCode, err := s.oauthCodes.NewCode(result, flowValue, s.isSecureRequest(r))
 	if err != nil {
 		s.logger.Error("oauth: issue exchange code", "provider", provider, "error", err)
 		s.redirectOAuthFailure(w, r)
@@ -179,7 +180,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The flow cookie stays: the SPA needs it to redeem the code.
-	http.SetCookie(w, oauthStateCookie(r, "", -1))
+	http.SetCookie(w, s.oauthStateCookie(r, "", -1))
 	http.Redirect(w, r, s.oauthSuccessLocation(exchangeCode), http.StatusFound)
 }
 
@@ -199,19 +200,19 @@ func (s *Server) handleOAuthExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flowValue, ok := oauthCookieValue(r, oauthFlowCookieName(r))
+	flowValue, ok := oauthCookieValue(r, s.oauthFlowCookieName(r))
 	if !ok || flowValue == "" {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
 	}
 
-	result, ok := s.oauthCodes.Exchange(req.Code, flowValue, isSecureRequest(r))
+	result, ok := s.oauthCodes.Exchange(req.Code, flowValue, s.isSecureRequest(r))
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
 	}
 
-	http.SetCookie(w, oauthFlowCookie(r, "", -1))
+	http.SetCookie(w, s.oauthFlowCookie(r, "", -1))
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
@@ -256,7 +257,7 @@ func (s *Server) clearOAuthCookies(w http.ResponseWriter, r *http.Request) {
 		auth.StateCookieNameSecure,
 		auth.FlowCookieNameSecure,
 	} {
-		http.SetCookie(w, oauthCookie(r, name, "", -1))
+		http.SetCookie(w, s.oauthCookie(r, name, "", -1))
 	}
 }
 
@@ -272,29 +273,29 @@ func newOAuthFlowBinding() (string, error) {
 
 // oauthStateCookie builds the state cookie with the name for the request's
 // scheme: the __Host- name over HTTPS, the plain name over insecure HTTP.
-func oauthStateCookie(r *http.Request, value string, maxAge int) *http.Cookie {
-	return oauthCookie(r, oauthStateCookieName(r), value, maxAge)
+func (s *Server) oauthStateCookie(r *http.Request, value string, maxAge int) *http.Cookie {
+	return s.oauthCookie(r, s.oauthStateCookieName(r), value, maxAge)
 }
 
 // oauthFlowCookie builds the flow-binding cookie with the name for the
 // request's scheme.
-func oauthFlowCookie(r *http.Request, value string, maxAge int) *http.Cookie {
-	return oauthCookie(r, oauthFlowCookieName(r), value, maxAge)
+func (s *Server) oauthFlowCookie(r *http.Request, value string, maxAge int) *http.Cookie {
+	return s.oauthCookie(r, s.oauthFlowCookieName(r), value, maxAge)
 }
 
 // oauthStateCookieName selects the state cookie name for the request's scheme.
 // Over HTTPS the __Host- prefix makes the cookie immune to shadowing by a
 // sibling subdomain, which cannot set a __Host- cookie with a Domain.
-func oauthStateCookieName(r *http.Request) string {
-	if isSecureRequest(r) {
+func (s *Server) oauthStateCookieName(r *http.Request) string {
+	if s.isSecureRequest(r) {
 		return auth.StateCookieNameSecure
 	}
 	return auth.StateCookieName
 }
 
 // oauthFlowCookieName selects the flow cookie name for the request's scheme.
-func oauthFlowCookieName(r *http.Request) string {
-	if isSecureRequest(r) {
+func (s *Server) oauthFlowCookieName(r *http.Request) string {
+	if s.isSecureRequest(r) {
 		return auth.FlowCookieNameSecure
 	}
 	return auth.FlowCookieName
@@ -323,7 +324,7 @@ func oauthCookieValue(r *http.Request, name string) (string, bool) {
 // Secure when the request is served over HTTPS. A __Host- cookie is always
 // Secure even for an insecure deletion, so the browser recognises it as a
 // deletion of the HTTPS-issued cookie.
-func oauthCookie(r *http.Request, name, value string, maxAge int) *http.Cookie {
+func (s *Server) oauthCookie(r *http.Request, name, value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     name,
 		Value:    value,
@@ -331,26 +332,25 @@ func oauthCookie(r *http.Request, name, value string, maxAge int) *http.Cookie {
 		MaxAge:   maxAge,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   oauthCookieSecure(r, name),
+		Secure:   s.oauthCookieSecure(r, name),
 	}
 }
 
 // oauthCookieSecure reports whether a cookie with name should carry Secure: a
 // __Host- cookie always does; otherwise it follows the request scheme.
-func oauthCookieSecure(r *http.Request, name string) bool {
+func (s *Server) oauthCookieSecure(r *http.Request, name string) bool {
 	if strings.HasPrefix(name, "__Host-") {
 		return true
 	}
-	return isSecureRequest(r)
+	return s.isSecureRequest(r)
 }
 
-// isSecureRequest reports whether the request reached us over HTTPS, directly or
-// through a TLS-terminating proxy.
-func isSecureRequest(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
-	}
-	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+// isSecureRequest reports whether the request reached us over HTTPS, directly
+// or through a trusted TLS-terminating proxy. X-Forwarded-Proto is honored only
+// when the direct peer is a configured trusted proxy, so a client cannot claim
+// HTTPS by sending the header itself.
+func (s *Server) isSecureRequest(r *http.Request) bool {
+	return clientip.IsSecure(r, s.trustedProxies)
 }
 
 // constantTimeEqual compares two strings without leaking their contents through

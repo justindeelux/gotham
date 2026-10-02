@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -249,7 +250,7 @@ func TestOAuthLoginSecureCookieOverTLS(t *testing.T) {
 	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/github/login", nil)
-	req.Header.Set("X-Forwarded-Proto", "https")
+	req.TLS = &tls.ConnectionState{}
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 
@@ -724,7 +725,7 @@ func oauthRawRequest(t *testing.T, s *Server, method, path, body string, secure 
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if secure {
-		req.Header.Set("X-Forwarded-Proto", "https")
+		req.TLS = &tls.ConnectionState{}
 	}
 	for _, cookie := range cookies {
 		req.AddCookie(cookie)

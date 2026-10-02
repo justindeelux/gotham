@@ -5,7 +5,8 @@
 # gotham.yaml is not an error.
 #
 # Environment variables override the file. Supported variables:
-#   GOTHAM_SERVER_ADDR, GOTHAM_SERVER_PORT, GOTHAM_DATABASE_DSN,
+#   GOTHAM_SERVER_ADDR, GOTHAM_SERVER_PORT, GOTHAM_TRUSTED_PROXIES,
+#   GOTHAM_DATABASE_DSN,
 #   GOTHAM_REDIS_ADDR, GOTHAM_LOG_LEVEL, GOTHAM_LOG_FORMAT,
 #   GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH, GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH,
 #   GOTHAM_OAUTH_GITHUB_CLIENT_ID, GOTHAM_OAUTH_GITHUB_CLIENT_SECRET,
@@ -62,6 +63,21 @@ server:
   addr: 0.0.0.0
   # TCP port to listen on. Default: 8000
   port: 8000
+  # Reverse proxies whose X-Forwarded-For / X-Forwarded-Proto headers are
+  # trusted. Comma-separated IPs and CIDRs via GOTHAM_TRUSTED_PROXIES, or a
+  # YAML list. Empty (default) trusts no peer: rate limits key on the direct
+  # connection and forwarded headers are ignored. Set this behind a
+  # TLS-terminating proxy so clients do not share one rate-limit bucket and
+  # HTTPS is detected correctly.
+  #
+  # List the proxy's exact addresses and keep ranges as narrow as possible:
+  # EVERY host inside a trusted range can spoof the client address and scheme,
+  # so a range like 10.0.0.0/8 lets anything on that network defeat the limiter.
+  # The proxy must set/replace X-Forwarded-Proto and append the client to
+  # X-Forwarded-For. Changing this value requires a restart.
+  # trusted_proxies:
+  #   - 10.0.0.5
+  #   - 10.0.0.6
 
 # PostgreSQL connection.
 database:

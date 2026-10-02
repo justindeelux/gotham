@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/clientip"
 	"github.com/justindeelux/gotham/internal/deploy"
 )
 
@@ -150,7 +151,7 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hook, err := h.svc.CreateWebhook(r.Context(), userID, appID, callbackBaseURL(r))
+	hook, err := h.svc.CreateWebhook(r.Context(), userID, appID, h.svc.callbackBaseURL(r))
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -222,13 +223,14 @@ func (h *handler) listPreviews(w http.ResponseWriter, r *http.Request) {
 }
 
 // callbackBaseURL derives the public origin of the delivery route from the
-// management request: scheme from the TLS-terminating proxy's
-// X-Forwarded-Proto (or the connection itself), host from the request. A proxy
-// that drops X-Forwarded-Proto yields http, which the host then rejects
-// loudly instead of silently mis-routing deliveries.
-func callbackBaseURL(r *http.Request) string {
+// management request: scheme from the trusted proxy's X-Forwarded-Proto (or
+// direct TLS), host from the request. Forwarded scheme headers from an
+// untrusted peer are ignored, so a client cannot redirect the callback to
+// http. A proxy that drops X-Forwarded-Proto yields http, which the host then
+// rejects loudly instead of silently mis-routing deliveries.
+func (s *Service) callbackBaseURL(r *http.Request) string {
 	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+	if clientip.IsSecure(r, s.trusted) {
 		scheme = "https"
 	}
 	return scheme + "://" + r.Host + deliveryPathPrefix

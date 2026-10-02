@@ -177,6 +177,62 @@ func TestServiceLoginFailures(t *testing.T) {
 	}
 }
 
+// TestServiceLoginMissStillVerifies pins the timing-oracle mitigation (A2-5):
+// the unknown-email and passwordless-account paths run a real password
+// verification before returning ErrInvalidCredentials, so their cost matches a
+// genuine check.
+func TestServiceLoginMissStillVerifies(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	calls := 0
+	var firstEncoded string
+	svc.verifyPassword = func(encoded, password string) (bool, error) {
+		calls++
+		if calls == 1 {
+			firstEncoded = encoded
+		}
+		return VerifyPassword(encoded, password)
+	}
+
+	if _, err := svc.Login(ctx, uniqueEmail("missing"), "s3cret-password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("Login(unknown email) error = %v, want ErrInvalidCredentials", err)
+	}
+	if calls != 1 {
+		t.Fatalf("unknown-email verifications = %d, want 1", calls)
+	}
+	if firstEncoded == "" {
+		t.Fatal("miss path verified against an empty hash (verification short-circuited)")
+	}
+	if _, _, _, err := decodeHash(firstEncoded); err != nil {
+		t.Fatalf("dummy hash %q is not decodable: %v", firstEncoded, err)
+	}
+
+	email := uniqueEmail("passwordless")
+	cleanupUser(t, st, email)
+	if _, err := st.CreateUser(ctx, email, nil); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := svc.Login(ctx, email, "s3cret-password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("Login(passwordless) error = %v, want ErrInvalidCredentials", err)
+	}
+	if calls != 2 {
+		t.Fatalf("passwordless-account verifications = %d, want 2", calls)
+	}
+
+	known := uniqueEmail("known")
+	cleanupUser(t, st, known)
+	if _, err := svc.Register(ctx, known, "right-password", newTestInvite(t, st, known), storeInvites{st}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := svc.Login(ctx, known, "wrong-password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("Login(wrong password) error = %v, want ErrInvalidCredentials", err)
+	}
+	if calls != 3 {
+		t.Fatalf("wrong-password verifications = %d, want 3", calls)
+	}
+}
+
 func TestServiceRegisterValidation(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()

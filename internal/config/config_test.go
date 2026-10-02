@@ -10,6 +10,7 @@ import (
 var gothamEnvKeys = []string{
 	EnvServerAddr,
 	EnvServerPort,
+	EnvTrustedProxies,
 	EnvDatabaseDSN,
 	EnvRedisAddr,
 	EnvLogLevel,
@@ -376,10 +377,33 @@ func TestLoadGRPCHostsFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadTrustedProxiesFromEnv(t *testing.T) {
+	clearGothamEnv(t)
+	chdir(t, t.TempDir())
+
+	t.Setenv(EnvTrustedProxies, "10.0.0.0/8,127.0.0.1,::1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	want := []string{"10.0.0.0/8", "127.0.0.1", "::1"}
+	if len(cfg.Server.TrustedProxies) != len(want) {
+		t.Fatalf("Server.TrustedProxies = %v, want %v", cfg.Server.TrustedProxies, want)
+	}
+	for i := range want {
+		if cfg.Server.TrustedProxies[i] != want[i] {
+			t.Fatalf("Server.TrustedProxies = %v, want %v", cfg.Server.TrustedProxies, want)
+		}
+	}
+}
+
 func TestLoadRejectsInvalidValues(t *testing.T) {
 	tests := map[string]string{
-		"bad format": "log:\n  format: xml\n",
-		"bad port":   "server:\n  port: 70000\n",
+		"bad format":          "log:\n  format: xml\n",
+		"bad port":            "server:\n  port: 70000\n",
+		"bad trusted proxies": "server:\n  trusted_proxies:\n    - not-an-ip\n",
 	}
 
 	for name, contents := range tests {

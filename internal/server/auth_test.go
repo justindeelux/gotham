@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -455,5 +456,95 @@ func TestSecurityHeaders(t *testing.T) {
 		if got := rec.Header().Get(name); got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
+	}
+
+	// The hardened directives are pinned literally, so dropping one from the
+	// shared constant does not silently weaken the policy.
+	csp := rec.Header().Get("Content-Security-Policy")
+	for _, directive := range []string{"base-uri 'self'", "object-src 'none'", "form-action 'self'", "frame-ancestors 'none'"} {
+		if !strings.Contains(csp, directive) {
+			t.Errorf("Content-Security-Policy %q missing %q", csp, directive)
+		}
+	}
+}
+
+// TestSecurityHeadersHSTSAndCache pins HSTS on secure responses and no-store on
+// the credential paths.
+func TestSecurityHeadersHSTSAndCache(t *testing.T) {
+	s := newTestAuthServer(t)
+
+	// A plain-HTTP request must not advertise HSTS.
+	plain := doRequest(t, s, http.MethodGet, "/healthz", "", "")
+	if got := plain.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("HSTS over plain HTTP = %q, want empty", got)
+	}
+
+	// A direct-TLS request does.
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.TLS = &tls.ConnectionState{}
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if got := rec.Header().Get("Strict-Transport-Security"); got != hstsHeader {
+		t.Errorf("HSTS over TLS = %q, want %q", got, hstsHeader)
+	}
+
+	for _, path := range []string{"/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/oauth/github/callback", "/api/v1/tokens"} {
+		rec := doRequest(t, s, http.MethodPost, path, "", "")
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("Cache-Control on %s = %q, want no-store", path, got)
+		}
+	}
+	if got := plain.Header().Get("Cache-Control"); got != "" {
+		t.Errorf("Cache-Control on /healthz = %q, want empty", got)
+	}
+}
+
+// TestTrustedProxyRateLimitKeying pins the server wiring: with a trusted proxy
+// configured, the auth limiter keys on X-Forwarded-For, so distinct clients
+// behind one proxy do not share a bucket.
+func TestTrustedProxyRateLimitKeying(t *testing.T) {
+	cfg := &config.Config{
+		Values: config.Values{Server: config.Server{
+			Addr:           "127.0.0.1",
+			Port:           0,
+			TrustedProxies: []string{"127.0.0.1"},
+		}},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s, err := New(cfg, logger, newFakeAuthService(), nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(s.closer)
+	s.db = stubPinger{}
+	s.redis = stubPinger{}
+
+	old := s.authLimiter
+	limiter := newIPRateLimiter(rate.Limit(0), 1)
+	s.authLimiter = limiter
+	t.Cleanup(func() {
+		limiter.Close()
+		old.Close()
+	})
+
+	post := func(client string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+			strings.NewReader(`{"email":"user@example.com","password":"password123"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-Forwarded-For", client)
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if got := post("203.0.113.1"); got != http.StatusOK {
+		t.Fatalf("first client status = %d, want 200", got)
+	}
+	if got := post("203.0.113.2"); got != http.StatusOK {
+		t.Fatalf("second client status = %d, want 200 (separate bucket)", got)
+	}
+	if got := post("203.0.113.1"); got != http.StatusTooManyRequests {
+		t.Fatalf("repeat client status = %d, want 429", got)
 	}
 }

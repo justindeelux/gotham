@@ -97,8 +97,9 @@ type DeployService interface {
 // through the explicit webhook routes.
 //
 // InstallHook takes the create request because the public callback origin is
-// request-derived (X-Forwarded-Proto + Host), exactly like the explicit
-// webhook route; a caller without a request must use that route instead.
+// request-derived (the trusted proxy's X-Forwarded-Proto plus Host, exactly
+// like the explicit webhook route); a caller without a request must use that
+// route instead.
 type HookLifecycle interface {
 	// InstallHook installs the application's provider hook, deriving the
 	// public callback origin from r. It is idempotent: an application that

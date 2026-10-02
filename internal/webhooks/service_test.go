@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/clientip"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
 )
@@ -144,7 +146,7 @@ func TestInstallHookDerivesCallbackFromRequest(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "http://internal:8000/api/v1/applications", nil)
 	req.Host = "cp.example.com"
-	req.Header.Set("X-Forwarded-Proto", "https")
+	req.TLS = &tls.ConnectionState{}
 
 	if err := svc.InstallHook(context.Background(), repo.app.UserID, repo.app.ID, req); err != nil {
 		t.Fatalf("InstallHook: %v", err)
@@ -161,6 +163,63 @@ func TestInstallHookDerivesCallbackFromRequest(t *testing.T) {
 	}
 	if len(installer.created) != 1 {
 		t.Errorf("provider installs = %d after a repeat, want 1", len(installer.created))
+	}
+}
+
+// TestInstallHookIgnoresUntrustedForwardedScheme pins L6 on the deploy
+// HookLifecycle adapter: an untrusted peer's X-Forwarded-Proto does not force
+// an https callback origin.
+func TestInstallHookIgnoresUntrustedForwardedScheme(t *testing.T) {
+	repo := newFakeRepository()
+	installer := &fakeInstaller{}
+	svc := newTestService(repo, installer, &fakeDeployer{})
+
+	req := httptest.NewRequest(http.MethodPost, "http://internal:8000/api/v1/applications", nil)
+	req.Host = "cp.example.com"
+	req.RemoteAddr = "203.0.113.7:1234"
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	if err := svc.InstallHook(context.Background(), repo.app.UserID, repo.app.ID, req); err != nil {
+		t.Fatalf("InstallHook: %v", err)
+	}
+	if len(installer.created) != 1 {
+		t.Fatalf("provider installs = %d, want 1", len(installer.created))
+	}
+	if got, want := installer.created[0].URL, "http://cp.example.com/api/v1/webhooks/github"; got != want {
+		t.Errorf("hook url = %q, want %q", got, want)
+	}
+}
+
+// TestInstallHookTrustedProxyScheme pins that a trusted peer's
+// X-Forwarded-Proto is honored.
+func TestInstallHookTrustedProxyScheme(t *testing.T) {
+	repo := newFakeRepository()
+	installer := &fakeInstaller{}
+	trusted, err := clientip.Parse([]string{"127.0.0.1"})
+	if err != nil {
+		t.Fatalf("clientip.Parse: %v", err)
+	}
+	svc := newTestServiceWith(Config{
+		Repository:     repo,
+		Installer:      installer,
+		Deployer:       &fakeDeployer{},
+		Logger:         discardLogger(),
+		TrustedProxies: trusted,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://internal:8000/api/v1/applications", nil)
+	req.Host = "cp.example.com"
+	req.RemoteAddr = "127.0.0.1:5000"
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	if err := svc.InstallHook(context.Background(), repo.app.UserID, repo.app.ID, req); err != nil {
+		t.Fatalf("InstallHook: %v", err)
+	}
+	if len(installer.created) != 1 {
+		t.Fatalf("provider installs = %d, want 1", len(installer.created))
+	}
+	if got, want := installer.created[0].URL, "https://cp.example.com/api/v1/webhooks/github"; got != want {
+		t.Errorf("hook url = %q, want %q", got, want)
 	}
 }
 

@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
 
+	"github.com/justindeelux/gotham/internal/clientip"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/store"
@@ -100,6 +101,10 @@ type Config struct {
 	// Limit is the delivery refill rate per client IP, Burst its bucket size.
 	Limit rate.Limit
 	Burst int
+	// TrustedProxies are the peers whose X-Forwarded-For header is honored when
+	// keying the delivery limiter. Empty trusts no peer, so deliveries key on
+	// the direct connection.
+	TrustedProxies []netip.Prefix
 	// Now overrides the clock (tests). Defaults to time.Now.
 	Now func() time.Time
 	// SweepInterval is the orphan sweep period. Zero selects
@@ -119,6 +124,7 @@ type Service struct {
 	commenter   Commenter
 	logger      *slog.Logger
 	limiter     *deliveryLimiter
+	trusted     []netip.Prefix
 	now         func() time.Time
 	sweepEvery  time.Duration
 
@@ -155,6 +161,7 @@ func NewService(cfg Config) *Service {
 		commenter:   cfg.Commenter,
 		logger:      logger,
 		limiter:     newDeliveryLimiter(cfg.Limit, cfg.Burst),
+		trusted:     cfg.TrustedProxies,
 		now:         now,
 		sweepEvery:  interval,
 	}
@@ -314,7 +321,7 @@ func (s *Service) deleteWebhook(ctx context.Context, userID, appID uuid.UUID, fo
 // explicit POST /v1/applications/{id}/webhooks route (see callbackBaseURL).
 // The deploy create path calls it; a non-request caller uses that route.
 func (s *Service) InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) error {
-	_, err := s.CreateWebhook(ctx, userID, appID, callbackBaseURL(r))
+	_, err := s.CreateWebhook(ctx, userID, appID, s.callbackBaseURL(r))
 	return err
 }
 
@@ -379,7 +386,7 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 	if !isSupported(provider) {
 		return Delivery{}, fmt.Errorf("%w: %s", ErrNotFound, provider)
 	}
-	if !s.limiter.allow(clientIP(r)) {
+	if !s.limiter.allow(clientip.ClientIP(r, s.trusted)) {
 		return Delivery{}, ErrRateLimited
 	}
 
@@ -562,14 +569,4 @@ func newHookSecret() (string, error) {
 		return "", fmt.Errorf("webhooks: generate secret: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
-// clientIP extracts the peer IP from RemoteAddr, falling back to the raw value
-// when it is not in host:port form.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

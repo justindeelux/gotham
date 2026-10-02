@@ -41,7 +41,7 @@ func (e *MariaDBEngine) VolumeSpec() VolumeSpec {
 // Healthcheck implements DatabaseEngine.
 func (e *MariaDBEngine) Healthcheck() Healthcheck {
 	return Healthcheck{
-		Probe:   ProbeState,
+		Probe:   ProbeHealth,
 		Command: []string{"mariadb-admin", "ping", "-h", "127.0.0.1", "-uroot", "-p" + placeholderRootPassword},
 		Timeout: 90 * time.Second,
 	}

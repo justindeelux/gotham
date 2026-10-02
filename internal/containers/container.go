@@ -14,6 +14,13 @@ import (
 // this label until the contract gains a ports field.
 const portsLabel = "gotham.ports"
 
+// Docker health statuses, as reported in a container's health field.
+const (
+	HealthStarting  = "starting"
+	HealthHealthy   = "healthy"
+	HealthUnhealthy = "unhealthy"
+)
+
 // Container is the shared wire representation of a container running on a
 // managed node.
 type Container struct {
@@ -34,6 +41,10 @@ type Container struct {
 	Labels        map[string]string `json:"-"`
 	Mounts        []ContainerMount  `json:"-"`
 	RestartPolicy string            `json:"-"`
+	// Health is the container's Docker health status ("starting", "healthy",
+	// "unhealthy") when it declares a healthcheck; empty when it does not.
+	// Database readiness is gated on it.
+	Health string `json:"-"`
 }
 
 // ContainerMount is one engine-reported bind mount of a container.
@@ -56,6 +67,20 @@ type RunOptions struct {
 	Volumes       []string          `json:"volumes,omitempty"`
 	Networks      []string          `json:"networks,omitempty"`
 	RestartPolicy string            `json:"restart_policy,omitempty"`
+	// Healthcheck optionally configures the container's native Docker
+	// healthcheck. A nil value leaves the image's own healthcheck untouched.
+	Healthcheck *Healthcheck `json:"healthcheck,omitempty"`
+}
+
+// Healthcheck is a container's native Docker healthcheck: Test is the
+// exec-form command run inside the container (no shell), and the durations
+// bound how Docker schedules and judges it.
+type Healthcheck struct {
+	Test        []string
+	Interval    time.Duration
+	Timeout     time.Duration
+	Retries     int
+	StartPeriod time.Duration
 }
 
 // validate rejects run requests without an image.
@@ -79,6 +104,23 @@ func (o RunOptions) toProto() *agentv1.CreateContainerRequest {
 		Volumes:       o.Volumes,
 		Networks:      o.Networks,
 		RestartPolicy: o.RestartPolicy,
+		Healthcheck:   o.Healthcheck.toProto(),
+	}
+}
+
+// toProto maps the healthcheck onto the agent contract. A nil healthcheck or
+// an empty test renders nil so the agent leaves the image's own healthcheck
+// (or its absence) untouched.
+func (h *Healthcheck) toProto() *agentv1.ContainerHealthcheck {
+	if h == nil || len(h.Test) == 0 {
+		return nil
+	}
+	return &agentv1.ContainerHealthcheck{
+		Test:               h.Test,
+		IntervalSeconds:    int64(h.Interval / time.Second),
+		TimeoutSeconds:     int64(h.Timeout / time.Second),
+		Retries:            int32(h.Retries),
+		StartPeriodSeconds: int64(h.StartPeriod / time.Second),
 	}
 }
 
@@ -100,6 +142,7 @@ func newContainer(info *agentv1.ContainerInfo) Container {
 	container.Labels = info.GetLabels()
 	container.Mounts = mountsFromInfo(info)
 	container.RestartPolicy = info.GetRestartPolicy()
+	container.Health = info.GetHealth()
 	if created := info.GetCreatedAt(); created != nil && created.IsValid() {
 		timestamp := created.AsTime().UTC()
 		container.Created = &timestamp

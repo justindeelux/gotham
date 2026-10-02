@@ -94,6 +94,15 @@ func (r *fakeRepository) live(database Database) bool {
 	return database.DeletedAt.IsZero()
 }
 
+// present reports whether a row still exists at all, including soft-deleted
+// rows (GetDatabase hides those).
+func (r *fakeRepository) present(databaseID uuid.UUID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.databases[databaseID]
+	return ok
+}
+
 // CreateDatabase implements Repository.
 func (r *fakeRepository) CreateDatabase(_ context.Context, database Database) (Database, error) {
 	r.mu.Lock()
@@ -193,6 +202,42 @@ func (r *fakeRepository) SoftDeleteDatabase(_ context.Context, databaseID uuid.U
 	return database, nil
 }
 
+// ListExpiredDatabases implements Repository: soft-deleted rows whose grace
+// window ended at or before cutoff, oldest deletion first.
+func (r *fakeRepository) ListExpiredDatabases(_ context.Context, cutoff time.Time) ([]Database, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	expired := make([]Database, 0)
+	for _, id := range r.order {
+		database := r.databases[id]
+		if !database.DeletedAt.IsZero() && !database.DeletedAt.After(cutoff) {
+			expired = append(expired, database)
+		}
+	}
+	return expired, nil
+}
+
+// PurgeDatabase implements Repository: hard-delete the row and its secrets.
+func (r *fakeRepository) PurgeDatabase(_ context.Context, databaseID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.softDeleteErr != nil {
+		return r.softDeleteErr
+	}
+	delete(r.secrets, databaseID)
+	delete(r.databases, databaseID)
+	for i, id := range r.order {
+		if id == databaseID {
+			r.order = append(r.order[:i], r.order[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
 // CreateSecret implements Repository.
 func (r *fakeRepository) CreateSecret(_ context.Context, secret Secret) (Secret, error) {
 	r.mu.Lock()
@@ -262,6 +307,10 @@ type fakeContainers struct {
 	restarts int
 	removes  []string
 	pulls    int
+
+	// volumeRemoves records every RemoveVolume name; volumeErr fails the call.
+	volumeRemoves []string
+	volumeErr     error
 
 	runID      string
 	runErr     error
@@ -339,6 +388,16 @@ func (f *fakeContainers) Remove(_ context.Context, _ uuid.UUID, containerID stri
 	defer f.mu.Unlock()
 	f.removes = append(f.removes, containerID)
 	return f.removeErr
+}
+
+func (f *fakeContainers) RemoveVolume(_ context.Context, _ uuid.UUID, volumeName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.volumeErr != nil {
+		return f.volumeErr
+	}
+	f.volumeRemoves = append(f.volumeRemoves, volumeName)
+	return nil
 }
 
 func (f *fakeContainers) Pull(context.Context, uuid.UUID, string) error {

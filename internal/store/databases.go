@@ -45,6 +45,20 @@ func (s *Store) SoftDeleteDatabase(ctx context.Context, id pgtype.UUID) (sqlc.Da
 	return s.queries.SoftDeleteDatabase(ctx, id)
 }
 
+// ListExpiredDatabases returns soft-deleted databases whose grace window ended
+// at or before the cutoff, oldest deletion first. It is the only read that sees
+// deleted rows and backs the retention sweep.
+func (s *Store) ListExpiredDatabases(ctx context.Context, deletedAt pgtype.Timestamptz) ([]sqlc.Database, error) {
+	return s.queries.ListExpiredDatabases(ctx, deletedAt)
+}
+
+// PurgeDatabase hard-deletes a soft-deleted database (and, by cascade, its
+// sealed credentials) and reports how many rows were removed. A live row is
+// never touched, so a purge can never delete a database that was recreated.
+func (s *Store) PurgeDatabase(ctx context.Context, id pgtype.UUID) (int64, error) {
+	return s.queries.PurgeDatabase(ctx, id)
+}
+
 // CreateDatabaseSecret stores one sealed credential of a database and returns
 // the row. The ciphertext is opened by the databases service, never here.
 func (s *Store) CreateDatabaseSecret(ctx context.Context, params sqlc.CreateDatabaseSecretParams) (sqlc.DatabaseSecret, error) {

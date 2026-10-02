@@ -38,12 +38,11 @@ func (e *MongoDBEngine) VolumeSpec() VolumeSpec {
 }
 
 // Healthcheck implements DatabaseEngine: an authenticated ping over mongosh
-// is the canonical probe for this engine. The control plane still evaluates it
-// as a state wait (see ProbeState) because the agent contract has no Exec RPC
-// yet — the command is what an Exec-capable agent will run.
+// is the canonical probe for this engine. The rendered command becomes the
+// container's native Docker healthcheck, so Docker evaluates it in-container.
 func (e *MongoDBEngine) Healthcheck() Healthcheck {
 	return Healthcheck{
-		Probe: ProbeState,
+		Probe: ProbeHealth,
 		Command: []string{
 			"mongosh", "--quiet",
 			"--username", placeholderUser,

@@ -29,6 +29,9 @@ func (fakeBindDocker) Start(context.Context, string) error   { return nil }
 func (fakeBindDocker) Stop(context.Context, string) error    { return nil }
 func (fakeBindDocker) Restart(context.Context, string) error { return nil }
 func (fakeBindDocker) Remove(context.Context, string) error  { return nil }
+func (fakeBindDocker) RemoveVolume(context.Context, string) error {
+	return nil
+}
 func (fakeBindDocker) PullImage(context.Context, string) error {
 	return nil
 }

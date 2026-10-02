@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -59,6 +60,9 @@ func buildRunOptions(db Database, engine DatabaseEngine, secrets []Secret, secre
 		return containers.RunOptions{}, fmt.Errorf("%w: engine reports an invalid internal port", ErrValidation)
 	}
 	volume := engine.VolumeSpec()
+	if versioned, ok := engine.(VersionedVolumeSpec); ok {
+		volume = versioned.VolumeSpecFor(db.Version)
+	}
 	if strings.TrimSpace(volume.MountPath) == "" {
 		return containers.RunOptions{}, fmt.Errorf("%w: engine reports no data directory", ErrValidation)
 	}
@@ -72,11 +76,12 @@ func buildRunOptions(db Database, engine DatabaseEngine, secrets []Secret, secre
 		labelEngine:     db.Engine,
 	}
 	options := containers.RunOptions{
-		Image:   engine.Image(db.Version),
-		Name:    containerName(db),
-		Env:     engine.EnvSpec(credentials),
-		Labels:  labels,
-		Volumes: []string{db.StoragePath + ":" + volume.MountPath},
+		Image:       engine.Image(db.Version),
+		Name:        containerName(db),
+		Env:         engine.EnvSpec(credentials),
+		Labels:      labels,
+		Volumes:     []string{db.StoragePath + ":" + volume.MountPath},
+		Healthcheck: runHealthcheck(engine.Healthcheck(), credentials),
 	}
 	if commander, ok := engine.(CommandSpec); ok {
 		options.Command = commander.Command(credentials)
@@ -89,6 +94,36 @@ func buildRunOptions(db Database, engine DatabaseEngine, secrets []Secret, secre
 		labels[portsLabel] = spec
 	}
 	return options, nil
+}
+
+// Healthcheck timing for a database container's native Docker healthcheck.
+// The probe is short because the provisioning wait polls for "healthy"; the
+// start period is the engine's own provisioning window, so first-boot
+// initialisation is not reported unhealthy before it has a chance to finish.
+const (
+	healthcheckInterval = 2 * time.Second
+	healthcheckTimeout  = 5 * time.Second
+	healthcheckRetries  = 3
+)
+
+// runHealthcheck builds the container healthcheck from the engine's canonical
+// probe command (pg_isready, mysqladmin ping, ...). Credentials are rendered
+// into the command here; the same values already reach the container through
+// its environment, so this adds no new exposure. The probe runs inside the
+// container, which is what lets the control plane evaluate a real engine
+// readiness signal without an Exec RPC. A nil result disables the healthcheck.
+func runHealthcheck(health Healthcheck, credentials Credentials) *containers.Healthcheck {
+	command := health.CommandFor(credentials)
+	if len(command) == 0 {
+		return nil
+	}
+	return &containers.Healthcheck{
+		Test:        command,
+		Interval:    healthcheckInterval,
+		Timeout:     healthcheckTimeout,
+		Retries:     healthcheckRetries,
+		StartPeriod: health.Timeout,
+	}
 }
 
 // containerName derives a Docker-safe, unique container name:

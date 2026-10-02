@@ -132,8 +132,8 @@ func TestEngineSpecs(t *testing.T) {
 			}
 
 			health := engine.Healthcheck()
-			if health.Probe != ProbeState {
-				t.Errorf("Healthcheck.Probe = %q, want %q", health.Probe, ProbeState)
+			if health.Probe != ProbeHealth {
+				t.Errorf("Healthcheck.Probe = %q, want %q", health.Probe, ProbeHealth)
 			}
 			if health.Timeout <= 0 {
 				t.Errorf("Healthcheck.Timeout = %s, want > 0", health.Timeout)

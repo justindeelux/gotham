@@ -56,21 +56,24 @@ func (f *fakeRegistry) Get(_ context.Context, id uuid.UUID) (*servers.Server, er
 type mockDockerClient struct {
 	mu sync.Mutex
 
-	lists     int
-	starts    int
-	stops     int
-	restarts  int
-	removes   int
-	pulls     int
-	runs      int
-	closes    int
-	listResp  *agentv1.ListContainersResponse
-	listErr   error
-	actionErr error
-	pullErr   error
-	runID     string
-	runErr    error
-	runSeen   *agentv1.CreateContainerRequest
+	lists    int
+	starts   int
+	stops    int
+	restarts int
+	removes  int
+	pulls    int
+	runs     int
+	closes   int
+	// removeVolumes counts RemoveVolume calls and records the last name.
+	removeVolumes    int
+	removeVolumeSeen string
+	listResp         *agentv1.ListContainersResponse
+	listErr          error
+	actionErr        error
+	pullErr          error
+	runID            string
+	runErr           error
+	runSeen          *agentv1.CreateContainerRequest
 	// logsChunks are delivered by StreamLogs before logsTerminal; logsOpenErr
 	// fails the StreamLogs call itself.
 	logsChunks   [][]byte
@@ -117,6 +120,14 @@ func (m *mockDockerClient) RemoveContainer(context.Context, *agentv1.ContainerAc
 	defer m.mu.Unlock()
 	m.removes++
 	return &agentv1.ContainerActionResponse{}, m.actionErr
+}
+
+func (m *mockDockerClient) RemoveVolume(_ context.Context, req *agentv1.VolumeActionRequest, _ ...grpc.CallOption) (*agentv1.VolumeActionResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.removeVolumes++
+	m.removeVolumeSeen = req.GetName()
+	return &agentv1.VolumeActionResponse{}, m.actionErr
 }
 
 func (m *mockDockerClient) PullImage(context.Context, *agentv1.PullImageRequest, ...grpc.CallOption) (*agentv1.PullImageResponse, error) {

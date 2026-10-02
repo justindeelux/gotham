@@ -319,9 +319,10 @@ func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req 
 }
 
 // Delete stops and removes the container of a database of the active team,
-// then soft-deletes the row. The named volume is never touched: it is kept for
-// the 7-day grace window of the phase rollback note, so the data outlives both
-// the container and the row's visibility.
+// then soft-deletes the row. The named volume is never touched here: it is
+// kept for VolumeRetention (7 days), after which the RetentionSweeper removes
+// it and purges the row, so the data outlives both the container and the row's
+// visibility but not forever.
 func (s *Service) Delete(ctx context.Context, userID, databaseID uuid.UUID) error {
 	database, err := s.database(ctx, userID, databaseID, true)
 	if err != nil {
@@ -469,8 +470,16 @@ func (s *Service) storeCredentials(ctx context.Context, databaseID uuid.UUID, cr
 	return secrets, nil
 }
 
-// waitHealthy polls the container until it reports the running state, bounded
+// waitHealthy polls the container until it is actually ready to serve, bounded
 // by the engine's window (or Config.HealthTimeout when set).
+//
+// Readiness is the container's native Docker healthcheck, which runs the
+// engine's own probe command inside the container (pg_isready, mysqladmin
+// ping, ...). A container that is merely "running" is not ready while that
+// probe reports "starting" or "unhealthy", so status never runs ahead of an
+// engine that is still initializing. A container without a healthcheck — a
+// row created before databases configured one — falls back to the running
+// state; new databases always carry a probe.
 //
 // The list is served by the shared container service, whose List results are
 // cached for a short TTL; a fresh observation can therefore lag by up to one
@@ -483,15 +492,15 @@ func (s *Service) waitHealthy(ctx context.Context, database Database, health Hea
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		running, err := s.containerRunning(ctx, database)
+		ready, err := s.containerReady(ctx, database)
 		if err != nil {
 			return err
 		}
-		if running {
+		if ready {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%w: %s did not reach the running state within %s",
+			return fmt.Errorf("%w: %s did not become ready within %s",
 				ErrHealthcheck, database.Name, timeout)
 		}
 		select {
@@ -502,17 +511,23 @@ func (s *Service) waitHealthy(ctx context.Context, database Database, health Hea
 	}
 }
 
-// containerRunning reports whether the database container is listed as running
-// on its node. A container that is not listed yet counts as not running.
-func (s *Service) containerRunning(ctx context.Context, database Database) (bool, error) {
+// containerReady reports whether the database container is both running and,
+// when it declares a healthcheck, healthy. A container that is not listed yet
+// counts as not ready; a listed container without a healthcheck falls back to
+// the running state.
+func (s *Service) containerReady(ctx context.Context, database Database) (bool, error) {
 	list, err := s.containers.List(ctx, database.ServerID)
 	if err != nil {
 		return false, mapContainerError(err)
 	}
 	for _, item := range list {
-		if item.ID == database.ContainerID {
-			return item.State == "running", nil
+		if item.ID != database.ContainerID {
+			continue
 		}
+		if item.State != "running" {
+			return false, nil
+		}
+		return item.Health == "" || item.Health == containers.HealthHealthy, nil
 	}
 	return false, nil
 }

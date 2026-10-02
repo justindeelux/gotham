@@ -34,6 +34,13 @@ type Repository interface {
 	UpdateDatabase(ctx context.Context, database Database) (Database, error)
 	// SoftDeleteDatabase marks the row deleted without touching the volume.
 	SoftDeleteDatabase(ctx context.Context, databaseID uuid.UUID) (Database, error)
+	// ListExpiredDatabases returns soft-deleted databases whose grace window
+	// ended at or before cutoff, oldest deletion first. It is the retention
+	// sweep's selection.
+	ListExpiredDatabases(ctx context.Context, cutoff time.Time) ([]Database, error)
+	// PurgeDatabase hard-deletes a soft-deleted database and its sealed
+	// credentials. A live row is never purged.
+	PurgeDatabase(ctx context.Context, databaseID uuid.UUID) error
 	// CreateSecret stores one sealed credential of a database.
 	CreateSecret(ctx context.Context, secret Secret) (Secret, error)
 	// ListSecrets returns a database's sealed credentials, sorted by key.
@@ -149,6 +156,30 @@ func (r *storeRepository) SoftDeleteDatabase(ctx context.Context, databaseID uui
 	return databaseFromRow(row), nil
 }
 
+// ListExpiredDatabases implements Repository: the soft-deleted rows the
+// retention sweep must purge, oldest deletion first.
+func (r *storeRepository) ListExpiredDatabases(ctx context.Context, cutoff time.Time) ([]Database, error) {
+	rows, err := r.store.ListExpiredDatabases(ctx, pgTimestamp(cutoff))
+	if err != nil {
+		return nil, fmt.Errorf("databases: list expired databases: %w", err)
+	}
+	databases := make([]Database, 0, len(rows))
+	for _, row := range rows {
+		databases = append(databases, databaseFromRow(row))
+	}
+	return databases, nil
+}
+
+// PurgeDatabase implements Repository. Purge is idempotent: a row that is
+// already gone (or is live) removes zero rows and is not an error, because the
+// sweep only needs the row to be absent.
+func (r *storeRepository) PurgeDatabase(ctx context.Context, databaseID uuid.UUID) error {
+	if _, err := r.store.PurgeDatabase(ctx, pgUUID(databaseID)); err != nil {
+		return fmt.Errorf("databases: purge database: %w", err)
+	}
+	return nil
+}
+
 // CreateSecret implements Repository.
 func (r *storeRepository) CreateSecret(ctx context.Context, secret Secret) (Secret, error) {
 	row, err := r.store.CreateDatabaseSecret(ctx, sqlc.CreateDatabaseSecretParams{
@@ -242,6 +273,11 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 		return pgtype.UUID{}
 	}
 	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+// pgTimestamp converts a domain time to a sqlc timestamptz column.
+func pgTimestamp(t time.Time) pgtype.Timestamptz {
+	return pgtype.Timestamptz{Time: t, Valid: !t.IsZero()}
 }
 
 // uuidFromPG converts a sqlc UUID column to the domain type (NULL → zero).

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -11,6 +12,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
+
+// maxRequestBodyBytes bounds a provider request body.
+const maxRequestBodyBytes = 1 << 20 // 1 MiB
 
 // UserIDFunc resolves the authenticated user from the request context. The
 // server passes its own RequireAuth accessor, so this package never imports the
@@ -56,6 +60,28 @@ type errorBody struct {
 	Message string `json:"message"`
 }
 
+// createProviderRequest is the body of POST /v1/providers.
+type createProviderRequest struct {
+	Provider     string `json:"provider"`
+	BaseURL      string `json:"base_url"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	RedirectURL  string `json:"redirect_url"`
+	Scopes       string `json:"scopes"`
+}
+
+// authorizeResponse is the body returned when an OAuth connection starts.
+type authorizeResponse struct {
+	URL   string `json:"url"`
+	State string `json:"state"`
+}
+
+// connectProviderRequest is the body of POST /v1/providers/{id}/connect.
+type connectProviderRequest struct {
+	Code  string `json:"code"`
+	State string `json:"state"`
+}
+
 // handler serves the provider routes for one ProviderService.
 type handler struct {
 	svc    ProviderService
@@ -65,10 +91,14 @@ type handler struct {
 
 // Mount registers the authenticated provider endpoints on r:
 //
-//	GET /v1/providers
-//	GET /v1/providers/{id}/repos
+//	GET  /v1/providers
+//	POST /v1/providers
+//	GET  /v1/providers/{id}/authorize
+//	POST /v1/providers/{id}/connect
+//	GET  /v1/providers/{id}/repos
 //
-// auth wraps the group (the server passes its RequireAuth + read scope); a nil
+// auth wraps the group; the server passes its method-based resource scope
+// boundary (read for GET/HEAD, deploy for the create/connect mutations). A nil
 // svc is a no-op so the control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc ProviderService) {
 	if svc == nil {
@@ -78,8 +108,84 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
 		protected.Get("/v1/providers", h.list)
+		protected.Post("/v1/providers", h.create)
+		protected.Get("/v1/providers/{id}/authorize", h.authorize)
+		protected.Post("/v1/providers/{id}/connect", h.connect)
 		protected.Get("/v1/providers/{id}/repos", h.listRepos)
 	})
+}
+
+// create serves POST /v1/providers: it stores a new, unconnected provider
+// connection from the caller's OAuth application.
+func (h *handler) create(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+
+	var req createProviderRequest
+	if !h.decodeJSON(w, r, &req) {
+		return
+	}
+
+	provider, err := h.svc.Create(r.Context(), userID, CreateProviderInput{
+		Name:         req.Provider,
+		BaseURL:      req.BaseURL,
+		ClientID:     req.ClientID,
+		ClientSecret: req.ClientSecret,
+		RedirectURL:  req.RedirectURL,
+		Scopes:       req.Scopes,
+	})
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, newProviderResponse(provider))
+}
+
+// authorize serves GET /v1/providers/{id}/authorize: it returns the provider
+// authorization URL and the state binding the browser to this connection.
+func (h *handler) authorize(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	providerID, ok := h.providerID(w, r)
+	if !ok {
+		return
+	}
+
+	url, state, err := h.svc.Authorize(r.Context(), userID, providerID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, authorizeResponse{URL: url, State: state})
+}
+
+// connect serves POST /v1/providers/{id}/connect: it completes an OAuth
+// connection by redeeming the code and state for stored tokens.
+func (h *handler) connect(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	providerID, ok := h.providerID(w, r)
+	if !ok {
+		return
+	}
+
+	var req connectProviderRequest
+	if !h.decodeJSON(w, r, &req) {
+		return
+	}
+
+	provider, err := h.svc.Connect(r.Context(), userID, providerID, req.Code, req.State)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newProviderResponse(provider))
 }
 
 // list serves GET /v1/providers.
@@ -109,9 +215,8 @@ func (h *handler) listRepos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	providerID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid provider id"})
+	providerID, ok := h.providerID(w, r)
+	if !ok {
 		return
 	}
 
@@ -126,6 +231,34 @@ func (h *handler) listRepos(w http.ResponseWriter, r *http.Request) {
 		response = append(response, newRepoResponse(repo))
 	}
 	writeJSON(w, http.StatusOK, repoListEnvelope{Repos: response})
+}
+
+// providerID parses the {id} path parameter, answering 400 when it is not a
+// UUID.
+func (h *handler) providerID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	providerID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid provider id"})
+		return uuid.Nil, false
+	}
+	return providerID, true
+}
+
+// decodeJSON decodes a size-limited JSON body, rejecting unknown fields and
+// trailing input.
+func (h *handler) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+		return false
+	}
+	return true
 }
 
 // currentUser resolves the authenticated user, answering 401 when absent.
@@ -152,6 +285,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: "provider is not connected"})
 	case errors.Is(err, ErrUnsupported), errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrTooManyRequests):
+		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "too many pending requests"})
 	case errors.As(err, &httpErr):
 		h.logger.Warn("providers: provider API error", "error", err)
 		writeJSON(w, http.StatusBadGateway, errorBody{Message: "provider unavailable"})

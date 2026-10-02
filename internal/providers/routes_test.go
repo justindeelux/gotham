@@ -20,6 +20,19 @@ type fakeService struct {
 	listErr   error
 	reposErr  error
 
+	created     Provider
+	createInput CreateProviderInput
+	createErr   error
+
+	authURL   string
+	authState string
+	authErr   error
+
+	connected    Provider
+	connectCode  string
+	connectState string
+	connectErr   error
+
 	webhookID     string
 	webhookErr    error
 	webhook       Webhook
@@ -31,6 +44,29 @@ type fakeService struct {
 
 func (f *fakeService) List(context.Context, uuid.UUID) ([]Provider, error) {
 	return f.providers, f.listErr
+}
+
+// Create implements ProviderService.
+func (f *fakeService) Create(_ context.Context, _ uuid.UUID, input CreateProviderInput) (Provider, error) {
+	f.createInput = input
+	if f.createErr != nil {
+		return Provider{}, f.createErr
+	}
+	return f.created, nil
+}
+
+// Authorize implements ProviderService.
+func (f *fakeService) Authorize(context.Context, uuid.UUID, uuid.UUID) (string, string, error) {
+	return f.authURL, f.authState, f.authErr
+}
+
+// Connect implements ProviderService.
+func (f *fakeService) Connect(_ context.Context, _, _ uuid.UUID, code, state string) (Provider, error) {
+	f.connectCode, f.connectState = code, state
+	if f.connectErr != nil {
+		return Provider{}, f.connectErr
+	}
+	return f.connected, nil
 }
 
 func (f *fakeService) ListRepos(context.Context, uuid.UUID, uuid.UUID) ([]Repo, error) {
@@ -156,6 +192,7 @@ func TestRoutesServiceErrors(t *testing.T) {
 		{"not found", ErrNotFound, http.StatusNotFound},
 		{"not connected", ErrNotConnected, http.StatusConflict},
 		{"unsupported", ErrUnsupported, http.StatusBadRequest},
+		{"rate limited", ErrTooManyRequests, http.StatusTooManyRequests},
 		{"provider api", &httpError{provider: NameGitHub, url: "https://api.github.com", status: 500}, http.StatusBadGateway},
 		{"internal", errors.New("boom"), http.StatusInternalServerError},
 	}
@@ -180,5 +217,84 @@ func TestMountNilService(t *testing.T) {
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/providers", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// TestRoutesCreateProvider is the C1-11 regression: the create route reaches
+// the service and never echoes the client secret.
+func TestRoutesCreateProvider(t *testing.T) {
+	userID := uuid.New()
+	providerID := uuid.New()
+	svc := &fakeService{created: Provider{ID: providerID, UserID: userID, Name: NameGitHub}}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	body := `{"provider":"github","client_id":"client-id","client_secret":"client-secret","redirect_url":"https://cp.example/oauth/callback","scopes":"repo"}`
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/providers", strings.NewReader(body)))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if svc.createInput.Name != NameGitHub || svc.createInput.ClientID != "client-id" || svc.createInput.Scopes != "repo" {
+		t.Fatalf("create input = %+v", svc.createInput)
+	}
+	if strings.Contains(rec.Body.String(), "client-secret") {
+		t.Errorf("response leaked the client secret: %s", rec.Body.String())
+	}
+}
+
+// TestRoutesCreateProviderInvalidBody rejects an unknown field and trailing
+// input.
+func TestRoutesCreateProviderInvalidBody(t *testing.T) {
+	svc := &fakeService{}
+	srv := newRouteServer(svc, alwaysUser(uuid.New()))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/providers", strings.NewReader(`{"unknown":true}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestRoutesAuthorize returns the provider URL and the binding state.
+func TestRoutesAuthorize(t *testing.T) {
+	userID := uuid.New()
+	svc := &fakeService{authURL: "https://github.com/login/oauth/authorize?state=abc", authState: "abc"}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/providers/"+uuid.New().String()+"/authorize", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body authorizeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.State != "abc" || body.URL == "" {
+		t.Fatalf("body = %+v", body)
+	}
+}
+
+// TestRoutesConnect forwards the code and state and returns the connection.
+func TestRoutesConnect(t *testing.T) {
+	userID := uuid.New()
+	providerID := uuid.New()
+	svc := &fakeService{connected: Provider{
+		ID: providerID, UserID: userID, Name: NameGitHub, AccessToken: "secret-token",
+	}}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/providers/"+providerID.String()+"/connect",
+		strings.NewReader(`{"code":"the-code","state":"the-state"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if svc.connectCode != "the-code" || svc.connectState != "the-state" {
+		t.Fatalf("connect saw code=%q state=%q", svc.connectCode, svc.connectState)
+	}
+	if strings.Contains(rec.Body.String(), "secret-token") {
+		t.Errorf("response leaked the access token: %s", rec.Body.String())
 	}
 }

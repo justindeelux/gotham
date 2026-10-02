@@ -49,23 +49,28 @@ type gitHubBranch struct {
 
 // gitHubSource implements SourceProvider against the GitHub REST API.
 type gitHubSource struct {
-	config  *oauth2.Config
+	tokenTracking
+	listingState
 	apiBase string
 }
 
 // newGitHubSource builds the GitHub implementation for one stored connection.
-func newGitHubSource(p Provider) *gitHubSource {
+// allowUnsafe disables the outbound guards for the loopback hosts tests use.
+func newGitHubSource(p Provider, allowUnsafe bool) *gitHubSource {
 	apiBase := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
 	if apiBase == "" {
 		apiBase = gitHubDefaultAPIBase
 	}
 	return &gitHubSource{
-		config: &oauth2.Config{
-			ClientID:     p.ClientID,
-			ClientSecret: p.ClientSecret,
-			RedirectURL:  p.RedirectURL,
-			Scopes:       splitScopes(p.Scopes, gitHubDefaultScopes),
-			Endpoint:     oauth2.Endpoint{AuthURL: gitHubAuthURL, TokenURL: gitHubTokenURL},
+		tokenTracking: tokenTracking{
+			config: &oauth2.Config{
+				ClientID:     p.ClientID,
+				ClientSecret: p.ClientSecret,
+				RedirectURL:  p.RedirectURL,
+				Scopes:       splitScopes(p.Scopes, gitHubDefaultScopes),
+				Endpoint:     oauth2.Endpoint{AuthURL: gitHubAuthURL, TokenURL: gitHubTokenURL},
+			},
+			allowUnsafe: allowUnsafe,
 		},
 		apiBase: apiBase,
 	}
@@ -76,15 +81,27 @@ func (p *gitHubSource) Name() string { return NameGitHub }
 
 // ExchangeToken completes the OAuth2 flow with GitHub.
 func (p *gitHubSource) ExchangeToken(ctx context.Context, code string) (*oauth2.Token, error) {
+	ctx, cancel := withProviderTimeout(p.exchangeContext(ctx))
+	defer cancel()
 	return p.config.Exchange(ctx, code)
 }
 
+// AuthCodeURL builds the authorization URL for state. It satisfies the
+// authorizer seam used by the connect flow.
+func (p *gitHubSource) AuthCodeURL(state string) string {
+	return p.config.AuthCodeURL(state)
+}
+
 // ListRepos returns every repository the token can reach, including private
-// ones.
+// ones. Pagination is bounded by maxRepoPages; a listing that hits the bound is
+// marked truncated so the caller keeps the previous cache.
 func (p *gitHubSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo, error) {
-	client := p.config.Client(ctx, tok)
+	ctx, cancel := withListingTimeout(ctx)
+	defer cancel()
+
+	client := p.client(ctx, tok)
 	repos := make([]Repo, 0)
-	for page := 1; ; page++ {
+	for page := 1; page <= maxRepoPages; page++ {
 		endpoint := fmt.Sprintf(
 			"%s/user/repos?per_page=%d&page=%d&sort=updated&affiliation=owner,collaborator,organization_member",
 			p.apiBase, gitHubPageSize, page,
@@ -110,16 +127,22 @@ func (p *gitHubSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo
 			return repos, nil
 		}
 	}
+	p.truncated = true
+	return repos, nil
 }
 
-// ListBranches returns the branches of repo ("owner/name").
+// ListBranches returns the branches of repo ("owner/name"). Pagination is
+// bounded by maxRepoPages.
 func (p *gitHubSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo string) ([]Branch, error) {
 	if err := validateRepo(repo, 2); err != nil {
 		return nil, err
 	}
-	client := p.config.Client(ctx, tok)
+	ctx, cancel := withListingTimeout(ctx)
+	defer cancel()
+
+	client := p.client(ctx, tok)
 	branches := make([]Branch, 0)
-	for page := 1; ; page++ {
+	for page := 1; page <= maxRepoPages; page++ {
 		endpoint := fmt.Sprintf(
 			"%s/repos/%s/branches?per_page=%d&page=%d",
 			p.apiBase, repo, gitHubPageSize, page,
@@ -140,6 +163,8 @@ func (p *gitHubSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo
 			return branches, nil
 		}
 	}
+	p.truncated = true
+	return branches, nil
 }
 
 // CreateWebhook installs a push hook on repo ("owner/name") and returns the
@@ -148,7 +173,7 @@ func (p *gitHubSource) CreateWebhook(ctx context.Context, tok *oauth2.Token, rep
 	if err := validateRepo(repo, 2); err != nil {
 		return "", err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	payload := map[string]any{
 		"name":   "web",
 		"active": true,
@@ -182,7 +207,7 @@ func (p *gitHubSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, rep
 	if err := validateHookID(hookID); err != nil {
 		return err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	endpoint := fmt.Sprintf("%s/repos/%s/hooks/%s", p.apiBase, repo, hookID)
 	if err := doJSON(ctx, client, NameGitHub, http.MethodDelete, endpoint, gitHubAccept, nil, nil); err != nil {
 		if isNotFound(err) {
@@ -203,7 +228,7 @@ func (p *gitHubSource) CreatePullRequestComment(ctx context.Context, tok *oauth2
 	if err := validateComment(number, body); err != nil {
 		return err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	endpoint := fmt.Sprintf("%s/repos/%s/issues/%d/comments", p.apiBase, repo, number)
 	payload := map[string]string{"body": body}
 	return doJSON(ctx, client, NameGitHub, http.MethodPost, endpoint, gitHubAccept, payload, nil)
@@ -218,7 +243,7 @@ func (p *gitHubSource) AddDeployKey(ctx context.Context, tok *oauth2.Token, repo
 	if err := validateDeployKey(key); err != nil {
 		return "", err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	payload := map[string]any{
 		"title":     key.Title,
 		"key":       key.Key,
@@ -247,7 +272,7 @@ func (p *gitHubSource) RemoveDeployKey(ctx context.Context, tok *oauth2.Token, r
 	if err := validateDeployKeyID(keyID); err != nil {
 		return err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	endpoint := fmt.Sprintf("%s/repos/%s/keys/%s", p.apiBase, repo, keyID)
 	if err := doJSON(ctx, client, NameGitHub, http.MethodDelete, endpoint, gitHubAccept, nil, nil); err != nil {
 		if isNotFound(err) {

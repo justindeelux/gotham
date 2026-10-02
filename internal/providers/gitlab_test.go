@@ -32,7 +32,7 @@ func TestGitLabSourceListRepos(t *testing.T) {
 		})
 	})
 
-	source := newGitLabSource(Provider{BaseURL: srv.URL})
+	source := newGitLabSource(Provider{BaseURL: srv.URL}, true)
 	repos, err := source.ListRepos(context.Background(), staticToken)
 	if err != nil {
 		t.Fatalf("ListRepos: %v", err)
@@ -51,6 +51,85 @@ func TestGitLabSourceListRepos(t *testing.T) {
 	}
 }
 
+// TestGitLabSourceListReposMembership is the C1-8 regression: the listing must
+// ask only for the user's member projects instead of the whole catalogue.
+func TestGitLabSourceListReposMembership(t *testing.T) {
+	var requests int
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Query().Get("membership") != "true" {
+			t.Errorf("membership = %q, want true", r.URL.Query().Get("membership"))
+		}
+		writeJSONTest(t, w, []map[string]any{
+			{"id": 1, "name": "r", "path_with_namespace": "o/r", "visibility": "private"},
+		})
+	})
+
+	source := newGitLabSource(Provider{BaseURL: srv.URL}, true)
+	repos, err := source.ListRepos(context.Background(), staticToken)
+	if err != nil {
+		t.Fatalf("ListRepos: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	if len(repos) != 1 || repos[0].FullName != "o/r" {
+		t.Fatalf("repos = %+v", repos)
+	}
+}
+
+// TestGitLabSourceListReposSpurious400Fails proves a mid-listing 400 is a real
+// failure, not a silently truncated success.
+func TestGitLabSourceListReposSpurious400Fails(t *testing.T) {
+	var requests int
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Query().Get("page") == "1" {
+			batch := make([]map[string]any, 0, gitLabPageSize)
+			for i := 0; i < gitLabPageSize; i++ {
+				batch = append(batch, map[string]any{"id": i, "name": "r", "path_with_namespace": "o/r"})
+			}
+			writeJSONTest(t, w, batch)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	})
+
+	source := newGitLabSource(Provider{BaseURL: srv.URL}, true)
+	if _, err := source.ListRepos(context.Background(), staticToken); err == nil {
+		t.Fatal("ListRepos on a mid-listing 400: no error, want failure")
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+// TestGitLabSourceListReposBounded proves the loop is bounded even when the
+// instance keeps returning full pages, and marks the result truncated.
+func TestGitLabSourceListReposBounded(t *testing.T) {
+	var requests int
+	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		batch := make([]map[string]any, 0, gitLabPageSize)
+		for i := 0; i < gitLabPageSize; i++ {
+			batch = append(batch, map[string]any{"id": i, "name": "r", "path_with_namespace": "o/r"})
+		}
+		writeJSONTest(t, w, batch)
+	})
+
+	source := newGitLabSource(Provider{BaseURL: srv.URL}, true)
+	repos, err := source.ListRepos(context.Background(), staticToken)
+	if err != nil {
+		t.Fatalf("ListRepos: %v", err)
+	}
+	if requests != maxRepoPages || len(repos) != maxRepoPages*gitLabPageSize {
+		t.Fatalf("requests = %d, repos = %d, want the %d-page cap", requests, len(repos), maxRepoPages)
+	}
+	if !source.Truncated() {
+		t.Error("listing at the page cap is not marked truncated")
+	}
+}
+
 func TestGitLabSourceListBranches(t *testing.T) {
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/repository/branches") {
@@ -62,7 +141,7 @@ func TestGitLabSourceListBranches(t *testing.T) {
 		})
 	})
 
-	source := newGitLabSource(Provider{BaseURL: srv.URL})
+	source := newGitLabSource(Provider{BaseURL: srv.URL}, true)
 	branches, err := source.ListBranches(context.Background(), staticToken, "team/sub/gotham")
 	if err != nil {
 		t.Fatalf("ListBranches: %v", err)
@@ -73,7 +152,7 @@ func TestGitLabSourceListBranches(t *testing.T) {
 }
 
 func TestGitLabSourceListBranchesInvalidRepo(t *testing.T) {
-	source := newGitLabSource(Provider{BaseURL: "http://irrelevant"})
+	source := newGitLabSource(Provider{BaseURL: "http://irrelevant"}, true)
 	for _, repo := range []string{"bad repo", "noslash"} {
 		if _, err := source.ListBranches(context.Background(), staticToken, repo); !errors.Is(err, ErrValidation) {
 			t.Fatalf("repo %q: error = %v, want ErrValidation", repo, err)
@@ -86,7 +165,7 @@ func TestGitLabSourceExchangeToken(t *testing.T) {
 		writeJSONTest(t, w, map[string]any{"access_token": "glpat_test", "token_type": "bearer"})
 	})
 
-	source := newGitLabSource(Provider{BaseURL: srv.URL, ClientID: "id", ClientSecret: "secret"})
+	source := newGitLabSource(Provider{BaseURL: srv.URL, ClientID: "id", ClientSecret: "secret"}, true)
 	source.config.Endpoint.TokenURL = srv.URL + "/oauth/token"
 
 	tok, err := source.ExchangeToken(context.Background(), "code")
@@ -130,7 +209,7 @@ func TestGitLabSourceCreateWebhook(t *testing.T) {
 				writeJSONTest(t, w, map[string]any{"id": 77})
 			})
 
-			source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"})
+			source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"}, true)
 			source.apiBase = srv.URL
 			id, err := source.CreateWebhook(context.Background(), staticToken, "group/project", Webhook{
 				URL:    "https://cp.gotham.dev/api/v1/webhooks/gitlab",
@@ -165,7 +244,7 @@ func TestGitLabSourceDeleteWebhook(t *testing.T) {
 		w.WriteHeader(status)
 	})
 
-	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"})
+	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"}, true)
 	source.apiBase = srv.URL
 	if err := source.DeleteWebhook(context.Background(), staticToken, "group/project", "77"); err != nil {
 		t.Fatalf("DeleteWebhook: %v", err)

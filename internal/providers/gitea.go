@@ -43,24 +43,29 @@ type giteaBranch struct {
 
 // giteaSource implements SourceProvider against the Gitea REST API.
 type giteaSource struct {
-	config  *oauth2.Config
+	tokenTracking
+	listingState
 	apiBase string
 }
 
 // newGiteaSource builds the Gitea implementation for one stored connection. The
 // base URL must be set (validated by the service) because Gitea is self-hosted.
-func newGiteaSource(p Provider) *giteaSource {
+// allowUnsafe disables the outbound guards for the loopback hosts tests use.
+func newGiteaSource(p Provider, allowUnsafe bool) *giteaSource {
 	base := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
 	return &giteaSource{
-		config: &oauth2.Config{
-			ClientID:     p.ClientID,
-			ClientSecret: p.ClientSecret,
-			RedirectURL:  p.RedirectURL,
-			Scopes:       splitScopes(p.Scopes, giteaDefaultScopes),
-			Endpoint: oauth2.Endpoint{
-				AuthURL:  base + "/login/oauth/authorize",
-				TokenURL: base + "/login/oauth/access_token",
+		tokenTracking: tokenTracking{
+			config: &oauth2.Config{
+				ClientID:     p.ClientID,
+				ClientSecret: p.ClientSecret,
+				RedirectURL:  p.RedirectURL,
+				Scopes:       splitScopes(p.Scopes, giteaDefaultScopes),
+				Endpoint: oauth2.Endpoint{
+					AuthURL:  base + "/login/oauth/authorize",
+					TokenURL: base + "/login/oauth/access_token",
+				},
 			},
+			allowUnsafe: allowUnsafe,
 		},
 		apiBase: base + "/api/v1",
 	}
@@ -71,15 +76,27 @@ func (p *giteaSource) Name() string { return NameGitea }
 
 // ExchangeToken completes the OAuth2 flow with Gitea.
 func (p *giteaSource) ExchangeToken(ctx context.Context, code string) (*oauth2.Token, error) {
+	ctx, cancel := withProviderTimeout(p.exchangeContext(ctx))
+	defer cancel()
 	return p.config.Exchange(ctx, code)
 }
 
+// AuthCodeURL builds the authorization URL for state. It satisfies the
+// authorizer seam used by the connect flow.
+func (p *giteaSource) AuthCodeURL(state string) string {
+	return p.config.AuthCodeURL(state)
+}
+
 // ListRepos returns every repository visible to the token, including private
-// ones.
+// ones. Pagination is bounded by maxRepoPages; a listing that hits the bound is
+// marked truncated so the caller keeps the previous cache.
 func (p *giteaSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo, error) {
-	client := p.config.Client(ctx, tok)
+	ctx, cancel := withListingTimeout(ctx)
+	defer cancel()
+
+	client := p.client(ctx, tok)
 	repos := make([]Repo, 0)
-	for page := 1; ; page++ {
+	for page := 1; page <= maxRepoPages; page++ {
 		endpoint := fmt.Sprintf("%s/user/repos?limit=%d&page=%d", p.apiBase, giteaPageSize, page)
 
 		var batch []giteaRepo
@@ -102,16 +119,22 @@ func (p *giteaSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo,
 			return repos, nil
 		}
 	}
+	p.truncated = true
+	return repos, nil
 }
 
-// ListBranches returns the branches of repo ("owner/name").
+// ListBranches returns the branches of repo ("owner/name"). Pagination is
+// bounded by maxRepoPages.
 func (p *giteaSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo string) ([]Branch, error) {
 	if err := validateRepo(repo, 2); err != nil {
 		return nil, err
 	}
-	client := p.config.Client(ctx, tok)
+	ctx, cancel := withListingTimeout(ctx)
+	defer cancel()
+
+	client := p.client(ctx, tok)
 	branches := make([]Branch, 0)
-	for page := 1; ; page++ {
+	for page := 1; page <= maxRepoPages; page++ {
 		endpoint := fmt.Sprintf("%s/repos/%s/branches?limit=%d&page=%d", p.apiBase, repo, giteaPageSize, page)
 
 		var batch []giteaBranch
@@ -129,6 +152,8 @@ func (p *giteaSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo 
 			return branches, nil
 		}
 	}
+	p.truncated = true
+	return branches, nil
 }
 
 // CreateWebhook installs a push hook on repo ("owner/name") and returns the
@@ -137,7 +162,7 @@ func (p *giteaSource) CreateWebhook(ctx context.Context, tok *oauth2.Token, repo
 	if err := validateRepo(repo, 2); err != nil {
 		return "", err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	payload := map[string]any{
 		"type":   "gitea",
 		"active": true,
@@ -171,7 +196,7 @@ func (p *giteaSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, repo
 	if err := validateHookID(hookID); err != nil {
 		return err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	endpoint := fmt.Sprintf("%s/repos/%s/hooks/%s", p.apiBase, repo, hookID)
 	if err := doJSON(ctx, client, NameGitea, http.MethodDelete, endpoint, "application/json", nil, nil); err != nil {
 		if isNotFound(err) {
@@ -192,7 +217,7 @@ func (p *giteaSource) CreatePullRequestComment(ctx context.Context, tok *oauth2.
 	if err := validateComment(number, body); err != nil {
 		return err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	endpoint := fmt.Sprintf("%s/repos/%s/issues/%d/comments", p.apiBase, repo, number)
 	payload := map[string]string{"body": body}
 	return doJSON(ctx, client, NameGitea, http.MethodPost, endpoint, "application/json", payload, nil)
@@ -207,7 +232,7 @@ func (p *giteaSource) AddDeployKey(ctx context.Context, tok *oauth2.Token, repo 
 	if err := validateDeployKey(key); err != nil {
 		return "", err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	payload := map[string]any{
 		"title":     key.Title,
 		"key":       key.Key,
@@ -236,7 +261,7 @@ func (p *giteaSource) RemoveDeployKey(ctx context.Context, tok *oauth2.Token, re
 	if err := validateDeployKeyID(keyID); err != nil {
 		return err
 	}
-	client := p.config.Client(ctx, tok)
+	client := p.client(ctx, tok)
 	endpoint := fmt.Sprintf("%s/repos/%s/keys/%s", p.apiBase, repo, keyID)
 	if err := doJSON(ctx, client, NameGitea, http.MethodDelete, endpoint, "application/json", nil, nil); err != nil {
 		if isNotFound(err) {

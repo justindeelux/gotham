@@ -37,6 +37,8 @@ type fakeRepo struct {
 	cached    map[uuid.UUID][]Repo
 	replaced  map[uuid.UUID][]Repo
 	replaceFn func(providerID uuid.UUID, repos []Repo) error
+
+	updateTokenCalls int
 }
 
 // newFakeRepo builds an empty fake repository.
@@ -49,6 +51,9 @@ func newFakeRepo() *fakeRepo {
 }
 
 func (f *fakeRepo) Create(_ context.Context, p Provider) (Provider, error) {
+	if p.ID == uuid.Nil {
+		p.ID = uuid.New()
+	}
 	f.providers[p.ID] = p
 	return p, nil
 }
@@ -71,11 +76,15 @@ func (f *fakeRepo) List(_ context.Context, userID uuid.UUID) ([]Provider, error)
 	return out, nil
 }
 
-func (f *fakeRepo) UpdateToken(_ context.Context, id uuid.UUID, accessToken, refreshToken string, expiresAt *time.Time) (Provider, error) {
+func (f *fakeRepo) UpdateToken(ctx context.Context, id uuid.UUID, accessToken, refreshToken string, expiresAt *time.Time) (Provider, error) {
+	if err := ctx.Err(); err != nil {
+		return Provider{}, err
+	}
 	p, ok := f.providers[id]
 	if !ok {
 		return Provider{}, ErrNotFound
 	}
+	f.updateTokenCalls++
 	p.AccessToken = accessToken
 	p.RefreshToken = refreshToken
 	p.TokenExpiresAt = expiresAt
@@ -104,4 +113,10 @@ func serve(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// newTestService builds a Service that permits the loopback base URLs the
+// httptest fakes use. Production leaves the escape hatch off.
+func newTestService(repo Repository) *Service {
+	return NewService(Config{Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true})
 }

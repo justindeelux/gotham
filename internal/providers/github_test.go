@@ -32,7 +32,7 @@ func TestGitHubSourceListRepos(t *testing.T) {
 		})
 	})
 
-	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, true)
 	repos, err := source.ListRepos(context.Background(), staticToken)
 	if err != nil {
 		t.Fatalf("ListRepos: %v", err)
@@ -67,7 +67,7 @@ func TestGitHubSourceListReposPagination(t *testing.T) {
 		writeJSONTest(t, w, []map[string]any{{"id": 999, "name": "last", "full_name": "o/last"}})
 	})
 
-	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, true)
 	repos, err := source.ListRepos(context.Background(), staticToken)
 	if err != nil {
 		t.Fatalf("ListRepos: %v", err)
@@ -77,6 +77,35 @@ func TestGitHubSourceListReposPagination(t *testing.T) {
 	}
 	if repos[len(repos)-1].FullName != "o/last" {
 		t.Errorf("last repo = %+v", repos[len(repos)-1])
+	}
+}
+
+// TestGitHubSourceListReposBounded is the C1-8 regression: a provider that
+// never returns a short page must not make the listing loop forever.
+func TestGitHubSourceListReposBounded(t *testing.T) {
+	var requests int
+	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		batch := make([]map[string]any, 0, gitHubPageSize)
+		for i := 0; i < gitHubPageSize; i++ {
+			batch = append(batch, map[string]any{"id": i, "name": "r", "full_name": "o/r"})
+		}
+		writeJSONTest(t, w, batch)
+	})
+
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, true)
+	repos, err := source.ListRepos(context.Background(), staticToken)
+	if err != nil {
+		t.Fatalf("ListRepos: %v", err)
+	}
+	if requests != maxRepoPages {
+		t.Fatalf("requests = %d, want the %d-page cap", requests, maxRepoPages)
+	}
+	if len(repos) != maxRepoPages*gitHubPageSize {
+		t.Fatalf("len(repos) = %d, want %d", len(repos), maxRepoPages*gitHubPageSize)
+	}
+	if !source.Truncated() {
+		t.Error("listing at the page cap is not marked truncated")
 	}
 }
 
@@ -92,7 +121,7 @@ func TestGitHubSourceListBranches(t *testing.T) {
 		})
 	})
 
-	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, true)
 	branches, err := source.ListBranches(context.Background(), staticToken, "justindeelux/gotham")
 	if err != nil {
 		t.Fatalf("ListBranches: %v", err)
@@ -106,7 +135,7 @@ func TestGitHubSourceListBranches(t *testing.T) {
 }
 
 func TestGitHubSourceListBranchesInvalidRepo(t *testing.T) {
-	source := newGitHubSource(Provider{BaseURL: "http://irrelevant"})
+	source := newGitHubSource(Provider{BaseURL: "http://irrelevant"}, true)
 	if _, err := source.ListBranches(context.Background(), staticToken, "no-slash"); !errors.Is(err, ErrValidation) {
 		t.Fatalf("error = %v, want ErrValidation", err)
 	}
@@ -119,7 +148,7 @@ func TestGitHubSourceExchangeToken(t *testing.T) {
 		})
 	})
 
-	source := newGitHubSource(Provider{ClientID: "id", ClientSecret: "secret"})
+	source := newGitHubSource(Provider{ClientID: "id", ClientSecret: "secret"}, true)
 	source.config.Endpoint.TokenURL = srv.URL + "/login/oauth/access_token"
 
 	tok, err := source.ExchangeToken(context.Background(), "the-code")
@@ -157,7 +186,7 @@ func TestGitHubSourceCreateWebhook(t *testing.T) {
 		writeJSONTest(t, w, map[string]any{"id": 4242})
 	})
 
-	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, true)
 	id, err := source.CreateWebhook(context.Background(), staticToken, "o/r", webhookUnderTest())
 	if err != nil {
 		t.Fatalf("CreateWebhook: %v", err)
@@ -190,7 +219,7 @@ func TestGitHubSourceCreateWebhookFailure(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 	})
 
-	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, true)
 	if _, err := source.CreateWebhook(context.Background(), staticToken, "o/r", webhookUnderTest()); err == nil {
 		t.Fatal("CreateWebhook on 403: no error, want failure")
 	}
@@ -207,7 +236,7 @@ func TestGitHubSourceDeleteWebhook(t *testing.T) {
 		w.WriteHeader(status)
 	})
 
-	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, true)
 	if err := source.DeleteWebhook(context.Background(), staticToken, "o/r", "4242"); err != nil {
 		t.Fatalf("DeleteWebhook: %v", err)
 	}

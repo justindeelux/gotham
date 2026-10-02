@@ -2,8 +2,10 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -133,5 +135,150 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	}
 	if len(cached) != 1 || cached[0].FullName != "o/gotham" || !cached[0].Private {
 		t.Fatalf("ListCachedRepos = %+v", cached)
+	}
+}
+
+// TestStoreRepositoryReplaceReposIsAtomic is the C1-9 regression: a refresh
+// that fails after clearing the cache must roll back, leaving the previous
+// complete list intact instead of an empty or partial one.
+func TestStoreRepositoryReplaceReposIsAtomic(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	st := store.New(pool)
+
+	email := fmt.Sprintf("fx10b-cache-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete: %v", err)
+		}
+	})
+
+	repo := newStoreRepository(st, newSecretCipher("integration-secret"))
+	provider, err := repo.Create(ctx, Provider{
+		UserID: uuid.UUID(user.ID.Bytes), Name: NameGitHub,
+		ClientID: "client-id", ClientSecret: "client-secret",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	first := []Repo{{ExternalID: "1", FullName: "o/one"}, {ExternalID: "2", FullName: "o/two"}}
+	if err := repo.ReplaceRepos(ctx, provider.ID, first); err != nil {
+		t.Fatalf("ReplaceRepos: %v", err)
+	}
+
+	// Force a failure after the clear; the transaction must roll back.
+	st.BeforeRepoCacheInsert = func() error { return errors.New("boom") }
+	if err := repo.ReplaceRepos(ctx, provider.ID, []Repo{{ExternalID: "3", FullName: "o/three"}}); err == nil {
+		t.Fatal("ReplaceRepos with a failing insert: no error, want rollback")
+	}
+	st.BeforeRepoCacheInsert = nil
+
+	cached, err := repo.ListCachedRepos(ctx, provider.ID)
+	if err != nil {
+		t.Fatalf("ListCachedRepos: %v", err)
+	}
+	if len(cached) != 2 {
+		t.Fatalf("cached = %+v, want the previous complete list of 2", cached)
+	}
+}
+
+// TestStoreRepositoryReplaceReposSerializes is the U8 regression for the
+// provider-row lock: two concurrent replacements must serialize, so the second
+// fully replaces the first instead of interleaving into a merged list.
+func TestStoreRepositoryReplaceReposSerializes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	st := store.New(pool)
+
+	email := fmt.Sprintf("fx10b-serialize-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete: %v", err)
+		}
+	})
+
+	repo := newStoreRepository(st, newSecretCipher("integration-secret"))
+	provider, err := repo.Create(ctx, Provider{
+		UserID: uuid.UUID(user.ID.Bytes), Name: NameGitHub,
+		ClientID: "client-id", ClientSecret: "client-secret",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	aInSeam := make(chan struct{}, 1)
+	release := make(chan struct{})
+	st.BeforeRepoCacheInsert = func() error {
+		aInSeam <- struct{}{}
+		<-release
+		return nil
+	}
+	t.Cleanup(func() { st.BeforeRepoCacheInsert = nil })
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := repo.ReplaceRepos(ctx, provider.ID, []Repo{{ExternalID: "a", FullName: "o/a"}}); err != nil {
+			t.Errorf("A ReplaceRepos: %v", err)
+		}
+	}()
+
+	<-aInSeam // A holds the row lock, blocked inside the seam
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := repo.ReplaceRepos(ctx, provider.ID, []Repo{{ExternalID: "b", FullName: "o/b"}}); err != nil {
+			t.Errorf("B ReplaceRepos: %v", err)
+		}
+	}()
+
+	// Let B reach the row lock, then let A commit.
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	cached, err := repo.ListCachedRepos(ctx, provider.ID)
+	if err != nil {
+		t.Fatalf("ListCachedRepos: %v", err)
+	}
+	if len(cached) != 1 || cached[0].FullName != "o/b" {
+		t.Fatalf("cached = %+v, want only B's replacement", cached)
 	}
 }

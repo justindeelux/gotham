@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -30,6 +31,9 @@ var (
 	ErrUnsupported = errors.New("providers: unsupported provider")
 	// ErrValidation is returned when user-supplied input fails validation.
 	ErrValidation = errors.New("providers: validation failed")
+	// ErrTooManyRequests is returned when a caller has too many pending OAuth
+	// authorizations, so a single account cannot exhaust the state store.
+	ErrTooManyRequests = errors.New("providers: too many pending requests")
 )
 
 // Repo is the provider-neutral repository representation.
@@ -151,4 +155,68 @@ func (p Provider) token() *oauth2.Token {
 		tok.Expiry = *p.TokenExpiresAt
 	}
 	return tok
+}
+
+// listingState records whether a paged listing stopped at a bound rather than a
+// natural end, so the service can avoid overwriting the cache with a partial
+// list.
+type listingState struct{ truncated bool }
+
+// Truncated reports whether the last listing hit a page/offset bound.
+func (l *listingState) Truncated() bool { return l.truncated }
+
+// tokenTracking builds oauth2 clients and remembers the token source, so a
+// refresh performed during a call can be read back and persisted. Embedding it
+// promotes config on each source implementation.
+type tokenTracking struct {
+	config      *oauth2.Config
+	allowUnsafe bool
+	source      *trackingSource
+}
+
+// trackingSource wraps an oauth2.TokenSource and records the latest token it
+// returned. The read-back never refreshes: a post-failure Token() must not
+// trigger a second, unbounded refresh.
+type trackingSource struct {
+	inner  oauth2.TokenSource
+	latest *oauth2.Token
+}
+
+// Token returns the wrapped source's token and records it.
+func (s *trackingSource) Token() (*oauth2.Token, error) {
+	tok, err := s.inner.Token()
+	if err != nil {
+		return nil, err
+	}
+	s.latest = tok
+	return tok, nil
+}
+
+// client returns an oauth2 client for tok and records its token source. The
+// context carries a guarded, timeout-bounded base client so an automatic token
+// refresh inside the transport is bounded too.
+func (t *tokenTracking) client(ctx context.Context, tok *oauth2.Token) *http.Client {
+	ctx = providerHTTPContext(ctx, t.allowUnsafe)
+	t.source = &trackingSource{inner: t.config.TokenSource(ctx, tok)}
+	client := oauth2.NewClient(ctx, t.source)
+	client.CheckRedirect = checkProviderRedirect(t.allowUnsafe)
+	client.Timeout = providerHTTPTimeout
+	return client
+}
+
+// exchangeContext applies the guarded base client to a token exchange.
+// oauth2.Config.Exchange runs on the client carried by the context and falls
+// back to http.DefaultClient otherwise, which would skip the dial/redirect
+// guards entirely.
+func (t *tokenTracking) exchangeContext(ctx context.Context) context.Context {
+	return providerHTTPContext(ctx, t.allowUnsafe)
+}
+
+// Token returns the latest token the recorded source held, or nil when no call
+// has been made. It never refreshes.
+func (t *tokenTracking) Token() *oauth2.Token {
+	if t.source == nil {
+		return nil
+	}
+	return t.source.latest
 }

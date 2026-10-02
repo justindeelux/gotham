@@ -31,7 +31,7 @@ func TestGitHubSourceAddDeployKey(t *testing.T) {
 		writeJSONTest(t, w, map[string]any{"id": 77})
 	})
 
-	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, true)
 	id, err := source.AddDeployKey(context.Background(), staticToken, "o/r", deployKeyUnderTest())
 	if err != nil {
 		t.Fatalf("AddDeployKey: %v", err)
@@ -58,7 +58,7 @@ func TestGitHubSourceAddDeployKeyFailures(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 	})
 
-	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, true)
 	if _, err := source.AddDeployKey(context.Background(), staticToken, "o/r", deployKeyUnderTest()); err == nil {
 		t.Error("AddDeployKey on 403: no error, want failure")
 	}
@@ -78,7 +78,7 @@ func TestGitHubSourceRemoveDeployKey(t *testing.T) {
 		w.WriteHeader(status)
 	})
 
-	source := newGitHubSource(Provider{BaseURL: srv.URL})
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, true)
 	if err := source.RemoveDeployKey(context.Background(), staticToken, "o/r", "77"); err != nil {
 		t.Fatalf("RemoveDeployKey: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestGitLabSourceAddDeployKey(t *testing.T) {
 		writeJSONTest(t, w, map[string]any{"id": 91})
 	})
 
-	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"})
+	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"}, true)
 	source.apiBase = srv.URL
 	id, err := source.AddDeployKey(context.Background(), staticToken, "group/project", deployKeyUnderTest())
 	if err != nil {
@@ -141,7 +141,7 @@ func TestGitLabSourceRemoveDeployKey(t *testing.T) {
 		w.WriteHeader(status)
 	})
 
-	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"})
+	source := newGitLabSource(Provider{BaseURL: "https://gitlab.com"}, true)
 	source.apiBase = srv.URL
 	if err := source.RemoveDeployKey(context.Background(), staticToken, "group/project", "91"); err != nil {
 		t.Fatalf("RemoveDeployKey: %v", err)
@@ -175,7 +175,7 @@ func TestGiteaSourceAddDeployKey(t *testing.T) {
 		writeJSONTest(t, w, map[string]any{"id": 13})
 	})
 
-	source := newGiteaSource(Provider{BaseURL: srv.URL})
+	source := newGiteaSource(Provider{BaseURL: srv.URL}, true)
 	id, err := source.AddDeployKey(context.Background(), staticToken, "t/r", deployKeyUnderTest())
 	if err != nil {
 		t.Fatalf("AddDeployKey: %v", err)
@@ -199,7 +199,7 @@ func TestGiteaSourceRemoveDeployKey(t *testing.T) {
 		w.WriteHeader(status)
 	})
 
-	source := newGiteaSource(Provider{BaseURL: srv.URL})
+	source := newGiteaSource(Provider{BaseURL: srv.URL}, true)
 	if err := source.RemoveDeployKey(context.Background(), staticToken, "t/r", "13"); err != nil {
 		t.Fatalf("RemoveDeployKey: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestServiceAddDeployKey(t *testing.T) {
 
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: srv.URL})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	id, err := svc.AddDeployKey(context.Background(), HookTarget{
 		UserID:   provider.UserID,
@@ -253,7 +253,7 @@ func TestServiceRemoveDeployKey(t *testing.T) {
 
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: srv.URL})
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 	target := HookTarget{UserID: provider.UserID, Provider: NameGitHub, Repo: "o/r"}
 
 	if err := svc.RemoveDeployKey(context.Background(), target, "5"); err != nil {
@@ -272,7 +272,7 @@ func TestServiceRemoveDeployKey(t *testing.T) {
 // the deploy routes translate into statuses.
 func TestServiceAddDeployKeyConnectionErrors(t *testing.T) {
 	repo := newFakeRepo()
-	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
+	svc := newTestService(repo)
 
 	_, err := svc.AddDeployKey(context.Background(), HookTarget{
 		UserID:   uuid.New(),

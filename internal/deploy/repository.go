@@ -63,6 +63,11 @@ type Repository interface {
 	ListEnvVars(ctx context.Context, appID uuid.UUID) ([]EnvVar, error)
 	// ListSecrets returns the application's sealed secrets.
 	ListSecrets(ctx context.Context, appID uuid.UUID) ([]Secret, error)
+	// ListEnvConfig returns the application's plain env vars and sealed
+	// secrets from one snapshot, so a replace committing between them cannot
+	// drop a key from either collection. The runtime payload is assembled from
+	// it.
+	ListEnvConfig(ctx context.Context, appID uuid.UUID) ([]EnvVar, []Secret, error)
 	// ListStorages returns the application's volume map.
 	ListStorages(ctx context.Context, appID uuid.UUID) ([]Storage, error)
 	// GetDeployKey returns the deploy key of an application, or ErrNotFound.
@@ -394,6 +399,37 @@ func (r *storeRepository) ListStorages(ctx context.Context, appID uuid.UUID) ([]
 		})
 	}
 	return storages, nil
+}
+
+// ListEnvConfig loads the plain env vars and sealed secrets of an application
+// from one database snapshot, so a concurrent replace cannot leave a key in
+// neither collection (see store.ListEnvConfigByApp).
+func (r *storeRepository) ListEnvConfig(ctx context.Context, appID uuid.UUID) ([]EnvVar, []Secret, error) {
+	envRows, secretRows, err := r.store.ListEnvConfigByApp(ctx, pgUUID(appID))
+	if err != nil {
+		return nil, nil, fmt.Errorf("deploy: list env config: %w", err)
+	}
+	vars := make([]EnvVar, 0, len(envRows))
+	for _, row := range envRows {
+		vars = append(vars, EnvVar{
+			ID:            uuidFromPG(row.ID),
+			ApplicationID: uuidFromPG(row.ApplicationID),
+			Key:           row.Key,
+			Value:         row.Value,
+			CreatedAt:     timeFromPG(row.CreatedAt),
+		})
+	}
+	secrets := make([]Secret, 0, len(secretRows))
+	for _, row := range secretRows {
+		secrets = append(secrets, Secret{
+			ID:            uuidFromPG(row.ID),
+			ApplicationID: uuidFromPG(row.ApplicationID),
+			Key:           row.Key,
+			Ciphertext:    row.Ciphertext,
+			CreatedAt:     timeFromPG(row.CreatedAt),
+		})
+	}
+	return vars, secrets, nil
 }
 
 // GetDeployKey loads the deploy key of an application, or ErrNotFound.

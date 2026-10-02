@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -87,6 +89,308 @@ func TestStoreUserRoundtrip(t *testing.T) {
 	if _, err := s.GetUserByEmail(ctx, "missing-"+email); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("expected pgx.ErrNoRows for missing user, got %v", err)
 	}
+}
+
+// TestStoreReplaceApplicationEnvIsAtomic is the item-2 store regression: two
+// concurrent replacements of the same collection must serialize, so each
+// commits its own full replacement rather than both inserting disjoint keys
+// (a union where a replace was asked for). It skips when no database is
+// reachable.
+func TestStoreReplaceApplicationEnvIsAtomic(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	dsn := testDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	st := store.New(pool)
+	email := fmt.Sprintf("fx-6b-replace-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete: %v", err)
+		}
+	})
+
+	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		UserID:   user.ID,
+		Name:     "replace-race-app",
+		Provider: "github",
+		Repo:     "acme/demo",
+		CloneUrl: "https://github.com/acme/demo.git",
+		Branch:   "main",
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+
+	// Start from empty and race two full replacements. The seam holds the
+	// first transaction open inside its clear/insert window so the second must
+	// either serialize on the parent row lock (fixed) or also enter and insert
+	// (buggy), committing a union of the two disjoint sets.
+	release := make(chan struct{})
+	entered := make(chan struct{}, 2)
+	st.BeforeCollectionClear = func() {
+		entered <- struct{}{}
+		<-release
+	}
+
+	a := []sqlc.InsertEnvVarParams{{Key: "RA", Value: "1"}}
+	b := []sqlc.InsertEnvVarParams{{Key: "RB", Value: "1"}}
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs <- st.ReplaceApplicationEnv(ctx, app.ID, a, nil)
+	}()
+	<-entered // the first transaction is inside its window
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs <- st.ReplaceApplicationEnv(ctx, app.ID, b, nil)
+	}()
+
+	// With the parent lock the second transaction is blocked before the seam;
+	// without it, it enters the seam too. Wait a bounded time for the second
+	// entry (the buggy path) and then release whichever way it went.
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("ReplaceApplicationEnv: %v", err)
+		}
+	}
+
+	stored, err := st.ListEnvVarsByApp(ctx, app.ID)
+	if err != nil {
+		t.Fatalf("ListEnvVarsByApp: %v", err)
+	}
+	if len(stored) != 1 {
+		keys := make([]string, 0, len(stored))
+		for _, row := range stored {
+			keys = append(keys, row.Key)
+		}
+		t.Fatalf("stored env vars = %v, want exactly one collection (no merged union)", keys)
+	}
+}
+
+// TestStoreReplaceApplicationStoragesIsAtomic is the storages half of the
+// item-2 regression (same pattern, see ReplaceApplicationEnv).
+func TestStoreReplaceApplicationStoragesIsAtomic(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	dsn := testDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	st := store.New(pool)
+	email := fmt.Sprintf("fx-6b-storage-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete: %v", err)
+		}
+	})
+
+	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		UserID:   user.ID,
+		Name:     "storage-race-app",
+		Provider: "github",
+		Repo:     "acme/demo",
+		CloneUrl: "https://github.com/acme/demo.git",
+		Branch:   "main",
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+
+	a := []sqlc.InsertStorageParams{{Name: "vol-a", ContainerPath: "/data/a"}}
+	b := []sqlc.InsertStorageParams{{Name: "vol-b", ContainerPath: "/data/b"}}
+	release := make(chan struct{})
+	entered := make(chan struct{}, 2)
+	st.BeforeCollectionClear = func() {
+		entered <- struct{}{}
+		<-release
+	}
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs <- st.ReplaceApplicationStorages(ctx, app.ID, a)
+	}()
+	<-entered
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs <- st.ReplaceApplicationStorages(ctx, app.ID, b)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("ReplaceApplicationStorages: %v", err)
+		}
+	}
+
+	stored, err := st.ListStoragesByApp(ctx, app.ID)
+	if err != nil {
+		t.Fatalf("ListStoragesByApp: %v", err)
+	}
+	if len(stored) != 1 {
+		names := make([]string, 0, len(stored))
+		for _, row := range stored {
+			names = append(names, row.Name)
+		}
+		t.Fatalf("stored storages = %v, want exactly one collection (no merged union)", names)
+	}
+}
+
+// TestStoreListEnvConfigIsOneSnapshot is the item-1 read regression: the plain
+// vars and secrets must come from one transaction snapshot. A replacement
+// commits between the two reads; with the single-snapshot read both queries
+// still observe the pre-replacement set (no key dropped), where two separate
+// autocommit reads would pair the old plain vars with the new secrets.
+func TestStoreListEnvConfigIsOneSnapshot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	dsn := testDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	st := store.New(pool)
+	email := fmt.Sprintf("fx-6b-snapshot-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete: %v", err)
+		}
+	})
+
+	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		UserID: user.ID, Name: "snapshot-app", Provider: "github",
+		Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git", Branch: "main",
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+	appID := app.ID
+
+	// Initial: plain OLD_PLAIN, secret OLD_SECRET.
+	if err := st.ReplaceApplicationEnv(ctx, appID,
+		[]sqlc.InsertEnvVarParams{{Key: "OLD_PLAIN", Value: "1"}},
+		[]sqlc.InsertSecretParams{{ID: pgUUID(uuid.New()), Key: "OLD_SECRET", Ciphertext: "old"}},
+	); err != nil {
+		t.Fatalf("seed env: %v", err)
+	}
+
+	// The seam commits a full replacement (new plain + new secret) between the
+	// two reads of ListEnvConfigByApp.
+	st.AfterEnvReadBeforeSecrets = func() {
+		if err := st.ReplaceApplicationEnv(ctx, appID,
+			[]sqlc.InsertEnvVarParams{{Key: "NEW_PLAIN", Value: "1"}},
+			[]sqlc.InsertSecretParams{{ID: pgUUID(uuid.New()), Key: "NEW_SECRET", Ciphertext: "new"}},
+		); err != nil {
+			t.Errorf("mid-read replacement: %v", err)
+		}
+	}
+
+	envVars, secrets, err := st.ListEnvConfigByApp(ctx, appID)
+	if err != nil {
+		t.Fatalf("ListEnvConfigByApp: %v", err)
+	}
+
+	envKeys := keysOf(envVars)
+	secretKeys := secretKeysOf(secrets)
+	// Both reads must be the same snapshot: either the old pair or the new
+	// pair, never old plain with new secret.
+	if len(envKeys) == 1 && envKeys[0] == "OLD_PLAIN" {
+		if len(secretKeys) != 1 || secretKeys[0] != "OLD_SECRET" {
+			t.Errorf("mixed snapshot: plain %v paired with secrets %v, want the pre-replacement pair", envKeys, secretKeys)
+		}
+	}
+	if len(envKeys) == 1 && envKeys[0] == "NEW_PLAIN" {
+		if len(secretKeys) != 1 || secretKeys[0] != "NEW_SECRET" {
+			t.Errorf("mixed snapshot: plain %v paired with secrets %v, want the post-replacement pair", envKeys, secretKeys)
+		}
+	}
+}
+
+// pgUUID converts a domain UUID into the pgtype form the sqlc params take.
+func pgUUID(id uuid.UUID) pgtype.UUID {
+	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+// keysOf returns the sorted env-var keys.
+func keysOf(rows []sqlc.EnvVar) []string {
+	keys := make([]string, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, row.Key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// secretKeysOf returns the sorted secret keys.
+func secretKeysOf(rows []sqlc.Secret) []string {
+	keys := make([]string, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, row.Key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // TestStoreCreateFirstUserSerializes proves the first-account guard is atomic:

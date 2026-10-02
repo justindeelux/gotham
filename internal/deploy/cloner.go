@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -115,7 +116,7 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	}
 
 	if log != nil {
-		line := fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, url)
+		line := fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, redactCloneURL(url))
 		if privatePEM != "" {
 			line += " (using the application deploy key)"
 		}
@@ -132,7 +133,7 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		return fmt.Errorf("git clone: %w", ctx.Err())
 	}
 	if err != nil {
-		return fmt.Errorf("git clone: %w: %s", err, tail(string(output), 400))
+		return fmt.Errorf("git clone: %w: %s", err, redactCloneError(tail(string(output), 400)))
 	}
 	if log != nil {
 		log("repository cloned (" + branch + ")")
@@ -357,3 +358,37 @@ func tail(s string, n int) string {
 	}
 	return "…" + s[len(s)-n:]
 }
+
+// redactCloneURL removes the userinfo from a clone URL before it is logged:
+// an operator-supplied URL may carry a token
+// (https://x-access-token:ghp_…@host/repo) and the realtime deploy log is
+// visible to the application's team. Only URL shapes (http/https/ssh/git) are
+// parsed; a scp-like git@host:path and every other shape are returned
+// unchanged.
+func redactCloneURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.User == nil {
+		return raw
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https", "ssh", "git":
+	default:
+		return raw
+	}
+	parsed.User = nil
+	return parsed.String()
+}
+
+// redactCloneError strips embedded credentials from a quoted git error tail:
+// some git versions echo the URL they were handed, so the token could reach
+// the deploy log through stderr even though the command line never logs it.
+func redactCloneError(msg string) string {
+	return userinfoPattern.ReplaceAllString(msg, "$1***@")
+}
+
+// userinfoPattern matches the credential half of a URL that carries one:
+// <scheme>://<user>:<password>@. The password is optional (a bare user or a
+// token-as-user must be hidden too). It is best effort — a hostile URL is
+// never trusted, only hidden — and deliberately narrow so it cannot mangle the
+// hostless diagnostic text git usually emits.
+var userinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@`)

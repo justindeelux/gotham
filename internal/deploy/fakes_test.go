@@ -99,6 +99,15 @@ type fakeRepository struct {
 	// deployKeyErr fails every deploy-key write (tests the rollback with).
 	deployKeyErr error
 
+	// listDeploymentsErr, when set, fails every ListDeployments call (the
+	// unresolved-previous-container regression).
+	listDeploymentsErr error
+
+	// envConfigCalls counts ListEnvConfig invocations: the runtime payload must
+	// be assembled from that single-snapshot seam, never from the two separate
+	// collection reads (item-1 regression).
+	envConfigCalls int
+
 	// states records every persisted deployment state in order, so tests can
 	// assert the exact state-machine walk.
 	states []State
@@ -459,6 +468,9 @@ func (r *fakeRepository) GetDeployment(_ context.Context, appID, deploymentID uu
 func (r *fakeRepository) ListDeployments(_ context.Context, appID uuid.UUID) ([]Deployment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.listDeploymentsErr != nil {
+		return nil, r.listDeploymentsErr
+	}
 	out := make([]Deployment, 0, len(r.deployments))
 	for i := len(r.deployments) - 1; i >= 0; i-- {
 		if r.deployments[i].ApplicationID == appID {
@@ -536,6 +548,28 @@ func (r *fakeRepository) ListSecrets(_ context.Context, appID uuid.UUID) ([]Secr
 		}
 	}
 	return out, nil
+}
+
+// ListEnvConfig implements Repository. envConfigCalls counts invocations so a
+// test can pin that the runtime payload is assembled from the single-snapshot
+// seam rather than the two separate collections.
+func (r *fakeRepository) ListEnvConfig(_ context.Context, appID uuid.UUID) ([]EnvVar, []Secret, error) {
+	r.mu.Lock()
+	r.envConfigCalls++
+	envVars := make([]EnvVar, 0, len(r.envVars))
+	for _, v := range r.envVars {
+		if v.ApplicationID == uuid.Nil || v.ApplicationID == appID {
+			envVars = append(envVars, v)
+		}
+	}
+	secrets := make([]Secret, 0, len(r.secrets))
+	for _, s := range r.secrets {
+		if s.ApplicationID == uuid.Nil || s.ApplicationID == appID {
+			secrets = append(secrets, s)
+		}
+	}
+	r.mu.Unlock()
+	return envVars, secrets, nil
 }
 
 // ListStorages implements Repository (see ListEnvVars for fixture rows).

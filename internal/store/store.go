@@ -30,6 +30,19 @@ type Store struct {
 	// TOFU pin write; a non-nil error aborts the write, so a test can force it
 	// to fail. Production leaves it nil.
 	BeforePinServerHostKey func() error
+
+	// BeforeCollectionClear is a nil-by-default test seam invoked inside the
+	// collection-replace transactions after the parent row lock and before the
+	// clear/insert. A test blocks it to hold a replacement open and prove that
+	// a concurrent replacement serializes rather than merging. Production
+	// leaves it nil.
+	BeforeCollectionClear func()
+
+	// AfterEnvReadBeforeSecrets is a nil-by-default test seam invoked inside
+	// ListEnvConfigByApp between the env-var read and the secret read. A test
+	// commits a replacement from it to prove both reads observe one snapshot.
+	// Production leaves it nil.
+	AfterEnvReadBeforeSecrets func()
 }
 
 // New wires a Store to an existing pool.

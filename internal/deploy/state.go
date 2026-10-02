@@ -77,11 +77,3 @@ func stepsFor(kind Kind) []State {
 	}
 	return []State{StateCloning, StateBuilding, StatePushing, StateStarting}
 }
-
-// firstStep returns the state a run enters from queued.
-func firstStep(kind Kind) State {
-	if kind == KindRollback {
-		return StatePushing
-	}
-	return StateCloning
-}

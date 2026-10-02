@@ -932,6 +932,76 @@ func writeOpenSSHKey(t *testing.T, path string) {
 	}
 }
 
+// TestCloneRedactsURLCredentials is the item-3 regression: a clone URL that
+// embeds a token must never reach the realtime deploy log — neither in the
+// command line the cloner echoes nor in the quoted git error tail.
+func TestCloneRedactsURLCredentials(t *testing.T) {
+	const token = "ghp_supersecrettoken123"
+	app := testApplication(uuid.New())
+	app.CloneURL = "https://x-access-token:" + token + "@github.com/acme/demo.git"
+
+	t.Run("log line", func(t *testing.T) {
+		var lines []string
+		run := func(context.Context, []string, []string) ([]byte, error) { return nil, nil }
+		source := gitSource{run: run}
+		if err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"),
+			func(line string) { lines = append(lines, line) }); err != nil {
+			t.Fatalf("Clone: %v", err)
+		}
+		joined := strings.Join(lines, "\n")
+		if strings.Contains(joined, token) {
+			t.Errorf("deploy log leaked the credential:\n%s", joined)
+		}
+		if !strings.Contains(joined, "github.com/acme/demo.git") {
+			t.Errorf("deploy log = %q, want the host and path still logged", joined)
+		}
+	})
+
+	t.Run("error tail", func(t *testing.T) {
+		run := func(context.Context, []string, []string) ([]byte, error) {
+			// A git version that echoes the URL it was handed, credential and all.
+			return []byte("fatal: unable to access '" + app.CloneURL + "': auth failed"), errors.New("exit status 128")
+		}
+		source := gitSource{run: run}
+		err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil)
+		if err == nil {
+			t.Fatal("Clone succeeded although git failed")
+		}
+		if strings.Contains(err.Error(), token) {
+			t.Errorf("error leaked the credential: %v", err)
+		}
+	})
+}
+
+// TestRedactCloneURLAndError pins the redaction shapes directly, so the
+// regex cannot silently widen (mangling harmless text) or narrow (leaving a
+// bare-user credential in place).
+func TestRedactCloneURLAndError(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"https://user:pass@host/repo.git", "https://host/repo.git"},
+		{"https://token@host/repo.git", "https://host/repo.git"},
+		{"git@host:acme/demo.git", "git@host:acme/demo.git"}, // scp-like, not a URL
+		{"https://host/repo.git", "https://host/repo.git"},   // nothing to strip
+		{"ssh://git@host/repo.git", "ssh://host/repo.git"},   // userinfo (git) hidden too
+	}
+	for _, tc := range cases {
+		if got := redactCloneURL(tc.in); got != tc.want {
+			t.Errorf("redactCloneURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		if got := redactCloneError("fatal: could not read from '" + tc.in + "'"); strings.Contains(got, "pass@") || strings.Contains(got, "token@") {
+			t.Errorf("redactCloneError left a credential in %q", got)
+		}
+	}
+	// Harmless git diagnostics must survive untouched.
+	plain := "fatal: repository 'https://github.com/acme/demo.git/' not found"
+	if got := redactCloneError(plain); got != plain {
+		t.Errorf("redactCloneError mangled a credential-free message: %q", got)
+	}
+}
+
 // TestSSHHostKeyVerification runs the real OpenSSH client with the known_hosts
 // and StrictHostKeyChecking options the cloner builds against an in-process
 // host presenting an unknown key: strict refuses it, a pin accepts it, and

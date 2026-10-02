@@ -511,18 +511,21 @@ func (s *Service) rollbackTarget(ctx context.Context, appID, deploymentID uuid.U
 // previousContainer returns the container the next release should retire: the
 // newest one this application started, whether its deployment succeeded or
 // failed (a container left running by a failed deploy must still be stopped).
-func (s *Service) previousContainer(ctx context.Context, appID uuid.UUID) string {
+// A lookup failure is returned, never swallowed: the pre-Run reconcile removes
+// every app-labelled container except this one, so an unresolved previous
+// would take the live release down with it.
+func (s *Service) previousContainer(ctx context.Context, appID uuid.UUID) (string, error) {
 	deployments, err := s.repo.ListDeployments(ctx, appID)
 	if err != nil {
 		s.logger.Warn("deploy: lookup previous container failed", "application_id", appID, "error", err)
-		return ""
+		return "", err
 	}
 	for _, dep := range deployments {
 		if dep.ContainerID != "" {
-			return dep.ContainerID
+			return dep.ContainerID, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // submit persists a queued deployment, enqueues its run and returns the row.
@@ -573,7 +576,16 @@ func (s *Service) createDeployment(ctx context.Context, app Application, dep Dep
 	if err != nil {
 		return Application{}, Deployment{}, "", err
 	}
-	return app, created, s.previousContainer(ctx, app.ID), nil
+	previous, err := s.previousContainer(ctx, app.ID)
+	if err != nil {
+		// The previous container must be known before the deployment starts:
+		// an empty previous would let the worker's pre-Run reconcile remove
+		// the live release as if it were an orphan. Fail the freshly created
+		// row here (it has not run) rather than hand the worker a blind job.
+		s.abandon(created, fmt.Errorf("deploy: resolve previous container: %w", err))
+		return Application{}, Deployment{}, "", fmt.Errorf("deploy: resolve previous container: %w", err)
+	}
+	return app, created, previous, nil
 }
 
 // abandon marks a deployment that never started running as failed.

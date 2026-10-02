@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -108,6 +109,15 @@ func (s *Store) ReplaceApplicationEnv(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	queries := s.queries.WithTx(tx)
+	// Lock the parent row first: two concurrent replacements of the same
+	// collection must serialize, or both clear an empty set, insert disjoint
+	// keys and commit their union — a merge where a replace was asked for.
+	if err := queries.LockApplication(ctx, applicationID); err != nil {
+		return err
+	}
+	if s.BeforeCollectionClear != nil {
+		s.BeforeCollectionClear()
+	}
 	if err := queries.ClearEnvVarsByApp(ctx, applicationID); err != nil {
 		return err
 	}
@@ -143,6 +153,14 @@ func (s *Store) ReplaceApplicationStorages(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	queries := s.queries.WithTx(tx)
+	// Same parent lock as ReplaceApplicationEnv: concurrent storage
+	// replacements serialize instead of merging (see that method).
+	if err := queries.LockApplication(ctx, applicationID); err != nil {
+		return err
+	}
+	if s.BeforeCollectionClear != nil {
+		s.BeforeCollectionClear()
+	}
 	if err := queries.ClearStoragesByApp(ctx, applicationID); err != nil {
 		return err
 	}
@@ -198,4 +216,33 @@ func (s *Store) ListSecretsByApp(ctx context.Context, applicationID pgtype.UUID)
 // ListStoragesByApp returns an application's volume mappings, sorted by name.
 func (s *Store) ListStoragesByApp(ctx context.Context, applicationID pgtype.UUID) ([]sqlc.Storage, error) {
 	return s.queries.ListStoragesByApp(ctx, applicationID)
+}
+
+// ListEnvConfigByApp returns an application's plain env vars and sealed secrets
+// from one transaction, so a replace that commits between two separate reads
+// cannot drop a key from either collection: both reads see the same committed
+// snapshot.
+func (s *Store) ListEnvConfigByApp(ctx context.Context, applicationID pgtype.UUID) ([]sqlc.EnvVar, []sqlc.Secret, error) {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	envVars, err := queries.ListEnvVarsByApp(ctx, applicationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.AfterEnvReadBeforeSecrets != nil {
+		s.AfterEnvReadBeforeSecrets()
+	}
+	secrets, err := queries.ListSecretsByApp(ctx, applicationID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+	return envVars, secrets, nil
 }

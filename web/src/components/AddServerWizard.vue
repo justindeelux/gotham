@@ -392,7 +392,7 @@ async function handleValidate(): Promise<void> {
     detail: "Running…",
   }));
   try {
-    const outcome = await serversStore.validate(server.id);
+    const outcome = await serversStore.validate(server.id, form.passphrase || undefined);
     if (!inFlight.isCurrent(token)) {
       return; // the wizard was closed while the probe was in flight
     }
@@ -629,7 +629,7 @@ function resetWizard(): void {
                     placeholder="Leave empty for unencrypted keys"
                     :input-props="{ id: 'add-server-passphrase', 'aria-label': 'Key passphrase' }"
                   />
-                  <span class="field-hint">The API does not accept a passphrase yet — passphrase-protected keys will fail validation.</span>
+                  <span class="field-hint">Required only for a passphrase-protected key. Sent for validation, never stored.</span>
                 </NFormItem>
               </template>
 
@@ -759,10 +759,10 @@ function resetWizard(): void {
           <!-- Step 4: finish -->
           <div v-else class="finish">
             <span class="avatar avatar--lg">{{ nodeInitials }}</span>
-            <h4>{{ currentServer?.name ?? form.name }} is ready</h4>
+            <h4>{{ currentServer?.name ?? form.name }} passed validation</h4>
             <NText depth="3">
-              The node passed validation. Finish the agent install on the node
-              and it will start sending heartbeats.
+              Install the agent on the node and it will check in over gRPC.
+              The server shows Ready only after its first heartbeat.
             </NText>
             <div class="finish-tags">
               <ServerStatusTag v-if="currentServer" :status="currentServer.status" />

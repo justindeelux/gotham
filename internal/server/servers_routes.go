@@ -42,6 +42,9 @@ type createServerRequest struct {
 type validateServerRequest struct {
 	SSHKeyID string `json:"ssh_key_id"`
 	Password string `json:"password"`
+	// Passphrase decrypts a passphrase-protected SSH private key for this run.
+	// It is transient: never stored, never logged.
+	Passphrase string `json:"passphrase"`
 	// TrustHostKey is the operator's explicit consent to trust an unpinned host
 	// key, required for the first password validation of a node.
 	TrustHostKey bool `json:"trust_host_key"`
@@ -288,6 +291,7 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 	result, err := s.servers.Validate(r.Context(), id, servers.ValidateAuth{
 		KeyID:        keyID,
 		Password:     req.Password,
+		Passphrase:   req.Passphrase,
 		TrustHostKey: req.TrustHostKey,
 	})
 	if err != nil {

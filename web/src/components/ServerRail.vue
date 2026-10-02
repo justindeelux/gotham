@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NTooltip } from "naive-ui";
-import { computed, onMounted, onUnmounted, watch } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
 import type { Server, ServerStatus } from "../api/servers";
@@ -57,6 +57,10 @@ function serverTip(server: Server): string {
   return `${server.name} · ${statusLabels[server.status] ?? server.status}`;
 }
 
+// The persistent rail owns the shared server poll: it arms the interval on
+// mount and is the only component that clears it (on its own unmount). Pages
+// fetch on mount but never stop the timer, so navigation cannot freeze the rail
+// dots (B4-7).
 onMounted(() => {
   if (serversStore.servers.length === 0) {
     void serversStore.fetchServers().catch(() => {
@@ -65,15 +69,6 @@ onMounted(() => {
   }
   serversStore.pollServers();
 });
-
-// A page may stop the shared poll timer on unmount; re-arm it so the rail
-// keeps showing live status on every route.
-watch(
-  () => route.path,
-  () => {
-    serversStore.pollServers();
-  },
-);
 
 onUnmounted(() => {
   serversStore.stopPolling();

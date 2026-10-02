@@ -11,6 +11,60 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimServerByNodeID = `-- name: ClaimServerByNodeID :one
+UPDATE servers
+SET node_id = $1,
+    updated_at = now()
+WHERE id = (
+    SELECT s.id FROM servers s
+    WHERE s.node_id IS NULL AND s.ip <> '' AND s.ip = $2
+    ORDER BY s.created_at ASC
+    LIMIT 1
+    FOR UPDATE
+)
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint
+`
+
+type ClaimServerByNodeIDParams struct {
+	NodeID *string `json:"node_id"`
+	Ip     string  `json:"ip"`
+}
+
+// Claims an operator-created server row (node_id still NULL) whose address
+// matches the registering node, so enrollment updates that existing row instead
+// of inserting a duplicate. The row lock serializes two concurrent
+// registrations: the loser's subquery re-reads the claimed row, finds no
+// candidate, and falls back to the node-id upsert.
+func (q *Queries) ClaimServerByNodeID(ctx context.Context, arg ClaimServerByNodeIDParams) (Server, error) {
+	row := q.db.QueryRow(ctx, claimServerByNodeID, arg.NodeID, arg.Ip)
+	var i Server
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Ip,
+		&i.Port,
+		&i.SshUser,
+		&i.SshKeyID,
+		&i.Status,
+		&i.NodeID,
+		&i.Os,
+		&i.DockerVersion,
+		&i.Arch,
+		&i.TotalMem,
+		&i.TotalDisk,
+		&i.CpuUsage,
+		&i.MemUsage,
+		&i.DiskUsage,
+		&i.ContainerCount,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TeamID,
+		&i.HostKeyFingerprint,
+	)
+	return i, err
+}
+
 const clearServerHostKey = `-- name: ClearServerHostKey :one
 UPDATE servers
 SET host_key_fingerprint = NULL,
@@ -278,6 +332,21 @@ func (q *Queries) ListServersByTeam(ctx context.Context, teamID pgtype.UUID) ([]
 	return items, nil
 }
 
+const markStaleServersOffline = `-- name: MarkStaleServersOffline :exec
+UPDATE servers
+SET status = 'offline',
+    updated_at = now()
+WHERE status = 'ready' AND (last_seen IS NULL OR last_seen < $1)
+`
+
+// Flips nodes that were ready but have not heartbeated since the cutoff to
+// offline, so the read path always reports the live status the FE understands
+// (A4-6). A ready row with no last_seen is stale by definition.
+func (q *Queries) MarkStaleServersOffline(ctx context.Context, lastSeen pgtype.Timestamptz) error {
+	_, err := q.db.Exec(ctx, markStaleServersOffline, lastSeen)
+	return err
+}
+
 const pinServerHostKey = `-- name: PinServerHostKey :one
 UPDATE servers
 SET host_key_fingerprint = $2,
@@ -368,6 +437,60 @@ func (q *Queries) SetServerStatus(ctx context.Context, arg SetServerStatusParams
 	return i, err
 }
 
+const setServerStatusAfterValidation = `-- name: SetServerStatusAfterValidation :one
+UPDATE servers
+SET status = CASE
+        WHEN last_seen IS NOT NULL AND last_seen >= $2 THEN 'ready'
+        WHEN last_seen IS NOT NULL THEN 'offline'
+        ELSE 'pending'
+    END,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint
+`
+
+type SetServerStatusAfterValidationParams struct {
+	ID       pgtype.UUID        `json:"id"`
+	LastSeen pgtype.Timestamptz `json:"last_seen"`
+}
+
+// Restores a node's status after a successful SSH validation. Ready is reserved
+// for a live agent heartbeat, so the status is derived from last_seen at the
+// moment of the write: a heartbeat that landed during the validation (fresh
+// last_seen) keeps the node ready, a node seen before but now past the window
+// goes offline, and a node never seen stays pending. Deriving it in one
+// statement means a concurrent heartbeat cannot be clobbered by a stale read
+// (A4-15/B4-9, fix round 1 U2).
+func (q *Queries) SetServerStatusAfterValidation(ctx context.Context, arg SetServerStatusAfterValidationParams) (Server, error) {
+	row := q.db.QueryRow(ctx, setServerStatusAfterValidation, arg.ID, arg.LastSeen)
+	var i Server
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Ip,
+		&i.Port,
+		&i.SshUser,
+		&i.SshKeyID,
+		&i.Status,
+		&i.NodeID,
+		&i.Os,
+		&i.DockerVersion,
+		&i.Arch,
+		&i.TotalMem,
+		&i.TotalDisk,
+		&i.CpuUsage,
+		&i.MemUsage,
+		&i.DiskUsage,
+		&i.ContainerCount,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TeamID,
+		&i.HostKeyFingerprint,
+	)
+	return i, err
+}
+
 const updateServerAgentInfo = `-- name: UpdateServerAgentInfo :one
 UPDATE servers
 SET node_id = $2,
@@ -376,8 +499,6 @@ SET node_id = $2,
     arch = $5,
     total_mem = $6,
     total_disk = $7,
-    status = 'ready',
-    last_seen = now(),
     updated_at = now()
 WHERE id = $1
 RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint
@@ -393,6 +514,10 @@ type UpdateServerAgentInfoParams struct {
 	TotalDisk     *int64      `json:"total_disk"`
 }
 
+// Records the capabilities an SSH validation or agent registration reported. It
+// deliberately does NOT touch status or last_seen: ready means a live agent
+// heartbeat, so SSH reachability or a one-off registration must never flip a
+// node ready on its own (A4-15/B4-9).
 func (q *Queries) UpdateServerAgentInfo(ctx context.Context, arg UpdateServerAgentInfoParams) (Server, error) {
 	row := q.db.QueryRow(ctx, updateServerAgentInfo,
 		arg.ID,
@@ -459,6 +584,76 @@ func (q *Queries) UpdateServerMetrics(ctx context.Context, arg UpdateServerMetri
 		arg.MemUsage,
 		arg.DiskUsage,
 		arg.ContainerCount,
+	)
+	var i Server
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Ip,
+		&i.Port,
+		&i.SshUser,
+		&i.SshKeyID,
+		&i.Status,
+		&i.NodeID,
+		&i.Os,
+		&i.DockerVersion,
+		&i.Arch,
+		&i.TotalMem,
+		&i.TotalDisk,
+		&i.CpuUsage,
+		&i.MemUsage,
+		&i.DiskUsage,
+		&i.ContainerCount,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TeamID,
+		&i.HostKeyFingerprint,
+	)
+	return i, err
+}
+
+const upsertServerByNodeID = `-- name: UpsertServerByNodeID :one
+INSERT INTO servers (name, ip, port, ssh_user, node_id, os, docker_version, arch, total_mem, total_disk)
+VALUES ($1, $2, $3, '', $4, $5, $6, $7, $8, $9)
+ON CONFLICT (node_id) DO UPDATE
+SET os = EXCLUDED.os,
+    docker_version = EXCLUDED.docker_version,
+    arch = EXCLUDED.arch,
+    total_mem = EXCLUDED.total_mem,
+    total_disk = EXCLUDED.total_disk,
+    updated_at = now()
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint
+`
+
+type UpsertServerByNodeIDParams struct {
+	Name          string  `json:"name"`
+	Ip            string  `json:"ip"`
+	Port          int32   `json:"port"`
+	NodeID        *string `json:"node_id"`
+	Os            *string `json:"os"`
+	DockerVersion *string `json:"docker_version"`
+	Arch          *string `json:"arch"`
+	TotalMem      *int64  `json:"total_mem"`
+	TotalDisk     *int64  `json:"total_disk"`
+}
+
+// Conflict-safe registration keyed on the node's stable identity. A concurrent
+// registration of the same node id converges on one row: the winner inserts and
+// the loser's ON CONFLICT updates that same row, so a race can never leave a
+// duplicate or an orphan row with a NULL node_id (A4-12). name/ip are not
+// overwritten on conflict so an operator's label survives re-registration.
+func (q *Queries) UpsertServerByNodeID(ctx context.Context, arg UpsertServerByNodeIDParams) (Server, error) {
+	row := q.db.QueryRow(ctx, upsertServerByNodeID,
+		arg.Name,
+		arg.Ip,
+		arg.Port,
+		arg.NodeID,
+		arg.Os,
+		arg.DockerVersion,
+		arg.Arch,
+		arg.TotalMem,
+		arg.TotalDisk,
 	)
 	var i Server
 	err := row.Scan(

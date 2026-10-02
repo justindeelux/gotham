@@ -76,6 +76,8 @@ func runServe() int {
 
 	logger, levelVar := server.NewLoggerWithLevel(cfg.Log)
 	cfg.SetLogger(logger)
+	// Only log.level is hot-reloaded; the handler's format is fixed at startup,
+	// so a changed log.format takes effect after a restart.
 	cfg.Watch(func() {
 		levelVar.Set(server.ParseLevel(cfg.Snapshot().Log.Level))
 	})

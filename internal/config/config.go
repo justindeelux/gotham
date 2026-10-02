@@ -235,23 +235,18 @@ func (c *Config) SetLogger(logger *slog.Logger) {
 // reload that actually changed the file contents. Watch is a no-op when Load
 // did not find a config file, because there is nothing to watch.
 //
-// viper's WatchConfig plus OnConfigChange handle in-place edits. It stops,
-// however, when the operating system reports the config file as removed, which
-// is exactly what an atomic save looks like to kqueue (macOS): write a temp
-// file, remove the target, recreate it. To keep hot reload working across
-// editors and platforms, Watch additionally watches the config directory with
-// fsnotify and re-applies on change. A content fingerprint de-duplicates the
-// two sources, so one edit logs "config changed" once.
+// A single fsnotify directory watcher drives reloads. It watches the config
+// directory rather than the file itself because a file-level watch (viper's
+// WatchConfig) stops when the operating system reports the config file as
+// removed, which is exactly what an atomic save looks like to kqueue (macOS):
+// write a temp file, remove the target, recreate it. Keeping one watcher also
+// serializes every viper read (ReadInConfig, Unmarshal) on this one goroutine
+// under watchMu, so a reload can never race the watcher. A content fingerprint
+// de-duplicates events, so one edit logs "config changed" once.
 func (c *Config) Watch(onChange func()) {
 	if c.v == nil || c.v.ConfigFileUsed() == "" {
 		return
 	}
-
-	c.v.OnConfigChange(func(fsnotify.Event) {
-		c.applyChange(onChange)
-	})
-	c.v.WatchConfig()
-
 	c.watchDirectory(onChange)
 }
 
@@ -392,6 +387,11 @@ func (c *Config) applyChange(onChange func()) {
 		return
 	}
 
+	c.mu.RLock()
+	logger := c.logger
+	previousFormat := c.Log.Format
+	c.mu.RUnlock()
+
 	if err := c.v.ReadInConfig(); err != nil {
 		c.logError("config read failed", err)
 		return
@@ -403,18 +403,20 @@ func (c *Config) applyChange(onChange func()) {
 	c.lastFingerprint = fingerprint
 	c.haveFingerprint = true
 
-	c.mu.RLock()
-	logger := c.logger
-	level := c.Log.Level
-	format := c.Log.Format
-	c.mu.RUnlock()
+	snap := c.Snapshot()
 
 	if logger != nil {
+		// Only log.level is applied to the running logger; the handler keeps
+		// the format it was built with. Report exactly what took effect and
+		// warn when a changed format needs a restart.
 		logger.Info("config changed",
 			"path", c.v.ConfigFileUsed(),
-			"log_level", level,
-			"log_format", format,
+			"log_level", snap.Log.Level,
 		)
+		if !strings.EqualFold(strings.TrimSpace(previousFormat), strings.TrimSpace(snap.Log.Format)) {
+			logger.Warn("log.format changed; restart required to apply",
+				"log_format", snap.Log.Format)
+		}
 	}
 	if onChange != nil {
 		onChange()

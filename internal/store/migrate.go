@@ -28,6 +28,16 @@ const (
 // ErrUnknownMigrateCommand is returned by Migrate for an unsupported subcommand.
 var ErrUnknownMigrateCommand = errors.New("unknown migration command")
 
+// ErrMigrationInProgress is returned when another `gotham migrate` holds the
+// migration lock. The schema is shared, so the second run fails instead of
+// interleaving goose's bookkeeping with the first.
+var ErrMigrationInProgress = errors.New("another migration is already in progress")
+
+// migrationLockID is the session-level advisory lock that serializes migration
+// runs across processes. It is the CRC-32 of "gotham-migrate", kept distinct
+// from goose's own lock ID so an unrelated goose locker never collides.
+const migrationLockID int64 = 1026152518
+
 // IsMigrateCommand reports whether command is a supported migrate subcommand.
 func IsMigrateCommand(command string) bool {
 	switch command {
@@ -40,6 +50,12 @@ func IsMigrateCommand(command string) bool {
 
 // Migrate runs the embedded migrations against dsn. The schema is forward-only:
 // "down" exists for local development and rolls back a single version.
+//
+// "up" and "down" mutate the shared schema, so they hold a session-level
+// PostgreSQL advisory lock for the whole run. The lock is released when the
+// connection closes (including on a crash), and a concurrent run fails fast
+// with ErrMigrationInProgress instead of interleaving goose's bookkeeping.
+// "status" only reads, so it runs without the lock.
 func Migrate(ctx context.Context, dsn, command string) error {
 	if !IsMigrateCommand(command) {
 		return fmt.Errorf("%w: %q", ErrUnknownMigrateCommand, command)
@@ -56,14 +72,30 @@ func Migrate(ctx context.Context, dsn, command string) error {
 		return fmt.Errorf("init migrations: %w", err)
 	}
 
-	switch command {
-	case MigrateUp:
-		return migrateUp(ctx, provider)
-	case MigrateDown:
-		return migrateDown(ctx, provider)
-	default:
+	if command == MigrateStatus {
 		return migrateStatus(ctx, provider)
 	}
+
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open migration lock connection: %w", err)
+	}
+	// Closing the connection ends the session and releases the advisory lock;
+	// no explicit unlock is needed, so a killed process cannot leave it held.
+	defer func() { _ = conn.Close() }()
+
+	var locked bool
+	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", migrationLockID).Scan(&locked); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	if !locked {
+		return ErrMigrationInProgress
+	}
+
+	if command == MigrateUp {
+		return migrateUp(ctx, provider)
+	}
+	return migrateDown(ctx, provider)
 }
 
 // migrateUp applies every pending migration and reports what ran.

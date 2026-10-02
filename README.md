@@ -36,7 +36,7 @@ manifest and the artifact digest before installing anything.
 | State / HTTP | Pinia + axios | |
 | UI kit | Naive UI | Flat design style |
 | Auth | JWT + OAuth2 (GitHub, GitLab) | argon2id password hashing, TOTP 2FA later |
-| Config | viper | YAML / ENV, hot reload |
+| Config | viper | YAML / ENV, hot reload of log level |
 | Self-update | Built-in atomic swap + Ed25519 signed manifest | GitHub Releases as the update channel |
 | CI/CD | GitHub Actions + GoReleaser | Build, sign, publish, attach checksums |
 

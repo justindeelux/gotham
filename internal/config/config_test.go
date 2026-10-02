@@ -1,9 +1,15 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // gothamEnvKeys lists every environment variable Load understands.
@@ -503,5 +509,144 @@ func TestApplyChangeRejectsInvalidValues(t *testing.T) {
 
 	if cfg.Log.Level != defaultLogLevel {
 		t.Errorf("Log.Level = %q, want previous %q after rejected reload", cfg.Log.Level, defaultLogLevel)
+	}
+}
+
+// rewriteConfigAtomic replaces gotham.yaml the way editors do: write a temp
+// file and rename it over the target. This is the case a file-level watch
+// misses, so it exercises the directory watcher.
+func rewriteConfigAtomic(t *testing.T, dir, contents string) {
+	t.Helper()
+
+	tmp := filepath.Join(dir, "gotham.yaml.tmp")
+	if err := os.WriteFile(tmp, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, "gotham.yaml")); err != nil {
+		t.Fatalf("rename temp config: %v", err)
+	}
+}
+
+// TestWatchReloadsOnFileChange pins that hot reload still fires after the viper
+// file watcher was dropped: the directory watcher alone must pick up an edit.
+func TestWatchReloadsOnFileChange(t *testing.T) {
+	clearGothamEnv(t)
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "log:\n  level: info\n")
+	chdir(t, dir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	changed := make(chan struct{}, 1)
+	cfg.Watch(func() {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	})
+
+	rewriteConfigAtomic(t, dir, "log:\n  level: debug\n")
+
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hot reload did not fire on config change")
+	}
+	if got := cfg.Snapshot().Log.Level; got != "debug" {
+		t.Fatalf("Log.Level = %q, want debug after reload", got)
+	}
+}
+
+// TestWatchReloadNoRace hammers file changes while readers snapshot the config.
+// It is meaningful under `go test -race`: a second watcher mutating viper state
+// concurrently with a reload would be reported.
+func TestWatchReloadNoRace(t *testing.T) {
+	clearGothamEnv(t)
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "log:\n  level: info\n")
+	chdir(t, dir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.Watch(nil)
+
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = cfg.Snapshot()
+				}
+			}
+		}()
+	}
+
+	levels := []string{"info", "debug", "warn", "error"}
+	for i := 0; i < 100; i++ {
+		writeConfig(t, dir, "log:\n  level: "+levels[i%len(levels)]+"\n")
+		time.Sleep(2 * time.Millisecond)
+	}
+	close(stop)
+	readers.Wait()
+}
+
+// TestApplyChangeReportsOnlyLevelApplied pins the honest reload report: only
+// log.level is applied live, and a changed log.format says so instead of being
+// logged as if it took effect.
+func TestApplyChangeReportsOnlyLevelApplied(t *testing.T) {
+	clearGothamEnv(t)
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "log:\n  level: info\n  format: json\n")
+	chdir(t, dir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	var buf bytes.Buffer
+	cfg.SetLogger(slog.New(slog.NewJSONHandler(&buf, nil)))
+
+	writeConfig(t, dir, "log:\n  level: debug\n  format: text\n")
+	cfg.applyChange(nil)
+
+	if got := cfg.Snapshot().Log.Level; got != "debug" {
+		t.Fatalf("Log.Level = %q, want debug", got)
+	}
+
+	sawRestartWarning := false
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("decode log line %q: %v", line, err)
+		}
+		switch entry["msg"] {
+		case "config changed":
+			if _, ok := entry["log_format"]; ok {
+				t.Errorf("config changed line reports log_format as applied: %v", entry)
+			}
+			if entry["log_level"] != "debug" {
+				t.Errorf("config changed log_level = %v, want debug", entry["log_level"])
+			}
+		case "log.format changed; restart required to apply":
+			sawRestartWarning = true
+		}
+	}
+	if !sawRestartWarning {
+		t.Errorf("missing restart warning for changed log.format; log = %q", buf.String())
 	}
 }

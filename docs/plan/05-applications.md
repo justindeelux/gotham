@@ -43,6 +43,7 @@
   - Tests: state machine with a mock agent; rollback tests.
 - **Verify:** e2e deploy via API: sample repo → `running`, full log events; kill the container → healthcheck fails → status `failed`; rollback → back to the old version.
 - **Runtime payload (BE-4.3c):** the container payload defaults `PORT` to the application's configured container port when the app declares a port and neither an env var nor a secret sets `PORT` — an explicit value (including a sealed `secret:` reference) always wins, and `port = 0` injects nothing, so Dockerfile apps that manage `PORT` themselves are untouched. This is what makes Railpack/buildpacks images (no Dockerfile) bind the port the host mapping points at, like Heroku/Railway/Coolify.
+- **Managed storage binds (FX-5a):** a storage row whose `host_path` is empty is a managed bind derived as `GOTHAM_MANAGED_VOLUME_ROOT/<app id>/<name>` (default root `/var/lib/gotham/volumes`). An explicit `host_path` may be an absolute bind only when it resolves inside `<root>/<app id>`; `/`, `/etc`, `/proc`, `/sys`, `/dev` and any `docker.sock` are always refused. A non-absolute `host_path` is a Docker named volume and is passed through. The node re-validates every bind against `GOTHAM_AGENT_MANAGED_VOLUME_ROOT` (default the same root) so a compromised control plane cannot smuggle an arbitrary host path through.
 - **Depends on:** BE-4.1 + BE-4.2.
 
 ## BE-4.3b — Applications CRUD + config + stop/start — `ws/p4-app-crud`

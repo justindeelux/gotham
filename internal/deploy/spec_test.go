@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,7 +24,7 @@ func TestBuildRunRequest(t *testing.T) {
 		RegistryImage: "127.0.0.1:5000/gotham/app:tag",
 	}
 	envVars, secrets := testEnv(t)
-	storages := []Storage{{Name: "data", HostPath: "/data/app", ContainerPath: "/var/lib/app"}}
+	storages := []Storage{{Name: "data", HostPath: "", ContainerPath: "/var/lib/app"}}
 
 	req, err := buildRunRequest(app, dep, envVars, secrets, storages, secretKey)
 	if err != nil {
@@ -44,7 +45,7 @@ func TestBuildRunRequest(t *testing.T) {
 	if want := []string{"8080:3000"}; !equalStrings(req.Ports, want) {
 		t.Errorf("Ports = %v, want %v", req.Ports, want)
 	}
-	if want := []string{"/data/app:/var/lib/app"}; !equalStrings(req.Volumes, want) {
+	if want := []string{filepath.Join(managedVolumeRoot(), app.ID.String(), "data") + ":/var/lib/app"}; !equalStrings(req.Volumes, want) {
 		t.Errorf("Volumes = %v, want %v", req.Volumes, want)
 	}
 	if req.Labels[labelManaged] != "true" {
@@ -241,14 +242,25 @@ func TestBuildRunRequestValidation(t *testing.T) {
 	}
 
 	dep := Deployment{ID: uuid.New(), ImageTag: "img"}
-	badStorage := []Storage{{Name: "data", HostPath: "relative/path", ContainerPath: "/var/lib/app"}}
-	if _, err := buildRunRequest(app, dep, nil, nil, badStorage, ""); !errors.Is(err, ErrValidation) {
-		t.Errorf("relative volume error = %v, want ErrValidation", err)
+	outside := []Storage{{Name: "data", HostPath: "/data/app", ContainerPath: "/var/lib/app"}}
+	if _, err := buildRunRequest(app, dep, nil, nil, outside, ""); !errors.Is(err, ErrValidation) {
+		t.Errorf("out-of-root bind error = %v, want ErrValidation", err)
 	}
 
-	emptyPath := []Storage{{Name: "data", HostPath: "/data", ContainerPath: ""}}
-	if _, err := buildRunRequest(app, dep, nil, nil, emptyPath, ""); !errors.Is(err, ErrValidation) {
+	emptyTarget := []Storage{{Name: "data", HostPath: "", ContainerPath: ""}}
+	if _, err := buildRunRequest(app, dep, nil, nil, emptyTarget, ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("empty container path error = %v, want ErrValidation", err)
+	}
+
+	// A non-absolute source is a Docker named volume: it is not a host bind
+	// and passes through unconfined.
+	named := []Storage{{Name: "data", HostPath: "gotham-data", ContainerPath: "/var/lib/app"}}
+	req, err := buildRunRequest(app, dep, nil, nil, named, "")
+	if err != nil {
+		t.Fatalf("named volume error = %v, want accepted", err)
+	}
+	if want := []string{"gotham-data:/var/lib/app"}; !equalStrings(req.Volumes, want) {
+		t.Errorf("Volumes = %v, want %v", req.Volumes, want)
 	}
 
 	sealed, err := providers.SealSecret("right-key", "value")

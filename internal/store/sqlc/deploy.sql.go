@@ -40,14 +40,21 @@ func (q *Queries) ClearStoragesByApp(ctx context.Context, applicationID pgtype.U
 
 const createApplication = `-- name: CreateApplication :one
 INSERT INTO applications (
-    user_id, server_id, name, provider, repo, clone_url,
+    id, user_id, server_id, name, provider, repo, clone_url,
     branch, build_pack, base_domain, port, host_port, team_id, is_preview
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES (
+    COALESCE($1::uuid, gen_random_uuid()),
+    $2, $3, $4, $5,
+    $6, $7, $8, $9,
+    $10, $11, $12, $13,
+    $14
+)
 RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview
 `
 
 type CreateApplicationParams struct {
+	ID         pgtype.UUID `json:"id"`
 	UserID     pgtype.UUID `json:"user_id"`
 	ServerID   pgtype.UUID `json:"server_id"`
 	Name       string      `json:"name"`
@@ -63,8 +70,13 @@ type CreateApplicationParams struct {
 	IsPreview  bool        `json:"is_preview"`
 }
 
+// The id is optional: a caller that must know the application id before the
+// insert (storage host paths are confined to <managed root>/<app id>) passes
+// one, and COALESCE keeps the database-generated default for every other
+// caller.
 func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationParams) (Application, error) {
 	row := q.db.QueryRow(ctx, createApplication,
+		arg.ID,
 		arg.UserID,
 		arg.ServerID,
 		arg.Name,

@@ -60,8 +60,8 @@ function removeRow(index: number): void {
       <NInput
         :value="row.host_path"
         class="mono"
-        placeholder="/data/uploads"
-        aria-label="Host path on the node"
+        placeholder="Optional — Gotham manages it"
+        aria-label="Host path on the node (optional)"
         @update:value="(value: string) => updateRow(index, { host_path: value })"
       />
       <NInput
@@ -84,7 +84,9 @@ function removeRow(index: number): void {
     </NButton>
     <p class="storage-editor__hint">
       Data lives on the node, not in the image. Each column is
-      <span class="mono">name → host path → container path</span>.
+      <span class="mono">name → host path → container path</span>. Leave the host
+      path blank for a Gotham-managed volume; an explicit path must be inside
+      <span class="mono">/var/lib/gotham/volumes/&lt;app id&gt;</span>.
     </p>
   </div>
 </template>

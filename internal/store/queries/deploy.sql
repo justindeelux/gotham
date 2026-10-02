@@ -1,9 +1,19 @@
 -- name: CreateApplication :one
+-- The id is optional: a caller that must know the application id before the
+-- insert (storage host paths are confined to <managed root>/<app id>) passes
+-- one, and COALESCE keeps the database-generated default for every other
+-- caller.
 INSERT INTO applications (
-    user_id, server_id, name, provider, repo, clone_url,
+    id, user_id, server_id, name, provider, repo, clone_url,
     branch, build_pack, base_domain, port, host_port, team_id, is_preview
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES (
+    COALESCE(sqlc.arg(id)::uuid, gen_random_uuid()),
+    sqlc.arg(user_id), sqlc.arg(server_id), sqlc.arg(name), sqlc.arg(provider),
+    sqlc.arg(repo), sqlc.arg(clone_url), sqlc.arg(branch), sqlc.arg(build_pack),
+    sqlc.arg(base_domain), sqlc.arg(port), sqlc.arg(host_port), sqlc.arg(team_id),
+    sqlc.arg(is_preview)
+)
 RETURNING *;
 
 -- name: GetApplication :one

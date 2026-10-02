@@ -173,7 +173,9 @@ func (r *fakeRepository) CreateApplication(_ context.Context, app Application, e
 			now = existing.CreatedAt.Add(time.Nanosecond)
 		}
 	}
-	app.ID = uuid.New()
+	if app.ID == uuid.Nil {
+		app.ID = uuid.New()
+	}
 	app.CreatedAt = now
 	app.UpdatedAt = now
 	r.apps = append(r.apps, app)

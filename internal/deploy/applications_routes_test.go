@@ -39,7 +39,7 @@ const applicationBody = `{
 		{"key": "API_TOKEN", "value": "secret:super-secret"}
 	],
 	"storage": [
-		{"name": "data", "host_path": "/data/app", "container_path": "/var/lib/app"}
+		{"name": "data", "host_path": "", "container_path": "/var/lib/app"}
 	]
 }`
 

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func validCreateInput(serverID uuid.UUID) CreateApplicationInput {
 			{Key: "NODE_ENV", Value: "production"},
 			{Key: "API_TOKEN", Value: "secret:super-secret"},
 		},
-		Storage: []Storage{{Name: "data", HostPath: "/data/app", ContainerPath: "/var/lib/app"}},
+		Storage: []Storage{{Name: "data", HostPath: "", ContainerPath: "/var/lib/app"}},
 	}
 }
 
@@ -63,7 +64,7 @@ func TestServiceCreateApplication(t *testing.T) {
 	in.Name = "  demo app  "
 	in.Branch = ""    // defaults to "main"
 	in.BuildPack = "" // auto-detection
-	in.Storage = []Storage{{Name: "data", HostPath: " /data/app ", ContainerPath: " /var/lib/app "}}
+	in.Storage = []Storage{{Name: "data", HostPath: "", ContainerPath: " /var/lib/app "}}
 
 	created, err := svc.CreateApplication(context.Background(), userID, in)
 	if err != nil {
@@ -117,9 +118,10 @@ func TestServiceCreateApplication(t *testing.T) {
 		if len(storages) != 1 {
 			t.Fatalf("storages = %d, want 1", len(storages))
 		}
-		if storages[0].HostPath != "/data/app" || storages[0].ContainerPath != "/var/lib/app" {
-			t.Errorf("paths = %q → %q, want trimmed absolute paths",
-				storages[0].HostPath, storages[0].ContainerPath)
+		wantHost := filepath.Join(managedVolumeRoot(), created.ID.String(), "data")
+		if storages[0].HostPath != wantHost || storages[0].ContainerPath != "/var/lib/app" {
+			t.Errorf("paths = %q → %q, want %q → %q",
+				storages[0].HostPath, storages[0].ContainerPath, wantHost, "/var/lib/app")
 		}
 	})
 
@@ -234,23 +236,23 @@ func TestServiceCreateApplicationValidation(t *testing.T) {
 			wantErr: ErrValidation,
 		},
 		{
-			name: "storage with a relative host path",
+			name: "storage with a host path outside the managed root",
 			mutate: func(in *CreateApplicationInput, _ *fakeRepository, _ uuid.UUID) {
-				in.Storage = []Storage{{Name: "data", HostPath: "data", ContainerPath: "/var/lib/app"}}
+				in.Storage = []Storage{{Name: "data", HostPath: "/data/app", ContainerPath: "/var/lib/app"}}
 			},
 			wantErr: ErrValidation,
 		},
 		{
 			name: "storage without a container path",
 			mutate: func(in *CreateApplicationInput, _ *fakeRepository, _ uuid.UUID) {
-				in.Storage = []Storage{{Name: "data", HostPath: "/data"}}
+				in.Storage = []Storage{{Name: "data", HostPath: ""}}
 			},
 			wantErr: ErrValidation,
 		},
 		{
 			name: "duplicate storage name",
 			mutate: func(in *CreateApplicationInput, _ *fakeRepository, _ uuid.UUID) {
-				in.Storage = append(in.Storage, Storage{Name: "data", HostPath: "/other", ContainerPath: "/var/lib/other"})
+				in.Storage = append(in.Storage, Storage{Name: "data", HostPath: "", ContainerPath: "/var/lib/other"})
 			},
 			wantErr: ErrValidation,
 		},
@@ -897,7 +899,7 @@ func TestServiceReplaceStorages(t *testing.T) {
 	}
 
 	storages, err := svc.ReplaceStorages(context.Background(), userID, created.ID, []Storage{
-		{Name: "cache", HostPath: "/data/cache", ContainerPath: "/var/cache"},
+		{Name: "cache", HostPath: "", ContainerPath: "/var/cache"},
 	})
 	if err != nil {
 		t.Fatalf("replace storages: %v", err)
@@ -917,9 +919,9 @@ func TestServiceReplaceStorages(t *testing.T) {
 		t.Errorf("storages = %+v, want an empty volume map", cleared)
 	}
 
-	t.Run("rejects a relative path", func(t *testing.T) {
+	t.Run("rejects a host path outside the managed root", func(t *testing.T) {
 		_, err := svc.ReplaceStorages(context.Background(), userID, created.ID, []Storage{
-			{Name: "cache", HostPath: "cache", ContainerPath: "/var/cache"},
+			{Name: "cache", HostPath: "/data/cache", ContainerPath: "/var/cache"},
 		})
 		if !errors.Is(err, ErrValidation) {
 			t.Fatalf("err = %v, want ErrValidation", err)

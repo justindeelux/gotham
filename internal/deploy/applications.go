@@ -76,6 +76,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		return Application{}, ErrDisabled
 	}
 	app := Application{
+		ID:         uuid.New(),
 		UserID:     userID,
 		TeamID:     teams.ScopeFor(ctx, userID).TeamID,
 		Name:       strings.TrimSpace(in.Name),
@@ -102,7 +103,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err != nil {
 		return Application{}, err
 	}
-	storages, err := normalizeStorages(in.Storage)
+	storages, err := normalizeStorages(app.ID, in.Storage)
 	if err != nil {
 		return Application{}, err
 	}
@@ -388,7 +389,7 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 	if _, err := s.application(ctx, userID, appID, true); err != nil {
 		return nil, err
 	}
-	normalized, err := normalizeStorages(storages)
+	normalized, err := normalizeStorages(appID, storages)
 	if err != nil {
 		return nil, err
 	}
@@ -637,11 +638,14 @@ func validateEnvKey(key string) error {
 	return nil
 }
 
-// normalizeStorages trims and validates the volume map: named rows with
-// absolute host and container paths, checked against the same rules the
-// deploy step enforces (volumeSpecs) so a bad mapping is a 400 at write time
-// rather than a failed deployment later.
-func normalizeStorages(storages []Storage) ([]Storage, error) {
+// normalizeStorages trims and validates the volume map: named rows with a
+// container path and either a managed host path, a host bind confined to
+// <managed root>/<appID>, or a Docker named volume. An empty host path is
+// derived to a managed directory, so a client never needs to know the
+// application id up front. The rules mirror volumeSpecs, so a bad mapping is a
+// 400 at write time rather than a failed deployment later.
+func normalizeStorages(appID uuid.UUID, storages []Storage) ([]Storage, error) {
+	root := managedVolumeRoot()
 	normalized := make([]Storage, 0, len(storages))
 	seen := make(map[string]bool, len(storages))
 	for _, storage := range storages {
@@ -657,9 +661,14 @@ func normalizeStorages(storages []Storage) ([]Storage, error) {
 			return nil, fmt.Errorf("%w: duplicate storage name %q", ErrValidation, row.Name)
 		}
 		seen[row.Name] = true
+		host, err := managedHostPath(root, appID, row.Name, row.HostPath)
+		if err != nil {
+			return nil, err
+		}
+		row.HostPath = host
 		normalized = append(normalized, row)
 	}
-	if _, err := volumeSpecs(normalized); err != nil {
+	if _, err := volumeSpecs(root, appID, normalized); err != nil {
 		return nil, err
 	}
 	return normalized, nil

@@ -260,8 +260,10 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 		return nil, fmt.Errorf("auth: get session: %w", err)
 	}
 	if session.RevokedAt.Valid {
-		// A replayed, already-rotated token is reuse: end every session.
-		s.revokeSessionFamily(ctx, session.UserID)
+		// A replayed revoked token. Classify and revoke atomically: only
+		// genuine reuse ends the family; a stale post-reset chain is a plain
+		// 401 so freshly authenticated sessions survive.
+		s.maybeRevokeFamily(ctx, session.UserID, hash)
 		return nil, ErrUnauthorized
 	}
 	if !session.ExpiresAt.Valid || s.now().After(session.ExpiresAt.Time) {
@@ -311,15 +313,10 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// The row stopped being live between the read and the rotation.
-			// Re-read it to tell a replay/rotation race (the row is still
-			// present and revoked) from a password reset or logout purge (the
-			// row is gone), which must not revoke a freshly authenticated
-			// session minted after the reset.
-			if latest, readErr := s.store.GetSessionByRefreshHash(ctx, hash); readErr == nil && latest.RevokedAt.Valid {
-				s.revokeSessionFamily(ctx, session.UserID)
-			} else if readErr != nil && !errors.Is(readErr, pgx.ErrNoRows) {
-				s.logger.Error("auth: re-read conflicted session", "error", readErr, "user_id", uuid.UUID(session.UserID.Bytes))
-			}
+			// Classify it atomically: a rotation race (row revoked, current
+			// version) is reuse, while a reset purge (row deleted) or a stale
+			// post-reset chain is a plain 401 that leaves fresh sessions be.
+			s.maybeRevokeFamily(ctx, session.UserID, hash)
 			return nil, ErrUnauthorized
 		}
 		return nil, fmt.Errorf("auth: rotate session: %w", err)
@@ -333,15 +330,21 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 	}, nil
 }
 
-// revokeSessionFamily handles reuse detection: it revokes every live session of
-// the token's owner and logs a warning with no token material. A store failure
-// is logged and swallowed because the caller is answering 401 either way.
-func (s *Service) revokeSessionFamily(ctx context.Context, userID pgtype.UUID) {
-	if err := s.store.RevokeUserSessions(ctx, userID); err != nil {
-		s.logger.Error("auth: revoke session family failed", "error", err, "user_id", uuid.UUID(userID.Bytes))
+// maybeRevokeFamily classifies a replayed revoked token under the per-user
+// session lock and revokes the family only for genuine reuse (the row still
+// exists, is revoked, and carries the account's current credential version).
+// The classification and the revocation are one store transaction, so a
+// password reset cannot interleave. A store failure is logged and swallowed
+// because the caller is answering 401 either way.
+func (s *Service) maybeRevokeFamily(ctx context.Context, userID pgtype.UUID, refreshHash string) {
+	stolen, err := s.store.RevokeFamilyIfStolen(ctx, userID, refreshHash)
+	if err != nil {
+		s.logger.Error("auth: reuse revocation failed", "error", err, "user_id", uuid.UUID(userID.Bytes))
 		return
 	}
-	s.logger.Warn("auth: refresh token reuse detected; revoked all live sessions", "user_id", uuid.UUID(userID.Bytes))
+	if stolen {
+		s.logger.Warn("auth: refresh token reuse detected; revoked all live sessions", "user_id", uuid.UUID(userID.Bytes))
+	}
 }
 
 // Logout revokes the session behind refreshToken. It is idempotent: an unknown

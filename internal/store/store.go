@@ -70,30 +70,56 @@ func (s *Store) RevokeSessionIfLive(ctx context.Context, refreshHash string) (bo
 	return true, nil
 }
 
-// RevokeUserSessions revokes every live refresh session of userID. Refresh-token
-// reuse detection calls it when a replayed token reveals a possible theft:
-// every device is forced to re-authenticate. Already-revoked rows are left
-// untouched.
+// RevokeFamilyIfStolen atomically classifies a presented refresh token and,
+// only for genuine reuse, revokes every live session of its owner. It holds
+// the per-user session lock across the re-read and the revocation, so a
+// concurrent RotateSession cannot slip a replacement in and a password reset
+// (which takes the same lock) cannot interleave.
 //
-// It takes the per-user session lock first, so a concurrent RotateSession
-// cannot insert a replacement after this transaction's snapshot has read the
-// user's live sessions. Under READ COMMITTED alone the replacement would be
-// invisible to the UPDATE and survive the family revocation.
-func (s *Store) RevokeUserSessions(ctx context.Context, userID pgtype.UUID) error {
+// The token is genuine reuse only when, under the lock, the presented row
+// still exists, is revoked, and carries the account's current credential
+// version. A deleted row (reset or logout purge) or a stale post-reset chain
+// (an obsolete credential version) returns false without touching any session,
+// so freshly authenticated sessions are never killed by a stale replay.
+func (s *Store) RevokeFamilyIfStolen(ctx context.Context, userID pgtype.UUID, refreshHash string) (bool, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	queries := s.queries.WithTx(tx)
 	if err := queries.LockUserSessions(ctx, sessionLockKey(userID)); err != nil {
-		return err
+		return false, err
 	}
-	if err := queries.RevokeUserSessions(ctx, userID); err != nil {
-		return err
+
+	presented, err := queries.GetSessionByRefreshHash(ctx, refreshHash)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil // deleted: nothing to attribute
+		}
+		return false, err
 	}
-	return tx.Commit(ctx)
+	if !presented.RevokedAt.Valid {
+		return false, nil // live (or rotated again): not this replay
+	}
+	user, err := queries.GetUserByID(ctx, presented.UserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if presented.CredentialVersion != user.CredentialVersion {
+		return false, nil // obsolete post-reset chain: plain 401
+	}
+	if err := queries.RevokeUserSessions(ctx, presented.UserID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // RotateSession atomically revokes the presented live session and inserts its
@@ -102,9 +128,8 @@ func (s *Store) RevokeUserSessions(ctx context.Context, userID pgtype.UUID) erro
 // the presented session was no longer live, leaving no replacement behind.
 //
 // The statement runs inside the same per-user session lock as
-// RevokeUserSessions, so a family revocation racing this rotation either runs
-// entirely before it or entirely after it — never between the revoke and the
-// insert.
+// RevokeFamilyIfStolen and ResetUserPassword, so those either run entirely
+// before it or entirely after it — never between the revoke and the insert.
 func (s *Store) RotateSession(ctx context.Context, userID pgtype.UUID, params sqlc.RotateSessionParams) (sqlc.Session, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -167,6 +192,11 @@ func (s *Store) UpdateUserPasswordHash(ctx context.Context, email, passwordHash 
 // refresh or login is still in flight while this commits: a replacement
 // session minted from the old credential carries the pre-bump version and is
 // refused by Refresh.
+//
+// It takes the per-user session lock first, the same lock the reuse classifier
+// and the rotation take, so a reset cannot delete sessions out from under an
+// in-flight family-revocation decision and let it revoke sessions minted after
+// the reset.
 func (s *Store) ResetUserPassword(ctx context.Context, userID pgtype.UUID, email, passwordHash string) error {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -175,6 +205,9 @@ func (s *Store) ResetUserPassword(ctx context.Context, userID pgtype.UUID, email
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	queries := s.queries.WithTx(tx)
+	if err := queries.LockUserSessions(ctx, sessionLockKey(userID)); err != nil {
+		return err
+	}
 	if err := queries.DeleteUserSessions(ctx, userID); err != nil {
 		return err
 	}

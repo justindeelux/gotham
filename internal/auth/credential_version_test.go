@@ -135,6 +135,67 @@ func TestServiceRefreshConflictAfterResetDoesNotRevokeFreshSession(t *testing.T)
 	}
 }
 
+// TestServiceRefreshStaleTokenReplayDoesNotRevokeFreshSession covers H1: a
+// stale pre-reset session (an in-flight login that minted after the reset's
+// delete) is refused on its first refresh by the credential-version check,
+// which marks the row revoked. Its second presentation must still classify by
+// version and be a plain 401 — it must not revoke the post-reset session.
+func TestServiceRefreshStaleTokenReplayDoesNotRevokeFreshSession(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	email := uniqueEmail("stale-replay")
+	cleanupUser(t, st, email)
+
+	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	userID, err := uuid.Parse(registered.User.ID)
+	if err != nil {
+		t.Fatalf("parse user ID: %v", err)
+	}
+	user, err := st.GetUserByID(ctx, pgUUID(userID))
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+
+	newHash, err := HashPassword("rotated-password")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := st.ResetUserPassword(ctx, pgUUID(userID), email, newHash); err != nil {
+		t.Fatalf("ResetUserPassword: %v", err)
+	}
+	fresh, err := svc.Login(ctx, email, "rotated-password")
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	// The stale session carries the pre-reset credential version.
+	staleToken := "stale-" + uuid.NewString()
+	if _, err := st.DB.Exec(ctx, `
+		INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
+		VALUES ($1, $2, now() + interval '1 hour', $3)`,
+		user.ID, hashRefreshToken(staleToken), user.CredentialVersion); err != nil {
+		t.Fatalf("insert stale session: %v", err)
+	}
+
+	// First presentation: version mismatch marks the row revoked, plain 401.
+	if _, err := svc.Refresh(ctx, staleToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("first stale Refresh error = %v, want ErrUnauthorized", err)
+	}
+	// Second presentation: the row is now revoked, but it is still an obsolete
+	// post-reset chain, not theft.
+	if _, err := svc.Refresh(ctx, staleToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("second stale Refresh error = %v, want ErrUnauthorized", err)
+	}
+
+	if _, err := svc.Refresh(ctx, fresh.RefreshToken); err != nil {
+		t.Fatalf("fresh session was revoked by a stale-token replay: %v", err)
+	}
+}
+
 // TestServiceLoginRefusesVersionBumpDuringVerify covers the login window: the
 // reset commits while the password is being verified, so the old password
 // checked out but the session must not be minted under the new credential.

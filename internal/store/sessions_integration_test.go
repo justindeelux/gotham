@@ -79,10 +79,10 @@ func TestStoreRotateSessionKeepsOldSessionOnInsertFailure(t *testing.T) {
 }
 
 // TestStoreFamilyRevocationSerializesWithRotation is the FX-2b replay race
-// regression: under READ COMMITTED alone, RevokeUserSessions snapshots the
+// regression: under READ COMMITTED alone, the family revocation snapshots the
 // live rows before an in-flight rotation inserts its replacement, then blocks
-// on the presented row and misses the replacement. Both paths take the
-// per-user advisory lock, so the revocation now runs entirely after the
+// on the presented row and misses the replacement. RevokeFamilyIfStolen holds
+// the per-user advisory lock, so the revocation runs entirely after the
 // rotation commits and sees the replacement.
 func TestStoreFamilyRevocationSerializesWithRotation(t *testing.T) {
 	st, ctx := openVersionTestStore(t)
@@ -116,15 +116,26 @@ func TestStoreFamilyRevocationSerializesWithRotation(t *testing.T) {
 
 	// The reuse handler starts while the rotation is uncommitted; it must
 	// block on the session lock instead of snapshotting before C exists.
-	done := make(chan error, 1)
-	go func() { done <- st.RevokeUserSessions(ctx, user.ID) }()
-	waitForBlockedSessionLock(t, ctx, st)
+	type result struct {
+		stolen bool
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		stolen, err := st.RevokeFamilyIfStolen(ctx, user.ID, presented.RefreshHash)
+		done <- result{stolen, err}
+	}()
+	waitForSessionLockWaiters(t, ctx, st, 1)
 
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit rotation: %v", err)
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("RevokeUserSessions: %v", err)
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("RevokeFamilyIfStolen: %v", res.err)
+	}
+	if !res.stolen {
+		t.Fatal("the replay was not classified as reuse")
 	}
 
 	replacement, err := st.GetSessionByRefreshHash(ctx, replacementHash)
@@ -161,7 +172,7 @@ func TestStoreRotateSessionTakesSessionLock(t *testing.T) {
 		_, err := st.RotateSession(ctx, user.ID, rotateParams(presented.RefreshHash, uuid.NewString(), user.CredentialVersion))
 		done <- err
 	}()
-	waitForBlockedSessionLock(t, ctx, st)
+	waitForSessionLockWaiters(t, ctx, st, 1)
 
 	if err := blocker.Commit(ctx); err != nil {
 		t.Fatalf("release session lock: %v", err)
@@ -179,12 +190,12 @@ func TestStoreRotateSessionTakesSessionLock(t *testing.T) {
 	}
 }
 
-// waitForBlockedSessionLock blocks until some session mutation is waiting on
+// waitForSessionLockWaiters blocks until want session mutations are waiting on
 // the per-user advisory lock, so a test can release an outer lock at a
-// deterministic point. The blocked statement is the lock SELECT itself; seeing
-// no advisory waiter within the deadline means the two paths are not
+// deterministic point. The blocked statement is the lock SELECT itself; fewer
+// waiters than expected within the deadline means the paths are not
 // serialized.
-func waitForBlockedSessionLock(t *testing.T, ctx context.Context, st *store.Store) {
+func waitForSessionLockWaiters(t *testing.T, ctx context.Context, st *store.Store, want int) {
 	t.Helper()
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -198,12 +209,150 @@ func waitForBlockedSessionLock(t *testing.T, ctx context.Context, st *store.Stor
 			  AND pid <> pg_backend_pid()`).Scan(&waiting); err != nil {
 			t.Fatalf("poll pg_stat_activity: %v", err)
 		}
-		if waiting > 0 {
+		if waiting >= want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("session mutation never blocked on the session lock")
+			t.Fatalf("only %d of %d session mutations blocked on the session lock", waiting, want)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestStoreRevokeFamilyIfStolen pins the classifier: genuine reuse (presented
+// row revoked, current credential version) revokes the live family; a stale
+// post-reset chain or a deleted row does not.
+func TestStoreRevokeFamilyIfStolen(t *testing.T) {
+	st, ctx := openVersionTestStore(t)
+
+	t.Run("genuine reuse revokes the family", func(t *testing.T) {
+		user, _ := versionTestUser(t, ctx, st, "stolen-true")
+		presented := versionTestSession(t, ctx, st, user.ID, user.CredentialVersion)
+		live := versionTestSession(t, ctx, st, user.ID, user.CredentialVersion)
+		if err := st.RevokeSession(ctx, presented.RefreshHash); err != nil {
+			t.Fatalf("revoke presented: %v", err)
+		}
+
+		stolen, err := st.RevokeFamilyIfStolen(ctx, user.ID, presented.RefreshHash)
+		if err != nil {
+			t.Fatalf("RevokeFamilyIfStolen: %v", err)
+		}
+		if !stolen {
+			t.Fatal("genuine reuse was not classified as stolen")
+		}
+		got, err := st.GetSessionByRefreshHash(ctx, live.RefreshHash)
+		if err != nil {
+			t.Fatalf("GetSessionByRefreshHash(live): %v", err)
+		}
+		if !got.RevokedAt.Valid {
+			t.Fatal("the live family survived a genuine reuse revocation")
+		}
+	})
+
+	t.Run("stale post-reset chain is not reuse", func(t *testing.T) {
+		user, email := versionTestUser(t, ctx, st, "stolen-stale")
+		// Reset bumps the version and deletes every session.
+		if err := st.ResetUserPassword(ctx, user.ID, email, "new-hash"); err != nil {
+			t.Fatalf("ResetUserPassword: %v", err)
+		}
+		after, err := st.GetUserByID(ctx, user.ID)
+		if err != nil {
+			t.Fatalf("GetUserByID: %v", err)
+		}
+		// A fresh post-reset session (the one that must survive) and a stale
+		// pre-reset session, as a racing login would have left behind.
+		live := versionTestSession(t, ctx, st, user.ID, after.CredentialVersion)
+		stale := versionTestSession(t, ctx, st, user.ID, user.CredentialVersion)
+		if err := st.RevokeSession(ctx, stale.RefreshHash); err != nil {
+			t.Fatalf("revoke stale: %v", err)
+		}
+
+		stolen, err := st.RevokeFamilyIfStolen(ctx, user.ID, stale.RefreshHash)
+		if err != nil {
+			t.Fatalf("RevokeFamilyIfStolen: %v", err)
+		}
+		if stolen {
+			t.Fatal("a stale post-reset chain was classified as reuse")
+		}
+		got, err := st.GetSessionByRefreshHash(ctx, live.RefreshHash)
+		if err != nil {
+			t.Fatalf("GetSessionByRefreshHash(live): %v", err)
+		}
+		if got.RevokedAt.Valid {
+			t.Fatal("a stale chain revoked the family")
+		}
+	})
+
+	t.Run("deleted row is not reuse", func(t *testing.T) {
+		user, _ := versionTestUser(t, ctx, st, "stolen-deleted")
+		presented := versionTestSession(t, ctx, st, user.ID, user.CredentialVersion)
+		if err := st.DeleteUserSessions(ctx, user.ID); err != nil {
+			t.Fatalf("DeleteUserSessions: %v", err)
+		}
+
+		stolen, err := st.RevokeFamilyIfStolen(ctx, user.ID, presented.RefreshHash)
+		if err != nil {
+			t.Fatalf("RevokeFamilyIfStolen: %v", err)
+		}
+		if stolen {
+			t.Fatal("a deleted row was classified as reuse")
+		}
+	})
+}
+
+// TestStoreResetWaitsForFamilyRevocation is the H2 regression: ResetUserPassword
+// must take the same per-user lock as the reuse classifier, so it cannot delete
+// the presented session and mint a fresh login between the classifier's read
+// and its family revocation. With the lock held externally, both the revocation
+// and the reset must queue; without the reset's lock the reset completes during
+// the pause and a post-reset session would be at risk.
+func TestStoreResetWaitsForFamilyRevocation(t *testing.T) {
+	st, ctx := openVersionTestStore(t)
+	user, email := versionTestUser(t, ctx, st, "reset-lock")
+	presented := versionTestSession(t, ctx, st, user.ID, user.CredentialVersion)
+	if err := st.RevokeSession(ctx, presented.RefreshHash); err != nil {
+		t.Fatalf("revoke presented: %v", err)
+	}
+
+	blocker, err := st.DB.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin blocker: %v", err)
+	}
+	defer func() { _ = blocker.Rollback(ctx) }()
+	if err := sqlc.New(blocker).LockUserSessions(ctx, uuid.UUID(user.ID.Bytes).String()); err != nil {
+		t.Fatalf("lock user sessions: %v", err)
+	}
+
+	revokeDone := make(chan error, 1)
+	go func() {
+		_, err := st.RevokeFamilyIfStolen(ctx, user.ID, presented.RefreshHash)
+		revokeDone <- err
+	}()
+	waitForSessionLockWaiters(t, ctx, st, 1)
+
+	resetDone := make(chan error, 1)
+	go func() { resetDone <- st.ResetUserPassword(ctx, user.ID, email, "new-hash") }()
+	// If ResetUserPassword did not take the lock it would finish during the
+	// pause and the waiter count would never reach two.
+	waitForSessionLockWaiters(t, ctx, st, 2)
+
+	if err := blocker.Commit(ctx); err != nil {
+		t.Fatalf("release session lock: %v", err)
+	}
+	if err := <-revokeDone; err != nil {
+		t.Fatalf("RevokeFamilyIfStolen: %v", err)
+	}
+	if err := <-resetDone; err != nil {
+		t.Fatalf("ResetUserPassword: %v", err)
+	}
+
+	// A login that completes after the serialized reset+revocation survives.
+	after, err := st.GetUserByID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	fresh := versionTestSession(t, ctx, st, user.ID, after.CredentialVersion)
+	if fresh.RevokedAt.Valid {
+		t.Fatal("fresh post-reset session was revoked")
 	}
 }

@@ -318,9 +318,9 @@ func (b *nodeImageBuilder) outcomeOf() (BuildOutcome, bool) {
 
 // mapRPCError translates agent transport failures to deploy sentinels:
 // Unavailable/DeadlineExceeded/Canceled mean the agent could not serve the
-// call (the only retryable class), InvalidArgument means bad input, and every
-// other status — including docker errors the agent maps to codes.Internal —
-// is a terminal failure. Unrecognised errors pass through unchanged.
+// call (the only retryable class), InvalidArgument means bad input, NotFound
+// means a missing Docker resource, and every other status is a terminal
+// failure. Unrecognised errors pass through unchanged.
 func mapRPCError(err error) error {
 	if err == nil {
 		return nil
@@ -330,6 +330,8 @@ func mapRPCError(err error) error {
 		return fmt.Errorf("%w: %v", ErrAgentUnavailable, err)
 	case codes.InvalidArgument:
 		return fmt.Errorf("%w: %v", ErrValidation, err)
+	case codes.NotFound:
+		return fmt.Errorf("%w: %v", ErrNotFound, err)
 	default:
 		return err
 	}

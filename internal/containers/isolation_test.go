@@ -38,7 +38,7 @@ func TestContainerTeamIsolation(t *testing.T) {
 	if _, err := svc.List(stranger, node.ID); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("stranger List = %v, want ErrServerNotFound", err)
 	}
-	if _, err := svc.Logs(stranger, node.ID, "abc", false); !errors.Is(err, ErrServerNotFound) {
+	if _, _, err := svc.Logs(stranger, node.ID, "abc", false); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("stranger Logs = %v, want ErrServerNotFound", err)
 	}
 	if err := svc.Stop(stranger, node.ID, "abc"); !errors.Is(err, ErrServerNotFound) {

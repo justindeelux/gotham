@@ -368,13 +368,13 @@ func (f *fakeContainers) Run(_ context.Context, _ uuid.UUID, opts containers.Run
 // agent's behaviour of ending the stream when the container exits. logFn, when
 // set, picks the payload from the options of the container's run — job flows
 // start several containers in a row and each one answers differently.
-func (f *fakeContainers) Logs(_ context.Context, _ uuid.UUID, containerID string, _ bool) (<-chan []byte, error) {
+func (f *fakeContainers) Logs(_ context.Context, _ uuid.UUID, containerID string, _ bool) (<-chan []byte, <-chan error, error) {
 	f.mu.Lock()
 	f.logIDs = append(f.logIDs, containerID)
 	if f.logErr != nil {
 		err := f.logErr
 		f.mu.Unlock()
-		return nil, err
+		return nil, nil, err
 	}
 	chunks := f.logs
 	fn := f.logFn
@@ -384,13 +384,15 @@ func (f *fakeContainers) Logs(_ context.Context, _ uuid.UUID, containerID string
 	f.mu.Unlock()
 
 	out := make(chan []byte)
+	streamErr := make(chan error, 1)
 	go func() {
 		defer close(out)
+		defer close(streamErr)
 		for _, chunk := range chunks {
 			out <- chunk
 		}
 	}()
-	return out, nil
+	return out, streamErr, nil
 }
 
 // lastRun returns the most recent run payload.

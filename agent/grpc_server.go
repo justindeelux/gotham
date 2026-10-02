@@ -41,7 +41,7 @@ type dockerClient interface {
 	PullImage(ctx context.Context, image string) error
 	CreateContainer(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	RunImage(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
-	Logs(ctx context.Context, id string, follow bool, tail int64) (<-chan []byte, error)
+	Logs(ctx context.Context, id string, follow bool, tail int64) (<-chan LogMessage, error)
 }
 
 // DockerServer implements agentv1.DockerServiceServer on top of a dockerClient.
@@ -187,11 +187,17 @@ func (s *DockerServer) StreamLogs(req *agentv1.StreamLogsRequest, stream grpc.Se
 		select {
 		case <-ctx.Done():
 			return status.FromContextError(ctx.Err()).Err()
-		case chunk, ok := <-chunks:
+		case message, ok := <-chunks:
 			if !ok {
 				return nil
 			}
-			if err := stream.Send(&agentv1.LogChunk{Data: chunk}); err != nil {
+			if message.Err != nil {
+				// A decode error is a failed stream, not a clean end: report
+				// it so the control plane never treats a truncated stream as
+				// success.
+				return dockerError("stream logs", message.Err)
+			}
+			if err := stream.Send(&agentv1.LogChunk{Data: message.Data}); err != nil {
 				return err
 			}
 		}
@@ -217,11 +223,16 @@ func (s *DockerServer) containerAction(
 
 // dockerError maps a Docker client error onto a gRPC status error. A
 // malformed port mapping is invalid input for every caller, not an internal
-// failure.
+// failure; a Docker 404 is NotFound and an unreachable daemon is Unavailable,
+// so the control plane can answer 404/502 instead of 500.
 func dockerError(action string, err error) error {
 	switch {
 	case errors.Is(err, ErrInvalidPortMapping), errors.Is(err, ErrInvalidVolumeBind):
 		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)
+	case errors.Is(err, ErrDockerNotFound):
+		return status.Errorf(codes.NotFound, "%s: %v", action, err)
+	case errors.Is(err, ErrDockerUnavailable):
+		return status.Errorf(codes.Unavailable, "%s: %v", action, err)
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, action+": context canceled")
 	case errors.Is(err, context.DeadlineExceeded):

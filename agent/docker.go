@@ -24,10 +24,25 @@ import (
 // maxLogFrame bounds the allocation for a single multiplexed log frame.
 const maxLogFrame = 16 << 20
 
+// runCleanupTimeout bounds the best-effort removal of a container whose start
+// failed, so a broken daemon cannot hang the RunImage error path.
+const runCleanupTimeout = 30 * time.Second
+
 // ErrInvalidPortMapping marks a malformed port mapping. The DockerService
 // error mapper turns it into InvalidArgument so every caller sees bad input
 // as bad input instead of an internal failure.
 var ErrInvalidPortMapping = errors.New("docker: invalid port mapping")
+
+// ErrDockerNotFound marks a Docker API 404 (a missing container, image or
+// network). The DockerService error mapper turns it into NotFound so the
+// control plane can answer 404 instead of 500.
+var ErrDockerNotFound = errors.New("docker: not found")
+
+// ErrDockerUnavailable marks a transport failure reaching the Docker daemon
+// (socket or TCP connection refused, reset or otherwise down). The
+// DockerService error mapper turns it into Unavailable so the control plane
+// answers 502 instead of 500.
+var ErrDockerUnavailable = errors.New("docker: daemon unavailable")
 
 // DockerClient talks to the Docker Engine API over a unix socket or TCP
 // endpoint. It implements the subset of the engine API the agent exposes to
@@ -287,21 +302,32 @@ func (c *DockerClient) CreateContainer(ctx context.Context, req *agentv1.CreateC
 }
 
 // RunImage creates the container described by req and starts it immediately.
+// A start failure removes the container it just created: the id would otherwise
+// be lost at the gRPC boundary, leaving an orphan that blocks a retry on the
+// same name and that a later delete cannot find. Docker allows removing a
+// created-but-not-started container.
 func (c *DockerClient) RunImage(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error) {
 	id, err := c.CreateContainer(ctx, req)
 	if err != nil {
 		return "", err
 	}
 	if err := c.Start(ctx, id); err != nil {
-		return id, err
+		// The start context may already be canceled or past its deadline;
+		// cleanup still has to run, so it gets its own bounded context.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
+		defer cancel()
+		if removeErr := c.Remove(cleanupCtx, id); removeErr != nil {
+			return "", fmt.Errorf("%w (cleanup failed: %v)", err, removeErr)
+		}
+		return "", err
 	}
 	return id, nil
 }
 
 // Logs streams the logs of the container with the given id. Each channel item
-// is the payload of one Docker multiplexed frame. The channel is closed when
-// the stream ends or ctx is canceled.
-func (c *DockerClient) Logs(ctx context.Context, id string, follow bool, tail int64) (<-chan []byte, error) {
+// is either one Docker multiplexed frame payload or a terminal decode error.
+// The channel is closed when the stream ends or ctx is canceled.
+func (c *DockerClient) Logs(ctx context.Context, id string, follow bool, tail int64) (<-chan LogMessage, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, errors.New("docker: container id is required")
 	}
@@ -320,7 +346,7 @@ func (c *DockerClient) Logs(ctx context.Context, id string, follow bool, tail in
 		return nil, err
 	}
 
-	out := make(chan []byte)
+	out := make(chan LogMessage)
 	go func() {
 		defer close(out)
 		defer func() { _ = response.Body.Close() }()
@@ -499,7 +525,7 @@ func (c *DockerClient) doRegistryRequest(ctx context.Context, method, path, auth
 
 	response, err := c.http.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("docker: %s %s: %w", method, path, err)
+		return nil, dockerTransportError(method, path, err)
 	}
 	if !dockerOK(response.StatusCode) {
 		return nil, statusError(method, path, response)
@@ -534,16 +560,31 @@ func (c *DockerClient) doRaw(ctx context.Context, method, path string, body io.R
 
 	response, err := c.http.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("docker: %s %s: %w", method, path, err)
+		return nil, dockerTransportError(method, path, err)
 	}
 	return response, nil
 }
 
+// dockerTransportError classifies a transport failure reaching the daemon. A
+// canceled or expired caller context keeps its identity so the gRPC mapper can
+// report Canceled/DeadlineExceeded; every other transport failure means the
+// daemon is unreachable.
+func dockerTransportError(method, path string, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("docker: %s %s: %w", method, path, err)
+	}
+	return fmt.Errorf("%w: docker: %s %s: %v", ErrDockerUnavailable, method, path, err)
+}
+
 // statusError reads a bounded error body, closes the response, and formats the
-// status failure.
+// status failure. A 404 is wrapped in ErrDockerNotFound so the gRPC boundary
+// can answer NotFound.
 func statusError(method, path string, response *http.Response) error {
 	defer func() { _ = response.Body.Close() }()
 	message, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+	if response.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("%w: docker: %s %s: status 404: %s", ErrDockerNotFound, method, path, strings.TrimSpace(string(message)))
+	}
 	return fmt.Errorf("docker: %s %s: status %d: %s", method, path, response.StatusCode, strings.TrimSpace(string(message)))
 }
 
@@ -553,15 +594,45 @@ func dockerOK(status int) bool {
 	return (status >= http.StatusOK && status < http.StatusMultipleChoices) || status == http.StatusNotModified
 }
 
+// LogMessage is one item of a container log stream: either a payload chunk or
+// a terminal decode error. The gRPC boundary turns the error into a status so a
+// truncated or broken stream is never reported as a clean end. It is exported
+// because the dockerClient seam is implemented by external test fakes.
+type LogMessage struct {
+	Data []byte
+	Err  error
+}
+
 // decodeLogStream reads Docker's multiplexed log format and emits payloads on
 // out. A stream that is not multiplexed (a TTY container) is copied raw after
-// the first frame looks invalid.
-func decodeLogStream(ctx context.Context, source io.Reader, out chan<- []byte) {
+// the first frame looks invalid. A short stream is delivered rather than
+// dropped: a partial read that cannot be a multiplexed header is treated as raw
+// content, and a partial frame payload is emitted before the truncation is
+// reported. Read errors that are not a clean EOF or a short read are reported
+// as a terminal error.
+func decodeLogStream(ctx context.Context, source io.Reader, out chan<- LogMessage) {
 	reader := bufio.NewReader(source)
 	header := make([]byte, 8)
 	for {
-		if _, err := io.ReadFull(reader, header); err != nil {
-			return
+		n, err := io.ReadFull(reader, header)
+		if err != nil {
+			switch {
+			case errors.Is(err, io.EOF):
+				return
+			case errors.Is(err, io.ErrUnexpectedEOF):
+				// Fewer than eight bytes: too short for a multiplexed header,
+				// so this is a short raw line. Deliver what arrived.
+				if n > 0 && !emit(ctx, out, header[:n]) {
+					return
+				}
+				return
+			default:
+				if n > 0 && !emit(ctx, out, header[:n]) {
+					return
+				}
+				report(ctx, out, err)
+				return
+			}
 		}
 		size := binary.BigEndian.Uint32(header[4:8])
 		if !validLogHeader(header, size) {
@@ -572,10 +643,16 @@ func decodeLogStream(ctx context.Context, source io.Reader, out chan<- []byte) {
 			return
 		}
 		payload := make([]byte, size)
-		if _, err := io.ReadFull(reader, payload); err != nil {
+		n, err = io.ReadFull(reader, payload)
+		if n > 0 && !emit(ctx, out, payload[:n]) {
 			return
 		}
-		if !emit(ctx, out, payload) {
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				report(ctx, out, fmt.Errorf("truncated log frame: %w", err))
+			} else {
+				report(ctx, out, err)
+			}
 			return
 		}
 	}
@@ -587,8 +664,9 @@ func validLogHeader(header []byte, size uint32) bool {
 	return header[0] <= 2 && header[1] == 0 && header[2] == 0 && header[3] == 0 && size <= maxLogFrame
 }
 
-// copyRaw forwards a non-multiplexed stream verbatim.
-func copyRaw(ctx context.Context, reader *bufio.Reader, out chan<- []byte) {
+// copyRaw forwards a non-multiplexed stream verbatim. A read error that is not
+// a clean EOF is reported as a terminal error.
+func copyRaw(ctx context.Context, reader *bufio.Reader, out chan<- LogMessage) {
 	buffer := make([]byte, 32<<10)
 	for {
 		n, err := reader.Read(buffer)
@@ -600,21 +678,36 @@ func copyRaw(ctx context.Context, reader *bufio.Reader, out chan<- []byte) {
 			}
 		}
 		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				report(ctx, out, err)
+			}
 			return
 		}
 	}
 }
 
-// emit sends data on out, aborting when ctx is canceled.
-func emit(ctx context.Context, out chan<- []byte, data []byte) bool {
+// emit sends a data chunk on out, aborting when ctx is canceled.
+func emit(ctx context.Context, out chan<- LogMessage, data []byte) bool {
 	if len(data) == 0 {
 		return true
 	}
 	select {
-	case out <- data:
+	case out <- LogMessage{Data: data}:
 		return true
 	case <-ctx.Done():
 		return false
+	}
+}
+
+// report sends a terminal stream error on out. A canceled context is a normal
+// end, not a failure, so nothing is reported once ctx is done.
+func report(ctx context.Context, out chan<- LogMessage, err error) {
+	if err == nil || ctx.Err() != nil {
+		return
+	}
+	select {
+	case out <- LogMessage{Err: err}:
+	case <-ctx.Done():
 	}
 }
 

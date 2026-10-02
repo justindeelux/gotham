@@ -44,8 +44,10 @@ type ContainerService interface {
 	Run(ctx context.Context, serverID uuid.UUID, opts RunOptions) (string, error)
 	// Logs streams a container's stdout and stderr payloads (the agent merges
 	// both) until the stream ends — with follow, Docker closes it when the
-	// container stops — or ctx is cancelled. The channel is closed on both.
-	Logs(ctx context.Context, serverID uuid.UUID, containerID string, follow bool) (<-chan []byte, error)
+	// container stops — or ctx is cancelled. chunks is closed on both. streamErr
+	// receives a non-nil terminal error when the agent stream failed before a
+	// clean end, so a caller never mistakes a truncated stream for success.
+	Logs(ctx context.Context, serverID uuid.UUID, containerID string, follow bool) (<-chan []byte, <-chan error, error)
 }
 
 // Config wires a Service. Registry and Cache are required inputs except that
@@ -149,11 +151,12 @@ func (s *Service) List(ctx context.Context, serverID uuid.UUID) ([]Container, er
 		return cached, nil
 	}
 
-	client, cancel, err := s.client(ctx, serverID, false)
+	ctx, client, cancel, err := s.client(ctx, serverID, false)
 	if err != nil {
 		return nil, err
 	}
 	defer cancel()
+	defer s.closeClient(client)
 
 	response, err := client.ListContainers(ctx, &agentv1.ListContainersRequest{All: true})
 	if err != nil {
@@ -178,11 +181,12 @@ func (s *Service) ListFresh(ctx context.Context, serverID uuid.UUID) ([]Containe
 	if _, err := s.resolve(ctx, serverID, false); err != nil {
 		return nil, err
 	}
-	client, cancel, err := s.client(ctx, serverID, true)
+	ctx, client, cancel, err := s.client(ctx, serverID, true)
 	if err != nil {
 		return nil, err
 	}
 	defer cancel()
+	defer s.closeClient(client)
 
 	response, err := client.ListContainers(ctx, &agentv1.ListContainersRequest{All: true})
 	if err != nil {
@@ -200,11 +204,12 @@ func (s *Service) Start(ctx context.Context, serverID uuid.UUID, containerID str
 	if strings.TrimSpace(containerID) == "" {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
 	}
-	client, cancel, err := s.client(ctx, serverID, true)
+	ctx, client, cancel, err := s.client(ctx, serverID, true)
 	if err != nil {
 		return err
 	}
 	defer cancel()
+	defer s.closeClient(client)
 
 	if _, err := client.StartContainer(ctx, &agentv1.ContainerActionRequest{ContainerId: containerID}); err != nil {
 		return mapRPCError(err)
@@ -218,11 +223,12 @@ func (s *Service) Stop(ctx context.Context, serverID uuid.UUID, containerID stri
 	if strings.TrimSpace(containerID) == "" {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
 	}
-	client, cancel, err := s.client(ctx, serverID, true)
+	ctx, client, cancel, err := s.client(ctx, serverID, true)
 	if err != nil {
 		return err
 	}
 	defer cancel()
+	defer s.closeClient(client)
 
 	if _, err := client.StopContainer(ctx, &agentv1.ContainerActionRequest{ContainerId: containerID}); err != nil {
 		return mapRPCError(err)
@@ -236,11 +242,12 @@ func (s *Service) Restart(ctx context.Context, serverID uuid.UUID, containerID s
 	if strings.TrimSpace(containerID) == "" {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
 	}
-	client, cancel, err := s.client(ctx, serverID, true)
+	ctx, client, cancel, err := s.client(ctx, serverID, true)
 	if err != nil {
 		return err
 	}
 	defer cancel()
+	defer s.closeClient(client)
 
 	if _, err := client.RestartContainer(ctx, &agentv1.ContainerActionRequest{ContainerId: containerID}); err != nil {
 		return mapRPCError(err)
@@ -256,11 +263,12 @@ func (s *Service) Remove(ctx context.Context, serverID uuid.UUID, containerID st
 	if strings.TrimSpace(containerID) == "" {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
 	}
-	client, cancel, err := s.client(ctx, serverID, true)
+	ctx, client, cancel, err := s.client(ctx, serverID, true)
 	if err != nil {
 		return err
 	}
 	defer cancel()
+	defer s.closeClient(client)
 
 	if _, err := client.RemoveContainer(ctx, &agentv1.ContainerActionRequest{ContainerId: containerID}); err != nil {
 		return mapRPCError(err)
@@ -274,11 +282,12 @@ func (s *Service) Pull(ctx context.Context, serverID uuid.UUID, image string) er
 	if strings.TrimSpace(image) == "" {
 		return fmt.Errorf("%w: image is required", ErrValidation)
 	}
-	client, cancel, err := s.pullClient(ctx, serverID)
+	ctx, client, cancel, err := s.pullClient(ctx, serverID)
 	if err != nil {
 		return err
 	}
 	defer cancel()
+	defer s.closeClient(client)
 
 	if _, err := client.PullImage(ctx, &agentv1.PullImageRequest{Image: strings.TrimSpace(image)}); err != nil {
 		return mapRPCError(err)
@@ -293,11 +302,12 @@ func (s *Service) Run(ctx context.Context, serverID uuid.UUID, opts RunOptions) 
 	if err := opts.validate(); err != nil {
 		return "", err
 	}
-	client, cancel, err := s.pullClient(ctx, serverID)
+	ctx, client, cancel, err := s.pullClient(ctx, serverID)
 	if err != nil {
 		return "", err
 	}
 	defer cancel()
+	defer s.closeClient(client)
 
 	response, err := client.RunImage(ctx, opts.toProto())
 	if err != nil {
@@ -314,38 +324,45 @@ func (s *Service) Run(ctx context.Context, serverID uuid.UUID, opts RunOptions) 
 //
 // The stream lives in its own context bounded by Config.LogTimeout rather than
 // the short RPC timeout: a dump of a large database runs for minutes.
-func (s *Service) Logs(ctx context.Context, serverID uuid.UUID, containerID string, follow bool) (<-chan []byte, error) {
+func (s *Service) Logs(ctx context.Context, serverID uuid.UUID, containerID string, follow bool) (<-chan []byte, <-chan error, error) {
 	if strings.TrimSpace(containerID) == "" {
-		return nil, fmt.Errorf("%w: container id is required", ErrValidation)
+		return nil, nil, fmt.Errorf("%w: container id is required", ErrValidation)
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.logTimeout)
 	server, err := s.resolve(ctx, serverID, false)
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, nil, err
 	}
 	client, err := s.dialClient(ctx, server)
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, nil, err
 	}
 	stream, err := client.StreamLogs(ctx, &agentv1.StreamLogsRequest{ContainerId: containerID, Follow: follow})
 	if err != nil {
+		s.closeClient(client)
 		cancel()
-		return nil, mapRPCError(err)
+		return nil, nil, mapRPCError(err)
 	}
 
 	out := make(chan []byte)
+	// Buffered so the producer never blocks if the caller stops reading after
+	// a cancellation.
+	streamErr := make(chan error, 1)
 	go func() {
 		defer close(out)
+		defer close(streamErr)
 		defer cancel()
+		defer s.closeClient(client)
 		for {
 			chunk, err := stream.Recv()
 			if err != nil {
-				// io.EOF is the normal end of a log stream; anything else is
-				// reported for diagnosis but still closes the channel so the
-				// caller never blocks on a dead stream.
+				// io.EOF is the normal end of a log stream. Any other error
+				// while the caller context is still live is a failed stream
+				// and is surfaced so the caller never reports success.
 				if !errors.Is(err, io.EOF) && ctx.Err() == nil {
+					streamErr <- mapRPCError(err)
 					s.logger.Debug("containers: log stream ended early",
 						"container_id", containerID, "error", err)
 				}
@@ -362,7 +379,7 @@ func (s *Service) Logs(ctx context.Context, serverID uuid.UUID, containerID stri
 			}
 		}
 	}()
-	return out, nil
+	return out, streamErr, nil
 }
 
 // resolve returns the registry entry for a server, mapping a missing row to
@@ -393,38 +410,52 @@ func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, write bool) (
 }
 
 // client resolves the server and dials its agent with the standard RPC
-// timeout. write selects the authorization: read methods pass false, every
-// mutation passes true.
-func (s *Service) client(ctx context.Context, serverID uuid.UUID, write bool) (DockerClient, context.CancelFunc, error) {
+// timeout, returning the bounded context the caller must pass to the RPC.
+// write selects the authorization: read methods pass false, every mutation
+// passes true.
+func (s *Service) client(ctx context.Context, serverID uuid.UUID, write bool) (context.Context, DockerClient, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.rpcTimeout)
 	server, err := s.resolve(ctx, serverID, write)
 	if err != nil {
 		cancel()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	client, err := s.dialClient(ctx, server)
 	if err != nil {
 		cancel()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return client, cancel, nil
+	return ctx, client, cancel, nil
 }
 
 // pullClient is client with the longer image-transfer timeout. Pull and run
 // are mutations.
-func (s *Service) pullClient(ctx context.Context, serverID uuid.UUID) (DockerClient, context.CancelFunc, error) {
+func (s *Service) pullClient(ctx context.Context, serverID uuid.UUID) (context.Context, DockerClient, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.pullTimeout)
 	server, err := s.resolve(ctx, serverID, true)
 	if err != nil {
 		cancel()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	client, err := s.dialClient(ctx, server)
 	if err != nil {
 		cancel()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return client, cancel, nil
+	return ctx, client, cancel, nil
+}
+
+// closeClient releases a dialed agent client. The production client owns a
+// gRPC connection, so every operation closes what it dialed; a test fake that
+// does not implement io.Closer is left untouched.
+func (s *Service) closeClient(client DockerClient) {
+	closer, ok := client.(io.Closer)
+	if !ok {
+		return
+	}
+	if err := closer.Close(); err != nil {
+		s.logger.Debug("containers: closing agent client failed", "error", err)
+	}
 }
 
 // dialClient opens the agent client, reporting a clear error while no dialer

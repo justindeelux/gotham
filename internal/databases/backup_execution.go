@@ -392,7 +392,7 @@ func (m *BackupManager) runJob(ctx context.Context, serverID uuid.UUID, options 
 	}
 	defer m.removeJobContainer(serverID, containerID)
 
-	logs, err := m.containers.Logs(ctx, serverID, containerID, true)
+	logs, streamErr, err := m.containers.Logs(ctx, serverID, containerID, true)
 	if err != nil {
 		return containerID, mapContainerError(err)
 	}
@@ -405,6 +405,11 @@ func (m *BackupManager) runJob(ctx context.Context, serverID uuid.UUID, options 
 			// for the agent goroutine to finish.
 			_, _ = sink.Write(chunk)
 		}
+	}
+	// A terminal stream error means the dump may be truncated: report it
+	// instead of treating the job as a clean success.
+	if err := <-streamErr; err != nil {
+		return containerID, mapContainerError(err)
 	}
 	return containerID, ctx.Err()
 }

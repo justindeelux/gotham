@@ -40,6 +40,13 @@ type Repository interface {
 	ListExpiredDatabases(ctx context.Context, cutoff time.Time) ([]Database, error)
 	// PurgeDatabase hard-deletes a soft-deleted database and its sealed
 	// credentials. A live row is never purged.
+	//
+	// The delete cascades (ON DELETE CASCADE) to the database's backups and
+	// backup_schedules rows. It does NOT remove the stored backup artifacts
+	// (local files, node volumes, S3 objects); a soft-deleted database's
+	// backups are already invisible to every read, so those artifacts are
+	// orphaned here rather than reapable. Reaping them is tracked for FX-9
+	// (backup durability); see RetentionSweeper.
 	PurgeDatabase(ctx context.Context, databaseID uuid.UUID) error
 	// CreateSecret stores one sealed credential of a database.
 	CreateSecret(ctx context.Context, secret Secret) (Secret, error)

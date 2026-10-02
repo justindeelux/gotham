@@ -33,6 +33,12 @@ func TestRemoveVolumeConfinesNames(t *testing.T) {
 		"gotham-db-not-a-uuid",
 		"gotham-db-11111111-2222-3333-4444-55555555555", // too short
 		"../../etc",
+		// Anchoring: both ends must be tight, or a prefix/suffix could smuggle
+		// a non-managed name past the guard.
+		"x-gotham-db-11111111-2222-3333-4444-555555555555",
+		"gotham-db-11111111-2222-3333-4444-555555555555x",
+		"gotham-db-11111111-2222-3333-4444-555555555555\n",
+		"gotham-db-11111111-2222-3333-4444-555555555555 extra",
 	} {
 		if _, err := server.RemoveVolume(context.Background(), &agentv1.VolumeActionRequest{Name: name}); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("RemoveVolume(%q) code = %v, want InvalidArgument", name, status.Code(err))

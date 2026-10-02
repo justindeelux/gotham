@@ -31,6 +31,18 @@ const (
 	portsLabel = "gotham.ports"
 )
 
+// volumeSpecFor resolves the engine's data directory for a specific image
+// tag, honouring VersionedVolumeSpec. Every path that mounts a database volume
+// must go through it: the run payload, the backup/restore job containers and
+// the restore staging directory all have to agree on the mount, or a
+// PostgreSQL 18 database is mounted at the path its entrypoint refuses.
+func volumeSpecFor(engine DatabaseEngine, version string) VolumeSpec {
+	if versioned, ok := engine.(VersionedVolumeSpec); ok {
+		return versioned.VolumeSpecFor(version)
+	}
+	return engine.VolumeSpec()
+}
+
 // invalidNameChars matches anything outside the Docker container-name alphabet
 // ([a-zA-Z0-9][a-zA-Z0-9_.-]).
 var invalidNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
@@ -59,10 +71,7 @@ func buildRunOptions(db Database, engine DatabaseEngine, secrets []Secret, secre
 	if port.Internal <= 0 || port.Internal > 65535 {
 		return containers.RunOptions{}, fmt.Errorf("%w: engine reports an invalid internal port", ErrValidation)
 	}
-	volume := engine.VolumeSpec()
-	if versioned, ok := engine.(VersionedVolumeSpec); ok {
-		volume = versioned.VolumeSpecFor(db.Version)
-	}
+	volume := volumeSpecFor(engine, db.Version)
 	if strings.TrimSpace(volume.MountPath) == "" {
 		return containers.RunOptions{}, fmt.Errorf("%w: engine reports no data directory", ErrValidation)
 	}
@@ -97,11 +106,14 @@ func buildRunOptions(db Database, engine DatabaseEngine, secrets []Secret, secre
 }
 
 // Healthcheck timing for a database container's native Docker healthcheck.
-// The probe is short because the provisioning wait polls for "healthy"; the
-// start period is the engine's own provisioning window, so first-boot
-// initialisation is not reported unhealthy before it has a chance to finish.
+// The interval is 10s on purpose: it keeps running for the container's whole
+// life, and a 2s cadence would exec mongosh/mysqladmin every couple of
+// seconds forever (and could flip healthy→unhealthy on a loaded node under the
+// 5s check timeout). The create-path readiness wait does its own 500ms polling
+// and the start period is the engine's provisioning window, so the slower
+// interval does not delay provisioning.
 const (
-	healthcheckInterval = 2 * time.Second
+	healthcheckInterval = 10 * time.Second
 	healthcheckTimeout  = 5 * time.Second
 	healthcheckRetries  = 3
 )

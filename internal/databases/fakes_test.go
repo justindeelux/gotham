@@ -52,6 +52,10 @@ type fakeRepository struct {
 	secretErr     error
 	serverErr     error
 	serverMissing bool
+
+	// expiredListCalls counts ListExpiredDatabases invocations so a lifecycle
+	// test can prove the sweeper loop started (or was refused).
+	expiredListCalls int
 }
 
 // Compile-time guarantee that fakeRepository satisfies the seam.
@@ -101,6 +105,13 @@ func (r *fakeRepository) present(databaseID uuid.UUID) bool {
 	defer r.mu.Unlock()
 	_, ok := r.databases[databaseID]
 	return ok
+}
+
+// expiredCalls returns how many times the retention selection ran.
+func (r *fakeRepository) expiredCalls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.expiredListCalls
 }
 
 // CreateDatabase implements Repository.
@@ -207,6 +218,7 @@ func (r *fakeRepository) SoftDeleteDatabase(_ context.Context, databaseID uuid.U
 func (r *fakeRepository) ListExpiredDatabases(_ context.Context, cutoff time.Time) ([]Database, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.expiredListCalls++
 	if r.listErr != nil {
 		return nil, r.listErr
 	}

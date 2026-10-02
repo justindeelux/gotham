@@ -144,10 +144,13 @@ var dbVolumePattern = regexp.MustCompile(`^gotham-db-[0-9a-f]{8}-[0-9a-f]{4}-[0-
 // cannot delete an arbitrary volume even if the control plane is compromised.
 // Removal is idempotent: a volume that is already gone is success.
 func (s *DockerServer) RemoveVolume(ctx context.Context, req *agentv1.VolumeActionRequest) (*agentv1.VolumeActionResponse, error) {
-	name := strings.TrimSpace(req.GetName())
-	if name == "" {
+	name := req.GetName()
+	if strings.TrimSpace(name) == "" {
 		return nil, status.Error(codes.InvalidArgument, "volume name is required")
 	}
+	// Match the raw name: the pattern is anchored, so a padded or
+	// suffix-injected name ("x-gotham-db-…", "…\n") is rejected rather than
+	// normalised into something Docker would accept.
 	if !dbVolumePattern.MatchString(name) {
 		return nil, status.Errorf(codes.InvalidArgument, "remove volume: %q is not a managed database volume", name)
 	}

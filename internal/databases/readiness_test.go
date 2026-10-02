@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -116,5 +117,10 @@ func TestRunHealthcheckRendersProbe(t *testing.T) {
 	if options.Healthcheck.StartPeriod != engine.Healthcheck().Timeout {
 		t.Errorf("start period = %s, want the engine window %s",
 			options.Healthcheck.StartPeriod, engine.Healthcheck().Timeout)
+	}
+	// A short interval would exec the probe (mongosh/mysqladmin) every couple
+	// of seconds for the container's whole life.
+	if options.Healthcheck.Interval != 10*time.Second {
+		t.Errorf("healthcheck interval = %s, want 10s", options.Healthcheck.Interval)
 	}
 }

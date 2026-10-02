@@ -37,8 +37,11 @@ type RetentionSweeper struct {
 
 	mu      sync.Mutex
 	running bool
-	cancel  context.CancelFunc
-	wait    sync.WaitGroup
+	// closed latches on Close so a later Start is refused rather than
+	// starting a fresh loop after the owner has already stopped the sweeper.
+	closed bool
+	cancel context.CancelFunc
+	wait   sync.WaitGroup
 }
 
 // NewRetentionSweeper builds the production sweeper over the control-plane
@@ -65,15 +68,15 @@ func newRetentionSweeper(repo Repository, containerService containers.ContainerS
 	}
 }
 
-// Start launches the sweep loop. It is idempotent; a nil sweeper starts
-// nothing.
+// Start launches the sweep loop. It is idempotent, refuses to start after
+// Close, and a nil sweeper starts nothing.
 func (r *RetentionSweeper) Start() {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.running {
+	if r.running || r.closed {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -93,6 +96,7 @@ func (r *RetentionSweeper) Close() {
 	cancel := r.cancel
 	r.cancel = nil
 	r.running = false
+	r.closed = true
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -132,6 +136,14 @@ func (r *RetentionSweeper) Sweep(ctx context.Context) (int, error) {
 }
 
 // expire removes one database's volume, then purges the row.
+//
+// The purge cascades to the database's backups and backup_schedules rows. It
+// deliberately does not attempt to delete backup artifacts: a soft-deleted
+// database's backups are already filtered out of every read (the queries join
+// deleted_at IS NULL), so their local/S3 objects are unreachable well before
+// this point. Reaping those artifacts needs the object-store/target resolution
+// the backup service owns and is tracked for FX-9 (backup durability); this
+// sweep must not pretend to have removed them.
 func (r *RetentionSweeper) expire(ctx context.Context, database Database) error {
 	if database.StoragePath != "" && database.ServerID != uuid.Nil {
 		if err := r.containers.RemoveVolume(ctx, database.ServerID, database.StoragePath); err != nil {

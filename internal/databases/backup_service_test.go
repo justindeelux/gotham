@@ -283,6 +283,44 @@ func TestRestoreStagesArtifactAndRunsJob(t *testing.T) {
 	}
 }
 
+// TestBackupPG18MountPath is the D1-7 backup/restore regression: the dump and
+// restore job containers (and the staging directory) must use the same
+// versioned mount the live container uses, or a PostgreSQL 18 job runs the
+// entrypoint against /var/lib/postgresql/data and refuses to start.
+func TestBackupPG18MountPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		want    string
+	}{
+		{name: "postgres16", version: "16-alpine", want: postgresLegacyMountPath},
+		{name: "postgres18", version: "18-alpine", want: postgres18MountPath},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := testDatabase(EnginePostgres, tt.version)
+			credentials := Credentials{Username: "app", Password: "pw", Database: "appdb"}
+
+			opts, err := backupJobOptions(db, credentials, "gotham-backup-abc", roleBackup, "run-1", "", "true")
+			if err != nil {
+				t.Fatalf("backupJobOptions: %v", err)
+			}
+			want := db.StoragePath + ":" + tt.want
+			if len(opts.Volumes) != 1 || opts.Volumes[0] != want {
+				t.Errorf("backup volumes = %v, want [%s]", opts.Volumes, want)
+			}
+
+			dir, err := stagingDir(db)
+			if err != nil {
+				t.Fatalf("stagingDir: %v", err)
+			}
+			if wantDir := strings.TrimRight(tt.want, "/") + "/" + stagingDirName; dir != wantDir {
+				t.Errorf("stagingDir = %q, want %q", dir, wantDir)
+			}
+		})
+	}
+}
+
 func TestRestoreRejectsIncompleteBackup(t *testing.T) {
 	fixture := newBackupFixture(t)
 	backup := fixture.backups.seedBackup(Backup{

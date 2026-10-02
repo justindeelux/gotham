@@ -107,8 +107,11 @@ var _ VersionedVolumeSpec = (*PostgresEngine)(nil)
 // for first-boot initialisation of the cluster before failures count.
 func (e *PostgresEngine) Healthcheck() Healthcheck {
 	return Healthcheck{
-		Probe:   ProbeHealth,
-		Command: []string{"pg_isready", "-U", placeholderUser, "-d", placeholderDatabase},
+		Probe: ProbeHealth,
+		// -h 127.0.0.1 is not optional: without it pg_isready answers over the
+		// unix socket, which the first-boot server listens on before it accepts
+		// TCP, so the probe would report healthy during initialisation.
+		Command: []string{"pg_isready", "-h", "127.0.0.1", "-U", placeholderUser, "-d", placeholderDatabase},
 		Timeout: 60 * time.Second,
 	}
 }

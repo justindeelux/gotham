@@ -96,6 +96,65 @@ func TestRetentionSweepKeepsRowWhenVolumeRemovalFails(t *testing.T) {
 	}
 }
 
+// TestRetentionSweepKeepsRowWhenPurgeFails: the volume is removed, then the
+// purge fails; the sweep reports no expiry and the row stays for a retry.
+func TestRetentionSweepKeepsRowWhenPurgeFails(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	now := time.Now().UTC()
+	expired := deletedRow(repo, serverID, now.Add(-VolumeRetention-time.Hour))
+	repo.softDeleteErr = errors.New("database down")
+
+	cs := &fakeContainers{}
+	sweeper := newRetentionSweeper(repo, cs, discardLogger())
+	sweeper.now = func() time.Time { return now }
+
+	removed, err := sweeper.Sweep(context.Background())
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed = %d, want 0 when the purge fails", removed)
+	}
+	if len(cs.volumeRemoves) != 1 || cs.volumeRemoves[0] != expired.StoragePath {
+		t.Errorf("removed volumes = %v, want the volume to have been removed first", cs.volumeRemoves)
+	}
+	if !repo.present(expired.ID) {
+		t.Error("the row must survive a failed purge so the sweep retries")
+	}
+}
+
+// TestRetentionSweeperLifecycle covers the started loop and the Close/Start
+// latch: the loop sweeps once at startup, Close stops it, and a later Start
+// must be refused so a stopped sweeper cannot silently run again.
+func TestRetentionSweeperLifecycle(t *testing.T) {
+	repo := newFakeRepository()
+	sweeper := newRetentionSweeper(repo, &fakeContainers{}, discardLogger())
+	sweeper.interval = time.Hour
+
+	sweeper.Start()
+	deadline := time.Now().Add(2 * time.Second)
+	for repo.expiredCalls() == 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if repo.expiredCalls() == 0 {
+		t.Fatal("the started loop never ran its startup sweep")
+	}
+	// Start is idempotent while running.
+	sweeper.Start()
+	if calls := repo.expiredCalls(); calls == 0 {
+		t.Fatal("second Start stopped the loop")
+	}
+
+	sweeper.Close()
+	before := repo.expiredCalls()
+	sweeper.Start()
+	time.Sleep(50 * time.Millisecond)
+	if after := repo.expiredCalls(); after != before {
+		t.Fatalf("Start after Close ran a sweep (%d → %d): a closed sweeper must not restart", before, after)
+	}
+}
+
 // TestRetentionSweepPurgesWhenServerGone: a row whose node is gone has no
 // reachable volume, so the sweep purges it without an agent call.
 func TestRetentionSweepPurgesWhenServerGone(t *testing.T) {

@@ -43,8 +43,10 @@ type Container struct {
 	RestartPolicy string            `json:"-"`
 	// Health is the container's Docker health status ("starting", "healthy",
 	// "unhealthy") when it declares a healthcheck; empty when it does not.
-	// Database readiness is gated on it.
-	Health string `json:"-"`
+	// Database readiness is gated on it, so unlike the other internal fields
+	// it must survive the Redis list cache, which marshals the DTO with
+	// encoding/json.
+	Health string `json:"health,omitempty"`
 }
 
 // ContainerMount is one engine-reported bind mount of a container.

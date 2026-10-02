@@ -251,7 +251,7 @@ func (f *fakeCache) Invalidate(_ context.Context, id uuid.UUID) error {
 }
 
 // fixture wires a service with fakes and a dialer returning mock.
-func fixture(registry *fakeRegistry, mock *mockDockerClient, cache *fakeCache) *Service {
+func fixture(registry *fakeRegistry, mock *mockDockerClient, cache Cache) *Service {
 	dial := func(context.Context, *servers.Server) (DockerClient, error) {
 		return mock, nil
 	}

@@ -120,13 +120,15 @@ func (rt *Realtime) ActiveStreams() int {
 // StartLogStream begins bridging an agent log stream for one container into
 // the realtime publisher. It is idempotent per channel while a stream is live:
 // the call replays the channel's recent lines to the (already subscribed)
-// caller instead of starting a second agent stream. A stale entry (its context
-// already cancelled) is replaced, so a POST racing the reaper still gets a
-// working stream (U6). The stream is cancelled when the control plane shuts
-// down or the channel has no subscribers for the idle grace.
-func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID string, req *agentv1.StreamLogsRequest) error {
+// caller instead of starting a second agent stream, and returns the number of
+// replay frames it published (0 for a fresh stream or an empty ring), so the
+// caller can size its replay window exactly (round-5 U1). A stale entry (its
+// context already cancelled) is replaced, so a POST racing the reaper still
+// gets a working stream (U6). The stream is cancelled when the control plane
+// shuts down or the channel has no subscribers for the idle grace.
+func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID string, req *agentv1.StreamLogsRequest) (int, error) {
 	if opener == nil {
-		return errors.New("ws: log stream opener is nil")
+		return 0, errors.New("ws: log stream opener is nil")
 	}
 	channel := LogChannel(serverID, containerID)
 
@@ -137,14 +139,15 @@ func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID
 		// The caller subscribes before starting (see LogViewer), so the replay
 		// reaches the new viewer. Frames are tagged Replay so a viewer that
 		// already has content skips them instead of duplicating history
-		// (round-2 U1); the end marker closes the batch so an existing viewer
-		// never renders a later batch (round-4 U1).
+		// (round-2 U1); the returned count plus the end marker bound the batch
+		// so a live frame cannot truncate it and an existing viewer never
+		// renders a later batch (round-4/5 U1).
 		for _, msg := range replay {
 			msg.Replay = true
 			_ = rt.pub.Publish(rt.ctx, channel, mustJSON(msg))
 		}
 		_ = rt.pub.Publish(rt.ctx, channel, replayEndNotice(channel))
-		return nil
+		return len(replay), nil
 	}
 	ctx, cancel := context.WithCancel(rt.ctx)
 	entry := &managedStream{ctx: ctx, cancel: cancel, replay: newReplayBuffer(streamReplayLines)}
@@ -160,7 +163,7 @@ func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID
 		defer rt.streamsWG.Done()
 		rt.runStream(entry, channel, opener, serverID, containerID, req)
 	}()
-	return nil
+	return 0, nil
 }
 
 // runStream opens the agent stream and forwards it until it ends or the stream

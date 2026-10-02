@@ -75,14 +75,16 @@ func (s *Server) handleStartLogStream(w http.ResponseWriter, r *http.Request) {
 		return client, client, nil
 	}
 	req := &agentv1.StreamLogsRequest{ContainerId: containerID, Follow: true, Tail: logStreamTail}
-	if err := s.realtime.StartLogStream(opener, serverID.String(), containerID, req); err != nil {
+	replay, err := s.realtime.StartLogStream(opener, serverID.String(), containerID, req)
+	if err != nil {
 		s.logger.Error("realtime: start log stream",
 			"error", err, "server_id", serverID.String(), "container_id", containerID)
 		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]string{
+	writeJSON(w, http.StatusAccepted, map[string]any{
 		"channel": ws.LogChannel(serverID.String(), containerID),
+		"replay":  replay,
 	})
 }

@@ -219,7 +219,7 @@ func TestM3EndToEnd(t *testing.T) {
 		}
 		return client, client, nil
 	}
-	if err := rt.StartLogStream(opener, serverID.String(), logsID, &agentv1.StreamLogsRequest{
+	if _, err := rt.StartLogStream(opener, serverID.String(), logsID, &agentv1.StreamLogsRequest{
 		ContainerId: logsID,
 		Follow:      true,
 		Tail:        20,

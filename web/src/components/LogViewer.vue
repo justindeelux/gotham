@@ -67,12 +67,30 @@ const logBody = ref<HTMLElement | null>(null);
 let lineId = 0;
 let scrollQueued = false;
 /**
- * Whether the current start should render replayed history. It is decided once
- * per start (in requestStreamStart) rather than per frame, because the first
- * replayed chunk makes `lines` non-empty and a per-frame check would then skip
- * the rest of the history (round-3 U1).
+ * Replay-window state, decided once per start (round-3/4/5 U1):
+ *  - `acceptReplay`: whether tagged history should render at all (the viewer
+ *    was empty when its start was requested).
+ *  - `replayRemaining`: the frame count the start response reported, or null
+ *    until it arrives (tagged frames may beat the HTTP response).
+ *  - `replayAccepted`: how many tagged frames have rendered in this window.
+ * A live frame never closes the window; the count, the server's `replay_end`
+ * marker, or the timeout do.
  */
 let acceptReplay = false;
+let replayRemaining: number | null = null;
+let replayAccepted = 0;
+let replayTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Fallback window for a replay whose counted frames never arrive, in ms. */
+const replayWindowMs = 5_000;
+
+/** clearReplayTimer cancels the fallback replay-window timeout. */
+function clearReplayTimer(): void {
+  if (replayTimer !== null) {
+    clearTimeout(replayTimer);
+    replayTimer = null;
+  }
+}
 
 const channelName = computed<string>(
   () => props.channel || `logs:${props.serverId}:${props.containerId}`,
@@ -159,9 +177,10 @@ function handleMessage(message: WebSocketMessage): void {
   }
 
   // End of a replay batch: stop accepting tagged history so a later viewer's
-  // replay is never rendered on top of this viewer's lines (round-4 U1).
+  // replay is never rendered on top of this viewer's lines (round-4/5 U1).
   if (message.payload?.type === "replay_end") {
     acceptReplay = false;
+    clearReplayTimer();
     return;
   }
 
@@ -193,15 +212,17 @@ function handleMessage(message: WebSocketMessage): void {
   const ts = formatTimestamp(payload?.ts, message.receivedAt);
   if (payload?.replay === true) {
     // Accept tagged history only for the batch this viewer's own start
-    // requested. The server's replay_end marker (or the first live frame
-    // below) closes the window, so a later viewer's batch is never rendered
-    // here (round-4 U1).
+    // requested, sized by the server-reported count. Live (untagged) frames do
+    // not close the window, so an interleaved live frame cannot truncate the
+    // history (round-5 U1).
     if (!acceptReplay) {
       return;
     }
-  } else {
-    // A live frame ends the replay window even if no marker arrives.
-    acceptReplay = false;
+    replayAccepted += 1;
+    if (replayRemaining !== null && replayAccepted >= replayRemaining) {
+      acceptReplay = false;
+      clearReplayTimer();
+    }
   }
   for (const piece of splitLines(text)) {
     appendLine({ id: ++lineId, ts, text: piece, kind: "line" });
@@ -343,18 +364,39 @@ function requestStreamStart(): void {
   }
   // Decide once per start whether replayed history should render: a late,
   // empty viewer accepts it; a viewer that already has lines (reconnect) does
-  // not, so no duplicate lines. Frames are tagged server-side (round-3 U1).
+  // not, so no duplicate lines. The server reports how many tagged frames it
+  // published for this start; until the response arrives, tagged frames are
+  // accepted optimistically (they can beat the HTTP response).
+  clearReplayTimer();
   acceptReplay = lines.value.length === 0 && pending.value.length === 0;
-  void startContainerLogStream(props.serverId, props.containerId).catch(
-    (error: unknown) => {
+  replayRemaining = null;
+  replayAccepted = 0;
+
+  if (acceptReplay) {
+    replayTimer = setTimeout(() => {
+      acceptReplay = false;
+      replayTimer = null;
+    }, replayWindowMs);
+  }
+
+  void startContainerLogStream(props.serverId, props.containerId)
+    .then((replay) => {
+      replayRemaining = replay;
+      if (replay === 0 || replayAccepted >= replay) {
+        acceptReplay = false;
+        clearReplayTimer();
+      }
+    })
+    .catch((error: unknown) => {
+      acceptReplay = false;
+      clearReplayTimer();
       appendLine({
         id: ++lineId,
         ts: formatTimestamp(null, Date.now()),
         text: `Could not start log stream: ${describeContainerError(error)}`,
         kind: "notice",
       });
-    },
-  );
+    });
 }
 
 watch(channelName, (next, previous) => {
@@ -373,6 +415,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  clearReplayTimer();
   closeStream(1000, "viewer unmounted");
 });
 </script>

@@ -62,14 +62,14 @@ func TestStartLogStreamIdempotentAndCleansUp(t *testing.T) {
 	opener := func(context.Context) (LogStreamer, io.Closer, error) { return tailStreamer{}, nil, nil }
 	req := &agentv1.StreamLogsRequest{ContainerId: "ctr", Follow: true}
 
-	if err := rt.StartLogStream(opener, "srv-rt", "ctr", req); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "ctr", req); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
 	if msg := nextClientFrame(t, client); msg.Type != TypeLog || msg.Data != "tail\n" {
 		t.Fatalf("frame = %+v, want a log frame", msg)
 	}
 	// A repeat start while the stream is live shares it (idempotent).
-	if err := rt.StartLogStream(opener, "srv-rt", "ctr", req); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "ctr", req); err != nil {
 		t.Fatalf("second StartLogStream: %v", err)
 	}
 	if got := rt.ActiveStreams(); got != 1 {
@@ -94,7 +94,7 @@ func TestStreamRemovedAfterEOF(t *testing.T) {
 		fail:   io.EOF,
 	}}
 	opener := func(context.Context) (LogStreamer, io.Closer, error) { return streamer, nil, nil }
-	if err := rt.StartLogStream(opener, "srv-rt", "eof", &agentv1.StreamLogsRequest{ContainerId: "eof"}); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "eof", &agentv1.StreamLogsRequest{ContainerId: "eof"}); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
 	if msg := nextClientFrame(t, client); msg.Type != TypeLog || msg.Data != "hello\n" {
@@ -116,7 +116,7 @@ func TestStreamReapedWhenNoSubscribers(t *testing.T) {
 
 	rt := mountFallback(t)
 	opener := func(context.Context) (LogStreamer, io.Closer, error) { return ctxStreamer{}, nil, nil }
-	if err := rt.StartLogStream(opener, "srv-rt", "idle", &agentv1.StreamLogsRequest{ContainerId: "idle"}); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "idle", &agentv1.StreamLogsRequest{ContainerId: "idle"}); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
 
@@ -136,7 +136,7 @@ func TestRealtimeCloseCancelsActiveStream(t *testing.T) {
 		close(started)
 		return ctxStreamer{}, nil, nil
 	}
-	if err := rt.StartLogStream(opener, "srv-rt", "live", &agentv1.StreamLogsRequest{ContainerId: "live"}); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "live", &agentv1.StreamLogsRequest{ContainerId: "live"}); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
 	select {
@@ -255,7 +255,7 @@ func TestStartLogStreamReplaysToLateViewer(t *testing.T) {
 	waitForCondition(t, 2*time.Second, "first subscription", func() bool {
 		return rt.Hub.Subscribers(channel) == 1
 	})
-	if err := rt.StartLogStream(opener, "srv-rt", "replay", req); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "replay", req); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
 	live := nextClientFrame(t, first)
@@ -268,7 +268,7 @@ func TestStartLogStreamReplaysToLateViewer(t *testing.T) {
 	waitForCondition(t, 2*time.Second, "second subscription", func() bool {
 		return rt.Hub.Subscribers(channel) == 2
 	})
-	if err := rt.StartLogStream(opener, "srv-rt", "replay", req); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "replay", req); err != nil {
 		t.Fatalf("repeat StartLogStream: %v", err)
 	}
 	replayed := nextClientFrame(t, second)
@@ -304,7 +304,7 @@ func TestReplayEmitsAllBufferedFrames(t *testing.T) {
 	waitForCondition(t, 2*time.Second, "first subscription", func() bool {
 		return rt.Hub.Subscribers(channel) == 1
 	})
-	if err := rt.StartLogStream(opener, "srv-rt", "multi", req); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "multi", req); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
 	for i, want := range []string{"one\n", "two\n", "three\n"} {
@@ -319,7 +319,7 @@ func TestReplayEmitsAllBufferedFrames(t *testing.T) {
 	waitForCondition(t, 2*time.Second, "late subscription", func() bool {
 		return rt.Hub.Subscribers(channel) == 2
 	})
-	if err := rt.StartLogStream(opener, "srv-rt", "multi", req); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "multi", req); err != nil {
 		t.Fatalf("repeat StartLogStream: %v", err)
 	}
 	for i, want := range []string{"one\n", "two\n", "three\n"} {
@@ -345,7 +345,7 @@ func TestReplayEndMarkerClosesTheBatch(t *testing.T) {
 	waitForCondition(t, 2*time.Second, "first subscription", func() bool {
 		return rt.Hub.Subscribers(channel) == 1
 	})
-	if err := rt.StartLogStream(opener, "srv-rt", "batch", req); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "batch", req); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
 	if live := nextClientFrame(t, first); live.Type != TypeLog || live.Replay {
@@ -357,7 +357,7 @@ func TestReplayEndMarkerClosesTheBatch(t *testing.T) {
 	waitForCondition(t, 2*time.Second, "late subscription", func() bool {
 		return rt.Hub.Subscribers(channel) == 2
 	})
-	if err := rt.StartLogStream(opener, "srv-rt", "batch", req); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "batch", req); err != nil {
 		t.Fatalf("repeat StartLogStream: %v", err)
 	}
 
@@ -368,6 +368,69 @@ func TestReplayEndMarkerClosesTheBatch(t *testing.T) {
 	marker := nextClientFrame(t, late)
 	if marker.Type != TypeReplayEnd || marker.Channel != channel {
 		t.Fatalf("batch end frame = %+v, want %q on %q", marker, TypeReplayEnd, channel)
+	}
+}
+
+// TestStartLogStreamReplayCount is the round-5 U1 contract: the count returned
+// by StartLogStream equals the number of tagged frames the server actually
+// publishes for that replay.
+func TestStartLogStreamReplayCount(t *testing.T) {
+	rt := mountFallback(t)
+
+	channel := LogChannel("srv-rt", "count")
+	chunks := [][]byte{[]byte("a\n"), []byte("b\n"), []byte("c\n")}
+	opener := func(context.Context) (LogStreamer, io.Closer, error) {
+		return scriptedTailStreamer{chunks: chunks}, nil, nil
+	}
+	req := &agentv1.StreamLogsRequest{ContainerId: "count"}
+
+	first := rt.Hub.newClient()
+	rt.Hub.subscribe(first, channel)
+	waitForCondition(t, 2*time.Second, "first subscription", func() bool {
+		return rt.Hub.Subscribers(channel) == 1
+	})
+	n, err := rt.StartLogStream(opener, "srv-rt", "count", req)
+	if err != nil {
+		t.Fatalf("StartLogStream: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("fresh stream replay count = %d, want 0", n)
+	}
+	// Drain the live frames so the ring is fully populated before the repeat.
+	for i := 0; i < len(chunks); i++ {
+		if msg := nextClientFrame(t, first); msg.Type != TypeLog || msg.Replay {
+			t.Fatalf("live frame %d = %+v, want untagged", i, msg)
+		}
+	}
+
+	late := rt.Hub.newClient()
+	rt.Hub.subscribe(late, channel)
+	waitForCondition(t, 2*time.Second, "late subscription", func() bool {
+		return rt.Hub.Subscribers(channel) == 2
+	})
+	n, err = rt.StartLogStream(opener, "srv-rt", "count", req)
+	if err != nil {
+		t.Fatalf("repeat StartLogStream: %v", err)
+	}
+	if n != len(chunks) {
+		t.Fatalf("replay count = %d, want %d", n, len(chunks))
+	}
+
+	// The server publishes exactly n tagged frames before the end marker.
+	tagged := 0
+	for {
+		msg := nextClientFrame(t, late)
+		if msg.Type == TypeReplayEnd {
+			break
+		}
+		if msg.Type == TypeLog && msg.Replay {
+			tagged++
+			continue
+		}
+		t.Fatalf("unexpected replay frame %+v", msg)
+	}
+	if tagged != n {
+		t.Fatalf("tagged replay frames = %d, want the reported count %d", tagged, n)
 	}
 }
 
@@ -426,7 +489,7 @@ func TestStartLogStreamRetriesPublishAndNotifies(t *testing.T) {
 
 	streamer := fakeStreamer{stream: &fakeLogStream{chunks: [][]byte{[]byte("hi\n")}, fail: io.EOF}}
 	opener := func(context.Context) (LogStreamer, io.Closer, error) { return streamer, nil, nil }
-	if err := rt.StartLogStream(opener, "srv-rt", "flaky", &agentv1.StreamLogsRequest{ContainerId: "flaky"}); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "flaky", &agentv1.StreamLogsRequest{ContainerId: "flaky"}); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
 
@@ -506,7 +569,7 @@ func TestResumedOnlyForLogFrames(t *testing.T) {
 
 	streamer := fakeStreamer{stream: &fakeLogStream{chunks: [][]byte{[]byte("hi\n")}, fail: io.EOF}}
 	opener := func(context.Context) (LogStreamer, io.Closer, error) { return streamer, nil, nil }
-	if err := rt.StartLogStream(opener, "srv-rt", "terminal", &agentv1.StreamLogsRequest{ContainerId: "terminal"}); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "terminal", &agentv1.StreamLogsRequest{ContainerId: "terminal"}); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
 	waitForCondition(t, 3*time.Second, "stream end", func() bool {
@@ -556,7 +619,7 @@ func TestStartLogStreamReplacesStaleEntry(t *testing.T) {
 	rt.streamsMu.Unlock()
 
 	opener := func(context.Context) (LogStreamer, io.Closer, error) { return ctxStreamer{}, nil, nil }
-	if err := rt.StartLogStream(opener, "srv-rt", "stale", &agentv1.StreamLogsRequest{ContainerId: "stale"}); err != nil {
+	if _, err := rt.StartLogStream(opener, "srv-rt", "stale", &agentv1.StreamLogsRequest{ContainerId: "stale"}); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
 

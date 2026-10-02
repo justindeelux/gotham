@@ -33,7 +33,12 @@ const requestTimeout = 15_000;
 const refreshPath = "/api/v1/auth/refresh";
 
 /** Endpoints that must never trigger a refresh-and-retry on 401. */
-const noRefreshPaths = ["/auth/login", "/auth/register", "/auth/refresh"];
+const noRefreshPaths = [
+  "/auth/login",
+  "/auth/register",
+  "/auth/refresh",
+  "/auth/oauth/exchange",
+];
 
 /** Shared axios instance for the `/api/v1` control-plane API. */
 export const http: AxiosInstance = axios.create({

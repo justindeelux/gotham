@@ -22,13 +22,26 @@ import (
 // name lives here so both sides agree.
 const StateCookieName = "gotham_oauth_state"
 
+// FlowCookieName is the cookie binding a login flow to the browser that started
+// it. It is set beside the state cookie and must accompany the one-time exchange
+// code that redeems the session, so a crafted callback URL cannot plant a
+// session in another browser. The HTTP layer owns writing it.
+const FlowCookieName = "gotham_oauth_flow"
+
 // OAuth state bookkeeping. A state is single-use and expires after stateTTL;
 // expired entries are swept by a background goroutine.
 const (
 	oauthStateTTL           = 10 * time.Minute
 	oauthStateCleanupPeriod = time.Minute
 	oauthStateBytes         = 32
+	// oauthStateCapacity bounds how many outstanding states the store keeps, so
+	// a flood of login starts cannot grow it without limit. NewState refuses
+	// once the cap is hit; the caller answers a generic error.
+	oauthStateCapacity = 10000
 )
+
+// errStateStoreFull reports that the OAuth state store hit its capacity cap.
+var errStateStoreFull = errors.New("auth: oauth state store full")
 
 // OAuthProvider abstracts an OAuth2 identity provider so the service can drive
 // several of them uniformly.
@@ -242,7 +255,7 @@ func newStateStore() *stateStore {
 }
 
 // NewState mints a random state bound to provider and remembers it until TTL
-// expiry.
+// expiry. It refuses with errStateStoreFull once the store is at capacity.
 func (s *stateStore) NewState(provider string) (string, error) {
 	buf := make([]byte, oauthStateBytes)
 	if _, err := rand.Read(buf); err != nil {
@@ -251,11 +264,14 @@ func (s *stateStore) NewState(provider string) (string, error) {
 	state := base64.RawURLEncoding.EncodeToString(buf)
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.entries) >= oauthStateCapacity {
+		return "", errStateStoreFull
+	}
 	s.entries[state] = oauthStateEntry{
 		provider:  provider,
 		expiresAt: s.now().Add(oauthStateTTL),
 	}
-	s.mu.Unlock()
 
 	return state, nil
 }

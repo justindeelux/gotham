@@ -1,58 +1,55 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NSpace, NSpin, NText } from "naive-ui";
 import { onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
+import { http } from "../api/http";
+import type { AuthResult } from "../api/token";
 import { describeAuthError, useAuthStore } from "../stores/auth";
 
-interface FragmentTokens {
-  access_token: string;
-  refresh_token: string;
-}
-
 const authStore = useAuthStore();
+const route = useRoute();
 const router = useRouter();
 
 const loadError = ref("");
-
-/** parseFragment reads the OAuth token pair from the URL fragment. */
-function parseFragment(): FragmentTokens | null {
-  const fragment = window.location.hash.replace(/^#/, "");
-  if (!fragment) {
-    return null;
-  }
-
-  const params = new URLSearchParams(fragment);
-  const accessToken = params.get("access_token");
-  const refreshToken = params.get("refresh_token");
-  if (!accessToken || !refreshToken) {
-    return null;
-  }
-
-  return { access_token: accessToken, refresh_token: refreshToken };
-}
 
 /** backToLogin returns to the sign-in page after a failed callback. */
 async function backToLogin(): Promise<void> {
   await router.replace({ path: "/login", query: { error: "oauth_failed" } });
 }
 
+/** clearCode drops the one-time code from the address bar. */
+function clearCode(): void {
+  window.history.replaceState(null, "", "/oauth/callback");
+}
+
 onMounted(async () => {
   try {
-    const tokens = parseFragment();
-    if (!tokens) {
+    const code = typeof route.query.code === "string" ? route.query.code : "";
+    if (!code) {
       await backToLogin();
       return;
     }
 
-    authStore.setSession(tokens);
+    // The code is redeemed against the HttpOnly flow cookie so a crafted
+    // callback link cannot plant someone else's session in this browser.
+    const response = await http.post<AuthResult>(
+      "/auth/oauth/exchange",
+      { code },
+      { withCredentials: true },
+    );
+    authStore.setSession(response.data);
 
-    // Strip the tokens from the address bar before moving on.
-    window.history.replaceState(null, "", "/oauth/callback");
+    clearCode();
+
+    // Refresh through /auth/me so the shell never renders a placeholder after
+    // sign-in (A2-17).
+    await authStore.fetchMe().catch(() => {});
 
     await router.replace({ path: "/dashboard" });
   } catch (error) {
     loadError.value = describeAuthError(error);
+    clearCode();
   }
 });
 </script>

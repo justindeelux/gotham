@@ -144,6 +144,22 @@ func TestStateStoreCleanup(t *testing.T) {
 	}
 }
 
+func TestStateStoreCapacity(t *testing.T) {
+	states := newStateStore()
+	t.Cleanup(states.Close)
+
+	// Fill the store to its cap; all entries are live, so no sweep frees room.
+	for i := 0; i < oauthStateCapacity; i++ {
+		if _, err := states.NewState("github"); err != nil {
+			t.Fatalf("NewState #%d: %v", i, err)
+		}
+	}
+
+	if _, err := states.NewState("github"); !errors.Is(err, errStateStoreFull) {
+		t.Fatalf("NewState past capacity error = %v, want errStateStoreFull", err)
+	}
+}
+
 func TestOAuthBeginUnknownProvider(t *testing.T) {
 	oauth := newTestOAuth(t, &fakeOAuthProvider{name: "github"})
 

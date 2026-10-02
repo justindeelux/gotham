@@ -104,14 +104,17 @@ func (p *GitHubProvider) Identity(ctx context.Context, tok *oauth2.Token) (*OAut
 }
 
 // primaryEmail fetches GET /user/emails and picks the primary verified address,
-// falling back to the first verified address, then to a primary unverified one.
+// falling back to the first verified address. An address GitHub has not
+// verified is never accepted: a user may mark an address primary before
+// verifying it, so trusting it would let an attacker claim someone else's email
+// (and account) through OAuth.
 func (p *GitHubProvider) primaryEmail(ctx context.Context, client *http.Client) (string, error) {
 	var emails []gitHubEmail
 	if err := p.getJSON(ctx, client, "/user/emails", &emails); err != nil {
 		return "", err
 	}
 
-	var verifiedFallback, primaryFallback string
+	var verifiedFallback string
 	for _, email := range emails {
 		if email.Email == "" {
 			continue
@@ -119,9 +122,6 @@ func (p *GitHubProvider) primaryEmail(ctx context.Context, client *http.Client) 
 		if email.Primary {
 			if email.Verified {
 				return email.Email, nil
-			}
-			if primaryFallback == "" {
-				primaryFallback = email.Email
 			}
 			continue
 		}
@@ -132,9 +132,6 @@ func (p *GitHubProvider) primaryEmail(ctx context.Context, client *http.Client) 
 
 	if verifiedFallback != "" {
 		return verifiedFallback, nil
-	}
-	if primaryFallback != "" {
-		return primaryFallback, nil
 	}
 	return "", ErrMissingEmail
 }

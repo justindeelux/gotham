@@ -6,7 +6,21 @@ import {
   NMessageProvider,
 } from "naive-ui";
 import type { GlobalThemeOverrides } from "naive-ui";
+import { onMounted } from "vue";
 import { RouterView } from "vue-router";
+
+import { useAuthStore } from "./stores/auth";
+
+const authStore = useAuthStore();
+
+// A session restored from localStorage may not carry the account (OAuth mints
+// the token pair before the SPA loads it). Refresh it once on mount so the shell
+// does not render a placeholder until a manual reload (A2-17).
+onMounted(() => {
+  if (authStore.isAuthenticated && authStore.user === null) {
+    void authStore.fetchMe().catch(() => {});
+  }
+});
 
 // Gotham dark-theme mapping for Naive UI, derived from
 // web/src/styles/tokens.css (docs/design is the source of truth).

@@ -145,17 +145,39 @@ const refreshLockName = "gotham-refresh";
 /** localStorage key holding the best-effort refresh lease (insecure contexts). */
 const refreshLeaseKey = "gotham-refresh-lock";
 
-/** Lease lifetime in ms: the refresh timeout, so a crashed tab self-releases. */
-const refreshLeaseTtl = requestTimeout;
+/**
+ * Lease lifetime in ms. It is longer than the refresh request timeout so a slow
+ * refresh does not let another tab acquire the lease and replay the consumed
+ * token; the TTL is the only self-heal for a tab that crashed mid-refresh.
+ */
+const refreshLeaseTtl = requestTimeout + 5_000;
 
 /** How long the lease fallback waits between acquisition attempts, in ms. */
 const refreshLeaseRetryMs = 250;
+
+/**
+ * How long to wait after writing the lease before the confirming re-read, so a
+ * concurrent cross-process writer can be observed. The write/read pair is still
+ * not atomic: this remains best-effort.
+ */
+const refreshLeaseConfirmMs = 75;
+
+/** sleep resolves after ms milliseconds. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /** Best-effort cross-tab refresh lease persisted in localStorage. */
 interface RefreshLease {
   id: string;
   expiresAt: number;
 }
+
+/** Outcome of a lease acquisition attempt. */
+type LeaseAttempt =
+  | { status: "acquired"; release: () => void }
+  | { status: "held" }
+  | { status: "unusable" };
 
 /** getLockStorage returns localStorage when it is available, or null otherwise. */
 function getLockStorage(): Storage | null {
@@ -186,22 +208,23 @@ function readRefreshLease(storage: Storage): RefreshLease | null {
 }
 
 /**
- * tryAcquireRefreshLease takes the best-effort lease and returns a release
- * function, or null when another tab holds an unexpired one.
+ * tryAcquireRefreshLease takes the best-effort lease.
  *
- * This fallback is weaker than navigator.locks: there is no queue and no
- * crash-safe release, only a TTL, and two simultaneous writers resolve by last
- * writer wins (confirmed by re-reading). It exists so the A2-12 mitigation also
- * applies on plain HTTP, where the Web Locks API is unavailable because it
- * requires a secure context.
+ * The result distinguishes a live foreign lease ("held", so the caller waits)
+ * from storage that cannot be written at all ("unusable", so the caller runs
+ * unlocked rather than hanging forever). This fallback is weaker than
+ * navigator.locks: there is no queue and no crash-safe release, only a TTL, and
+ * two simultaneous writers resolve by last writer wins (confirmed by a delayed
+ * re-read). It exists so the A2-12 mitigation also applies on plain HTTP, where
+ * the Web Locks API is unavailable because it requires a secure context.
  */
-function tryAcquireRefreshLease(): (() => void) | null {
+async function tryAcquireRefreshLease(): Promise<LeaseAttempt> {
   const storage = getLockStorage();
   if (!storage) {
-    return null;
+    return { status: "unusable" };
   }
   if (readRefreshLease(storage)) {
-    return null;
+    return { status: "held" };
   }
 
   // crypto.randomUUID() is secure-context only, so build the id from a
@@ -211,57 +234,83 @@ function tryAcquireRefreshLease(): (() => void) | null {
   try {
     storage.setItem(refreshLeaseKey, JSON.stringify(lease));
   } catch {
-    return null;
+    // Quota full or a write-blocked profile: a lease cannot be coordinated.
+    return { status: "unusable" };
   }
 
-  // Another tab may have written between our read and write; last writer wins,
-  // so only the id that survived the re-read owns the lease.
+  // Give a concurrent writer time to land, then confirm ownership. The last
+  // writer wins; only the id that survived the re-read owns the lease.
+  await sleep(refreshLeaseConfirmMs);
   if (readRefreshLease(storage)?.id !== id) {
-    return null;
+    return { status: "held" };
   }
 
-  return () => {
-    if (readRefreshLease(storage)?.id === id) {
-      try {
-        storage.removeItem(refreshLeaseKey);
-      } catch {
-        // Ignore private-mode failures; the TTL expires the lease anyway.
+  return {
+    status: "acquired",
+    release: () => {
+      if (readRefreshLease(storage)?.id === id) {
+        try {
+          storage.removeItem(refreshLeaseKey);
+        } catch {
+          // Ignore private-mode failures; the TTL expires the lease anyway.
+        }
       }
-    }
+    },
   };
 }
 
 /** withRefreshLease waits for the lease, then runs task while holding it. */
 async function withRefreshLease<T>(task: () => Promise<T>): Promise<T> {
-  // Without storage there is nothing to coordinate on: keep the previous
-  // per-tab behaviour rather than hanging.
-  if (!getLockStorage()) {
-    return task();
-  }
-
   for (;;) {
-    const release = tryAcquireRefreshLease();
-    if (release) {
+    const attempt = await tryAcquireRefreshLease();
+    if (attempt.status === "unusable") {
+      // Storage cannot coordinate a lease: run unlocked rather than hang.
+      return task();
+    }
+    if (attempt.status === "acquired") {
       try {
         return await task();
       } finally {
-        release();
+        attempt.release();
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, refreshLeaseRetryMs));
+    await sleep(refreshLeaseRetryMs);
   }
+}
+
+/** Lock errors that mean the Web Locks API could not run the task at all. */
+const lockEnvironmentErrorNames = new Set([
+  "InvalidStateError",
+  "SecurityError",
+  "NotSupportedError",
+]);
+
+/** errorName extracts a DOMException/Error name for environment-error checks. */
+function errorName(error: unknown): string {
+  return typeof error === "object" && error !== null && "name" in error
+    ? String((error as { name: unknown }).name)
+    : "";
 }
 
 /**
  * withRefreshLock runs task while holding a cross-tab lock, so two tabs cannot
  * present the same single-use refresh token at once. The Web Locks API is the
  * primary path (secure contexts); on plain HTTP it is unavailable, so the
- * best-effort localStorage lease above is used instead.
+ * best-effort localStorage lease above is used instead. An environment error
+ * from the lock call itself (not from the task) also falls back to the lease.
  */
-function withRefreshLock<T>(task: () => Promise<T>): Promise<T> {
+async function withRefreshLock<T>(task: () => Promise<T>): Promise<T> {
   const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
   if (locks) {
-    return locks.request(refreshLockName, task) as Promise<T>;
+    try {
+      return (await locks.request(refreshLockName, task)) as T;
+    } catch (error) {
+      // Only lock-environment failures fall back; a rejected task (a refresh
+      // failure) must propagate unchanged.
+      if (!lockEnvironmentErrorNames.has(errorName(error))) {
+        throw error;
+      }
+    }
   }
   return withRefreshLease(task);
 }
@@ -309,6 +358,10 @@ async function rotateRefreshToken(
     if (userId && replacementUserId && userId !== replacementUserId) {
       throw new StaleRefreshError();
     }
+    // Another tab rotated the session. Re-persist it through this tab's store
+    // (idempotent write + notify) so a later persist() here cannot write the
+    // old, now-revoked token back over the rotated one.
+    setSession(getSession());
     const accessToken = getAccessToken();
     if (!accessToken) {
       throw new StaleRefreshError();

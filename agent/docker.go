@@ -44,6 +44,12 @@ var ErrDockerNotFound = errors.New("docker: not found")
 // answers 502 instead of 500.
 var ErrDockerUnavailable = errors.New("docker: daemon unavailable")
 
+// ErrDockerImageNotFound marks a Docker API 404 for a missing image or
+// repository (a create with an absent image, a pull of an unknown repo). It is
+// distinct from ErrDockerNotFound so a bad image reference is reported as bad
+// input, not as a missing container.
+var ErrDockerImageNotFound = errors.New("docker: image not found")
+
 // DockerClient talks to the Docker Engine API over a unix socket or TCP
 // endpoint. It implements the subset of the engine API the agent exposes to
 // the control plane.
@@ -317,7 +323,7 @@ func (c *DockerClient) RunImage(ctx context.Context, req *agentv1.CreateContaine
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
 		defer cancel()
 		if removeErr := c.Remove(cleanupCtx, id); removeErr != nil {
-			return "", fmt.Errorf("%w (cleanup failed: %v)", err, removeErr)
+			return "", fmt.Errorf("%w: container %s left behind (cleanup failed: %v)", err, id, removeErr)
 		}
 		return "", err
 	}
@@ -577,15 +583,38 @@ func dockerTransportError(method, path string, err error) error {
 }
 
 // statusError reads a bounded error body, closes the response, and formats the
-// status failure. A 404 is wrapped in ErrDockerNotFound so the gRPC boundary
-// can answer NotFound.
+// status failure. A 404 is classified as a missing container or a missing
+// image so the gRPC boundary can answer the right code.
 func statusError(method, path string, response *http.Response) error {
 	defer func() { _ = response.Body.Close() }()
-	message, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+	raw, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+	message := strings.TrimSpace(string(raw))
 	if response.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("%w: docker: %s %s: status 404: %s", ErrDockerNotFound, method, path, strings.TrimSpace(string(message)))
+		return notFoundError(method, path, message)
 	}
-	return fmt.Errorf("docker: %s %s: status %d: %s", method, path, response.StatusCode, strings.TrimSpace(string(message)))
+	return fmt.Errorf("docker: %s %s: status %d: %s", method, path, response.StatusCode, message)
+}
+
+// notFoundError classifies a Docker 404. A container-scoped miss is
+// ErrDockerNotFound; a missing image or repository is ErrDockerImageNotFound so
+// a bad image reference is not reported as a missing container. The message is
+// matched first (Docker's own wording), then the operation.
+func notFoundError(method, path, message string) error {
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "no such container"):
+		return fmt.Errorf("%w: docker: %s %s: status 404: %s", ErrDockerNotFound, method, path, message)
+	case strings.Contains(lower, "no such image"),
+		strings.Contains(lower, "manifest unknown"),
+		strings.Contains(lower, "not found"),
+		strings.Contains(lower, "pull access denied"),
+		strings.Contains(lower, "repository does not exist"):
+		return fmt.Errorf("%w: docker: %s %s: status 404: %s", ErrDockerImageNotFound, method, path, message)
+	case path == "/containers/create" || strings.HasPrefix(path, "/images/"):
+		return fmt.Errorf("%w: docker: %s %s: status 404: %s", ErrDockerImageNotFound, method, path, message)
+	default:
+		return fmt.Errorf("%w: docker: %s %s: status 404: %s", ErrDockerNotFound, method, path, message)
+	}
 }
 
 // dockerOK reports whether status indicates success. Docker returns 304 for
@@ -614,6 +643,22 @@ func decodeLogStream(ctx context.Context, source io.Reader, out chan<- LogMessag
 	reader := bufio.NewReader(source)
 	header := make([]byte, 8)
 	for {
+		first, err := reader.Peek(1)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			report(ctx, out, err)
+			return
+		}
+		if first[0] > 2 {
+			// A first byte outside Docker's stream-type set cannot begin a
+			// multiplexed header, so this is a raw TTY stream. Copy it
+			// immediately instead of waiting for eight bytes: a short line on
+			// a following stream is delivered without stalling.
+			copyRaw(ctx, reader, out)
+			return
+		}
 		n, err := io.ReadFull(reader, header)
 		if err != nil {
 			switch {

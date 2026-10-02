@@ -283,10 +283,13 @@ type fakeContainers struct {
 	// logs is the payload Logs hands back; logFn overrides it per container
 	// so a job flow that runs several containers can script each one. logErr
 	// fails the call instead. logIDs records every container asked for.
-	logs   [][]byte
-	logFn  func(opts containers.RunOptions) [][]byte
-	logErr error
-	logIDs []string
+	// logStreamErr is delivered on the streamErr channel after the chunks, so a
+	// test can drive a mid-stream agent failure.
+	logs         [][]byte
+	logFn        func(opts containers.RunOptions) [][]byte
+	logErr       error
+	logStreamErr error
+	logIDs       []string
 }
 
 // Compile-time guarantee that fakeContainers satisfies the seam.
@@ -381,6 +384,7 @@ func (f *fakeContainers) Logs(_ context.Context, _ uuid.UUID, containerID string
 	if fn != nil && len(f.runs) > 0 {
 		chunks = fn(f.runs[len(f.runs)-1])
 	}
+	streamFailure := f.logStreamErr
 	f.mu.Unlock()
 
 	out := make(chan []byte)
@@ -390,6 +394,9 @@ func (f *fakeContainers) Logs(_ context.Context, _ uuid.UUID, containerID string
 		defer close(streamErr)
 		for _, chunk := range chunks {
 			out <- chunk
+		}
+		if streamFailure != nil {
+			streamErr <- streamFailure
 		}
 	}()
 	return out, streamErr, nil

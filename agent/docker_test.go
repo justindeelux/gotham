@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,6 +32,8 @@ type fakeDockerState struct {
 	createdID string
 	// startFail makes the start endpoint answer 500.
 	startFail bool
+	// removeFail makes the delete endpoint answer 500.
+	removeFail bool
 	// logsBody, when non-nil, replaces the multiplexed log frames with the
 	// exact bytes written (for short/raw/truncated stream tests).
 	logsBody []byte
@@ -118,8 +121,16 @@ func newFakeDockerServer(t *testing.T) (*httptest.Server, *fakeDockerState) {
 		rest := strings.TrimPrefix(r.URL.Path, "/containers/")
 		if r.Method == http.MethodDelete {
 			state.mu.Lock()
-			state.removed = append(state.removed, rest)
+			fail := state.removeFail
+			if !fail {
+				state.removed = append(state.removed, rest)
+			}
 			state.mu.Unlock()
+			if fail {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"message":"remove failed"}`))
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -471,6 +482,24 @@ func TestDockerClientRunImageCleansUpFailedStart(t *testing.T) {
 	}
 }
 
+// TestDockerClientRunImageCleanupFailureNamesContainer is the U4 guard: when the
+// cleanup removal also fails, the error must name the orphan container so it can
+// be found and deleted.
+func TestDockerClientRunImageCleanupFailureNamesContainer(t *testing.T) {
+	server, state := newFakeDockerServer(t)
+	state.mu.Lock()
+	state.startFail = true
+	state.removeFail = true
+	state.mu.Unlock()
+	client := newFakeDockerClient(t, server.URL)
+
+	if _, err := client.RunImage(context.Background(), createContainerRequestForTest()); err == nil {
+		t.Fatal("RunImage with failing start and cleanup = nil; want failure")
+	} else if !strings.Contains(err.Error(), "container created123 left behind") {
+		t.Errorf("error = %q; want the orphan container id in the cleanup failure", err)
+	}
+}
+
 // TestDockerClientLogsShortRawStream is the A3-4 guard: a raw stream shorter
 // than a multiplexed header must still be delivered, not dropped.
 func TestDockerClientLogsShortRawStream(t *testing.T) {
@@ -542,6 +571,78 @@ func TestDockerClientHonorsContext(t *testing.T) {
 	defer cancel()
 	if _, err := client.Version(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Version with expired ctx = %v; want DeadlineExceeded", err)
+	}
+}
+
+// TestDecodeLogStreamFollowsShortRawLine is the U1 guard: on a following raw
+// (TTY) stream that writes fewer than eight bytes and stays open, the bytes must
+// be delivered without waiting for a full header.
+func TestDecodeLogStreamFollowsShortRawLine(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := make(chan LogMessage)
+	go decodeLogStream(ctx, reader, out)
+
+	if _, err := writer.Write([]byte("ok\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	select {
+	case message := <-out:
+		if message.Err != nil {
+			t.Fatalf("stream error = %v; want clean data", message.Err)
+		}
+		if string(message.Data) != "ok\n" {
+			t.Errorf("data = %q; want %q", message.Data, "ok\n")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("short raw line withheld while the stream is still open")
+	}
+}
+
+// TestDockerClientNotFoundTaxonomy is the U2/U3 guard: a Docker 404 is
+// classified by scope — a missing container is ErrDockerNotFound, a missing
+// image or repository is ErrDockerImageNotFound.
+func TestDockerClientNotFoundTaxonomy(t *testing.T) {
+	mux := http.NewServeMux()
+	notFound := func(body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(body))
+		}
+	}
+	mux.HandleFunc("/containers/abc/start", notFound(`{"message":"No such container: abc"}`))
+	mux.HandleFunc("/containers/create", notFound(`{"message":"No such image: nope:latest"}`))
+	mux.HandleFunc("/images/create", notFound(`{"message":"pull access denied for nope, repository does not exist"}`))
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	client := newFakeDockerClient(t, server.URL)
+	ctx := context.Background()
+
+	if err := client.Start(ctx, "abc"); !errors.Is(err, ErrDockerNotFound) {
+		t.Errorf("container 404 = %v; want ErrDockerNotFound", err)
+	}
+	if _, err := client.CreateContainer(ctx, &agentv1.CreateContainerRequest{Image: "nope:latest"}); !errors.Is(err, ErrDockerImageNotFound) {
+		t.Errorf("create with a missing image = %v; want ErrDockerImageNotFound", err)
+	}
+	if err := client.PullImage(ctx, "nope"); !errors.Is(err, ErrDockerImageNotFound) {
+		t.Errorf("pull of a missing repository = %v; want ErrDockerImageNotFound", err)
+	}
+}
+
+// TestDockerClientDaemonDown is the U3 guard for the daemon-down mapping: a
+// closed listener is ErrDockerUnavailable, not Internal.
+func TestDockerClientDaemonDown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := server.URL
+	server.Close()
+	client := newFakeDockerClient(t, url)
+
+	if _, err := client.Version(context.Background()); !errors.Is(err, ErrDockerUnavailable) {
+		t.Fatalf("closed daemon = %v; want ErrDockerUnavailable", err)
 	}
 }
 

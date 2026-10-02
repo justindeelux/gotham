@@ -231,6 +231,10 @@ func dockerError(action string, err error) error {
 		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)
 	case errors.Is(err, ErrDockerNotFound):
 		return status.Errorf(codes.NotFound, "%s: %v", action, err)
+	case errors.Is(err, ErrDockerImageNotFound):
+		// A missing image is a bad image reference, not a missing resource:
+		// the control plane answers 400 rather than 404.
+		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)
 	case errors.Is(err, ErrDockerUnavailable):
 		return status.Errorf(codes.Unavailable, "%s: %v", action, err)
 	case errors.Is(err, context.Canceled):

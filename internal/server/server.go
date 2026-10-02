@@ -56,8 +56,13 @@ type Pinger interface {
 
 // Server is the control-plane HTTP server.
 type Server struct {
-	cfg         *config.Config
-	logger      *slog.Logger
+	cfg    *config.Config
+	logger *slog.Logger
+	// secretKey is the credential-encryption key resolved once at startup:
+	// the configured GOTHAM_SECRET_KEY, or a generated ephemeral one when it
+	// is empty. Every subsystem that seals credentials is wired with this
+	// value, so none can fall back to the publicly derivable SHA-256("").
+	secretKey   string
 	db          Pinger
 	redis       Pinger
 	auth        AuthService
@@ -98,6 +103,10 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	}
 
 	snap := cfg.Snapshot()
+	secretKey, generatedSecret := ensureSecretKey(snap.SecretKey)
+	if generatedSecret {
+		logger.Warn("GOTHAM_SECRET_KEY is empty; generated an ephemeral credential-encryption key for this process. Stored credentials will not survive a restart — set GOTHAM_SECRET_KEY in production.")
+	}
 	redisClient := newRedisPinger(snap.Redis.Addr)
 	limiter := newDefaultAuthLimiter()
 
@@ -113,6 +122,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	s := &Server{
 		cfg:               cfg,
 		logger:            logger,
+		secretKey:         secretKey,
 		db:                db,
 		allowRegistration: snap.Auth.AllowRegistration,
 		redis:             redisClient,
@@ -257,7 +267,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// in PLATFORM_ADMINS).
 		s.proxy = s.proxyService(containerService)
 		sslConfig := proxy.SSLConfig{
-			Secret: s.cfg.Snapshot().SecretKey,
+			Secret: s.secretKey,
 			Logger: s.logger,
 			Resync: s.resyncProxyNodes,
 		}
@@ -301,7 +311,7 @@ func (s *Server) routes() (http.Handler, error) {
 		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger, s.authorizeLogSubscription)
 
 		// Source providers (GitHub/GitLab/Gitea): list connections and repos.
-		providerSvc := providers.NewDefaultService(s.persistence, s.cfg.Snapshot().SecretKey, s.logger)
+		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger)
 		providers.Mount(api, s.RequireAuth, UserIDFromContext, providerSvc)
 
 		// Application deploy orchestration (BE-4.3): a nil service (no
@@ -386,7 +396,7 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 	}
 	cfg := deploy.Config{
 		Store:     s.persistence,
-		Secret:    s.cfg.Snapshot().SecretKey,
+		Secret:    s.secretKey,
 		RedisAddr: s.cfg.Snapshot().Redis.Addr,
 		Logger:    s.logger,
 	}
@@ -494,7 +504,7 @@ func (s *Server) webhookService(providerSvc providers.ProviderService) *webhooks
 		Store:     s.persistence,
 		Installer: installer,
 		Deployer:  deployer,
-		Secret:    s.cfg.Snapshot().SecretKey,
+		Secret:    s.secretKey,
 		Logger:    s.logger,
 	}
 	// Preview siblings are provisioned through the deploy service (clone +
@@ -559,7 +569,7 @@ func (s *Server) proxyService(containerService containers.ContainerService) prox
 		Store:      s.persistence,
 		Containers: containerService,
 		Logger:     s.logger,
-		Secret:     s.cfg.Snapshot().SecretKey,
+		Secret:     s.secretKey,
 		// Compose service hosts (BE-7.1) join the generated routing model
 		// through the same generator; the adapter renders each stored
 		// document, which this package cannot do without a cycle.
@@ -609,7 +619,7 @@ func (s *Server) databaseService(containerService containers.ContainerService) d
 	return databases.NewDefaultService(databases.Config{
 		Store:      s.persistence,
 		Containers: containerService,
-		Secret:     s.cfg.Snapshot().SecretKey,
+		Secret:     s.secretKey,
 		Logger:     s.logger,
 	})
 }
@@ -626,7 +636,7 @@ func (s *Server) backupService(containerService containers.ContainerService) dat
 	cfg := databases.BackupConfig{
 		Store:      s.persistence,
 		Containers: containerService,
-		Secret:     s.cfg.Snapshot().SecretKey,
+		Secret:     s.secretKey,
 		Logger:     s.logger,
 	}
 	if notifier, ok := s.notify.(databases.BackupNotifier); ok {
@@ -646,7 +656,7 @@ func (s *Server) notificationService() notifications.NotificationService {
 	}
 	return notifications.NewDefaultService(notifications.Config{
 		Store:  s.persistence,
-		Secret: s.cfg.Snapshot().SecretKey,
+		Secret: s.secretKey,
 		Logger: s.logger,
 	})
 }

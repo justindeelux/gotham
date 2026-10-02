@@ -231,8 +231,12 @@ async function main() {
     computeBackoffDelay,
     buildWebSocketUrl,
   } = composable.module;
-  const { activateChannel, createChannelLogBufferStore, isFrameForChannel } =
-    channelBuffers.module;
+  const {
+    activateChannel,
+    createChannelLogBufferStore,
+    flushPendingLines,
+    isFrameForChannel,
+  } = channelBuffers.module;
 
   console.log("pure helpers");
   await check("backoff doubles then caps", () => {
@@ -539,6 +543,33 @@ async function main() {
     }
   });
 
+  console.log("reconnect session refresh (U4)");
+  await check("a failing reconnect refreshes the session once per streak", async () => {
+    const dead = await startMockServer();
+    const deadUrl = dead.url;
+    await dead.close(); // port now refuses connections
+    let refreshes = 0;
+    const failing = useWebSocket({
+      url: deadUrl,
+      token: "t",
+      baseDelayMs: 10,
+      maxDelayMs: 20,
+      maxRetries: 3,
+      jitter: false,
+      onReconnectFailed: () => {
+        refreshes += 1;
+      },
+    });
+    try {
+      failing.connect();
+      await waitFor(() => failing.status.value === "error", { timeout: 3000 });
+      assert(failing.retryCount.value === 3, "used the full retry budget");
+      assert(refreshes === 1, `session refresh ran ${refreshes} times`);
+    } finally {
+      failing.close();
+    }
+  });
+
   console.log("per-channel log buffers (B2-2 / C4-4)");
   await check("switching channel scopes the rendered buffer", () => {
     const store = createChannelLogBufferStore();
@@ -561,6 +592,22 @@ async function main() {
     assert(isFrameForChannel("chan-a", "chan-b") === false, "stale dropped");
     assert(isFrameForChannel("chan-b", "chan-b") === true, "active kept");
     assert(isFrameForChannel(null, "chan-b") === true, "channel-less kept");
+  });
+  await check("a restored pending queue flushes in order", () => {
+    const buffer = { lines: [{ id: 1 }], pending: [{ id: 2 }, { id: 3 }] };
+    flushPendingLines(buffer, 10);
+    assert(buffer.pending.length === 0, "pending drained");
+    assert(
+      buffer.lines.map((line) => line.id).join(",") === "1,2,3",
+      "merged in order",
+    );
+    const capped = { lines: [{ id: 1 }], pending: [{ id: 2 }, { id: 3 }] };
+    flushPendingLines(capped, 2);
+    assert(capped.lines.length === 2, "capped at maxLines");
+    assert(
+      capped.lines.map((line) => line.id).join(",") === "2,3",
+      "oldest dropped",
+    );
   });
 
   await server.close();

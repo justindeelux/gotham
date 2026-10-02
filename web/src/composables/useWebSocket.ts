@@ -76,6 +76,13 @@ export interface UseWebSocketOptions {
   onMessage?: (message: WebSocketMessage) => void;
   /** Called for every status transition. */
   onStatusChange?: (status: WebSocketStatus) => void;
+  /**
+   * Best-effort hook invoked at most once per reconnect streak, before the
+   * second attempt is scheduled. It exists so an expired session can be
+   * refreshed (the token getter then reads the rotated token); rejections are
+   * swallowed so a failed refresh never blocks reconnection (U4).
+   */
+  onReconnectFailed?: () => void | Promise<unknown>;
 }
 
 /** Reactive handles returned by {@link useWebSocket}. */
@@ -199,6 +206,8 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
   let generation = 0;
   /** Approximate bytes currently retained in {@link messages}. */
   let bufferedBytes = 0;
+  /** True once {@link UseWebSocketOptions.onReconnectFailed} ran this streak. */
+  let refreshTriggered = false;
   const channels = new Set<string>();
 
   /** resolveToken reads the configured token, re-running a getter per connect. */
@@ -220,8 +229,9 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     const buffer = messages.value;
     buffer.push(message);
     bufferedBytes += message.raw.length;
-    // Drop oldest frames until both the frame cap and the byte guard hold. A
-    // single oversized frame is dropped immediately rather than retained whole.
+    // Drop oldest frames until both the frame cap and the byte guard hold. The
+    // newest frame is always kept whole, even when it alone exceeds the byte
+    // ceiling, so a burst cannot evict the line just received.
     while (
       buffer.length > bufferLimit ||
       (buffer.length > 1 && bufferedBytes > bufferByteLimit)
@@ -296,6 +306,17 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     }
 
     retryCount.value += 1;
+    // On a repeated failure give the session one chance to refresh before the
+    // next attempt; the token getter then reads the rotated token (U4). This is
+    // fire-and-forget and guarded so it can fire at most once per streak.
+    if (!refreshTriggered && options.onReconnectFailed) {
+      refreshTriggered = true;
+      try {
+        void Promise.resolve(options.onReconnectFailed()).catch(() => {});
+      } catch {
+        // A synchronous throw in the hook must not break reconnection.
+      }
+    }
     const delay = computeBackoffDelay(
       retryCount.value,
       baseDelayMs,
@@ -372,6 +393,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       }
       settled = false;
       retryCount.value = 0;
+      refreshTriggered = false;
       lastError.value = null;
       setStatus("open");
       for (const channel of channels) {
@@ -413,6 +435,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     }
     shouldReconnect = true;
     retryCount.value = 0;
+    refreshTriggered = false;
     lastError.value = null;
     openSocket();
   }

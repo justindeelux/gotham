@@ -6,10 +6,12 @@ import {
   describeContainerError,
   startContainerLogStream,
 } from "../api/containers";
+import { refreshSession } from "../api/http";
 import { getAccessToken } from "../api/token";
 import {
   activateChannel,
   createChannelLogBufferStore,
+  flushPendingLines,
   isFrameForChannel,
 } from "../composables/logChannelBuffers";
 import type { ChannelLogBuffer } from "../composables/logChannelBuffers";
@@ -88,6 +90,11 @@ let acceptReplay = false;
 let replayRemaining: number | null = null;
 let replayAccepted = 0;
 let replayTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * Bumped on every channel switch so an in-flight start response for a channel
+ * the viewer has left cannot mutate the new channel's replay state (U1).
+ */
+let channelGeneration = 0;
 
 /** Fallback window for a replay whose counted frames never arrive, in ms. */
 const replayWindowMs = 5_000;
@@ -123,6 +130,9 @@ const {
   url: props.wsPath,
   token: getAccessToken,
   onMessage: handleMessage,
+  // On repeated reconnect failures, refresh the session once so the token
+  // getter can pick up a rotated token after the 15-min TTL (B2-3/U4).
+  onReconnectFailed: refreshSession,
 });
 
 const statusLabel = computed<string>(() => {
@@ -329,15 +339,19 @@ function handleScroll(): void {
   }
 }
 
+/** flushPending appends queued lines to the view in order, respecting maxLines. */
+function flushPending(): void {
+  flushPendingLines(
+    { lines: lines.value, pending: pending.value },
+    props.maxLines,
+  );
+}
+
 /** togglePause freezes the view; resuming flushes queued lines. */
 function togglePause(): void {
   isPaused.value = !isPaused.value;
-  if (!isPaused.value && pending.value.length > 0) {
-    lines.value.push(...pending.value);
-    pending.value = [];
-    if (lines.value.length > props.maxLines) {
-      lines.value.splice(0, lines.value.length - props.maxLines);
-    }
+  if (!isPaused.value) {
+    flushPending();
   }
   scheduleScroll();
 }
@@ -385,6 +399,9 @@ function requestStreamStart(): void {
   if (!props.autoStartStream || !props.serverId || !props.containerId) {
     return;
   }
+  // Capture the channel generation so a response for a channel the viewer has
+  // since left cannot mutate the new channel's replay window or buffer (U1).
+  const requestedGeneration = channelGeneration;
   // Decide once per start whether replayed history should render: a late,
   // empty viewer accepts it; a viewer that already has lines (reconnect) does
   // not, so no duplicate lines. The server reports how many tagged frames it
@@ -404,6 +421,9 @@ function requestStreamStart(): void {
 
   void startContainerLogStream(props.serverId, props.containerId)
     .then((replay) => {
+      if (requestedGeneration !== channelGeneration) {
+        return;
+      }
       replayRemaining = replay;
       if (replay === 0 || replayAccepted >= replay) {
         acceptReplay = false;
@@ -411,6 +431,9 @@ function requestStreamStart(): void {
       }
     })
     .catch((error: unknown) => {
+      if (requestedGeneration !== channelGeneration) {
+        return;
+      }
       acceptReplay = false;
       clearReplayTimer();
       appendLine({
@@ -423,6 +446,8 @@ function requestStreamStart(): void {
 }
 
 watch(channelName, (next, previous) => {
+  // Invalidate any in-flight start/response for the channel being left (U1).
+  channelGeneration += 1;
   if (previous) {
     unsubscribeChannel(previous);
   }
@@ -441,6 +466,10 @@ watch(channelName, (next, previous) => {
   pending.value = buffer.pending;
   isPaused.value = false;
   isFollowing.value = true;
+  // A restored buffer may carry lines queued while it was paused; flush them
+  // now so they stay in order instead of resurfacing behind later live lines
+  // (U2).
+  flushPending();
   // The subscribed ack (handleMessage) starts the stream for the new channel.
   subscribeChannel(next);
 });

@@ -48,3 +48,24 @@ export function isFrameForChannel(
 ): boolean {
   return frameChannel === null || frameChannel === activeChannel;
 }
+
+/**
+ * flushPendingLines appends a channel's queued (paused) lines to its rendered
+ * lines in order, then drops the oldest past `maxLines`. It mutates both arrays
+ * in place so a per-channel buffer keeps its array identity. Exposed for the
+ * viewer's resume and switch-restore paths so a restored backlog is never
+ * stranded behind later live lines (U2).
+ */
+export function flushPendingLines<T>(
+  buffer: ChannelLogBuffer<T>,
+  maxLines: number,
+): void {
+  if (buffer.pending.length === 0) {
+    return;
+  }
+  buffer.lines.push(...buffer.pending);
+  buffer.pending.length = 0;
+  if (buffer.lines.length > maxLines) {
+    buffer.lines.splice(0, buffer.lines.length - maxLines);
+  }
+}

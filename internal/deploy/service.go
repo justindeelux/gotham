@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -174,6 +175,10 @@ type Config struct {
 	BuildTimeout  time.Duration
 	HealthTimeout time.Duration
 	HealthPoll    time.Duration
+	// ControlTimeout bounds one manual start/stop agent call so a hung agent
+	// cannot pin the application lock indefinitely. Zero selects
+	// containerCleanupTimeout (15s).
+	ControlTimeout time.Duration
 }
 
 // repository resolves the configured repository implementation.
@@ -205,6 +210,37 @@ type Service struct {
 	hooks func() HookLifecycle
 	// hookTimeout bounds one hook call (see Config.HookTimeout).
 	hookTimeout time.Duration
+	// controlTimeout bounds one manual start/stop agent call (see
+	// Config.ControlTimeout).
+	controlTimeout time.Duration
+	// locks serializes the operations that must not interleave on one
+	// application: deployment submission, manual container control, an update
+	// that moves the application between nodes, and deletion.
+	locks appLocks
+}
+
+// appLocks holds one mutex per application so different applications proceed
+// concurrently. Entries are never reclaimed; they are bounded by the number of
+// applications and one pointer each.
+type appLocks struct {
+	mu    sync.Mutex
+	locks map[uuid.UUID]*sync.Mutex
+}
+
+// lock acquires the mutex of one application and returns its release.
+func (l *appLocks) lock(appID uuid.UUID) func() {
+	l.mu.Lock()
+	if l.locks == nil {
+		l.locks = make(map[uuid.UUID]*sync.Mutex)
+	}
+	mu, ok := l.locks[appID]
+	if !ok {
+		mu = &sync.Mutex{}
+		l.locks[appID] = mu
+	}
+	l.mu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 // Compile-time guarantee that Service satisfies the route-level contract.
@@ -221,12 +257,17 @@ func NewService(cfg Config) *Service {
 	if hookTimeout <= 0 {
 		hookTimeout = DefaultHookTimeout
 	}
+	controlTimeout := cfg.ControlTimeout
+	if controlTimeout <= 0 {
+		controlTimeout = containerCleanupTimeout
+	}
 	return &Service{
 		Orchestrator:   o,
 		registrar:      cfg.KeyRegistrar,
 		previewCleanup: cfg.PreviewCleanup,
 		hooks:          cfg.Hooks,
 		hookTimeout:    hookTimeout,
+		controlTimeout: controlTimeout,
 	}
 }
 
@@ -487,27 +528,52 @@ func (s *Service) previousContainer(ctx context.Context, appID uuid.UUID) string
 // submit persists a queued deployment, enqueues its run and returns the row.
 // It is the single queue boundary of deploy, rollback and system deploys, so
 // the stored application→node check runs here: no queue path can hand the
-// worker an application bound to another team's node. When the queue rejects
-// the job the row is marked failed immediately, so it never sits in a
-// non-terminal state and blocks the active-deployment index.
+// worker an application bound to another team's node. The application lock is
+// held only across the active-deployment check and the create; the queued row
+// already makes delete, a move and manual control answer 409, so the lock is
+// released before a potentially blocking enqueue. When the queue rejects the
+// job the row is marked failed immediately, so it never sits in a non-terminal
+// state and blocks the active-deployment index.
 func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (Deployment, error) {
-	if err := s.checkStoredTarget(ctx, app); err != nil {
-		return Deployment{}, err
-	}
-	dep.ApplicationID = app.ID
-	created, err := s.repo.CreateDeployment(ctx, dep)
+	app, created, previous, err := s.createDeployment(ctx, app, dep)
 	if err != nil {
 		return Deployment{}, err
 	}
 	if err := s.enqueue(ctx, job{
 		app:      app,
 		dep:      created,
-		previous: s.previousContainer(ctx, app.ID),
+		previous: previous,
 	}); err != nil {
 		s.abandon(created, err)
 		return Deployment{}, err
 	}
 	return created, nil
+}
+
+// createDeployment is the locked part of submit: re-read the stored
+// application (a concurrent move must not leave the worker on a stale target),
+// re-validate it, enforce the stored application→node invariant, persist the
+// queued row and pick the container the run will replace.
+func (s *Service) createDeployment(ctx context.Context, app Application, dep Deployment) (Application, Deployment, string, error) {
+	unlock := s.locks.lock(app.ID)
+	defer unlock()
+	fresh, err := s.repo.GetApplication(ctx, app.ID)
+	if err != nil {
+		return Application{}, Deployment{}, "", err
+	}
+	app = fresh
+	if err := validateDeployTarget(app); err != nil {
+		return Application{}, Deployment{}, "", err
+	}
+	if err := s.checkStoredTarget(ctx, app); err != nil {
+		return Application{}, Deployment{}, "", err
+	}
+	dep.ApplicationID = app.ID
+	created, err := s.repo.CreateDeployment(ctx, dep)
+	if err != nil {
+		return Application{}, Deployment{}, "", err
+	}
+	return app, created, s.previousContainer(ctx, app.ID), nil
 }
 
 // abandon marks a deployment that never started running as failed.

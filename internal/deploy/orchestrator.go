@@ -255,6 +255,14 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 		o.fail(ctx, st, err)
 		return
 	}
+	// execute persisted the terminal running state, so the deployment row is
+	// terminal here: removeRetired and syncProxy are idempotent best-effort
+	// follow-ups that cannot change the outcome.
+	//
+	// The replacement is live: remove the retired container so its layers do not
+	// accumulate. Best effort — rollback redeploys the registry image, not the
+	// container, and the removal preserves named volumes and bind directories.
+	o.removeRetired(ctx, st)
 	// A release reached running: the node's routing may now point at the new
 	// container's published port. Best effort, see syncProxy.
 	o.syncProxy(ctx, st.app)
@@ -424,15 +432,13 @@ func (o *Orchestrator) push(ctx context.Context, st *runState) error {
 // startContainer retires the container this deployment replaces, runs the new
 // one with the application's runtime payload, and gates success on the
 // post-start healthcheck.
+//
+// Ordering is a correctness property: the complete runtime payload is
+// assembled and validated (config queries, secret decryption, volume specs)
+// BEFORE the previous container is stopped, so a configuration failure fails
+// the deploy without taking the live release down. Retirement itself must be
+// confirmed — an unconfirmed stop would leave two releases running.
 func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
-	if st.previous != "" {
-		if err := st.node.Stop(ctx, st.previous); err != nil {
-			st.log("could not stop previous container " + shortID(st.previous) + ": " + err.Error())
-		} else {
-			st.log("stopped previous container " + shortID(st.previous))
-		}
-	}
-
 	envVars, err := o.repo.ListEnvVars(ctx, st.app.ID)
 	if err != nil {
 		return err
@@ -450,10 +456,34 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 	if err != nil {
 		return err
 	}
+	// A build that produced no registry reference has no image the node can
+	// pull: refuse before stopping the live release rather than discovering it
+	// after the replacement starts. This duplicates the push step's guard on
+	// purpose: startContainer is the retirement boundary and must stand alone.
+	if strings.TrimSpace(st.dep.RegistryImage) == "" {
+		return fmt.Errorf("%w: image %s was not pushed to the node registry; refusing to retire the running container",
+			ErrValidation, st.dep.ImageTag)
+	}
+
+	if st.previous != "" {
+		if err := o.retirePrevious(ctx, st); err != nil {
+			return err
+		}
+	}
+	// Clear any other container of this application before Run. A lost Run
+	// response whose id was never recorded would otherwise keep the
+	// deterministic name and, with a pinned host port, that port — wedging
+	// every later deploy. Detached and bounded like the other cleanup paths.
+	o.reconcileDetached(ctx, st)
 
 	st.log("starting container " + request.Name + " from " + request.Image)
 	containerID, err := st.node.Run(ctx, request)
 	if err != nil {
+		// The create may have succeeded before the failure; remove whatever it
+		// left so it cannot outlive the run untracked. reconcileDetached is
+		// itself detached and bounded, so a step timeout or shutdown (exactly
+		// when an untracked container is most likely) still cleans up.
+		o.reconcileDetached(ctx, st)
 		return err
 	}
 	st.dep.ContainerID = containerID
@@ -465,6 +495,100 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 	healthCtx, cancel := context.WithTimeout(ctx, o.healthTimeout)
 	defer cancel()
 	return o.waitHealthy(healthCtx, st, containerID)
+}
+
+// retirePrevious stops the container this deployment replaces and requires a
+// confirmed retirement: the stop succeeded, or the container is verifiably
+// already gone. Every other outcome fails the deploy closed, so a failed stop
+// can never leave two releases running.
+func (o *Orchestrator) retirePrevious(ctx context.Context, st *runState) error {
+	stopErr := st.node.Stop(ctx, st.previous)
+	if stopErr == nil {
+		st.log("stopped previous container " + shortID(st.previous))
+		return nil
+	}
+	present, listErr := o.containerPresent(ctx, st, st.previous)
+	if listErr == nil && !present {
+		st.log("previous container " + shortID(st.previous) + " is already gone")
+		return nil
+	}
+	return fmt.Errorf("deploy: failed to retire previous container %s: %w", shortID(st.previous), stopErr)
+}
+
+// containerPresent reports whether containerID (or its unambiguous prefix) is
+// still known to the node.
+func (o *Orchestrator) containerPresent(ctx context.Context, st *runState, containerID string) (bool, error) {
+	containers, err := st.node.Containers(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, candidate := range containers {
+		if sameContainer(candidate.GetId(), containerID) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// sameContainer reports whether two Docker ids refer to the same container,
+// tolerating the short-id prefixes the agent may report.
+func sameContainer(a, b string) bool {
+	if a == "" || b == "" {
+		return a == b
+	}
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+}
+
+// reconcileDetached runs reconcileApplicationContainers on a bounded context
+// detached from the run, so a cancelled step or shutdown still lets the
+// best-effort cleanup reach the node.
+func (o *Orchestrator) reconcileDetached(ctx context.Context, st *runState) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
+	defer cancel()
+	o.reconcileApplicationContainers(cleanupCtx, st)
+}
+
+// reconcileApplicationContainers removes every container of this application
+// except the one the deployment replaces (st.previous, already retired). It is
+// what clears an orphan left by a lost Run response whose deployment id was
+// never recorded: such an orphan keeps its deterministic name and, with a
+// pinned host port, that port, so it would otherwise wedge every later deploy.
+// It is safe under the current fencing — delete, a move and manual control are
+// refused while this deployment is non-terminal, so no other release of the
+// application can be live — and st.previous is kept until the replacement is
+// confirmed. Best effort: a listing or removal failure is logged, never fatal.
+func (o *Orchestrator) reconcileApplicationContainers(ctx context.Context, st *runState) {
+	containers, err := st.node.Containers(ctx)
+	if err != nil {
+		st.log("could not list containers to reconcile the application: " + truncateError(err))
+		return
+	}
+	for _, candidate := range containers {
+		if candidate.GetLabels()[labelAppID] != st.app.ID.String() {
+			continue
+		}
+		if st.previous != "" && sameContainer(candidate.GetId(), st.previous) {
+			continue
+		}
+		if err := st.node.Remove(ctx, candidate.GetId()); err != nil {
+			st.log("could not remove leftover container " + shortID(candidate.GetId()) + ": " + truncateError(err))
+			continue
+		}
+		st.log("removed leftover container " + shortID(candidate.GetId()))
+	}
+}
+
+// removeRetired removes the container this deployment replaced, once the new
+// release is running. Best effort: a failed removal only leaves layers behind.
+func (o *Orchestrator) removeRetired(ctx context.Context, st *runState) {
+	if st.previous == "" {
+		return
+	}
+	if err := st.node.Remove(ctx, st.previous); err != nil {
+		st.log("could not remove retired container " + shortID(st.previous) + ": " + truncateError(err))
+		return
+	}
+	st.log("removed retired container " + shortID(st.previous))
 }
 
 // waitHealthy polls the node until the container reports healthy, exits or
@@ -531,21 +655,25 @@ func (o *Orchestrator) healthState(ctx context.Context, st *runState, containerI
 
 // transition persists one legal state-machine edge and mirrors it to the
 // realtime channel. The deployment clock starts when it leaves queued and
-// stops on a terminal state.
+// stops on a terminal state. In-memory state advances only after the write
+// succeeds: a failed persist must not leave the run believing it reached a
+// state the database never saw (which would make fail() unable to record the
+// terminal failure and wedge the active-deployment index).
 func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) error {
 	from := st.dep.State
 	if !CanTransition(from, to) {
 		return fmt.Errorf("deploy: illegal transition %s → %s", from, to)
 	}
+	next := st.dep
 	if from == StateQueued {
-		st.dep.StartedAt = time.Now().UTC()
+		next.StartedAt = time.Now().UTC()
 	}
 	if to.Terminal() {
-		st.dep.FinishedAt = time.Now().UTC()
+		next.FinishedAt = time.Now().UTC()
 	}
-	st.dep.State = to
+	next.State = to
 
-	updated, err := o.repo.UpdateDeployment(ctx, st.dep)
+	updated, err := o.repo.UpdateDeployment(ctx, next)
 	if err != nil {
 		return fmt.Errorf("deploy: persist state %s: %w", to, err)
 	}
@@ -560,7 +688,10 @@ func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) e
 // fail records the terminal failure: the error text on the row, the failed
 // transition and one log line. It uses a detached context so a cancelled run
 // (shutdown, step timeout) still leaves a terminal row behind — otherwise the
-// partial unique index would block every future deploy of the application.
+// partial unique index would block every future deploy of the application. The
+// failed state is forced directly rather than routed through CanTransition, so
+// a run whose in-memory state was left terminal by a failed running write
+// still records the failure.
 func (o *Orchestrator) fail(ctx context.Context, st *runState, cause error) {
 	st.dep.Error = truncateError(cause)
 	o.logger.Error("deploy: deployment failed",
@@ -568,12 +699,43 @@ func (o *Orchestrator) fail(ctx context.Context, st *runState, cause error) {
 
 	fresh, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	if err := o.transition(fresh, st, StateFailed); err != nil {
+	if err := o.forceFail(fresh, st); err != nil {
 		o.logger.Error("deploy: could not persist failed state",
 			"deployment_id", st.dep.ID, "error", err)
 		return
 	}
 	st.log("deployment failed: " + st.dep.Error)
+}
+
+// forceFail writes the terminal failed state unconditionally, emitting the
+// transition event only when it is a real edge. It is the failure-path
+// counterpart of transition: it must succeed even when the in-memory state no
+// longer admits a legal edge to failed. It refuses to downgrade a row that a
+// previous ambiguous write already committed terminal (running or failed).
+func (o *Orchestrator) forceFail(ctx context.Context, st *runState) error {
+	from := st.dep.State
+	if current, err := o.repo.GetDeployment(ctx, st.dep.ApplicationID, st.dep.ID); err == nil && current.State.Terminal() {
+		st.dep = current
+		return nil
+	}
+	next := st.dep
+	next.State = StateFailed
+	if from == StateQueued && next.StartedAt.IsZero() {
+		next.StartedAt = time.Now().UTC()
+	}
+	if next.FinishedAt.IsZero() {
+		next.FinishedAt = time.Now().UTC()
+	}
+	updated, err := o.repo.UpdateDeployment(ctx, next)
+	if err != nil {
+		return err
+	}
+	st.dep = updated
+	if from != StateFailed {
+		o.emitter.State(ctx, st.target, from, StateFailed)
+		o.notify(ctx, st, StateFailed)
+	}
+	return nil
 }
 
 // dialNode opens the agent of the deployment's server.

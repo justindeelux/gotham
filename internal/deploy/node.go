@@ -60,6 +60,10 @@ type Node interface {
 	Stop(ctx context.Context, containerID string) error
 	// Start starts a stopped container (manual start endpoint).
 	Start(ctx context.Context, containerID string) error
+	// Remove deletes a container, forcing a stop when it still runs. Anonymous
+	// volumes go with it; named volumes and host bind directories are preserved
+	// (the agent's Remove contract), so deleting a resource keeps its data.
+	Remove(ctx context.Context, containerID string) error
 	// Containers lists every container on the node, including stopped ones.
 	Containers(ctx context.Context) ([]*agentv1.ContainerInfo, error)
 	// Close releases the underlying agent connection.
@@ -231,6 +235,18 @@ func (n *agentNode) Start(ctx context.Context, containerID string) error {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
 	}
 	if _, err := n.docker.StartContainer(ctx, &agentv1.ContainerActionRequest{ContainerId: containerID}); err != nil {
+		return mapRPCError(err)
+	}
+	return nil
+}
+
+// Remove implements Node. The agent's Remove is idempotent: a container that is
+// already gone is reported as success, so a retried cleanup is safe.
+func (n *agentNode) Remove(ctx context.Context, containerID string) error {
+	if strings.TrimSpace(containerID) == "" {
+		return fmt.Errorf("%w: container id is required", ErrValidation)
+	}
+	if _, err := n.docker.RemoveContainer(ctx, &agentv1.ContainerActionRequest{ContainerId: containerID}); err != nil {
 		return mapRPCError(err)
 	}
 	return nil

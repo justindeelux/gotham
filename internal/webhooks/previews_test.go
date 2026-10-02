@@ -3,6 +3,7 @@ package webhooks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -1416,11 +1417,12 @@ func TestCloseRetryClearsPoisonedLedger(t *testing.T) {
 // TestCloseFailureIsRetriedByTheSweep is the hardening regression: a close
 // that fails after persisting its intent leaves the binding 'closing', and the
 // sweep re-attempts the teardown instead of leaving the preview running
-// forever.
+// forever. The teardown error is the in-flight refusal the deploy service now
+// answers (ErrConflict), which the sweep must tolerate and retry.
 func TestCloseFailureIsRetriedByTheSweep(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
-	deployer := &fakeDeployer{deleteErr: errors.New("node unreachable")}
+	deployer := &fakeDeployer{deleteErr: fmt.Errorf("%w: a deployment is in progress", deploy.ErrConflict)}
 	now := time.Now().UTC()
 	svc := newTestServiceWith(Config{
 		Repository: repo, Installer: &fakeInstaller{}, Deployer: deployer,

@@ -196,6 +196,92 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 	}
 }
 
+// TestStoreRepositoryActiveDeploymentIndex pins the partial unique index that
+// allows at most one active deployment per application (deployments_active_app_idx):
+// a second active submit must surface as ErrConflict, and a row that becomes
+// terminal — running or failed — releases the index for the next deploy.
+func TestStoreRepositoryActiveDeploymentIndex(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	const secret = "integration-secret"
+	st := store.New(pool)
+	repo := newStoreRepository(st, secret)
+
+	email := fmt.Sprintf("fx-6a-active-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	userID := uuid.UUID(user.ID.Bytes)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete user: %v", err)
+		}
+	})
+
+	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		UserID:    pgUUID(userID),
+		Name:      "active-index-app",
+		Provider:  "github",
+		Repo:      "acme/demo",
+		CloneUrl:  "https://github.com/acme/demo.git",
+		Branch:    "main",
+		BuildPack: "dockerfile",
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+	appID := uuid.UUID(app.ID.Bytes)
+
+	first, err := repo.CreateDeployment(ctx, Deployment{
+		ApplicationID: appID, Kind: KindDeploy, State: StateQueued,
+	})
+	if err != nil {
+		t.Fatalf("first active deployment: %v", err)
+	}
+	if _, err := repo.CreateDeployment(ctx, Deployment{
+		ApplicationID: appID, Kind: KindDeploy, State: StateQueued,
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("second active deployment error = %v, want ErrConflict", err)
+	}
+
+	// A running row is terminal: the index is released.
+	first.State = StateRunning
+	if _, err := repo.UpdateDeployment(ctx, first); err != nil {
+		t.Fatalf("mark first running: %v", err)
+	}
+	second, err := repo.CreateDeployment(ctx, Deployment{
+		ApplicationID: appID, Kind: KindDeploy, State: StateQueued,
+	})
+	if err != nil {
+		t.Fatalf("deployment after running release: %v", err)
+	}
+
+	// A failed row releases it too.
+	second.State = StateFailed
+	if _, err := repo.UpdateDeployment(ctx, second); err != nil {
+		t.Fatalf("mark second failed: %v", err)
+	}
+	if _, err := repo.CreateDeployment(ctx, Deployment{
+		ApplicationID: appID, Kind: KindRollback, State: StateQueued,
+	}); err != nil {
+		t.Fatalf("deployment after failed release: %v", err)
+	}
+}
+
 // TestSystemTeardownRemovesLocalKey is the F7 regression: deleting a preview
 // sibling through the system path removes its local deploy-key rows — the
 // mapping and the sealed private key it points at — while the base

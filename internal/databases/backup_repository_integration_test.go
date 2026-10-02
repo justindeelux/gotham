@@ -499,7 +499,14 @@ func TestDestinationEditWaitsForRunLock(t *testing.T) {
 		}, nil)
 		runDone <- err
 	}()
-	<-runLocked
+
+	select {
+	case err := <-runDone:
+		t.Fatalf("run failed before the commit seam: %v", err)
+	case <-runLocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run never reached the commit seam")
+	}
 
 	editDone := make(chan error, 1)
 	go func() {

@@ -201,6 +201,7 @@ func TestBackupValidatesTargetOwnershipUnderLock(t *testing.T) {
 	}
 }
 
+// TestNextCronTimeSurvivesSpringForward is the D2-8/U2 regression: a slot
 // inside the spring-forward gap must fire at the first valid instant after the
 // gap (not be skipped) and the scan must return promptly.
 func TestNextCronTimeSurvivesSpringForward(t *testing.T) {

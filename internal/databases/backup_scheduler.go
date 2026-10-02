@@ -337,6 +337,8 @@ type backupScheduler struct {
 	interval time.Duration
 	now      func() time.Time
 	logger   *slog.Logger
+	// loc evaluates cron expressions in; tests swap it to pin DST behavior.
+	loc *time.Location
 
 	mu       sync.Mutex
 	inflight map[uuid.UUID]bool
@@ -356,6 +358,7 @@ func newBackupScheduler(manager *BackupManager, interval time.Duration) *backupS
 		interval: interval,
 		now:      manager.now,
 		logger:   logger,
+		loc:      time.Local,
 		inflight: make(map[uuid.UUID]bool),
 	}
 }
@@ -438,7 +441,7 @@ func (s *backupScheduler) fire(ctx context.Context, schedule BackupSchedule, now
 			"schedule_id", schedule.ID.String(), "database_id", schedule.DatabaseID.String(), "error", err)
 		return 0
 	}
-	next, err := nextRunTime(schedule.Cron, schedule.NextRunAt, now, time.Local)
+	next, err := nextRunTime(schedule.Cron, schedule.NextRunAt, now, s.loc)
 	if err != nil {
 		s.logger.Error("databases: backup schedule has an invalid cron expression",
 			"schedule_id", schedule.ID.String(), "cron", schedule.Cron, "error", err)

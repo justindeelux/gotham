@@ -10,11 +10,16 @@ import { refreshSession } from "../api/http";
 import { getAccessToken } from "../api/token";
 import {
   activateChannel,
+  applyStartFailure,
+  applyStartSuccess,
   createChannelLogBufferStore,
   flushPendingLines,
   isFrameForChannel,
 } from "../composables/logChannelBuffers";
-import type { ChannelLogBuffer } from "../composables/logChannelBuffers";
+import type {
+  ChannelLogBuffer,
+  ReplayWindow,
+} from "../composables/logChannelBuffers";
 import type { WebSocketMessage } from "../composables/useWebSocket";
 import { useWebSocket } from "../composables/useWebSocket";
 
@@ -86,9 +91,11 @@ let scrollQueued = false;
  * A live frame never closes the window; the count, the server's `replay_end`
  * marker, or the timeout do.
  */
-let acceptReplay = false;
-let replayRemaining: number | null = null;
-let replayAccepted = 0;
+const replayWindow: ReplayWindow = {
+  acceptReplay: false,
+  replayRemaining: null,
+  replayAccepted: 0,
+};
 let replayTimer: ReturnType<typeof setTimeout> | null = null;
 /**
  * Bumped on every channel switch so an in-flight start response for a channel
@@ -110,9 +117,9 @@ function clearReplayTimer(): void {
 /** resetReplayState drops any in-flight replay window for the previous channel. */
 function resetReplayState(): void {
   clearReplayTimer();
-  acceptReplay = false;
-  replayRemaining = null;
-  replayAccepted = 0;
+  replayWindow.acceptReplay = false;
+  replayWindow.replayRemaining = null;
+  replayWindow.replayAccepted = 0;
 }
 
 const channelName = computed<string>(
@@ -211,7 +218,7 @@ function handleMessage(message: WebSocketMessage): void {
   // End of a replay batch: stop accepting tagged history so a later viewer's
   // replay is never rendered on top of this viewer's lines (round-4/5 U1).
   if (message.payload?.type === "replay_end") {
-    acceptReplay = false;
+    replayWindow.acceptReplay = false;
     clearReplayTimer();
     return;
   }
@@ -247,12 +254,15 @@ function handleMessage(message: WebSocketMessage): void {
     // requested, sized by the server-reported count. Live (untagged) frames do
     // not close the window, so an interleaved live frame cannot truncate the
     // history (round-5 U1).
-    if (!acceptReplay) {
+    if (!replayWindow.acceptReplay) {
       return;
     }
-    replayAccepted += 1;
-    if (replayRemaining !== null && replayAccepted >= replayRemaining) {
-      acceptReplay = false;
+    replayWindow.replayAccepted += 1;
+    if (
+      replayWindow.replayRemaining !== null &&
+      replayWindow.replayAccepted >= replayWindow.replayRemaining
+    ) {
+      replayWindow.acceptReplay = false;
       clearReplayTimer();
     }
   }
@@ -408,40 +418,56 @@ function requestStreamStart(): void {
   // published for this start; until the response arrives, tagged frames are
   // accepted optimistically (they can beat the HTTP response).
   clearReplayTimer();
-  acceptReplay = lines.value.length === 0 && pending.value.length === 0;
-  replayRemaining = null;
-  replayAccepted = 0;
+  replayWindow.acceptReplay =
+    lines.value.length === 0 && pending.value.length === 0;
+  replayWindow.replayRemaining = null;
+  replayWindow.replayAccepted = 0;
 
-  if (acceptReplay) {
+  if (replayWindow.acceptReplay) {
     replayTimer = setTimeout(() => {
-      acceptReplay = false;
+      replayWindow.acceptReplay = false;
       replayTimer = null;
     }, replayWindowMs);
   }
 
   void startContainerLogStream(props.serverId, props.containerId)
     .then((replay) => {
-      if (requestedGeneration !== channelGeneration) {
+      if (
+        !applyStartSuccess(
+          replayWindow,
+          requestedGeneration,
+          channelGeneration,
+          replay,
+        )
+      ) {
         return;
       }
-      replayRemaining = replay;
-      if (replay === 0 || replayAccepted >= replay) {
-        acceptReplay = false;
+      if (!replayWindow.acceptReplay) {
         clearReplayTimer();
       }
     })
     .catch((error: unknown) => {
-      if (requestedGeneration !== channelGeneration) {
-        return;
-      }
-      acceptReplay = false;
-      clearReplayTimer();
-      appendLine({
+      const notice: LogLine = {
         id: ++lineId,
         ts: formatTimestamp(null, Date.now()),
         text: `Could not start log stream: ${describeContainerError(error)}`,
         kind: "notice",
-      });
+      };
+      if (
+        !applyStartFailure(
+          replayWindow,
+          requestedGeneration,
+          channelGeneration,
+          { lines: lines.value, pending: pending.value },
+          isPaused.value,
+          notice,
+          props.maxLines,
+        )
+      ) {
+        return;
+      }
+      clearReplayTimer();
+      scheduleScroll();
     });
 }
 

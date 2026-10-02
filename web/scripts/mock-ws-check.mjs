@@ -233,6 +233,8 @@ async function main() {
   } = composable.module;
   const {
     activateChannel,
+    applyStartFailure,
+    applyStartSuccess,
     createChannelLogBufferStore,
     flushPendingLines,
     isFrameForChannel,
@@ -608,6 +610,37 @@ async function main() {
       capped.lines.map((line) => line.id).join(",") === "2,3",
       "oldest dropped",
     );
+  });
+
+  console.log("stale start responses (U1)");
+  await check("a stale start success leaves the new channel's replay window untouched", () => {
+    const window = { acceptReplay: true, replayRemaining: null, replayAccepted: 0 };
+    assert(applyStartSuccess(window, 1, 2, 0) === false, "stale success ignored");
+    assert(window.acceptReplay === true, "window still open");
+    assert(window.replayRemaining === null, "count not written");
+  });
+  await check("a stale start failure appends no notice to the new channel's buffer", () => {
+    const window = { acceptReplay: true, replayRemaining: 3, replayAccepted: 1 };
+    const buffer = { lines: [{ text: "B" }], pending: [] };
+    assert(
+      applyStartFailure(window, 1, 2, buffer, false, { text: "err" }, 10) ===
+        false,
+      "stale failure ignored",
+    );
+    assert(buffer.lines.length === 1, "no notice appended");
+    assert(window.replayRemaining === 3, "window untouched");
+  });
+  await check("a current start response is still applied", () => {
+    const window = { acceptReplay: true, replayRemaining: null, replayAccepted: 0 };
+    assert(applyStartSuccess(window, 2, 2, 0) === true, "success applied");
+    assert(window.acceptReplay === false, "zero-count closes the window");
+    const window2 = { acceptReplay: true, replayRemaining: null, replayAccepted: 0 };
+    const buffer = { lines: [], pending: [] };
+    assert(
+      applyStartFailure(window2, 2, 2, buffer, true, { text: "err" }, 10) === true,
+      "failure applied",
+    );
+    assert(buffer.pending.length === 1, "paused notice queued, not rendered");
   });
 
   await server.close();

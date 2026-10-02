@@ -69,3 +69,72 @@ export function flushPendingLines<T>(
     buffer.lines.splice(0, buffer.lines.length - maxLines);
   }
 }
+
+/** Mutable replay-window state for an in-flight start request. */
+export interface ReplayWindow {
+  acceptReplay: boolean;
+  replayRemaining: number | null;
+  replayAccepted: number;
+}
+
+/**
+ * isStaleResponse reports whether a start response captured at
+ * `capturedGeneration` no longer belongs to the viewer's current channel
+ * generation, i.e. the viewer switched channel while the request was in flight
+ * (U1). The viewer calls this (via the two apply helpers) from both the success
+ * and failure callbacks so a stale response can neither rewrite the new
+ * channel's replay window nor append a notice to its buffer.
+ */
+export function isStaleResponse(
+  capturedGeneration: number,
+  currentGeneration: number,
+): boolean {
+  return capturedGeneration !== currentGeneration;
+}
+
+/**
+ * applyStartSuccess folds a successful start response's replay count into the
+ * window, ignoring a response captured for a channel the viewer has left.
+ * Returns whether the response was applied.
+ */
+export function applyStartSuccess(
+  window: ReplayWindow,
+  capturedGeneration: number,
+  currentGeneration: number,
+  replayCount: number,
+): boolean {
+  if (isStaleResponse(capturedGeneration, currentGeneration)) {
+    return false;
+  }
+  window.replayRemaining = replayCount;
+  if (replayCount === 0 || window.replayAccepted >= replayCount) {
+    window.acceptReplay = false;
+  }
+  return true;
+}
+
+/**
+ * applyStartFailure folds a failed start response into the viewer's buffer as a
+ * notice, queued while paused and capped at `maxLines`, ignoring a response
+ * captured for a channel the viewer has left. Returns whether it was applied.
+ */
+export function applyStartFailure<T>(
+  window: ReplayWindow,
+  capturedGeneration: number,
+  currentGeneration: number,
+  buffer: ChannelLogBuffer<T>,
+  paused: boolean,
+  notice: T,
+  maxLines: number,
+): boolean {
+  if (isStaleResponse(capturedGeneration, currentGeneration)) {
+    return false;
+  }
+  window.acceptReplay = false;
+  const target = paused ? buffer.pending : buffer.lines;
+  target.push(notice);
+  if (target.length > maxLines) {
+    target.splice(0, target.length - maxLines);
+  }
+  return true;
+}

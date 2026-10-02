@@ -181,10 +181,9 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	// Rename keeps every other column; a colliding rename inside one user
 	// conflicts, while another user may take the same name (the index is
 	// partial on user_id).
-	created.Name = "warehouse"
-	renamed, err := repo.UpdateDatabase(ctx, created)
+	renamed, err := repo.UpdateDatabaseName(ctx, created.ID, "warehouse")
 	if err != nil {
-		t.Fatalf("UpdateDatabase: %v", err)
+		t.Fatalf("UpdateDatabaseName: %v", err)
 	}
 	if renamed.Name != "warehouse" || renamed.Status != StatusCreating ||
 		renamed.StoragePath != created.StoragePath {
@@ -197,20 +196,50 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	if _, err := repo.CreateDatabase(ctx, second); err != nil {
 		t.Fatalf("CreateDatabase (second row): %v", err)
 	}
-	second.Name = "warehouse"
-	if _, err := repo.UpdateDatabase(ctx, second); !errors.Is(err, ErrConflict) {
+	if _, err := repo.UpdateDatabaseName(ctx, second.ID, "warehouse"); !errors.Is(err, ErrConflict) {
 		t.Errorf("colliding rename error = %v, want ErrConflict", err)
 	}
 
-	duplicate.Name = "warehouse"
-	if _, err := repo.UpdateDatabase(ctx, duplicate); err != nil {
+	if _, err := repo.UpdateDatabaseName(ctx, duplicate.ID, "warehouse"); err != nil {
 		t.Errorf("another user may reuse a name: %v", err)
 	}
 
 	// Status vocabulary is enforced by the CHECK constraint.
-	renamed.Status = "not-a-status"
-	if _, err := repo.UpdateDatabase(ctx, renamed); err == nil {
+	if _, err := repo.UpdateDatabaseStatus(ctx, renamed.ID, "not-a-status"); err == nil {
 		t.Error("an unknown status must be rejected by the CHECK constraint")
+	}
+
+	// The column-scoped writes do not clobber each other: a status change
+	// keeps the name and container id, and a rename keeps the status.
+	tagged, err := repo.UpdateDatabaseContainer(ctx, second.ID, "container-42")
+	if err != nil {
+		t.Fatalf("UpdateDatabaseContainer: %v", err)
+	}
+	if tagged.ContainerID != "container-42" || tagged.Name != "billing" || tagged.Status != StatusCreating {
+		t.Errorf("container write changed more than container_id: %+v", tagged)
+	}
+	stopped, err := repo.UpdateDatabaseStatus(ctx, second.ID, StatusStopped)
+	if err != nil {
+		t.Fatalf("UpdateDatabaseStatus: %v", err)
+	}
+	if stopped.Status != StatusStopped || stopped.Name != "billing" || stopped.ContainerID != "container-42" {
+		t.Errorf("status write changed more than status: %+v", stopped)
+	}
+	renamedAgain, err := repo.UpdateDatabaseName(ctx, second.ID, "billing-2")
+	if err != nil {
+		t.Fatalf("UpdateDatabaseName: %v", err)
+	}
+	if renamedAgain.Name != "billing-2" || renamedAgain.Status != StatusStopped ||
+		renamedAgain.ContainerID != "container-42" {
+		t.Errorf("rename changed more than name: %+v", renamedAgain)
+	}
+
+	// The port pre-check sees the live row and ignores soft-deleted ones.
+	if inUse, err := repo.PublicPortInUse(ctx, serverID, 5433); err != nil || !inUse {
+		t.Errorf("PublicPortInUse(live) = %v, %v, want true", inUse, err)
+	}
+	if inUse, err := repo.PublicPortInUse(ctx, serverID, 5499); err != nil || inUse {
+		t.Errorf("PublicPortInUse(free) = %v, %v, want false", inUse, err)
 	}
 
 	// The owner sees both live databases; a stranger sees only their own.

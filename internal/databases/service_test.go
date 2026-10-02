@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -775,6 +776,329 @@ func TestNewDefaultServiceReturnsNilWithoutDependencies(t *testing.T) {
 	})
 	if svc != nil {
 		t.Error("FEATURE_DATABASES=false must yield a nil service")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FX-8a regression tests: provisioning image pull, cleanup ids, delete/create
+// fencing, column-scoped writes, credential rollback and public-port conflicts.
+// ---------------------------------------------------------------------------
+
+// TestCreatePullsImageBeforeRun (D1-2): a fresh node has no engine image, so
+// create must pull it before running the container.
+func TestCreatePullsImageBeforeRun(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{runID: "container-1"}
+	svc := newTestService(repo, cs)
+
+	if _, _, err := svc.Create(context.Background(), uuid.New(), CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if cs.pulls != 1 {
+		t.Fatalf("pulls = %d, want 1", cs.pulls)
+	}
+	engine, _ := LookupEngine(EnginePostgres)
+	pullImage := ""
+	if len(cs.runs) > 0 {
+		pullImage = cs.runs[0].Image
+	}
+	if got := cs.lastRun().Image; got != engine.Image("") || pullImage == "" {
+		t.Fatalf("run image = %q, want %q", got, engine.Image(""))
+	}
+	// Pull must happen before Run: a run against a missing image would fail.
+	want := []string{"pull", "run"}
+	if len(cs.calls) < len(want) || cs.calls[0] != want[0] || cs.calls[1] != want[1] {
+		t.Fatalf("calls = %v, want pull before run", cs.calls)
+	}
+}
+
+// TestCreatePullFailureLeavesTerminalErrorRow (D1-2): a failed pull must not
+// leave a permanently-creating row, and it must not write credentials for a
+// database that will never run.
+func TestCreatePullFailureLeavesTerminalErrorRow(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{pullErr: containers.ErrAgentUnavailable}
+	svc := newTestService(repo, cs)
+	owner := uuid.New()
+
+	var createdID uuid.UUID
+	repo.afterCreate = func(d Database) { createdID = d.ID }
+
+	_, _, err := svc.Create(context.Background(), owner, CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID,
+	})
+	if !errors.Is(err, ErrAgentUnavailable) {
+		t.Fatalf("Create error = %v, want ErrAgentUnavailable", err)
+	}
+	if len(cs.runs) != 0 {
+		t.Fatalf("runs = %d, want none after a failed pull", len(cs.runs))
+	}
+	row, err := svc.Get(context.Background(), owner, createdID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if row.Status != StatusError {
+		t.Errorf("status = %q, want a terminal error, not creating", row.Status)
+	}
+	repo.mu.Lock()
+	secrets := len(repo.secrets[createdID])
+	repo.mu.Unlock()
+	if secrets != 0 {
+		t.Errorf("stored %d credentials despite a failed pull", secrets)
+	}
+}
+
+// TestCreateCleanupUsesRecordedIDs (D1-4): when the container-id write fails,
+// cleanup must remove the container using the node id we actually hold, never
+// a zeroed row.
+func TestCreateCleanupUsesRecordedIDs(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{runID: "container-1"}
+	cs.setRunning("container-1")
+	svc := newTestService(repo, cs)
+
+	repo.updateErr = errors.New("database is down")
+	if _, _, err := svc.Create(context.Background(), uuid.New(), CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID,
+	}); err == nil {
+		t.Fatal("Create should fail when the row cannot be updated")
+	}
+
+	cs.mu.Lock()
+	removes := append([]string(nil), cs.removes...)
+	servers := append([]uuid.UUID(nil), cs.removeServers...)
+	cs.mu.Unlock()
+	if len(removes) != 1 || removes[0] != "container-1" {
+		t.Fatalf("removes = %v, want the unmanageable container removed", removes)
+	}
+	if len(servers) != 1 || servers[0] != serverID {
+		t.Fatalf("remove servers = %v, want the real node %s (a zeroed row = bug)", servers, serverID)
+	}
+}
+
+// TestDeleteDuringProvisionRemovesLateContainer (D1-5): delete that wins while
+// provisioning is in flight must leave no container behind and the row must
+// stay deleted. The create path's late write is fenced and its cleanup removes
+// the container the agent already started.
+func TestDeleteDuringProvisionRemovesLateContainer(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{runID: "container-1"}
+	svc := newTestService(repo, cs)
+	owner := uuid.New()
+	ctx := context.Background()
+
+	var databaseID uuid.UUID
+	repo.afterCreate = func(d Database) { databaseID = d.ID }
+	// afterRun fires once the agent returned a container id but before create
+	// persisted it: the classic interleaving the finding describes.
+	cs.afterRun = func() {
+		if err := svc.Delete(ctx, owner, databaseID); err != nil {
+			t.Errorf("Delete during provisioning: %v", err)
+		}
+	}
+
+	if _, _, err := svc.Create(ctx, owner, CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID,
+	}); err == nil {
+		t.Fatal("Create should fail after delete removed the row")
+	}
+
+	cs.mu.Lock()
+	removes := append([]string(nil), cs.removes...)
+	servers := append([]uuid.UUID(nil), cs.removeServers...)
+	cs.mu.Unlock()
+	if len(removes) != 1 || removes[0] != "container-1" {
+		t.Fatalf("removes = %v, want the late container removed", removes)
+	}
+	if len(servers) != 1 || servers[0] != serverID {
+		t.Fatalf("remove servers = %v, want %s", servers, serverID)
+	}
+	if _, err := repo.GetDatabase(ctx, databaseID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("row lookup = %v, want the row to stay deleted", err)
+	}
+}
+
+// TestSoftDeletedRowRejectsProvisioningWrites (D1-5): the fence itself — after
+// a soft delete every provisioning write reports no row.
+func TestSoftDeletedRowRejectsProvisioningWrites(t *testing.T) {
+	repo := newFakeRepository()
+	owner := uuid.New()
+	row := repo.seed(Database{
+		UserID: owner, ServerID: uuid.New(), Name: "orders",
+		Engine: EnginePostgres, Status: StatusCreating,
+	})
+	ctx := context.Background()
+	if _, err := repo.SoftDeleteDatabase(ctx, row.ID); err != nil {
+		t.Fatalf("SoftDeleteDatabase: %v", err)
+	}
+
+	if _, err := repo.UpdateDatabaseContainer(ctx, row.ID, "late"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateDatabaseContainer after delete = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.UpdateDatabaseStatus(ctx, row.ID, StatusRunning); !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateDatabaseStatus after delete = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.UpdateDatabaseName(ctx, row.ID, "late"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateDatabaseName after delete = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.GetDatabase(ctx, row.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetDatabase = %v, want the row to stay deleted", err)
+	}
+}
+
+// TestConcurrentRenameAndLifecycleDoNotClobber (D1-6): column-scoped writes
+// keep a rename and a lifecycle transition from erasing each other's field or
+// the container id.
+func TestConcurrentRenameAndLifecycleDoNotClobber(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		repo := newFakeRepository()
+		serverID := repo.seedServer()
+		cs := &fakeContainers{runID: "container-1"}
+		svc := newTestService(repo, cs)
+		owner := uuid.New()
+		ctx := context.Background()
+
+		created, _, err := svc.Create(ctx, owner, CreateRequest{
+			Name: "orders", Engine: EnginePostgres, ServerID: serverID,
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		cs.setRunning(created.ContainerID)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if _, err := svc.Update(ctx, owner, created.ID, UpdateRequest{Name: "renamed"}); err != nil {
+				t.Errorf("Update: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := svc.Stop(ctx, owner, created.ID); err != nil {
+				t.Errorf("Stop: %v", err)
+			}
+		}()
+		wg.Wait()
+
+		repo.mu.Lock()
+		row := repo.databases[created.ID]
+		repo.mu.Unlock()
+		if row.Name != "renamed" {
+			t.Fatalf("iteration %d: name = %q, want renamed (rename clobbered)", i, row.Name)
+		}
+		if row.Status != StatusStopped {
+			t.Fatalf("iteration %d: status = %q, want stopped (lifecycle clobbered)", i, row.Status)
+		}
+		if row.ContainerID != "container-1" {
+			t.Fatalf("iteration %d: container_id = %q, want container-1 (erased)", i, row.ContainerID)
+		}
+	}
+}
+
+// TestCreateCredentialFailureRollsBackAndMarksError (D1-8): a partial
+// credential write is rolled back and the row becomes terminal, never a
+// permanently-creating database with incomplete secrets.
+func TestCreateCredentialFailureRollsBackAndMarksError(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{runID: "container-1"}
+	svc := newTestService(repo, cs)
+	owner := uuid.New()
+
+	var createdID uuid.UUID
+	repo.afterCreate = func(d Database) { createdID = d.ID }
+	// The first credential write succeeds, the second fails: a partial write.
+	repo.secretFailAt = 2
+	repo.secretFail = errors.New("credentials table is down")
+
+	_, _, err := svc.Create(context.Background(), owner, CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID,
+	})
+	if err == nil {
+		t.Fatal("Create should fail when a credential write fails")
+	}
+	if len(cs.runs) != 0 {
+		t.Errorf("runs = %d, want none after a credential failure", len(cs.runs))
+	}
+
+	row, err := svc.Get(context.Background(), owner, createdID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if row.Status != StatusError {
+		t.Errorf("status = %q, want a terminal error, not creating", row.Status)
+	}
+	repo.mu.Lock()
+	secrets := len(repo.secrets[createdID])
+	repo.mu.Unlock()
+	if secrets != 0 {
+		t.Errorf("secrets = %d, want the partial credential write rolled back", secrets)
+	}
+}
+
+// TestCreateRejectsPublicPortInUse (D1-11): the pre-check answers 409 before a
+// row or container is created.
+func TestCreateRejectsPublicPortInUse(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	owner := uuid.New()
+	repo.seed(Database{
+		UserID: owner, ServerID: serverID, Name: "taken",
+		Engine: EnginePostgres, Status: StatusRunning, PublicPort: 5433,
+	})
+	cs := &fakeContainers{}
+	svc := newTestService(repo, cs)
+
+	_, _, err := svc.Create(context.Background(), owner, CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID, PublicPort: 5433,
+	})
+	if !errors.Is(err, ErrPortConflict) {
+		t.Fatalf("Create error = %v, want ErrPortConflict", err)
+	}
+	if cs.pulls != 0 || len(cs.runs) != 0 {
+		t.Errorf("create touched the node (pulls %d, runs %d) despite a port conflict", cs.pulls, len(cs.runs))
+	}
+	list, err := svc.List(context.Background(), owner)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("databases = %d, want the port-conflict create to leave no row", len(list))
+	}
+}
+
+// TestCreateMapsDockerPortConflict (D1-11): a Docker bind conflict surfaced by
+// the agent is a typed conflict, not a 500, and leaves a terminal error row.
+func TestCreateMapsDockerPortConflict(t *testing.T) {
+	repo := newFakeRepository()
+	serverID := repo.seedServer()
+	cs := &fakeContainers{runErr: containers.ErrPortConflict}
+	svc := newTestService(repo, cs)
+	owner := uuid.New()
+
+	_, _, err := svc.Create(context.Background(), owner, CreateRequest{
+		Name: "orders", Engine: EnginePostgres, ServerID: serverID, PublicPort: 5433,
+	})
+	if !errors.Is(err, ErrPortConflict) {
+		t.Fatalf("Create error = %v, want ErrPortConflict", err)
+	}
+	list, err := svc.List(context.Background(), owner)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || list[0].Status != StatusError {
+		t.Fatalf("databases = %+v, want one row in the error state", list)
+	}
+	if len(cs.removes) != 0 {
+		t.Errorf("removes = %v, want none (the failed run left no container)", cs.removes)
 	}
 }
 

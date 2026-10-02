@@ -2,6 +2,7 @@ package databases
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -44,14 +45,26 @@ type fakeRepository struct {
 	// serverTeams maps a registered server to its team (zero = legacy node).
 	serverTeams map[uuid.UUID]uuid.UUID
 
-	createErr     error
-	getErr        error
-	listErr       error
-	updateErr     error
-	softDeleteErr error
-	secretErr     error
-	serverErr     error
-	serverMissing bool
+	createErr        error
+	getErr           error
+	listErr          error
+	updateErr        error
+	softDeleteErr    error
+	secretErr        error
+	deleteSecretsErr error
+	portErr          error
+	serverErr        error
+	serverMissing    bool
+
+	// secretFailAt fails the Nth CreateSecret call (1-based) while earlier
+	// calls succeed, modelling a partial credential write. 0 disables it.
+	secretFailAt int
+	secretWrites int
+	secretFail   error
+
+	// afterCreate runs after a row is stored, letting a test interleave a
+	// concurrent action (a delete that races provisioning) deterministically.
+	afterCreate func(Database)
 }
 
 // Compile-time guarantee that fakeRepository satisfies the seam.
@@ -97,13 +110,14 @@ func (r *fakeRepository) live(database Database) bool {
 // CreateDatabase implements Repository.
 func (r *fakeRepository) CreateDatabase(_ context.Context, database Database) (Database, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.createErr != nil {
+		r.mu.Unlock()
 		return Database{}, r.createErr
 	}
 	for _, id := range r.order {
 		existing := r.databases[id]
 		if existing.UserID == database.UserID && existing.Name == database.Name && r.live(existing) {
+			r.mu.Unlock()
 			return Database{}, ErrConflict
 		}
 	}
@@ -112,6 +126,11 @@ func (r *fakeRepository) CreateDatabase(_ context.Context, database Database) (D
 	}
 	r.databases[database.ID] = database
 	r.order = append(r.order, database.ID)
+	hook := r.afterCreate
+	r.mu.Unlock()
+	if hook != nil {
+		hook(database)
+	}
 	return database, nil
 }
 
@@ -153,27 +172,104 @@ func (r *fakeRepository) ListDatabases(_ context.Context, scope teams.Scope) ([]
 	return live, nil
 }
 
-// UpdateDatabase implements Repository.
-func (r *fakeRepository) UpdateDatabase(_ context.Context, database Database) (Database, error) {
+// updateError returns the configured write error, mirroring the shared
+// repository failure hook.
+func (r *fakeRepository) updateError() error { return r.updateErr }
+
+// liveRow loads a row that is visible to reads, mirroring the SQL fence on
+// deleted_at IS NULL: a soft-deleted row is ErrNotFound to every scoped write.
+func (r *fakeRepository) liveRow(databaseID uuid.UUID) (Database, bool) {
+	stored, ok := r.databases[databaseID]
+	if !ok || !r.live(stored) {
+		return Database{}, false
+	}
+	return stored, true
+}
+
+// UpdateDatabaseName implements Repository, scoped to the name column so it
+// cannot clobber a concurrent status or container-id write.
+func (r *fakeRepository) UpdateDatabaseName(_ context.Context, databaseID uuid.UUID, name string) (Database, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.updateErr != nil {
-		return Database{}, r.updateErr
+	if err := r.updateError(); err != nil {
+		return Database{}, err
 	}
-	stored, ok := r.databases[database.ID]
-	if !ok || !r.live(stored) {
+	stored, ok := r.liveRow(databaseID)
+	if !ok {
 		return Database{}, ErrNotFound
 	}
 	for _, id := range r.order {
 		existing := r.databases[id]
-		if id != database.ID && existing.UserID == database.UserID &&
-			existing.Name == database.Name && r.live(existing) {
+		if id != databaseID && existing.UserID == stored.UserID &&
+			existing.Name == name && r.live(existing) {
 			return Database{}, ErrConflict
 		}
 	}
-	database.UpdatedAt = stored.UpdatedAt
-	r.databases[database.ID] = database
-	return database, nil
+	stored.Name = name
+	stored.UpdatedAt = time.Now().UTC()
+	r.databases[databaseID] = stored
+	return stored, nil
+}
+
+// UpdateDatabaseContainer implements Repository, scoped to the container id.
+func (r *fakeRepository) UpdateDatabaseContainer(_ context.Context, databaseID uuid.UUID, containerID string) (Database, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.updateError(); err != nil {
+		return Database{}, err
+	}
+	stored, ok := r.liveRow(databaseID)
+	if !ok {
+		return Database{}, ErrNotFound
+	}
+	stored.ContainerID = containerID
+	stored.UpdatedAt = time.Now().UTC()
+	r.databases[databaseID] = stored
+	return stored, nil
+}
+
+// UpdateDatabaseStatus implements Repository, scoped to the status column.
+func (r *fakeRepository) UpdateDatabaseStatus(_ context.Context, databaseID uuid.UUID, status Status) (Database, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.updateError(); err != nil {
+		return Database{}, err
+	}
+	stored, ok := r.liveRow(databaseID)
+	if !ok {
+		return Database{}, ErrNotFound
+	}
+	stored.Status = status
+	stored.UpdatedAt = time.Now().UTC()
+	r.databases[databaseID] = stored
+	return stored, nil
+}
+
+// PublicPortInUse implements Repository.
+func (r *fakeRepository) PublicPortInUse(_ context.Context, serverID uuid.UUID, publicPort int32) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.portErr != nil {
+		return false, r.portErr
+	}
+	for _, id := range r.order {
+		existing := r.databases[id]
+		if r.live(existing) && existing.ServerID == serverID && existing.PublicPort == publicPort {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// DeleteDatabaseSecrets implements Repository.
+func (r *fakeRepository) DeleteDatabaseSecrets(_ context.Context, databaseID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.deleteSecretsErr != nil {
+		return r.deleteSecretsErr
+	}
+	delete(r.secrets, databaseID)
+	return nil
 }
 
 // SoftDeleteDatabase implements Repository.
@@ -193,12 +289,20 @@ func (r *fakeRepository) SoftDeleteDatabase(_ context.Context, databaseID uuid.U
 	return database, nil
 }
 
-// CreateSecret implements Repository.
+// CreateSecret implements Repository. secretFailAt models a partial write: the
+// first N-1 secrets are stored, the Nth fails.
 func (r *fakeRepository) CreateSecret(_ context.Context, secret Secret) (Secret, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.secretErr != nil {
-		return Secret{}, r.secretErr
+	r.secretWrites++
+	if err := r.secretErr; err != nil {
+		return Secret{}, err
+	}
+	if r.secretFailAt > 0 && r.secretWrites >= r.secretFailAt {
+		if r.secretFail != nil {
+			return Secret{}, r.secretFail
+		}
+		return Secret{}, errors.New("databases: secret write failed")
 	}
 	if secret.ID == uuid.Nil {
 		secret.ID = uuid.New()
@@ -262,6 +366,15 @@ type fakeContainers struct {
 	restarts int
 	removes  []string
 	pulls    int
+	// removeServers records the server id of every Remove call, so a test can
+	// prove cleanup used the real node id rather than a zeroed row.
+	removeServers []uuid.UUID
+	// calls records container operations in order ("pull", "run", "remove",
+	// ...) so ordering (pull before run) is assertable.
+	calls []string
+	// afterRun runs after Run published its container, letting a test
+	// interleave a delete with provisioning deterministically.
+	afterRun func()
 
 	runID      string
 	runErr     error
@@ -334,16 +447,19 @@ func (f *fakeContainers) Restart(context.Context, uuid.UUID, string) error {
 	return f.restartErr
 }
 
-func (f *fakeContainers) Remove(_ context.Context, _ uuid.UUID, containerID string) error {
+func (f *fakeContainers) Remove(_ context.Context, serverID uuid.UUID, containerID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls = append(f.calls, "remove")
 	f.removes = append(f.removes, containerID)
+	f.removeServers = append(f.removeServers, serverID)
 	return f.removeErr
 }
 
 func (f *fakeContainers) Pull(context.Context, uuid.UUID, string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls = append(f.calls, "pull")
 	f.pulls++
 	return f.pullErr
 }
@@ -352,17 +468,23 @@ func (f *fakeContainers) Pull(context.Context, uuid.UUID, string) error {
 // what the health wait looks for.
 func (f *fakeContainers) Run(_ context.Context, _ uuid.UUID, opts containers.RunOptions) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.calls = append(f.calls, "run")
 	f.runs = append(f.runs, opts)
-	if f.runErr != nil {
-		return "", f.runErr
-	}
+	runErr := f.runErr
 	id := f.runID
 	if id == "" {
 		id = "container-1"
 	}
-	if !f.suppressRunning {
+	if runErr == nil && !f.suppressRunning {
 		f.listed = []containers.Container{{ID: id, State: "running", Status: "Up"}}
+	}
+	hook := f.afterRun
+	f.mu.Unlock()
+	if runErr != nil {
+		return "", runErr
+	}
+	if hook != nil {
+		hook()
 	}
 	return id, nil
 }

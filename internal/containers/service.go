@@ -498,7 +498,35 @@ func mapRPCError(err error) error {
 		return fmt.Errorf("%w: %v", ErrValidation, err)
 	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
 		return fmt.Errorf("%w: %v", ErrAgentUnavailable, err)
+	case codes.Internal, codes.Unknown:
+		// Docker reports a host-port collision through a generic 500 whose
+		// message carries the daemon text (the agent has no typed error for
+		// it), so the text is the only signal left. Classify it as a conflict
+		// so callers answer 409 instead of 500.
+		if isPortConflictMessage(status.Convert(err).Message()) {
+			return fmt.Errorf("%w: %v", ErrPortConflict, err)
+		}
+		return err
 	default:
 		return err
 	}
+}
+
+// portConflictMarkers are the Docker daemon messages for a host port that is
+// already bound.
+var portConflictMarkers = []string{
+	"port is already allocated",
+	"address already in use",
+}
+
+// isPortConflictMessage reports whether a Docker (or agent) error message
+// describes a host-port bind collision.
+func isPortConflictMessage(message string) bool {
+	message = strings.ToLower(message)
+	for _, marker := range portConflictMarkers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }

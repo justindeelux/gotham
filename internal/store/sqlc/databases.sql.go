@@ -90,6 +90,16 @@ func (q *Queries) CreateDatabaseSecret(ctx context.Context, arg CreateDatabaseSe
 	return i, err
 }
 
+const deleteDatabaseSecrets = `-- name: DeleteDatabaseSecrets :exec
+DELETE FROM database_secrets
+WHERE database_id = $1
+`
+
+func (q *Queries) DeleteDatabaseSecrets(ctx context.Context, databaseID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteDatabaseSecrets, databaseID)
+	return err
+}
+
 const getDatabase = `-- name: GetDatabase :one
 SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id FROM databases
 WHERE id = $1 AND deleted_at IS NULL
@@ -231,6 +241,25 @@ func (q *Queries) ListDatabasesByUser(ctx context.Context, userID pgtype.UUID) (
 	return items, nil
 }
 
+const publicPortInUse = `-- name: PublicPortInUse :one
+SELECT EXISTS (
+    SELECT 1 FROM databases
+    WHERE server_id = $1 AND public_port = $2 AND deleted_at IS NULL
+)
+`
+
+type PublicPortInUseParams struct {
+	ServerID   pgtype.UUID `json:"server_id"`
+	PublicPort int32       `json:"public_port"`
+}
+
+func (q *Queries) PublicPortInUse(ctx context.Context, arg PublicPortInUseParams) (bool, error) {
+	row := q.db.QueryRow(ctx, publicPortInUse, arg.ServerID, arg.PublicPort)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const softDeleteDatabase = `-- name: SoftDeleteDatabase :one
 UPDATE databases
 SET status = 'deleting',
@@ -262,30 +291,91 @@ func (q *Queries) SoftDeleteDatabase(ctx context.Context, id pgtype.UUID) (Datab
 	return i, err
 }
 
-const updateDatabase = `-- name: UpdateDatabase :one
+const updateDatabaseContainer = `-- name: UpdateDatabaseContainer :one
 UPDATE databases
-SET name = $2,
-    status = $3,
-    container_id = $4,
+SET container_id = $2,
     updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND deleted_at IS NULL
 RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id
 `
 
-type UpdateDatabaseParams struct {
+type UpdateDatabaseContainerParams struct {
 	ID          pgtype.UUID `json:"id"`
-	Name        string      `json:"name"`
-	Status      string      `json:"status"`
 	ContainerID string      `json:"container_id"`
 }
 
-func (q *Queries) UpdateDatabase(ctx context.Context, arg UpdateDatabaseParams) (Database, error) {
-	row := q.db.QueryRow(ctx, updateDatabase,
-		arg.ID,
-		arg.Name,
-		arg.Status,
-		arg.ContainerID,
+func (q *Queries) UpdateDatabaseContainer(ctx context.Context, arg UpdateDatabaseContainerParams) (Database, error) {
+	row := q.db.QueryRow(ctx, updateDatabaseContainer, arg.ID, arg.ContainerID)
+	var i Database
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ServerID,
+		&i.Name,
+		&i.Engine,
+		&i.Version,
+		&i.Status,
+		&i.ContainerID,
+		&i.PublicPort,
+		&i.StoragePath,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.TeamID,
 	)
+	return i, err
+}
+
+const updateDatabaseName = `-- name: UpdateDatabaseName :one
+UPDATE databases
+SET name = $2,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id
+`
+
+type UpdateDatabaseNameParams struct {
+	ID   pgtype.UUID `json:"id"`
+	Name string      `json:"name"`
+}
+
+func (q *Queries) UpdateDatabaseName(ctx context.Context, arg UpdateDatabaseNameParams) (Database, error) {
+	row := q.db.QueryRow(ctx, updateDatabaseName, arg.ID, arg.Name)
+	var i Database
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ServerID,
+		&i.Name,
+		&i.Engine,
+		&i.Version,
+		&i.Status,
+		&i.ContainerID,
+		&i.PublicPort,
+		&i.StoragePath,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.TeamID,
+	)
+	return i, err
+}
+
+const updateDatabaseStatus = `-- name: UpdateDatabaseStatus :one
+UPDATE databases
+SET status = $2,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id
+`
+
+type UpdateDatabaseStatusParams struct {
+	ID     pgtype.UUID `json:"id"`
+	Status string      `json:"status"`
+}
+
+func (q *Queries) UpdateDatabaseStatus(ctx context.Context, arg UpdateDatabaseStatusParams) (Database, error) {
+	row := q.db.QueryRow(ctx, updateDatabaseStatus, arg.ID, arg.Status)
 	var i Database
 	err := row.Scan(
 		&i.ID,

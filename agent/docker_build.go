@@ -11,8 +11,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/justindeelux/gotham/buildtool"
 )
 
 const (
@@ -20,6 +24,11 @@ const (
 	registryImage = "registry:2"
 	// registryContainerName is the name of the node-local registry container.
 	registryContainerName = "gotham-registry"
+	// registryNetworkName is the dedicated bridge network the registry is
+	// attached to. Workload containers stay on the default bridge; Docker's
+	// inter-network isolation keeps them from reaching the registry by its
+	// container IP, not just by the loopback-published host port.
+	registryNetworkName = "gotham-registry"
 	// registryVolumeName is the named volume the registry stores images in.
 	registryVolumeName = "gotham-registry-data"
 	// registryPort is the registry container's listen port.
@@ -98,6 +107,54 @@ func (c *DockerClient) Build(ctx context.Context, opts BuildOptions, emit func([
 	return streamDockerMessages("build "+opts.Tag, response.Body, emit)
 }
 
+// emitWriter adapts an emit callback to an io.Writer so a toolchain's combined
+// output streams through the same channel as a Docker build.
+type emitWriter func([]byte) error
+
+// Write forwards p to the callback, returning its error to stop the tool.
+func (w emitWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if err := w(p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// RunToolchain extracts the uploaded build context into a scratch directory and
+// runs the named language toolchain (railpack or buildpacks) on the node,
+// tagging the result as tag. The CLI talks to this node's Docker daemon, so the
+// image lands locally and the caller pushes it to the node registry. The
+// scratch directory is removed when the build ends.
+func (c *DockerClient) RunToolchain(ctx context.Context, engine string, contextTar io.Reader, tag string, buildArgs map[string]string, emit func([]byte) error) error {
+	if contextTar == nil {
+		return errors.New("docker: toolchain build context is required")
+	}
+	if strings.TrimSpace(tag) == "" {
+		return errors.New("docker: toolchain image tag is required")
+	}
+	dir, err := os.MkdirTemp("", "gotham-toolchain-*")
+	if err != nil {
+		return fmt.Errorf("docker: create toolchain directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	if err := buildtool.ExtractTar(dir, contextTar); err != nil {
+		return err
+	}
+	options := buildtool.Options{
+		Dir:        dir,
+		Tag:        tag,
+		BuildArgs:  buildArgs,
+		DockerHost: c.dockerHost,
+	}
+	if emit != nil {
+		options.LogWriter = emitWriter(emit)
+	}
+	return buildtool.Run(ctx, buildtool.Engine(engine), options)
+}
+
 // TagImage adds repository:tag to the image currently referenced by source.
 func (c *DockerClient) TagImage(ctx context.Context, source, repository, tag string) error {
 	if strings.TrimSpace(source) == "" || strings.TrimSpace(repository) == "" || strings.TrimSpace(tag) == "" {
@@ -162,11 +219,27 @@ func (c *DockerClient) ImageDigest(ctx context.Context, ref string) (string, err
 
 // EnsureRegistry makes the node-local registry container available and returns
 // its host:port address. On first build the registry:2 image is pulled and run
-// with a persistent volume published on loopback; afterwards the existing
-// container is reused, restarting it when it is stopped. Containers that were
-// created with an auto-assigned port are recreated on an explicit probed port:
-// daemons cannot reach auto-assigned published ports on every platform.
+// with a persistent volume, published on loopback only and attached to a
+// dedicated network so workloads cannot reach it; afterwards the existing
+// container is reused, restarting it when it is stopped.
+//
+// A container that was created with an auto-assigned port (which some daemons
+// cannot reach) or that predates the isolated-network/authenticated layout is
+// recreated. The registry is configured with an htpasswd credential generated
+// on the node and stored mode 0600 in the agent state dir; EnsureRegistry also
+// caches the credential so every subsequent push/pull is authenticated.
 func (c *DockerClient) EnsureRegistry(ctx context.Context) (string, error) {
+	c.registryMu.Lock()
+	defer c.registryMu.Unlock()
+
+	auth, _, err := prepareRegistryAuth(c.registryStateDir)
+	if err != nil {
+		return "", err
+	}
+	if err := c.ensureRegistryNetwork(ctx); err != nil {
+		return "", err
+	}
+
 	info, err := c.inspectRegistryContainer(ctx)
 	switch {
 	case errors.Is(err, errContainerNotFound):
@@ -180,7 +253,7 @@ func (c *DockerClient) EnsureRegistry(ctx context.Context) (string, error) {
 		return "", err
 	case !registryManaged(info):
 		return "", fmt.Errorf("docker: container %s exists but is not managed by gotham", registryContainerName)
-	case !registryBindingExplicit(info):
+	case !registryBindingExplicit(info) || !registryIsolated(info):
 		if err := c.removeRegistryContainer(ctx, info); err != nil {
 			return "", err
 		}
@@ -210,7 +283,70 @@ func (c *DockerClient) EnsureRegistry(ctx context.Context) (string, error) {
 	if address == "" {
 		return "", errors.New("docker: registry container has no published port")
 	}
+	auth.Address = address
+	c.mu.Lock()
+	c.registryAuth = auth
+	c.mu.Unlock()
 	return address, nil
+}
+
+// ensureRegistryNetwork creates the dedicated registry network if it is
+// missing. A network that already exists under that name must be managed by
+// gotham, so an unrelated operator network is never adopted.
+func (c *DockerClient) ensureRegistryNetwork(ctx context.Context) error {
+	path := "/networks/" + registryNetworkName
+	response, err := c.doRaw(ctx, http.MethodGet, path, nil, "")
+	if err != nil {
+		return fmt.Errorf("docker: inspect registry network: %w", err)
+	}
+	if response.StatusCode == http.StatusOK {
+		defer func() { _ = response.Body.Close() }()
+		var network struct {
+			Labels map[string]string `json:"Labels"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&network); err != nil {
+			return fmt.Errorf("docker: decode registry network: %w", err)
+		}
+		if network.Labels["gotham.managed"] != "true" {
+			return fmt.Errorf("docker: network %s exists but is not managed by gotham", registryNetworkName)
+		}
+		return nil
+	}
+	if response.StatusCode != http.StatusNotFound {
+		return statusError(http.MethodGet, path, response)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+
+	body := map[string]any{
+		"Name":           registryNetworkName,
+		"Driver":         "bridge",
+		"CheckDuplicate": true,
+		"Labels": map[string]string{
+			"gotham.managed": "true",
+			"gotham.role":    "registry",
+		},
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("docker: marshal registry network body: %w", err)
+	}
+	createPath := "/networks/create"
+	response, err = c.doRaw(ctx, http.MethodPost, createPath, bytes.NewReader(encoded), "application/json")
+	if err != nil {
+		return fmt.Errorf("docker: create registry network: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	// CheckDuplicate makes a concurrent create return 409, which is success.
+	if response.StatusCode == http.StatusConflict {
+		_, _ = io.Copy(io.Discard, response.Body)
+		return nil
+	}
+	if !dockerOK(response.StatusCode) {
+		return statusError(http.MethodPost, createPath, response)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	return nil
 }
 
 // bootstrapRegistry pulls registry:2 and creates the registry container on a
@@ -277,18 +413,29 @@ func (c *DockerClient) inspectRegistryContainer(ctx context.Context) (*container
 	return &info, nil
 }
 
-// createRegistryContainer creates the registry container, publishing its port
-// on loopback at the explicit host port.
+// createRegistryContainer creates the registry container: its port is published
+// on loopback only, it joins the dedicated registry network (not the default
+// bridge), and it requires the generated htpasswd credential mounted read-only.
 func (c *DockerClient) createRegistryContainer(ctx context.Context, port string) error {
+	htpasswdPath := filepath.Join(c.registryStateDir, registryHtpasswdFilename)
 	body := dockerCreateBody{
 		Image: registryImage,
+		Env: []string{
+			"REGISTRY_AUTH=htpasswd",
+			"REGISTRY_AUTH_HTPASSWD_REALM=" + registryAuthRealm,
+			"REGISTRY_AUTH_HTPASSWD_PATH=" + registryHtpasswdPath,
+		},
 		Labels: map[string]string{
 			"gotham.managed": "true",
 			"gotham.role":    "registry",
 		},
 		ExposedPorts: map[string]struct{}{registryPort + "/tcp": {}},
 		HostConfig: &dockerHostConfig{
-			Binds: []string{registryVolumeName + ":/var/lib/registry"},
+			Binds: []string{
+				registryVolumeName + ":/var/lib/registry",
+				htpasswdPath + ":" + registryHtpasswdPath + ":ro",
+			},
+			NetworkMode: registryNetworkName,
 			PortBindings: map[string][]dockerPort{
 				registryPort + "/tcp": {{HostIP: registryHostIP, HostPort: port}},
 			},
@@ -351,9 +498,11 @@ type containerRuntimeInfo struct {
 	} `json:"Config"`
 	HostConfig struct {
 		PortBindings map[string][]dockerPortBinding `json:"PortBindings"`
+		NetworkMode  string                         `json:"NetworkMode"`
 	} `json:"HostConfig"`
 	NetworkSettings struct {
-		Ports map[string][]dockerPortBinding `json:"Ports"`
+		Ports    map[string][]dockerPortBinding `json:"Ports"`
+		Networks map[string]struct{}            `json:"Networks"`
 	} `json:"NetworkSettings"`
 }
 
@@ -374,6 +523,20 @@ func registryManaged(info *containerRuntimeInfo) bool {
 func registryBindingExplicit(info *containerRuntimeInfo) bool {
 	bindings := info.HostConfig.PortBindings[registryPort+"/tcp"]
 	return len(bindings) > 0 && bindings[0].HostPort != ""
+}
+
+// registryIsolated reports whether the registry is attached to the dedicated
+// registry network rather than the default bridge that workloads share. A
+// container created by an older agent is not isolated and must be recreated.
+func registryIsolated(info *containerRuntimeInfo) bool {
+	if info.HostConfig.NetworkMode == registryNetworkName {
+		return true
+	}
+	if len(info.NetworkSettings.Networks) != 1 {
+		return false
+	}
+	_, ok := info.NetworkSettings.Networks[registryNetworkName]
+	return ok
 }
 
 // neverStarted reports whether the container has never reached running state.

@@ -132,7 +132,7 @@ func TestP6DNS01Issuance(t *testing.T) {
 
 	// Docker, Postgres and the one local node: the same stack the BE-6.1
 	// acceptance test builds.
-	engine, err := agent.NewDockerClient(e2eDockerSock())
+	engine, err := agent.NewDockerClient(e2eDockerSock(), agent.WithRegistryStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("docker client for %s: %v", e2eDockerSock(), err)
 	}

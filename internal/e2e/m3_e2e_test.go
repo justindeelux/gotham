@@ -62,7 +62,7 @@ func TestM3EndToEnd(t *testing.T) {
 	dockerSock := e2eDockerSock()
 
 	// 1. Preconditions: the local daemon and Redis must be reachable.
-	engine, err := agent.NewDockerClient(dockerSock)
+	engine, err := agent.NewDockerClient(dockerSock, agent.WithRegistryStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("docker client for %s: %v", dockerSock, err)
 	}

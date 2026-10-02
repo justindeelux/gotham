@@ -31,7 +31,7 @@ func TestDockerBuildLive(t *testing.T) {
 		t.Skip("skipping live Docker build in -short mode")
 	}
 
-	client, err := NewDockerClient("")
+	client, err := NewDockerClient("", WithRegistryStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("docker client: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestBuildServerLive(t *testing.T) {
 		t.Skip("skipping live build RPC in -short mode")
 	}
 
-	docker, err := NewDockerClient("")
+	docker, err := NewDockerClient("", WithRegistryStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("docker client: %v", err)
 	}
@@ -189,6 +189,75 @@ func TestBuildServerLive(t *testing.T) {
 
 	// The pushed reference must be present in the node-local registry.
 	defer removeTestImage(t, docker, result.GetRegistryImage())
+}
+
+// TestRegistryLiveAuthAndIsolation bootstraps the real node registry and checks
+// it rejects an unauthenticated request, accepts the generated credential, and
+// is attached to the dedicated (non-default) network that workloads cannot
+// reach. It only runs when GOTHAM_E2E=1 and a daemon is reachable.
+func TestRegistryLiveAuthAndIsolation(t *testing.T) {
+	if os.Getenv("GOTHAM_E2E") != "1" {
+		t.Skip("set GOTHAM_E2E=1 to run the live registry test")
+	}
+	if testing.Short() {
+		t.Skip("skipping live registry test in -short mode")
+	}
+
+	stateDir := t.TempDir()
+	client, err := NewDockerClient("", WithRegistryStateDir(stateDir))
+	if err != nil {
+		t.Fatalf("docker client: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, err := client.Version(ctx); err != nil {
+		t.Skipf("docker daemon unavailable: %v", err)
+	}
+
+	address, err := client.EnsureRegistry(ctx)
+	if err != nil {
+		t.Fatalf("ensure registry: %v", err)
+	}
+	auth, _, err := prepareRegistryAuth(stateDir)
+	if err != nil {
+		t.Fatalf("read registry credential: %v", err)
+	}
+
+	// Unauthenticated: the /v2/ API must answer 401.
+	response, err := http.Get("http://" + address + "/v2/") //nolint:gosec // loopback test URL
+	if err != nil {
+		t.Fatalf("unauthenticated registry request: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d; want 401", response.StatusCode)
+	}
+
+	// Authenticated: the generated credential must be accepted.
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/v2/", nil)
+	if err != nil {
+		t.Fatalf("build authenticated request: %v", err)
+	}
+	request.SetBasicAuth(auth.Username, auth.Password)
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("authenticated registry request: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("authenticated status = %d; want 200", response.StatusCode)
+	}
+
+	// The registry must not share the default bridge with workloads.
+	info, err := client.inspectRegistryContainer(ctx)
+	if err != nil {
+		t.Fatalf("inspect registry: %v", err)
+	}
+	if !registryIsolated(info) || info.HostConfig.NetworkMode == "bridge" {
+		t.Fatalf("registry network mode = %q; want %q", info.HostConfig.NetworkMode, registryNetworkName)
+	}
 }
 
 // writeLiveContext writes a minimal FROM scratch build context.

@@ -202,6 +202,41 @@ func TestOrchestratorHappyPath(t *testing.T) {
 	}
 }
 
+func TestOrchestratorRoutesToolchainEngineToNode(t *testing.T) {
+	app := testApplication(uuid.New())
+	app.BuildPack = "railpack"
+	repo := &fakeRepository{app: app}
+	repo.envVars, repo.secrets = testEnv(t)
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+
+	node := newMockNode()
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &fakeSource{},
+		Dial:       dialAlways(node),
+		Emitter:    NewEmitter(&recordPublisher{}),
+	})
+
+	o.run(context.Background(), job{app: app, dep: dep, previous: "old-container"})
+
+	if node.buildCalls != 1 || len(node.metas) != 1 {
+		t.Fatalf("build calls = %d, metas = %d; want 1 and 1", node.buildCalls, len(node.metas))
+	}
+	if node.metas[0].Engine != "railpack" {
+		t.Errorf("engine = %q; want railpack (the node runs the toolchain)", node.metas[0].Engine)
+	}
+	stored, ok := repo.deployment(dep.ID)
+	if !ok {
+		t.Fatal("deployment row is gone")
+	}
+	if stored.State != StateRunning {
+		t.Errorf("state = %s; want running", stored.State)
+	}
+	if stored.RegistryImage == "" {
+		t.Error("registry image is empty; the node build must supply it")
+	}
+}
+
 func TestOrchestratorStreamsBuildLogs(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -506,23 +541,29 @@ func TestPushStep(t *testing.T) {
 		}
 	})
 
-	t.Run("control plane build logs the missing transport", func(t *testing.T) {
+	t.Run("missing registry reference fails before retiring the running container", func(t *testing.T) {
 		node := newMockNode()
 		var lines []string
 		st := &runState{
-			node: node,
-			dep:  Deployment{ImageTag: "gotham/app:2"},
-			log:  func(line string) { lines = append(lines, line) },
+			node:     node,
+			previous: "release-container",
+			dep:      Deployment{ImageTag: "gotham/app:2"},
+			log:      func(line string) { lines = append(lines, line) },
 		}
-		if err := newTestOrchestrator(Config{}).push(context.Background(), st); err != nil {
-			t.Fatalf("push: %v", err)
+		err := newTestOrchestrator(Config{}).push(context.Background(), st)
+		if err == nil {
+			t.Fatal("push succeeded although no registry reference exists")
+		}
+		if !strings.Contains(err.Error(), "refusing to retire") {
+			t.Errorf("err = %q; want it to explain the refusal", err)
 		}
 		if node.pullCalls != 0 {
 			t.Errorf("pull calls = %d, want 0 (no registry reference exists)", node.pullCalls)
 		}
-		joined := strings.Join(lines, "\n")
-		if !strings.Contains(joined, "built on the control plane") {
-			t.Errorf("log = %q, want it to explain the control-plane build", joined)
+		// The regression: the previous container must not be stopped when the
+		// new image cannot be transferred.
+		if len(node.stopped) != 0 {
+			t.Errorf("stopped = %v; want no container retired before the image is available", node.stopped)
 		}
 	})
 }

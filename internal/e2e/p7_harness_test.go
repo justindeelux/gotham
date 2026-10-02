@@ -53,7 +53,7 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 	logger := testLogger(t)
 	h := &p7Harness{logger: logger}
 
-	engine, err := agent.NewDockerClient(e2eDockerSock())
+	engine, err := agent.NewDockerClient(e2eDockerSock(), agent.WithRegistryStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("docker client for %s: %v", e2eDockerSock(), err)
 	}

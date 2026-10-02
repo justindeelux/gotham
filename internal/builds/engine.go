@@ -104,8 +104,8 @@ func NewRegistry(builder ImageBuilder) *Registry {
 		order:   append([]EngineKind(nil), EngineKinds...),
 	}
 	r.Register(NewDockerfileEngine(builder))
-	r.Register(NewRailpackEngine())
-	r.Register(NewBuildpacksEngine())
+	r.Register(NewRailpackEngine(builder))
+	r.Register(NewBuildpacksEngine(builder))
 	r.Register(NewStaticEngine(builder))
 	return r
 }

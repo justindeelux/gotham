@@ -2,12 +2,15 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,7 +23,7 @@ func newTestDockerClient(t *testing.T, handler http.Handler) *DockerClient {
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
-	client, err := NewDockerClient(server.URL)
+	client, err := NewDockerClient(server.URL, WithRegistryStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("new docker client: %v", err)
 	}
@@ -300,6 +303,9 @@ type registryTestEngine struct {
 	creates       int
 	removals      int
 	startFails    bool
+	networkExists bool
+	networkCreate int
+	networkMode   string
 }
 
 // inspectPayload renders a GET /containers/{name}/json response.
@@ -312,6 +318,10 @@ func (e *registryTestEngine) inspectPayload() map[string]any {
 	if e.managed {
 		labels = map[string]string{"gotham.managed": "true", "gotham.role": "registry"}
 	}
+	networkMode := e.networkMode
+	if networkMode == "" {
+		networkMode = registryNetworkName
+	}
 	ports := map[string]any{}
 	if e.running && e.publishedPort != "" {
 		ports[registryPort+"/tcp"] = []map[string]string{
@@ -322,13 +332,17 @@ func (e *registryTestEngine) inspectPayload() map[string]any {
 		"State":  map[string]any{"Running": e.running, "StartedAt": startedAt},
 		"Config": map[string]any{"Labels": labels},
 		"HostConfig": map[string]any{
+			"NetworkMode": networkMode,
 			"PortBindings": map[string]any{
 				registryPort + "/tcp": []map[string]string{
 					{"HostIp": registryHostIP, "HostPort": e.hostPort},
 				},
 			},
 		},
-		"NetworkSettings": map[string]any{"Ports": ports},
+		"NetworkSettings": map[string]any{
+			"Ports":    ports,
+			"Networks": map[string]any{networkMode: map[string]any{}},
+		},
 	}
 }
 
@@ -338,6 +352,22 @@ func (e *registryTestEngine) handler(t *testing.T) http.Handler {
 		defer e.mu.Unlock()
 
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/networks/"+registryNetworkName:
+			if !e.networkExists {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"message":"network not found"}`))
+				return
+			}
+			writeJSONStream(t, w, map[string]any{
+				"Name":   registryNetworkName,
+				"Labels": map[string]string{"gotham.managed": "true"},
+			})
+
+		case r.Method == http.MethodPost && r.URL.Path == "/networks/create":
+			e.networkCreate++
+			e.networkExists = true
+			writeJSONStream(t, w, map[string]any{"Id": "network-1"})
+
 		case r.Method == http.MethodGet && r.URL.Path == "/containers/"+registryContainerName+"/json":
 			if !e.exists {
 				w.WriteHeader(http.StatusNotFound)
@@ -441,8 +471,30 @@ func TestDockerClientEnsureRegistryBootstraps(t *testing.T) {
 	if got := engine.created.Labels["gotham.managed"]; got != "true" {
 		t.Errorf("gotham.managed label = %q", got)
 	}
-	if len(engine.created.HostConfig.Binds) != 1 || engine.created.HostConfig.Binds[0] != registryVolumeName+":/var/lib/registry" {
-		t.Errorf("binds = %v", engine.created.HostConfig.Binds)
+	binds := engine.created.HostConfig.Binds
+	var hasVolume, hasHtpasswd bool
+	for _, bind := range binds {
+		switch {
+		case strings.HasPrefix(bind, registryVolumeName+":/var/lib/registry"):
+			hasVolume = true
+		case strings.HasSuffix(bind, ":"+registryHtpasswdPath+":ro"):
+			hasHtpasswd = true
+		}
+	}
+	if !hasVolume {
+		t.Errorf("binds = %v; want the registry data volume", binds)
+	}
+	if !hasHtpasswd {
+		t.Errorf("binds = %v; want the htpasswd file mounted read-only", binds)
+	}
+	if engine.created.HostConfig.NetworkMode != registryNetworkName {
+		t.Errorf("network mode = %q; want %q", engine.created.HostConfig.NetworkMode, registryNetworkName)
+	}
+	if !containsString(engine.created.Env, "REGISTRY_AUTH=htpasswd") {
+		t.Errorf("env = %v; want REGISTRY_AUTH=htpasswd", engine.created.Env)
+	}
+	if !containsString(engine.created.Env, "REGISTRY_AUTH_HTPASSWD_PATH="+registryHtpasswdPath) {
+		t.Errorf("env = %v; want the htpasswd path", engine.created.Env)
 	}
 	bindings := engine.created.HostConfig.PortBindings[registryPort+"/tcp"]
 	if len(bindings) != 1 || bindings[0].HostIP != registryHostIP || bindings[0].HostPort == "" {
@@ -515,6 +567,32 @@ func TestDockerClientEnsureRegistryRepairsAutoAssignedPort(t *testing.T) {
 	}
 }
 
+// TestDockerClientEnsureRegistryIsolatesLegacyContainer checks a registry left
+// on the default bridge by an older agent is recreated on the dedicated
+// network, so workloads can no longer reach it by container IP.
+func TestDockerClientEnsureRegistryIsolatesLegacyContainer(t *testing.T) {
+	engine := &registryTestEngine{
+		exists: true, running: true, managed: true,
+		hostPort: "5001", publishedPort: "5001", networkMode: "bridge",
+	}
+	client := newTestDockerClient(t, engine.handler(t))
+
+	address, err := client.EnsureRegistry(context.Background())
+	if err != nil {
+		t.Fatalf("ensure registry: %v", err)
+	}
+	if address != "127.0.0.1:"+engine.hostPort {
+		t.Fatalf("address = %q", address)
+	}
+	if engine.removals != 1 || engine.pulls != 1 || engine.creates != 1 || engine.starts != 1 {
+		t.Fatalf("removals = %d, pulls = %d, creates = %d, starts = %d; want 1 each",
+			engine.removals, engine.pulls, engine.creates, engine.starts)
+	}
+	if engine.created.HostConfig.NetworkMode != registryNetworkName {
+		t.Errorf("recreated network mode = %q; want %q", engine.created.HostConfig.NetworkMode, registryNetworkName)
+	}
+}
+
 func TestDockerClientEnsureRegistryRejectsUnmanagedContainer(t *testing.T) {
 	engine := &registryTestEngine{
 		exists: true, running: true, managed: false,
@@ -584,4 +662,182 @@ func TestStripImageTag(t *testing.T) {
 			t.Errorf("stripImageTag(%q) = %q, want %q", testCase.ref, got, testCase.want)
 		}
 	}
+}
+
+// TestRegistryAuthFilesArePrivate checks the credential is persisted 0600 and
+// the htpasswd only carries a bcrypt hash, never the plaintext password.
+func TestRegistryAuthFilesArePrivate(t *testing.T) {
+	dir := t.TempDir()
+	auth, htpasswdPath, err := prepareRegistryAuth(dir)
+	if err != nil {
+		t.Fatalf("prepare registry auth: %v", err)
+	}
+	if auth.Username != registryAuthUser || len(auth.Password) < 16 {
+		t.Fatalf("auth = %+v", auth)
+	}
+
+	for _, path := range []string{filepath.Join(dir, registryCredentialFilename), htpasswdPath} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != registryAuthFileMode {
+			t.Errorf("%s mode = %#o, want %#o", path, got, registryAuthFileMode)
+		}
+	}
+
+	htpasswd, err := os.ReadFile(htpasswdPath)
+	if err != nil {
+		t.Fatalf("read htpasswd: %v", err)
+	}
+	if strings.Contains(string(htpasswd), auth.Password) {
+		t.Error("htpasswd contains the plaintext password")
+	}
+	if !strings.HasPrefix(string(htpasswd), registryAuthUser+":$2") {
+		t.Errorf("htpasswd = %q; want a gotham bcrypt entry", string(htpasswd))
+	}
+
+	// The credential is stable across reloads so a restart does not lose it.
+	again, _, err := prepareRegistryAuth(dir)
+	if err != nil {
+		t.Fatalf("reload registry auth: %v", err)
+	}
+	if again.Password != auth.Password || again.Username != auth.Username {
+		t.Error("reload changed the credential")
+	}
+}
+
+// TestRegistryAuthHeaderScope checks the node credential is only sent to the
+// node registry, never to another registry (for example the registry:2
+// bootstrap pull from Docker Hub).
+func TestRegistryAuthHeaderScope(t *testing.T) {
+	client, err := NewDockerClient("http://unused", WithRegistryStateDir(t.TempDir()))
+	if err != nil {
+		t.Fatalf("new docker client: %v", err)
+	}
+	client.registryAuth = registryAuth{Address: "127.0.0.1:5000", Username: "gotham", Password: "s3cret"}
+
+	header, err := client.registryAuthHeader("127.0.0.1:5000/gotham/web:dep-1")
+	if err != nil {
+		t.Fatalf("registryAuthHeader: %v", err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(header)
+	if err != nil {
+		t.Fatalf("decode header: %v", err)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(decoded, &payload); err != nil {
+		t.Fatalf("unmarshal header: %v", err)
+	}
+	if payload["username"] != "gotham" || payload["password"] != "s3cret" || payload["serveraddress"] != "127.0.0.1:5000" {
+		t.Errorf("header payload = %v", payload)
+	}
+
+	for _, image := range []string{"registry:2", "docker.io/library/nginx:latest", "nginx:alpine"} {
+		got, err := client.registryAuthHeader(image)
+		if err != nil {
+			t.Fatalf("registryAuthHeader(%q): %v", image, err)
+		}
+		if got != anonymousRegistryAuth {
+			t.Errorf("registryAuthHeader(%q) = %q; want the anonymous config", image, got)
+		}
+	}
+}
+
+// TestDockerClientPushImageUsesCredential checks a push carries the node
+// credential in X-Registry-Auth, not the anonymous config.
+func TestDockerClientPushImageUsesCredential(t *testing.T) {
+	var gotAuth string
+	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get(registryAuthHeader)
+		writeJSONStream(t, w, map[string]string{"status": "pushed\n"})
+	}))
+	client.registryAuth = registryAuth{Address: "127.0.0.1:5000", Username: "gotham", Password: "s3cret"}
+
+	if err := client.PushImage(context.Background(), "127.0.0.1:5000/gotham/web", "dep-1", func([]byte) error { return nil }); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if gotAuth == anonymousRegistryAuth || gotAuth == "" {
+		t.Fatalf("push auth header = %q; want the node credential", gotAuth)
+	}
+}
+
+// TestEnsureRegistryRequiresStateDir checks the registry bootstrap fails closed
+// rather than serving an unauthenticated registry when no state dir is set.
+func TestEnsureRegistryRequiresStateDir(t *testing.T) {
+	client := newTestDockerClientWithoutStateDir(t)
+	if _, err := client.EnsureRegistry(context.Background()); err == nil || !strings.Contains(err.Error(), "state dir") {
+		t.Fatalf("err = %v, want a state-dir error", err)
+	}
+}
+
+// TestRegistryIsolated pins the isolation predicate: only the dedicated
+// registry network counts, so a container on the default bridge is recreated.
+func TestRegistryIsolated(t *testing.T) {
+	var isolated containerRuntimeInfo
+	isolated.HostConfig.NetworkMode = registryNetworkName
+	if !registryIsolated(&isolated) {
+		t.Error("dedicated network must be isolated")
+	}
+
+	var bridged containerRuntimeInfo
+	bridged.HostConfig.NetworkMode = "bridge"
+	bridged.NetworkSettings.Networks = map[string]struct{}{"bridge": {}}
+	if registryIsolated(&bridged) {
+		t.Error("default bridge must not be isolated")
+	}
+
+	var multi containerRuntimeInfo
+	multi.NetworkSettings.Networks = map[string]struct{}{
+		registryNetworkName: {},
+		"bridge":            {},
+	}
+	if registryIsolated(&multi) {
+		t.Error("a container on two networks must not be isolated")
+	}
+}
+
+// TestEnsureRegistryRejectsUnmanagedNetwork checks a same-named network that
+// gotham did not create is refused rather than adopted.
+func TestEnsureRegistryRejectsUnmanagedNetwork(t *testing.T) {
+	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/networks/"+registryNetworkName {
+			writeJSONStream(t, w, map[string]any{
+				"Name":   registryNetworkName,
+				"Labels": map[string]string{"operator": "true"},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+
+	_, err := client.EnsureRegistry(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "not managed by gotham") {
+		t.Fatalf("err = %v; want an unmanaged-network error", err)
+	}
+}
+
+// newTestDockerClientWithoutStateDir returns a client with no registry state
+// directory, for the fail-closed assertion.
+func newTestDockerClientWithoutStateDir(t *testing.T) *DockerClient {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewDockerClient(server.URL)
+	if err != nil {
+		t.Fatalf("new docker client: %v", err)
+	}
+	return client
+}
+
+// containsString reports whether values contains want.
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

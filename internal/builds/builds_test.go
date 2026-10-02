@@ -254,8 +254,9 @@ func TestRegistryBuildCLIMissing(t *testing.T) {
 			t.Setenv("PATH", t.TempDir())
 			repoDir := t.TempDir()
 			writeTestFile(t, filepath.Join(repoDir, tt.marker), tt.content)
-			builder := &mockBuilder{}
-			registry := NewRegistry(builder)
+			// No builder: the toolchain runs in-process, so a missing CLI must
+			// fail with ErrCLIMissing instead of a fabricated image.
+			registry := NewRegistry(nil)
 
 			_, err := registry.Build(context.Background(), testOptions(repoDir))
 			if !errors.Is(err, ErrCLIMissing) {
@@ -267,8 +268,54 @@ func TestRegistryBuildCLIMissing(t *testing.T) {
 			if !strings.Contains(err.Error(), "install") {
 				t.Errorf("Build error = %q; want an install hint", err)
 			}
-			if builder.calls != 0 {
-				t.Errorf("builder called %d times; want 0", builder.calls)
+		})
+	}
+}
+
+// TestRegistryBuildToolchainRoutesToBuilder pins the remote-build fix: with a
+// builder configured, the Railpack and Buildpacks engines package the raw
+// source context and dispatch it with the engine named, so the node agent (not
+// the control plane) runs the CLI and pushes to the node registry.
+func TestRegistryBuildToolchainRoutesToBuilder(t *testing.T) {
+	tests := []struct {
+		name    string
+		marker  string
+		content string
+		kind    EngineKind
+	}{
+		{name: "railpack", marker: "package.json", content: "{}\n", kind: EngineRailpack},
+		{name: "buildpacks", marker: "Procfile", content: "web: ./app\n", kind: EngineBuildpacks},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// An empty PATH proves the control plane does not need the CLI.
+			t.Setenv("PATH", t.TempDir())
+			repoDir := t.TempDir()
+			writeTestFile(t, filepath.Join(repoDir, tt.marker), tt.content)
+
+			builder := &mockBuilder{result: ImageBuildResult{Digest: "sha256:remote"}}
+			opts := testOptions(repoDir)
+			opts.BuildPack = tt.kind
+
+			ref, err := NewRegistry(builder).Build(context.Background(), opts)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if builder.calls != 1 {
+				t.Fatalf("builder calls = %d; want 1", builder.calls)
+			}
+			if builder.lastOpts.Engine != tt.kind {
+				t.Errorf("builder engine = %q; want %q", builder.lastOpts.Engine, tt.kind)
+			}
+			if builder.lastOpts.Tag != ImageTag(testAppID, testDeployID) {
+				t.Errorf("builder tag = %q", builder.lastOpts.Tag)
+			}
+			if ref.Digest != "sha256:remote" {
+				t.Errorf("Digest = %q; want sha256:remote", ref.Digest)
+			}
+			files := readContextTar(t, builder.lastTar)
+			if _, ok := files[tt.marker]; !ok {
+				t.Errorf("context is missing %s", tt.marker)
 			}
 		})
 	}

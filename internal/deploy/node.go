@@ -28,7 +28,11 @@ type BuildMeta struct {
 	AppID      string
 	DeployID   string
 	Dockerfile string
-	BuildArgs  map[string]string
+	// Engine names the build engine the node must run. Empty and "dockerfile"
+	// mean a Dockerfile build; "railpack"/"buildpacks" run that toolchain on
+	// the node.
+	Engine    string
+	BuildArgs map[string]string
 }
 
 // BuildOutcome is the result of a build performed on a node.
@@ -166,6 +170,7 @@ func (n *agentNode) sendBuild(stream grpc.BidiStreamingClient[agentv1.BuildImage
 			AppId:      meta.AppID,
 			DeployId:   meta.DeployID,
 			Dockerfile: meta.Dockerfile,
+			Engine:     meta.Engine,
 			BuildArgs:  meta.BuildArgs,
 		}},
 	})
@@ -275,6 +280,7 @@ func (b *nodeImageBuilder) Build(ctx context.Context, contextTar []byte, opts bu
 		AppID:      b.appID.String(),
 		DeployID:   b.deployID.String(),
 		Dockerfile: opts.Dockerfile,
+		Engine:     string(opts.Engine),
 		BuildArgs:  opts.BuildArgs,
 	}, contextTar, b.log)
 	if err != nil {

@@ -327,7 +327,7 @@ func newP5Harness(t *testing.T) *p5Harness {
 
 	// 2. Docker: the agent creates the database and runs every job container
 	// on the local daemon.
-	engine, err := agent.NewDockerClient(e2eDockerSock())
+	engine, err := agent.NewDockerClient(e2eDockerSock(), agent.WithRegistryStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("GOTHAM_E2E=1: docker client for %s: %v", e2eDockerSock(), err)
 	}

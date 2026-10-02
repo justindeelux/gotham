@@ -7,7 +7,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 
+	"github.com/justindeelux/gotham/buildtool"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -29,6 +31,7 @@ const (
 type buildClient interface {
 	EnsureRegistry(ctx context.Context) (string, error)
 	Build(ctx context.Context, opts BuildOptions, emit func([]byte) error) error
+	RunToolchain(ctx context.Context, engine string, context io.Reader, tag string, buildArgs map[string]string, emit func([]byte) error) error
 	TagImage(ctx context.Context, source, repository, tag string) error
 	PushImage(ctx context.Context, repository, tag string, emit func([]byte) error) error
 	ImageDigest(ctx context.Context, ref string) (string, error)
@@ -115,7 +118,18 @@ func (s *BuildServer) BuildImage(stream agentv1.BuildService_BuildImageServer) e
 		return sendErr
 	}
 
-	if err := s.docker.Build(ctx, BuildOptions{
+	if engine := normalizeEngine(meta.GetEngine()); engine != "" {
+		// A language toolchain (Railpack, Buildpacks) runs on the node against
+		// the extracted context, so a control-plane host does not need the CLI
+		// and the image is pushed to the node registry by the shared steps
+		// below.
+		if err := emit([]byte("running " + engine + " build on the node\n")); err != nil {
+			return sendErr
+		}
+		if err := s.docker.RunToolchain(ctx, engine, contextFile, registryImage, meta.GetBuildArgs(), emit); err != nil {
+			return fail(err)
+		}
+	} else if err := s.docker.Build(ctx, BuildOptions{
 		Tag:        registryImage,
 		Dockerfile: dockerfilePath(meta),
 		BuildArgs:  meta.GetBuildArgs(),
@@ -191,12 +205,35 @@ func (s *BuildServer) receiveContext(stream agentv1.BuildService_BuildImageServe
 	}
 }
 
-// validateBuildMeta checks that both ids are usable in an image tag.
+// validateBuildMeta checks that both ids are usable in an image tag and that
+// the requested engine is one the node can run.
 func validateBuildMeta(meta *agentv1.BuildMeta) error {
 	if err := validateTagSegment("app_id", meta.GetAppId()); err != nil {
 		return err
 	}
-	return validateTagSegment("deploy_id", meta.GetDeployId())
+	if err := validateTagSegment("deploy_id", meta.GetDeployId()); err != nil {
+		return err
+	}
+	switch strings.ToLower(strings.TrimSpace(meta.GetEngine())) {
+	case "", "dockerfile", "static", string(buildtool.Railpack), string(buildtool.Buildpacks):
+		return nil
+	default:
+		return fmt.Errorf("engine %q is not supported", meta.GetEngine())
+	}
+}
+
+// normalizeEngine maps a BuildMeta engine to the toolchain the node must run,
+// or "" for a Dockerfile build. The Dockerfile and static engines both build
+// the uploaded context as a Dockerfile.
+func normalizeEngine(engine string) string {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case string(buildtool.Railpack):
+		return string(buildtool.Railpack)
+	case string(buildtool.Buildpacks):
+		return string(buildtool.Buildpacks)
+	default:
+		return ""
+	}
 }
 
 // validateTagSegment rejects empty, oversized, or ref-unsafe tag segments.

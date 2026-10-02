@@ -347,13 +347,18 @@ func (s *Service) maybeRevokeFamily(ctx context.Context, userID pgtype.UUID, ref
 	}
 }
 
-// Logout revokes the session behind refreshToken. It is idempotent: an unknown
-// or already-revoked token is not an error.
+// Logout deletes the live session behind refreshToken. Deleting rather than
+// revoking keeps a replayed logged-out token a plain 401: the reuse classifier
+// only attributes theft to a still-existing revoked row, so an old token from a
+// logged-out browser cannot revoke the account's other live sessions. A token
+// that was already rotated away is left revoked, preserving its reuse evidence.
+// It is idempotent: an unknown or already-revoked token deletes nothing and is
+// not an error.
 func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	if refreshToken == "" {
 		return nil
 	}
-	return s.store.RevokeSession(ctx, hashRefreshToken(refreshToken))
+	return s.store.DeleteSession(ctx, hashRefreshToken(refreshToken))
 }
 
 // Me returns the public account for userID.

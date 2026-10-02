@@ -138,7 +138,7 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 		t.Fatalf("create acme dir: %v", err)
 	}
 	proxyAgent := agent.NewProxyServer(agent.ProxyServerConfig{Root: proxyConfigDir, Logger: logger})
-	agentAddr, authority := startLocalAgentWithOptions(t, ctx, engine, nodeID,
+	agentAddr, authority := startLocalAgentWithProxyRoot(t, ctx, engine, nodeID, proxyConfigDir,
 		agent.WithProxyService(proxyAgent),
 		agent.WithComposeService(composeAgent))
 

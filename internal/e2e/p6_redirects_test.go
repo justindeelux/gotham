@@ -135,7 +135,7 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	}
 	debugLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	proxyAgent := agent.NewProxyServer(agent.ProxyServerConfig{Root: configDir, Logger: debugLogger})
-	agentAddr, authority := startLocalAgentWithOptions(t, ctx, engine, nodeID,
+	agentAddr, authority := startLocalAgentWithProxyRoot(t, ctx, engine, nodeID, configDir,
 		agent.WithProxyService(proxyAgent))
 
 	if existing := p6FindContainer(t, ctx, engine); existing != "" {

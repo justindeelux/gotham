@@ -70,6 +70,19 @@ func WithManagedVolumeRoot(root string) DockerServerOption {
 	}
 }
 
+// WithProxyVolumeRoot overrides the directory a proxy container may mount. It
+// exists for embedded/test harnesses that run the proxy out of a temporary
+// root; the production agent never passes it, so the default stays the fixed
+// constant that matches internal/proxy.TraefikDir and no environment or config
+// value can widen the allowlist.
+func WithProxyVolumeRoot(root string) DockerServerOption {
+	return func(s *DockerServer) {
+		if strings.TrimSpace(root) != "" {
+			s.proxyVolumeRoot = root
+		}
+	}
+}
+
 // NewDockerServer returns a DockerService implementation backed by docker.
 func NewDockerServer(docker dockerClient, log *slog.Logger, options ...DockerServerOption) *DockerServer {
 	if log == nil {

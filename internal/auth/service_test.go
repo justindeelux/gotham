@@ -271,7 +271,7 @@ func TestServiceRefreshExpiredDoesNotRevokeFamily(t *testing.T) {
 	}
 }
 
-func TestServiceLogoutRevokesSession(t *testing.T) {
+func TestServiceLogoutDeletesSession(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
 
@@ -290,12 +290,57 @@ func TestServiceLogoutRevokesSession(t *testing.T) {
 		t.Fatalf("Refresh after logout error = %v, want ErrUnauthorized", err)
 	}
 
+	// The row is deleted, not merely revoked.
+	var count int
+	if err := st.DB.QueryRow(ctx,
+		`SELECT count(*) FROM sessions WHERE refresh_hash = $1`,
+		hashRefreshToken(result.RefreshToken)).Scan(&count); err != nil {
+		t.Fatalf("count session rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("logged-out session still exists (%d rows), want deleted", count)
+	}
+
 	// Logout is idempotent, including for unknown tokens.
 	if err := svc.Logout(ctx, result.RefreshToken); err != nil {
 		t.Fatalf("second Logout: %v", err)
 	}
 	if err := svc.Logout(ctx, "unknown-refresh-token"); err != nil {
 		t.Fatalf("Logout(unknown): %v", err)
+	}
+}
+
+// TestServiceLogoutReplayDoesNotRevokeOtherSessions is the FX-2f regression: a
+// replayed token from a logged-out browser (a stale tab, an old copy) must be a
+// plain 401 and must not revoke the account's other live sessions. Logout
+// deletes the row, so the reuse classifier sees a deleted row and attributes
+// nothing; a revoked row would have been classified as rotation theft.
+func TestServiceLogoutReplayDoesNotRevokeOtherSessions(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+
+	email := uniqueEmail("logout-replay")
+	cleanupUser(t, st, email)
+
+	loggedOut, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	// A second live session on another device that must survive the replay.
+	other, err := svc.Login(ctx, email, "s3cret-password")
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	if err := svc.Logout(ctx, loggedOut.RefreshToken); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, loggedOut.RefreshToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Refresh(logged-out token) error = %v, want ErrUnauthorized", err)
+	}
+	if _, err := svc.Refresh(ctx, other.RefreshToken); err != nil {
+		t.Fatalf("other live session was revoked by a logged-out token replay: %v", err)
 	}
 }
 

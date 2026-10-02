@@ -241,15 +241,18 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
-// handleLogout revokes the presented session and always clears the OAuth
-// protocol cookies. A malformed body answers 400; a well-formed unknown or
-// already-revoked token answers 204, so clients cannot probe which refresh
-// tokens exist. A persistence failure answers 500: reporting success would
-// leave the refresh token usable while the client believes it is signed out.
+// handleLogout deletes the presented session and clears the OAuth protocol
+// cookies on the 204, 400 and 500 responses it writes. The shared
+// refresh/logout rate limiter answers 429 before this handler runs, so that
+// response does not clear the cookies. A malformed body answers 400; a
+// well-formed unknown or already-deleted token answers 204, so clients cannot
+// probe which refresh tokens exist. A persistence failure answers 500:
+// reporting success would leave the refresh token usable while the client
+// believes it is signed out.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	// Clear the OAuth protocol cookies on every logout response (204, 400,
-	// 500): a browser that attempted to log out must never be able to redeem
-	// a pending OAuth exchange, whatever the outcome.
+	// Clear the OAuth protocol cookies on the responses this handler writes
+	// (204, 400, 500): a browser that attempted to log out must never be able
+	// to redeem a pending OAuth exchange, whatever the outcome.
 	s.clearOAuthCookies(w, r)
 
 	var req refreshTokenRequest

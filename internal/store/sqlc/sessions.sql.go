@@ -44,6 +44,21 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 	return i, err
 }
 
+const deleteSession = `-- name: DeleteSession :exec
+DELETE FROM sessions
+WHERE refresh_hash = $1
+`
+
+// DeleteSession removes the session with the given refresh hash. Logout uses it
+// instead of RevokeSession so a replayed logged-out token reaches the reuse
+// classifier as a deleted row: RevokeFamilyIfStolen returns false (nothing to
+// attribute), so the user's other live sessions survive and the refresh is a
+// plain 401.
+func (q *Queries) DeleteSession(ctx context.Context, refreshHash string) error {
+	_, err := q.db.Exec(ctx, deleteSession, refreshHash)
+	return err
+}
+
 const deleteStaleSessions = `-- name: DeleteStaleSessions :execrows
 DELETE FROM sessions
 WHERE (revoked_at IS NULL AND expires_at < $1)

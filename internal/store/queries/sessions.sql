@@ -14,6 +14,15 @@ SET revoked_at = now()
 WHERE refresh_hash = $1
   AND revoked_at IS NULL;
 
+-- name: DeleteSession :exec
+-- DeleteSession removes the session with the given refresh hash. Logout uses it
+-- instead of RevokeSession so a replayed logged-out token reaches the reuse
+-- classifier as a deleted row: RevokeFamilyIfStolen returns false (nothing to
+-- attribute), so the user's other live sessions survive and the refresh is a
+-- plain 401.
+DELETE FROM sessions
+WHERE refresh_hash = $1;
+
 -- name: DeleteUserSessions :exec
 -- DeleteUserSessions removes every session of a user, used after a password
 -- change so the old refresh chain dies with the credential.

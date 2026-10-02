@@ -62,6 +62,15 @@ func (s *Store) RevokeSession(ctx context.Context, refreshHash string) error {
 	return s.queries.RevokeSession(ctx, refreshHash)
 }
 
+// DeleteSession removes the session with the given refresh-token hash. Logout
+// uses it so a replayed logged-out token is a deleted row, not a revoked one:
+// the reuse classifier attributes theft only to a still-existing revoked row,
+// so the replay cannot force a mass logout. It is idempotent: an unknown token
+// is not an error.
+func (s *Store) DeleteSession(ctx context.Context, refreshHash string) error {
+	return s.queries.DeleteSession(ctx, refreshHash)
+}
+
 // RevokeSessionIfLive revokes a live session by its refresh hash and reports
 // whether a row was updated. A false result means the session was already
 // revoked or deleted, so a rotation racing it must not issue a new session.

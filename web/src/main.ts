@@ -10,7 +10,8 @@ const app = createApp(App);
 app.use(createPinia());
 app.use(router);
 
-// Resolve the initial navigation before mounting so route-dependent startup
+// Mount once the initial navigation resolves so route-dependent startup
 // (App.vue's session hydration) observes the real route rather than "/" (G3).
-await router.isReady();
-app.mount("#app");
+// A top-level `await` here leaves the built entry module pending forever (the
+// app never mounts, blank page); a promise chain is equivalent and bundle-safe.
+router.isReady().then(() => app.mount("#app"));

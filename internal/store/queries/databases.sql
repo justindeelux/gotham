@@ -19,14 +19,36 @@ SELECT * FROM databases
 WHERE team_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC;
 
--- name: UpdateDatabase :one
+-- name: UpdateDatabaseName :one
 UPDATE databases
 SET name = $2,
-    status = $3,
-    container_id = $4,
     updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
+
+-- name: UpdateDatabaseContainer :one
+UPDATE databases
+SET container_id = $2,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;
+
+-- name: UpdateDatabaseStatus :one
+UPDATE databases
+SET status = $2,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;
+
+-- name: PublicPortInUse :one
+SELECT EXISTS (
+    SELECT 1 FROM databases
+    WHERE server_id = $1 AND public_port = $2 AND deleted_at IS NULL
+);
+
+-- name: DeleteDatabaseSecrets :exec
+DELETE FROM database_secrets
+WHERE database_id = $1;
 
 -- name: SoftDeleteDatabase :one
 UPDATE databases

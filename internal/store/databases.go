@@ -32,10 +32,37 @@ func (s *Store) ListDatabasesByTeam(ctx context.Context, teamID pgtype.UUID) ([]
 	return s.queries.ListDatabasesByTeam(ctx, teamID)
 }
 
-// UpdateDatabase persists the mutable database fields (rename, status,
-// container id) and returns the row.
-func (s *Store) UpdateDatabase(ctx context.Context, params sqlc.UpdateDatabaseParams) (sqlc.Database, error) {
-	return s.queries.UpdateDatabase(ctx, params)
+// UpdateDatabaseName persists only the name and returns the fresh row. The
+// update is fenced on the row still being live, so a rename cannot follow a
+// soft delete back into visibility, and it cannot clobber a concurrent status
+// or container-id write.
+func (s *Store) UpdateDatabaseName(ctx context.Context, params sqlc.UpdateDatabaseNameParams) (sqlc.Database, error) {
+	return s.queries.UpdateDatabaseName(ctx, params)
+}
+
+// UpdateDatabaseContainer persists only the container id and returns the
+// fresh row. The live-row fence is what stops a container id recorded after a
+// delete from resurrecting the row on reads.
+func (s *Store) UpdateDatabaseContainer(ctx context.Context, params sqlc.UpdateDatabaseContainerParams) (sqlc.Database, error) {
+	return s.queries.UpdateDatabaseContainer(ctx, params)
+}
+
+// UpdateDatabaseStatus persists only the status and returns the fresh row;
+// like the other scoped writes it is fenced on the row being live.
+func (s *Store) UpdateDatabaseStatus(ctx context.Context, params sqlc.UpdateDatabaseStatusParams) (sqlc.Database, error) {
+	return s.queries.UpdateDatabaseStatus(ctx, params)
+}
+
+// PublicPortInUse reports whether any live database already publishes
+// publicPort on serverID, so create can reject a port the node would refuse.
+func (s *Store) PublicPortInUse(ctx context.Context, params sqlc.PublicPortInUseParams) (bool, error) {
+	return s.queries.PublicPortInUse(ctx, params)
+}
+
+// DeleteDatabaseSecrets removes every sealed credential of a database. It is
+// the create path's rollback for a partial credential write.
+func (s *Store) DeleteDatabaseSecrets(ctx context.Context, databaseID pgtype.UUID) error {
+	return s.queries.DeleteDatabaseSecrets(ctx, databaseID)
 }
 
 // SoftDeleteDatabase marks a database deleted without touching its volume, so

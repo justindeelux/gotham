@@ -33,6 +33,12 @@ func Enabled() bool {
 // when the engine declares no interval of its own.
 const defaultHealthPoll = 500 * time.Millisecond
 
+// cleanupTimeout bounds every cancel-independent cleanup write (mark error,
+// roll back credentials, remove a container). A client disconnect or proxy
+// timeout must not leave a row creating or a container unmanaged, so these
+// run on a context detached from the request but with their own deadline.
+const cleanupTimeout = 30 * time.Second
+
 // namePattern is the API-facing database name: a Docker-safe identifier of
 // 1–63 characters. It is also what the derived SQL identifier is built from.
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
@@ -167,9 +173,14 @@ func NewDefaultService(cfg Config) DatabaseService {
 }
 
 // Create provisions a database: it validates the request, generates and seals
-// the credentials, writes the row, runs the container through the shared
-// container service and waits for the engine's health window before reporting
-// the database as running.
+// the credentials, writes the row, ensures the engine image is present, runs
+// the container through the shared container service and waits for the
+// engine's health window before reporting the database as running.
+//
+// Every failure after the row is written leaves a terminal error row (never a
+// permanently creating one) and rolls back what it created. Writes are fenced
+// on the row still being live, so a delete that lands while create is in
+// flight wins and the container is removed rather than left orphaned.
 func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateRequest) (Database, Credentials, error) {
 	if !Enabled() {
 		return Database{}, Credentials{}, ErrDisabled
@@ -202,6 +213,21 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if !exists {
 		return Database{}, Credentials{}, ErrServerNotFound
 	}
+	// Reject a public port another live database already publishes on this
+	// node before writing a row: Docker would refuse the bind and, without
+	// this check, the failure would surface as an opaque 500. The check is
+	// best-effort against the race with a concurrent create; Docker's own
+	// bind conflict is mapped to ErrPortConflict as a second line of defense.
+	if req.PublicPort > 0 {
+		inUse, err := s.repo.PublicPortInUse(ctx, req.ServerID, req.PublicPort)
+		if err != nil {
+			return Database{}, Credentials{}, err
+		}
+		if inUse {
+			return Database{}, Credentials{}, fmt.Errorf(
+				"%w: public port %d is already in use on this node", ErrPortConflict, req.PublicPort)
+		}
+	}
 
 	credentials, err := generateCredentials(canonical, name)
 	if err != nil {
@@ -229,12 +255,22 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if err != nil {
 		return Database{}, Credentials{}, err
 	}
+	// The image comes first: credentials written before a failed pull would
+	// only be rolled back again, and a fresh node has no image to run.
+	if err := s.ensureImage(ctx, stored, engine.Image(stored.Version)); err != nil {
+		s.markError(ctx, stored, err)
+		return Database{}, Credentials{}, err
+	}
 	secrets, err := s.storeCredentials(ctx, stored.ID, credentials)
 	if err != nil {
+		s.rollbackCredentials(ctx, stored)
+		s.markError(ctx, stored, err)
 		return Database{}, Credentials{}, err
 	}
 	options, err := buildRunOptions(stored, engine, secrets, s.secret)
 	if err != nil {
+		s.rollbackCredentials(ctx, stored)
+		s.markError(ctx, stored, err)
 		return Database{}, Credentials{}, err
 	}
 
@@ -243,27 +279,40 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 		s.markError(ctx, stored, err)
 		return Database{}, Credentials{}, mapContainerError(err)
 	}
-	stored.ContainerID = containerID
-	if stored, err = s.repo.UpdateDatabase(ctx, stored); err != nil {
+	updated, err := s.repo.UpdateDatabaseContainer(ctx, stored.ID, containerID)
+	if err != nil {
 		// The agent started the container but the row could not record its
 		// ID, so the control plane would never be able to manage it again.
-		// Best-effort removal beats an orphan container on the node.
-		if removeErr := s.containers.Remove(ctx, stored.ServerID, containerID); removeErr != nil &&
-			!errors.Is(removeErr, containers.ErrContainerNotFound) &&
-			!errors.Is(removeErr, containers.ErrServerNotFound) {
-			s.logger.Warn("databases: could not remove container after a failed update",
-				"database_id", stored.ID.String(), "container_id", containerID, "error", removeErr)
-		}
+		// Cleanup uses the ids we already hold — never a zeroed row — because
+		// best-effort removal beats an orphan container on the node. A fenced
+		// write (row deleted) lands here too: delete has won and the container
+		// must go with it.
+		s.markError(ctx, stored, err)
+		s.removeContainer(ctx, stored.ServerID, containerID)
 		return Database{}, Credentials{}, err
 	}
+	stored = updated
 	if err := s.waitHealthy(ctx, stored, engine.Healthcheck()); err != nil {
 		s.markError(ctx, stored, err)
 		return Database{}, Credentials{}, err
 	}
-	if stored, err = s.setStatus(ctx, stored, StatusRunning); err != nil {
+	updated, err = s.repo.UpdateDatabaseStatus(ctx, stored.ID, StatusRunning)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			// The row was soft-deleted while provisioning (the status write is
+			// fenced on the row being live): delete has won and the container
+			// must go with it.
+			s.removeContainer(ctx, stored.ServerID, stored.ContainerID)
+			return Database{}, Credentials{}, err
+		}
+		// Any other failure is transient, not a delete: keep the container so
+		// the row stays recoverable (Start can still reach it) and mark the
+		// row terminal error. Removing the container here would strand a
+		// healthy database that a single failed UPDATE should not destroy.
+		s.markError(ctx, stored, err)
 		return Database{}, Credentials{}, err
 	}
-	return stored, credentials, nil
+	return updated, credentials, nil
 }
 
 // List returns the active team's live databases, newest first. Without a team
@@ -314,8 +363,7 @@ func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req 
 		return Database{}, fmt.Errorf(
 			"%w: name must be 1-63 characters of letters, digits, \".\", \"_\" or \"-\"", ErrValidation)
 	}
-	database.Name = name
-	return s.repo.UpdateDatabase(ctx, database)
+	return s.repo.UpdateDatabaseName(ctx, database.ID, name)
 }
 
 // Delete stops and removes the container of a database of the active team,
@@ -327,6 +375,7 @@ func (s *Service) Delete(ctx context.Context, userID, databaseID uuid.UUID) erro
 	if err != nil {
 		return err
 	}
+	removed := ""
 	if database.ContainerID != "" {
 		// A graceful stop first so the engine can flush; it is best-effort
 		// because Remove below forces the container down anyway. Failing the
@@ -341,9 +390,19 @@ func (s *Service) Delete(ctx context.Context, userID, databaseID uuid.UUID) erro
 			!errors.Is(err, containers.ErrServerNotFound) {
 			return mapContainerError(err)
 		}
+		removed = database.ContainerID
 	}
-	if _, err := s.repo.SoftDeleteDatabase(ctx, database.ID); err != nil {
+	deleted, err := s.repo.SoftDeleteDatabase(ctx, database.ID)
+	if err != nil {
 		return err
+	}
+	// A provision that was in flight may have persisted its container id
+	// after our read but before the soft delete; the returned row carries the
+	// id at delete time. The row is already deleted, so removal is
+	// best-effort: delete wins, the late provisioning write was fenced, and
+	// this removes the container it had started rather than orphaning it.
+	if deleted.ContainerID != "" && deleted.ContainerID != removed {
+		s.removeContainer(ctx, deleted.ServerID, deleted.ContainerID)
 	}
 	s.logger.Info("databases: deleted; volume retained for the grace window",
 		"database_id", database.ID.String(), "volume", database.StoragePath)
@@ -517,28 +576,79 @@ func (s *Service) containerRunning(ctx context.Context, database Database) (bool
 	return false, nil
 }
 
-// setStatus persists a status transition and returns the updated row.
+// setStatus persists a status transition and returns the updated row. The
+// write is column-scoped, so it cannot revert a concurrent rename or erase a
+// container id.
 func (s *Service) setStatus(ctx context.Context, database Database, status Status) (Database, error) {
-	database.Status = status
-	updated, err := s.repo.UpdateDatabase(ctx, database)
-	if err != nil {
-		return Database{}, err
-	}
-	return updated, nil
+	return s.repo.UpdateDatabaseStatus(ctx, database.ID, status)
+}
+
+// cleanupContext returns a context detached from the request cancellation
+// (context.WithoutCancel) but bounded by cleanupTimeout, so cleanup writes and
+// container removals finish even after a client disconnect while still having
+// a deadline of their own.
+func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 }
 
 // markError flips a database to the error state after a failed provision or
 // lifecycle action. Failures are logged only: the original error is what the
-// caller sees, and a second write must not mask it.
+// caller sees, and a second write must not mask it. A fenced write means the
+// row was deleted while the action was in flight — the intended outcome for a
+// lost race with delete.
 func (s *Service) markError(ctx context.Context, database Database, cause error) {
-	database.Status = StatusError
-	if _, err := s.repo.UpdateDatabase(ctx, database); err != nil {
+	ctx, cancel := cleanupContext(ctx)
+	defer cancel()
+	if _, err := s.repo.UpdateDatabaseStatus(ctx, database.ID, StatusError); err != nil {
 		s.logger.Error("databases: could not mark the database as errored",
 			"database_id", database.ID.String(), "error", err)
 		return
 	}
 	s.logger.Warn("databases: operation failed",
 		"database_id", database.ID.String(), "status", StatusError, "error", cause)
+}
+
+// ensureImage makes the engine image present on the node before create runs
+// it. There is no image-inspect RPC, so create pulls unconditionally: a Docker
+// pull is idempotent and skips layers already present, and it is the only way
+// a fresh node (no image) can provision. The error is mapped so a failed pull
+// surfaces as a clear typed failure and the caller can leave a terminal error
+// row instead of a permanently-creating one.
+func (s *Service) ensureImage(ctx context.Context, database Database, image string) error {
+	if err := s.containers.Pull(ctx, database.ServerID, image); err != nil {
+		return mapContainerError(err)
+	}
+	return nil
+}
+
+// rollbackCredentials removes the sealed credentials of a database whose
+// create is being abandoned. Failures are logged only: the create error is
+// what the caller sees, and a stray ciphertext row is not a credential leak.
+func (s *Service) rollbackCredentials(ctx context.Context, database Database) {
+	ctx, cancel := cleanupContext(ctx)
+	defer cancel()
+	if err := s.repo.DeleteDatabaseSecrets(ctx, database.ID); err != nil {
+		s.logger.Warn("databases: could not roll back credentials after a failed create",
+			"database_id", database.ID.String(), "error", err)
+	}
+}
+
+// removeContainer best-effort removes a container that a failed or fenced
+// create would otherwise leave unmanaged. A missing container or node is
+// success; anything else is logged because the caller already has the primary
+// error.
+func (s *Service) removeContainer(ctx context.Context, serverID uuid.UUID, containerID string) {
+	if strings.TrimSpace(containerID) == "" {
+		return
+	}
+	ctx, cancel := cleanupContext(ctx)
+	defer cancel()
+	if err := s.containers.Remove(ctx, serverID, containerID); err != nil &&
+		!errors.Is(err, containers.ErrContainerNotFound) &&
+		!errors.Is(err, containers.ErrServerNotFound) {
+		s.logger.Warn("databases: could not remove container",
+			"server_id", serverID.String(), "container_id", containerID, "error", err)
+	}
 }
 
 // mapContainerError translates container-service sentinels onto this package's
@@ -551,6 +661,8 @@ func mapContainerError(err error) error {
 		return fmt.Errorf("%w: %v", ErrServerNotFound, err)
 	case errors.Is(err, containers.ErrContainerNotFound):
 		return fmt.Errorf("%w: %v", ErrNotFound, err)
+	case errors.Is(err, containers.ErrPortConflict):
+		return fmt.Errorf("%w: %v", ErrPortConflict, err)
 	case errors.Is(err, containers.ErrAgentUnavailable):
 		return fmt.Errorf("%w: %v", ErrAgentUnavailable, err)
 	case errors.Is(err, containers.ErrValidation):

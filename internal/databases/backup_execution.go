@@ -40,17 +40,24 @@ func (m *BackupManager) startRun(ctx context.Context, database Database, target 
 	if target != nil {
 		backup.TargetID = target.ID
 	}
-	stored, err := m.backups.CreateBackup(ctx, backup)
+	// Ownership is validated against the target row the run insert locks, not
+	// the caller's earlier read: a target that flips from local to S3 between
+	// the two must not slip a team database's dump into a member's bucket. The
+	// check runs before the run row exists, so a rejected target leaves no
+	// orphaned running backup.
+	stored, liveTarget, err := m.backups.CreateBackupWithTarget(ctx, backup, func(live *BackupTarget) error {
+		if live.Kind == TargetS3 && live.UserID != database.UserID {
+			return ErrNotFound
+		}
+		return nil
+	})
 	if err != nil {
 		m.release(database.ID)
 		return Backup{}, err
 	}
-	var targetCopy *BackupTarget
-	if target != nil {
-		targetCopy = &BackupTarget{}
-		*targetCopy = *target
-	}
-	go m.runBackup(stored, database, targetCopy)
+	// liveTarget is the target read under the same row lock as the run insert,
+	// so a concurrent destination edit cannot strand this run.
+	go m.runBackup(stored, database, liveTarget)
 	return stored, nil
 }
 
@@ -477,6 +484,105 @@ func (m *BackupManager) removeJobContainer(serverID uuid.UUID, containerID strin
 		m.logger.Warn("databases: could not remove the job container",
 			"container_id", containerID, "error", err)
 	}
+}
+
+// backupServerLister is the slice of the repository the startup container
+// sweep needs: every managed node id. It is separate from BackupRepository so
+// the backup persistence contract stays about backup tables.
+type backupServerLister interface {
+	ListServerIDs(ctx context.Context) ([]uuid.UUID, error)
+}
+
+// sweepJobContainers removes temporary job containers a crashed control plane
+// left behind. It runs once at construction, after the stale-run sweep: a
+// container is removed only when neither its database is leased by a live job
+// nor its run is still running, so a job this process is actively driving is
+// never killed.
+func (m *BackupManager) sweepJobContainers() {
+	if m == nil || m.containers == nil || m.backups == nil {
+		return
+	}
+	lister, ok := m.backups.(backupServerLister)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	liveRuns := map[uuid.UUID]bool{}
+	running, err := m.backups.ListRunningBackups(ctx)
+	if err != nil {
+		m.logger.Warn("databases: container sweep could not list running backups", "error", err)
+		return
+	}
+	for _, backup := range running {
+		liveRuns[backup.ID] = true
+	}
+
+	leased := map[uuid.UUID]bool{}
+	for _, databaseID := range m.leases.HeldIDs() {
+		leased[databaseID] = true
+	}
+
+	serverIDs, err := lister.ListServerIDs(ctx)
+	if err != nil {
+		m.logger.Warn("databases: container sweep could not list servers", "error", err)
+		return
+	}
+	removed := 0
+	for _, serverID := range serverIDs {
+		list, err := m.listContainersFresh(ctx, serverID)
+		if err != nil {
+			m.logger.Warn("databases: container sweep could not list node containers",
+				"server_id", serverID.String(), "error", err)
+			continue
+		}
+		for _, container := range list {
+			if !isStaleJobContainer(container, leased, liveRuns) {
+				continue
+			}
+			m.removeJobContainer(serverID, container.ID)
+			removed++
+		}
+	}
+	if removed > 0 {
+		m.logger.Info("databases: removed leftover backup job containers", "count", removed)
+	}
+}
+
+// listContainersFresh reads a node's containers straight from the agent when
+// the service supports it. The startup sweep must not read the List cache: a
+// hit serves an earlier snapshot (and an older binary cached containers whose
+// labels were dropped), so a crash's leftover job container could be missed.
+func (m *BackupManager) listContainersFresh(ctx context.Context, serverID uuid.UUID) ([]containers.Container, error) {
+	type freshLister interface {
+		ListFresh(ctx context.Context, serverID uuid.UUID) ([]containers.Container, error)
+	}
+	if lister, ok := m.containers.(freshLister); ok {
+		return lister.ListFresh(ctx, serverID)
+	}
+	return m.containers.List(ctx, serverID)
+}
+
+// isStaleJobContainer reports whether c is a temporary backup job container
+// the sweep may remove. Containers of another role (the database container
+// itself) and containers still leased by a live run are never selected.
+func isStaleJobContainer(c containers.Container, leased, liveRuns map[uuid.UUID]bool) bool {
+	if c.Labels[labelManaged] != "true" {
+		return false
+	}
+	switch c.Labels[labelRole] {
+	case roleBackup, roleRestore, roleStage:
+	default:
+		return false
+	}
+	if id, err := uuid.Parse(c.Labels[labelDatabaseID]); err == nil && leased[id] {
+		return false
+	}
+	if id, err := uuid.Parse(c.Labels[labelBackupID]); err == nil && liveRuns[id] {
+		return false
+	}
+	return true
 }
 
 // databaseRunning reports whether the database container is listed as running.

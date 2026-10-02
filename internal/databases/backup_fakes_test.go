@@ -103,6 +103,17 @@ type fakeBackupRepository struct {
 	targets       map[uuid.UUID]BackupTarget
 	targetOrder   []uuid.UUID
 	secrets       map[uuid.UUID][]TargetSecret
+	// serverIDs is what ListServerIDs answers for the container sweep.
+	serverIDs []uuid.UUID
+	// finishHook runs inside FinishBackup, before the row is written, so a
+	// test can assert an ordering (for example that the artifact was flushed
+	// before the run was marked completed).
+	finishHook func(Backup)
+	// beforeCreateBackupWithTarget runs just before CreateBackupWithTarget
+	// reads the target, while the fake's lock is held, so a test can flip the
+	// target between the caller's read and the locked insert. It must mutate
+	// the maps directly (calling locked methods would deadlock).
+	beforeCreateBackupWithTarget func()
 
 	createBackupErr   error
 	getBackupErr      error
@@ -249,6 +260,35 @@ func (r *fakeBackupRepository) CreateBackup(_ context.Context, backup Backup) (B
 	return r.seedBackupLocked(backup), nil
 }
 
+// CreateBackupWithTarget implements BackupRepository: a run that references a
+// target returns the target row a locked read would observe, after running the
+// caller's validation on it (and before recording the run, so a rejected
+// target leaves no row behind).
+func (r *fakeBackupRepository) CreateBackupWithTarget(_ context.Context, backup Backup, validate func(*BackupTarget) error) (Backup, *BackupTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.createBackupErr != nil {
+		return Backup{}, nil, r.createBackupErr
+	}
+	if backup.TargetID == uuid.Nil {
+		return r.seedBackupLocked(backup), nil, nil
+	}
+	if r.beforeCreateBackupWithTarget != nil {
+		r.beforeCreateBackupWithTarget()
+	}
+	target, ok := r.targets[backup.TargetID]
+	if !ok {
+		return Backup{}, nil, ErrNotFound
+	}
+	if validate != nil {
+		if err := validate(&target); err != nil {
+			return Backup{}, nil, err
+		}
+	}
+	stored := r.seedBackupLocked(backup)
+	return stored, &target, nil
+}
+
 // seedBackupLocked is seedBackup for callers already holding the lock.
 func (r *fakeBackupRepository) seedBackupLocked(backup Backup) Backup {
 	if backup.ID == uuid.Nil {
@@ -276,8 +316,9 @@ func (r *fakeBackupRepository) GetBackup(_ context.Context, backupID uuid.UUID) 
 	return backup, nil
 }
 
-// ListBackupsByDatabase implements BackupRepository, newest first.
-func (r *fakeBackupRepository) ListBackupsByDatabase(_ context.Context, databaseID uuid.UUID) ([]Backup, error) {
+// ListBackupsByDatabase implements BackupRepository, newest first, capped at
+// limit (zero means unbounded, matching the repository seam).
+func (r *fakeBackupRepository) ListBackupsByDatabase(_ context.Context, databaseID uuid.UUID, limit int) ([]Backup, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listBackupErr != nil {
@@ -288,6 +329,9 @@ func (r *fakeBackupRepository) ListBackupsByDatabase(_ context.Context, database
 		backup := r.backups[r.backupOrder[i]]
 		if backup.DatabaseID == databaseID {
 			list = append(list, backup)
+			if limit > 0 && len(list) >= limit {
+				break
+			}
 		}
 	}
 	return list, nil
@@ -321,6 +365,9 @@ func (r *fakeBackupRepository) FinishBackup(_ context.Context, backup Backup) (B
 	stored, ok := r.backups[backup.ID]
 	if !ok {
 		return Backup{}, ErrNotFound
+	}
+	if r.finishHook != nil {
+		r.finishHook(backup)
 	}
 	stored.Status = backup.Status
 	stored.Size = backup.Size
@@ -548,6 +595,37 @@ func (r *fakeBackupRepository) CreateBackupTarget(_ context.Context, target Back
 	return target, nil
 }
 
+// CreateBackupTargetWithSecrets implements BackupRepository as one atomic
+// step: a credential failure leaves no target behind.
+func (r *fakeBackupRepository) CreateBackupTargetWithSecrets(_ context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.createTargetErr != nil {
+		return BackupTarget{}, r.createTargetErr
+	}
+	if r.secretErr != nil {
+		return BackupTarget{}, r.secretErr
+	}
+	for _, id := range r.targetOrder {
+		existing := r.targets[id]
+		if existing.UserID == target.UserID && existing.Name == target.Name {
+			return BackupTarget{}, ErrConflict
+		}
+	}
+	if target.ID == uuid.Nil {
+		target.ID = uuid.New()
+	}
+	r.targets[target.ID] = target
+	r.targetOrder = append(r.targetOrder, target.ID)
+	for _, secret := range secrets {
+		if secret.TargetID == uuid.Nil {
+			secret.TargetID = target.ID
+		}
+		r.upsertSecretLocked(secret)
+	}
+	return target, nil
+}
+
 // GetBackupTarget implements BackupRepository.
 func (r *fakeBackupRepository) GetBackupTarget(_ context.Context, targetID uuid.UUID) (BackupTarget, error) {
 	r.mu.Lock()
@@ -582,6 +660,65 @@ func (r *fakeBackupRepository) UpdateBackupTarget(_ context.Context, target Back
 	}
 	r.targets[target.ID] = target
 	return target, nil
+}
+
+// UpdateBackupTargetWithSecrets implements BackupRepository as one atomic
+// step: a credential failure leaves the previous configuration in place, and a
+// destination change while a run references the target is refused.
+func (r *fakeBackupRepository) UpdateBackupTargetWithSecrets(_ context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, ok := r.targets[target.ID]
+	if !ok {
+		return BackupTarget{}, ErrNotFound
+	}
+	if r.secretErr != nil {
+		return BackupTarget{}, r.secretErr
+	}
+	if fakeDestinationChanged(current, target) {
+		for _, backup := range r.backups {
+			if backup.TargetID == target.ID && (backup.Status == BackupRunning || backup.Status == BackupCompleted) {
+				return BackupTarget{}, ErrTargetStranded
+			}
+		}
+	}
+	r.targets[target.ID] = target
+	for _, secret := range secrets {
+		if secret.TargetID == uuid.Nil {
+			secret.TargetID = target.ID
+		}
+		r.upsertSecretLocked(secret)
+	}
+	return target, nil
+}
+
+// fakeDestinationChanged mirrors the store's destination comparison.
+func fakeDestinationChanged(current, next BackupTarget) bool {
+	return current.Kind != next.Kind ||
+		current.Endpoint != next.Endpoint ||
+		current.Region != next.Region ||
+		current.Bucket != next.Bucket
+}
+
+// HasBackupsForTarget implements BackupRepository.
+func (r *fakeBackupRepository) HasBackupsForTarget(_ context.Context, targetID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, backup := range r.backups {
+		if backup.TargetID == targetID && (backup.Status == BackupCompleted || backup.Status == BackupRunning) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ListServerIDs implements backupServerLister for the container sweep.
+func (r *fakeBackupRepository) ListServerIDs(_ context.Context) ([]uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ids := make([]uuid.UUID, len(r.serverIDs))
+	copy(ids, r.serverIDs)
+	return ids, nil
 }
 
 // DeleteBackupTarget implements BackupRepository with the owner filter of the
@@ -624,20 +761,26 @@ func (r *fakeBackupRepository) UpsertTargetSecret(_ context.Context, secret Targ
 	if r.secretErr != nil {
 		return TargetSecret{}, r.secretErr
 	}
+	return r.upsertSecretLocked(secret), nil
+}
+
+// upsertSecretLocked is the replace-or-insert of one sealed credential for
+// callers already holding the lock.
+func (r *fakeBackupRepository) upsertSecretLocked(secret TargetSecret) TargetSecret {
 	stored := r.secrets[secret.TargetID]
 	for i, item := range stored {
 		if item.Key == secret.Key {
 			secret.ID = item.ID
 			stored[i] = secret
 			r.secrets[secret.TargetID] = stored
-			return secret, nil
+			return secret
 		}
 	}
 	if secret.ID == uuid.Nil {
 		secret.ID = uuid.New()
 	}
 	r.secrets[secret.TargetID] = append(stored, secret)
-	return secret, nil
+	return secret
 }
 
 // ListTargetSecrets implements BackupRepository.

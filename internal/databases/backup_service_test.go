@@ -152,7 +152,7 @@ func TestBackupEnforcesOwnership(t *testing.T) {
 	if _, err := fixture.manager.CreateBackup(context.Background(), stranger, fixture.database.ID, CreateBackupRequest{}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("CreateBackup err = %v, want ErrNotFound", err)
 	}
-	if _, err := fixture.manager.ListBackups(context.Background(), stranger, fixture.database.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := fixture.manager.ListBackups(context.Background(), stranger, fixture.database.ID, 0); !errors.Is(err, ErrNotFound) {
 		t.Errorf("ListBackups err = %v, want ErrNotFound", err)
 	}
 	if _, err := fixture.manager.GetBackup(context.Background(), stranger, fixture.database.ID, uuid.New()); !errors.Is(err, ErrNotFound) {
@@ -646,7 +646,7 @@ func TestBackupManagerWithoutRepositoryFailsClearly(t *testing.T) {
 	if _, err := manager.ListTargets(context.Background(), uuid.New()); err == nil {
 		t.Error("expected an error without a repository")
 	}
-	if _, err := manager.ListBackups(context.Background(), uuid.New(), uuid.New()); err == nil {
+	if _, err := manager.ListBackups(context.Background(), uuid.New(), uuid.New(), 0); err == nil {
 		t.Error("expected an error without a repository")
 	}
 	if _, err := manager.CreateBackup(context.Background(), uuid.New(), uuid.New(), CreateBackupRequest{}); err == nil {

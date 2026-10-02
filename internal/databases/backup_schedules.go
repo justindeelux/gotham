@@ -32,7 +32,8 @@ func (m *BackupManager) ListSchedules(ctx context.Context, userID, databaseID uu
 // the first run computed before anything is written, so an invalid cron
 // never reaches the table.
 func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
-	if _, err := m.database(ctx, userID, databaseID, true); err != nil {
+	database, err := m.database(ctx, userID, databaseID, true)
+	if err != nil {
 		return BackupSchedule{}, err
 	}
 	cron := strings.TrimSpace(req.Cron)
@@ -43,6 +44,9 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID u
 	targetID := uuid.Nil
 	if req.TargetID != nil {
 		if targetID, err = m.ownedTargetID(ctx, userID, *req.TargetID); err != nil {
+			return BackupSchedule{}, err
+		}
+		if err := m.targetOwnedByDatabase(ctx, targetID, database.UserID); err != nil {
 			return BackupSchedule{}, err
 		}
 	}
@@ -77,7 +81,8 @@ func (m *BackupManager) CreateSchedule(ctx context.Context, userID, databaseID u
 // empty string clears it (runs go to the local backup directory) and an id
 // replaces it with an owned target.
 func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, scheduleID uuid.UUID, req ScheduleRequest) (BackupSchedule, error) {
-	if _, err := m.database(ctx, userID, databaseID, true); err != nil {
+	database, err := m.database(ctx, userID, databaseID, true)
+	if err != nil {
 		return BackupSchedule{}, err
 	}
 	schedule, err := m.backups.GetBackupSchedule(ctx, scheduleID)
@@ -95,12 +100,20 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, 
 	targetID := schedule.TargetID
 	switch {
 	case req.TargetID == nil:
-		// Field absent: keep the stored target. nil can never clear.
+		// Field absent: keep the stored target. nil can never clear, and the
+		// stored target is not re-validated: a legacy schedule whose target no
+		// longer passes the ownership invariant must still be editable (for
+		// example disabled).
 	case strings.TrimSpace(*req.TargetID) == "":
 		// Explicit clear: scheduled runs return to the local directory.
 		targetID = uuid.Nil
 	default:
 		if targetID, err = m.ownedTargetID(ctx, userID, *req.TargetID); err != nil {
+			return BackupSchedule{}, err
+		}
+		// The caller is choosing a target, so it must be usable for this
+		// database (see startRun).
+		if err := m.targetOwnedByDatabase(ctx, targetID, database.UserID); err != nil {
 			return BackupSchedule{}, err
 		}
 	}

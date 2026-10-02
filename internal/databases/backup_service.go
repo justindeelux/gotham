@@ -26,6 +26,12 @@ const (
 	defaultJobTimeout = 30 * time.Minute
 	// defaultSchedulerInterval is the tick of the internal cron scheduler.
 	defaultSchedulerInterval = 30 * time.Second
+	// defaultBackupListLimit and maxBackupListLimit bound one page of the
+	// backup listing. A database accumulates a run per schedule tick (hundreds
+	// of thousands a year), so a listing is always a capped page of the newest
+	// runs rather than the whole history.
+	defaultBackupListLimit = 50
+	maxBackupListLimit     = 200
 )
 
 // BackupConfig wires a BackupManager. Store (or an explicit Repository) and
@@ -81,8 +87,10 @@ type BackupService interface {
 	// CreateBackup queues a manual backup of a database the caller owns and
 	// returns the row as soon as it is recorded (the job runs behind it).
 	CreateBackup(ctx context.Context, userID, databaseID uuid.UUID, req CreateBackupRequest) (Backup, error)
-	// ListBackups returns a database's runs, newest first.
-	ListBackups(ctx context.Context, userID, databaseID uuid.UUID) ([]Backup, error)
+	// ListBackups returns up to limit of a database's runs, newest first. A
+	// limit of zero selects the default page size, and a limit above the
+	// maximum is capped.
+	ListBackups(ctx context.Context, userID, databaseID uuid.UUID, limit int) ([]Backup, error)
 	// GetBackup returns one run of a database the caller owns.
 	GetBackup(ctx context.Context, userID, databaseID, backupID uuid.UUID) (Backup, error)
 	// DeleteBackup drops the row and the stored artifact.
@@ -287,6 +295,10 @@ func NewDefaultBackupService(cfg BackupConfig) BackupService {
 	}
 	manager := NewBackupService(cfg)
 	manager.reconcileStaleBackups()
+	// The stale-run sweep runs first: a running row it failed is by definition
+	// orphaned, so its job container is safe to remove. Containers still leased
+	// by a live run are kept (see sweepJobContainers).
+	manager.sweepJobContainers()
 	if !cfg.DisableScheduler {
 		manager.scheduler.Start()
 	}
@@ -483,14 +495,14 @@ func (m *BackupManager) CreateBackup(ctx context.Context, userID, databaseID uui
 }
 
 // ListBackups implements BackupService.
-func (m *BackupManager) ListBackups(ctx context.Context, userID, databaseID uuid.UUID) ([]Backup, error) {
+func (m *BackupManager) ListBackups(ctx context.Context, userID, databaseID uuid.UUID, limit int) ([]Backup, error) {
 	if err := m.backupsReady(); err != nil {
 		return nil, err
 	}
 	if _, err := m.database(ctx, userID, databaseID, false); err != nil {
 		return nil, err
 	}
-	backups, err := m.backups.ListBackupsByDatabase(ctx, databaseID)
+	backups, err := m.backups.ListBackupsByDatabase(ctx, databaseID, clampBackupListLimit(limit))
 	if err != nil {
 		return nil, err
 	}
@@ -498,6 +510,17 @@ func (m *BackupManager) ListBackups(ctx context.Context, userID, databaseID uuid
 		return []Backup{}, nil
 	}
 	return backups, nil
+}
+
+// clampBackupListLimit turns a caller-supplied page size into a safe bound.
+func clampBackupListLimit(limit int) int {
+	if limit <= 0 {
+		return defaultBackupListLimit
+	}
+	if limit > maxBackupListLimit {
+		return maxBackupListLimit
+	}
+	return limit
 }
 
 // GetBackup implements BackupService. The database ownership check doubles as

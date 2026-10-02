@@ -40,7 +40,7 @@ func TestBackupManagerTeamIsolation(t *testing.T) {
 	// The demoted creator is still a member of the team (read_only): reads are
 	// allowed, every mutation is refused.
 	viewer := teams.WithScope(bg, teams.Scope{UserID: bob, TeamID: teamB, Role: teams.RoleReadOnly})
-	if _, err := manager.ListBackups(viewer, bob, database.ID); err != nil {
+	if _, err := manager.ListBackups(viewer, bob, database.ID, 0); err != nil {
 		t.Fatalf("read_only ListBackups: %v", err)
 	}
 	if _, err := manager.ListSchedules(viewer, bob, database.ID); err != nil {
@@ -61,7 +61,7 @@ func TestBackupManagerTeamIsolation(t *testing.T) {
 
 	// A member of another team cannot even see the database.
 	stranger := teams.WithScope(bg, teams.Scope{UserID: uuid.New(), TeamID: teamA, Role: teams.RoleOwner})
-	if _, err := manager.ListBackups(stranger, uuid.New(), database.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := manager.ListBackups(stranger, uuid.New(), database.ID, 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("foreign ListBackups = %v, want ErrNotFound", err)
 	}
 	if _, err := manager.CreateBackup(stranger, uuid.New(), database.ID, CreateBackupRequest{}); !errors.Is(err, ErrNotFound) {

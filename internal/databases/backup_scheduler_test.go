@@ -284,3 +284,42 @@ func firstBackupID(t *testing.T, fixture *backupFixture) uuid.UUID {
 	}
 	return fixture.backups.backupOrder[0]
 }
+
+// TestSchedulerFallBackRecoveryAdvancesFromServedSlot is the round-3 U1
+// regression: the fire call site must compute the next run from the served
+// slot, not only from `now`, or a catch-up started in a fall-back repeated hour
+// re-schedules (and then fires) the same wall-clock slot.
+func TestSchedulerFallBackRecoveryAdvancesFromServedSlot(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	fixture := newBackupFixture(t)
+	fixture.manager.scheduler.loc = loc
+
+	// The schedule was due at 01:30 EDT; the scheduler catches up at 01:00 EST,
+	// the second pass of the repeated hour. Ambiguous instants are built via
+	// UTC because 01:00-01:59 local is ambiguous.
+	served := time.Date(2025, 11, 2, 5, 30, 0, 0, time.UTC).In(loc) // 01:30 EDT
+	now := time.Date(2025, 11, 2, 6, 0, 0, 0, time.UTC).In(loc)     // 01:00 EST
+	schedule := fixture.backups.seedSchedule(BackupSchedule{
+		DatabaseID: fixture.database.ID,
+		Cron:       "30 1 * * *",
+		Enabled:    true,
+		NextRunAt:  served,
+	})
+
+	if started := fixture.manager.scheduler.fire(context.Background(), schedule, now); started != 1 {
+		t.Fatalf("fire started %d, want 1", started)
+	}
+	fixture.waitBackup(t, firstBackupID(t, fixture))
+
+	advanced, ok := fixture.backups.getSchedule(schedule.ID)
+	if !ok {
+		t.Fatal("schedule disappeared")
+	}
+	want := time.Date(2025, 11, 3, 1, 30, 0, 0, loc)
+	if !advanced.NextRunAt.Equal(want) {
+		t.Errorf("next_run_at = %v, want %v (the repeated slot must not fire twice)", advanced.NextRunAt, want)
+	}
+}

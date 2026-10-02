@@ -17,15 +17,64 @@ func (s *Store) CreateBackup(ctx context.Context, params sqlc.CreateBackupParams
 	return s.queries.CreateBackup(ctx, params)
 }
 
+// CreateBackupWithTarget stores a run that references a storage target. When it
+// does, the target row is read under a FOR SHARE lock in the same transaction
+// and returned, so a concurrent destination edit (which takes FOR UPDATE)
+// cannot commit between the target read and the run insert, and the run always
+// carries the config the destination lock saw. validate, when non-nil, runs on
+// the locked row before the insert.
+func (s *Store) CreateBackupWithTarget(ctx context.Context, params sqlc.CreateBackupParams, validate func(sqlc.BackupTarget) error) (sqlc.Backup, *sqlc.BackupTarget, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.Backup{}, nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	var target *sqlc.BackupTarget
+	if params.TargetID.Valid {
+		row, err := queries.GetBackupTargetForShare(ctx, params.TargetID)
+		if err != nil {
+			return sqlc.Backup{}, nil, err
+		}
+		if validate != nil {
+			if err := validate(row); err != nil {
+				return sqlc.Backup{}, nil, err
+			}
+		}
+		target = &row
+		if s.BeforeBackupRunCommit != nil {
+			s.BeforeBackupRunCommit()
+		}
+	}
+	backup, err := queries.CreateBackup(ctx, params)
+	if err != nil {
+		return sqlc.Backup{}, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.Backup{}, nil, err
+	}
+	return backup, target, nil
+}
+
 // GetBackup returns a backup run whose database is still live; ownership is
 // checked by the caller through the database row.
 func (s *Store) GetBackup(ctx context.Context, id pgtype.UUID) (sqlc.Backup, error) {
 	return s.queries.GetBackup(ctx, id)
 }
 
-// ListBackupsByDatabase returns a database's runs, newest first.
-func (s *Store) ListBackupsByDatabase(ctx context.Context, databaseID pgtype.UUID) ([]sqlc.Backup, error) {
-	return s.queries.ListBackupsByDatabase(ctx, databaseID)
+// ListBackupsByDatabase returns up to limit of a database's runs, newest first.
+func (s *Store) ListBackupsByDatabase(ctx context.Context, databaseID pgtype.UUID, limit int32) ([]sqlc.Backup, error) {
+	return s.queries.ListBackupsByDatabase(ctx, sqlc.ListBackupsByDatabaseParams{
+		DatabaseID: databaseID,
+		Limit:      limit,
+	})
+}
+
+// HasBackupsForTarget reports whether any running or completed run references
+// the target, which locks its destination against edits.
+func (s *Store) HasBackupsForTarget(ctx context.Context, targetID pgtype.UUID) (bool, error) {
+	return s.queries.HasBackupsForTarget(ctx, targetID)
 }
 
 // ListRunningBackups returns every run the control plane left running.
@@ -121,6 +170,83 @@ func (s *Store) ListBackupTargetsByUser(ctx context.Context, userID pgtype.UUID)
 // UpdateBackupTarget persists a target's configuration and returns the row.
 func (s *Store) UpdateBackupTarget(ctx context.Context, params sqlc.UpdateBackupTargetParams) (sqlc.BackupTarget, error) {
 	return s.queries.UpdateBackupTarget(ctx, params)
+}
+
+// CreateBackupTargetWithSecrets stores a target and its sealed credentials in
+// one transaction, so a failed credential write can never leave a target
+// without the pair its kind requires.
+func (s *Store) CreateBackupTargetWithSecrets(ctx context.Context, target sqlc.CreateBackupTargetParams, secrets []sqlc.UpsertBackupTargetSecretParams) (sqlc.BackupTarget, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.BackupTarget{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	row, err := queries.CreateBackupTarget(ctx, target)
+	if err != nil {
+		return sqlc.BackupTarget{}, err
+	}
+	for _, secret := range secrets {
+		if _, err := queries.UpsertBackupTargetSecret(ctx, secret); err != nil {
+			return sqlc.BackupTarget{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.BackupTarget{}, err
+	}
+	return row, nil
+}
+
+// UpdateBackupTargetWithSecrets persists a target's configuration and upserts
+// the supplied sealed credentials in one transaction. It locks the target row
+// FOR UPDATE, so it serializes with a run start (which holds FOR SHARE on the
+// same row): if the destination changed and any running or completed backup
+// references the target, stranded is true and nothing is written.
+func (s *Store) UpdateBackupTargetWithSecrets(ctx context.Context, target sqlc.UpdateBackupTargetParams, secrets []sqlc.UpsertBackupTargetSecretParams) (sqlc.BackupTarget, bool, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.BackupTarget{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	current, err := queries.GetBackupTargetForUpdate(ctx, target.ID)
+	if err != nil {
+		return sqlc.BackupTarget{}, false, err
+	}
+	if backupTargetDestinationChanged(current, target) {
+		hasBackups, err := queries.HasBackupsForTarget(ctx, target.ID)
+		if err != nil {
+			return sqlc.BackupTarget{}, false, err
+		}
+		if hasBackups {
+			return current, true, nil
+		}
+	}
+	row, err := queries.UpdateBackupTarget(ctx, target)
+	if err != nil {
+		return sqlc.BackupTarget{}, false, err
+	}
+	for _, secret := range secrets {
+		if _, err := queries.UpsertBackupTargetSecret(ctx, secret); err != nil {
+			return sqlc.BackupTarget{}, false, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.BackupTarget{}, false, err
+	}
+	return row, false, nil
+}
+
+// backupTargetDestinationChanged reports whether an update moves where a
+// target's artifacts live (a recorded location names the endpoint and bucket,
+// so those must not change once a run references them).
+func backupTargetDestinationChanged(current sqlc.BackupTarget, next sqlc.UpdateBackupTargetParams) bool {
+	return current.Kind != next.Kind ||
+		current.Endpoint != next.Endpoint ||
+		current.Region != next.Region ||
+		current.Bucket != next.Bucket
 }
 
 // DeleteBackupTarget removes a target owned by userID, returning pgx.ErrNoRows

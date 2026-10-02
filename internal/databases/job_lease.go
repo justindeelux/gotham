@@ -69,3 +69,18 @@ func (l *JobLeases) Held(id uuid.UUID) JobLeaseKind {
 	defer l.mu.Unlock()
 	return l.held[id]
 }
+
+// HeldIDs returns the ids currently leased. The boot-time container sweep uses
+// it to keep a container whose database a live job still holds.
+func (l *JobLeases) HeldIDs() []uuid.UUID {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	ids := make([]uuid.UUID, 0, len(l.held))
+	for id := range l.held {
+		ids = append(ids, id)
+	}
+	return ids
+}

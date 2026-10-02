@@ -21,6 +21,7 @@ const apiTokenRole = "user"
 // Keeping it an interface lets tests substitute a fake without a database.
 type TokenService interface {
 	Create(ctx context.Context, userID uuid.UUID, name string, scopes []string) (*auth.CreatedToken, error)
+	Get(ctx context.Context, userID, id uuid.UUID) (*auth.APIToken, error)
 	List(ctx context.Context, userID uuid.UUID) ([]auth.APIToken, error)
 	Revoke(ctx context.Context, userID, id uuid.UUID) error
 	Rotate(ctx context.Context, userID, id uuid.UUID) (*auth.CreatedToken, error)
@@ -114,6 +115,17 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A token may only grant scopes it already holds: a read token cannot mint
+	// a deploy token, a deploy token cannot mint an admin token, and only an
+	// admin token may mint admin. A JWT session holds every scope, so it skips
+	// this gate (the admin-scope issuance gate below still applies to it).
+	if callerScopes, isAPIToken := ScopesFromContext(r.Context()); isAPIToken {
+		if !auth.CanGrantScopes(callerScopes, scopes) {
+			writeJSON(w, http.StatusForbidden, apiError{Message: tokenScopeGrantDenied})
+			return
+		}
+	}
+
 	// Minting the admin scope is the platform-operator boundary: an
 	// admin-scoped token unlocks the platform-global proxy surface
 	// (RequirePlatformAdmin), so any authenticated user could otherwise
@@ -151,6 +163,21 @@ func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 	id, ok := tokenIDParam(w, r)
 	if !ok {
 		return
+	}
+
+	// A rotation re-issues the token's existing scopes, so the caller must be
+	// allowed to grant them: a read token cannot rotate a deploy token. A JWT
+	// session holds every scope and skips the check.
+	if callerScopes, isAPIToken := ScopesFromContext(r.Context()); isAPIToken {
+		existing, err := s.tokens.Get(r.Context(), userID, id)
+		if err != nil {
+			s.writeTokenError(w, "rotate", err)
+			return
+		}
+		if !auth.CanGrantScopes(callerScopes, existing.Scopes) {
+			writeJSON(w, http.StatusForbidden, apiError{Message: tokenScopeGrantDenied})
+			return
+		}
 	}
 
 	rotated, err := s.tokens.Rotate(r.Context(), userID, id)
@@ -232,12 +259,13 @@ func newTokenMetadata(token auth.APIToken) tokenMetadata {
 
 // RequireScopes enforces API-token scopes on a route. JWT-authenticated
 // requests carry no scopes and hold every scope in Phase 1; an API token must
-// hold each required scope or the request is rejected with 403.
+// hold each required scope (a more privileged scope covers the ones below it)
+// or the request is rejected with 403.
 func RequireScopes(required ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			scopes, isAPIToken := ScopesFromContext(r.Context())
-			if !isAPIToken || auth.ScopesContain(scopes, required...) {
+			if !isAPIToken || auth.ScopesAuthorize(scopes, required...) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -245,3 +273,24 @@ func RequireScopes(required ...string) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// requireResourceScopes enforces the API-token containment boundary on the
+// resource surface: reads (GET/HEAD) need the read scope, every other method
+// needs the deploy scope. It sits between RequireAuth (which stores the token's
+// scopes) and the team chain, and a JWT session holds every scope, so the SPA
+// is unaffected.
+func requireResourceScopes(next http.Handler) http.Handler {
+	read := RequireScopes(auth.ScopeRead)(next)
+	deploy := RequireScopes(auth.ScopeDeploy)(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			read.ServeHTTP(w, r)
+			return
+		}
+		deploy.ServeHTTP(w, r)
+	})
+}
+
+// tokenScopeGrantDenied is the 403 body returned when an API token tries to
+// mint or rotate a token carrying a scope it does not hold.
+const tokenScopeGrantDenied = "a token may only grant scopes it holds"

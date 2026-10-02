@@ -126,16 +126,33 @@ func (s *Server) authorizeLogSubscription(ctx context.Context, serverID, userID 
 }
 
 // withTeam builds the middleware chain of a team-scoped resource group:
-// authentication, the admin scope when the group requires it, active-team
-// resolution, and the owner/admin gate for mutating methods. The control plane
-// passes the same chain to every resource package's Mount, so a new route in
-// one of those groups cannot silently miss team scoping.
-func (s *Server) withTeam(adminScope bool) func(http.Handler) http.Handler {
+// authentication, the API-token scope boundary (reads need read, mutations
+// need deploy), active-team resolution, and the owner/admin gate for mutating
+// methods. The control plane passes the same chain to every resource package's
+// Mount, so a new route in one of those groups cannot silently miss either
+// team scoping or the scope boundary.
+func (s *Server) withTeam() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		h := s.RequireTeam(s.teamWriteGate(next))
-		if adminScope {
-			h = RequireScopes(auth.ScopeAdmin)(h)
-		}
-		return s.RequireAuth(h)
+		return s.RequireAuth(requireResourceScopes(s.RequireTeam(s.teamWriteGate(next))))
 	}
+}
+
+// readScopeAuth wraps a handler with authentication and the read scope, for
+// read-only surfaces reached by API tokens.
+func (s *Server) readScopeAuth(next http.Handler) http.Handler {
+	return s.RequireAuth(RequireScopes(auth.ScopeRead)(next))
+}
+
+// adminScopeAuth wraps a handler with authentication and the admin scope, for
+// platform-management surfaces reached by API tokens. A JWT session holds every
+// scope, so it passes.
+func (s *Server) adminScopeAuth(next http.Handler) http.Handler {
+	return s.RequireAuth(RequireScopes(auth.ScopeAdmin)(next))
+}
+
+// resourceScopeAuth wraps a handler with authentication and the method-based
+// resource scope boundary (read for GET/HEAD, deploy otherwise), for resource
+// groups that do not ride the team chain.
+func (s *Server) resourceScopeAuth(next http.Handler) http.Handler {
+	return s.RequireAuth(requireResourceScopes(next))
 }

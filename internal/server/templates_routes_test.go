@@ -12,9 +12,9 @@ import (
 )
 
 // TestTemplatesRoutesWiring proves the BE-7.2 surface is mounted on the real
-// router behind the same auth and admin-scope chain as the services routes:
-// a missing token gets 401, a read-scoped token gets 403 without reaching the
-// catalog, and a session token serves the embedded catalog and a render.
+// router behind the resource scope boundary: a missing token gets 401, a
+// read-scoped token may list the catalog, a deploy-scoped token may render, and
+// a read-scoped token may not render. A session token serves both.
 func TestTemplatesRoutesWiring(t *testing.T) {
 	s, tokens := newTestTokenServer(t)
 	const session = "Bearer valid-token"
@@ -26,8 +26,20 @@ func TestTemplatesRoutesWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create read token: %v", err)
 	}
-	if recorder := doRequest(t, s, http.MethodGet, "/api/v1/templates", "", "Bearer "+readToken.Token); recorder.Code != http.StatusForbidden {
-		t.Fatalf("read token status = %d, want 403", recorder.Code)
+	if recorder := doRequest(t, s, http.MethodGet, "/api/v1/templates", "", "Bearer "+readToken.Token); recorder.Code != http.StatusOK {
+		t.Fatalf("read token list status = %d, want 200", recorder.Code)
+	}
+	if recorder := doRequest(t, s, http.MethodPost, "/api/v1/templates/wordpress/render", `{}`, "Bearer "+readToken.Token); recorder.Code != http.StatusForbidden {
+		t.Fatalf("read token render status = %d, want 403", recorder.Code)
+	}
+	deployToken, err := tokens.Create(context.Background(), testUserID, "deployer", []string{auth.ScopeDeploy})
+	if err != nil {
+		t.Fatalf("create deploy token: %v", err)
+	}
+	if recorder := doRequest(t, s, http.MethodPost, "/api/v1/templates/wordpress/render",
+		`{"values":{"domain":"blog.example.test","db_password":"wp-secret","db_root_password":"root-secret"}}`,
+		"Bearer "+deployToken.Token); recorder.Code != http.StatusOK {
+		t.Fatalf("deploy token render status = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
 	}
 
 	recorder := doRequest(t, s, http.MethodGet, "/api/v1/templates", "", session)

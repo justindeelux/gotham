@@ -255,7 +255,7 @@ func (s *Server) routes() (http.Handler, error) {
 			// so auth never imports teams.
 			s.invites = teamSvc
 		}
-		teams.Mount(api, s.RequireAuth, UserIDFromContext, s.teamService)
+		teams.Mount(api, s.adminScopeAuth, UserIDFromContext, s.teamService)
 
 		// Notifications (BE-8.3): the team-scoped channel CRUD plus the
 		// dispatcher behind the deploy and backup hooks below. A nil service
@@ -263,7 +263,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// leaves both hooks unwired, so the deploy/backup flows are
 		// untouched.
 		s.notify = s.notificationService()
-		notifications.Mount(api, s.withTeam(false), UserIDFromContext, s.notify)
+		notifications.Mount(api, s.withTeam(), UserIDFromContext, s.notify)
 
 		// Container management routes to the node agent; a nil service (no
 		// registry) mounts nothing. The mTLS agent dialer is plugged in here
@@ -274,7 +274,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// mutate a team's containers (and a missing vs foreign node is
 		// indistinguishable).
 		containerService := s.containerService()
-		containers.Mount(api, s.withTeam(false), containerService)
+		containers.Mount(api, s.withTeam(), containerService)
 
 		// Traefik proxy synchronization (BE-6.1) and the SSL surface
 		// (BE-6.2): the shared container service provisions the
@@ -314,7 +314,7 @@ func (s *Server) routes() (http.Handler, error) {
 		platformOnly := func(next http.Handler) http.Handler {
 			return s.RequireAuth(s.RequirePlatformAdmin(next))
 		}
-		proxy.Mount(api, s.withTeam(false), platformOnly, s.proxy,
+		proxy.Mount(api, s.withTeam(), platformOnly, s.proxy,
 			proxy.NewDefaultProviderService(sslConfig),
 			proxy.NewDefaultCertificateService(sslConfig),
 			proxy.NewDefaultRedirectService(redirectConfig),
@@ -326,7 +326,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// be able to swap the binary). A nil service (FEATURE_UPDATES=false,
 		// or unusable configuration) mounts nothing.
 		s.updates = s.updatesService()
-		updates.Mount(api, s.RequireAuth, platformOnly, s.isPlatformOperator, s.updates)
+		updates.Mount(api, s.readScopeAuth, platformOnly, s.isPlatformOperator, s.updates)
 
 		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
 		// Log subscriptions are authorized against the node's team before the
@@ -335,7 +335,7 @@ func (s *Server) routes() (http.Handler, error) {
 
 		// Source providers (GitHub/GitLab/Gitea): list connections and repos.
 		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger)
-		providers.Mount(api, s.RequireAuth, UserIDFromContext, providerSvc)
+		providers.Mount(api, s.readScopeAuth, UserIDFromContext, providerSvc)
 
 		// Application deploy orchestration (BE-4.3): a nil service (no
 		// database) or FEATURE_APPLICATIONS=false mounts nothing, so Phases
@@ -346,7 +346,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// lifecycle uses. The proxy service (BE-6.1) receives a best-effort
 		// resync after application mutations and successful deployments.
 		s.deploy = s.deployService(providerSvc, s.proxy)
-		deploy.Mount(api, s.withTeam(false), UserIDFromContext, s.deploy)
+		deploy.Mount(api, s.withTeam(), UserIDFromContext, s.deploy)
 
 		// Push webhooks (BE-4.4) and preview deployments (BE-8.1): the public,
 		// signature-verified delivery endpoint plus authenticated hook and
@@ -358,13 +358,13 @@ func (s *Server) routes() (http.Handler, error) {
 		// handling, the orphan sweep, the listing route) is gated by
 		// FEATURE_PREVIEWS; push deliveries are untouched by that flag.
 		s.webhooks = s.webhookService(providerSvc)
-		webhooks.Mount(api, s.withTeam(false), UserIDFromContext, s.webhooks)
+		webhooks.Mount(api, s.withTeam(), UserIDFromContext, s.webhooks)
 		s.webhooks.StartPreviews()
 
 		// Managed databases (BE-5.1): same container service as above, so a
 		// database container is created through the shared container service
 		// rather than a second agent path.
-		databases.Mount(api, s.withTeam(false), UserIDFromContext, s.databaseService(containerService))
+		databases.Mount(api, s.withTeam(), UserIDFromContext, s.databaseService(containerService))
 
 		// Backup and restore surface (BE-5.2), same container service and
 		// same feature flag as the databases routes above: a nil service
@@ -372,26 +372,23 @@ func (s *Server) routes() (http.Handler, error) {
 		// service owns the internal cron scheduler, started here and stopped
 		// by the closer above.
 		s.backups = s.backupService(containerService)
-		databases.MountBackups(api, s.withTeam(false), s.RequireAuth, UserIDFromContext, s.backups)
+		databases.MountBackups(api, s.withTeam(), s.resourceScopeAuth, UserIDFromContext, s.backups)
 
 		// Compose services (BE-7.1): one docker-compose project per service,
-		// run by the node agent's compose CLI. Like the proxy group, the
-		// whole surface mutates node state with user-supplied compose, so it
-		// requires the admin scope on top of authentication (JWT sessions
-		// already hold every scope). A nil service (no database, no agent
-		// dialer, or FEATURE_SERVICES=false) mounts nothing.
-		services.Mount(api, s.withTeam(true), UserIDFromContext, s.composeService())
+		// run by the node agent's compose CLI. The whole surface mutates node
+		// state with user-supplied compose, so it rides the team chain and the
+		// API-token scope boundary (reads need read, mutations need deploy;
+		// JWT sessions already hold every scope). A nil service (no database,
+		// no agent dialer, or FEATURE_SERVICES=false) mounts nothing.
+		services.Mount(api, s.withTeam(), UserIDFromContext, s.composeService())
 
 		// One-click templates (BE-7.2): the built-in catalog (embedded in
 		// the binary) and the render engine. The surface is read-only and
 		// stateless; a rendered document is created and deployed through
-		// the services routes above, so it shares their admin scope and
-		// rides the same FEATURE_SERVICES kill switch (a nil catalog
+		// the services routes above, so it rides the same FEATURE_SERVICES
+		// kill switch and the same resource scope boundary (a nil catalog
 		// mounts nothing).
-		adminOnly := func(next http.Handler) http.Handler {
-			return s.RequireAuth(RequireScopes(auth.ScopeAdmin)(next))
-		}
-		templates.Mount(api, adminOnly, templates.NewDefaultService(s.logger))
+		templates.Mount(api, s.resourceScopeAuth, templates.NewDefaultService(s.logger))
 	})
 
 	spa, err := newSPAHandler()

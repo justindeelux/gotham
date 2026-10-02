@@ -133,7 +133,7 @@ func TestP6ProxySyncProduction(t *testing.T) {
 		t.Fatalf("create acme dir: %v", err)
 	}
 	proxyAgent := agent.NewProxyServer(agent.ProxyServerConfig{Root: configDir, Logger: logger})
-	agentAddr, authority := startLocalAgentWithOptions(t, ctx, engine, nodeID,
+	agentAddr, authority := startLocalAgentWithProxyRoot(t, ctx, engine, nodeID, configDir,
 		agent.WithProxyService(proxyAgent))
 
 	registry := p6Registry{server: &servers.Server{ID: serverID, IP: "127.0.0.1", NodeID: &nodeID}}

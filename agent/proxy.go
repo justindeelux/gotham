@@ -37,6 +37,11 @@ const (
 	// storage defaults to its "acme" subdirectory
 	// (internal/proxy.TraefikAcmeDir).
 	defaultTraefikDir = "/var/lib/gotham-agent/traefik"
+	// defaultTraefikContainerName is the fixed name of the node's proxy
+	// container (internal/proxy.TraefikContainerName). The bind validator
+	// requires it (with gotham.managed=true) before granting a container
+	// access to the proxy directory.
+	defaultTraefikContainerName = "gotham-traefik"
 	// defaultTraefikPingURL is the loopback-only Traefik ping endpoint
 	// (internal/proxy.PingURL).
 	defaultTraefikPingURL = "http://127.0.0.1:8080/ping"

@@ -49,14 +49,55 @@ type DockerServer struct {
 	agentv1.UnimplementedDockerServiceServer
 	docker dockerClient
 	log    *slog.Logger
+	// volumeRoot is the parent of every application bind mount the node
+	// accepts; a request carrying an application bind outside it is refused.
+	volumeRoot string
+	// proxyVolumeRoot is the node's own Traefik directory: a proxy container
+	// may mount it (the config and ACME directories), unlike an application.
+	proxyVolumeRoot string
+}
+
+// DockerServerOption tunes a DockerServer.
+type DockerServerOption func(*DockerServer)
+
+// WithManagedVolumeRoot confines every application bind DockerServer accepts
+// to <root>/<app id>. Pass the configured Config.ManagedVolumeRoot.
+func WithManagedVolumeRoot(root string) DockerServerOption {
+	return func(s *DockerServer) {
+		if strings.TrimSpace(root) != "" {
+			s.volumeRoot = root
+		}
+	}
+}
+
+// WithProxyVolumeRoot overrides the directory a proxy container may mount. It
+// exists for embedded/test harnesses that run the proxy out of a temporary
+// root; the production agent never passes it, so the default stays the fixed
+// constant that matches internal/proxy.TraefikDir and no environment or config
+// value can widen the allowlist.
+func WithProxyVolumeRoot(root string) DockerServerOption {
+	return func(s *DockerServer) {
+		if strings.TrimSpace(root) != "" {
+			s.proxyVolumeRoot = root
+		}
+	}
 }
 
 // NewDockerServer returns a DockerService implementation backed by docker.
-func NewDockerServer(docker dockerClient, log *slog.Logger) *DockerServer {
+func NewDockerServer(docker dockerClient, log *slog.Logger, options ...DockerServerOption) *DockerServer {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &DockerServer{docker: docker, log: log}
+	server := &DockerServer{
+		docker:          docker,
+		log:             log,
+		volumeRoot:      defaultManagedVolumeRoot,
+		proxyVolumeRoot: defaultTraefikDir,
+	}
+	for _, option := range options {
+		option(server)
+	}
+	return server
 }
 
 // ListContainers returns the node's containers.
@@ -106,6 +147,9 @@ func (s *DockerServer) CreateContainer(ctx context.Context, req *agentv1.CreateC
 	if req.GetImage() == "" {
 		return nil, status.Error(codes.InvalidArgument, "image is required")
 	}
+	if err := validateContainerVolumes(s.volumeRoot, s.proxyVolumeRoot, req); err != nil {
+		return nil, dockerError("create container", err)
+	}
 	id, err := s.docker.CreateContainer(ctx, req)
 	if err != nil {
 		return nil, dockerError("create container", err)
@@ -117,6 +161,9 @@ func (s *DockerServer) CreateContainer(ctx context.Context, req *agentv1.CreateC
 func (s *DockerServer) RunImage(ctx context.Context, req *agentv1.CreateContainerRequest) (*agentv1.ContainerActionResponse, error) {
 	if req.GetImage() == "" {
 		return nil, status.Error(codes.InvalidArgument, "image is required")
+	}
+	if err := validateContainerVolumes(s.volumeRoot, s.proxyVolumeRoot, req); err != nil {
+		return nil, dockerError("run image", err)
 	}
 	id, err := s.docker.RunImage(ctx, req)
 	if err != nil {
@@ -173,7 +220,7 @@ func (s *DockerServer) containerAction(
 // failure.
 func dockerError(action string, err error) error {
 	switch {
-	case errors.Is(err, ErrInvalidPortMapping):
+	case errors.Is(err, ErrInvalidPortMapping), errors.Is(err, ErrInvalidVolumeBind):
 		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, action+": context canceled")

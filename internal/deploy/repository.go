@@ -150,6 +150,7 @@ func (r *storeRepository) CreateApplication(
 ) (Application, error) {
 	row, err := r.store.CreateApplicationWithConfig(ctx,
 		sqlc.CreateApplicationParams{
+			ID:         pgUUID(app.ID),
 			UserID:     pgUUID(app.UserID),
 			TeamID:     pgUUID(app.TeamID),
 			ServerID:   pgUUID(app.ServerID),

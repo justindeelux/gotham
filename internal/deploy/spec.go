@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/justindeelux/gotham/internal/providers"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
@@ -66,7 +68,7 @@ func buildRunRequest(
 	if err != nil {
 		return nil, err
 	}
-	volumes, err := volumeSpecs(storages)
+	volumes, err := volumeSpecs(managedVolumeRoot(), app.ID, storages)
 	if err != nil {
 		return nil, err
 	}
@@ -149,22 +151,25 @@ func buildEnv(envVars []EnvVar, secrets []Secret, secretKey string, defaults map
 	return env, nil
 }
 
-// volumeSpecs renders the storage map as "host:container" bind specs. Both
-// paths must be absolute: a relative host path would be resolved against the
-// daemon's working directory on the node.
-func volumeSpecs(storages []Storage) ([]string, error) {
+// volumeSpecs renders the storage map as Docker mount specs. A named volume
+// (a non-absolute host) is passed through unchanged; an absolute host is a bind
+// and is confined to the application's managed directory; an empty host is a
+// managed bind derived as <managed root>/<appID>/<name> (see managedHostPath).
+// The container path must always be absolute: a relative one would resolve
+// against the image's working directory.
+func volumeSpecs(root string, appID uuid.UUID, storages []Storage) ([]string, error) {
 	if len(storages) == 0 {
 		return nil, nil
 	}
 	specs := make([]string, 0, len(storages))
 	for _, s := range storages {
-		host := strings.TrimSpace(s.HostPath)
 		target := strings.TrimSpace(s.ContainerPath)
-		if host == "" || target == "" {
-			return nil, fmt.Errorf("%w: storage %q needs a host and a container path", ErrValidation, s.Name)
+		if target == "" || !strings.HasPrefix(target, "/") {
+			return nil, fmt.Errorf("%w: storage %q needs an absolute container path", ErrValidation, s.Name)
 		}
-		if !strings.HasPrefix(host, "/") || !strings.HasPrefix(target, "/") {
-			return nil, fmt.Errorf("%w: storage %q paths must be absolute", ErrValidation, s.Name)
+		host, err := managedHostPath(root, appID, s.Name, strings.TrimSpace(s.HostPath))
+		if err != nil {
+			return nil, err
 		}
 		specs = append(specs, host+":"+target)
 	}

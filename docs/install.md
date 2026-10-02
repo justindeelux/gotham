@@ -113,6 +113,7 @@ Useful overrides:
 | `GOTHAM_AUTH_ALLOW_REGISTRATION` | Test/dev only: reopens self-registration after the first account (the default is closed — members join through invites). |
 | `--cp-host <name-or-ip>` | Add a DNS name or IP to the gRPC listener certificate SANs (repeatable). |
 | `GOTHAM_GRPC_HOSTS` | Comma-separated SAN hosts (same as `--cp-host`); also overrides the persisted list at runtime. |
+| `GOTHAM_MANAGED_VOLUME_ROOT` | Parent of every application bind mount (default `/var/lib/gotham/volumes`). An application bind must live in `<root>/<app id>`; a named volume is namespaced to the application. Must match the node's `GOTHAM_AGENT_MANAGED_VOLUME_ROOT`. |
 | `GOTHAM_INSTALL_ROOT` | Install under a prefix instead of `/` (testing only; non-root; enables test mode). |
 | `GOTHAM_INSTALL_TEST_PUBLIC_KEY` | Test-only: replace the pinned trust anchor (PEM or base64); honoured **only** with `GOTHAM_INSTALL_ROOT`, otherwise warned and ignored. |
 
@@ -191,6 +192,7 @@ Useful agent installer flags and variables:
 | `--dry-run` | Print what would be done; makes no change. |
 | `GOTHAM_AGENT_CA` | The agent-side path the installer writes (`/etc/gotham/ca.crt`). It is **not** read from the ambient environment; on a reinstall the installer keeps the value already in `agent.env`. Use `--ca`/`GOTHAM_AGENT_CA_FILE` to change it. |
 | `GOTHAM_AGENT_UPDATE_CHANNEL` | Release channel this node accepts, `stable` (default) or `beta`; an offer with a different or empty channel is refused. |
+| `GOTHAM_AGENT_MANAGED_VOLUME_ROOT` | Parent of every application bind mount the node accepts (default `/var/lib/gotham/volumes`); falls back to the shared `GOTHAM_MANAGED_VOLUME_ROOT`. Must match the control plane. |
 
 `GOTHAM_AGENT_CP_ADDR` must use a name or IP that is one of the control plane's
 listener SANs (see [Control plane](#control-plane)); otherwise the TLS handshake

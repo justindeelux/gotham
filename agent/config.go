@@ -25,6 +25,11 @@ const (
 	envComposeRoot = "GOTHAM_AGENT_COMPOSE_ROOT"
 	envLogLevel    = "GOTHAM_AGENT_LOG_LEVEL"
 
+	envManagedVolumeRoot = "GOTHAM_AGENT_MANAGED_VOLUME_ROOT"
+	// envSharedManagedVolumeRoot lets a node reuse the control plane's root
+	// variable name; the agent-prefixed variable wins when both are set.
+	envSharedManagedVolumeRoot = "GOTHAM_MANAGED_VOLUME_ROOT"
+
 	envAutoUpdate     = "GOTHAM_AGENT_AUTO_UPDATE"
 	envUpdateInterval = "GOTHAM_AGENT_UPDATE_INTERVAL"
 	envUpdateChannel  = "GOTHAM_AGENT_UPDATE_CHANNEL"
@@ -47,6 +52,12 @@ const (
 	defaultCertDir    = "./data/agent"
 	defaultDockerSock = "/var/run/docker.sock"
 	defaultLogLevel   = "info"
+	// defaultManagedVolumeRoot is the parent of every application bind mount
+	// the node accepts. It must match the control plane's
+	// GOTHAM_MANAGED_VOLUME_ROOT: the node re-validates every bind against its
+	// own root, so a compromised or stale control plane cannot smuggle an
+	// arbitrary host path through.
+	defaultManagedVolumeRoot = "/var/lib/gotham/volumes"
 
 	// Agent self-update layout, mirroring the control plane's split
 	// privileges: the binary and its hardlink backup live in the agent-writable
@@ -101,6 +112,9 @@ type Config struct {
 	// ComposeRoot is the directory that holds one subdirectory per compose
 	// service project. It must be writable by the agent user.
 	ComposeRoot string
+	// ManagedVolumeRoot is the parent of every application bind mount the node
+	// accepts; a bind whose source is not inside it is refused.
+	ManagedVolumeRoot string
 	// LogLevel is the slog level name (debug, info, warn, error).
 	LogLevel string
 
@@ -157,6 +171,8 @@ func Load() (Config, error) {
 		ComposeRoot: envOr(envComposeRoot, defaultComposeRoot),
 		LogLevel:    envOr(envLogLevel, defaultLogLevel),
 
+		ManagedVolumeRoot: envOr(envManagedVolumeRoot, envOr(envSharedManagedVolumeRoot, defaultManagedVolumeRoot)),
+
 		AutoUpdate:        strings.EqualFold(strings.TrimSpace(os.Getenv(envAutoUpdate)), "true"),
 		UpdateInterval:    updateIntervalFromEnv(),
 		UpdateChannel:     envOr(envUpdateChannel, defaultUpdateChannel),
@@ -189,6 +205,9 @@ func Load() (Config, error) {
 		if !isLoopbackListenAddr(cfg.ListenAddr) {
 			return Config{}, fmt.Errorf("%s must be a loopback address when %s=true, got %q", envListenAddr, envInsecure, cfg.ListenAddr)
 		}
+	}
+	if !strings.HasPrefix(cfg.ManagedVolumeRoot, "/") {
+		return Config{}, fmt.Errorf("%s must be an absolute path", envManagedVolumeRoot)
 	}
 	return cfg, nil
 }

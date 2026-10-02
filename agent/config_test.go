@@ -11,6 +11,7 @@ func clearAgentEnv(t *testing.T) {
 	for _, key := range []string{
 		envCPAddr, envNodeID, envListenAddr, envCA, envCertDir,
 		envKey, envInsecure, envDockerSock, envComposeRoot, envLogLevel, envDockerHost,
+		envManagedVolumeRoot, envSharedManagedVolumeRoot,
 	} {
 		t.Setenv(key, "")
 	}
@@ -35,6 +36,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.DockerSock != defaultDockerSock {
 		t.Errorf("DockerSock = %q; want %q", cfg.DockerSock, defaultDockerSock)
+	}
+	if cfg.ManagedVolumeRoot != defaultManagedVolumeRoot {
+		t.Errorf("ManagedVolumeRoot = %q; want %q", cfg.ManagedVolumeRoot, defaultManagedVolumeRoot)
 	}
 	if cfg.LogLevel != defaultLogLevel {
 		t.Errorf("LogLevel = %q; want %q", cfg.LogLevel, defaultLogLevel)
@@ -93,6 +97,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(envDockerSock, "unix:///run/docker.sock")
 	t.Setenv(envComposeRoot, "/srv/gotham/compose")
 	t.Setenv(envLogLevel, "debug")
+	t.Setenv(envManagedVolumeRoot, "/srv/gotham/volumes")
 
 	cfg, err := Load()
 	if err != nil {
@@ -125,6 +130,9 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.LogLevel != "debug" {
 		t.Errorf("LogLevel = %q", cfg.LogLevel)
 	}
+	if cfg.ManagedVolumeRoot != "/srv/gotham/volumes" {
+		t.Errorf("ManagedVolumeRoot = %q", cfg.ManagedVolumeRoot)
+	}
 }
 
 func TestLoadFallsBackToDockerHost(t *testing.T) {
@@ -154,6 +162,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"node id with space", envNodeID, "bad id"},
 		{"node id with slash", envNodeID, "bad/id"},
 		{"overlong node id", envNodeID, strings.Repeat("a", maxNodeIDLength+1)},
+		{"relative managed volume root", envManagedVolumeRoot, "data/volumes"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

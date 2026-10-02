@@ -76,6 +76,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		return Application{}, ErrDisabled
 	}
 	app := Application{
+		ID:         uuid.New(),
 		UserID:     userID,
 		TeamID:     teams.ScopeFor(ctx, userID).TeamID,
 		Name:       strings.TrimSpace(in.Name),
@@ -102,7 +103,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err != nil {
 		return Application{}, err
 	}
-	storages, err := normalizeStorages(in.Storage)
+	storages, err := normalizeStorages(app.ID, in.Storage)
 	if err != nil {
 		return Application{}, err
 	}
@@ -388,14 +389,49 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 	if _, err := s.application(ctx, userID, appID, true); err != nil {
 		return nil, err
 	}
-	normalized, err := normalizeStorages(storages)
+	normalized, err := normalizeStorages(appID, storages)
 	if err != nil {
 		return nil, err
 	}
+	s.warnStorageChanges(ctx, appID, storages, normalized)
 	if err := s.repo.ReplaceStorages(ctx, appID, normalized); err != nil {
 		return nil, err
 	}
 	return s.GetStorages(ctx, userID, appID)
+}
+
+// warnStorageChanges logs when a save changes the resolved host source of an
+// existing storage row in a way that strands data: a previously explicit host
+// path blanked to a managed path, or a pre-change bare named volume silently
+// re-namespaced. An intentional explicit change is left to the operator, and a
+// re-save that resolves to the same value (the derived managed path) does not
+// warn.
+func (s *Service) warnStorageChanges(ctx context.Context, appID uuid.UUID, input, normalized []Storage) {
+	existing, err := s.repo.ListStorages(ctx, appID)
+	if err != nil {
+		return
+	}
+	byName := make(map[string]Storage, len(existing))
+	for _, row := range existing {
+		byName[row.Name] = row
+	}
+	for index, row := range normalized {
+		previous, ok := byName[row.Name]
+		if !ok || strings.TrimSpace(previous.HostPath) == "" || previous.HostPath == row.HostPath {
+			continue
+		}
+		if !strings.HasPrefix(previous.HostPath, "/") {
+			s.logger.Warn("deploy: storage named volume renamed; the old volume's data is not moved",
+				"application_id", appID, "storage", row.Name,
+				"previous_volume", previous.HostPath, "new_volume", row.HostPath)
+			continue
+		}
+		if index < len(input) && strings.TrimSpace(input[index].HostPath) == "" {
+			s.logger.Warn("deploy: storage host path blanked; existing data is not moved to the managed path",
+				"application_id", appID, "storage", row.Name,
+				"previous_host_path", previous.HostPath, "new_host_path", row.HostPath)
+		}
+	}
 }
 
 // Stop stops the container of the application's newest deployment.
@@ -637,13 +673,18 @@ func validateEnvKey(key string) error {
 	return nil
 }
 
-// normalizeStorages trims and validates the volume map: named rows with
-// absolute host and container paths, checked against the same rules the
-// deploy step enforces (volumeSpecs) so a bad mapping is a 400 at write time
-// rather than a failed deployment later.
-func normalizeStorages(storages []Storage) ([]Storage, error) {
+// normalizeStorages trims and validates the volume map: named rows with a
+// container path and either a managed host path, a host bind confined to
+// <managed root>/<appID>, or a Docker named volume. An empty host path is
+// derived to a managed directory, so a client never needs to know the
+// application id up front. The rules mirror volumeSpecs, so a bad mapping is a
+// 400 at write time rather than a failed deployment later.
+func normalizeStorages(appID uuid.UUID, storages []Storage) ([]Storage, error) {
+	root := managedVolumeRoot()
 	normalized := make([]Storage, 0, len(storages))
 	seen := make(map[string]bool, len(storages))
+	seenDirs := make(map[string]string, len(storages))
+	seenNamed := make(map[string]string, len(storages))
 	for _, storage := range storages {
 		row := Storage{
 			Name:          strings.TrimSpace(storage.Name),
@@ -657,9 +698,31 @@ func normalizeStorages(storages []Storage) ([]Storage, error) {
 			return nil, fmt.Errorf("%w: duplicate storage name %q", ErrValidation, row.Name)
 		}
 		seen[row.Name] = true
+		// Two distinct names that sanitize to the same directory would share
+		// one host path once derived; reject rather than silently fuse them.
+		dir := storageDirName(row.Name)
+		if other, ok := seenDirs[dir]; ok {
+			return nil, fmt.Errorf("%w: storage names %q and %q map to the same managed directory %q",
+				ErrValidation, other, row.Name, dir)
+		}
+		seenDirs[dir] = row.Name
+		host, err := managedHostPath(root, appID, row.Name, row.HostPath)
+		if err != nil {
+			return nil, err
+		}
+		if !strings.HasPrefix(host, "/") {
+			// Named volumes are namespaced with the storage name; reject two
+			// rows whose (sanitized) names collapse onto one volume.
+			if other, ok := seenNamed[host]; ok {
+				return nil, fmt.Errorf("%w: storage names %q and %q map to the same named volume %q",
+					ErrValidation, other, row.Name, host)
+			}
+			seenNamed[host] = row.Name
+		}
+		row.HostPath = host
 		normalized = append(normalized, row)
 	}
-	if _, err := volumeSpecs(normalized); err != nil {
+	if _, err := volumeSpecs(root, appID, normalized); err != nil {
 		return nil, err
 	}
 	return normalized, nil

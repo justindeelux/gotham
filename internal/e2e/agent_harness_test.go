@@ -30,6 +30,15 @@ func startLocalAgent(t *testing.T, ctx context.Context, engine *agent.DockerClie
 // such as WithProxyService for the Phase 6 proxy smoke.
 func startLocalAgentWithOptions(t *testing.T, ctx context.Context, engine *agent.DockerClient, nodeID string, options ...agent.ServerOption) (string, *servers.Authority) {
 	t.Helper()
+	return startLocalAgentWithProxyRoot(t, ctx, engine, nodeID, "", options...)
+}
+
+// startLocalAgentWithProxyRoot is startLocalAgentWithOptions plus the proxy
+// directory the node may mount. A test whose CP proxy service runs out of a
+// temporary config dir passes it here so the agent's proxy branch accepts the
+// same root; an empty proxyRoot keeps the production default.
+func startLocalAgentWithProxyRoot(t *testing.T, ctx context.Context, engine *agent.DockerClient, nodeID, proxyRoot string, options ...agent.ServerOption) (string, *servers.Authority) {
+	t.Helper()
 
 	// 1. The throwaway CA and the agent's key/CSR/certificate.
 	authority, err := servers.LoadOrCreateAuthority(t.TempDir())
@@ -65,7 +74,11 @@ func startLocalAgentWithOptions(t *testing.T, ctx context.Context, engine *agent
 	// 2. Serve the requested agent services over mTLS on loopback.
 	logger := testLogger(t)
 	services := append([]agent.ServerOption{agent.WithBuildService(agent.NewBuildServer(engine, logger))}, options...)
-	grpcServer, err := agent.NewServer("127.0.0.1:0", serverCreds, agent.NewDockerServer(engine, logger), logger, services...)
+	var dockerOptions []agent.DockerServerOption
+	if proxyRoot != "" {
+		dockerOptions = append(dockerOptions, agent.WithProxyVolumeRoot(proxyRoot))
+	}
+	grpcServer, err := agent.NewServer("127.0.0.1:0", serverCreds, agent.NewDockerServer(engine, logger, dockerOptions...), logger, services...)
 	if err != nil {
 		t.Fatalf("agent server: %v", err)
 	}

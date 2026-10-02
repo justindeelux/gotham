@@ -442,6 +442,83 @@ func TestReceiveDuplicateWaitsForDurableClaim(t *testing.T) {
 	}
 }
 
+// cancelOnDeploy cancels the delivery context as it crosses the deploy boundary
+// and then returns err, modelling a client disconnect at the deadline.
+type cancelOnDeploy struct {
+	cancel context.CancelFunc
+	err    error
+}
+
+func (d *cancelOnDeploy) DeploySystem(_ context.Context, appID uuid.UUID) (deploy.Deployment, error) {
+	d.cancel()
+	if d.err != nil {
+		return deploy.Deployment{}, d.err
+	}
+	return deploy.Deployment{
+		ID:            uuid.New(),
+		ApplicationID: appID,
+		Kind:          deploy.KindDeploy,
+		State:         deploy.StateQueued,
+	}, nil
+}
+
+// TestReceiveReleasesClaimOnCancelledRequest pins U1: when the request context
+// is cancelled at the deploy boundary, the claim must still be released (on a
+// detached context) or it is stranded and every redelivery answers 503.
+func TestReceiveReleasesClaimOnCancelledRequest(t *testing.T) {
+	const secret = "hook-secret"
+	repo := newFakeRepository().withTarget()
+	ctx, cancel := context.WithCancel(context.Background())
+	svc := NewService(Config{
+		Repository: repo,
+		Deployer:   &cancelOnDeploy{cancel: cancel, err: deploy.ErrConflict},
+		Logger:     discardLogger(),
+	})
+	body := pushBody("abc123")
+
+	_, err := svc.Receive(ctx, providers.NameGitHub,
+		deliveryRequest(providers.NameGitHub, body, githubPushHeaders(secret, body, "delivery-1"), "10.0.0.1:4242"))
+	if !errors.Is(err, ErrRetryable) {
+		t.Fatalf("err = %v, want ErrRetryable", err)
+	}
+	if repo.claimCount() != 0 {
+		t.Errorf("claims = %d, want 0 (released despite the cancelled request context)", repo.claimCount())
+	}
+}
+
+// TestReceiveLinksClaimOnCancelledRequest pins the link half of U1: a
+// successful deploy whose request context was cancelled must still link the
+// deployment, so a redelivery is a durable duplicate rather than a retry.
+func TestReceiveLinksClaimOnCancelledRequest(t *testing.T) {
+	const secret = "hook-secret"
+	repo := newFakeRepository().withTarget()
+	ctx, cancel := context.WithCancel(context.Background())
+	svc := NewService(Config{
+		Repository: repo,
+		Deployer:   &cancelOnDeploy{cancel: cancel},
+		Logger:     discardLogger(),
+	})
+	body := pushBody("abc123")
+
+	delivery, err := svc.Receive(ctx, providers.NameGitHub,
+		deliveryRequest(providers.NameGitHub, body, githubPushHeaders(secret, body, "delivery-1"), "10.0.0.1:4242"))
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("status = %q, want %q", delivery.Status, StatusQueued)
+	}
+
+	dup, err := svc.Receive(context.Background(), providers.NameGitHub,
+		deliveryRequest(providers.NameGitHub, body, githubPushHeaders(secret, body, "delivery-2"), "10.0.0.1:4242"))
+	if err != nil {
+		t.Fatalf("redelivery = %v, want a durable duplicate (the link must have landed)", err)
+	}
+	if dup.Status != StatusDuplicate {
+		t.Errorf("status = %q, want %q", dup.Status, StatusDuplicate)
+	}
+}
+
 func TestRoutesDeliveryRateLimited(t *testing.T) {
 	const secret = "hook-secret"
 	repo := newFakeRepository().withTarget()

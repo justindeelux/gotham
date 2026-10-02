@@ -177,7 +177,10 @@ func (s *Service) receivePullRequest(ctx context.Context, provider string, targe
 		// never build it against the platform.
 		return Delivery{Status: StatusIgnored, Reason: "fork"}, nil
 	}
-	if !strings.EqualFold(pr.BaseBranch, target.Branch) {
+	// Base branch names are case-sensitive, exactly like the push path: a PR
+	// against "main" must not provision a preview for an application watching
+	// "Main" (the clone still checks out the configured branch).
+	if pr.BaseBranch != target.Branch {
 		return Delivery{Status: StatusIgnored, Reason: "branch"}, nil
 	}
 	action := normalizePullRequestAction(pr.Action)

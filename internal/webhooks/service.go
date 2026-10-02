@@ -467,10 +467,7 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 		}
 		return Delivery{}, err
 	}
-	if err := s.repo.LinkEventDeployment(ctx, event.ID, deployment.ID); err != nil {
-		s.logger.Warn("webhooks: could not link delivery to deployment",
-			"event_id", event.ID, "deployment_id", deployment.ID, "error", err)
-	}
+	s.linkClaim(ctx, event, deployment)
 	return Delivery{Status: StatusQueued, DeploymentID: deployment.ID.String()}, nil
 }
 
@@ -486,10 +483,32 @@ func authorizedTarget(provider string, header http.Header, body []byte, targets 
 	return Target{}, false
 }
 
-// releaseClaim undoes a claim whose deployment never started.
+// claimCleanupTimeout bounds the best-effort claim cleanup (release after a
+// failed deploy, link after a successful one). Both run on a detached context,
+// so nothing else bounds them; the value mirrors the hook rollback budget.
+const claimCleanupTimeout = 3 * time.Second
+
+// releaseClaim undoes a claim whose deployment never started. It detaches from
+// the request context: a client disconnect or expired deadline is exactly when
+// the claim must still be cleared, or the row is stranded and every redelivery
+// answers 503 forever.
 func (s *Service) releaseClaim(ctx context.Context, event Event) {
-	if err := s.repo.ReleaseEvent(ctx, event.ID); err != nil {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claimCleanupTimeout)
+	defer cancel()
+	if err := s.repo.ReleaseEvent(cleanupCtx, event.ID); err != nil {
 		s.logger.Warn("webhooks: could not release delivery claim", "event_id", event.ID, "error", err)
+	}
+}
+
+// linkClaim attaches the queued deployment to its claim, on a detached context
+// for the same reason as releaseClaim: without the link a later duplicate
+// cannot tell the winning claim is durable and answers 503 forever.
+func (s *Service) linkClaim(ctx context.Context, event Event, deployment deploy.Deployment) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claimCleanupTimeout)
+	defer cancel()
+	if err := s.repo.LinkEventDeployment(cleanupCtx, event.ID, deployment.ID); err != nil {
+		s.logger.Warn("webhooks: could not link delivery to deployment",
+			"event_id", event.ID, "deployment_id", deployment.ID, "error", err)
 	}
 }
 

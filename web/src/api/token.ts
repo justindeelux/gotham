@@ -52,6 +52,17 @@ function notifySession(): void {
   }
 }
 
+// Other tabs share localStorage. Mirror their session changes so this tab's
+// store follows external rotations and sign-outs instead of writing a stale
+// token back. A null key means storage.clear() ran.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key === storageKey || event.key === null) {
+      notifySession();
+    }
+  });
+}
+
 /** getStorage returns localStorage when it is available, or null otherwise. */
 function getStorage(): Storage | null {
   try {

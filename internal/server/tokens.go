@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -165,19 +166,8 @@ func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A rotation re-issues the token's existing scopes, so the caller must be
-	// allowed to grant them: a read token cannot rotate a deploy token. A JWT
-	// session holds every scope and skips the check.
-	if callerScopes, isAPIToken := ScopesFromContext(r.Context()); isAPIToken {
-		existing, err := s.tokens.Get(r.Context(), userID, id)
-		if err != nil {
-			s.writeTokenError(w, "rotate", err)
-			return
-		}
-		if !auth.CanGrantScopes(callerScopes, existing.Scopes) {
-			writeJSON(w, http.StatusForbidden, apiError{Message: tokenScopeGrantDenied})
-			return
-		}
+	if !s.authorizeTokenOperation(w, r, "rotate", userID, id) {
+		return
 	}
 
 	rotated, err := s.tokens.Rotate(r.Context(), userID, id)
@@ -203,11 +193,41 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.authorizeTokenOperation(w, r, "revoke", userID, id) {
+		return
+	}
+
 	if err := s.tokens.Revoke(r.Context(), userID, id); err != nil {
 		s.writeTokenError(w, "revoke", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// authorizeTokenOperation enforces the token-management boundary on an owned
+// token before it is rotated or revoked. Re-issuing or touching an admin token
+// is the same platform-operator boundary as minting one, so a session that is
+// no longer an operator cannot rotate a stored admin token into a fresh secret.
+// An API token may additionally only manage tokens whose scopes it could itself
+// grant; a JWT session holds every scope and skips that subset check. It answers
+// the request itself and returns false when the operation must not proceed.
+func (s *Server) authorizeTokenOperation(w http.ResponseWriter, r *http.Request, op string, userID, id uuid.UUID) bool {
+	existing, err := s.tokens.Get(r.Context(), userID, id)
+	if err != nil {
+		s.writeTokenError(w, op, err)
+		return false
+	}
+	if slices.Contains(existing.Scopes, auth.ScopeAdmin) && !s.isPlatformOperator(r) {
+		writeJSON(w, http.StatusForbidden, apiError{Message: platformAdminScopeDenied})
+		return false
+	}
+	if callerScopes, isAPIToken := ScopesFromContext(r.Context()); isAPIToken {
+		if !auth.CanGrantScopes(callerScopes, existing.Scopes) {
+			writeJSON(w, http.StatusForbidden, apiError{Message: tokenScopeGrantDenied})
+			return false
+		}
+	}
+	return true
 }
 
 // writeTokenError maps a token service error to its HTTP response.
@@ -274,21 +294,38 @@ func RequireScopes(required ...string) func(http.Handler) http.Handler {
 	}
 }
 
+// sensitiveReadSuffixes are read routes that return secrets and therefore need
+// the deploy scope instead of the plain read scope: the decrypted database
+// credentials endpoint (database + root passwords in plaintext). Application
+// env values stay read-scoped by design (the SPA reads them on every app page).
+var sensitiveReadSuffixes = []string{"/credentials"}
+
 // requireResourceScopes enforces the API-token containment boundary on the
 // resource surface: reads (GET/HEAD) need the read scope, every other method
-// needs the deploy scope. It sits between RequireAuth (which stores the token's
-// scopes) and the team chain, and a JWT session holds every scope, so the SPA
-// is unaffected.
+// needs the deploy scope, and secret-bearing reads need deploy too. It sits
+// between RequireAuth (which stores the token's scopes) and the team chain, and
+// a JWT session holds every scope, so the SPA is unaffected.
 func requireResourceScopes(next http.Handler) http.Handler {
 	read := RequireScopes(auth.ScopeRead)(next)
 	deploy := RequireScopes(auth.ScopeDeploy)(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && !sensitiveRead(r.URL.Path) {
 			read.ServeHTTP(w, r)
 			return
 		}
 		deploy.ServeHTTP(w, r)
 	})
+}
+
+// sensitiveRead reports whether a read path returns secrets and must be
+// deploy-gated.
+func sensitiveRead(path string) bool {
+	for _, suffix := range sensitiveReadSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // tokenScopeGrantDenied is the 403 body returned when an API token tries to

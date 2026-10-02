@@ -36,6 +36,14 @@ service DockerService {
   // Named volumes are never removed: deleting a resource must not delete its
   // data (Phase 5 database soft delete relies on this).
   rpc RemoveContainer(ContainerActionRequest) returns (ContainerActionResponse);
+  // RemoveVolume deletes one named volume. It exists for the Phase 5 database
+  // grace-window expiry: a soft-deleted database keeps its volume for the
+  // retention window and this is the only way the control plane can remove it.
+  // The agent confines the call to Gotham-managed database volumes (the
+  // "gotham-db-" prefix) so a compromised control plane cannot delete arbitrary
+  // node storage. Removal is idempotent: a volume that is already gone is
+  // reported as success.
+  rpc RemoveVolume(VolumeActionRequest) returns (VolumeActionResponse);
   rpc PullImage(PullImageRequest) returns (PullImageResponse);
   rpc CreateContainer(CreateContainerRequest) returns (ContainerActionResponse);
   rpc RunImage(CreateContainerRequest) returns (ContainerActionResponse);
@@ -291,6 +299,12 @@ message ContainerInfo {
   // restart_policy is the container's native Docker restart policy. The agent
   // fills it for managed proxy containers only; empty means unknown.
   string restart_policy = 10;
+  // health is the container's Docker health status ("starting", "healthy" or
+  // "unhealthy") when the container declares a native healthcheck; empty when
+  // it does not. The control plane gates database readiness on "healthy" so a
+  // container that is merely up does not report ready before its engine
+  // accepts connections.
+  string health = 11;
 }
 
 // ContainerMount is one bind mount of a container.
@@ -326,6 +340,13 @@ message ContainerActionResponse {
   string container_id = 1;
 }
 
+// VolumeActionRequest targets one named volume.
+message VolumeActionRequest {
+  string name = 1;
+}
+
+message VolumeActionResponse {}
+
 // PullImageRequest pulls an image from a registry.
 message PullImageRequest {
   string image = 1;
@@ -348,6 +369,22 @@ message CreateContainerRequest {
   // restart_policy is the native Docker restart policy name ("always",
   // "unless-stopped", "on-failure"); empty leaves Docker's default.
   string restart_policy = 10;
+  // healthcheck configures the container's native Docker healthcheck. The
+  // control plane uses it for managed databases so readiness is an engine
+  // probe (the image's own ping tool run inside the container) rather than the
+  // bare container state. Empty leaves the image's own healthcheck (or none).
+  ContainerHealthcheck healthcheck = 11;
+}
+
+// ContainerHealthcheck is a container's native Docker healthcheck. test is the
+// exec-form command Docker runs inside the container; an empty test disables
+// the healthcheck.
+message ContainerHealthcheck {
+  repeated string test = 1;
+  int64 interval_seconds = 2;
+  int64 timeout_seconds = 3;
+  int32 retries = 4;
+  int64 start_period_seconds = 5;
 }
 
 // StreamLogsRequest tails the logs of one container.

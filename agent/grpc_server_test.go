@@ -20,16 +20,17 @@ import (
 
 // fakeDockerClient is a configurable dockerClient for server tests.
 type fakeDockerClient struct {
-	containers   []*agentv1.ContainerInfo
-	version      string
-	err          error
-	logs         []byte
-	logStreamErr error
-	started      []string
-	stopped      []string
-	restarted    []string
-	removed      []string
-	createdID    string
+	containers     []*agentv1.ContainerInfo
+	version        string
+	err            error
+	logs           []byte
+	logStreamErr   error
+	started        []string
+	stopped        []string
+	restarted      []string
+	removed        []string
+	removedVolumes []string
+	createdID      string
 }
 
 func (f *fakeDockerClient) Version(context.Context) (string, error) {
@@ -72,6 +73,14 @@ func (f *fakeDockerClient) Remove(_ context.Context, id string) error {
 		return f.err
 	}
 	f.removed = append(f.removed, id)
+	return nil
+}
+
+func (f *fakeDockerClient) RemoveVolume(_ context.Context, name string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.removedVolumes = append(f.removedVolumes, name)
 	return nil
 }
 

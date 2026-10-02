@@ -40,6 +40,11 @@ type ContainerService interface {
 	// is not an error). Named volumes are kept, so removing a container never
 	// deletes its data.
 	Remove(ctx context.Context, serverID uuid.UUID, containerID string) error
+	// RemoveVolume deletes one named volume on a node (idempotent: an
+	// already-gone volume is not an error). It is the expiry path for the
+	// database grace window; the agent confines the name it accepts to managed
+	// database volumes.
+	RemoveVolume(ctx context.Context, serverID uuid.UUID, volumeName string) error
 	Pull(ctx context.Context, serverID uuid.UUID, image string) error
 	Run(ctx context.Context, serverID uuid.UUID, opts RunOptions) (string, error)
 	// Logs streams a container's stdout and stderr payloads (the agent merges
@@ -274,6 +279,27 @@ func (s *Service) Remove(ctx context.Context, serverID uuid.UUID, containerID st
 		return mapRPCError(err)
 	}
 	s.invalidate(ctx, serverID)
+	return nil
+}
+
+// RemoveVolume deletes one named volume on a node. The agent reports an
+// already-gone volume as success, so the expiry sweep can retry safely; the
+// call is a mutation and routes through the same team/role authorization as
+// the container lifecycle methods.
+func (s *Service) RemoveVolume(ctx context.Context, serverID uuid.UUID, volumeName string) error {
+	if strings.TrimSpace(volumeName) == "" {
+		return fmt.Errorf("%w: volume name is required", ErrValidation)
+	}
+	ctx, client, cancel, err := s.client(ctx, serverID, true)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	defer s.closeClient(client)
+
+	if _, err := client.RemoveVolume(ctx, &agentv1.VolumeActionRequest{Name: volumeName}); err != nil {
+		return mapRPCError(err)
+	}
 	return nil
 }
 

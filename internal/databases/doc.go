@@ -15,8 +15,10 @@
 // response that shows the credentials to their owner.
 //
 // Deleting a database stops and removes the container and soft-deletes the row
-// (deleted_at); the named volume is never removed by this path, so the data
-// survives the 7-day grace window of the phase rollback note.
+// (deleted_at); the named volume is never removed by that path, so the data
+// survives the 7-day grace window. The RetentionSweeper enforces the window:
+// on a periodic tick it removes the volume through the agent (RemoveVolume)
+// and purges the row, so the documented retention is real.
 //
 // Backups (BE-5.2) reuse that machinery: a BackupEngine per engine builds the
 // temporary container that stops the database, starts the engine on the same

@@ -27,6 +27,7 @@ type DockerClient interface {
 	StopContainer(ctx context.Context, in *agentv1.ContainerActionRequest, opts ...grpc.CallOption) (*agentv1.ContainerActionResponse, error)
 	RestartContainer(ctx context.Context, in *agentv1.ContainerActionRequest, opts ...grpc.CallOption) (*agentv1.ContainerActionResponse, error)
 	RemoveContainer(ctx context.Context, in *agentv1.ContainerActionRequest, opts ...grpc.CallOption) (*agentv1.ContainerActionResponse, error)
+	RemoveVolume(ctx context.Context, in *agentv1.VolumeActionRequest, opts ...grpc.CallOption) (*agentv1.VolumeActionResponse, error)
 	PullImage(ctx context.Context, in *agentv1.PullImageRequest, opts ...grpc.CallOption) (*agentv1.PullImageResponse, error)
 	CreateContainer(ctx context.Context, in *agentv1.CreateContainerRequest, opts ...grpc.CallOption) (*agentv1.ContainerActionResponse, error)
 	RunImage(ctx context.Context, in *agentv1.CreateContainerRequest, opts ...grpc.CallOption) (*agentv1.ContainerActionResponse, error)

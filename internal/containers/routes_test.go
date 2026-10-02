@@ -64,6 +64,14 @@ func (f *fakeService) Remove(_ context.Context, _ uuid.UUID, _ string) error {
 	return f.actionErr
 }
 
+func (f *fakeService) RemoveVolume(_ context.Context, _ uuid.UUID, volumeName string) error {
+	f.record("remove-volume")
+	if volumeName == "" {
+		return fmt.Errorf("%w: volume name is required", ErrValidation)
+	}
+	return f.actionErr
+}
+
 func (f *fakeService) Pull(_ context.Context, _ uuid.UUID, image string) error {
 	f.record("pull")
 	if image == "" {

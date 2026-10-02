@@ -283,6 +283,73 @@ func TestRestoreStagesArtifactAndRunsJob(t *testing.T) {
 	}
 }
 
+// TestBackupPG18MountPath is the D1-7 backup/restore regression: the dump and
+// restore job containers (and the staging directory) must use the same
+// versioned mount the live container uses, or a PostgreSQL 18 job runs the
+// entrypoint against /var/lib/postgresql/data and refuses to start.
+func TestBackupPG18MountPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		want    string
+	}{
+		{name: "postgres16", version: "16-alpine", want: postgresLegacyMountPath},
+		{name: "postgres18", version: "18-alpine", want: postgres18MountPath},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := testDatabase(EnginePostgres, tt.version)
+			credentials := Credentials{Username: "app", Password: "pw", Database: "appdb"}
+
+			opts, err := backupJobOptions(db, credentials, "gotham-backup-abc", roleBackup, "run-1", "", "true")
+			if err != nil {
+				t.Fatalf("backupJobOptions: %v", err)
+			}
+			want := db.StoragePath + ":" + tt.want
+			if len(opts.Volumes) != 1 || opts.Volumes[0] != want {
+				t.Errorf("backup volumes = %v, want [%s]", opts.Volumes, want)
+			}
+
+			dir, err := stagingDir(db)
+			if err != nil {
+				t.Fatalf("stagingDir: %v", err)
+			}
+			if wantDir := strings.TrimRight(tt.want, "/") + "/" + stagingDirName; dir != wantDir {
+				t.Errorf("stagingDir = %q, want %q", dir, wantDir)
+			}
+		})
+	}
+}
+
+// TestPG18StageAndCleanupMounts pins the two job paths a partial revert misses:
+// stageChunk (the restore staging container) and removeStagedArtifact (the
+// post-failure cleanup container) must both use the versioned mount for
+// PostgreSQL 18, not only backupJobOptions/stagingDir.
+func TestPG18StageAndCleanupMounts(t *testing.T) {
+	fixture := newBackupFixture(t)
+	database := fixture.database
+	database.Version = "18-alpine"
+	want := database.StoragePath + ":" + postgres18MountPath
+	staged := postgres18MountPath + "/" + stagingDirName + "/" + database.ID.String() + ".part"
+
+	if err := fixture.manager.stageChunk(context.Background(), database, database.ID, []byte("chunk-0"), staged, 0); err != nil {
+		t.Fatalf("stageChunk: %v", err)
+	}
+	fixture.manager.removeStagedArtifact(database, staged)
+
+	fixture.containers.mu.Lock()
+	runs := append([]containers.RunOptions(nil), fixture.containers.runs...)
+	fixture.containers.mu.Unlock()
+	if len(runs) != 2 {
+		t.Fatalf("job runs = %d, want 2 (stage + cleanup)", len(runs))
+	}
+	for i, run := range runs {
+		if len(run.Volumes) != 1 || run.Volumes[0] != want {
+			t.Errorf("run %d volumes = %v, want [%s]", i, run.Volumes, want)
+		}
+	}
+}
+
 func TestRestoreRejectsIncompleteBackup(t *testing.T) {
 	fixture := newBackupFixture(t)
 	backup := fixture.backups.seedBackup(Backup{

@@ -46,7 +46,7 @@ func (e *RedisEngine) VolumeSpec() VolumeSpec {
 // canonical probe, bounded tightly because Redis starts without initialisation.
 func (e *RedisEngine) Healthcheck() Healthcheck {
 	return Healthcheck{
-		Probe:   ProbeState,
+		Probe:   ProbeHealth,
 		Command: []string{"redis-cli", "-a", placeholderPassword, "ping"},
 		Timeout: 30 * time.Second,
 	}

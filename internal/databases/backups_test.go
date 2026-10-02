@@ -64,7 +64,7 @@ func TestBackupEngineDumpOptions(t *testing.T) {
 	}{
 		{EnginePostgres, "", "postgres:16-alpine", "/var/lib/postgresql/data", "pg_dump", "POSTGRES_USER"},
 		{EngineMySQL, "8.4", "mysql:8.4", "/var/lib/mysql", "mysqldump", "MYSQL_ROOT_PASSWORD"},
-		{EngineMariaDB, "", "mariadb:11.4", "/var/lib/mysql", "mysqldump", "MYSQL_ROOT_PASSWORD"},
+		{EngineMariaDB, "", "mariadb:11.4", "/var/lib/mysql", "mariadb-dump", "MYSQL_ROOT_PASSWORD"},
 		{EngineMongoDB, "", "mongo:7.0", "/data/db", "mongodump", "MONGO_INITDB_ROOT_USERNAME"},
 		{EngineRedis, "", "redis:7.2-alpine", "/data", "tar -cf", "REDIS_PASSWORD"},
 	}
@@ -125,6 +125,7 @@ func TestBackupEngineRestoreOptions(t *testing.T) {
 	}{
 		{EnginePostgres, "pg_restore", "/var/lib/postgresql/data/.gotham-restore/x.part"},
 		{EngineMySQL, "mysql -h", "/var/lib/mysql/.gotham-restore/x.part"},
+		{EngineMariaDB, "mariadb -h", "/var/lib/mysql/.gotham-restore/x.part"},
 		{EngineMongoDB, "mongorestore", "/data/db/.gotham-restore/x.part"},
 		{EngineRedis, "tar -xf", "/data/.gotham-restore/x.part"},
 	}
@@ -199,6 +200,63 @@ func TestPostgresRestoreUsesFileAndTransaction(t *testing.T) {
 	}
 	if !strings.Contains(script, `--no-owner --single-transaction "$archive"`) {
 		t.Errorf("pg_restore must read the checked archive inside one transaction:\n%s", script)
+	}
+}
+
+// TestMySQLAndMariaDBToolMatrix pins the per-engine binary selection (D2-6):
+// MariaDB 11.0+ removed the mysql/mysqldump/mysqladmin symlinks from the
+// official image, so MariaDB must use the mariadb-* tools while MySQL keeps
+// the mysql* ones. It also pins the restore fix (D2-12): the client is never
+// given $MYSQL_DATABASE as a preselected database, because the dump's
+// CREATE DATABASE/USE statements must be able to recreate a dropped database.
+func TestMySQLAndMariaDBToolMatrix(t *testing.T) {
+	tests := []struct {
+		engine string
+		server string
+		ping   string
+		dump   string
+		client string
+	}{
+		{EngineMySQL, "mysqld", "mysqladmin", "mysqldump", "mysql"},
+		{EngineMariaDB, "mariadbd", "mariadb-admin", "mariadb-dump", "mariadb"},
+	}
+	for _, test := range tests {
+		t.Run(test.engine, func(t *testing.T) {
+			engine, ok := LookupBackupEngine(test.engine)
+			if !ok {
+				t.Fatalf("no backup engine for %q", test.engine)
+			}
+			dump, err := engine.DumpOptions(testDatabase(test.engine, ""), testCredentials(), "run-1")
+			if err != nil {
+				t.Fatalf("DumpOptions: %v", err)
+			}
+			restore, err := engine.RestoreOptions(testDatabase(test.engine, ""), testCredentials(), "run-2", "/var/lib/mysql/.gotham-restore/x.part")
+			if err != nil {
+				t.Fatalf("RestoreOptions: %v", err)
+			}
+			dumpScript, restoreScript := dump.Command[2], restore.Command[2]
+
+			if !strings.Contains(dumpScript, "docker-entrypoint.sh "+test.server) {
+				t.Errorf("dump entrypoint is not %s:\n%s", test.server, dumpScript)
+			}
+			if !strings.Contains(dumpScript, test.ping+" ping") {
+				t.Errorf("dump does not ping with %s:\n%s", test.ping, dumpScript)
+			}
+			if !strings.Contains(dumpScript, test.dump+" -h") {
+				t.Errorf("dump does not run %s:\n%s", test.dump, dumpScript)
+			}
+			if !strings.Contains(restoreScript, test.client+" -h") {
+				t.Errorf("restore does not run %s:\n%s", test.client, restoreScript)
+			}
+			// The MySQL client's only positional argument must be nothing:
+			// a preselected database breaks restoring a dropped one.
+			if strings.Contains(restoreScript, `"$MYSQL_DATABASE" <"$archive"`) {
+				t.Errorf("restore preselects $MYSQL_DATABASE before reading the archive:\n%s", restoreScript)
+			}
+			if !strings.Contains(dumpScript, `--databases "$MYSQL_DATABASE"`) {
+				t.Errorf("dump must keep --databases so the archive recreates the schema:\n%s", dumpScript)
+			}
+		})
 	}
 }
 

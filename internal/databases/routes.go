@@ -330,6 +330,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a database with that name already exists"})
 	case errors.Is(err, ErrPortConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "the requested public port is already in use"})
+	case errors.Is(err, ErrDatabaseBusy):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "another operation is running for this database"})
 	case errors.Is(err, ErrDisabled):
 		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "databases are disabled"})
 	case errors.Is(err, ErrAgentUnavailable), errors.Is(err, ErrHealthcheck):

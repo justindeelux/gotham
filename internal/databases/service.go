@@ -108,6 +108,12 @@ type Config struct {
 	HealthTimeout time.Duration
 	// HealthPoll is the interval between readiness checks.
 	HealthPoll time.Duration
+	// Leases, when set, is the job exclusion registry shared with the backup
+	// manager of the same control plane: a database whose volume a backup or
+	// restore owns refuses Start/Restart, and a lifecycle action claims the
+	// same lease so a job cannot start under it. Nil disables exclusion
+	// (tests that do not exercise it).
+	Leases *JobLeases
 }
 
 // repository resolves the configured repository implementation.
@@ -131,6 +137,7 @@ type Service struct {
 	logger        *slog.Logger
 	healthTimeout time.Duration
 	healthPoll    time.Duration
+	leases        *JobLeases
 }
 
 // Compile-time guarantee that Service satisfies the route-level contract.
@@ -155,6 +162,7 @@ func NewService(cfg Config) *Service {
 		logger:        logger,
 		healthTimeout: cfg.HealthTimeout,
 		healthPoll:    poll,
+		leases:        cfg.Leases,
 	}
 }
 
@@ -411,12 +419,18 @@ func (s *Service) Delete(ctx context.Context, userID, databaseID uuid.UUID) erro
 }
 
 // Start powers the container back on and reports the database running once the
-// engine's health window passes.
+// engine's health window passes. It refuses to run while a backup or restore
+// owns the volume (409) and claims the same lease while it runs, so a job
+// cannot start underneath it.
 func (s *Service) Start(ctx context.Context, userID, databaseID uuid.UUID) (Database, error) {
 	database, err := s.ownedContainer(ctx, userID, databaseID)
 	if err != nil {
 		return Database{}, err
 	}
+	if err := s.claimLifecycle(database.ID); err != nil {
+		return Database{}, err
+	}
+	defer s.leases.Release(database.ID)
 	engine, _, err := parseEngine(database.Engine)
 	if err != nil {
 		return Database{}, err
@@ -445,11 +459,16 @@ func (s *Service) Stop(ctx context.Context, userID, databaseID uuid.UUID) (Datab
 }
 
 // Restart re-runs the container in place and waits for it to be healthy again.
+// Like Start it respects and claims the shared job lease.
 func (s *Service) Restart(ctx context.Context, userID, databaseID uuid.UUID) (Database, error) {
 	database, err := s.ownedContainer(ctx, userID, databaseID)
 	if err != nil {
 		return Database{}, err
 	}
+	if err := s.claimLifecycle(database.ID); err != nil {
+		return Database{}, err
+	}
+	defer s.leases.Release(database.ID)
 	engine, _, err := parseEngine(database.Engine)
 	if err != nil {
 		return Database{}, err
@@ -511,6 +530,25 @@ func (s *Service) ownedContainer(ctx context.Context, userID, databaseID uuid.UU
 		return Database{}, fmt.Errorf("%w: database has no container", ErrValidation)
 	}
 	return database, nil
+}
+
+// claimLifecycle claims the shared job lease for a Start/Restart, mapping a
+// lease already held by a backup or restore to ErrDatabaseBusy. A nil registry
+// never blocks, so a service built without exclusion keeps working.
+func (s *Service) claimLifecycle(databaseID uuid.UUID) error {
+	if !s.leases.Claim(databaseID, JobLeaseLifecycle) {
+		switch s.leases.Held(databaseID) {
+		case JobLeaseBackup:
+			return fmt.Errorf("%w: a backup is running for this database", ErrDatabaseBusy)
+		case JobLeaseRestore:
+			return fmt.Errorf("%w: a restore is running for this database", ErrDatabaseBusy)
+		default:
+			// Another lifecycle action holds the lease (a double
+			// Start/Restart), or the holder was released in between.
+			return fmt.Errorf("%w: another operation is running for this database", ErrDatabaseBusy)
+		}
+	}
+	return nil
 }
 
 // storeCredentials seals and writes every credential of a database, returning

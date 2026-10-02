@@ -390,6 +390,8 @@ func TestServiceErrorMapping(t *testing.T) {
 			bind: func(s *fakeDatabaseService) { s.updateErr = ErrConflict }},
 		{name: "port conflict", status: http.StatusConflict, err: ErrPortConflict,
 			bind: func(s *fakeDatabaseService) { s.createErr = ErrPortConflict }},
+		{name: "busy", status: http.StatusConflict, err: ErrDatabaseBusy,
+			bind: func(s *fakeDatabaseService) { s.lifecycleErr = ErrDatabaseBusy }},
 		{name: "disabled", status: http.StatusServiceUnavailable, err: ErrDisabled,
 			bind: func(s *fakeDatabaseService) { s.getErr = ErrDisabled }},
 		{name: "agent unavailable", status: http.StatusBadGateway, err: ErrAgentUnavailable,
@@ -412,7 +414,7 @@ func TestServiceErrorMapping(t *testing.T) {
 			case "conflict":
 				req = httptest.NewRequest(http.MethodPatch, databasePath(databaseID, ""),
 					strings.NewReader(`{"name":"warehouse"}`))
-			case "agent unavailable", "healthcheck":
+			case "agent unavailable", "healthcheck", "busy":
 				req = httptest.NewRequest(http.MethodPost, databasePath(databaseID, "/start"), nil)
 			case "port conflict":
 				req = httptest.NewRequest(http.MethodPost, databasePath(uuid.Nil, ""),

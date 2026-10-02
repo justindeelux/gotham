@@ -521,18 +521,36 @@ func (f *fakeContainers) List(context.Context, uuid.UUID) ([]containers.Containe
 	return list, nil
 }
 
-func (f *fakeContainers) Start(context.Context, uuid.UUID, string) error {
+func (f *fakeContainers) Start(_ context.Context, _ uuid.UUID, containerID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls = append(f.calls, "start")
 	f.starts++
+	// Start makes a known container running again, so a Stop-then-Start
+	// sequence (and the health wait after it) sees the real state.
+	f.setState(containerID, "running")
 	return f.startErr
 }
 
-func (f *fakeContainers) Stop(context.Context, uuid.UUID, string) error {
+func (f *fakeContainers) Stop(_ context.Context, _ uuid.UUID, containerID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stops++
+	// Observe the stop so an "observe the database after stopping it"
+	// regression cannot hide behind a still-"running" listed state.
+	f.setState(containerID, "exited")
 	return f.stopErr
+}
+
+// setState updates the observed state of a listed container. A container that
+// was never published is left alone.
+func (f *fakeContainers) setState(containerID, state string) {
+	for i := range f.listed {
+		if f.listed[i].ID == containerID {
+			f.listed[i].State = state
+			return
+		}
+	}
 }
 
 func (f *fakeContainers) Restart(context.Context, uuid.UUID, string) error {

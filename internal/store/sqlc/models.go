@@ -77,6 +77,7 @@ type Backup struct {
 	Error       string             `json:"error"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+	WasRunning  bool               `json:"was_running"`
 }
 
 type BackupSchedule struct {
@@ -297,6 +298,16 @@ type ReposCache struct {
 	SshUrl        string             `json:"ssh_url"`
 	HtmlUrl       string             `json:"html_url"`
 	CachedAt      pgtype.Timestamptz `json:"cached_at"`
+}
+
+type Restore struct {
+	ID         pgtype.UUID        `json:"id"`
+	DatabaseID pgtype.UUID        `json:"database_id"`
+	BackupID   pgtype.UUID        `json:"backup_id"`
+	Status     string             `json:"status"`
+	Error      string             `json:"error"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	FinishedAt pgtype.Timestamptz `json:"finished_at"`
 }
 
 type Secret struct {

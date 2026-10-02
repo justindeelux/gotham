@@ -77,6 +77,52 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("GetBackup(missing) err = %v, want ErrNotFound", err)
 	}
 
+	// --- restores --------------------------------------------------------
+	restore, err := repo.CreateRestore(ctx, Restore{
+		ID:         uuid.New(),
+		DatabaseID: database.ID,
+		BackupID:   backup.ID,
+		Status:     RestoreRunning,
+		CreatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("CreateRestore: %v", err)
+	}
+	running, err := repo.ListRunningRestores(ctx)
+	if err != nil {
+		t.Fatalf("ListRunningRestores: %v", err)
+	}
+	found := false
+	for _, item := range running {
+		if item.ID == restore.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the running restore is not listed: %+v", running)
+	}
+	finishedRestore, err := repo.FinishRestore(ctx, Restore{
+		ID:         restore.ID,
+		Status:     RestoreFailed,
+		Error:      "interrupted",
+		FinishedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("FinishRestore: %v", err)
+	}
+	if finishedRestore.Status != RestoreFailed || finishedRestore.Error != "interrupted" ||
+		finishedRestore.FinishedAt.IsZero() {
+		t.Errorf("finished restore = %+v", finishedRestore)
+	}
+	if running, err = repo.ListRunningRestores(ctx); err != nil {
+		t.Fatalf("ListRunningRestores(after finish): %v", err)
+	}
+	for _, item := range running {
+		if item.ID == restore.ID {
+			t.Error("a finished restore is still listed as running")
+		}
+	}
+
 	// --- schedules -------------------------------------------------------
 	late, err := repo.CreateBackupSchedule(ctx, BackupSchedule{
 		ID:         uuid.New(),

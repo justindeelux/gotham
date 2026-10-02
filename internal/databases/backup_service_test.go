@@ -663,6 +663,7 @@ func TestReconcileStaleBackups(t *testing.T) {
 		DatabaseID: fixture.database.ID,
 		Type:       BackupManual,
 		Status:     BackupRunning,
+		WasRunning: true,
 		CreatedAt:  time.Now().UTC(),
 	})
 	if err != nil {

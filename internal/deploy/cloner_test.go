@@ -973,26 +973,57 @@ func TestCloneRedactsURLCredentials(t *testing.T) {
 	})
 }
 
+// TestCloneRedactsBeforeTruncation is the fix-round-1 regression: the git error
+// tail is redacted BEFORE the 400-byte truncation, so a cut landing inside the
+// userinfo cannot expose the credential suffix (tail would otherwise start at
+// "ser:secretpw@host/…").
+func TestCloneRedactsBeforeTruncation(t *testing.T) {
+	const secret = "secretpw"
+	app := testApplication(uuid.New())
+	// Position the credential so tail(output, 400) starts inside it: the URL is
+	// 29 bytes and the suffix is 380, so the last 400 bytes begin at offset 9.
+	output := "https://user:" + secret + "@host/repo" + strings.Repeat("B", 380)
+	run := func(context.Context, []string, []string) ([]byte, error) {
+		return []byte(output), errors.New("exit status 128")
+	}
+	source := gitSource{run: run}
+	err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil)
+	if err == nil {
+		t.Fatal("Clone succeeded although git failed")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("truncated error leaked the credential: %v", err)
+	}
+}
+
 // TestRedactCloneURLAndError pins the redaction shapes directly, so the
 // regex cannot silently widen (mangling harmless text) or narrow (leaving a
-// bare-user credential in place).
+// credential in place), and the parse-failure fallback never returns a
+// credential-bearing string raw.
 func TestRedactCloneURLAndError(t *testing.T) {
 	cases := []struct {
-		in   string
-		want string
+		in       string
+		want     string
+		notLeaks []string
 	}{
-		{"https://user:pass@host/repo.git", "https://host/repo.git"},
-		{"https://token@host/repo.git", "https://host/repo.git"},
-		{"git@host:acme/demo.git", "git@host:acme/demo.git"}, // scp-like, not a URL
-		{"https://host/repo.git", "https://host/repo.git"},   // nothing to strip
-		{"ssh://git@host/repo.git", "ssh://host/repo.git"},   // userinfo (git) hidden too
+		{"https://user:pass@host/repo.git", "https://host/repo.git", []string{"user:pass"}},
+		{"https://token@host/repo.git", "https://host/repo.git", []string{"token@"}},
+		{"git@host:acme/demo.git", "git@host:acme/demo.git", nil},                                 // scp-like, no userinfo
+		{"https://host/repo.git", "https://host/repo.git", nil},                                   // nothing to strip
+		{"ssh://git@host/repo.git", "ssh://host/repo.git", []string{"git@"}},                      // userinfo (git) hidden too
+		{"https://user:p@ss@host/repo.git", "https://host/repo.git", []string{"p@ss", "ss@host"}}, // literal '@' in password
+		// url.Parse rejects the invalid escape; the fallback must still redact.
+		{"https://user:secret%zz@host/repo.git", "https://***@host/repo.git", []string{"secret"}},
 	}
 	for _, tc := range cases {
 		if got := redactCloneURL(tc.in); got != tc.want {
 			t.Errorf("redactCloneURL(%q) = %q, want %q", tc.in, got, tc.want)
 		}
-		if got := redactCloneError("fatal: could not read from '" + tc.in + "'"); strings.Contains(got, "pass@") || strings.Contains(got, "token@") {
-			t.Errorf("redactCloneError left a credential in %q", got)
+		got := redactCloneError("fatal: could not read from '" + tc.in + "'")
+		for _, leak := range tc.notLeaks {
+			if strings.Contains(got, leak) {
+				t.Errorf("redactCloneError(%q) left %q in %q", tc.in, leak, got)
+			}
 		}
 	}
 	// Harmless git diagnostics must survive untouched.

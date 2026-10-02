@@ -707,6 +707,12 @@ func TestUnresolvedPreviousContainerFailsDeployClosed(t *testing.T) {
 	if _, err := player.Deploy(context.Background(), userID, app.ID); err == nil {
 		t.Fatal("deploy succeeded although the previous container could not be resolved")
 	}
+	// The failed deploy must leave exactly one terminal row behind: without
+	// this, the loop below passes vacuously when Deploy fails before creating
+	// the deployment.
+	if len(repo.deployments) != 1 {
+		t.Fatalf("deployments = %d, want exactly one (the fresh failed row)", len(repo.deployments))
+	}
 	for _, dep := range repo.deployments {
 		if dep.ApplicationID != app.ID {
 			continue

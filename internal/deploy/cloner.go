@@ -133,7 +133,7 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		return fmt.Errorf("git clone: %w", ctx.Err())
 	}
 	if err != nil {
-		return fmt.Errorf("git clone: %w: %s", err, redactCloneError(tail(string(output), 400)))
+		return fmt.Errorf("git clone: %w: %s", err, tail(redactCloneError(string(output)), 400))
 	}
 	if log != nil {
 		log("repository cloned (" + branch + ")")
@@ -362,17 +362,21 @@ func tail(s string, n int) string {
 // redactCloneURL removes the userinfo from a clone URL before it is logged:
 // an operator-supplied URL may carry a token
 // (https://x-access-token:ghp_…@host/repo) and the realtime deploy log is
-// visible to the application's team. Only URL shapes (http/https/ssh/git) are
-// parsed; a scp-like git@host:path and every other shape are returned
-// unchanged.
+// visible to the application's team. It never returns a credential-bearing
+// string raw: a URL url.Parse rejects falls back to the regex redaction, and a
+// scp-like git@host:path (no userinfo to strip) is returned unchanged.
 func redactCloneURL(raw string) string {
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.User == nil {
+	if err != nil {
+		// An unparseable URL can still be logged verbatim by callers, so
+		// redact it by pattern rather than trusting Parse to have validated
+		// it. Only a string with an authority can carry userinfo.
+		if strings.Contains(raw, "://") {
+			return redactCloneError(raw)
+		}
 		return raw
 	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "http", "https", "ssh", "git":
-	default:
+	if parsed.User == nil {
 		return raw
 	}
 	parsed.User = nil
@@ -382,13 +386,17 @@ func redactCloneURL(raw string) string {
 // redactCloneError strips embedded credentials from a quoted git error tail:
 // some git versions echo the URL they were handed, so the token could reach
 // the deploy log through stderr even though the command line never logs it.
+// It runs on the untruncated output (see Clone), so a cut inside the userinfo
+// can never expose the remainder.
 func redactCloneError(msg string) string {
 	return userinfoPattern.ReplaceAllString(msg, "$1***@")
 }
 
 // userinfoPattern matches the credential half of a URL that carries one:
 // <scheme>://<user>:<password>@. The password is optional (a bare user or a
-// token-as-user must be hidden too). It is best effort — a hostile URL is
-// never trusted, only hidden — and deliberately narrow so it cannot mangle the
-// hostless diagnostic text git usually emits.
-var userinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@`)
+// token-as-user must be hidden too), and the match runs to the LAST '@' before
+// the path so a literal '@' inside the password cannot leave a suffix behind.
+// It is best effort — a hostile URL is never trusted, only hidden — and
+// deliberately bounded so it cannot mangle the hostless diagnostic text git
+// usually emits.
+var userinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s]+@`)

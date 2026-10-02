@@ -354,6 +354,11 @@ func TestStoreListEnvConfigIsOneSnapshot(t *testing.T) {
 
 	envKeys := keysOf(envVars)
 	secretKeys := secretKeysOf(secrets)
+	// Both reads must return their collection: a vacuous comparison below would
+	// pass on an empty read, which is exactly the failure mode under test.
+	if len(envKeys) != 1 || len(secretKeys) != 1 {
+		t.Fatalf("read env %v secrets %v, want exactly one of each", envKeys, secretKeys)
+	}
 	// Both reads must be the same snapshot: either the old pair or the new
 	// pair, never old plain with new secret.
 	if len(envKeys) == 1 && envKeys[0] == "OLD_PLAIN" {

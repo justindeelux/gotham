@@ -180,3 +180,23 @@ func TestStaticEngineE2E(t *testing.T) {
 		t.Error("Build returned an empty digest")
 	}
 }
+
+// TestLocalDockerBuilderDockerHost pins the endpoint handed to toolchain CLIs:
+// the toolchain runs with a stripped environment, so the builder must carry a
+// usable DOCKER_HOST itself.
+func TestLocalDockerBuilderDockerHost(t *testing.T) {
+	for _, tc := range []struct{ host, want string }{
+		{host: "", want: ""},
+		{host: "/var/run/docker.sock", want: "unix:///var/run/docker.sock"},
+		{host: "unix:///run/docker.sock", want: "unix:///run/docker.sock"},
+		{host: "tcp://127.0.0.1:2375", want: "tcp://127.0.0.1:2375"},
+	} {
+		builder, err := NewLocalDockerBuilderWithHost(tc.host)
+		if err != nil {
+			t.Fatalf("NewLocalDockerBuilderWithHost(%q): %v", tc.host, err)
+		}
+		if builder.dockerHost != tc.want {
+			t.Errorf("dockerHost(%q) = %q; want %q", tc.host, builder.dockerHost, tc.want)
+		}
+	}
+}

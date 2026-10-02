@@ -22,6 +22,9 @@ import (
 type LocalDockerBuilder struct {
 	http    *http.Client
 	baseURL string
+	// dockerHost is the DOCKER_HOST value handed to a toolchain CLI. The
+	// toolchain runs with a stripped environment, so it cannot inherit it.
+	dockerHost string
 }
 
 // Compile-time guarantee that the local builder satisfies the seam.
@@ -40,7 +43,26 @@ func NewLocalDockerBuilderWithHost(host string) (*LocalDockerBuilder, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &LocalDockerBuilder{http: &http.Client{Transport: transport}, baseURL: baseURL}, nil
+	return &LocalDockerBuilder{
+		http:       &http.Client{Transport: transport},
+		baseURL:    baseURL,
+		dockerHost: dockerHostEnv(host),
+	}, nil
+}
+
+// dockerHostEnv normalises a Docker endpoint into a DOCKER_HOST value for a
+// child process. An empty host and the default socket are left empty so the CLI
+// uses its own default.
+func dockerHostEnv(host string) string {
+	host = strings.TrimSpace(host)
+	switch {
+	case host == "":
+		return ""
+	case strings.HasPrefix(host, "/"):
+		return "unix://" + host
+	default:
+		return host
+	}
 }
 
 // Build implements ImageBuilder by POSTing the context tarball to the daemon's
@@ -109,8 +131,9 @@ func (b *LocalDockerBuilder) Build(ctx context.Context, contextTar []byte, opts 
 
 // buildToolchain extracts the raw source context to a temporary directory and
 // runs the toolchain in this process, then reports the built image's digest.
-// It is the dev/test counterpart of the node agent's toolchain build: the CLI
-// reads DOCKER_HOST from the process environment.
+// It is the dev/test counterpart of the node agent's toolchain build. The
+// toolchain runs with a stripped environment, so the builder passes its Docker
+// endpoint explicitly as DOCKER_HOST.
 func (b *LocalDockerBuilder) buildToolchain(ctx context.Context, contextTar []byte, opts ImageBuildOptions) (ImageBuildResult, error) {
 	dir, err := os.MkdirTemp("", "gotham-buildtool-*")
 	if err != nil {
@@ -123,10 +146,11 @@ func (b *LocalDockerBuilder) buildToolchain(ctx context.Context, contextTar []by
 	}
 	var logs bytes.Buffer
 	runErr := buildtool.Run(ctx, buildtool.Engine(opts.Engine), buildtool.Options{
-		Dir:       dir,
-		Tag:       opts.Tag,
-		BuildArgs: opts.BuildArgs,
-		LogWriter: &logs,
+		Dir:        dir,
+		Tag:        opts.Tag,
+		BuildArgs:  opts.BuildArgs,
+		LogWriter:  &logs,
+		DockerHost: b.dockerHost,
 	})
 	result := ImageBuildResult{Logs: logs.String()}
 	if runErr != nil {

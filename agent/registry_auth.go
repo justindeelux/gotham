@@ -99,8 +99,6 @@ func prepareRegistryAuth(stateDir string) (registryAuth, string, bool, error) {
 				return registryAuth{}, "", false, err
 			}
 		}
-		// Written in place (never temp+rename): the file is bind-mounted, so a
-		// rename would swap the inode the running container sees.
 		if err := writeRegistryHtpasswd(htpasswdPath, auth); err != nil {
 			return registryAuth{}, "", false, err
 		}
@@ -119,6 +117,28 @@ func resolveRegistryStateDir(stateDir string) (string, error) {
 		return "", fmt.Errorf("docker: resolve registry state dir: %w", err)
 	}
 	return absolute, nil
+}
+
+// persistedRegistryAuth reads the stored credential without writing anything
+// and reports whether it is usable: the credential file exists and its htpasswd
+// currently matches. It is the pull-path loader; only EnsureRegistry may
+// generate or rewrite credentials.
+func persistedRegistryAuth(stateDir string) (registryAuth, bool, error) {
+	resolved, err := resolveRegistryStateDir(stateDir)
+	if err != nil {
+		return registryAuth{}, false, err
+	}
+	auth, err := readRegistryAuth(filepath.Join(resolved, registryCredentialFilename))
+	if err != nil {
+		return registryAuth{}, false, err
+	}
+	if auth.Username == "" || auth.Password == "" {
+		return registryAuth{}, false, nil
+	}
+	if !registryHtpasswdMatches(filepath.Join(resolved, registryHtpasswdFilename), auth) {
+		return registryAuth{}, false, nil
+	}
+	return auth, true, nil
 }
 
 // registryHtpasswdMatches reports whether the htpasswd file exists and already
@@ -175,7 +195,11 @@ func writeRegistryHtpasswd(path string, auth registryAuth) error {
 	return writeSecretFile(path, []byte(line))
 }
 
-// writeSecretFile writes data mode 0600, truncating any existing file.
+// writeSecretFile overwrites path in place (O_TRUNC), never temp+rename. The
+// htpasswd file is bind-mounted; PrepareRegistryAuth is only reached under the
+// registry bootstrap lock, and EnsureRegistry recreates the container whenever
+// the credential was rewritten, so the running container never observes a
+// half-written file and picks up the new inode on recreation.
 func writeSecretFile(path string, data []byte) error {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, registryAuthFileMode)
 	if err != nil {

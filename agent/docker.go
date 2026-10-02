@@ -437,13 +437,19 @@ func (c *DockerClient) ensureRegistryCredentialFor(ctx context.Context, image st
 		// No live gotham-managed registry to authenticate against.
 		return nil
 	}
-	if registryHostPort(info) != addr {
+	if !registryManaged(info) || registryHostPort(info) != addr {
 		return nil
 	}
 
-	auth, _, _, err := prepareRegistryAuth(c.registryStateDir)
+	auth, ok, err := persistedRegistryAuth(c.registryStateDir)
 	if err != nil {
 		return err
+	}
+	if !ok {
+		// No stored credential yet, or the htpasswd no longer matches: leave
+		// this pull anonymous. EnsureRegistry owns credential generation and
+		// container recreation, so the pull path never writes.
+		return nil
 	}
 	auth.Address = addr
 	c.mu.Lock()

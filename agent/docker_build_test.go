@@ -565,17 +565,19 @@ func TestDockerClientEnsureRegistryReusesRunningContainer(t *testing.T) {
 	}
 }
 
-// TestDockerClientEnsureRegistryRecreatesOnStaleCredentialMount covers the
-// persistent-container/stale-htpasswd case: the running container mounts a
-// different htpasswd source (a new state dir, or the file was regenerated), so
-// it must be recreated rather than left 401ing.
+// TestDockerClientEnsureRegistryRecreatesOnStaleCredentialMount isolates the
+// mount-source guard: the credential is seeded and matches (reused=true), but
+// the running container mounts a different htpasswd path, so only
+// registryMountsPath can trigger recreation.
 func TestDockerClientEnsureRegistryRecreatesOnStaleCredentialMount(t *testing.T) {
+	stateDir, _ := seedRegistryState(t)
+	staleSource := filepath.Join(t.TempDir(), registryHtpasswdFilename)
 	engine := &registryTestEngine{
 		exists: true, running: true, managed: true,
 		hostPort: "5001", publishedPort: "5001",
-		htpasswdSource: filepath.Join(t.TempDir(), registryHtpasswdFilename),
+		htpasswdSource: staleSource,
 	}
-	client := newTestDockerClientWithStateDir(t, engine.handler(t), t.TempDir())
+	client := newTestDockerClientWithStateDir(t, engine.handler(t), stateDir)
 
 	address, err := client.EnsureRegistry(context.Background())
 	if err != nil {
@@ -588,8 +590,37 @@ func TestDockerClientEnsureRegistryRecreatesOnStaleCredentialMount(t *testing.T)
 		t.Fatalf("removals = %d, pulls = %d, creates = %d, starts = %d; want 1 each",
 			engine.removals, engine.pulls, engine.creates, engine.starts)
 	}
-	if !strings.HasSuffix(engine.htpasswdSource, registryHtpasswdFilename) {
-		t.Errorf("recreated htpasswd source = %q", engine.htpasswdSource)
+	if engine.htpasswdSource == staleSource {
+		t.Errorf("recreated container still mounts the stale source %q", staleSource)
+	}
+}
+
+// TestDockerClientEnsureRegistryRecreatesOnRewrittenCredential isolates the
+// !reused guard: the credential is seeded and the mount path still matches, but
+// the htpasswd file is deleted, so prepareRegistryAuth must rewrite it (a new
+// inode) and the container must be recreated to pick it up.
+func TestDockerClientEnsureRegistryRecreatesOnRewrittenCredential(t *testing.T) {
+	stateDir, htpasswdPath := seedRegistryState(t)
+	engine := &registryTestEngine{
+		exists: true, running: true, managed: true,
+		hostPort: "5001", publishedPort: "5001", htpasswdSource: htpasswdPath,
+	}
+	client := newTestDockerClientWithStateDir(t, engine.handler(t), stateDir)
+
+	if err := os.Remove(htpasswdPath); err != nil {
+		t.Fatalf("remove htpasswd: %v", err)
+	}
+
+	address, err := client.EnsureRegistry(context.Background())
+	if err != nil {
+		t.Fatalf("ensure registry: %v", err)
+	}
+	if address != "127.0.0.1:"+engine.hostPort {
+		t.Fatalf("address = %q", address)
+	}
+	if engine.removals != 1 || engine.pulls != 1 || engine.creates != 1 || engine.starts != 1 {
+		t.Fatalf("removals = %d, pulls = %d, creates = %d, starts = %d; want 1 each",
+			engine.removals, engine.pulls, engine.creates, engine.starts)
 	}
 }
 
@@ -793,8 +824,8 @@ func TestRegistryAuthFilesArePrivate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat htpasswd after reload: %v", err)
 	}
-	if !after.ModTime().Equal(before.ModTime()) {
-		t.Error("a matching credential was rewritten")
+	if !os.SameFile(before, after) {
+		t.Error("a matching credential was rewritten (inode changed)")
 	}
 }
 
@@ -893,11 +924,20 @@ func TestEnsureRegistryRequiresStateDir(t *testing.T) {
 }
 
 // TestEnsureRegistryCredentialRequiresLiveRegistry checks the lazy credential
-// load only attaches the credential when a live registry actually publishes the
-// address named by the image, so a stale reference cannot hand the credential
-// to another local process.
+// load only attaches the credential when a live, gotham-managed registry
+// actually publishes the address named by the image, so a stale reference or a
+// same-named container cannot be handed the node credential.
 func TestEnsureRegistryCredentialRequiresLiveRegistry(t *testing.T) {
 	image := "127.0.0.1:5000/gotham/web:dep"
+
+	newClient := func(managed bool, port string) *DockerClient {
+		stateDir, _ := seedRegistryState(t)
+		engine := &registryTestEngine{
+			exists: true, running: true, managed: managed,
+			hostPort: port, publishedPort: port,
+		}
+		return newTestDockerClientWithStateDir(t, engine.handler(t), stateDir)
+	}
 
 	// No container: no credential.
 	absent := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -910,9 +950,17 @@ func TestEnsureRegistryCredentialRequiresLiveRegistry(t *testing.T) {
 		t.Error("credential attached without a live registry")
 	}
 
-	// A live registry on a different port than the image: no credential.
-	other := &registryTestEngine{exists: true, running: true, managed: true, hostPort: "5001", publishedPort: "5001"}
-	mismatch := newTestDockerClient(t, other.handler(t))
+	// A non-gotham container with the right port must not get the credential.
+	unmanaged := newClient(false, "5000")
+	if err := unmanaged.ensureRegistryCredentialFor(context.Background(), image); err != nil {
+		t.Fatalf("unmanaged registry: %v", err)
+	}
+	if unmanaged.registryAuth.Username != "" {
+		t.Error("credential attached to a container gotham does not manage")
+	}
+
+	// A managed registry on a different port than the image: no credential.
+	mismatch := newClient(true, "5001")
 	if err := mismatch.ensureRegistryCredentialFor(context.Background(), image); err != nil {
 		t.Fatalf("mismatched registry: %v", err)
 	}
@@ -920,14 +968,36 @@ func TestEnsureRegistryCredentialRequiresLiveRegistry(t *testing.T) {
 		t.Error("credential attached for a mismatched registry address")
 	}
 
-	// A live registry publishing the image's address: credential attached.
-	match := &registryTestEngine{exists: true, running: true, managed: true, hostPort: "5000", publishedPort: "5000"}
-	live := newTestDockerClient(t, match.handler(t))
+	// A managed registry publishing the image's address: credential attached.
+	live := newClient(true, "5000")
 	if err := live.ensureRegistryCredentialFor(context.Background(), image); err != nil {
 		t.Fatalf("live registry: %v", err)
 	}
 	if live.registryAuth.Username == "" || live.registryAuth.Address != "127.0.0.1:5000" {
 		t.Errorf("registry auth = %+v; want the live credential", live.registryAuth)
+	}
+}
+
+// TestEnsureRegistryCredentialPullPathDoesNotWrite checks the pull path never
+// generates or rewrites the credential: with no stored credential it stays
+// anonymous and creates no files.
+func TestEnsureRegistryCredentialPullPathDoesNotWrite(t *testing.T) {
+	stateDir := t.TempDir()
+	engine := &registryTestEngine{exists: true, running: true, managed: true, hostPort: "5000", publishedPort: "5000"}
+	client := newTestDockerClientWithStateDir(t, engine.handler(t), stateDir)
+
+	if err := client.ensureRegistryCredentialFor(context.Background(), "127.0.0.1:5000/gotham/web:dep"); err != nil {
+		t.Fatalf("pull path: %v", err)
+	}
+	if client.registryAuth.Username != "" {
+		t.Error("pull path attached a credential")
+	}
+	entries, err := os.ReadDir(stateDir)
+	if err != nil {
+		t.Fatalf("read state dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("pull path wrote %d files to the state dir; want none", len(entries))
 	}
 }
 

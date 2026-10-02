@@ -8,6 +8,7 @@ import { isApiError } from "./servers";
  *   POST /servers/{id}/containers/{containerID}/start
  *   POST /servers/{id}/containers/{containerID}/stop
  *   POST /servers/{id}/containers/{containerID}/restart
+ *   POST /servers/{id}/containers/{containerID}/logs/stream
  *   POST /servers/{id}/images/pull
  *   POST /servers/{id}/containers/run
  *
@@ -142,6 +143,23 @@ export async function runContainer(
     input,
   );
   return response.data.container_id;
+}
+
+/**
+ * startContainerLogStream asks the control plane to bridge one container's
+ * agent log stream into the realtime channel. It is idempotent per container,
+ * so repeated mounts share one agent stream, and the stream is reaped once no
+ * WebSocket subscriber remains. Call it before subscribing the log viewer.
+ */
+export async function startContainerLogStream(
+  serverId: string,
+  containerId: string,
+): Promise<string> {
+  const response = await http.post<{ channel: string }>(
+    `/servers/${serverId}/containers/${encodeURIComponent(containerId)}/logs/stream`,
+    {},
+  );
+  return response.data.channel;
 }
 
 /** describeContainerError maps a thrown error to a user-facing message. */

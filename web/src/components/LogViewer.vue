@@ -2,6 +2,10 @@
 import { NButton } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import {
+  describeContainerError,
+  startContainerLogStream,
+} from "../api/containers";
 import { getAccessToken } from "../api/token";
 import type { WebSocketMessage } from "../composables/useWebSocket";
 import { useWebSocket } from "../composables/useWebSocket";
@@ -25,6 +29,12 @@ interface Props {
   subtitle?: string;
   /** Explicit channel override; defaults to `logs:{serverId}:{containerId}`. */
   channel?: string;
+  /**
+   * When true, ask the control plane to bridge the agent log stream on mount.
+   * Only valid for raw container logs (`logs:{serverId}:{containerId}`); the
+   * deploy-log wrapper leaves it off because its channel is already published.
+   */
+  autoStartStream?: boolean;
   /** Realtime endpoint path. */
   wsPath?: string;
   /** Maximum rendered lines before the oldest are dropped. */
@@ -35,6 +45,7 @@ const props = withDefaults(defineProps<Props>(), {
   title: "",
   subtitle: "",
   channel: "",
+  autoStartStream: false,
   wsPath: "/api/v1/ws",
   maxLines: 2000,
 });
@@ -257,15 +268,39 @@ function downloadLog(): void {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * requestStreamStart asks the control plane to bridge this container's agent
+ * log stream into the realtime channel. The viewer only subscribes otherwise,
+ * so without this call a raw container produces no frames (B2-1). A failure is
+ * surfaced as a notice rather than leaving the drawer silently empty.
+ */
+function requestStreamStart(): void {
+  if (!props.autoStartStream || !props.serverId || !props.containerId) {
+    return;
+  }
+  void startContainerLogStream(props.serverId, props.containerId).catch(
+    (error: unknown) => {
+      appendLine({
+        id: ++lineId,
+        ts: formatTimestamp(null, Date.now()),
+        text: `Could not start log stream: ${describeContainerError(error)}`,
+        kind: "notice",
+      });
+    },
+  );
+}
+
 watch(channelName, (next, previous) => {
   if (previous) {
     unsubscribeChannel(previous);
   }
+  requestStreamStart();
   subscribeChannel(next);
 });
 
 onMounted(() => {
   connectStream();
+  requestStreamStart();
   subscribeChannel(channelName.value);
 });
 

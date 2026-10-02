@@ -101,10 +101,13 @@ type Server struct {
 	sessionSweeper    *auth.SessionSweeper
 	databasesRetainer *databases.RetentionSweeper
 	updates           updates.Service
-	authLimiter       *ipRateLimiter
-	refreshLimiter    *ipRateLimiter
-	router            http.Handler
-	closer            func()
+	// realtime is the mounted WebSocket hub, Redis bridge and log-stream
+	// manager; the closer owns its lifecycle.
+	realtime       *ws.Realtime
+	authLimiter    *ipRateLimiter
+	refreshLimiter *ipRateLimiter
+	router         http.Handler
+	closer         func()
 
 	// trustedProxies are the peers whose X-Forwarded-For / X-Forwarded-Proto
 	// headers are honored for client-IP keying and scheme detection. Empty
@@ -172,6 +175,13 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		jobLeases:         databases.NewJobLeases(),
 	}
 	s.closer = func() {
+		// The realtime hub, bridge and log streams stop first: they hold their
+		// own Redis client and publish to clients while the rest of the plane
+		// shuts down. Closing them here releases Redis connections and lets
+		// connection handlers finish instead of leaking past shutdown (B1-8).
+		if s.realtime != nil {
+			s.realtime.Close()
+		}
 		// The deploy service owns its worker pool and realtime publisher;
 		// shutting it down first stops in-flight deployments before the
 		// shared Redis pinger goes away. The backup service stops its cron
@@ -388,8 +398,18 @@ func (s *Server) routes() (http.Handler, error) {
 
 		// Shared realtime channel (WS + Redis pub/sub); auth via query token.
 		// Log subscriptions are authorized against the node's team before the
-		// client joins the room.
-		ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger, s.authorizeLogSubscription)
+		// client joins the room. The returned Realtime owns the lifecycle
+		// (bridge, Redis, hub) and is closed by s.closer.
+		s.realtime = ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger, s.authorizeLogSubscription)
+
+		// Starting a container log stream. The FE drawer calls this on mount;
+		// the stream is idempotent per channel and reaped once no subscriber
+		// remains. It is a read surface, so it takes the read scope rather than
+		// the team write gate (log viewing is allowed for every team role).
+		api.Group(func(protected chi.Router) {
+			protected.Use(s.readScopeAuth)
+			protected.Post("/v1/servers/{id}/containers/{containerID}/logs/stream", s.handleStartLogStream)
+		})
 
 		// Source providers (GitHub/GitLab/Gitea): list connections and repos.
 		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger)

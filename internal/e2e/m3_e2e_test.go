@@ -15,6 +15,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -111,14 +112,6 @@ func TestM3EndToEnd(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = svc.Close() })
 
-	// A dedicated connection tails logs for the WS subscriber, mirroring the
-	// control-plane side of the realtime pipeline.
-	logClient, err := servers.DialDockerClient(ctx, agentAddr, authority, servers.WithDockerServerName(nodeID))
-	if err != nil {
-		t.Fatalf("dial agent for logs: %v", err)
-	}
-	t.Cleanup(func() { _ = logClient.Close() })
-
 	// 4. M3: list the node's containers through the service.
 	baseline := mustList(t, ctx, svc, serverID)
 	t.Logf("listed %d pre-existing container(s) on %s", len(baseline), nodeID)
@@ -197,10 +190,11 @@ func TestM3EndToEnd(t *testing.T) {
 	}
 	waitForState(t, ctx, svc, serverID, logsID, "running")
 
-	// Mount the production WS endpoint, hub and Redis bridge.
+	// Mount the production WS endpoint, hub, supervised Redis bridge and the
+	// log-stream manager.
 	api := chi.NewRouter()
-	hub := ws.Mount(api, acceptAnyToken{}, redisAddr, logger, nil)
-	t.Cleanup(hub.Close)
+	rt := ws.Mount(api, acceptAnyToken{}, redisAddr, logger, nil)
+	t.Cleanup(rt.Close)
 	httpServer := httptest.NewServer(api)
 	t.Cleanup(httpServer.Close)
 
@@ -214,19 +208,24 @@ func TestM3EndToEnd(t *testing.T) {
 	}
 	waitBridgeReady(t, ctx, rdb, messages, errs, channel, "bridge-ready-"+suffix)
 
-	// Tail the container through the control-plane publisher: agent gRPC
-	// stream -> Redis channel -> bridge -> hub -> WebSocket client.
-	publishCtx, publishCancel := context.WithCancel(context.Background())
-	defer publishCancel()
-	streamDone := make(chan error, 1)
-	go func() {
-		streamDone <- ws.PublishStream(publishCtx, logClient, ws.RedisPublisher{RDB: rdb},
-			serverID.String(), logsID, &agentv1.StreamLogsRequest{
-				ContainerId: logsID,
-				Follow:      true,
-				Tail:        20,
-			})
-	}()
+	// Tail the container through the production start path: the manager dials
+	// the agent, PublishStream reads real chunks, Redis carries them to the
+	// bridge, and the hub fans them out to the WebSocket client. No test code
+	// broadcasts log frames directly.
+	opener := func(dialCtx context.Context) (ws.LogStreamer, io.Closer, error) {
+		client, dialErr := servers.DialDockerClient(dialCtx, agentAddr, authority, servers.WithDockerServerName(nodeID))
+		if dialErr != nil {
+			return nil, nil, dialErr
+		}
+		return client, client, nil
+	}
+	if err := rt.StartLogStream(opener, serverID.String(), logsID, &agentv1.StreamLogsRequest{
+		ContainerId: logsID,
+		Follow:      true,
+		Tail:        20,
+	}); err != nil {
+		t.Fatalf("rt.StartLogStream: %v", err)
+	}
 
 	chunks := 0
 	for chunks < 2 {
@@ -255,15 +254,13 @@ func TestM3EndToEnd(t *testing.T) {
 	if strings.TrimSpace(disconnect.Data) == "" {
 		t.Error("disconnect notice has an empty reason")
 	}
-	select {
-	case err := <-streamDone:
-		if err == nil {
-			t.Error("PublishStream = nil, want an error once the container dies")
-		} else {
-			t.Logf("PublishStream ended: %v", err)
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("PublishStream did not return after the container stopped")
+	// The manager removes the finished stream, so it does not linger.
+	deadline := time.Now().Add(15 * time.Second)
+	for rt.ActiveStreams() != 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := rt.ActiveStreams(); got != 0 {
+		t.Errorf("ActiveStreams after the container stopped = %d, want 0", got)
 	}
 
 	t.Logf("M3 e2e ok: node=%s nginx=%s logs=%s marker=%s", nodeID, shortID(nginxID), channel, marker)

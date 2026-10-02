@@ -2,6 +2,7 @@ package ws
 
 import (
 	"sync"
+	"sync/atomic"
 )
 
 // Message is the JSON envelope exchanged with WebSocket clients.
@@ -17,17 +18,58 @@ const (
 	TypeDisconnect = "disconnect"
 	TypeSubscribed = "subscribed"
 	// TypeDenied reports a subscription the server refused (the client never
-	// joined the channel).
+	// joined the channel). An older client that does not know the type ignores
+	// the frame, so adding it stays backward compatible.
 	TypeDenied = "denied"
+	// TypePing is the server heartbeat. It is a no-op for clients that do not
+	// know the type; its purpose is to keep a write in flight so a dead peer
+	// fails the connection's write deadline (see handler.serveConn).
+	TypePing = "ping"
 )
+
+// clientSendBuffer bounds how many frames may queue for one connection before
+// the hub starts dropping (and eventually disconnecting) a slow reader.
+const clientSendBuffer = 64
+
+// slowClientDropLimit is how many consecutive dropped frames mark a client as
+// too slow to keep. A single successful delivery resets the run.
+const slowClientDropLimit = 8
 
 // Client is one WebSocket connection attached to the hub.
 type Client struct {
 	hub  *Hub
 	send chan []byte
+	// kick is closed once when the hub decides the client must go (slow reader
+	// or hub shutdown). serveConn selects on it and releases the connection.
+	kick     chan struct{}
+	kickOnce sync.Once
+	// dropRun counts consecutive broadcast drops for this client. Only the hub
+	// goroutine touches it, so it needs no lock.
+	dropRun int
 
 	mu       sync.Mutex
 	channels map[string]bool
+}
+
+// kickClient signals serveConn to stop. Safe to call more than once.
+func (c *Client) kickClient() {
+	c.kickOnce.Do(func() { close(c.kick) })
+}
+
+// deliver enqueues payload without blocking. It reports false when the send
+// buffer is full, in which case the caller counts a drop.
+func (c *Client) deliver(payload []byte) bool {
+	select {
+	case c.send <- payload:
+		c.dropRun = 0
+		return true
+	default:
+		c.dropRun++
+		if c.dropRun >= slowClientDropLimit {
+			c.kickClient()
+		}
+		return false
+	}
 }
 
 // Hub fans out published payloads to subscribed clients. The zero value is
@@ -41,6 +83,10 @@ type Hub struct {
 	mu      sync.RWMutex
 	clients map[*Client]struct{}
 	rooms   map[string]map[*Client]struct{}
+
+	// dropped counts frames the hub discarded because a client's send buffer
+	// was full. It makes silent drops observable (and testable).
+	dropped atomic.Uint64
 
 	done chan struct{}
 	once sync.Once
@@ -75,6 +121,14 @@ func (h *Hub) Run() {
 	for {
 		select {
 		case <-h.done:
+			// Wake every attached connection so no serveConn goroutine survives
+			// the hub. Closing kick (not send) keeps a concurrent broadcast
+			// from ever sending on a closed channel.
+			h.mu.Lock()
+			for c := range h.clients {
+				c.kickClient()
+			}
+			h.mu.Unlock()
 			return
 		case c := <-h.register:
 			h.mu.Lock()
@@ -119,11 +173,8 @@ func (h *Hub) Run() {
 			h.mu.RLock()
 			members := h.rooms[b.channel]
 			for c := range members {
-				select {
-				case c.send <- b.payload:
-				default:
-					// Slow client: drop the message rather than blocking the
-					// whole room.
+				if !c.deliver(b.payload) {
+					h.dropped.Add(1)
 				}
 			}
 			h.mu.RUnlock()
@@ -131,31 +182,51 @@ func (h *Hub) Run() {
 	}
 }
 
-// Close stops the hub. Publish after Close is a no-op.
+// Close stops the hub and wakes every attached connection. Publish after
+// Close is a no-op.
 func (h *Hub) Close() {
 	h.once.Do(func() { close(h.done) })
 }
 
 // newClient attaches a connection send queue to the hub.
 func (h *Hub) newClient() *Client {
-	c := &Client{hub: h, send: make(chan []byte, 64), channels: make(map[string]bool)}
-	h.register <- c
+	c := &Client{
+		hub:      h,
+		send:     make(chan []byte, clientSendBuffer),
+		kick:     make(chan struct{}),
+		channels: make(map[string]bool),
+	}
+	select {
+	case h.register <- c:
+	case <-h.done:
+	}
 	return c
 }
 
-// remove detaches a client, releasing its room memberships.
+// remove detaches a client, releasing its room memberships. It never blocks
+// once the hub has shut down, so a connection finishing during shutdown cannot
+// deadlock (B1-9).
 func (h *Hub) remove(c *Client) {
-	h.unregister <- c
+	select {
+	case h.unregister <- c:
+	case <-h.done:
+	}
 }
 
 // subscribe adds the client to a channel.
 func (h *Hub) subscribe(c *Client, channel string) {
-	h.subCh <- subscription{client: c, channel: channel, subscribe: true}
+	select {
+	case h.subCh <- subscription{client: c, channel: channel, subscribe: true}:
+	case <-h.done:
+	}
 }
 
 // unsubscribe removes the client from a channel.
 func (h *Hub) unsubscribe(c *Client, channel string) {
-	h.subCh <- subscription{client: c, channel: channel, subscribe: false}
+	select {
+	case h.subCh <- subscription{client: c, channel: channel, subscribe: false}:
+	case <-h.done:
+	}
 }
 
 // Broadcast publishes payload to every client subscribed to channel. It is
@@ -173,6 +244,12 @@ func (h *Hub) Broadcast(channel string, payload []byte) {
 	default:
 		// Hub saturated: drop rather than block log streaming.
 	}
+}
+
+// Drops reports how many frames were dropped for slow clients. Exposed so the
+// condition is observable (metrics/tests) rather than silent.
+func (h *Hub) Drops() uint64 {
+	return h.dropped.Load()
 }
 
 // Subscribers reports how many clients listen on channel.

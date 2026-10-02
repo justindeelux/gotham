@@ -4,12 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
+
+// Bridge retry bounds. The supervisor starts at the minimum and doubles up to
+// the maximum, so an unreachable Redis at control-plane start is retried
+// forever instead of killing realtime for the process lifetime (B1-5).
+const (
+	bridgeMinBackoff = 250 * time.Millisecond
+	bridgeMaxBackoff = 30 * time.Second
+)
+
+// logPattern matches every container/deploy log channel.
+const logPattern = "logs:*:*"
 
 // LogChannel is the Redis channel carrying the logs of one container.
 func LogChannel(serverID, containerID string) string {
@@ -97,37 +110,140 @@ func PublishStream(ctx context.Context, streamer LogStreamer, pub Publisher, ser
 	}
 }
 
+// messageStream is the slice of a Redis subscription the bridge consumes: the
+// message channel plus a close func. It is a seam so the reconnect supervisor
+// can be tested without a live Redis.
+type messageStream struct {
+	messages <-chan *redis.Message
+	close    func()
+}
+
+// subscribeFunc opens a pattern subscription and blocks until it is confirmed,
+// so an unreachable Redis surfaces as an error here.
+type subscribeFunc func(ctx context.Context) (messageStream, error)
+
 // Bridge subscribes to the Redis log channels and forwards every message into
-// the hub. One bridge serves all channels via a pattern subscription.
+// the hub. One bridge serves all channels via a pattern subscription, and its
+// supervisor reconnects with bounded backoff whenever the subscription drops.
 type Bridge struct {
-	hub *Hub
-	rdb *redis.Client
+	hub    *Hub
+	rdb    *redis.Client
+	logger *slog.Logger
+
+	subscribe  subscribeFunc
+	minBackoff time.Duration
+	maxBackoff time.Duration
 }
 
-// NewBridge builds a Redis-to-hub bridge. The caller runs Run.
-func NewBridge(hub *Hub, rdb *redis.Client) *Bridge {
-	return &Bridge{hub: hub, rdb: rdb}
-}
-
-// Run forwards Redis messages on logs:*:* into the hub until ctx ends.
-func (b *Bridge) Run(ctx context.Context) error {
-	sub := b.rdb.PSubscribe(ctx, "logs:*:*")
-	defer func() { _ = sub.Close() }()
-
-	if _, err := sub.Receive(ctx); err != nil {
-		return fmt.Errorf("ws: redis subscribe: %w", err)
+// NewBridge builds a Redis-to-hub bridge. The caller runs Run. A nil logger
+// falls back to slog.Default.
+func NewBridge(hub *Hub, rdb *redis.Client, logger *slog.Logger) *Bridge {
+	if logger == nil {
+		logger = slog.Default()
 	}
+	b := &Bridge{
+		hub:        hub,
+		rdb:        rdb,
+		logger:     logger,
+		minBackoff: bridgeMinBackoff,
+		maxBackoff: bridgeMaxBackoff,
+	}
+	b.subscribe = b.redisSubscribe
+	return b
+}
 
-	messages := sub.Channel()
+// redisSubscribe opens the production pattern subscription.
+func (b *Bridge) redisSubscribe(ctx context.Context) (messageStream, error) {
+	sub := b.rdb.PSubscribe(ctx, logPattern)
+	if _, err := sub.Receive(ctx); err != nil {
+		_ = sub.Close()
+		return messageStream{}, fmt.Errorf("ws: redis subscribe: %w", err)
+	}
+	return messageStream{messages: sub.Channel(), close: func() { _ = sub.Close() }}, nil
+}
+
+// Run supervises the subscription until ctx ends, reconnecting with bounded
+// exponential backoff after every failure. It only returns on ctx cancellation
+// (or when the hub is done), so a Redis outage no longer silently disables
+// realtime forever.
+func (b *Bridge) Run(ctx context.Context) error {
+	backoff := b.minBackoff
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		stream, err := b.subscribe(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			b.logRetry("ws: redis bridge subscribe failed", err, backoff)
+			if !sleepContext(ctx, backoff) {
+				return ctx.Err()
+			}
+			backoff = nextBackoff(backoff, b.maxBackoff)
+			continue
+		}
+
+		backoff = b.minBackoff // a successful subscribe resets the ceiling
+		err = b.forward(ctx, stream.messages)
+		stream.close()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		b.logRetry("ws: redis bridge disconnected", err, backoff)
+		if !sleepContext(ctx, backoff) {
+			return ctx.Err()
+		}
+		backoff = nextBackoff(backoff, b.maxBackoff)
+	}
+}
+
+// forward copies messages into the hub until the subscription closes or ctx
+// ends.
+func (b *Bridge) forward(ctx context.Context, messages <-chan *redis.Message) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg, ok := <-messages:
 			if !ok {
-				return nil
+				return fmt.Errorf("ws: redis subscription closed")
 			}
 			b.hub.Broadcast(msg.Channel, []byte(msg.Payload))
 		}
+	}
+}
+
+// logRetry reports a bridge failure and the delay before the next attempt.
+func (b *Bridge) logRetry(message string, err error, retryIn time.Duration) {
+	b.logger.Warn(message, "error", err, "retry_in", retryIn)
+}
+
+// nextBackoff doubles delay up to max.
+func nextBackoff(delay, max time.Duration) time.Duration {
+	if delay <= 0 {
+		return bridgeMinBackoff
+	}
+	delay *= 2
+	if delay > max {
+		return max
+	}
+	return delay
+}
+
+// sleepContext waits for delay or ctx cancellation. It reports false when ctx
+// ended first.
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }

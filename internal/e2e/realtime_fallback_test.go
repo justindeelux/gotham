@@ -35,8 +35,8 @@ func TestRealtimePollFallback(t *testing.T) {
 	// An address nothing listens on: the disabled path must never dial it.
 	const unreachableRedis = "127.0.0.1:1"
 	api := chi.NewRouter()
-	hub := ws.Mount(api, acceptAnyToken{}, unreachableRedis, logger, nil)
-	t.Cleanup(hub.Close)
+	rt := ws.Mount(api, acceptAnyToken{}, unreachableRedis, logger, nil)
+	t.Cleanup(rt.Close)
 	server := httptest.NewServer(api)
 	t.Cleanup(server.Close)
 
@@ -59,7 +59,7 @@ func TestRealtimePollFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal hub payload: %v", err)
 	}
-	if err := (ws.HubPublisher{Hub: hub}).Publish(context.Background(), channel, payload); err != nil {
+	if err := (ws.HubPublisher{Hub: rt.Hub}).Publish(context.Background(), channel, payload); err != nil {
 		t.Fatalf("hub publish: %v", err)
 	}
 

@@ -364,7 +364,9 @@ func tail(s string, n int) string {
 // (https://x-access-token:ghp_…@host/repo) and the realtime deploy log is
 // visible to the application's team. It never returns a credential-bearing
 // string raw: a URL url.Parse rejects falls back to the regex redaction, and a
-// scp-like git@host:path (no userinfo to strip) is returned unchanged.
+// scp-like git@host:path (no userinfo to strip) is returned unchanged. The one
+// bound is whitespace, which cannot be part of a userinfo a git/curl client
+// could use (see userinfoPattern).
 func redactCloneURL(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -394,9 +396,12 @@ func redactCloneError(msg string) string {
 
 // userinfoPattern matches the credential half of a URL that carries one:
 // <scheme>://<user>:<password>@. The password is optional (a bare user or a
-// token-as-user must be hidden too), and the match runs to the LAST '@' before
-// the path so a literal '@' inside the password cannot leave a suffix behind.
-// It is best effort — a hostile URL is never trusted, only hidden — and
-// deliberately bounded so it cannot mangle the hostless diagnostic text git
-// usually emits.
-var userinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s]+@`)
+// token-as-user must be hidden too). The negated class excludes only
+// whitespace: it crosses both a literal '/' and a literal '@' in the password,
+// so the match runs to the LAST '@' in the whitespace-delimited token and
+// neither can leave a suffix behind. It is best effort — a hostile URL is never
+// trusted, only hidden. Userinfo containing whitespace cannot be matched
+// without swallowing unrelated diagnostic text, and such a URL is rejected by
+// git/curl, so it cannot carry a working credential. This is deliberately
+// bounded, so a credential-free message is never mangled.
+var userinfoPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s]+@`)

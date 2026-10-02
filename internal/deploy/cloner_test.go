@@ -976,12 +976,13 @@ func TestCloneRedactsURLCredentials(t *testing.T) {
 // TestCloneRedactsBeforeTruncation is the fix-round-1 regression: the git error
 // tail is redacted BEFORE the 400-byte truncation, so a cut landing inside the
 // userinfo cannot expose the credential suffix (tail would otherwise start at
-// "ser:secretpw@host/…").
+// "ser:secretpw@host/…"). The trailing assertion pins that truncation actually
+// happened, so the test cannot pass by never exercising a cut.
 func TestCloneRedactsBeforeTruncation(t *testing.T) {
 	const secret = "secretpw"
 	app := testApplication(uuid.New())
-	// Position the credential so tail(output, 400) starts inside it: the URL is
-	// 29 bytes and the suffix is 380, so the last 400 bytes begin at offset 9.
+	// The URL is 31 bytes and the suffix is 380, so the last 400 bytes of the
+	// pre-redaction output begin at offset 11, inside the userinfo.
 	output := "https://user:" + secret + "@host/repo" + strings.Repeat("B", 380)
 	run := func(context.Context, []string, []string) ([]byte, error) {
 		return []byte(output), errors.New("exit status 128")
@@ -990,6 +991,9 @@ func TestCloneRedactsBeforeTruncation(t *testing.T) {
 	err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil)
 	if err == nil {
 		t.Fatal("Clone succeeded although git failed")
+	}
+	if !strings.Contains(err.Error(), "…") {
+		t.Fatal("expected the error tail to be truncated")
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Errorf("truncated error leaked the credential: %v", err)
@@ -1014,6 +1018,9 @@ func TestRedactCloneURLAndError(t *testing.T) {
 		{"https://user:p@ss@host/repo.git", "https://host/repo.git", []string{"p@ss", "ss@host"}}, // literal '@' in password
 		// url.Parse rejects the invalid escape; the fallback must still redact.
 		{"https://user:secret%zz@host/repo.git", "https://***@host/repo.git", []string{"secret"}},
+		// A raw '/' in the password also fails Parse and must be redacted by the
+		// fallback rather than returned raw.
+		{"https://user:pa/ss@host/repo.git", "https://***@host/repo.git", []string{"pa/ss"}},
 	}
 	for _, tc := range cases {
 		if got := redactCloneURL(tc.in); got != tc.want {

@@ -338,7 +338,9 @@ func TestStoreListEnvConfigIsOneSnapshot(t *testing.T) {
 
 	// The seam commits a full replacement (new plain + new secret) between the
 	// two reads of ListEnvConfigByApp.
+	var seamFired int
 	st.AfterEnvReadBeforeSecrets = func() {
+		seamFired++
 		if err := st.ReplaceApplicationEnv(ctx, appID,
 			[]sqlc.InsertEnvVarParams{{Key: "NEW_PLAIN", Value: "1"}},
 			[]sqlc.InsertSecretParams{{ID: pgUUID(uuid.New()), Key: "NEW_SECRET", Ciphertext: "new"}},
@@ -350,6 +352,9 @@ func TestStoreListEnvConfigIsOneSnapshot(t *testing.T) {
 	envVars, secrets, err := st.ListEnvConfigByApp(ctx, appID)
 	if err != nil {
 		t.Fatalf("ListEnvConfigByApp: %v", err)
+	}
+	if seamFired == 0 {
+		t.Fatalf("seam never fired; the race was not exercised")
 	}
 
 	envKeys := keysOf(envVars)

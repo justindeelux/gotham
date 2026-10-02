@@ -50,8 +50,7 @@ func (fakeBindDocker) Logs(context.Context, string, bool, int64) (<-chan []byte,
 func TestAgentAcceptsTraefikProxyVolumes(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
-	agentv1.RegisterDockerServiceServer(server, agent.NewDockerServer(fakeBindDocker{},
-		testLogger(t), agent.WithProxyVolumeRoot(proxy.TraefikDir)))
+	agentv1.RegisterDockerServiceServer(server, agent.NewDockerServer(fakeBindDocker{}, testLogger(t)))
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
 

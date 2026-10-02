@@ -23,6 +23,16 @@ func volumeRequest(labels map[string]string, volumes ...string) *agentv1.CreateC
 	return &agentv1.CreateContainerRequest{Volumes: volumes, Labels: labels}
 }
 
+// proxyRequest builds a request carrying the managed proxy identity, which the
+// proxy branch requires before it may mount the node's proxy directory.
+func proxyRequest(volumes ...string) *agentv1.CreateContainerRequest {
+	return &agentv1.CreateContainerRequest{
+		Name:    defaultTraefikContainerName,
+		Volumes: volumes,
+		Labels:  map[string]string{labelComponent: componentProxy, "gotham.managed": "true"},
+	}
+}
+
 // TestValidateContainerVolumes pins the node-side rule per component: an
 // application bind is a direct child of <root>/<appID> and its named volumes
 // are namespaced; a proxy may mount the node's proxy directory; other managed
@@ -33,7 +43,6 @@ func TestValidateContainerVolumes(t *testing.T) {
 	appID := uuid.New()
 	appDir := filepath.Join(root, appID.String())
 	appLabels := map[string]string{labelAppID: appID.String()}
-	proxyLabels := map[string]string{labelComponent: componentProxy}
 	managedLabels := map[string]string{"gotham.managed": "true"}
 
 	cases := []struct {
@@ -52,10 +61,11 @@ func TestValidateContainerVolumes(t *testing.T) {
 		{name: "app bare named volume", req: volumeRequest(appLabels, "shared:/var/lib/app"), wantErr: true},
 		{name: "app bind without a label", req: volumeRequest(map[string]string{}, filepath.Join(appDir, "data")+":/data"), wantErr: true},
 		{name: "app non-uuid label", req: volumeRequest(map[string]string{labelAppID: "../.."}, filepath.Join(appDir, "data")+":/data"), wantErr: true},
-		{name: "proxy config directory", req: volumeRequest(proxyLabels, filepath.Join(proxyRoot, "conf")+":/etc/traefik:ro")},
-		{name: "proxy acme child", req: volumeRequest(proxyLabels, filepath.Join(proxyRoot, "conf", "acme")+":/acme")},
-		{name: "proxy outside its root", req: volumeRequest(proxyLabels, "/data/conf:/etc/traefik"), wantErr: true},
-		{name: "proxy etc", req: volumeRequest(proxyLabels, "/etc:/etc/traefik"), wantErr: true},
+		{name: "proxy config directory", req: proxyRequest(filepath.Join(proxyRoot, "conf") + ":/etc/traefik:ro")},
+		{name: "proxy acme child", req: proxyRequest(filepath.Join(proxyRoot, "conf", "acme") + ":/acme")},
+		{name: "proxy outside its root", req: proxyRequest("/data/conf:/etc/traefik"), wantErr: true},
+		{name: "proxy etc", req: proxyRequest("/etc:/etc/traefik"), wantErr: true},
+		{name: "proxy label without the proxy identity", req: volumeRequest(map[string]string{labelComponent: componentProxy}, filepath.Join(proxyRoot, "conf")+":/etc/traefik"), wantErr: true},
 		{name: "database named volume", req: volumeRequest(managedLabels, "gotham-db-x:/var/lib/postgresql/data")},
 		{name: "database absolute bind", req: volumeRequest(managedLabels, "/data/x:/var/lib/postgresql/data"), wantErr: true},
 		{name: "no volumes", req: volumeRequest(appLabels)},
@@ -176,8 +186,9 @@ func TestDockerServerRejectsOutOfRootBind(t *testing.T) {
 
 	proxy := &agentv1.CreateContainerRequest{
 		Image:   "traefik",
+		Name:    defaultTraefikContainerName,
 		Volumes: []string{filepath.Join(proxyRoot, "conf") + ":/etc/traefik:ro"},
-		Labels:  map[string]string{labelComponent: componentProxy},
+		Labels:  map[string]string{labelComponent: componentProxy, "gotham.managed": "true"},
 	}
 	if _, err := client.RunImage(context.Background(), proxy); err != nil {
 		t.Fatalf("proxy bind run = %v, want accepted", err)

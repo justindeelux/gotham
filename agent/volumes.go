@@ -62,6 +62,9 @@ func validateContainerVolumes(root, proxyRoot string, req *agentv1.CreateContain
 		}
 		switch {
 		case component == componentProxy:
+			if !isManagedProxy(labels, req.GetName()) {
+				return fmt.Errorf("%w: component=proxy requires the managed proxy container identity", ErrInvalidVolumeBind)
+			}
 			if err := validateProxyBind(proxyRoot, host); err != nil {
 				return err
 			}
@@ -103,9 +106,6 @@ func validateAppVolume(root, appID, host string) error {
 	}
 	base := filepath.Join(filepath.Clean(root), id.String())
 	cleaned := filepath.Clean(host)
-	if cleaned == base {
-		return fmt.Errorf("%w: host path %q must name a child of %s", ErrInvalidVolumeBind, host, base)
-	}
 	if filepath.Dir(cleaned) != base {
 		return fmt.Errorf("%w: host path %q must be a direct child of %s", ErrInvalidVolumeBind, host, base)
 	}
@@ -113,6 +113,16 @@ func validateAppVolume(root, appID, host string) error {
 		return fmt.Errorf("%w: host path %q: %v", ErrInvalidVolumeBind, host, err)
 	}
 	return nil
+}
+
+// isManagedProxy reports whether a request carries the node's managed proxy
+// identity: the fixed proxy container name and the gotham.managed label. This
+// keeps a merely relabelled container from reaching the proxy directory (and
+// its ACME private keys). A compromised control plane can still spoof both, so
+// this raises the bar rather than making the proxy branch tamper-proof.
+func isManagedProxy(labels map[string]string, name string) bool {
+	return strings.TrimSpace(name) == defaultTraefikContainerName &&
+		strings.TrimSpace(labels["gotham.managed"]) == "true"
 }
 
 // validateProxyBind checks a proxy container mount: it must live inside the

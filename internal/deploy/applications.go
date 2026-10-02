@@ -389,22 +389,24 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 	if _, err := s.application(ctx, userID, appID, true); err != nil {
 		return nil, err
 	}
-	s.warnBlankedStorages(ctx, appID, storages)
 	normalized, err := normalizeStorages(appID, storages)
 	if err != nil {
 		return nil, err
 	}
+	s.warnStorageChanges(ctx, appID, storages, normalized)
 	if err := s.repo.ReplaceStorages(ctx, appID, normalized); err != nil {
 		return nil, err
 	}
 	return s.GetStorages(ctx, userID, appID)
 }
 
-// warnBlankedStorages logs when a save clears a previously explicit host path.
-// The new binding derives a fresh managed directory, so the data on the old
-// path is left behind; the warning is the only signal an operator gets, since
-// moving or copying the data is intentionally out of scope.
-func (s *Service) warnBlankedStorages(ctx context.Context, appID uuid.UUID, next []Storage) {
+// warnStorageChanges logs when a save changes the resolved host source of an
+// existing storage row in a way that strands data: a previously explicit host
+// path blanked to a managed path, or a pre-change bare named volume silently
+// re-namespaced. An intentional explicit change is left to the operator, and a
+// re-save that resolves to the same value (the derived managed path) does not
+// warn.
+func (s *Service) warnStorageChanges(ctx context.Context, appID uuid.UUID, input, normalized []Storage) {
 	existing, err := s.repo.ListStorages(ctx, appID)
 	if err != nil {
 		return
@@ -413,11 +415,21 @@ func (s *Service) warnBlankedStorages(ctx context.Context, appID uuid.UUID, next
 	for _, row := range existing {
 		byName[row.Name] = row
 	}
-	for _, row := range next {
-		previous, ok := byName[strings.TrimSpace(row.Name)]
-		if ok && strings.TrimSpace(previous.HostPath) != "" && strings.TrimSpace(row.HostPath) == "" {
+	for index, row := range normalized {
+		previous, ok := byName[row.Name]
+		if !ok || strings.TrimSpace(previous.HostPath) == "" || previous.HostPath == row.HostPath {
+			continue
+		}
+		if !strings.HasPrefix(previous.HostPath, "/") {
+			s.logger.Warn("deploy: storage named volume renamed; the old volume's data is not moved",
+				"application_id", appID, "storage", row.Name,
+				"previous_volume", previous.HostPath, "new_volume", row.HostPath)
+			continue
+		}
+		if index < len(input) && strings.TrimSpace(input[index].HostPath) == "" {
 			s.logger.Warn("deploy: storage host path blanked; existing data is not moved to the managed path",
-				"application_id", appID, "storage", previous.Name, "previous_host_path", previous.HostPath)
+				"application_id", appID, "storage", row.Name,
+				"previous_host_path", previous.HostPath, "new_host_path", row.HostPath)
 		}
 	}
 }
@@ -672,6 +684,7 @@ func normalizeStorages(appID uuid.UUID, storages []Storage) ([]Storage, error) {
 	normalized := make([]Storage, 0, len(storages))
 	seen := make(map[string]bool, len(storages))
 	seenDirs := make(map[string]string, len(storages))
+	seenNamed := make(map[string]string, len(storages))
 	for _, storage := range storages {
 		row := Storage{
 			Name:          strings.TrimSpace(storage.Name),
@@ -696,6 +709,15 @@ func normalizeStorages(appID uuid.UUID, storages []Storage) ([]Storage, error) {
 		host, err := managedHostPath(root, appID, row.Name, row.HostPath)
 		if err != nil {
 			return nil, err
+		}
+		if !strings.HasPrefix(host, "/") {
+			// Named volumes are namespaced with the storage name; reject two
+			// rows whose (sanitized) names collapse onto one volume.
+			if other, ok := seenNamed[host]; ok {
+				return nil, fmt.Errorf("%w: storage names %q and %q map to the same named volume %q",
+					ErrValidation, other, row.Name, host)
+			}
+			seenNamed[host] = row.Name
 		}
 		row.HostPath = host
 		normalized = append(normalized, row)

@@ -47,9 +47,14 @@ func managedVolumeRoot() string {
 // configured, so an operator running without GOTHAM_MANAGED_VOLUME_ROOT knows
 // which implicit default the control plane and node must agree on.
 func warnManagedVolumeRoot(logger *slog.Logger) {
-	if strings.TrimSpace(os.Getenv(envManagedVolumeRoot)) == "" {
+	configured := strings.TrimSpace(os.Getenv(envManagedVolumeRoot))
+	switch {
+	case configured == "":
 		logger.Warn("deploy: GOTHAM_MANAGED_VOLUME_ROOT is unset; using the default managed volume root",
 			"root", defaultManagedVolumeRoot)
+	case !strings.HasPrefix(configured, "/"):
+		logger.Warn("deploy: GOTHAM_MANAGED_VOLUME_ROOT must be absolute; using the default managed volume root",
+			"configured", configured, "root", defaultManagedVolumeRoot)
 	}
 }
 
@@ -76,6 +81,12 @@ func managedHostPath(root string, appID uuid.UUID, name, host string) (string, e
 		if appID == uuid.Nil {
 			return "", fmt.Errorf("%w: storage %q named volume needs an application id", ErrValidation, name)
 		}
+		// Idempotent: a name already carrying this application's namespace is
+		// returned unchanged, so normalizing an already-normalized row (a
+		// GET→PUT round-trip) cannot double the prefix.
+		if strings.HasPrefix(host, appNamedVolumePrefix+appID.String()+"-") {
+			return host, nil
+		}
 		return appNamedVolumePrefix + appID.String() + "-" + storageDirName(host), nil
 	}
 	if err := validateHostBind(root, appID, name, host); err != nil {
@@ -101,9 +112,8 @@ func validateHostBind(root string, appID uuid.UUID, name, host string) error {
 	}
 	base := appVolumeDir(root, appID)
 	cleaned := filepath.Clean(host)
-	if cleaned == base {
-		return fmt.Errorf("%w: storage %q host path %q must name a child of %s", ErrValidation, name, host, base)
-	}
+	// A direct child only: the app directory itself and any nested path are
+	// rejected here (filepath.Dir(base) != base).
 	if filepath.Dir(cleaned) != base {
 		return fmt.Errorf("%w: storage %q host path %q must be a direct child of %s", ErrValidation, name, host, base)
 	}

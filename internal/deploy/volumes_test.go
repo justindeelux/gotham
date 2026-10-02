@@ -1,9 +1,13 @@
 package deploy
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -135,4 +139,146 @@ func TestManagedHostPath(t *testing.T) {
 	if explicit != child {
 		t.Errorf("explicit = %q, want %q", explicit, child)
 	}
+}
+
+// TestStorageNormalizationIsIdempotent pins P1: feeding an already-normalized
+// row (as a GET→PUT round-trip does) back through normalizeStorages must not
+// prefix a named volume a second time or move a derived bind.
+func TestStorageNormalizationIsIdempotent(t *testing.T) {
+	appID := uuid.New()
+	root := t.TempDir()
+
+	named, err := normalizeStorages(appID, []Storage{{Name: "data", HostPath: "cache", ContainerPath: "/var/cache"}})
+	if err != nil {
+		t.Fatalf("normalize named: %v", err)
+	}
+	if want := appNamedVolumePrefix + appID.String() + "-cache"; named[0].HostPath != want {
+		t.Fatalf("named host = %q, want %q", named[0].HostPath, want)
+	}
+	again, err := normalizeStorages(appID, named)
+	if err != nil {
+		t.Fatalf("renormalize named: %v", err)
+	}
+	if again[0].HostPath != named[0].HostPath {
+		t.Fatalf("named round-trip doubled the prefix: %q -> %q", named[0].HostPath, again[0].HostPath)
+	}
+	specs, err := volumeSpecs(root, appID, again)
+	if err != nil {
+		t.Fatalf("volumeSpecs: %v", err)
+	}
+	if want := named[0].HostPath + ":/var/cache"; len(specs) != 1 || specs[0] != want {
+		t.Fatalf("specs = %v, want [%s]", specs, want)
+	}
+
+	derived, err := normalizeStorages(appID, []Storage{{Name: "data", HostPath: "", ContainerPath: "/data"}})
+	if err != nil {
+		t.Fatalf("normalize derived: %v", err)
+	}
+	derivedAgain, err := normalizeStorages(appID, derived)
+	if err != nil {
+		t.Fatalf("renormalize derived: %v", err)
+	}
+	if derivedAgain[0].HostPath != derived[0].HostPath {
+		t.Fatalf("derived round-trip moved the path: %q -> %q", derived[0].HostPath, derivedAgain[0].HostPath)
+	}
+}
+
+// TestWarnStorageChanges pins P3/P4: a blanked explicit path and a re-namespaced
+// named volume warn, while a re-save that resolves to the stored derived path
+// does not.
+func TestWarnStorageChanges(t *testing.T) {
+	newService := func(t *testing.T, repo *fakeRepository) (*Service, *bytes.Buffer) {
+		t.Helper()
+		var logs bytes.Buffer
+		svc := NewService(Config{
+			Repository: repo,
+			Secret:     testSecretKey,
+			Logger:     slog.New(slog.NewTextHandler(&logs, nil)),
+		})
+		t.Cleanup(func() { _ = svc.Close() })
+		return svc, &logs
+	}
+
+	t.Run("explicit path blanked warns", func(t *testing.T) {
+		userID := uuid.New()
+		app := testApplication(userID)
+		repo := &fakeRepository{app: app}
+		repo.storages = []Storage{{ApplicationID: app.ID, Name: "data", HostPath: "/data/app", ContainerPath: "/data"}}
+		svc, logs := newService(t, repo)
+
+		if _, err := svc.ReplaceStorages(context.Background(), userID, app.ID, []Storage{{Name: "data", HostPath: "", ContainerPath: "/data"}}); err != nil {
+			t.Fatalf("replace: %v", err)
+		}
+		if !strings.Contains(logs.String(), "storage host path blanked") {
+			t.Errorf("logs = %q, want a blanked-path warning", logs.String())
+		}
+	})
+
+	t.Run("unchanged derived path does not warn", func(t *testing.T) {
+		userID := uuid.New()
+		app := testApplication(userID)
+		repo := &fakeRepository{app: app}
+		derived := filepath.Join(managedVolumeRoot(), app.ID.String(), "data")
+		repo.storages = []Storage{{ApplicationID: app.ID, Name: "data", HostPath: derived, ContainerPath: "/data"}}
+		svc, logs := newService(t, repo)
+
+		if _, err := svc.ReplaceStorages(context.Background(), userID, app.ID, []Storage{{Name: "data", HostPath: "", ContainerPath: "/data"}}); err != nil {
+			t.Fatalf("replace: %v", err)
+		}
+		if strings.Contains(logs.String(), "storage host path blanked") {
+			t.Errorf("logs = %q, want no warning when the derived path is unchanged", logs.String())
+		}
+	})
+
+	t.Run("bare named volume renaming warns", func(t *testing.T) {
+		userID := uuid.New()
+		app := testApplication(userID)
+		repo := &fakeRepository{app: app}
+		repo.storages = []Storage{{ApplicationID: app.ID, Name: "data", HostPath: "cache", ContainerPath: "/data"}}
+		svc, logs := newService(t, repo)
+
+		if _, err := svc.ReplaceStorages(context.Background(), userID, app.ID, []Storage{{Name: "data", HostPath: "cache", ContainerPath: "/data"}}); err != nil {
+			t.Fatalf("replace: %v", err)
+		}
+		if !strings.Contains(logs.String(), "named volume renamed") {
+			t.Errorf("logs = %q, want a named-volume rename warning", logs.String())
+		}
+	})
+}
+
+// TestWarnManagedVolumeRoot pins L6/P7: the control plane warns when the root
+// is unset or is set to a relative value.
+func TestWarnManagedVolumeRoot(t *testing.T) {
+	record := func(t *testing.T) (*slog.Logger, *bytes.Buffer) {
+		t.Helper()
+		var logs bytes.Buffer
+		return slog.New(slog.NewTextHandler(&logs, nil)), &logs
+	}
+
+	t.Run("unset warns", func(t *testing.T) {
+		t.Setenv(envManagedVolumeRoot, "")
+		logger, logs := record(t)
+		warnManagedVolumeRoot(logger)
+		if !strings.Contains(logs.String(), "is unset") {
+			t.Errorf("logs = %q, want an unset warning", logs.String())
+		}
+	})
+
+	t.Run("relative warns", func(t *testing.T) {
+		t.Setenv(envManagedVolumeRoot, "data/volumes")
+		logger, logs := record(t)
+		warnManagedVolumeRoot(logger)
+		if !strings.Contains(logs.String(), "must be absolute") {
+			t.Errorf("logs = %q, want a relative-value warning", logs.String())
+		}
+	})
+
+	t.Run("absolute does not warn", func(t *testing.T) {
+		t.Setenv(envManagedVolumeRoot, "/srv/gotham/volumes")
+		logger, logs := record(t)
+		warnManagedVolumeRoot(logger)
+		if logs.Len() != 0 {
+			t.Errorf("logs = %q, want none for an absolute root", logs.String())
+		}
+	})
 }

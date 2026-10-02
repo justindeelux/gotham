@@ -246,6 +246,19 @@ func TestRunRoute(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("missing image status = %d, want 400", rec.Code)
 	}
+
+	// FX-5a: a raw run must not spoof a managed label or mount a reserved
+	// named volume.
+	rec = doRouteRequest(t, h, http.MethodPost, "/v1/servers/"+id.String()+"/containers/run",
+		`{"image":"nginx","labels":{"gotham.component":"proxy"}}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("reserved label status = %d, want 400", rec.Code)
+	}
+	rec = doRouteRequest(t, h, http.MethodPost, "/v1/servers/"+id.String()+"/containers/run",
+		`{"image":"nginx","volumes":["gotham-db-secret:/data"]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("reserved volume status = %d, want 400", rec.Code)
+	}
 }
 
 func TestAuthMiddlewareEnforced(t *testing.T) {

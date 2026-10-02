@@ -29,6 +29,10 @@ const (
 	// envSharedManagedVolumeRoot lets a node reuse the control plane's root
 	// variable name; the agent-prefixed variable wins when both are set.
 	envSharedManagedVolumeRoot = "GOTHAM_MANAGED_VOLUME_ROOT"
+	// envProxyRoot relocates the node's Traefik directory. It is passed to
+	// both the proxy service (which writes there) and the bind validator
+	// (which allows the proxy container to mount it).
+	envProxyRoot = "GOTHAM_AGENT_PROXY_ROOT"
 
 	envAutoUpdate     = "GOTHAM_AGENT_AUTO_UPDATE"
 	envUpdateInterval = "GOTHAM_AGENT_UPDATE_INTERVAL"
@@ -115,6 +119,9 @@ type Config struct {
 	// ManagedVolumeRoot is the parent of every application bind mount the node
 	// accepts; a bind whose source is not inside it is refused.
 	ManagedVolumeRoot string
+	// ProxyRoot is the node's Traefik directory: the proxy container may mount
+	// it, and the proxy service writes the generated config under it.
+	ProxyRoot string
 	// LogLevel is the slog level name (debug, info, warn, error).
 	LogLevel string
 
@@ -172,6 +179,7 @@ func Load() (Config, error) {
 		LogLevel:    envOr(envLogLevel, defaultLogLevel),
 
 		ManagedVolumeRoot: envOr(envManagedVolumeRoot, envOr(envSharedManagedVolumeRoot, defaultManagedVolumeRoot)),
+		ProxyRoot:         envOr(envProxyRoot, defaultTraefikDir),
 
 		AutoUpdate:        strings.EqualFold(strings.TrimSpace(os.Getenv(envAutoUpdate)), "true"),
 		UpdateInterval:    updateIntervalFromEnv(),
@@ -208,6 +216,9 @@ func Load() (Config, error) {
 	}
 	if !strings.HasPrefix(cfg.ManagedVolumeRoot, "/") {
 		return Config{}, fmt.Errorf("%s must be an absolute path", envManagedVolumeRoot)
+	}
+	if !strings.HasPrefix(cfg.ProxyRoot, "/") {
+		return Config{}, fmt.Errorf("%s must be an absolute path", envProxyRoot)
 	}
 	return cfg, nil
 }

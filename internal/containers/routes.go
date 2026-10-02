@@ -3,8 +3,10 @@ package containers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -156,12 +158,53 @@ func (h *handler) run(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &opts) {
 		return
 	}
+	if err := validateRawRun(opts); err != nil {
+		h.writeError(w, err)
+		return
+	}
 	id, err := h.svc.Run(r.Context(), serverID, opts)
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, containerActionEnvelope{ContainerID: id})
+}
+
+// reservedLabelPrefix marks every label the control plane uses to classify a
+// managed container. A raw run must not spoof one: gotham.component=proxy
+// would grant access to the node's proxy directory (and its ACME keys), and
+// gotham.app_id would grant a managed bind.
+const reservedLabelPrefix = "gotham."
+
+// reservedVolumePrefix marks every platform-owned Docker named volume
+// (gotham-db-*, gotham-app-*, gotham-registry). A raw run must not mount one.
+const reservedVolumePrefix = "gotham-"
+
+// validateRawRun refuses a user-facing raw container-run request that spoofs a
+// managed label or mounts a reserved named volume. It applies only to the HTTP
+// route: the control plane's own services (proxy, databases, backups) call
+// Service.Run directly and keep their labels and volumes.
+func validateRawRun(opts RunOptions) error {
+	for key := range opts.Labels {
+		if strings.HasPrefix(strings.TrimSpace(key), reservedLabelPrefix) {
+			return fmt.Errorf("%w: label %q is reserved", ErrValidation, key)
+		}
+	}
+	for _, spec := range opts.Volumes {
+		if source := volumeSource(spec); strings.HasPrefix(source, reservedVolumePrefix) {
+			return fmt.Errorf("%w: volume %q is reserved", ErrValidation, source)
+		}
+	}
+	return nil
+}
+
+// volumeSource returns the source side of a "source:target" (or
+// "source:target:mode") mount spec.
+func volumeSource(spec string) string {
+	if index := strings.IndexByte(spec, ':'); index >= 0 {
+		return strings.TrimSpace(spec[:index])
+	}
+	return strings.TrimSpace(spec)
 }
 
 // writeError maps service sentinels to HTTP responses.

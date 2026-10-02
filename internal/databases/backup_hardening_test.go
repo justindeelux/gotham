@@ -154,7 +154,53 @@ func waitForBackupDone(t *testing.T, repo *fakeBackupRepository, backupID uuid.U
 	return Backup{}
 }
 
-// TestNextCronTimeSurvivesSpringForward is the D2-8/U2 regression: a slot
+// TestBackupValidatesTargetOwnershipUnderLock is the round-2 U1 regression: a
+// target that flips from a member's local target to their S3 target between the
+// caller's read and the run insert must still be refused, and the refusal must
+// leave no running row behind.
+func TestBackupValidatesTargetOwnershipUnderLock(t *testing.T) {
+	owner, member := uuid.New(), uuid.New()
+	teamID := uuid.New()
+
+	databaseRepo := newFakeRepository()
+	database := databaseRepo.seed(Database{
+		UserID: owner, TeamID: teamID, ServerID: databaseRepo.seedServer(),
+		Name: "shared-db", Engine: EnginePostgres, Status: StatusRunning,
+		ContainerID: "db-container", StoragePath: VolumeName(uuid.New()),
+	})
+	backupRepo := newFakeBackupRepository()
+	manager := NewBackupService(BackupConfig{
+		Repository:         backupRepo,
+		DatabaseRepository: databaseRepo,
+		Containers:         &fakeContainers{},
+		ObjectStore:        newFakeObjectStore(),
+		Secret:             testSecret,
+		Logger:             discardLogger(),
+	})
+	t.Cleanup(func() { _ = manager.Close() })
+
+	target := backupRepo.seedTarget(BackupTarget{UserID: member, Name: "flip", Kind: TargetLocal})
+	// Between the caller's target read and the locked insert the target becomes
+	// an S3 target owned by the member.
+	backupRepo.beforeCreateBackupWithTarget = func() {
+		flipped := backupRepo.targets[target.ID]
+		flipped.Kind = TargetS3
+		flipped.Endpoint = "http://minio:9000"
+		flipped.Bucket = "b"
+		backupRepo.targets[target.ID] = flipped
+	}
+
+	ctx := teams.WithScope(context.Background(), teams.Scope{
+		UserID: member, TeamID: teamID, Role: teams.RoleAdmin,
+	})
+	if _, err := manager.CreateBackup(ctx, member, database.ID, CreateBackupRequest{TargetID: target.ID}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("flipped cross-owner target err = %v, want ErrNotFound", err)
+	}
+	if backupRepo.countBackups() != 0 {
+		t.Fatal("a refused target must leave no running row behind")
+	}
+}
+
 // inside the spring-forward gap must fire at the first valid instant after the
 // gap (not be skipped) and the scan must return promptly.
 func TestNextCronTimeSurvivesSpringForward(t *testing.T) {
@@ -348,6 +394,70 @@ func TestLocalStoreFlushesCreatedAncestors(t *testing.T) {
 		if !found {
 			t.Errorf("did not flush directory %s; flushed %v", dir, synced)
 		}
+	}
+}
+
+// TestNextRunTimeFallBackRecoveryDoesNotDoubleFire is the round-2 U2
+// regression: a catch-up run started during the repeated hour must not schedule
+// the second occurrence of the same wall-clock slot.
+func TestNextRunTimeFallBackRecoveryDoesNotDoubleFire(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	// The schedule was due at 01:30 EDT; the control plane restarts at 01:00
+	// EST (the second pass) and serves the slot late. Both instants are built
+	// in UTC because 01:00-01:59 local is ambiguous.
+	served := time.Date(2025, 11, 2, 5, 30, 0, 0, time.UTC).In(loc) // 01:30 EDT
+	now := time.Date(2025, 11, 2, 6, 0, 0, 0, time.UTC).In(loc)     // 01:00 EST
+	next, err := nextRunTime("30 1 * * *", served, now, loc)
+	if err != nil {
+		t.Fatalf("nextRunTime: %v", err)
+	}
+	want := time.Date(2025, 11, 3, 1, 30, 0, 0, loc)
+	if !next.Equal(want) {
+		t.Fatalf("next = %v, want %v (the repeated slot must not fire twice)", next, want)
+	}
+	if second := time.Date(2025, 11, 2, 6, 30, 0, 0, time.UTC).In(loc); next.Equal(second) {
+		t.Fatal("next re-scheduled the second occurrence of the served slot")
+	}
+}
+
+// TestNextCronTimeWildcardHourSkipsRepeatedHour pins the documented fall-back
+// policy for wildcard-hour schedules: the repeated hour is served once, so the
+// second pass is skipped rather than fired again.
+func TestNextCronTimeWildcardHourSkipsRepeatedHour(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	after := time.Date(2025, 11, 2, 5, 59, 0, 0, time.UTC).In(loc) // 01:59 EDT, last minute of the first pass
+	next, err := nextCronTime("* * * * *", after, loc)
+	if err != nil {
+		t.Fatalf("nextCronTime: %v", err)
+	}
+	want := time.Date(2025, 11, 2, 7, 0, 0, 0, time.UTC).In(loc) // 02:00 EST, unique
+	if !next.Equal(want) {
+		t.Errorf("next = %v, want %v (the second pass of 01:00-01:59 must be skipped)", next, want)
+	}
+}
+
+// TestNextCronTimeSpringForwardEastOfUTC pins the gap behavior for a zone east
+// of UTC, where Go's time.Date lands on the far side of the gap from a western
+// zone.
+func TestNextCronTimeSpringForwardEastOfUTC(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	after := time.Date(2025, 3, 30, 1, 0, 0, 0, loc) // 01:00 CET, gap is 02:00-03:00
+	next, err := nextCronTime("30 2 * * *", after, loc)
+	if err != nil {
+		t.Fatalf("nextCronTime: %v", err)
+	}
+	want := time.Date(2025, 3, 30, 3, 0, 0, 0, loc) // transition instant 03:00 CEST
+	if !next.Equal(want) {
+		t.Errorf("next = %v, want %v (the transition instant)", next, want)
 	}
 }
 

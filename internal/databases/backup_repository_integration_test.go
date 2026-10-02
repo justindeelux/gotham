@@ -3,6 +3,7 @@ package databases
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -441,7 +442,7 @@ func TestBackupRunWaitsForDestinationEditLock(t *testing.T) {
 		_, live, err := repo.CreateBackupWithTarget(ctx, Backup{
 			ID: uuid.New(), DatabaseID: database.ID, TargetID: target.ID,
 			Type: BackupManual, Status: BackupRunning,
-		})
+		}, nil)
 		done <- runResult{target: live, err: err}
 	}()
 
@@ -479,18 +480,23 @@ func TestDestinationEditWaitsForRunLock(t *testing.T) {
 
 	runLocked := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseRun := func() { releaseOnce.Do(func() { close(release) }) }
 	st.BeforeBackupRunCommit = func() {
 		close(runLocked)
 		<-release
 	}
+	// LIFO: release the run before clearing the seam, so a t.Fatalf before the
+	// explicit release cannot leave the run goroutine blocking the pool close.
 	t.Cleanup(func() { st.BeforeBackupRunCommit = nil })
+	t.Cleanup(releaseRun)
 
 	runDone := make(chan error, 1)
 	go func() {
 		_, _, err := repo.CreateBackupWithTarget(ctx, Backup{
 			ID: uuid.New(), DatabaseID: database.ID, TargetID: target.ID,
 			Type: BackupManual, Status: BackupRunning,
-		})
+		}, nil)
 		runDone <- err
 	}()
 	<-runLocked
@@ -510,7 +516,7 @@ func TestDestinationEditWaitsForRunLock(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	close(release)
+	releaseRun()
 	if err := <-runDone; err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -518,4 +524,34 @@ func TestDestinationEditWaitsForRunLock(t *testing.T) {
 		t.Fatalf("edit err = %v, want ErrTargetStranded once the run exists", err)
 	}
 	assertTargetState(t, repo, ctx, target.ID, target.Name, "https://old", "old")
+}
+
+// TestBackupTargetValidationLeavesNoRow is the store-level half of the round-2
+// U1 fix: the ownership validation runs on the locked target before the run is
+// inserted, so a rejected target creates no running row.
+func TestBackupTargetValidationLeavesNoRow(t *testing.T) {
+	_, st := integrationEnv(t)
+	repo := newStoreBackupRepository(st)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	target, database := seedRaceTarget(t, st, repo, ownerID, serverID)
+
+	before, err := repo.ListBackupsByDatabase(ctx, database.ID, maxBackupListLimit)
+	if err != nil {
+		t.Fatalf("ListBackupsByDatabase: %v", err)
+	}
+	_, _, err = repo.CreateBackupWithTarget(ctx, Backup{
+		ID: uuid.New(), DatabaseID: database.ID, TargetID: target.ID,
+		Type: BackupManual, Status: BackupRunning,
+	}, func(*BackupTarget) error { return ErrNotFound })
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("CreateBackupWithTarget err = %v, want the validation error", err)
+	}
+	after, err := repo.ListBackupsByDatabase(ctx, database.ID, maxBackupListLimit)
+	if err != nil {
+		t.Fatalf("ListBackupsByDatabase: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("rejected validation left %d rows, want %d", len(after), len(before))
+	}
 }

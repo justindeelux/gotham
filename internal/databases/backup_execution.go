@@ -26,16 +26,6 @@ func (m *BackupManager) startRun(ctx context.Context, database Database, target 
 	if err := m.backupsReady(); err != nil {
 		return Backup{}, err
 	}
-	// Ownership must be consistent end to end. A target is user-global, while
-	// a database can belong to a team: a member could otherwise back up a
-	// database they share to their own S3 target, and the read path — which
-	// resolves the target by the database owner — would then 404 on every
-	// restore. An S3 target is therefore usable only when its owner is the
-	// database owner (a member's own local target is still fine: it records a
-	// file:// location that needs no target to read back).
-	if target != nil && target.Kind == TargetS3 && target.UserID != database.UserID {
-		return Backup{}, ErrNotFound
-	}
 	if !m.claim(database.ID) {
 		return Backup{}, ErrBackupInFlight
 	}
@@ -50,7 +40,17 @@ func (m *BackupManager) startRun(ctx context.Context, database Database, target 
 	if target != nil {
 		backup.TargetID = target.ID
 	}
-	stored, liveTarget, err := m.backups.CreateBackupWithTarget(ctx, backup)
+	// Ownership is validated against the target row the run insert locks, not
+	// the caller's earlier read: a target that flips from local to S3 between
+	// the two must not slip a team database's dump into a member's bucket. The
+	// check runs before the run row exists, so a rejected target leaves no
+	// orphaned running backup.
+	stored, liveTarget, err := m.backups.CreateBackupWithTarget(ctx, backup, func(live *BackupTarget) error {
+		if live.Kind == TargetS3 && live.UserID != database.UserID {
+			return ErrNotFound
+		}
+		return nil
+	})
 	if err != nil {
 		m.release(database.ID)
 		return Backup{}, err

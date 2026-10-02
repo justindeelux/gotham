@@ -131,6 +131,26 @@ func parseCronField(expression string, min, max int) (cronField, bool, error) {
 	return field, any, nil
 }
 
+// nextRunTime returns the next run after a scheduler served `served` at tick
+// `now`. Basing it on `now` alone is wrong across a fall-back: a catch-up run
+// started during the repeated hour would otherwise schedule the second
+// occurrence of the same wall-clock slot and fire it again. Taking the later of
+// the next run after `now` and the next run after the served slot fires each
+// wall slot once while still skipping a backlog.
+func nextRunTime(cron string, served, now time.Time, loc *time.Location) (time.Time, error) {
+	next, err := nextCronTime(cron, now, loc)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if served.IsZero() {
+		return next, nil
+	}
+	if fromServed, servedErr := nextCronTime(cron, served, loc); servedErr == nil && fromServed.After(next) {
+		return fromServed, nil
+	}
+	return next, nil
+}
+
 // maxCronSteps bounds the scan independently of the four-year window, so a
 // pathological expression can never spin the scheduler.
 const maxCronSteps = 500_000
@@ -141,12 +161,13 @@ const maxCronSteps = 500_000
 // expression that can never fire (for example February 30th).
 //
 // The scan walks the local *wall clock*, not absolute time, and treats each
-// wall-clock slot as served at most once. A fall-back day therefore does not
-// fire a repeated hour twice (the second occurrence of a slot whose wall clock
-// is already behind the cursor is skipped), and a slot inside a spring-forward
-// gap fires at the first valid instant after the gap instead of being missed.
-// Walking wall time also makes the scan incapable of stalling on a
-// transition, so the bounded step cap is only a safety net.
+// wall-clock slot as served at most once. On a fall-back day a repeated hour
+// therefore fires once, not twice — including wildcard-hour schedules, which
+// skip the second pass of the repeated hour entirely. On a spring-forward day a
+// slot inside the skipped interval fires at the transition instant (the first
+// valid instant after the gap) instead of being missed. Walking wall time also
+// makes the scan incapable of stalling on a transition, so the bounded step cap
+// is only a safety net.
 func nextCronTime(expression string, after time.Time, loc *time.Location) (time.Time, error) {
 	spec, err := parseCron(expression)
 	if err != nil {
@@ -226,18 +247,37 @@ func slotInstant(wall, after time.Time, loc *time.Location) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// afterGap resolves a wall-clock slot swallowed by a DST gap to the first
-// valid instant at the end of the gap: the first local wall clock strictly
-// after the requested slot. Go's time.Date reports a gap slot with the
-// pre-transition offset, so a bounded real-time walk crosses the transition.
+// afterGap resolves a wall-clock slot swallowed by a DST gap to the transition
+// instant at the end of the gap (the first valid instant after it). Go's
+// time.Date reports a gap slot with an offset that is not guaranteed to place
+// the instant before or after the gap (it depends on the zone and transition:
+// America/New_York's 02:30 maps before the gap, Europe/Paris's 02:30 after
+// it), so the transition is found by walking to the offset change from
+// whichever side time.Date landed on.
 func afterGap(wall time.Time, loc *time.Location) (time.Time, bool) {
 	year, month, day := wall.Date()
 	candidate := time.Date(year, month, day, wall.Hour(), wall.Minute(), 0, 0, loc)
+	_, offset := candidate.Zone()
+	if wallBefore(candidate.In(loc), wall) {
+		// candidate is before the gap: the transition is the first following
+		// instant whose offset differs.
+		for i := 0; i < 4*60; i++ {
+			next := candidate.Add(time.Minute)
+			if _, nextOffset := next.Zone(); nextOffset != offset {
+				return next, true
+			}
+			candidate = next
+		}
+		return time.Time{}, false
+	}
+	// candidate is after the gap: walking back, the first instant still on the
+	// post-transition offset is the transition itself.
 	for i := 0; i < 4*60; i++ {
-		if wallBefore(wall, candidate.In(loc)) {
+		previous := candidate.Add(-time.Minute)
+		if _, previousOffset := previous.Zone(); previousOffset != offset {
 			return candidate, true
 		}
-		candidate = candidate.Add(time.Minute)
+		candidate = previous
 	}
 	return time.Time{}, false
 }
@@ -398,7 +438,7 @@ func (s *backupScheduler) fire(ctx context.Context, schedule BackupSchedule, now
 			"schedule_id", schedule.ID.String(), "database_id", schedule.DatabaseID.String(), "error", err)
 		return 0
 	}
-	next, err := nextCronTime(schedule.Cron, now, time.Local)
+	next, err := nextRunTime(schedule.Cron, schedule.NextRunAt, now, time.Local)
 	if err != nil {
 		s.logger.Error("databases: backup schedule has an invalid cron expression",
 			"schedule_id", schedule.ID.String(), "cron", schedule.Cron, "error", err)

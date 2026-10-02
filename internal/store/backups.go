@@ -21,8 +21,9 @@ func (s *Store) CreateBackup(ctx context.Context, params sqlc.CreateBackupParams
 // does, the target row is read under a FOR SHARE lock in the same transaction
 // and returned, so a concurrent destination edit (which takes FOR UPDATE)
 // cannot commit between the target read and the run insert, and the run always
-// carries the config the destination lock saw.
-func (s *Store) CreateBackupWithTarget(ctx context.Context, params sqlc.CreateBackupParams) (sqlc.Backup, *sqlc.BackupTarget, error) {
+// carries the config the destination lock saw. validate, when non-nil, runs on
+// the locked row before the insert.
+func (s *Store) CreateBackupWithTarget(ctx context.Context, params sqlc.CreateBackupParams, validate func(sqlc.BackupTarget) error) (sqlc.Backup, *sqlc.BackupTarget, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return sqlc.Backup{}, nil, err
@@ -35,6 +36,11 @@ func (s *Store) CreateBackupWithTarget(ctx context.Context, params sqlc.CreateBa
 		row, err := queries.GetBackupTargetForShare(ctx, params.TargetID)
 		if err != nil {
 			return sqlc.Backup{}, nil, err
+		}
+		if validate != nil {
+			if err := validate(row); err != nil {
+				return sqlc.Backup{}, nil, err
+			}
 		}
 		target = &row
 		if s.BeforeBackupRunCommit != nil {

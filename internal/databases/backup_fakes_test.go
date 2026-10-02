@@ -107,6 +107,11 @@ type fakeBackupRepository struct {
 	// test can assert an ordering (for example that the artifact was flushed
 	// before the run was marked completed).
 	finishHook func(Backup)
+	// beforeCreateBackupWithTarget runs just before CreateBackupWithTarget
+	// reads the target, while the fake's lock is held, so a test can flip the
+	// target between the caller's read and the locked insert. It must mutate
+	// the maps directly (calling locked methods would deadlock).
+	beforeCreateBackupWithTarget func()
 
 	createBackupErr   error
 	getBackupErr      error
@@ -223,23 +228,32 @@ func (r *fakeBackupRepository) CreateBackup(_ context.Context, backup Backup) (B
 }
 
 // CreateBackupWithTarget implements BackupRepository: a run that references a
-// target returns the target row that a locked read would observe.
-func (r *fakeBackupRepository) CreateBackupWithTarget(_ context.Context, backup Backup) (Backup, *BackupTarget, error) {
+// target returns the target row a locked read would observe, after running the
+// caller's validation on it (and before recording the run, so a rejected
+// target leaves no row behind).
+func (r *fakeBackupRepository) CreateBackupWithTarget(_ context.Context, backup Backup, validate func(*BackupTarget) error) (Backup, *BackupTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.createBackupErr != nil {
 		return Backup{}, nil, r.createBackupErr
 	}
-	stored := r.seedBackupLocked(backup)
 	if backup.TargetID == uuid.Nil {
-		return stored, nil, nil
+		return r.seedBackupLocked(backup), nil, nil
+	}
+	if r.beforeCreateBackupWithTarget != nil {
+		r.beforeCreateBackupWithTarget()
 	}
 	target, ok := r.targets[backup.TargetID]
 	if !ok {
 		return Backup{}, nil, ErrNotFound
 	}
-	live := target
-	return stored, &live, nil
+	if validate != nil {
+		if err := validate(&target); err != nil {
+			return Backup{}, nil, err
+		}
+	}
+	stored := r.seedBackupLocked(backup)
+	return stored, &target, nil
 }
 
 // seedBackupLocked is seedBackup for callers already holding the lock.

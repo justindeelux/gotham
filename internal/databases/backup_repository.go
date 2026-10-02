@@ -28,7 +28,9 @@ type BackupRepository interface {
 	// target, returns the target row read under a shared lock in the same
 	// transaction. The returned target is the configuration the destination
 	// lock observed, so a concurrent destination edit cannot strand the run.
-	CreateBackupWithTarget(ctx context.Context, backup Backup) (Backup, *BackupTarget, error)
+	// validate, when non-nil, runs on the locked target before the run is
+	// inserted; a rejected target leaves no running row behind.
+	CreateBackupWithTarget(ctx context.Context, backup Backup, validate func(*BackupTarget) error) (Backup, *BackupTarget, error)
 	// GetBackup returns a run joined to a live database, or ErrNotFound.
 	GetBackup(ctx context.Context, backupID uuid.UUID) (Backup, error)
 	// ListBackupsByDatabase returns up to limit of a database's runs, newest
@@ -126,8 +128,18 @@ func (r *storeBackupRepository) CreateBackup(ctx context.Context, backup Backup)
 	return backupFromRow(row), nil
 }
 
-// CreateBackupWithTarget implements BackupRepository.
-func (r *storeBackupRepository) CreateBackupWithTarget(ctx context.Context, backup Backup) (Backup, *BackupTarget, error) {
+// CreateBackupWithTarget implements BackupRepository. validate runs on the
+// locked target inside the inserting transaction, so a target that changed
+// between the caller's read and the insert is still checked before any row is
+// written.
+func (r *storeBackupRepository) CreateBackupWithTarget(ctx context.Context, backup Backup, validate func(*BackupTarget) error) (Backup, *BackupTarget, error) {
+	storeValidate := func(target sqlc.BackupTarget) error {
+		if validate == nil {
+			return nil
+		}
+		live := targetFromRow(target)
+		return validate(&live)
+	}
 	row, target, err := r.store.CreateBackupWithTarget(ctx, sqlc.CreateBackupParams{
 		ID:          pgUUID(backup.ID),
 		DatabaseID:  pgUUID(backup.DatabaseID),
@@ -140,7 +152,7 @@ func (r *storeBackupRepository) CreateBackupWithTarget(ctx context.Context, back
 		ContainerID: backup.ContainerID,
 		Error:       backup.Error,
 		FinishedAt:  timeToPG(backup.FinishedAt),
-	})
+	}, storeValidate)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Backup{}, nil, ErrNotFound

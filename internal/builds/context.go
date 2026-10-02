@@ -91,9 +91,10 @@ func buildContextTar(spec contextSpec) ([]byte, error) {
 	var buf bytes.Buffer
 	limited := &limitedWriter{writer: &buf, limit: limit}
 	tw := tar.NewWriter(limited)
-	// Per-directory, per-pattern match state threaded down the walk to
-	// replicate moby/patternmatcher's parent-match inheritance.
-	dirStates := map[string][]bool{}
+	// Per-pattern match state for the current ancestor chain only, indexed by
+	// walk depth, so retained memory is O(tree depth × patterns) rather than
+	// O(directories × patterns).
+	var dirStates dirStateChain
 
 	err = filepath.WalkDir(dir, func(p string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -114,14 +115,22 @@ func buildContextTar(spec contextSpec) ([]byte, error) {
 		}
 		name := filepath.ToSlash(rel)
 		isDir := entry.IsDir()
+		depth := strings.Count(name, "/")
+		parentState := dirStates.parent(depth)
+		var excluded bool
+		if isDir {
+			var state []bool
+			excluded, state = ignore.matchState(rebased(prefix, name), parentState)
+			dirStates.set(depth, state)
+		} else {
+			// A file has no children, so only its decision is needed; skip the
+			// per-pattern state allocation.
+			excluded = ignore.excludedOnly(rebased(prefix, name), parentState)
+		}
 		// The Dockerfile and its parent directories are never filtered: the
 		// builder must be able to read it even when .dockerignore lists it.
 		protected := spec.keep != "" &&
 			(name == spec.keep || strings.HasPrefix(spec.keep, name+"/"))
-		excluded, state := ignore.matchState(rebased(prefix, name), dirStates[path.Dir(name)])
-		if isDir {
-			dirStates[name] = state
-		}
 		if !protected && excluded {
 			// Descend into an excluded directory when a later negation could
 			// re-include a child (Docker keeps `docs/keep.md` for
@@ -427,6 +436,59 @@ func (d dockerIgnore) matchState(rel string, parent []bool) (bool, []bool) {
 	return excluded, state
 }
 
+// excludedOnly is matchState without allocating the per-pattern state, for
+// entries (files and symlinks) whose children never need it.
+func (d dockerIgnore) excludedOnly(rel string, parent []bool) bool {
+	excluded := false
+	for i, p := range d.patterns {
+		matched := i < len(parent) && parent[i]
+		if !matched {
+			if p.negate != excluded {
+				continue
+			}
+			matched = matchContextPattern(p.pattern, rel)
+		}
+		if matched {
+			excluded = !p.negate
+		}
+	}
+	return excluded
+}
+
+// dirStateChain keeps the per-pattern match state of the current directory
+// ancestors only, indexed by walk depth. A depth-first walk reads a parent
+// state at depth-1 and writes its own at depth, so only one state per depth is
+// ever live and memory is O(tree depth), not O(number of directories).
+type dirStateChain struct {
+	states [][]bool
+}
+
+// parent returns the match state of the directory at depth-1 (nil at the root).
+func (c *dirStateChain) parent(depth int) []bool {
+	if depth > 0 && depth-1 < len(c.states) {
+		return c.states[depth-1]
+	}
+	return nil
+}
+
+// set stores the match state for a directory at the given depth.
+func (c *dirStateChain) set(depth int, state []bool) {
+	for len(c.states) <= depth {
+		c.states = append(c.states, nil)
+	}
+	c.states[depth] = state
+}
+
+// retained reports the number of match-state values currently held; used by the
+// bounded-memory regression test.
+func (c *dirStateChain) retained() int {
+	total := 0
+	for _, state := range c.states {
+		total += len(state)
+	}
+	return total
+}
+
 // ignoredPath reports whether a standalone path (for example a symlink's
 // resolved target) is excluded, threading the ancestor states from the root.
 func (d dockerIgnore) ignoredPath(rel string) bool {
@@ -451,12 +513,21 @@ func pathPrefixes(rel string) []string {
 // matchContextPattern matches a Docker ignore pattern against a
 // context-relative path. `*` and `?` match within one path segment and `**`
 // matches any number of segments (including none), which covers Docker's
-// documented syntax. Escapes and `[`-classes beyond path.Match are not
-// supported; a pattern that path.Match cannot parse simply does not match.
+// documented syntax. A trailing `/**` is a prefix match on `dir/` (moby's
+// prefixMatch): it matches everything under dir but not dir itself, so
+// `secrets/**` + `!secrets` keeps the subtree excluded. Escapes and
+// `[`-classes beyond path.Match are not supported; a pattern that path.Match
+// cannot parse simply does not match.
 func matchContextPattern(pattern, rel string) bool {
 	pattern = strings.TrimRight(pattern, "/")
 	if pattern == "" {
 		return false
+	}
+	// A purely literal trailing /**: moby compiles it to prefixMatch. A glob in
+	// the prefix (e.g. `**/**` or `*.js/**`) instead compiles to a regexp and is
+	// left to matchSegments.
+	if dir, ok := strings.CutSuffix(pattern, "/**"); ok && dir != "" && !strings.ContainsAny(dir, "*?[") {
+		return strings.HasPrefix(rel, dir+"/")
 	}
 	return matchSegments(strings.Split(pattern, "/"), strings.Split(rel, "/"))
 }

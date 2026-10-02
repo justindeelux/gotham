@@ -386,6 +386,12 @@ func TestDockerfileBuildDockerignoreOrderE2E(t *testing.T) {
 			excluded: []string{"logs/tmp/x"},
 			included: []string{"logs/other.txt"},
 		},
+		{
+			name:     "trailing double star with ancestor negation",
+			ignore:   "secrets/**\n!secrets\n",
+			files:    map[string]string{"secrets/token.txt": "s\n", "secrets/nested/deep.txt": "d\n"},
+			excluded: []string{"secrets/token.txt", "secrets/nested/deep.txt"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

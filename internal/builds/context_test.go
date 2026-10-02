@@ -550,3 +550,82 @@ func TestBuildContextTarIgnoresEscapingSymlinkedDockerIgnore(t *testing.T) {
 		t.Error("a .dockerignore symlink escaping the repository must be ignored")
 	}
 }
+
+// TestBuildContextTarDockerIgnoreTrailingDoubleStar is the round-4 U1
+// regression: moby compiles a literal trailing `/**` to a prefix match on
+// `dir/`, so it matches the subtree but not the directory itself. Without the
+// special case, `secrets/**` + `!secrets` re-included the whole subtree.
+func TestBuildContextTarDockerIgnoreTrailingDoubleStar(t *testing.T) {
+	t.Run("prefix match does not include the dir itself", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTestFile(t, filepath.Join(dir, ".dockerignore"), "secrets/**\n!secrets\n")
+		writeTestFile(t, filepath.Join(dir, "secrets", "token.txt"), "SECRET\n")
+		writeTestFile(t, filepath.Join(dir, "secrets", "nested", "deep.txt"), "deep\n")
+
+		data, err := buildContextTar(contextSpec{root: dir})
+		if err != nil {
+			t.Fatalf("buildContextTar: %v", err)
+		}
+		files := readContextTar(t, data)
+		if _, ok := files["secrets/token.txt"]; ok {
+			t.Error("secrets/** + !secrets must keep secrets/token.txt excluded")
+		}
+		if _, ok := files["secrets/nested/deep.txt"]; ok {
+			t.Error("secrets/** + !secrets must keep the whole subtree excluded")
+		}
+	})
+
+	t.Run("directory itself is not matched", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTestFile(t, filepath.Join(dir, ".dockerignore"), "a/**\n")
+		writeTestFile(t, filepath.Join(dir, "a"), "regular file named a\n")
+
+		data, err := buildContextTar(contextSpec{root: dir})
+		if err != nil {
+			t.Fatalf("buildContextTar: %v", err)
+		}
+		if _, ok := readContextTar(t, data)["a"]; !ok {
+			t.Error("a/** must not match a regular file named a")
+		}
+	})
+
+	t.Run("subtree is matched", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTestFile(t, filepath.Join(dir, ".dockerignore"), "a/**\n")
+		writeTestFile(t, filepath.Join(dir, "a", "b"), "b\n")
+
+		data, err := buildContextTar(contextSpec{root: dir})
+		if err != nil {
+			t.Fatalf("buildContextTar: %v", err)
+		}
+		if _, ok := readContextTar(t, data)["a/b"]; ok {
+			t.Error("a/** must match a/b")
+		}
+	})
+}
+
+// TestDirStateChainBoundedMemory is the round-4 U2 regression: the walk keeps
+// only the current ancestor chain, so the retained match state is bounded by
+// tree depth, not by the number of directories (which is attacker-controlled
+// through the repository layout).
+func TestDirStateChainBoundedMemory(t *testing.T) {
+	const patterns = 4000
+	var chain dirStateChain
+
+	// A wide, shallow tree: 2000 sibling directories at depth 0.
+	for i := 0; i < 2000; i++ {
+		chain.set(0, make([]bool, patterns))
+	}
+	if got := chain.retained(); got != patterns {
+		t.Fatalf("retained = %d; want %d (one state at depth 0, not one per directory)", got, patterns)
+	}
+
+	// A deep chain retains one state per depth.
+	const depth = 50
+	for d := 1; d < depth; d++ {
+		chain.set(d, make([]bool, patterns))
+	}
+	if got, want := chain.retained(), depth*patterns; got != want {
+		t.Fatalf("retained = %d; want %d (bounded by depth)", got, want)
+	}
+}

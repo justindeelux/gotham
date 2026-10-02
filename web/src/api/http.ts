@@ -88,8 +88,11 @@ http.interceptors.response.use(
 
     if (shouldRefresh(error, config)) {
       config._retry = true;
-      // Set once the refresh succeeds; used to tell whether a newer session
-      // replaced this one between the refresh and a failed retry.
+      // Identity of the session that starts the refresh. A replacement installed
+      // at any point before this handler decides to expire must survive.
+      const tokenBeforeRefresh = getRefreshToken();
+      // Identity after a successful refresh (the rotated token), used to tell
+      // whether a replacement landed before a failed retry.
       let tokenBeforeRetry: string | null | undefined;
       try {
         const accessToken = await refreshAccessToken();
@@ -97,14 +100,18 @@ http.interceptors.response.use(
         tokenBeforeRetry = getRefreshToken();
         return await http.request(config);
       } catch (refreshError) {
-        // A stale refresh, or a retry that failed after a newer session
-        // replaced this one, must not clear the newer session.
-        const stale = refreshError instanceof StaleRefreshError;
-        const replacedAfterRefresh =
-          tokenBeforeRetry !== undefined &&
-          getRefreshToken() !== tokenBeforeRetry;
-        if (!stale && !replacedAfterRefresh) {
-          expireSession();
+        if (!(refreshError instanceof StaleRefreshError)) {
+          // The refresh (or a retry after it) failed. Expire only if the
+          // session that started it is still current: a replacement installed
+          // meanwhile is preserved. After a successful refresh the rotated
+          // token is that session's identity, otherwise the pre-refresh one is.
+          const sessionAtFailure =
+            tokenBeforeRetry !== undefined
+              ? tokenBeforeRetry
+              : tokenBeforeRefresh;
+          if (getRefreshToken() === sessionAtFailure) {
+            expireSession();
+          }
         }
       }
     }

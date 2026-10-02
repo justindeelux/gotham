@@ -343,6 +343,19 @@ func (r *fakeBackupRepository) DeleteBackup(_ context.Context, backupID uuid.UUI
 	return backup, nil
 }
 
+// SetBackupWasRunning implements BackupRepository.
+func (r *fakeBackupRepository) SetBackupWasRunning(_ context.Context, backupID uuid.UUID, wasRunning bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	backup, ok := r.backups[backupID]
+	if !ok {
+		return ErrNotFound
+	}
+	backup.WasRunning = wasRunning
+	r.backups[backupID] = backup
+	return nil
+}
+
 // CreateRestore implements BackupRepository.
 func (r *fakeBackupRepository) CreateRestore(_ context.Context, restore Restore) (Restore, error) {
 	r.mu.Lock()

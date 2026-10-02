@@ -536,8 +536,16 @@ func (s *Service) ownedContainer(ctx context.Context, userID, databaseID uuid.UU
 // never blocks, so a service built without exclusion keeps working.
 func (s *Service) claimLifecycle(databaseID uuid.UUID) error {
 	if !s.leases.Claim(databaseID, JobLeaseLifecycle) {
-		kind := s.leases.Held(databaseID)
-		return fmt.Errorf("%w: %s is running for this database", ErrDatabaseBusy, kind)
+		switch s.leases.Held(databaseID) {
+		case JobLeaseBackup:
+			return fmt.Errorf("%w: a backup is running for this database", ErrDatabaseBusy)
+		case JobLeaseRestore:
+			return fmt.Errorf("%w: a restore is running for this database", ErrDatabaseBusy)
+		default:
+			// Another lifecycle action holds the lease (a double
+			// Start/Restart), or the holder was released in between.
+			return fmt.Errorf("%w: another operation is running for this database", ErrDatabaseBusy)
+		}
 	}
 	return nil
 }

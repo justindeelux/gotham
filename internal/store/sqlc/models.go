@@ -77,6 +77,7 @@ type Backup struct {
 	Error       string             `json:"error"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+	WasRunning  bool               `json:"was_running"`
 }
 
 type BackupSchedule struct {

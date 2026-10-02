@@ -57,6 +57,10 @@ type Backup struct {
 	// ContainerID is the temporary container that produced the dump, kept for
 	// diagnostics after the container itself is removed.
 	ContainerID string
+	// WasRunning records whether the database was running when the job paused
+	// it. The boot-time sweep restarts a database only when this is true, so it
+	// never starts one the user had already stopped.
+	WasRunning bool
 	// Error holds a bounded failure summary when Status is failed.
 	Error     string
 	CreatedAt time.Time

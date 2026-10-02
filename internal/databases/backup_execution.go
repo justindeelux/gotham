@@ -144,6 +144,13 @@ func (m *BackupManager) dump(ctx context.Context, database Database, target *Bac
 	if err != nil {
 		return "", 0, "", err
 	}
+	// Persist the pause observation before anything else can crash: the
+	// boot-time sweep restarts a database only when the job itself stopped it,
+	// never one the user had already stopped.
+	if recordErr := m.backups.SetBackupWasRunning(ctx, runID, wasRunning); recordErr != nil {
+		m.logger.Warn("databases: could not record the pre-backup database state",
+			"backup_id", runID.String(), "database_id", database.ID.String(), "error", recordErr)
+	}
 	if wasRunning {
 		defer func() {
 			if resumeErr := m.resumeDatabase(context.Background(), database); resumeErr != nil {
@@ -231,11 +238,10 @@ func (m *BackupManager) restore(ctx context.Context, database Database, backup B
 	}
 
 	if err := m.applyRestore(ctx, database, backup, artifact); err != nil {
-		if wasRunning {
-			// Never restart into a half-restored volume: the database stays
-			// stopped and its row carries the failure.
-			m.markError(context.Background(), database, err)
-		}
+		// Never restart into a half-restored volume, and always surface the
+		// failure: the database stays stopped and its row carries the error,
+		// even when it was already stopped or has no container to pause.
+		m.markError(context.Background(), database, err)
 		return err
 	}
 	if wasRunning {

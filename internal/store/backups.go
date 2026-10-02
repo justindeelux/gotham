@@ -44,6 +44,12 @@ func (s *Store) DeleteBackup(ctx context.Context, id pgtype.UUID) (sqlc.Backup, 
 	return s.queries.DeleteBackup(ctx, id)
 }
 
+// SetBackupWasRunning records the pre-job container state observed by the
+// dump's pause.
+func (s *Store) SetBackupWasRunning(ctx context.Context, params sqlc.SetBackupWasRunningParams) error {
+	return s.queries.SetBackupWasRunning(ctx, params)
+}
+
 // CreateRestore stores one restore run before its job starts.
 func (s *Store) CreateRestore(ctx context.Context, params sqlc.CreateRestoreParams) (sqlc.Restore, error) {
 	return s.queries.CreateRestore(ctx, params)

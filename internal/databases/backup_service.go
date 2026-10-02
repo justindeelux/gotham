@@ -318,6 +318,13 @@ func (m *BackupManager) reconcileStaleBackups() {
 		m.logger.Warn("databases: stale backup sweep failed", "error", err)
 	} else {
 		for _, backup := range stale {
+			// A held lease means a job is still live in this process: leave
+			// its row and resources entirely to that job.
+			if kind := m.leases.Held(backup.DatabaseID); kind != "" {
+				m.logger.Warn("databases: not sweeping a backup with a live job",
+					"backup_id", backup.ID.String(), "lease", string(kind))
+				continue
+			}
 			failed := backup
 			failed.Status = BackupFailed
 			failed.Error = "control plane restarted during the backup"
@@ -329,7 +336,12 @@ func (m *BackupManager) reconcileStaleBackups() {
 			}
 			m.logger.Info("databases: marked stale backup failed",
 				"backup_id", backup.ID.String(), "database_id", backup.DatabaseID.String())
-			m.recoverInterrupted(ctx, backup.DatabaseID)
+			// Release the volume, then restore the pre-job state: the dump
+			// paused the database only when it was running.
+			database, ok := m.releaseInterrupted(ctx, backup.DatabaseID)
+			if ok && backup.WasRunning {
+				m.resumeAfterSweep(ctx, database)
+			}
 		}
 	}
 
@@ -339,6 +351,11 @@ func (m *BackupManager) reconcileStaleBackups() {
 		return
 	}
 	for _, restore := range restores {
+		if kind := m.leases.Held(restore.DatabaseID); kind != "" {
+			m.logger.Warn("databases: not sweeping a restore with a live job",
+				"restore_id", restore.ID.String(), "lease", string(kind))
+			continue
+		}
 		failed := restore
 		failed.Status = RestoreFailed
 		failed.Error = "control plane restarted during the restore"
@@ -350,27 +367,30 @@ func (m *BackupManager) reconcileStaleBackups() {
 		}
 		m.logger.Info("databases: marked stale restore failed",
 			"restore_id", restore.ID.String(), "database_id", restore.DatabaseID.String())
-		m.recoverInterrupted(ctx, restore.DatabaseID)
+		// An interrupted restore may have written partial data: clean up the
+		// volume, keep the database stopped and mark the failure. Never resume
+		// it — that is the D2-2 invariant.
+		database, ok := m.releaseInterrupted(ctx, restore.DatabaseID)
+		if ok {
+			m.markError(ctx, database, errors.New("control plane restarted during the restore"))
+		}
 	}
 }
 
-// recoverInterrupted releases a database from an interrupted job: orphan job
-// containers are removed first — a leftover job container still holds the
-// volume, so starting the database under it would race the half-written
-// restore — and only then is the container resumed.
-func (m *BackupManager) recoverInterrupted(ctx context.Context, databaseID uuid.UUID) {
-	// A held lease means a job is still live in this process; it — not the
-	// sweep — owns the volume, so leave the database to that job.
-	if kind := m.leases.Held(databaseID); kind != "" {
-		m.logger.Warn("databases: not recovering a database with a live job",
-			"database_id", databaseID.String(), "lease", string(kind))
-		return
-	}
+// releaseInterrupted removes any orphan job container still owning the
+// database's volume and returns the live database row. A database that is gone
+// reports ok=false.
+func (m *BackupManager) releaseInterrupted(ctx context.Context, databaseID uuid.UUID) (Database, bool) {
 	database, err := m.repo.GetDatabase(ctx, databaseID)
 	if err != nil {
-		return
+		return Database{}, false
 	}
 	m.cleanupOrphanJobs(ctx, database)
+	return database, true
+}
+
+// resumeAfterSweep restarts a database that an interrupted job had paused.
+func (m *BackupManager) resumeAfterSweep(ctx context.Context, database Database) {
 	if err := m.resumeDatabase(ctx, database); err != nil {
 		m.logger.Warn("databases: could not resume a database after a stale job",
 			"database_id", database.ID.String(), "error", err)

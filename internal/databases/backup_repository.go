@@ -35,6 +35,9 @@ type BackupRepository interface {
 	FinishBackup(ctx context.Context, backup Backup) (Backup, error)
 	// DeleteBackup removes one run and returns the deleted row.
 	DeleteBackup(ctx context.Context, backupID uuid.UUID) (Backup, error)
+	// SetBackupWasRunning records whether the database was running when the
+	// dump paused it, so the boot-time sweep can restore the pre-job state.
+	SetBackupWasRunning(ctx context.Context, backupID uuid.UUID, wasRunning bool) error
 
 	// CreateRestore stores a new restore run, always in the running state.
 	CreateRestore(ctx context.Context, restore Restore) (Restore, error)
@@ -185,6 +188,17 @@ func (r *storeBackupRepository) DeleteBackup(ctx context.Context, backupID uuid.
 		return Backup{}, fmt.Errorf("databases: delete backup: %w", err)
 	}
 	return backupFromRow(row), nil
+}
+
+// SetBackupWasRunning implements BackupRepository.
+func (r *storeBackupRepository) SetBackupWasRunning(ctx context.Context, backupID uuid.UUID, wasRunning bool) error {
+	if err := r.store.SetBackupWasRunning(ctx, sqlc.SetBackupWasRunningParams{
+		ID:         pgUUID(backupID),
+		WasRunning: wasRunning,
+	}); err != nil {
+		return fmt.Errorf("databases: record backup was_running: %w", err)
+	}
+	return nil
 }
 
 // CreateRestore implements BackupRepository.
@@ -467,6 +481,7 @@ func backupFromRow(row sqlc.Backup) Backup {
 		Location:    row.Location,
 		TargetID:    uuidFromPG(row.TargetID),
 		ContainerID: row.ContainerID,
+		WasRunning:  row.WasRunning,
 		Error:       row.Error,
 		CreatedAt:   timeFromPG(row.CreatedAt),
 		FinishedAt:  timeFromPG(row.FinishedAt),

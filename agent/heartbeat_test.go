@@ -267,6 +267,87 @@ func TestAgentRetriesRegisterUntilCanceled(t *testing.T) {
 	}
 }
 
+// TestNextBackoffGrowthAndCap pins the exponential growth and the cap that the
+// jittered schedule is built on (A3-12).
+func TestNextBackoffGrowthAndCap(t *testing.T) {
+	const max = 30 * time.Second
+	got := time.Second
+	for _, want := range []time.Duration{
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+		16 * time.Second,
+		max,
+		max,
+	} {
+		got = nextBackoff(got, max)
+		if got != want {
+			t.Fatalf("nextBackoff = %v; want %v", got, want)
+		}
+	}
+}
+
+// TestJitterBounded pins the A3-12 jitter bounds: every wait stays within ±20%
+// of the nominal backoff and is clamped to [min, max].
+func TestJitterBounded(t *testing.T) {
+	const (
+		min  = 10 * time.Millisecond
+		max  = time.Second
+		base = 100 * time.Millisecond
+	)
+	spread := time.Duration(float64(base) * backoffJitterFraction)
+	for i := 0; i < 2000; i++ {
+		if got := jitter(base, min, max); got < base-spread || got > base+spread {
+			t.Fatalf("jitter(%v) = %v; want within ±20%% [%v,%v]", base, got, base-spread, base+spread)
+		}
+	}
+	floorSpread := time.Duration(float64(min) * backoffJitterFraction)
+	capSpread := time.Duration(float64(max) * backoffJitterFraction)
+	for i := 0; i < 200; i++ {
+		if got := jitter(min, min, max); got < min || got > min+floorSpread {
+			t.Fatalf("jitter at the floor = %v; want [%v,%v]", got, min, min+floorSpread)
+		}
+		if got := jitter(max, min, max); got < max-capSpread || got > max {
+			t.Fatalf("jitter at the cap = %v; want [%v,%v]", got, max-capSpread, max)
+		}
+	}
+	if got := jitter(0, min, max); got != min {
+		t.Fatalf("jitter(0) = %v; want the floor %v", got, min)
+	}
+}
+
+// TestAgentShortSessionsDoNotHotLoop is the A3-12 guard: a control plane that
+// accepts Register but drops every heartbeat stream must not make the agent
+// retry at the floor. Before the fix the backoff reset to the floor after each
+// short "success", pinning the loop at the minimum; now the backoff keeps
+// growing until a session lasts backoffResetAfter.
+func TestAgentShortSessionsDoNotHotLoop(t *testing.T) {
+	fake := &fakeAgentService{heartbeatFail: true}
+	dialOptions := startFakeCP(t, fake)
+
+	runner := NewAgent(Config{
+		CPAddr:  "passthrough:///bufnet",
+		NodeID:  "node-flap",
+		CertDir: t.TempDir(),
+	}, discardLogger(), nil,
+		WithHeartbeatInterval(time.Millisecond),
+		WithBackoff(10*time.Millisecond, 320*time.Millisecond),
+		WithDialOptions(dialOptions...),
+	)
+
+	// 250ms is far too short for the pre-fix floor-pinned loop to look like
+	// anything but a hot loop (it would attempt roughly every 10ms), while the
+	// growing schedule fits only a handful of attempts.
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	if err := runner.Run(ctx, nil); err != nil {
+		t.Fatalf("Run = %v; want nil after cancel", err)
+	}
+	if count := fake.registerCount(); count > 8 {
+		t.Errorf("register attempts = %d in 250ms; the short-session backoff is not growing (hot loop)", count)
+	}
+}
+
 func assertHeartbeat(t *testing.T, heartbeat *agentv1.HeartbeatRequest, wantContainers int64) {
 	t.Helper()
 	for name, value := range map[string]float64{

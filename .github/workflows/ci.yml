@@ -163,3 +163,6 @@ jobs:
 
       - name: Release install chain (test-release-install.sh)
         run: sh deploy/test-release-install.sh
+
+      - name: Agent reinstall behaviours (test-agent-install.sh)
+        run: sh deploy/test-agent-install.sh

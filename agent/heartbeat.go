@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"runtime"
 	"sync"
 	"time"
@@ -27,6 +28,14 @@ const (
 	// defaultRegisterTimeout bounds a single registration attempt so a stalled
 	// control plane cannot pin the loop (and block backoff/heartbeats).
 	defaultRegisterTimeout = 30 * time.Second
+	// backoffResetAfter is how long a registration must last before it counts
+	// as healthy and the reconnect backoff resets to the floor. A shorter
+	// session (a flap) keeps the growing backoff, so repeated reconnects cannot
+	// hot-loop at the floor.
+	backoffResetAfter = 30 * time.Second
+	// backoffJitterFraction bounds the per-attempt jitter to ±20% so a control
+	// plane flap does not have every agent retry in lockstep.
+	backoffJitterFraction = 0.2
 	// defaultRenewBefore re-registers for a fresh certificate this long before
 	// the current leaf expires.
 	defaultRenewBefore = 30 * 24 * time.Hour
@@ -187,15 +196,16 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 			if ctx.Err() != nil {
 				return nil
 			}
-			a.log.Warn("register failed; retrying", "error", err, "backoff", backoff.String())
-			if !sleepContext(ctx, backoff) {
+			delay := jitter(backoff, a.minBackoff, a.maxBackoff)
+			a.log.Warn("register failed; retrying", "error", err, "backoff", delay.String())
+			if !sleepContext(ctx, delay) {
 				return nil
 			}
 			backoff = nextBackoff(backoff, a.maxBackoff)
 			continue
 		}
 
-		backoff = a.minBackoff
+		sessionStart := time.Now()
 		a.log.Info("registered with control plane",
 			slog.String("node_id", a.cfg.NodeID),
 			slog.String("cp_version", response.GetCpVersion()),
@@ -251,7 +261,14 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 		if ctx.Err() != nil {
 			return nil
 		}
-		if !sleepContext(ctx, backoff) {
+		// Only a session long enough to count as healthy resets the reconnect
+		// backoff; a short-lived success (a flap) keeps the growing backoff so
+		// repeated reconnects cannot hot-loop at the floor.
+		if time.Since(sessionStart) >= backoffResetAfter {
+			backoff = a.minBackoff
+		}
+		delay := jitter(backoff, a.minBackoff, a.maxBackoff)
+		if !sleepContext(ctx, delay) {
 			return nil
 		}
 		backoff = nextBackoff(backoff, a.maxBackoff)
@@ -448,4 +465,23 @@ func nextBackoff(current, max time.Duration) time.Duration {
 		return max
 	}
 	return next
+}
+
+// jitter returns d with up to ±backoffJitterFraction random jitter, clamped to
+// [min, max]. Jittering every wait de-correlates agents so a control-plane flap
+// does not have them all retry on the same schedule.
+func jitter(d, min, max time.Duration) time.Duration {
+	if d <= 0 {
+		return min
+	}
+	spread := time.Duration(float64(d) * backoffJitterFraction)
+	delta := time.Duration((rand.Float64()*2 - 1) * float64(spread))
+	jittered := d + delta
+	if jittered < min {
+		jittered = min
+	}
+	if jittered > max {
+		jittered = max
+	}
+	return jittered
 }

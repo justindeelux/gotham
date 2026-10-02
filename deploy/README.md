@@ -119,6 +119,12 @@ identities (its hostname and addresses): the CP refuses to register those, so a
 co-located install must set an explicit distinct node id. See `docs/install.md`,
 "Node agent".
 
+Re-running `install-agent.sh` is a safe reinstall: values the invocation does not
+set (for example the control plane address and node id) are kept from the
+existing `agent.env`, operator-added keys are preserved, and a running agent is
+restarted onto the newly installed binary. Pass a value again (flag or
+environment) to override it.
+
 Re-running `install.sh` on a pre-existing plaintext control plane flips it to
 TLS; agents installed before that go offline until they are reinstalled with
 `--ca` (see `docs/install.md`, "Upgrading an existing control plane").

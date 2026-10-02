@@ -52,11 +52,25 @@ func IsMigrateCommand(command string) bool {
 // "down" exists for local development and rolls back a single version.
 //
 // "up" and "down" mutate the shared schema, so they hold a session-level
-// PostgreSQL advisory lock for the whole run. The lock is released when the
-// connection closes (including on a crash), and a concurrent run fails fast
-// with ErrMigrationInProgress instead of interleaving goose's bookkeeping.
-// "status" only reads, so it runs without the lock.
+// PostgreSQL advisory lock for the whole run and wait for any concurrent run to
+// finish, respecting ctx. The lock is released when the connection closes
+// (including on a crash). "status" only reads, so it runs without the lock.
+//
+// Callers that must not wait use MigrateFailFast.
 func Migrate(ctx context.Context, dsn, command string) error {
+	return migrate(ctx, dsn, command, false)
+}
+
+// MigrateFailFast is Migrate without the wait: when another run holds the
+// migration lock it returns ErrMigrationInProgress immediately. The CLI uses it
+// so a second `gotham migrate` fails clearly instead of queueing behind the
+// first. Test setup uses Migrate so parallel packages serialize on the lock.
+func MigrateFailFast(ctx context.Context, dsn, command string) error {
+	return migrate(ctx, dsn, command, true)
+}
+
+// migrate is the shared implementation behind Migrate and MigrateFailFast.
+func migrate(ctx context.Context, dsn, command string, failFast bool) error {
 	if !IsMigrateCommand(command) {
 		return fmt.Errorf("%w: %q", ErrUnknownMigrateCommand, command)
 	}
@@ -84,12 +98,16 @@ func Migrate(ctx context.Context, dsn, command string) error {
 	// no explicit unlock is needed, so a killed process cannot leave it held.
 	defer func() { _ = conn.Close() }()
 
-	var locked bool
-	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", migrationLockID).Scan(&locked); err != nil {
+	if failFast {
+		var locked bool
+		if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", migrationLockID).Scan(&locked); err != nil {
+			return fmt.Errorf("acquire migration lock: %w", err)
+		}
+		if !locked {
+			return ErrMigrationInProgress
+		}
+	} else if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
 		return fmt.Errorf("acquire migration lock: %w", err)
-	}
-	if !locked {
-		return ErrMigrationInProgress
 	}
 
 	if command == MigrateUp {

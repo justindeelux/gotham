@@ -649,4 +649,20 @@ func TestApplyChangeReportsOnlyLevelApplied(t *testing.T) {
 	if !sawRestartWarning {
 		t.Errorf("missing restart warning for changed log.format; log = %q", buf.String())
 	}
+
+	// A level-only reload while the format still differs must not warn again.
+	buf.Reset()
+	writeConfig(t, dir, "log:\n  level: error\n  format: text\n")
+	cfg.applyChange(nil)
+	if strings.Contains(buf.String(), "restart required to apply") {
+		t.Errorf("level-only reload warned about log.format: %q", buf.String())
+	}
+
+	// Returning to the startup format is already live: no warning either.
+	buf.Reset()
+	writeConfig(t, dir, "log:\n  level: warn\n  format: json\n")
+	cfg.applyChange(nil)
+	if strings.Contains(buf.String(), "restart required to apply") {
+		t.Errorf("format returned to the startup value but warned again: %q", buf.String())
+	}
 }

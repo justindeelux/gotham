@@ -18,22 +18,19 @@ func testDSN() string {
 	return "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 }
 
-// TestMigrateFailsWhenLockHeld is the concurrent case: while another session
-// holds the migration advisory lock, a run must fail fast instead of racing it,
-// and once the holder goes away the lock must be available again.
-func TestMigrateFailsWhenLockHeld(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+// holdMigrationLock opens a session that holds the migration advisory lock
+// until the returned connection is closed. It blocks until the lock is free
+// (other packages' Migrate calls also use it) and disables idle connections so
+// closing it really ends the session and frees the lock.
+func holdMigrationLock(t *testing.T, ctx context.Context, dsn string) *sql.Conn {
+	t.Helper()
 
-	dsn := testDSN()
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	defer func() { _ = db.Close() }()
-	// Returned connections must really close, so ending the holder's session
-	// releases its advisory lock instead of parking it back in the pool.
 	db.SetMaxIdleConns(0)
+	t.Cleanup(func() { _ = db.Close() })
 
 	if err := db.PingContext(ctx); err != nil {
 		t.Skipf("Postgres not available: %v", err)
@@ -43,25 +40,61 @@ func TestMigrateFailsWhenLockHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("checkout lock connection: %v", err)
 	}
-	defer func() { _ = conn.Close() }()
+	t.Cleanup(func() { _ = conn.Close() })
 
-	var locked bool
-	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", migrationLockID).Scan(&locked); err != nil {
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
 		t.Fatalf("acquire test lock: %v", err)
 	}
-	if !locked {
-		t.Fatal("could not acquire the migration lock for the test")
+	return conn
+}
+
+// TestMigrateFailFastFailsWhenLockHeld is the concurrent CLI case: while
+// another session holds the migration lock, up and down must both fail fast.
+func TestMigrateFailFastFailsWhenLockHeld(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := testDSN()
+	_ = holdMigrationLock(t, ctx, dsn)
+
+	for _, command := range []string{MigrateUp, MigrateDown} {
+		t.Run(command, func(t *testing.T) {
+			if err := MigrateFailFast(ctx, dsn, command); !errors.Is(err, ErrMigrationInProgress) {
+				t.Fatalf("MigrateFailFast(%s) while locked = %v, want ErrMigrationInProgress", command, err)
+			}
+		})
+	}
+}
+
+// TestMigrateWaitsForLock is the parallel-test case: Migrate must block on a
+// held lock (instead of failing) and proceed once the holder releases it.
+func TestMigrateWaitsForLock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := testDSN()
+	conn := holdMigrationLock(t, ctx, dsn)
+
+	done := make(chan error, 1)
+	go func() { done <- Migrate(ctx, dsn, MigrateUp) }()
+
+	// The run must still be waiting while the lock is held.
+	select {
+	case err := <-done:
+		t.Fatalf("Migrate returned while the lock was held: %v", err)
+	case <-time.After(300 * time.Millisecond):
 	}
 
-	if err := Migrate(ctx, dsn, MigrateUp); !errors.Is(err, ErrMigrationInProgress) {
-		t.Fatalf("Migrate while locked = %v, want ErrMigrationInProgress", err)
-	}
-
-	// Ending the holder's session releases the lock; a fresh run must get it.
+	// Ending the holder's session releases the lock; the waiter must proceed.
 	if err := conn.Close(); err != nil {
 		t.Fatalf("close lock connection: %v", err)
 	}
-	if err := Migrate(ctx, dsn, MigrateUp); errors.Is(err, ErrMigrationInProgress) {
-		t.Fatal("Migrate after release = ErrMigrationInProgress, want the lock available")
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Migrate after release: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Migrate did not proceed after the lock was released")
 	}
 }

@@ -286,7 +286,7 @@ func runMigrate(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := store.Migrate(ctx, cfg.Database.DSN, command); err != nil {
+	if err := store.MigrateFailFast(ctx, cfg.Database.DSN, command); err != nil {
 		fmt.Fprintf(os.Stderr, "migrate %s: %v\n", command, err)
 		return exitError
 	}

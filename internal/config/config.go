@@ -7,8 +7,8 @@
 //  3. environment variables with the GOTHAM_ prefix.
 //
 // A missing gotham.yaml is not an error: the defaults apply. Hot reload is
-// driven by viper's WatchConfig (fsnotify), so no SIGHUP handler is required;
-// the operating system reports file changes directly.
+// driven by an fsnotify watch on the config directory, so no SIGHUP handler is
+// required; the operating system reports file changes directly.
 package config
 
 import (
@@ -194,6 +194,10 @@ type Config struct {
 	watchMu         sync.Mutex
 	lastFingerprint [sha256.Size]byte
 	haveFingerprint bool
+	// startupLogFormat is the log format the running handler was built with.
+	// A hot reload cannot change it, so it is the reference for the "restart
+	// required" warning: a format that returns to this value is already live.
+	startupLogFormat string
 }
 
 // Load builds a Config from defaults, the optional gotham.yaml in the current
@@ -209,6 +213,8 @@ func Load() (*Config, error) {
 	if err := cfg.reload(); err != nil {
 		return nil, err
 	}
+	// The logger handler is built from this value; hot reload cannot change it.
+	cfg.startupLogFormat = cfg.Log.Format
 	if fingerprint, ok := cfg.fingerprint(); ok {
 		cfg.lastFingerprint = fingerprint
 		cfg.haveFingerprint = true
@@ -250,7 +256,9 @@ func (c *Config) Watch(onChange func()) {
 	c.watchDirectory(onChange)
 }
 
-// watchDirectory is the atomic-save-resilient companion to viper's own watch.
+// watchDirectory is the single watcher behind Watch. Watching the directory
+// (rather than the file) keeps reload working across the atomic saves editors
+// perform.
 func (c *Config) watchDirectory(onChange func()) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -413,7 +421,11 @@ func (c *Config) applyChange(onChange func()) {
 			"path", c.v.ConfigFileUsed(),
 			"log_level", snap.Log.Level,
 		)
-		if !strings.EqualFold(strings.TrimSpace(previousFormat), strings.TrimSpace(snap.Log.Format)) {
+		// Warn only when the format just moved to a value the running handler
+		// is not already using: a format that returns to the startup value is
+		// live again, and a level-only reload leaves it untouched.
+		if !strings.EqualFold(strings.TrimSpace(previousFormat), strings.TrimSpace(snap.Log.Format)) &&
+			!strings.EqualFold(strings.TrimSpace(c.startupLogFormat), strings.TrimSpace(snap.Log.Format)) {
 			logger.Warn("log.format changed; restart required to apply",
 				"log_format", snap.Log.Format)
 		}
@@ -423,8 +435,8 @@ func (c *Config) applyChange(onChange func()) {
 	}
 }
 
-// fingerprint hashes the raw config file so duplicate change events from the
-// viper watcher and the directory watcher collapse into a single reload.
+// fingerprint hashes the raw config file so repeated change events for one edit
+// collapse into a single reload.
 func (c *Config) fingerprint() ([sha256.Size]byte, bool) {
 	path := c.v.ConfigFileUsed()
 	if path == "" {

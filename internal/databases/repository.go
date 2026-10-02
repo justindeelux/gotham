@@ -29,9 +29,20 @@ type Repository interface {
 	// ListDatabases returns the live databases of the scope's active team
 	// (or, without a team context, of the creator), newest first.
 	ListDatabases(ctx context.Context, scope teams.Scope) ([]Database, error)
-	// UpdateDatabase persists the mutable fields, or ErrNotFound when the row
-	// is gone or already deleted.
-	UpdateDatabase(ctx context.Context, database Database) (Database, error)
+	// UpdateDatabaseName persists only the name, or ErrNotFound when the row
+	// is gone or already deleted. Scoping the write to one column keeps a
+	// rename from clobbering a concurrent status or container-id change.
+	UpdateDatabaseName(ctx context.Context, databaseID uuid.UUID, name string) (Database, error)
+	// UpdateDatabaseContainer persists only the container id, or ErrNotFound
+	// when the row is gone or already deleted (the write must not resurrect a
+	// soft-deleted row).
+	UpdateDatabaseContainer(ctx context.Context, databaseID uuid.UUID, containerID string) (Database, error)
+	// UpdateDatabaseStatus persists only the status, or ErrNotFound when the
+	// row is gone or already deleted.
+	UpdateDatabaseStatus(ctx context.Context, databaseID uuid.UUID, status Status) (Database, error)
+	// PublicPortInUse reports whether a live database already publishes
+	// publicPort on serverID.
+	PublicPortInUse(ctx context.Context, serverID uuid.UUID, publicPort int32) (bool, error)
 	// SoftDeleteDatabase marks the row deleted without touching the volume.
 	SoftDeleteDatabase(ctx context.Context, databaseID uuid.UUID) (Database, error)
 	// ListExpiredDatabases returns soft-deleted databases whose grace window
@@ -52,6 +63,9 @@ type Repository interface {
 	CreateSecret(ctx context.Context, secret Secret) (Secret, error)
 	// ListSecrets returns a database's sealed credentials, sorted by key.
 	ListSecrets(ctx context.Context, databaseID uuid.UUID) ([]Secret, error)
+	// DeleteDatabaseSecrets removes every sealed credential of a database,
+	// rolling back a partially-written credential set on create failure.
+	DeleteDatabaseSecrets(ctx context.Context, databaseID uuid.UUID) error
 	// ServerExists reports whether the target node is registered AND
 	// actionable by the caller's active team. A node of another team answers
 	// false, like a missing one, so node IDs cannot be probed (F6); a legacy
@@ -130,24 +144,66 @@ func (r *storeRepository) ListDatabases(ctx context.Context, scope teams.Scope) 
 	return databases, nil
 }
 
-// UpdateDatabase implements Repository, mapping a missing row to ErrNotFound.
-func (r *storeRepository) UpdateDatabase(ctx context.Context, database Database) (Database, error) {
-	row, err := r.store.UpdateDatabase(ctx, sqlc.UpdateDatabaseParams{
-		ID:          pgUUID(database.ID),
-		Name:        database.Name,
-		Status:      string(database.Status),
-		ContainerID: database.ContainerID,
+// UpdateDatabaseName implements Repository, mapping a missing (or already
+// soft-deleted) row to ErrNotFound.
+func (r *storeRepository) UpdateDatabaseName(ctx context.Context, databaseID uuid.UUID, name string) (Database, error) {
+	row, err := r.store.UpdateDatabaseName(ctx, sqlc.UpdateDatabaseNameParams{
+		ID:   pgUUID(databaseID),
+		Name: name,
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
-			return Database{}, ErrConflict
-		}
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Database{}, ErrNotFound
-		}
-		return Database{}, fmt.Errorf("databases: update database: %w", err)
+		return Database{}, updateDatabaseError("name", err)
 	}
 	return databaseFromRow(row), nil
+}
+
+// UpdateDatabaseContainer implements Repository.
+func (r *storeRepository) UpdateDatabaseContainer(ctx context.Context, databaseID uuid.UUID, containerID string) (Database, error) {
+	row, err := r.store.UpdateDatabaseContainer(ctx, sqlc.UpdateDatabaseContainerParams{
+		ID:          pgUUID(databaseID),
+		ContainerID: containerID,
+	})
+	if err != nil {
+		return Database{}, updateDatabaseError("container", err)
+	}
+	return databaseFromRow(row), nil
+}
+
+// UpdateDatabaseStatus implements Repository.
+func (r *storeRepository) UpdateDatabaseStatus(ctx context.Context, databaseID uuid.UUID, status Status) (Database, error) {
+	row, err := r.store.UpdateDatabaseStatus(ctx, sqlc.UpdateDatabaseStatusParams{
+		ID:     pgUUID(databaseID),
+		Status: string(status),
+	})
+	if err != nil {
+		return Database{}, updateDatabaseError("status", err)
+	}
+	return databaseFromRow(row), nil
+}
+
+// PublicPortInUse implements Repository.
+func (r *storeRepository) PublicPortInUse(ctx context.Context, serverID uuid.UUID, publicPort int32) (bool, error) {
+	inUse, err := r.store.PublicPortInUse(ctx, sqlc.PublicPortInUseParams{
+		ServerID:   pgUUID(serverID),
+		PublicPort: publicPort,
+	})
+	if err != nil {
+		return false, fmt.Errorf("databases: check public port: %w", err)
+	}
+	return inUse, nil
+}
+
+// updateDatabaseError maps the shared failure modes of the column-scoped
+// updates: a unique-name violation is a conflict and a missing/fenced row is
+// not-found.
+func updateDatabaseError(column string, err error) error {
+	if isUniqueViolation(err) {
+		return ErrConflict
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return fmt.Errorf("databases: update database %s: %w", column, err)
 }
 
 // SoftDeleteDatabase implements Repository. A row that is already deleted
@@ -211,6 +267,14 @@ func (r *storeRepository) ListSecrets(ctx context.Context, databaseID uuid.UUID)
 		secrets = append(secrets, secretFromRow(row))
 	}
 	return secrets, nil
+}
+
+// DeleteDatabaseSecrets implements Repository.
+func (r *storeRepository) DeleteDatabaseSecrets(ctx context.Context, databaseID uuid.UUID) error {
+	if err := r.store.DeleteDatabaseSecrets(ctx, pgUUID(databaseID)); err != nil {
+		return fmt.Errorf("databases: delete secrets: %w", err)
+	}
+	return nil
 }
 
 // ServerExists implements Repository using the node registry table and the

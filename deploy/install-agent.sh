@@ -8,6 +8,11 @@
 # update wrapper + sudoers rule, creates the gotham-agent system user and
 # enables the systemd unit.
 #
+# Re-running it is a reinstall: keys left unset keep the value the previous run
+# wrote (so the control plane address and node id survive), operator-added keys
+# are preserved, and a unit that is already running is restarted onto the newly
+# installed binary.
+#
 # The release binary is downloaded with the same signed-manifest verification as
 # the control-plane installer (deploy/release-verify.sh): the Ed25519 signature
 # of gotham-agent-manifest-<arch>.txt is checked against the embedded release
@@ -31,8 +36,9 @@
 # Usage:
 #   sudo ./install-agent.sh [--ca <path>] [--insecure] [--dry-run]
 #
-# Environment variables written to /etc/gotham/agent.env (unset values are
-# omitted so the agent keeps its built-in default):
+# Environment variables written to /etc/gotham/agent.env. A key left unset keeps
+# the value a previous install wrote (or the agent's built-in default on a fresh
+# install):
 #   GOTHAM_AGENT_CP_ADDR
 #   GOTHAM_AGENT_NODE_ID
 #   GOTHAM_AGENT_LISTEN_ADDR
@@ -87,7 +93,9 @@ while [ "$#" -gt 0 ]; do
             CA_SOURCE="${1#--ca=}"
             ;;
         -h | --help)
-            sed -n '2,45p' "$0"
+            # Print every leading comment line (the header), not a fixed range,
+            # so the documented env list cannot drift out of --help.
+            awk 'NR == 1 { next } /^[^#]/ { exit } { print }' "$0"
             exit 0
             ;;
         *)
@@ -116,7 +124,7 @@ log() {
 # config and the sudoers installer). Fail early with a clear message rather than
 # aborting after the user has been created and the binary installed.
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-for sibling in release-verify.sh gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh; do
+for sibling in release-verify.sh gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh install-agent-lib.sh; do
     if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
         echo "install-agent.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
         exit 2
@@ -124,6 +132,8 @@ for sibling in release-verify.sh gotham-update.sh gotham-agent-updater.conf inst
 done
 # shellcheck source=deploy/release-verify.sh
 . "${SCRIPT_DIR}/release-verify.sh"
+# shellcheck source=deploy/install-agent-lib.sh
+. "${SCRIPT_DIR}/install-agent-lib.sh"
 
 detect_arch() {
     case "$(uname -m)" in
@@ -266,44 +276,11 @@ fi
 
 log "writing ${ENV_FILE}"
 if [ "${DRY_RUN}" -eq 1 ]; then
-    echo "[dry-run] write ${ENV_FILE} from GOTHAM_AGENT_* environment"
+    echo "[dry-run] write ${ENV_FILE} from GOTHAM_AGENT_* environment (preserving prior values)"
 else
-    # Restrictive umask only around the env write; the directory stays 0755.
-    (
-        umask 077
-        : >"${ENV_FILE}"
-        for key in \
-            GOTHAM_AGENT_CP_ADDR \
-            GOTHAM_AGENT_NODE_ID \
-            GOTHAM_AGENT_LISTEN_ADDR \
-            GOTHAM_AGENT_CERT_DIR \
-            GOTHAM_AGENT_KEY \
-            GOTHAM_AGENT_DOCKER_SOCK \
-            GOTHAM_AGENT_LOG_LEVEL \
-            GOTHAM_AGENT_AUTO_UPDATE \
-            GOTHAM_AGENT_UPDATE_INTERVAL \
-            GOTHAM_AGENT_UPDATE_CHANNEL; do
-            eval "value=\${${key}:-}"
-            if [ -n "${value}" ]; then
-                printf '%s=%s\n' "${key}" "${value}" >>"${ENV_FILE}"
-            fi
-        done
-        # The CA path is resolved above (never taken verbatim from the ambient
-        # GOTHAM_AGENT_CA, which the installer itself does not write).
-        if [ -n "${AGENT_CA_PATH}" ]; then
-            printf 'GOTHAM_AGENT_CA=%s\n' "${AGENT_CA_PATH}" >>"${ENV_FILE}"
-        elif [ "${INSECURE}" -eq 1 ]; then
-            # Match the agent's fail-closed runtime: plaintext needs the
-            # explicit opt-in and a loopback listener. Keep the documented dev
-            # path working by defaulting the address when the operator did not
-            # set one.
-            printf 'GOTHAM_AGENT_INSECURE=true\n' >>"${ENV_FILE}"
-            if [ -z "${GOTHAM_AGENT_LISTEN_ADDR:-}" ]; then
-                printf 'GOTHAM_AGENT_LISTEN_ADDR=127.0.0.1:9443\n' >>"${ENV_FILE}"
-            fi
-        fi
-    )
-    chmod 0640 "${ENV_FILE}"
+    # Reinstall: keys this invocation does not set keep the value a previous
+    # install wrote, so the CP address and node id are not lost.
+    agent_env_write "${ENV_FILE}" "${AGENT_CA_PATH}" "${INSECURE}"
     chown root:"${SERVICE_USER}" "${ENV_FILE}"
 fi
 
@@ -380,6 +357,16 @@ fi
 
 log "enabling ${BINARY_NAME}"
 run systemctl daemon-reload
-run systemctl enable --now gotham-agent.service
+if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "[dry-run] systemctl enable gotham-agent.service"
+    echo "[dry-run] systemctl restart gotham-agent.service (or start when inactive)"
+else
+    # A reinstall must not leave the previous process running: restart the unit
+    # when it is already active (start it otherwise) and confirm it will exec the
+    # binary just installed.
+    systemctl enable gotham-agent.service
+    agent_service_restart gotham-agent.service "${INSTALL_PATH}" \
+        || { echo "install-agent.sh: could not bring gotham-agent onto the new binary" >&2; exit 1; }
+fi
 
 log "done. Check status with: systemctl status gotham-agent"

@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	mathrand "math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -264,6 +265,215 @@ func TestAgentRetriesRegisterUntilCanceled(t *testing.T) {
 	}
 	if count := fake.registerCount(); count < 2 {
 		t.Errorf("register attempts = %d; want >= 2", count)
+	}
+}
+
+// TestNextBackoffGrowthAndCap pins the exponential growth and the cap that the
+// jittered schedule is built on (A3-12).
+func TestNextBackoffGrowthAndCap(t *testing.T) {
+	const max = 30 * time.Second
+	got := time.Second
+	for _, want := range []time.Duration{
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+		16 * time.Second,
+		max,
+		max,
+	} {
+		got = nextBackoff(got, max)
+		if got != want {
+			t.Fatalf("nextBackoff = %v; want %v", got, want)
+		}
+	}
+}
+
+// TestJitterBounded pins the A3-12 jitter bounds: every wait stays within ±20%
+// of the nominal backoff and is clamped to [min, max].
+func TestJitterBounded(t *testing.T) {
+	// Pin the documented fraction against a literal so changing the constant
+	// cannot silently change the tested bound.
+	if backoffJitterFraction != 0.2 {
+		t.Fatalf("backoffJitterFraction = %v; want 0.2", backoffJitterFraction)
+	}
+	const (
+		min      = 10 * time.Millisecond
+		max      = time.Second
+		base     = 100 * time.Millisecond
+		fraction = 0.2
+	)
+	spread := time.Duration(float64(base) * fraction)
+	seen := map[time.Duration]struct{}{}
+	below, above := 0, 0
+	for i := 0; i < 2000; i++ {
+		got := jitter(base, min, max, mathrand.Float64)
+		if got < base-spread || got > base+spread {
+			t.Fatalf("jitter(%v) = %v; want within ±20%% [%v,%v]", base, got, base-spread, base+spread)
+		}
+		seen[got] = struct{}{}
+		if got < base {
+			below++
+		} else if got > base {
+			above++
+		}
+	}
+	// The samples must actually spread around the base and land on both sides;
+	// otherwise the "jitter" is a no-op.
+	if len(seen) < 100 {
+		t.Fatalf("jitter produced only %d distinct values; want real spread", len(seen))
+	}
+	if below == 0 || above == 0 {
+		t.Fatalf("jitter never crossed the base (below=%d above=%d)", below, above)
+	}
+	floorSpread := time.Duration(float64(min) * fraction)
+	capSpread := time.Duration(float64(max) * fraction)
+	for i := 0; i < 200; i++ {
+		if got := jitter(min, min, max, mathrand.Float64); got < min || got > min+floorSpread {
+			t.Fatalf("jitter at the floor = %v; want [%v,%v]", got, min, min+floorSpread)
+		}
+		if got := jitter(max, min, max, mathrand.Float64); got < max-capSpread || got > max {
+			t.Fatalf("jitter at the cap = %v; want [%v,%v]", got, max-capSpread, max)
+		}
+	}
+	if got := jitter(0, min, max, mathrand.Float64); got != min {
+		t.Fatalf("jitter(0) = %v; want the floor %v", got, min)
+	}
+}
+
+// TestAgentRegisterFailureBackoffIsJittered is the A3-12 guard for the
+// register-failure path: the wait is jittered around the nominal backoff, so a
+// fixed random source yields a deterministic lower/upper schedule rather than
+// the bare backoff.
+func TestAgentRegisterFailureBackoffIsJittered(t *testing.T) {
+	const (
+		min = 10 * time.Millisecond
+		max = time.Second
+	)
+	lower := []time.Duration{min, 16 * time.Millisecond, 32 * time.Millisecond} // nominal -20%, floor-clamped
+	upper := []time.Duration{12 * time.Millisecond, 24 * time.Millisecond, 48 * time.Millisecond}
+
+	for _, tc := range []struct {
+		name string
+		rand float64
+		want []time.Duration
+	}{
+		{"lower", 0, lower},
+		{"upper", 1, upper},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeAgentService{registerErr: errors.New("control plane unreachable")}
+			dialOptions := startFakeCP(t, fake)
+			runner := NewAgent(Config{
+				CPAddr:  "passthrough:///bufnet",
+				NodeID:  "node-register-jitter",
+				CertDir: t.TempDir(),
+			}, discardLogger(), nil,
+				WithBackoff(min, max),
+				WithDialOptions(dialOptions...),
+			)
+			runner.randFloat = func() float64 { return tc.rand }
+			var delays []time.Duration
+			runner.sleep = func(_ context.Context, d time.Duration) bool {
+				delays = append(delays, d)
+				return len(delays) < len(tc.want)
+			}
+			if err := runner.Run(context.Background(), nil); err != nil {
+				t.Fatalf("Run = %v; want nil", err)
+			}
+			if len(delays) != len(tc.want) {
+				t.Fatalf("recorded %d delays; want %d", len(delays), len(tc.want))
+			}
+			for i := range tc.want {
+				if delays[i] != tc.want[i] {
+					t.Fatalf("register-failure delay[%d] = %v; want %v (full %v)", i, delays[i], tc.want[i], delays)
+				}
+			}
+		})
+	}
+}
+
+// TestBackoffResetAfterHealthySession pins the reset gate (U7): a session at
+// least backoffResetAfter long resets the backoff to the floor, a shorter one
+// keeps growing. Both schedules are driven deterministically through the
+// injected rand/sleep seams.
+func TestBackoffResetAfterHealthySession(t *testing.T) {
+	const min = 10 * time.Millisecond
+	delays := func(resetAfter time.Duration) []time.Duration {
+		fake := &fakeAgentService{heartbeatFail: true}
+		dialOptions := startFakeCP(t, fake)
+		runner := NewAgent(Config{
+			CPAddr:  "passthrough:///bufnet",
+			NodeID:  "node-reset",
+			CertDir: t.TempDir(),
+		}, discardLogger(), nil,
+			WithHeartbeatInterval(time.Millisecond),
+			WithBackoff(min, time.Second),
+			WithBackoffResetAfter(resetAfter),
+			WithDialOptions(dialOptions...),
+		)
+		runner.randFloat = func() float64 { return 0 } // nominal -20%
+		var got []time.Duration
+		runner.sleep = func(_ context.Context, d time.Duration) bool {
+			got = append(got, d)
+			return len(got) < 4
+		}
+		if err := runner.Run(context.Background(), nil); err != nil {
+			t.Fatalf("Run = %v; want nil", err)
+		}
+		return got
+	}
+
+	// A session longer than the (tiny) reset window resets before every wait, so
+	// the delay stays at the jittered floor.
+	short := delays(time.Nanosecond)
+	for i, d := range short {
+		if d < 8*time.Millisecond || d > min {
+			t.Fatalf("reset-window session: delay[%d] = %v; want ~%v", i, d, min)
+		}
+	}
+	// A session shorter than the (huge) reset window never resets, so the delay
+	// grows: 10, 20, 40, 80ms (each -20% jitter).
+	long := delays(time.Hour)
+	want := []time.Duration{min, 16 * time.Millisecond, 32 * time.Millisecond, 64 * time.Millisecond}
+	if len(long) != len(want) {
+		t.Fatalf("recorded %d delays; want %d", len(long), len(want))
+	}
+	for i := range want {
+		if long[i] != want[i] {
+			t.Fatalf("short-session delay[%d] = %v; want %v (full %v)", i, long[i], want[i], long)
+		}
+	}
+}
+
+// TestAgentShortSessionsDoNotHotLoop is the A3-12 guard: a control plane that
+// accepts Register but drops every heartbeat stream must not make the agent
+// retry at the floor. Before the fix the backoff reset to the floor after each
+// short "success", pinning the loop at the minimum; now the backoff keeps
+// growing until a session lasts backoffResetAfter.
+func TestAgentShortSessionsDoNotHotLoop(t *testing.T) {
+	fake := &fakeAgentService{heartbeatFail: true}
+	dialOptions := startFakeCP(t, fake)
+
+	runner := NewAgent(Config{
+		CPAddr:  "passthrough:///bufnet",
+		NodeID:  "node-flap",
+		CertDir: t.TempDir(),
+	}, discardLogger(), nil,
+		WithHeartbeatInterval(time.Millisecond),
+		WithBackoff(10*time.Millisecond, 320*time.Millisecond),
+		WithDialOptions(dialOptions...),
+	)
+
+	// 250ms is far too short for the pre-fix floor-pinned loop to look like
+	// anything but a hot loop (it would attempt roughly every 10ms), while the
+	// growing schedule fits only a handful of attempts.
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	if err := runner.Run(ctx, nil); err != nil {
+		t.Fatalf("Run = %v; want nil after cancel", err)
+	}
+	if count := fake.registerCount(); count > 8 {
+		t.Errorf("register attempts = %d in 250ms; the short-session backoff is not growing (hot loop)", count)
 	}
 }
 

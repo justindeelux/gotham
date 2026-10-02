@@ -16,6 +16,9 @@ var (
 	ErrAgentUnavailable = errors.New("containers: agent unavailable")
 	// ErrValidation reports a malformed request (empty image, empty IDs).
 	ErrValidation = errors.New("containers: invalid request")
+	// ErrPortConflict reports a Docker host-port bind that another container
+	// already holds, so the caller can answer 409 instead of 500.
+	ErrPortConflict = errors.New("containers: host port already in use")
 	// ErrForbidden reports a caller whose team role does not permit the
 	// mutation (read_only member).
 	ErrForbidden = errors.New("containers: insufficient team role")

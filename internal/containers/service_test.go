@@ -792,6 +792,53 @@ func TestPortsFromLabels(t *testing.T) {
 	}
 }
 
+// TestMapRPCErrorPortConflict pins the Docker host-port collision taxonomy: the
+// daemon reports it as a generic 500, so the message text is the only signal
+// across gRPC. It must map to ErrPortConflict, not leak as an internal error.
+func TestMapRPCErrorPortConflict(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{
+			name: "docker port allocated",
+			err: status.Error(codes.Internal,
+				`run image: docker: POST /containers/x/start: status 500: {"message":"driver failed programming external connectivity ... Bind for 0.0.0.0:5433 failed: port is already allocated"}`),
+			want: ErrPortConflict,
+		},
+		{
+			name: "address already in use",
+			err:  status.Error(codes.Unknown, "run image: failed to bind host port: address already in use"),
+			want: ErrPortConflict,
+		},
+		{
+			name: "unrelated internal passes through",
+			err:  status.Error(codes.Internal, "docker: daemon exploded"),
+			want: nil,
+		},
+		{
+			name: "unavailable stays agent unavailable",
+			err:  status.Error(codes.Unavailable, "dial failed"),
+			want: ErrAgentUnavailable,
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			mapped := mapRPCError(tt.err)
+			if tt.want == nil {
+				if errors.Is(mapped, ErrPortConflict) {
+					t.Fatalf("mapRPCError() = %v, want the raw error, not ErrPortConflict", mapped)
+				}
+				return
+			}
+			if !errors.Is(mapped, tt.want) {
+				t.Fatalf("mapRPCError() = %v, want %v", mapped, tt.want)
+			}
+		})
+	}
+}
+
 func TestNopCache(t *testing.T) {
 	var cache Cache = NopCache{}
 	id := uuid.New()

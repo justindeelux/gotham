@@ -10,6 +10,9 @@ var (
 	ErrValidation = errors.New("databases: validation")
 	// ErrConflict — a live database with the same name exists (409).
 	ErrConflict = errors.New("databases: conflict")
+	// ErrPortConflict — the requested public port is already published on the
+	// node (409).
+	ErrPortConflict = errors.New("databases: public port already in use")
 	// ErrServerNotFound — target server missing (404).
 	ErrServerNotFound = errors.New("databases: server not found")
 	// ErrAgentUnavailable — node agent unreachable; the only retryable

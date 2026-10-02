@@ -388,6 +388,8 @@ func TestServiceErrorMapping(t *testing.T) {
 			bind: func(s *fakeDatabaseService) { s.getErr = ErrValidation }},
 		{name: "conflict", status: http.StatusConflict, err: ErrConflict,
 			bind: func(s *fakeDatabaseService) { s.updateErr = ErrConflict }},
+		{name: "port conflict", status: http.StatusConflict, err: ErrPortConflict,
+			bind: func(s *fakeDatabaseService) { s.createErr = ErrPortConflict }},
 		{name: "disabled", status: http.StatusServiceUnavailable, err: ErrDisabled,
 			bind: func(s *fakeDatabaseService) { s.getErr = ErrDisabled }},
 		{name: "agent unavailable", status: http.StatusBadGateway, err: ErrAgentUnavailable,
@@ -412,6 +414,9 @@ func TestServiceErrorMapping(t *testing.T) {
 					strings.NewReader(`{"name":"warehouse"}`))
 			case "agent unavailable", "healthcheck":
 				req = httptest.NewRequest(http.MethodPost, databasePath(databaseID, "/start"), nil)
+			case "port conflict":
+				req = httptest.NewRequest(http.MethodPost, databasePath(uuid.Nil, ""),
+					strings.NewReader(`{"name":"orders","engine":"postgres","server_id":"`+uuid.New().String()+`","public_port":5433}`))
 			default:
 				req = httptest.NewRequest(http.MethodGet, databasePath(databaseID, ""), nil)
 			}

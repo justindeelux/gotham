@@ -94,16 +94,17 @@ type Server struct {
 	// jobLeases is the exclusion registry shared by the database service and
 	// the backup manager: a backup/restore owns the volume while a lifecycle
 	// Start/Restart is refused, and vice versa.
-	jobLeases      *databases.JobLeases
-	notify         notifications.NotificationService
-	webhooks       *webhooks.Service
-	metrics        *servers.MetricsSweeper
-	sessionSweeper *auth.SessionSweeper
-	updates        updates.Service
-	authLimiter    *ipRateLimiter
-	refreshLimiter *ipRateLimiter
-	router         http.Handler
-	closer         func()
+	jobLeases         *databases.JobLeases
+	notify            notifications.NotificationService
+	webhooks          *webhooks.Service
+	metrics           *servers.MetricsSweeper
+	sessionSweeper    *auth.SessionSweeper
+	databasesRetainer *databases.RetentionSweeper
+	updates           updates.Service
+	authLimiter       *ipRateLimiter
+	refreshLimiter    *ipRateLimiter
+	router            http.Handler
+	closer            func()
 
 	// trustedProxies are the peers whose X-Forwarded-For / X-Forwarded-Proto
 	// headers are honored for client-IP keying and scheme detection. Empty
@@ -184,6 +185,9 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		}
 		if s.sessionSweeper != nil {
 			s.sessionSweeper.Close()
+		}
+		if s.databasesRetainer != nil {
+			s.databasesRetainer.Close()
 		}
 		if closer, ok := s.notify.(interface{ Close() error }); ok {
 			_ = closer.Close()
@@ -322,6 +326,13 @@ func (s *Server) routes() (http.Handler, error) {
 		// indistinguishable).
 		containerService := s.containerService()
 		containers.Mount(api, s.withTeam(), containerService)
+
+		// Deleted database volumes are kept for the grace window and then
+		// removed by the retention sweep. The loop starts here and is stopped
+		// by the closer above; a nil retainer (no database or container
+		// service) makes Start a no-op.
+		s.databasesRetainer = s.databasesRetention(containerService)
+		s.databasesRetainer.Start()
 
 		// Traefik proxy synchronization (BE-6.1) and the SSL surface
 		// (BE-6.2): the shared container service provisions the
@@ -748,6 +759,16 @@ func (s *Server) sessionRetention() *auth.SessionSweeper {
 		return nil
 	}
 	return auth.NewSessionSweeper(s.persistence, s.logger)
+}
+
+// databasesRetention builds the deleted-database grace-window sweep. It
+// returns nil without a database or container service (the handler tests) so
+// no goroutine is started.
+func (s *Server) databasesRetention(containerService containers.ContainerService) *databases.RetentionSweeper {
+	if s.persistence == nil || containerService == nil {
+		return nil
+	}
+	return databases.NewRetentionSweeper(s.persistence, containerService, s.logger)
 }
 
 // versionReporter exposes the control-plane build version without widening the

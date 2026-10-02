@@ -132,8 +132,8 @@ func TestEngineSpecs(t *testing.T) {
 			}
 
 			health := engine.Healthcheck()
-			if health.Probe != ProbeState {
-				t.Errorf("Healthcheck.Probe = %q, want %q", health.Probe, ProbeState)
+			if health.Probe != ProbeHealth {
+				t.Errorf("Healthcheck.Probe = %q, want %q", health.Probe, ProbeHealth)
 			}
 			if health.Timeout <= 0 {
 				t.Errorf("Healthcheck.Timeout = %s, want > 0", health.Timeout)
@@ -231,7 +231,9 @@ func TestValidateVersion(t *testing.T) {
 func TestHealthcheckCommandFor(t *testing.T) {
 	engine, _ := LookupEngine(EnginePostgres)
 	got := engine.Healthcheck().CommandFor(sampleCredentials)
-	want := []string{"pg_isready", "-U", "app", "-d", "appdb"}
+	// -h 127.0.0.1 keeps the probe on TCP: the bare command answers over the
+	// unix socket the first-boot server listens on before TCP is up.
+	want := []string{"pg_isready", "-h", "127.0.0.1", "-U", "app", "-d", "appdb"}
 	if !equalStrings(got, want) {
 		t.Errorf("postgres probe = %v, want %v", got, want)
 	}

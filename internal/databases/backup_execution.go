@@ -314,7 +314,7 @@ func (m *BackupManager) removeStagedArtifact(database Database, stagedPath strin
 	if err != nil || !safeJobPath(stagedPath) {
 		return
 	}
-	volume := engine.VolumeSpec()
+	volume := volumeSpecFor(engine, database.Version)
 	if strings.TrimSpace(volume.MountPath) == "" {
 		return
 	}
@@ -423,7 +423,7 @@ func (m *BackupManager) stageChunk(ctx context.Context, database Database, runID
 			labelRole:       roleStage,
 			labelBackupID:   runID.String(),
 		},
-		Volumes: []string{database.StoragePath + ":" + engine.VolumeSpec().MountPath},
+		Volumes: []string{database.StoragePath + ":" + volumeSpecFor(engine, database.Version).MountPath},
 	}
 	collector := newJobCollector(runID.String(), nil)
 	if _, err := m.runJob(ctx, database.ServerID, options, collector); err != nil {

@@ -58,6 +58,19 @@ SET status = 'deleting',
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
 
+-- name: ListExpiredDatabases :many
+-- Soft-deleted databases whose grace window has elapsed. The retention sweep
+-- is the only reader that looks past deleted_at; every API read filters it.
+SELECT * FROM databases
+WHERE deleted_at IS NOT NULL AND deleted_at <= $1
+ORDER BY deleted_at ASC, id ASC;
+
+-- name: PurgeDatabase :execrows
+-- Hard-deletes a soft-deleted database after its volume is removed; the
+-- database_secrets cascade with it. A live row is never purged.
+DELETE FROM databases
+WHERE id = $1 AND deleted_at IS NOT NULL;
+
 -- name: CreateDatabaseSecret :one
 INSERT INTO database_secrets (database_id, key, ciphertext)
 VALUES ($1, $2, $3)

@@ -152,6 +152,7 @@ func (c *DockerClient) ListContainers(ctx context.Context, all bool) ([]*agentv1
 			Status: summary.Status,
 			State:  summary.State,
 			Labels: summary.Labels,
+			Health: containerHealth(summary.Status),
 		}
 		for _, port := range summary.Ports {
 			// Only published TCP bindings matter for routing; a binding
@@ -229,6 +230,30 @@ func (c *DockerClient) Remove(ctx context.Context, id string) error {
 		return errors.New("docker: container id is required")
 	}
 	path := "/containers/" + url.PathEscape(id) + "?force=true&v=true"
+	response, err := c.doRaw(ctx, http.MethodDelete, path, nil, "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, response.Body)
+		return nil
+	}
+	if !dockerOK(response.StatusCode) {
+		return statusError(http.MethodDelete, path, response)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	return nil
+}
+
+// RemoveVolume deletes one named volume, forcing removal when it is still
+// referenced. A volume that is already gone (404) is reported as success so
+// the expiry sweep is idempotent; every other engine error is returned.
+func (c *DockerClient) RemoveVolume(ctx context.Context, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("docker: volume name is required")
+	}
+	path := "/volumes/" + url.PathEscape(name) + "?force=true"
 	response, err := c.doRaw(ctx, http.MethodDelete, path, nil, "")
 	if err != nil {
 		return err
@@ -803,6 +828,28 @@ func containerName(names []string) string {
 	return strings.TrimPrefix(names[0], "/")
 }
 
+// containerHealth extracts the Docker health status from a container summary's
+// human-readable status, which carries one of the following suffixes when the
+// container declares a healthcheck:
+//
+//	"(health: starting)" / "(healthy)" / "(unhealthy)"
+//
+// A container without a healthcheck has no marker and returns "". This mirrors
+// the summary contract Docker has kept stable; the exact value (rather than a
+// substring match) is what the control plane gates database readiness on.
+func containerHealth(status string) string {
+	switch {
+	case strings.Contains(status, "(healthy)"):
+		return "healthy"
+	case strings.Contains(status, "(unhealthy)"):
+		return "unhealthy"
+	case strings.Contains(status, "(health: starting)"):
+		return "starting"
+	default:
+		return ""
+	}
+}
+
 // dockerCreateBody is the Docker API container-create payload.
 type dockerCreateBody struct {
 	Image            string               `json:"Image"`
@@ -813,6 +860,18 @@ type dockerCreateBody struct {
 	ExposedPorts     map[string]struct{}  `json:"ExposedPorts,omitempty"`
 	HostConfig       *dockerHostConfig    `json:"HostConfig,omitempty"`
 	NetworkingConfig *dockerNetworkingCfg `json:"NetworkingConfig,omitempty"`
+	Healthcheck      *dockerHealthcheck   `json:"Healthcheck,omitempty"`
+}
+
+// dockerHealthcheck is the Docker API HealthConfig. Interval, Timeout and
+// StartPeriod are int64 nanoseconds, as the engine expects; Retries is a
+// count. Test is the exec-form command with "CMD" prepended.
+type dockerHealthcheck struct {
+	Test        []string `json:"Test,omitempty"`
+	Interval    int64    `json:"Interval,omitempty"`
+	Timeout     int64    `json:"Timeout,omitempty"`
+	StartPeriod int64    `json:"StartPeriod,omitempty"`
+	Retries     int      `json:"Retries,omitempty"`
 }
 
 // dockerHostConfig carries bind mounts and port bindings.
@@ -891,7 +950,28 @@ func buildCreateBody(req *agentv1.CreateContainerRequest) (*dockerCreateBody, er
 			body.NetworkingConfig = &dockerNetworkingCfg{EndpointsConfig: endpoints}
 		}
 	}
+	if health := toDockerHealthcheck(req.GetHealthcheck()); health != nil {
+		body.Healthcheck = health
+	}
 	return body, nil
+}
+
+// toDockerHealthcheck maps the proto healthcheck onto the Docker HealthConfig.
+// The command is exec-form ("CMD" plus the argv), so no shell is involved and
+// no quoting rules apply. Seconds become the nanoseconds the engine expects. A
+// nil request or an empty test disables the healthcheck (nil, not a zero
+// config, so an image with its own healthcheck is left untouched).
+func toDockerHealthcheck(h *agentv1.ContainerHealthcheck) *dockerHealthcheck {
+	if h == nil || len(h.GetTest()) == 0 {
+		return nil
+	}
+	return &dockerHealthcheck{
+		Test:        append([]string{"CMD"}, h.GetTest()...),
+		Interval:    h.GetIntervalSeconds() * int64(time.Second),
+		Timeout:     h.GetTimeoutSeconds() * int64(time.Second),
+		StartPeriod: h.GetStartPeriodSeconds() * int64(time.Second),
+		Retries:     int(h.GetRetries()),
+	}
 }
 
 // parsePortSpec parses a publish mapping: "container", "host:container" or

@@ -241,6 +241,49 @@ func (q *Queries) ListDatabasesByUser(ctx context.Context, userID pgtype.UUID) (
 	return items, nil
 }
 
+const listExpiredDatabases = `-- name: ListExpiredDatabases :many
+SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id FROM databases
+WHERE deleted_at IS NOT NULL AND deleted_at <= $1
+ORDER BY deleted_at ASC, id ASC
+`
+
+// Soft-deleted databases whose grace window has elapsed. The retention sweep
+// is the only reader that looks past deleted_at; every API read filters it.
+func (q *Queries) ListExpiredDatabases(ctx context.Context, deletedAt pgtype.Timestamptz) ([]Database, error) {
+	rows, err := q.db.Query(ctx, listExpiredDatabases, deletedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Database{}
+	for rows.Next() {
+		var i Database
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ServerID,
+			&i.Name,
+			&i.Engine,
+			&i.Version,
+			&i.Status,
+			&i.ContainerID,
+			&i.PublicPort,
+			&i.StoragePath,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.TeamID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const publicPortInUse = `-- name: PublicPortInUse :one
 SELECT EXISTS (
     SELECT 1 FROM databases
@@ -258,6 +301,21 @@ func (q *Queries) PublicPortInUse(ctx context.Context, arg PublicPortInUseParams
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const purgeDatabase = `-- name: PurgeDatabase :execrows
+DELETE FROM databases
+WHERE id = $1 AND deleted_at IS NOT NULL
+`
+
+// Hard-deletes a soft-deleted database after its volume is removed; the
+// database_secrets cascade with it. A live row is never purged.
+func (q *Queries) PurgeDatabase(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeDatabase, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const softDeleteDatabase = `-- name: SoftDeleteDatabase :one

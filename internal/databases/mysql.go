@@ -43,7 +43,7 @@ func (e *MySQLEngine) VolumeSpec() VolumeSpec {
 // the server accepts connections; the window covers first-boot initialisation.
 func (e *MySQLEngine) Healthcheck() Healthcheck {
 	return Healthcheck{
-		Probe:   ProbeState,
+		Probe:   ProbeHealth,
 		Command: []string{"mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p" + placeholderRootPassword},
 		Timeout: 90 * time.Second,
 	}

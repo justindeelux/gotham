@@ -59,6 +59,9 @@ type GatewayConfig struct {
 	// gateway closes it. Zero selects the production default; tests set a
 	// smaller value.
 	HeartbeatIdle time.Duration
+	// MaxConcurrentStreams overrides the per-connection stream cap. Zero selects
+	// the production default; tests set a small value to exercise the cap.
+	MaxConcurrentStreams uint32
 }
 
 // Gateway is the control-plane gRPC server. It implements AgentService (node
@@ -119,9 +122,13 @@ func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 	if g.heartbeatIdle <= 0 {
 		g.heartbeatIdle = heartbeatIdleTimeout
 	}
+	maxStreams := cfg.MaxConcurrentStreams
+	if maxStreams == 0 {
+		maxStreams = maxConcurrentStreams
+	}
 
 	opts := make([]grpc.ServerOption, 0, 3)
-	opts = append(opts, grpc.MaxConcurrentStreams(maxConcurrentStreams), grpc.MaxRecvMsgSize(maxRecvMsgSize))
+	opts = append(opts, grpc.MaxConcurrentStreams(maxStreams), grpc.MaxRecvMsgSize(maxRecvMsgSize))
 	if cfg.Authority != nil {
 		creds, err := cfg.Authority.serverCredentials(addr, cfg.Hosts)
 		if err != nil {
@@ -529,13 +536,17 @@ const reservedNodeIDMessage = "node_id is reserved for the control plane listene
 	"set a distinct GOTHAM_AGENT_NODE_ID for this node (it must not match the control plane's own hostname or address)"
 
 // canonicalNodeID normalizes a node id / host for identity comparison: it
-// lowercases, trims one trailing dot (a fully qualified name), and, when the
-// result parses as an IP address, uses the canonical form. Without this,
-// "::ffff:127.0.0.1" and "0:0:0:0:0:0:0:1" (both equal 127.0.0.1 / ::1) would
-// enroll as distinct node ids and mint a control-plane certificate.
+// lowercases, trims all trailing dots (a fully qualified name), strips one IPv6
+// bracket pair, and, when the result parses as an IP address, uses the canonical
+// form. Without this, "::ffff:127.0.0.1" and "0:0:0:0:0:0:0:1" (both equal
+// 127.0.0.1 / ::1) would enroll as distinct node ids and mint a control-plane
+// certificate.
 func canonicalNodeID(id string) string {
 	id = strings.ToLower(strings.TrimSpace(id))
-	id = strings.TrimSuffix(id, ".")
+	id = strings.TrimRight(id, ".")
+	if len(id) >= 2 && strings.HasPrefix(id, "[") && strings.HasSuffix(id, "]") {
+		id = id[1 : len(id)-1]
+	}
 	if ip := net.ParseIP(id); ip != nil {
 		return ip.String()
 	}

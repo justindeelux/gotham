@@ -226,27 +226,42 @@ func TestAgentRecvCapExceedsComposeLimit(t *testing.T) {
 	client := agentv1.NewComposeServiceClient(conn)
 
 	// A document one byte over the application limit is rejected by validation.
-	atLimit := make([]byte, maxComposeYAML+1)
-	for i := range atLimit {
-		atLimit[i] = 'x'
+	justOver := make([]byte, maxComposeYAML+1)
+	for i := range justOver {
+		justOver[i] = 'x'
 	}
 	if _, err := client.ComposeValidate(callCtx, &agentv1.ComposeValidateRequest{
 		ProjectName: composeTestProject,
-		ComposeYaml: atLimit,
+		ComposeYaml: justOver,
 	}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("just-over-limit document = %v, want InvalidArgument (not a transport cap)", err)
 	}
 
-	// A message well past the receive cap is rejected by the transport.
-	tooBig := make([]byte, agentMaxRecvMsgSize+1)
-	for i := range tooBig {
-		tooBig[i] = 'x'
+	// A payload one byte past the transport receive cap is rejected by gRPC.
+	overCap := make([]byte, agentMaxRecvMsgSize+1)
+	for i := range overCap {
+		overCap[i] = 'x'
 	}
 	if _, err := client.ComposeValidate(callCtx, &agentv1.ComposeValidateRequest{
 		ProjectName: composeTestProject,
-		ComposeYaml: tooBig,
+		ComposeYaml: overCap,
 	}); status.Code(err) != codes.ResourceExhausted {
-		t.Fatalf("over-cap document = %v, want ResourceExhausted", err)
+		t.Fatalf("over-cap payload = %v, want ResourceExhausted", err)
+	}
+
+	// A document exactly at the application limit fits the receive cap and is
+	// validated as a document (it is not valid compose, so it fails on content,
+	// never on transport size).
+	exact := make([]byte, maxComposeYAML)
+	copy(exact, "services:\n  web:\n    image: nginx\n")
+	for i := len("services:\n  web:\n    image: nginx\n"); i < len(exact); i++ {
+		exact[i] = ' '
+	}
+	if _, err := client.ComposeValidate(callCtx, &agentv1.ComposeValidateRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: exact,
+	}); status.Code(err) == codes.ResourceExhausted {
+		t.Fatalf("exact-limit document = ResourceExhausted, want it to reach validation")
 	}
 }
 

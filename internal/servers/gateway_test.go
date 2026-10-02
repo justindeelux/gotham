@@ -639,13 +639,19 @@ func TestGatewayRegisterRejectsReservedNodeIDAliases(t *testing.T) {
 		"0:0:0:0:0:0:0:1",  // alternate spelling of ::1
 		"LOCALHOST",        // uppercase
 		"localhost.",       // trailing dot (FQDN)
+		"localhost..",      // multiple trailing dots
 		"CP.EXAMPLE.COM.",  // uppercase + trailing dot
 		"::0001",           // padded IPv6 loopback
+		"[::1]",            // bracketed IPv6
 	}
 	for _, alias := range aliases {
 		_, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: alias, Os: "linux"})
 		if status.Code(err) != codes.PermissionDenied {
 			t.Errorf("Register(%q) = %v, want PermissionDenied", alias, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "GOTHAM_AGENT_NODE_ID") {
+			t.Errorf("Register(%q) error %q does not name GOTHAM_AGENT_NODE_ID", alias, err)
 		}
 	}
 }
@@ -670,14 +676,18 @@ func TestReservedNodeIDMessageIsActionable(t *testing.T) {
 // TestCanonicalNodeID pins the canonicalization used by the reserved lookup.
 func TestCanonicalNodeID(t *testing.T) {
 	cases := map[string]string{
-		"LOCALHOST":        "localhost",
-		"localhost.":       "localhost",
-		"cp.example.com.":  "cp.example.com",
-		"::ffff:127.0.0.1": "127.0.0.1",
-		"0:0:0:0:0:0:0:1":  "::1",
-		"::0001":           "::1",
-		"2001:0db8::1":     "2001:db8::1",
-		" node-1 ":         "node-1",
+		"LOCALHOST":          "localhost",
+		"localhost.":         "localhost",
+		"localhost..":        "localhost",
+		"cp.example.com.":    "cp.example.com",
+		"cp.example.com..":   "cp.example.com",
+		"::ffff:127.0.0.1":   "127.0.0.1",
+		"0:0:0:0:0:0:0:1":    "::1",
+		"::0001":             "::1",
+		"[::1]":              "::1",
+		"[::ffff:127.0.0.1]": "127.0.0.1",
+		"2001:0db8::1":       "2001:db8::1",
+		" node-1 ":           "node-1",
 	}
 	for in, want := range cases {
 		if got := canonicalNodeID(in); got != want {
@@ -970,11 +980,67 @@ func TestGatewayHeartbeatIdleDeadline(t *testing.T) {
 	}
 }
 
-// TestGatewayLimitsStreamsAndMessages pins the gRPC caps (FX-3 R2). The
-// oversized-message path is exercised against the served gateway. The concurrent
-// stream cap is constant-only here: the gRPC client's lazy stream setup makes a
-// 65th-stream assertion slow and transport-dependent, so it is covered by the
-// constant check plus the wiring in NewGateway.
+// TestGatewayConcurrentStreamCapOpensBehaviorally is the FX-3 P1 behavioral
+// check: with a tightened cap, opening maxConcurrentStreams Heartbeat streams on
+// one connection succeeds and the next stream fails/blocks with DeadlineExceeded.
+func TestGatewayConcurrentStreamCapOpensBehaviorally(t *testing.T) {
+	const cap = 4
+	service, _ := newTestService(t)
+	_, conn := startTestGatewayWithConfig(t, GatewayConfig{
+		Service:              service,
+		Logger:               discardLogger(),
+		MaxConcurrentStreams: cap,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	client := agentv1.NewAgentServiceClient(conn)
+
+	// The cap is per connection, so the streams must share one conn.
+	open := make([]grpc.ClientStreamingClient[agentv1.HeartbeatRequest, agentv1.HeartbeatResponse], 0, cap)
+	for i := 0; i < cap; i++ {
+		stream, err := client.Heartbeat(ctx)
+		if err != nil {
+			t.Fatalf("Heartbeat(%d): %v", i, err)
+		}
+		// A first message forces the stream past lazy setup.
+		if err := stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()}); err != nil {
+			t.Fatalf("send on stream %d: %v", i, err)
+		}
+		open = append(open, stream)
+	}
+
+	// The next stream must be refused: either Heartbeat fails synchronously or
+	// the first Send/Recv surfaces the transport error, bounded by a short
+	// deadline.
+	nextCtx, nextCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer nextCancel()
+	extra, err := client.Heartbeat(nextCtx)
+	if err == nil {
+		if sendErr := extra.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()}); sendErr != nil {
+			err = sendErr
+		} else if _, recvErr := extra.CloseAndRecv(); recvErr != nil {
+			err = recvErr
+		}
+	}
+	if err == nil {
+		t.Fatalf("stream %d opened past the cap of %d", cap+1, cap)
+	}
+	switch status.Code(err) {
+	case codes.ResourceExhausted, codes.DeadlineExceeded, codes.Canceled:
+	default:
+		t.Fatalf("extra stream error = %v, want ResourceExhausted/DeadlineExceeded/Canceled", err)
+	}
+
+	for _, stream := range open {
+		_ = stream.CloseSend()
+	}
+}
+
+// TestGatewayLimitsStreamsAndMessages pins the gRPC caps (FX-3 R2) at their
+// production values and exercises the oversized-message path live. The concurrent
+// stream cap has its own behavioral test above; here it is also asserted as a
+// constant so a production default change is caught.
 func TestGatewayLimitsStreamsAndMessages(t *testing.T) {
 	if maxConcurrentStreams != 64 || maxRecvMsgSize != 1<<20 {
 		t.Fatalf("gateway caps = %d/%d, want 64/1MiB", maxConcurrentStreams, maxRecvMsgSize)

@@ -237,6 +237,11 @@ type p5CreateDatabaseResponse struct {
 	Credentials databases.Credentials `json:"credentials"`
 }
 
+// p5DatabaseEnvelope wraps a single database, e.g. the start/lifecycle answer.
+type p5DatabaseEnvelope struct {
+	Database p5Database `json:"database"`
+}
+
 // p5Backup is the backup half of the API wire format.
 type p5Backup struct {
 	ID         string `json:"id"`
@@ -510,6 +515,55 @@ func (h *p5Harness) trackDatabase(t *testing.T, databaseID uuid.UUID) {
 			t.Logf("cleanup: docker volume rm %s: %v: %s", volume, err, strings.TrimSpace(string(out)))
 		}
 	})
+}
+
+// databaseStatus returns one database's status through the API.
+func (h *p5Harness) databaseStatus(t *testing.T, databaseID string) string {
+	t.Helper()
+	var out p5DatabaseEnvelope
+	status, raw := h.api(t, http.MethodGet, "/v1/databases/"+databaseID, nil, &out)
+	if status != http.StatusOK {
+		t.Fatalf("get database: status %d: %s", status, raw)
+	}
+	return out.Database.Status
+}
+
+// assertDatabaseNotRunning pins the D2-2 contract after a failed restore: the
+// database is left stopped or error, never running on partial data. It returns
+// the observed status.
+func (h *p5Harness) assertDatabaseNotRunning(t *testing.T, databaseID string) string {
+	t.Helper()
+	status := h.databaseStatus(t, databaseID)
+	if status != "stopped" && status != "error" {
+		t.Fatalf("database %s status = %q after a failed restore, want stopped or error", databaseID, status)
+	}
+	return status
+}
+
+// startDatabase starts a stopped/errored database through the API and waits for
+// it to report running again. A 409 is retried: the restore job that just
+// failed may still be releasing its lease for a moment.
+func (h *p5Harness) startDatabase(t *testing.T, databaseID string) {
+	t.Helper()
+	deadline := time.Now().Add(p5JobWait)
+	for {
+		status, raw := h.api(t, http.MethodPost, "/v1/databases/"+databaseID+"/start", nil, nil)
+		if status == http.StatusOK {
+			break
+		}
+		if status == http.StatusConflict && time.Now().Before(deadline) {
+			time.Sleep(p5PollInterval)
+			continue
+		}
+		t.Fatalf("start database: status %d: %s", status, raw)
+	}
+	for time.Now().Before(deadline) {
+		if h.databaseStatus(t, databaseID) == "running" {
+			return
+		}
+		time.Sleep(p5PollInterval)
+	}
+	t.Fatalf("database %s did not reach running after start", databaseID)
 }
 
 // createBackup queues a manual backup, to the local directory when targetID is
@@ -904,6 +958,12 @@ func TestP5BackupRestoreRejectsCorruptArtifact(t *testing.T) {
 		if elapsed > p5RestoreFailBound {
 			t.Fatalf("restore failure surfaced after %s, want under %s", elapsed, p5RestoreFailBound)
 		}
+		// D2-2: a failed restore leaves the database stopped/error, never
+		// running on partial data. Bring it back up explicitly to read the
+		// data assertions below.
+		state := h.assertDatabaseNotRunning(t, database.ID)
+		t.Logf("database status after failed restore: %s", state)
+		h.startDatabase(t, database.ID)
 		gone := h.psqlWait(t, containerID, creds,
 			"SELECT count(*) FROM information_schema.tables WHERE table_name = '"+table+"'")
 		if gone != "0" {
@@ -951,6 +1011,11 @@ func TestP5BackupRestoreRejectsCorruptArtifact(t *testing.T) {
 		if !strings.Contains(message, "pg_restore") || !strings.Contains(message, "CREATX") {
 			t.Errorf("failure does not name the pg_restore SQL stage: %s", message)
 		}
+		// D2-2: the failed restore leaves the database stopped/error; start it
+		// explicitly before checking the rolled-back data.
+		state := h.assertDatabaseNotRunning(t, database.ID)
+		t.Logf("database status after failed restore: %s", state)
+		h.startDatabase(t, database.ID)
 		after := h.psqlWait(t, containerID, creds, checksumSQL)
 		if after != marker {
 			t.Fatalf("failed restore was not rolled back: pre=%s after=%s", marker, after)

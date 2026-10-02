@@ -358,8 +358,13 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 	// preview sibling reuses its base application's remote deploy key, so
 	// only its local rows go and the remote key always stays registered.
 	if app.IsPreview {
-		if _, err := s.repo.DeleteDeployKey(ctx, app.ID); err != nil && !errors.Is(err, ErrNotFound) {
-			s.logger.Warn("deploy: preview deploy key row could not be detached; the application still deletes",
+		if key, err := s.repo.GetDeployKey(ctx, app.ID); err == nil {
+			if err := s.deleteLocalDeployKey(ctx, key); err != nil {
+				s.logger.Warn("deploy: preview deploy key row could not be detached; the application still deletes",
+					"application_id", app.ID, "error", err)
+			}
+		} else if !errors.Is(err, ErrNotFound) {
+			s.logger.Warn("deploy: preview deploy key lookup failed; the application still deletes",
 				"application_id", app.ID, "error", err)
 		}
 	} else if err := s.detachDeployKey(ctx, app); err != nil {

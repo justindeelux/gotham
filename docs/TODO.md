@@ -202,6 +202,26 @@ Proven:
   dropped with the application even when the host detach fails.
 - [ ] GitHub OAuth manual verification (blocked on owner credentials).
 - [ ] Second-node SSH validation e2e on real hardware.
+- [ ] **FX-10a residual — reconcile stuck unlinked webhook claims.** After the
+  C3-4/C3-3 fixes a push claim is durable only once `webhook_events.deployment_id`
+  is linked. A crash between the claim insert and the link (or a link/release
+  that both fail) leaves a row with `deployment_id IS NULL`, so every
+  redelivery of that commit answers 503 forever. Needs a reconciliation policy:
+  a bounded sweep of old unlinked claims, or a re-claim after an age threshold.
+  Confirmed real, documented; not a regression (previously the duplicate was
+  silently acknowledged instead).
+- [ ] **FX-10a residual — operational note: 503 recovery is host-driven.** A
+  conflict/retryable delivery is recovered only when the Git host redelivers the
+  event (GitHub/GitLab/Gitea "Redeliver" in the delivery log, or an automatic
+  retry). There is no in-process requeue. Document this in the operations guide;
+  a delivery that is never redelivered stays unbuilt.
+- [ ] **FX-10a residual — sealed deploy-key row under double failure.** The
+  C3-10 orphan cleanup removes the sealed `private_keys` row directly when the
+  fenced mapping delete fails. If that purge also fails and the subsequent
+  application delete succeeds, an inert sealed row is stranded (mapping
+  cascaded; `private_keys` has no application FK). Same reconciliation
+  follow-up as the stuck claim: sweep `private_keys` named `deploy-key:%` with
+  no `application_deploy_keys` row.
 
 ## Cross-cutting
 

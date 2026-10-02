@@ -55,6 +55,14 @@ func (s *Store) CreateWebhookEvent(ctx context.Context, params sqlc.CreateWebhoo
 	return s.queries.CreateWebhookEvent(ctx, params)
 }
 
+// GetWebhookEventForDelivery returns the claimed event that collides with a
+// delivery's commit SHA or delivery ID, so a duplicate can inspect whether the
+// winning claim already produced a deployment. pgx.ErrNoRows means the
+// colliding row vanished (released concurrently).
+func (s *Store) GetWebhookEventForDelivery(ctx context.Context, params sqlc.GetWebhookEventForDeliveryParams) (sqlc.WebhookEvent, error) {
+	return s.queries.GetWebhookEventForDelivery(ctx, params)
+}
+
 // UpdateWebhookEventDeployment links a claimed delivery to the deployment it
 // queued.
 func (s *Store) UpdateWebhookEventDeployment(ctx context.Context, eventID, deploymentID pgtype.UUID) error {

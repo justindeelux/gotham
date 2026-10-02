@@ -383,6 +383,134 @@ func TestDeleteApplicationWithoutKeySkipsProvider(t *testing.T) {
 	}
 }
 
+// TestDeleteDeployKeyStaleDeleteKeepsReplacement pins C3-6: a delete that lost
+// the race must not remove a replacement key installed after its read. The
+// interleaving is deterministic: the second delete reads the old mapping, the
+// first delete then completes and a POST installs a replacement, and only then
+// does the stale delete run its fenced delete.
+func TestDeleteDeployKeyStaleDeleteKeepsReplacement(t *testing.T) {
+	repo, _, svc, app := keyFixture(t)
+	first, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID)
+	if err != nil {
+		t.Fatalf("CreateDeployKey: %v", err)
+	}
+
+	interleaved := false
+	var replacement DeployKey
+	repo.onGetDeployKey = func() {
+		if interleaved {
+			return
+		}
+		interleaved = true
+		// The first (winning) delete completes...
+		if _, err := repo.DeleteDeployKey(context.Background(), first); err != nil {
+			t.Errorf("first delete: %v", err)
+		}
+		// ...and a POST installs a replacement behind it.
+		created, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID)
+		if err != nil {
+			t.Errorf("replacement CreateDeployKey: %v", err)
+			return
+		}
+		replacement = created
+	}
+
+	deleted, err := svc.DeleteDeployKey(context.Background(), app.UserID, app.ID)
+	if err != nil {
+		t.Fatalf("stale DeleteDeployKey: %v", err)
+	}
+	if deleted {
+		t.Error("stale delete reported true although it removed no local row")
+	}
+	if replacement.ID == uuid.Nil {
+		t.Fatal("the interleave did not install a replacement")
+	}
+	stored, err := repo.GetDeployKey(context.Background(), app.ID)
+	if err != nil {
+		t.Fatalf("replacement vanished: %v", err)
+	}
+	if stored.ID != replacement.ID {
+		t.Errorf("stored key = %s, want the replacement %s", stored.ID, replacement.ID)
+	}
+	if !repo.hasPrivateKey(replacement.PrivateKeyID) {
+		t.Error("the replacement's sealed private key was erased")
+	}
+	if repo.hasPrivateKey(first.PrivateKeyID) {
+		t.Error("the first key's private key survived its delete")
+	}
+}
+
+// cancelOnAddRegistrar cancels the create context right after the host accepted
+// the key, modelling a provider that answered at the edge of the deadline; its
+// RemoveDeployKey honours a canceled context like a real client.
+type cancelOnAddRegistrar struct {
+	cancel  context.CancelFunc
+	removed []string
+}
+
+func (r *cancelOnAddRegistrar) AddDeployKey(context.Context, providers.HookTarget, providers.DeployKey) (string, error) {
+	r.cancel()
+	return "key-1", nil
+}
+
+func (r *cancelOnAddRegistrar) RemoveDeployKey(ctx context.Context, _ providers.HookTarget, keyID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.removed = append(r.removed, keyID)
+	return nil
+}
+
+// TestCreateDeployKeyRollbackSurvivesExpiredContext pins C3-8: when the store
+// write fails on a context that just expired, the registered remote key must
+// still be removed — the rollback runs detached and bounded, not on the dead
+// request context.
+func TestCreateDeployKeyRollbackSurvivesExpiredContext(t *testing.T) {
+	repo := &fakeRepository{}
+	app := testApplication(uuid.New())
+	repo.app = app
+	repo.deployKeyErr = errors.New("database down")
+	ctx, cancel := context.WithCancel(context.Background())
+	registrar := &cancelOnAddRegistrar{cancel: cancel}
+	svc := NewService(Config{
+		Repository:   repo,
+		Secret:       testSecretKey,
+		Logger:       discardLogger(),
+		KeyRegistrar: registrar,
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	if _, err := svc.CreateDeployKey(ctx, app.UserID, app.ID); err == nil {
+		t.Fatal("CreateDeployKey: no error, want the store failure to surface")
+	}
+	if len(registrar.removed) != 1 || registrar.removed[0] != "key-1" {
+		t.Fatalf("removed = %v, want the registered key rolled back on a detached context", registrar.removed)
+	}
+}
+
+// TestDeleteApplicationCleansSealedKeyWhenLocalDetachFails pins C3-10: when the
+// local deploy-key detach fails, the application delete still proceeds but must
+// not strand the sealed private_keys row (the mapping cascades away and no
+// application FK reaches private_keys).
+func TestDeleteApplicationCleansSealedKeyWhenLocalDetachFails(t *testing.T) {
+	repo, _, svc, app := keyFixture(t)
+	created, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID)
+	if err != nil {
+		t.Fatalf("CreateDeployKey: %v", err)
+	}
+	repo.deleteDeployKeyErr = errors.New("database down")
+
+	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
+		t.Fatalf("DeleteApplication = %v, want the delete to proceed", err)
+	}
+	if repo.hasDeployKey(app.ID) {
+		t.Error("the mapping must cascade with the application")
+	}
+	if repo.hasPrivateKey(created.PrivateKeyID) {
+		t.Error("the sealed private key was stranded after a failed local detach")
+	}
+}
+
 // firstLine returns the head of a PEM for failure messages without printing a
 // whole key.
 func firstLine(value string) string {

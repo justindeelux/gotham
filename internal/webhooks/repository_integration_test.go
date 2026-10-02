@@ -1,10 +1,13 @@
 package webhooks
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,7 +51,7 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	st := store.New(pool)
-	repo := newStoreRepository(st, "integration-secret")
+	repo := newStoreRepository(st, "integration-secret", discardLogger())
 
 	email := fmt.Sprintf("be-4.4-%d@example.com", time.Now().UnixNano())
 	user, err := st.CreateUser(ctx, email, nil)
@@ -140,11 +143,15 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimEvent: %v", err)
 	}
-	if _, err := repo.ClaimEvent(ctx, Event{
+	dup, err := repo.ClaimEvent(ctx, Event{
 		ApplicationID: appID, Provider: "github", Event: "push",
 		DeliveryID: "d2", Ref: "refs/heads/main", CommitSHA: "abc123",
-	}); !errors.Is(err, ErrDuplicate) {
+	})
+	if !errors.Is(err, ErrDuplicate) {
 		t.Errorf("same commit error = %v, want ErrDuplicate", err)
+	}
+	if dup.ID != event.ID || dup.DeploymentID != uuid.Nil {
+		t.Errorf("duplicate = %+v, want the in-flight winner with no deployment yet", dup)
 	}
 	if _, err := repo.ClaimEvent(ctx, Event{
 		ApplicationID: appID, Provider: "github", Event: "push",
@@ -156,6 +163,15 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	deploymentID := uuid.New()
 	if err := repo.LinkEventDeployment(ctx, event.ID, deploymentID); err != nil {
 		t.Fatalf("LinkEventDeployment: %v", err)
+	}
+	// Once the winner's deployment is durable, the duplicate carries it — the
+	// caller can then acknowledge it as a no-op (C3-4).
+	linked, err := repo.ClaimEvent(ctx, Event{
+		ApplicationID: appID, Provider: "github", Event: "push",
+		DeliveryID: "d3", Ref: "refs/heads/main", CommitSHA: "abc123",
+	})
+	if !errors.Is(err, ErrDuplicate) || linked.DeploymentID != deploymentID {
+		t.Errorf("linked duplicate = %+v / %v, want the durable deployment", linked, err)
 	}
 	if err := repo.ReleaseEvent(ctx, event.ID); err != nil {
 		t.Fatalf("ReleaseEvent: %v", err)
@@ -203,7 +219,7 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	st := store.New(pool)
-	repo := newStoreRepository(st, "integration-secret")
+	repo := newStoreRepository(st, "integration-secret", discardLogger())
 
 	email := fmt.Sprintf("be-8.1-%d@example.com", time.Now().UnixNano())
 	user, err := st.CreateUser(ctx, email, nil)
@@ -528,7 +544,7 @@ func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	st := store.New(pool)
-	repo := newStoreRepository(st, "integration-secret")
+	repo := newStoreRepository(st, "integration-secret", discardLogger())
 
 	email := fmt.Sprintf("be-8.1-targets-%d@example.com", time.Now().UnixNano())
 	user, err := st.CreateUser(ctx, email, nil)
@@ -1364,6 +1380,72 @@ func TestStoreUpsertPreviewDeployTakesTheApplicationLock(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("bindings = %d, want the one refreshed row", count)
+	}
+}
+
+// TestStoreRepositoryLogsUnopenableHookSecret pins C3-9: a hook whose secret
+// cannot be decrypted must not be skipped silently — the lookup returns no
+// target (it can never verify a delivery) and logs the hook identity, never the
+// secret material.
+func TestStoreRepositoryLogsUnopenableHookSecret(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	st := store.New(pool)
+	email := fmt.Sprintf("c3-9-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	userID := uuid.UUID(user.ID.Bytes)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete: %v", err)
+		}
+	})
+	createdApp, err := st.CreateApplication(ctx, createApplicationParams(userID))
+	if err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+	appID := uuid.UUID(createdApp.ID.Bytes)
+
+	// Seal the hook with one key...
+	writer := newStoreRepository(st, "right-secret", discardLogger())
+	if _, err := writer.CreateWebhook(ctx, Hook{
+		ApplicationID: appID, Provider: "github", Repo: createdApp.Repo, HookID: "4242",
+	}, "hook-secret"); err != nil {
+		t.Fatalf("CreateWebhook: %v", err)
+	}
+
+	// ...then read it back with another, capturing the warning.
+	var logs bytes.Buffer
+	reader := newStoreRepository(st, "wrong-secret",
+		slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	targets, err := reader.Targets(ctx, "github", "octo/gotham")
+	if err != nil {
+		t.Fatalf("Targets: %v", err)
+	}
+	if len(targets) != 0 {
+		t.Fatalf("targets = %+v, want none (the secret cannot be opened)", targets)
+	}
+	logged := logs.String()
+	if !strings.Contains(logged, "could not be opened") || !strings.Contains(logged, appID.String()) {
+		t.Errorf("log = %q, want the hook identity and the decrypt failure", logged)
+	}
+	if strings.Contains(logged, "hook-secret") {
+		t.Errorf("log leaked the secret material: %q", logged)
 	}
 }
 

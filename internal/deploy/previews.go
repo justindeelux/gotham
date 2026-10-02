@@ -246,7 +246,12 @@ func (s *Service) DeleteSystemApplication(ctx context.Context, appID uuid.UUID) 
 	// Local key rows go first: a failure aborts before the application row
 	// disappears, so the teardown (and its binding) stays retryable and no
 	// orphan private key is left behind.
-	if _, err := s.repo.DeleteDeployKey(ctx, appID); err != nil && !errors.Is(err, ErrNotFound) {
+	switch key, err := s.repo.GetDeployKey(ctx, appID); {
+	case err == nil:
+		if err := s.deleteLocalDeployKey(ctx, key); err != nil {
+			return err
+		}
+	case !errors.Is(err, ErrNotFound):
 		return err
 	}
 	s.removeApplicationContainers(ctx, app)

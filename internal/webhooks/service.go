@@ -33,14 +33,12 @@ const (
 	// StatusQueued means a deployment was started for this delivery.
 	StatusQueued = "queued"
 	// StatusDuplicate means the commit SHA (or delivery ID) was already
-	// handled: an anti-spam no-op, not an error.
+	// handled AND its deployment is durable: an anti-spam no-op, not an error.
+	// A duplicate whose winner is still in flight is a retryable error instead.
 	StatusDuplicate = "duplicate"
 	// StatusIgnored means the delivery verified but asks for no build (ping,
 	// tag push, another branch, deleted ref).
 	StatusIgnored = "ignored"
-	// StatusSkipped means the delivery verified but the deploy service refused
-	// it without failing (a deployment is already running).
-	StatusSkipped = "skipped"
 	// StatusDeleted means a closed pull request tore its preview down.
 	StatusDeleted = "deleted"
 )
@@ -143,7 +141,7 @@ func NewService(cfg Config) *Service {
 	}
 	repo := cfg.Repository
 	if repo == nil && cfg.Store != nil {
-		repo = newStoreRepository(cfg.Store, cfg.Secret)
+		repo = newStoreRepository(cfg.Store, cfg.Secret, logger)
 	}
 	now := cfg.Now
 	if now == nil {
@@ -424,7 +422,10 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 	if branch == "" {
 		return Delivery{Status: StatusIgnored, Reason: "ref"}, nil
 	}
-	if !strings.EqualFold(branch, target.Branch) {
+	// Branch names are case-sensitive: a push to "Main" must not consume the
+	// claim of an application watching "main" (the clone still checks out the
+	// configured branch, so the two are different targets).
+	if branch != target.Branch {
 		return Delivery{Status: StatusIgnored, Reason: "branch"}, nil
 	}
 
@@ -438,7 +439,15 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 	})
 	switch {
 	case errors.Is(err, ErrDuplicate):
-		return Delivery{Status: StatusDuplicate, Reason: "commit already handled"}, nil
+		// The claim is only a durable no-op once the winning delivery has
+		// actually queued its deployment. While the winner is still in flight —
+		// or about to release its claim after a conflict — acknowledging this
+		// duplicate would let the commit be dropped if the winner releases.
+		// Answer retryable so the host redelivers and re-checks later.
+		if event.DeploymentID != uuid.Nil {
+			return Delivery{Status: StatusDuplicate, Reason: "commit already handled"}, nil
+		}
+		return Delivery{}, fmt.Errorf("%w: the delivery is still being handled", ErrRetryable)
 	case err != nil:
 		return Delivery{}, err
 	}
@@ -450,14 +459,15 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 		// host's retry of this delivery through.
 		s.releaseClaim(ctx, event)
 		if errors.Is(err, deploy.ErrConflict) {
-			return Delivery{Status: StatusSkipped, Reason: "deployment in progress"}, nil
+			// A build is already running for this application, so the push
+			// cannot be serviced now. A 200 would be recorded as delivered and
+			// the commit silently dropped: answer 503 so the Git host
+			// redelivers the same event once the active build finishes.
+			return Delivery{}, fmt.Errorf("%w: a deployment is already running", ErrRetryable)
 		}
 		return Delivery{}, err
 	}
-	if err := s.repo.LinkEventDeployment(ctx, event.ID, deployment.ID); err != nil {
-		s.logger.Warn("webhooks: could not link delivery to deployment",
-			"event_id", event.ID, "deployment_id", deployment.ID, "error", err)
-	}
+	s.linkClaim(ctx, event, deployment)
 	return Delivery{Status: StatusQueued, DeploymentID: deployment.ID.String()}, nil
 }
 
@@ -473,10 +483,32 @@ func authorizedTarget(provider string, header http.Header, body []byte, targets 
 	return Target{}, false
 }
 
-// releaseClaim undoes a claim whose deployment never started.
+// claimCleanupTimeout bounds the best-effort claim cleanup (release after a
+// failed deploy, link after a successful one). Both run on a detached context,
+// so nothing else bounds them; the value mirrors the hook rollback budget.
+const claimCleanupTimeout = 3 * time.Second
+
+// releaseClaim undoes a claim whose deployment never started. It detaches from
+// the request context: a client disconnect or expired deadline is exactly when
+// the claim must still be cleared, or the row is stranded and every redelivery
+// answers 503 forever.
 func (s *Service) releaseClaim(ctx context.Context, event Event) {
-	if err := s.repo.ReleaseEvent(ctx, event.ID); err != nil {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claimCleanupTimeout)
+	defer cancel()
+	if err := s.repo.ReleaseEvent(cleanupCtx, event.ID); err != nil {
 		s.logger.Warn("webhooks: could not release delivery claim", "event_id", event.ID, "error", err)
+	}
+}
+
+// linkClaim attaches the queued deployment to its claim, on a detached context
+// for the same reason as releaseClaim: without the link a later duplicate
+// cannot tell the winning claim is durable and answers 503 forever.
+func (s *Service) linkClaim(ctx context.Context, event Event, deployment deploy.Deployment) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claimCleanupTimeout)
+	defer cancel()
+	if err := s.repo.LinkEventDeployment(cleanupCtx, event.ID, deployment.ID); err != nil {
+		s.logger.Warn("webhooks: could not link delivery to deployment",
+			"event_id", event.ID, "deployment_id", deployment.ID, "error", err)
 	}
 }
 

@@ -57,12 +57,20 @@ func (q *Queries) CreateApplicationDeployKey(ctx context.Context, arg CreateAppl
 
 const deleteApplicationDeployKey = `-- name: DeleteApplicationDeployKey :one
 DELETE FROM application_deploy_keys
-WHERE application_id = $1
+WHERE id = $1 AND application_id = $2
 RETURNING id, application_id, private_key_id, provider, repo, provider_key_id, fingerprint, public_key, created_at, updated_at
 `
 
-func (q *Queries) DeleteApplicationDeployKey(ctx context.Context, applicationID pgtype.UUID) (ApplicationDeployKey, error) {
-	row := q.db.QueryRow(ctx, deleteApplicationDeployKey, applicationID)
+type DeleteApplicationDeployKeyParams struct {
+	ID            pgtype.UUID `json:"id"`
+	ApplicationID pgtype.UUID `json:"application_id"`
+}
+
+// Fenced on the mapping identity the caller read: a delete that lost a race
+// (the row was replaced by a fresh key after the read) matches nothing and
+// cannot remove the replacement.
+func (q *Queries) DeleteApplicationDeployKey(ctx context.Context, arg DeleteApplicationDeployKeyParams) (ApplicationDeployKey, error) {
+	row := q.db.QueryRow(ctx, deleteApplicationDeployKey, arg.ID, arg.ApplicationID)
 	var i ApplicationDeployKey
 	err := row.Scan(
 		&i.ID,

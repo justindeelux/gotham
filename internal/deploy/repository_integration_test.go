@@ -171,15 +171,16 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 		t.Errorf("private_keys rows = %d, want 1 (the failed insert must roll back)", orphanCheck)
 	}
 
-	// Deleting takes the mapping and the private key with it, once.
-	removed, err := repo.DeleteDeployKey(ctx, appID)
+	// Deleting takes the mapping and the private key with it, once. The delete
+	// is fenced on the mapping ID that was read: replaying it is a no-op.
+	removed, err := repo.DeleteDeployKey(ctx, got)
 	if err != nil {
 		t.Fatalf("DeleteDeployKey: %v", err)
 	}
 	if removed.ID != created.ID {
 		t.Errorf("removed = %+v, want the stored mapping", removed)
 	}
-	if _, err := repo.DeleteDeployKey(ctx, appID); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.DeleteDeployKey(ctx, got); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second delete error = %v, want ErrNotFound", err)
 	}
 	if pem, err := repo.DeployKeyPrivatePEM(ctx, appID); err != nil || pem != "" {
@@ -193,6 +194,110 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 	}
 	if remaining != 0 {
 		t.Errorf("private_keys rows after delete = %d, want 0", remaining)
+	}
+}
+
+// TestStoreRepositoryDeleteDeployKeyFence pins U2 / C3-6 at the real store:
+// the delete is fenced on the mapping ID that was read, so a stale delete
+// (whose row was already removed and replaced) matches nothing and leaves the
+// replacement's mapping and sealed private key intact.
+func TestStoreRepositoryDeleteDeployKeyFence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	const secret = "integration-secret"
+	st := store.New(pool)
+	repo := newStoreRepository(st, secret)
+
+	email := fmt.Sprintf("c3-6-fence-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	userID := uuid.UUID(user.ID.Bytes)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete user: %v", err)
+		}
+	})
+
+	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		UserID:    pgUUID(userID),
+		Name:      "fence-app",
+		Provider:  "github",
+		Repo:      "acme/fence",
+		CloneUrl:  "https://github.com/acme/fence.git",
+		Branch:    "main",
+		BuildPack: "dockerfile",
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+	appID := uuid.UUID(app.ID.Bytes)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		// private_keys has no application FK; clear the deploy-key rows so the
+		// test does not leak sealed keys across runs.
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM private_keys WHERE name = $1", deployKeyRowName(appID)); err != nil {
+			t.Logf("cleanup delete private keys: %v", err)
+		}
+	})
+
+	privatePEM, publicKey, fingerprint, err := generateDeployKeyPair("gotham:deploy:fence")
+	if err != nil {
+		t.Fatalf("generateDeployKeyPair: %v", err)
+	}
+	key1, err := repo.CreateDeployKey(ctx, DeployKey{
+		ApplicationID: appID, Provider: "github", Repo: "acme/fence",
+		ProviderKeyID: "1", Fingerprint: fingerprint, PublicKey: publicKey,
+	}, privatePEM)
+	if err != nil {
+		t.Fatalf("CreateDeployKey(key1): %v", err)
+	}
+
+	// The first delete reads key1 and removes it; a replacement is then
+	// installed behind it.
+	read1, err := repo.GetDeployKey(ctx, appID)
+	if err != nil || read1.ID != key1.ID {
+		t.Fatalf("GetDeployKey = %+v / %v, want key1", read1, err)
+	}
+	if _, err := repo.DeleteDeployKey(ctx, read1); err != nil {
+		t.Fatalf("DeleteDeployKey(key1): %v", err)
+	}
+	key2, err := repo.CreateDeployKey(ctx, DeployKey{
+		ApplicationID: appID, Provider: "github", Repo: "acme/fence",
+		ProviderKeyID: "2", Fingerprint: fingerprint, PublicKey: publicKey,
+	}, privatePEM)
+	if err != nil {
+		t.Fatalf("CreateDeployKey(key2): %v", err)
+	}
+
+	// The stale delete (still holding key1) must not touch key2.
+	if _, err := repo.DeleteDeployKey(ctx, read1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale delete error = %v, want ErrNotFound", err)
+	}
+	stored, err := repo.GetDeployKey(ctx, appID)
+	if err != nil {
+		t.Fatalf("replacement vanished: %v", err)
+	}
+	if stored.ID != key2.ID {
+		t.Errorf("stored key = %s, want the replacement %s", stored.ID, key2.ID)
+	}
+	if pem, err := repo.DeployKeyPrivatePEM(ctx, appID); err != nil || pem != privatePEM {
+		t.Errorf("replacement private key = %q / %v, want it intact", pem, err)
 	}
 }
 

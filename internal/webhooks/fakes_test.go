@@ -238,8 +238,8 @@ func (r *fakeRepository) ClaimEvent(_ context.Context, event Event) (Event, erro
 	if key == "" {
 		key = uuid.NewString() // nothing to dedupe by: every delivery is new
 	}
-	if _, taken := r.claims[key]; taken {
-		return Event{}, ErrDuplicate
+	if existing, taken := r.claims[key]; taken {
+		return existing, ErrDuplicate
 	}
 	event.ID = uuid.New()
 	event.ReceivedAt = time.Now().UTC()
@@ -247,10 +247,14 @@ func (r *fakeRepository) ClaimEvent(_ context.Context, event Event) (Event, erro
 	return event, nil
 }
 
-// ReleaseEvent implements Repository.
-func (r *fakeRepository) ReleaseEvent(_ context.Context, eventID uuid.UUID) error {
+// ReleaseEvent implements Repository. It honours ctx cancellation like a real
+// database client, so a test can pin that cleanup runs on a detached context.
+func (r *fakeRepository) ReleaseEvent(ctx context.Context, eventID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if r.releaseErr != nil {
 		return r.releaseErr
 	}
@@ -263,10 +267,14 @@ func (r *fakeRepository) ReleaseEvent(_ context.Context, eventID uuid.UUID) erro
 	return nil
 }
 
-// LinkEventDeployment implements Repository.
-func (r *fakeRepository) LinkEventDeployment(_ context.Context, eventID, deploymentID uuid.UUID) error {
+// LinkEventDeployment implements Repository. It honours ctx cancellation like a
+// real database client, so a test can pin that the link runs detached.
+func (r *fakeRepository) LinkEventDeployment(ctx context.Context, eventID, deploymentID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if r.linkErr != nil {
 		return r.linkErr
 	}
@@ -866,6 +874,13 @@ func (f *fakeDeployer) DeleteSystemApplication(_ context.Context, appID uuid.UUI
 	}
 	f.deleted = append(f.deleted, appID)
 	return nil
+}
+
+// setErr replaces the scripted DeploySystem error.
+func (f *fakeDeployer) setErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
 }
 
 // deployCount reports how many deployments were queued.

@@ -782,6 +782,38 @@ func TestReceivePullRequestIgnoresUnwatchedBaseBranch(t *testing.T) {
 	}
 }
 
+// TestReceivePullRequestBaseBranchMatchIsExact pins U3: PR base-branch
+// matching is case-sensitive like the push path, so a PR against "main" must
+// not provision a preview for an application watching "Main".
+func TestReceivePullRequestBaseBranchMatchIsExact(t *testing.T) {
+	repo := newFakeRepository().withTarget()
+	repo.app.Branch = "Main"
+	repo.target.Branch = "Main"
+	deployer := &fakeDeployer{}
+	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
+
+	delivery, err := receive(t, svc, githubPRBody("opened", 7, "feat/x", "main", "abc123"))
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	if delivery.Status != StatusIgnored || delivery.Reason != "branch" {
+		t.Fatalf("delivery = %+v, want ignored for the differently-cased base branch", delivery)
+	}
+	if deployer.provisionCount() != 0 || repo.reservationCount() != 0 {
+		t.Fatalf("provisioned=%d reservations=%d, want none",
+			deployer.provisionCount(), repo.reservationCount())
+	}
+
+	// The exact watched base branch still provisions.
+	delivery, err = receive(t, svc, githubPRBody("opened", 8, "feat/y", "Main", "def456"))
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	if delivery.Status != StatusQueued {
+		t.Fatalf("delivery = %+v, want queued", delivery)
+	}
+}
+
 func TestReceivePullRequestIgnoresUnwatchedRepository(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}

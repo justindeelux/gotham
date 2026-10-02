@@ -179,6 +179,40 @@ func (q *Queries) GetApplicationWebhookByApp(ctx context.Context, applicationID 
 	return i, err
 }
 
+const getWebhookEventForDelivery = `-- name: GetWebhookEventForDelivery :one
+SELECT id, application_id, provider, event, delivery_id, ref, commit_sha, deployment_id, received_at FROM webhook_events
+WHERE application_id = $1
+  AND (
+    ($2::text <> '' AND commit_sha = $2::text)
+    OR ($3::text <> '' AND delivery_id = $3::text)
+  )
+ORDER BY received_at DESC
+LIMIT 1
+`
+
+type GetWebhookEventForDeliveryParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	CommitSha     string      `json:"commit_sha"`
+	DeliveryID    string      `json:"delivery_id"`
+}
+
+func (q *Queries) GetWebhookEventForDelivery(ctx context.Context, arg GetWebhookEventForDeliveryParams) (WebhookEvent, error) {
+	row := q.db.QueryRow(ctx, getWebhookEventForDelivery, arg.ApplicationID, arg.CommitSha, arg.DeliveryID)
+	var i WebhookEvent
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.Provider,
+		&i.Event,
+		&i.DeliveryID,
+		&i.Ref,
+		&i.CommitSha,
+		&i.DeploymentID,
+		&i.ReceivedAt,
+	)
+	return i, err
+}
+
 const listWebhookTargetsForRepo = `-- name: ListWebhookTargetsForRepo :many
 SELECT w.application_id, w.hook_id, w.secret, w.url,
        a.user_id, a.team_id, a.provider, a.repo, a.branch, a.clone_url,

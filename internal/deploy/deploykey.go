@@ -216,8 +216,15 @@ func (s *Service) DeleteDeployKey(ctx context.Context, userID, appID uuid.UUID) 
 	if err := s.removeHostDeployKey(ctx, app, key); err != nil {
 		return false, err
 	}
-	if _, err := s.repo.DeleteDeployKey(ctx, appID); err != nil && !errors.Is(err, ErrNotFound) {
-		return false, err
+	// Fenced on the mapping ID we just read: a concurrent delete that already
+	// removed this row (and possibly had a replacement installed behind it)
+	// leaves the replacement untouched, and we honestly report that this call
+	// removed no local row.
+	if _, err := s.repo.DeleteDeployKey(ctx, key); err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			return false, err
+		}
+		return false, nil
 	}
 	return true, nil
 }
@@ -238,13 +245,28 @@ func (s *Service) detachDeployKey(ctx context.Context, app Application) error {
 		return err
 	}
 	hostErr := s.removeHostDeployKey(ctx, app, key)
-	if _, err := s.repo.DeleteDeployKey(ctx, app.ID); err != nil && !errors.Is(err, ErrNotFound) {
-		if hostErr != nil {
-			return fmt.Errorf("%w; local key cleanup also failed: %v", hostErr, err)
-		}
-		return err
+	localErr := s.deleteLocalDeployKey(ctx, key)
+	switch {
+	case localErr != nil && hostErr != nil:
+		return fmt.Errorf("%w; local key cleanup also failed: %v", hostErr, localErr)
+	case localErr != nil:
+		return localErr
+	default:
+		return hostErr
 	}
-	return hostErr
+}
+
+// deleteLocalDeployKey removes the mapping and the sealed private key it points
+// at. The fenced delete normally takes both; when it fails, the private key is
+// removed directly by ID — its FK cascades the mapping — so the application
+// delete that follows cannot strand a sealed credential with no owner (C3-10).
+func (s *Service) deleteLocalDeployKey(ctx context.Context, key DeployKey) error {
+	if _, err := s.repo.DeleteDeployKey(ctx, key); err != nil && !errors.Is(err, ErrNotFound) {
+		if purgeErr := s.repo.DeletePrivateKey(ctx, key.PrivateKeyID); purgeErr != nil {
+			return errors.Join(err, purgeErr)
+		}
+	}
+	return nil
 }
 
 // removeHostDeployKey deletes the key from the Git host when one was
@@ -266,13 +288,26 @@ func (s *Service) removeHostDeployKey(ctx context.Context, app Application, key 
 	return nil
 }
 
+// deployKeyRollbackTimeout bounds the best-effort rollback of a deploy key
+// whose row could not be stored. It is deliberately short: the rollback runs on
+// a detached context (see bestEffortRemoveKey), so nothing else bounds it.
+const deployKeyRollbackTimeout = 3 * time.Second
+
 // bestEffortRemoveKey rolls back a host-side key registration whose row could
 // not be stored, so a retry does not accumulate orphan keys on the repository.
+//
+// It detaches from the create context, which carries the caller's deadline and
+// is exactly what may have just expired (a provider that answered near the
+// timeout, a store write that failed on the expired context); removal must
+// still happen then. The detached context is bounded so a stalled host cannot
+// hold the rollback open forever, mirroring the webhook helper.
 func (s *Service) bestEffortRemoveKey(ctx context.Context, app Application, providerKeyID string) {
 	if s.registrar == nil {
 		return
 	}
-	if err := s.registrar.RemoveDeployKey(ctx, deployKeyTarget(app), providerKeyID); err != nil {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployKeyRollbackTimeout)
+	defer cancel()
+	if err := s.registrar.RemoveDeployKey(rollbackCtx, deployKeyTarget(app), providerKeyID); err != nil {
 		s.logger.Warn("deploy: could not roll back deploy key registration",
 			"application_id", app.ID, "provider_key_id", providerKeyID, "error", err)
 	}

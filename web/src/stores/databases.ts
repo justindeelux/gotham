@@ -42,8 +42,11 @@ export const useDatabasesStore = defineStore("databases", () => {
   let mutationGeneration = 0;
 
   // Ids this tab deleted. A list response that started before the delete must
-  // not resurrect them; the set is cleared when a fresh authoritative list
-  // (same generation) replaces the array.
+  // not resurrect them; the set is intentionally never cleared while the store
+  // lives, because a stale pre-delete response can resolve after a fresh
+  // post-delete one. Growth is bounded by the session's deletions.
+  // ponytail: per-session set, cap/expire only if a long session deletes
+  // thousands of databases.
   const deletedIds = new Set<string>();
 
   /**
@@ -53,7 +56,6 @@ export const useDatabasesStore = defineStore("databases", () => {
   function applyServerList(server: Database[], generation: number): void {
     if (generation === mutationGeneration) {
       databases.value = server;
-      deletedIds.clear();
       return;
     }
     databases.value = mergeDatabasesById(server, databases.value, deletedIds);

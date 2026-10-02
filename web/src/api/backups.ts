@@ -87,6 +87,7 @@ export interface BackupTarget {
 
 /** A queued restore as answered by POST .../restore (HTTP 202). */
 export interface RestoreResult {
+  restore_id: string;
   backup_id: string;
   database_id: string;
   location: string;

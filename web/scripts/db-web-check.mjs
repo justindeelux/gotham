@@ -63,11 +63,13 @@ async function main() {
   const format = await loadModule("../src/utils/format.ts");
   const targetBody = await loadModule("../src/utils/backupTarget.ts");
   const storeMerge = await loadModule("../src/utils/storeMerge.ts");
+  const restoreOutcomes = await loadModule("../src/utils/restoreOutcomes.ts");
 
   try {
     const { relativeTime } = format.module;
     const { toTargetBody } = targetBody.module;
     const { mergeBackupsById, mergeDatabasesById } = storeMerge.module;
+    const { advanceRestoreStatuses } = restoreOutcomes.module;
 
     await check("D3-3: a past timestamp still reads as 'ago'", () => {
       assert(relativeTime(isoOffset(-2 * 3600)) === "2h ago", "2h past");
@@ -141,10 +143,35 @@ async function main() {
       assert(merged.length === 2, "local-only row kept");
       assert(merged.find((d) => d.id === "live").name === "server-name", "server wins");
     });
+
+    await check("U1: a poll observing running→completed announces exactly once", () => {
+      const seen = new Map();
+      const running = advanceRestoreStatuses(seen, [{ id: "r1", status: "running" }]);
+      assert(running.length === 0, "running is not announced");
+      const completed = advanceRestoreStatuses(seen, [{ id: "r1", status: "completed" }]);
+      assert(completed.length === 1 && completed[0].status === "completed", "completion announced");
+      const again = advanceRestoreStatuses(seen, [{ id: "r1", status: "completed" }]);
+      assert(again.length === 0, "not announced twice");
+    });
+
+    await check("U4b: a stale running response cannot re-arm a terminal toast", () => {
+      const seen = new Map([["r2", "running"]]);
+      advanceRestoreStatuses(seen, [{ id: "r2", status: "failed", error: "boom" }]);
+      const stale = advanceRestoreStatuses(seen, [{ id: "r2", status: "running" }]);
+      assert(stale.length === 0, "stale running does not re-arm");
+      assert(seen.get("r2") === "failed", "terminal status is retained");
+    });
+
+    await check("U2: an unseeded terminal restore is silent (202 seeding covers it)", () => {
+      const seen = new Map();
+      const outcomes = advanceRestoreStatuses(seen, [{ id: "r3", status: "completed" }]);
+      assert(outcomes.length === 0, "unseeded terminal is not announced");
+    });
   } finally {
     await format.cleanup();
     await targetBody.cleanup();
     await storeMerge.cleanup();
+    await restoreOutcomes.cleanup();
   }
 
   const failed = results.filter((r) => !r.ok);

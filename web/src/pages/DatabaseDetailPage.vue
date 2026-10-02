@@ -39,6 +39,7 @@ import { useBackupsStore } from "../stores/backups";
 import { useDatabasesStore } from "../stores/databases";
 import { useServersStore } from "../stores/servers";
 import { formatBytes, relativeTime } from "../utils/format";
+import { advanceRestoreStatuses } from "../utils/restoreOutcomes";
 
 const route = useRoute();
 const router = useRouter();
@@ -279,17 +280,26 @@ const restores = computed<DatabaseRestore[]>(() => {
   return [...list].sort((a, b) => b.created_at.localeCompare(a.created_at));
 });
 
+// Restores queued in this tab but not yet observed in a list response. They
+// keep the poll alive when the first post-queue list fetch fails, and are
+// dropped once a list reports them.
+const pendingRestoreIds = ref<Set<string>>(new Set());
+
 /** hasRunningRestore keeps the poll alive until a queued restore finishes. */
-const hasRunningRestore = computed<boolean>(() =>
-  restores.value.some((item) => item.status === "running"),
+const hasRunningRestore = computed<boolean>(
+  () =>
+    pendingRestoreIds.value.size > 0 ||
+    restores.value.some((item) => item.status === "running"),
 );
 
 // Last status seen per restore id, so a running→terminal transition can toast
 // exactly once. Kept outside reactivity: it is bookkeeping, not UI state.
 const lastRestoreStatus = new Map<string, string>();
 
-// Monotonic token for the restore poll: a response whose token is no longer
-// current is discarded so overlapping polls cannot revert the cached status.
+// Monotonic token for the restore poll: it gates the poll's own notify, so an
+// older overlapping poll cannot announce a status a newer one already handled.
+// The store write itself is unconditional; the monotonic seen-status map in
+// advanceRestoreStatuses is what stops a stale list from re-arming a toast.
 let restorePollEpoch = 0;
 
 /** backupTargetOptions lists the destination choices for backup-now. */
@@ -346,32 +356,50 @@ async function fetchBackupTab(): Promise<void> {
   // Seed the status of every restore the first fetch returned, so a restore
   // that was already running when the tab opened still toasts on completion
   // instead of being skipped by the first-poll "previous === undefined" case.
+  // advanceRestoreStatuses is monotonic, so a slow stale GET cannot re-arm a
+  // toast a poll already fired.
   notifyRestoreOutcomes();
 }
 
 /** stopBackupPolling clears the running-job refresh interval. */
 function stopBackupPolling(): void {
-  // Invalidate any in-flight poll so its late response cannot re-toast after
-  // polling has stopped (or restarted).
-  restorePollEpoch += 1;
+  // No epoch bump here: stopping because a restore just completed must not
+  // suppress the poll that observed it (that poll still has to notify). The
+  // poll epoch is bumped only when a new poll starts.
   if (backupPollTimer !== null) {
     clearInterval(backupPollTimer);
     backupPollTimer = null;
   }
 }
 
+/** reconcilePendingRestores drops queued ids once a list reports them. */
+function reconcilePendingRestores(): void {
+  if (pendingRestoreIds.value.size === 0) {
+    return;
+  }
+  const seen = new Set(restores.value.map((item) => item.id));
+  const next = new Set<string>();
+  for (const id of pendingRestoreIds.value) {
+    if (!seen.has(id)) {
+      next.add(id);
+    }
+  }
+  if (next.size !== pendingRestoreIds.value.size) {
+    pendingRestoreIds.value = next;
+  }
+}
+
 /** notifyRestoreOutcomes toasts a restore that just reached a terminal state. */
 function notifyRestoreOutcomes(): void {
-  for (const restore of restores.value) {
-    const previous = lastRestoreStatus.get(restore.id);
-    lastRestoreStatus.set(restore.id, restore.status);
-    if (previous !== "running") {
-      continue;
-    }
-    if (restore.status === "completed") {
+  reconcilePendingRestores();
+  for (const outcome of advanceRestoreStatuses(
+    lastRestoreStatus,
+    restores.value,
+  )) {
+    if (outcome.status === "completed") {
       message.success("Restore completed");
-    } else if (restore.status === "failed") {
-      message.error(restore.error || "Restore failed");
+    } else {
+      message.error(outcome.error || "Restore failed");
     }
   }
 }
@@ -383,8 +411,8 @@ async function pollRunningJobs(id: string): Promise<void> {
     backupsStore.refreshBackups(id),
     backupsStore.refreshRestores(id),
   ]);
-  // A newer poll (or a stop) superseded this one: its response is older, so
-  // ignoring it stops an out-of-order completion from re-firing the toast.
+  // An older overlapping poll was superseded: ignore its notify. The completion
+  // itself still fires from the watcher below, which is not epoch-gated.
   if (epoch !== restorePollEpoch) {
     return;
   }
@@ -439,10 +467,22 @@ async function handleRestoreConfirm(): Promise<void> {
   }
   restoring.value = true;
   try {
-    await backupsStore.restore(dbId.value, restoreCandidate.value.id);
+    const queued = await backupsStore.restore(
+      dbId.value,
+      restoreCandidate.value.id,
+    );
     message.success("Restore queued · the database is stopped while it runs");
     restoreOpen.value = false;
     restoreCandidate.value = null;
+    // Seed the queued status from the 202 answer: the row can reach a terminal
+    // state before the first list fetch, and the transition would otherwise be
+    // missed. The pending id also keeps polling alive if that fetch fails.
+    if (queued.restore_id) {
+      lastRestoreStatus.set(queued.restore_id, queued.status);
+      pendingRestoreIds.value = new Set(pendingRestoreIds.value).add(
+        queued.restore_id,
+      );
+    }
     // refreshRestores swallows a failed read (the queue already succeeded), so
     // a transient list error cannot hide the "queued" result or skip the poll.
     await backupsStore.refreshRestores(dbId.value);
@@ -667,6 +707,7 @@ watch(dbId, () => {
   resetTargetForm();
   resetScheduleForm();
   lastRestoreStatus.clear();
+  pendingRestoreIds.value = new Set();
   stopBackupPolling();
   void fetchAll();
 });
@@ -683,6 +724,9 @@ watch(hasRunningBackup, () => {
 });
 
 watch(hasRunningRestore, () => {
+  // Notify before the stop: a completion flips this to false and stops the
+  // interval, and the toast must still fire for the poll that observed it.
+  notifyRestoreOutcomes();
   syncBackupPolling();
 });
 

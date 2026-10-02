@@ -160,14 +160,16 @@ func TestRotateRevokeRespectScopeGrant(t *testing.T) {
 
 // TestRotateAdminTokenRequiresPlatformOperator is the fix-round-1 R1 regression:
 // a non-operator session owning an admin token must not be able to rotate it
-// into a fresh admin secret, and the same gate applies to revoke.
+// into a fresh admin secret. Fix round 2 S1: revoke is de-escalating, so the
+// owner may always kill a leaked admin token even after losing operator status.
 func TestRotateAdminTokenRequiresPlatformOperator(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	const session = "Bearer valid-token"
 
-	adminToken := mustCreateAdminToken(t, tokens)
+	rotateTarget := mustCreateAdminToken(t, tokens)
+	revokeTarget := mustCreateAdminToken(t, tokens)
 
-	rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+adminToken.ID.String()+"/rotate", "", session)
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+rotateTarget.ID.String()+"/rotate", "", session)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("non-operator rotating admin token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -179,14 +181,16 @@ func TestRotateAdminTokenRequiresPlatformOperator(t *testing.T) {
 		t.Fatalf("message = %q, want %q", body.Message, platformAdminScopeDenied)
 	}
 
-	rec = doRequest(t, s, http.MethodDelete, "/api/v1/tokens/"+adminToken.ID.String(), "", session)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("non-operator revoking admin token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	// Revoke stays available to the owner: a non-operator may kill their own
+	// admin token.
+	rec = doRequest(t, s, http.MethodDelete, "/api/v1/tokens/"+revokeTarget.ID.String(), "", session)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("non-operator revoking admin token = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// An operator-listed session may rotate it.
+	// An operator-listed session may rotate the surviving token.
 	t.Setenv(PlatformAdminsEnv, "user@example.com")
-	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+adminToken.ID.String()+"/rotate", "", session); rec.Code != http.StatusOK {
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+rotateTarget.ID.String()+"/rotate", "", session); rec.Code != http.StatusOK {
 		t.Fatalf("operator rotating admin token = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
@@ -232,9 +236,14 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 	}
 }
 
-// TestAuthScopeWrappers covers the four chains the server mounts, so reverting
-// any of them fails: readScopeAuth, adminScopeAuth, resourceScopeAuth and
-// withTeam.
+// TestAuthScopeWrappers covers the four chains the server mounts. It pins the
+// presence and ordering of RequireAuth plus the scope gate on each: admin
+// rejects read/deploy and accepts admin/JWT, the resource and team chains split
+// reads from mutations, and every chain rejects a missing token. Note that
+// readScopeAuth is not distinguishable from bare RequireAuth for a valid token,
+// because read is the baseline scope every token carries (deploy/admin imply
+// it); its row pins the authentication leg, and the intent is documented on the
+// helper itself.
 func TestAuthScopeWrappers(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
@@ -291,5 +300,33 @@ func TestAuthScopeWrappers(t *testing.T) {
 				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
 			}
 		})
+	}
+}
+
+// TestTeamsMountRequiresAdminScope pins the production teams mount wiring
+// (server.go passes s.adminScopeAuth): a read token is refused before the team
+// service, so reverting that call to RequireAuth fails here. teams.Mount is a
+// no-op without a team service, so the router is rebuilt with one injected.
+func TestTeamsMountRequiresAdminScope(t *testing.T) {
+	s, tokens := newScopeTestServer(t)
+	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
+	adminToken := mustCreateToken(t, tokens, auth.ScopeAdmin)
+
+	s.teamService = newFakeTeamService()
+	router, err := s.routes()
+	if err != nil {
+		t.Fatalf("routes: %v", err)
+	}
+	s.router = router
+
+	rec := doRequest(t, s, http.MethodGet, "/api/v1/teams", "", "Bearer "+readToken)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("read token GET /api/v1/teams = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// An admin token passes the scope gate; the fake team service then answers
+	// an unimplemented error, so the route is reached rather than refused.
+	if rec := doRequest(t, s, http.MethodGet, "/api/v1/teams", "", "Bearer "+adminToken); rec.Code == http.StatusForbidden {
+		t.Fatalf("admin token GET /api/v1/teams = 403, want the scope gate to pass")
 	}
 }

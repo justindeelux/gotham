@@ -107,10 +107,14 @@ type handler struct {
 //	POST   /v1/databases/{id}/stop
 //	POST   /v1/databases/{id}/restart
 //
-// auth wraps the group (the server passes its RequireAuth); a nil svc or
+// auth wraps the group (the server passes its team chain); deployScope is the
+// server's deploy-scope middleware, applied explicitly to the credentials read
+// because it returns decrypted passwords. The resource classifier already
+// deploy-gates secret-bearing reads; this wrap is defense in depth, so a future
+// change to the classifier cannot silently reopen the endpoint. A nil svc or
 // FEATURE_DATABASES=false mounts nothing, so the control plane can call Mount
 // unconditionally.
-func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc DatabaseService) {
+func Mount(r chi.Router, auth func(http.Handler) http.Handler, deployScope func(http.Handler) http.Handler, userID UserIDFunc, svc DatabaseService) {
 	if svc == nil || !Enabled() {
 		return
 	}
@@ -122,7 +126,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Get("/v1/databases/{id}", h.get)
 		protected.Patch("/v1/databases/{id}", h.update)
 		protected.Delete("/v1/databases/{id}", h.delete)
-		protected.Get("/v1/databases/{id}/credentials", h.credentials)
+		protected.With(deployScope).Get("/v1/databases/{id}/credentials", h.credentials)
 		protected.Post("/v1/databases/{id}/start", h.start)
 		protected.Post("/v1/databases/{id}/stop", h.stop)
 		protected.Post("/v1/databases/{id}/restart", h.restart)

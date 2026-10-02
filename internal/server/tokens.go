@@ -166,7 +166,7 @@ func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.authorizeTokenOperation(w, r, "rotate", userID, id) {
+	if !s.authorizeTokenOperation(w, r, "rotate", userID, id, true) {
 		return
 	}
 
@@ -193,7 +193,7 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.authorizeTokenOperation(w, r, "revoke", userID, id) {
+	if !s.authorizeTokenOperation(w, r, "revoke", userID, id, false) {
 		return
 	}
 
@@ -205,19 +205,21 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // authorizeTokenOperation enforces the token-management boundary on an owned
-// token before it is rotated or revoked. Re-issuing or touching an admin token
-// is the same platform-operator boundary as minting one, so a session that is
-// no longer an operator cannot rotate a stored admin token into a fresh secret.
-// An API token may additionally only manage tokens whose scopes it could itself
-// grant; a JWT session holds every scope and skips that subset check. It answers
-// the request itself and returns false when the operation must not proceed.
-func (s *Server) authorizeTokenOperation(w http.ResponseWriter, r *http.Request, op string, userID, id uuid.UUID) bool {
+// token before it is rotated or revoked. The API-token subset rule always
+// applies: a token may only manage tokens whose scopes it could itself grant.
+// requireOperatorForAdmin additionally applies the platform-operator gate when
+// the target carries the admin scope — rotation re-issues the secret, so a
+// session that is no longer an operator must not rotate a stored admin token
+// into a fresh one. Revoke is de-escalating and deliberately skips that gate,
+// so an owner can always kill a leaked admin-scoped credential. It answers the
+// request itself and returns false when the operation must not proceed.
+func (s *Server) authorizeTokenOperation(w http.ResponseWriter, r *http.Request, op string, userID, id uuid.UUID, requireOperatorForAdmin bool) bool {
 	existing, err := s.tokens.Get(r.Context(), userID, id)
 	if err != nil {
 		s.writeTokenError(w, op, err)
 		return false
 	}
-	if slices.Contains(existing.Scopes, auth.ScopeAdmin) && !s.isPlatformOperator(r) {
+	if requireOperatorForAdmin && slices.Contains(existing.Scopes, auth.ScopeAdmin) && !s.isPlatformOperator(r) {
 		writeJSON(w, http.StatusForbidden, apiError{Message: platformAdminScopeDenied})
 		return false
 	}

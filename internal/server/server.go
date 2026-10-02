@@ -364,7 +364,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// Managed databases (BE-5.1): same container service as above, so a
 		// database container is created through the shared container service
 		// rather than a second agent path.
-		databases.Mount(api, s.withTeam(), UserIDFromContext, s.databaseService(containerService))
+		databases.Mount(api, s.withTeam(), RequireScopes(auth.ScopeDeploy), UserIDFromContext, s.databaseService(containerService))
 
 		// Backup and restore surface (BE-5.2), same container service and
 		// same feature flag as the databases routes above: a nil service

@@ -196,9 +196,10 @@ func newManualRealtime(hub *Hub, pub Publisher) *Realtime {
 	}
 }
 
-// TestStartLogStreamReplaysToLateViewer is the U2 regression: a viewer that
-// subscribes after the agent tail was already published still receives the
-// buffered lines, because a repeat start replays the channel's ring.
+// TestStartLogStreamReplaysToLateViewer covers the U2 replay behavior and the
+// round-2 U1 fix: a late viewer receives the buffered tail tagged Replay, and
+// the first viewer's only untagged copy is the live frame — the second copy it
+// also receives is tagged, so the client skips it instead of duplicating lines.
 func TestStartLogStreamReplaysToLateViewer(t *testing.T) {
 	rt := mountFallback(t)
 
@@ -211,8 +212,9 @@ func TestStartLogStreamReplaysToLateViewer(t *testing.T) {
 	if err := rt.StartLogStream(opener, "srv-rt", "replay", req); err != nil {
 		t.Fatalf("StartLogStream: %v", err)
 	}
-	if msg := nextClientFrame(t, first, 3*time.Second); msg.Type != TypeLog || msg.Data != "tail\n" {
-		t.Fatalf("first viewer frame = %+v, want the tail", msg)
+	live := nextClientFrame(t, first, 3*time.Second)
+	if live.Type != TypeLog || live.Data != "tail\n" || live.Replay {
+		t.Fatalf("first viewer frame = %+v, want an untagged live tail", live)
 	}
 
 	second := rt.Hub.newClient()
@@ -220,8 +222,15 @@ func TestStartLogStreamReplaysToLateViewer(t *testing.T) {
 	if err := rt.StartLogStream(opener, "srv-rt", "replay", req); err != nil {
 		t.Fatalf("repeat StartLogStream: %v", err)
 	}
-	if msg := nextClientFrame(t, second, 3*time.Second); msg.Type != TypeLog || msg.Data != "tail\n" {
-		t.Fatalf("late viewer frame = %+v, want the replayed tail", msg)
+	replayed := nextClientFrame(t, second, 3*time.Second)
+	if replayed.Type != TypeLog || replayed.Data != "tail\n" || !replayed.Replay {
+		t.Fatalf("late viewer frame = %+v, want the replay-tagged tail", replayed)
+	}
+	// The first viewer receives the same replayed frame, but tagged, so the
+	// client will not render a duplicate.
+	duplicate := nextClientFrame(t, first, 3*time.Second)
+	if duplicate.Type != TypeLog || duplicate.Data != "tail\n" || !duplicate.Replay {
+		t.Fatalf("first viewer replay frame = %+v, want a replay-tagged tail", duplicate)
 	}
 	if got := rt.ActiveStreams(); got != 1 {
 		t.Errorf("ActiveStreams = %d, want 1 (shared stream)", got)
@@ -287,9 +296,9 @@ func TestStartLogStreamRetriesPublishAndNotifies(t *testing.T) {
 		t.Fatalf("StartLogStream: %v", err)
 	}
 
-	gotNotice, gotLog := false, false
+	gotNotice, gotResumed, gotLog := false, false, false
 	deadline := time.After(3 * time.Second)
-	for !gotNotice || !gotLog {
+	for !gotNotice || !gotResumed || !gotLog {
 		select {
 		case payload := <-client.send:
 			var msg Message
@@ -299,11 +308,14 @@ func TestStartLogStreamRetriesPublishAndNotifies(t *testing.T) {
 			switch {
 			case msg.Type == TypeDisconnect && strings.Contains(msg.Data, "interrupted"):
 				gotNotice = true
+			case msg.Type == TypeResumed:
+				gotResumed = true
 			case msg.Type == TypeLog && msg.Data == "hi\n":
 				gotLog = true
 			}
 		case <-deadline:
-			t.Fatalf("did not recover from publish failures: notice=%v log=%v", gotNotice, gotLog)
+			t.Fatalf("did not recover from publish failures: notice=%v resumed=%v log=%v",
+				gotNotice, gotResumed, gotLog)
 		}
 	}
 	if flaky.callCount() < 3 {

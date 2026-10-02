@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/server/ws"
+	"github.com/justindeelux/gotham/internal/servers"
+	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -40,9 +43,17 @@ func (s *Server) handleStartLogStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.authorizeLogSubscription(r.Context(), serverID, userID); err != nil {
-		// A missing node and a node the caller cannot access are reported
-		// identically, matching the server's indistinguishable-node policy (U5).
-		writeJSON(w, http.StatusNotFound, apiError{Message: "not found"})
+		// Only a missing node and a denied membership answer 404, and they are
+		// indistinguishable (server policy). A transient lookup/DB failure is a
+		// real error, not "not found", so it is logged and answered 500 (U2).
+		switch {
+		case errors.Is(err, servers.ErrNotFound), errors.Is(err, teams.ErrNotFound):
+			writeJSON(w, http.StatusNotFound, apiError{Message: "not found"})
+		default:
+			s.logger.Error("realtime: authorize log stream",
+				"error", err, "server_id", serverID.String(), "user_id", userID.String())
+			writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
+		}
 		return
 	}
 

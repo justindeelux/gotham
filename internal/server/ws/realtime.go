@@ -135,9 +135,12 @@ func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID
 		replay := entry.replay.snapshot()
 		rt.streamsMu.Unlock()
 		// The caller subscribes before starting (see LogViewer), so the replay
-		// reaches the new viewer's room.
-		for _, payload := range replay {
-			_ = rt.pub.Publish(rt.ctx, channel, payload)
+		// reaches the new viewer. Frames are tagged Replay so a viewer that
+		// already has content skips them instead of duplicating history
+		// (round-2 U1).
+		for _, msg := range replay {
+			msg.Replay = true
+			_ = rt.pub.Publish(rt.ctx, channel, mustJSON(msg))
 		}
 		return nil
 	}
@@ -267,8 +270,14 @@ func (p recordingPublisher) Publish(ctx context.Context, channel string, payload
 // resilientPublisher retries a failed publish with bounded backoff while the
 // stream context is live and the channel still has subscribers. On the first
 // failure it broadcasts a disconnect notice straight to the hub (bypassing the
-// failed Redis transport), so the viewer sees the interruption instead of a
-// silently stalled "Streaming" state (U3).
+// failed Redis transport), and on the first success after a failure it
+// broadcasts a resumed notice, so the viewer sees the interruption and its
+// recovery instead of a silently stalled "Streaming" state (U3).
+//
+// Gap: a bridge-only subscription drop (Redis accepts the subscription but
+// stops delivering) makes PUBLISH succeed with zero receivers, so frames during
+// that window are lost without an error here. Detecting it needs a bridge
+// health signal the publisher does not have; documented rather than guessed.
 type resilientPublisher struct {
 	inner      Publisher
 	hub        *Hub
@@ -280,11 +289,17 @@ type resilientPublisher struct {
 func (p resilientPublisher) Publish(ctx context.Context, channel string, payload []byte) error {
 	backoff := p.minBackoff
 	notified := false
+	failed := false
 	for {
 		err := p.inner.Publish(ctx, channel, payload)
 		if err == nil {
+			if failed {
+				p.hub.Broadcast(channel, resumedNotice(channel))
+				p.logger.Info("ws: log publish recovered", "channel", channel)
+			}
 			return nil
 		}
+		failed = true
 		if ctx.Err() != nil {
 			return err
 		}
@@ -307,7 +322,7 @@ func (p resilientPublisher) Publish(ctx context.Context, channel string, payload
 type replayBuffer struct {
 	mu   sync.Mutex
 	max  int
-	data [][]byte
+	data []Message
 }
 
 // newReplayBuffer builds a ring holding at most max log frames.
@@ -318,7 +333,8 @@ func newReplayBuffer(max int) *replayBuffer {
 	return &replayBuffer{max: max}
 }
 
-// add stores a log frame; disconnect notices and any non-log frame are ignored.
+// add stores a log frame; disconnect/resumed notices and any non-log frame are
+// ignored.
 func (r *replayBuffer) add(payload []byte) {
 	if r.max == 0 {
 		return
@@ -327,19 +343,20 @@ func (r *replayBuffer) add(payload []byte) {
 	if err := json.Unmarshal(payload, &msg); err != nil || msg.Type != TypeLog {
 		return
 	}
+	msg.Replay = false // history is stored untagged; replay tags on the way out
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.data = append(r.data, payload)
+	r.data = append(r.data, msg)
 	if len(r.data) > r.max {
 		r.data = r.data[len(r.data)-r.max:]
 	}
 }
 
 // snapshot returns a copy of the buffered frames, oldest first.
-func (r *replayBuffer) snapshot() [][]byte {
+func (r *replayBuffer) snapshot() []Message {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([][]byte, len(r.data))
+	out := make([]Message, len(r.data))
 	copy(out, r.data)
 	return out
 }

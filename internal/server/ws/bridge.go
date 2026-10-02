@@ -70,6 +70,12 @@ func disconnectNotice(channel, reason string) []byte {
 	return payload
 }
 
+// resumedNotice frames a transport-recovery notice for WS clients.
+func resumedNotice(channel string) []byte {
+	payload, _ := json.Marshal(Message{Channel: channel, Type: TypeResumed, Data: "log stream resumed"})
+	return payload
+}
+
 // logPayload frames one log chunk for WS clients.
 func logPayload(channel string, data []byte) []byte {
 	payload, _ := json.Marshal(Message{Channel: channel, Type: TypeLog, Data: string(data)})

@@ -10,6 +10,10 @@ type Message struct {
 	Channel string `json:"channel"`
 	Type    string `json:"type"`
 	Data    string `json:"data,omitempty"`
+	// Replay marks a frame re-broadcast from a channel's history ring. Clients
+	// with buffered content skip it, so a late viewer never duplicates lines on
+	// existing viewers (round-2 U1).
+	Replay bool `json:"replay,omitempty"`
 }
 
 // Message types sent from the server to clients.
@@ -21,6 +25,9 @@ const (
 	// joined the channel). An older client that does not know the type ignores
 	// the frame, so adding it stays backward compatible.
 	TypeDenied = "denied"
+	// TypeResumed tells subscribers that a previously interrupted log stream is
+	// delivering again after the transport recovered (round-2 U3).
+	TypeResumed = "resumed"
 	// TypePing is the server heartbeat. It is a no-op for clients that do not
 	// know the type; its purpose is to keep a write in flight so a dead peer
 	// fails the connection's write deadline (see handler.serveConn).

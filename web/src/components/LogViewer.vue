@@ -125,6 +125,32 @@ function handleMessage(message: WebSocketMessage): void {
     return;
   }
 
+  // A denied subscription (authorization or the per-connection cap) never
+  // joins the room, so the drawer would otherwise wait forever: surface the
+  // server's reason as a notice (round-2 U4).
+  if (message.payload?.type === "denied") {
+    const reason =
+      typeof message.payload.data === "string" ? message.payload.data : "";
+    appendLine({
+      id: ++lineId,
+      ts: formatTimestamp(null, message.receivedAt),
+      text: reason ? `Subscription denied: ${reason}` : "Subscription denied",
+      kind: "notice",
+    });
+    return;
+  }
+
+  // A transport recovery notice closes out the interruption notice.
+  if (message.payload?.type === "resumed") {
+    appendLine({
+      id: ++lineId,
+      ts: formatTimestamp(null, message.receivedAt),
+      text: "Log stream resumed",
+      kind: "notice",
+    });
+    return;
+  }
+
   if (message.kind === "notice") {
     appendLine({
       id: ++lineId,
@@ -151,6 +177,16 @@ function handleMessage(message: WebSocketMessage): void {
   }
 
   const ts = formatTimestamp(payload?.ts, message.receivedAt);
+  // Replayed history must not duplicate lines on a viewer that already has
+  // content (a reconnect re-POSTs the start, and a second viewer's replay is
+  // broadcast to the room). Skip it unless this viewer is still empty
+  // (round-2 U1).
+  if (
+    payload?.replay === true &&
+    (lines.value.length > 0 || pending.value.length > 0)
+  ) {
+    return;
+  }
   for (const piece of splitLines(text)) {
     appendLine({ id: ++lineId, ts, text: piece, kind: "line" });
   }

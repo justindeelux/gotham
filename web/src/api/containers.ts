@@ -147,9 +147,11 @@ export async function runContainer(
 
 /**
  * startContainerLogStream asks the control plane to bridge one container's
- * agent log stream into the realtime channel. It is idempotent per container,
- * so repeated mounts share one agent stream, and the stream is reaped once no
- * WebSocket subscriber remains. Call it before subscribing the log viewer.
+ * agent log stream into the realtime channel. Call it after the viewer's
+ * subscription is acknowledged, so the hub room has a member before the agent
+ * tail is published. It is idempotent per container, so repeated mounts share
+ * one agent stream, and the stream is reaped once no WebSocket subscriber
+ * remains.
  */
 export async function startContainerLogStream(
   serverId: string,

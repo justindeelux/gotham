@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -184,6 +185,36 @@ func TestHandleStartLogStreamForeignNodeIsNotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d for a foreign node", rec.Code, http.StatusNotFound)
 	}
+}
+
+// TestHandleStartLogStreamTransientErrorIs500 is the U2 regression: a lookup
+// failure that is not "not found" is a real error (500 + logged), not a 404.
+func TestHandleStartLogStreamTransientErrorIs500(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	rt := ws.Mount(chi.NewRouter(), nil, "", logger, nil)
+	t.Cleanup(rt.Close)
+
+	s := &Server{
+		servers:  &failingGetServerService{fakeServerService: newFakeServerService()},
+		realtime: rt,
+		logger:   logger,
+	}
+	rec := httptest.NewRecorder()
+	s.handleStartLogStream(rec, startLogStreamRequest(uuid.New().String(), uuid.New()))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d for a transient lookup error", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+// failingGetServerService is a ServerService whose node lookup fails with a
+// transient (non-not-found) error.
+type failingGetServerService struct {
+	*fakeServerService
+}
+
+func (f *failingGetServerService) Get(context.Context, uuid.UUID) (*servers.Server, error) {
+	return nil, errors.New("database unavailable")
 }
 
 // TestHandleStartLogStreamRequiresAgentDialer verifies a registry without the

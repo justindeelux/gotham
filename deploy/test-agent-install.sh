@@ -178,6 +178,64 @@ else
 fi
 unset_agent_env
 
+# --- U1/U3: --insecure with a CA must not force loopback -----------------------
+echo "==> U1 --insecure alongside --ca keeps the TLS listener"
+T8_DIR="${SCRATCH}/u1"
+mkdir -p "${T8_DIR}"
+T8_ENV="${T8_DIR}/agent.env"
+printf 'GOTHAM_AGENT_LISTEN_ADDR=0.0.0.0:9443\n' >"${T8_ENV}"
+agent_env_write "${T8_ENV}" "/etc/gotham/ca.crt" 1
+grep -qxF 'GOTHAM_AGENT_LISTEN_ADDR=0.0.0.0:9443' "${T8_ENV}" \
+    || fail "--ca --insecure rewrote the listener to loopback"
+grep -qxF 'GOTHAM_AGENT_CA=/etc/gotham/ca.crt' "${T8_ENV}" \
+    || fail "--ca --insecure did not write the CA"
+if grep -q '^GOTHAM_AGENT_INSECURE=' "${T8_ENV}"; then
+    fail "--ca --insecure wrote GOTHAM_AGENT_INSECURE"
+fi
+pass "--ca --insecure keeps the listener and writes the CA"
+
+# Plain TLS -> TLS reinstall keeps a non-loopback listener (remote CP reachable).
+T9_ENV="${T8_DIR}/tls-reinstall.env"
+printf 'GOTHAM_AGENT_CP_ADDR=cp:9443\nGOTHAM_AGENT_LISTEN_ADDR=0.0.0.0:9443\n' >"${T9_ENV}"
+agent_env_write "${T9_ENV}" "/etc/gotham/ca.crt" 0
+grep -qxF 'GOTHAM_AGENT_LISTEN_ADDR=0.0.0.0:9443' "${T9_ENV}" \
+    || fail "TLS->TLS reinstall dropped a non-loopback listener"
+pass "TLS->TLS reinstall keeps a non-loopback listener"
+
+# A case-variant prior INSECURE=True behaves like true: drop the loopback
+# listener when switching to TLS.
+T10_ENV="${T8_DIR}/insecure-case.env"
+printf 'GOTHAM_AGENT_INSECURE=True\nGOTHAM_AGENT_LISTEN_ADDR=127.0.0.1:9443\n' >"${T10_ENV}"
+agent_env_write "${T10_ENV}" "/etc/gotham/ca.crt" 0
+if grep -q '^GOTHAM_AGENT_LISTEN_ADDR=' "${T10_ENV}"; then
+    fail "case-variant INSECURE=True kept the loopback listener through --ca"
+fi
+pass "case-variant INSECURE=True is treated as true"
+
+# --- U2: installer loopback validation matches the agent ----------------------
+echo "==> U2 loopback validation parity"
+for _bad in '127.example.com:9443' '::1:9443' '0.0.0.0:9443' '127.0.0.300:9443'; do
+    _f="${T8_DIR}/bad.env"
+    printf 'GOTHAM_AGENT_CP_ADDR=cp:9443\n' >"${_f}"
+    # shellcheck disable=SC2034  # read by agent_env_write through eval
+    GOTHAM_AGENT_LISTEN_ADDR="${_bad}"
+    if agent_env_write "${_f}" "" 1 2>/dev/null; then
+        fail "--insecure accepted non-loopback ${_bad}"
+    fi
+    unset_agent_env
+done
+for _good in 'localhost:9443' 'LOCALHOST:9443' '127.0.0.1:9443' '[::1]:9443'; do
+    _f="${T8_DIR}/good.env"
+    printf 'GOTHAM_AGENT_CP_ADDR=cp:9443\n' >"${_f}"
+    # shellcheck disable=SC2034  # read by agent_env_write through eval
+    GOTHAM_AGENT_LISTEN_ADDR="${_good}"
+    agent_env_write "${_f}" "" 1
+    grep -qxF "GOTHAM_AGENT_LISTEN_ADDR=${_good}" "${_f}" \
+        || fail "--insecure rejected loopback ${_good}"
+    unset_agent_env
+done
+pass "loopback parity: rejects non-loopback, accepts localhost/127.0.0.1/[::1]"
+
 # --- U4: a symlinked agent.env keeps its link ---------------------------------
 echo "==> U4 symlinked agent.env keeps its link"
 T6_DIR="${SCRATCH}/u4"

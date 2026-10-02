@@ -64,16 +64,55 @@ agent_env_write() {
                 _env_prev_value "$1"
             fi
         }
+        # _is_loopback_listener mirrors the agent's isLoopbackListenAddr
+        # (agent/grpc_server.go): "localhost" (any case), a bracketed "[::1]",
+        # or a dotted 127.<d>.<d>.<d> IPv4 address. "127.example.com" and an
+        # unbracketed "::1" are not loopback, and leading-zero octets are
+        # rejected because Go's net.ParseIP rejects them.
         _is_loopback_listener() {
-            case "$1" in
-                127.* | localhost:* | "[::1]:"* | ::1:*) return 0 ;;
-                *) return 1 ;;
+            _addr=$1
+            case "${_addr}" in
+                "[::1]" | "[::1]:"*) return 0 ;;
             esac
+            case "${_addr}" in
+                *:*) _host="${_addr%:*}" ;;
+                *) _host="${_addr}" ;;
+            esac
+            _lower="$(printf '%s' "${_host}" | tr '[:upper:]' '[:lower:]')"
+            if [ "${_lower}" = "localhost" ]; then
+                return 0
+            fi
+            case "${_host}" in
+                *[!0-9.]* | "") return 1 ;;
+            esac
+            _oldifs=$IFS
+            IFS=.
+            # shellcheck disable=SC2086
+            set -- ${_host}
+            IFS=${_oldifs}
+            [ "$#" -eq 4 ] || return 1
+            [ "$1" = "127" ] || return 1
+            shift
+            for _octet in "$@"; do
+                case "${_octet}" in
+                    "" | *[!0-9]*) return 1 ;;
+                esac
+                if [ "${_octet}" != "0" ] && [ "${_octet#0}" != "${_octet}" ]; then
+                    return 1
+                fi
+                [ "${#_octet}" -le 3 ] || return 1
+                [ "${_octet}" -le 255 ] || return 1
+            done
+            return 0
         }
         # Resolve the listener before writing: a plaintext install's loopback
-        # address must not survive a switch to TLS, and --insecure requires a
-        # loopback address (the agent refuses to start otherwise).
-        _prior_insecure="$(_env_prev_value GOTHAM_AGENT_INSECURE)"
+        # address must not survive a switch to TLS. The --insecure loopback rules
+        # apply only when there is no CA: with a CA the agent serves TLS and may
+        # bind any address, so --insecure alongside --ca must not force loopback.
+        # The prior INSECURE flag is compared the way the agent reads it
+        # (trimmed, case-insensitive).
+        _prior_insecure="$(printf '%s' "$(_env_prev_value GOTHAM_AGENT_INSECURE)" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        [ "${_prior_insecure}" = "true" ] || _prior_insecure=""
         eval "_ambient_listen=\${GOTHAM_AGENT_LISTEN_ADDR:-}"
         _prior_listen="$(_env_prev_value GOTHAM_AGENT_LISTEN_ADDR)"
         _listen=""
@@ -88,15 +127,17 @@ agent_env_write() {
                 _listen="${_prior_listen}"
             fi
         fi
-        if [ -z "${_listen}" ] && [ "${_insecure}" -eq 1 ]; then
-            _listen="127.0.0.1:9443"
-        fi
-        if [ "${_insecure}" -eq 1 ] && [ -n "${_listen}" ] && ! _is_loopback_listener "${_listen}"; then
-            if [ -n "${_ambient_listen}" ]; then
-                echo "install-agent.sh: GOTHAM_AGENT_LISTEN_ADDR=${_listen} is not loopback; --insecure requires a loopback listener" >&2
-                exit 1
+        if [ -z "${_agent_ca}" ]; then
+            if [ -z "${_listen}" ] && [ "${_insecure}" -eq 1 ]; then
+                _listen="127.0.0.1:9443"
             fi
-            _listen="127.0.0.1:9443"
+            if [ "${_insecure}" -eq 1 ] && [ -n "${_listen}" ] && ! _is_loopback_listener "${_listen}"; then
+                if [ -n "${_ambient_listen}" ]; then
+                    echo "install-agent.sh: GOTHAM_AGENT_LISTEN_ADDR=${_listen} is not loopback; --insecure requires a loopback listener" >&2
+                    exit 1
+                fi
+                _listen="127.0.0.1:9443"
+            fi
         fi
         _env_tmp="${_env_target}.tmp.$$"
         # Root-only temp holding operator settings; remove it if any step

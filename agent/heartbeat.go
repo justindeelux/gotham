@@ -28,11 +28,11 @@ const (
 	// defaultRegisterTimeout bounds a single registration attempt so a stalled
 	// control plane cannot pin the loop (and block backoff/heartbeats).
 	defaultRegisterTimeout = 30 * time.Second
-	// backoffResetAfter is how long a registration must last before it counts
-	// as healthy and the reconnect backoff resets to the floor. A shorter
+	// defaultBackoffResetAfter is how long a registration must last before it
+	// counts as healthy and the reconnect backoff resets to the floor. A shorter
 	// session (a flap) keeps the growing backoff, so repeated reconnects cannot
 	// hot-loop at the floor.
-	backoffResetAfter = 30 * time.Second
+	defaultBackoffResetAfter = 30 * time.Second
 	// backoffJitterFraction bounds the per-attempt jitter to ±20% so a control
 	// plane flap does not have every agent retry in lockstep.
 	backoffJitterFraction = 0.2
@@ -56,12 +56,19 @@ type Agent struct {
 	interval   time.Duration
 	minBackoff time.Duration
 	maxBackoff time.Duration
+	// backoffResetAfter is how long a registration must last before the
+	// reconnect backoff resets to the floor.
+	backoffResetAfter time.Duration
 	// registerTimeout bounds one Register attempt.
 	registerTimeout time.Duration
 	// renewBefore is how long before the served certificate's expiry the agent
 	// re-registers for a fresh one.
 	renewBefore time.Duration
 	dialOptions []grpc.DialOption
+	// randFloat and sleep are seams: production uses math/rand and sleepContext,
+	// tests inject them to make the backoff schedule deterministic.
+	randFloat func() float64
+	sleep     func(context.Context, time.Duration) bool
 
 	versionMu sync.Mutex
 	version   string
@@ -88,6 +95,16 @@ func WithBackoff(minBackoff, maxBackoff time.Duration) Option {
 		}
 		if maxBackoff >= minBackoff && maxBackoff > 0 {
 			a.maxBackoff = maxBackoff
+		}
+	}
+}
+
+// WithBackoffResetAfter overrides how long a registration must last before the
+// reconnect backoff resets to the floor (default 30s).
+func WithBackoffResetAfter(d time.Duration) Option {
+	return func(a *Agent) {
+		if d > 0 {
+			a.backoffResetAfter = d
 		}
 	}
 }
@@ -125,16 +142,19 @@ func NewAgent(cfg Config, log *slog.Logger, docker dockerClient, options ...Opti
 		log = slog.Default()
 	}
 	agent := &Agent{
-		cfg:             cfg,
-		log:             log,
-		docker:          docker,
-		sampler:         stats.New(),
-		interval:        defaultHeartbeatInterval,
-		minBackoff:      defaultMinBackoff,
-		maxBackoff:      defaultMaxBackoff,
-		registerTimeout: defaultRegisterTimeout,
-		renewBefore:     defaultRenewBefore,
-		version:         cfg.Version,
+		cfg:               cfg,
+		log:               log,
+		docker:            docker,
+		sampler:           stats.New(),
+		interval:          defaultHeartbeatInterval,
+		minBackoff:        defaultMinBackoff,
+		maxBackoff:        defaultMaxBackoff,
+		backoffResetAfter: defaultBackoffResetAfter,
+		registerTimeout:   defaultRegisterTimeout,
+		renewBefore:       defaultRenewBefore,
+		randFloat:         rand.Float64,
+		sleep:             sleepContext,
+		version:           cfg.Version,
 	}
 	for _, option := range options {
 		option(agent)
@@ -196,9 +216,9 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 			if ctx.Err() != nil {
 				return nil
 			}
-			delay := jitter(backoff, a.minBackoff, a.maxBackoff)
+			delay := a.backoffDelay(backoff)
 			a.log.Warn("register failed; retrying", "error", err, "backoff", delay.String())
-			if !sleepContext(ctx, delay) {
+			if !a.sleep(ctx, delay) {
 				return nil
 			}
 			backoff = nextBackoff(backoff, a.maxBackoff)
@@ -264,11 +284,11 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 		// Only a session long enough to count as healthy resets the reconnect
 		// backoff; a short-lived success (a flap) keeps the growing backoff so
 		// repeated reconnects cannot hot-loop at the floor.
-		if time.Since(sessionStart) >= backoffResetAfter {
+		if time.Since(sessionStart) >= a.backoffResetAfter {
 			backoff = a.minBackoff
 		}
-		delay := jitter(backoff, a.minBackoff, a.maxBackoff)
-		if !sleepContext(ctx, delay) {
+		delay := a.backoffDelay(backoff)
+		if !a.sleep(ctx, delay) {
 			return nil
 		}
 		backoff = nextBackoff(backoff, a.maxBackoff)
@@ -467,15 +487,21 @@ func nextBackoff(current, max time.Duration) time.Duration {
 	return next
 }
 
+// backoffDelay returns backoff with ±backoffJitterFraction jitter, clamped to
+// [minBackoff, maxBackoff].
+func (a *Agent) backoffDelay(backoff time.Duration) time.Duration {
+	return jitter(backoff, a.minBackoff, a.maxBackoff, a.randFloat)
+}
+
 // jitter returns d with up to ±backoffJitterFraction random jitter, clamped to
 // [min, max]. Jittering every wait de-correlates agents so a control-plane flap
-// does not have them all retry on the same schedule.
-func jitter(d, min, max time.Duration) time.Duration {
+// does not have them all retry on the same schedule. randFloat returns [0,1).
+func jitter(d, min, max time.Duration, randFloat func() float64) time.Duration {
 	if d <= 0 {
 		return min
 	}
 	spread := time.Duration(float64(d) * backoffJitterFraction)
-	delta := time.Duration((rand.Float64()*2 - 1) * float64(spread))
+	delta := time.Duration((randFloat()*2 - 1) * float64(spread))
 	jittered := d + delta
 	if jittered < min {
 		jittered = min

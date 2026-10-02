@@ -1,11 +1,19 @@
 #!/bin/sh
 #
-# test-agent-install.sh exercises the two reinstall behaviours of install-agent.sh
+# test-agent-install.sh exercises the reinstall behaviours of install-agent.sh
 # without root or a systemd host:
 #
 #   A3-7  agent_env_write preserves values a prior install wrote for keys this
 #         invocation does not set (CP address / node id), lets ambient values
 #         win, keeps operator-added keys, and leaves the file mode 0640.
+#   U2    a duplicate managed key resolves to the last occurrence (systemd
+#         EnvironmentFile semantics).
+#   U3    a plaintext -> TLS reinstall drops the loopback listener and INSECURE;
+#         --insecure overrides a preserved non-loopback listener and rejects an
+#         ambient one.
+#   U4    a symlinked agent.env keeps its link (the target is rewritten).
+#   U5    an indented managed key keeps its value.
+#   U6    --help documents every managed key.
 #   A3-8  agent_service_restart restarts an active unit onto the new binary and
 #         starts an inactive one, failing when the unit's ExecStart does not
 #         reference the installed binary.
@@ -16,7 +24,7 @@
 # Usage:
 #   sh deploy/test-agent-install.sh
 #
-# Requirements: sh, grep, sed, stat, mktemp (present on the CI runner).
+# Requirements: sh, grep, sed, awk, stat, readlink, mktemp (present on CI).
 
 set -eu
 
@@ -90,6 +98,7 @@ fi
 echo "==> A3-7 ambient values override the prior file"
 # shellcheck disable=SC2034  # read by agent_env_write through eval
 GOTHAM_AGENT_CP_ADDR=override.example.com:9443
+# shellcheck disable=SC2034  # read by agent_env_write through eval
 GOTHAM_AGENT_NODE_ID=node-override
 agent_env_write "${T1_ENV}" "/etc/gotham/ca.crt" 0
 unset_agent_env
@@ -116,15 +125,108 @@ grep -qx 'GOTHAM_AGENT_LISTEN_ADDR=127.0.0.1:9443' "${T3_ENV}" \
     || fail "--insecure did not default the loopback listener"
 [ "$(grep -c '^GOTHAM_AGENT_LISTEN_ADDR=' "${T3_ENV}")" -eq 1 ] \
     || fail "--insecure wrote a duplicate listener address"
-# A preserved listener must not gain a second default entry.
+# --insecure requires a loopback listener: a preserved non-loopback address is
+# overridden (the agent refuses to start with a non-loopback plaintext listener).
 T3B_ENV="${T3_DIR}/agent-preserved.env"
 printf 'GOTHAM_AGENT_CP_ADDR=cp.example.com:9443\nGOTHAM_AGENT_LISTEN_ADDR=0.0.0.0:9443\n' >"${T3B_ENV}"
 agent_env_write "${T3B_ENV}" "" 1
-grep -qx 'GOTHAM_AGENT_LISTEN_ADDR=0.0.0.0:9443' "${T3B_ENV}" \
-    || fail "preserved listener address was lost"
+grep -qx 'GOTHAM_AGENT_LISTEN_ADDR=127.0.0.1:9443' "${T3B_ENV}" \
+    || fail "a preserved non-loopback listener was not overridden for --insecure"
 [ "$(grep -c '^GOTHAM_AGENT_LISTEN_ADDR=' "${T3B_ENV}")" -eq 1 ] \
     || fail "preserved listener gained a duplicate entry"
-pass "--insecure writes one listener address, preserved or default"
+pass "--insecure overrides a preserved non-loopback listener to loopback"
+
+# --- U2: a duplicate key takes the last value (systemd EnvironmentFile) -------
+echo "==> U2 duplicate key takes the last value"
+T2_DIR="${SCRATCH}/u2"
+mkdir -p "${T2_DIR}"
+T2_ENV="${T2_DIR}/agent.env"
+printf 'GOTHAM_AGENT_CP_ADDR=stale:9443\nGOTHAM_AGENT_CP_ADDR=latest:9443\n' >"${T2_ENV}"
+agent_env_write "${T2_ENV}" "/etc/gotham/ca.crt" 0
+grep -qx 'GOTHAM_AGENT_CP_ADDR=latest:9443' "${T2_ENV}" \
+    || fail "duplicate key did not take the last value"
+[ "$(grep -c '^GOTHAM_AGENT_CP_ADDR=' "${T2_ENV}")" -eq 1 ] \
+    || fail "duplicate key was not collapsed to one line"
+pass "duplicate managed key resolves to the last occurrence"
+
+# --- U3: plaintext -> TLS reinstall drops the loopback listener ---------------
+echo "==> U3 plaintext->TLS reinstall drops the loopback listener"
+T4_DIR="${SCRATCH}/u3"
+mkdir -p "${T4_DIR}"
+T4_ENV="${T4_DIR}/agent.env"
+printf 'GOTHAM_AGENT_INSECURE=true\nGOTHAM_AGENT_LISTEN_ADDR=127.0.0.1:9443\n' >"${T4_ENV}"
+agent_env_write "${T4_ENV}" "/etc/gotham/ca.crt" 0
+grep -qx 'GOTHAM_AGENT_CA=/etc/gotham/ca.crt' "${T4_ENV}" \
+    || fail "TLS reinstall did not write the CA"
+if grep -q '^GOTHAM_AGENT_LISTEN_ADDR=' "${T4_ENV}"; then
+    fail "TLS reinstall kept the plaintext loopback listener"
+fi
+if grep -q '^GOTHAM_AGENT_INSECURE=' "${T4_ENV}"; then
+    fail "TLS reinstall kept GOTHAM_AGENT_INSECURE"
+fi
+pass "plaintext->TLS reinstall drops the loopback listener and INSECURE"
+
+# An ambient non-loopback listener under --insecure must fail closed.
+T5_ENV="${T4_DIR}/insecure-ambient.env"
+printf 'GOTHAM_AGENT_CP_ADDR=cp:9443\n' >"${T5_ENV}"
+# shellcheck disable=SC2034  # read by agent_env_write through eval
+GOTHAM_AGENT_LISTEN_ADDR=0.0.0.0:9443
+if agent_env_write "${T5_ENV}" "" 1 2>/dev/null; then
+    fail "--insecure accepted a non-loopback ambient listener"
+else
+    pass "--insecure rejects a non-loopback ambient listener"
+fi
+unset_agent_env
+
+# --- U4: a symlinked agent.env keeps its link ---------------------------------
+echo "==> U4 symlinked agent.env keeps its link"
+T6_DIR="${SCRATCH}/u4"
+mkdir -p "${T6_DIR}"
+T6_REAL="${T6_DIR}/real-agent.env"
+T6_LINK="${T6_DIR}/agent.env"
+printf 'GOTHAM_AGENT_CP_ADDR=linked:9443\nOPERATOR_EXTRA=keepme\n' >"${T6_REAL}"
+ln -s "${T6_REAL}" "${T6_LINK}"
+agent_env_write "${T6_LINK}" "/etc/gotham/ca.crt" 0
+[ -L "${T6_LINK}" ] || fail "agent_env_write replaced a symlinked agent.env"
+grep -qx 'GOTHAM_AGENT_CP_ADDR=linked:9443' "${T6_REAL}" \
+    || fail "symlink target was not rewritten"
+grep -qx 'GOTHAM_AGENT_CA=/etc/gotham/ca.crt' "${T6_REAL}" \
+    || fail "symlink target did not receive the CA"
+pass "symlinked agent.env is rewritten through the link"
+
+# --- U5: an indented managed key keeps its value -------------------------------
+echo "==> U5 indented managed key keeps its value"
+T7_DIR="${SCRATCH}/u5"
+mkdir -p "${T7_DIR}"
+T7_ENV="${T7_DIR}/agent.env"
+printf '  GOTHAM_AGENT_CP_ADDR=indented:9443\n' >"${T7_ENV}"
+agent_env_write "${T7_ENV}" "/etc/gotham/ca.crt" 0
+grep -qx 'GOTHAM_AGENT_CP_ADDR=indented:9443' "${T7_ENV}" \
+    || fail "an indented managed key was silently dropped"
+[ "$(grep -c '^GOTHAM_AGENT_CP_ADDR=' "${T7_ENV}")" -eq 1 ] \
+    || fail "indented managed key produced a duplicate or stray line"
+pass "indented managed key keeps its value"
+
+# --- U6: --help documents every managed key -----------------------------------
+echo "==> U6 --help lists every managed key"
+HELP_OUT="$(sh "${AGENT_INSTALLER}" --help 2>&1 || true)"
+for _key in \
+    GOTHAM_AGENT_CP_ADDR \
+    GOTHAM_AGENT_NODE_ID \
+    GOTHAM_AGENT_LISTEN_ADDR \
+    GOTHAM_AGENT_CA \
+    GOTHAM_AGENT_INSECURE \
+    GOTHAM_AGENT_CERT_DIR \
+    GOTHAM_AGENT_KEY \
+    GOTHAM_AGENT_DOCKER_SOCK \
+    GOTHAM_AGENT_LOG_LEVEL \
+    GOTHAM_AGENT_AUTO_UPDATE \
+    GOTHAM_AGENT_UPDATE_INTERVAL \
+    GOTHAM_AGENT_UPDATE_CHANNEL; do
+    printf '%s' "${HELP_OUT}" | grep -q "${_key}" \
+        || fail "--help does not document ${_key}"
+done
+pass "--help documents every managed key"
 
 # --- A3-8: restart an active unit, start an inactive one ---------------------
 echo "==> A3-8 restart/start decision"

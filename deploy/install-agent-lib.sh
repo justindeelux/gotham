@@ -16,9 +16,11 @@
 #   $3 insecure       1 when --insecure was given, else 0
 #
 # Ambient GOTHAM_AGENT_* variables (the values the operator supplied this run)
-# win; for a key left unset the previous file's value is kept. Operator-added
-# keys are preserved verbatim. This keeps a reinstall from wiping the control
-# plane address and node id and resetting the agent to the local default. The
+# win; for a key left unset the previous file's value is kept. When a key appears
+# more than once, the last occurrence wins, matching systemd's EnvironmentFile.
+# Operator-added keys are preserved verbatim. This keeps a reinstall from wiping
+# the control plane address and node id and resetting the agent to the local
+# default. A symlinked env file keeps its link (the target is rewritten). The
 # caller owns the file's ownership (chown needs root); this sets mode 0640.
 agent_env_write() {
     _env_file=$1
@@ -28,12 +30,31 @@ agent_env_write() {
     # caller and the temp file's EXIT trap is scoped to this write.
     (
         umask 077
+        # _resolve_path follows a symlink chain so a symlinked agent.env keeps its
+        # link: the write replaces the target, not the link.
+        _resolve_path() {
+            _rp=$1
+            _hops=0
+            while [ -L "${_rp}" ] && [ "${_hops}" -lt 40 ]; do
+                _link="$(readlink "${_rp}" 2>/dev/null || true)"
+                [ -n "${_link}" ] || break
+                case "${_link}" in
+                    /*) _rp="${_link}" ;;
+                    *) _rp="$(dirname "${_rp}")/${_link}" ;;
+                esac
+                _hops=$((_hops + 1))
+            done
+            printf '%s' "${_rp}"
+        }
+        _env_target="$(_resolve_path "${_env_file}")"
         _env_prev=""
-        if [ -f "${_env_file}" ]; then
-            _env_prev="$(cat "${_env_file}")"
+        if [ -f "${_env_target}" ]; then
+            _env_prev="$(cat "${_env_target}")"
         fi
+        # The last occurrence wins (systemd EnvironmentFile), and leading
+        # whitespace is tolerated so a hand-indented key keeps its value.
         _env_prev_value() {
-            printf '%s\n' "${_env_prev}" | sed -n "s/^$1=//p" | head -n1
+            printf '%s\n' "${_env_prev}" | sed -n "s/^[[:space:]]*$1=//p" | tail -n1
         }
         _env_value() {
             eval "_ambient=\${$1:-}"
@@ -43,7 +64,41 @@ agent_env_write() {
                 _env_prev_value "$1"
             fi
         }
-        _env_tmp="${_env_file}.tmp.$$"
+        _is_loopback_listener() {
+            case "$1" in
+                127.* | localhost:* | "[::1]:"* | ::1:*) return 0 ;;
+                *) return 1 ;;
+            esac
+        }
+        # Resolve the listener before writing: a plaintext install's loopback
+        # address must not survive a switch to TLS, and --insecure requires a
+        # loopback address (the agent refuses to start otherwise).
+        _prior_insecure="$(_env_prev_value GOTHAM_AGENT_INSECURE)"
+        eval "_ambient_listen=\${GOTHAM_AGENT_LISTEN_ADDR:-}"
+        _prior_listen="$(_env_prev_value GOTHAM_AGENT_LISTEN_ADDR)"
+        _listen=""
+        if [ -n "${_ambient_listen}" ]; then
+            _listen="${_ambient_listen}"
+        elif [ -n "${_prior_listen}" ]; then
+            if [ -n "${_agent_ca}" ] && [ "${_prior_insecure}" = "true" ]; then
+                # Plaintext -> TLS: the old loopback listener would leave a
+                # remote control plane unable to reach the agent; drop it.
+                _listen=""
+            else
+                _listen="${_prior_listen}"
+            fi
+        fi
+        if [ -z "${_listen}" ] && [ "${_insecure}" -eq 1 ]; then
+            _listen="127.0.0.1:9443"
+        fi
+        if [ "${_insecure}" -eq 1 ] && [ -n "${_listen}" ] && ! _is_loopback_listener "${_listen}"; then
+            if [ -n "${_ambient_listen}" ]; then
+                echo "install-agent.sh: GOTHAM_AGENT_LISTEN_ADDR=${_listen} is not loopback; --insecure requires a loopback listener" >&2
+                exit 1
+            fi
+            _listen="127.0.0.1:9443"
+        fi
+        _env_tmp="${_env_target}.tmp.$$"
         # Root-only temp holding operator settings; remove it if any step
         # aborts. The success path moves it into place first, so the trap is a
         # no-op then.
@@ -53,7 +108,6 @@ agent_env_write() {
         for _key in \
             GOTHAM_AGENT_CP_ADDR \
             GOTHAM_AGENT_NODE_ID \
-            GOTHAM_AGENT_LISTEN_ADDR \
             GOTHAM_AGENT_CERT_DIR \
             GOTHAM_AGENT_KEY \
             GOTHAM_AGENT_DOCKER_SOCK \
@@ -66,17 +120,16 @@ agent_env_write() {
                 printf '%s=%s\n' "${_key}" "${_value}" >>"${_env_tmp}"
             fi
         done
+        if [ -n "${_listen}" ]; then
+            printf 'GOTHAM_AGENT_LISTEN_ADDR=%s\n' "${_listen}" >>"${_env_tmp}"
+        fi
         # The CA path is resolved by the installer (never taken verbatim from
         # the ambient GOTHAM_AGENT_CA, which the installer itself does not
-        # write). Without a CA, --insecure is the only path, and it needs a
-        # loopback listener; default one when no value was preserved.
+        # write). Without a CA, --insecure is the only path.
         if [ -n "${_agent_ca}" ]; then
             printf 'GOTHAM_AGENT_CA=%s\n' "${_agent_ca}" >>"${_env_tmp}"
         elif [ "${_insecure}" -eq 1 ]; then
             printf 'GOTHAM_AGENT_INSECURE=true\n' >>"${_env_tmp}"
-            if [ -z "$(_env_value GOTHAM_AGENT_LISTEN_ADDR)" ]; then
-                printf 'GOTHAM_AGENT_LISTEN_ADDR=127.0.0.1:9443\n' >>"${_env_tmp}"
-            fi
         fi
         # Keep the operator lines: drop every managed key (tolerating leading
         # whitespace, so a hand-indented key cannot silently override the
@@ -103,8 +156,8 @@ agent_env_write() {
                 }
         fi
         chmod 0640 "${_env_tmp}"
-        mv -f "${_env_tmp}" "${_env_file}"
-        chmod 0640 "${_env_file}"
+        mv -f "${_env_tmp}" "${_env_target}"
+        chmod 0640 "${_env_target}"
     )
 }
 

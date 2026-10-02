@@ -36,8 +36,9 @@
 # Usage:
 #   sudo ./install-agent.sh [--ca <path>] [--insecure] [--dry-run]
 #
-# Environment variables written to /etc/gotham/agent.env (unset values are
-# omitted so the agent keeps its built-in default):
+# Environment variables written to /etc/gotham/agent.env. A key left unset keeps
+# the value a previous install wrote (or the agent's built-in default on a fresh
+# install):
 #   GOTHAM_AGENT_CP_ADDR
 #   GOTHAM_AGENT_NODE_ID
 #   GOTHAM_AGENT_LISTEN_ADDR
@@ -92,7 +93,9 @@ while [ "$#" -gt 0 ]; do
             CA_SOURCE="${1#--ca=}"
             ;;
         -h | --help)
-            sed -n '2,45p' "$0"
+            # Print every leading comment line (the header), not a fixed range,
+            # so the documented env list cannot drift out of --help.
+            awk 'NR == 1 { next } /^[^#]/ { exit } { print }' "$0"
             exit 0
             ;;
         *)

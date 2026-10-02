@@ -6,7 +6,13 @@ import type {
   InternalAxiosRequestConfig,
 } from "axios";
 
-import { clearSession, getAccessToken, getRefreshToken, setSession } from "./token";
+import {
+  clearSession,
+  getAccessToken,
+  getRefreshToken,
+  getSession,
+  setSession,
+} from "./token";
 import type { AuthResult } from "./token";
 
 /** Axios error payloads returned by the Gotham API. */
@@ -136,17 +142,128 @@ function shouldRefresh(
 /** Web Lock name serialising refresh across tabs. */
 const refreshLockName = "gotham-refresh";
 
+/** localStorage key holding the best-effort refresh lease (insecure contexts). */
+const refreshLeaseKey = "gotham-refresh-lock";
+
+/** Lease lifetime in ms: the refresh timeout, so a crashed tab self-releases. */
+const refreshLeaseTtl = requestTimeout;
+
+/** How long the lease fallback waits between acquisition attempts, in ms. */
+const refreshLeaseRetryMs = 250;
+
+/** Best-effort cross-tab refresh lease persisted in localStorage. */
+interface RefreshLease {
+  id: string;
+  expiresAt: number;
+}
+
+/** getLockStorage returns localStorage when it is available, or null otherwise. */
+function getLockStorage(): Storage | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** readRefreshLease returns the unexpired lease held in storage, if any. */
+function readRefreshLease(storage: Storage): RefreshLease | null {
+  try {
+    const raw = storage.getItem(refreshLeaseKey);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as Partial<RefreshLease>;
+    if (typeof parsed.id !== "string" || typeof parsed.expiresAt !== "number") {
+      return null;
+    }
+    return parsed.expiresAt > Date.now()
+      ? { id: parsed.id, expiresAt: parsed.expiresAt }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * withRefreshLock runs task while holding a cross-tab Web Lock, so two tabs
- * cannot present the same single-use refresh token at once. When the API is
- * unavailable the fallback keeps the previous per-tab behaviour.
+ * tryAcquireRefreshLease takes the best-effort lease and returns a release
+ * function, or null when another tab holds an unexpired one.
+ *
+ * This fallback is weaker than navigator.locks: there is no queue and no
+ * crash-safe release, only a TTL, and two simultaneous writers resolve by last
+ * writer wins (confirmed by re-reading). It exists so the A2-12 mitigation also
+ * applies on plain HTTP, where the Web Locks API is unavailable because it
+ * requires a secure context.
+ */
+function tryAcquireRefreshLease(): (() => void) | null {
+  const storage = getLockStorage();
+  if (!storage) {
+    return null;
+  }
+  if (readRefreshLease(storage)) {
+    return null;
+  }
+
+  // crypto.randomUUID() is secure-context only, so build the id from a
+  // timestamp and random suffix available to insecure contexts too.
+  const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const lease: RefreshLease = { id, expiresAt: Date.now() + refreshLeaseTtl };
+  try {
+    storage.setItem(refreshLeaseKey, JSON.stringify(lease));
+  } catch {
+    return null;
+  }
+
+  // Another tab may have written between our read and write; last writer wins,
+  // so only the id that survived the re-read owns the lease.
+  if (readRefreshLease(storage)?.id !== id) {
+    return null;
+  }
+
+  return () => {
+    if (readRefreshLease(storage)?.id === id) {
+      try {
+        storage.removeItem(refreshLeaseKey);
+      } catch {
+        // Ignore private-mode failures; the TTL expires the lease anyway.
+      }
+    }
+  };
+}
+
+/** withRefreshLease waits for the lease, then runs task while holding it. */
+async function withRefreshLease<T>(task: () => Promise<T>): Promise<T> {
+  // Without storage there is nothing to coordinate on: keep the previous
+  // per-tab behaviour rather than hanging.
+  if (!getLockStorage()) {
+    return task();
+  }
+
+  for (;;) {
+    const release = tryAcquireRefreshLease();
+    if (release) {
+      try {
+        return await task();
+      } finally {
+        release();
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, refreshLeaseRetryMs));
+  }
+}
+
+/**
+ * withRefreshLock runs task while holding a cross-tab lock, so two tabs cannot
+ * present the same single-use refresh token at once. The Web Locks API is the
+ * primary path (secure contexts); on plain HTTP it is unavailable, so the
+ * best-effort localStorage lease above is used instead.
  */
 function withRefreshLock<T>(task: () => Promise<T>): Promise<T> {
   const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
-  if (!locks) {
-    return task();
+  if (locks) {
+    return locks.request(refreshLockName, task) as Promise<T>;
   }
-  return locks.request(refreshLockName, task) as Promise<T>;
+  return withRefreshLease(task);
 }
 
 /** refreshAccessToken rotates the refresh token, reusing one shared request. */
@@ -159,11 +276,14 @@ function refreshAccessToken(): Promise<string> {
   if (!refreshToken) {
     return Promise.reject(new Error("no refresh token available"));
   }
+  // Identity of the account that starts the refresh. A replacement belonging
+  // to a different account must never be replayed under.
+  const userId = getSession().user?.id ?? null;
 
   // Per-tab single-flight: concurrent local callers share this promise, so the
   // cross-tab lock is only acquired once per tab.
   refreshPromise = withRefreshLock(() =>
-    rotateRefreshToken(refreshToken),
+    rotateRefreshToken(refreshToken, userId),
   ).finally(() => {
     refreshPromise = null;
   });
@@ -175,10 +295,20 @@ function refreshAccessToken(): Promise<string> {
  * rotateRefreshToken consumes refreshToken under the cross-tab lock. It re-reads
  * the stored token first: when another tab already rotated the session while
  * this call waited for the lock, it returns that session's access token instead
- * of replaying the now single-use token.
+ * of replaying the now single-use token. A replacement that switched accounts is
+ * treated as stale instead.
  */
-async function rotateRefreshToken(refreshToken: string): Promise<string> {
+async function rotateRefreshToken(
+  refreshToken: string,
+  userId: string | null,
+): Promise<string> {
   if (getRefreshToken() !== refreshToken) {
+    const replacementUserId = getSession().user?.id ?? null;
+    // A different account's session is not this session's rotation: do not
+    // replay the request under the wrong user.
+    if (userId && replacementUserId && userId !== replacementUserId) {
+      throw new StaleRefreshError();
+    }
     const accessToken = getAccessToken();
     if (!accessToken) {
       throw new StaleRefreshError();

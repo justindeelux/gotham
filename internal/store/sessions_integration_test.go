@@ -125,7 +125,7 @@ func TestStoreFamilyRevocationSerializesWithRotation(t *testing.T) {
 		stolen, err := st.RevokeFamilyIfStolen(ctx, user.ID, presented.RefreshHash)
 		done <- result{stolen, err}
 	}()
-	waitForSessionLockWaiters(t, ctx, st, 1)
+	waitForSessionLockWaiters(t, ctx, st, user.ID, 1)
 
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit rotation: %v", err)
@@ -172,7 +172,7 @@ func TestStoreRotateSessionTakesSessionLock(t *testing.T) {
 		_, err := st.RotateSession(ctx, user.ID, rotateParams(presented.RefreshHash, uuid.NewString(), user.CredentialVersion))
 		done <- err
 	}()
-	waitForSessionLockWaiters(t, ctx, st, 1)
+	waitForSessionLockWaiters(t, ctx, st, user.ID, 1)
 
 	if err := blocker.Commit(ctx); err != nil {
 		t.Fatalf("release session lock: %v", err)
@@ -190,32 +190,82 @@ func TestStoreRotateSessionTakesSessionLock(t *testing.T) {
 	}
 }
 
-// waitForSessionLockWaiters blocks until want session mutations are waiting on
-// the per-user advisory lock, so a test can release an outer lock at a
-// deterministic point. The blocked statement is the lock SELECT itself; fewer
-// waiters than expected within the deadline means the paths are not
-// serialized.
-func waitForSessionLockWaiters(t *testing.T, ctx context.Context, st *store.Store, want int) {
+// waitForSessionLockWaiters blocks until want session mutations for userID are
+// waiting on that user's per-user advisory lock, so a test can release an outer
+// lock at a deterministic point. The count is scoped to the lock key (derived
+// the same way LockUserSessions derives it) so a parallel test process using a
+// different key cannot satisfy the barrier.
+func waitForSessionLockWaiters(t *testing.T, ctx context.Context, st *store.Store, userID pgtype.UUID, want int) {
 	t.Helper()
 
+	key := uuid.UUID(userID.Bytes).String()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var waiting int
 		if err := st.DB.QueryRow(ctx, `
-			SELECT count(*) FROM pg_stat_activity
-			WHERE datname = current_database()
-			  AND wait_event_type = 'Lock'
-			  AND wait_event = 'advisory'
-			  AND pid <> pg_backend_pid()`).Scan(&waiting); err != nil {
-			t.Fatalf("poll pg_stat_activity: %v", err)
+			SELECT count(*)
+			FROM pg_locks l, (SELECT hashtextextended($1::text, 0) AS key) k
+			WHERE l.locktype = 'advisory'
+			  AND NOT l.granted
+			  AND l.objsubid = 1
+			  AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+			  AND l.classid = ((k.key >> 32) & 4294967295)::oid
+			  AND l.objid = (k.key & 4294967295)::oid`, key).Scan(&waiting); err != nil {
+			t.Fatalf("poll pg_locks: %v", err)
 		}
 		if waiting >= want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("only %d of %d session mutations blocked on the session lock", waiting, want)
+			t.Fatalf("only %d of %d session mutations blocked on the session lock for %s", waiting, want, key)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestStoreFamilyRevocationIsSingleCriticalSection pins A1: the classification
+// read and the family revocation must stay in one transaction under the
+// per-user lock. The seam starts a competing ResetUserPassword inside that
+// window; with the correct single critical section the reset is still blocked
+// on the lock, whereas a split implementation (commit, then revoke unlocked)
+// lets it complete and fails the test.
+func TestStoreFamilyRevocationIsSingleCriticalSection(t *testing.T) {
+	st, ctx := openVersionTestStore(t)
+	user, email := versionTestUser(t, ctx, st, "single-section")
+	presented := versionTestSession(t, ctx, st, user.ID, user.CredentialVersion)
+	if err := st.RevokeSession(ctx, presented.RefreshHash); err != nil {
+		t.Fatalf("revoke presented: %v", err)
+	}
+
+	resetDone := make(chan error, 1)
+	st.BeforeFamilyRevoke = func() {
+		go func() { resetDone <- st.ResetUserPassword(ctx, user.ID, email, "new-hash") }()
+		select {
+		case <-resetDone:
+			t.Error("ResetUserPassword completed inside the classifier's critical section; the lock was released early")
+		case <-time.After(200 * time.Millisecond):
+			// Still blocked: the classifier holds the lock across the revoke.
+		}
+	}
+	defer func() { st.BeforeFamilyRevoke = nil }()
+
+	stolen, err := st.RevokeFamilyIfStolen(ctx, user.ID, presented.RefreshHash)
+	if err != nil {
+		t.Fatalf("RevokeFamilyIfStolen: %v", err)
+	}
+	if !stolen {
+		t.Fatal("genuine reuse was not classified as stolen")
+	}
+
+	// The reset must now complete: the classifier committed and released the
+	// lock.
+	select {
+	case err := <-resetDone:
+		if err != nil {
+			t.Fatalf("ResetUserPassword: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ResetUserPassword did not complete after the classifier committed")
 	}
 }
 
@@ -328,13 +378,13 @@ func TestStoreResetWaitsForFamilyRevocation(t *testing.T) {
 		_, err := st.RevokeFamilyIfStolen(ctx, user.ID, presented.RefreshHash)
 		revokeDone <- err
 	}()
-	waitForSessionLockWaiters(t, ctx, st, 1)
+	waitForSessionLockWaiters(t, ctx, st, user.ID, 1)
 
 	resetDone := make(chan error, 1)
 	go func() { resetDone <- st.ResetUserPassword(ctx, user.ID, email, "new-hash") }()
 	// If ResetUserPassword did not take the lock it would finish during the
 	// pause and the waiter count would never reach two.
-	waitForSessionLockWaiters(t, ctx, st, 2)
+	waitForSessionLockWaiters(t, ctx, st, user.ID, 2)
 
 	if err := blocker.Commit(ctx); err != nil {
 		t.Fatalf("release session lock: %v", err)

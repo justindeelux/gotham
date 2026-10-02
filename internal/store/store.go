@@ -19,6 +19,13 @@ import (
 type Store struct {
 	DB      *pgxpool.Pool
 	queries *sqlc.Queries
+
+	// BeforeFamilyRevoke is a nil-by-default test seam. RevokeFamilyIfStolen
+	// calls it after classifying the presented session and before revoking the
+	// family, so a test can prove the classification and the revocation share
+	// one critical section (the per-user lock is still held). Production leaves
+	// it nil.
+	BeforeFamilyRevoke func()
 }
 
 // New wires a Store to an existing pool.
@@ -100,6 +107,11 @@ func (s *Store) RevokeFamilyIfStolen(ctx context.Context, userID pgtype.UUID, re
 		}
 		return false, err
 	}
+	if presented.UserID != userID {
+		// The lock key and the revoked account must agree; a mismatch would
+		// revoke the wrong user's family.
+		return false, errors.New("store: presented session belongs to another user")
+	}
 	if !presented.RevokedAt.Valid {
 		return false, nil // live (or rotated again): not this replay
 	}
@@ -112,6 +124,9 @@ func (s *Store) RevokeFamilyIfStolen(ctx context.Context, userID pgtype.UUID, re
 	}
 	if presented.CredentialVersion != user.CredentialVersion {
 		return false, nil // obsolete post-reset chain: plain 401
+	}
+	if s.BeforeFamilyRevoke != nil {
+		s.BeforeFamilyRevoke()
 	}
 	if err := queries.RevokeUserSessions(ctx, presented.UserID); err != nil {
 		return false, err

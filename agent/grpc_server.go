@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -17,6 +18,16 @@ import (
 
 // serverDrainTimeout bounds a graceful server stop before it is forced.
 const serverDrainTimeout = 5 * time.Second
+
+// Stream and message caps for the agent's gRPC server, matching the control
+// plane's gateway: one peer must not open unbounded streams or push oversized
+// messages. The receive cap must exceed maxComposeYAML (1 MiB) with room for
+// gRPC framing, otherwise a compose document at the application limit would be
+// rejected by the transport before its own validation.
+const (
+	agentMaxConcurrentStreams = 64
+	agentMaxRecvMsgSize       = 2 << 20
+)
 
 // dockerClient is the subset of DockerClient the gRPC server needs. It is an
 // interface so tests can substitute a fake.
@@ -208,9 +219,14 @@ type Server struct {
 }
 
 // NewServer binds addr and registers the DockerService implementation plus any
-// optional services. The caller must call Serve to begin accepting
-// connections.
+// optional services. When creds is nil the listener runs in development
+// plaintext and is confined to loopback: a plaintext Docker control channel
+// must never be reachable off-host. The caller must call Serve to begin
+// accepting connections.
 func NewServer(addr string, creds credentials.TransportCredentials, impl agentv1.DockerServiceServer, log *slog.Logger, options ...ServerOption) (*Server, error) {
+	if creds == nil && !isLoopbackListenAddr(addr) {
+		return nil, fmt.Errorf("agent: refusing to serve plaintext on non-loopback address %q", addr)
+	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("agent: listen %s: %w", addr, err)
@@ -219,6 +235,10 @@ func NewServer(addr string, creds credentials.TransportCredentials, impl agentv1
 	if creds != nil {
 		serverOptions = append(serverOptions, grpc.Creds(creds))
 	}
+	// Bound streams and message size for the same reason as the control-plane
+	// gateway: the listener is reachable by the CP, and a compromised or buggy
+	// peer must not be able to exhaust the agent.
+	serverOptions = append(serverOptions, grpc.MaxConcurrentStreams(agentMaxConcurrentStreams), grpc.MaxRecvMsgSize(agentMaxRecvMsgSize))
 	server := grpc.NewServer(serverOptions...)
 	agentv1.RegisterDockerServiceServer(server, impl)
 	for _, option := range options {
@@ -227,7 +247,29 @@ func NewServer(addr string, creds credentials.TransportCredentials, impl agentv1
 	if log == nil {
 		log = slog.Default()
 	}
+	if creds == nil {
+		log.Warn("agent: serving plaintext on loopback (development only)", "addr", listener.Addr().String())
+	}
 	return &Server{grpc: server, ln: listener, log: log}, nil
+}
+
+// isLoopbackListenAddr reports whether a listen address is confined to the
+// loopback interface ("127.0.0.1:9443", "[::1]:9443", "localhost:9443"). An
+// empty or wildcard host is not loopback.
+func isLoopbackListenAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Addr returns the bound listener address.

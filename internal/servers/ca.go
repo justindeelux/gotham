@@ -29,7 +29,18 @@ const (
 	caValidity         = 10 * 365 * 24 * time.Hour
 	serverCertValidity = 365 * 24 * time.Hour
 	clientCertValidity = 365 * 24 * time.Hour
-	agentCertValidity  = 365 * 24 * time.Hour
+	// agentCertValidity bounds a node leaf's exposure. There is no CRL yet
+	// (docs/TODO.md, LOW-4), so a shorter lifetime is the only revocation
+	// control; the agent re-registers well before it lapses.
+	agentCertValidity = 90 * 24 * time.Hour
+
+	// maxNodeIDLength caps a registered node identity: the DNS name maximum
+	// (253 bytes), which is also ample for an IP literal.
+	maxNodeIDLength = 253
+	// maxCSRSANs caps how many subject alternative names a CSR may carry, so
+	// an unauthenticated caller cannot make the CP sign a certificate with an
+	// unbounded SAN set.
+	maxCSRSANs = 8
 
 	caCommonName = "Gotham CA"
 )
@@ -43,24 +54,49 @@ type Authority struct {
 	pem  []byte
 }
 
-// LoadAuthority loads an existing CA from dir. It returns (nil, nil) when no CA
-// has been created yet, which signals the caller to fall back to an insecure
-// development listener.
+// LoadAuthority loads an existing CA from dir. It returns (nil, nil) only when
+// no CA has been created yet, which signals the caller to fall back to an
+// insecure development listener. A directory holding exactly one of
+// ca.crt/ca.key is an incomplete CA and is refused: silently serving without
+// TLS because half the authority is missing would downgrade the channel.
 func LoadAuthority(dir string) (*Authority, error) {
 	if dir == "" {
 		return nil, errors.New("servers: ca dir is empty")
 	}
 	certPath := filepath.Join(dir, caCertFile)
 	keyPath := filepath.Join(dir, caKeyFile)
-	if !fileExists(certPath) || !fileExists(keyPath) {
-		return nil, nil
+	certExists, err := fileState(certPath)
+	if err != nil {
+		return nil, err
 	}
-	return loadAuthority(certPath, keyPath)
+	keyExists, err := fileState(keyPath)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case certExists && keyExists:
+		return loadAuthority(certPath, keyPath)
+	case !certExists && !keyExists:
+		return nil, nil
+	default:
+		return nil, incompleteCAError(certPath, keyPath, certExists)
+	}
+}
+
+// incompleteCAError describes a CA directory that has exactly one of its two
+// files. missingIsKey names whether the key (true) or the certificate (false)
+// is the missing half.
+func incompleteCAError(certPath, keyPath string, missingIsKey bool) error {
+	if missingIsKey {
+		return fmt.Errorf("servers: incomplete CA: %s exists but %s is missing; refusing to serve", certPath, keyPath)
+	}
+	return fmt.Errorf("servers: incomplete CA: %s exists but %s is missing; refusing to serve", keyPath, certPath)
 }
 
 // LoadOrCreateAuthority loads the CA from dir, generating and persisting a new
 // self-signed CA (ECDSA P-256, 10 years) on first use. Files are written with
-// 0600 permissions.
+// 0600 permissions. An existing-but-incomplete pair is refused rather than
+// overwritten, so a missing file cannot silently replace the CA.
 func LoadOrCreateAuthority(dir string) (*Authority, error) {
 	if dir == "" {
 		return nil, errors.New("servers: ca dir is empty")
@@ -68,10 +104,22 @@ func LoadOrCreateAuthority(dir string) (*Authority, error) {
 	certPath := filepath.Join(dir, caCertFile)
 	keyPath := filepath.Join(dir, caKeyFile)
 
-	if fileExists(certPath) && fileExists(keyPath) {
-		return loadAuthority(certPath, keyPath)
+	certExists, err := fileState(certPath)
+	if err != nil {
+		return nil, err
 	}
-	return createAuthority(dir, certPath, keyPath)
+	keyExists, err := fileState(keyPath)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case certExists && keyExists:
+		return loadAuthority(certPath, keyPath)
+	case !certExists && !keyExists:
+		return createAuthority(dir, certPath, keyPath)
+	default:
+		return nil, incompleteCAError(certPath, keyPath, certExists)
+	}
 }
 
 // CACertPEM returns the PEM-encoded CA certificate.
@@ -131,46 +179,112 @@ func (a *Authority) Pool() *x509.CertPool {
 	return pool
 }
 
-// IssueAgentCert issues a server-auth certificate for the node identified by
-// nodeID. When nodeID is an IP address it is added as an IP SAN in addition to
-// the DNS SAN.
+// IssueAgentCertFromCSR verifies a PEM-encoded PKCS#10 CSR, checks that it is
+// bound to the enrolled node identity, and issues a server-auth certificate
+// (90 days) for the public key it carries.
 //
-// It is the fallback used when an agent registers without a CSR. Agents that
-// send a CSR (RegisterRequest.csr) get a certificate bound to their own key via
-// IssueAgentCertFromCSR instead.
-func (a *Authority) IssueAgentCert(nodeID string) ([]byte, error) {
-	if nodeID == "" {
-		return nil, fmt.Errorf("%w: node id is empty", ErrValidation)
+// The certificate is issued for nodeID — the authenticated identity — and
+// never for the CSR's self-asserted SAN set: the CSR supplies only the public
+// key. A CSR whose common name, DNS SANs or IP SANs do not exactly match
+// nodeID, that carries a wildcard, or that carries an oversized SAN set is
+// rejected with an error wrapping ErrValidation.
+//
+// This binds a caller to one identity but does NOT prove ownership of it: the
+// node id is self-asserted on the bootstrap connection, so any caller can
+// enroll any *enrollable* id (the control-plane listener ids are refused
+// separately in Gateway.Register). A caller cannot obtain a certificate that is
+// valid for an identity other than the one it enrolled; it can still enroll
+// someone else's id until the LOW-4 bootstrap credential exists.
+func (a *Authority) IssueAgentCertFromCSR(csrPEM []byte, nodeID string) ([]byte, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	if err := validateNodeID(nodeID); err != nil {
+		return nil, err
 	}
-	_, cert, err := a.issue(nodeID, []string{nodeID}, ipSANs(nodeID), []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, agentCertValidity)
+
+	csr, err := parseCSR(csrPEM)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyCSRBinding(csr, nodeID); err != nil {
+		return nil, err
+	}
+
+	dns, ips := identitySANs(nodeID)
+	cert, err := a.sign(nodeID, dns, ips, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, agentCertValidity, csr.PublicKey)
 	if err != nil {
 		return nil, err
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}), nil
 }
 
-// IssueAgentCertFromCSR verifies a PEM-encoded PKCS#10 CSR and issues a
-// server-auth certificate (one year) for the public key it carries. The
-// certificate copies the CSR's DNS and IP SANs and always includes the CSR
-// subject common name as a SAN, so it verifies for both name- and
-// address-based node ids. The CSR must be self-signed and carry an identity;
-// otherwise it is rejected with an error wrapping ErrValidation.
-func (a *Authority) IssueAgentCertFromCSR(csrPEM []byte) ([]byte, error) {
-	csr, err := parseCSR(csrPEM)
-	if err != nil {
-		return nil, err
+// validateNodeID rejects node identities that are unusable or hostile: empty,
+// over-long, or carrying a wildcard or path/whitespace characters. It is the
+// shared gate for registration and CSR binding.
+func validateNodeID(nodeID string) error {
+	if nodeID == "" {
+		return fmt.Errorf("%w: node_id is required", ErrValidation)
+	}
+	if len(nodeID) > maxNodeIDLength {
+		return fmt.Errorf("%w: node_id exceeds %d bytes", ErrValidation, maxNodeIDLength)
+	}
+	if strings.ContainsAny(nodeID, "*\\/\x00") || strings.ContainsAny(nodeID, " \t\r\n") {
+		return fmt.Errorf("%w: node_id contains an invalid character", ErrValidation)
+	}
+	return nil
+}
+
+// identitySANs returns the SANs a node certificate is issued with: the node id
+// as a DNS name and, when it parses as an IP address, an IP SAN as well.
+func identitySANs(nodeID string) ([]string, []net.IP) {
+	dns := []string{nodeID}
+	if ip := net.ParseIP(nodeID); ip != nil {
+		return dns, []net.IP{ip}
+	}
+	return dns, nil
+}
+
+// verifyCSRBinding rejects a CSR that is not bound to nodeID: a different or
+// missing common name, a wildcard, any extra/foreign SAN, or an oversized SAN
+// set. A caller that controls one node id therefore cannot obtain a
+// certificate valid for a different host.
+func verifyCSRBinding(csr *x509.CertificateRequest, nodeID string) error {
+	commonName := strings.TrimSpace(csr.Subject.CommonName)
+	if commonName == "" {
+		return fmt.Errorf("%w: csr subject common name is required", ErrValidation)
+	}
+	if commonName != nodeID {
+		return fmt.Errorf("%w: csr common name %q does not match node id %q", ErrValidation, commonName, nodeID)
+	}
+	if len(csr.DNSNames)+len(csr.IPAddresses) > maxCSRSANs {
+		return fmt.Errorf("%w: csr carries more than %d subject alternative names", ErrValidation, maxCSRSANs)
 	}
 
-	commonName, dns, ips, err := csrIdentity(csr)
-	if err != nil {
-		return nil, err
+	wantIP := net.ParseIP(nodeID)
+	for _, dns := range csr.DNSNames {
+		if isWildcardName(dns) {
+			return fmt.Errorf("%w: wildcard SAN %q is not allowed", ErrValidation, dns)
+		}
+		if wantIP != nil {
+			if dns != nodeID {
+				return fmt.Errorf("%w: csr dns SAN %q does not match node id %q", ErrValidation, dns, nodeID)
+			}
+			continue
+		}
+		if !strings.EqualFold(dns, nodeID) {
+			return fmt.Errorf("%w: csr dns SAN %q does not match node id %q", ErrValidation, dns, nodeID)
+		}
 	}
+	for _, ip := range csr.IPAddresses {
+		if wantIP == nil || !ip.Equal(wantIP) {
+			return fmt.Errorf("%w: csr ip SAN %s does not match node id %q", ErrValidation, ip, nodeID)
+		}
+	}
+	return nil
+}
 
-	cert, err := a.sign(commonName, dns, ips, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, agentCertValidity, csr.PublicKey)
-	if err != nil {
-		return nil, err
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}), nil
+// isWildcardName reports whether a DNS name is a wildcard.
+func isWildcardName(name string) bool {
+	return name == "*" || strings.HasPrefix(name, "*.")
 }
 
 // parseCSR decodes and verifies a PEM-encoded PKCS#10 certificate request.
@@ -190,34 +304,6 @@ func parseCSR(csrPEM []byte) (*x509.CertificateRequest, error) {
 		return nil, fmt.Errorf("%w: csr signature is invalid: %v", ErrValidation, err)
 	}
 	return csr, nil
-}
-
-// csrIdentity derives the certificate subject common name, DNS SANs and IP
-// SANs from a verified CSR, ensuring the common name is present as a SAN.
-func csrIdentity(csr *x509.CertificateRequest) (commonName string, dns []string, ips []net.IP, err error) {
-	commonName = strings.TrimSpace(csr.Subject.CommonName)
-	dns = uniqueStrings(csr.DNSNames)
-	ips = csr.IPAddresses
-
-	if commonName == "" {
-		switch {
-		case len(dns) > 0:
-			commonName = dns[0]
-		case len(ips) > 0:
-			commonName = ips[0].String()
-		default:
-			return "", nil, nil, fmt.Errorf("%w: csr carries no subject", ErrValidation)
-		}
-	}
-
-	if ip := net.ParseIP(commonName); ip != nil {
-		if !containsIP(ips, ip) {
-			ips = append(ips, ip)
-		}
-	} else if !containsString(dns, commonName) {
-		dns = append(dns, commonName)
-	}
-	return commonName, dns, ips, nil
 }
 
 // uniqueStrings returns s with surrounding spaces trimmed and blank entries and
@@ -240,16 +326,6 @@ func uniqueStrings(s []string) []string {
 func containsString(s []string, item string) bool {
 	for _, existing := range s {
 		if existing == item {
-			return true
-		}
-	}
-	return false
-}
-
-// containsIP reports whether ips contains ip.
-func containsIP(ips []net.IP, ip net.IP) bool {
-	for _, existing := range ips {
-		if existing.Equal(ip) {
 			return true
 		}
 	}
@@ -378,6 +454,9 @@ func createAuthority(dir, certPath, keyPath string) (*Authority, error) {
 
 // loadAuthority reads and parses a persisted CA.
 func loadAuthority(certPath, keyPath string) (*Authority, error) {
+	if err := checkCAKeyPermissions(keyPath); err != nil {
+		return nil, err
+	}
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
 		return nil, fmt.Errorf("read ca certificate: %w", err)
@@ -391,20 +470,40 @@ func loadAuthority(certPath, keyPath string) (*Authority, error) {
 		return nil, fmt.Errorf("parse ca certificate: %w", err)
 	}
 
-	keyPEM, err := os.ReadFile(keyPath)
-	if err != nil {
+	var (
+		keyPEM []byte
+		block  *pem.Block
+	)
+	if keyPEM, err = os.ReadFile(keyPath); err != nil {
 		return nil, fmt.Errorf("read ca key: %w", err)
 	}
-	keyBlock, _ := pem.Decode(keyPEM)
-	if keyBlock == nil {
+	block, _ = pem.Decode(keyPEM)
+	if block == nil {
 		return nil, fmt.Errorf("decode ca key %s: not PEM", keyPath)
 	}
-	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	key, err := x509.ParseECPrivateKey(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse ca key: %w", err)
 	}
 
 	return &Authority{cert: cert, key: key, pem: certPEM}, nil
+}
+
+// checkCAKeyPermissions refuses a CA private key readable beyond its owner. The
+// CA signs every agent certificate; a group- or world-readable key lets a local
+// user mint certificates for any node, so a loose mode is a hard error rather
+// than a warning. The check is a Stat-then-ReadFile, so a local attacker who can
+// already write the CA directory could swap the file between the two; that
+// attacker can read the key regardless, so the TOCTOU is not a material risk.
+func checkCAKeyPermissions(keyPath string) error {
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		return fmt.Errorf("stat ca key: %w", err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return fmt.Errorf("servers: ca key %s has permissions %04o; must not be readable by group or others (chmod 0600)", keyPath, perm)
+	}
+	return nil
 }
 
 // leafPEM encodes a leaf certificate and its key as PEM.
@@ -451,8 +550,21 @@ func writeFile(path string, data []byte) error {
 	return nil
 }
 
-// fileExists reports whether path exists and is a regular file.
-func fileExists(path string) bool {
+// fileState reports whether path is an existing regular file. A path that
+// cannot be stat'd for any reason other than "does not exist" — a permission
+// error, an I/O error, or a directory sitting where a file belongs — is an
+// error: treating it as "absent" is what would let a broken CA load as a
+// plaintext listener.
+func fileState(path string) (bool, error) {
 	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return false, fmt.Errorf("servers: %s is a directory, not a file", path)
+	}
+	return true, nil
 }

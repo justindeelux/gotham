@@ -125,15 +125,22 @@ func runServe() int {
 	oauthService := buildOAuthService(snap.OAuth, authService, logger)
 	tokenService := auth.NewAPITokenService(authStore, logger)
 
-	// The CA is optional: without one the gRPC gateway runs an insecure
-	// development listener, matching the agent's dev fallback.
+	// The CA is required: without one, the gRPC gateway would serve the agent
+	// channel in plaintext, so serve refuses unless the operator explicitly
+	// opted in with GOTHAM_GRPC_INSECURE=true (development only).
 	authority, err := servers.LoadAuthority(snap.CA.Dir)
 	if err != nil {
 		logger.Error("failed to load certificate authority", "error", err)
 		return exitError
 	}
 	if authority == nil {
-		logger.Warn("no CA found; gRPC gateway runs without TLS (development only)", "ca_dir", snap.CA.Dir)
+		if !snap.GRPC.Insecure {
+			logger.Error("no CA found and GOTHAM_GRPC_INSECURE is not set; refusing to serve the agent channel in plaintext",
+				"ca_dir", snap.CA.Dir)
+			return exitError
+		}
+		logger.Warn("no CA found; gRPC gateway runs without TLS because GOTHAM_GRPC_INSECURE is set (development only)",
+			"ca_dir", snap.CA.Dir)
 	} else {
 		logger.Info("certificate authority loaded", "ca_dir", snap.CA.Dir)
 	}

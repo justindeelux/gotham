@@ -92,7 +92,7 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 				startErr = err
 				return
 			}
-			creds, err := agent.ServerCredentials(response.GetCert(), keyPEM, caPath)
+			creds, err := agent.ServerCredentials(response.GetCert(), keyPEM, caPath, false)
 			if err != nil {
 				startErr = err
 				return

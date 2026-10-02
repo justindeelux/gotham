@@ -30,7 +30,9 @@ const selfSignedValidity = 365 * 24 * time.Hour
 
 // clientCredentials returns transport credentials that verify the CP server
 // certificate against the PEM bundle at caPath. An empty caPath returns
-// insecure credentials for local development and reports dev = true.
+// insecure credentials for local development; Config.Load only accepts an empty
+// CA when GOTHAM_AGENT_INSECURE=true, so this path is reachable only through the
+// explicit development opt-in. It reports dev = true in that case.
 func clientCredentials(caPath string) (credentials.TransportCredentials, bool, error) {
 	if caPath == "" {
 		return insecure.NewCredentials(), true, nil
@@ -45,13 +47,19 @@ func clientCredentials(caPath string) (credentials.TransportCredentials, bool, e
 // ServerCredentials builds credentials for the agent's DockerService server.
 // certPEM is the certificate issued by the CP at registration and keyPEM its
 // matching private key. When caPath is non-empty the server requires and
-// verifies client certificates; otherwise it does not request one. In
-// development mode — no certificate issued and no CA configured — it returns
-// nil credentials, so the agent serves plaintext and matches the control
-// plane's insecure dial when it runs without a CA. With a CA configured but no
-// issued certificate it falls back to a self-signed certificate (still TLS).
-func ServerCredentials(certPEM, keyPEM []byte, caPath string) (credentials.TransportCredentials, error) {
+// verifies client certificates; otherwise it does not request one.
+//
+// With no certificate and no CA the agent would serve plaintext: that is only
+// returned when allowInsecure is set (the explicit development opt-in), and the
+// caller must additionally bind the listener to loopback. Without the opt-in it
+// is an error, so a misconfiguration cannot silently expose a plaintext Docker
+// control channel. With a CA configured but no issued certificate it falls back
+// to a self-signed certificate (still TLS).
+func ServerCredentials(certPEM, keyPEM []byte, caPath string, allowInsecure bool) (credentials.TransportCredentials, error) {
 	if len(certPEM) == 0 && caPath == "" {
+		if !allowInsecure {
+			return nil, fmt.Errorf("agent: refusing to serve plaintext without an explicit insecure opt-in")
+		}
 		return nil, nil
 	}
 	if len(certPEM) == 0 {
@@ -82,6 +90,51 @@ func ServerCredentials(certPEM, keyPEM []byte, caPath string) (credentials.Trans
 		config.ClientAuth = tls.RequireAndVerifyClientCert
 	}
 	return credentials.NewTLS(config), nil
+}
+
+// ServerCredentialsFromFiles is ServerCredentials for a certificate and key
+// that live on disk and are rewritten on renewal. The TLS handshake loads them
+// on demand, so a re-registration that persists a fresh certificate takes
+// effect without restarting the gRPC server. caPath enables the same client
+// verification as ServerCredentials.
+func ServerCredentialsFromFiles(certPath, keyPath, caPath string) (credentials.TransportCredentials, error) {
+	if certPath == "" || keyPath == "" {
+		return nil, fmt.Errorf("agent: certificate and key paths are required")
+	}
+	var pool *x509.CertPool
+	if caPath != "" {
+		loaded, err := loadCertPool(caPath)
+		if err != nil {
+			return nil, err
+		}
+		pool = loaded
+	}
+
+	config := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			keyPair, err := tls.LoadX509KeyPair(certPath, keyPath)
+			if err != nil {
+				return nil, fmt.Errorf("agent: load server keypair: %w", err)
+			}
+			return &keyPair, nil
+		},
+	}
+	if pool != nil {
+		config.ClientCAs = pool
+		config.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+	return credentials.NewTLS(config), nil
+}
+
+// KeyPath returns the private-key path LoadOrGenerateKey resolves for the given
+// explicit override and cert dir, so callers that need the on-disk path (for
+// ServerCredentialsFromFiles) agree with the loader.
+func KeyPath(keyFile, certDir string) string {
+	if keyFile != "" {
+		return keyFile
+	}
+	return filepath.Join(certDir, keyFileName)
 }
 
 // SaveAgentCert persists the certificate issued by the CP as
@@ -170,14 +223,20 @@ func generateSelfSigned() (certPEM, keyPEM []byte, err error) {
 	return certPEM, keyPEM, nil
 }
 
-// savePEM writes data to path, creating the parent directory with 0o700 and the
-// file with 0o600.
+// savePEM writes data to path atomically, creating the parent directory with
+// 0o700 and the file with 0o600. The temp-then-rename write matters because the
+// file-backed server credentials read the certificate on each handshake while a
+// renewal may be rewriting it.
 func savePEM(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("agent: create cert dir: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("agent: write %s: %w", path, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("agent: rename %s: %w", path, err)
 	}
 	return nil
 }

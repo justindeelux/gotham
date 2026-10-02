@@ -17,6 +17,7 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -186,6 +187,81 @@ func TestComposeInputBounds(t *testing.T) {
 		ComposeYaml: oversized,
 	}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("oversized document code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+// TestAgentRecvCapExceedsComposeLimit is the FX-3 R2/C3 guard: a compose
+// document at the application limit must survive gRPC framing and be rejected by
+// its own validation (InvalidArgument), not by the transport's receive cap
+// (ResourceExhausted). It also proves the receive cap still rejects a message
+// well past it.
+func TestAgentRecvCapExceedsComposeLimit(t *testing.T) {
+	if agentMaxRecvMsgSize <= maxComposeYAML {
+		t.Fatalf("agentMaxRecvMsgSize = %d, must exceed maxComposeYAML = %d", agentMaxRecvMsgSize, maxComposeYAML)
+	}
+
+	fake := &fakeDockerClient{}
+	creds, err := ServerCredentials(nil, nil, "", true)
+	if err != nil {
+		t.Fatalf("ServerCredentials: %v", err)
+	}
+	server, err := NewServer("127.0.0.1:0", creds, NewDockerServer(fake, discardLogger()), discardLogger(),
+		WithComposeService(newTestComposeServer(t, ComposeServerConfig{})))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = server.Serve(ctx) }()
+	t.Cleanup(func() { cancel() })
+
+	conn, err := grpc.NewClient(server.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	callCtx, callCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer callCancel()
+	client := agentv1.NewComposeServiceClient(conn)
+
+	// A document one byte over the application limit is rejected by validation.
+	justOver := make([]byte, maxComposeYAML+1)
+	for i := range justOver {
+		justOver[i] = 'x'
+	}
+	if _, err := client.ComposeValidate(callCtx, &agentv1.ComposeValidateRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: justOver,
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("just-over-limit document = %v, want InvalidArgument (not a transport cap)", err)
+	}
+
+	// A payload one byte past the transport receive cap is rejected by gRPC.
+	overCap := make([]byte, agentMaxRecvMsgSize+1)
+	for i := range overCap {
+		overCap[i] = 'x'
+	}
+	if _, err := client.ComposeValidate(callCtx, &agentv1.ComposeValidateRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: overCap,
+	}); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("over-cap payload = %v, want ResourceExhausted", err)
+	}
+
+	// A document exactly at the application limit fits the receive cap and is
+	// validated as a document (it is not valid compose, so it fails on content,
+	// never on transport size).
+	exact := make([]byte, maxComposeYAML)
+	copy(exact, "services:\n  web:\n    image: nginx\n")
+	for i := len("services:\n  web:\n    image: nginx\n"); i < len(exact); i++ {
+		exact[i] = ' '
+	}
+	if _, err := client.ComposeValidate(callCtx, &agentv1.ComposeValidateRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: exact,
+	}); status.Code(err) == codes.ResourceExhausted {
+		t.Fatalf("exact-limit document = ResourceExhausted, want it to reach validation")
 	}
 }
 

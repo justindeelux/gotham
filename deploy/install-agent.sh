@@ -37,6 +37,7 @@
 #   GOTHAM_AGENT_NODE_ID
 #   GOTHAM_AGENT_LISTEN_ADDR
 #   GOTHAM_AGENT_CA            (set to /etc/gotham/ca.crt when --ca is used)
+#   GOTHAM_AGENT_INSECURE      (set to true only with --insecure)
 #   GOTHAM_AGENT_CERT_DIR
 #   GOTHAM_AGENT_KEY
 #   GOTHAM_AGENT_DOCKER_SOCK
@@ -291,6 +292,15 @@ else
         # GOTHAM_AGENT_CA, which the installer itself does not write).
         if [ -n "${AGENT_CA_PATH}" ]; then
             printf 'GOTHAM_AGENT_CA=%s\n' "${AGENT_CA_PATH}" >>"${ENV_FILE}"
+        elif [ "${INSECURE}" -eq 1 ]; then
+            # Match the agent's fail-closed runtime: plaintext needs the
+            # explicit opt-in and a loopback listener. Keep the documented dev
+            # path working by defaulting the address when the operator did not
+            # set one.
+            printf 'GOTHAM_AGENT_INSECURE=true\n' >>"${ENV_FILE}"
+            if [ -z "${GOTHAM_AGENT_LISTEN_ADDR:-}" ]; then
+                printf 'GOTHAM_AGENT_LISTEN_ADDR=127.0.0.1:9443\n' >>"${ENV_FILE}"
+            fi
         fi
     )
     chmod 0640 "${ENV_FILE}"

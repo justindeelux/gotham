@@ -2,11 +2,16 @@ package agent
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
 	"io"
 	"math"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,7 +23,9 @@ import (
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -31,6 +38,11 @@ type fakeAgentService struct {
 	cert        []byte
 	registerErr error
 	heartbeatCh chan *agentv1.HeartbeatRequest
+	// registerGate, when non-nil, blocks Register until it is closed or the
+	// call's context is canceled.
+	registerGate chan struct{}
+	// heartbeatFail closes the stream with an error after the first message.
+	heartbeatFail bool
 
 	mu         sync.Mutex
 	registers  []*agentv1.RegisterRequest
@@ -40,10 +52,17 @@ type fakeAgentService struct {
 	heartbeatNodes []string
 }
 
-func (f *fakeAgentService) Register(_ context.Context, req *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error) {
+func (f *fakeAgentService) Register(ctx context.Context, req *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error) {
 	f.mu.Lock()
 	f.registers = append(f.registers, req)
 	f.mu.Unlock()
+	if f.registerGate != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-f.registerGate:
+		}
+	}
 	if f.registerErr != nil {
 		return nil, f.registerErr
 	}
@@ -69,6 +88,9 @@ func (f *fakeAgentService) Heartbeat(stream grpc.ClientStreamingServer[agentv1.H
 		}
 		f.heartbeatNodes = append(f.heartbeatNodes, nodeID)
 		f.mu.Unlock()
+		if f.heartbeatFail {
+			return errors.New("heartbeat stream reset")
+		}
 		if f.heartbeatCh != nil {
 			select {
 			case f.heartbeatCh <- req:
@@ -289,4 +311,171 @@ func parseCSRRequest(t *testing.T, csrPEM []byte) *x509.CertificateRequest {
 		t.Fatalf("parse CSR: %v", err)
 	}
 	return csr
+}
+
+// newAgentConn builds a client connection with the agent's own dial options
+// (including the fake CP's bufconn dialer).
+func newAgentConn(t *testing.T, runner *Agent) *grpc.ClientConn {
+	t.Helper()
+	options, err := runner.dialOptionsFor()
+	if err != nil {
+		t.Fatalf("dialOptionsFor: %v", err)
+	}
+	conn, err := grpc.NewClient(runner.cfg.CPAddr, options...)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// TestAgentRegisterDeadlineBounded is the FX-3 item-10 guard: a stalled control
+// plane cannot pin a registration attempt past the per-attempt deadline.
+func TestAgentRegisterDeadlineBounded(t *testing.T) {
+	fake := &fakeAgentService{registerGate: make(chan struct{})}
+	defer close(fake.registerGate)
+	dialOptions := startFakeCP(t, fake)
+
+	runner := NewAgent(Config{
+		CPAddr:  "passthrough:///bufnet",
+		NodeID:  "node-deadline",
+		CertDir: t.TempDir(),
+	}, discardLogger(), nil,
+		WithDialOptions(dialOptions...),
+		WithRegisterTimeout(100*time.Millisecond),
+	)
+	client := agentv1.NewAgentServiceClient(newAgentConn(t, runner))
+
+	start := time.Now()
+	_, err := runner.register(context.Background(), client)
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("register = %v, want DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("register took %v, want it bounded by the deadline", elapsed)
+	}
+}
+
+// TestAgentHeartbeatCancelsStreamOnReturn is the FX-3 item-11 guard: the
+// heartbeat stream's own context is canceled when the call returns, so a
+// reconnect cannot leak the stream.
+func TestAgentHeartbeatCancelsStreamOnReturn(t *testing.T) {
+	fake := &fakeAgentService{heartbeatFail: true}
+	dialOptions := startFakeCP(t, fake)
+
+	var captured context.Context
+	interceptor := grpc.WithStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		captured = ctx
+		return streamer(ctx, desc, cc, method, opts...)
+	})
+
+	runner := NewAgent(Config{
+		CPAddr:  "passthrough:///bufnet",
+		NodeID:  "node-hb-cancel",
+		CertDir: t.TempDir(),
+	}, discardLogger(), nil,
+		WithHeartbeatInterval(5*time.Millisecond),
+		WithDialOptions(append(dialOptions, interceptor)...),
+	)
+	client := agentv1.NewAgentServiceClient(newAgentConn(t, runner))
+
+	if err := runner.heartbeat(context.Background(), client); err == nil {
+		t.Fatal("heartbeat returned nil, want the server's stream error")
+	}
+	if captured == nil {
+		t.Fatal("the stream interceptor did not capture a context")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for captured.Err() == nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if captured.Err() == nil {
+		t.Fatal("the heartbeat stream context was not canceled on return")
+	}
+}
+
+// TestRenewalDelaySchedulesBeforeExpiry pins the FX-3 item-7 renewal schedule.
+func TestRenewalDelaySchedulesBeforeExpiry(t *testing.T) {
+	certPEM, _, err := generateSelfSigned()
+	if err != nil {
+		t.Fatalf("generateSelfSigned: %v", err)
+	}
+	runner := NewAgent(Config{CertDir: t.TempDir()}, discardLogger(), nil, WithRenewBefore(30*24*time.Hour))
+
+	got := runner.renewalDelay(certPEM)
+	// selfSignedValidity is 365 days; renewing 30 days early leaves ~335.
+	if got < 330*24*time.Hour || got > 340*24*time.Hour {
+		t.Fatalf("renewalDelay = %v, want ~335d", got)
+	}
+	if runner.renewalDelay(nil) != 0 {
+		t.Error("renewalDelay(empty) != 0")
+	}
+	if runner.renewalDelay([]byte("garbage")) != 0 {
+		t.Error("renewalDelay(garbage) != 0")
+	}
+}
+
+// TestAgentReRegistersBeforeCertificateExpiry is the FX-3 item-7 end-to-end
+// behaviour: a short-lived certificate makes the agent re-register before it
+// lapses rather than waiting for a stream failure.
+func TestAgentReRegistersBeforeCertificateExpiry(t *testing.T) {
+	fake := &fakeAgentService{cert: shortLivedCertPEM(t, 2*time.Second)}
+	dialOptions := startFakeCP(t, fake)
+
+	cfg := Config{
+		CPAddr:  "passthrough:///bufnet",
+		NodeID:  "node-renew",
+		CertDir: t.TempDir(),
+	}
+	runner := NewAgent(cfg, discardLogger(), nil,
+		WithHeartbeatInterval(20*time.Millisecond),
+		WithBackoff(5*time.Millisecond, 20*time.Millisecond),
+		WithRenewBefore(time.Second),
+		WithDialOptions(dialOptions...),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- runner.Run(ctx, nil) }()
+
+	deadline := time.Now().Add(4 * time.Second)
+	for fake.registerCount() < 2 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if count := fake.registerCount(); count < 2 {
+		t.Fatalf("register attempts = %d; want the agent to re-register before expiry", count)
+	}
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run = %v, want nil after cancel", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}
+
+// shortLivedCertPEM returns a self-signed certificate valid for validity.
+func shortLivedCertPEM(t *testing.T, validity time.Duration) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "gotham-agent"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(validity),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }

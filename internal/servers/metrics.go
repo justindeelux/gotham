@@ -136,19 +136,58 @@ func (s *ServerService) Metrics(ctx context.Context, id uuid.UUID, from, to time
 	return points, nil
 }
 
+// heartbeatSampleInterval is the minimum wall-clock gap between persisted
+// time-series samples for one node. It is set below the agent's 10s heartbeat
+// cadence so scheduling jitter does not randomly drop healthy samples (a 10s
+// interval against a 10s cadence would lose roughly half). An unauthenticated
+// peer still cannot grow server_metrics faster than this; the live snapshot on
+// the servers row updates on every message.
+const heartbeatSampleInterval = 5 * time.Second
+
+// metricClockSkew bounds how far a heartbeat's self-reported sent_at may differ
+// from the server clock before it is ignored for storage. A peer cannot push a
+// sample into the far future (which would poison the series and, previously,
+// the throttle) or the distant past.
+const metricClockSkew = 5 * time.Minute
+
+// claimMetricSample reports whether a sample arriving at now should be
+// persisted, and records now as the node's latest. The decision uses the
+// server's wall clock, never the peer-supplied sent_at, so a peer that advances
+// sent_at cannot bypass the throttle. The map is bounded by the node registry;
+// entries for deleted nodes are not reclaimed, which is acceptable at registry
+// scale.
+func (s *ServerService) claimMetricSample(nodeID string, now time.Time) bool {
+	s.metricMu.Lock()
+	defer s.metricMu.Unlock()
+	if last, ok := s.lastMetricAt[nodeID]; ok && now.Sub(last) < heartbeatSampleInterval {
+		return false
+	}
+	s.lastMetricAt[nodeID] = now
+	return true
+}
+
 // recordMetric appends one heartbeat sample to the time series. It is
 // best-effort by contract: the servers row already carries the latest snapshot,
 // so a failed append is logged and the next heartbeat tries again.
 // FEATURE_METRICS=false skips the append entirely. The sample is stored at the
-// heartbeat's sent_at so the series is the node's own clock; a heartbeat
-// without one is stamped on arrival.
+// heartbeat's sent_at so the series is the node's own clock, clamped to the
+// server clock when the report is outside metricClockSkew; a heartbeat without
+// one is stamped on arrival. Arrival times closer together than
+// heartbeatSampleInterval are dropped server-side so a flood cannot fill the
+// table.
 func (s *ServerService) recordMetric(ctx context.Context, serverID pgtype.UUID, req *agentv1.HeartbeatRequest) {
 	if !MetricsEnabled() {
 		return
 	}
-	recordedAt := time.Now().UTC()
+	now := s.now().UTC()
+	recordedAt := now
 	if sentAt := req.GetSentAt(); sentAt != nil {
-		recordedAt = sentAt.AsTime().UTC()
+		if at := sentAt.AsTime().UTC(); !at.Before(now.Add(-metricClockSkew)) && !at.After(now.Add(metricClockSkew)) {
+			recordedAt = at
+		}
+	}
+	if !s.claimMetricSample(serverID.String(), now) {
+		return
 	}
 	err := s.store.InsertServerMetric(ctx, sqlc.InsertServerMetricParams{
 		ServerID:       serverID,

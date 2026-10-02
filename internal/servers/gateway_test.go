@@ -1,16 +1,23 @@
 package servers
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -87,11 +94,28 @@ func newTestServiceWithAuthority(t *testing.T) (*ServerService, *store.Store, *A
 // a client connection.
 func startTestGateway(t *testing.T, service *ServerService) *grpc.ClientConn {
 	t.Helper()
+	_, conn := startTestGatewayInstance(t, service)
+	return conn
+}
 
-	gateway, err := NewGateway(GatewayConfig{
+// startTestGatewayInstance is startTestGateway but also returns the gateway, so
+// tests can tighten its per-peer rate limits.
+func startTestGatewayInstance(t *testing.T, service *ServerService) (*Gateway, *grpc.ClientConn) {
+	t.Helper()
+	return startTestGatewayWithConfig(t, GatewayConfig{
 		Service: service,
 		Logger:  discardLogger(),
 	})
+}
+
+// startTestGatewayWithConfig serves cfg over an in-memory connection.
+func startTestGatewayWithConfig(t *testing.T, cfg GatewayConfig) (*Gateway, *grpc.ClientConn) {
+	t.Helper()
+
+	if cfg.Logger == nil {
+		cfg.Logger = discardLogger()
+	}
+	gateway, err := NewGateway(cfg)
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
@@ -116,7 +140,7 @@ func startTestGateway(t *testing.T, service *ServerService) *grpc.ClientConn {
 		t.Fatalf("grpc.NewClient: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return conn
+	return gateway, conn
 }
 
 // uniqueNodeID returns a node id that will not collide with other tests.
@@ -143,8 +167,10 @@ func TestGatewayRegisterCreatesServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if len(resp.GetCert()) == 0 {
-		t.Error("Register returned an empty certificate")
+	// A certificate is only ever issued from a CSR bound to the node identity;
+	// this gateway has no authority configured, so the response carries none.
+	if len(resp.GetCert()) != 0 {
+		t.Error("Register returned a certificate without a CSR or a CA")
 	}
 	if resp.GetCpVersion() != "test" {
 		t.Errorf("cp_version = %q, want test", resp.GetCpVersion())
@@ -182,8 +208,8 @@ func TestGatewayRegisterCreatesServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Register: %v", err)
 	}
-	if len(second.GetCert()) == 0 {
-		t.Error("second Register returned an empty certificate")
+	if len(second.GetCert()) != 0 {
+		t.Error("second Register returned a certificate without a CSR")
 	}
 	reregistered, err := st.GetServerByNodeID(ctx, &nodeID)
 	if err != nil {
@@ -324,15 +350,17 @@ func TestGatewayHeartbeatUpdatesMetrics(t *testing.T) {
 		t.Errorf("last_seen = %+v, want a set timestamp", updated.LastSeen)
 	}
 
-	// Each heartbeat message appends exactly one time-series sample, stamped
-	// with the message's sent_at and carrying the reported I/O rates.
+	// The heartbeat path aggregates time-series samples on the server wall
+	// clock: two messages sent back-to-back persist a single sample, while the
+	// servers row keeps the newest snapshot. The sample is stamped with the
+	// message's sent_at.
 	var count int
 	if err := st.DB.QueryRow(ctx,
 		"SELECT count(*) FROM server_metrics WHERE server_id = $1", row.ID).Scan(&count); err != nil {
 		t.Fatalf("count server_metrics: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("server_metrics rows = %d, want one per heartbeat (2)", count)
+	if count != 1 {
+		t.Errorf("server_metrics rows = %d, want 1 (samples inside %s are dropped)", count, heartbeatSampleInterval)
 	}
 	var (
 		cpu float64
@@ -547,4 +575,528 @@ func TestGatewayRequestUpdate(t *testing.T) {
 			t.Errorf("rollout = false during an active rollout")
 		}
 	})
+}
+
+// startAuthorityGateway serves service over TLS with authority and returns the
+// listener address.
+func startAuthorityGateway(t *testing.T, service *ServerService, authority *Authority) string {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	gateway, err := NewGateway(GatewayConfig{
+		Addr:      "127.0.0.1:0",
+		Authority: authority,
+		Service:   service,
+		Logger:    discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if err := gateway.Start(ctx); err != nil {
+		t.Fatalf("gateway.Start: %v", err)
+	}
+	t.Cleanup(gateway.Stop)
+	return gateway.listener.Addr().String()
+}
+
+// TestGatewayRegisterRejectsReservedNodeIDAliases is the FX-3 C1 guard: an
+// equivalent spelling of a reserved identity (mapped IPv6, alternate IPv6,
+// uppercase, trailing dot) must not slip past the lookup.
+func TestGatewayRegisterRejectsReservedNodeIDAliases(t *testing.T) {
+	service, _, authority := newTestServiceWithAuthority(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	gateway, err := NewGateway(GatewayConfig{
+		Addr:      "127.0.0.1:0",
+		Hosts:     []string{"cp.example.com"},
+		Authority: authority,
+		Service:   service,
+		Logger:    discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	// The alias matrix exceeds the production register burst; this test checks
+	// identity rejection, not rate limiting.
+	gateway.registerLimiter = newPeerRateLimiter(registerRateLimit, 64)
+	if err := gateway.Start(ctx); err != nil {
+		t.Fatalf("gateway.Start: %v", err)
+	}
+	t.Cleanup(gateway.Stop)
+
+	conn, err := grpc.NewClient(gateway.listener.Addr().String(),
+		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(authority.Pool(), "")))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := agentv1.NewAgentServiceClient(conn)
+
+	aliases := []string{
+		"::ffff:127.0.0.1", // IPv4-mapped IPv6 of 127.0.0.1
+		"0:0:0:0:0:0:0:1",  // alternate spelling of ::1
+		"LOCALHOST",        // uppercase
+		"localhost.",       // trailing dot (FQDN)
+		"localhost..",      // multiple trailing dots
+		"CP.EXAMPLE.COM.",  // uppercase + trailing dot
+		"::0001",           // padded IPv6 loopback
+		"[::1]",            // bracketed IPv6
+	}
+	for _, alias := range aliases {
+		_, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: alias, Os: "linux"})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Errorf("Register(%q) = %v, want PermissionDenied", alias, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "GOTHAM_AGENT_NODE_ID") {
+			t.Errorf("Register(%q) error %q does not name GOTHAM_AGENT_NODE_ID", alias, err)
+		}
+	}
+}
+
+// TestReservedNodeIDMessageIsActionable is the FX-3 C2 guard: a co-located agent
+// whose default node id is the machine hostname gets an error naming
+// GOTHAM_AGENT_NODE_ID rather than a bare "reserved".
+func TestReservedNodeIDMessageIsActionable(t *testing.T) {
+	if !strings.Contains(reservedNodeIDMessage, "GOTHAM_AGENT_NODE_ID") {
+		t.Errorf("reservedNodeIDMessage = %q, want it to name GOTHAM_AGENT_NODE_ID", reservedNodeIDMessage)
+	}
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		t.Skip("hostname unavailable")
+	}
+	g := &Gateway{reservedNodeIDs: reservedNodeIDSet("127.0.0.1:0", nil)}
+	if !g.isReservedNodeID(hostname) {
+		t.Fatalf("the machine hostname %q is not reserved", hostname)
+	}
+}
+
+// TestCanonicalNodeID pins the canonicalization used by the reserved lookup.
+func TestCanonicalNodeID(t *testing.T) {
+	cases := map[string]string{
+		"LOCALHOST":          "localhost",
+		"localhost.":         "localhost",
+		"localhost..":        "localhost",
+		"cp.example.com.":    "cp.example.com",
+		"cp.example.com..":   "cp.example.com",
+		"::ffff:127.0.0.1":   "127.0.0.1",
+		"0:0:0:0:0:0:0:1":    "::1",
+		"::0001":             "::1",
+		"[::1]":              "::1",
+		"[::ffff:127.0.0.1]": "127.0.0.1",
+		"2001:0db8::1":       "2001:db8::1",
+		" node-1 ":           "node-1",
+	}
+	for in, want := range cases {
+		if got := canonicalNodeID(in); got != want {
+			t.Errorf("canonicalNodeID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestGatewayHeartbeatRejectsIdentityMismatch rejects a heartbeat whose
+// metadata node id contradicts the authenticated peer certificate (FX-3 item 3).
+func TestGatewayHeartbeatRejectsIdentityMismatch(t *testing.T) {
+	service, _, authority := newTestServiceWithAuthority(t)
+	addr := startAuthorityGateway(t, service, authority)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	clientCertPEM, clientKeyPEM, err := authority.IssueClientCert("attacker")
+	if err != nil {
+		t.Fatalf("IssueClientCert: %v", err)
+	}
+	keyPair, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
+	if err != nil {
+		t.Fatalf("load client keypair: %v", err)
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{keyPair},
+		RootCAs:      authority.Pool(),
+		ServerName:   "localhost",
+		MinVersion:   tls.VersionTLS12,
+	})))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	streamCtx := metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, "victim")
+	stream, err := agentv1.NewAgentServiceClient(conn).Heartbeat(streamCtx)
+	if err == nil {
+		_ = stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()})
+		_, err = stream.CloseAndRecv()
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Heartbeat with a mismatched identity = %v, want PermissionDenied", err)
+	}
+}
+
+// TestGatewayRegisterWithCSRIssuesBoundCert is the FX-3 item-1 end-to-end path:
+// a CSR bound to the registered node id yields a usable certificate, and the
+// registry row is created.
+func TestGatewayRegisterWithCSRIssuesBoundCert(t *testing.T) {
+	service, st, authority := newTestServiceWithAuthority(t)
+	addr := startAuthorityGateway(t, service, authority)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(authority.Pool(), "")))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	nodeID := uniqueNodeID("node-csr")
+	csr := testCSR(t, testKey(t), &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: nodeID},
+		DNSNames: []string{nodeID},
+	})
+	resp, err := agentv1.NewAgentServiceClient(conn).Register(ctx, &agentv1.RegisterRequest{
+		NodeId: nodeID,
+		Os:     "linux",
+		Csr:    csr,
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if len(resp.GetCert()) == 0 {
+		t.Fatal("Register with a bound CSR returned no certificate")
+	}
+	cert := parseCertPEM(t, resp.GetCert())
+	if _, err := cert.Verify(x509.VerifyOptions{
+		DNSName:   nodeID,
+		Roots:     authority.Pool(),
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		t.Fatalf("issued certificate failed verification: %v", err)
+	}
+
+	row, err := st.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = st.DeleteServer(cleanupCtx, row.ID)
+	})
+}
+
+// TestGatewayRegisterRejectsIdentityMismatch is the FX-3 item-3 guard: a peer
+// that presents a client certificate cannot register under another node id.
+func TestGatewayRegisterRejectsIdentityMismatch(t *testing.T) {
+	service, st, authority := newTestServiceWithAuthority(t)
+	addr := startAuthorityGateway(t, service, authority)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	clientCertPEM, clientKeyPEM, err := authority.IssueClientCert("attacker")
+	if err != nil {
+		t.Fatalf("IssueClientCert: %v", err)
+	}
+	keyPair, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
+	if err != nil {
+		t.Fatalf("load client keypair: %v", err)
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{keyPair},
+		RootCAs:      authority.Pool(),
+		ServerName:   "localhost",
+		MinVersion:   tls.VersionTLS12,
+	})))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	client := agentv1.NewAgentServiceClient(conn)
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: "victim", Os: "linux"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Register as victim = %v, want PermissionDenied", err)
+	}
+
+	// The authenticated identity itself is accepted.
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: "attacker", Os: "linux"}); err != nil {
+		t.Fatalf("Register as the authenticated identity: %v", err)
+	}
+	identity := "attacker"
+	row, err := st.GetServerByNodeID(ctx, &identity)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = st.DeleteServer(cleanupCtx, row.ID)
+	})
+}
+
+// TestGatewayRegisterRejectsLongNodeID is the FX-3 item-4 cap on node_id.
+func TestGatewayRegisterRejectsLongNodeID(t *testing.T) {
+	service, _ := newTestService(t)
+	conn := startTestGateway(t, service)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := agentv1.NewAgentServiceClient(conn).Register(ctx, &agentv1.RegisterRequest{
+		NodeId: strings.Repeat("a", maxNodeIDLength+1),
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Register(long node id) = %v, want InvalidArgument", err)
+	}
+}
+
+// TestGatewayRegisterRateLimited is the FX-3 item-4 per-peer registration cap.
+func TestGatewayRegisterRateLimited(t *testing.T) {
+	service, _ := newTestService(t)
+	gateway, conn := startTestGatewayInstance(t, service)
+	gateway.registerLimiter = newPeerRateLimiter(rate.Limit(0), 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := agentv1.NewAgentServiceClient(conn)
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: uniqueNodeID("rl-1")}); err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: uniqueNodeID("rl-2")}); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("second Register = %v, want ResourceExhausted", err)
+	}
+}
+
+// TestGatewayHeartbeatRateLimited is the FX-3 item-4 per-peer heartbeat cap.
+func TestGatewayHeartbeatRateLimited(t *testing.T) {
+	service, _ := newTestService(t)
+	gateway, conn := startTestGatewayInstance(t, service)
+	gateway.heartbeatLimiter = newPeerRateLimiter(rate.Limit(0), 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	nodeID := uniqueNodeID("node-hb-rl")
+	client := agentv1.NewAgentServiceClient(conn)
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	stream, err := client.Heartbeat(metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, nodeID))
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if err := stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()}); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	// The second message exhausts the burst; the server closes the stream with
+	// ResourceExhausted, surfaced on the next send or close.
+	_ = stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()})
+	if _, err := stream.CloseAndRecv(); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("Heartbeat after burst = %v, want ResourceExhausted", err)
+	}
+}
+
+// TestGatewayRegisterRejectsReservedNodeID is the FX-3 R1 short-term guard: a
+// peer cannot enroll the control plane's own listener identity, which would mint
+// a CP-impersonation certificate.
+func TestGatewayRegisterRejectsReservedNodeID(t *testing.T) {
+	service, st, authority := newTestServiceWithAuthority(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	gateway, err := NewGateway(GatewayConfig{
+		Addr:      "127.0.0.1:0",
+		Hosts:     []string{"cp.example.com"},
+		Authority: authority,
+		Service:   service,
+		Logger:    discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if err := gateway.Start(ctx); err != nil {
+		t.Fatalf("gateway.Start: %v", err)
+	}
+	t.Cleanup(gateway.Stop)
+
+	conn, err := grpc.NewClient(gateway.listener.Addr().String(),
+		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(authority.Pool(), "")))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := agentv1.NewAgentServiceClient(conn)
+
+	reserved := []string{"cp.example.com", "localhost", "127.0.0.1"}
+	for _, nodeID := range reserved {
+		_, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux"})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Errorf("Register(%q) = %v, want PermissionDenied", nodeID, err)
+		}
+		if _, lookupErr := st.GetServerByNodeID(ctx, &nodeID); lookupErr == nil {
+			t.Errorf("a registry row was created for the reserved id %q", nodeID)
+		}
+	}
+
+	// A non-reserved id is unaffected.
+	nodeID := uniqueNodeID("node-not-reserved")
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux"}); err != nil {
+		t.Fatalf("Register(%q) = %v, want success", nodeID, err)
+	}
+	row, err := st.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = st.DeleteServer(cleanupCtx, row.ID)
+	})
+}
+
+// TestGatewayHeartbeatIdleDeadline proves an idle Heartbeat stream is closed
+// rather than held open indefinitely (FX-3 R2).
+func TestGatewayHeartbeatIdleDeadline(t *testing.T) {
+	service, _ := newTestService(t)
+	_, conn := startTestGatewayWithConfig(t, GatewayConfig{
+		Service:       service,
+		Logger:        discardLogger(),
+		HeartbeatIdle: time.Second,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	stream, err := agentv1.NewAgentServiceClient(conn).Heartbeat(ctx)
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	// Stay quiet past the idle deadline; the server must close the stream
+	// rather than hold it open.
+	time.Sleep(3 * time.Second)
+	if _, err := stream.CloseAndRecv(); status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("idle Heartbeat = %v, want DeadlineExceeded", err)
+	}
+}
+
+// TestGatewayConcurrentStreamCapOpensBehaviorally is the FX-3 P1 behavioral
+// check: with a tightened cap, opening maxConcurrentStreams Heartbeat streams on
+// one connection succeeds and the next stream fails/blocks with DeadlineExceeded.
+func TestGatewayConcurrentStreamCapOpensBehaviorally(t *testing.T) {
+	const cap = 4
+	service, _ := newTestService(t)
+	_, conn := startTestGatewayWithConfig(t, GatewayConfig{
+		Service:              service,
+		Logger:               discardLogger(),
+		MaxConcurrentStreams: cap,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	client := agentv1.NewAgentServiceClient(conn)
+
+	// The cap is per connection, so the streams must share one conn.
+	open := make([]grpc.ClientStreamingClient[agentv1.HeartbeatRequest, agentv1.HeartbeatResponse], 0, cap)
+	for i := 0; i < cap; i++ {
+		stream, err := client.Heartbeat(ctx)
+		if err != nil {
+			t.Fatalf("Heartbeat(%d): %v", i, err)
+		}
+		// A first message forces the stream past lazy setup.
+		if err := stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()}); err != nil {
+			t.Fatalf("send on stream %d: %v", i, err)
+		}
+		open = append(open, stream)
+	}
+
+	// The next stream must be refused: either Heartbeat fails synchronously or
+	// the first Send/Recv surfaces the transport error, bounded by a short
+	// deadline.
+	nextCtx, nextCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer nextCancel()
+	extra, err := client.Heartbeat(nextCtx)
+	if err == nil {
+		if sendErr := extra.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()}); sendErr != nil {
+			err = sendErr
+		} else if _, recvErr := extra.CloseAndRecv(); recvErr != nil {
+			err = recvErr
+		}
+	}
+	if err == nil {
+		t.Fatalf("stream %d opened past the cap of %d", cap+1, cap)
+	}
+	switch status.Code(err) {
+	case codes.ResourceExhausted, codes.DeadlineExceeded, codes.Canceled:
+	default:
+		t.Fatalf("extra stream error = %v, want ResourceExhausted/DeadlineExceeded/Canceled", err)
+	}
+
+	for _, stream := range open {
+		_ = stream.CloseSend()
+	}
+}
+
+// TestGatewayLimitsStreamsAndMessages pins the gRPC caps (FX-3 R2) at their
+// production values and exercises the oversized-message path live. The concurrent
+// stream cap has its own behavioral test above; here it is also asserted as a
+// constant so a production default change is caught.
+func TestGatewayLimitsStreamsAndMessages(t *testing.T) {
+	if maxConcurrentStreams != 64 || maxRecvMsgSize != 1<<20 {
+		t.Fatalf("gateway caps = %d/%d, want 64/1MiB", maxConcurrentStreams, maxRecvMsgSize)
+	}
+	service, _ := newTestService(t)
+	conn := startTestGateway(t, service)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := agentv1.NewAgentServiceClient(conn).Register(ctx, &agentv1.RegisterRequest{
+		NodeId: uniqueNodeID("node-big"),
+		Os:     strings.Repeat("x", 2<<20),
+	}); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("oversized Register = %v, want ResourceExhausted", err)
+	}
+}
+
+// TestLoadAuthorityRejectsLooseKeyPermissions is the FX-3 R3 guard: a CA key
+// readable beyond its owner is refused.
+func TestLoadAuthorityRejectsLooseKeyPermissions(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := LoadOrCreateAuthority(dir); err != nil {
+		t.Fatalf("LoadOrCreateAuthority: %v", err)
+	}
+	keyPath := filepath.Join(dir, caKeyFile)
+	if err := os.Chmod(keyPath, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if _, err := LoadAuthority(dir); err == nil {
+		t.Error("LoadAuthority(0644 key) = nil error, want refusal")
+	}
+	if err := os.Chmod(keyPath, 0o600); err != nil {
+		t.Fatalf("chmod back: %v", err)
+	}
+	if _, err := LoadAuthority(dir); err != nil {
+		t.Errorf("LoadAuthority(0600 key) = %v, want success", err)
+	}
+}
+
+// TestRegisterErrorLogsUnexpected is the FX-3 item-6 guard: an unexpected
+// registry failure is logged before it is collapsed to Internal.
+func TestRegisterErrorLogsUnexpected(t *testing.T) {
+	var buf bytes.Buffer
+	gateway := &Gateway{logger: slog.New(slog.NewTextHandler(&buf, nil))}
+
+	if err := gateway.registerError("node-1", errors.New("db exploded")); status.Code(err) != codes.Internal {
+		t.Fatalf("registerError = %v, want Internal", err)
+	}
+	if !strings.Contains(buf.String(), "db exploded") {
+		t.Errorf("unexpected error was not logged: %q", buf.String())
+	}
+
+	buf.Reset()
+	if err := gateway.registerError("node-1", fmt.Errorf("%w: bad", ErrValidation)); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("registerError(validation) = %v, want InvalidArgument", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("a domain error was logged: %q", buf.String())
+	}
 }

@@ -165,8 +165,11 @@ control plane in plaintext. It installs the certificate as `/etc/gotham/ca.crt`
 (root-owned, `0644`) and writes `GOTHAM_AGENT_CA=/etc/gotham/ca.crt` to
 `/etc/gotham/agent.env`, which makes the agent verify the control plane over TLS.
 `--insecure` is the documented **local-development-only** override: it skips the
-CA check and leaves `GOTHAM_AGENT_CA` unset, so the agent connects without TLS.
-Never use it on a real node.
+CA check, writes `GOTHAM_AGENT_INSECURE=true`, and leaves `GOTHAM_AGENT_CA`
+unset, so the agent connects without TLS. The agent itself now fails closed:
+with no CA it refuses to start unless `GOTHAM_AGENT_INSECURE=true`, and a
+plaintext listener is confined to loopback (the installer defaults the address
+to `127.0.0.1:9443`). Never use it on a real node.
 
 The agent installer uses the same signed-manifest verification
 (`deploy/release-verify.sh`) for `gotham-agent-linux-<arch>` and
@@ -192,6 +195,19 @@ Useful agent installer flags and variables:
 `GOTHAM_AGENT_CP_ADDR` must use a name or IP that is one of the control plane's
 listener SANs (see [Control plane](#control-plane)); otherwise the TLS handshake
 fails and the node never registers.
+
+`GOTHAM_AGENT_NODE_ID` must not name the control plane itself. The CP refuses to
+register its own listener identities (its bind host, the loopback names, its
+machine hostname and every `GOTHAM_GRPC_HOSTS` entry, compared after
+canonicalization), because accepting one would issue a certificate that
+impersonates the control plane. On a **co-located** install — the agent on the
+same host as the CP — the agent's default node id is that hostname, so set an
+explicit distinct value:
+
+```sh
+sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=worker-1 \
+    gotham/deploy/install-agent.sh --ca ./ca.crt
+```
 
 ## Updates and rollback
 

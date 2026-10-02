@@ -333,6 +333,7 @@ mkdir -p "${SCRATCH}/cp"
     GOTHAM_REDIS_ADDR="127.0.0.1:6379" \
     GOTHAM_SECRET_KEY="verify-secret-${RUN_ID}" \
     GOTHAM_CA_DIR="${SCRATCH}/ca" \
+    GOTHAM_GRPC_INSECURE=true \
     GOTHAM_LOG_LEVEL=info \
     FEATURE_UPDATES=true \
     GOTHAM_UPDATE_BASE_URL="http://127.0.0.1:${RELEASE_PORT}" \

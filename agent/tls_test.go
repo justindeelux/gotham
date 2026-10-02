@@ -10,10 +10,13 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/credentials"
 )
 
 // testCA returns a self-signed CA certificate and key.
@@ -151,31 +154,138 @@ func TestServerCredentials(t *testing.T) {
 		t.Fatalf("write CA: %v", err)
 	}
 
-	creds, err := ServerCredentials(certPEM, keyPEM, caPath)
+	creds, err := ServerCredentials(certPEM, keyPEM, caPath, false)
 	if err != nil || creds == nil {
 		t.Errorf("ServerCredentials(cert, key, ca) = (%v, %v); want TLS creds", creds, err)
 	}
 
-	// Development mode: no issued certificate and no CA → plaintext, matching
-	// the control plane's insecure dial.
-	creds, err = ServerCredentials(nil, nil, "")
+	// No CA and no certificate is plaintext: it must be refused without the
+	// explicit insecure opt-in, and allowed only with it.
+	if _, err := ServerCredentials(nil, nil, "", false); err == nil {
+		t.Error("ServerCredentials(nil, nil, empty, false) = nil error; want refusal")
+	}
+	creds, err = ServerCredentials(nil, nil, "", true)
 	if err != nil || creds != nil {
-		t.Errorf("ServerCredentials(nil, nil, empty) = (%v, %v); want nil plaintext creds", creds, err)
+		t.Errorf("ServerCredentials(nil, nil, empty, true) = (%v, %v); want nil plaintext creds", creds, err)
 	}
 
 	// A CA configured with no issued certificate still keeps the listener on
 	// TLS with a self-signed certificate.
-	creds, err = ServerCredentials(nil, nil, caPath)
+	creds, err = ServerCredentials(nil, nil, caPath, false)
 	if err != nil || creds == nil {
 		t.Errorf("ServerCredentials(nil, nil, ca) = (%v, %v); want self-signed TLS creds", creds, err)
 	}
 
-	if _, err := ServerCredentials(certPEM, nil, ""); err == nil {
+	if _, err := ServerCredentials(certPEM, nil, "", false); err == nil {
 		t.Error("ServerCredentials(cert, no key) = nil error; want error")
 	}
-	if _, err := ServerCredentials(nil, nil, filepath.Join(dir, "missing.pem")); err == nil {
+	if _, err := ServerCredentials(nil, nil, filepath.Join(dir, "missing.pem"), false); err == nil {
 		t.Error("ServerCredentials(cert, key, missing CA) = nil error; want error")
 	}
+}
+
+// TestServerCredentialsFromFilesReloads proves the file-backed credentials read
+// the certificate on each handshake, so a renewal written to disk takes effect
+// without restarting the server.
+func TestServerCredentialsFromFilesReloads(t *testing.T) {
+	_, caCert, caKey := testCA(t)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate leaf key: %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	certA := leafWithKey(t, caCert, caKey, key, big.NewInt(101))
+	certB := leafWithKey(t, caCert, caKey, key, big.NewInt(202))
+
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, certFileName)
+	keyPath := filepath.Join(dir, keyFileName)
+	if err := os.WriteFile(certPath, certA, 0o600); err != nil {
+		t.Fatalf("write cert A: %v", err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	creds, err := ServerCredentialsFromFiles(certPath, keyPath, "")
+	if err != nil {
+		t.Fatalf("ServerCredentialsFromFiles: %v", err)
+	}
+	addr := startTLSHandshakeServer(t, creds)
+
+	if got := peerSerial(t, addr); got != 101 {
+		t.Fatalf("first handshake serial = %d, want 101", got)
+	}
+
+	// Rewrite the certificate through the atomic saver; the same credentials
+	// must present the new leaf.
+	if err := savePEM(certPath, certB); err != nil {
+		t.Fatalf("rewrite cert B: %v", err)
+	}
+	if got := peerSerial(t, addr); got != 202 {
+		t.Fatalf("after rewrite handshake serial = %d, want 202", got)
+	}
+}
+
+// leafWithKey signs a leaf certificate for key with the given serial.
+func leafWithKey(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, key *ecdsa.PrivateKey, serial *big.Int) []byte {
+	t.Helper()
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "gotham-agent"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, caCert, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create leaf: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// startTLSHandshakeServer accepts connections and completes a TLS handshake
+// with creds, returning its address.
+func startTLSHandshakeServer(t *testing.T, creds credentials.TransportCredentials) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _, _ = creds.ServerHandshake(c)
+			}(conn)
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// peerSerial dials addr and returns the serial of the presented leaf.
+func peerSerial(t *testing.T, addr string) int64 {
+	t.Helper()
+	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		t.Fatal("no peer certificate presented")
+	}
+	return certs[0].SerialNumber.Int64()
 }
 
 func TestSaveAgentCertAndKeyRoundtrip(t *testing.T) {

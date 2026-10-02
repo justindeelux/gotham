@@ -293,6 +293,125 @@ func TestHeartbeatSkipsMetricsWhenDisabled(t *testing.T) {
 	}
 }
 
+// TestHeartbeatAggregatesSamples is the FX-3 item-4 bound on metrics growth:
+// samples arriving closer together than heartbeatSampleInterval are dropped
+// while the servers row still carries the latest snapshot. The throttle runs on
+// the server wall clock, so a heartbeat cannot advance sent_at to bypass it.
+func TestHeartbeatAggregatesSamples(t *testing.T) {
+	service, st := newTestService(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	nodeID := uniqueNodeID("node-metrics-agg")
+	if _, err := service.RegisterNode(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux"}); err != nil {
+		t.Fatalf("RegisterNode: %v", err)
+	}
+	row, err := st.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = st.DeleteServer(cleanupCtx, row.ID)
+	})
+
+	base := time.Now().UTC()
+	current := base
+	service.now = func() time.Time { return current }
+	send := func(cpu float64, sentAt time.Time) {
+		t.Helper()
+		if err := service.RecordHeartbeat(ctx, nodeID, &agentv1.HeartbeatRequest{
+			CpuUsage: cpu,
+			SentAt:   timestamppb.New(sentAt),
+		}); err != nil {
+			t.Fatalf("RecordHeartbeat: %v", err)
+		}
+	}
+
+	// The throttle keys on the server wall clock, never on sent_at: a sample
+	// whose sent_at is far ahead but which arrives immediately must still be
+	// dropped.
+	send(0.1, base)                   // accepted
+	send(0.2, base.Add(24*time.Hour)) // dropped: same wall-clock slot
+	current = base.Add(heartbeatSampleInterval + time.Second)
+	send(0.3, current.Add(-24*time.Hour)) // accepted: new slot despite old sent_at
+	send(0.4, current.Add(time.Hour))     // dropped: same slot, future sent_at
+
+	updated, err := st.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID after heartbeats: %v", err)
+	}
+	if updated.CpuUsage == nil || *updated.CpuUsage != 0.4 {
+		t.Errorf("cpu_usage = %v, want 0.4 (the snapshot always updates)", updated.CpuUsage)
+	}
+
+	var count int
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM server_metrics WHERE server_id = $1", row.ID).Scan(&count); err != nil {
+		t.Fatalf("count metrics: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("metrics rows = %d, want 2 (sent_at must not bypass the wall-clock throttle)", count)
+	}
+}
+
+// TestHeartbeatClampsFutureSentAt proves a hostile sent_at cannot poison the
+// series: a far-future report is stored at the server clock, and the throttle
+// still accepts the next genuine sample.
+func TestHeartbeatClampsFutureSentAt(t *testing.T) {
+	service, st := newTestService(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	nodeID := uniqueNodeID("node-metrics-skew")
+	if _, err := service.RegisterNode(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux"}); err != nil {
+		t.Fatalf("RegisterNode: %v", err)
+	}
+	row, err := st.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_ = st.DeleteServer(cleanupCtx, row.ID)
+	})
+
+	base := time.Now().UTC()
+	current := base
+	service.now = func() time.Time { return current }
+	send := func(cpu float64, sentAt time.Time) {
+		t.Helper()
+		if err := service.RecordHeartbeat(ctx, nodeID, &agentv1.HeartbeatRequest{
+			CpuUsage: cpu,
+			SentAt:   timestamppb.New(sentAt),
+		}); err != nil {
+			t.Fatalf("RecordHeartbeat: %v", err)
+		}
+	}
+
+	send(0.1, base.Add(2*time.Hour)) // far future: stored clamped to now
+	current = base.Add(11 * time.Second)
+	send(0.2, current) // accepted despite the earlier hostile timestamp
+
+	var count int
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM server_metrics WHERE server_id = $1", row.ID).Scan(&count); err != nil {
+		t.Fatalf("count metrics: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("metrics rows = %d, want 2", count)
+	}
+	var latest time.Time
+	if err := st.DB.QueryRow(ctx, "SELECT max(recorded_at) FROM server_metrics WHERE server_id = $1", row.ID).Scan(&latest); err != nil {
+		t.Fatalf("max recorded_at: %v", err)
+	}
+	if latest.After(base.Add(time.Minute)) {
+		t.Errorf("stored sample = %v, want the hostile future sent_at clamped near the server clock %v", latest, base)
+	}
+}
+
 // addMetricsNode creates a node for the metrics tests and deletes it on
 // cleanup (its samples cascade).
 func addMetricsNode(t *testing.T, ctx context.Context, service *ServerService, st *store.Store, name string) *Server {

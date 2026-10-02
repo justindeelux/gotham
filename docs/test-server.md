@@ -106,7 +106,9 @@ Environment prerequisites installed for the current feature set:
   `/var/lib/gotham-agent/compose`).
 - `servers.ip = 127.0.0.1` for `test-node-1` (the all-in-one registration has
   no operator address; the CP dials the agent on the node port 9443).
-- Dev mode: no CA configured, so CP and agent speak plaintext.
+- Dev mode: no CA configured, so CP and agent speak plaintext. This is opt-in
+  on both sides: the CP needs `GOTHAM_GRPC_INSECURE=true` (a CA-less `serve`
+  otherwise refuses to start) and the agent `GOTHAM_AGENT_INSECURE=true`.
 
 Verified live (beyond CI):
 
@@ -157,9 +159,9 @@ repeated against this shared box's CP/agent yet.
   reads (`GET /api/v1/applications/{id}/env`) stay `read`. JWT sessions hold
   every scope, so the SPA is unaffected.
 - Development mode: when there is no CA (empty `GOTHAM_CA_DIR`), the control
-  plane dials agents over plaintext and the agent serves its DockerService
-  without TLS. As soon as a CA exists, registration issues certificates and
-  both sides use mTLS.
+  plane refuses to start unless `GOTHAM_GRPC_INSECURE=true`, and the agent
+  unless `GOTHAM_AGENT_INSECURE=true`; both then dial/serve plaintext. As soon
+  as a CA exists, registration issues certificates and both sides use mTLS.
 - Go toolchain: install a Go release matching `go.mod` before `make build`.
 - Ports used on this host: 8000 (CP HTTP), 9442 (CP gRPC), 9443 (agent
   DockerService), 5432 (Postgres), 6379 (Redis).

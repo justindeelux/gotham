@@ -101,8 +101,11 @@ Caveats learned 2026-10-03:
   JWT/credential keys); they are expected on this box, not errors.
 
 Unreleased `main` deploy (2026-10-04): there is no tag after `v0.2.0` yet, so the
-box was moved to `main` at `0378f65` (`v0.2.0-21-g0378f65`, PRs #134-#137: server
-password auth and edit, installer, runtime version tag). Same procedure with a
+box was moved to `main` at `9ea55ce` (`v0.2.0-41-g9ea55ce`, PRs #134-#142: server
+password auth and edit, installer hardening, runtime version tag, add-server wizard
+layout, truthful dashboard data, OAuth avatar persistence). It was first deployed at
+`0378f65` (`v0.2.0-21-g0378f65`) the same day and redeployed with no new migrations
+(`00029`/`00030` were already applied). Same procedure with a
 commit instead of a tag and a dev stamp (`git checkout -f 0378f65`, build with
 `-X main.version=0.2.1-dev`), plus:
 
@@ -116,11 +119,18 @@ commit instead of a tag and a dev stamp (`git checkout -f 0378f65`, build with
   the gap; the agent re-registers with `cp_version=0.2.1-dev`.
 - Smoke after deploy: both units `active`, `/healthz` 200, `GET /api/v1/version`
   401 unauthenticated, `PATCH /api/v1/servers/{id}` 401 unauthenticated.
-- Registration is closed on this box, so authenticated checks (the sidebar tag
-  showing `v0.2.1-dev`, adding a server with a password, editing a server) need
-  an existing account or an admin-scoped token; they have not been run here yet.
-- The CP's CSP is `img-src 'self' data:`, so remote (OAuth) avatar images do not
-  load and the avatar falls back to the initial.
+- Registration is closed on this box, so authenticated checks need an existing
+  account. The `demo@gotham.dev` account's password was reset on 2026-10-04 for a
+  UI walkthrough (the password is not recorded here; reset it again if you need
+  to). Verified in a browser through an SSH tunnel on 2026-10-04: sidebar tag
+  `v0.2.1-dev`, round header avatar, add server with a password, edit and delete a
+  server, dashboard `Running applications 2 / 2`, sidebar role `owner`, install
+  snippet with `--full`, login page without the sample footer.
+- The CP's CSP allows exactly one remote image host, `avatars.githubusercontent.com`
+  (`img-src 'self' data: https://avatars.githubusercontent.com`), shared with the
+  OAuth avatar validator. GitHub OAuth is the only provider, and it has not been
+  exercised on this box (no OAuth app configured), so avatar rendering from GitHub
+  is covered by tests only.
 
 
 ## Browser UI smoke (Playwright)

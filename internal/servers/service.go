@@ -209,13 +209,11 @@ func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip stri
 		if s.store == nil {
 			return nil, errors.New("servers: store is not configured")
 		}
-		if _, err := s.store.GetPrivateKeyByID(ctx, pgtype.UUID{Bytes: sshKeyID, Valid: true}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil, fmt.Errorf("%w: unknown ssh_key_id", ErrValidation)
-			}
-			return nil, fmt.Errorf("lookup ssh key: %w", err)
+		key, err := s.keyForTeam(ctx, sshKeyID)
+		if err != nil {
+			return nil, err
 		}
-		keyID = pgtype.UUID{Bytes: sshKeyID, Valid: true}
+		keyID = key.ID
 	}
 
 	var encryptedPassword *string
@@ -332,10 +330,18 @@ type UpdateParams struct {
 // Update applies a PATCH edit. Changing the address (ip), port, ssh user or
 // either credential clears the pinned host key and returns the node to
 // pending: the pin belongs to the old endpoint/identity, so the node must be
-// revalidated before it is trusted again. Revalidation itself stays an
+// revalidated before it is trusted again. Only an actual change resets
+// anything: re-sending the stored address or the attached key, or a name-only
+// edit, leaves the pin and status alone. Revalidation itself stays an
 // explicit POST /v1/servers/{id}/validate call — a metadata edit must not
 // block on a 15s SSH dial. A node outside the active team answers ErrNotFound
 // so node IDs cannot be probed.
+//
+// The read-modify-write runs under a row lock (SELECT ... FOR UPDATE): the
+// merge is computed from the locked row, so a concurrent heartbeat,
+// RegisterNode, ResetHostKey or Validate write is never reverted by a stale
+// read, and status is rewritten only when the address or credentials actually
+// changed.
 func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateParams) (*Server, error) {
 	row, err := s.store.GetServerByID(ctx, pgUUID(id))
 	if err != nil {
@@ -352,104 +358,183 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 		return nil, ErrNotFound
 	}
 
-	name, ip, sshUser := server.Name, server.IP, server.SSHUser
-	port := server.Port
-	keyID := row.SshKeyID
-	encryptedPassword := row.EncryptedPassword
-	addressChanged := false
-
+	// Scalar validation depends only on the request, so it runs before the
+	// row lock. A nil field leaves the column unchanged.
+	var newName, newIP, newUser *string
+	var newPort *int
 	if params.Name != nil {
-		name = strings.TrimSpace(*params.Name)
-		if name == "" {
+		v := strings.TrimSpace(*params.Name)
+		if v == "" {
 			return nil, fmt.Errorf("%w: name is required", ErrValidation)
 		}
+		newName = &v
 	}
 	if params.IP != nil {
-		ip = strings.TrimSpace(*params.IP)
-		if ip == "" {
+		v := strings.TrimSpace(*params.IP)
+		if v == "" {
 			return nil, fmt.Errorf("%w: ip is required", ErrValidation)
 		}
-		if ip != server.IP {
-			addressChanged = true
-		}
+		newIP = &v
 	}
 	if params.Port != nil {
 		if *params.Port < 1 || *params.Port > 65535 {
 			return nil, fmt.Errorf("%w: port must be between 1 and 65535", ErrValidation)
 		}
-		if *params.Port != server.Port {
-			addressChanged = true
-		}
-		port = *params.Port
+		v := *params.Port
+		newPort = &v
 	}
 	if params.SSHUser != nil {
-		sshUser = strings.TrimSpace(*params.SSHUser)
-		if sshUser == "" {
+		v := strings.TrimSpace(*params.SSHUser)
+		if v == "" {
 			return nil, fmt.Errorf("%w: ssh_user is required", ErrValidation)
 		}
-		if sshUser != server.SSHUser {
-			addressChanged = true
-		}
+		newUser = &v
 	}
+	// Single auth mode holds for PATCH as it does for create: a key and a
+	// password together are a 400.
+	if params.SSHKeyID != nil && params.Password != nil &&
+		*params.SSHKeyID != uuid.Nil && *params.Password != "" {
+		return nil, fmt.Errorf("%w: provide either ssh_key_id or password, not both", ErrValidation)
+	}
+
+	// Resolve the requested credentials outside the row lock: the keys table
+	// is immutable (no key update path), so no concurrent writer here can
+	// invalidate the lookup.
+	var wantKey pgtype.UUID
+	wantKeySet := params.SSHKeyID != nil
 	if params.SSHKeyID != nil {
-		if *params.SSHKeyID == uuid.Nil {
-			keyID = pgtype.UUID{}
-		} else {
-			if _, err := s.store.GetPrivateKeyByID(ctx, pgUUID(*params.SSHKeyID)); err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return nil, fmt.Errorf("%w: unknown ssh_key_id", ErrValidation)
-				}
-				return nil, fmt.Errorf("lookup ssh key: %w", err)
-			}
-			keyID = pgUUID(*params.SSHKeyID)
-		}
-		// Single auth mode: attaching a key forgets any stored password.
-		encryptedPassword = nil
-		addressChanged = true
-	}
-	if params.Password != nil {
-		if *params.Password == "" {
-			encryptedPassword = nil
-		} else {
-			secret, err := EncryptKey(*params.Password, s.secret)
+		if *params.SSHKeyID != uuid.Nil {
+			key, err := s.keyForTeam(ctx, *params.SSHKeyID)
 			if err != nil {
 				return nil, err
 			}
-			encryptedPassword = &secret
+			wantKey = key.ID
 		}
-		// Single auth mode: setting (or clearing) the password detaches the key.
-		keyID = pgtype.UUID{}
-		addressChanged = true
+	}
+	var wantPassword *string
+	wantPasswordSet := params.Password != nil
+	if params.Password != nil && *params.Password != "" {
+		secret, err := EncryptKey(*params.Password, s.secret)
+		if err != nil {
+			return nil, err
+		}
+		wantPassword = &secret
+	}
+	wantPasswordPlain := ""
+	if params.Password != nil {
+		wantPasswordPlain = *params.Password
 	}
 
-	var fingerprint *string
-	status := row.Status
-	if addressChanged {
-		// The pin and the derived status belong to the old endpoint: forget
-		// the pin and go back through validation.
-		fingerprint = nil
-		status = StatusPending
-	} else {
-		fingerprint = row.HostKeyFingerprint
-	}
+	updated, err := s.store.UpdateServerGuarded(ctx, pgUUID(id), func(locked sqlc.Server) (sqlc.UpdateServerParams, error) {
+		name, ip, sshUser, port := locked.Name, locked.Ip, locked.SshUser, int(locked.Port)
+		if newName != nil {
+			name = *newName
+		}
+		if newIP != nil {
+			ip = *newIP
+		}
+		if newPort != nil {
+			port = *newPort
+		}
+		if newUser != nil {
+			sshUser = *newUser
+		}
+		addressChanged := ip != locked.Ip || port != int(locked.Port) || sshUser != locked.SshUser
 
-	updated, err := s.store.UpdateServer(ctx, sqlc.UpdateServerParams{
-		ID:                 pgUUID(id),
-		Name:               name,
-		Ip:                 ip,
-		Port:               int32(port),
-		SshUser:            sshUser,
-		SshKeyID:           keyID,
-		EncryptedPassword:  encryptedPassword,
-		HostKeyFingerprint: fingerprint,
-		Status:             status,
+		keyID, encryptedPassword := locked.SshKeyID, locked.EncryptedPassword
+		credentialChanged := false
+		if wantKeySet {
+			if !sameKeyID(keyID, wantKey) {
+				credentialChanged = true
+			}
+			keyID = wantKey
+			// Single auth mode: attaching a key forgets any stored password.
+			if encryptedPassword != nil {
+				encryptedPassword = nil
+				credentialChanged = true
+			}
+		}
+		if wantPasswordSet {
+			if wantPassword == nil {
+				// Forgetting the secret; a detached key goes with it.
+				if encryptedPassword != nil {
+					encryptedPassword = nil
+					credentialChanged = true
+				}
+				if keyID.Valid {
+					keyID = pgtype.UUID{}
+					credentialChanged = true
+				}
+			} else {
+				// Setting the secret detaches the key. A re-sent identical
+				// secret is not a change (the nonce prevents comparing
+				// ciphertext, so decrypt and compare instead).
+				if keyID.Valid {
+					keyID = pgtype.UUID{}
+					credentialChanged = true
+				}
+				if !s.storedPasswordEquals(locked.EncryptedPassword, wantPasswordPlain) {
+					encryptedPassword = wantPassword
+					credentialChanged = true
+				} else {
+					encryptedPassword = locked.EncryptedPassword
+				}
+			}
+		}
+
+		status := locked.Status
+		fingerprint := locked.HostKeyFingerprint
+		if addressChanged || credentialChanged {
+			// The pin and the derived status belong to the old
+			// endpoint/identity: forget the pin and go back through
+			// validation.
+			fingerprint = nil
+			status = StatusPending
+		}
+
+		return sqlc.UpdateServerParams{
+			ID:                 pgUUID(id),
+			Name:               name,
+			Ip:                 ip,
+			Port:               int32(port),
+			SshUser:            sshUser,
+			SshKeyID:           keyID,
+			EncryptedPassword:  encryptedPassword,
+			HostKeyFingerprint: fingerprint,
+			Status:             status,
+		}, nil
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
 		return nil, fmt.Errorf("update server: %w", err)
 	}
 
 	s.logger.Debug("servers: updated", "server_id", id.String())
 	return serverFromRow(updated), nil
+}
+
+// sameKeyID reports whether two nullable key references identify the same key.
+func sameKeyID(a, b pgtype.UUID) bool {
+	if a.Valid != b.Valid {
+		return false
+	}
+	return !a.Valid || a.Bytes == b.Bytes
+}
+
+// storedPasswordEquals reports whether plain matches the stored encrypted
+// secret. An undecryptable stored value counts as a mismatch, so the secret
+// is rewritten rather than kept.
+func (s *ServerService) storedPasswordEquals(stored *string, plain string) bool {
+	if stored == nil || *stored == "" {
+		return false
+	}
+	decrypted, err := DecryptKey(*stored, s.secret)
+	if err != nil {
+		return false
+	}
+	return decrypted == plain
 }
 
 // ResetHostKey forgets a node's pinned SSH host key, so the next validation
@@ -494,15 +579,25 @@ func scopeID(id uuid.UUID) string {
 }
 
 // pinHostKey persists a first-use host key fingerprint with compare-and-set
-// semantics. When the CAS affects 0 rows the node was pinned (or unpinned)
-// concurrently: it re-reads and either accepts a stored match, fails closed on
-// a mismatch, or retries once when the row was cleared in the window. A pin
-// that never lands is an error, so a node is never reported ready un-pinned.
-func (s *ServerService) pinHostKey(ctx context.Context, id uuid.UUID, fingerprint string) error {
+// semantics, guarded on the endpoint and credentials the validation ran
+// against. When the guarded write affects 0 rows the row is re-read: an
+// endpoint or credential mismatch means a concurrent PATCH moved the node, so
+// the stale pin is dropped with errServerChanged instead of pinning the OLD
+// host's key onto the NEW address (JUS-5 fix round 1, defect 1). A pin that
+// landed concurrently is accepted on a match and fails closed on a mismatch;
+// a row cleared in the window (an operator reset) is retried once. A pin that
+// never lands is an error, so a node is never reported ready un-pinned.
+func (s *ServerService) pinHostKey(ctx context.Context, id uuid.UUID, row sqlc.Server, fingerprint string) error {
+	guard := endpointGuardOf(id, row)
 	for attempt := 0; attempt < 2; attempt++ {
-		if _, err := s.store.PinServerHostKey(ctx, sqlc.PinServerHostKeyParams{
-			ID:                 pgUUID(id),
+		if _, err := s.store.PinServerHostKeyGuarded(ctx, sqlc.PinServerHostKeyGuardedParams{
+			ID:                 guard.ID,
 			HostKeyFingerprint: &fingerprint,
+			Ip:                 guard.Ip,
+			Port:               guard.Port,
+			SshUser:            guard.SshUser,
+			SshKeyID:           guard.SshKeyID,
+			EncryptedPassword:  guard.EncryptedPassword,
 		}); err == nil {
 			// The fingerprint is public; log it so operators can audit the
 			// first pin. A routine pin is Info; only resets/mismatches Warn.
@@ -515,22 +610,69 @@ func (s *ServerService) pinHostKey(ctx context.Context, id uuid.UUID, fingerprin
 			return fmt.Errorf("persist host key fingerprint: %w", err)
 		}
 
-		// Lost the CAS: another writer touched the row first.
-		row, readErr := s.store.GetServerByID(ctx, pgUUID(id))
+		// Lost the guarded write: re-read and decide.
+		fresh, readErr := s.store.GetServerByID(ctx, pgUUID(id))
 		if readErr != nil {
 			return fmt.Errorf("persist host key fingerprint: %w", readErr)
 		}
-		switch stored := fingerprintOf(row.HostKeyFingerprint); {
+		if !sameEndpoint(fresh, row) {
+			return fmt.Errorf("%w: server changed during validation", ErrValidation)
+		}
+		switch stored := fingerprintOf(fresh.HostKeyFingerprint); {
 		case stored == fingerprint:
 			return nil // someone else pinned the same key: benign
 		case stored != "":
 			return fmt.Errorf("host key changed while pinning: got %s, want %s", fingerprint, stored)
 		default:
 			// The row was cleared in the window (an operator reset landed):
-			// loop and re-run the CAS so the pin is not silently skipped.
+			// loop and re-run the guarded write so the pin is not silently
+			// skipped.
 		}
 	}
 	return fmt.Errorf("persist host key fingerprint: node %s was cleared repeatedly while pinning", id)
+}
+
+// endpointGuard captures the endpoint identity a validation ran against, so
+// every later write can be conditional on the row still matching it.
+type endpointGuard struct {
+	ID                pgtype.UUID
+	Ip                string
+	Port              int32
+	SshUser           string
+	SshKeyID          pgtype.UUID
+	EncryptedPassword *string
+}
+
+// endpointGuardOf snapshots the guarded columns of row.
+func endpointGuardOf(id uuid.UUID, row sqlc.Server) endpointGuard {
+	return endpointGuard{
+		ID:                pgUUID(id),
+		Ip:                row.Ip,
+		Port:              row.Port,
+		SshUser:           row.SshUser,
+		SshKeyID:          row.SshKeyID,
+		EncryptedPassword: row.EncryptedPassword,
+	}
+}
+
+// sameEndpoint reports whether fresh still carries the endpoint and
+// credentials row had when the validation read it.
+func sameEndpoint(fresh, row sqlc.Server) bool {
+	return fresh.Ip == row.Ip &&
+		fresh.Port == row.Port &&
+		fresh.SshUser == row.SshUser &&
+		sameKeyID(fresh.SshKeyID, row.SshKeyID) &&
+		sameSecret(fresh.EncryptedPassword, row.EncryptedPassword)
+}
+
+// sameSecret compares two stored (encrypted) secrets by ciphertext. A PATCH
+// that sets even an identical password re-encrypts with a fresh nonce, so any
+// ciphertext difference means a concurrent credential write.
+func sameSecret(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 // AddPrivateKey encrypts and stores an SSH private key.
@@ -551,6 +693,7 @@ func (s *ServerService) AddPrivateKey(ctx context.Context, name, privateKeyPEM s
 	row, err := s.store.CreatePrivateKey(ctx, sqlc.CreatePrivateKeyParams{
 		Name:         name,
 		EncryptedKey: encrypted,
+		TeamID:       pgUUID(teams.ScopeFor(ctx, uuid.Nil).TeamID),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create private key: %w", err)
@@ -562,6 +705,26 @@ func (s *ServerService) AddPrivateKey(ctx context.Context, name, privateKeyPEM s
 		Name:      row.Name,
 		CreatedAt: row.CreatedAt.Time,
 	}, nil
+}
+
+// keyForTeam fetches a private key by ID and enforces that it belongs to the
+// caller's active team (JUS-5 fix round 1, defect 4a). A key from another
+// team answers the same unknown-key validation error as a missing key, so key
+// IDs cannot be probed across teams. Legacy keys (team_id NULL) predate teams
+// and stay usable by every caller, mirroring legacy shared nodes; a request
+// without a team scope keeps pre-teams behavior.
+func (s *ServerService) keyForTeam(ctx context.Context, id uuid.UUID) (sqlc.PrivateKey, error) {
+	key, err := s.store.GetPrivateKeyByID(ctx, pgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlc.PrivateKey{}, fmt.Errorf("%w: unknown ssh_key_id", ErrValidation)
+		}
+		return sqlc.PrivateKey{}, fmt.Errorf("lookup ssh key: %w", err)
+	}
+	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(uuidFromPG(key.TeamID), false); err != nil {
+		return sqlc.PrivateKey{}, fmt.Errorf("%w: unknown ssh_key_id", ErrValidation)
+	}
+	return key, nil
 }
 
 // Validate runs the SSH probes against a server and, on success, records the
@@ -604,59 +767,107 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		policy.AcceptUnpinned = len(credentials.PrivateKeyPEM) > 0 || auth.TrustHostKey
 	}
 
-	s.setStatus(ctx, id, StatusValidating)
+	// Every write below is conditional on the row still matching the endpoint
+	// and credentials validated here (JUS-5 fix round 1, defect 1): a
+	// concurrent PATCH that moved the node clears the pin and returns it to
+	// pending, and the stale validation must drop its writes instead of
+	// pinning the OLD host's key onto the NEW address or overwriting the new
+	// status. A heartbeat touches none of the guarded columns, so it never
+	// blocks these writes.
+	guard := endpointGuardOf(id, row)
+	if _, err := s.store.SetServerStatusGuarded(ctx, sqlc.SetServerStatusGuardedParams{
+		ID:                guard.ID,
+		Status:            StatusValidating,
+		Ip:                guard.Ip,
+		Port:              guard.Port,
+		SshUser:           guard.SshUser,
+		SshKeyID:          guard.SshKeyID,
+		EncryptedPassword: guard.EncryptedPassword,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: server changed while validating", ErrValidation)
+		}
+		s.logger.Warn("servers: set status", "server_id", id.String(), "status", StatusValidating, "error", err)
+	}
 
 	checks, info, fingerprint, err := ValidateNode(ctx, server.IP, server.Port, server.SSHUser, credentials, policy)
 	result := &ValidationResult{Checks: checks, Server: server}
+
+	// failValidation records a failed run without overwriting a concurrent
+	// PATCH: the guarded error write affects 0 rows when the endpoint moved
+	// on, leaving the new pending status alone.
+	failValidation := func(format string, args ...any) (*ValidationResult, error) {
+		if _, guardErr := s.store.SetServerStatusGuarded(ctx, sqlc.SetServerStatusGuardedParams{
+			ID:                guard.ID,
+			Status:            StatusError,
+			Ip:                guard.Ip,
+			Port:              guard.Port,
+			SshUser:           guard.SshUser,
+			SshKeyID:          guard.SshKeyID,
+			EncryptedPassword: guard.EncryptedPassword,
+		}); guardErr != nil && !errors.Is(guardErr, pgx.ErrNoRows) {
+			s.logger.Warn("servers: set status", "server_id", id.String(), "status", StatusError, "error", guardErr)
+		}
+		result.Server.Status = StatusError
+		return result, fmt.Errorf("%w: %s", ErrValidation, fmt.Sprintf(format, args...))
+	}
 
 	if err != nil {
 		if len(checks) == 0 {
 			result.Checks = failedChecks(err.Error())
 		}
-		s.setStatus(ctx, id, StatusError)
-		result.Server.Status = StatusError
-		return result, fmt.Errorf("%w: %v", ErrValidation, err)
+		return failValidation("%v", err)
 	}
 
 	for _, check := range checks {
 		if !check.OK {
-			s.setStatus(ctx, id, StatusError)
-			result.Server.Status = StatusError
-			return result, fmt.Errorf("%w: %s check failed: %s", ErrValidation, check.Name, check.Detail)
+			return failValidation("%s check failed: %s", check.Name, check.Detail)
 		}
 	}
 
 	// The handshake succeeded against a host that is now trusted: persist the
 	// TOFU pin so every later validation fails closed on a different key. A
-	// first pin only (fingerprint != policy.Pinned) and only when the row is
-	// still unpinned: a racing validation that pinned a different key must not
-	// be overwritten. A failed or losing pin write fails the validation — the
-	// node never reports ready without a durable pin.
+	// first pin only (fingerprint != policy.Pinned) and only when the row
+	// still matches the validated endpoint: a concurrent PATCH drops the pin
+	// attempt instead of pinning the old host's key onto the new address. A
+	// failed or losing pin write fails the validation — the node never
+	// reports ready without a durable pin.
 	if fingerprint != "" && fingerprint != policy.Pinned {
-		if err := s.pinHostKey(ctx, id, fingerprint); err != nil {
-			s.setStatus(ctx, id, StatusError)
-			result.Server.Status = StatusError
-			return result, fmt.Errorf("%w: %v", ErrValidation, err)
+		if err := s.pinHostKey(ctx, id, row, fingerprint); err != nil {
+			return failValidation("%v", err)
 		}
 	}
 
-	if _, err := s.store.UpdateServerAgentInfo(ctx, sqlc.UpdateServerAgentInfoParams{
-		ID:            pgUUID(id),
-		NodeID:        row.NodeID,
-		Os:            strPtr(info.OS),
-		DockerVersion: strPtr(info.DockerVersion),
-		Arch:          strPtr(info.Arch),
-		TotalMem:      ptrInt64(info.TotalMem),
-		TotalDisk:     ptrInt64(info.TotalDisk),
+	if _, err := s.store.UpdateServerAgentInfoGuarded(ctx, sqlc.UpdateServerAgentInfoGuardedParams{
+		ID:                guard.ID,
+		NodeID:            row.NodeID,
+		Os:                strPtr(info.OS),
+		DockerVersion:     strPtr(info.DockerVersion),
+		Arch:              strPtr(info.Arch),
+		TotalMem:          ptrInt64(info.TotalMem),
+		TotalDisk:         ptrInt64(info.TotalDisk),
+		Ip:                guard.Ip,
+		Port:              guard.Port,
+		SshUser:           guard.SshUser,
+		SshKeyID:          guard.SshKeyID,
+		EncryptedPassword: guard.EncryptedPassword,
 	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return failValidation("server changed during validation")
+		}
 		// The SSH run succeeded but the inventory write failed. Restore the
 		// heartbeat-derived status so the node does not stay stuck in
 		// validating; a restore failure is logged and the original error is
 		// still returned (fix round 2 U1).
-		if _, restoreErr := s.store.SetServerStatusAfterValidation(ctx, sqlc.SetServerStatusAfterValidationParams{
-			ID:       pgUUID(id),
-			LastSeen: pgtype.Timestamptz{Time: s.now().Add(-heartbeatOfflineAfter), Valid: true},
-		}); restoreErr != nil {
+		if _, restoreErr := s.store.SetServerStatusAfterValidationGuarded(ctx, sqlc.SetServerStatusAfterValidationGuardedParams{
+			ID:                guard.ID,
+			LastSeen:          pgtype.Timestamptz{Time: s.now().Add(-heartbeatOfflineAfter), Valid: true},
+			Ip:                guard.Ip,
+			Port:              guard.Port,
+			SshUser:           guard.SshUser,
+			SshKeyID:          guard.SshKeyID,
+			EncryptedPassword: guard.EncryptedPassword,
+		}); restoreErr != nil && !errors.Is(restoreErr, pgx.ErrNoRows) {
 			s.logger.Warn("servers: restore status after agent-info failure",
 				"server_id", id.String(), "error", restoreErr)
 		}
@@ -667,13 +878,23 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 	// its last heartbeat at the moment of the write (A4-15/B4-9). A previously
 	// ready node with a live agent stays ready; a node that heartbeated during
 	// the validation stays ready; an agentless node is pending; a node whose
-	// agent stopped is offline. Deriving it in one statement prevents a
-	// concurrent heartbeat from being clobbered (fix round 1 U2).
-	updated, err := s.store.SetServerStatusAfterValidation(ctx, sqlc.SetServerStatusAfterValidationParams{
-		ID:       pgUUID(id),
-		LastSeen: pgtype.Timestamptz{Time: s.now().Add(-heartbeatOfflineAfter), Valid: true},
+	// agent stopped is offline. Deriving it in one guarded statement prevents
+	// a concurrent heartbeat from being clobbered (fix round 1 U2) and a
+	// concurrent PATCH from being overwritten (defect 1): 0 rows means the
+	// endpoint moved on, and the stale success is dropped.
+	updated, err := s.store.SetServerStatusAfterValidationGuarded(ctx, sqlc.SetServerStatusAfterValidationGuardedParams{
+		ID:                guard.ID,
+		LastSeen:          pgtype.Timestamptz{Time: s.now().Add(-heartbeatOfflineAfter), Valid: true},
+		Ip:                guard.Ip,
+		Port:              guard.Port,
+		SshUser:           guard.SshUser,
+		SshKeyID:          guard.SshKeyID,
+		EncryptedPassword: guard.EncryptedPassword,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return failValidation("server changed during validation")
+		}
 		return result, fmt.Errorf("record server status: %w", err)
 	}
 
@@ -869,31 +1090,40 @@ func (s *ServerService) credentials(ctx context.Context, row sqlc.Server, auth V
 // loadKeyAuth loads and decrypts a private key into an SSHAuth. passphrase
 // decrypts a passphrase-protected PEM for this run and is never stored. explicit
 // distinguishes an operator-supplied key ID from the server's attached key so
-// the error text matches the cause.
+// the error text matches the cause. An operator-supplied key from another
+// team answers unknown-key, like Add and Update (defect 4a); an attached key
+// the caller's team can no longer see answers the same attached-key error as
+// a deleted key.
 func (s *ServerService) loadKeyAuth(ctx context.Context, id pgtype.UUID, passphrase string, explicit bool) (SSHAuth, error) {
+	if explicit {
+		key, err := s.keyForTeam(ctx, uuidFromPG(id))
+		if err != nil {
+			return SSHAuth{}, err
+		}
+		return s.decryptKeyAuth(key.EncryptedKey, passphrase)
+	}
+
 	key, err := s.store.GetPrivateKeyByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			if explicit {
-				return SSHAuth{}, fmt.Errorf("%w: unknown ssh_key_id", ErrValidation)
-			}
 			return SSHAuth{}, fmt.Errorf("%w: attached SSH key no longer exists", ErrNoCredentials)
 		}
 		return SSHAuth{}, fmt.Errorf("load ssh key: %w", err)
 	}
+	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(uuidFromPG(key.TeamID), false); err != nil {
+		return SSHAuth{}, fmt.Errorf("%w: attached SSH key no longer exists", ErrNoCredentials)
+	}
 
-	plain, err := DecryptKey(key.EncryptedKey, s.secret)
+	return s.decryptKeyAuth(key.EncryptedKey, passphrase)
+}
+
+// decryptKeyAuth decrypts stored key material into an SSHAuth for one run.
+func (s *ServerService) decryptKeyAuth(encrypted, passphrase string) (SSHAuth, error) {
+	plain, err := DecryptKey(encrypted, s.secret)
 	if err != nil {
 		return SSHAuth{}, fmt.Errorf("decrypt ssh key: %w", err)
 	}
 	return SSHAuth{PrivateKeyPEM: []byte(plain), Passphrase: passphrase}, nil
-}
-
-// setStatus updates a server's status, logging but not failing on error.
-func (s *ServerService) setStatus(ctx context.Context, id uuid.UUID, status string) {
-	if _, err := s.store.SetServerStatus(ctx, sqlc.SetServerStatusParams{ID: pgUUID(id), Status: status}); err != nil {
-		s.logger.Warn("servers: set status", "server_id", id.String(), "status", status, "error", err)
-	}
 }
 
 // serverFromRow maps a sqlc row to the domain type.

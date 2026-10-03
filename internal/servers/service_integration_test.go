@@ -323,7 +323,11 @@ func TestServicePinHostKeyIsCompareAndSet(t *testing.T) {
 	}
 
 	// ...then a stale validation that observed a different key must fail.
-	err = service.pinHostKey(ctx, created.ID, "SHA256:loser")
+	pinRow, err := st.GetServerByID(ctx, pgUUID(created.ID))
+	if err != nil {
+		t.Fatalf("GetServerByID: %v", err)
+	}
+	err = service.pinHostKey(ctx, created.ID, pinRow, "SHA256:loser")
 	if err == nil {
 		t.Fatal("pinHostKey overwrote an existing pin")
 	}
@@ -332,7 +336,7 @@ func TestServicePinHostKeyIsCompareAndSet(t *testing.T) {
 	}
 
 	// A concurrent validation that observed the same key is a benign no-op.
-	if err := service.pinHostKey(ctx, created.ID, "SHA256:winner"); err != nil {
+	if err := service.pinHostKey(ctx, created.ID, pinRow, "SHA256:winner"); err != nil {
 		t.Fatalf("pinHostKey with the same key: %v", err)
 	}
 	row, err := st.GetServerByID(ctx, pgUUID(created.ID))
@@ -387,7 +391,11 @@ func TestServicePinHostKeyRetryBranch(t *testing.T) {
 		}
 		t.Cleanup(func() { st.BeforePinServerHostKey = nil })
 
-		if err := service.pinHostKey(ctx, id, "SHA256:new"); err != nil {
+		pinRow, err := st.GetServerByID(ctx, pgUUID(id))
+		if err != nil {
+			t.Fatalf("GetServerByID: %v", err)
+		}
+		if err := service.pinHostKey(ctx, id, pinRow, "SHA256:new"); err != nil {
 			t.Fatalf("pinHostKey retry: %v", err)
 		}
 		row, err := st.GetServerByID(ctx, pgUUID(id))
@@ -406,7 +414,11 @@ func TestServicePinHostKeyRetryBranch(t *testing.T) {
 		st.BeforePinServerHostKey = func() error { return pgx.ErrNoRows }
 		t.Cleanup(func() { st.BeforePinServerHostKey = nil })
 
-		err := service.pinHostKey(ctx, id, "SHA256:new")
+		pinRow, err := st.GetServerByID(ctx, pgUUID(id))
+		if err != nil {
+			t.Fatalf("GetServerByID: %v", err)
+		}
+		err = service.pinHostKey(ctx, id, pinRow, "SHA256:new")
 		if err == nil {
 			t.Fatal("pinHostKey reported success although the pin never landed")
 		}

@@ -25,6 +25,13 @@ RETURNING *;
 -- name: GetServerByID :one
 SELECT * FROM servers WHERE id = $1;
 
+-- name: GetServerByIDForUpdate :one
+-- Locks the node row for a PATCH edit (Update): the service re-reads under
+-- this lock and computes the write from the locked row, so a concurrent
+-- heartbeat/RegisterNode/ResetHostKey/Validate write cannot be reverted by a
+-- stale read (JUS-5 fix round 1, defect 2).
+SELECT * FROM servers WHERE id = $1 FOR UPDATE;
+
 -- name: GetServerByNodeID :one
 SELECT * FROM servers WHERE node_id = $1;
 
@@ -138,6 +145,29 @@ SET status = CASE
 WHERE id = $1
 RETURNING *;
 
+-- name: SetServerStatusAfterValidationGuarded :one
+-- Restores the heartbeat-derived status like SetServerStatusAfterValidation,
+-- but only when the row still matches the endpoint and credentials the
+-- validation ran against (JUS-5 fix round 1, defect 1). A concurrent PATCH
+-- that moved the node to a new address (and back to pending) is left alone;
+-- 0 rows means the endpoint moved on and the caller drops the write. A
+-- heartbeat during the validation touches none of the guarded columns, so the
+-- live-agent derivation still lands.
+UPDATE servers
+SET status = CASE
+        WHEN last_seen IS NOT NULL AND last_seen >= $2 THEN 'ready'
+        WHEN last_seen IS NOT NULL THEN 'offline'
+        ELSE 'pending'
+    END,
+    updated_at = now()
+WHERE id = $1
+  AND ip = $3
+  AND port = $4
+  AND ssh_user = $5
+  AND ssh_key_id IS NOT DISTINCT FROM $6
+  AND encrypted_password IS NOT DISTINCT FROM $7
+RETURNING *;
+
 -- name: PinServerHostKey :one
 -- Pins the TOFU host key fingerprint of a node only when it is still unpinned.
 -- A stale first-use validation then cannot overwrite a pin written by a racing
@@ -147,6 +177,62 @@ UPDATE servers
 SET host_key_fingerprint = $2,
     updated_at = now()
 WHERE id = $1 AND host_key_fingerprint IS NULL
+RETURNING *;
+
+-- name: PinServerHostKeyGuarded :one
+-- Pins like PinServerHostKey, but only when the row still matches the endpoint
+-- and credentials the validation ran against (JUS-5 fix round 1, defect 1). A
+-- concurrent PATCH that changed the address or credentials clears the pin and
+-- returns the node to pending; the stale validation's pin then affects 0 rows
+-- and must be dropped instead of pinning the OLD host's key onto the NEW
+-- address. A heartbeat or inventory write touches none of the guarded columns,
+-- so it never blocks a legitimate pin.
+UPDATE servers
+SET host_key_fingerprint = $2,
+    updated_at = now()
+WHERE id = $1 AND host_key_fingerprint IS NULL
+  AND ip = $3
+  AND port = $4
+  AND ssh_user = $5
+  AND ssh_key_id IS NOT DISTINCT FROM $6
+  AND encrypted_password IS NOT DISTINCT FROM $7
+RETURNING *;
+
+-- name: SetServerStatusGuarded :one
+-- Sets the status only when the row still matches the endpoint and credentials
+-- the caller acted on (JUS-5 fix round 1, defect 1): a stale validation must
+-- not overwrite the pending status a concurrent PATCH set. 0 rows means the
+-- endpoint moved on; the caller drops the write.
+UPDATE servers
+SET status = $2,
+    updated_at = now()
+WHERE id = $1
+  AND ip = $3
+  AND port = $4
+  AND ssh_user = $5
+  AND ssh_key_id IS NOT DISTINCT FROM $6
+  AND encrypted_password IS NOT DISTINCT FROM $7
+RETURNING *;
+
+-- name: UpdateServerAgentInfoGuarded :one
+-- Records validation inventory only when the row still matches the endpoint
+-- the validation ran against (JUS-5 fix round 1, defect 1): a concurrent PATCH
+-- to a new address must not inherit the OLD host's inventory. Like the
+-- unguarded variant it never touches status or last_seen.
+UPDATE servers
+SET node_id = $2,
+    os = $3,
+    docker_version = $4,
+    arch = $5,
+    total_mem = $6,
+    total_disk = $7,
+    updated_at = now()
+WHERE id = $1
+  AND ip = $8
+  AND port = $9
+  AND ssh_user = $10
+  AND ssh_key_id IS NOT DISTINCT FROM $11
+  AND encrypted_password IS NOT DISTINCT FROM $12
 RETURNING *;
 
 -- name: ClearServerHostKey :one

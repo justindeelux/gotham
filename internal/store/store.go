@@ -434,6 +434,82 @@ func (s *Store) UpdateServer(ctx context.Context, params sqlc.UpdateServerParams
 	return s.queries.UpdateServer(ctx, params)
 }
 
+// UpdateServerGuarded locks the node row, re-reads it under the lock, and
+// applies apply to compute the PATCH write from the locked row, so a
+// concurrent heartbeat/RegisterNode/ResetHostKey/Validate write cannot be
+// reverted by a stale read (JUS-5 fix round 1, defect 2). apply runs inside
+// the transaction; the write commits only when apply succeeds.
+func (s *Store) UpdateServerGuarded(ctx context.Context, id pgtype.UUID, apply func(sqlc.Server) (sqlc.UpdateServerParams, error)) (sqlc.Server, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.Server{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	row, err := queries.GetServerByIDForUpdate(ctx, id)
+	if err != nil {
+		return sqlc.Server{}, err
+	}
+	params, err := apply(row)
+	if err != nil {
+		return sqlc.Server{}, err
+	}
+	updated, err := queries.UpdateServer(ctx, params)
+	if err != nil {
+		return sqlc.Server{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.Server{}, err
+	}
+	return updated, nil
+}
+
+// PinServerHostKeyGuarded pins a node's host key only when the row still
+// matches the validated endpoint and credentials, and returns the updated
+// row. It answers pgx.ErrNoRows when the endpoint moved on (or a pin landed
+// concurrently), so the caller drops the stale write instead of pinning the
+// old host's key onto the new address (JUS-5 fix round 1, defect 1). The
+// BeforePinServerHostKey test seam, when set, runs first and can fail the
+// write or mutate the row mid-validation.
+func (s *Store) PinServerHostKeyGuarded(ctx context.Context, params sqlc.PinServerHostKeyGuardedParams) (sqlc.Server, error) {
+	if s.BeforePinServerHostKey != nil {
+		if err := s.BeforePinServerHostKey(); err != nil {
+			return sqlc.Server{}, err
+		}
+	}
+	return s.queries.PinServerHostKeyGuarded(ctx, params)
+}
+
+// SetServerStatusGuarded sets the status only when the row still matches the
+// given endpoint and credentials (JUS-5 fix round 1, defect 1). It answers
+// pgx.ErrNoRows when the endpoint moved on; the caller drops the write.
+func (s *Store) SetServerStatusGuarded(ctx context.Context, params sqlc.SetServerStatusGuardedParams) (sqlc.Server, error) {
+	return s.queries.SetServerStatusGuarded(ctx, params)
+}
+
+// SetServerStatusAfterValidationGuarded derives the heartbeat status like
+// SetServerStatusAfterValidation, but only when the row still matches the
+// validated endpoint and credentials (JUS-5 fix round 1, defect 1). It answers
+// pgx.ErrNoRows when the endpoint moved on; the caller drops the write.
+func (s *Store) SetServerStatusAfterValidationGuarded(ctx context.Context, params sqlc.SetServerStatusAfterValidationGuardedParams) (sqlc.Server, error) {
+	return s.queries.SetServerStatusAfterValidationGuarded(ctx, params)
+}
+
+// UpdateServerAgentInfoGuarded records validation inventory like
+// UpdateServerAgentInfo, but only when the row still matches the validated
+// endpoint and credentials (JUS-5 fix round 1, defect 1). It answers
+// pgx.ErrNoRows when the endpoint moved on; the caller drops the write. Like
+// the unguarded variant it never touches status or last_seen.
+func (s *Store) UpdateServerAgentInfoGuarded(ctx context.Context, params sqlc.UpdateServerAgentInfoGuardedParams) (sqlc.Server, error) {
+	if s.BeforeUpdateServerAgentInfo != nil {
+		if err := s.BeforeUpdateServerAgentInfo(); err != nil {
+			return sqlc.Server{}, err
+		}
+	}
+	return s.queries.UpdateServerAgentInfoGuarded(ctx, params)
+}
+
 // CreatePrivateKey stores an encrypted SSH private key and returns its metadata.
 func (s *Store) CreatePrivateKey(ctx context.Context, params sqlc.CreatePrivateKeyParams) (sqlc.CreatePrivateKeyRow, error) {
 	return s.queries.CreatePrivateKey(ctx, params)

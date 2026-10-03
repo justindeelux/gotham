@@ -120,9 +120,11 @@ a:hover {
 /* Naive UI renders an NFormItem's default slot (input + `.field-hint`) inside
  * `.n-form-item-blank`, a flex row — so a hint placed after its field sat on
  * the same row as the input. Wrap the row and force every hint onto its own
- * line below the field, in every wizard and modal, without touching each one.
+ * line below the field, scoped to the server wizards/modals that own the
+ * `.field-hint` pattern so no other form in the app re-lays-out.
  * (The `#feedback`-slot hints need no change: they already render below.) */
-.n-form-item-blank {
+.wizard-modal .n-form-item-blank,
+.edit-server-modal .n-form-item-blank {
   flex-wrap: wrap;
 }
 
@@ -133,16 +135,19 @@ a:hover {
   color: var(--meta);
 }
 
-/* Modal dialogs (add/edit server wizards included) must scroll their content
+/* Modal dialogs (add/edit server wizards) must scroll their content
  * when taller than the viewport instead of overflowing it: cap the card at
- * the viewport height and let the content area take the scroll. */
-.n-modal.n-card {
+ * the viewport height and let the content area take the scroll. Scoped to the
+ * server modals so no other modal in the app changes size or behavior. */
+.wizard-modal.n-modal.n-card,
+.edit-server-modal.n-modal.n-card {
   max-height: calc(100vh - 64px);
   display: flex;
   flex-direction: column;
 }
 
-.n-modal.n-card > .n-card-content {
+.wizard-modal.n-modal.n-card > .n-card-content,
+.edit-server-modal.n-modal.n-card > .n-card-content {
   overflow-y: auto;
   min-height: 0;
 }

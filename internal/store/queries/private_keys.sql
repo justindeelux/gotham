@@ -1,6 +1,6 @@
 -- name: CreatePrivateKey :one
-INSERT INTO private_keys (name, encrypted_key)
-VALUES ($1, $2)
+INSERT INTO private_keys (name, encrypted_key, team_id)
+VALUES ($1, $2, $3)
 RETURNING id, name, created_at;
 
 -- name: GetPrivateKeyByID :one

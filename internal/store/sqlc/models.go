@@ -258,6 +258,7 @@ type PrivateKey struct {
 	Name         string             `json:"name"`
 	EncryptedKey string             `json:"encrypted_key"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	TeamID       pgtype.UUID        `json:"team_id"`
 }
 
 type Provider struct {

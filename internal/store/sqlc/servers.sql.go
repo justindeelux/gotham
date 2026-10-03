@@ -206,6 +206,45 @@ func (q *Queries) GetServerByID(ctx context.Context, id pgtype.UUID) (Server, er
 	return i, err
 }
 
+const getServerByIDForUpdate = `-- name: GetServerByIDForUpdate :one
+SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password FROM servers WHERE id = $1 FOR UPDATE
+`
+
+// Locks the node row for a PATCH edit (Update): the service re-reads under
+// this lock and computes the write from the locked row, so a concurrent
+// heartbeat/RegisterNode/ResetHostKey/Validate write cannot be reverted by a
+// stale read (JUS-5 fix round 1, defect 2).
+func (q *Queries) GetServerByIDForUpdate(ctx context.Context, id pgtype.UUID) (Server, error) {
+	row := q.db.QueryRow(ctx, getServerByIDForUpdate, id)
+	var i Server
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Ip,
+		&i.Port,
+		&i.SshUser,
+		&i.SshKeyID,
+		&i.Status,
+		&i.NodeID,
+		&i.Os,
+		&i.DockerVersion,
+		&i.Arch,
+		&i.TotalMem,
+		&i.TotalDisk,
+		&i.CpuUsage,
+		&i.MemUsage,
+		&i.DiskUsage,
+		&i.ContainerCount,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TeamID,
+		&i.HostKeyFingerprint,
+		&i.EncryptedPassword,
+	)
+	return i, err
+}
+
 const getServerByNodeID = `-- name: GetServerByNodeID :one
 SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password FROM servers WHERE node_id = $1
 `
@@ -404,6 +443,75 @@ func (q *Queries) PinServerHostKey(ctx context.Context, arg PinServerHostKeyPara
 	return i, err
 }
 
+const pinServerHostKeyGuarded = `-- name: PinServerHostKeyGuarded :one
+UPDATE servers
+SET host_key_fingerprint = $2,
+    updated_at = now()
+WHERE id = $1 AND host_key_fingerprint IS NULL
+  AND ip = $3
+  AND port = $4
+  AND ssh_user = $5
+  AND ssh_key_id IS NOT DISTINCT FROM $6
+  AND encrypted_password IS NOT DISTINCT FROM $7
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+`
+
+type PinServerHostKeyGuardedParams struct {
+	ID                 pgtype.UUID `json:"id"`
+	HostKeyFingerprint *string     `json:"host_key_fingerprint"`
+	Ip                 string      `json:"ip"`
+	Port               int32       `json:"port"`
+	SshUser            string      `json:"ssh_user"`
+	SshKeyID           pgtype.UUID `json:"ssh_key_id"`
+	EncryptedPassword  *string     `json:"encrypted_password"`
+}
+
+// Pins like PinServerHostKey, but only when the row still matches the endpoint
+// and credentials the validation ran against (JUS-5 fix round 1, defect 1). A
+// concurrent PATCH that changed the address or credentials clears the pin and
+// returns the node to pending; the stale validation's pin then affects 0 rows
+// and must be dropped instead of pinning the OLD host's key onto the NEW
+// address. A heartbeat or inventory write touches none of the guarded columns,
+// so it never blocks a legitimate pin.
+func (q *Queries) PinServerHostKeyGuarded(ctx context.Context, arg PinServerHostKeyGuardedParams) (Server, error) {
+	row := q.db.QueryRow(ctx, pinServerHostKeyGuarded,
+		arg.ID,
+		arg.HostKeyFingerprint,
+		arg.Ip,
+		arg.Port,
+		arg.SshUser,
+		arg.SshKeyID,
+		arg.EncryptedPassword,
+	)
+	var i Server
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Ip,
+		&i.Port,
+		&i.SshUser,
+		&i.SshKeyID,
+		&i.Status,
+		&i.NodeID,
+		&i.Os,
+		&i.DockerVersion,
+		&i.Arch,
+		&i.TotalMem,
+		&i.TotalDisk,
+		&i.CpuUsage,
+		&i.MemUsage,
+		&i.DiskUsage,
+		&i.ContainerCount,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TeamID,
+		&i.HostKeyFingerprint,
+		&i.EncryptedPassword,
+	)
+	return i, err
+}
+
 const setServerStatus = `-- name: SetServerStatus :one
 UPDATE servers
 SET status = $2,
@@ -474,6 +582,145 @@ type SetServerStatusAfterValidationParams struct {
 // (A4-15/B4-9, fix round 1 U2).
 func (q *Queries) SetServerStatusAfterValidation(ctx context.Context, arg SetServerStatusAfterValidationParams) (Server, error) {
 	row := q.db.QueryRow(ctx, setServerStatusAfterValidation, arg.ID, arg.LastSeen)
+	var i Server
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Ip,
+		&i.Port,
+		&i.SshUser,
+		&i.SshKeyID,
+		&i.Status,
+		&i.NodeID,
+		&i.Os,
+		&i.DockerVersion,
+		&i.Arch,
+		&i.TotalMem,
+		&i.TotalDisk,
+		&i.CpuUsage,
+		&i.MemUsage,
+		&i.DiskUsage,
+		&i.ContainerCount,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TeamID,
+		&i.HostKeyFingerprint,
+		&i.EncryptedPassword,
+	)
+	return i, err
+}
+
+const setServerStatusAfterValidationGuarded = `-- name: SetServerStatusAfterValidationGuarded :one
+UPDATE servers
+SET status = CASE
+        WHEN last_seen IS NOT NULL AND last_seen >= $2 THEN 'ready'
+        WHEN last_seen IS NOT NULL THEN 'offline'
+        ELSE 'pending'
+    END,
+    updated_at = now()
+WHERE id = $1
+  AND ip = $3
+  AND port = $4
+  AND ssh_user = $5
+  AND ssh_key_id IS NOT DISTINCT FROM $6
+  AND encrypted_password IS NOT DISTINCT FROM $7
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+`
+
+type SetServerStatusAfterValidationGuardedParams struct {
+	ID                pgtype.UUID        `json:"id"`
+	LastSeen          pgtype.Timestamptz `json:"last_seen"`
+	Ip                string             `json:"ip"`
+	Port              int32              `json:"port"`
+	SshUser           string             `json:"ssh_user"`
+	SshKeyID          pgtype.UUID        `json:"ssh_key_id"`
+	EncryptedPassword *string            `json:"encrypted_password"`
+}
+
+// Restores the heartbeat-derived status like SetServerStatusAfterValidation,
+// but only when the row still matches the endpoint and credentials the
+// validation ran against (JUS-5 fix round 1, defect 1). A concurrent PATCH
+// that moved the node to a new address (and back to pending) is left alone;
+// 0 rows means the endpoint moved on and the caller drops the write. A
+// heartbeat during the validation touches none of the guarded columns, so the
+// live-agent derivation still lands.
+func (q *Queries) SetServerStatusAfterValidationGuarded(ctx context.Context, arg SetServerStatusAfterValidationGuardedParams) (Server, error) {
+	row := q.db.QueryRow(ctx, setServerStatusAfterValidationGuarded,
+		arg.ID,
+		arg.LastSeen,
+		arg.Ip,
+		arg.Port,
+		arg.SshUser,
+		arg.SshKeyID,
+		arg.EncryptedPassword,
+	)
+	var i Server
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Ip,
+		&i.Port,
+		&i.SshUser,
+		&i.SshKeyID,
+		&i.Status,
+		&i.NodeID,
+		&i.Os,
+		&i.DockerVersion,
+		&i.Arch,
+		&i.TotalMem,
+		&i.TotalDisk,
+		&i.CpuUsage,
+		&i.MemUsage,
+		&i.DiskUsage,
+		&i.ContainerCount,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TeamID,
+		&i.HostKeyFingerprint,
+		&i.EncryptedPassword,
+	)
+	return i, err
+}
+
+const setServerStatusGuarded = `-- name: SetServerStatusGuarded :one
+UPDATE servers
+SET status = $2,
+    updated_at = now()
+WHERE id = $1
+  AND ip = $3
+  AND port = $4
+  AND ssh_user = $5
+  AND ssh_key_id IS NOT DISTINCT FROM $6
+  AND encrypted_password IS NOT DISTINCT FROM $7
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+`
+
+type SetServerStatusGuardedParams struct {
+	ID                pgtype.UUID `json:"id"`
+	Status            string      `json:"status"`
+	Ip                string      `json:"ip"`
+	Port              int32       `json:"port"`
+	SshUser           string      `json:"ssh_user"`
+	SshKeyID          pgtype.UUID `json:"ssh_key_id"`
+	EncryptedPassword *string     `json:"encrypted_password"`
+}
+
+// Sets the status only when the row still matches the endpoint and credentials
+// the caller acted on (JUS-5 fix round 1, defect 1): a stale validation must
+// not overwrite the pending status a concurrent PATCH set. 0 rows means the
+// endpoint moved on; the caller drops the write.
+func (q *Queries) SetServerStatusGuarded(ctx context.Context, arg SetServerStatusGuardedParams) (Server, error) {
+	row := q.db.QueryRow(ctx, setServerStatusGuarded,
+		arg.ID,
+		arg.Status,
+		arg.Ip,
+		arg.Port,
+		arg.SshUser,
+		arg.SshKeyID,
+		arg.EncryptedPassword,
+	)
 	var i Server
 	err := row.Scan(
 		&i.ID,
@@ -612,6 +859,87 @@ func (q *Queries) UpdateServerAgentInfo(ctx context.Context, arg UpdateServerAge
 		arg.Arch,
 		arg.TotalMem,
 		arg.TotalDisk,
+	)
+	var i Server
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Ip,
+		&i.Port,
+		&i.SshUser,
+		&i.SshKeyID,
+		&i.Status,
+		&i.NodeID,
+		&i.Os,
+		&i.DockerVersion,
+		&i.Arch,
+		&i.TotalMem,
+		&i.TotalDisk,
+		&i.CpuUsage,
+		&i.MemUsage,
+		&i.DiskUsage,
+		&i.ContainerCount,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TeamID,
+		&i.HostKeyFingerprint,
+		&i.EncryptedPassword,
+	)
+	return i, err
+}
+
+const updateServerAgentInfoGuarded = `-- name: UpdateServerAgentInfoGuarded :one
+UPDATE servers
+SET node_id = $2,
+    os = $3,
+    docker_version = $4,
+    arch = $5,
+    total_mem = $6,
+    total_disk = $7,
+    updated_at = now()
+WHERE id = $1
+  AND ip = $8
+  AND port = $9
+  AND ssh_user = $10
+  AND ssh_key_id IS NOT DISTINCT FROM $11
+  AND encrypted_password IS NOT DISTINCT FROM $12
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+`
+
+type UpdateServerAgentInfoGuardedParams struct {
+	ID                pgtype.UUID `json:"id"`
+	NodeID            *string     `json:"node_id"`
+	Os                *string     `json:"os"`
+	DockerVersion     *string     `json:"docker_version"`
+	Arch              *string     `json:"arch"`
+	TotalMem          *int64      `json:"total_mem"`
+	TotalDisk         *int64      `json:"total_disk"`
+	Ip                string      `json:"ip"`
+	Port              int32       `json:"port"`
+	SshUser           string      `json:"ssh_user"`
+	SshKeyID          pgtype.UUID `json:"ssh_key_id"`
+	EncryptedPassword *string     `json:"encrypted_password"`
+}
+
+// Records validation inventory only when the row still matches the endpoint
+// the validation ran against (JUS-5 fix round 1, defect 1): a concurrent PATCH
+// to a new address must not inherit the OLD host's inventory. Like the
+// unguarded variant it never touches status or last_seen.
+func (q *Queries) UpdateServerAgentInfoGuarded(ctx context.Context, arg UpdateServerAgentInfoGuardedParams) (Server, error) {
+	row := q.db.QueryRow(ctx, updateServerAgentInfoGuarded,
+		arg.ID,
+		arg.NodeID,
+		arg.Os,
+		arg.DockerVersion,
+		arg.Arch,
+		arg.TotalMem,
+		arg.TotalDisk,
+		arg.Ip,
+		arg.Port,
+		arg.SshUser,
+		arg.SshKeyID,
+		arg.EncryptedPassword,
 	)
 	var i Server
 	err := row.Scan(

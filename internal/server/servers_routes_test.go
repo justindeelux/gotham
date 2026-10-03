@@ -118,6 +118,10 @@ func (f *fakeServerService) Update(_ context.Context, id uuid.UUID, params serve
 	if !ok {
 		return nil, servers.ErrNotFound
 	}
+	if params.SSHKeyID != nil && params.Password != nil &&
+		*params.SSHKeyID != uuid.Nil && *params.Password != "" {
+		return nil, fmt.Errorf("%w: provide either ssh_key_id or password, not both", servers.ErrValidation)
+	}
 	addressChanged := false
 	if params.Name != nil {
 		if *params.Name == "" {
@@ -650,6 +654,7 @@ func TestUpdateServerRouteValidation(t *testing.T) {
 		{"bad port", "/api/v1/servers/" + id.String(), `{"port":70000}`, http.StatusBadRequest},
 		{"empty user", "/api/v1/servers/" + id.String(), `{"ssh_user":""}`, http.StatusBadRequest},
 		{"bad key id", "/api/v1/servers/" + id.String(), `{"ssh_key_id":"nope"}`, http.StatusBadRequest},
+		{"key and password", "/api/v1/servers/" + id.String(), `{"ssh_key_id":"` + uuid.New().String() + `","password":"s3cret"}`, http.StatusBadRequest},
 		{"bad id", "/api/v1/servers/not-a-uuid", `{"name":"x"}`, http.StatusBadRequest},
 		{"unknown server", "/api/v1/servers/" + uuid.New().String(), `{"name":"x"}`, http.StatusNotFound},
 	}

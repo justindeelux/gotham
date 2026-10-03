@@ -12,14 +12,15 @@ import (
 )
 
 const createPrivateKey = `-- name: CreatePrivateKey :one
-INSERT INTO private_keys (name, encrypted_key)
-VALUES ($1, $2)
+INSERT INTO private_keys (name, encrypted_key, team_id)
+VALUES ($1, $2, $3)
 RETURNING id, name, created_at
 `
 
 type CreatePrivateKeyParams struct {
-	Name         string `json:"name"`
-	EncryptedKey string `json:"encrypted_key"`
+	Name         string      `json:"name"`
+	EncryptedKey string      `json:"encrypted_key"`
+	TeamID       pgtype.UUID `json:"team_id"`
 }
 
 type CreatePrivateKeyRow struct {
@@ -29,7 +30,7 @@ type CreatePrivateKeyRow struct {
 }
 
 func (q *Queries) CreatePrivateKey(ctx context.Context, arg CreatePrivateKeyParams) (CreatePrivateKeyRow, error) {
-	row := q.db.QueryRow(ctx, createPrivateKey, arg.Name, arg.EncryptedKey)
+	row := q.db.QueryRow(ctx, createPrivateKey, arg.Name, arg.EncryptedKey, arg.TeamID)
 	var i CreatePrivateKeyRow
 	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
 	return i, err
@@ -45,7 +46,7 @@ func (q *Queries) DeletePrivateKey(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getPrivateKeyByID = `-- name: GetPrivateKeyByID :one
-SELECT id, name, encrypted_key, created_at FROM private_keys WHERE id = $1
+SELECT id, name, encrypted_key, created_at, team_id FROM private_keys WHERE id = $1
 `
 
 func (q *Queries) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (PrivateKey, error) {
@@ -56,6 +57,7 @@ func (q *Queries) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (Privat
 		&i.Name,
 		&i.EncryptedKey,
 		&i.CreatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }

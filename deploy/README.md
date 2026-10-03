@@ -146,7 +146,11 @@ Re-running `install-agent.sh` is a safe reinstall: values the invocation does no
 set (for example the control plane address and node id) are kept from the
 existing `agent.env`, operator-added keys are preserved, and a running agent is
 restarted onto the newly installed binary. Pass a value again (flag or
-environment) to override it.
+environment) to override it. Upgrading from an older installer: the quote
+rejection below also applies to values preserved from an existing `agent.env`,
+so a node id containing a quote written by an older installer now blocks the
+upgrade with a clear error naming the key — remove the quote from `agent.env`
+and re-run.
 
 Every value written to `agent.env` is validated before the installer changes
 anything (service user, directories, binary, CA): control characters and
@@ -166,12 +170,16 @@ refused) while the channel must match channel names. `install.sh` runs the
 same agent checks — but only when the localhost agent step will actually
 run (the distro/arch/systemd/remote-`agent.env` skip decisions are computed
 before the first mutation, so a value the skipped step would never use
-cannot abort the control-plane install) — plus the DSN/Redis
-control-character gate, which always runs before the first mutation, so a
-bad value fails the run with nothing created; a failing agent step itself
-still keeps the control plane. `GOTHAM_DATABASE_DSN` and
+cannot abort the control-plane install) — plus the DSN/Redis gate (control
+characters, a trailing backslash, quotes), which always runs before the first
+mutation, so a bad value fails the run with nothing created; a failing agent
+step itself still keeps the control plane. `GOTHAM_DATABASE_DSN` and
 `GOTHAM_REDIS_ADDR` get the same control-character check before they go into
-`gotham.env`.
+`gotham.env`. Upgrading from an older installer: the DSN/Redis gate also
+applies to values preserved from an existing `gotham.env`, so a DSN with
+quotes or a trailing backslash written by an older installer now blocks the
+upgrade with a clear error naming the key — fix the value in `gotham.env`
+(keyword DSNs with quoted values must use the URL form) and re-run.
 
 `install-agent.sh --full` (or `GOTHAM_AGENT_FULL=1`) also installs Docker
 Engine and the compose plugin from the official Docker apt repository before

@@ -261,7 +261,13 @@ _env_check_value() {
             # is an overflow error in Go, so the installer refuses it instead
             # of writing a value the agent would silently default. Zero or
             # negative values still fall through to the agent default, as
-            # today.
+            # today — deliberately including the two negative magnitudes Go
+            # itself accepts (-9223372036854775808ns and
+            # -2562047h47m16s854775808ns, both exactly min-int64): the sign
+            # is stripped before the magnitude check, so they are refused
+            # here although they parse. That difference is unobservable (the
+            # agent defaults any non-positive duration anyway) and keeping
+            # the check sign-agnostic avoids a special case.
             _ck_dur="$(printf '%s' "${_ck_value}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
             case "${_ck_dur}" in
                 [+-]*) _ck_dur="${_ck_dur#?}" ;;
@@ -273,13 +279,67 @@ _env_check_value() {
                 return 1
             fi
             if [ "${_ck_dur}" != "0" ] && ! printf '%s' "${_ck_dur}" | awk '
-                BEGIN { ns["ns"]=1; ns["us"]=1000; ns["ms"]=1000000; ns["s"]=1000000000; ns["m"]=60000000000; ns["h"]=3600000000000 }
-                { s=$0; total=0;
+                # Exact integer overflow check against the int64 nanosecond
+                # range: awk numbers are doubles, which round 2^63 to itself,
+                # so 9223372036854775808ns compared numerically equal and a
+                # mutant off-by-one total passed. Every term is therefore kept
+                # as a digit string (the mul/add helpers below never create
+                # a float) and the total is compared digit by digit.
+                function strmul(s, n,   out, carry, i, d) {
+                    out = ""; carry = 0
+                    for (i = length(s); i >= 1; i--) {
+                        d = (substr(s, i, 1) + 0) * n + carry
+                        out = (d % 10) out
+                        carry = int(d / 10)
+                    }
+                    while (carry > 0) { out = (carry % 10) out; carry = int(carry / 10) }
+                    sub(/^0+/, "", out)
+                    return out == "" ? "0" : out
+                }
+                function zeros(n,   out) { out = ""; while (n > 0) { out = out "0"; n-- }; return out }
+                function stradd(a, b,   out, carry, i, da, db, d) {
+                    out = ""; carry = 0; i = 0
+                    while (i < length(a) || i < length(b) || carry > 0) {
+                        da = i < length(a) ? substr(a, length(a) - i, 1) + 0 : 0
+                        db = i < length(b) ? substr(b, length(b) - i, 1) + 0 : 0
+                        d = da + db + carry
+                        out = (d % 10) out
+                        carry = int(d / 10); i++
+                    }
+                    sub(/^0+/, "", out)
+                    return out == "" ? "0" : out
+                }
+                function strgt(a, b) {
+                    sub(/^0+/, "", a); sub(/^0+/, "", b)
+                    if (a == "") a = "0"; if (b == "") b = "0"
+                    if (length(a) != length(b)) return length(a) > length(b)
+                    # Same length: compare lexicographically. The "x" prefix
+                    # forces a string comparison: two numeric strings would
+                    # otherwise compare as (rounded) numbers.
+                    return ("x" a) > ("x" b)
+                }
+                BEGIN { m_of["ns"]=1; e_of["ns"]=0; m_of["us"]=1; e_of["us"]=3; m_of["ms"]=1; e_of["ms"]=6; m_of["s"]=1; e_of["s"]=9; m_of["m"]=6; e_of["m"]=10; m_of["h"]=36; e_of["h"]=11 }
+                { s=$0; total="0";
                   while (s != "") {
-                    if (match(s, /^[0-9]+(\.[0-9]*)?/) || match(s, /^\.[0-9]+/)) { num=substr(s, 1, RLENGTH); s=substr(s, RLENGTH+1) } else { exit 2 }
+                    if (match(s, /^([0-9]+(\.[0-9]*)?|\.[0-9]+)/)) { mag=substr(s, 1, RLENGTH); s=substr(s, RLENGTH+1) } else { exit 2 }
                     if (match(s, /^(ns|us|ms|s|m|h)/)) { unit=substr(s, 1, RLENGTH); s=substr(s, RLENGTH+1) } else { exit 2 }
-                    total += num * ns[unit] }
-                  if (total > 9223372036854775807) { exit 1 } }'; then
+                    if (match(mag, /\./)) { I=substr(mag, 1, RSTART-1); F=substr(mag, RSTART+1) } else { I=mag; F="" }
+                    if (I == "") I="0"
+                    m=m_of[unit]; e=e_of[unit]
+                    base=strmul(I, m) zeros(e)
+                    if (F == "") { fpart="0" }
+                    else {
+                        k=length(F); fval=strmul(F, m)
+                        if (e >= k) { fpart=fval zeros(e-k) }
+                        else {
+                            # A sub-nanosecond fraction: Go truncates toward
+                            # zero, so drop the excess digits the same way.
+                            keep=length(fval)-(k-e)
+                            fpart=(keep > 0) ? substr(fval, 1, keep) : "0"
+                        }
+                    }
+                    total=stradd(total, stradd(base, fpart)) }
+                  if (strgt(total, "9223372036854775807")) { exit 1 } }'; then
                 echo "install-agent.sh: ${_ck_key} overflows Go time.Duration (got '${_ck_value}')" >&2
                 return 1
             fi

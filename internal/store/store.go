@@ -239,6 +239,16 @@ func (s *Store) CountUsers(ctx context.Context) (int64, error) {
 	return s.queries.CountUsers(ctx)
 }
 
+// UpdateUserAvatar replaces the account's stored OAuth avatar URL and returns
+// the updated row. The caller validates the URL against the shared allowlist
+// first (auth.SanitizeAvatarURL); a nil avatar clears the stored value.
+func (s *Store) UpdateUserAvatar(ctx context.Context, id pgtype.UUID, avatar *string) (sqlc.User, error) {
+	return s.queries.UpdateUserAvatar(ctx, sqlc.UpdateUserAvatarParams{
+		ID:     id,
+		Avatar: avatar,
+	})
+}
+
 // UpdateUserPasswordHash replaces the argon2id hash of the account with the
 // given email. email must already be normalized (lowercase), as resolved
 // through GetUserByEmail.

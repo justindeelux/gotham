@@ -34,6 +34,16 @@ SELECT $1, $2
 WHERE NOT EXISTS (SELECT 1 FROM users)
 RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version;
 
+-- name: UpdateUserAvatar :one
+-- UpdateUserAvatar replaces the account's stored OAuth avatar URL. The caller
+-- (OAuth login) validates the URL against the shared allowlist first; a nil
+-- avatar clears the stored value. It returns the updated row so the login can
+-- mint its session from the fresh read.
+UPDATE users
+SET avatar = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version;
+
 -- name: BumpCredentialVersion :exec
 -- BumpCredentialVersion advances the account's credential version. It runs
 -- inside the password-reset transaction: every session minted before the bump

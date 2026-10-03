@@ -108,7 +108,14 @@ Re-running the installer keeps `/etc/gotham/gotham.env`: the managed keys
 command line wins, otherwise the existing value is kept — and any operator-added
 keys (`AUTO_UPDATE`, `PLATFORM_ADMINS`, ...) are left untouched. A managed DSN
 is never replaced by the local default, and local PostgreSQL/Redis are only
-provisioned when the resolved DSN is the built-in local default.
+provisioned when the resolved DSN is the built-in local default. Upgrading from
+an older installer: the quote rejection also applies to values preserved from
+an existing `agent.env`, so a node id containing a quote written by an older
+installer now blocks the upgrade with a clear error naming the key — remove
+the quote from `agent.env` and re-run. The same holds for `gotham.env`: a
+preserved DSN or Redis value with quotes or a trailing backslash now blocks
+the upgrade naming the key — fix the value in `gotham.env` (keyword DSNs
+with quoted values must use the URL form) and re-run.
 
 Useful overrides:
 
@@ -228,7 +235,8 @@ before the installer changes anything, so a bad value fails with nothing
 created. `install.sh` runs the same agent checks, but only when the
 localhost agent step will actually run: a skipped step (unsupported
 platform, remote `agent.env`, `--no-local-agent`) is never blocked by agent
-values, while the DSN/Redis gate always runs.
+values, while the DSN/Redis gate (control characters, a trailing backslash,
+quotes) always runs.
 
 `GOTHAM_AGENT_NODE_ID` must not name the control plane itself. The CP refuses to
 register its own listener identities (its bind host, the loopback names, its

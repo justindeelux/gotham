@@ -22,6 +22,8 @@ export interface Server {
   port: number;
   ssh_user: string;
   ssh_key_id: string | null;
+  /** True when a password secret is stored. The secret itself never appears. */
+  has_password: boolean;
   status: ServerStatus;
   node_id: string | null;
   os: string | null;
@@ -59,6 +61,26 @@ export interface CreateServerInput {
   port?: number;
   ssh_user: string;
   ssh_key_id?: string | null;
+  /** Node password for password auth. Write-only: never returned by the API. */
+  password?: string;
+}
+
+/** Body accepted by PATCH /servers/{id}. Missing fields stay unchanged. */
+export interface UpdateServerInput {
+  name?: string;
+  ip?: string;
+  port?: number;
+  ssh_user?: string;
+  /** New key ID, or "" to detach the key. Missing leaves it unchanged. */
+  ssh_key_id?: string;
+  /** New secret (replaces any key), "" to forget it. Missing = unchanged. */
+  password?: string;
+}
+
+/** Extra credential options for POST /servers/{id}/validate. */
+export interface ValidateOptions {
+  password?: string;
+  trustHostKey?: boolean;
 }
 
 /** Body accepted by POST /private-keys. */
@@ -134,10 +156,21 @@ export async function deleteServer(id: string): Promise<void> {
 export async function validateServer(
   id: string,
   passphrase?: string,
+  options: ValidateOptions = {},
 ): Promise<ValidateOutcome> {
+  const body: Record<string, unknown> = {};
+  if (passphrase) {
+    body.passphrase = passphrase;
+  }
+  if (options.password) {
+    body.password = options.password;
+  }
+  if (options.trustHostKey) {
+    body.trust_host_key = true;
+  }
   const response: AxiosResponse<ValidateResponse> = await http.post<ValidateResponse>(
     `/servers/${id}/validate`,
-    passphrase ? { passphrase } : {},
+    body,
     {
       timeout: validateTimeoutMs,
       validateStatus: (status) => status === 200 || status === 422,
@@ -150,6 +183,12 @@ export async function validateServer(
     server: response.data.server ?? null,
     message: response.data.message ?? "",
   };
+}
+
+/** updateServer applies a PATCH edit to one server. */
+export async function updateServer(id: string, input: UpdateServerInput): Promise<Server> {
+  const response = await http.patch<ServerEnvelope>(`/servers/${id}`, input);
+  return response.data.server;
 }
 
 /** createPrivateKey stores an encrypted SSH private key, returning its metadata. */

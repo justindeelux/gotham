@@ -30,6 +30,7 @@ import {
 } from "../api/metrics";
 import type { ChartSeries } from "../components/MetricsChart.vue";
 import MetricsChart from "../components/MetricsChart.vue";
+import EditServerModal from "../components/EditServerModal.vue";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useMediaQuery } from "../composables/useMediaQuery";
 import { useServersStore } from "../stores/servers";
@@ -47,6 +48,7 @@ const loading = ref(false);
 const error = ref<string | null>(null);
 const validating = ref(false);
 const deleting = ref(false);
+const editOpen = ref(false);
 const activeTab = ref("overview");
 
 /** One metrics range: the API step and the window it is shown over. */
@@ -381,6 +383,17 @@ function fallback(value: string | null): string {
   return value ?? "—";
 }
 
+/** authLabel names the stored credential without revealing any secret. */
+function authLabel(server: Server): string {
+  if (server.ssh_key_id) {
+    return server.ssh_key_id;
+  }
+  if (server.has_password) {
+    return "password stored";
+  }
+  return "—";
+}
+
 /** usageText renders a nullable usage reading as display text.
  *
  * Heartbeat usage arrives as a fraction 0..1 (see toPercent), so the raw
@@ -438,6 +451,12 @@ async function handleValidate(): Promise<void> {
   } finally {
     validating.value = false;
   }
+}
+
+/** handleUpdated applies an edit-modal save to the header. */
+function handleUpdated(updated: Server): void {
+  server.value = updated;
+  message.success(`Saved ${updated.name}`);
 }
 
 /** handleDelete removes the server and returns to the list. */
@@ -532,6 +551,9 @@ onBeforeUnmount(() => {
             <NText depth="3">{{ summaryLine }}</NText>
           </div>
           <NSpace class="page-head__actions" align="center" :size="8">
+            <NButton @click="editOpen = true">
+              Edit
+            </NButton>
             <NButton :loading="validating" @click="handleValidate">
               Validate
             </NButton>
@@ -574,8 +596,8 @@ onBeforeUnmount(() => {
                   <NDescriptionsItem label="Docker">
                     {{ fallback(server.docker_version) }}
                   </NDescriptionsItem>
-                  <NDescriptionsItem label="SSH key">
-                    <span class="mono">{{ fallback(server.ssh_key_id) }}</span>
+                  <NDescriptionsItem label="Credential">
+                    <span class="mono">{{ authLabel(server) }}</span>
                   </NDescriptionsItem>
                   <NDescriptionsItem label="CPU usage">
                     {{ usageText(server.cpu_usage) }}
@@ -790,8 +812,8 @@ onBeforeUnmount(() => {
                 <NDescriptionsItem label="SSH user">
                   <span class="mono">{{ server.ssh_user }}</span>
                 </NDescriptionsItem>
-                <NDescriptionsItem label="SSH key">
-                  <span class="mono">{{ fallback(server.ssh_key_id) }}</span>
+                <NDescriptionsItem label="Credential">
+                  <span class="mono">{{ authLabel(server) }}</span>
                 </NDescriptionsItem>
                 <NDescriptionsItem label="Registered">
                   {{ relativeTime(server.created_at) }}
@@ -805,6 +827,12 @@ onBeforeUnmount(() => {
         </NTabs>
       </template>
     </NSpin>
+
+    <EditServerModal
+      v-model:show="editOpen"
+      :server="server"
+      @updated="handleUpdated"
+    />
   </NSpace>
 </template>
 

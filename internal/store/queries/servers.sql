@@ -1,6 +1,25 @@
 -- name: CreateServer :one
-INSERT INTO servers (name, ip, port, ssh_user, ssh_key_id, team_id)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO servers (name, ip, port, ssh_user, ssh_key_id, team_id, encrypted_password)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING *;
+
+-- name: UpdateServer :one
+-- Applies a PATCH edit computed by the domain service: every column is written
+-- as given, so the service owns the merge (field-by-field COALESCE would hide
+-- the difference between "unchanged" and "cleared to NULL"). host key and
+-- status arrive already derived: an address/identity/auth change clears the pin
+-- and returns the node to pending for revalidation.
+UPDATE servers
+SET name = $2,
+    ip = $3,
+    port = $4,
+    ssh_user = $5,
+    ssh_key_id = $6,
+    encrypted_password = $7,
+    host_key_fingerprint = $8,
+    status = $9,
+    updated_at = now()
+WHERE id = $1
 RETURNING *;
 
 -- name: GetServerByID :one

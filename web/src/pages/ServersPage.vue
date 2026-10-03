@@ -18,6 +18,7 @@ import { useRoute, useRouter } from "vue-router";
 import { describeServerError } from "../api/servers";
 import type { Server } from "../api/servers";
 import AddServerWizard from "../components/AddServerWizard.vue";
+import EditServerModal from "../components/EditServerModal.vue";
 import GothamIcon from "../components/GothamIcon.vue";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
@@ -29,6 +30,8 @@ const serversStore = useServersStore();
 const message = useMessage();
 
 const wizardOpen = ref(false);
+const editOpen = ref(false);
+const editTarget = ref<Server | null>(null);
 const validatingId = ref<string | null>(null);
 const checkingAll = ref(false);
 
@@ -211,9 +214,15 @@ function metricView(value: number | null, base: string): MetricView {
   };
 }
 
-/** keyLabel identifies the SSH key by its short id; the API exposes no name. */
+/** keyLabel identifies the stored credential without revealing any secret. */
 function keyLabel(server: Server): string {
-  return server.ssh_key_id ? server.ssh_key_id.slice(0, 8) : "no key attached";
+  if (server.ssh_key_id) {
+    return server.ssh_key_id.slice(0, 8);
+  }
+  if (server.has_password) {
+    return "password stored";
+  }
+  return "no credentials";
 }
 
 /** containerLabel keeps an unknown count (no heartbeat yet) distinct from zero. */
@@ -293,6 +302,17 @@ function openNode(id: string): Promise<void> {
 /** openContainers navigates to the server-containers route for one server. */
 function openContainers(id: string): Promise<void> {
   return router.push({ name: "server-containers", params: { id } }).then(() => undefined);
+}
+
+/** openEdit opens the edit modal prefilled from one server. */
+function openEdit(server: Server): void {
+  editTarget.value = server;
+  editOpen.value = true;
+}
+
+/** handleUpdated refreshes the edited row in place. */
+function handleUpdated(updated: Server): void {
+  message.success(`Saved ${updated.name}`);
 }
 
 /** handleDelete removes one server after the popconfirm is accepted. */
@@ -503,6 +523,9 @@ watch(
             <NButton size="small" style="margin-left: auto" @click="openNode(server.id)">
               Open node
             </NButton>
+            <NButton size="small" @click="openEdit(server)">
+              Edit
+            </NButton>
             <NButton
               size="small"
               :loading="validatingId === server.id"
@@ -606,6 +629,11 @@ watch(
     </NCard>
 
     <AddServerWizard v-model:show="wizardOpen" />
+    <EditServerModal
+      v-model:show="editOpen"
+      :server="editTarget"
+      @updated="handleUpdated"
+    />
   </div>
 </template>
 

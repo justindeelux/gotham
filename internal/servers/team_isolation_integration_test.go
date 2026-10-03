@@ -60,15 +60,15 @@ func TestServerTeamIsolation(t *testing.T) {
 	aliceTeam := teams.WithScope(ctx, teams.Scope{UserID: uuid.UUID(alice.ID.Bytes), TeamID: uuid.UUID(shared.ID.Bytes), Role: teams.RoleOwner})
 	bobPersonal := teams.WithScope(ctx, teams.Scope{UserID: uuid.UUID(bob.ID.Bytes), TeamID: teams.PersonalTeamID(uuid.UUID(bob.ID.Bytes)), Role: teams.RoleOwner})
 
-	sharedNode, err := service.Add(aliceTeam, uuid.UUID(alice.ID.Bytes), "shared-node", "127.0.0.1", 22, "root", uuid.Nil)
+	sharedNode, err := service.Add(aliceTeam, uuid.UUID(alice.ID.Bytes), "shared-node", "127.0.0.1", 22, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("add shared node: %v", err)
 	}
-	bobNode, err := service.Add(bobPersonal, uuid.UUID(bob.ID.Bytes), "bob-node", "127.0.0.1", 22, "root", uuid.Nil)
+	bobNode, err := service.Add(bobPersonal, uuid.UUID(bob.ID.Bytes), "bob-node", "127.0.0.1", 22, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("add bob node: %v", err)
 	}
-	legacyNode, err := service.Add(ctx, uuid.UUID(alice.ID.Bytes), "legacy-node", "127.0.0.1", 22, "root", uuid.Nil)
+	legacyNode, err := service.Add(ctx, uuid.UUID(alice.ID.Bytes), "legacy-node", "127.0.0.1", 22, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("add legacy node: %v", err)
 	}

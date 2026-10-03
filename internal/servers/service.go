@@ -50,6 +50,9 @@ type Server struct {
 	Port     int
 	SSHUser  string
 	SSHKeyID *uuid.UUID
+	// HasPassword reports whether a password secret is stored for the node.
+	// The secret itself is never exposed outside the domain service.
+	HasPassword bool
 	// TeamID is the owning team. The zero UUID marks a legacy node that
 	// predates teams: it stays visible to every authenticated caller, which
 	// is the documented Phase 8 residual for the shared node registry.
@@ -171,10 +174,13 @@ func NewService(cfg Config) *ServerService {
 func (s *ServerService) Version() string { return s.version }
 
 // Add registers a new server. sshKeyID may be the zero UUID when no key is
-// attached. userID is recorded as the creator, and the node is stamped with the
+// attached, and password may be empty when no password is used. Exactly one
+// credential may be given: a key id or a password, not both. The password is
+// encrypted with the same mechanism as private keys and is never returned.
+// userID is recorded as the creator, and the node is stamped with the
 // caller's active team; a request without a team scope leaves team_id NULL,
 // which is the legacy shared-node behavior.
-func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip string, port int, sshUser string, sshKeyID uuid.UUID) (*Server, error) {
+func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip string, port int, sshUser string, sshKeyID uuid.UUID, password string) (*Server, error) {
 	name = strings.TrimSpace(name)
 	ip = strings.TrimSpace(ip)
 	sshUser = strings.TrimSpace(sshUser)
@@ -197,6 +203,9 @@ func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip stri
 
 	keyID := pgtype.UUID{}
 	if sshKeyID != uuid.Nil {
+		if password != "" {
+			return nil, fmt.Errorf("%w: provide either ssh_key_id or password, not both", ErrValidation)
+		}
 		if s.store == nil {
 			return nil, errors.New("servers: store is not configured")
 		}
@@ -209,13 +218,25 @@ func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip stri
 		keyID = pgtype.UUID{Bytes: sshKeyID, Valid: true}
 	}
 
+	var encryptedPassword *string
+	if password != "" {
+		// The secret is encrypted before it touches the store and never
+		// logged; validation errors below never echo it.
+		secret, err := EncryptKey(password, s.secret)
+		if err != nil {
+			return nil, err
+		}
+		encryptedPassword = &secret
+	}
+
 	row, err := s.store.CreateServer(ctx, sqlc.CreateServerParams{
-		Name:     name,
-		Ip:       ip,
-		Port:     int32(port),
-		SshUser:  sshUser,
-		SshKeyID: keyID,
-		TeamID:   pgUUID(teams.ScopeFor(ctx, userID).TeamID),
+		Name:              name,
+		Ip:                ip,
+		Port:              int32(port),
+		SshUser:           sshUser,
+		SshKeyID:          keyID,
+		TeamID:            pgUUID(teams.ScopeFor(ctx, userID).TeamID),
+		EncryptedPassword: encryptedPassword,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create server: %w", err)
@@ -291,6 +312,144 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 		return fmt.Errorf("delete server: %w", err)
 	}
 	return nil
+}
+
+// UpdateParams edits a server. A nil field leaves the column unchanged; a
+// non-nil field writes it. SSHKeyID points to the new key, or to the zero
+// UUID to detach the key without attaching another. Password points to the
+// new secret (which replaces any attached key), or to "" to forget the stored
+// secret. The secret itself is never exposed: the API layer reads Password
+// from the request body only.
+type UpdateParams struct {
+	Name     *string
+	IP       *string
+	Port     *int
+	SSHUser  *string
+	SSHKeyID *uuid.UUID
+	Password *string
+}
+
+// Update applies a PATCH edit. Changing the address (ip), port, ssh user or
+// either credential clears the pinned host key and returns the node to
+// pending: the pin belongs to the old endpoint/identity, so the node must be
+// revalidated before it is trusted again. Revalidation itself stays an
+// explicit POST /v1/servers/{id}/validate call — a metadata edit must not
+// block on a 15s SSH dial. A node outside the active team answers ErrNotFound
+// so node IDs cannot be probed.
+func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateParams) (*Server, error) {
+	row, err := s.store.GetServerByID(ctx, pgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get server: %w", err)
+	}
+	server := serverFromRow(row)
+	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, true); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return nil, err
+		}
+		return nil, ErrNotFound
+	}
+
+	name, ip, sshUser := server.Name, server.IP, server.SSHUser
+	port := server.Port
+	keyID := row.SshKeyID
+	encryptedPassword := row.EncryptedPassword
+	addressChanged := false
+
+	if params.Name != nil {
+		name = strings.TrimSpace(*params.Name)
+		if name == "" {
+			return nil, fmt.Errorf("%w: name is required", ErrValidation)
+		}
+	}
+	if params.IP != nil {
+		ip = strings.TrimSpace(*params.IP)
+		if ip == "" {
+			return nil, fmt.Errorf("%w: ip is required", ErrValidation)
+		}
+		if ip != server.IP {
+			addressChanged = true
+		}
+	}
+	if params.Port != nil {
+		if *params.Port < 1 || *params.Port > 65535 {
+			return nil, fmt.Errorf("%w: port must be between 1 and 65535", ErrValidation)
+		}
+		if *params.Port != server.Port {
+			addressChanged = true
+		}
+		port = *params.Port
+	}
+	if params.SSHUser != nil {
+		sshUser = strings.TrimSpace(*params.SSHUser)
+		if sshUser == "" {
+			return nil, fmt.Errorf("%w: ssh_user is required", ErrValidation)
+		}
+		if sshUser != server.SSHUser {
+			addressChanged = true
+		}
+	}
+	if params.SSHKeyID != nil {
+		if *params.SSHKeyID == uuid.Nil {
+			keyID = pgtype.UUID{}
+		} else {
+			if _, err := s.store.GetPrivateKeyByID(ctx, pgUUID(*params.SSHKeyID)); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil, fmt.Errorf("%w: unknown ssh_key_id", ErrValidation)
+				}
+				return nil, fmt.Errorf("lookup ssh key: %w", err)
+			}
+			keyID = pgUUID(*params.SSHKeyID)
+		}
+		// Single auth mode: attaching a key forgets any stored password.
+		encryptedPassword = nil
+		addressChanged = true
+	}
+	if params.Password != nil {
+		if *params.Password == "" {
+			encryptedPassword = nil
+		} else {
+			secret, err := EncryptKey(*params.Password, s.secret)
+			if err != nil {
+				return nil, err
+			}
+			encryptedPassword = &secret
+		}
+		// Single auth mode: setting (or clearing) the password detaches the key.
+		keyID = pgtype.UUID{}
+		addressChanged = true
+	}
+
+	var fingerprint *string
+	status := row.Status
+	if addressChanged {
+		// The pin and the derived status belong to the old endpoint: forget
+		// the pin and go back through validation.
+		fingerprint = nil
+		status = StatusPending
+	} else {
+		fingerprint = row.HostKeyFingerprint
+	}
+
+	updated, err := s.store.UpdateServer(ctx, sqlc.UpdateServerParams{
+		ID:                 pgUUID(id),
+		Name:               name,
+		Ip:                 ip,
+		Port:               int32(port),
+		SshUser:            sshUser,
+		SshKeyID:           keyID,
+		EncryptedPassword:  encryptedPassword,
+		HostKeyFingerprint: fingerprint,
+		Status:             status,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update server: %w", err)
+	}
+
+	s.logger.Debug("servers: updated", "server_id", id.String())
+	return serverFromRow(updated), nil
 }
 
 // ResetHostKey forgets a node's pinned SSH host key, so the next validation
@@ -693,10 +852,17 @@ func (s *ServerService) credentials(ctx context.Context, row sqlc.Server, auth V
 	case auth.KeyID != uuid.Nil:
 		return s.loadKeyAuth(ctx, pgUUID(auth.KeyID), auth.Passphrase, true)
 	default:
-		if !row.SshKeyID.Valid {
-			return SSHAuth{}, fmt.Errorf("%w: server has no SSH key", ErrNoCredentials)
+		if row.SshKeyID.Valid {
+			return s.loadKeyAuth(ctx, row.SshKeyID, auth.Passphrase, false)
 		}
-		return s.loadKeyAuth(ctx, row.SshKeyID, auth.Passphrase, false)
+		if row.EncryptedPassword != nil && *row.EncryptedPassword != "" {
+			plain, err := DecryptKey(*row.EncryptedPassword, s.secret)
+			if err != nil {
+				return SSHAuth{}, fmt.Errorf("decrypt server password: %w", err)
+			}
+			return SSHAuth{Password: plain}, nil
+		}
+		return SSHAuth{}, fmt.Errorf("%w: server has no SSH key", ErrNoCredentials)
 	}
 }
 
@@ -758,6 +924,9 @@ func serverFromRow(row sqlc.Server) *Server {
 	if row.SshKeyID.Valid {
 		keyID := uuidFromPG(row.SshKeyID)
 		server.SSHKeyID = &keyID
+	}
+	if row.EncryptedPassword != nil && *row.EncryptedPassword != "" {
+		server.HasPassword = true
 	}
 	return server
 }

@@ -38,7 +38,7 @@ func TestServiceLifecycleWithValidation(t *testing.T) {
 	defer stop()
 	host, port := target(t, addr)
 
-	created, err := service.Add(ctx, uuid.New(), "edge-1", host, port, "root", key.ID)
+	created, err := service.Add(ctx, uuid.New(), "edge-1", host, port, "root", key.ID, "")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -139,19 +139,19 @@ func TestServiceAddValidation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if _, err := service.Add(ctx, uuid.New(), "", "10.0.0.1", 22, "root", uuid.Nil); !errors.Is(err, ErrValidation) {
+	if _, err := service.Add(ctx, uuid.New(), "", "10.0.0.1", 22, "root", uuid.Nil, ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("empty name = %v, want ErrValidation", err)
 	}
-	if _, err := service.Add(ctx, uuid.New(), "n", "", 22, "root", uuid.Nil); !errors.Is(err, ErrValidation) {
+	if _, err := service.Add(ctx, uuid.New(), "n", "", 22, "root", uuid.Nil, ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("empty ip = %v, want ErrValidation", err)
 	}
-	if _, err := service.Add(ctx, uuid.New(), "n", "10.0.0.1", 22, "", uuid.Nil); !errors.Is(err, ErrValidation) {
+	if _, err := service.Add(ctx, uuid.New(), "n", "10.0.0.1", 22, "", uuid.Nil, ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("empty user = %v, want ErrValidation", err)
 	}
-	if _, err := service.Add(ctx, uuid.New(), "n", "10.0.0.1", 70000, "root", uuid.Nil); !errors.Is(err, ErrValidation) {
+	if _, err := service.Add(ctx, uuid.New(), "n", "10.0.0.1", 70000, "root", uuid.Nil, ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("bad port = %v, want ErrValidation", err)
 	}
-	if _, err := service.Add(ctx, uuid.New(), "n", "10.0.0.1", 22, "root", uuid.New()); !errors.Is(err, ErrValidation) {
+	if _, err := service.Add(ctx, uuid.New(), "n", "10.0.0.1", 22, "root", uuid.New(), ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("unknown ssh_key_id = %v, want ErrValidation", err)
 	}
 }
@@ -169,7 +169,7 @@ func TestServicePasswordAuthRequiresHostKeyTrust(t *testing.T) {
 	defer stop()
 	host, port := target(t, addr)
 
-	created, err := service.Add(ctx, uuid.New(), "pw-node", host, port, "root", uuid.Nil)
+	created, err := service.Add(ctx, uuid.New(), "pw-node", host, port, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -202,6 +202,97 @@ func TestServicePasswordAuthRequiresHostKeyTrust(t *testing.T) {
 	}
 }
 
+// TestServiceStoredPasswordAndUpdate proves a password given at creation is
+// encrypted at rest, used for later SSH validation without being passed again,
+// never exposed via Get, and that Update resets the host-key pin and status
+// only when the address, user, or credential changes.
+func TestServiceStoredPasswordAndUpdate(t *testing.T) {
+	service, st := newTestService(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	addr, fingerprint, stop := startSSHProbeServer(t, "hunter2", false)
+	defer stop()
+	host, port := target(t, addr)
+
+	created, err := service.Add(ctx, uuid.New(), "stored-pw-node", host, port, "root", uuid.Nil, "hunter2")
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if err := st.DeleteServer(cleanupCtx, pgUUID(created.ID)); err != nil {
+			t.Logf("cleanup delete server: %v", err)
+		}
+	})
+	if !created.HasPassword {
+		t.Errorf("HasPassword = false, want true")
+	}
+
+	// The stored secret authenticates a validation run with an empty auth.
+	result, err := service.Validate(ctx, created.ID, ValidateAuth{TrustHostKey: true})
+	if err != nil {
+		t.Fatalf("Validate with stored password: %v", err)
+	}
+	if result.Server == nil || result.Server.HostKeyFingerprint == nil || *result.Server.HostKeyFingerprint != fingerprint {
+		t.Errorf("pin = %+v, want %q", result.Server, fingerprint)
+	}
+
+	// A name-only edit keeps the pin and the password flag.
+	name := "stored-pw-renamed"
+	updated, err := service.Update(ctx, created.ID, UpdateParams{Name: &name})
+	if err != nil {
+		t.Fatalf("Update name: %v", err)
+	}
+	if updated.Name != name {
+		t.Errorf("Name = %q, want %q", updated.Name, name)
+	}
+	if updated.HostKeyFingerprint == nil || *updated.HostKeyFingerprint != fingerprint {
+		t.Errorf("pin = %v, want kept on name-only edit", updated.HostKeyFingerprint)
+	}
+	if !updated.HasPassword {
+		t.Errorf("HasPassword = false after name-only edit, want true")
+	}
+
+	// An address change resets the pin and returns the node to pending.
+	newIP := "10.99.0.9"
+	updated, err = service.Update(ctx, created.ID, UpdateParams{IP: &newIP})
+	if err != nil {
+		t.Fatalf("Update ip: %v", err)
+	}
+	if updated.HostKeyFingerprint != nil {
+		t.Errorf("pin = %q, want nil after address change", *updated.HostKeyFingerprint)
+	}
+	if updated.Status != StatusPending {
+		t.Errorf("Status = %q, want pending after address change", updated.Status)
+	}
+
+	// Switching to a key forgets the password.
+	key, err := service.AddPrivateKey(ctx, "update-key", string(testPrivateKeyPEM(t)))
+	if err != nil {
+		t.Fatalf("AddPrivateKey: %v", err)
+	}
+	updated, err = service.Update(ctx, created.ID, UpdateParams{SSHKeyID: &key.ID})
+	if err != nil {
+		t.Fatalf("Update key: %v", err)
+	}
+	if updated.SSHKeyID == nil || *updated.SSHKeyID != key.ID {
+		t.Errorf("SSHKeyID = %v, want %v", updated.SSHKeyID, key.ID)
+	}
+	if updated.HasPassword {
+		t.Errorf("HasPassword = true after key switch, want false")
+	}
+
+	// Validation errors never echo the stored secret.
+	if _, err := service.Add(ctx, uuid.New(), "both-node", host, port, "root", key.ID, "hunter2"); err == nil {
+		t.Errorf("Add with key and password succeeded, want ErrValidation")
+	} else if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("Add error echoes the password: %v", err)
+	}
+}
+
 // TestServicePinHostKeyIsCompareAndSet proves the first-use pin cannot
 // overwrite an existing pin: a racing validation that observed a different key
 // must fail closed, not clobber the stored pin.
@@ -211,7 +302,7 @@ func TestServicePinHostKeyIsCompareAndSet(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	created, err := service.Add(ctx, uuid.New(), "cas-node", "127.0.0.1", 22, "root", uuid.Nil)
+	created, err := service.Add(ctx, uuid.New(), "cas-node", "127.0.0.1", 22, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -264,7 +355,7 @@ func TestServicePinHostKeyRetryBranch(t *testing.T) {
 
 	newNode := func(t *testing.T, name string) uuid.UUID {
 		t.Helper()
-		created, err := service.Add(ctx, uuid.New(), name, "127.0.0.1", 22, "root", uuid.Nil)
+		created, err := service.Add(ctx, uuid.New(), name, "127.0.0.1", 22, "root", uuid.Nil, "")
 		if err != nil {
 			t.Fatalf("Add: %v", err)
 		}
@@ -358,7 +449,7 @@ func TestServiceValidateFailsClosedWhenPinWriteFails(t *testing.T) {
 		}
 	})
 
-	created, err := service.Add(ctx, uuid.New(), "pinfail-node", host, port, "root", key.ID)
+	created, err := service.Add(ctx, uuid.New(), "pinfail-node", host, port, "root", key.ID, "")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}

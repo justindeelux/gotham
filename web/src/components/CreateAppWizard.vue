@@ -791,7 +791,7 @@ function resetWizard(): void {
   min-width: 0;
 }
 
-.wizard-modal :deep(.n-card__content) {
+.wizard-modal :deep(.n-card-content) {
   max-height: 72vh;
   overflow-y: auto;
 }

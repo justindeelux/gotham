@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,21 +22,26 @@ import (
 type fakeServerService struct {
 	mu             sync.Mutex
 	items          map[uuid.UUID]servers.Server
+	hasPassword    map[uuid.UUID]bool
 	failAdd        error
 	validateResult *servers.ValidationResult
 	validateErr    error
 	lastAuth       servers.ValidateAuth
+	lastPassword   string
 	metrics        []servers.MetricPoint
 	metricsErr     error
 }
 
 func newFakeServerService() *fakeServerService {
-	return &fakeServerService{items: make(map[uuid.UUID]servers.Server)}
+	return &fakeServerService{items: make(map[uuid.UUID]servers.Server), hasPassword: make(map[uuid.UUID]bool)}
 }
 
-func (f *fakeServerService) Add(_ context.Context, _ uuid.UUID, name, ip string, port int, sshUser string, sshKeyID uuid.UUID) (*servers.Server, error) {
+func (f *fakeServerService) Add(_ context.Context, _ uuid.UUID, name, ip string, port int, sshUser string, sshKeyID uuid.UUID, password string) (*servers.Server, error) {
 	if f.failAdd != nil {
 		return nil, f.failAdd
+	}
+	if sshKeyID != uuid.Nil && password != "" {
+		return nil, fmt.Errorf("%w: provide either ssh_key_id or password, not both", servers.ErrValidation)
 	}
 	server := &servers.Server{
 		ID:        uuid.New(),
@@ -51,9 +57,18 @@ func (f *fakeServerService) Add(_ context.Context, _ uuid.UUID, name, ip string,
 		keyID := sshKeyID
 		server.SSHKeyID = &keyID
 	}
+	if password != "" {
+		server.HasPassword = true
+		f.mu.Lock()
+		f.lastPassword = password
+		f.mu.Unlock()
+	}
 
 	f.mu.Lock()
 	f.items[server.ID] = *server
+	if password != "" {
+		f.hasPassword[server.ID] = true
+	}
 	f.mu.Unlock()
 	return server, nil
 }
@@ -88,7 +103,82 @@ func (f *fakeServerService) Delete(_ context.Context, id uuid.UUID) error {
 		return servers.ErrNotFound
 	}
 	delete(f.items, id)
+	delete(f.hasPassword, id)
 	return nil
+}
+
+// Update applies a PATCH edit with the same merge semantics as the domain
+// service: nil leaves a field unchanged, a key ID of uuid.Nil detaches the
+// key, and a password sets (or, when empty, forgets) the secret.
+func (f *fakeServerService) Update(_ context.Context, id uuid.UUID, params servers.UpdateParams) (*servers.Server, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	item, ok := f.items[id]
+	if !ok {
+		return nil, servers.ErrNotFound
+	}
+	addressChanged := false
+	if params.Name != nil {
+		if *params.Name == "" {
+			return nil, fmt.Errorf("%w: name is required", servers.ErrValidation)
+		}
+		item.Name = *params.Name
+	}
+	if params.IP != nil {
+		if *params.IP == "" {
+			return nil, fmt.Errorf("%w: ip is required", servers.ErrValidation)
+		}
+		if *params.IP != item.IP {
+			addressChanged = true
+		}
+		item.IP = *params.IP
+	}
+	if params.Port != nil {
+		if *params.Port < 1 || *params.Port > 65535 {
+			return nil, fmt.Errorf("%w: port must be between 1 and 65535", servers.ErrValidation)
+		}
+		if *params.Port != item.Port {
+			addressChanged = true
+		}
+		item.Port = *params.Port
+	}
+	if params.SSHUser != nil {
+		if *params.SSHUser == "" {
+			return nil, fmt.Errorf("%w: ssh_user is required", servers.ErrValidation)
+		}
+		if *params.SSHUser != item.SSHUser {
+			addressChanged = true
+		}
+		item.SSHUser = *params.SSHUser
+	}
+	if params.SSHKeyID != nil {
+		if *params.SSHKeyID == uuid.Nil {
+			item.SSHKeyID = nil
+		} else {
+			keyID := *params.SSHKeyID
+			item.SSHKeyID = &keyID
+		}
+		delete(f.hasPassword, id)
+		addressChanged = true
+	}
+	if params.Password != nil {
+		if *params.Password == "" {
+			delete(f.hasPassword, id)
+		} else {
+			f.lastPassword = *params.Password
+			f.hasPassword[id] = true
+		}
+		item.SSHKeyID = nil
+		addressChanged = true
+	}
+	if addressChanged {
+		item.HostKeyFingerprint = nil
+		item.Status = servers.StatusPending
+	}
+	item.HasPassword = f.hasPassword[id]
+	f.items[id] = item
+	return &item, nil
 }
 
 func (f *fakeServerService) Validate(_ context.Context, id uuid.UUID, auth servers.ValidateAuth) (*servers.ValidationResult, error) {
@@ -409,7 +499,7 @@ func TestCreatePrivateKeyRoute(t *testing.T) {
 func seedServer(t *testing.T, fake *fakeServerService, name string) uuid.UUID {
 	t.Helper()
 
-	server, err := fake.Add(context.Background(), testUserID, name, "10.0.0.9", 22, "root", uuid.Nil)
+	server, err := fake.Add(context.Background(), testUserID, name, "10.0.0.9", 22, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("seed server: %v", err)
 	}
@@ -431,6 +521,152 @@ func (f *fakeServerService) setTeam(id uuid.UUID, teamID uuid.UUID) {
 
 // compile-time assertion that the fake satisfies the interface.
 var _ ServerService = (*fakeServerService)(nil)
+
+func TestCreateServerRouteWithPassword(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers",
+		`{"name":"pw-1","ip":"10.0.0.5","port":22,"ssh_user":"root","password":"s3cret-node-pw"}`, authHeader)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var body serverEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.Server.HasPassword {
+		t.Errorf("has_password = false, want true")
+	}
+	if body.Server.SSHKeyID != nil {
+		t.Errorf("ssh_key_id = %v, want null for password auth", *body.Server.SSHKeyID)
+	}
+
+	// The secret must never appear in the response body.
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	if strings.Contains(rec.Body.String(), "s3cret-node-pw") {
+		t.Errorf("response body echoes the password: %s", rec.Body.String())
+	}
+
+	// Key and password together are rejected.
+	rec = doRequest(t, s, http.MethodPost, "/api/v1/servers",
+		`{"name":"pw-2","ip":"10.0.0.6","ssh_user":"root","ssh_key_id":"`+uuid.New().String()+`","password":"s3cret"}`, authHeader)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("key+password status = %d, want 400", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "s3cret") {
+		t.Errorf("validation error echoes the password: %s", rec.Body.String())
+	}
+}
+
+func TestUpdateServerRoute(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "edit-1")
+
+	// Pin a host key first: an address change must reset it.
+	fingerprint := "SHA256:abc"
+	fake.mu.Lock()
+	item := fake.items[id]
+	item.HostKeyFingerprint = &fingerprint
+	item.Status = servers.StatusReady
+	fake.items[id] = item
+	fake.mu.Unlock()
+
+	rec := doRequest(t, s, http.MethodPatch, "/api/v1/servers/"+id.String(),
+		`{"name":"edit-1-renamed","ip":"10.0.0.99"}`, authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var body serverEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Server.Name != "edit-1-renamed" || body.Server.IP != "10.0.0.99" {
+		t.Errorf("server = %+v, want renamed address", body.Server)
+	}
+	if body.Server.HostKeyFingerprint != nil {
+		t.Errorf("host_key_fingerprint = %q, want null after address change", *body.Server.HostKeyFingerprint)
+	}
+	if body.Server.Status != servers.StatusPending {
+		t.Errorf("status = %q, want pending after address change", body.Server.Status)
+	}
+
+	// A name-only edit keeps the pin.
+	fake.mu.Lock()
+	item = fake.items[id]
+	item.HostKeyFingerprint = &fingerprint
+	item.Status = servers.StatusReady
+	fake.items[id] = item
+	fake.mu.Unlock()
+
+	rec = doRequest(t, s, http.MethodPatch, "/api/v1/servers/"+id.String(),
+		`{"name":"edit-1-again"}`, authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Server.HostKeyFingerprint == nil || *body.Server.HostKeyFingerprint != fingerprint {
+		t.Errorf("host_key_fingerprint = %+v, want pin kept on name-only edit", body.Server.HostKeyFingerprint)
+	}
+
+	// Setting a password switches the auth mode and resets the pin.
+	rec = doRequest(t, s, http.MethodPatch, "/api/v1/servers/"+id.String(),
+		`{"password":"new-node-pw"}`, authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.Server.HasPassword {
+		t.Errorf("has_password = false, want true after password edit")
+	}
+	if strings.Contains(rec.Body.String(), "new-node-pw") {
+		t.Errorf("response body echoes the password: %s", rec.Body.String())
+	}
+}
+
+func TestUpdateServerRouteValidation(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "edit-2")
+
+	tests := []struct {
+		name   string
+		target string
+		body   string
+		want   int
+	}{
+		{"empty name", "/api/v1/servers/" + id.String(), `{"name":""}`, http.StatusBadRequest},
+		{"empty ip", "/api/v1/servers/" + id.String(), `{"ip":""}`, http.StatusBadRequest},
+		{"bad port", "/api/v1/servers/" + id.String(), `{"port":70000}`, http.StatusBadRequest},
+		{"empty user", "/api/v1/servers/" + id.String(), `{"ssh_user":""}`, http.StatusBadRequest},
+		{"bad key id", "/api/v1/servers/" + id.String(), `{"ssh_key_id":"nope"}`, http.StatusBadRequest},
+		{"bad id", "/api/v1/servers/not-a-uuid", `{"name":"x"}`, http.StatusBadRequest},
+		{"unknown server", "/api/v1/servers/" + uuid.New().String(), `{"name":"x"}`, http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := doRequest(t, s, http.MethodPatch, tt.target, tt.body, authHeader)
+			if rec.Code != tt.want {
+				t.Errorf("status = %d, want %d (body %s)", rec.Code, tt.want, rec.Body.String())
+			}
+		})
+	}
+
+	// The route requires authentication.
+	if rec := doRequest(t, s, http.MethodPatch, "/api/v1/servers/"+id.String(), `{"name":"x"}`, ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated status = %d, want 401", rec.Code)
+	}
+}
 
 func TestServerMetricsRoute(t *testing.T) {
 	fake := newFakeServerService()

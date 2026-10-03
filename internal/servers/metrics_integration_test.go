@@ -193,7 +193,7 @@ func TestMetricsTeamIsolation(t *testing.T) {
 		TeamID: uuid.UUID(shared.ID.Bytes),
 		Role:   teams.RoleOwner,
 	})
-	node, err := service.Add(aliceTeam, uuid.UUID(alice.ID.Bytes), "metrics-team-node", "127.0.0.1", 22, "root", uuid.Nil)
+	node, err := service.Add(aliceTeam, uuid.UUID(alice.ID.Bytes), "metrics-team-node", "127.0.0.1", 22, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("add node: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestHeartbeatClampsFutureSentAt(t *testing.T) {
 // cleanup (its samples cascade).
 func addMetricsNode(t *testing.T, ctx context.Context, service *ServerService, st *store.Store, name string) *Server {
 	t.Helper()
-	server, err := service.Add(ctx, uuid.New(), name, "127.0.0.1", 22, "root", uuid.Nil)
+	server, err := service.Add(ctx, uuid.New(), name, "127.0.0.1", 22, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("add node: %v", err)
 	}

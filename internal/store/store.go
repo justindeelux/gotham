@@ -428,6 +428,12 @@ func (s *Store) ClearServerHostKey(ctx context.Context, id pgtype.UUID) (sqlc.Se
 	return s.queries.ClearServerHostKey(ctx, id)
 }
 
+// UpdateServer applies a PATCH edit computed by the domain service and
+// returns the updated row.
+func (s *Store) UpdateServer(ctx context.Context, params sqlc.UpdateServerParams) (sqlc.Server, error) {
+	return s.queries.UpdateServer(ctx, params)
+}
+
 // CreatePrivateKey stores an encrypted SSH private key and returns its metadata.
 func (s *Store) CreatePrivateKey(ctx context.Context, params sqlc.CreatePrivateKeyParams) (sqlc.CreatePrivateKeyRow, error) {
 	return s.queries.CreatePrivateKey(ctx, params)

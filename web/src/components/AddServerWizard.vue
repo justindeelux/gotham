@@ -2,6 +2,7 @@
 import {
   NAlert,
   NButton,
+  NCheckbox,
   NForm,
   NFormItem,
   NInput,
@@ -36,11 +37,14 @@ interface ConnectionForm {
   ip: string;
   port: number | null;
   sshUser: string;
+  authMode: "key" | "password";
   keyMode: "new" | "existing";
   keyName: string;
   privateKey: string;
   passphrase: string;
   keyId: string;
+  password: string;
+  trustHostKey: boolean;
 }
 
 /** Display state of one fixed validation check. */
@@ -105,11 +109,14 @@ const form = reactive<ConnectionForm>({
   ip: "",
   port: 22,
   sshUser: "root",
+  authMode: "key",
   keyMode: "new",
   keyName: "",
   privateKey: "",
   passphrase: "",
   keyId: "",
+  password: "",
+  trustHostKey: false,
 });
 
 const HOST_PATTERN = /^[0-9a-zA-Z.-]+$/;
@@ -158,16 +165,20 @@ const rules = computed<FormRules>(() => ({
     },
   ],
   keyName:
-    form.keyMode === "new"
+    form.authMode === "key" && form.keyMode === "new"
       ? { required: true, message: "Enter a key name.", trigger: ["input", "blur"] }
       : [],
   privateKey:
-    form.keyMode === "new"
+    form.authMode === "key" && form.keyMode === "new"
       ? { required: true, message: "Paste the PEM-encoded private key.", trigger: ["input", "blur"] }
       : [],
   keyId:
-    form.keyMode === "existing"
+    form.authMode === "key" && form.keyMode === "existing"
       ? { required: true, message: "Enter an existing key ID.", trigger: ["input", "blur"] }
+      : [],
+  password:
+    form.authMode === "password"
+      ? { required: true, message: "Enter the node password.", trigger: ["input", "blur"] }
       : [],
 }));
 
@@ -262,10 +273,12 @@ const connectionSnapshot = computed<string>(() =>
     form.ip,
     form.port,
     form.sshUser,
+    form.authMode,
     form.keyMode,
     form.keyName,
     form.privateKey,
     form.keyId,
+    form.password !== "",
   ]),
 );
 watch(connectionSnapshot, () => {
@@ -336,7 +349,10 @@ async function handleCreate(): Promise<void> {
   creating.value = true;
   try {
     let keyId: string | null = null;
-    if (form.keyMode === "new") {
+    let password: string | undefined;
+    if (form.authMode === "password") {
+      password = form.password;
+    } else if (form.keyMode === "new") {
       const key = await createPrivateKey({
         name: form.keyName.trim(),
         private_key: form.privateKey,
@@ -352,6 +368,7 @@ async function handleCreate(): Promise<void> {
       port: form.port ?? 22,
       ssh_user: form.sshUser.trim(),
       ssh_key_id: keyId,
+      ...(password ? { password } : {}),
     });
 
     if (!inFlight.isCurrent(token)) {
@@ -392,7 +409,9 @@ async function handleValidate(): Promise<void> {
     detail: "Running…",
   }));
   try {
-    const outcome = await serversStore.validate(server.id, form.passphrase || undefined);
+    const outcome = await serversStore.validate(server.id, form.passphrase || undefined, {
+      trustHostKey: form.trustHostKey,
+    });
     if (!inFlight.isCurrent(token)) {
       return; // the wizard was closed while the probe was in flight
     }
@@ -450,11 +469,14 @@ function resetWizard(): void {
   form.ip = "";
   form.port = 22;
   form.sshUser = "root";
+  form.authMode = "key";
   form.keyMode = "new";
   form.keyName = "";
   form.privateKey = "";
   form.passphrase = "";
   form.keyId = "";
+  form.password = "";
+  form.trustHostKey = false;
   errorMessage.value = "";
   validateMessage.value = "";
   validationPassed.value = false;
@@ -494,8 +516,8 @@ function resetWizard(): void {
           </li>
         </ol>
         <p class="wizard-rail-note">
-          The private key is encrypted before it is stored and is never returned
-          by the API.
+          The private key or password is encrypted before it is stored and is
+          never returned by the API.
         </p>
       </div>
 
@@ -578,6 +600,19 @@ function resetWizard(): void {
                 <span class="field-hint">The Unix user the control plane connects as.</span>
               </NFormItem>
 
+              <NFormItem label="Authentication">
+                <NRadioGroup
+                  v-model:value="form.authMode"
+                  size="small"
+                  aria-label="Authentication method"
+                >
+                  <NRadioButton value="key">SSH key</NRadioButton>
+                  <NRadioButton value="password">Password</NRadioButton>
+                </NRadioGroup>
+                <span class="field-hint">Authenticate with a stored private key or a node password.</span>
+              </NFormItem>
+
+              <template v-if="form.authMode === 'key'">
               <NFormItem label="SSH key">
                 <NRadioGroup
                   v-model:value="form.keyMode"
@@ -589,8 +624,9 @@ function resetWizard(): void {
                 </NRadioGroup>
                 <span class="field-hint">Key listing is not exposed by the API yet — paste the key material or a known key ID.</span>
               </NFormItem>
+              </template>
 
-              <template v-if="form.keyMode === 'new'">
+              <template v-if="form.authMode === 'key' && form.keyMode === 'new'">
                 <NFormItem
                   label="Key name"
                   path="keyName"
@@ -634,7 +670,7 @@ function resetWizard(): void {
               </template>
 
               <NFormItem
-                v-else
+                v-else-if="form.authMode === 'key'"
                 label="Key ID"
                 path="keyId"
                 :label-props="{ for: 'add-server-key-id' }"
@@ -647,9 +683,28 @@ function resetWizard(): void {
                 <span class="field-hint">The UUID of a key already stored on the control plane.</span>
               </NFormItem>
 
-              <NText depth="3">
-                Password-auth servers are not supported in this release.
-              </NText>
+              <template v-else>
+                <NFormItem
+                  label="Node password"
+                  path="password"
+                  :label-props="{ for: 'add-server-password' }"
+                >
+                  <NInput
+                    v-model:value="form.password"
+                    type="password"
+                    show-password-on="click"
+                    placeholder="Node SSH password"
+                    :input-props="{ id: 'add-server-password', 'aria-label': 'Node password', autocomplete: 'new-password' }"
+                  />
+                  <span class="field-hint">Stored encrypted, never returned. Sent over SSH for validation.</span>
+                </NFormItem>
+                <NFormItem label="First connection" :show-feedback="false">
+                  <NCheckbox v-model:checked="form.trustHostKey">
+                    Trust this host key on first validation
+                  </NCheckbox>
+                  <span class="field-hint">Required once: a password node has no key to pin until it is trusted.</span>
+                </NFormItem>
+              </template>
             </NSpace>
           </NForm>
 
@@ -666,6 +721,13 @@ function resetWizard(): void {
             <NAlert v-if="validateMessage && !validationPassed" type="error" :show-icon="true">
               {{ validateMessage }}
             </NAlert>
+
+            <NCheckbox
+              v-if="currentServer?.has_password"
+              v-model:checked="form.trustHostKey"
+            >
+              Trust this host key on first validation
+            </NCheckbox>
 
             <div class="check-list">
               <div
@@ -1088,7 +1150,7 @@ function resetWizard(): void {
   line-height: var(--leading-body);
 }
 
-.wizard-modal :deep(.n-card__content) {
+.wizard-modal :deep(.n-card-content) {
   max-height: 72vh;
   overflow-y: auto;
 }

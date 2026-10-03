@@ -6,7 +6,7 @@ import { useRouter } from "vue-router";
 
 import { useAuthStore } from "../stores/auth";
 import { useTeamsStore } from "../stores/teams";
-import { meRoleLabel } from "../api/teams";
+import { meRoleLabel, roleReadRetryMs, shouldRetryRoleRead } from "../api/teams";
 import GothamIcon from "./GothamIcon.vue";
 
 const authStore = useAuthStore();
@@ -30,7 +30,7 @@ const roleText = computed<string>(() => meRoleLabel(teamsStore.activeTeam?.role 
 /**
  * loadRole reads the caller's teams for the footer label. A failed read
  * keeps the neutral fallback and retries on the next mount or account
- * change, plus a bounded retry (two more attempts, 5s apart) so a transient
+ * change, plus a bounded retry (see shouldRetryRoleRead) so a transient
  * failure does not pin the neutral label until the sidebar remounts; a
  * fetch already in flight needs no retry because the label follows the store
  * reactively. A disabled teams feature (loaded with an empty list) keeps the
@@ -38,8 +38,6 @@ const roleText = computed<string>(() => meRoleLabel(teamsStore.activeTeam?.role 
  * (see the auth store), so a failed or stale read can never pin the
  * previous account's role here.
  */
-const maxRoleRetries = 2;
-const roleRetryMs = 5_000;
 let roleRetries = 0;
 let roleRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -51,14 +49,20 @@ function loadRole(): void {
 async function readRole(): Promise<void> {
   cancelRoleRetry();
   await teamsStore.ensureTeams();
-  if (teamsStore.loaded || teamsStore.loading) {
-    roleRetries = 0;
+  if (
+    !shouldRetryRoleRead({
+      loaded: teamsStore.loaded,
+      loading: teamsStore.loading,
+      retries: roleRetries,
+    })
+  ) {
+    if (teamsStore.loaded || teamsStore.loading) {
+      roleRetries = 0;
+    }
     return;
   }
-  if (roleRetries < maxRoleRetries) {
-    roleRetries += 1;
-    roleRetryTimer = setTimeout(() => void readRole(), roleRetryMs);
-  }
+  roleRetries += 1;
+  roleRetryTimer = setTimeout(() => void readRole(), roleReadRetryMs);
 }
 
 /** cancelRoleRetry drops a pending retry so it cannot fire after unmount. */

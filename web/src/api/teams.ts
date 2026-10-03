@@ -209,6 +209,33 @@ export function meRoleLabel(role: TeamRole | null): string {
   return role === null ? "Team member" : roleLabel(role);
 }
 
+/** Retries after the initial role read before the neutral fallback pins. */
+export const roleReadMaxRetries = 2;
+
+/** Delay between role-read retries. */
+export const roleReadRetryMs = 5_000;
+
+/** Store snapshot deciding a role-read retry. */
+export interface RoleReadStatus {
+  loaded: boolean;
+  loading: boolean;
+  /** Attempts already scheduled; reset on a terminal read or account change. */
+  retries: number;
+}
+
+/**
+ * shouldRetryRoleRead bounds the sidebar role retry: stop on a terminal
+ * read (loaded, even empty, or another fetch in flight) and after
+ * roleReadMaxRetries scheduled attempts. Unmount stops retries by clearing
+ * the pending timer (see MeCard's cancelRoleRetry).
+ */
+export function shouldRetryRoleRead(status: RoleReadStatus): boolean {
+  if (status.loaded || status.loading) {
+    return false;
+  }
+  return status.retries < roleReadMaxRetries;
+}
+
 /** canManageMembers reports whether a role may invite, remove and re-role. */
 export function canManageMembers(role: TeamRole | null): boolean {
   return role === "owner" || role === "admin";

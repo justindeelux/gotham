@@ -417,9 +417,9 @@ async function main() {
     );
   });
 
-  console.log("dashboard tile states (JUS-10 fix round 2)");
-  await check("loading / error / empty / incomplete / ready and boundaries", () => {
-    const { applicationTileView } = dashboard.module;
+  console.log("dashboard tile states (JUS-10 fix round 3)");
+  await check("loading / error / empty / ready and boundaries", () => {
+    const { applicationTileView, incompleteTileHint } = dashboard.module;
     const base = {
       loading: false,
       error: null,
@@ -451,9 +451,8 @@ async function main() {
     assert(
       ready.state === "ready" &&
         ready.countText === "1/2" &&
-        ready.incomplete === false &&
-        ready.prefix === "",
-      "complete tile reads 1/2 with no marker",
+        ready.hint === "",
+      "complete tile reads 1/2 with no hint",
     );
     assert(
       applicationTileView({ ...base, failedReads: 1 }).countText === "≥1/2",
@@ -461,12 +460,8 @@ async function main() {
     );
     const incomplete = applicationTileView({ ...base, failedReads: 1 });
     assert(
-      incomplete.state === "ready" &&
-        incomplete.incomplete === true &&
-        incomplete.prefix === "≥" &&
-        incomplete.running === 1 &&
-        incomplete.total === 2,
-      "incomplete tile carries the marker and the numbers",
+      incomplete.state === "ready" && incomplete.hint === incompleteTileHint,
+      "incomplete tile carries the caveat hint",
     );
     const allFailed = applicationTileView({
       ...base,
@@ -475,30 +470,155 @@ async function main() {
       failedReads: 3,
     });
     assert(
-      allFailed.countText === "≥0/3" && allFailed.incomplete,
+      allFailed.countText === "≥0/3" && allFailed.hint === incompleteTileHint,
       "zero running with failed reads is at least 0/3, not 0/3",
+    );
+    assert(
+      incompleteTileHint === "Some states could not be read",
+      "hint wording is fixed",
     );
   });
 
-  await check("tile template delegates to the pure decision", async () => {
+  await check("tile input mapping passes the live page values through", async () => {
+    const { buildApplicationTileInput } = dashboard.module;
+    const input = buildApplicationTileInput({
+      loading: false,
+      error: "Could not load",
+      total: 2,
+      running: 1,
+      failedReads: 1,
+    });
+    assert(input.error === "Could not load", "error text is not nulled");
+    assert(input.failedReads === 1, "failed reads are not zeroed");
+    assert(
+      input.loading === false && input.total === 2 && input.running === 1,
+      "loading/total/running pass through",
+    );
+    const idle = buildApplicationTileInput({
+      loading: true,
+      error: null,
+      total: 0,
+      running: 0,
+      failedReads: 0,
+    });
+    assert(
+      idle.loading === true && idle.error === null,
+      "loading/null-error states stay distinct",
+    );
+    const { readFile } = await import("node:fs/promises");
+    const page = await readFile(
+      new URL("../src/pages/DashboardPage.vue", import.meta.url),
+      "utf8",
+    );
+    const callAt = page.indexOf("buildApplicationTileInput({");
+    assert(callAt !== -1, "page maps through buildApplicationTileInput");
+    for (const live of [
+      "applicationsLoading.value",
+      "applicationsError.value",
+      "applicationTotal.value",
+      "applicationRunning.value",
+      "applicationFailedReads.value",
+    ]) {
+      assert(page.includes(live), `page passes live ${live}`);
+    }
+    assert(
+      !page.includes("error: null") && !page.includes("failedReads: 0"),
+      "page hardcodes no null error / zero reads",
+    );
+  });
+
+  await check("tile template renders the tested output only", async () => {
     const { readFile } = await import("node:fs/promises");
     const source = await readFile(
       new URL("../src/pages/DashboardPage.vue", import.meta.url),
       "utf8",
     );
-    for (const branch of ["loading", "error", "ready"]) {
-      assert(
-        source.includes(`tile.state === '${branch}'`),
-        `template switches on tile.state === '${branch}'`,
-      );
-    }
+    const start = source.indexOf('title="Running applications"');
+    assert(start !== -1, "tile card exists");
+    const end = source.indexOf('title="Deploys in 24h"', start);
+    assert(end !== -1, "tile card block ends");
+    const block = source.slice(start, end);
+    // Every tile branch directive is exactly a tile.state comparison: an
+    // `&& false` (or any extra condition) fails here.
+    const directives = [...block.matchAll(/\bv-(?:if|else-if)="([^"]*)"/g)].map(
+      (match) => match[1],
+    );
+    assert(
+      directives.length === 4,
+      `three tile branches plus the hint (saw ${directives.length})`,
+    );
+    assert(
+      directives[0] === "tile.state === 'loading'" &&
+        directives[1] === "tile.state === 'error'" &&
+        directives[2] === "tile.state === 'ready'" &&
+        directives[3] === "tile.hint",
+      `branch directives are exactly the tile state plus hint (saw ${directives})`,
+    );
+    assert(block.includes("{{ tile.countText }}"), "figure binds countText");
+    assert(block.includes("{{ tile.hint }}"), "caveat binds hint");
+    assert(block.includes("{{ tile.error }}"), "error branch binds tile.error");
+    // The figure and marker come only from the tested function: no
+    // duplicated formatting, no page-level refs, no marker literal.
     for (const stale of [
+      "tile.running",
+      "tile.total",
+      "tile.prefix",
+      "tile.incomplete",
+      "applicationsLoading",
+      "applicationsError",
+      "applicationTotal",
+      "applicationRunning",
+      "applicationFailedReads",
       "applicationsIncomplete",
-      'v-else-if="applicationsError"',
-      'v-else-if="applicationTotal > 0"',
+      "≥",
     ]) {
-      assert(!source.includes(stale), `template no longer branches on ${stale}`);
+      assert(!block.includes(stale), `tile block references no ${stale}`);
     }
+  });
+
+  await check("sidebar role retry is bounded (JUS-10 fix round 3)", async () => {
+    const { shouldRetryRoleRead, roleReadMaxRetries, roleReadRetryMs } =
+      teams.module;
+    assert(roleReadMaxRetries === 2, "two retries after the initial read");
+    assert(roleReadRetryMs === 5_000, "retries are 5s apart");
+    assert(
+      shouldRetryRoleRead({ loaded: false, loading: false, retries: 0 }) === true,
+      "first failure schedules a retry",
+    );
+    assert(
+      shouldRetryRoleRead({ loaded: false, loading: false, retries: 1 }) === true,
+      "second failure schedules the last retry",
+    );
+    assert(
+      shouldRetryRoleRead({ loaded: false, loading: false, retries: 2 }) === false,
+      "exhausted attempts stop",
+    );
+    assert(
+      shouldRetryRoleRead({ loaded: true, loading: false, retries: 0 }) === false,
+      "loaded stops (even an empty list: disabled feature stays neutral)",
+    );
+    assert(
+      shouldRetryRoleRead({ loaded: false, loading: true, retries: 0 }) === false,
+      "an in-flight fetch stops (the label follows the store)",
+    );
+    const { readFile } = await import("node:fs/promises");
+    const card = await readFile(
+      new URL("../src/components/MeCard.vue", import.meta.url),
+      "utf8",
+    );
+    assert(card.includes("shouldRetryRoleRead("), "MeCard decides via the helper");
+    assert(
+      card.includes("roleReadRetryMs") && !card.includes("5_000"),
+      "MeCard takes the delay from the policy, not a local literal",
+    );
+    assert(
+      !card.includes("maxRoleRetries") && !card.includes("roleRetryMs"),
+      "MeCard keeps no local retry constants",
+    );
+    assert(
+      card.includes("onUnmounted(cancelRoleRetry)"),
+      "unmount drops a pending retry",
+    );
   });
 
   console.log("tightened error prefix allowlist (fix round 1)");
@@ -534,16 +654,43 @@ async function main() {
     );
   });
 
-  await check("allowlist matches the Go sources exactly (fix round 2)", () => {
+  await check("allowlist regenerated from the Go sources live", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { readFile } = await import("node:fs/promises");
+    // The documented regeneration grep over non-test Go sources: a new Go
+    // prefix changes this set and fails the comparison below.
+    const repoRoot = new URL("../../", import.meta.url).pathname;
+    const grepped = execFileSync(
+      "/bin/sh",
+      [
+        "-c",
+        "grep -rhoE '(errors\\.New|Errorf)\\(\"[a-z][0-9a-z_-]*:' internal" +
+          " --include='*.go' --exclude='*_test.go'" +
+          ' | grep -oE \'"[a-z][0-9a-z_-]*\' | tr -d \'"\' | sort -u',
+      ],
+      { cwd: repoRoot, encoding: "utf8" },
+    )
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    const source = await readFile(
+      new URL("../src/api/servers.ts", import.meta.url),
+      "utf8",
+    );
+    const setStart = source.indexOf("new Set([");
+    assert(setStart !== -1, "allowlist set literal exists");
+    const setBody = source.slice(setStart, source.indexOf("])", setStart));
+    const allowlist = [...setBody.matchAll(/"([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    assert(
+      allowlist.length === grepped.length &&
+        allowlist.every((prefix) => grepped.includes(prefix)) &&
+        grepped.every((prefix) => allowlist.includes(prefix)),
+      `allowlist [${allowlist}] equals the Go sources [${grepped}]`,
+    );
     const { stripErrorPrefix } = servers.module;
-    // Every "<pkg>: ..." constructor under internal/ (non-test), per the
-    // grep in the stripErrorPrefix comment.
-    for (const prefix of [
-      "auth", "builds", "containers", "databases", "deploy", "docker",
-      "notifications", "oauth", "providers", "proxy", "server", "servers",
-      "services", "spa", "ssh", "store", "teams", "templates", "updates",
-      "webhooks", "ws",
-    ]) {
+    for (const prefix of grepped) {
       assert(
         stripErrorPrefix(`${prefix}: boom`) === "boom",
         `${prefix} strips`,

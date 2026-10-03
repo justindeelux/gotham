@@ -21,7 +21,7 @@ import {
 import type { Server, ServerStatus } from "../api/servers";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
-import { applicationTileView } from "../utils/dashboard";
+import { applicationTileView, buildApplicationTileInput } from "../utils/dashboard";
 import { relativeTime, usageView } from "../utils/format";
 
 /**
@@ -93,18 +93,21 @@ async function fetchApplicationCounts(): Promise<void> {
 
 /**
  * tile is the pure render decision for the "Running applications" tile
- * (loading / error / empty / incomplete / ready, plus the "≥N/total" text).
- * The template switches on tile.state, so every branch is pinned by the
- * ui-truth harness through applicationTileView.
+ * (loading / error / empty / ready, plus the "≥N/total" figure and its
+ * caveat). The template binds tile.countText / tile.hint directly and
+ * formats nothing itself, so every branch is pinned by the ui-truth
+ * harness through applicationTileView + buildApplicationTileInput.
  */
 const tile = computed(() =>
-  applicationTileView({
-    loading: applicationsLoading.value,
-    error: applicationsError.value,
-    total: applicationTotal.value,
-    running: applicationRunning.value,
-    failedReads: applicationFailedReads.value,
-  }),
+  applicationTileView(
+    buildApplicationTileInput({
+      loading: applicationsLoading.value,
+      error: applicationsError.value,
+      total: applicationTotal.value,
+      running: applicationRunning.value,
+      failedReads: applicationFailedReads.value,
+    }),
+  ),
 );
 
 const servers = computed<Server[]>(() => serversStore.servers);
@@ -246,15 +249,10 @@ onMounted(() => {
           </p>
         </template>
         <template v-else-if="tile.state === 'ready'">
-          <p class="kpi-value num">
-            <span v-if="tile.incomplete" aria-hidden="true">≥</span
-            >{{ tile.running }}<span class="kpi-unit">/{{ tile.total }}</span>
-          </p>
+          <p class="kpi-value num">{{ tile.countText }}</p>
           <p class="kpi-sub">
             <RouterLink :to="{ name: 'applications' }">View applications</RouterLink>
-            <NText v-if="tile.incomplete" depth="3">
-              Some states could not be read
-            </NText>
+            <NText v-if="tile.hint" depth="3">{{ tile.hint }}</NText>
           </p>
         </template>
         <NEmpty v-else size="small" description="No applications yet" />

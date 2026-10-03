@@ -562,22 +562,34 @@ func TestStoreRepositoryListDeploymentsByAppLimit(t *testing.T) {
 	})
 
 	t.Run("equal timestamps fall back to id DESC", func(t *testing.T) {
-		if _, err := pool.Exec(ctx,
-			"UPDATE deployments SET created_at = $1, updated_at = $1 WHERE application_id = $2",
-			base, pgUUID(appA)); err != nil {
-			t.Fatalf("equalize timestamps: %v", err)
+		// Fixed ids in ascending creation order: the id tiebreak is the only
+		// discriminator, so removing `id DESC` fails every run (without it
+		// the index scan returns insertion order) instead of passing by luck.
+		fixed := []string{
+			"11111111-1111-1111-1111-111111111111",
+			"22222222-2222-2222-2222-222222222222",
+			"33333333-3333-3333-3333-333333333333",
 		}
+		for i, row := range created {
+			id, err := uuid.Parse(fixed[i])
+			if err != nil {
+				t.Fatalf("parse fixed id %d: %v", i, err)
+			}
+			if _, err := pool.Exec(ctx,
+				"UPDATE deployments SET id = $1, created_at = $2, updated_at = $2 WHERE id = $3",
+				pgUUID(id), base, pgUUID(row.ID)); err != nil {
+				t.Fatalf("assign fixed id %d: %v", i, err)
+			}
+			created[i].ID = id
+		}
+		want := []string{created[2].ID.String(), created[1].ID.String(), created[0].ID.String()}
 		rows, err := repo.ListDeploymentsLimit(ctx, appA, 10)
 		if err != nil {
 			t.Fatalf("ListDeploymentsLimit: %v", err)
 		}
 		got := ids(rows)
-		if len(got) != 3 {
-			t.Fatalf("rows = %v, want 3", got)
-		}
-		// Canonical UUID strings sort in byte order, matching uuid DESC.
-		if got[0] <= got[1] || got[1] <= got[2] {
-			t.Errorf("order = %v, want id DESC", got)
+		if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+			t.Errorf("order = %v, want %v", got, want)
 		}
 	})
 

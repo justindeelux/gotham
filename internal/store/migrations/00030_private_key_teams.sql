@@ -9,7 +9,9 @@ CREATE INDEX private_keys_team_idx ON private_keys (team_id);
 -- team so legacy keys stop being attachable by arbitrary teams.
 --   1. Deploy-key rows follow their application: the mapping is per-app, so
 --      the app's team is the stronger ownership signal and wins when a key is
---      both a deploy key and a node key.
+--      both a deploy key and a node key. That overlap is only reachable
+--      through the old cross-team attach bug (fixed in JUS-5 round 1), so the
+--      other team must re-attach its node key after the upgrade.
 --   2. The remaining keys follow the servers that reference them, but only
 --      when every referencing server agrees on one non-NULL team. A key
 --      referenced by servers of more than one team, by a legacy (team_id NULL)

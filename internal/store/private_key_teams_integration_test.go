@@ -77,17 +77,17 @@ func TestPrivateKeyTeamsBackfill(t *testing.T) {
 	defer pool.Close()
 
 	suffix := time.Now().UnixNano()
-	makeTeam := func() pgtype.UUID {
+	makeTeam := func(tag string) pgtype.UUID {
 		t.Helper()
 		var id pgtype.UUID
 		if err := pool.QueryRow(ctx, `INSERT INTO teams (name) VALUES ($1) RETURNING id`,
-			fmt.Sprintf("key-team-%d", suffix)).Scan(&id); err != nil {
+			fmt.Sprintf("key-team-%s-%d", tag, suffix)).Scan(&id); err != nil {
 			t.Fatalf("insert team: %v", err)
 		}
 		return id
 	}
-	teamA := makeTeam()
-	teamB := makeTeam()
+	teamA := makeTeam("a")
+	teamB := makeTeam("b")
 
 	var owner pgtype.UUID
 	if err := pool.QueryRow(ctx, `INSERT INTO users (email) VALUES ($1) RETURNING id`,

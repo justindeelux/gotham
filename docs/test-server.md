@@ -100,6 +100,28 @@ Caveats learned 2026-10-03:
 - The control plane logs dev-mode warnings on every start (no CA, ephemeral
   JWT/credential keys); they are expected on this box, not errors.
 
+Unreleased `main` deploy (2026-10-04): there is no tag after `v0.2.0` yet, so the
+box was moved to `main` at `0378f65` (`v0.2.0-21-g0378f65`, PRs #134-#137: server
+password auth and edit, installer, runtime version tag). Same procedure with a
+commit instead of a tag and a dev stamp (`git checkout -f 0378f65`, build with
+`-X main.version=0.2.1-dev`), plus:
+
+- `git clean -fdq internal/server/webdist` first: earlier builds left untracked
+  assets there that would otherwise be embedded in the binary.
+- Migrations `00029_server_password` and `00030_private_key_teams` applied with
+  `gotham migrate up`.
+- Agent swap order that works: `systemctl stop gotham-agent`, `install -m 0755
+  bin/gotham-agent /var/lib/gotham-agent/bin/gotham-agent`, restart `gotham`,
+  then start `gotham-agent`. The CP logs one `agent unavailable` warning during
+  the gap; the agent re-registers with `cp_version=0.2.1-dev`.
+- Smoke after deploy: both units `active`, `/healthz` 200, `GET /api/v1/version`
+  401 unauthenticated, `PATCH /api/v1/servers/{id}` 401 unauthenticated.
+- Registration is closed on this box, so authenticated checks (the sidebar tag
+  showing `v0.2.1-dev`, adding a server with a password, editing a server) need
+  an existing account or an admin-scoped token; they have not been run here yet.
+- The CP's CSP is `img-src 'self' data:`, so remote (OAuth) avatar images do not
+  load and the avatar falls back to the initial.
+
 
 ## Browser UI smoke (Playwright)
 

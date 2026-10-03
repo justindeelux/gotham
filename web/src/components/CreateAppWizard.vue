@@ -406,8 +406,9 @@ function resetWizard(): void {
     @update:show="handleShowChange"
   >
     <NText depth="3">
-      Pick a source, build pack, port and domain, then deploy. Every step can
-      be changed again after creation.
+      Pick a source, build pack, port and domain, then deploy. Source, build
+      pack and runtime are fixed once created; environment variables, volumes
+      and domains can be changed afterwards.
     </NText>
 
     <div class="wizard">

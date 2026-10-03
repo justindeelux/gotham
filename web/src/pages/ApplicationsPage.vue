@@ -7,6 +7,7 @@ import {
   NIcon,
   NInput,
   NSpace,
+  NSpin,
   NTag,
   NText,
   useMessage,
@@ -26,7 +27,9 @@ const providersStore = useProvidersStore();
 
 const wizardOpen = ref(false);
 const listError = ref<string | null>(null);
-const listLoading = ref(false);
+// Start loading so the first paint shows the spinner, never the empty state
+// before the initial list response lands (C4-16).
+const listLoading = ref(true);
 const knownApps = ref<Application[]>([]);
 const openById = ref("");
 
@@ -56,10 +59,11 @@ function openApplication(): void {
   void router.push({ name: "application-detail", params: { id } });
 }
 
-/** handleCreated refreshes the list attempt after the wizard succeeds. */
+/** handleCreated navigates to the detail page after the wizard succeeds. */
 function handleCreated(application: Application): void {
-  message.success(`Application "${application.name}" created`);
-  void fetchKnownApplications();
+  // The wizard already announced the create (and whether the first deploy
+  // queued), so this handler only navigates — a list refetch here would run
+  // against a component being unmounted and its result discarded (C4-15).
   void router.push({
     name: "application-detail",
     params: { id: application.id },
@@ -167,6 +171,13 @@ onMounted(() => {
         </div>
       </NSpace>
 
+      <!-- Render the initial load as a spinner instead of flashing the empty
+           state before the first response lands (C4-16). -->
+      <div v-else-if="listLoading" class="apps-loading">
+        <NSpin size="small" />
+        <NText depth="3">Loading applications…</NText>
+      </div>
+
       <NEmpty
         v-else
         class="apps-empty"
@@ -268,6 +279,14 @@ onMounted(() => {
 }
 
 .apps-empty {
+  padding: var(--space-8) 0;
+}
+
+.apps-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
   padding: var(--space-8) 0;
 }
 

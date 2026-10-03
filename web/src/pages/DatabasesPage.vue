@@ -33,6 +33,7 @@ const databasesStore = useDatabasesStore();
 const serversStore = useServersStore();
 
 const wizardOpen = ref(false);
+const restartingId = ref<string | null>(null);
 
 /** Filter chip keys mirroring the databases.html toolbar. */
 type DatabaseFilter = "all" | "running" | "stopped" | "public";
@@ -99,6 +100,20 @@ const filterCounts = computed<Record<DatabaseFilter, number>>(() => ({
   public: databasesStore.databases.filter((item) => item.public_port > 0).length,
 }));
 
+/** engineBreakdown summarizes engines for the KPI subtitle. */
+const engineBreakdown = computed<string>(() => {
+  const counts = new Map<string, number>();
+  for (const item of databasesStore.databases) {
+    counts.set(item.engine, (counts.get(item.engine) ?? 0) + 1);
+  }
+  if (counts.size === 0) {
+    return "None yet";
+  }
+  return [...counts.entries()]
+    .map(([engine, count]) => `${count} ${engine}`)
+    .join(" · ");
+});
+
 /** nameCell renders the database name with its engine image. */
 function nameCell(database: Database): VNode {
   return h("div", { class: "cell-main" }, [
@@ -117,7 +132,7 @@ function portCell(database: Database): VNode {
   return h(NText, { depth: 3 }, { default: () => "—" });
 }
 
-/** actionsCell renders per-row Details / delete controls. */
+/** actionsCell renders per-row Details / restart / delete controls. */
 function actionsCell(database: Database): VNode {
   return h(NSpace, { size: 8, align: "center", wrap: false }, {
     default: () => [
@@ -136,6 +151,18 @@ function actionsCell(database: Database): VNode {
         { default: () => "Details" },
       ),
       h(
+        NButton,
+        {
+          size: "small",
+          secondary: true,
+          loading: restartingId.value === database.id,
+          disabled: databasesStore.acting,
+          "aria-label": `Restart ${database.name}`,
+          onClick: () => void handleRestart(database),
+        },
+        { default: () => "Restart" },
+      ),
+      h(
         NPopconfirm,
         {
           onPositiveClick: () => void handleDelete(database),
@@ -144,7 +171,7 @@ function actionsCell(database: Database): VNode {
           trigger: () =>
             h(
               NButton,
-              { size: "small", type: "error", ghost: true },
+              { size: "small", type: "error", ghost: true, "aria-label": `Delete ${database.name}` },
               { default: () => "Delete" },
             ),
           default: () =>
@@ -189,7 +216,7 @@ const columns: DataTableColumns<Database> = [
   {
     title: "Actions",
     key: "actions",
-    width: 190,
+    width: 280,
     render: (row) => actionsCell(row),
   },
 ];
@@ -221,6 +248,19 @@ async function handleDelete(database: Database): Promise<void> {
   }
 }
 
+/** handleRestart re-runs one database container in place. */
+async function handleRestart(database: Database): Promise<void> {
+  restartingId.value = database.id;
+  try {
+    await databasesStore.restart(database.id);
+    message.success(`Database "${database.name}" restarting`);
+  } catch (error) {
+    message.error(describeDatabaseError(error));
+  } finally {
+    restartingId.value = null;
+  }
+}
+
 onMounted(() => {
   void fetchAll();
   databasesStore.pollDatabases();
@@ -247,6 +287,32 @@ onUnmounted(() => {
         <NButton type="primary" @click="wizardOpen = true">
           Create database
         </NButton>
+      </div>
+    </div>
+
+    <!-- KPI row ported from databases.html. Size/backup/schedule tiles need
+         backend aggregates the API does not expose yet, so this row reports
+         the same population the list does. -->
+    <div class="kpi-row">
+      <div class="stat">
+        <p class="stat-label">Databases</p>
+        <p class="stat-value num">{{ filterCounts.all }}</p>
+        <p class="stat-sub muted">{{ engineBreakdown }}</p>
+      </div>
+      <div class="stat">
+        <p class="stat-label">Running</p>
+        <p class="stat-value num">{{ filterCounts.running }}</p>
+        <p class="stat-sub muted">of {{ filterCounts.all }}</p>
+      </div>
+      <div class="stat">
+        <p class="stat-label">Public port</p>
+        <p class="stat-value num">{{ filterCounts.public }}</p>
+        <p class="stat-sub muted">reachable outside the node</p>
+      </div>
+      <div class="stat">
+        <p class="stat-label">Stopped</p>
+        <p class="stat-value num">{{ filterCounts.stopped }}</p>
+        <p class="stat-sub muted">container stopped, volume intact</p>
       </div>
     </div>
 
@@ -389,6 +455,50 @@ onUnmounted(() => {
   color: var(--muted);
   margin: 0;
   max-width: 72ch;
+}
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.stat-label {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.stat-value {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-3xl);
+  color: var(--fg-2);
+}
+
+.stat-sub {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 1180px) {
+  .kpi-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .kpi-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .page-actions {

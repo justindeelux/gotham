@@ -73,9 +73,12 @@ a:hover {
 }
 
 :focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--radius-sm);
+  /* A visible, high-contrast indicator (>=3:1 against every app surface):
+   * the accent mixed toward white, drawn as a real outline so it also
+   * survives forced-colors mode. The previous 30%-alpha accent ring measured
+   * ~1.36:1 (B3-9). */
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
 }
 
 ::selection {

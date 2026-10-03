@@ -12,7 +12,7 @@ import {
   NSpin,
   useMessage,
 } from "naive-ui";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { describeServerError } from "../api/servers";
@@ -21,7 +21,7 @@ import AddServerWizard from "../components/AddServerWizard.vue";
 import GothamIcon from "../components/GothamIcon.vue";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
-import { formatBytes, relativeTime, toPercent } from "../utils/format";
+import { formatBytes, relativeTime, toPercent, USAGE_DANGER_PERCENT } from "../utils/format";
 
 const router = useRouter();
 const route = useRoute();
@@ -32,14 +32,50 @@ const wizardOpen = ref(false);
 const validatingId = ref<string | null>(null);
 const checkingAll = ref(false);
 
+/**
+ * The install snippet, kept as data so the mockup's copy button can write the
+ * exact command to the clipboard instead of scraping rendered markup.
+ */
+const installCommand = `scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .
+git clone --depth 1 https://github.com/justindeelux/gotham /tmp/gotham
+sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=<node> \\
+  /tmp/gotham/deploy/install-agent.sh --ca ./ca.crt
+
+# The installer verifies the signed manifest + digest, writes
+# /etc/gotham/ca.crt, then enables the systemd unit.
+systemctl status gotham-agent`;
+
+const copiedInstall = ref(false);
+let copiedInstallTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** copyInstallCommand writes the install snippet to the clipboard. */
+async function copyInstallCommand(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(installCommand);
+    copiedInstall.value = true;
+    if (copiedInstallTimer !== null) {
+      clearTimeout(copiedInstallTimer);
+    }
+    copiedInstallTimer = setTimeout(() => {
+      copiedInstall.value = false;
+      copiedInstallTimer = null;
+    }, 2000);
+  } catch {
+    message.error("Could not copy — select the command and copy it manually.");
+  }
+}
+
+onUnmounted(() => {
+  if (copiedInstallTimer !== null) {
+    clearTimeout(copiedInstallTimer);
+  }
+});
+
 /** Filter chip keys mirroring the servers.html toolbar. */
 type ServerFilter = "all" | "ready" | "offline" | "update";
 
 const activeFilter = ref<ServerFilter>("all");
 const searchQuery = ref("");
-
-/** Meter value over which every usage bar turns danger red. */
-const dangerThreshold = 80;
 
 /**
  * needsAgentUpdate reports whether a server needs an agent update. The
@@ -137,7 +173,7 @@ watch(pageCount, (count) => {
   }
 });
 
-/** meterColor picks the bar color: per-metric base, danger red over 80%. */
+/** meterColor picks the bar color: per-metric base, danger red at 80%+. */
 /**
  * initials builds the node avatar label: the first letters of up to two words
  * ("gotham-prod-01" -> "GP"). Ported from the server-detail avatar.
@@ -152,7 +188,7 @@ function initials(name: string): string {
 interface MetricView {
   /** label is the displayed reading, or an em dash when the node reported none. */
   label: string;
-  /** color is the bar color; danger red once the normalized reading exceeds 80%. */
+  /** color is the bar color; danger red once the normalized reading reaches 80%. */
   color: string;
   /** percentage is the normalized 0..100 reading the bar renders. */
   percentage: number;
@@ -170,7 +206,7 @@ function metricView(value: number | null, base: string): MetricView {
   const percentage = Math.max(0, Math.min(100, toPercent(value)));
   return {
     label: `${percentage}%`,
-    color: percentage > dangerThreshold ? "var(--danger)" : base,
+    color: percentage >= USAGE_DANGER_PERCENT ? "var(--danger)" : base,
     percentage,
   };
 }
@@ -335,6 +371,7 @@ watch(
             class="chip"
             type="button"
             :class="{ 'is-active': activeFilter === 'all' }"
+            :aria-pressed="activeFilter === 'all'"
             @click="activeFilter = 'all'"
           >
             All <span class="nav-count">{{ serversStore.servers.length }}</span>
@@ -343,6 +380,7 @@ watch(
             class="chip"
             type="button"
             :class="{ 'is-active': activeFilter === 'ready' }"
+            :aria-pressed="activeFilter === 'ready'"
             @click="activeFilter = 'ready'"
           >
             Ready <span class="nav-count">{{ readyCount }}</span>
@@ -351,6 +389,7 @@ watch(
             class="chip"
             type="button"
             :class="{ 'is-active': activeFilter === 'offline' }"
+            :aria-pressed="activeFilter === 'offline'"
             @click="activeFilter = 'offline'"
           >
             Offline <span class="nav-count">{{ offlineCount }}</span>
@@ -359,6 +398,7 @@ watch(
             class="chip"
             type="button"
             :class="{ 'is-active': activeFilter === 'update' }"
+            :aria-pressed="activeFilter === 'update'"
             @click="activeFilter = 'update'"
           >
             Agent update needed <span class="nav-count">{{ updateCount }}</span>
@@ -522,16 +562,19 @@ watch(
 
     <NCard class="install-card" title="Install the agent on a new node">
       <template #header-extra>
-        <code class="inline-code">deploy/install-agent.sh</code>
+        <span class="install-head">
+          <code class="inline-code">deploy/install-agent.sh</code>
+          <NButton
+            size="small"
+            secondary
+            :aria-label="copiedInstall ? 'Install command copied' : 'Copy install command'"
+            @click="() => void copyInstallCommand()"
+          >
+            {{ copiedInstall ? "Copied" : "Copy" }}
+          </NButton>
+        </span>
       </template>
-      <pre class="install-cmd"><code>scp root@&lt;cp-host&gt;:/var/lib/gotham/ca/ca.crt .
-git clone --depth 1 https://github.com/justindeelux/gotham /tmp/gotham
-sudo GOTHAM_AGENT_CP_ADDR=&lt;cp-host&gt;:9442 GOTHAM_AGENT_NODE_ID=&lt;node&gt; \
-  /tmp/gotham/deploy/install-agent.sh --ca ./ca.crt
-
-# The installer verifies the signed manifest + digest, writes
-# /etc/gotham/ca.crt, then enables the systemd unit.
-systemctl status gotham-agent</code></pre>
+      <pre class="install-cmd"><code>{{ installCommand }}</code></pre>
       <div class="callouts">
         <div class="callout">
           <NIcon>
@@ -706,6 +749,12 @@ systemctl status gotham-agent</code></pre>
 
 .install-card {
   margin-top: var(--space-4);
+}
+
+.install-head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .install-cmd {

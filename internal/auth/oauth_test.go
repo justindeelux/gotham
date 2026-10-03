@@ -236,7 +236,7 @@ func TestOAuthCallbackUnknownProvider(t *testing.T) {
 func TestOAuthCallbackRefusesNewUserWhenClosed(t *testing.T) {
 	provider := &fakeOAuthProvider{name: "github"}
 	oauth, st := newTestOAuthWithStore(t, provider)
-	requireClosedInstance(t, oauth.auth, st)
+	requireClosedInstance(t, oauth.auth)
 	ctx := context.Background()
 
 	// Closed registration must refuse an unseen OAuth identity (P-A2) rather

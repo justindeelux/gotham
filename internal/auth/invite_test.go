@@ -93,7 +93,7 @@ func newTestInvite(t *testing.T, st *store.Store, email string) string {
 // accounts, Register refuses without a token (P-A2).
 func TestServiceRegisterClosedWithoutInvite(t *testing.T) {
 	svc, st := newTestService(t)
-	requireClosedInstance(t, svc, st)
+	requireClosedInstance(t, svc)
 	ctx := context.Background()
 
 	email := uniqueEmail("closed")

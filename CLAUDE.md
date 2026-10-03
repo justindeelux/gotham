@@ -1,3 +1,7 @@
+See [`AGENTS.md`](AGENTS.md) for the project instructions: tech stack, repository
+layout, development workflow and invariants, review gates and tooling priority,
+code style, UI design rules, and language policy.
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 

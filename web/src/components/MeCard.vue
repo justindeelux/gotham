@@ -37,7 +37,8 @@ async function handleSelect(key: string | number): Promise<void> {
     <NButton quaternary class="me-card" aria-label="Account">
       <NSpace align="center" :size="8" :wrap="false" class="me-card-inner">
         <NAvatar round :size="24" :src="authStore.user?.avatar">
-          {{ userInitial }}
+          <template v-if="!authStore.user?.avatar">{{ userInitial }}</template>
+          <template #fallback>{{ userInitial }}</template>
         </NAvatar>
         <span class="me-meta">
           <NText class="me-email">{{ userEmail }}</NText>

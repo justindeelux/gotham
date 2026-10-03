@@ -343,7 +343,11 @@ watch(
             <NButton quaternary circle aria-label="Account">
               <template #icon>
                 <NAvatar round :size="24" :src="authStore.user?.avatar">
-                  {{ userInitial }}
+                  <!-- NAvatar prefers the default slot over `src`, so the
+                       initial is rendered only when there is no avatar image;
+                       `#fallback` keeps it for a failed image load. -->
+                  <template v-if="!authStore.user?.avatar">{{ userInitial }}</template>
+                  <template #fallback>{{ userInitial }}</template>
                 </NAvatar>
               </template>
             </NButton>

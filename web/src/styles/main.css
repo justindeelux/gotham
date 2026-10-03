@@ -109,6 +109,14 @@ a:hover {
   background: transparent;
 }
 
+/* Naive UI's `.n-avatar` is a flex item with the default `flex-shrink: 1`.
+ * Inside a fixed-size flex parent — e.g. a button's 18px `.n-icon-slot` — a
+ * 24px round avatar shrinks on width only, rendering as an 18x24 ellipse.
+ * Avatars are fixed-size by nature, so never let them shrink. */
+.n-avatar {
+  flex-shrink: 0;
+}
+
 .mono {
   font-family: var(--font-mono);
 }

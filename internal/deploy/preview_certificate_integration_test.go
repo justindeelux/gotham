@@ -24,12 +24,17 @@ func TestCreatePreviewApplicationClonesCertificateIntent(t *testing.T) {
 
 	dsn := integrationDSN()
 	explicit := integrationDSNExplicit()
-	pool, err := store.Open(ctx, dsn)
-	if err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if explicit {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
 		}
 		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
 	// Open proved the database is reachable, so a migration error is a real

@@ -70,15 +70,38 @@ test.describe("applications", () => {
     const row = page.locator(".provider-row").filter({ hasText: name });
     await expect(row).toHaveCount(1);
 
+    // The detail view fires its history, config and node reads after the
+    // application row arrives. Await each dependent response (any status —
+    // a failure still resolves the wait and lands in the guardrail below),
+    // otherwise a late failure can slip past the assertion and the smoke
+    // still passes. Waiters register before the click so an already-answered
+    // read cannot be missed.
+    const detailPrefix = `/api/v1/applications/${application.id}`;
+    const settled = Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes(`${detailPrefix}/deployments`),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes(`${detailPrefix}/env`),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes(`${detailPrefix}/storages`),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes(`${detailPrefix}/previews`),
+      ),
+      // The rail polls the same endpoint on its own interval, so this waiter
+      // can resolve on a poll rather than the detail's own refetch; the five
+      // app-scoped waiters above are exact.
+      page.waitForResponse((response) =>
+        response.url().endsWith("/api/v1/servers"),
+      ),
+    ]);
     await row.getByRole("button", { name: "Open" }).click();
     await expect(page).toHaveURL(
       new RegExp(`/applications/${application.id}$`),
     );
-    // The detail view fires its history, config and node reads after the
-    // application row arrives. Wait for those to settle first, otherwise a
-    // dependent API failure can land after the guardrail assertion below and
-    // the smoke still passes.
-    await page.waitForLoadState("networkidle");
+    await settled;
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
 
     expect(guardrails.apiFailures).toEqual([]);

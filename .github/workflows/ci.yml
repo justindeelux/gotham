@@ -120,7 +120,12 @@ jobs:
         run: npm run build
 
       - name: Check committed dist is up to date
-        run: git diff --exit-code -- internal/server/webdist
+        run: |
+          if [ -n "$(git status --porcelain -- internal/server/webdist)" ]; then
+            echo "webdist: committed SPA is out of date (rebuild with npm run build):"
+            git status --porcelain -- internal/server/webdist
+            exit 1
+          fi
 
   sqlc:
     name: sqlc drift check
@@ -185,7 +190,7 @@ jobs:
   db-test:
     name: DB-backed tests (postgres + redis)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine

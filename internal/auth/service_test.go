@@ -80,6 +80,23 @@ func newTestService(t *testing.T) (*Service, *store.Store) {
 	return New(st, signer, logger), st
 }
 
+// requireClosedInstance seeds the "instance already has accounts" precondition
+// through the real bootstrap path and schedules the seed's removal. When
+// another package already populated the shared database — or this seed loses
+// the bootstrap race — Register reports ErrRegistrationClosed and there is
+// nothing to seed. Either way the instance is closed on return, so closed-
+// registration assertions hold on a fresh database as well as a dirty one.
+func requireClosedInstance(t *testing.T, svc *Service, st *store.Store) {
+	t.Helper()
+
+	email := uniqueEmail("closed-seed")
+	cleanupUser(t, st, email)
+	_, err := svc.Register(context.Background(), email, "s3cret-password", "", nil)
+	if err != nil && !errors.Is(err, ErrRegistrationClosed) {
+		t.Fatalf("seed closed-instance account: %v", err)
+	}
+}
+
 // uniqueEmail returns an email that will not collide across test runs.
 func uniqueEmail(prefix string) string {
 	return fmt.Sprintf("be-1.1-%s-%d@example.com", prefix, time.Now().UnixNano())

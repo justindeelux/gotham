@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -16,6 +17,8 @@ const (
 	connectMaxDelay  = 2 * time.Second
 	openTimeout      = 15 * time.Second
 	pingTimeout      = 5 * time.Second
+	// probeTimeout bounds a single reachability attempt (see ProbeOnce).
+	probeTimeout = 3 * time.Second
 )
 
 // ErrNilPool is returned by Ping when no pool is provided.
@@ -59,6 +62,23 @@ func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 		delay = min(delay*2, connectMaxDelay)
 	}
 	return nil, fmt.Errorf("connect to postgres after %d attempts: %w", connectAttempts, lastErr)
+}
+
+// ProbeOnce checks whether dsn answers a single connection attempt, without
+// retries. Test setups call it before Open so an unreachable database skips
+// fast instead of burning Open's 15s retry loop; Open itself keeps retrying
+// for production callers that race a starting database.
+func ProbeOnce(ctx context.Context, dsn string) error {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	return conn.Ping(ctx)
 }
 
 // Ping verifies the pool can reach the database, bounded by pingTimeout.

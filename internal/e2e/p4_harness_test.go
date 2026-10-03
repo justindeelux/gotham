@@ -589,6 +589,14 @@ func freeHostPort(t *testing.T) int32 {
 			continue
 		}
 		hostPortsTaken[port] = true
+		// Release the reservation when the test finishes: artifact cleanup is
+		// registered later (removeAppArtifacts) so it runs first under LIFO,
+		// and the port is free again by the time it is handed out twice.
+		t.Cleanup(func() {
+			hostPortsMu.Lock()
+			defer hostPortsMu.Unlock()
+			delete(hostPortsTaken, port)
+		})
 		return port
 	}
 	t.Fatalf("could not reserve a free host port after 50 attempts")
@@ -625,7 +633,8 @@ func removeLabelledContainers(t *testing.T, label string) {
 //
 // `docker ps` truncates .Command, which can cut the marker off before the
 // match ever runs. Resolve the ids first and inspect each container's full
-// command (entrypoint path, args and configured cmd) instead.
+// command (entrypoint path, args and configured cmd) instead, in a single
+// inspect call: vanished ids only add stderr, the surviving rows still parse.
 func removeContainersMatchingCommand(t *testing.T, marker string) {
 	t.Helper()
 	docker, err := exec.LookPath("docker")
@@ -638,24 +647,31 @@ func removeContainersMatchingCommand(t *testing.T, marker string) {
 		t.Logf("cleanup: docker ps -aq: %v: %s", err, strings.TrimSpace(string(output)))
 		return
 	}
-	var ids []string
-	for _, id := range strings.Fields(string(output)) {
-		inspectOut, err := exec.Command(docker, "inspect", "--format",
-			`{{.Path}} {{join .Args " "}} {{join .Config.Cmd " "}}`, id).CombinedOutput()
-		if err != nil {
-			t.Logf("cleanup: docker inspect %s: %v: %s", id, err, strings.TrimSpace(string(inspectOut)))
-			continue
-		}
-		if strings.Contains(string(inspectOut), marker) {
-			ids = append(ids, id)
-		}
-	}
+	ids := strings.Fields(string(output))
 	if len(ids) == 0 {
 		return
 	}
-	args := append([]string{"rm", "-f"}, ids...)
+	args := append([]string{"inspect", "--format", `{{.ID}} {{.Path}} {{join .Args " "}} {{join .Config.Cmd " "}}`}, ids...)
+	inspectOut, _ := exec.Command(docker, args...).CombinedOutput()
+	var matched []string
+	for _, line := range strings.Split(string(inspectOut), "\n") {
+		id, command, ok := strings.Cut(strings.TrimSpace(line), " ")
+		// Stderr rides along in CombinedOutput; only full hex ids are
+		// inspect rows, never "error: no such object" lines.
+		if !ok || len(id) != 64 || strings.Trim(id, "0123456789abcdef") != "" {
+			continue
+		}
+		if !strings.Contains(command, marker) {
+			continue
+		}
+		matched = append(matched, id)
+	}
+	if len(matched) == 0 {
+		return
+	}
+	args = append([]string{"rm", "-f"}, matched...)
 	if removed, err := exec.Command(docker, args...).CombinedOutput(); err != nil {
-		t.Logf("cleanup: docker rm %v: %v: %s", ids, err, strings.TrimSpace(string(removed)))
+		t.Logf("cleanup: docker rm %v: %v: %s", matched, err, strings.TrimSpace(string(removed)))
 	}
 }
 

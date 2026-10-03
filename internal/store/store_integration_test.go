@@ -46,12 +46,17 @@ func TestStoreUserRoundtrip(t *testing.T) {
 
 	dsn := testDSN()
 
-	pool, err := store.Open(ctx, dsn)
-	if err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if testDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
 		}
 		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
 	// Registered before the row cleanup so LIFO order closes the pool last.
 	t.Cleanup(pool.Close)
@@ -105,12 +110,17 @@ func TestStoreReplaceApplicationEnvIsAtomic(t *testing.T) {
 	defer cancel()
 
 	dsn := testDSN()
-	pool, err := store.Open(ctx, dsn)
-	if err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if testDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
 		}
 		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
 	// Open proved the database is reachable, so a migration error is a real
@@ -210,12 +220,17 @@ func TestStoreReplaceApplicationStoragesIsAtomic(t *testing.T) {
 	defer cancel()
 
 	dsn := testDSN()
-	pool, err := store.Open(ctx, dsn)
-	if err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if testDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
 		}
 		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
 	// Open proved the database is reachable, so a migration error is a real
@@ -310,12 +325,17 @@ func TestStoreListEnvConfigIsOneSnapshot(t *testing.T) {
 	defer cancel()
 
 	dsn := testDSN()
-	pool, err := store.Open(ctx, dsn)
-	if err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if testDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
 		}
 		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
 	// Open proved the database is reachable, so a migration error is a real
@@ -432,12 +452,17 @@ func TestStoreCreateFirstUserSerializes(t *testing.T) {
 
 	// Reachability first: CI has no database, so an unreachable DSN must skip
 	// (the opt-in GOTHAM_TEST_DSN turns a missing database into a failure).
-	pool, err := store.Open(ctx, testDSN())
-	if err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, testDSN()); err != nil {
 		if testDSNExplicit() {
 			t.Fatalf("open store: %v", err)
 		}
 		t.Skipf("no database: %v", err)
+	}
+	pool, err := store.Open(ctx, testDSN())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
 	defer pool.Close()
 
@@ -505,12 +530,17 @@ func TestStoreRevokeSessionIfLive(t *testing.T) {
 
 	// Reachability first: CI has no database, so an unreachable DSN must skip
 	// (the opt-in GOTHAM_TEST_DSN turns a missing database into a failure).
-	pool, err := store.Open(ctx, testDSN())
-	if err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, testDSN()); err != nil {
 		if testDSNExplicit() {
 			t.Fatalf("open store: %v", err)
 		}
 		t.Skipf("no database: %v", err)
+	}
+	pool, err := store.Open(ctx, testDSN())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
 	defer pool.Close()
 

@@ -29,12 +29,17 @@ func openVersionTestStore(t *testing.T) (*store.Store, context.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
 
-	pool, err := store.Open(ctx, testDSN())
-	if err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, testDSN()); err != nil {
 		if testDSNExplicit() {
 			t.Fatalf("open store: %v", err)
 		}
 		t.Skipf("no database: %v", err)
+	}
+	pool, err := store.Open(ctx, testDSN())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
 

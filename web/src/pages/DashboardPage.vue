@@ -13,19 +13,18 @@ import {
 import { computed, onMounted } from "vue";
 import { RouterLink } from "vue-router";
 
-import type { Server } from "../api/servers";
+import type { Server, ServerStatus } from "../api/servers";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
-import { relativeTime } from "../utils/format";
+import { relativeTime, toPercent, USAGE_DANGER_PERCENT } from "../utils/format";
 
 /**
- * Deployment is the typed seam for the future deployments store
- * (Phase 4). The recent-deploys widget renders an explicit empty state
- * until that store exists — never fabricated rows.
+ * Deployment is the typed seam for a deployments store that does not exist
+ * yet. The recent-deploys widget renders an explicit empty state until that
+ * store exists — never fabricated rows.
  *
- * TODO(phase-4): add web/src/stores/deployments.ts backed by the
- * deployments API, replace `deployments` below with live data, and
- * remove the empty state.
+ * TODO: add web/src/stores/deployments.ts backed by the deployments API,
+ * replace `deployments` below with live data, and remove the empty state.
  */
 interface Deployment {
   id: string;
@@ -55,6 +54,37 @@ const offlineServers = computed<Server[]>(() =>
   ),
 );
 
+/**
+ * aggregateStatus summarizes the fleet for the KPI badge. It never claims
+ * "ready" while readyCount is 0: a fleet that is entirely pending/validating
+ * reads "pending", and an unreachable node reads "offline" (B4-12).
+ */
+const aggregateStatus = computed<ServerStatus>(() => {
+  if (offlineServers.value.length > 0) {
+    return "offline";
+  }
+  if (readyCount.value > 0) {
+    return "ready";
+  }
+  return "pending";
+});
+
+/** Bound the widgets so a large fleet is not re-diffed in full every 5s (B4-14). */
+const nodeWidgetLimit = 6;
+const heartbeatWidgetLimit = 8;
+const visibleNodes = computed<Server[]>(() =>
+  servers.value.slice(0, nodeWidgetLimit),
+);
+const hiddenNodeCount = computed<number>(() =>
+  Math.max(0, servers.value.length - nodeWidgetLimit),
+);
+const visibleHeartbeats = computed<Server[]>(() =>
+  servers.value.slice(0, heartbeatWidgetLimit),
+);
+const hiddenHeartbeatCount = computed<number>(() =>
+  Math.max(0, servers.value.length - heartbeatWidgetLimit),
+);
+
 /** initials derives a two-letter node avatar from the server name. */
 function initials(name: string): string {
   const parts = name.replace(/[^a-zA-Z0-9]+/g, " ").trim().split(/\s+/);
@@ -76,21 +106,7 @@ function nodeSubtitle(server: Server): string {
   return bits.join(" · ");
 }
 
-/** toPercent normalizes a usage reading to a 0-100 percentage.
- *
- * The proto contract (proto/agent/v1/agent.proto) defines heartbeat usage
- * as a fraction 0..1, so fractional readings are scaled up. Readings above
- * 1 pass through unchanged for forward compatibility.
- */
-function toPercent(value: number | null | undefined): number {
-  if (value === null || value === undefined) {
-    return 0;
-  }
-  const scaled = value <= 1 ? value * 100 : value;
-  return Math.round(Math.min(Math.max(scaled, 0), 100));
-}
-
-/** meterStatus maps usage to a Naive progress status (danger over 80%). */
+/** meterStatus maps usage to a Naive progress status (danger at the shared threshold). */
 function meterStatus(
   value: number | null,
 ): "default" | "success" | "warning" | "error" {
@@ -98,7 +114,7 @@ function meterStatus(
     return "default";
   }
   const percent = toPercent(value);
-  if (percent >= 80) {
+  if (percent >= USAGE_DANGER_PERCENT) {
     return "error";
   }
   if (percent >= 60) {
@@ -165,7 +181,7 @@ onMounted(() => {
             {{ readyCount }}<span class="kpi-unit">/{{ totalCount }}</span>
           </p>
           <p class="kpi-sub">
-            <ServerStatusTag v-if="totalCount > 0" :status="offlineServers.length > 0 ? 'offline' : 'ready'" />
+            <ServerStatusTag v-if="totalCount > 0" :status="aggregateStatus" />
             <NText v-else depth="3">No servers yet — add one to begin.</NText>
             <NText v-if="offlineServers.length > 0" depth="3">
               {{ offlineServers.map((server) => server.name).join(", ") }}
@@ -176,15 +192,15 @@ onMounted(() => {
       </NCard>
 
       <NCard class="kpi" title="Running applications" size="small">
-        <NEmpty size="small" description="No applications yet — ships in Phase 4" />
+        <NEmpty size="small" description="No applications data yet" />
       </NCard>
 
       <NCard class="kpi" title="Deploys in 24h" size="small">
-        <NEmpty size="small" description="No deploys yet — ships in Phase 4" />
+        <NEmpty size="small" description="No deploy data yet" />
       </NCard>
 
       <NCard class="kpi" title="SSL certificates" size="small">
-        <NEmpty size="small" description="No certificates yet — ships in Phase 6" />
+        <NEmpty size="small" description="No certificate data yet" />
       </NCard>
     </div>
 
@@ -197,7 +213,7 @@ onMounted(() => {
         <NCard size="small">
           <NEmpty
             v-if="deployments.length === 0"
-            description="No deployments yet — ships in Phase 4"
+            description="No deployments yet"
           >
             <template #extra>
               <NText depth="3">
@@ -209,7 +225,7 @@ onMounted(() => {
           <NSpace vertical :size="12">
             <div class="card-foot">
               <NText depth="3">Queue: no data yet</NText>
-              <NText depth="3">Build pipeline ships in Phase 4</NText>
+              <NText depth="3">Build history is not wired up yet</NText>
             </div>
           </NSpace>
         </NCard>
@@ -242,7 +258,7 @@ onMounted(() => {
         <div v-else class="node-grid">
           <NSkeleton v-if="serversStore.loading && totalCount === 0" text :repeat="3" />
           <NCard
-            v-for="server in servers"
+            v-for="server in visibleNodes"
             :key="server.id"
             size="small"
             class="node-card"
@@ -304,6 +320,12 @@ onMounted(() => {
             </NSpace>
           </NCard>
         </div>
+        <!-- Cap the grid so a large fleet is not re-diffed in full every 5s
+             (B4-14); link out for the rest. -->
+        <NText v-if="hiddenNodeCount > 0" depth="3" class="meta">
+          +{{ hiddenNodeCount }} more node{{ hiddenNodeCount === 1 ? "" : "s" }} —
+          <RouterLink :to="{ name: 'servers' }">view all servers</RouterLink>
+        </NText>
       </div>
 
       <aside class="dash-aside">
@@ -320,13 +342,16 @@ onMounted(() => {
           />
           <NSpace v-else vertical :size="8">
             <div
-              v-for="server in servers"
+              v-for="server in visibleHeartbeats"
               :key="server.id"
               class="heartbeat-row"
             >
               <NText depth="2">{{ server.name }}</NText>
               <NText depth="3" class="mono">{{ relativeTime(server.last_seen) }}</NText>
             </div>
+            <NText v-if="hiddenHeartbeatCount > 0" depth="3" class="meta">
+              +{{ hiddenHeartbeatCount }} more node{{ hiddenHeartbeatCount === 1 ? "" : "s" }}
+            </NText>
           </NSpace>
           <template #footer>
             <NText depth="3" class="mono meta">10s cycle · Heartbeat(stream) in agent.v1</NText>
@@ -350,7 +375,7 @@ onMounted(() => {
         <NCard size="small" title="Team activity" class="aside-card">
           <NEmpty
             size="small"
-            description="No team activity yet — ships in Phase 8"
+            description="No team activity yet"
           />
         </NCard>
 

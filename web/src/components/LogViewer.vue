@@ -524,7 +524,13 @@ onBeforeUnmount(() => {
     </header>
 
     <div class="log-viewer__toolbar">
-      <NButton size="small" secondary @click="togglePause">
+      <!-- The labels already flip (Pause/Resume, Follow/Following), so no
+           aria-pressed: a screen reader would otherwise hear "Resume, pressed". -->
+      <NButton
+        size="small"
+        secondary
+        @click="togglePause"
+      >
         {{ isPaused ? "Resume" : "Pause" }}
       </NButton>
       <NButton
@@ -540,7 +546,19 @@ onBeforeUnmount(() => {
       <span class="log-viewer__count">{{ lines.length }} lines</span>
     </div>
 
-    <div ref="logBody" class="log" @scroll="handleScroll">
+    <!-- role=log + aria-live announce appended lines; tabindex makes the
+         scroll region reachable so it can be scrolled with the keyboard
+         (B2-7). -->
+    <div
+      ref="logBody"
+      class="log"
+      role="log"
+      aria-live="polite"
+      aria-relevant="additions"
+      aria-label="Log output"
+      tabindex="0"
+      @scroll="handleScroll"
+    >
       <p v-if="lines.length === 0" class="log-viewer__empty">
         Waiting for log output…
       </p>

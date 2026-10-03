@@ -22,7 +22,12 @@ async function handleSelect(key: string | number): Promise<void> {
   if (key !== "sign-out") {
     return;
   }
-  await authStore.logout();
+  try {
+    await authStore.logout();
+  } catch {
+    // logout clears the local session in `finally`; a failed revoke must not
+    // block the redirect or surface as an unhandled rejection (B3-3).
+  }
   await router.push({ name: "login" });
 }
 </script>

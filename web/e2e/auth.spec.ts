@@ -19,10 +19,10 @@ test.describe("authentication", () => {
     await expect(
       page.getByRole("button", { name: "Sign in", exact: true }),
     ).toBeVisible();
-    // The create-account control is a RouterLink with an explicit role="tab",
-    // so it must be located by its tab role, not as a link.
+    // The switch is navigation, not an ARIA tab widget: the create-account
+    // control is a link with `aria-current`, not a `role=tab` (B4-18).
     await expect(
-      page.getByRole("tab", { name: "Create account", exact: true }),
+      page.getByRole("link", { name: "Create account", exact: true }),
     ).toBeVisible();
   });
 

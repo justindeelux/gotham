@@ -141,6 +141,103 @@ function copyCredential(field: CredentialField, label: string): void {
   void copyText(value, label);
 }
 
+/** Engine default port, used to build the internal connection string. */
+const enginePorts: Record<string, number> = {
+  postgres: 5432,
+  mysql: 3306,
+  mariadb: 3306,
+  mongodb: 27017,
+  redis: 6379,
+};
+
+/** URL scheme for each engine's connection string. */
+function connectionScheme(engine: string): string {
+  switch (engine) {
+    case "postgres":
+      return "postgresql";
+    case "mysql":
+      return "mysql";
+    case "mariadb":
+      return "mariadb";
+    case "mongodb":
+      return "mongodb";
+    case "redis":
+      return "redis";
+    default:
+      return engine;
+  }
+}
+
+/**
+ * dbContainerName mirrors the backend's containerName rule
+ * (internal/databases/spec.go): lowercased, non-Docker characters collapsed
+ * to dashes, truncated to 32 chars, suffixed with the id head. The API
+ * exposes no container-name field, so the internal DSN must be derived — a
+ * guessed `gotham-db-<name>` would not resolve.
+ */
+function dbContainerName(name: string, id: string): string {
+  const sanitized = name
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+    .replace(/^-+|-+$/g, "");
+  const suffix = id.slice(0, 8);
+  return sanitized === "" ? `gotham-db-${suffix}` : `gotham-db-${sanitized}-${suffix}`;
+}
+
+/**
+ * connectionString builds the full DSN (with the real password) for the Copy
+ * button. The public endpoint is preferred when the database exposes a public
+ * port, but only when the node address is actually resolved — substituting the
+ * raw server UUID would copy an unroutable host. The internal fallback uses
+ * the exact backend container-name rule.
+ */
+const connectionString = computed<string>(() => {
+  const db = database.value;
+  const creds = credentials.value;
+  if (!db || !creds) {
+    return "";
+  }
+  const scheme = connectionScheme(db.engine);
+  const server = serversStore.servers.find((item) => item.id === db.server_id);
+  if (db.public_port > 0) {
+    if (!server?.ip) {
+      return "";
+    }
+    return `${scheme}://${creds.username}:${creds.password}@${server.ip}:${db.public_port}/${creds.database}`;
+  }
+  const internalPort = enginePorts[db.engine] ?? 0;
+  return `${scheme}://${creds.username}:${creds.password}@${dbContainerName(db.name, db.id)}:${internalPort}/${creds.database}`;
+});
+
+/** nodeAddressUnknown renders instead of a DSN with an unroutable host. */
+const nodeAddressUnknown = computed<boolean>(() => {
+  const db = database.value;
+  if (!db || !credentials.value || db.public_port <= 0) {
+    return false;
+  }
+  return !serversStore.servers.some((item) => item.id === db.server_id && item.ip);
+});
+
+/** connectionDisplay masks the password for on-screen rendering. */
+const connectionDisplay = computed<string>(() =>
+  connectionString.value.replace(/:[^:@/]+@/, ":••••••••@"),
+);
+
+/** copyConnectionString copies the unmasked DSN. */
+function copyConnectionString(): void {
+  if (nodeAddressUnknown.value) {
+    message.error("Node address unknown — cannot build the public DSN yet");
+    return;
+  }
+  if (connectionString.value === "") {
+    message.error("Credentials are not loaded yet");
+    return;
+  }
+  void copyText(connectionString.value, "Connection string");
+}
+
 /** fetchAll loads the row, its credentials and the node list. */
 async function fetchAll(): Promise<void> {
   if (!dbId.value) {
@@ -922,6 +1019,18 @@ onUnmounted(() => {
                       Copy
                     </NButton>
                   </div>
+                  <div v-if="connectionString" class="connection-block">
+                    <NText depth="3" class="connection-label">
+                      Connection string
+                    </NText>
+                    <pre class="connection-string"><code>{{ connectionDisplay }}</code></pre>
+                    <NButton size="small" secondary @click="copyConnectionString">
+                      Copy connection string
+                    </NButton>
+                  </div>
+                  <NText v-else-if="nodeAddressUnknown" depth="3">
+                    Public endpoint unavailable · node address unknown.
+                  </NText>
                 </NSpace>
                 <NEmpty
                   v-else-if="!databasesStore.credentialsLoading"
@@ -941,6 +1050,7 @@ onUnmounted(() => {
                     v-model:value="backupTargetId"
                     :options="backupTargetOptions"
                     placeholder="Destination"
+                    aria-label="Backup destination"
                     style="width: 220px"
                   />
                   <NButton
@@ -1035,6 +1145,7 @@ onUnmounted(() => {
                       <NButton
                         size="small"
                         secondary
+                        :aria-label="`Restore backup from ${relativeTime(backup.created_at)}`"
                         :disabled="backup.status !== 'completed'"
                         @click="openRestore(backup)"
                       >
@@ -1048,6 +1159,7 @@ onUnmounted(() => {
                             size="small"
                             type="error"
                             ghost
+                            :aria-label="`Delete backup from ${relativeTime(backup.created_at)}`"
                             :disabled="backup.status === 'running'"
                           >
                             Delete
@@ -1174,6 +1286,7 @@ onUnmounted(() => {
                     <NSpace class="backup-row__actions" align="center" :size="8">
                       <NSwitch
                         :value="schedule.enabled"
+                        :aria-label="`Enable schedule ${schedule.cron}`"
                         :loading="backupsStore.schedulesActing"
                         @update:value="
                           (enabled: boolean) =>
@@ -1187,7 +1300,12 @@ onUnmounted(() => {
                         <template #checked>On</template>
                         <template #unchecked>Off</template>
                       </NSwitch>
-                      <NButton size="small" secondary @click="openScheduleEdit(schedule)">
+                      <NButton
+                        size="small"
+                        secondary
+                        :aria-label="`Edit schedule ${schedule.cron}`"
+                        @click="openScheduleEdit(schedule)"
+                      >
                         Edit
                       </NButton>
                       <NPopconfirm
@@ -1196,7 +1314,12 @@ onUnmounted(() => {
                         "
                       >
                         <template #trigger>
-                          <NButton size="small" type="error" ghost>
+                          <NButton
+                            size="small"
+                            type="error"
+                            ghost
+                            :aria-label="`Delete schedule ${schedule.cron}`"
+                          >
                             Delete
                           </NButton>
                         </template>
@@ -1236,9 +1359,13 @@ onUnmounted(() => {
                     v-model:value="scheduleTargetId"
                     :options="scheduleTargetOptions"
                     placeholder="Destination"
+                    aria-label="Schedule destination"
                     style="width: 220px"
                   />
-                  <NSwitch v-model:value="scheduleEnabled">
+                  <NSwitch
+                    v-model:value="scheduleEnabled"
+                    aria-label="Enable the new schedule"
+                  >
                     <template #checked>On</template>
                     <template #unchecked>Off</template>
                   </NSwitch>
@@ -1326,6 +1453,7 @@ onUnmounted(() => {
                       <NButton
                         size="small"
                         secondary
+                        :aria-label="`Test target ${target.name}`"
                         :loading="targetTests[target.id]?.checking"
                         @click="() => void handleTestTarget(target.id)"
                       >
@@ -1334,6 +1462,7 @@ onUnmounted(() => {
                       <NButton
                         size="small"
                         secondary
+                        :aria-label="`Edit target ${target.name}`"
                         @click="openTargetEdit(target.id)"
                       >
                         Edit
@@ -1344,7 +1473,12 @@ onUnmounted(() => {
                         "
                       >
                         <template #trigger>
-                          <NButton size="small" type="error" ghost>
+                          <NButton
+                            size="small"
+                            type="error"
+                            ghost
+                            :aria-label="`Delete target ${target.name}`"
+                          >
                             Delete
                           </NButton>
                         </template>
@@ -1584,6 +1718,35 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+}
+
+.connection-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.connection-label {
+  font-size: var(--text-sm);
+}
+
+.connection-string {
+  margin: 0;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: var(--surface-warm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.connection-string code {
+  font-family: inherit;
 }
 
 .empty-hint {

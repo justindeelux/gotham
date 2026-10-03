@@ -143,7 +143,9 @@
     0 0 0 1px rgba(255, 255, 255, 0.06);
 
   /* ─── Focus ────────────────────────────────────────────────────── */
-  --focus-ring: 0 0 0 3px rgba(88, 101, 242, 0.3);
+  /* Accent mixed toward white: >=5.3:1 on every app surface, so keyboard
+   * focus is never a ~1.36:1 30%-alpha wash (B3-9). */
+  --focus-ring: 0 0 0 3px var(--accent-ink);
 
   /* ─── Motion ───────────────────────────────────────────────────── */
   --motion-fast: 80ms;

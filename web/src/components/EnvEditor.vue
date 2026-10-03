@@ -3,6 +3,7 @@ import { NButton, NIcon, NInput, NText } from "naive-ui";
 import { computed } from "vue";
 
 import type { EnvVar } from "../api/applications";
+import { useStableRowKeys } from "../composables/useStableRowKeys";
 import { isSecretValue } from "../utils/envSecret";
 import GothamIcon from "./GothamIcon.vue";
 
@@ -24,6 +25,7 @@ const emit = defineEmits<{
 const KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
 const rows = computed<EnvVar[]>(() => props.modelValue);
+const { keys: rowKeys, insertAt, removeAt } = useStableRowKeys(() => rows.value.length);
 
 /** isValidKey enforces the backend-adjacent KEY shape ^[A-Z][A-Z0-9_]*$. */
 function isValidKey(key: string): boolean {
@@ -40,11 +42,13 @@ function updateRow(index: number, patch: Partial<EnvVar>): void {
 
 /** addRow appends an empty row for the next variable. */
 function addRow(): void {
+  insertAt(rows.value.length);
   emit("update:modelValue", [...rows.value, { key: "", value: "" }]);
 }
 
 /** removeRow drops one row by index. */
 function removeRow(index: number): void {
+  removeAt(index);
   emit("update:modelValue", rows.value.filter((_, rowIndex) => rowIndex !== index));
 }
 </script>
@@ -54,7 +58,11 @@ function removeRow(index: number): void {
     <div v-if="rows.length === 0" class="env-editor__empty">
       <NText depth="3">No environment variables yet. Add the first one below.</NText>
     </div>
-    <div v-for="(row, index) in rows" :key="index" class="env-editor__row">
+    <div
+      v-for="(row, index) in rows"
+      :key="rowKeys[index] ?? index"
+      class="env-editor__row"
+    >
       <NInput
         :value="row.key"
         class="mono"

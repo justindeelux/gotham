@@ -288,6 +288,24 @@ agent_dry_run --ca "${SCRATCH}/ca-src.pem" --dry-run >"${SCRATCH}/agent-ca.log" 
     || { echo "FAIL: install-agent.sh --ca --dry-run failed" >&2; cat "${SCRATCH}/agent-ca.log" >&2; exit 1; }
 echo "PASS: agent installer fails closed without a CA and accepts --ca/--insecure (A1)"
 
+# ---- JUS-5: localhost agent by default, --full opt-in -----------------------
+# install.sh installs and starts the agent on the same host unless
+# --no-local-agent is given; install-agent.sh only sets up Docker with --full.
+sh "${SCRIPT_DIR}/install.sh" --help 2>&1 | grep -q -- '--no-local-agent' \
+    || { echo "FAIL: install.sh --help does not document --no-local-agent" >&2; exit 1; }
+sh "${AGENT_INSTALLER}" --help 2>&1 | grep -q -- '--full' \
+    || { echo "FAIL: install-agent.sh --help does not document --full" >&2; exit 1; }
+grep -q 'install-agent.sh" --full --ca' "${SCRIPT_DIR}/install.sh" \
+    || { echo "FAIL: install.sh does not call install-agent.sh --full --ca for the localhost agent" >&2; exit 1; }
+grep -q 'ensure_docker_full' "${AGENT_INSTALLER}" \
+    || { echo "FAIL: install-agent.sh does not wire ensure_docker_full" >&2; exit 1; }
+# Test mode must not touch the agent paths: there is no systemd/Docker there.
+if [ -e "${ROOT}/var/lib/gotham-agent" ] || [ -e "${ROOT}/etc/gotham/agent.env" ]; then
+    echo "FAIL: test-mode install.sh installed the localhost agent" >&2
+    exit 1
+fi
+echo "PASS: localhost agent wiring present and test mode skips it (JUS-5)"
+
 # ---- N1: installer scripts must be executable ---------------------------------
 # The installers invoke the sudoers helpers (via `sh`, but the committed mode
 # must still be +x) and the operator runs the installers and verification
@@ -584,5 +602,26 @@ GOTHAM_SKIP_DEPS=1 \
     sh "${SCRIPT_DIR}/install.sh" --dry-run >/dev/null
 [ ! -e "${DRY_ROOT}" ] || { echo "FAIL: --dry-run created files" >&2; exit 1; }
 echo "PASS: --dry-run made no changes"
+
+# ---- JUS-5: dry-run shows the localhost agent step and its opt-out ----------
+# Without GOTHAM_INSTALL_ROOT (real paths, but --dry-run creates nothing) the
+# run reaches the localhost agent step past service activation.
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_SKIP_DEPS=1 \
+    sh "${SCRIPT_DIR}/install.sh" --dry-run >"${SCRATCH}/dry-agent.log" 2>&1
+grep -q 'install-agent.sh --full --ca' "${SCRATCH}/dry-agent.log" \
+    || { echo "FAIL: --dry-run does not show the localhost agent install" >&2; cat "${SCRATCH}/dry-agent.log" >&2; exit 1; }
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_SKIP_DEPS=1 \
+    sh "${SCRIPT_DIR}/install.sh" --dry-run --no-local-agent >"${SCRATCH}/dry-no-agent.log" 2>&1
+grep -q 'skipping the localhost agent install (--no-local-agent)' "${SCRATCH}/dry-no-agent.log" \
+    || { echo "FAIL: --no-local-agent --dry-run does not show the skip" >&2; exit 1; }
+if grep -q 'install-agent.sh --full' "${SCRATCH}/dry-no-agent.log"; then
+    echo "FAIL: --no-local-agent still schedules the agent install" >&2
+    exit 1
+fi
+echo "PASS: --dry-run shows the localhost agent install and its --no-local-agent skip (JUS-5)"
 
 echo "ALL RELEASE-INSTALL TESTS PASSED"

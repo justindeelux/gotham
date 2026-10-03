@@ -1,13 +1,17 @@
 #!/bin/sh
 #
-# install-agent-lib.sh holds the two pieces of install-agent.sh that carry
-# reinstall behaviour, split out so they can be exercised without root or a
-# systemd host (see deploy/test-agent-install.sh). It is sourced, not run.
+# install-agent-lib.sh holds the pieces of install-agent.sh that carry
+# reinstall behaviour or need root-free exercise, split out so they can be
+# tested without root or a systemd host (see deploy/test-agent-install.sh).
+# It is sourced, not run.
 #
 # agent_env_write     composes /etc/gotham/agent.env, preserving values a prior
 #                     install wrote for keys this invocation does not set.
 # agent_service_restart  restarts an already-running agent on the new binary
 #                     (starts it otherwise) and verifies the unit's ExecStart.
+# ensure_docker_full  installs Docker Engine + the compose plugin from the
+#                     official Docker apt repository (--full; Ubuntu/Debian
+#                     only, idempotent, fingerprint-pinned key).
 
 # agent_env_write writes <env_file> for the agent.
 #
@@ -224,4 +228,119 @@ agent_service_restart() {
             return 1
             ;;
     esac
+}
+
+# Docker apt repository pinned for --full installs. Packages are verified by
+# apt against this keyring; the key itself is fetched over HTTPS and checked
+# against the published fingerprint below, never piped to a shell.
+_docker_apt_key_url="https://download.docker.com/linux"
+_docker_apt_key_fingerprint="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+
+# ensure_docker_full installs Docker Engine and the compose plugin from the
+# official Docker apt repository (Ubuntu/Debian only). It is idempotent: when
+# `docker` and `docker compose` already work it only logs and returns 0. On
+# any other distro it fails with a message naming the manual step instead of
+# attempting an unverified install. Test seam: GOTHAM_OS_RELEASE_FILE overrides
+# /etc/os-release; GOTHAM_APT_ROOT prefixes the apt paths (/etc/apt/...).
+ensure_docker_full() {
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        echo "==> Docker Engine and the compose plugin are already installed; skipping"
+        return 0
+    fi
+    _os_release="${GOTHAM_OS_RELEASE_FILE:-/etc/os-release}"
+    _distro="" _codename=""
+    if [ -f "${_os_release}" ]; then
+        _distro="$(sed -n 's/^ID=//p' "${_os_release}" | head -n1 | tr -d '"')"
+        _codename="$(sed -n 's/^VERSION_CODENAME=//p' "${_os_release}" | head -n1 | tr -d '"')"
+    fi
+    case "${_distro}" in
+        ubuntu | debian) ;;
+        *)
+            echo "install-agent.sh --full: Docker Engine is not installed and automatic setup supports Ubuntu/Debian only (found '${_distro:-unknown}')." >&2
+            echo "  Install Docker Engine and the compose plugin manually (https://docs.docker.com/engine/install/), then re-run without --full." >&2
+            return 1
+            ;;
+    esac
+    [ -n "${_codename}" ] \
+        || {
+            echo "install-agent.sh --full: could not read VERSION_CODENAME from ${_os_release}" >&2
+            return 1
+        }
+    command -v apt-get >/dev/null 2>&1 \
+        || {
+            echo "install-agent.sh --full: apt-get not found; install Docker manually, then re-run without --full" >&2
+            return 1
+        }
+    command -v curl >/dev/null 2>&1 || die_simple "required tool 'curl' is missing (apt-get install -y curl)"
+    command -v gpg >/dev/null 2>&1 || {
+        echo "==> installing ca-certificates curl gnupg for the Docker repository setup"
+        ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg ) \
+            || return 1
+    }
+    _apt_root="${GOTHAM_APT_ROOT:-}"
+    _keyrings_dir="${_apt_root}/etc/apt/keyrings"
+    # NOTE: the dearmored (binary) keyring must end in .gpg, not .asc: apt
+    # treats a .asc signed-by file as ASCII-armored and silently ignores binary
+    # content in it, failing later with NO_PUBKEY (proven on Ubuntu 22.04).
+    _keyring_file="${_keyrings_dir}/docker.gpg"
+    _source_file="${_apt_root}/etc/apt/sources.list.d/docker.list"
+    mkdir -p "${_keyrings_dir}" "$(dirname "${_source_file}")"
+    chmod 0755 "${_keyrings_dir}" "$(dirname "${_source_file}")"
+    # No EXIT trap here: this library is sourced by install-agent.sh, whose own
+    # EXIT trap owns the installer scratch dir; installing another one would
+    # clobber it (I5). The temp key is removed on every path below instead.
+    _key_tmp="$(mktemp "${TMPDIR:-/tmp}/docker-key.XXXXXX")" || return 1
+    if ! curl -fsSL "${_docker_apt_key_url}/${_distro}/gpg" -o "${_key_tmp}"; then
+        echo "install-agent.sh --full: could not download the Docker signing key" >&2
+        rm -f "${_key_tmp}"
+        return 1
+    fi
+    # Verify the key against the published fingerprint before trusting it: the
+    # download channel alone is not the anchor. The fingerprint is field 10 of
+    # the fpr record in --with-colons output.
+    _key_fp="$(gpg --show-keys --with-colons "${_key_tmp}" 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }' | tr -d '[:space:]')"
+    case "${_key_fp}" in
+        "${_docker_apt_key_fingerprint}")
+            ;;
+        *)
+            echo "install-agent.sh --full: Docker signing key fingerprint mismatch (got '${_key_fp:-unreadable}'); refusing to use it" >&2
+            rm -f "${_key_tmp}"
+            return 1
+            ;;
+    esac
+    if ! gpg --dearmor -o "${_keyring_file}" "${_key_tmp}"; then
+        echo "install-agent.sh --full: could not import the Docker signing key" >&2
+        rm -f "${_key_tmp}"
+        return 1
+    fi
+    rm -f "${_key_tmp}"
+    chmod 0644 "${_keyring_file}"
+    _arch="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
+    _repo_tmp="${_source_file}.tmp.$$"
+    printf 'deb [arch=%s signed-by=%s] %s/%s %s stable\n' \
+        "${_arch}" "${_keyring_file}" "${_docker_apt_key_url}" "${_distro}" "${_codename}" >"${_repo_tmp}" \
+        || return 1
+    chmod 0644 "${_repo_tmp}"
+    mv -f "${_repo_tmp}" "${_source_file}"
+    echo "==> installing Docker Engine and the compose plugin from the Docker apt repository"
+    ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update ) || return 1
+    ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin ) \
+        || {
+            echo "install-agent.sh --full: Docker installation failed" >&2
+            return 1
+        }
+    command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 \
+        || {
+            echo "install-agent.sh --full: Docker installed but 'docker compose version' does not work" >&2
+            return 1
+        }
+    echo "==> Docker Engine and the compose plugin are ready"
+    return 0
+}
+
+# die_simple aborts without depending on the caller's die (release-verify.sh is
+# not necessarily sourced when this library is exercised standalone).
+die_simple() {
+    echo "install-agent.sh: $*" >&2
+    exit 1
 }

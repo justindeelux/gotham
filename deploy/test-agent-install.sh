@@ -17,6 +17,11 @@
 #   A3-8  agent_service_restart restarts an active unit onto the new binary and
 #         starts an inactive one, failing when the unit's ExecStart does not
 #         reference the installed binary.
+#   F1    install-agent.sh --full is opt-in (flag or GOTHAM_AGENT_FULL=1),
+#         stays fail-closed without a CA, and wires ensure_docker_full.
+#   F2    ensure_docker_full skips when Docker works, refuses non-Ubuntu/
+#         Debian with the manual step, installs via the pinned Docker apt
+#         repository, and fails closed on a fingerprint mismatch.
 #
 # The systemd calls are answered by a PATH shim, so nothing outside the scratch
 # directory (and the process environment) is touched.
@@ -381,6 +386,179 @@ if grep -q 'systemctl enable --now' "${AGENT_INSTALLER}"; then
     fail "install-agent.sh still uses a blind 'enable --now' (reinstall would not restart)"
 fi
 pass "install-agent.sh wires both helpers and no longer blind-enables"
+
+# --- F1: --full Docker setup -------------------------------------------------
+echo "==> F1 --full installs Docker Engine + the compose plugin (Ubuntu/Debian only)"
+printf 'dummy CA for the --full dry-run path\n' >"${SCRATCH}/full-ca.pem"
+# --help documents --full.
+env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test \
+    sh "${AGENT_INSTALLER}" --help 2>&1 | grep -q -- '--full' \
+    || fail "--help does not document --full"
+# The CA gate stays first: --full without a CA still fails closed.
+if env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test \
+    sh "${AGENT_INSTALLER}" --full --dry-run >"${SCRATCH}/full-no-ca.log" 2>&1; then
+    fail "--full ran without a CA (agent channel would be plaintext)"
+fi
+grep -q "no control-plane CA certificate configured" "${SCRATCH}/full-no-ca.log" \
+    || fail "--full without a CA failed for an unexpected reason"
+# With a CA, --full announces the Docker setup in dry-run mode.
+env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test \
+    sh "${AGENT_INSTALLER}" --full --ca "${SCRATCH}/full-ca.pem" --dry-run \
+    >"${SCRATCH}/full-dry.log" 2>&1 \
+    || fail "--full --ca --dry-run failed"
+grep -q 'ensure Docker Engine and the compose plugin (--full)' "${SCRATCH}/full-dry.log" \
+    || fail "--full --dry-run did not announce the Docker setup"
+# Default off: without --full (flag or environment) no Docker setup is printed.
+env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test \
+    sh "${AGENT_INSTALLER}" --ca "${SCRATCH}/full-ca.pem" --dry-run \
+    >"${SCRATCH}/no-full-dry.log" 2>&1 \
+    || fail "--ca --dry-run without --full failed"
+if grep -q 'ensure Docker Engine' "${SCRATCH}/no-full-dry.log"; then
+    fail "Docker setup ran without --full (default must stay off)"
+fi
+# The environment form enables it too.
+env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test GOTHAM_AGENT_FULL=1 \
+    sh "${AGENT_INSTALLER}" --ca "${SCRATCH}/full-ca.pem" --dry-run \
+    >"${SCRATCH}/full-env-dry.log" 2>&1 \
+    || fail "GOTHAM_AGENT_FULL=1 --dry-run failed"
+grep -q 'ensure Docker Engine and the compose plugin (--full)' "${SCRATCH}/full-env-dry.log" \
+    || fail "GOTHAM_AGENT_FULL=1 did not enable the Docker setup"
+# The installer wires the helper (static guard; the live path needs root/apt).
+grep -q 'ensure_docker_full' "${AGENT_INSTALLER}" \
+    || fail "install-agent.sh does not call ensure_docker_full for --full"
+pass "--full is opt-in, fail-closed without a CA, and wired to ensure_docker_full"
+
+# --- F2: ensure_docker_full behaviour ----------------------------------------
+echo "==> F2 ensure_docker_full skips, refuses, and installs via shims"
+F2_DIR="${SCRATCH}/full-flow"
+F2_SHIM="${F2_DIR}/shim"
+mkdir -p "${F2_SHIM}" "${F2_DIR}/os" "${F2_DIR}/apt"
+printf 'ID=ubuntu\nVERSION_CODENAME=jammy\n' >"${F2_DIR}/os/os-release"
+printf 'ID=arch\nVERSION_CODENAME=n/a\n' >"${F2_DIR}/os/arch-release"
+cat >"${F2_SHIM}/docker" <<'SHIM'
+#!/bin/sh
+# Succeeds only once the "install" (the curl shim) drops the marker.
+if [ "$1" = "compose" ]; then
+    [ -f "${DOCKER_MARKER:?}/installed" ] && exit 0
+    exit 1
+fi
+exit 0
+SHIM
+chmod +x "${F2_SHIM}/docker"
+FULL_PATH="${F2_SHIM}:${PATH}"
+export FULL_PATH
+# Already installed: skipped before the distro is even read.
+DOCKER_MARKER="${F2_DIR}/marker-present"
+export DOCKER_MARKER
+mkdir -p "${DOCKER_MARKER}"
+touch "${DOCKER_MARKER}/installed"
+if GOTHAM_OS_RELEASE_FILE=/nonexistent PATH="${FULL_PATH}" ensure_docker_full >"${F2_DIR}/skip.log" 2>&1; then
+    grep -q 'already installed; skipping' "${F2_DIR}/skip.log" \
+        || fail "skip path did not log the skip"
+else
+    fail "ensure_docker_full did not skip when Docker already works"
+fi
+rm -rf "${DOCKER_MARKER}"
+DOCKER_MARKER="${F2_DIR}/marker-absent"
+export DOCKER_MARKER
+mkdir -p "${DOCKER_MARKER}"
+# Unsupported distro: fails with the manual step, touching nothing.
+if GOTHAM_OS_RELEASE_FILE="${F2_DIR}/os/arch-release" GOTHAM_APT_ROOT="${F2_DIR}/apt" \
+    PATH="${FULL_PATH}" ensure_docker_full >"${F2_DIR}/arch.log" 2>&1; then
+    fail "ensure_docker_full accepted an unsupported distro"
+else
+    grep -q 'supports Ubuntu/Debian only' "${F2_DIR}/arch.log" \
+        || fail "unsupported distro failed without the manual-step message"
+fi
+[ ! -e "${F2_DIR}/apt/etc/apt/sources.list.d/docker.list" ] \
+    || fail "unsupported distro still wrote an apt source"
+pass "skip-when-present and refuse-elsewhere hold"
+# Full flow against shims: pinned key, atomic repo file, expected packages.
+cat >"${F2_SHIM}/curl" <<'SHIM'
+#!/bin/sh
+# Minimal -o parser: writes a dummy key and drops the installed marker.
+out=""
+prev=""
+for arg in "$@"; do
+    if [ "${prev}" = "-o" ]; then out="${arg}"; fi
+    prev="${arg}"
+done
+[ -n "${out}" ] || exit 1
+printf 'dummy-docker-key\n' >"${out}"
+mkdir -p "${DOCKER_MARKER:?}"
+touch "${DOCKER_MARKER}/installed"
+exit 0
+SHIM
+cat >"${F2_SHIM}/gpg" <<'SHIM'
+#!/bin/sh
+case "$*" in
+    *--show-keys*)
+        echo "fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:"
+        exit 0
+        ;;
+    *--dearmor*)
+        out=""; prev=""; src=""
+        for arg in "$@"; do
+            if [ "${prev}" = "-o" ]; then out="${arg}"; else src="${arg}"; fi
+            prev="${arg}"
+        done
+        cp "${src}" "${out}"
+        exit 0
+        ;;
+esac
+exit 1
+SHIM
+cat >"${F2_SHIM}/dpkg" <<'SHIM'
+#!/bin/sh
+echo amd64
+SHIM
+cat >"${F2_SHIM}/apt-get" <<'SHIM'
+#!/bin/sh
+echo "apt-get $*" >>"${APT_LOG:?}"
+exit 0
+SHIM
+chmod +x "${F2_SHIM}/curl" "${F2_SHIM}/gpg" "${F2_SHIM}/dpkg" "${F2_SHIM}/apt-get"
+APT_LOG="${F2_DIR}/apt.log"
+export APT_LOG
+: >"${APT_LOG}"
+if GOTHAM_OS_RELEASE_FILE="${F2_DIR}/os/os-release" GOTHAM_APT_ROOT="${F2_DIR}/apt" \
+    PATH="${FULL_PATH}" ensure_docker_full >"${F2_DIR}/flow.log" 2>&1; then
+    grep -qx 'deb \[arch=amd64 signed-by='"${F2_DIR}"'/apt/etc/apt/keyrings/docker.gpg\] https://download.docker.com/linux/ubuntu jammy stable' \
+        "${F2_DIR}/apt/etc/apt/sources.list.d/docker.list" \
+        || fail "apt source has the wrong content"
+    [ -f "${F2_DIR}/apt/etc/apt/keyrings/docker.gpg" ] \
+        || fail "keyring file was not written"
+    grep -q 'docker-ce-cli' "${APT_LOG}" && grep -q 'docker-compose-plugin' "${APT_LOG}" \
+        || fail "apt was not asked for the engine and compose plugin packages"
+    grep -q 'containerd.io' "${APT_LOG}" && grep -q 'docker-buildx-plugin' "${APT_LOG}" \
+        || fail "apt was not asked for containerd.io and the buildx plugin"
+    pass "shimmed install writes the pinned repo and requests the engine + compose plugin"
+else
+    fail "ensure_docker_full failed against shims"
+fi
+# A wrong fingerprint aborts before any apt path is written.
+cat >"${F2_SHIM}/gpg" <<'SHIM'
+#!/bin/sh
+case "$*" in
+    *--show-keys*)
+        echo "fpr:::::::::AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:"
+        exit 0
+        ;;
+esac
+exit 1
+SHIM
+chmod +x "${F2_SHIM}/gpg"
+rm -rf "${F2_DIR}/apt2" "${DOCKER_MARKER}/installed"
+if GOTHAM_OS_RELEASE_FILE="${F2_DIR}/os/os-release" GOTHAM_APT_ROOT="${F2_DIR}/apt2" \
+    PATH="${FULL_PATH}" ensure_docker_full >"${F2_DIR}/fp.log" 2>&1; then
+    fail "ensure_docker_full accepted a key with the wrong fingerprint"
+else
+    grep -q 'fingerprint mismatch' "${F2_DIR}/fp.log" \
+        || fail "wrong fingerprint failed without the mismatch message"
+fi
+[ ! -e "${F2_DIR}/apt2/etc/apt/sources.list.d/docker.list" ] \
+    || fail "a wrong-fingerprint key still wrote an apt source"
+pass "a wrong fingerprint fails closed before any apt path is written"
 
 if [ "${FAILURES}" -eq 0 ]; then
     echo "ALL AGENT-INSTALL TESTS PASSED"

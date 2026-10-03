@@ -108,6 +108,13 @@ scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .
 sudo deploy/install-agent.sh --ca ./ca.crt
 ```
 
+The control plane installer already did this for the local host: `install.sh`
+installs and starts the agent on the same machine by default (same release
+tag, `--full` so Docker Engine and the compose plugin are set up too) and the
+agent registers itself as the first node — the Servers page lists it once its
+heartbeats land. Pass `--no-local-agent` (or `GOTHAM_NO_LOCAL_AGENT=1`) for a
+remote-only control plane.
+
 `install-agent.sh` fails closed without a CA; `--insecure` is the
 development-only override that leaves the agent channel in plaintext. The agent
 itself also fails closed: with no CA it refuses to start unless
@@ -124,6 +131,14 @@ set (for example the control plane address and node id) are kept from the
 existing `agent.env`, operator-added keys are preserved, and a running agent is
 restarted onto the newly installed binary. Pass a value again (flag or
 environment) to override it.
+
+`install-agent.sh --full` (or `GOTHAM_AGENT_FULL=1`) also installs Docker
+Engine and the compose plugin from the official Docker apt repository before
+anything else. It is off by default and on for the localhost agent the
+control-plane installer sets up. The repository key is fingerprint-pinned
+before use and every package is apt-verified; on non-Ubuntu/Debian distros it
+fails with the manual step instead of guessing. Re-running it is a no-op when
+`docker compose version` already works.
 
 Re-running `install.sh` on a pre-existing plaintext control plane flips it to
 TLS; agents installed before that go offline until they are reinstalled with

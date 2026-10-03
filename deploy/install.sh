@@ -49,8 +49,24 @@
 # hostname are always included. On a reinstall, omitting them keeps the list
 # already persisted next to the CA.
 #
+# Localhost agent (on by default). The installer also installs and starts the
+# node agent on this host and registers it as the control plane's first node,
+# over the mTLS channel above (127.0.0.1 is always a listener SAN, so no
+# --cp-host is needed for it). It calls install-agent.sh --full --ca with the
+# provisioned CA, so Docker Engine and the compose plugin are set up too, and
+# pins the agent to the same release tag the control plane just installed. The
+# node id defaults to "<hostname>-agent" (the bare hostname is reserved for the
+# control plane listener) and may be overridden with GOTHAM_AGENT_NODE_ID; the
+# dial address defaults to 127.0.0.1:9442 and may be overridden with
+# GOTHAM_AGENT_CP_ADDR. Registration is automatic: the agent registers on first
+# contact and its heartbeats flip the server row the UI lists to ready.
+# Re-running the installer re-runs the agent install, which is idempotent (the
+# prior node id and address are kept, the unit is restarted onto the new
+# binary). Pass --no-local-agent (or GOTHAM_NO_LOCAL_AGENT=1) to skip it for a
+# remote-only control plane.
+#
 # Usage:
-#   sudo ./install.sh [--cp-host <name-or-ip>]... [--dry-run]
+#   sudo ./install.sh [--cp-host <name-or-ip>]... [--no-local-agent] [--dry-run]
 
 set -eu
 # A permissive base umask: shared directories (/etc/gotham, /usr/libexec/gotham,
@@ -72,10 +88,12 @@ DEFAULT_REPO="justindeelux/gotham"
 GOTHAM_RELEASE_PUBLIC_KEY_B64="Yt6nz1gGQWF7Bfc9MCt/gQXbPMzhN9OygrUkOEFYdwQ="
 
 DRY_RUN=0
+NO_LOCAL_AGENT=0
 CP_HOSTS_OPT=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
+        --no-local-agent) NO_LOCAL_AGENT=1 ;;
         --cp-host)
             [ "$#" -ge 2 ] || { echo "--cp-host requires a hostname or IP" >&2; exit 2; }
             CP_HOSTS_OPT="${CP_HOSTS_OPT} $2"
@@ -83,7 +101,9 @@ while [ "$#" -gt 0 ]; do
             ;;
         --cp-host=*) CP_HOSTS_OPT="${CP_HOSTS_OPT} ${1#--cp-host=}" ;;
         -h | --help)
-            sed -n '2,53p' "$0"
+            # Print every leading comment line (the header), not a fixed range,
+            # so the documented flags cannot drift out of --help.
+            awk 'NR == 1 { next } /^[^#]/ { exit } { print }' "$0"
             exit 0
             ;;
         *)
@@ -93,6 +113,10 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
+# GOTHAM_NO_LOCAL_AGENT=1 is the environment form of --no-local-agent.
+if [ "${GOTHAM_NO_LOCAL_AGENT:-0}" = "1" ]; then
+    NO_LOCAL_AGENT=1
+fi
 
 # gRPC listener SAN hosts: --cp-host values plus GOTHAM_GRPC_HOSTS
 # (comma-separated). Empty is fine; serve always adds the loopback names and the
@@ -434,7 +458,7 @@ log "installing systemd unit ${SERVICE_FILE}"
 render_file "${SCRIPT_DIR}/gotham.service" "${SERVICE_FILE}" 0644
 
 if [ "${TEST_MODE}" -eq 1 ]; then
-    log "test mode: skipping service activation"
+    log "test mode: skipping service activation and the localhost agent install"
     log "done (test install under ${PREFIX})"
     exit 0
 fi
@@ -479,6 +503,43 @@ log "starting ${BINARY_NAME}"
 run systemctl daemon-reload
 run systemctl enable --now "${BINARY_NAME}.service"
 
+# ---- Localhost agent (the control plane's first node) -----------------------
+# On by default: install and start the agent on this host, pointed at the
+# loopback gRPC listener over the mTLS channel provisioned above. The dial
+# address needs no --cp-host because the loopback names are always listener
+# SANs. Idempotent: the agent installer keeps the prior node id and address and
+# restarts the unit onto the newly installed binary. Opt out with
+# --no-local-agent for a remote-only control plane.
+if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
+    for agent_sibling in install-agent.sh install-agent-lib.sh gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service; do
+        if [ ! -f "${SCRIPT_DIR}/${agent_sibling}" ]; then
+            die "install.sh: ${agent_sibling} must be next to this script for the localhost agent install (--no-local-agent to skip)"
+        fi
+    done
+    LOCAL_AGENT_NODE_ID="${GOTHAM_AGENT_NODE_ID:-}"
+    if [ -z "${LOCAL_AGENT_NODE_ID}" ]; then
+        LOCAL_AGENT_NODE_ID="$(hostname 2>/dev/null || true)-agent"
+        [ "${LOCAL_AGENT_NODE_ID}" != "-agent" ] || LOCAL_AGENT_NODE_ID="local-agent"
+    fi
+    LOCAL_AGENT_CP_ADDR="${GOTHAM_AGENT_CP_ADDR:-127.0.0.1:9442}"
+    if [ "${DRY_RUN}" -eq 1 ]; then
+        echo "[dry-run] GOTHAM_AGENT_CP_ADDR=${LOCAL_AGENT_CP_ADDR} GOTHAM_AGENT_NODE_ID=${LOCAL_AGENT_NODE_ID} GOTHAM_VERSION=${VERSION} sh ${SCRIPT_DIR}/install-agent.sh --full --ca ${CA_DIR}/ca.crt"
+    else
+        log "installing the localhost agent node ${LOCAL_AGENT_NODE_ID} (--no-local-agent to skip)"
+        # Invoke via sh so a checkout that lost the exec bit still installs.
+        # The release location (mirror/base URL, repo) is inherited from the
+        # environment; the tag is pinned to the control plane's so both
+        # binaries come from one release.
+        GOTHAM_AGENT_CP_ADDR="${LOCAL_AGENT_CP_ADDR}" \
+        GOTHAM_AGENT_NODE_ID="${LOCAL_AGENT_NODE_ID}" \
+        GOTHAM_VERSION="${VERSION}" \
+            sh "${SCRIPT_DIR}/install-agent.sh" --full --ca "${CA_DIR}/ca.crt" \
+            || die "localhost agent install failed (re-run with --no-local-agent to skip it)"
+    fi
+else
+    log "skipping the localhost agent install (--no-local-agent)"
+fi
+
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [ -n "${HOST_IP}" ] || HOST_IP="127.0.0.1"
 
@@ -492,7 +553,8 @@ Gotham ${VERSION} is installed.
 
 First login:
   1. Open the Web UI and create an account through the sign-up form.
-  2. Sign in, then add a node agent with deploy/install-agent.sh.
+  2. Sign in: the Servers page already lists this host's agent node (ready
+     once its first heartbeat lands). Add more nodes with deploy/install-agent.sh.
   Platform-global operations (node-wide proxy sync, DNS providers) also require
   the account email in PLATFORM_ADMINS in /etc/gotham/gotham.env.
 

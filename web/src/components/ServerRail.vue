@@ -325,8 +325,8 @@ onUnmounted(() => {
 
 .rail-dot {
   position: absolute;
-  right: 10px;
-  bottom: 9px;
+  right: 3px;
+  bottom: 3px;
   width: 10px;
   height: 10px;
   border-radius: var(--radius-pill);

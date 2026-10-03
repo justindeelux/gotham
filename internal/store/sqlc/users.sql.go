@@ -135,6 +135,37 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	return i, err
 }
 
+const updateUserAvatar = `-- name: UpdateUserAvatar :one
+UPDATE users
+SET avatar = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version
+`
+
+type UpdateUserAvatarParams struct {
+	ID     pgtype.UUID `json:"id"`
+	Avatar *string     `json:"avatar"`
+}
+
+// UpdateUserAvatar replaces the account's stored OAuth avatar URL. The caller
+// (OAuth login) validates the URL against the shared allowlist first; a nil
+// avatar clears the stored value. It returns the updated row so the login can
+// mint its session from the fresh read.
+func (q *Queries) UpdateUserAvatar(ctx context.Context, arg UpdateUserAvatarParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserAvatar, arg.ID, arg.Avatar)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.CreatedAt,
+		&i.PasswordHash,
+		&i.Avatar,
+		&i.UpdatedAt,
+		&i.CredentialVersion,
+	)
+	return i, err
+}
+
 const updateUserPasswordHash = `-- name: UpdateUserPasswordHash :exec
 UPDATE users
 SET password_hash = $2, updated_at = now()

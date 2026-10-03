@@ -177,11 +177,27 @@ func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFr
 		return nil, err
 	}
 
+	// Persist the provider avatar end to end: first login stores it and later
+	// logins refresh it, so /me (and the header behind it) renders the image
+	// the CSP allowlist permits. An invalid provider value stores nothing and
+	// never blocks the login; a storage failure is logged, not fatal.
+	if avatar, ok := SanitizeAvatarURL(identity.AvatarURL); ok {
+		if user.Avatar == nil || *user.Avatar != avatar {
+			if updated, updErr := s.auth.store.UpdateUserAvatar(ctx, user.ID, &avatar); updErr != nil {
+				s.logger.Warn("auth: oauth update avatar", "error", updErr, "email", email)
+			} else {
+				user = updated
+			}
+		}
+	}
+
 	return s.auth.IssueSession(ctx, user)
 }
 
 // createOAuthUser inserts an account for an OAuth-only identity (no local
-// password, empty avatar). A concurrent insert of the same email is resolved by
+// password). The avatar is synced by Callback after this returns, so every
+// path (created, existing, race-winner re-read) stores or refreshes it
+// uniformly. A concurrent insert of the same email is resolved by
 // re-reading the row rather than failing the login.
 func (s *OAuthService) createOAuthUser(ctx context.Context, email string) (sqlc.User, error) {
 	// Closed registration applies to every account-creation path (P-A2): an

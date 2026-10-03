@@ -1,9 +1,11 @@
 # Retro review — Phases 0–5 + UI side track
 
-Owner-approved pass to re-review, under the dual-reviewer regime (Codex +
-subagent), all code merged up to Phase 5 (PRs #1–#54). Everything is already
-merged and in use, so findings land as follow-up PRs (owner-approved per
-cluster) or as register entries. Status: planned, 2026-10-02.
+Owner-approved pass to re-review, under the dual-reviewer regime, all code
+merged up to Phase 5 (PRs #1–#54). Everything was already merged and in use, so
+findings landed as follow-up PRs (owner-approved per cluster) or as register
+entries. Status: **complete, 2026-10-03** — all 16 fix clusters merged
+(PRs #100–#130, `main` @ `2219d78`). Campaign register:
+`docs/sub-plans/retro-review-p0-5-register.md`.
 
 ## Scope
 

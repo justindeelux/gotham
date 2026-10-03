@@ -19,6 +19,18 @@ Plan: [`plan/00-roadmap.md`](plan/00-roadmap.md).
 - [x] Phase 9 — Self-update & Release (gate G2 approved with conditions): BE-9.1 control-plane self-update merged `390a2fa` (PR #71); BE-9.2 agent remote update merged `ae78888` (PR #72); INFRA-9.1 release pipeline + signed installers merged `9a6268d` (PR #73); install hardening merged `e99ef49` (PR #74); G2 conditions closed: e2e determinism (#79 `8928b49`), agent channel TLS by default + release-environment gating + supply-chain pins (#78 `d716734`), download budget + CLI ownership + CP backoff + wrapper health gate (#77 `4220931`), docs/UI + residual register (#80 `0deee90`); the real newer-release `gotham update` + AUTO_UPDATE exercise and the real agent rollout from the GitHub CDN are proven (M9 evidence below); code residuals closed 2026-10-01 (#92, #93, #96)
 - [x] Phase 11 — UI Alignment side track
 
+## Retro review Phases 0–5
+
+- [x] **Complete 2026-10-03.** Dual review of all code merged up to Phase 5
+  (15 units, ≈236 deduped findings) → 16 fix clusters shipped as PRs #100–#130
+  (`main` @ `2219d78`), each with dual review + green CI. Register:
+  [`sub-plans/retro-review-p0-5-register.md`](sub-plans/retro-review-p0-5-register.md);
+  plan: [`sub-plans/retro-review-p0-5.md`](sub-plans/retro-review-p0-5.md).
+- [ ] Owner-decision follow-ups from the register: `TestStoreCreateFirstUserSerializes`
+  needs its own DB/schema (or a serial CI step) to stop skipping; backfill the
+  `target_id` index on the next migration; the `connectionDisplay` DSN masking
+  should move to `new URL()`.
+
 ## Phase 5 residuals
 
 - [x] Live smoke: create a managed Postgres via the API, local backup, drop a

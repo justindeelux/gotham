@@ -22,7 +22,7 @@ import EditServerModal from "../components/EditServerModal.vue";
 import GothamIcon from "../components/GothamIcon.vue";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
-import { formatBytes, relativeTime, toPercent, USAGE_DANGER_PERCENT } from "../utils/format";
+import { formatBytes, relativeTime, toPercent, usageLevel } from "../utils/format";
 
 const router = useRouter();
 const route = useRoute();
@@ -42,8 +42,11 @@ const checkingAll = ref(false);
 const installCommand = `scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .
 git clone --depth 1 https://github.com/justindeelux/gotham /tmp/gotham
 sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=<node> \\
-  /tmp/gotham/deploy/install-agent.sh --ca ./ca.crt
+  /tmp/gotham/deploy/install-agent.sh --ca ./ca.crt --full
 
+# --full installs Docker Engine + the compose plugin (Ubuntu/Debian).
+# install.sh already adds a localhost agent by default (--no-local-agent
+# opts out); use this snippet for every further node.
 # The installer verifies the signed manifest + digest, writes
 # /etc/gotham/ca.crt, then enables the systemd unit.
 systemctl status gotham-agent`;
@@ -191,7 +194,7 @@ function initials(name: string): string {
 interface MetricView {
   /** label is the displayed reading, or an em dash when the node reported none. */
   label: string;
-  /** color is the bar color; danger red once the normalized reading reaches 80%. */
+  /** color is the bar color from the shared severity scale (see usageLevel). */
   color: string;
   /** percentage is the normalized 0..100 reading the bar renders. */
   percentage: number;
@@ -199,19 +202,24 @@ interface MetricView {
 
 /**
  * metricView normalizes a heartbeat usage fraction (0..1) before applying the
- * danger threshold — comparing the raw fraction with a percentage threshold
- * would never turn the bar red.
+ * shared severity thresholds (see usageLevel) — comparing the raw fraction
+ * with a percentage threshold would never turn the bar red. The healthy bar
+ * keeps the metric's base color; warn and danger levels render amber and red
+ * on every page.
  */
 function metricView(value: number | null, base: string): MetricView {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return { label: "—", color: base, percentage: 0 };
   }
   const percentage = Math.max(0, Math.min(100, toPercent(value)));
-  return {
-    label: `${percentage}%`,
-    color: percentage >= USAGE_DANGER_PERCENT ? "var(--danger)" : base,
-    percentage,
-  };
+  switch (usageLevel(percentage)) {
+    case "danger":
+      return { label: `${percentage}%`, color: "var(--danger)", percentage };
+    case "warn":
+      return { label: `${percentage}%`, color: "var(--warn)", percentage };
+    default:
+      return { label: `${percentage}%`, color: base, percentage };
+  }
 }
 
 /** keyLabel identifies the stored credential without revealing any secret. */
@@ -471,8 +479,7 @@ watch(
             </dd>
             <dt>SSH</dt>
             <dd>
-              <span class="inline-code">{{ keyLabel(server) }}</span> · user
-              <span class="mono">{{ server.ssh_user }}</span>
+              <span class="inline-code">{{ keyLabel(server) }}</span><template v-if="server.ssh_user"> · user <span class="mono">{{ server.ssh_user }}</span></template>
             </dd>
           </dl>
 
@@ -505,12 +512,12 @@ watch(
             </div>
             <div class="node-metric">
               <p class="stat-label">Disk</p>
-              <p class="val">{{ metricView(server.disk_usage, 'var(--warn)').label }}</p>
+              <p class="val">{{ metricView(server.disk_usage, 'var(--success)').label }}</p>
               <NProgress
                 class="mt-2"
                 type="line"
-                :percentage="metricView(server.disk_usage, 'var(--warn)').percentage"
-                :color="metricView(server.disk_usage, 'var(--warn)').color"
+                :percentage="metricView(server.disk_usage, 'var(--success)').percentage"
+                :color="metricView(server.disk_usage, 'var(--success)').color"
                 :height="6"
                 :show-indicator="false"
                 :rail-style="{ borderRadius: 'var(--radius-pill)' }"

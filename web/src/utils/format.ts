@@ -40,10 +40,36 @@ export function formatPercent(value: number | null | undefined): string {
 }
 
 /**
+ * Shared usage-meter thresholds (percent, 0..100 after toPercent).
+ *
+ *   ok      below 60 — healthy headroom, rendered green / base color.
+ *   warn    60..79   — getting full, rendered amber.
+ *   danger  80+      — act soon, rendered red.
+ *
+ * The dashboard and the server list share this helper so the same reading
+ * never shows two severities on two pages.
+ */
+export const USAGE_WARN_PERCENT = 60;
+
+/**
  * USAGE_DANGER_PERCENT is the single danger threshold for CPU/RAM/disk meters.
  * Kept here so the dashboard and the server list cannot drift apart (B4-13).
  */
 export const USAGE_DANGER_PERCENT = 80;
+
+/** Severity level of a normalized 0..100 usage reading. */
+export type UsageLevel = "ok" | "warn" | "danger";
+
+/** usageLevel maps a normalized percentage onto its severity level. */
+export function usageLevel(percent: number): UsageLevel {
+  if (percent >= USAGE_DANGER_PERCENT) {
+    return "danger";
+  }
+  if (percent >= USAGE_WARN_PERCENT) {
+    return "warn";
+  }
+  return "ok";
+}
 
 /** toPercent normalizes a usage reading to a 0-100 percentage.
  *

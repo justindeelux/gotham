@@ -200,6 +200,15 @@ export function roleTagType(
   }
 }
 
+/**
+ * meRoleLabel renders the sidebar footer label for the caller's role in the
+ * active team, using the same wording as the Teams page. A null role (teams
+ * not loaded yet) falls back to neutral text rather than a guessed role.
+ */
+export function meRoleLabel(role: TeamRole | null): string {
+  return role === null ? "Team member" : roleLabel(role);
+}
+
 /** canManageMembers reports whether a role may invite, remove and re-role. */
 export function canManageMembers(role: TeamRole | null): boolean {
   return role === "owner" || role === "admin";

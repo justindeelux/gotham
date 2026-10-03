@@ -204,6 +204,16 @@ export function isActiveDeployment(deployment: Deployment): boolean {
 }
 
 /**
+ * countRunning counts applications whose newest deployment reached "running".
+ * Pure so the dashboard tile and the harness share one definition.
+ */
+export function countRunning(
+  latestStates: Array<DeploymentState | null | undefined>,
+): number {
+  return latestStates.filter((state) => state === "running").length;
+}
+
+/**
  * deployChannel returns the realtime channel carrying one deployment's logs.
  * It mirrors `DeployChannel` in `internal/deploy/events.go`
  * (`logs:{serverID}:{deploymentID}`) so the existing WS bridge forwards deploy

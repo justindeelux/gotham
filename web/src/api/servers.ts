@@ -212,10 +212,51 @@ export function isApiError(error: unknown): error is ApiError {
 /** describeServerError maps a thrown error to a user-facing message. */
 export function describeServerError(error: unknown): string {
   if (isApiError(error)) {
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
   }
   return "Something went wrong. Please try again.";
+}
+
+/**
+ * Backend package names whose "<package>: " prefix is internal detail.
+ * Mirrors the package directories under internal/ that surface errors
+ * through the API (for example "servers: validation failed: ...").
+ */
+const errorPrefixPackages = new Set([
+  "auth",
+  "builds",
+  "clientip",
+  "config",
+  "containers",
+  "databases",
+  "deploy",
+  "notifications",
+  "providers",
+  "proxy",
+  "server",
+  "servers",
+  "services",
+  "store",
+  "teams",
+  "templates",
+  "updates",
+  "webhooks",
+]);
+
+/**
+ * stripErrorPrefix drops one internal "<package>: " prefix from a backend
+ * message, keeping the useful remainder ("servers: validation failed: ssh
+ * dial ..." renders as "validation failed: ssh dial ..."). Only known
+ * backend package names are stripped, so values like "host:port ..." pass
+ * through untouched.
+ */
+export function stripErrorPrefix(message: string): string {
+  const match = /^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*([\s\S]*)$/.exec(message ?? "");
+  if (match && errorPrefixPackages.has(match[1].toLowerCase())) {
+    return match[2].trim();
+  }
+  return (message ?? "").trim();
 }

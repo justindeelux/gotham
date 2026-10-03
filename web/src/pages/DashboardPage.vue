@@ -10,13 +10,15 @@ import {
   NTag,
   NText,
 } from "naive-ui";
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 
+import type { DeploymentState } from "../api/applications";
+import { countRunning, listApplications, listDeployments } from "../api/applications";
 import type { Server, ServerStatus } from "../api/servers";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
-import { relativeTime, toPercent, USAGE_DANGER_PERCENT } from "../utils/format";
+import { relativeTime, toPercent, usageLevel } from "../utils/format";
 
 /**
  * Deployment is the typed seam for a deployments store that does not exist
@@ -41,6 +43,39 @@ interface Deployment {
 const deployments: Deployment[] = [];
 
 const serversStore = useServersStore();
+
+/**
+ * Applications backing the "Running applications" tile. Read once on mount
+ * (no polling): the tile counts running versus total from the real list, and
+ * shows an honest empty state only when the list is really empty.
+ */
+const applicationsLoading = ref(true);
+const applicationTotal = ref(0);
+const applicationRunning = ref(0);
+
+/** fetchApplicationCounts loads the list plus each app's newest deployment. */
+async function fetchApplicationCounts(): Promise<void> {
+  applicationsLoading.value = true;
+  try {
+    const applications = await listApplications();
+    applicationTotal.value = applications.length;
+    const settled = await Promise.all(
+      applications.map((application) =>
+        listDeployments(application.id)
+          .then((deployments): DeploymentState | null =>
+            deployments.length > 0 ? deployments[0].state : null,
+          )
+          .catch((): DeploymentState | null => null),
+      ),
+    );
+    applicationRunning.value = countRunning(settled);
+  } catch {
+    applicationTotal.value = 0;
+    applicationRunning.value = 0;
+  } finally {
+    applicationsLoading.value = false;
+  }
+}
 
 const servers = computed<Server[]>(() => serversStore.servers);
 const readyCount = computed<number>(
@@ -106,21 +141,21 @@ function nodeSubtitle(server: Server): string {
   return bits.join(" · ");
 }
 
-/** meterStatus maps usage to a Naive progress status (danger at the shared threshold). */
+/** meterStatus maps usage to a Naive progress status via the shared thresholds. */
 function meterStatus(
   value: number | null,
 ): "default" | "success" | "warning" | "error" {
   if (value === null || value === undefined) {
     return "default";
   }
-  const percent = toPercent(value);
-  if (percent >= USAGE_DANGER_PERCENT) {
-    return "error";
+  switch (usageLevel(toPercent(value))) {
+    case "danger":
+      return "error";
+    case "warn":
+      return "warning";
+    default:
+      return "success";
   }
-  if (percent >= 60) {
-    return "warning";
-  }
-  return "success";
 }
 
 /** usageLabel renders a nullable usage reading as a percentage or dash. */
@@ -136,6 +171,7 @@ onMounted(() => {
     // The store already exposes the error; alert rendering is enough here.
   });
   serversStore.pollServers();
+  void fetchApplicationCounts();
 });
 </script>
 
@@ -147,8 +183,6 @@ onMounted(() => {
         <h1>Dashboard</h1>
         <p class="page-desc">
           One control plane for every node, application, and database.
-          Widgets without a backend show an explicit empty state until
-          their phase lands.
         </p>
       </div>
       <div class="page-actions">
@@ -192,7 +226,16 @@ onMounted(() => {
       </NCard>
 
       <NCard class="kpi" title="Running applications" size="small">
-        <NEmpty size="small" description="No applications data yet" />
+        <NSkeleton v-if="applicationsLoading" text :repeat="2" />
+        <template v-else-if="applicationTotal > 0">
+          <p class="kpi-value num">
+            {{ applicationRunning }}<span class="kpi-unit">/{{ applicationTotal }}</span>
+          </p>
+          <p class="kpi-sub">
+            <RouterLink :to="{ name: 'applications' }">View applications</RouterLink>
+          </p>
+        </template>
+        <NEmpty v-else size="small" description="No applications yet" />
       </NCard>
 
       <NCard class="kpi" title="Deploys in 24h" size="small">
@@ -225,7 +268,7 @@ onMounted(() => {
           <NSpace vertical :size="12">
             <div class="card-foot">
               <NText depth="3">Queue: no data yet</NText>
-              <NText depth="3">Build history is not wired up yet</NText>
+              <NText depth="3">No build history to show</NText>
             </div>
           </NSpace>
         </NCard>
@@ -365,8 +408,7 @@ onMounted(() => {
           >
             <template #extra>
               <NText depth="3">
-                Postgres, Redis, and gateway health ships with a
-                status endpoint in a later phase.
+                Database, cache, and gateway health is not reported yet.
               </NText>
             </template>
           </NEmpty>

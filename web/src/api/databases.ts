@@ -235,3 +235,24 @@ export function describeDatabaseError(error: unknown): string {
   }
   return "Something went wrong. Please try again.";
 }
+
+/**
+ * databaseEmptyDescription picks the honest empty state for the managed
+ * databases table: "none exist yet" when the team owns no databases at all,
+ * "no match" only when a filter or search hides existing ones. Pure so the
+ * page and the harness share one definition.
+ */
+export function databaseEmptyDescription(totalCount: number): string {
+  return totalCount === 0
+    ? "No databases yet"
+    : "No databases match this filter";
+}
+
+/**
+ * databaseEmptyHint picks the matching follow-up line for the empty state.
+ */
+export function databaseEmptyHint(totalCount: number): string {
+  return totalCount === 0
+    ? "Create your first database with the Create database wizard."
+    : "Change the filter or search, or create a database with the Create database wizard.";
+}

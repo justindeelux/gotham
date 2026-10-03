@@ -5,9 +5,12 @@ import { computed } from "vue";
 import { useRouter } from "vue-router";
 
 import { useAuthStore } from "../stores/auth";
+import { useTeamsStore } from "../stores/teams";
+import { meRoleLabel } from "../api/teams";
 import GothamIcon from "./GothamIcon.vue";
 
 const authStore = useAuthStore();
+const teamsStore = useTeamsStore();
 const router = useRouter();
 
 const accountOptions: DropdownOption[] = [{ label: "Sign out", key: "sign-out" }];
@@ -17,6 +20,16 @@ const userEmail = computed<string>(() => authStore.user?.email ?? "Signed in");
 const userInitial = computed<string>(() =>
   (authStore.user?.email?.[0] ?? "?").toUpperCase(),
 );
+
+/**
+ * roleText derives the footer label from the caller's real role in the
+ * active team (same wording as the Teams page); neutral text while loading.
+ */
+const roleText = computed<string>(() => meRoleLabel(teamsStore.activeTeam?.role ?? null));
+
+void teamsStore.ensureTeams().catch(() => {
+  // A failed teams read keeps the neutral fallback; the Teams page reports it.
+});
 
 async function handleSelect(key: string | number): Promise<void> {
   if (key !== "sign-out") {
@@ -42,7 +55,7 @@ async function handleSelect(key: string | number): Promise<void> {
         </NAvatar>
         <span class="me-meta">
           <NText class="me-email">{{ userEmail }}</NText>
-          <NText depth="3" class="me-role">Workspace member</NText>
+          <NText depth="3" class="me-role">{{ roleText }}</NText>
         </span>
         <GothamIcon name="chevron-down" class="me-chevron" />
       </NSpace>

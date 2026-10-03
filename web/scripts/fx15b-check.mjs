@@ -177,7 +177,7 @@ async function main() {
       for (const page of pages) {
         const source = await readFile(new URL(page, import.meta.url), "utf8");
         assert(
-          source.includes("USAGE_DANGER_PERCENT"),
+          source.includes("USAGE_DANGER_PERCENT") || source.includes("usageLevel"),
           `${page} must reference the shared threshold`,
         );
         assert(
@@ -191,7 +191,7 @@ async function main() {
       for (const page of ["../src/pages/DashboardPage.vue", "../src/pages/ServersPage.vue"]) {
         const source = await readFile(new URL(page, import.meta.url), "utf8");
         assert(
-          source.includes(">= USAGE_DANGER_PERCENT"),
+          source.includes(">= USAGE_DANGER_PERCENT") || source.includes("usageLevel"),
           `${page} must compare with >= (a node at exactly 80% is danger-red)`,
         );
       }

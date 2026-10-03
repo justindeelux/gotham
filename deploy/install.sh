@@ -55,15 +55,22 @@
 # --cp-host is needed for it). It calls install-agent.sh --full --ca with the
 # provisioned CA, so Docker Engine and the compose plugin are set up too, and
 # pins the agent to the same release tag the control plane just installed. The
-# node id defaults to "<hostname>-agent" (the bare hostname is reserved for the
-# control plane listener) and may be overridden with GOTHAM_AGENT_NODE_ID; the
-# dial address defaults to 127.0.0.1:9442 and may be overridden with
-# GOTHAM_AGENT_CP_ADDR. Registration is automatic: the agent registers on first
-# contact and its heartbeats flip the server row the UI lists to ready.
+# node id defaults to "<hostname>-agent" (a default, not a reserved id: only
+# the control plane's own listener identities are refused) and may be
+# overridden with GOTHAM_AGENT_NODE_ID; the dial address defaults to
+# 127.0.0.1:9442 and may be overridden with GOTHAM_AGENT_CP_ADDR. Both are
+# passed only when agent.env does not already define them, so re-running the
+# installer keeps a remote-agent setup or operator edits and never repoints or
+# duplicates the node (a hostname change is safe). Registration is automatic:
+# the agent registers on first contact and its heartbeats flip the server row
+# the UI lists to ready. The localhost agent needs Ubuntu/Debian + systemd +
+# a supported architecture: anywhere else it is skipped with a notice and the
+# control plane install still succeeds. If the agent step fails on a supported
+# platform the control plane is left installed and running (nothing is rolled
+# back) and the installer exits nonzero with the exact retry command.
 # Re-running the installer re-runs the agent install, which is idempotent (the
-# prior node id and address are kept, the unit is restarted onto the new
-# binary). Pass --no-local-agent (or GOTHAM_NO_LOCAL_AGENT=1) to skip it for a
-# remote-only control plane.
+# unit is restarted onto the new binary). Pass --no-local-agent (or
+# GOTHAM_NO_LOCAL_AGENT=1) to skip it for a remote-only control plane.
 #
 # Usage:
 #   sudo ./install.sh [--cp-host <name-or-ip>]... [--no-local-agent] [--dry-run]
@@ -511,30 +518,86 @@ run systemctl enable --now "${BINARY_NAME}.service"
 # restarts the unit onto the newly installed binary. Opt out with
 # --no-local-agent for a remote-only control plane.
 if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
-    for agent_sibling in install-agent.sh install-agent-lib.sh gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service; do
-        if [ ! -f "${SCRIPT_DIR}/${agent_sibling}" ]; then
-            die "install.sh: ${agent_sibling} must be next to this script for the localhost agent install (--no-local-agent to skip)"
-        fi
-    done
-    LOCAL_AGENT_NODE_ID="${GOTHAM_AGENT_NODE_ID:-}"
-    if [ -z "${LOCAL_AGENT_NODE_ID}" ]; then
-        LOCAL_AGENT_NODE_ID="$(hostname 2>/dev/null || true)-agent"
-        [ "${LOCAL_AGENT_NODE_ID}" != "-agent" ] || LOCAL_AGENT_NODE_ID="local-agent"
+    # Platform pre-check first, before touching anything for the local agent:
+    # the agent step needs Ubuntu/Debian (for the --full Docker setup),
+    # systemd and a supported architecture. Anywhere else the control plane
+    # still installs fine on its own, so skip the agent with a notice instead
+    # of failing the whole install. GOTHAM_OS_RELEASE_FILE and
+    # GOTHAM_TEST_UNAME_M are test seams (see deploy/test-release-install.sh).
+    LOCAL_AGENT_SKIP=""
+    _la_os_release="${GOTHAM_OS_RELEASE_FILE:-/etc/os-release}"
+    _la_distro=""
+    if [ -f "${_la_os_release}" ]; then
+        _la_distro="$(sed -n 's/^ID=//p' "${_la_os_release}" | head -n1 | tr -d '"')"
     fi
-    LOCAL_AGENT_CP_ADDR="${GOTHAM_AGENT_CP_ADDR:-127.0.0.1:9442}"
-    if [ "${DRY_RUN}" -eq 1 ]; then
-        echo "[dry-run] GOTHAM_AGENT_CP_ADDR=${LOCAL_AGENT_CP_ADDR} GOTHAM_AGENT_NODE_ID=${LOCAL_AGENT_NODE_ID} GOTHAM_VERSION=${VERSION} sh ${SCRIPT_DIR}/install-agent.sh --full --ca ${CA_DIR}/ca.crt"
+    case "${_la_distro}" in
+        ubuntu | debian) ;;
+        *) LOCAL_AGENT_SKIP="automatic localhost agent setup supports Ubuntu/Debian only (found '${_la_distro:-unknown}')" ;;
+    esac
+    if [ -z "${LOCAL_AGENT_SKIP}" ] && ! command -v systemctl >/dev/null 2>&1; then
+        LOCAL_AGENT_SKIP="systemctl not found; the localhost agent needs a systemd host"
+    fi
+    if [ -z "${LOCAL_AGENT_SKIP}" ]; then
+        case "${GOTHAM_TEST_UNAME_M:-$(uname -m)}" in
+            x86_64 | amd64 | aarch64 | arm64) ;;
+            *) LOCAL_AGENT_SKIP="unsupported architecture: $(uname -m)" ;;
+        esac
+    fi
+    if [ -n "${LOCAL_AGENT_SKIP}" ]; then
+        log "skipping the localhost agent install: ${LOCAL_AGENT_SKIP}"
+        log "install the agent manually with deploy/install-agent.sh once the platform supports it"
     else
-        log "installing the localhost agent node ${LOCAL_AGENT_NODE_ID} (--no-local-agent to skip)"
-        # Invoke via sh so a checkout that lost the exec bit still installs.
-        # The release location (mirror/base URL, repo) is inherited from the
-        # environment; the tag is pinned to the control plane's so both
-        # binaries come from one release.
-        GOTHAM_AGENT_CP_ADDR="${LOCAL_AGENT_CP_ADDR}" \
-        GOTHAM_AGENT_NODE_ID="${LOCAL_AGENT_NODE_ID}" \
-        GOTHAM_VERSION="${VERSION}" \
-            sh "${SCRIPT_DIR}/install-agent.sh" --full --ca "${CA_DIR}/ca.crt" \
-            || die "localhost agent install failed (re-run with --no-local-agent to skip it)"
+        for agent_sibling in install-agent.sh install-agent-lib.sh gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service; do
+            if [ ! -f "${SCRIPT_DIR}/${agent_sibling}" ]; then
+                die "install.sh: ${agent_sibling} must be next to this script for the localhost agent install (--no-local-agent to skip)"
+            fi
+        done
+        # A re-run keeps the operator's agent: GOTHAM_AGENT_NODE_ID /
+        # GOTHAM_AGENT_CP_ADDR are passed only when agent.env does not already
+        # define them. A value set in this run's environment still wins;
+        # otherwise the prior file's values are kept by passing nothing, so a
+        # hostname change or a remote-agent setup is never repointed and no
+        # duplicate node is created. GOTHAM_AGENT_ENV_FILE is a test seam.
+        AGENT_ENV_FILE="${GOTHAM_AGENT_ENV_FILE:-/etc/gotham/agent.env}"
+        agent_env_prev() {
+            [ -f "${AGENT_ENV_FILE}" ] || return 0
+            sed -n "s/^[[:space:]]*$1=//p" "${AGENT_ENV_FILE}" | tail -n1
+        }
+        LOCAL_AGENT_NODE_ID="${GOTHAM_AGENT_NODE_ID:-}"
+        if [ -z "${LOCAL_AGENT_NODE_ID}" ] && [ -z "$(agent_env_prev GOTHAM_AGENT_NODE_ID)" ]; then
+            LOCAL_AGENT_NODE_ID="$(hostname 2>/dev/null || true)-agent"
+            [ "${LOCAL_AGENT_NODE_ID}" != "-agent" ] || LOCAL_AGENT_NODE_ID="local-agent"
+        fi
+        LOCAL_AGENT_CP_ADDR="${GOTHAM_AGENT_CP_ADDR:-}"
+        if [ -z "${LOCAL_AGENT_CP_ADDR}" ] && [ -z "$(agent_env_prev GOTHAM_AGENT_CP_ADDR)" ]; then
+            LOCAL_AGENT_CP_ADDR="127.0.0.1:9442"
+        fi
+        # Exactly the assignments passed to the agent installer, reused for the
+        # retry command below. Word splitting is intended (no value here
+        # contains whitespace).
+        LOCAL_AGENT_ENV="GOTHAM_VERSION=${VERSION}"
+        [ -z "${LOCAL_AGENT_CP_ADDR}" ] \
+            || LOCAL_AGENT_ENV="GOTHAM_AGENT_CP_ADDR=${LOCAL_AGENT_CP_ADDR} ${LOCAL_AGENT_ENV}"
+        [ -z "${LOCAL_AGENT_NODE_ID}" ] \
+            || LOCAL_AGENT_ENV="GOTHAM_AGENT_NODE_ID=${LOCAL_AGENT_NODE_ID} ${LOCAL_AGENT_ENV}"
+        LOCAL_AGENT_RETRY="${LOCAL_AGENT_ENV} sh ${SCRIPT_DIR}/install-agent.sh --full --ca ${CA_DIR}/ca.crt"
+        LOCAL_AGENT_FAILED=0
+        if [ "${DRY_RUN}" -eq 1 ]; then
+            echo "[dry-run] ${LOCAL_AGENT_RETRY}"
+        else
+            _agent_label="${LOCAL_AGENT_NODE_ID:-$(agent_env_prev GOTHAM_AGENT_NODE_ID)}"
+            [ -n "${_agent_label}" ] || _agent_label="the existing node"
+            log "installing the localhost agent node ${_agent_label} (--no-local-agent to skip)"
+            # Invoke via sh so a checkout that lost the exec bit still installs.
+            # The release location (mirror/base URL, repo) is inherited from the
+            # environment; the tag is pinned to the control plane's so both
+            # binaries come from one release. A failing agent step must NOT roll
+            # the control plane back: it is already migrated and started above,
+            # so record the failure and exit nonzero only at the end.
+            # shellcheck disable=SC2086
+            env ${LOCAL_AGENT_ENV} sh "${SCRIPT_DIR}/install-agent.sh" --full --ca "${CA_DIR}/ca.crt" \
+                || LOCAL_AGENT_FAILED=1
+        fi
     fi
 else
     log "skipping the localhost agent install (--no-local-agent)"
@@ -562,3 +625,20 @@ Self-update checking is enabled by default. To apply new releases unattended,
 add AUTO_UPDATE=true to /etc/gotham/gotham.env (operator edits there are kept
 across reinstalls).
 EOF
+
+# A failed localhost agent step leaves the control plane installed and running
+# (nothing was rolled back): report it loudly with the exact retry command and
+# exit nonzero only now that the control plane is fully up.
+if [ "${LOCAL_AGENT_FAILED:-0}" -eq 1 ]; then
+    cat >&2 <<EOF
+
+================================================================
+WARNING: the control plane is installed and running, but the
+localhost agent install failed. Nothing was rolled back.
+Retry only the agent step with:
+  ${LOCAL_AGENT_RETRY}
+or re-run this installer (an existing agent.env is kept as-is).
+================================================================
+EOF
+    exit 1
+fi

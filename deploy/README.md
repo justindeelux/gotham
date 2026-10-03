@@ -115,6 +115,16 @@ agent registers itself as the first node — the Servers page lists it once its
 heartbeats land. Pass `--no-local-agent` (or `GOTHAM_NO_LOCAL_AGENT=1`) for a
 remote-only control plane.
 
+First registration of the local node is server-authenticated TLS: the agent
+verifies the control plane against the provisioned CA, but the control plane
+does not yet verify the agent's client credential on first contact (known
+limitation; see "The agent channel is not mutual yet" below). `<host>-agent`
+is only the default node id, not a reserved one: any id other than the control
+plane's own listener identities (its hostname and addresses) is accepted. Set
+`GOTHAM_AGENT_NODE_ID` on a fresh install to pick another id; re-running
+`install.sh` never repoints an existing `agent.env` (a hostname change or a
+remote-agent setup is kept as-is, so no duplicate node appears).
+
 `install-agent.sh` fails closed without a CA; `--insecure` is the
 development-only override that leaves the agent channel in plaintext. The agent
 itself also fails closed: with no CA it refuses to start unless

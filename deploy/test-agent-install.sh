@@ -22,6 +22,19 @@
 #   F2    ensure_docker_full skips when Docker works, refuses non-Ubuntu/
 #         Debian with the manual step, installs via the pinned Docker apt
 #         repository, and fails closed on a fingerprint mismatch.
+#   R3    re-running --full after a partial run succeeds: dearmoring into an
+#         existing docker.gpg works (temp file in the same directory + atomic
+#         mv) and a stale docker.list is rewritten.
+#   R4    an engine without the compose plugin gets only the plugin
+#         (docker-compose-plugin, then docker-compose-v2); no engine package
+#         is ever named, so apt cannot replace or remove the working engine.
+#   R5    a Docker repository the operator already defined (docker.sources, a
+#         docker.asc Signed-By line, another .list) is reused: no conflicting
+#         docker.list is added and the key is not re-downloaded.
+#   R6    a broken dpkg fails fast with a clear message (no amd64 fallback);
+#         Debian testing/sid installs from the newest stable codename.
+#   R7    the key download is HTTPS-pinned, TLS 1.2+, retried, and its temp
+#         file is removed on every path without installing an EXIT trap.
 #
 # The systemd calls are answered by a PATH shim, so nothing outside the scratch
 # directory (and the process environment) is touched.
@@ -437,12 +450,11 @@ printf 'ID=ubuntu\nVERSION_CODENAME=jammy\n' >"${F2_DIR}/os/os-release"
 printf 'ID=arch\nVERSION_CODENAME=n/a\n' >"${F2_DIR}/os/arch-release"
 cat >"${F2_SHIM}/docker" <<'SHIM'
 #!/bin/sh
-# Succeeds only once the "install" (the curl shim) drops the marker.
-if [ "$1" = "compose" ]; then
-    [ -f "${DOCKER_MARKER:?}/installed" ] && exit 0
-    exit 1
-fi
-exit 0
+# Nothing works until the "install" (the curl shim) drops the marker, so the
+# full engine-install path is exercised (an engine that already exists takes
+# the plugin-only branch covered by R4 instead).
+[ -f "${DOCKER_MARKER:?}/installed" ] && exit 0
+exit 1
 SHIM
 chmod +x "${F2_SHIM}/docker"
 FULL_PATH="${F2_SHIM}:${PATH}"
@@ -517,12 +529,50 @@ cat >"${F2_SHIM}/apt-get" <<'SHIM'
 echo "apt-get $*" >>"${APT_LOG:?}"
 exit 0
 SHIM
+cat >"${F2_SHIM}/apt-get" <<'SHIM'
+#!/bin/sh
+echo "apt-get $*" >>"${APT_LOG:?}"
+# A successful engine install provides docker, like the real one: write a
+# working docker shim into the minimal PATH and drop the marker the skip
+# check looks for.
+case "$*" in
+    *docker-ce*)
+        cat >"${F2_MINPATH:?}/docker" <<'DOCKERSHIM'
+#!/bin/sh
+[ -f "${DOCKER_MARKER:?}/installed" ] && exit 0
+exit 1
+DOCKERSHIM
+        chmod +x "${F2_MINPATH}/docker"
+        mkdir -p "${DOCKER_MARKER:?}"
+        touch "${DOCKER_MARKER}/installed"
+        ;;
+esac
+exit 0
+SHIM
 chmod +x "${F2_SHIM}/curl" "${F2_SHIM}/gpg" "${F2_SHIM}/dpkg" "${F2_SHIM}/apt-get"
 APT_LOG="${F2_DIR}/apt.log"
-export APT_LOG
+F2_MINPATH="${F2_DIR}/minpath"
+export APT_LOG F2_MINPATH
+# From nothing: a minimal PATH holding symlinks to the system tools plus the
+# shims, and nothing else. A real docker elsewhere on PATH (a dev Mac, a CI
+# runner) must not leak into the presence check, and the fake install above
+# materializes docker only on success.
+mkdir -p "${F2_MINPATH}"
+for _tool in sed tr head mktemp awk grep mkdir chmod dirname mv rm cp touch; do
+    _tool_path="$(command -v "${_tool}")" && ln -sf "${_tool_path}" "${F2_MINPATH}/${_tool}"
+done
+for _tool in curl gpg dpkg apt-get; do
+    ln -sf "${F2_SHIM}/${_tool}" "${F2_MINPATH}/${_tool}"
+done
 : >"${APT_LOG}"
+hash -r 2>/dev/null || true
+# NOTE: an inline PATH= assignment before a function call persists after it
+# returns, so the minimal PATH is saved and restored around the call.
+SAVED_MINPATH="${PATH}"
+PATH="${F2_MINPATH}"
 if GOTHAM_OS_RELEASE_FILE="${F2_DIR}/os/os-release" GOTHAM_APT_ROOT="${F2_DIR}/apt" \
-    PATH="${FULL_PATH}" ensure_docker_full >"${F2_DIR}/flow.log" 2>&1; then
+    ensure_docker_full >"${F2_DIR}/flow.log" 2>&1; then
+    PATH="${SAVED_MINPATH}"
     grep -qx 'deb \[arch=amd64 signed-by='"${F2_DIR}"'/apt/etc/apt/keyrings/docker.gpg\] https://download.docker.com/linux/ubuntu jammy stable' \
         "${F2_DIR}/apt/etc/apt/sources.list.d/docker.list" \
         || fail "apt source has the wrong content"
@@ -534,6 +584,7 @@ if GOTHAM_OS_RELEASE_FILE="${F2_DIR}/os/os-release" GOTHAM_APT_ROOT="${F2_DIR}/a
         || fail "apt was not asked for containerd.io and the buildx plugin"
     pass "shimmed install writes the pinned repo and requests the engine + compose plugin"
 else
+    PATH="${SAVED_MINPATH}"
     fail "ensure_docker_full failed against shims"
 fi
 # A wrong fingerprint aborts before any apt path is written.
@@ -559,6 +610,250 @@ fi
 [ ! -e "${F2_DIR}/apt2/etc/apt/sources.list.d/docker.list" ] \
     || fail "a wrong-fingerprint key still wrote an apt source"
 pass "a wrong fingerprint fails closed before any apt path is written"
+
+# --- R3-R7: review round 1 (partial re-run, engine-only, existing repo,
+#             arch/codename, curl hardening) -----------------------------------
+echo "==> R3-R7 review round 1 cases against fresh shims"
+R_DIR="${SCRATCH}/round1"
+R_SHIM="${R_DIR}/shim"
+mkdir -p "${R_SHIM}" "${R_DIR}/os" "${R_DIR}/apt"
+printf 'ID=ubuntu\nVERSION_CODENAME=jammy\n' >"${R_DIR}/os/ubuntu-release"
+printf 'ID=debian\nVERSION_CODENAME=sid\n' >"${R_DIR}/os/debian-sid-release"
+printf 'ID=debian\nVERSION_CODENAME=testing\n' >"${R_DIR}/os/debian-testing-release"
+# The docker on PATH delegates to the variant the current case selects
+# (docker-absent = from nothing, docker-"" = engine present). R_DOCKER_RUN is
+# exported so the delegating shim sees it.
+cat >"${R_SHIM}/docker" <<'SHIM'
+#!/bin/sh
+exec "${R_DOCKER_RUN:?}" "$@"
+SHIM
+# Engine-only docker: plain docker works, compose works only after the
+# "install" (the apt-get shim) drops the marker.
+cat >"${R_SHIM}/docker-" <<'SHIM'
+#!/bin/sh
+if [ "$1" = "compose" ]; then
+    [ -f "${DOCKER_MARKER:?}/installed" ] && exit 0
+    exit 1
+fi
+exit 0
+SHIM
+# No-docker-at-all variant for the from-nothing path (R3): nothing works
+# until the apt-get shim drops the marker.
+cat >"${R_SHIM}/docker-absent" <<'SHIM'
+#!/bin/sh
+[ -f "${DOCKER_MARKER:?}/installed" ] && exit 0
+exit 1
+SHIM
+cat >"${R_SHIM}/curl" <<'SHIM'
+#!/bin/sh
+# Logs its arguments (R7) and writes a dummy key to the -o target.
+echo "curl $*" >>"${CURL_LOG:?}"
+out=""
+prev=""
+for arg in "$@"; do
+    if [ "${prev}" = "-o" ]; then out="${arg}"; fi
+    prev="${arg}"
+done
+[ -n "${out}" ] || exit 1
+printf 'dummy-docker-key\n' >"${out}"
+exit 0
+SHIM
+cat >"${R_SHIM}/gpg" <<'SHIM'
+#!/bin/sh
+# Faithful dearmor: like the real gpg, it refuses to overwrite an existing
+# -o file, so only a temp-file + mv caller survives a re-run (R3).
+case "$*" in
+    *--show-keys*)
+        echo "fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:"
+        exit 0
+        ;;
+    *--dearmor*)
+        out=""; prev=""; src=""
+        for arg in "$@"; do
+            if [ "${prev}" = "-o" ]; then out="${arg}"; else src="${arg}"; fi
+            prev="${arg}"
+        done
+        if [ -e "${out}" ]; then
+            echo "gpg: file '${out}' exists" >&2
+            exit 1
+        fi
+        cp "${src}" "${out}"
+        exit 0
+        ;;
+esac
+exit 1
+SHIM
+cat >"${R_SHIM}/dpkg" <<'SHIM'
+#!/bin/sh
+echo amd64
+SHIM
+cat >"${R_SHIM}/dpkg-fail" <<'SHIM'
+#!/bin/sh
+echo "dpkg: error" >&2
+exit 1
+SHIM
+cat >"${R_SHIM}/apt-get" <<'SHIM'
+#!/bin/sh
+echo "apt-get $*" >>"${APT_LOG:?}"
+# A successful package install makes docker (compose) work, like the real one.
+case "$*" in
+    *docker-ce* | *docker-compose-plugin* | *docker-compose-v2* | *containerd.io*)
+        mkdir -p "${DOCKER_MARKER:?}"
+        touch "${DOCKER_MARKER}/installed"
+        ;;
+esac
+exit 0
+SHIM
+chmod +x "${R_SHIM}/docker" "${R_SHIM}/docker-" "${R_SHIM}/docker-absent" "${R_SHIM}/curl" \
+    "${R_SHIM}/gpg" "${R_SHIM}/dpkg" "${R_SHIM}/dpkg-fail" "${R_SHIM}/apt-get"
+R_PATH="${R_SHIM}:${PATH}"
+export R_PATH
+run_full() {
+    # $1 os-release fixture, $2 apt root, $3 docker marker dir, $4 log prefix.
+    # The marker/log paths are exported so the shim subprocesses see them.
+    DOCKER_MARKER="$3"
+    APT_LOG="$4-apt.log"
+    CURL_LOG="$4-curl.log"
+    export DOCKER_MARKER APT_LOG CURL_LOG
+    GOTHAM_OS_RELEASE_FILE="$1" GOTHAM_APT_ROOT="$2" \
+    PATH="${R_PATH}" ensure_docker_full >"$4-out.log" 2>&1
+}
+set_docker_variant() {
+    ln -sf "${R_SHIM}/docker-$1" "${R_SHIM}/docker-run"
+}
+R_DOCKER_RUN="${R_SHIM}/docker-run"
+export R_DOCKER_RUN
+# The docker on PATH delegates to the selected variant.
+cat >"${R_SHIM}/docker" <<'SHIM'
+#!/bin/sh
+exec "${R_DOCKER_RUN:?}" "$@"
+SHIM
+chmod +x "${R_SHIM}/docker"
+
+# --- R3: re-run after a partial run (stale keyring + stale own source) -------
+echo "==> R3 re-run after a partial run succeeds"
+set_docker_variant absent
+R3_APT="${R_DIR}/apt-r3"
+R3_MARKER="${R_DIR}/marker-r3"
+mkdir -p "${R3_MARKER}" "${R3_APT}/etc/apt/keyrings" "${R3_APT}/etc/apt/sources.list.d"
+printf 'stale-keyring\n' >"${R3_APT}/etc/apt/keyrings/docker.gpg"
+printf 'deb [arch=amd64] https://stale.example.com/ubuntu jammy stable\n' >"${R3_APT}/etc/apt/sources.list.d/docker.list"
+: >"${R_DIR}/r3-curl.log"
+if run_full "${R_DIR}/os/ubuntu-release" "${R3_APT}" "${R3_MARKER}" "${R_DIR}/r3"; then
+    grep -qx 'dummy-docker-key' "${R3_APT}/etc/apt/keyrings/docker.gpg" \
+        || fail "R3: stale docker.gpg was not replaced (dearmor must use temp+mv)"
+    grep -qx 'deb \[arch=amd64 signed-by='"${R3_APT}"'/etc/apt/keyrings/docker.gpg\] https://download.docker.com/linux/ubuntu jammy stable' \
+        "${R3_APT}/etc/apt/sources.list.d/docker.list" \
+        || fail "R3: stale docker.list was not rewritten"
+    pass "R3: re-run after a partial run replaces the keyring and the source"
+else
+    fail "R3: ensure_docker_full failed on a re-run after a partial run"
+fi
+
+# --- R4: engine present, compose missing -> plugin only ----------------------
+echo "==> R4 engine without compose gets only the plugin"
+set_docker_variant ""
+R4_APT="${R_DIR}/apt-r4"
+R4_MARKER="${R_DIR}/marker-r4"
+mkdir -p "${R4_MARKER}"
+if run_full "${R_DIR}/os/ubuntu-release" "${R4_APT}" "${R4_MARKER}" "${R_DIR}/r4"; then
+    grep -q 'install -y docker-compose-plugin' "${R_DIR}/r4-apt.log" \
+        || fail "R4: apt was not asked for only the compose plugin"
+    if grep -q 'docker-ce' "${R_DIR}/r4-apt.log"; then
+        fail "R4: an engine package was named while a working engine exists"
+    fi
+    if grep -q 'containerd.io' "${R_DIR}/r4-apt.log"; then
+        fail "R4: containerd.io was named while a working engine exists"
+    fi
+    grep -q 'keeping the existing engine' "${R_DIR}/r4-out.log" \
+        || fail "R4: the engine-preserving path did not log itself"
+    pass "R4: engine kept, only the compose plugin installed"
+else
+    fail "R4: ensure_docker_full failed with an engine but no compose plugin"
+fi
+
+# --- R5: pre-existing Docker repository is reused, not duplicated ------------
+echo "==> R5 pre-existing Docker repository is reused"
+set_docker_variant ""
+R5_APT="${R_DIR}/apt-r5"
+R5_MARKER="${R_DIR}/marker-r5"
+mkdir -p "${R5_MARKER}" "${R5_APT}/etc/apt/sources.list.d"
+cat >"${R5_APT}/etc/apt/sources.list.d/operator-docker.sources" <<'SOURCES'
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: jammy
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+SOURCES
+: >"${R_DIR}/r5-curl.log"
+if run_full "${R_DIR}/os/ubuntu-release" "${R5_APT}" "${R5_MARKER}" "${R_DIR}/r5"; then
+    [ ! -e "${R5_APT}/etc/apt/sources.list.d/docker.list" ] \
+        || fail "R5: a conflicting docker.list was added next to the existing repository"
+    [ ! -s "${R_DIR}/r5-curl.log" ] \
+        || fail "R5: the signing key was re-downloaded although a repository is already configured"
+    grep -q 'reusing it instead of adding a conflicting source' "${R_DIR}/r5-out.log" \
+        || fail "R5: the reuse path did not log itself"
+    grep -q 'apt-get update' "${R_DIR}/r5-apt.log" \
+        || fail "R5: apt-get update did not run against the reused repository"
+    pass "R5: existing Docker repository reused, no conflicting source added"
+else
+    fail "R5: ensure_docker_full failed with a pre-existing Docker repository"
+fi
+
+# --- R6: broken dpkg fails fast; testing/sid maps to stable ------------------
+echo "==> R6 arch detection fails fast, testing/sid maps to stable"
+mkdir -p "${R_SHIM}/nodpkg"
+ln -sf "${R_SHIM}/dpkg-fail" "${R_SHIM}/nodpkg/dpkg"
+set_docker_variant ""
+R6_APT="${R_DIR}/apt-r6"
+R6_MARKER="${R_DIR}/marker-r6"
+mkdir -p "${R6_MARKER}"
+DOCKER_MARKER="${R6_MARKER}"
+APT_LOG="${R_DIR}/r6-apt.log"
+CURL_LOG="${R_DIR}/r6-curl.log"
+export DOCKER_MARKER APT_LOG CURL_LOG
+GOTHAM_OS_RELEASE_FILE="${R_DIR}/os/ubuntu-release" GOTHAM_APT_ROOT="${R6_APT}" \
+PATH="${R_SHIM}/nodpkg:${R_PATH}" ensure_docker_full >"${R_DIR}/r6-out.log" 2>&1 || R6_RC=$?
+if [ "${R6_RC:-0}" -eq 0 ]; then
+    fail "R6: a broken dpkg was silently treated as amd64"
+else
+    grep -q 'dpkg --print-architecture' "${R_DIR}/r6-out.log" \
+        || fail "R6: broken dpkg failed without naming dpkg --print-architecture"
+    [ ! -s "${R_DIR}/r6-curl.log" ] \
+        || fail "R6: the key download ran although the architecture is unknown"
+    pass "R6: broken dpkg fails fast with a clear message (no amd64 fallback)"
+fi
+for _codename in sid testing; do
+    R6B_APT="${R_DIR}/apt-r6b-${_codename}"
+    R6B_MARKER="${R_DIR}/marker-r6b-${_codename}"
+    mkdir -p "${R6B_MARKER}"
+    if run_full "${R_DIR}/os/debian-${_codename}-release" "${R6B_APT}" "${R6B_MARKER}" "${R_DIR}/r6b-${_codename}"; then
+        grep -qx 'deb \[arch=amd64 signed-by='"${R6B_APT}"'/etc/apt/keyrings/docker.gpg\] https://download.docker.com/linux/debian trixie stable' \
+            "${R6B_APT}/etc/apt/sources.list.d/docker.list" \
+            || fail "R6: Debian ${_codename} did not map to the trixie repository"
+    else
+        fail "R6: Debian ${_codename} was refused instead of mapping to stable"
+    fi
+done
+pass "R6: Debian testing/sid installs from the newest stable codename"
+
+# --- R7: curl hardening + trap-safe temp cleanup ------------------------------
+echo "==> R7 curl hardening and trap-safe cleanup"
+grep -q -- '--proto' "${R_DIR}/r3-curl.log" \
+    || fail "R7: the key download is not protocol-pinned (--proto)"
+grep -q 'tlsv1.2' "${R_DIR}/r3-curl.log" \
+    || fail "R7: the key download does not require TLS 1.2+"
+grep -q -- '--retry' "${R_DIR}/r3-curl.log" \
+    || fail "R7: the key download is not retried"
+grep -q -- '--silent' "${R_DIR}/r3-curl.log" \
+    || fail "R7: the key download is not silent (secrets-safe logging)"
+if awk '/^ensure_docker_full\(\)/,/^}/' "${SCRIPT_DIR}/install-agent-lib.sh" | grep -qE '^[[:space:]]*trap[[:space:]]'; then
+    fail "R7: ensure_docker_full installs a trap (it would clobber the caller's EXIT trap)"
+fi
+if ls "${TMPDIR:-/tmp}"/docker-key.* >/dev/null 2>&1; then
+    fail "R7: a docker-key temp file survived (success and failure paths must remove it)"
+fi
+pass "R7: hardened curl flags, no EXIT-trap clobbering, no temp file left"
 
 if [ "${FAILURES}" -eq 0 ]; then
     echo "ALL AGENT-INSTALL TESTS PASSED"

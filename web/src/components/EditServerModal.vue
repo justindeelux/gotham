@@ -238,56 +238,70 @@ async function handleSave(): Promise<void> {
       label-placement="top"
       @submit.prevent="handleSave"
     >
-      <NFormItem label="Node name" path="name">
-        <NInput v-model:value="form.name" placeholder="build-node-03" :input-props="{ 'aria-label': 'Node name' }" />
-        <span class="field-hint">A short unique name, e.g. build-node-03.</span>
-      </NFormItem>
+      <div class="connect-form">
+        <section class="connect-group" aria-label="Identity">
+          <h4 class="connect-group__title">Identity</h4>
+          <NFormItem label="Node name" path="name">
+            <NInput v-model:value="form.name" placeholder="build-node-03" :input-props="{ 'aria-label': 'Node name' }" />
+            <span class="field-hint">A short unique name, e.g. build-node-03.</span>
+          </NFormItem>
+        </section>
 
-      <NSpace :size="12">
-        <NFormItem label="IP address / hostname" path="ip" class="grow">
-          <NInput v-model:value="form.ip" placeholder="203.0.113.90" :input-props="{ 'aria-label': 'IP address or hostname' }" />
-          <span class="field-hint">IPv4 or hostname.</span>
-        </NFormItem>
-        <NFormItem label="SSH port" path="port" style="width: 120px">
-          <NInputNumber v-model:value="form.port" :min="1" :max="65535" placeholder="22" :input-props="{ 'aria-label': 'SSH port' }" />
-          <span class="field-hint">Usually 22.</span>
-        </NFormItem>
-      </NSpace>
+        <section class="connect-group" aria-label="Address">
+          <h4 class="connect-group__title">Address</h4>
+          <div class="addr-row">
+            <NFormItem label="IP address / hostname" path="ip">
+              <NInput v-model:value="form.ip" placeholder="203.0.113.90" :input-props="{ 'aria-label': 'IP address or hostname' }" />
+              <span class="field-hint">IPv4 or hostname.</span>
+            </NFormItem>
+            <NFormItem label="SSH port" path="port">
+              <NInputNumber v-model:value="form.port" :min="1" :max="65535" placeholder="22" :input-props="{ 'aria-label': 'SSH port' }" />
+              <span class="field-hint">Usually 22.</span>
+            </NFormItem>
+          </div>
+        </section>
 
-      <NFormItem label="SSH user" path="sshUser">
-        <NInput v-model:value="form.sshUser" placeholder="root" :input-props="{ 'aria-label': 'SSH user' }" />
-        <span class="field-hint">The Unix user the control plane connects as.</span>
-      </NFormItem>
+        <section class="connect-group" aria-label="Access">
+          <h4 class="connect-group__title">Access</h4>
+          <NFormItem label="SSH user" path="sshUser">
+            <NInput v-model:value="form.sshUser" placeholder="root" :input-props="{ 'aria-label': 'SSH user' }" />
+            <span class="field-hint">The Unix user the control plane connects as.</span>
+          </NFormItem>
+        </section>
 
-      <NFormItem label="Credentials">
-        <NRadioGroup v-model:value="form.authMode" size="small" aria-label="Credential change">
-          <NRadioButton value="keep">Keep ({{ currentAuth }})</NRadioButton>
-          <NRadioButton value="key">SSH key</NRadioButton>
-          <NRadioButton value="password">Password</NRadioButton>
-        </NRadioGroup>
-        <span class="field-hint">Switching the credential replaces the stored one.</span>
-      </NFormItem>
+        <section class="connect-group" aria-label="Credentials">
+          <h4 class="connect-group__title">Credentials</h4>
+          <NFormItem label="Credentials">
+            <NRadioGroup v-model:value="form.authMode" size="small" aria-label="Credential change">
+              <NRadioButton value="keep">Keep ({{ currentAuth }})</NRadioButton>
+              <NRadioButton value="key">SSH key</NRadioButton>
+              <NRadioButton value="password">Password</NRadioButton>
+            </NRadioGroup>
+            <span class="field-hint">Switching the credential replaces the stored one.</span>
+          </NFormItem>
 
-      <NFormItem v-if="form.authMode === 'key'" label="Key ID" path="keyId">
-        <NInput v-model:value="form.keyId" placeholder="00000000-0000-0000-0000-000000000000" :input-props="{ 'aria-label': 'Key ID' }" />
-        <span class="field-hint">The UUID of a key already stored on the control plane.</span>
-      </NFormItem>
+          <NFormItem v-if="form.authMode === 'key'" label="Key ID" path="keyId">
+            <NInput v-model:value="form.keyId" placeholder="00000000-0000-0000-0000-000000000000" :input-props="{ 'aria-label': 'Key ID' }" />
+            <span class="field-hint">The UUID of a key already stored on the control plane.</span>
+          </NFormItem>
 
-      <NFormItem v-if="form.authMode === 'password'" label="New password" path="password">
-        <NInput
-          v-model:value="form.password"
-          type="password"
-          show-password-on="click"
-          placeholder="Leave blank to keep the stored password"
-          :input-props="{ autocomplete: 'new-password', 'aria-label': 'New password' }"
-        />
-        <span class="field-hint">Blank keeps the stored password. Stored encrypted, never returned.</span>
-      </NFormItem>
+          <NFormItem v-if="form.authMode === 'password'" label="New password" path="password">
+            <NInput
+              v-model:value="form.password"
+              type="password"
+              show-password-on="click"
+              placeholder="Leave blank to keep the stored password"
+              :input-props="{ autocomplete: 'new-password', 'aria-label': 'New password' }"
+            />
+            <span class="field-hint">Blank keeps the stored password. Stored encrypted, never returned.</span>
+          </NFormItem>
+        </section>
 
-      <NAlert v-if="resetsPin" type="warning" :show-icon="false">
-        Changing the address, user, or credential resets the pinned host key and
-        returns the node to pending — revalidate it afterwards.
-      </NAlert>
+        <NAlert v-if="resetsPin" type="warning" :show-icon="false">
+          Changing the address, user, or credential resets the pinned host key and
+          returns the node to pending — revalidate it afterwards.
+        </NAlert>
+      </div>
     </NForm>
 
     <template #footer>

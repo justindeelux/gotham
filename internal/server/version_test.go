@@ -45,6 +45,9 @@ func TestGetVersionRoute(t *testing.T) {
 	if body := decodeVersion(t, rec); body.Version != "1.2.3" {
 		t.Errorf("version = %q, want %q", body.Version, "1.2.3")
 	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want %q", cc, "no-store")
+	}
 }
 
 func TestGetVersionRouteUnauthenticated(t *testing.T) {

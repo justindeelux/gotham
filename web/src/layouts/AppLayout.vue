@@ -3,7 +3,7 @@ import { NAvatar, NButton, NDropdown, NInput, NTooltip } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
-import { getVersion } from "../api/version";
+import { getVersion, formatVersionTag } from "../api/version";
 
 import GothamIcon from "../components/GothamIcon.vue";
 import type { IconName } from "../components/GothamIcon.vue";
@@ -85,22 +85,10 @@ const accountOptions: DropdownOption[] = [{ label: "Sign out", key: "sign-out" }
 const runningVersion = ref<string | null>(null);
 
 /**
- * versionTag is the sidebar-head tag text: the v-prefixed release, bare
- * "dev" for dev builds, null while loading or on error (the tag hides). A
- * leading v from the backend is stripped so it never renders vv0.2.0.
+ * versionTag is the sidebar-head tag text (see formatVersionTag): null while
+ * loading or on error, so the tag hides rather than showing a stale literal.
  */
-const versionTag = computed<string | null>(() => {
-  if (!runningVersion.value) {
-    return null;
-  }
-  const raw = runningVersion.value.startsWith("v")
-    ? runningVersion.value.slice(1)
-    : runningVersion.value;
-  if (raw === "") {
-    return null;
-  }
-  return raw === "dev" ? "dev" : `v${raw}`;
-});
+const versionTag = computed<string | null>(() => formatVersionTag(runningVersion.value));
 
 // Live count: the only pill backed by a store. Every other section has no
 // backend yet, so no pill is rendered rather than a fabricated number.

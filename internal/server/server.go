@@ -823,12 +823,7 @@ func (s *Server) updatesService() updates.Service {
 	if !updates.Enabled() {
 		return nil
 	}
-	current := "dev"
-	if reporter, ok := s.servers.(versionReporter); ok {
-		if v := reporter.Version(); v != "" {
-			current = v
-		}
-	}
+	current := s.currentVersion()
 	// GOTHAM_UPDATE_CURRENT is a development seam for wrappers and tests. On a
 	// release build (an embedded release key) it is ignored so a stray
 	// environment value cannot pin the reported version; the node-registry

@@ -173,7 +173,7 @@ interface MetricChart {
  * synthesized: every series is a projection of the returned `points`.
  */
 const metricCharts = computed<MetricChart[]>(() => {
-  const pointsOf = (select: (point: MetricPoint) => number): ChartSeries["points"] =>
+  const pointsOf = (select: (_point: MetricPoint) => number): ChartSeries["points"] =>
     metricPoints.value.map((point) => ({
       at: new Date(point.bucket).getTime(),
       value: select(point),

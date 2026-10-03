@@ -236,11 +236,11 @@ func TestOAuthCallbackUnknownProvider(t *testing.T) {
 func TestOAuthCallbackRefusesNewUserWhenClosed(t *testing.T) {
 	provider := &fakeOAuthProvider{name: "github"}
 	oauth, st := newTestOAuthWithStore(t, provider)
+	requireClosedInstance(t, oauth.auth)
 	ctx := context.Background()
 
-	// The shared test database already holds accounts, so closed registration
-	// must refuse an unseen OAuth identity (P-A2) rather than create an
-	// uninvited account.
+	// Closed registration must refuse an unseen OAuth identity (P-A2) rather
+	// than create an uninvited account.
 	email := uniqueEmail("oauth-closed")
 	cleanupUser(t, st, email)
 	provider.identity = &OAuthIdentity{Email: email, Name: "Uninvited"}

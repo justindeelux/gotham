@@ -80,7 +80,11 @@ sqlc-check:
 	}
 	@echo "==> sqlc generate (drift check)"
 	@sqlc generate
-	@git diff --exit-code -- internal/store/sqlc
+	@if [ -n "$$(git status --porcelain -- internal/store/sqlc)" ]; then \
+		echo "sqlc: generated code is out of date:"; \
+		git status --porcelain -- internal/store/sqlc; \
+		exit 1; \
+	fi
 
 ## proto: lint and regenerate protobuf/gRPC code from proto/ with buf
 proto:
@@ -131,7 +135,11 @@ proto-check:
 	@buf lint
 	@echo "==> buf generate (drift check)"
 	@buf generate
-	@git diff --exit-code -- proto/
+	@if [ -n "$$(git status --porcelain -- proto/)" ]; then \
+		echo "proto: generated code is out of date:"; \
+		git status --porcelain -- proto/; \
+		exit 1; \
+	fi
 
 ## dev: run the local development environment (not implemented yet)
 dev:

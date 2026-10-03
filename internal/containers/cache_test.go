@@ -89,13 +89,15 @@ func TestContainerJSONRoundTripKeepsHealth(t *testing.T) {
 	}
 }
 
-// newTestRedisCache builds a RedisCache for the dev Redis and skips when none
-// is reachable, so CI without a Redis service stays green. Set
-// GOTHAM_TEST_REDIS to point at another address.
+// newTestRedisCache builds a RedisCache for the dev Redis. It skips only when
+// GOTHAM_TEST_REDIS is unset; an explicit address makes an unreachable Redis
+// fatal, mirroring the GOTHAM_TEST_DSN fail-not-skip rule, so the db-test
+// job's provisioned Redis is actually gated.
 func newTestRedisCache(t *testing.T) *RedisCache {
 	t.Helper()
 	addr := os.Getenv("GOTHAM_TEST_REDIS")
-	if addr == "" {
+	explicit := addr != ""
+	if !explicit {
 		addr = defaultRedisAddr
 	}
 	cache := NewRedisCache(addr)
@@ -103,6 +105,9 @@ func newTestRedisCache(t *testing.T) *RedisCache {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	if err := cache.client.Ping(ctx).Err(); err != nil {
+		if explicit {
+			t.Fatalf("GOTHAM_TEST_REDIS is set but Redis is unavailable at %s: %v", addr, err)
+		}
 		t.Skipf("Redis not available at %s: %v", addr, err)
 	}
 	return cache

@@ -17,7 +17,7 @@ export interface InFlightGuard {
   creating: Ref<boolean>;
   validating: Ref<boolean>;
   begin(): number;
-  isCurrent(token: number): boolean;
+  isCurrent(_token: number): boolean;
   reset(): void;
 }
 

@@ -542,8 +542,11 @@ func (h *p4Harness) seedWebhook(t *testing.T, app p4Application, plainSecret str
 // behind on the test box.
 func (h *p4Harness) removeAppArtifacts(t *testing.T, appID string) {
 	t.Helper()
-	t.Cleanup(func() { removeLabelledContainers(t, "gotham.app_id="+appID) })
+	// Cleanup is LIFO: register the image pass first so the container pass runs
+	// before it. Removing a tagged image while its container is still running
+	// fails, and the container must be gone before the tag can be dropped.
 	t.Cleanup(func() { removeImages(t, "gotham/"+appID) })
+	t.Cleanup(func() { removeLabelledContainers(t, "gotham.app_id="+appID) })
 }
 
 // pgUUID converts a domain id to its nullable PostgreSQL form.
@@ -554,19 +557,50 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
+// hostPortsTaken guards freeHostPort against handing the same loopback port to
+// two callers in one run: the probe listener is closed before the container
+// binds the port, so without this a later caller could reserve the same free
+// number and the two containers would fight over it.
+var (
+	hostPortsMu    sync.Mutex
+	hostPortsTaken = map[int32]bool{}
+)
+
 // freeHostPort reserves and immediately releases a loopback port, returning
 // its number: the application container binds it for the duration of a test.
+//
+// ponytail: the close→bind window is still racy against processes outside this
+// test binary; per-run bookkeeping removes the self-inflicted collision, which
+// is the only one the suite controls.
 func freeHostPort(t *testing.T) int32 {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve host port: %v", err)
+	hostPortsMu.Lock()
+	defer hostPortsMu.Unlock()
+	for attempt := 0; attempt < 50; attempt++ {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("reserve host port: %v", err)
+		}
+		port := int32(listener.Addr().(*net.TCPAddr).Port)
+		if err := listener.Close(); err != nil {
+			t.Fatalf("release host port: %v", err)
+		}
+		if hostPortsTaken[port] {
+			continue
+		}
+		hostPortsTaken[port] = true
+		// Release the reservation when the test finishes: artifact cleanup is
+		// registered later (removeAppArtifacts) so it runs first under LIFO,
+		// and the port is free again by the time it is handed out twice.
+		t.Cleanup(func() {
+			hostPortsMu.Lock()
+			defer hostPortsMu.Unlock()
+			delete(hostPortsTaken, port)
+		})
+		return port
 	}
-	port := int32(listener.Addr().(*net.TCPAddr).Port)
-	if err := listener.Close(); err != nil {
-		t.Fatalf("release host port: %v", err)
-	}
-	return port
+	t.Fatalf("could not reserve a free host port after 50 attempts")
+	return 0
 }
 
 // removeLabelledContainers force-removes every container carrying label.
@@ -596,6 +630,11 @@ func removeLabelledContainers(t *testing.T, label string) {
 // reported command contains marker. The legacy Docker builder leaves the
 // scratch container of a failed RUN step behind without labels, so
 // label-based cleanup cannot see it.
+//
+// `docker ps` truncates .Command, which can cut the marker off before the
+// match ever runs. Resolve the ids first and inspect each container's full
+// command (entrypoint path, args and configured cmd) instead, in a single
+// inspect call: vanished ids only add stderr, the surviving rows still parse.
 func removeContainersMatchingCommand(t *testing.T, marker string) {
 	t.Helper()
 	docker, err := exec.LookPath("docker")
@@ -603,24 +642,36 @@ func removeContainersMatchingCommand(t *testing.T, marker string) {
 		t.Logf("cleanup: docker CLI not found, remove containers running %q manually", marker)
 		return
 	}
-	output, err := exec.Command(docker, "ps", "-a", "--format", "{{.ID}} {{.Command}}").CombinedOutput()
+	output, err := exec.Command(docker, "ps", "-aq").CombinedOutput()
 	if err != nil {
-		t.Logf("cleanup: docker ps -a: %v: %s", err, strings.TrimSpace(string(output)))
+		t.Logf("cleanup: docker ps -aq: %v: %s", err, strings.TrimSpace(string(output)))
 		return
 	}
-	var ids []string
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		id, command, ok := strings.Cut(line, " ")
-		if ok && strings.Contains(command, marker) {
-			ids = append(ids, id)
-		}
-	}
+	ids := strings.Fields(string(output))
 	if len(ids) == 0 {
 		return
 	}
-	args := append([]string{"rm", "-f"}, ids...)
+	args := append([]string{"inspect", "--format", `{{.ID}} {{.Path}} {{join .Args " "}} {{join .Config.Cmd " "}}`}, ids...)
+	inspectOut, _ := exec.Command(docker, args...).CombinedOutput()
+	var matched []string
+	for _, line := range strings.Split(string(inspectOut), "\n") {
+		id, command, ok := strings.Cut(strings.TrimSpace(line), " ")
+		// Stderr rides along in CombinedOutput; only full hex ids are
+		// inspect rows, never "error: no such object" lines.
+		if !ok || len(id) != 64 || strings.Trim(id, "0123456789abcdef") != "" {
+			continue
+		}
+		if !strings.Contains(command, marker) {
+			continue
+		}
+		matched = append(matched, id)
+	}
+	if len(matched) == 0 {
+		return
+	}
+	args = append([]string{"rm", "-f"}, matched...)
 	if removed, err := exec.Command(docker, args...).CombinedOutput(); err != nil {
-		t.Logf("cleanup: docker rm %v: %v: %s", ids, err, strings.TrimSpace(string(removed)))
+		t.Logf("cleanup: docker rm %v: %v: %s", matched, err, strings.TrimSpace(string(removed)))
 	}
 }
 

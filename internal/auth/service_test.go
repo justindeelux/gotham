@@ -29,7 +29,9 @@ func testDSN() string {
 }
 
 // requirePostgres skips the test when no database is reachable. Only a
-// connection failure skips: any migration error afterwards is a hard failure.
+// connection failure skips, and only when GOTHAM_TEST_DSN is unset: an
+// explicit DSN makes the connection failure fatal so CI cannot pass green by
+// skipping. Any migration error afterwards is always a hard failure.
 func requirePostgres(t *testing.T, dsn string) {
 	t.Helper()
 
@@ -38,6 +40,9 @@ func requirePostgres(t *testing.T, dsn string) {
 
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
+		if os.Getenv("GOTHAM_TEST_DSN") != "" {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	_ = conn.Close(ctx)
@@ -73,6 +78,27 @@ func newTestService(t *testing.T) (*Service, *store.Store) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	st := store.New(pool)
 	return New(st, signer, logger), st
+}
+
+// requireClosedInstance seeds the "instance already has accounts" precondition
+// through the real bootstrap path and leaves the seed in place. When another
+// package already populated the shared database — or this seed loses the
+// bootstrap race — Register reports ErrRegistrationClosed and there is nothing
+// to seed. Either way the instance is closed on return, so closed-registration
+// assertions hold on a fresh database as well as a dirty one.
+//
+// The seed is deliberately NOT cleaned up: this helper's guarantee is the row
+// itself, and a concurrent package's cleanup could otherwise empty the shared
+// database mid-test and reopen registration. Test databases are throwaway, and
+// the unique email makes the row harmless.
+func requireClosedInstance(t *testing.T, svc *Service) {
+	t.Helper()
+
+	email := uniqueEmail("closed-seed")
+	_, err := svc.Register(context.Background(), email, "s3cret-password", "", nil)
+	if err != nil && !errors.Is(err, ErrRegistrationClosed) {
+		t.Fatalf("seed closed-instance account: %v", err)
+	}
 }
 
 // uniqueEmail returns an email that will not collide across test runs.

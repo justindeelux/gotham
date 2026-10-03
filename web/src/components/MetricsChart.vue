@@ -33,7 +33,7 @@ interface Props {
   /** Bucket width in milliseconds; used to detect gaps. */
   stepMs: number;
   /** Formats axis labels and the legend readings. */
-  formatValue?: (value: number) => string;
+  formatValue?: (_value: number) => string;
   /** Fixed y ceiling (percent charts use 100); auto when omitted. */
   yMax?: number;
   height?: number;

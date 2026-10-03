@@ -18,8 +18,8 @@ import (
 )
 
 // defaultIntegrationDSN points at the dev database from deploy/compose.dev.yml.
-// Override with GOTHAM_TEST_DSN; a value that cannot be reached skips the test
-// so CI stays green without a database.
+// Override with GOTHAM_TEST_DSN: an explicit value turns a missing database or
+// a failed migration into a failure instead of a skip.
 const defaultIntegrationDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
 // integrationDSN returns the DSN the repository integration test should use.
@@ -47,14 +47,24 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 	defer cancel()
 
 	dsn := integrationDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
-		t.Skipf("Postgres not available: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	const secret = "integration-secret"
 	st := store.New(pool)
@@ -206,14 +216,24 @@ func TestStoreRepositoryDeleteDeployKeyFence(t *testing.T) {
 	defer cancel()
 
 	dsn := integrationDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
-		t.Skipf("Postgres not available: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	const secret = "integration-secret"
 	st := store.New(pool)
@@ -310,14 +330,24 @@ func TestStoreRepositoryActiveDeploymentIndex(t *testing.T) {
 	defer cancel()
 
 	dsn := integrationDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
-		t.Skipf("Postgres not available: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	const secret = "integration-secret"
 	st := store.New(pool)
@@ -396,14 +426,24 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 	defer cancel()
 
 	dsn := integrationDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
-		t.Skipf("Postgres not available: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	const secret = "integration-secret"
 	st := store.New(pool)

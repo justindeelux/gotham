@@ -211,7 +211,7 @@ test.describe("domains", () => {
         .first();
     };
     const checkDismissalClears = async (
-      dismiss: (modal: Locator) => Promise<void>,
+      dismiss: (_modal: Locator) => Promise<void>,
     ): Promise<void> => {
       const modal = await openEditDialog();
       await credentialInput(modal).fill(throwawayCredential);

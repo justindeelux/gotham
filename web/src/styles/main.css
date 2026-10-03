@@ -131,8 +131,106 @@ a:hover {
 .field-hint {
   flex-basis: 100%;
   min-width: 0;
+  margin-top: var(--space-1);
   font-size: var(--text-xs);
   color: var(--meta);
+}
+
+/* Single-border focus for text fields (JUS-13): the field's own border takes
+ * the accent color on focus and the extra Naive UI glow ring is removed. This
+ * covers NInput (text, password, textarea) and NInputNumber, which renders an
+ * inner NInput, on every form and page. The border color change itself is the
+ * visible keyboard indicator (accent-ink on the input surface measures >3:1),
+ * so the global :focus-visible outline is suppressed only on the inner input
+ * elements, where it would draw a second box around the field. */
+.n-input.n-input--focus .n-input__state-border {
+  box-shadow: none !important;
+}
+
+.n-input .n-input__input-el:focus-visible,
+.n-input .n-input__textarea-el:focus-visible {
+  outline: none;
+}
+
+/* Root wrap rules for tables and description lists (JUS-8): labels keep whole
+ * words (word-break: normal) with a readable minimum width, and only long
+ * unbreakable values (ids, hashes, image tags in .mono) may break anywhere.
+ * Naive UI's data-table default (word-break: break-word on the whole table)
+ * broke short headers mid-word ("deplo/y") once a column squeezed. */
+.n-data-table .n-data-table-table {
+  word-break: normal;
+}
+
+.n-data-table .n-data-table-th,
+.n-data-table .n-data-table-td {
+  overflow-wrap: break-word;
+}
+
+.n-data-table .n-data-table-td .mono,
+.n-data-table .n-data-table-td .error-text {
+  overflow-wrap: anywhere;
+}
+
+.n-descriptions .n-descriptions-table-header {
+  min-width: 6rem;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.n-descriptions .n-descriptions-table-content .mono {
+  overflow-wrap: anywhere;
+}
+
+/* Connect-step grouping shared by the Add wizard and the Edit modal (JUS-13):
+ * related fields read as one block with a single spacing rhythm. The address
+ * row is a grid (not a wrapping flex), so IP + port stay on one row whether
+ * or not the modal shows a scrollbar. */
+.wizard-modal .connect-form,
+.edit-server-modal .connect-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.wizard-modal .connect-group,
+.edit-server-modal .connect-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.wizard-modal .connect-group__title,
+.edit-server-modal .connect-group__title {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--meta);
+}
+
+.wizard-modal .connect-group .n-form-item,
+.edit-server-modal .connect-group .n-form-item {
+  margin: 0;
+}
+
+.wizard-modal .addr-row,
+.edit-server-modal .addr-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 132px;
+  gap: var(--space-3);
+  align-items: start;
+  min-width: 0;
+}
+
+.wizard-modal .addr-row .n-input-number,
+.edit-server-modal .addr-row .n-input-number {
+  width: 100%;
 }
 
 /* Modal dialogs (add/edit server wizards) must scroll their content

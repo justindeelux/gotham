@@ -28,6 +28,9 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_DIR="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_DIR}"
+# INSTALL_SH_OVERRIDE points the suite at a scratch copy of the installer for
+# negative controls (mutate a copy, rerun, the new tests must catch it).
+INSTALL_SH="${INSTALL_SH_OVERRIDE:-${SCRIPT_DIR}/install.sh}"
 
 require() {
     command -v "$1" >/dev/null 2>&1 || { echo "test-release-install: '$1' is required" >&2; exit 1; }
@@ -136,7 +139,7 @@ run_install() {
     GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
     GOTHAM_INSTALL_ROOT="${ROOT}" \
     GOTHAM_SKIP_DEPS=1 \
-        sh "${SCRIPT_DIR}/install.sh" "$@"
+        sh "${INSTALL_SH}" "$@"
 }
 
 # run_install_pinned uses the key embedded in install.sh (the provisioned release
@@ -148,7 +151,7 @@ run_install_pinned() {
     GOTHAM_VERSION="${VERSION}" \
     GOTHAM_INSTALL_ROOT="${ROOT}" \
     GOTHAM_SKIP_DEPS=1 \
-        sh "${SCRIPT_DIR}/install.sh" "$@"
+        sh "${INSTALL_SH}" "$@"
 }
 
 # run_install_at installs into an arbitrary GOTHAM_INSTALL_ROOT (test mode).
@@ -158,7 +161,7 @@ run_install_at() {
     GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
     GOTHAM_INSTALL_ROOT="$1" \
     GOTHAM_SKIP_DEPS=1 \
-        sh "${SCRIPT_DIR}/install.sh"
+        sh "${INSTALL_SH}"
 }
 
 echo "==> install (happy path)"
@@ -230,7 +233,7 @@ for installer in "${SCRIPT_DIR}/install-sudoers.sh" "${SCRIPT_DIR}/install-agent
     grep -q '^visudo -cf' "${installer}" \
         || { echo "FAIL: ${installer} does not validate the drop-in with visudo" >&2; exit 1; }
 done
-for installer in "${SCRIPT_DIR}/install.sh" "${AGENT_INSTALLER}"; do
+for installer in "${INSTALL_SH}" "${AGENT_INSTALLER}"; do
     grep -q 'require_cmd visudo' "${installer}" \
         || { echo "FAIL: ${installer} does not require visudo" >&2; exit 1; }
 done
@@ -260,7 +263,7 @@ GOTHAM_VERSION="${VERSION}" \
 GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
 GOTHAM_INSTALL_ROOT="${CP_ROOT}" \
 GOTHAM_SKIP_DEPS=1 \
-    sh "${SCRIPT_DIR}/install.sh" --cp-host cp.example.com --cp-host 192.0.2.10 >/dev/null
+    sh "${INSTALL_SH}" --cp-host cp.example.com --cp-host 192.0.2.10 >/dev/null
 grep -qx 'cp.example.com' "${CP_ROOT}/var/lib/gotham/ca/hosts" \
     || { echo "FAIL: --cp-host cp.example.com was not persisted" >&2; cat "${CP_ROOT}/var/lib/gotham/ca/hosts" >&2; exit 1; }
 grep -qx '192.0.2.10' "${CP_ROOT}/var/lib/gotham/ca/hosts" \
@@ -291,12 +294,12 @@ echo "PASS: agent installer fails closed without a CA and accepts --ca/--insecur
 # ---- JUS-5: localhost agent by default, --full opt-in -----------------------
 # install.sh installs and starts the agent on the same host unless
 # --no-local-agent is given; install-agent.sh only sets up Docker with --full.
-sh "${SCRIPT_DIR}/install.sh" --help 2>&1 | grep -q -- '--no-local-agent' \
+sh "${INSTALL_SH}" --help 2>&1 | grep -q -- '--no-local-agent' \
     || { echo "FAIL: install.sh --help does not document --no-local-agent" >&2; exit 1; }
 sh "${AGENT_INSTALLER}" --help 2>&1 | grep -q -- '--full' \
     || { echo "FAIL: install-agent.sh --help does not document --full" >&2; exit 1; }
-grep -q 'install-agent.sh" --full --ca' "${SCRIPT_DIR}/install.sh" \
-    || { echo "FAIL: install.sh does not call install-agent.sh --full --ca for the localhost agent" >&2; exit 1; }
+grep -q 'LOCAL_AGENT_RETRY=.*--full --ca' "${INSTALL_SH}" \
+    || { echo "FAIL: install.sh does not build a --full --ca retry command for the localhost agent" >&2; exit 1; }
 grep -q 'ensure_docker_full' "${AGENT_INSTALLER}" \
     || { echo "FAIL: install-agent.sh does not wire ensure_docker_full" >&2; exit 1; }
 # Test mode must not touch the agent paths: there is no systemd/Docker there.
@@ -328,7 +331,7 @@ echo "PASS: installer scripts are executable (N1)"
 # ---- I4: no cleanup-only INT/TERM trap (a signal must abort) -----------------
 # A `trap '…' EXIT INT TERM` cleans up but lets the shell carry on after a
 # signal; both scripts must clean up on EXIT and exit on INT/TERM.
-for installer in "${SCRIPT_DIR}/install.sh" "${AGENT_INSTALLER}"; do
+for installer in "${INSTALL_SH}" "${AGENT_INSTALLER}"; do
     if grep -qE "trap '.*' EXIT INT TERM" "${installer}"; then
         echo "FAIL: ${installer} has a cleanup-only EXIT/INT/TERM trap" >&2
         exit 1
@@ -482,7 +485,7 @@ GOTHAM_RELEASES_URL="http://127.0.0.1:${PORT}/releases" \
 GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
 GOTHAM_INSTALL_ROOT="${LATEST_ROOT}" \
 GOTHAM_SKIP_DEPS=1 \
-    sh "${SCRIPT_DIR}/install.sh" >/dev/null
+    sh "${INSTALL_SH}" >/dev/null
 LATEST_BIN="${LATEST_ROOT}/var/lib/gotham/bin/gotham"
 [ -x "${LATEST_BIN}" ] || { echo "FAIL: default latest-path install did not install the binary" >&2; exit 1; }
 [ "$(sha "${LATEST_BIN}")" = "$(sha "${SERVE}/gotham-linux-${ARCH}")" ] \
@@ -599,7 +602,7 @@ GOTHAM_VERSION="${VERSION}" \
 GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
 GOTHAM_INSTALL_ROOT="${DRY_ROOT}" \
 GOTHAM_SKIP_DEPS=1 \
-    sh "${SCRIPT_DIR}/install.sh" --dry-run >/dev/null
+    sh "${INSTALL_SH}" --dry-run >/dev/null
 [ ! -e "${DRY_ROOT}" ] || { echo "FAIL: --dry-run created files" >&2; exit 1; }
 echo "PASS: --dry-run made no changes"
 
@@ -619,16 +622,18 @@ dry_run() {
     GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
     GOTHAM_VERSION="${VERSION}" \
     GOTHAM_SKIP_DEPS=1 \
+    GOTHAM_INSTALL_TEST=1 \
     GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
     PATH="${SYS_SHIM}:${PATH}" \
-        sh "${SCRIPT_DIR}/install.sh" --dry-run "$@"
+        sh "${INSTALL_SH}" --dry-run "$@"
 }
 GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
 GOTHAM_VERSION="${VERSION}" \
 GOTHAM_SKIP_DEPS=1 \
+GOTHAM_INSTALL_TEST=1 \
 GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
 PATH="${SYS_SHIM}:${PATH}" \
-    sh "${SCRIPT_DIR}/install.sh" --dry-run >"${SCRATCH}/dry-agent.log" 2>&1
+    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-agent.log" 2>&1
 grep -q 'install-agent.sh --full --ca' "${SCRATCH}/dry-agent.log" \
     || { echo "FAIL: --dry-run does not show the localhost agent install" >&2; cat "${SCRATCH}/dry-agent.log" >&2; exit 1; }
 dry_run --no-local-agent >"${SCRATCH}/dry-no-agent.log" 2>&1
@@ -646,9 +651,10 @@ echo "PASS: --dry-run shows the localhost agent install and its --no-local-agent
 GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
 GOTHAM_VERSION="${VERSION}" \
 GOTHAM_SKIP_DEPS=1 \
+GOTHAM_INSTALL_TEST=1 \
 GOTHAM_OS_RELEASE_FILE="${FIXTURES}/arch-release" \
 PATH="${SYS_SHIM}:${PATH}" \
-    sh "${SCRIPT_DIR}/install.sh" --dry-run >"${SCRATCH}/dry-skip-arch.log" 2>&1
+    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-skip-arch.log" 2>&1
 grep -q 'skipping the localhost agent install' "${SCRATCH}/dry-skip-arch.log" \
     || { echo "FAIL: unsupported platform did not skip the localhost agent (R1)" >&2; cat "${SCRATCH}/dry-skip-arch.log" >&2; exit 1; }
 grep -q 'supports Ubuntu/Debian only' "${SCRATCH}/dry-skip-arch.log" \
@@ -662,10 +668,11 @@ echo "PASS: unsupported platform skips the localhost agent with a notice (R1)"
 GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
 GOTHAM_VERSION="${VERSION}" \
 GOTHAM_SKIP_DEPS=1 \
+GOTHAM_INSTALL_TEST=1 \
 GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
 GOTHAM_TEST_UNAME_M=sparc64 \
 PATH="${SYS_SHIM}:${PATH}" \
-    sh "${SCRIPT_DIR}/install.sh" --dry-run >"${SCRATCH}/dry-skip-cpu.log" 2>&1
+    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-skip-cpu.log" 2>&1
 grep -q 'skipping the localhost agent install: unsupported architecture' "${SCRATCH}/dry-skip-cpu.log" \
     || { echo "FAIL: unsupported architecture did not skip the localhost agent (R1)" >&2; exit 1; }
 if grep -q 'install-agent.sh --full' "${SCRATCH}/dry-skip-cpu.log"; then
@@ -676,15 +683,15 @@ echo "PASS: unsupported architecture skips the localhost agent (R1)"
 # A failed agent step must never roll the control plane back: the old
 # abort-the-install message is gone, replaced by a warning that leaves the
 # control plane installed and running plus the exact retry command.
-if grep -q 'localhost agent install failed (re-run with --no-local-agent' "${SCRIPT_DIR}/install.sh"; then
+if grep -q 'localhost agent install failed (re-run with --no-local-agent' "${INSTALL_SH}"; then
     echo "FAIL: install.sh still aborts the install when the localhost agent fails (R1)" >&2
     exit 1
 fi
-grep -q 'Retry only the agent step' "${SCRIPT_DIR}/install.sh" \
+grep -q 'Retry only the agent step' "${INSTALL_SH}" \
     || { echo "FAIL: install.sh has no agent retry message (R1)" >&2; exit 1; }
-grep -q 'LOCAL_AGENT_FAILED' "${SCRIPT_DIR}/install.sh" \
+grep -q 'LOCAL_AGENT_FAILED' "${INSTALL_SH}" \
     || { echo "FAIL: install.sh does not record the agent failure for a late exit (R1)" >&2; exit 1; }
-grep -q 'install-agent.sh --full --ca' "${SCRIPT_DIR}/install.sh" \
+grep -q 'LOCAL_AGENT_RETRY=.*--full --ca' "${INSTALL_SH}" \
     || { echo "FAIL: install.sh retry does not cover the --full --ca agent step (R1)" >&2; exit 1; }
 echo "PASS: a failed localhost agent step keeps the control plane and prints the retry (R1)"
 
@@ -692,17 +699,19 @@ echo "PASS: a failed localhost agent step keeps the control plane and prints the
 # GOTHAM_AGENT_NODE_ID / GOTHAM_AGENT_CP_ADDR are passed only when agent.env
 # does not already define them, so the dry-run line omits them when the file
 # has them (kept), shows the defaults when it does not, and honours an
-# explicit override. GOTHAM_AGENT_ENV_FILE points the lookup at scratch.
+# explicit override. GOTHAM_AGENT_ENV_FILE points the lookup at scratch
+# (test seam, honoured with GOTHAM_INSTALL_TEST=1 here).
 R2_ENV="${SCRATCH}/prior-agent.env"
-printf 'GOTHAM_AGENT_CP_ADDR=remote.example.com:9443\nGOTHAM_AGENT_NODE_ID=remote-node\n' >"${R2_ENV}"
+printf 'GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442\nGOTHAM_AGENT_NODE_ID=kept-node\n' >"${R2_ENV}"
 dry_run_agent_line() {
     GOTHAM_AGENT_ENV_FILE="$1" \
     GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
     GOTHAM_VERSION="${VERSION}" \
     GOTHAM_SKIP_DEPS=1 \
+    GOTHAM_INSTALL_TEST=1 \
     GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
     PATH="${SYS_SHIM}:${PATH}" \
-        sh "${SCRIPT_DIR}/install.sh" --dry-run 2>/dev/null | grep 'install-agent.sh --full' || true
+        sh "${INSTALL_SH}" --dry-run 2>/dev/null | grep 'install-agent.sh --full' || true
 }
 PRIOR_LINE="$(dry_run_agent_line "${R2_ENV}")"
 [ -n "${PRIOR_LINE}" ] || { echo "FAIL: no agent step scheduled with a prior agent.env (R2)" >&2; exit 1; }
@@ -739,5 +748,145 @@ case "${EXPLICIT_LINE}" in
         exit 1
         ;;
 esac
+
+# ---- Remote agent.env: a re-run leaves another control plane's agent alone -
+# When the prior agent.env points at a remote control plane, the localhost
+# step is skipped entirely: --ca must not overwrite that host's ca.crt and
+# its agent config must not be repointed. An explicit address this run still
+# repoints deliberately.
+R2R_ENV="${SCRATCH}/remote-agent.env"
+printf 'GOTHAM_AGENT_CP_ADDR=remote.example.com:9443\nGOTHAM_AGENT_NODE_ID=remote-node\n' >"${R2R_ENV}"
+GOTHAM_AGENT_ENV_FILE="${R2R_ENV}" \
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_SKIP_DEPS=1 \
+GOTHAM_INSTALL_TEST=1 \
+GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
+PATH="${SYS_SHIM}:${PATH}" \
+    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-remote.log" 2>&1
+grep -q 'leaving it untouched' "${SCRATCH}/dry-remote.log" \
+    || { echo "FAIL: a remote agent.env was not left untouched" >&2; cat "${SCRATCH}/dry-remote.log" >&2; exit 1; }
+if grep -q 'install-agent.sh --full' "${SCRATCH}/dry-remote.log"; then
+    echo "FAIL: a remote agent.env still schedules the agent install" >&2
+    exit 1
+fi
+echo "PASS: a remote agent.env skips the localhost step untouched"
+REMOTE_EXPLICIT="$(GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442 dry_run_agent_line "${R2R_ENV}")"
+[ -n "${REMOTE_EXPLICIT}" ] \
+    || { echo "FAIL: an explicit CP_ADDR did not repoint a remote agent.env" >&2; exit 1; }
+echo "PASS: an explicit GOTHAM_AGENT_CP_ADDR still repoints deliberately"
+
+# ---- Retry quoting: values with spaces/specials stay one re-runnable word --
+QUOTED_LINE="$(GOTHAM_AGENT_NODE_ID='odd id; rm -rf /' dry_run_agent_line "${SCRATCH}/no-such-agent.env")"
+case "${QUOTED_LINE}" in
+    *"GOTHAM_AGENT_NODE_ID='odd id; rm -rf /'"*)
+        echo "PASS: the retry command shell-quotes values with spaces/specials"
+        ;;
+    *)
+        echo "FAIL: the retry command is not safely quoted: ${QUOTED_LINE}" >&2
+        exit 1
+        ;;
+esac
+
+# ---- agent.env default parity: install.sh reads what install-agent.sh writes
+# The lookup default must stay the path install-agent.sh actually writes
+# (its ENV_FILE), or kept values silently stop matching.
+grep -q 'ENV_FILE="${ENV_DIR}/agent.env"' "${AGENT_INSTALLER}" \
+    || { echo "FAIL: install-agent.sh no longer writes \${ENV_DIR}/agent.env" >&2; exit 1; }
+grep -q 'AGENT_ENV_FILE="/etc/gotham/agent.env"' "${INSTALL_SH}" \
+    || { echo "FAIL: install.sh lookup default is not /etc/gotham/agent.env" >&2; exit 1; }
+echo "PASS: the agent.env lookup default matches the path install-agent.sh writes"
+
+# ---- Production run ignores the test seams ----------------------------------
+# Without GOTHAM_INSTALL_TEST (and without GOTHAM_INSTALL_ROOT) the
+# GOTHAM_*_FILE / GOTHAM_TEST_* seams must change nothing: even an arch
+# fixture, a hostile arch and a remote agent.env still schedule the agent
+# step. Needs a supported host (Ubuntu/Debian + systemctl); elsewhere the
+# live container run covers it.
+if [ -f /etc/os-release ] && grep -qE '^ID=(ubuntu|debian)' /etc/os-release \
+    && command -v systemctl >/dev/null 2>&1; then
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+    GOTHAM_SKIP_DEPS=1 \
+    GOTHAM_OS_RELEASE_FILE="${FIXTURES}/arch-release" \
+    GOTHAM_TEST_UNAME_M=sparc64 \
+    GOTHAM_AGENT_ENV_FILE="${R2R_ENV}" \
+        sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-prod-seams.log" 2>&1
+    grep -q 'install-agent.sh --full' "${SCRATCH}/dry-prod-seams.log" \
+        || { echo "FAIL: production run honored a test seam" >&2; cat "${SCRATCH}/dry-prod-seams.log" >&2; exit 1; }
+    if grep -q 'skipping the localhost agent' "${SCRATCH}/dry-prod-seams.log"; then
+        echo "FAIL: production run skipped the agent on test-seam input" >&2
+        exit 1
+    fi
+    echo "PASS: a production run ignores the test seams"
+else
+    echo "SKIP: production seam-ignorance needs Ubuntu/Debian + systemctl (container covers it)"
+fi
+
+# ---- R3: a failing localhost agent install keeps CP, warns, exits nonzero --
+# Test mode runs past service activation with a logging systemctl shim and
+# executes a failing fake agent installer through the test-only seam, so the
+# real failure path runs: the retry command lands on stderr, the exit is
+# nonzero, the control plane is fully installed and its service was enabled
+# (never disabled/stopped after the failure).
+echo "==> failing localhost agent install keeps the control plane (R3)"
+R3_ROOT="${SCRATCH}/root-r3"
+R3_SHIM="${SCRATCH}/r3-shim"
+R3_AGENT_ENV="${SCRATCH}/r3-agent.env"
+mkdir -p "${R3_SHIM}"
+cat >"${R3_SHIM}/systemctl" <<'SHIM'
+#!/bin/sh
+echo "systemctl $*" >>"${SYSTEMCTL_LOG:?}"
+exit 0
+SHIM
+chmod +x "${R3_SHIM}/systemctl"
+cat >"${SCRATCH}/fake-agent.sh" <<'SHIM'
+#!/bin/sh
+echo "fake-agent-installer: refusing on purpose" >&2
+touch "${AGENT_MARKER:?}"
+exit 1
+SHIM
+chmod +x "${SCRATCH}/fake-agent.sh"
+rm -f "${R3_AGENT_ENV}"
+: >"${SCRATCH}/r3-systemctl.log"
+R3_RC=0
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_ROOT="${R3_ROOT}" \
+GOTHAM_SKIP_DEPS=1 \
+GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
+GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/fake-agent.sh" \
+GOTHAM_AGENT_ENV_FILE="${R3_AGENT_ENV}" \
+GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
+SYSTEMCTL_LOG="${SCRATCH}/r3-systemctl.log" \
+AGENT_MARKER="${SCRATCH}/r3-agent-ran" \
+PATH="${R3_SHIM}:${PATH}" \
+    sh "${INSTALL_SH}" >"${SCRATCH}/r3-out.log" 2>"${SCRATCH}/r3-err.log" || R3_RC=$?
+[ "${R3_RC}" -ne 0 ] \
+    || { echo "FAIL: the install exited 0 although the agent step failed (R3)" >&2; exit 1; }
+[ -f "${SCRATCH}/r3-agent-ran" ] \
+    || { echo "FAIL: the failing agent installer never ran (R3)" >&2; exit 1; }
+grep -q 'Retry only the agent step' "${SCRATCH}/r3-err.log" \
+    || { echo "FAIL: the retry block is not on stderr (R3)" >&2; cat "${SCRATCH}/r3-err.log" >&2; exit 1; }
+grep -q 'install-agent.sh --full --ca' "${SCRATCH}/r3-err.log" \
+    || { echo "FAIL: stderr names no --full --ca retry command (R3)" >&2; exit 1; }
+grep -q 'Nothing was rolled back' "${SCRATCH}/r3-err.log" \
+    || { echo "FAIL: stderr does not say the control plane was kept (R3)" >&2; exit 1; }
+[ -x "${R3_ROOT}/var/lib/gotham/bin/gotham" ] \
+    || { echo "FAIL: the control plane binary is missing after the agent failure (R3)" >&2; exit 1; }
+[ -f "${R3_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: gotham.env is missing after the agent failure (R3)" >&2; exit 1; }
+[ -f "${R3_ROOT}/var/lib/gotham/ca/ca.crt" ] \
+    || { echo "FAIL: the CA is missing after the agent failure (R3)" >&2; exit 1; }
+[ -f "${R3_ROOT}/etc/systemd/system/gotham.service" ] \
+    || { echo "FAIL: the unit is missing after the agent failure (R3)" >&2; exit 1; }
+grep -q 'systemctl enable --now gotham.service' "${SCRATCH}/r3-systemctl.log" \
+    || { echo "FAIL: the control plane service was not enabled before the agent failure (R3)" >&2; exit 1; }
+if grep -qE 'systemctl (disable|stop) ' "${SCRATCH}/r3-systemctl.log"; then
+    echo "FAIL: the control plane service was touched after the agent failure (R3)" >&2
+    exit 1
+fi
+echo "PASS: a failing agent install keeps the control plane, warns on stderr and exits nonzero (R3)"
 
 echo "ALL RELEASE-INSTALL TESTS PASSED"

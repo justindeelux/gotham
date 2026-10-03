@@ -30,9 +30,13 @@
 #         is ever named, so apt cannot replace or remove the working engine.
 #   R5    a Docker repository the operator already defined (docker.sources, a
 #         docker.asc Signed-By line, another .list) is reused: no conflicting
-#         docker.list is added and the key is not re-downloaded.
+#         docker.list is added and the key is not re-downloaded. Commented-out
+#         entries and Enabled:no stanzas do not count as a repository.
 #   R6    a broken dpkg fails fast with a clear message (no amd64 fallback);
-#         Debian testing/sid installs from the newest stable codename.
+#         the codename is probed against the Docker repository
+#         (.../dists/<codename>/Release): Debian testing/sid falls back to
+#         the newest stable suite the repo serves, and an unserved codename
+#         with no fallback refuses instead of writing a dead docker.list.
 #   R7    the key download is HTTPS-pinned, TLS 1.2+, retried, and its temp
 #         file is removed on every path without installing an EXIT trap.
 #
@@ -488,7 +492,17 @@ pass "skip-when-present and refuse-elsewhere hold"
 # Full flow against shims: pinned key, atomic repo file, expected packages.
 cat >"${F2_SHIM}/curl" <<'SHIM'
 #!/bin/sh
-# Minimal -o parser: writes a dummy key and drops the installed marker.
+# Minimal -o parser: writes a dummy key and drops the installed marker. A
+# .../dists/<suite>/Release probe is answered without writing: only jammy is
+# served by this fake repo.
+case "$*" in
+    */dists/*/Release*)
+        case "$*" in
+            */dists/jammy/Release*) exit 0 ;;
+            *) exit 1 ;;
+        esac
+        ;;
+esac
 out=""
 prev=""
 for arg in "$@"; do
@@ -646,8 +660,20 @@ exit 1
 SHIM
 cat >"${R_SHIM}/curl" <<'SHIM'
 #!/bin/sh
-# Logs its arguments (R7) and writes a dummy key to the -o target.
+# Logs its arguments (R7). A .../dists/<suite>/Release probe is answered from
+# DOCKER_SERVED_SUITES (the suites the fake repo serves) without writing;
+# the key download writes a dummy key to the -o target.
 echo "curl $*" >>"${CURL_LOG:?}"
+case "$*" in
+    */dists/*/Release*)
+        for _suite in ${DOCKER_SERVED_SUITES:-}; do
+            case "$*" in
+                */dists/"${_suite}"/Release*) exit 0 ;;
+            esac
+        done
+        exit 1
+        ;;
+esac
 out=""
 prev=""
 for arg in "$@"; do
@@ -723,6 +749,10 @@ set_docker_variant() {
 }
 R_DOCKER_RUN="${R_SHIM}/docker-run"
 export R_DOCKER_RUN
+# Suites the fake Docker repository serves (the codename probe answers from
+# this list); cases that need a different repo override it per call.
+DOCKER_SERVED_SUITES="jammy trixie"
+export DOCKER_SERVED_SUITES
 # The docker on PATH delegates to the selected variant.
 cat >"${R_SHIM}/docker" <<'SHIM'
 #!/bin/sh
@@ -799,6 +829,40 @@ if run_full "${R_DIR}/os/ubuntu-release" "${R5_APT}" "${R5_MARKER}" "${R_DIR}/r5
 else
     fail "R5: ensure_docker_full failed with a pre-existing Docker repository"
 fi
+# A commented-out download.docker.com line is not a repository: it must be
+# ignored and our own docker.list written.
+set_docker_variant ""
+R5B_APT="${R_DIR}/apt-r5b"
+R5B_MARKER="${R_DIR}/marker-r5b"
+mkdir -p "${R5B_MARKER}" "${R5B_APT}/etc/apt/sources.list.d"
+printf '# deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable\n' \
+    >"${R5B_APT}/etc/apt/sources.list.d/operator-docker.list"
+if run_full "${R_DIR}/os/ubuntu-release" "${R5B_APT}" "${R5B_MARKER}" "${R_DIR}/r5b"; then
+    [ -f "${R5B_APT}/etc/apt/sources.list.d/docker.list" ] \
+        || fail "R5: a commented-out entry was mistaken for an existing repository"
+else
+    fail "R5: ensure_docker_full failed with only a commented-out entry present"
+fi
+pass "R5: commented-out entries do not count as an existing repository"
+# A DEB822 stanza with Enabled: no is disabled: it must be ignored too, while
+# an enabled stanza still counts.
+R5C_APT="${R_DIR}/apt-r5c"
+R5C_MARKER="${R_DIR}/marker-r5c"
+mkdir -p "${R5C_MARKER}" "${R5C_APT}/etc/apt/sources.list.d"
+cat >"${R5C_APT}/etc/apt/sources.list.d/operator-docker.sources" <<'SOURCES'
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: jammy
+Components: stable
+Enabled: no
+SOURCES
+if run_full "${R_DIR}/os/ubuntu-release" "${R5C_APT}" "${R5C_MARKER}" "${R_DIR}/r5c"; then
+    [ -f "${R5C_APT}/etc/apt/sources.list.d/docker.list" ] \
+        || fail "R5: an Enabled:no stanza was mistaken for an existing repository"
+else
+    fail "R5: ensure_docker_full failed with only a disabled stanza present"
+fi
+pass "R5: Enabled:no stanzas do not count as an existing repository"
 
 # --- R6: broken dpkg fails fast; testing/sid maps to stable ------------------
 echo "==> R6 arch detection fails fast, testing/sid maps to stable"
@@ -823,19 +887,59 @@ else
         || fail "R6: the key download ran although the architecture is unknown"
     pass "R6: broken dpkg fails fast with a clear message (no amd64 fallback)"
 fi
-for _codename in sid testing; do
-    R6B_APT="${R_DIR}/apt-r6b-${_codename}"
-    R6B_MARKER="${R_DIR}/marker-r6b-${_codename}"
+for _r6case in sid testing; do
+    R6B_APT="${R_DIR}/apt-r6b-${_r6case}"
+    R6B_MARKER="${R_DIR}/marker-r6b-${_r6case}"
     mkdir -p "${R6B_MARKER}"
-    if run_full "${R_DIR}/os/debian-${_codename}-release" "${R6B_APT}" "${R6B_MARKER}" "${R_DIR}/r6b-${_codename}"; then
+    if run_full "${R_DIR}/os/debian-${_r6case}-release" "${R6B_APT}" "${R6B_MARKER}" "${R_DIR}/r6b-${_r6case}"; then
         grep -qx 'deb \[arch=amd64 signed-by='"${R6B_APT}"'/etc/apt/keyrings/docker.gpg\] https://download.docker.com/linux/debian trixie stable' \
             "${R6B_APT}/etc/apt/sources.list.d/docker.list" \
-            || fail "R6: Debian ${_codename} did not map to the trixie repository"
+            || fail "R6: Debian ${_r6case} did not map to the trixie repository"
+        grep -q "does not serve '${_r6case}'; falling back to 'trixie'" "${R_DIR}/r6b-${_r6case}-out.log" \
+            || fail "R6: Debian ${_r6case} fell back silently (the fallback must be logged)"
     else
-        fail "R6: Debian ${_codename} was refused instead of mapping to stable"
+        fail "R6: Debian ${_r6case} was refused instead of mapping to stable"
     fi
 done
 pass "R6: Debian testing/sid installs from the newest stable codename"
+# A codename the repo serves is used as-is (no fallback): jammy stays jammy.
+R6C_APT="${R_DIR}/apt-r6c"
+R6C_MARKER="${R_DIR}/marker-r6c"
+mkdir -p "${R6C_MARKER}"
+if run_full "${R_DIR}/os/ubuntu-release" "${R6C_APT}" "${R6C_MARKER}" "${R_DIR}/r6c"; then
+    grep -qx 'deb \[arch=amd64 signed-by='"${R6C_APT}"'/etc/apt/keyrings/docker.gpg\] https://download.docker.com/linux/ubuntu jammy stable' \
+        "${R6C_APT}/etc/apt/sources.list.d/docker.list" \
+        || fail "R6: a served codename was not used as-is"
+    if grep -q 'falling back' "${R_DIR}/r6c-out.log"; then
+        fail "R6: a served codename triggered the fallback"
+    fi
+else
+    fail "R6: a served codename was refused"
+fi
+pass "R6: a served codename is used as-is"
+# An unserved codename with no served fallback refuses loudly and writes no
+# repo line at all (never a dead docker.list).
+printf 'ID=ubuntu\nVERSION_CODENAME=zzznosuch\n' >"${R_DIR}/os/ubuntu-unknown-release"
+R6D_APT="${R_DIR}/apt-r6d"
+R6D_MARKER="${R_DIR}/marker-r6d"
+mkdir -p "${R6D_MARKER}"
+DOCKER_SERVED_SUITES=""
+export DOCKER_SERVED_SUITES
+if run_full "${R_DIR}/os/ubuntu-unknown-release" "${R6D_APT}" "${R6D_MARKER}" "${R_DIR}/r6d"; then
+    fail "R6: an unserved codename with no fallback was accepted"
+else
+    grep -q "does not serve 'zzznosuch'" "${R_DIR}/r6d-out.log" \
+        || fail "R6: the refusal does not name the unserved codename"
+    grep -q 'manually' "${R_DIR}/r6d-out.log" \
+        || fail "R6: the refusal does not name the manual step"
+fi
+[ ! -e "${R6D_APT}/etc/apt/sources.list.d/docker.list" ] \
+    || fail "R6: an unserved codename still wrote a docker.list"
+[ ! -e "${R6D_APT}/etc/apt/keyrings/docker.gpg" ] \
+    || fail "R6: the key was downloaded although no suite is served"
+DOCKER_SERVED_SUITES="jammy trixie"
+export DOCKER_SERVED_SUITES
+pass "R6: an unserved codename with no fallback refuses without writing a repo"
 
 # --- R7: curl hardening + trap-safe temp cleanup ------------------------------
 echo "==> R7 curl hardening and trap-safe cleanup"

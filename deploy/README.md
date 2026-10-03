@@ -122,8 +122,14 @@ limitation; see "The agent channel is not mutual yet" below). `<host>-agent`
 is only the default node id, not a reserved one: any id other than the control
 plane's own listener identities (its hostname and addresses) is accepted. Set
 `GOTHAM_AGENT_NODE_ID` on a fresh install to pick another id; re-running
-`install.sh` never repoints an existing `agent.env` (a hostname change or a
-remote-agent setup is kept as-is, so no duplicate node appears).
+`install.sh` never repoints an existing `agent.env` (a hostname change is
+kept as-is, so no duplicate node appears). When that `agent.env` points at a
+remote control plane, the localhost step is skipped entirely, so a re-run
+never overwrites that host's `ca.crt` or agent config with the local ones.
+If the local agent step fails on a supported platform, the control plane is
+left installed and running (nothing is rolled back) and the installer exits
+nonzero with the exact agent-only retry command (values shell-quoted, so it
+re-runs as shown).
 
 `install-agent.sh` fails closed without a CA; `--insecure` is the
 development-only override that leaves the agent channel in plaintext. The agent

@@ -239,6 +239,42 @@ agent_service_restart() {
 _docker_apt_key_url="https://download.docker.com/linux"
 _docker_apt_key_fingerprint="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
 
+# _docker_repo_serves reports whether the Docker apt repository serves the
+# given suite by probing .../dists/<codename>/Release with the hardened curl
+# flags (same pinning as the key download). $1 distro, $2 codename.
+_docker_repo_serves() {
+    curl -fSL --proto '=https' --tlsv1.2 --retry 3 --silent --show-error \
+        -o /dev/null "${_docker_apt_key_url}/$1/dists/$2/Release" 2>/dev/null
+}
+
+# _docker_repo_has_active_entry reports whether the apt source file defines an
+# enabled download.docker.com entry. Full-line comments (#...) never count,
+# and a DEB822 stanza (.sources) carrying "Enabled: no" is disabled.
+_docker_repo_has_active_entry() {
+    case "$1" in
+        *.sources)
+            awk '
+                function stanza_end() {
+                    if (has && !disabled) found = 1
+                    has = 0; disabled = 0
+                }
+                BEGIN { has = 0; disabled = 0; found = 0 }
+                /^[[:space:]]*$/ { stanza_end(); next }
+                {
+                    line = $0
+                    sub(/^[[:space:]]+/, "", line)
+                    if (line ~ /^#/) next
+                    if (index(line, "download.docker.com") > 0) has = 1
+                    if (tolower(line) ~ /^enabled:[[:space:]]*no([[:space:]]|$)/) disabled = 1
+                }
+                END { stanza_end(); exit(!found) }' "$1" 2>/dev/null
+            ;;
+        *)
+            sed 's/^[[:space:]]*#.*//' "$1" 2>/dev/null | grep -qF 'download.docker.com'
+            ;;
+    esac
+}
+
 # ensure_docker_full installs Docker Engine and the compose plugin from the
 # official Docker apt repository (Ubuntu/Debian only). It is idempotent: when
 # `docker` and `docker compose` already work it only logs and returns 0. When
@@ -274,14 +310,6 @@ ensure_docker_full() {
             echo "install-agent.sh --full: could not read VERSION_CODENAME from ${_os_release}" >&2
             return 1
         }
-    # Debian testing/sid tracks the next stable, which the Docker repository
-    # does not publish: install from the newest supported stable codename
-    # instead of writing a repo line apt can never satisfy. Bump the target
-    # when Debian releases. Any other codename passes through and either
-    # resolves or fails loudly at apt-get update below.
-    case "${_codename}" in
-        testing | unstable | sid) _codename="trixie" ;;
-    esac
     command -v apt-get >/dev/null 2>&1 \
         || {
             echo "install-agent.sh --full: apt-get not found; install Docker manually, then re-run without --full" >&2
@@ -309,7 +337,7 @@ ensure_docker_full() {
     for _repo_file in "${_apt_root}/etc/apt/sources.list" "${_apt_root}/etc/apt/sources.list.d/"*.list "${_apt_root}/etc/apt/sources.list.d/"*.sources; do
         [ -f "${_repo_file}" ] || continue
         [ "${_repo_file}" = "${_source_file}" ] && continue
-        if grep -qF 'download.docker.com' "${_repo_file}" 2>/dev/null; then
+        if _docker_repo_has_active_entry "${_repo_file}"; then
             _existing_repo="${_repo_file}"
             break
         fi
@@ -325,6 +353,35 @@ ensure_docker_full() {
         if ! _arch="$(dpkg --print-architecture 2>/dev/null)" || [ -z "${_arch}" ]; then
             echo "install-agent.sh --full: could not determine the system architecture (dpkg --print-architecture failed)" >&2
             return 1
+        fi
+        # Resolve the codename against what the Docker repository actually
+        # serves: probe .../dists/<codename>/Release first (VERSION_CODENAME
+        # is authoritative for what this host is). Anything the repo does not
+        # serve (Debian testing/sid/unstable, an EOL suite, a typo) falls
+        # back to the newest stable codename the repo serves; when nothing is
+        # served, refuse with a clear message. A dead docker.list is never
+        # written. The probe runs after the arch check so a broken dpkg fails
+        # before any network.
+        if ! _docker_repo_serves "${_distro}" "${_codename}"; then
+            _fallback=""
+            case "${_distro}" in
+                ubuntu) _stable_codenames="noble jammy focal" ;;
+                debian) _stable_codenames="trixie bookworm bullseye" ;;
+            esac
+            for _candidate in ${_stable_codenames}; do
+                if _docker_repo_serves "${_distro}" "${_candidate}"; then
+                    _fallback="${_candidate}"
+                    break
+                fi
+            done
+            if [ -z "${_fallback}" ]; then
+                echo "install-agent.sh --full: the Docker apt repository does not serve '${_codename}' for ${_distro}" >&2
+                echo "  (checked ${_docker_apt_key_url}/${_distro}/dists/${_codename}/Release) and no fallback suite is served either." >&2
+                echo "  Install Docker Engine and the compose plugin manually (https://docs.docker.com/engine/install/), then re-run without --full." >&2
+                return 1
+            fi
+            echo "==> the Docker apt repository does not serve '${_codename}'; falling back to '${_fallback}'"
+            _codename="${_fallback}"
         fi
         # No EXIT trap here: this library is sourced by install-agent.sh, whose own
         # EXIT trap owns the installer scratch dir; installing another one would

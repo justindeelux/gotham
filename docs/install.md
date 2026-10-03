@@ -46,8 +46,14 @@ The installer:
 7. installs and starts the node agent on the same host as the first node
    (`install-agent.sh --full --ca` with the provisioned CA, pinned to the
    same release tag; node id `<hostname>-agent`), unless `--no-local-agent`
-   is given;
+   is given or the existing `/etc/gotham/agent.env` already points at a
+   remote control plane (that agent is left untouched: its `ca.crt` and
+   config are never overwritten with the local ones);
 8. prints the Web UI URL and the first-login steps.
+
+If step 7 fails on a supported platform, the control plane is left installed
+and running (nothing is rolled back) and the installer exits nonzero with the
+exact agent-only retry command.
 
 The gRPC gateway the node agents connect to runs **TLS** as soon as that CA
 exists: `gotham serve` loads `/var/lib/gotham/ca/ca.crt` + `ca.key` and presents

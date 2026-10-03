@@ -43,10 +43,19 @@
 #   H1    the production paths (_OS_RELEASE_FILE / _APT_ROOT) are fixed:
 #         exporting seam-like variables (old GOTHAM_* names or the internal
 #         names) never redirects them; the suite overrides the paths by plain
-#         assignment after sourcing the lib.
-#   C1    control characters (any byte < 0x20 or 0x7f, including newline) in
-#         GOTHAM_AGENT_NODE_ID / GOTHAM_AGENT_CP_ADDR are rejected before
-#         agent.env is written, so a newline cannot smuggle a second line in.
+#         assignment after sourcing the lib. The read-path proof is
+#         fixture-driven (host-distro independent): hostile exports lose to
+#         the internal variables on both the Ubuntu and the refusal path.
+#   C1    every value written to agent.env is rejected on control
+#         characters (any byte < 0x20 or 0x7f, including newline); the dial
+#         address additionally refuses spaces, quotes and = and must be
+#         host:port, and the remaining keys get a cheap shape check matching
+#         what the agent accepts (log level, boolean, Go duration, channel
+#         name, listen host:port). Printable metacharacters in the node id
+#         still pass through verbatim.
+#   V1    install-agent.sh validates every agent.env value before its first
+#         mutation (user, binary, CA): a direct run with a bad value fails
+#         with nothing created.
 #   L1    the codename probe times out, surfaces curl errors, and refuses on
 #         a network failure (never silently falling back) while an HTTP 404
 #         keeps the documented fallback/refusal.
@@ -1089,57 +1098,57 @@ cmp -s "${SCRATCH}/skip-clean.log" "${SCRATCH}/skip-hostile.log" \
 grep -q 'already installed; skipping' "${SCRATCH}/skip-hostile.log" \
     || fail "H1: the differential skip run did not take the skip path"
 pass "H1: hostile old-name exports change nothing (differential)"
-# Read-path: hostile old-name exports are ignored. On Ubuntu/Debian the
-# internal fixture install must succeed into the sandbox apt root (a
-# re-opened environment seam would read the hostile arch fixture and refuse);
-# off Ubuntu the fixed real host file must refuse (a re-opened seam would
-# proceed from the hostile ubuntu fixture). All writes stay under SCRATCH.
+# Read-path: hostile old-name exports are ignored, on any host. The os-release
+# and apt paths come from the internal variables (plain assignment after
+# sourcing, the only seam the tests get), so no host file is read: with the
+# internal ubuntu fixture the install must succeed into the sandbox apt root
+# (a re-opened environment seam would read the hostile arch fixture and
+# refuse), and with the internal arch fixture it must refuse (a re-opened
+# seam would proceed from the hostile ubuntu fixture). All writes stay under
+# SCRATCH.
 H_APT="${SCRATCH}/hostile-apt"
 H_OTHER="${SCRATCH}/hostile-apt-other"
 H_MARKER="${SCRATCH}/hostile-marker"
 mkdir -p "${H_APT}" "${H_OTHER}" "${H_MARKER}"
 printf 'ID=arch\nVERSION_CODENAME=n/a\n' >"${SCRATCH}/hostile-arch-release"
+printf 'ID=ubuntu\nVERSION_CODENAME=jammy\n' >"${SCRATCH}/hostile-ubuntu-release"
 set_docker_variant absent
-if [ -f /etc/os-release ] && grep -qE '^ID=(ubuntu|debian)' /etc/os-release; then
+(
     GOTHAM_OS_RELEASE_FILE="${SCRATCH}/hostile-arch-release"
     GOTHAM_APT_ROOT="${H_OTHER}"
     export GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT
-    if run_full "${R_DIR}/os/ubuntu-release" "${H_APT}" "${H_MARKER}" "${SCRATCH}/hostile"; then
-        grep -qx 'deb \[arch=amd64 signed-by='"${H_APT}"'/etc/apt/keyrings/docker.gpg\] https://download.docker.com/linux/ubuntu jammy stable' \
-            "${H_APT}/etc/apt/sources.list.d/docker.list" \
-            || fail "H1: hostile exports redirected the install away from the internal paths"
-        if [ -e "${H_OTHER}/etc/apt/sources.list.d/docker.list" ]; then
-            fail "H1: a repo was written under the hostile apt root"
-        fi
-    else
-        fail "H1: the hostile arch fixture was honored instead of the internal ubuntu one"
-    fi
-    unset GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT
-    pass "H1: hostile exports ignored on the read path (Ubuntu host)"
-else
-    printf 'ID=ubuntu\nVERSION_CODENAME=jammy\n' >"${SCRATCH}/hostile-ubuntu-release"
-    _OS_RELEASE_FILE=/etc/os-release
-    _APT_ROOT=
-    (
-        GOTHAM_OS_RELEASE_FILE="${SCRATCH}/hostile-ubuntu-release"
-        GOTHAM_APT_ROOT="${H_OTHER}"
-        DOCKER_MARKER="${H_MARKER}"
-        APT_LOG="${SCRATCH}/hostile-apt.log"
-        CURL_LOG="${SCRATCH}/hostile-curl.log"
-        export GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT DOCKER_MARKER APT_LOG CURL_LOG
-        PATH="${R_PATH}" ensure_docker_full >"${SCRATCH}/hostile-out.log" 2>&1
-    ) && H_RC=0 || H_RC=$?
-    [ "${H_RC}" -ne 0 ] \
-        || fail "H1: the hostile ubuntu fixture was honored instead of the real host file"
-    grep -q 'supports Ubuntu/Debian only' "${SCRATCH}/hostile-out.log" \
-        || fail "H1: refusal did not use the real host os-release"
-    if grep -q "found 'ubuntu'" "${SCRATCH}/hostile-out.log"; then
-        fail "H1: production run read the hostile fixture instead of the real os-release"
-    fi
-    [ ! -e "${H_OTHER}/etc/apt/sources.list.d/docker.list" ] \
-        || fail "H1: a repo was written under the hostile apt root"
-    pass "H1: hostile exports ignored on the read path (non-Ubuntu host)"
+    run_full "${R_DIR}/os/ubuntu-release" "${H_APT}" "${H_MARKER}" "${SCRATCH}/hostile"
+) || fail "H1: the hostile arch fixture was honored instead of the internal ubuntu one"
+grep -qx 'deb \[arch=amd64 signed-by='"${H_APT}"'/etc/apt/keyrings/docker.gpg\] https://download.docker.com/linux/ubuntu jammy stable' \
+    "${H_APT}/etc/apt/sources.list.d/docker.list" \
+    || fail "H1: hostile exports redirected the install away from the internal paths"
+if [ -e "${H_OTHER}/etc/apt/sources.list.d/docker.list" ]; then
+    fail "H1: a repo was written under the hostile apt root"
 fi
+unset GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT
+pass "H1: hostile exports ignored on the install path (internal ubuntu wins)"
+(
+    GOTHAM_OS_RELEASE_FILE="${SCRATCH}/hostile-ubuntu-release"
+    GOTHAM_APT_ROOT="${H_OTHER}"
+    DOCKER_MARKER="${SCRATCH}/hostile-marker-refuse"
+    APT_LOG="${SCRATCH}/hostile-apt.log"
+    CURL_LOG="${SCRATCH}/hostile-curl.log"
+    export GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT DOCKER_MARKER APT_LOG CURL_LOG
+    mkdir -p "${DOCKER_MARKER}"
+    _OS_RELEASE_FILE="${SCRATCH}/hostile-arch-release"
+    _APT_ROOT="${H_APT}"
+    PATH="${R_PATH}" ensure_docker_full >"${SCRATCH}/hostile-out.log" 2>&1
+) && H_RC=0 || H_RC=$?
+[ "${H_RC}" -ne 0 ] \
+    || fail "H1: the hostile ubuntu fixture was honored instead of the internal arch one"
+grep -q 'supports Ubuntu/Debian only' "${SCRATCH}/hostile-out.log" \
+    || fail "H1: refusal did not use the internal arch os-release"
+if grep -q "found 'ubuntu'" "${SCRATCH}/hostile-out.log"; then
+    fail "H1: production run read the hostile fixture instead of the internal paths"
+fi
+[ ! -e "${H_OTHER}/etc/apt/sources.list.d/docker.list" ] \
+    || fail "H1: a repo was written under the hostile apt root"
+pass "H1: hostile exports ignored on the refusal path (internal arch wins)"
 # Fresh-process proof through install-agent.sh itself: exporting the old and
 # the new names before --full --dry-run changes nothing, because sourcing the
 # lib overwrites them before any path is used.
@@ -1219,7 +1228,125 @@ grep -qxF "GOTHAM_AGENT_NODE_ID=o'dd \$(touch ${CC_DIR}/pwned) *; rm -rf /" "${C
 if [ -e "${CC_DIR}/pwned" ]; then
     fail "the metachar node id executed during the write"
 fi
-pass "C1: control characters rejected (newline/DEL, ambient and prior), metacharacters kept verbatim"
+# Every other managed key gets the same control-character gate: a newline
+# smuggling a second line fails closed, names the key, and writes nothing.
+# shellcheck disable=SC2034  # CC_BAD is consumed through eval below
+CC_BAD="$(printf 'ok\nGOTHAM_AGENT_INSECURE=true')"
+for _cckey in GOTHAM_AGENT_CERT_DIR GOTHAM_AGENT_KEY GOTHAM_AGENT_DOCKER_SOCK \
+    GOTHAM_AGENT_LOG_LEVEL GOTHAM_AGENT_AUTO_UPDATE \
+    GOTHAM_AGENT_UPDATE_INTERVAL GOTHAM_AGENT_UPDATE_CHANNEL \
+    GOTHAM_AGENT_LISTEN_ADDR; do
+    CC_KENV="${CC_DIR}/k-${_cckey}.env"
+    printf 'GOTHAM_AGENT_CP_ADDR=cp.example.com:9443\nGOTHAM_AGENT_NODE_ID=node-ok\n' >"${CC_KENV}"
+    # shellcheck disable=SC2034  # read by agent_env_write through eval
+    eval "${_cckey}=\"\${CC_BAD}\""
+    if agent_env_write "${CC_KENV}" "/etc/gotham/ca.crt" 0 2>"${CC_DIR}/k-err.log"; then
+        fail "a newline in ${_cckey} was written to agent.env"
+    else
+        grep -q "${_cckey}.*control character" "${CC_DIR}/k-err.log" \
+            || fail "the ${_cckey} rejection does not name the key and the cause"
+        if grep -q '^GOTHAM_AGENT_INSECURE=' "${CC_KENV}"; then
+            fail "the smuggled line via ${_cckey} reached agent.env"
+        fi
+    fi
+    unset_agent_env
+done
+# The dial address additionally refuses spaces, quotes and = (systemd would
+# parse them differently from what the operator typed) and must be host:port.
+for _cpbad in 'cp.example.com: 9443' "cp.exa'mple.com:9443" 'cp.exa"mple.com:9443' \
+    'cp.exa=mple.com:9443' 'cp.example.com'; do
+    CC_CPBAD="${CC_DIR}/cp-bad.env"
+    printf 'GOTHAM_AGENT_NODE_ID=node-ok\nGOTHAM_AGENT_CP_ADDR=%s\n' "${_cpbad}" >"${CC_CPBAD}"
+    if agent_env_write "${CC_CPBAD}" "/etc/gotham/ca.crt" 0 2>/dev/null; then
+        fail "GOTHAM_AGENT_CP_ADDR='${_cpbad}' was written to agent.env"
+    fi
+done
+unset_agent_env
+# Bracketed IPv6 and :port forms are host:port and still pass.
+printf 'GOTHAM_AGENT_NODE_ID=node-ok\nGOTHAM_AGENT_CP_ADDR=[::1]:9443\n' >"${CC_DIR}/cp-v6.env"
+agent_env_write "${CC_DIR}/cp-v6.env" "/etc/gotham/ca.crt" 0 \
+    || fail "a bracketed IPv6 dial address was rejected"
+grep -qxF 'GOTHAM_AGENT_CP_ADDR=[::1]:9443' "${CC_DIR}/cp-v6.env" \
+    || fail "a bracketed IPv6 dial address was mangled"
+# Shape checks accept everything the agent accepts: log level (any case),
+# boolean forms, Go durations, channel names, :port listeners, relative key
+# paths, spaced cert dirs and tcp:// docker endpoints.
+CC_SHAPE="${CC_DIR}/shape.env"
+printf 'GOTHAM_AGENT_CP_ADDR=cp.example.com:9443\nGOTHAM_AGENT_NODE_ID=node-shape\n' >"${CC_SHAPE}"
+# shellcheck disable=SC2034  # read by agent_env_write through eval
+GOTHAM_AGENT_LOG_LEVEL=Warning
+# shellcheck disable=SC2034
+GOTHAM_AGENT_AUTO_UPDATE=YES
+# shellcheck disable=SC2034
+GOTHAM_AGENT_UPDATE_INTERVAL=1h30m
+# shellcheck disable=SC2034
+GOTHAM_AGENT_UPDATE_CHANNEL=beta
+# shellcheck disable=SC2034
+GOTHAM_AGENT_LISTEN_ADDR=:9443
+# shellcheck disable=SC2034
+GOTHAM_AGENT_CERT_DIR="/opt/my dir/certs"
+# shellcheck disable=SC2034
+GOTHAM_AGENT_KEY=relative/key.pem
+# shellcheck disable=SC2034
+GOTHAM_AGENT_DOCKER_SOCK=tcp://docker:2375
+agent_env_write "${CC_SHAPE}" "/etc/gotham/ca.crt" 0 \
+    || fail "valid shaped values were rejected"
+for _shapeline in 'GOTHAM_AGENT_LOG_LEVEL=Warning' 'GOTHAM_AGENT_AUTO_UPDATE=YES' \
+    'GOTHAM_AGENT_UPDATE_INTERVAL=1h30m' 'GOTHAM_AGENT_UPDATE_CHANNEL=beta' \
+    'GOTHAM_AGENT_LISTEN_ADDR=:9443' 'GOTHAM_AGENT_CERT_DIR=/opt/my dir/certs' \
+    'GOTHAM_AGENT_KEY=relative/key.pem' 'GOTHAM_AGENT_DOCKER_SOCK=tcp://docker:2375'; do
+    grep -qxF "${_shapeline}" "${CC_SHAPE}" \
+        || fail "valid shaped value not written verbatim: ${_shapeline}"
+done
+unset_agent_env
+# ... and reject malformed ones: unknown level, non-boolean, unit-less or
+# unit-broken durations, channel names with spaces or slashes, and a
+# port-less listener.
+for _spec in 'GOTHAM_AGENT_LOG_LEVEL|verbose' 'GOTHAM_AGENT_AUTO_UPDATE|maybe' \
+    'GOTHAM_AGENT_UPDATE_INTERVAL|5' 'GOTHAM_AGENT_UPDATE_INTERVAL|5x' \
+    'GOTHAM_AGENT_UPDATE_INTERVAL|5 m' 'GOTHAM_AGENT_UPDATE_CHANNEL|a b' \
+    'GOTHAM_AGENT_UPDATE_CHANNEL|a/b' 'GOTHAM_AGENT_LISTEN_ADDR|9443'; do
+    _skey="${_spec%%|*}"
+    _sval="${_spec#*|}"
+    CC_SENV="${CC_DIR}/shape-bad.env"
+    printf 'GOTHAM_AGENT_CP_ADDR=cp.example.com:9443\nGOTHAM_AGENT_NODE_ID=node-ok\n' >"${CC_SENV}"
+    # shellcheck disable=SC2034  # read by agent_env_write through eval
+    eval "${_skey}=\"\${_sval}\""
+    if agent_env_write "${CC_SENV}" "/etc/gotham/ca.crt" 0 2>/dev/null; then
+        fail "${_skey}='${_sval}' was written to agent.env"
+    fi
+    unset_agent_env
+done
+pass "C1: every agent.env value rejected on control characters, dial-address charset and shapes enforced"
+
+# --- V1: install-agent.sh validates before its first mutation ---------------
+echo "==> V1 a direct run with a bad value fails with nothing created"
+V1_DIR="${SCRATCH}/v1"
+mkdir -p "${V1_DIR}/tmp"
+printf 'dummy CA for the validate-first path\n' >"${V1_DIR}/ca.pem"
+# A poisoned value fails the direct --dry-run before any mutation is even
+# planned: the rejection names the key, no [dry-run] line is printed, and
+# TMPDIR stays empty (validation precedes the first mktemp).
+if GOTHAM_AGENT_LOG_LEVEL="$(printf 'info\nGOTHAM_AGENT_INSECURE=true')" \
+    GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test \
+    TMPDIR="${V1_DIR}/tmp" \
+    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --dry-run >"${V1_DIR}/bad.log" 2>&1; then
+    fail "V1: a direct run with a poisoned LOG_LEVEL succeeded"
+else
+    grep -q 'GOTHAM_AGENT_LOG_LEVEL.*control character' "${V1_DIR}/bad.log" \
+        || fail "V1: the rejection does not name the key and the cause"
+    if grep -q '\[dry-run\]' "${V1_DIR}/bad.log"; then
+        fail "V1: the failed run planned mutations before validating"
+    fi
+    [ -z "$(ls -A "${V1_DIR}/tmp")" ] \
+        || fail "V1: the failed run created scratch files before validating"
+fi
+# Valid input still passes validation (no behaviour change for good values).
+GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test \
+    TMPDIR="${V1_DIR}/tmp" \
+    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --dry-run >"${V1_DIR}/good.log" 2>&1 \
+    || fail "V1: valid input no longer passes validation"
+pass "V1: bad values fail before the first mutation, good values pass"
 
 if [ "${FAILURES}" -eq 0 ]; then
     echo "ALL AGENT-INSTALL TESTS PASSED"

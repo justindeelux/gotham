@@ -448,6 +448,16 @@ DSN="${DSN:-${DEFAULT_DSN}}"
 REDIS_ADDR="${GOTHAM_REDIS_ADDR:-$(env_prev GOTHAM_REDIS_ADDR)}"
 REDIS_ADDR="${REDIS_ADDR:-${DEFAULT_REDIS}}"
 
+# A control character (notably a newline smuggling a second line) in either
+# value would corrupt root-owned gotham.env, so both are rejected before
+# anything is written.
+_stripped_dsn="$(printf '%s' "${DSN}" | tr -d '\000-\037\177')"
+[ "${_stripped_dsn}" = "${DSN}" ] \
+    || die "GOTHAM_DATABASE_DSN contains a control character (rejected)"
+_stripped_redis="$(printf '%s' "${REDIS_ADDR}" | tr -d '\000-\037\177')"
+[ "${_stripped_redis}" = "${REDIS_ADDR}" ] \
+    || die "GOTHAM_REDIS_ADDR contains a control character (rejected)"
+
 if [ "${DRY_RUN}" -eq 0 ]; then
     # Restrictive umask only around the secret material, so it is never briefly
     # world-readable; the shared directories stay 0755 (base umask 022).

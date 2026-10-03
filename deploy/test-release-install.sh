@@ -12,7 +12,11 @@
 #     redirect of <releases>/latest (H2 regression guard);
 #   - the gotham-agent family branch of verify_release;
 #   - re-install preserving operator settings (M2);
-#   - fail-closed: tampered artifact, tampered manifest, pinned-key mismatch.
+#   - fail-closed: tampered artifact, tampered manifest, pinned-key mismatch;
+#   - control characters in GOTHAM_DATABASE_DSN / GOTHAM_REDIS_ADDR fail
+#     closed before gotham.env is written (C2);
+#   - a real run (no --dry-run, no GOTHAM_INSTALL_ROOT) ignores
+#     GOTHAM_INSTALL_TEST_AGENT_SCRIPT (R4).
 #
 # The installer's public key is the provisioned release key; the tests inject an
 # ephemeral key through GOTHAM_INSTALL_TEST_PUBLIC_KEY (test mode only), and the
@@ -1176,5 +1180,193 @@ cmp -s "${SCRATCH}/m2-expected" "${M2_CAPTURE}" \
 [ ! -e "${M2_PWNED}" ] \
     || { echo "FAIL: a command inside the node id was executed (M2)" >&2; exit 1; }
 echo "PASS: a metachar node id arrives verbatim and nothing in it runs (M2)"
+
+# ---- C2: control characters in GOTHAM_DATABASE_DSN / GOTHAM_REDIS_ADDR ----
+# A newline smuggling a second line into root-owned gotham.env fails closed
+# before anything is written: the rejection names the key and no gotham.env
+# appears. Sandbox real runs (no --dry-run) prove the write path itself.
+echo "==> control characters in the DSN / Redis addr are rejected (C2)"
+C2_ROOT="${SCRATCH}/root-c2"
+C2_RC=0
+GOTHAM_DATABASE_DSN="$(printf 'postgres://gotham:gotham@localhost:5432/gotham\nGOTHAM_EVIL=true')" \
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_ROOT="${C2_ROOT}" \
+GOTHAM_SKIP_DEPS=1 \
+    sh "${INSTALL_SH}" >"${SCRATCH}/c2-out.log" 2>"${SCRATCH}/c2-err.log" || C2_RC=$?
+[ "${C2_RC}" -ne 0 ] \
+    || { echo "FAIL: a newline in GOTHAM_DATABASE_DSN was accepted (C2)" >&2; exit 1; }
+grep -q 'GOTHAM_DATABASE_DSN.*control character' "${SCRATCH}/c2-err.log" \
+    || { echo "FAIL: the DSN rejection does not name the key and the cause (C2)" >&2; exit 1; }
+[ ! -f "${C2_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: gotham.env was written although the DSN was rejected (C2)" >&2; exit 1; }
+C2R_ROOT="${SCRATCH}/root-c2r"
+C2R_RC=0
+GOTHAM_REDIS_ADDR="$(printf 'localhost:6379\nGOTHAM_EVIL=true')" \
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_ROOT="${C2R_ROOT}" \
+GOTHAM_SKIP_DEPS=1 \
+    sh "${INSTALL_SH}" >"${SCRATCH}/c2r-out.log" 2>"${SCRATCH}/c2r-err.log" || C2R_RC=$?
+[ "${C2R_RC}" -ne 0 ] \
+    || { echo "FAIL: a newline in GOTHAM_REDIS_ADDR was accepted (C2)" >&2; exit 1; }
+grep -q 'GOTHAM_REDIS_ADDR.*control character' "${SCRATCH}/c2r-err.log" \
+    || { echo "FAIL: the Redis rejection does not name the key and the cause (C2)" >&2; exit 1; }
+[ ! -f "${C2R_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: gotham.env was written although the Redis addr was rejected (C2)" >&2; exit 1; }
+echo "PASS: control characters in the DSN / Redis addr fail closed with nothing written (C2)"
+
+# ---- R4: a real run ignores GOTHAM_INSTALL_TEST_AGENT_SCRIPT ---------------
+# No --dry-run, no GOTHAM_INSTALL_ROOT: the installer runs for real with
+# every test seam set hostile, from a scratch copy whose five writable
+# roots are rewritten onto a sandbox and whose platform/agent.env lookups
+# are baked to fixtures (the suite's bake_installer pattern: production
+# reads fixed paths on a real run, so the copy drives them through the
+# file). The PREFIX/TEST_MODE derivation, the gate and everything else are
+# byte-identical, asserted below. PATH shims fake root (id), the service
+# activations (systemctl/runuser), the key verification this run cannot
+# pass honestly (openssl) and the sudoers sub-installer (sh); file
+# operations run for real inside the sandbox. The run must still reach the
+# agent step, pick the REAL install-agent.sh, and fail only on its missing
+# CA — the fake script must never execute. A scratch copy whose gate
+# honours the seam on a real run lets the fake execute, so this test
+# catches that regression (run it with INSTALL_SH_OVERRIDE=<mutant> to
+# see it fail).
+echo "==> a real run ignores the agent-script seam (R4)"
+RR_SHIM="${SCRATCH}/rr-shim"
+RR_BOX="${SCRATCH}/realrun"
+mkdir -p "${RR_SHIM}" "${RR_BOX}/tmp"
+RR_AGENT_ENV="${SCRATCH}/rr-agent.env"
+rm -f "${RR_AGENT_ENV}"
+RR_INSTALLER="${SCRATCH}/install-rr.sh"
+# Sandbox the five writable roots (the rest derive from them) and bake the
+# platform/agent.env lookups to fixtures; the TEST_MODE derivation, the
+# gate and everything else stay byte-identical so this is a genuine
+# TEST_MODE=0 real run, only relocated.
+sed -e "s|^ETC_DIR=\"\${PREFIX}/etc/gotham\"\$|ETC_DIR=\"${RR_BOX}/etc/gotham\"|" \
+    -e "s|^STATE_DIR=\"\${PREFIX}/var/lib/gotham\"\$|STATE_DIR=\"${RR_BOX}/var/lib/gotham\"|" \
+    -e "s|^STATUS_DIR=\"\${PREFIX}/var/lib/gotham-updater\"\$|STATUS_DIR=\"${RR_BOX}/var/lib/gotham-updater\"|" \
+    -e "s|^WRAPPER_PATH=\"\${PREFIX}/usr/libexec/gotham/gotham-update\"\$|WRAPPER_PATH=\"${RR_BOX}/usr/libexec/gotham/gotham-update\"|" \
+    -e "s|^SERVICE_FILE=\"\${PREFIX}/etc/systemd/system/gotham.service\"\$|SERVICE_FILE=\"${RR_BOX}/etc/systemd/system/gotham.service\"|" \
+    -e "s|^    _la_os_release=\"/etc/os-release\"\$|    _la_os_release=\"${FIXTURES}/ubuntu-release\"|" \
+    -e "s|^        AGENT_ENV_FILE=\"/etc/gotham/agent.env\"\$|        AGENT_ENV_FILE=\"${RR_AGENT_ENV}\"|" \
+    "${INSTALL_SH}" >"${RR_INSTALLER}"
+for _rrvar in ETC_DIR STATE_DIR STATUS_DIR WRAPPER_PATH SERVICE_FILE; do
+    grep -q "^${_rrvar}=\"${RR_BOX}/" "${RR_INSTALLER}" \
+        || { echo "FAIL: the R4 copy did not rewrite ${_rrvar}" >&2; exit 1; }
+done
+grep -qxF "    _la_os_release=\"${FIXTURES}/ubuntu-release\"" "${RR_INSTALLER}" \
+    || { echo "FAIL: the R4 copy did not bake the os-release path" >&2; exit 1; }
+grep -qxF "        AGENT_ENV_FILE=\"${RR_AGENT_ENV}\"" "${RR_INSTALLER}" \
+    || { echo "FAIL: the R4 copy did not bake the agent.env path" >&2; exit 1; }
+_rr_extra="$(diff "${INSTALL_SH}" "${RR_INSTALLER}" | grep '^>' | grep -vcE '^> ((ETC_DIR|STATE_DIR|STATUS_DIR|WRAPPER_PATH|SERVICE_FILE)=|    _la_os_release=|        AGENT_ENV_FILE=)' || true)"
+[ "${_rr_extra}" = "0" ] \
+    || { echo "FAIL: the R4 copy differs by more than the relocated lines" >&2; diff "${INSTALL_SH}" "${RR_INSTALLER}" >&2; exit 1; }
+    # The copy runs from its own directory (SCRIPT_DIR), so link the real
+    # siblings next to it; the copy itself stays the file under test.
+    for _sib in release-verify.sh gotham-update.sh gotham-updater.conf \
+        install-sudoers.sh gotham.service install-agent.sh install-agent-lib.sh \
+        gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service; do
+        ln -sf "${SCRIPT_DIR}/${_sib}" "$(dirname "${RR_INSTALLER}")/${_sib}"
+    done
+    REAL_OPENSSL="$(command -v openssl)"
+    export REAL_OPENSSL
+    cat >"${RR_SHIM}/id" <<'SHIM'
+#!/bin/sh
+printf '0\n'
+SHIM
+    cat >"${RR_SHIM}/systemctl" <<'SHIM'
+#!/bin/sh
+echo "systemctl $*" >>"${SYSTEMCTL_LOG:-/dev/null}"
+exit 0
+SHIM
+    cat >"${RR_SHIM}/runuser" <<'SHIM'
+#!/bin/sh
+echo "runuser $*" >>"${SYSTEMCTL_LOG:-/dev/null}"
+exit 0
+SHIM
+    for _dumb in sudo visudo; do
+        printf '#!/bin/sh\nexit 0\n' >"${RR_SHIM}/${_dumb}"
+    done
+    # install runs for real when it can (owner flags stripped: the fake
+    # root owns nothing); chown can never succeed here and is faked.
+    cat >"${RR_SHIM}/install" <<'SHIM'
+#!/bin/sh
+if "${0}-real" "$@" 2>/dev/null; then exit 0; fi
+stripped=""
+skip=0
+for a in "$@"; do
+    if [ "${skip}" = "1" ]; then skip=0; continue; fi
+    case "${a}" in
+        -o | -g) skip=1 ;;
+        *) stripped="${stripped} ${a}" ;;
+    esac
+done
+# shellcheck disable=SC2086
+"${0}-real" ${stripped} 2>/dev/null || exit 0
+SHIM
+    ln -sf "$(command -v install)" "${RR_SHIM}/install-real"
+    printf '#!/bin/sh\nexit 0\n' >"${RR_SHIM}/chown"
+    cat >"${RR_SHIM}/openssl" <<'SHIM'
+#!/bin/sh
+# The capability probe and the manifest verification are faked (the run has
+# no key it could verify with); every other openssl runs for real.
+case "$*" in
+    *pkeyutl*-help*) printf 'options: -rawin -verify\n'; exit 0 ;;
+    *pkeyutl*-verify*) exit 0 ;;
+esac
+exec "${REAL_OPENSSL}" "$@"
+SHIM
+    cat >"${RR_SHIM}/sh" <<'SHIM'
+#!/bin/sh
+# The sudoers sub-installer would write the host /etc/sudoers.d; it is
+# proven elsewhere, so the fake-root run fakes its success. The agent step
+# (the point of this test) runs for real.
+case "$*" in
+    *install-sudoers.sh*) exit 0 ;;
+esac
+exec /bin/sh "$@"
+SHIM
+    chmod +x "${RR_SHIM}"/*
+    cat >"${SCRATCH}/rr-agent.sh" <<'SHIM'
+#!/bin/sh
+touch "${AGENT_MARKER:?}"
+echo "fake-agent: ran" >&2
+exit 1
+SHIM
+    chmod +x "${SCRATCH}/rr-agent.sh"
+    rm -f "${SCRATCH}/rr-agent-ran"
+    : >"${SCRATCH}/rr-systemctl.log"
+    RR_RC=0
+    TMPDIR="${RR_BOX}/tmp" \
+    SYSTEMCTL_LOG="${SCRATCH}/rr-systemctl.log" \
+    AGENT_MARKER="${SCRATCH}/rr-agent-ran" \
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+    GOTHAM_SKIP_DEPS=1 \
+    GOTHAM_INSTALL_TEST=1 \
+    GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
+    GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/rr-agent.sh" \
+    GOTHAM_OS_RELEASE_FILE="${FIXTURES}/arch-release" \
+    GOTHAM_TEST_UNAME_M=sparc64 \
+    GOTHAM_AGENT_ENV_FILE="${SCRATCH}/rr-agent.env" \
+    GOTHAM_APT_ROOT="${SCRATCH}/rr-hostile-apt" \
+    PATH="${RR_SHIM}:${PATH}" \
+        sh "${RR_INSTALLER}" >"${SCRATCH}/rr-out.log" 2>"${SCRATCH}/rr-err.log" || RR_RC=$?
+    [ "${RR_RC}" -ne 0 ] \
+        || { echo "FAIL: the real run exited 0 although the agent step failed (R4)" >&2; exit 1; }
+    grep -q 'installing the localhost agent node' "${SCRATCH}/rr-out.log" \
+        || { echo "FAIL: the real run never reached the agent step (R4)" >&2; cat "${SCRATCH}/rr-err.log" >&2; exit 1; }
+    grep -q 'Retry only the agent step' "${SCRATCH}/rr-err.log" \
+        || { echo "FAIL: the real run failed before the agent step (R4)" >&2; cat "${SCRATCH}/rr-err.log" >&2; exit 1; }
+    [ ! -e "${SCRATCH}/rr-agent-ran" ] \
+        || { echo "FAIL: the fake agent script ran on a real run (R4)" >&2; exit 1; }
+    if grep -q 'hostile-apt-root\|sparc64\|arch-release' "${SCRATCH}/rr-out.log" "${SCRATCH}/rr-err.log"; then
+        echo "FAIL: a hostile seam value leaked into the real run (R4)" >&2
+        exit 1
+    fi
+    echo "PASS: a real run reaches the agent step on the real script and never runs the seam fake (R4)"
 
 echo "ALL RELEASE-INSTALL TESTS PASSED"

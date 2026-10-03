@@ -213,7 +213,10 @@ Useful agent installer flags and variables:
 
 `GOTHAM_AGENT_CP_ADDR` must use a name or IP that is one of the control plane's
 listener SANs (see [Control plane](#control-plane)); otherwise the TLS handshake
-fails and the node never registers.
+fails and the node never registers. It must be `host:port` without spaces,
+quotes or `=`; every other `agent.env` value is likewise rejected on control
+characters (and on shapes the agent would not accept) before the installer
+changes anything, so a bad value fails with nothing created.
 
 `GOTHAM_AGENT_NODE_ID` must not name the control plane itself. The CP refuses to
 register its own listener identities (its bind host, the loopback names, its

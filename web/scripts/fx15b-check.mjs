@@ -186,13 +186,16 @@ async function main() {
     });
 
     await check("B4-13: exactly 80% counts as danger (inclusive >=)", async () => {
+      for (const page of ["../src/pages/DashboardPage.vue", "../src/pages/ServersPage.vue"]) {
+        const source = await readFile(new URL(page, import.meta.url), "utf8");
+        assert(
+          source.includes(">= USAGE_DANGER_PERCENT"),
+          `${page} must compare with >= (a node at exactly 80% is danger-red)`,
+        );
+      }
       const source = await readFile(
         new URL("../src/pages/ServersPage.vue", import.meta.url),
         "utf8",
-      );
-      assert(
-        source.includes(">= USAGE_DANGER_PERCENT"),
-        "the server list must compare with >= (a node at exactly 80% is danger-red)",
       );
       // Boundary behaviour through the shared normalizer: 0.8 lands exactly
       // on the threshold, so an inclusive comparison flags it.

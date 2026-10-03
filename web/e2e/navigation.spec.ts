@@ -21,13 +21,17 @@ test.describe("core navigation", () => {
       page.getByRole("heading", { name: "Dashboard", level: 1 }),
     ).toBeVisible();
 
-    await page.getByRole("link", { name: "Servers" }).click();
+    // Sidebar-scoped: the dashboard renders its own links whose names contain
+    // these labels ("View applications", "view all servers"), so a page-wide
+    // non-exact lookup is a strict-mode violation once that data exists.
+    const sidebar = page.locator("#app-nav");
+    await sidebar.getByRole("link", { name: "Servers" }).click();
     await expect(page).toHaveURL(/\/servers$/);
     await expect(
       page.getByRole("heading", { name: "Servers", level: 1 }),
     ).toBeVisible();
 
-    await page.getByRole("link", { name: "Applications" }).click();
+    await sidebar.getByRole("link", { name: "Applications" }).click();
     await expect(page).toHaveURL(/\/applications$/);
     await expect(
       page.getByRole("heading", { name: "Applications", level: 1 }),
@@ -37,13 +41,13 @@ test.describe("core navigation", () => {
     // applications scenario.
     await expect(page.getByText("Source providers", { exact: true })).toBeVisible();
 
-    await page.getByRole("link", { name: "Databases" }).click();
+    await sidebar.getByRole("link", { name: "Databases" }).click();
     await expect(page).toHaveURL(/\/databases$/);
     await expect(
       page.getByRole("heading", { name: "Databases", level: 1 }),
     ).toBeVisible();
 
-    await page.getByRole("link", { name: "Domains & SSL" }).click();
+    await sidebar.getByRole("link", { name: "Domains & SSL" }).click();
     await expect(page).toHaveURL(/\/domains$/);
     await expect(
       page.getByRole("heading", { name: "Domains & SSL", level: 1 }),

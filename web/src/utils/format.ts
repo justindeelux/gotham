@@ -40,10 +40,84 @@ export function formatPercent(value: number | null | undefined): string {
 }
 
 /**
+ * Shared usage-meter thresholds (percent, 0..100 after toPercent).
+ *
+ *   ok      below 60 — healthy headroom, rendered green / base color.
+ *   warn    60..79   — getting full, rendered amber.
+ *   danger  80+      — act soon, rendered red.
+ *
+ * The dashboard and the server list share this helper so the same reading
+ * never shows two severities on two pages.
+ */
+export const USAGE_WARN_PERCENT = 60;
+
+/**
  * USAGE_DANGER_PERCENT is the single danger threshold for CPU/RAM/disk meters.
  * Kept here so the dashboard and the server list cannot drift apart (B4-13).
  */
 export const USAGE_DANGER_PERCENT = 80;
+
+/** Severity level of a normalized 0..100 usage reading. */
+export type UsageLevel = "ok" | "warn" | "danger";
+
+/** usageLevel maps a normalized percentage onto its severity level. */
+export function usageLevel(percent: number): UsageLevel {
+  if (percent >= USAGE_DANGER_PERCENT) {
+    return "danger";
+  }
+  if (percent >= USAGE_WARN_PERCENT) {
+    return "warn";
+  }
+  return "ok";
+}
+
+/**
+ * usageBarColor maps a severity level onto its bar color: the metric keeps
+ * its healthy base hue (per the dashboard/servers mockups CPU renders accent
+ * while RAM/disk render success green), warn renders amber and danger red on
+ * every page. The dashboard and the server list share this helper so the same
+ * reading never shows two severities on two pages.
+ */
+export function usageBarColor(level: UsageLevel, healthy: string): string {
+  switch (level) {
+    case "danger":
+      return "var(--danger)";
+    case "warn":
+      return "var(--warn)";
+    default:
+      return healthy;
+  }
+}
+
+/** UsageView is one rendered usage tile (label, bar color, bar percent). */
+export interface UsageView {
+  /** label is the displayed reading, or an em dash when there is none. */
+  label: string;
+  /** color is the bar color from the shared severity scale. */
+  color: string;
+  /** percentage is the normalized 0..100 reading the bar renders. */
+  percentage: number;
+}
+
+/**
+ * usageView normalizes a heartbeat usage reading for display. Null,
+ * undefined and NaN render as an em dash (never as a false 0%); other values
+ * are clamped to 0..100 through toPercent before the shared thresholds apply.
+ */
+export function usageView(
+  value: number | null | undefined,
+  healthy: string,
+): UsageView {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return { label: "—", color: healthy, percentage: 0 };
+  }
+  const percentage = toPercent(value);
+  return {
+    label: `${percentage}%`,
+    color: usageBarColor(usageLevel(percentage), healthy),
+    percentage,
+  };
+}
 
 /** toPercent normalizes a usage reading to a 0-100 percentage.
  *

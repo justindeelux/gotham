@@ -1,5 +1,5 @@
 import { http } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 
 /**
  * Typed client for the preview-binding route served by `internal/webhooks`
@@ -98,10 +98,10 @@ export function describePreviewError(error: unknown): string {
     if (error.status === 404) {
       return "Preview deployments are not enabled on this control plane (FEATURE_PREVIEWS=false).";
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
   }
   return "Something went wrong. Please try again.";
 }

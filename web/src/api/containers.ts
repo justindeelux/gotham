@@ -1,5 +1,5 @@
 import { http } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 
 /**
  * Typed client for the container routes served by `internal/containers`:
@@ -169,10 +169,10 @@ export async function startContainerLogStream(
 /** describeContainerError maps a thrown error to a user-facing message. */
 export function describeContainerError(error: unknown): string {
   if (isApiError(error)) {
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
   }
   return "Something went wrong. Please try again.";
 }

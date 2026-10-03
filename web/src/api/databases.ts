@@ -1,5 +1,5 @@
 import { http, teamHeaders } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 
 /**
  * Typed client for the database routes served by `internal/databases`
@@ -223,15 +223,41 @@ export function describeDatabaseError(error: unknown): string {
       return "A database with that name already exists.";
     }
     if (error.status === 502) {
-      return "The node agent is unreachable or the healthcheck failed. Check the node status and retry.";
+      return (
+        "The node agent is unreachable or the healthcheck failed. " +
+        "Check the node status and retry."
+      );
     }
     if (error.status === 503) {
       return "Databases are disabled on the control plane (FEATURE_DATABASES=false).";
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return (
+      stripErrorPrefix(error.message) || "Something went wrong. Please try again."
+    );
   }
   return "Something went wrong. Please try again.";
+}
+
+/**
+ * databaseEmptyDescription picks the honest empty state for the managed
+ * databases table: "none exist yet" when the team owns no databases at all,
+ * "no match" only when a filter or search hides existing ones. Pure so the
+ * page and the harness share one definition.
+ */
+export function databaseEmptyDescription(totalCount: number): string {
+  return totalCount === 0
+    ? "No databases yet"
+    : "No databases match this filter";
+}
+
+/**
+ * databaseEmptyHint picks the matching follow-up line for the empty state.
+ */
+export function databaseEmptyHint(totalCount: number): string {
+  return totalCount === 0
+    ? "Create your first database with the Create database wizard."
+    : "Change the filter or search, or create a database with the Create database wizard.";
 }

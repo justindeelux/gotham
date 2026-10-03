@@ -79,11 +79,7 @@ const valueProps: ValueProp[] = [
 
       <div class="stack gap-2" data-od-id="auth-aside-foot">
         <p class="small muted">
-          <span class="mono">cp.gotham.dev:8000</span> ·
-          <span class="mono">v0.9.4</span> · stable channel
-        </p>
-        <p class="small muted">
-          Gotham interface design — every figure on this screen is sample data.
+          Self-hosted control plane · your infrastructure, your data.
         </p>
       </div>
     </aside>

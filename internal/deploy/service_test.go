@@ -178,6 +178,52 @@ func TestServiceListDeploymentsEmpty(t *testing.T) {
 	}
 }
 
+func TestServiceListDeploymentsLimit(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
+	seed := []Deployment{
+		{Kind: KindDeploy, State: StateFailed, ImageTag: "gotham/app:1"},
+		{Kind: KindDeploy, State: StateRunning, ImageTag: "gotham/app:2"},
+		{Kind: KindDeploy, State: StateRunning, ImageTag: "gotham/app:3"},
+	}
+	for _, dep := range seed {
+		seedDeployment(t, repo, app, dep)
+	}
+	svc := newTestService(t, repo)
+	ctx := context.Background()
+
+	t.Run("limit bounds the page to the newest rows", func(t *testing.T) {
+		deployments, err := svc.ListDeploymentsLimit(ctx, userID, app.ID, 1)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(deployments) != 1 {
+			t.Fatalf("len = %d, want 1", len(deployments))
+		}
+		if deployments[0].State != StateRunning || deployments[0].ImageTag != "gotham/app:3" {
+			t.Errorf("row = %s %s, want the newest (running gotham/app:3)",
+				deployments[0].State, deployments[0].ImageTag)
+		}
+	})
+
+	t.Run("non-positive limit selects the newest row", func(t *testing.T) {
+		deployments, err := svc.ListDeploymentsLimit(ctx, userID, app.ID, 0)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(deployments) != 1 {
+			t.Fatalf("len = %d, want 1", len(deployments))
+		}
+	})
+
+	t.Run("foreign application answers not found", func(t *testing.T) {
+		if _, err := svc.ListDeploymentsLimit(ctx, uuid.New(), app.ID, 1); !errors.Is(err, ErrNotFound) {
+			t.Errorf("err = %v, want ErrNotFound", err)
+		}
+	})
+}
+
 func TestServiceRollbackTarget(t *testing.T) {
 	newRepo := func(t *testing.T) (*fakeRepository, Application, []Deployment) {
 		t.Helper()

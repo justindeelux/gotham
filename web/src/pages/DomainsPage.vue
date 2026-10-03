@@ -211,7 +211,8 @@ function domainCell(certificate: Certificate): VNode {
       "span",
       { class: "cell-sub" },
       domain && domain !== certificate.domain
-        ? `${applicationName(certificate.application_id)} · base domain changed to ${domain} — re-save to re-record`
+        ? `${applicationName(certificate.application_id)} · base domain ` +
+          `changed to ${domain} — re-save to re-record`
         : applicationName(certificate.application_id),
     ),
   ]);
@@ -266,7 +267,8 @@ function certificateActions(certificate: Certificate): VNode {
               { default: () => "Delete" },
             ),
           default: () =>
-            `Delete the certificate configuration for ${certificate.domain}? The route falls back to plain HTTP.`,
+            `Delete the certificate configuration for ${certificate.domain}? ` +
+            "The route falls back to plain HTTP.",
         },
       ),
     ],
@@ -343,14 +345,41 @@ function certificateRowKey(row: Certificate): string {
   return row.id;
 }
 
+/**
+ * statsReady flips once the first load settles, so the tiles never flash a
+ * 0 that was never read.
+ */
+const statsReady = ref(false);
+
 /** load refreshes providers, certificates, redirects and the name map. */
 async function load(): Promise<void> {
-  await Promise.allSettled([
-    proxyStore.fetchProviders(),
-    proxyStore.fetchCertificates(),
-    proxyStore.fetchRedirects(),
-    proxyStore.fetchApplications(),
-  ]);
+  try {
+    await Promise.allSettled([
+      proxyStore.fetchProviders(),
+      proxyStore.fetchCertificates(),
+      proxyStore.fetchRedirects(),
+      proxyStore.fetchApplications(),
+    ]);
+  } finally {
+    statsReady.value = true;
+  }
+}
+
+/**
+ * statsBlocked is true while the first load is in flight or when a read
+ * failed (for example a non-admin 403): the tiles then show a dash rather
+ * than a 0 that looks like real data.
+ */
+const statsBlocked = computed<boolean>(
+  () =>
+    !statsReady.value ||
+    proxyStore.error !== null ||
+    proxyStore.certificatesError !== null,
+);
+
+/** statText renders a tile count, or a dash when the read failed/is pending. */
+function statText(count: number): string {
+  return statsBlocked.value ? "—" : String(count);
 }
 
 /**
@@ -635,22 +664,22 @@ onMounted(() => {
     <div class="grid cols-4 kpi-row">
       <div class="stat">
         <p class="stat-label">Certificate configs</p>
-        <p class="stat-value num">{{ proxyStore.certificates.length }}</p>
-        <p class="stat-sub">{{ enabledCertificates }} enabled · one per application</p>
+        <p class="stat-value num">{{ statText(proxyStore.certificates.length) }}</p>
+        <p class="stat-sub">{{ statText(enabledCertificates) }} enabled · one per application</p>
       </div>
       <div class="stat">
         <p class="stat-label">Wildcard configs</p>
-        <p class="stat-value num">{{ wildcardCertificates }}</p>
+        <p class="stat-value num">{{ statText(wildcardCertificates) }}</p>
         <p class="stat-sub">dns-01 challenge required</p>
       </div>
       <div class="stat">
         <p class="stat-label">DNS providers</p>
-        <p class="stat-value num">{{ proxyStore.providers.length }}</p>
-        <p class="stat-sub">{{ enabledProviders.length }} enabled · credential sealed</p>
+        <p class="stat-value num">{{ statText(proxyStore.providers.length) }}</p>
+        <p class="stat-sub">{{ statText(enabledProviders.length) }} enabled · credential sealed</p>
       </div>
       <div class="stat">
         <p class="stat-label">Applications with a domain</p>
-        <p class="stat-value num">{{ applicationsWithDomain }}</p>
+        <p class="stat-value num">{{ statText(applicationsWithDomain) }}</p>
         <p class="stat-sub">edited on each application page</p>
       </div>
     </div>

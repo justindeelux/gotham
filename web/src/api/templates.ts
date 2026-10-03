@@ -1,5 +1,5 @@
 import { http } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 import type { ServiceDomainRoute } from "./services";
 
 /**
@@ -246,7 +246,10 @@ export function describeTemplateError(error: unknown): string {
       return "Your session expired. Please sign in again.";
     }
     if (error.status === 400) {
-      return error.message || "Invalid template values. Check the highlighted fields.";
+      return (
+      stripErrorPrefix(error.message) ||
+      "Invalid template values. Check the highlighted fields."
+    );
     }
     if (error.status === 404) {
       return "Template not found. The catalog may have changed — reload the page.";
@@ -254,10 +257,10 @@ export function describeTemplateError(error: unknown): string {
     if (error.status === 503) {
       return "Services are disabled on the control plane (FEATURE_SERVICES=false).";
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
   }
   return "Something went wrong. Please try again.";
 }

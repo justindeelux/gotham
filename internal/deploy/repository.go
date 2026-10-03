@@ -54,6 +54,10 @@ type Repository interface {
 	GetDeployment(ctx context.Context, appID, deploymentID uuid.UUID) (Deployment, error)
 	// ListDeployments returns an application's deployments, newest first.
 	ListDeployments(ctx context.Context, appID uuid.UUID) ([]Deployment, error)
+	// ListDeploymentsLimit returns at most limit of an application's newest
+	// deployments, so readers that only need the latest state (the dashboard
+	// running count) never pull the full history.
+	ListDeploymentsLimit(ctx context.Context, appID uuid.UUID, limit int) ([]Deployment, error)
 	// FailStaleDeployments marks deployments left non-terminal by a previous
 	// control plane process as failed and reports how many were recovered.
 	FailStaleDeployments(ctx context.Context) (int64, error)
@@ -306,6 +310,25 @@ func (r *storeRepository) GetDeployment(ctx context.Context, appID, deploymentID
 // ListDeployments loads every deployment of an application, newest first.
 func (r *storeRepository) ListDeployments(ctx context.Context, appID uuid.UUID) ([]Deployment, error) {
 	rows, err := r.store.ListDeploymentsByApp(ctx, pgUUID(appID))
+	if err != nil {
+		return nil, fmt.Errorf("deploy: list deployments: %w", err)
+	}
+	deployments := make([]Deployment, 0, len(rows))
+	for _, row := range rows {
+		deployments = append(deployments, deploymentFromRow(row))
+	}
+	return deployments, nil
+}
+
+// ListDeploymentsLimit loads at most limit deployments of an application,
+// newest first. A non-positive limit selects one row: the route rejects
+// ?limit=<1 with a 400 before this runs, so the guard only covers
+// in-process callers.
+func (r *storeRepository) ListDeploymentsLimit(ctx context.Context, appID uuid.UUID, limit int) ([]Deployment, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	rows, err := r.store.ListDeploymentsByAppLimit(ctx, pgUUID(appID), int32(limit))
 	if err != nil {
 		return nil, fmt.Errorf("deploy: list deployments: %w", err)
 	}

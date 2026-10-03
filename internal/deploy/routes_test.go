@@ -55,6 +55,7 @@ type fakeDeployService struct {
 
 	seenUser        uuid.UUID
 	seenApplication uuid.UUID
+	seenLimit       int
 	seenRollback    uuid.UUID
 	seenRollbackSet bool
 	seenCreate      CreateApplicationInput
@@ -200,6 +201,19 @@ func (f *fakeDeployService) ListDeployments(_ context.Context, userID, appID uui
 	return f.list, f.listErr
 }
 
+// ListDeploymentsLimit implements DeployService: the newest slice of the
+// canned list, bounded to limit rows.
+func (f *fakeDeployService) ListDeploymentsLimit(_ context.Context, userID, appID uuid.UUID, limit int) ([]Deployment, error) {
+	f.seenUser, f.seenApplication, f.seenLimit = userID, appID, limit
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	if limit > 0 && len(f.list) > limit {
+		return f.list[:limit], nil
+	}
+	return f.list, nil
+}
+
 // Rollback implements DeployService.
 func (f *fakeDeployService) Rollback(_ context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error) {
 	f.seenUser, f.seenApplication = userID, appID
@@ -287,6 +301,84 @@ func TestRoutesListDeployments(t *testing.T) {
 		t.Errorf("states = %s / %s, want running / failed",
 			body.Deployments[0].State, body.Deployments[1].State)
 	}
+}
+
+func TestRoutesListDeploymentsLimit(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	newDeployment := func(state State) Deployment {
+		return Deployment{ID: uuid.New(), ApplicationID: appID, Kind: KindDeploy, State: state}
+	}
+	svc := &fakeDeployService{list: []Deployment{
+		newDeployment(StateRunning),
+		newDeployment(StateFailed),
+		newDeployment(StateFailed),
+	}}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	t.Run("limit bounds the page to the newest rows", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, deploymentPath(appID, "")+"?limit=1", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var body deploymentListEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(body.Deployments) != 1 {
+			t.Fatalf("deployments = %d, want 1", len(body.Deployments))
+		}
+		if body.Deployments[0].State != StateRunning {
+			t.Errorf("state = %s, want the newest (running)", body.Deployments[0].State)
+		}
+		if svc.seenLimit != 1 {
+			t.Errorf("service saw limit %d, want 1", svc.seenLimit)
+		}
+	})
+
+	t.Run("absent limit returns the full history", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, deploymentPath(appID, ""), nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var body deploymentListEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(body.Deployments) != 3 {
+			t.Fatalf("deployments = %d, want 3", len(body.Deployments))
+		}
+	})
+
+	t.Run("non-numeric limit is a 400", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, deploymentPath(appID, "")+"?limit=ten", nil))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
+		}
+	})
+
+	t.Run("negative limit is a 400", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, deploymentPath(appID, "")+"?limit=-1", nil))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
+		}
+	})
+
+	t.Run("zero limit is a 400, never the full history", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, deploymentPath(appID, "")+"?limit=0", nil))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
+		}
+	})
 }
 
 func TestRoutesRollback(t *testing.T) {

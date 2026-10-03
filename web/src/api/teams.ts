@@ -1,5 +1,5 @@
 import { http } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 
 /**
  * Typed client for the team-management routes served by `internal/teams`
@@ -200,6 +200,42 @@ export function roleTagType(
   }
 }
 
+/**
+ * meRoleLabel renders the sidebar footer label for the caller's role in the
+ * active team, using the same wording as the Teams page. A null role (teams
+ * not loaded yet) falls back to neutral text rather than a guessed role.
+ */
+export function meRoleLabel(role: TeamRole | null): string {
+  return role === null ? "Team member" : roleLabel(role);
+}
+
+/** Retries after the initial role read before the neutral fallback pins. */
+export const roleReadMaxRetries = 2;
+
+/** Delay between role-read retries. */
+export const roleReadRetryMs = 5_000;
+
+/** Store snapshot deciding a role-read retry. */
+export interface RoleReadStatus {
+  loaded: boolean;
+  loading: boolean;
+  /** Attempts already scheduled; reset on a terminal read or account change. */
+  retries: number;
+}
+
+/**
+ * shouldRetryRoleRead bounds the sidebar role retry: stop on a terminal
+ * read (loaded, even empty, or another fetch in flight) and after
+ * roleReadMaxRetries scheduled attempts. Unmount stops retries by clearing
+ * the pending timer (see MeCard's cancelRoleRetry).
+ */
+export function shouldRetryRoleRead(status: RoleReadStatus): boolean {
+  if (status.loaded || status.loading) {
+    return false;
+  }
+  return status.retries < roleReadMaxRetries;
+}
+
 /** canManageMembers reports whether a role may invite, remove and re-role. */
 export function canManageMembers(role: TeamRole | null): boolean {
   return role === "owner" || role === "admin";
@@ -214,8 +250,9 @@ export function isFeatureDisabled(error: unknown): boolean {
  * describeTeamError maps a thrown error to a user-facing message. The backend
  * answers 400 for validation, 403 for an insufficient role, 409 for the
  * last-owner / personal-team / non-empty-team protections and 410 for an
- * expired invite, and its message is the actionable part — the "teams: "
- * package prefix is stripped for display.
+ * expired invite, and its message is the actionable part — the internal
+ * "<package>: " prefix is stripped for display through the shared
+ * stripErrorPrefix helper.
  */
 export function describeTeamError(error: unknown): string {
   if (isApiError(error)) {
@@ -223,32 +260,36 @@ export function describeTeamError(error: unknown): string {
       return "Your session expired. Please sign in again.";
     }
     if (error.status === 403) {
-      return stripPrefix(error.message) || "Your team role does not allow this action.";
+      return (
+        stripErrorPrefix(error.message) ||
+        "Your team role does not allow this action."
+      );
     }
     if (error.status === 404) {
-      return stripPrefix(error.message) || "Not found. It may have been removed already.";
+      return (
+        stripErrorPrefix(error.message) ||
+        "Not found. It may have been removed already."
+      );
     }
     if (error.status === 409) {
       return (
-        stripPrefix(error.message) ||
+        stripErrorPrefix(error.message) ||
         "The team changed while you were editing it. Reload and retry."
       );
     }
     if (error.status === 410) {
-      return stripPrefix(error.message) || "This invite expired. Issue a new one.";
+      return stripErrorPrefix(error.message) || "This invite expired. Issue a new one.";
     }
     if (error.status === 400) {
-      return stripPrefix(error.message) || "Invalid request.";
+      return stripErrorPrefix(error.message) || "Invalid request.";
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return (
+      stripErrorPrefix(error.message) || "Something went wrong. Please try again."
+    );
   }
   return "Something went wrong. Please try again.";
 }
 
-/** stripPrefix drops a domain package prefix from a backend message. */
-function stripPrefix(message: string): string {
-  return (message ?? "").replace(/^(teams|notifications):\s*/i, "").trim();
-}

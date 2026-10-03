@@ -33,7 +33,7 @@ test("the server rail keeps polling after leaving the dashboard", async ({
   // The dashboard starts the shared poll; wait for one list poll to prove it.
   await page.waitForResponse(isServerListPoll);
 
-  await page.getByRole("link", { name: "Applications" }).click();
+  await page.getByRole("link", { name: "Applications", exact: true }).click();
   await expect(page).toHaveURL(/\/applications$/);
 
   // ApplicationsPage never starts the poll, and the rail owns the interval, so

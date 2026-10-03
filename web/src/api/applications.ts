@@ -1,5 +1,5 @@
 import { http, teamHeaders } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 
 /**
  * Typed client for the application routes served by `internal/deploy`
@@ -204,6 +204,16 @@ export function isActiveDeployment(deployment: Deployment): boolean {
 }
 
 /**
+ * countRunning counts applications whose newest deployment reached "running".
+ * Pure so the dashboard tile and the harness share one definition.
+ */
+export function countRunning(
+  latestStates: Array<DeploymentState | null | undefined>,
+): number {
+  return latestStates.filter((state) => state === "running").length;
+}
+
+/**
  * deployChannel returns the realtime channel carrying one deployment's logs.
  * It mirrors `DeployChannel` in `internal/deploy/events.go`
  * (`logs:{serverID}:{deploymentID}`) so the existing WS bridge forwards deploy
@@ -213,12 +223,72 @@ export function deployChannel(serverId: string, deploymentId: string): string {
   return `logs:${serverId}:${deploymentId}`;
 }
 
-/** listDeployments returns an application's deployments, newest first. */
-export async function listDeployments(appId: string): Promise<Deployment[]> {
+/**
+ * listDeployments returns an application's deployments, newest first. A
+ * positive limit bounds the page to that many rows (GET ?limit=, clamped
+ * server-side); readers that only need the latest state pass 1 so the full
+ * history is never transferred. Omitting the limit returns the full history
+ * for the build-history surfaces; an explicit zero or negative limit is a
+ * 400, so callers must omit rather than send 0.
+ */
+export async function listDeployments(
+  appId: string,
+  limit = 0,
+): Promise<Deployment[]> {
   const response = await http.get<DeploymentListEnvelope>(
     `/applications/${appId}/deployments`,
+    limit > 0 ? { params: { limit } } : undefined,
   );
   return response.data.deployments ?? [];
+}
+
+/**
+ * LatestStates is the outcome of reading one newest deployment per
+ * application: the states in input order (null when the application has no
+ * deployments) plus the count of per-application reads that failed, so the
+ * caller can mark its figure incomplete instead of falsely low.
+ */
+export interface LatestStates {
+  states: Array<DeploymentState | null>;
+  failed: number;
+}
+
+/**
+ * latestDeploymentStates reads the newest deployment of every application,
+ * fetching at most the latest row per application with bounded concurrency
+ * (default 4) instead of one unbounded full-history request per application.
+ * A failed per-application read counts toward `failed` and yields null
+ * rather than failing the whole summary.
+ */
+export async function latestDeploymentStates(
+  appIds: string[],
+  concurrency = 4,
+): Promise<LatestStates> {
+  const states: Array<DeploymentState | null> = new Array(appIds.length).fill(
+    null,
+  );
+  let failed = 0;
+  const lanes = Math.max(1, Math.floor(concurrency));
+  for (let start = 0; start < appIds.length; start += lanes) {
+    const batch = await Promise.all(
+      appIds.slice(start, start + lanes).map((appId, offset) =>
+        listDeployments(appId, 1).then(
+          (deployments): { index: number; state: DeploymentState | null } => ({
+            index: start + offset,
+            state: deployments.length > 0 ? deployments[0].state : null,
+          }),
+          (): { index: number; state: DeploymentState | null } => {
+            failed += 1;
+            return { index: start + offset, state: null };
+          },
+        ),
+      ),
+    );
+    for (const { index, state } of batch) {
+      states[index] = state;
+    }
+  }
+  return { states, failed };
 }
 
 /**
@@ -409,7 +479,10 @@ export function describeApplicationError(
       return "Your session expired. Please sign in again.";
     }
     if (error.status === 400) {
-      return error.message || "Invalid request. Check the highlighted fields and retry.";
+      return (
+        stripErrorPrefix(error.message) ||
+        "Invalid request. Check the highlighted fields and retry."
+      );
     }
     if (error.status === 404) {
       if (action === "stop") {
@@ -421,7 +494,10 @@ export function describeApplicationError(
       return "Application not found. It may have been deleted or belong to another account.";
     }
     if (error.status === 409) {
-      return "A deployment is already in progress for this application. Wait for it to finish and retry.";
+      return (
+        "A deployment is already in progress for this application. " +
+        "Wait for it to finish and retry."
+      );
     }
     if (error.status === 502) {
       return "The node agent is unreachable. Check the node status and retry.";
@@ -429,10 +505,12 @@ export function describeApplicationError(
     if (error.status === 503) {
       return "Applications are disabled on the control plane (FEATURE_APPLICATIONS=false).";
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return (
+      stripErrorPrefix(error.message) || "Something went wrong. Please try again."
+    );
   }
   return "Something went wrong. Please try again.";
 }

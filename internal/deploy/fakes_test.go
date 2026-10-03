@@ -490,6 +490,26 @@ func (r *fakeRepository) ListDeployments(_ context.Context, appID uuid.UUID) ([]
 	return out, nil
 }
 
+// ListDeploymentsLimit implements Repository: the newest slice of
+// ListDeployments, bounded to limit rows (one row when non-positive).
+func (r *fakeRepository) ListDeploymentsLimit(_ context.Context, appID uuid.UUID, limit int) ([]Deployment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.listDeploymentsErr != nil {
+		return nil, r.listDeploymentsErr
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	out := make([]Deployment, 0, limit)
+	for i := len(r.deployments) - 1; i >= 0 && len(out) < limit; i-- {
+		if r.deployments[i].ApplicationID == appID {
+			out = append(out, r.deployments[i])
+		}
+	}
+	return out, nil
+}
+
 // FailStaleDeployments implements Repository: it marks every non-terminal
 // deployment failed, mirroring the boot-time sweep, and reports the count.
 func (r *fakeRepository) FailStaleDeployments(_ context.Context) (int64, error) {

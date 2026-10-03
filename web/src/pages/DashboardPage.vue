@@ -10,13 +10,19 @@ import {
   NTag,
   NText,
 } from "naive-ui";
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 
+import {
+  countRunning,
+  latestDeploymentStates,
+  listApplications,
+} from "../api/applications";
 import type { Server, ServerStatus } from "../api/servers";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
-import { relativeTime, toPercent, USAGE_DANGER_PERCENT } from "../utils/format";
+import { applicationTileView, buildApplicationTileInput } from "../utils/dashboard";
+import { relativeTime, usageView } from "../utils/format";
 
 /**
  * Deployment is the typed seam for a deployments store that does not exist
@@ -41,6 +47,68 @@ interface Deployment {
 const deployments: Deployment[] = [];
 
 const serversStore = useServersStore();
+
+/**
+ * Applications backing the "Running applications" tile. Read once on mount
+ * (no polling) from the caller's personal team — the same scope as the
+ * applications page — with at most the latest deployment row per application
+ * (GET ?limit=1, four requests at a time). The tile distinguishes four
+ * states: loading, error (with a retry, never a false "none yet"),
+ * genuinely empty, and ready. When only some per-application reads fail the
+ * figure is marked incomplete ("at least N running") instead of falsely low.
+ */
+const applicationsLoading = ref(true);
+const applicationsError = ref<string | null>(null);
+/** Per-application latest-state reads that failed; >0 marks the tile incomplete. */
+const applicationFailedReads = ref(0);
+const applicationTotal = ref(0);
+const applicationRunning = ref(0);
+
+/** fetchApplicationCounts loads the personal-team list plus latest states. */
+async function fetchApplicationCounts(): Promise<void> {
+  applicationsLoading.value = true;
+  applicationsError.value = null;
+  try {
+    const applications = await listApplications();
+    applicationTotal.value = applications.length;
+    if (applications.length === 0) {
+      applicationRunning.value = 0;
+      applicationFailedReads.value = 0;
+      return;
+    }
+    const { states, failed } = await latestDeploymentStates(
+      applications.map((application) => application.id),
+    );
+    applicationRunning.value = countRunning(states);
+    applicationFailedReads.value = failed;
+  } catch {
+    applicationTotal.value = 0;
+    applicationRunning.value = 0;
+    applicationFailedReads.value = 0;
+    applicationsError.value = "Could not load applications";
+  } finally {
+    applicationsLoading.value = false;
+  }
+}
+
+/**
+ * tile is the pure render decision for the "Running applications" tile
+ * (loading / error / empty / ready, plus the "≥N/total" figure and its
+ * caveat). The template binds tile.countText / tile.hint directly and
+ * formats nothing itself, so every branch is pinned by the ui-truth
+ * harness through applicationTileView + buildApplicationTileInput.
+ */
+const tile = computed(() =>
+  applicationTileView(
+    buildApplicationTileInput({
+      loading: applicationsLoading.value,
+      error: applicationsError.value,
+      total: applicationTotal.value,
+      running: applicationRunning.value,
+      failedReads: applicationFailedReads.value,
+    }),
+  ),
+);
 
 const servers = computed<Server[]>(() => serversStore.servers);
 const readyCount = computed<number>(
@@ -106,36 +174,12 @@ function nodeSubtitle(server: Server): string {
   return bits.join(" · ");
 }
 
-/** meterStatus maps usage to a Naive progress status (danger at the shared threshold). */
-function meterStatus(
-  value: number | null,
-): "default" | "success" | "warning" | "error" {
-  if (value === null || value === undefined) {
-    return "default";
-  }
-  const percent = toPercent(value);
-  if (percent >= USAGE_DANGER_PERCENT) {
-    return "error";
-  }
-  if (percent >= 60) {
-    return "warning";
-  }
-  return "success";
-}
-
-/** usageLabel renders a nullable usage reading as a percentage or dash. */
-function usageLabel(value: number | null): string {
-  if (value === null || value === undefined) {
-    return "—";
-  }
-  return `${toPercent(value)}%`;
-}
-
 onMounted(() => {
   void serversStore.fetchServers().catch(() => {
     // The store already exposes the error; alert rendering is enough here.
   });
   serversStore.pollServers();
+  void fetchApplicationCounts();
 });
 </script>
 
@@ -147,8 +191,6 @@ onMounted(() => {
         <h1>Dashboard</h1>
         <p class="page-desc">
           One control plane for every node, application, and database.
-          Widgets without a backend show an explicit empty state until
-          their phase lands.
         </p>
       </div>
       <div class="page-actions">
@@ -192,7 +234,28 @@ onMounted(() => {
       </NCard>
 
       <NCard class="kpi" title="Running applications" size="small">
-        <NEmpty size="small" description="No applications data yet" />
+        <NSkeleton v-if="tile.state === 'loading'" text :repeat="2" />
+        <template v-else-if="tile.state === 'error'">
+          <p class="kpi-value num">—</p>
+          <p class="kpi-sub">
+            <NText depth="3">{{ tile.error }}</NText>
+            <NButton
+              size="small"
+              quaternary
+              @click="() => void fetchApplicationCounts()"
+            >
+              Retry
+            </NButton>
+          </p>
+        </template>
+        <template v-else-if="tile.state === 'ready'">
+          <p class="kpi-value num">{{ tile.countText }}</p>
+          <p class="kpi-sub">
+            <RouterLink :to="{ name: 'applications' }">View applications</RouterLink>
+            <NText v-if="tile.hint" depth="3">{{ tile.hint }}</NText>
+          </p>
+        </template>
+        <NEmpty v-else size="small" description="No applications yet" />
       </NCard>
 
       <NCard class="kpi" title="Deploys in 24h" size="small">
@@ -225,7 +288,7 @@ onMounted(() => {
           <NSpace vertical :size="12">
             <div class="card-foot">
               <NText depth="3">Queue: no data yet</NText>
-              <NText depth="3">Build history is not wired up yet</NText>
+              <NText depth="3">No build history to show</NText>
             </div>
           </NSpace>
         </NCard>
@@ -277,32 +340,38 @@ onMounted(() => {
               <div class="node-metrics">
                 <div class="node-metric">
                   <NText depth="3" class="metric-label">CPU</NText>
-                  <NText class="num metric-val">{{ usageLabel(server.cpu_usage) }}</NText>
+                  <NText class="num metric-val">
+                    {{ usageView(server.cpu_usage, "var(--accent)").label }}
+                  </NText>
                   <NProgress
                     type="line"
-                    :percentage="toPercent(server.cpu_usage)"
+                    :percentage="usageView(server.cpu_usage, 'var(--accent)').percentage"
                     :show-indicator="false"
-                    :status="meterStatus(server.cpu_usage)"
+                    :color="usageView(server.cpu_usage, 'var(--accent)').color"
                   />
                 </div>
                 <div class="node-metric">
                   <NText depth="3" class="metric-label">RAM</NText>
-                  <NText class="num metric-val">{{ usageLabel(server.mem_usage) }}</NText>
+                  <NText class="num metric-val">
+                    {{ usageView(server.mem_usage, "var(--success)").label }}
+                  </NText>
                   <NProgress
                     type="line"
-                    :percentage="toPercent(server.mem_usage)"
+                    :percentage="usageView(server.mem_usage, 'var(--success)').percentage"
                     :show-indicator="false"
-                    :status="meterStatus(server.mem_usage)"
+                    :color="usageView(server.mem_usage, 'var(--success)').color"
                   />
                 </div>
                 <div class="node-metric">
                   <NText depth="3" class="metric-label">Disk</NText>
-                  <NText class="num metric-val">{{ usageLabel(server.disk_usage) }}</NText>
+                  <NText class="num metric-val">
+                    {{ usageView(server.disk_usage, "var(--success)").label }}
+                  </NText>
                   <NProgress
                     type="line"
-                    :percentage="toPercent(server.disk_usage)"
+                    :percentage="usageView(server.disk_usage, 'var(--success)').percentage"
                     :show-indicator="false"
-                    :status="meterStatus(server.disk_usage)"
+                    :color="usageView(server.disk_usage, 'var(--success)').color"
                   />
                 </div>
               </div>
@@ -365,8 +434,7 @@ onMounted(() => {
           >
             <template #extra>
               <NText depth="3">
-                Postgres, Redis, and gateway health ships with a
-                status endpoint in a later phase.
+                Database, cache, and gateway health is not reported yet.
               </NText>
             </template>
           </NEmpty>

@@ -20,6 +20,7 @@ import { useRouter } from "vue-router";
 
 import { describeDatabaseError } from "../api/databases";
 import type { Database } from "../api/databases";
+import { databaseEmptyDescription, databaseEmptyHint } from "../api/databases";
 import CreateDatabaseWizard from "../components/CreateDatabaseWizard.vue";
 import DatabaseStatusTag from "../components/DatabaseStatusTag.vue";
 import GothamIcon from "../components/GothamIcon.vue";
@@ -370,7 +371,7 @@ onUnmounted(() => {
           <NInput
             v-model:value="searchQuery"
             class="search-input"
-            placeholder="Search name, engine, node…"
+            placeholder="Search databases…"
             aria-label="Search databases"
             clearable
           />
@@ -388,7 +389,7 @@ onUnmounted(() => {
         />
         <NEmpty
           v-else
-          description="No databases match this filter"
+          :description="databaseEmptyDescription(databasesStore.databases.length)"
         >
           <template #icon>
             <NIcon>
@@ -397,8 +398,7 @@ onUnmounted(() => {
           </template>
           <template #extra>
             <p class="empty-hint">
-              Change the filter or create a database with the
-              <span class="mono">Create database</span> wizard.
+              {{ databaseEmptyHint(databasesStore.databases.length) }}
             </p>
             <NButton type="primary" @click="wizardOpen = true">
               Create database

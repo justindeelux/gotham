@@ -135,6 +135,18 @@ export const useServersStore = defineStore("servers", () => {
     return updated;
   }
 
+  /**
+   * reset drops the cached list and stops polling, so the next sign-in never
+   * sees the previous account's nodes. Called on sign-out (see the auth
+   * store).
+   */
+  function reset(): void {
+    stopPolling();
+    servers.value = [];
+    loading.value = false;
+    error.value = null;
+  }
+
   return {
     servers,
     loading,
@@ -142,6 +154,7 @@ export const useServersStore = defineStore("servers", () => {
     fetchServers,
     pollServers,
     stopPolling,
+    reset,
     addServer,
     removeServer,
     validate,

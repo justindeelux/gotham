@@ -1,5 +1,5 @@
 import { http } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 import { toTargetBody } from "../utils/backupTarget";
 
 /**
@@ -397,7 +397,10 @@ export async function testTarget(targetId: string): Promise<TargetCheck> {
 export function describeBackupError(error: unknown): string {
   if (isApiError(error)) {
     if (error.status === 400) {
-      return error.message || "Invalid request. Check the cron expression and target fields.";
+      return (
+        stripErrorPrefix(error.message) ||
+        "Invalid request. Check the cron expression and target fields."
+      );
     }
     if (error.status === 401) {
       return "Session expired. Please sign in again.";
@@ -407,7 +410,7 @@ export function describeBackupError(error: unknown): string {
     }
     if (error.status === 409) {
       return (
-        error.message ||
+        stripErrorPrefix(error.message) ||
         "A backup or restore is already running for this database."
       );
     }
@@ -417,10 +420,10 @@ export function describeBackupError(error: unknown): string {
     if (error.status === 503) {
       return "Databases are disabled on the control plane (FEATURE_DATABASES=false).";
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
   }
   return "Something went wrong. Please try again.";
 }

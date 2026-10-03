@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { NAvatar, NButton, NDropdown, NSpace, NText } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
-import { computed } from "vue";
+import { computed, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { useAuthStore } from "../stores/auth";
+import { useTeamsStore } from "../stores/teams";
+import { meRoleLabel, roleReadRetryMs, shouldRetryRoleRead } from "../api/teams";
 import GothamIcon from "./GothamIcon.vue";
 
 const authStore = useAuthStore();
+const teamsStore = useTeamsStore();
 const router = useRouter();
 
 const accountOptions: DropdownOption[] = [{ label: "Sign out", key: "sign-out" }];
@@ -16,6 +19,70 @@ const userEmail = computed<string>(() => authStore.user?.email ?? "Signed in");
 
 const userInitial = computed<string>(() =>
   (authStore.user?.email?.[0] ?? "?").toUpperCase(),
+);
+
+/**
+ * roleText derives the footer label from the caller's real role in the
+ * active team (same wording as the Teams page); neutral text while loading.
+ */
+const roleText = computed<string>(() => meRoleLabel(teamsStore.activeTeam?.role ?? null));
+
+/**
+ * loadRole reads the caller's teams for the footer label. A failed read
+ * keeps the neutral fallback and retries on the next mount or account
+ * change, plus a bounded retry (see shouldRetryRoleRead) so a transient
+ * failure does not pin the neutral label until the sidebar remounts; a
+ * fetch already in flight needs no retry because the label follows the store
+ * reactively. A disabled teams feature (loaded with an empty list) keeps the
+ * neutral fallback permanently. The sign-out path resets the teams store
+ * (see the auth store), so a failed or stale read can never pin the
+ * previous account's role here.
+ */
+let roleRetries = 0;
+let roleRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function loadRole(): void {
+  roleRetries = 0;
+  void readRole();
+}
+
+async function readRole(): Promise<void> {
+  cancelRoleRetry();
+  await teamsStore.ensureTeams();
+  if (
+    !shouldRetryRoleRead({
+      loaded: teamsStore.loaded,
+      loading: teamsStore.loading,
+      retries: roleRetries,
+    })
+  ) {
+    if (teamsStore.loaded || teamsStore.loading) {
+      roleRetries = 0;
+    }
+    return;
+  }
+  roleRetries += 1;
+  roleRetryTimer = setTimeout(() => void readRole(), roleReadRetryMs);
+}
+
+/** cancelRoleRetry drops a pending retry so it cannot fire after unmount. */
+function cancelRoleRetry(): void {
+  if (roleRetryTimer !== null) {
+    clearTimeout(roleRetryTimer);
+    roleRetryTimer = null;
+  }
+}
+
+onMounted(loadRole);
+onUnmounted(cancelRoleRetry);
+
+// A different signed-in account (or a team change elsewhere) re-reads the
+// role even when the sidebar never remounts.
+watch(
+  () => authStore.user?.email,
+  () => {
+    loadRole();
+  },
 );
 
 async function handleSelect(key: string | number): Promise<void> {
@@ -42,7 +109,7 @@ async function handleSelect(key: string | number): Promise<void> {
         </NAvatar>
         <span class="me-meta">
           <NText class="me-email">{{ userEmail }}</NText>
-          <NText depth="3" class="me-role">Workspace member</NText>
+          <NText depth="3" class="me-role">{{ roleText }}</NText>
         </span>
         <GothamIcon name="chevron-down" class="me-chevron" />
       </NSpace>

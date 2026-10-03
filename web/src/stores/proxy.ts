@@ -187,6 +187,23 @@ export const useProxyStore = defineStore("proxy", () => {
     await fetchRedirects();
   }
 
+  /**
+   * reset drops every cached list, so the next sign-in never sees the
+   * previous account's proxy data. Called on sign-out (see the auth store).
+   */
+  function reset(): void {
+    providers.value = [];
+    certificates.value = [];
+    redirects.value = [];
+    applications.value = [];
+    loading.value = false;
+    certificatesLoading.value = false;
+    redirectsLoading.value = false;
+    error.value = null;
+    certificatesError.value = null;
+    redirectsError.value = null;
+  }
+
   return {
     providers,
     certificates,
@@ -214,5 +231,6 @@ export const useProxyStore = defineStore("proxy", () => {
     createRedirectRule,
     updateRedirectRule,
     removeRedirectRule,
+    reset,
   };
 });

@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 
 import type { ApiError } from "../api/http";
 import { http } from "../api/http";
+import { stripErrorPrefix } from "../api/servers";
 import {
   clearSession as clearStoredSession,
   getSession,
@@ -12,6 +13,16 @@ import {
   type Session,
   type User,
 } from "../api/token";
+import { useApplicationsStore } from "./applications";
+import { useBackupsStore } from "./backups";
+import { useDatabasesStore } from "./databases";
+import { useNotificationsStore } from "./notifications";
+import { useProvidersStore } from "./providers";
+import { useProxyStore } from "./proxy";
+import { useServersStore } from "./servers";
+import { useServicesStore } from "./services";
+import { useTeamsStore } from "./teams";
+import { useTemplatesStore } from "./templates";
 
 export type { AuthResult, User } from "../api/token";
 
@@ -48,8 +59,16 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   // The HTTP layer rotates tokens directly through the token module; mirror
-  // those changes here so the store never writes a stale token back.
-  subscribeSession(applySession);
+  // those changes here so the store never writes a stale token back. When the
+  // shared session is emptied elsewhere (forced logout on 401, cross-tab
+  // sign-out) the user-scoped caches are dropped too: the redirect stays
+  // in-app now, so no reload clears them anymore.
+  subscribeSession((session) => {
+    applySession(session);
+    if (session.accessToken === null && session.refreshToken === null) {
+      resetUserStores();
+    }
+  });
 
   /** persist writes the current state back to the shared token module. */
   function persist(): void {
@@ -68,7 +87,14 @@ export const useAuthStore = defineStore("auth", () => {
     persist();
   }
 
-  /** clearSession forgets the session in memory and in localStorage. */
+  /**
+   * clearSession forgets the session in memory and in localStorage, and
+   * drops every user-scoped Pinia cache (teams, servers, applications,
+   * databases, notifications, services, backups, providers, templates,
+   * proxy) so the next sign-in cannot render the previous account's data —
+   * notably the sidebar role, which the teams store would otherwise keep
+   * serving from its loaded cache.
+   */
   function clearSession(): void {
     // The instance's registration policy does not change on sign-out; keep the
     // cached config unless a caller forces a refresh.
@@ -76,6 +102,35 @@ export const useAuthStore = defineStore("auth", () => {
     accessToken.value = null;
     refreshToken.value = null;
     clearStoredSession();
+    resetUserStores();
+  }
+
+  /**
+   * resetUserStores clears every user-scoped store. Each call is guarded so
+   * a store that was never instantiated (or whose reset throws) cannot break
+   * sign-out; Pinia creates the store on first use, at which point there is
+   * nothing stale to clear.
+   */
+  function resetUserStores(): void {
+    const resetters: Array<() => void> = [
+      () => useTeamsStore().reset(),
+      () => useServersStore().reset(),
+      () => useApplicationsStore().reset(),
+      () => useDatabasesStore().reset(),
+      () => useNotificationsStore().reset(),
+      () => useServicesStore().reset(),
+      () => useBackupsStore().reset(),
+      () => useProvidersStore().reset(),
+      () => useTemplatesStore().reset(),
+      () => useProxyStore().reset(),
+    ];
+    for (const resetStore of resetters) {
+      try {
+        resetStore();
+      } catch {
+        // Sign-out must always complete; a store reset never blocks it.
+      }
+    }
   }
 
   /**
@@ -207,7 +262,10 @@ export function describeAuthError(error: unknown): string {
     typeof error === "object" && error !== null
       ? (error as Partial<ApiError>).message
       : undefined;
-  return message ?? "Something went wrong. Please try again.";
+  if (typeof message === "string" && message.trim() !== "") {
+    return stripErrorPrefix(message);
+  }
+  return "Something went wrong. Please try again.";
 }
 
 /** getStatus extracts the HTTP status from a thrown ApiError, if present. */

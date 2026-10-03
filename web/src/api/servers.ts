@@ -212,10 +212,64 @@ export function isApiError(error: unknown): error is ApiError {
 /** describeServerError maps a thrown error to a user-facing message. */
 export function describeServerError(error: unknown): string {
   if (isApiError(error)) {
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
   }
   return "Something went wrong. Please try again.";
+}
+
+/**
+ * Backend package names whose "<package>: " prefix is internal detail.
+ * Regenerate with:
+ *   grep -rhoE '(errors\.New|Errorf)\("[a-z][0-9a-z_-]*:' internal \
+ *     --include='*.go' --exclude='*_test.go' | grep -oE '"[a-z][0-9a-z_-]*' \
+ *     | tr -d '"' | sort -u
+ * Test-only strings (cleanup:, cloudflare:, rpc:, dial:, hijack:, fake:,
+ * disconnected:) appear solely in *_test.go and stay out, as do the agent/
+ * prefixes (agent, stats, sudo): agent failures cross the API wrapped in
+ * services:/deploy: errors, never bare. Ordinary words that never prefix a
+ * Go error (config, clientip, ...) are left alone, so a legitimate message
+ * like "config: key X missing" passes through unchanged.
+ */
+const errorPrefixPackages = new Set([
+  "auth",
+  "builds",
+  "containers",
+  "databases",
+  "deploy",
+  "docker",
+  "notifications",
+  "oauth",
+  "providers",
+  "proxy",
+  "server",
+  "servers",
+  "services",
+  "spa",
+  "ssh",
+  "store",
+  "teams",
+  "templates",
+  "updates",
+  "webhooks",
+  "ws",
+]);
+
+/**
+ * stripErrorPrefix drops one internal "<package>: " prefix from the start of
+ * a backend message, keeping the useful remainder ("servers: validation
+ * failed: ssh dial ..." renders as "validation failed: ssh dial ..."). Only
+ * known backend package names are stripped, and only one level: a nested
+ * "proxy: render static config: ..." becomes "render static config: ...".
+ * Anything else — including ordinary words like "config: key X missing" —
+ * passes through untouched.
+ */
+export function stripErrorPrefix(message: string): string {
+  const match = /^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*([\s\S]*)$/.exec(message ?? "");
+  if (match && errorPrefixPackages.has(match[1].toLowerCase())) {
+    return match[2].trim();
+  }
+  return (message ?? "").trim();
 }

@@ -54,6 +54,20 @@ export const useProvidersStore = defineStore("providers", () => {
     return providers.value.filter((item) => item.connected);
   }
 
+  /**
+   * reset drops the cached providers and repos, so the next sign-in never
+   * sees the previous account's data. Called on sign-out (see the auth
+   * store).
+   */
+  function reset(): void {
+    providers.value = [];
+    reposByProvider.value = {};
+    loading.value = false;
+    reposLoading.value = false;
+    error.value = null;
+    reposError.value = null;
+  }
+
   return {
     providers,
     reposByProvider,
@@ -61,6 +75,7 @@ export const useProvidersStore = defineStore("providers", () => {
     reposLoading,
     error,
     reposError,
+    reset,
     fetchProviders,
     fetchRepos,
     reposOf,

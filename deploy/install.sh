@@ -325,6 +325,19 @@ _stripped_dsn="$(printf '%s' "${DSN}" | tr -d '\000-\037\177')"
 _stripped_redis="$(printf '%s' "${REDIS_ADDR}" | tr -d '\000-\037\177')"
 [ "${_stripped_redis}" = "${REDIS_ADDR}" ] \
     || die "GOTHAM_REDIS_ADDR contains a control character (rejected)"
+# A trailing backslash would join the gotham.env line with the next one under
+# systemd's EnvironmentFile continuation, swallowing a key; quotes are refused
+# because the service would see a different value than the file holds. URL
+# metacharacters a real DSN needs (@, :, %-escapes, ?query, rediss://) pass
+# through untouched (pinned by the C2c cases in test-release-install.sh).
+case "${DSN}" in
+    *\\) die "GOTHAM_DATABASE_DSN must not end with a backslash (systemd would join it with the next line)" ;;
+    *\'* | *\"*) die "GOTHAM_DATABASE_DSN must not contain quotes (got '${DSN}')" ;;
+esac
+case "${REDIS_ADDR}" in
+    *\\) die "GOTHAM_REDIS_ADDR must not end with a backslash (systemd would join it with the next line)" ;;
+    *\'* | *\"*) die "GOTHAM_REDIS_ADDR must not contain quotes (got '${REDIS_ADDR}')" ;;
+esac
 
 if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
     # The skip decision lives here, before the first mutation, and the
@@ -746,6 +759,16 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
         if [ -z "${LOCAL_AGENT_CP_ADDR}" ] && [ -z "$(agent_env_prev GOTHAM_AGENT_CP_ADDR)" ]; then
             LOCAL_AGENT_CP_ADDR="127.0.0.1:9442"
         fi
+        # The derived defaults (<hostname>-agent, 127.0.0.1:9442) are
+        # installer-computed, not operator input, but a hostile hostname (or a
+        # mutant default) must still fail closed here — with the key named —
+        # instead of only inside install-agent.sh. Cheap: the same validators.
+        [ -z "${LOCAL_AGENT_NODE_ID}" ] \
+            || _env_check_value GOTHAM_AGENT_NODE_ID "${LOCAL_AGENT_NODE_ID}" \
+                || die "invalid derived agent node id (see above); refusing to install"
+        [ -z "${LOCAL_AGENT_CP_ADDR}" ] \
+            || _env_check_value GOTHAM_AGENT_CP_ADDR "${LOCAL_AGENT_CP_ADDR}" \
+                || die "invalid derived agent address (see above); refusing to install"
         # The retry line below reuses exactly these assignments, shell-quoted
         # for safe re-execution. Which script runs: the real installer by
         # default; in a GOTHAM_INSTALL_ROOT sandbox together with

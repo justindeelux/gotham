@@ -193,10 +193,6 @@ async function main() {
           `${page} must compare with >= (a node at exactly 80% is danger-red)`,
         );
       }
-      const source = await readFile(
-        new URL("../src/pages/ServersPage.vue", import.meta.url),
-        "utf8",
-      );
       // Boundary behaviour through the shared normalizer: 0.8 lands exactly
       // on the threshold, so an inclusive comparison flags it.
       assert(

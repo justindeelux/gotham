@@ -10,6 +10,16 @@ const app = createApp(App);
 app.use(createPinia());
 app.use(router);
 
+// A dead session (failed refresh, forced logout) redirects in-app through
+// the router instead of a hard location.assign, which would reload the
+// document and lose SPA state. Preventing the default tells the HTTP layer
+// (see redirectToLogin in api/http) the SPA took over; without a listener
+// the HTTP layer falls back to the hard navigation.
+window.addEventListener("gotham:session-expired", (event) => {
+  event.preventDefault();
+  void router.push({ name: "login" }).catch(() => undefined);
+});
+
 /** sessionStorage flag marking the one-shot reload after a failed navigation. */
 const chunkReloadKey = "gotham-chunk-reload";
 

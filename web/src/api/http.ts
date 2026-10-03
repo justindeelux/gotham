@@ -423,6 +423,21 @@ function redirectToLogin(): void {
   if (typeof window === "undefined" || window.location.pathname === "/login") {
     return;
   }
+  // The SPA router handles the redirect in-app when it is listening: a hard
+  // assign reloads the document, which wipes SPA state (a failed logout that
+  // already navigates itself must never degrade into a reload). dispatchEvent
+  // is synchronous, so a canceled event means the app took over; otherwise
+  // fall back to the hard navigation for contexts without the router.
+  try {
+    const expired = new CustomEvent("gotham:session-expired", {
+      cancelable: true,
+    });
+    if (!window.dispatchEvent(expired)) {
+      return;
+    }
+  } catch {
+    // No DOM event support here; fall through to the hard navigation below.
+  }
   window.location.assign("/login");
 }
 

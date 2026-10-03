@@ -1099,6 +1099,61 @@ async function main() {
     }
   });
 
+  await check("forced logout prefers the in-app router over a hard reload", async () => {
+    // B3-3: expireSession must let the SPA router take over (cancelable
+    // gotham:session-expired event) so a failed logout never degrades into a
+    // document reload; without a listener it keeps the hard assign fallback.
+    const store = new Map();
+    const redirects = [];
+    const seenEvents = [];
+    globalThis.window = {
+      localStorage: {
+        getItem: (key) => (store.has(key) ? store.get(key) : null),
+        setItem: (key, value) => {
+          store.set(key, String(value));
+        },
+        removeItem: (key) => {
+          store.delete(key);
+        },
+      },
+      location: {
+        pathname: "/servers",
+        assign: (url) => redirects.push(url),
+      },
+      addEventListener: () => {},
+      dispatchEvent: (event) => {
+        seenEvents.push(event.type);
+        // Canceled (false) means the SPA router took over in-app.
+        return false;
+      },
+    };
+    let httpBundle = null;
+    try {
+      httpBundle = await loadHttpReal();
+      const { expireSession } = httpBundle.module;
+      store.set(
+        "gotham.auth.session",
+        JSON.stringify({ user: { id: "u" }, accessToken: "a", refreshToken: "r" }),
+      );
+      expireSession();
+      assert(!store.has("gotham.auth.session"), "session cleared");
+      assert(seenEvents.includes("gotham:session-expired"), "expiry announced");
+      assert(redirects.length === 0, "no hard reload while the SPA handles it");
+      globalThis.window.dispatchEvent = () => true;
+      store.set(
+        "gotham.auth.session",
+        JSON.stringify({ user: { id: "u" }, accessToken: "a", refreshToken: "r" }),
+      );
+      expireSession();
+      assert(redirects.includes("/login"), "hard fallback without a listener");
+    } finally {
+      delete globalThis.window;
+      if (httpBundle) {
+        await httpBundle.cleanup();
+      }
+    }
+  });
+
   await format.cleanup();
   await servers.cleanup();
   await teams.cleanup();

@@ -115,7 +115,7 @@ test.describe("app shell", () => {
   test("the rail Add server button opens the wizard", async ({ page }) => {
     // B3-6: the rail add button must deep-link into the wizard, not the list.
     await page.goto("/dashboard");
-    await page.getByRole("link", { name: "Add server" }).click();
+    await page.getByRole("link", { name: "Add server", exact: true }).click();
     await expect(page).toHaveURL(/\/servers$/);
     await expect(page.getByRole("dialog")).toBeVisible();
   });

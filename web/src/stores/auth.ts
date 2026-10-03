@@ -59,8 +59,16 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   // The HTTP layer rotates tokens directly through the token module; mirror
-  // those changes here so the store never writes a stale token back.
-  subscribeSession(applySession);
+  // those changes here so the store never writes a stale token back. When the
+  // shared session is emptied elsewhere (forced logout on 401, cross-tab
+  // sign-out) the user-scoped caches are dropped too: the redirect stays
+  // in-app now, so no reload clears them anymore.
+  subscribeSession((session) => {
+    applySession(session);
+    if (session.accessToken === null && session.refreshToken === null) {
+      resetUserStores();
+    }
+  });
 
   /** persist writes the current state back to the shared token module. */
   function persist(): void {

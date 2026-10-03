@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -12,7 +13,9 @@ import (
 // private key in private_keys plus the application_deploy_keys mapping that
 // points at it, in one transaction. A mapping must never exist without its
 // private key (the cloner would open nothing), so the two rows are written
-// together.
+// together. The private key is stamped with the owning application's team, so
+// another team that learns its UUID cannot attach it as a node SSH key
+// (JUS-5 fix round 2).
 func (s *Store) CreateApplicationDeployKey(
 	ctx context.Context,
 	params sqlc.CreateApplicationDeployKeyParams,
@@ -25,9 +28,14 @@ func (s *Store) CreateApplicationDeployKey(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	queries := s.queries.WithTx(tx)
+	app, err := queries.GetApplication(ctx, params.ApplicationID)
+	if err != nil {
+		return sqlc.ApplicationDeployKey{}, fmt.Errorf("store: get deploy-key application: %w", err)
+	}
 	keyRow, err := queries.CreatePrivateKey(ctx, sqlc.CreatePrivateKeyParams{
 		Name:         privateKeyName,
 		EncryptedKey: encryptedKey,
+		TeamID:       app.TeamID,
 	})
 	if err != nil {
 		return sqlc.ApplicationDeployKey{}, err

@@ -6,9 +6,10 @@ import {
   deleteServer,
   describeServerError,
   listServers,
+  updateServer,
   validateServer,
 } from "../api/servers";
-import type { CreateServerInput, Server, ValidateOutcome } from "../api/servers";
+import type { CreateServerInput, Server, UpdateServerInput, ValidateOptions, ValidateOutcome } from "../api/servers";
 import { createServerListSync } from "./serverListSync";
 
 /** Polling cadence for the server list, in milliseconds. */
@@ -115,8 +116,8 @@ export const useServersStore = defineStore("servers", () => {
   }
 
   /** validate runs the probes, merging the updated server into the list. */
-  async function validate(id: string, passphrase?: string): Promise<ValidateOutcome> {
-    const outcome = await validateServer(id, passphrase);
+  async function validate(id: string, passphrase?: string, options: ValidateOptions = {}): Promise<ValidateOutcome> {
+    const outcome = await validateServer(id, passphrase, options);
     if (outcome.server) {
       // Invalidate in-flight polls so they cannot clobber the merge with older
       // state.
@@ -124,6 +125,14 @@ export const useServersStore = defineStore("servers", () => {
       applyServer(outcome.server);
     }
     return outcome;
+  }
+
+  /** updateServer edits a server, merging the updated row into the list. */
+  async function updateServerById(id: string, input: UpdateServerInput): Promise<Server> {
+    const updated = await updateServer(id, input);
+    listSync.markMutation();
+    applyServer(updated);
+    return updated;
   }
 
   return {
@@ -136,5 +145,6 @@ export const useServersStore = defineStore("servers", () => {
     addServer,
     removeServer,
     validate,
+    updateServer: updateServerById,
   };
 });

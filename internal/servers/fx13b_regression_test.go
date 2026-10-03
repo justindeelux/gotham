@@ -168,7 +168,7 @@ func TestServiceRegistrationClaimsOperatorServer(t *testing.T) {
 	defer cancel()
 
 	nodeIP := fmt.Sprintf("10.42.%d.%d", rand.Intn(250)+1, rand.Intn(250)+1)
-	created, err := service.Add(ctx, uuid.New(), "operator-label", nodeIP, 22, "root", uuid.Nil)
+	created, err := service.Add(ctx, uuid.New(), "operator-label", nodeIP, 22, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestServiceRegistrationClaimsOperatorServerByHostname(t *testing.T) {
 	defer cancel()
 
 	host := fmt.Sprintf("node-%d.internal", rand.Intn(1_000_000))
-	created, err := service.Add(ctx, uuid.New(), "op-host", host, 22, "root", uuid.Nil)
+	created, err := service.Add(ctx, uuid.New(), "op-host", host, 22, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestServicePassphraseProtectedKeyValidation(t *testing.T) {
 		}
 	})
 
-	created, err := service.Add(ctx, uuid.New(), "passphrase-node", host, port, "root", key.ID)
+	created, err := service.Add(ctx, uuid.New(), "passphrase-node", host, port, "root", key.ID, "")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestServiceValidateReadyNodeKeepsReady(t *testing.T) {
 		}
 	})
 
-	created, err := service.Add(ctx, uuid.New(), "ready-node", host, port, "root", key.ID)
+	created, err := service.Add(ctx, uuid.New(), "ready-node", host, port, "root", key.ID, "")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestServerStatusAfterValidationTransitions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	created, err := service.Add(ctx, uuid.New(), "transition-node", "10.99.0.1", 22, "root", uuid.Nil)
+	created, err := service.Add(ctx, uuid.New(), "transition-node", "10.99.0.1", 22, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestServiceValidateRestoresStatusWhenAgentInfoWriteFails(t *testing.T) {
 		}
 	})
 
-	created, err := service.Add(ctx, uuid.New(), "info-fail-node", host, port, "root", key.ID)
+	created, err := service.Add(ctx, uuid.New(), "info-fail-node", host, port, "root", key.ID, "")
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}

@@ -257,6 +257,7 @@ async function loadServersStore() {
               "export const createServer = (...a) => api().createServer(...a);",
               "export const deleteServer = (...a) => api().deleteServer(...a);",
               "export const validateServer = (...a) => api().validateServer(...a);",
+              "export const updateServer = (...a) => api().updateServer(...a);",
               "export const describeServerError = (...a) => api().describeServerError(...a);",
             ].join("\n"),
             loader: "js",
@@ -295,6 +296,7 @@ function makeServersApi() {
       server: null,
       message: "",
     }),
+    updateServer: async () => ({ id: "updated" }),
     describeServerError: (error) =>
       error instanceof Error ? error.message : String(error),
   };

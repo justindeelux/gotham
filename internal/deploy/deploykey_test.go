@@ -511,6 +511,60 @@ func TestDeleteApplicationCleansSealedKeyWhenLocalDetachFails(t *testing.T) {
 	}
 }
 
+// TestDeleteLocalDeployKeyPurgeStaysFencedOnMapping pins the JUS-5 fix round
+// 2 guard on the raw-ID purge: when the fenced mapping delete fails, the
+// private key goes only while the application's mapping still points at it. A
+// rotated mapping (now pointing at a new key) keeps its key; the stale purge
+// surfaces the original error instead.
+func TestDeleteLocalDeployKeyPurgeStaysFencedOnMapping(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("mapping unchanged purges", func(t *testing.T) {
+		repo, _, svc, app := keyFixture(t)
+		created, err := repo.CreateDeployKey(ctx, DeployKey{ApplicationID: app.ID}, "stale-pem")
+		if err != nil {
+			t.Fatalf("CreateDeployKey: %v", err)
+		}
+		repo.deleteDeployKeyErr = errors.New("database down")
+
+		if err := svc.deleteLocalDeployKey(ctx, created); err != nil {
+			t.Fatalf("deleteLocalDeployKey = %v, want nil after the purge took both rows", err)
+		}
+		if repo.hasDeployKey(app.ID) {
+			t.Error("the mapping survived a failed detach")
+		}
+		if repo.hasPrivateKey(created.PrivateKeyID) {
+			t.Error("the orphaned sealed key was stranded after a failed detach")
+		}
+	})
+
+	t.Run("rotated mapping keeps its key", func(t *testing.T) {
+		repo, _, svc, app := keyFixture(t)
+		stale, err := repo.CreateDeployKey(ctx, DeployKey{ApplicationID: app.ID}, "stale-pem")
+		if err != nil {
+			t.Fatalf("CreateDeployKey: %v", err)
+		}
+		rotated := DeployKey{
+			ID:            uuid.New(),
+			ApplicationID: app.ID,
+			PrivateKeyID:  uuid.New(),
+		}
+		repo.deployKeys[app.ID] = fakeDeployKey{key: rotated}
+		repo.privateKeys[rotated.PrivateKeyID] = "fresh-pem"
+		repo.deleteDeployKeyErr = errors.New("database down")
+
+		if err := svc.deleteLocalDeployKey(ctx, stale); err == nil {
+			t.Fatal("deleteLocalDeployKey = nil, want the detach error to surface")
+		}
+		if !repo.hasDeployKey(app.ID) {
+			t.Error("the rotated mapping was removed by a stale purge")
+		}
+		if !repo.hasPrivateKey(rotated.PrivateKeyID) {
+			t.Error("the rotated sealed key was removed by a stale purge")
+		}
+	})
+}
+
 // firstLine returns the head of a PEM for failure messages without printing a
 // whole key.
 func firstLine(value string) string {

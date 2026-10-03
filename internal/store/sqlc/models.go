@@ -258,6 +258,7 @@ type PrivateKey struct {
 	Name         string             `json:"name"`
 	EncryptedKey string             `json:"encrypted_key"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	TeamID       pgtype.UUID        `json:"team_id"`
 }
 
 type Provider struct {
@@ -341,6 +342,7 @@ type Server struct {
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 	TeamID             pgtype.UUID        `json:"team_id"`
 	HostKeyFingerprint *string            `json:"host_key_fingerprint"`
+	EncryptedPassword  *string            `json:"encrypted_password"`
 }
 
 type ServerMetric struct {

@@ -12,14 +12,15 @@ import (
 )
 
 const createPrivateKey = `-- name: CreatePrivateKey :one
-INSERT INTO private_keys (name, encrypted_key)
-VALUES ($1, $2)
+INSERT INTO private_keys (name, encrypted_key, team_id)
+VALUES ($1, $2, $3)
 RETURNING id, name, created_at
 `
 
 type CreatePrivateKeyParams struct {
-	Name         string `json:"name"`
-	EncryptedKey string `json:"encrypted_key"`
+	Name         string      `json:"name"`
+	EncryptedKey string      `json:"encrypted_key"`
+	TeamID       pgtype.UUID `json:"team_id"`
 }
 
 type CreatePrivateKeyRow struct {
@@ -29,7 +30,7 @@ type CreatePrivateKeyRow struct {
 }
 
 func (q *Queries) CreatePrivateKey(ctx context.Context, arg CreatePrivateKeyParams) (CreatePrivateKeyRow, error) {
-	row := q.db.QueryRow(ctx, createPrivateKey, arg.Name, arg.EncryptedKey)
+	row := q.db.QueryRow(ctx, createPrivateKey, arg.Name, arg.EncryptedKey, arg.TeamID)
 	var i CreatePrivateKeyRow
 	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
 	return i, err
@@ -45,7 +46,7 @@ func (q *Queries) DeletePrivateKey(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getPrivateKeyByID = `-- name: GetPrivateKeyByID :one
-SELECT id, name, encrypted_key, created_at FROM private_keys WHERE id = $1
+SELECT id, name, encrypted_key, created_at, team_id FROM private_keys WHERE id = $1
 `
 
 func (q *Queries) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (PrivateKey, error) {
@@ -56,31 +57,36 @@ func (q *Queries) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (Privat
 		&i.Name,
 		&i.EncryptedKey,
 		&i.CreatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
 
-const listPrivateKeys = `-- name: ListPrivateKeys :many
+const listPrivateKeysByTeam = `-- name: ListPrivateKeysByTeam :many
 SELECT id, name, created_at
 FROM private_keys
+WHERE team_id = $1 OR team_id IS NULL
 ORDER BY created_at DESC, id DESC
 `
 
-type ListPrivateKeysRow struct {
+type ListPrivateKeysByTeamRow struct {
 	ID        pgtype.UUID        `json:"id"`
 	Name      string             `json:"name"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
-func (q *Queries) ListPrivateKeys(ctx context.Context) ([]ListPrivateKeysRow, error) {
-	rows, err := q.db.Query(ctx, listPrivateKeys)
+// The active team's keys plus every legacy key (team_id NULL), newest first,
+// mirroring ListServersByTeam. Listing a legacy key does not make it
+// attachable: keyForTeam still gates the attach.
+func (q *Queries) ListPrivateKeysByTeam(ctx context.Context, teamID pgtype.UUID) ([]ListPrivateKeysByTeamRow, error) {
+	rows, err := q.db.Query(ctx, listPrivateKeysByTeam, teamID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListPrivateKeysRow{}
+	items := []ListPrivateKeysByTeamRow{}
 	for rows.Next() {
-		var i ListPrivateKeysRow
+		var i ListPrivateKeysByTeamRow
 		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -90,4 +96,26 @@ func (q *Queries) ListPrivateKeys(ctx context.Context) ([]ListPrivateKeysRow, er
 		return nil, err
 	}
 	return items, nil
+}
+
+const teamReferencesPrivateKey = `-- name: TeamReferencesPrivateKey :one
+SELECT EXISTS(
+    SELECT 1 FROM servers
+    WHERE ssh_key_id = $1 AND team_id = $2
+)
+`
+
+type TeamReferencesPrivateKeyParams struct {
+	PrivateKeyID pgtype.UUID `json:"private_key_id"`
+	TeamID       pgtype.UUID `json:"team_id"`
+}
+
+// Reports whether the given team already attaches the key to one of its nodes.
+// keyForTeam uses it so a legacy key (team_id NULL) stays usable by the teams
+// that already reference it, and by no other team-scoped caller.
+func (q *Queries) TeamReferencesPrivateKey(ctx context.Context, arg TeamReferencesPrivateKeyParams) (bool, error) {
+	row := q.db.QueryRow(ctx, teamReferencesPrivateKey, arg.PrivateKeyID, arg.TeamID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

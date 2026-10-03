@@ -19,9 +19,10 @@ import (
 // ServerService is the subset of servers.ServerService the HTTP layer depends
 // on. Keeping it an interface lets tests substitute a fake without a database.
 type ServerService interface {
-	Add(ctx context.Context, userID uuid.UUID, name, ip string, port int, sshUser string, sshKeyID uuid.UUID) (*servers.Server, error)
+	Add(ctx context.Context, userID uuid.UUID, name, ip string, port int, sshUser string, sshKeyID uuid.UUID, password string) (*servers.Server, error)
 	List(ctx context.Context) ([]servers.Server, error)
 	Get(ctx context.Context, id uuid.UUID) (*servers.Server, error)
+	Update(ctx context.Context, id uuid.UUID, params servers.UpdateParams) (*servers.Server, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	Validate(ctx context.Context, id uuid.UUID, auth servers.ValidateAuth) (*servers.ValidationResult, error)
 	ResetHostKey(ctx context.Context, id uuid.UUID) (*servers.Server, error)
@@ -36,6 +37,24 @@ type createServerRequest struct {
 	Port     int    `json:"port"`
 	SSHUser  string `json:"ssh_user"`
 	SSHKeyID string `json:"ssh_key_id"`
+	// Password is the optional node password for password auth. It is
+	// write-only: encrypted on receipt, never returned, never logged.
+	// Exactly one of ssh_key_id and password may be given.
+	Password string `json:"password"`
+}
+
+// updateServerRequest is the body of PATCH /api/v1/servers/{id}. Every field
+// is optional: a missing field leaves the column unchanged. SSHKeyID points to
+// the new key, or to "" to detach the key; Password holds the new secret
+// (which replaces any attached key), "" to forget the stored secret, and a
+// missing password to leave it unchanged.
+type updateServerRequest struct {
+	Name     *string `json:"name"`
+	IP       *string `json:"ip"`
+	Port     *int    `json:"port"`
+	SSHUser  *string `json:"ssh_user"`
+	SSHKeyID *string `json:"ssh_key_id"`
+	Password *string `json:"password"`
 }
 
 // validateServerRequest is the optional body of POST /api/v1/servers/{id}/validate.
@@ -58,12 +77,15 @@ type createPrivateKeyRequest struct {
 
 // serverDTO is the wire representation of a managed server.
 type serverDTO struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	IP             string     `json:"ip"`
-	Port           int        `json:"port"`
-	SSHUser        string     `json:"ssh_user"`
-	SSHKeyID       *string    `json:"ssh_key_id,omitempty"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	IP       string  `json:"ip"`
+	Port     int     `json:"port"`
+	SSHUser  string  `json:"ssh_user"`
+	SSHKeyID *string `json:"ssh_key_id,omitempty"`
+	// HasPassword reports whether a password secret is stored. The secret
+	// itself never appears on the wire.
+	HasPassword    bool       `json:"has_password"`
 	Status         string     `json:"status"`
 	NodeID         *string    `json:"node_id,omitempty"`
 	OS             *string    `json:"os,omitempty"`
@@ -176,6 +198,7 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 		protected.Get("/v1/servers", s.handleListServers)
 		protected.Post("/v1/servers", s.handleCreateServer)
 		protected.Get("/v1/servers/{id}", s.handleGetServer)
+		protected.Patch("/v1/servers/{id}", s.handleUpdateServer)
 		protected.Delete("/v1/servers/{id}", s.handleDeleteServer)
 		protected.Post("/v1/servers/{id}/validate", s.handleValidateServer)
 		protected.Delete("/v1/servers/{id}/host-key", s.handleResetHostKey)
@@ -233,7 +256,7 @@ func (s *Server) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := s.servers.Add(r.Context(), userID, req.Name, req.IP, req.Port, req.SSHUser, keyID)
+	created, err := s.servers.Add(r.Context(), userID, req.Name, req.IP, req.Port, req.SSHUser, keyID, req.Password)
 	if err != nil {
 		s.writeServerError(w, "create", err)
 		return
@@ -255,6 +278,41 @@ func (s *Server) handleGetServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, serverEnvelope{Server: newServerDTO(found)})
+}
+
+// handleUpdateServer applies a PATCH edit to one server.
+func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	var req updateServerRequest
+	if !s.decodeJSON(w, r, &req) {
+		return
+	}
+
+	params := servers.UpdateParams{
+		Name:    req.Name,
+		IP:      req.IP,
+		Port:    req.Port,
+		SSHUser: req.SSHUser,
+	}
+	if req.SSHKeyID != nil {
+		keyID, ok := parseOptionalUUID(w, *req.SSHKeyID, "ssh_key_id")
+		if !ok {
+			return
+		}
+		params.SSHKeyID = &keyID
+	}
+	params.Password = req.Password
+
+	updated, err := s.servers.Update(r.Context(), id, params)
+	if err != nil {
+		s.writeServerError(w, "update", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, serverEnvelope{Server: newServerDTO(updated)})
 }
 
 // handleDeleteServer removes one server.
@@ -588,6 +646,7 @@ func newServerDTO(server *servers.Server) serverDTO {
 		IP:                 server.IP,
 		Port:               server.Port,
 		SSHUser:            server.SSHUser,
+		HasPassword:        server.HasPassword,
 		Status:             server.Status,
 		NodeID:             server.NodeID,
 		OS:                 server.OS,

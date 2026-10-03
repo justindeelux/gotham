@@ -11,7 +11,8 @@ updates and rollback, and the release/signing flow.
   managed services with `GOTHAM_DATABASE_DSN` / `GOTHAM_REDIS_ADDR` (or set
   `GOTHAM_SKIP_DEPS=1`).
 - **Node host:** Linux (`amd64` or `arm64`) with `systemd`, `curl`, `openssl` 3,
-  `sudo` (with `visudo`) and Docker Engine.
+  `sudo` (with `visudo`) and Docker Engine (or pass `--full` on Ubuntu/Debian
+  to have the installer set Docker up from the official repository).
 - Outbound HTTPS to `github.com` (or your mirror via `GOTHAM_RELEASES_URL` /
   `GOTHAM_BASE_URL`).
 
@@ -42,7 +43,17 @@ The installer:
 5. provisions the gRPC mTLS certificate authority at `/var/lib/gotham/ca`
    (`gotham ca init`, idempotent — an existing CA is kept);
 6. applies the database migrations and starts `gotham.service`;
-7. prints the Web UI URL and the first-login steps.
+7. installs and starts the node agent on the same host as the first node
+   (`install-agent.sh --full --ca` with the provisioned CA, pinned to the
+   same release tag; node id `<hostname>-agent`), unless `--no-local-agent`
+   is given or the existing `/etc/gotham/agent.env` already points at a
+   remote control plane (that agent is left untouched: its `ca.crt` and
+   config are never overwritten with the local ones);
+8. prints the Web UI URL and the first-login steps.
+
+If step 7 fails on a supported platform, the control plane is left installed
+and running (nothing is rolled back) and the installer exits nonzero with the
+exact agent-only retry command.
 
 The gRPC gateway the node agents connect to runs **TLS** as soon as that CA
 exists: `gotham serve` loads `/var/lib/gotham/ca/ca.crt` + `ca.key` and presents
@@ -112,6 +123,9 @@ Useful overrides:
 | `GOTHAM_SKIP_DEPS=1` | Do not install or configure PostgreSQL/Redis. |
 | `GOTHAM_AUTH_ALLOW_REGISTRATION` | Test/dev only: reopens self-registration after the first account (the default is closed — members join through invites). |
 | `--cp-host <name-or-ip>` | Add a DNS name or IP to the gRPC listener certificate SANs (repeatable). |
+| `--no-local-agent` / `GOTHAM_NO_LOCAL_AGENT=1` | Skip the localhost agent install (remote-only control plane). |
+| `GOTHAM_AGENT_NODE_ID` | Node id for the localhost agent (default `<hostname>-agent`); also honoured by direct `install-agent.sh` runs. |
+| `GOTHAM_AGENT_CP_ADDR` | Dial address for the localhost agent (default `127.0.0.1:9442`); also honoured by direct `install-agent.sh` runs. |
 | `GOTHAM_GRPC_HOSTS` | Comma-separated SAN hosts (same as `--cp-host`); also overrides the persisted list at runtime. |
 | `GOTHAM_MANAGED_VOLUME_ROOT` | Parent of every application bind mount (default `/var/lib/gotham/volumes`). An application bind must live in `<root>/<app id>`; a named volume is namespaced to the application. Must match the node's `GOTHAM_AGENT_MANAGED_VOLUME_ROOT`. |
 | `GOTHAM_INSTALL_ROOT` | Install under a prefix instead of `/` (testing only; non-root; enables test mode). |
@@ -150,7 +164,9 @@ account email in `PLATFORM_ADMINS` in `/etc/gotham/gotham.env`.
 
 ## Node agent
 
-Copy the control plane's public CA certificate to the node first (see
+`install.sh` already installs the agent on the control-plane host itself (the
+first node, `<hostname>-agent`); the steps below add *further* nodes. Copy
+the control plane's public CA certificate to the node first (see
 [Control plane](#control-plane)), then run the installer:
 
 ```sh
@@ -189,6 +205,7 @@ Useful agent installer flags and variables:
 | `--ca <path>` | Install this control-plane CA certificate (required). |
 | `GOTHAM_AGENT_CA_FILE` | Same as `--ca`, via the environment. |
 | `--insecure` | Development only: connect without TLS. |
+| `--full` / `GOTHAM_AGENT_FULL=1` | Also install Docker Engine and the compose plugin from the official Docker apt repository (Ubuntu/Debian only; no-op when already installed). On by default for the localhost agent `install.sh` sets up; off by default for direct runs. |
 | `--dry-run` | Print what would be done; makes no change. |
 | `GOTHAM_AGENT_CA` | The agent-side path the installer writes (`/etc/gotham/ca.crt`). It is **not** read from the ambient environment; on a reinstall the installer keeps the value already in `agent.env`. Use `--ca`/`GOTHAM_AGENT_CA_FILE` to change it. |
 | `GOTHAM_AGENT_UPDATE_CHANNEL` | Release channel this node accepts, `stable` (default) or `beta`; an offer with a different or empty channel is refused. |

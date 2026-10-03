@@ -1,13 +1,29 @@
 #!/bin/sh
 #
-# install-agent-lib.sh holds the two pieces of install-agent.sh that carry
-# reinstall behaviour, split out so they can be exercised without root or a
-# systemd host (see deploy/test-agent-install.sh). It is sourced, not run.
+# install-agent-lib.sh holds the pieces of install-agent.sh that carry
+# reinstall behaviour or need root-free exercise, split out so they can be
+# tested without root or a systemd host (see deploy/test-agent-install.sh).
+# It is sourced, not run.
+#
+# Fixed production paths for the --full Docker setup. These are plain shell
+# variables with fixed defaults, assigned unconditionally when this file is
+# sourced (never imported from the environment), so no exported variable can
+# redirect them. The test suite overrides them by assigning new values AFTER
+# sourcing this file.
 #
 # agent_env_write     composes /etc/gotham/agent.env, preserving values a prior
 #                     install wrote for keys this invocation does not set.
 # agent_service_restart  restarts an already-running agent on the new binary
 #                     (starts it otherwise) and verifies the unit's ExecStart.
+# ensure_docker_full  installs Docker Engine + the compose plugin from the
+#                     official Docker apt repository (--full; Ubuntu/Debian
+#                     only, idempotent, fingerprint-pinned key). An engine that
+#                     is already present gets only the compose plugin (the
+#                     engine is never replaced), and a Docker repository the
+#                     operator already defined is reused, never duplicated.
+
+_OS_RELEASE_FILE=/etc/os-release
+_APT_ROOT=
 
 # agent_env_write writes <env_file> for the agent.
 #
@@ -157,6 +173,19 @@ agent_env_write() {
             GOTHAM_AGENT_UPDATE_INTERVAL \
             GOTHAM_AGENT_UPDATE_CHANNEL; do
             _value="$(_env_value "${_key}")"
+            # The node id and dial address are written verbatim, so a control
+            # character in either (notably a newline smuggling a second line
+            # such as GOTHAM_AGENT_INSECURE=true) would corrupt agent.env.
+            # Reject any byte below 0x20 or 0x7f before writing.
+            case "${_key}" in
+                GOTHAM_AGENT_CP_ADDR | GOTHAM_AGENT_NODE_ID)
+                    _stripped="$(printf '%s' "${_value}" | tr -d '\000-\037\177')"
+                    if [ "${_stripped}" != "${_value}" ]; then
+                        echo "install-agent.sh: ${_key} contains a control character (rejected)" >&2
+                        exit 1
+                    fi
+                    ;;
+            esac
             if [ -n "${_value}" ]; then
                 printf '%s=%s\n' "${_key}" "${_value}" >>"${_env_tmp}"
             fi
@@ -224,4 +253,271 @@ agent_service_restart() {
             return 1
             ;;
     esac
+}
+
+# Docker apt repository pinned for --full installs. Packages are verified by
+# apt against this keyring; the key itself is fetched over HTTPS and checked
+# against the published fingerprint below, never piped to a shell.
+_docker_apt_key_url="https://download.docker.com/linux"
+_docker_apt_key_fingerprint="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+
+# _docker_repo_serves reports whether the Docker apt repository serves the
+# given suite by probing .../dists/<codename>/Release with the hardened curl
+# flags (same pinning as the key download, plus a connect and a total
+# timeout). Exit 0: served (HTTP 200). Exit 1: not served (HTTP 404) — the
+# caller may fall back to another suite. Exit 2: the repository could not be
+# reached at all (network failure, unexpected HTTP status) — the caller's
+# curl already printed the real error (errors are NOT sent to /dev/null), and
+# the caller must refuse, never silently fall back to an older suite it could
+# not even verify is served. $1 distro, $2 codename.
+_docker_repo_serves() {
+    _probe_code="$(curl -SL --proto '=https' --tlsv1.2 --retry 3 \
+        --connect-timeout 10 --max-time 30 --silent --show-error \
+        -o /dev/null -w '%{http_code}' \
+        "${_docker_apt_key_url}/$1/dists/$2/Release")" || return 2
+    case "${_probe_code}" in
+        200) return 0 ;;
+        404) return 1 ;;
+        *)
+            echo "install-agent.sh --full: unexpected HTTP ${_probe_code} probing ${_docker_apt_key_url}/$1/dists/$2/Release" >&2
+            return 2
+            ;;
+    esac
+}
+
+# _docker_repo_has_active_entry reports whether the apt source file defines an
+# enabled download.docker.com entry. Full-line comments (#...) never count,
+# and a DEB822 stanza (.sources) carrying "Enabled: no" is disabled.
+_docker_repo_has_active_entry() {
+    case "$1" in
+        *.sources)
+            awk '
+                function stanza_end() {
+                    if (has && !disabled) found = 1
+                    has = 0; disabled = 0
+                }
+                BEGIN { has = 0; disabled = 0; found = 0 }
+                /^[[:space:]]*$/ { stanza_end(); next }
+                {
+                    line = $0
+                    sub(/^[[:space:]]+/, "", line)
+                    if (line ~ /^#/) next
+                    if (index(line, "download.docker.com") > 0) has = 1
+                    if (tolower(line) ~ /^enabled:[[:space:]]*no([[:space:]]|$)/) disabled = 1
+                }
+                END { stanza_end(); exit(!found) }' "$1" 2>/dev/null
+            ;;
+        *)
+            sed 's/^[[:space:]]*#.*//' "$1" 2>/dev/null | grep -qF 'download.docker.com'
+            ;;
+    esac
+}
+
+# ensure_docker_full installs Docker Engine and the compose plugin from the
+# official Docker apt repository (Ubuntu/Debian only). It is idempotent: when
+# `docker` and `docker compose` already work it only logs and returns 0. When
+# only the engine is present it installs just the compose plugin, never an
+# engine package (naming one could make apt replace or remove the working
+# engine, e.g. docker.io). A Docker repository the operator already defined
+# (docker.sources, a docker.asc Signed-By line, another .list) is reused
+# instead of adding a conflicting docker.list. On any other distro it fails
+# with a message naming the manual step instead of attempting an unverified
+# install. The distro and apt paths come from the fixed _OS_RELEASE_FILE /
+# _APT_ROOT variables above; there are no environment seams.
+ensure_docker_full() {
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        echo "==> Docker Engine and the compose plugin are already installed; skipping"
+        return 0
+    fi
+    _os_release="${_OS_RELEASE_FILE}"
+    _distro="" _codename=""
+    if [ -f "${_os_release}" ]; then
+        _distro="$(sed -n 's/^ID=//p' "${_os_release}" | head -n1 | tr -d '"')"
+        _codename="$(sed -n 's/^VERSION_CODENAME=//p' "${_os_release}" | head -n1 | tr -d '"')"
+    fi
+    case "${_distro}" in
+        ubuntu | debian) ;;
+        *)
+            echo "install-agent.sh --full: Docker Engine is not installed and automatic setup supports Ubuntu/Debian only (found '${_distro:-unknown}')." >&2
+            echo "  Install Docker Engine and the compose plugin manually (https://docs.docker.com/engine/install/), then re-run without --full." >&2
+            return 1
+            ;;
+    esac
+    [ -n "${_codename}" ] \
+        || {
+            echo "install-agent.sh --full: could not read VERSION_CODENAME from ${_os_release}" >&2
+            return 1
+        }
+    command -v apt-get >/dev/null 2>&1 \
+        || {
+            echo "install-agent.sh --full: apt-get not found; install Docker manually, then re-run without --full" >&2
+            return 1
+        }
+    command -v curl >/dev/null 2>&1 || die_simple "required tool 'curl' is missing (apt-get install -y curl)"
+    command -v gpg >/dev/null 2>&1 || {
+        echo "==> installing ca-certificates curl gnupg for the Docker repository setup"
+        ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg ) \
+            || return 1
+    }
+    _apt_root="${_APT_ROOT}"
+    _keyrings_dir="${_apt_root}/etc/apt/keyrings"
+    # NOTE: the dearmored (binary) keyring must end in .gpg, not .asc: apt
+    # treats a .asc signed-by file as ASCII-armored and silently ignores binary
+    # content in it, failing later with NO_PUBKEY (proven on Ubuntu 22.04).
+    _keyring_file="${_keyrings_dir}/docker.gpg"
+    _source_file="${_apt_root}/etc/apt/sources.list.d/docker.list"
+    # A Docker repository defined outside our own file (a docker.sources
+    # entry, a docker.asc Signed-By line, another .list) is reused as-is:
+    # adding our docker.list next to it makes apt fail with a Signed-By
+    # conflict. Our own file from a previous run does not count: it is
+    # rewritten below, so a partial run still refreshes the keyring.
+    _existing_repo=""
+    for _repo_file in "${_apt_root}/etc/apt/sources.list" "${_apt_root}/etc/apt/sources.list.d/"*.list "${_apt_root}/etc/apt/sources.list.d/"*.sources; do
+        [ -f "${_repo_file}" ] || continue
+        [ "${_repo_file}" = "${_source_file}" ] && continue
+        if _docker_repo_has_active_entry "${_repo_file}"; then
+            _existing_repo="${_repo_file}"
+            break
+        fi
+    done
+    if [ -n "${_existing_repo}" ]; then
+        echo "==> existing Docker apt repository at ${_existing_repo}; reusing it instead of adding a conflicting source"
+    else
+        mkdir -p "${_keyrings_dir}" "$(dirname "${_source_file}")"
+        chmod 0755 "${_keyrings_dir}" "$(dirname "${_source_file}")"
+        # The architecture is read before the download so a broken dpkg fails
+        # fast with a clear message instead of falling back to amd64, which
+        # would write a repo line for the wrong architecture.
+        if ! _arch="$(dpkg --print-architecture 2>/dev/null)" || [ -z "${_arch}" ]; then
+            echo "install-agent.sh --full: could not determine the system architecture (dpkg --print-architecture failed)" >&2
+            return 1
+        fi
+        # Resolve the codename against what the Docker repository actually
+        # serves: probe .../dists/<codename>/Release first (VERSION_CODENAME
+        # is authoritative for what this host is). An HTTP 404 (the repo does
+        # not serve this suite: Debian testing/sid/unstable, an EOL suite, a
+        # typo) falls back to the newest stable codename the repo serves; when
+        # nothing is served, refuse with a clear message. A dead docker.list
+        # is never written. A probe that cannot reach the repository at all
+        # (network failure, unexpected HTTP status) refuses immediately with
+        # the real error: falling back to a suite that was never confirmed
+        # served would write a repo line on no evidence. The probe runs after
+        # the arch check so a broken dpkg fails before any network.
+        _probe_rc=0
+        _docker_repo_serves "${_distro}" "${_codename}" || _probe_rc=$?
+        case "${_probe_rc}" in
+            0) ;;
+            1)
+                _fallback=""
+                case "${_distro}" in
+                    ubuntu) _stable_codenames="noble jammy focal" ;;
+                    debian) _stable_codenames="trixie bookworm bullseye" ;;
+                esac
+                for _candidate in ${_stable_codenames}; do
+                    _probe_rc=0
+                    _docker_repo_serves "${_distro}" "${_candidate}" || _probe_rc=$?
+                    case "${_probe_rc}" in
+                        0)
+                            _fallback="${_candidate}"
+                            break
+                            ;;
+                        1) ;;
+                        *)
+                            echo "install-agent.sh --full: could not reach the Docker apt repository while probing '${_candidate}' for ${_distro}; refusing (not falling back on an unverified repository)" >&2
+                            echo "  Install Docker Engine and the compose plugin manually (https://docs.docker.com/engine/install/), then re-run without --full." >&2
+                            return 1
+                            ;;
+                    esac
+                done
+                if [ -z "${_fallback}" ]; then
+                    echo "install-agent.sh --full: the Docker apt repository does not serve '${_codename}' for ${_distro}" >&2
+                    echo "  (checked ${_docker_apt_key_url}/${_distro}/dists/${_codename}/Release) and no fallback suite is served either." >&2
+                    echo "  Install Docker Engine and the compose plugin manually (https://docs.docker.com/engine/install/), then re-run without --full." >&2
+                    return 1
+                fi
+                echo "==> the Docker apt repository does not serve '${_codename}'; falling back to '${_fallback}'"
+                _codename="${_fallback}"
+                ;;
+            *)
+                echo "install-agent.sh --full: could not reach the Docker apt repository while probing '${_codename}' for ${_distro}; refusing (not falling back on an unverified repository)" >&2
+                echo "  Install Docker Engine and the compose plugin manually (https://docs.docker.com/engine/install/), then re-run without --full." >&2
+                return 1
+                ;;
+        esac
+        # No EXIT trap here: this library is sourced by install-agent.sh, whose own
+        # EXIT trap owns the installer scratch dir; installing another one would
+        # clobber it (I5). The temp key is removed on every path below instead.
+        _key_tmp="$(mktemp "${TMPDIR:-/tmp}/docker-key.XXXXXX")" || return 1
+        if ! curl -fSL --proto '=https' --tlsv1.2 --retry 3 --silent --show-error "${_docker_apt_key_url}/${_distro}/gpg" -o "${_key_tmp}"; then
+            echo "install-agent.sh --full: could not download the Docker signing key" >&2
+            rm -f "${_key_tmp}"
+            return 1
+        fi
+        # Verify the key against the published fingerprint before trusting it: the
+        # download channel alone is not the anchor. The fingerprint is field 10 of
+        # the fpr record in --with-colons output.
+        _key_fp="$(gpg --show-keys --with-colons "${_key_tmp}" 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }' | tr -d '[:space:]')"
+        case "${_key_fp}" in
+            "${_docker_apt_key_fingerprint}")
+                ;;
+            *)
+                echo "install-agent.sh --full: Docker signing key fingerprint mismatch (got '${_key_fp:-unreadable}'); refusing to use it" >&2
+                rm -f "${_key_tmp}"
+                return 1
+                ;;
+        esac
+        # gpg refuses to overwrite an existing -o file, so dearmoring straight
+        # into the keyring breaks a re-run after a partial run: dearmor into a
+        # temp file in the same directory and move it into place atomically.
+        _keyring_tmp="${_keyring_file}.tmp.$$"
+        if ! gpg --dearmor -o "${_keyring_tmp}" "${_key_tmp}"; then
+            echo "install-agent.sh --full: could not import the Docker signing key" >&2
+            rm -f "${_key_tmp}" "${_keyring_tmp}"
+            return 1
+        fi
+        rm -f "${_key_tmp}"
+        chmod 0644 "${_keyring_tmp}"
+        mv -f "${_keyring_tmp}" "${_keyring_file}"
+        _repo_tmp="${_source_file}.tmp.$$"
+        printf 'deb [arch=%s signed-by=%s] %s/%s %s stable\n' \
+            "${_arch}" "${_keyring_file}" "${_docker_apt_key_url}" "${_distro}" "${_codename}" >"${_repo_tmp}" \
+            || return 1
+        chmod 0644 "${_repo_tmp}"
+        mv -f "${_repo_tmp}" "${_source_file}"
+    fi
+    # A working engine whose compose plugin is missing gets only the plugin:
+    # this branch must never name an engine package (docker-ce and friends can
+    # make apt replace or remove the running engine, e.g. docker.io).
+    if command -v docker >/dev/null 2>&1; then
+        echo "==> installing only the Docker compose plugin (keeping the existing engine)"
+        ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update ) || return 1
+        ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-plugin ) \
+            || ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-v2 ) \
+            || {
+                echo "install-agent.sh --full: compose plugin installation failed" >&2
+                return 1
+            }
+    else
+        echo "==> installing Docker Engine and the compose plugin from the Docker apt repository"
+        ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update ) || return 1
+        ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin ) \
+            || {
+                echo "install-agent.sh --full: Docker installation failed" >&2
+                return 1
+            }
+    fi
+    command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 \
+        || {
+            echo "install-agent.sh --full: Docker installed but 'docker compose version' does not work" >&2
+            return 1
+        }
+    echo "==> Docker Engine and the compose plugin are ready"
+    return 0
+}
+
+# die_simple aborts without depending on the caller's die (release-verify.sh is
+# not necessarily sourced when this library is exercised standalone).
+die_simple() {
+    echo "install-agent.sh: $*" >&2
+    exit 1
 }

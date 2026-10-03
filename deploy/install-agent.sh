@@ -33,8 +33,17 @@
 # leaves GOTHAM_AGENT_CA unset, so the agent connects without TLS. Never use it
 # on a real node.
 #
+# Docker Engine and the compose plugin (which the agent shells out to) are
+# required at runtime but are NOT installed by default: pass --full (or set
+# GOTHAM_AGENT_FULL=1) to install them from the official Docker apt repository
+# (Ubuntu/Debian only; other distros fail with a message naming the manual
+# step). The repository key is fingerprint-pinned before use and every package
+# is apt-verified; nothing is piped to a shell. Re-running --full is a no-op
+# when Docker already works. The control-plane installer enables --full for its
+# localhost agent automatically.
+#
 # Usage:
-#   sudo ./install-agent.sh [--ca <path>] [--insecure] [--dry-run]
+#   sudo ./install-agent.sh [--ca <path>] [--insecure] [--full] [--dry-run]
 #
 # Environment variables written to /etc/gotham/agent.env. A key left unset keeps
 # the value a previous install wrote (or the agent's built-in default on a fresh
@@ -51,6 +60,9 @@
 #   GOTHAM_AGENT_AUTO_UPDATE
 #   GOTHAM_AGENT_UPDATE_INTERVAL
 #   GOTHAM_AGENT_UPDATE_CHANNEL
+#
+# Read once at startup (never written to agent.env):
+#   GOTHAM_AGENT_FULL          (set to 1 for the --full Docker setup)
 
 set -eu
 # Permissive base umask so shared directories stay world-traversable and the
@@ -74,6 +86,7 @@ DEFAULT_REPO="justindeelux/gotham"
 GOTHAM_RELEASE_PUBLIC_KEY_B64="Yt6nz1gGQWF7Bfc9MCt/gQXbPMzhN9OygrUkOEFYdwQ="
 DRY_RUN=0
 INSECURE=0
+FULL=0
 CA_SOURCE=""
 
 while [ "$#" -gt 0 ]; do
@@ -83,6 +96,9 @@ while [ "$#" -gt 0 ]; do
             ;;
         --insecure)
             INSECURE=1
+            ;;
+        --full)
+            FULL=1
             ;;
         --ca)
             [ "$#" -ge 2 ] || { echo "--ca requires a path" >&2; exit 2; }
@@ -184,6 +200,24 @@ if [ -z "${AGENT_CA_PATH}" ] && [ "${INSECURE}" -ne 1 ]; then
 fi
 if [ "${INSECURE}" -eq 1 ]; then
     echo "==> WARNING: --insecure: the agent will connect to the control plane WITHOUT TLS (development only)" >&2
+fi
+
+# --full defaults off; GOTHAM_AGENT_FULL=1 is the environment form (the
+# control-plane installer passes --full explicitly for its localhost agent).
+if [ "${GOTHAM_AGENT_FULL:-0}" = "1" ]; then
+    FULL=1
+fi
+
+# Docker Engine + the compose plugin: required at runtime, installed only in
+# --full mode (a no-op when they already work; Ubuntu/Debian only).
+if [ "${FULL}" -eq 1 ]; then
+    if [ "${DRY_RUN}" -eq 1 ]; then
+        echo "[dry-run] ensure Docker Engine and the compose plugin (--full)"
+    else
+        log "ensuring Docker Engine and the compose plugin (--full)"
+        ensure_docker_full \
+            || { echo "install-agent.sh: Docker setup failed (install Docker manually, then re-run without --full)" >&2; exit 1; }
+    fi
 fi
 
 ARCH="$(detect_arch)"

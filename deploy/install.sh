@@ -23,11 +23,28 @@
 #   GOTHAM_BASE_URL             full asset base URL (static mirror); requires
 #                               GOTHAM_VERSION
 #   GOTHAM_REPO                 owner/name (default justindeelux/gotham)
-#   GOTHAM_INSTALL_ROOT         install everything under this prefix (non-root);
-#                               enables test mode
+#   GOTHAM_INSTALL_ROOT         install everything under this prefix (non-/);
+#                               enables test mode. "/" is refused: it is the
+#                               real root, not a sandbox.
 #   GOTHAM_INSTALL_TEST_PUBLIC_KEY  test-only: replace the pinned trust anchor
 #                               (PEM or base64); honoured ONLY with
 #                               GOTHAM_INSTALL_ROOT, otherwise warned and ignored
+#   GOTHAM_INSTALL_TEST=1       test-only: honour the GOTHAM_OS_RELEASE_FILE /
+#                               GOTHAM_TEST_UNAME_M / GOTHAM_AGENT_ENV_FILE
+#                               seams in a run without GOTHAM_INSTALL_ROOT, but
+#                               ONLY together with --dry-run (a dry run changes
+#                               nothing, so the flag alone is safe there). With
+#                               a real run it changes nothing, so a stray
+#                               export cannot redirect an install. Never set it
+#                               in production.
+#   GOTHAM_INSTALL_TEST_RUN_AGENT=1 + GOTHAM_INSTALL_TEST_AGENT_SCRIPT=<fake>
+#                               test-only: with GOTHAM_INSTALL_ROOT (a non-/
+#                               sandbox), run past service activation
+#                               (systemctl must be a logging shim on PATH) and
+#                               execute <fake> instead of install-agent.sh, so
+#                               the agent-failure path runs. RUN_AGENT=1
+#                               without the script seam is refused outright (it
+#                               would run the real install-agent.sh).
 #
 # Runtime configuration overrides:
 #   GOTHAM_DATABASE_DSN       managed PostgreSQL DSN; skips local provisioning
@@ -49,8 +66,31 @@
 # hostname are always included. On a reinstall, omitting them keeps the list
 # already persisted next to the CA.
 #
+# Localhost agent (on by default). The installer also installs and starts the
+# node agent on this host and registers it as the control plane's first node,
+# over the mTLS channel above (127.0.0.1 is always a listener SAN, so no
+# --cp-host is needed for it). It calls install-agent.sh --full --ca with the
+# provisioned CA, so Docker Engine and the compose plugin are set up too, and
+# pins the agent to the same release tag the control plane just installed. The
+# node id defaults to "<hostname>-agent" (a default, not a reserved id: only
+# the control plane's own listener identities are refused) and may be
+# overridden with GOTHAM_AGENT_NODE_ID; the dial address defaults to
+# 127.0.0.1:9442 and may be overridden with GOTHAM_AGENT_CP_ADDR. Both are
+# passed only when agent.env does not already define them, so re-running the
+# installer keeps a remote-agent setup or operator edits and never repoints or
+# duplicates the node (a hostname change is safe). Registration is automatic:
+# the agent registers on first contact and its heartbeats flip the server row
+# the UI lists to ready. The localhost agent needs Ubuntu/Debian + systemd +
+# a supported architecture: anywhere else it is skipped with a notice and the
+# control plane install still succeeds. If the agent step fails on a supported
+# platform the control plane is left installed and running (nothing is rolled
+# back) and the installer exits nonzero with the exact retry command.
+# Re-running the installer re-runs the agent install, which is idempotent (the
+# unit is restarted onto the new binary). Pass --no-local-agent (or
+# GOTHAM_NO_LOCAL_AGENT=1) to skip it for a remote-only control plane.
+#
 # Usage:
-#   sudo ./install.sh [--cp-host <name-or-ip>]... [--dry-run]
+#   sudo ./install.sh [--cp-host <name-or-ip>]... [--no-local-agent] [--dry-run]
 
 set -eu
 # A permissive base umask: shared directories (/etc/gotham, /usr/libexec/gotham,
@@ -72,10 +112,12 @@ DEFAULT_REPO="justindeelux/gotham"
 GOTHAM_RELEASE_PUBLIC_KEY_B64="Yt6nz1gGQWF7Bfc9MCt/gQXbPMzhN9OygrUkOEFYdwQ="
 
 DRY_RUN=0
+NO_LOCAL_AGENT=0
 CP_HOSTS_OPT=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
+        --no-local-agent) NO_LOCAL_AGENT=1 ;;
         --cp-host)
             [ "$#" -ge 2 ] || { echo "--cp-host requires a hostname or IP" >&2; exit 2; }
             CP_HOSTS_OPT="${CP_HOSTS_OPT} $2"
@@ -83,7 +125,9 @@ while [ "$#" -gt 0 ]; do
             ;;
         --cp-host=*) CP_HOSTS_OPT="${CP_HOSTS_OPT} ${1#--cp-host=}" ;;
         -h | --help)
-            sed -n '2,53p' "$0"
+            # Print every leading comment line (the header), not a fixed range,
+            # so the documented flags cannot drift out of --help.
+            awk 'NR == 1 { next } /^[^#]/ { exit } { print }' "$0"
             exit 0
             ;;
         *)
@@ -93,6 +137,10 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
+# GOTHAM_NO_LOCAL_AGENT=1 is the environment form of --no-local-agent.
+if [ "${GOTHAM_NO_LOCAL_AGENT:-0}" = "1" ]; then
+    NO_LOCAL_AGENT=1
+fi
 
 # gRPC listener SAN hosts: --cp-host values plus GOTHAM_GRPC_HOSTS
 # (comma-separated). Empty is fine; serve always adds the loopback names and the
@@ -122,19 +170,107 @@ run() {
     "$@"
 }
 
+# _is_loopback_cp_addr reports whether a GOTHAM_AGENT_CP_ADDR value points at
+# this host's loopback: a numeric 127.0.0.0/8 IPv4 literal, "localhost" (any
+# case), or ::1 (bare or bracketed, with or without :port). Anything else,
+# including a hostname that merely starts with 127. (127.evil.example.com),
+# is remote: re-running the localhost step over it would overwrite another
+# control plane's agent.
+_is_loopback_cp_addr() {
+    _lc_addr=$1
+    case "${_lc_addr}" in
+        '['*']'*)
+            _lc_host="${_lc_addr%%\]*}"
+            _lc_host="${_lc_host#\[}"
+            ;;
+        *)
+            _lc_rest="${_lc_addr#*:}"
+            case "${_lc_rest}" in
+                *:*) _lc_host="${_lc_addr}" ;; # unbracketed IPv6: no port strip
+                *) _lc_host="${_lc_addr%:*}" ;;
+            esac
+            ;;
+    esac
+    _lc_lower="$(printf '%s' "${_lc_host}" | tr '[:upper:]' '[:lower:]')"
+    if [ "${_lc_lower}" = "localhost" ] || [ "${_lc_host}" = "::1" ]; then
+        return 0
+    fi
+    # Numeric 127.0.0.0/8 only: four dot-separated parts, first 127, the rest
+    # 0-255. A non-numeric 127.* name falls through to remote.
+    _lc_rest="${_lc_host}"
+    _lc_n=0
+    _lc_ok=1
+    while [ -n "${_lc_rest}" ]; do
+        _lc_part="${_lc_rest%%.*}"
+        case "${_lc_rest}" in
+            *.*) _lc_rest="${_lc_rest#*.}" ;;
+            *) _lc_rest="" ;;
+        esac
+        _lc_n=$((_lc_n + 1))
+        case "${_lc_n}" in
+            1) [ "${_lc_part}" = "127" ] || _lc_ok=0 ;;
+            *)
+                case "${_lc_part}" in
+                    '' | *[!0-9]*) _lc_ok=0 ;;
+                    *)
+                        [ "${#_lc_part}" -le 3 ] || _lc_ok=0
+                        [ "${_lc_part}" -le 255 ] 2>/dev/null || _lc_ok=0
+                        ;;
+                esac
+                ;;
+        esac
+    done
+    [ "${_lc_ok}" -eq 1 ] && [ "${_lc_n}" -eq 4 ]
+}
+
 # Install prefix. Empty = the production layout from deploy/README.md. A
 # non-empty prefix is the test-only redirect used by the dry run so no host
 # path is touched.
 PREFIX="${GOTHAM_INSTALL_ROOT:-}"
 if [ -n "${PREFIX}" ]; then
-    TEST_MODE=1
     case "${PREFIX}" in
         /*) ;;
         *) die "GOTHAM_INSTALL_ROOT must be an absolute path" ;;
     esac
+    # A trailing slash changes nothing about where the prefix points, so strip
+    # it before the root check: "/" (and "///") is the real root, not a
+    # sandbox, and must never enable test mode.
+    while [ "${PREFIX}" != "/" ] && [ "${PREFIX%/}" != "${PREFIX}" ]; do
+        PREFIX="${PREFIX%/}"
+    done
+    if [ "${PREFIX}" = "/" ]; then
+        die "GOTHAM_INSTALL_ROOT must be a non-/ sandbox path, not the real root"
+    fi
+    TEST_MODE=1
 else
     TEST_MODE=0
 fi
+
+# Explicit test-harness flag. The GOTHAM_OS_RELEASE_FILE /
+# GOTHAM_TEST_UNAME_M / GOTHAM_AGENT_ENV_FILE path seams below are honoured
+# only when IN_TEST is 1 AND the run is a dry run (a dry run changes nothing,
+# so the flag alone is safe there): never on a run that can execute the agent
+# step. IN_TEST is 1 inside a GOTHAM_INSTALL_ROOT sandbox, or with
+# GOTHAM_INSTALL_TEST=1 together with --dry-run. A bare GOTHAM_INSTALL_TEST=1
+# on a real run changes nothing, so a stray export cannot redirect the
+# install. The agent-script seam (GOTHAM_INSTALL_TEST_AGENT_SCRIPT, sandbox +
+# RUN_AGENT only) is the one exception: it names the fake the sandbox run
+# executes, and a sandbox RUN_AGENT run without it is refused outright.
+IN_TEST=0
+if [ "${TEST_MODE}" -eq 1 ]; then
+    IN_TEST=1
+elif [ "${GOTHAM_INSTALL_TEST:-0}" = "1" ] && [ "${DRY_RUN}" -eq 1 ]; then
+    IN_TEST=1
+fi
+
+# sh_quote prints one argument for safe re-execution: bare when it holds
+# only shell-safe characters, single-quoted otherwise.
+sh_quote() {
+    case "$1" in
+        '' | *[!A-Za-z0-9_@%+=:,./-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
 
 ETC_DIR="${PREFIX}/etc/gotham"
 STATE_DIR="${PREFIX}/var/lib/gotham"
@@ -433,16 +569,19 @@ fi
 log "installing systemd unit ${SERVICE_FILE}"
 render_file "${SCRIPT_DIR}/gotham.service" "${SERVICE_FILE}" 0644
 
-if [ "${TEST_MODE}" -eq 1 ]; then
-    log "test mode: skipping service activation"
+if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" != "1" ]; then
+    log "test mode: skipping service activation and the localhost agent install"
     log "done (test install under ${PREFIX})"
     exit 0
 fi
+# GOTHAM_INSTALL_TEST_RUN_AGENT=1 (sandbox test mode only) runs past
+# the exit above with shims for systemctl and the agent installer, so the
+# suite can execute the real agent-failure path end to end.
 
 # ---- Dependencies (PostgreSQL + Redis) --------------------------------------
 # Only provision local services when the resolved DSN is the built-in local
 # default; a managed DSN (from the CLI or a previous install) is left alone.
-if [ "${DRY_RUN}" -eq 0 ] && [ "${GOTHAM_SKIP_DEPS:-0}" != "1" ] && [ "${DSN}" = "${DEFAULT_DSN}" ]; then
+if [ "${DRY_RUN}" -eq 0 ] && [ "${TEST_MODE}" -eq 0 ] && [ "${GOTHAM_SKIP_DEPS:-0}" != "1" ] && [ "${DSN}" = "${DEFAULT_DSN}" ]; then
     if ! command -v psql >/dev/null 2>&1 || ! command -v redis-server >/dev/null 2>&1; then
         if command -v apt-get >/dev/null 2>&1; then
             log "installing PostgreSQL and Redis"
@@ -465,7 +604,9 @@ if [ "${DRY_RUN}" -eq 0 ] && [ "${GOTHAM_SKIP_DEPS:-0}" != "1" ] && [ "${DSN}" =
 fi
 
 # ---- Migrate + start --------------------------------------------------------
-if [ "${DRY_RUN}" -eq 0 ]; then
+# Skipped in test mode (no database there; the agent-failure suite covers the
+# tail with a systemctl shim instead).
+if [ "${DRY_RUN}" -eq 0 ] && [ "${TEST_MODE}" -eq 0 ]; then
     log "applying database migrations"
     # Pass the DSN and binary path positionally: interpolating the DSN into a
     # single-quoted sh -c would let a quote in the DSN run commands as the
@@ -478,6 +619,157 @@ fi
 log "starting ${BINARY_NAME}"
 run systemctl daemon-reload
 run systemctl enable --now "${BINARY_NAME}.service"
+
+# ---- Localhost agent (the control plane's first node) -----------------------
+# On by default: install and start the agent on this host, pointed at the
+# loopback gRPC listener over the mTLS channel provisioned above. The dial
+# address needs no --cp-host because the loopback names are always listener
+# SANs. Idempotent: the agent installer keeps the prior node id and address and
+# restarts the unit onto the newly installed binary. Opt out with
+# --no-local-agent for a remote-only control plane.
+if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
+    # Platform pre-check first, before touching anything for the local agent:
+    # the agent step needs Ubuntu/Debian (for the --full Docker setup),
+    # systemd and a supported architecture. Anywhere else the control plane
+    # still installs fine on its own, so skip the agent with a notice instead
+    # of failing the whole install. The production paths below are fixed;
+    # GOTHAM_OS_RELEASE_FILE and GOTHAM_TEST_UNAME_M override them only on a
+    # dry run in test mode (see deploy/test-release-install.sh), never on a
+    # run that can execute the agent step.
+    LOCAL_AGENT_SKIP=""
+    _la_os_release="/etc/os-release"
+    if [ "${IN_TEST}" -eq 1 ] && [ "${DRY_RUN}" -eq 1 ] && [ -n "${GOTHAM_OS_RELEASE_FILE:-}" ]; then
+        _la_os_release="${GOTHAM_OS_RELEASE_FILE}"
+    fi
+    _la_distro=""
+    if [ -f "${_la_os_release}" ]; then
+        _la_distro="$(sed -n 's/^ID=//p' "${_la_os_release}" | head -n1 | tr -d '"')"
+    fi
+    case "${_la_distro}" in
+        ubuntu | debian) ;;
+        *) LOCAL_AGENT_SKIP="automatic localhost agent setup supports Ubuntu/Debian only (found '${_la_distro:-unknown}')" ;;
+    esac
+    if [ -z "${LOCAL_AGENT_SKIP}" ] && ! command -v systemctl >/dev/null 2>&1; then
+        LOCAL_AGENT_SKIP="systemctl not found; the localhost agent needs a systemd host"
+    fi
+    if [ -z "${LOCAL_AGENT_SKIP}" ]; then
+        _la_uname_m="$(uname -m)"
+        if [ "${IN_TEST}" -eq 1 ] && [ "${DRY_RUN}" -eq 1 ] && [ -n "${GOTHAM_TEST_UNAME_M:-}" ]; then
+            _la_uname_m="${GOTHAM_TEST_UNAME_M}"
+        fi
+        case "${_la_uname_m}" in
+            x86_64 | amd64 | aarch64 | arm64) ;;
+            *) LOCAL_AGENT_SKIP="unsupported architecture: ${_la_uname_m}" ;;
+        esac
+    fi
+    if [ -z "${LOCAL_AGENT_SKIP}" ]; then
+        for agent_sibling in install-agent.sh install-agent-lib.sh gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service; do
+            if [ ! -f "${SCRIPT_DIR}/${agent_sibling}" ]; then
+                die "install.sh: ${agent_sibling} must be next to this script for the localhost agent install (--no-local-agent to skip)"
+            fi
+        done
+        # A re-run keeps the operator's agent: GOTHAM_AGENT_NODE_ID /
+        # GOTHAM_AGENT_CP_ADDR are passed only when agent.env does not already
+        # define them. A value set in this run's environment still wins;
+        # otherwise the prior file's values are kept by passing nothing, so a
+        # hostname change is never repointed and no duplicate node is created.
+        # The prior-env lookup reads the path install-agent.sh actually
+        # writes; GOTHAM_AGENT_ENV_FILE redirects it only on a dry run in
+        # test mode (a sandbox real run uses a scratch installer copy with the
+        # path baked in — see deploy/test-release-install.sh).
+        AGENT_ENV_FILE="/etc/gotham/agent.env"
+        if [ "${IN_TEST}" -eq 1 ] && [ "${DRY_RUN}" -eq 1 ] && [ -n "${GOTHAM_AGENT_ENV_FILE:-}" ]; then
+            AGENT_ENV_FILE="${GOTHAM_AGENT_ENV_FILE}"
+        fi
+        agent_env_prev() {
+            [ -f "${AGENT_ENV_FILE}" ] || return 0
+            sed -n "s/^[[:space:]]*$1=//p" "${AGENT_ENV_FILE}" | tail -n1
+        }
+        # Never touch another control plane's agent: when the prior agent.env
+        # points at a remote control plane (an explicit address this run still
+        # wins and repoints deliberately), installing the local CA and config
+        # over it would break that node, so the whole step is skipped.
+        if [ -z "${GOTHAM_AGENT_CP_ADDR:-}" ]; then
+            _prior_cp_addr="$(agent_env_prev GOTHAM_AGENT_CP_ADDR)"
+            if [ -n "${_prior_cp_addr}" ] && ! _is_loopback_cp_addr "${_prior_cp_addr}"; then
+                LOCAL_AGENT_SKIP="agent.env points at a remote control plane (${_prior_cp_addr}); leaving it untouched"
+            fi
+        fi
+    fi
+    if [ -n "${LOCAL_AGENT_SKIP}" ]; then
+        log "skipping the localhost agent install: ${LOCAL_AGENT_SKIP}"
+        log "install the agent manually with deploy/install-agent.sh once the platform supports it"
+    else
+        LOCAL_AGENT_NODE_ID="${GOTHAM_AGENT_NODE_ID:-}"
+        if [ -z "${LOCAL_AGENT_NODE_ID}" ] && [ -z "$(agent_env_prev GOTHAM_AGENT_NODE_ID)" ]; then
+            LOCAL_AGENT_NODE_ID="$(hostname 2>/dev/null || true)-agent"
+            [ "${LOCAL_AGENT_NODE_ID}" != "-agent" ] || LOCAL_AGENT_NODE_ID="local-agent"
+        fi
+        LOCAL_AGENT_CP_ADDR="${GOTHAM_AGENT_CP_ADDR:-}"
+        if [ -z "${LOCAL_AGENT_CP_ADDR}" ] && [ -z "$(agent_env_prev GOTHAM_AGENT_CP_ADDR)" ]; then
+            LOCAL_AGENT_CP_ADDR="127.0.0.1:9442"
+        fi
+        # The retry line below reuses exactly these assignments, shell-quoted
+        # for safe re-execution. Which script runs: the real installer by
+        # default; in a GOTHAM_INSTALL_ROOT sandbox together with
+        # GOTHAM_INSTALL_TEST_RUN_AGENT=1 the GOTHAM_INSTALL_TEST_AGENT_SCRIPT
+        # fake (never from a bare GOTHAM_INSTALL_TEST=1, and never in a real
+        # run). RUN_AGENT=1 in a sandbox without the script seam is refused:
+        # it would execute the real install-agent.sh. The retry line always
+        # shows the canonical command.
+        LOCAL_AGENT_ENV="GOTHAM_VERSION=$(sh_quote "${VERSION}")"
+        [ -z "${LOCAL_AGENT_CP_ADDR}" ] \
+            || LOCAL_AGENT_ENV="GOTHAM_AGENT_CP_ADDR=$(sh_quote "${LOCAL_AGENT_CP_ADDR}") ${LOCAL_AGENT_ENV}"
+        [ -z "${LOCAL_AGENT_NODE_ID}" ] \
+            || LOCAL_AGENT_ENV="GOTHAM_AGENT_NODE_ID=$(sh_quote "${LOCAL_AGENT_NODE_ID}") ${LOCAL_AGENT_ENV}"
+        LOCAL_AGENT_RETRY="${LOCAL_AGENT_ENV} sh $(sh_quote "${SCRIPT_DIR}/install-agent.sh") --full --ca $(sh_quote "${CA_DIR}/ca.crt")"
+        LOCAL_AGENT_FAILED=0
+        _agent_script="${SCRIPT_DIR}/install-agent.sh"
+        if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" = "1" ]; then
+            [ -n "${GOTHAM_INSTALL_TEST_AGENT_SCRIPT:-}" ] \
+                || die "GOTHAM_INSTALL_TEST_RUN_AGENT=1 requires GOTHAM_INSTALL_TEST_AGENT_SCRIPT=<fake agent script>; refusing to run the real install-agent.sh in a sandbox"
+            _agent_script="${GOTHAM_INSTALL_TEST_AGENT_SCRIPT}"
+        fi
+        if [ "${DRY_RUN}" -eq 1 ]; then
+            echo "[dry-run] ${LOCAL_AGENT_RETRY}"
+        else
+            _agent_label="${LOCAL_AGENT_NODE_ID:-$(agent_env_prev GOTHAM_AGENT_NODE_ID)}"
+            [ -n "${_agent_label}" ] || _agent_label="the existing node"
+            log "installing the localhost agent node ${_agent_label} (--no-local-agent to skip)"
+            # Invoke via sh so a checkout that lost the exec bit still installs.
+            # The release location (mirror/base URL, repo) is inherited from the
+            # environment; the tag is pinned to the control plane's so both
+            # binaries come from one release. A failing agent step must NOT roll
+            # the control plane back: it is already migrated and started above,
+            # so record the failure and exit nonzero only at the end.
+            #
+            # The assignments travel as positional parameters through env, one
+            # per argument, never through an unquoted string: values holding
+            # spaces, quotes, $() or globs arrive verbatim instead of being
+            # split (or run). The child always runs scrubbed: every test seam
+            # is removed from its environment (defense in depth — the
+            # installers ignore them anyway), so a stray export cannot
+            # redirect it; the intended values travel as "$@" below.
+            (
+                set -- "GOTHAM_VERSION=${VERSION}"
+                if [ -n "${LOCAL_AGENT_CP_ADDR}" ]; then
+                    set -- "$@" "GOTHAM_AGENT_CP_ADDR=${LOCAL_AGENT_CP_ADDR}"
+                fi
+                if [ -n "${LOCAL_AGENT_NODE_ID}" ]; then
+                    set -- "$@" "GOTHAM_AGENT_NODE_ID=${LOCAL_AGENT_NODE_ID}"
+                fi
+                env -u GOTHAM_OS_RELEASE_FILE -u GOTHAM_APT_ROOT \
+                    -u GOTHAM_AGENT_ENV_FILE -u GOTHAM_TEST_UNAME_M \
+                    -u GOTHAM_INSTALL_TEST -u GOTHAM_INSTALL_TEST_RUN_AGENT \
+                    -u GOTHAM_INSTALL_TEST_AGENT_SCRIPT \
+                    -u GOTHAM_INSTALL_TEST_PUBLIC_KEY \
+                    "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt"
+            ) || LOCAL_AGENT_FAILED=1
+        fi
+    fi
+else
+    log "skipping the localhost agent install (--no-local-agent)"
+fi
 
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [ -n "${HOST_IP}" ] || HOST_IP="127.0.0.1"
@@ -492,7 +784,8 @@ Gotham ${VERSION} is installed.
 
 First login:
   1. Open the Web UI and create an account through the sign-up form.
-  2. Sign in, then add a node agent with deploy/install-agent.sh.
+  2. Sign in: the Servers page already lists this host's agent node (ready
+     once its first heartbeat lands). Add more nodes with deploy/install-agent.sh.
   Platform-global operations (node-wide proxy sync, DNS providers) also require
   the account email in PLATFORM_ADMINS in /etc/gotham/gotham.env.
 
@@ -500,3 +793,20 @@ Self-update checking is enabled by default. To apply new releases unattended,
 add AUTO_UPDATE=true to /etc/gotham/gotham.env (operator edits there are kept
 across reinstalls).
 EOF
+
+# A failed localhost agent step leaves the control plane installed and running
+# (nothing was rolled back): report it loudly with the exact retry command and
+# exit nonzero only now that the control plane is fully up.
+if [ "${LOCAL_AGENT_FAILED:-0}" -eq 1 ]; then
+    cat >&2 <<EOF
+
+================================================================
+WARNING: the control plane is installed and running, but the
+localhost agent install failed. Nothing was rolled back.
+Retry only the agent step with:
+  ${LOCAL_AGENT_RETRY}
+or re-run this installer (an existing agent.env is kept as-is).
+================================================================
+EOF
+    exit 1
+fi

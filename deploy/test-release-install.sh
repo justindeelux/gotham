@@ -1474,7 +1474,9 @@ case "$*" in
 esac
 exec /bin/sh "$@"
 SHIM
-    chmod +x "${RR_SHIM}"/*
+    chmod +x "${RR_SHIM}/id" "${RR_SHIM}/systemctl" "${RR_SHIM}/runuser" \
+        "${RR_SHIM}/sudo" "${RR_SHIM}/visudo" "${RR_SHIM}/install" \
+        "${RR_SHIM}/chown" "${RR_SHIM}/openssl" "${RR_SHIM}/sh"
     cat >"${SCRATCH}/rr-agent.sh" <<'SHIM'
 #!/bin/sh
 touch "${AGENT_MARKER:?}"

@@ -281,6 +281,13 @@ func (s *Server) routes() (http.Handler, error) {
 			s.mountServerRoutes(api)
 		}
 
+		// Running binary version (JUS-7): any authenticated caller, no team
+		// scope. It reads through the versionReporter seam, so it mounts
+		// whenever auth is wired even without a node registry.
+		if s.auth != nil {
+			s.mountVersionRoutes(api)
+		}
+
 		// Server time series (BE-8.4): the 30-day retention sweep runs beside
 		// the routes. A nil retention (no database, or FEATURE_METRICS=false)
 		// leaves the heartbeat path without persistence, and a nil store
@@ -816,12 +823,7 @@ func (s *Server) updatesService() updates.Service {
 	if !updates.Enabled() {
 		return nil
 	}
-	current := "dev"
-	if reporter, ok := s.servers.(versionReporter); ok {
-		if v := reporter.Version(); v != "" {
-			current = v
-		}
-	}
+	current := s.currentVersion()
 	// GOTHAM_UPDATE_CURRENT is a development seam for wrappers and tests. On a
 	// release build (an embedded release key) it is ignored so a stray
 	// environment value cannot pin the reported version; the node-registry

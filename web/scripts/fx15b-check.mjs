@@ -86,6 +86,7 @@ function apiError(status, message = "") {
 async function main() {
   const applications = await loadModule("../src/api/applications.ts");
   const format = await loadModule("../src/utils/format.ts");
+  const version = await loadModule("../src/api/version.ts");
   const rowKeys = await loadInline(
     `import { ref } from "vue";
      import { useStableRowKeys } from "./useStableRowKeys";
@@ -96,6 +97,7 @@ async function main() {
   try {
     const { describeApplicationError } = applications.module;
     const { toPercent, USAGE_DANGER_PERCENT } = format.module;
+    const { formatVersionTag } = version.module;
     const { ref, useStableRowKeys } = rowKeys.module;
 
     await check("C4-18: a stop 404 means no running container, not a missing app", () => {
@@ -221,9 +223,23 @@ async function main() {
         );
       }
     });
+    await check("JUS-7: the sidebar tag prefixes a bare version and never doubles v", () => {
+      assert(formatVersionTag("0.2.0") === "v0.2.0", "bare version gains v");
+      assert(formatVersionTag("v0.2.0") === "v0.2.0", "v-prefixed version stays single-v");
+      assert(formatVersionTag("dev") === "dev", "dev builds render bare dev");
+    });
+
+    await check("JUS-7: an empty version hides the tag instead of rendering", () => {
+      assert(formatVersionTag("") === null, "empty hides");
+      assert(formatVersionTag(null) === null, "null (loading/error) hides");
+      assert(formatVersionTag(undefined) === null, "undefined hides");
+      assert(formatVersionTag("v") === null, "lone v hides");
+    });
+
   } finally {
     await applications.cleanup();
     await format.cleanup();
+    await version.cleanup();
     await rowKeys.cleanup();
   }
 

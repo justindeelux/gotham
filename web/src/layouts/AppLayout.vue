@@ -3,7 +3,7 @@ import { NAvatar, NButton, NDropdown, NInput, NTooltip } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
-import { version as appVersion } from "../../package.json";
+import { getVersion } from "../api/version";
 
 import GothamIcon from "../components/GothamIcon.vue";
 import type { IconName } from "../components/GothamIcon.vue";
@@ -78,6 +78,29 @@ const route = useRoute();
 const router = useRouter();
 
 const accountOptions: DropdownOption[] = [{ label: "Sign out", key: "sign-out" }];
+
+// runningVersion is the control-plane binary version from GET /v1/version.
+// Null while loading or on error: the tag hides rather than showing a stale
+// literal.
+const runningVersion = ref<string | null>(null);
+
+/**
+ * versionTag is the sidebar-head tag text: the v-prefixed release, bare
+ * "dev" for dev builds, null while loading or on error (the tag hides). A
+ * leading v from the backend is stripped so it never renders vv0.2.0.
+ */
+const versionTag = computed<string | null>(() => {
+  if (!runningVersion.value) {
+    return null;
+  }
+  const raw = runningVersion.value.startsWith("v")
+    ? runningVersion.value.slice(1)
+    : runningVersion.value;
+  if (raw === "") {
+    return null;
+  }
+  return raw === "dev" ? "dev" : `v${raw}`;
+});
 
 // Live count: the only pill backed by a store. Every other section has no
 // backend yet, so no pill is rendered rather than a fabricated number.
@@ -208,7 +231,14 @@ function onViewportChange(event: MediaQueryListEvent): void {
   }
 }
 
-onMounted(() => mobileQuery.addEventListener("change", onViewportChange));
+onMounted(async () => {
+  mobileQuery.addEventListener("change", onViewportChange);
+  try {
+    runningVersion.value = await getVersion();
+  } catch {
+    runningVersion.value = null;
+  }
+});
 
 onBeforeUnmount(() => {
   mobileQuery.removeEventListener("change", onViewportChange);
@@ -239,7 +269,9 @@ watch(
     >
       <div class="sidebar-head">
         <span class="brand">Gotham</span>
-        <span class="tag" :title="`Web build ${appVersion}`">v{{ appVersion }}</span>
+        <span v-if="versionTag" class="tag" :title="`Control plane ${versionTag}`">{{
+          versionTag
+        }}</span>
       </div>
       <nav class="sidebar-body">
         <template v-for="section in navSections" :key="section.label">

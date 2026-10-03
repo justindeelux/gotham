@@ -13,6 +13,9 @@
 #
 # agent_env_write     composes /etc/gotham/agent.env, preserving values a prior
 #                     install wrote for keys this invocation does not set.
+# agent_env_validate  checks every value agent_env_write would write without
+#                     writing anything, so the installer can fail before its
+#                     first mutation.
 # agent_service_restart  restarts an already-running agent on the new binary
 #                     (starts it otherwise) and verifies the unit's ExecStart.
 # ensure_docker_full  installs Docker Engine + the compose plugin from the
@@ -24,6 +27,346 @@
 
 _OS_RELEASE_FILE=/etc/os-release
 _APT_ROOT=
+
+# _env_has_ctrl succeeds when $1 holds a control character (any byte below
+# 0x20 or 0x7f, including newline): such a value written as KEY=value would
+# smuggle a second line (e.g. GOTHAM_AGENT_INSECURE=true) into agent.env.
+_env_has_ctrl() {
+    _stripped="$(printf '%s' "$1" | tr -d '\000-\037\177')"
+    [ "${_stripped}" != "$1" ]
+}
+
+# _is_loopback_listener mirrors the agent's isLoopbackListenAddr
+# (agent/grpc_server.go): "localhost" (any case), a bracketed "[::1]",
+# or a dotted 127.<d>.<d>.<d> IPv4 address. "127.example.com" and an
+# unbracketed "::1" are not loopback, and leading-zero octets are
+# rejected because Go's net.ParseIP rejects them.
+_is_loopback_listener() {
+    _addr=$1
+    case "${_addr}" in
+        "[::1]" | "[::1]:"*) return 0 ;;
+    esac
+    case "${_addr}" in
+        *:*) _host="${_addr%:*}" ;;
+        *) _host="${_addr}" ;;
+    esac
+    _lower="$(printf '%s' "${_host}" | tr '[:upper:]' '[:lower:]')"
+    if [ "${_lower}" = "localhost" ]; then
+        return 0
+    fi
+    case "${_host}" in
+        *[!0-9.]* | "") return 1 ;;
+    esac
+    _oldifs=$IFS
+    IFS=.
+    # shellcheck disable=SC2086
+    set -- ${_host}
+    IFS=${_oldifs}
+    [ "$#" -eq 4 ] || return 1
+    [ "$1" = "127" ] || return 1
+    shift
+    for _octet in "$@"; do
+        case "${_octet}" in
+            "" | *[!0-9]*) return 1 ;;
+        esac
+        if [ "${_octet}" != "0" ] && [ "${_octet#0}" != "${_octet}" ]; then
+            return 1
+        fi
+        [ "${#_octet}" -le 3 ] || return 1
+        [ "${_octet}" -le 255 ] || return 1
+    done
+    return 0
+}
+
+# _env_check_value rejects a single agent.env value before it is written.
+# Empty values are unset keys (never written, nothing to check). Every
+# non-empty value is rejected on control characters and on a trailing
+# backslash (systemd would join such a line with the next one, swallowing a
+# key); the remaining keys get a shape check matching what the agent itself
+# accepts:
+# - dial/listen addresses: host:port systemd parses verbatim (spaces, quotes
+#   and = are refused on both: systemd strips a leading quote and unquotes a
+#   balanced pair, so the unit would see a different value than the operator
+#   typed — proven on Ubuntu 22.04 systemd 249: KEY="abc" delivers abc,
+#   KEY="a b" delivers a b);
+# - NODE_ID mirrors the agent's validNodeID (agent/config.go) and the control
+#   plane's validateNodeID (internal/servers/ca.go): at most 253 bytes, no
+#   wildcard, path or whitespace characters. Quotes are refused although the
+#   agent accepts them: an EnvironmentFile line does not hold them verbatim
+#   (a leading quote is silently stripped, a balanced pair is unquoted), so
+#   the running agent would see a different id than the installer wrote;
+# - CERT_DIR/KEY/CA must be absolute paths without whitespace, quotes or
+#   backslashes (a relative path would resolve against the service's working
+#   directory, not the operator's checkout);
+# - DOCKER_SOCK must be unix:///abs/path, a bare /abs/path or
+#   tcp://host:port, without whitespace, quotes or backslashes;
+# - AUTO_UPDATE is exactly what the agent parses (true/false, any case,
+#   surrounding whitespace trimmed): 1/yes/on silently mean false to the
+#   agent, so the installer refuses them instead of pretending otherwise;
+# - UPDATE_INTERVAL mirrors Go's time.ParseDuration grammar (optional sign,
+#   surrounding whitespace trimmed as the agent trims it, int-or-float
+#   magnitudes, ns/us/ms/s/m/h units, bare 0) and its overflow errors (a
+#   total past ~292 years is refused, not defaulted); a zero or negative
+#   value still falls through to the agent default, as today;
+# - UPDATE_CHANNEL accepts [A-Za-z0-9_.-]+ (the agent maps unknown channels
+#   to stable).
+# Prints the reason on stderr and returns 1 on rejection.
+_env_check_value() {
+    _ck_key=$1
+    _ck_value=$2
+    [ -n "${_ck_value}" ] || return 0
+    if _env_has_ctrl "${_ck_value}"; then
+        echo "install-agent.sh: ${_ck_key} contains a control character (rejected)" >&2
+        return 1
+    fi
+    case "${_ck_value}" in
+        *\\)
+            echo "install-agent.sh: ${_ck_key} must not end with a backslash (systemd would join it with the next line; got '${_ck_value}')" >&2
+            return 1
+            ;;
+    esac
+    # A literal tab cannot appear in a case pattern on every shell, so it
+    # travels in a variable (quoted below, hence matched literally).
+    _ck_tab="$(printf '\t')"
+    case "${_ck_key}" in
+        GOTHAM_AGENT_CP_ADDR)
+            case "${_ck_value}" in
+                *" "* | *"'"* | *'"'* | *=*)
+                    echo "install-agent.sh: ${_ck_key} must not contain spaces, quotes or = (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            case "${_ck_value}" in
+                *:*)
+                    ;;
+                *)
+                    echo "install-agent.sh: ${_ck_key} must be host:port (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            ;;
+        GOTHAM_AGENT_LISTEN_ADDR)
+            case "${_ck_value}" in
+                *" "* | *"$_ck_tab"* | *"'"* | *'"'* | *=*)
+                    echo "install-agent.sh: ${_ck_key} must not contain spaces, quotes or = (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            case "${_ck_value}" in
+                *:*)
+                    ;;
+                *)
+                    echo "install-agent.sh: ${_ck_key} must be host:port or :port (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            ;;
+        GOTHAM_AGENT_NODE_ID)
+            if [ "${#_ck_value}" -gt 253 ]; then
+                echo "install-agent.sh: ${_ck_key} exceeds 253 bytes (got ${#_ck_value})" >&2
+                return 1
+            fi
+            case "${_ck_value}" in
+                *\** | *\\* | */* | *" "* | *"$_ck_tab"* | *"'"* | *'"'*)
+                    echo "install-agent.sh: ${_ck_key} must not contain spaces, tabs, quotes, *, / or backslashes (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            ;;
+        GOTHAM_AGENT_CERT_DIR | GOTHAM_AGENT_KEY | GOTHAM_AGENT_CA)
+            case "${_ck_value}" in
+                /*) ;;
+                *)
+                    echo "install-agent.sh: ${_ck_key} must be an absolute path (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            case "${_ck_value}" in
+                *" "* | *"$_ck_tab"* | *"'"* | *'"'* | *\\*)
+                    echo "install-agent.sh: ${_ck_key} must not contain whitespace, quotes or backslashes (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            ;;
+        GOTHAM_AGENT_DOCKER_SOCK)
+            case "${_ck_value}" in
+                *" "* | *"$_ck_tab"* | *"'"* | *'"'* | *\\*)
+                    echo "install-agent.sh: ${_ck_key} must not contain whitespace, quotes or backslashes (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            case "${_ck_value}" in
+                unix://*)
+                    _ck_rest="${_ck_value#unix://}"
+                    case "${_ck_rest}" in
+                        /*) ;;
+                        *)
+                            echo "install-agent.sh: ${_ck_key} unix:// endpoints must carry an absolute socket path (got '${_ck_value}')" >&2
+                            return 1
+                            ;;
+                    esac
+                    ;;
+                tcp://*)
+                    _ck_rest="${_ck_value#tcp://}"
+                    case "${_ck_rest}" in
+                        ?*:?*)
+                            ;;
+                        *)
+                            echo "install-agent.sh: ${_ck_key} must be unix:///abs/path, /abs/path or tcp://host:port (got '${_ck_value}')" >&2
+                            return 1
+                            ;;
+                    esac
+                    ;;
+                /*)
+                    ;;
+                *)
+                    echo "install-agent.sh: ${_ck_key} must be unix:///abs/path, /abs/path or tcp://host:port (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            ;;
+        GOTHAM_AGENT_LOG_LEVEL)
+            _ck_norm="$(printf '%s' "${_ck_value}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
+            case "${_ck_norm}" in
+                debug | info | warn | warning | error)
+                    ;;
+                *)
+                    echo "install-agent.sh: ${_ck_key} must be debug, info, warn or error (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            ;;
+        GOTHAM_AGENT_AUTO_UPDATE)
+            # The agent enables unattended updates only on EqualFold(trimmed,
+            # "true") (agent/config.go): 1/yes/on silently mean off there, so
+            # the installer accepts only an explicit true or false instead of
+            # pretending those spellings switch anything on.
+            _ck_norm="$(printf '%s' "${_ck_value}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
+            case "${_ck_norm}" in
+                true | false)
+                    ;;
+                *)
+                    echo "install-agent.sh: ${_ck_key} must be true or false (the agent only honours true; got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            ;;
+        GOTHAM_AGENT_UPDATE_INTERVAL)
+            # Mirrors Go's time.ParseDuration grammar (agent/config.go parses
+            # with it and falls back to the 5m default on error or when the
+            # result is not positive): an optional sign, surrounding
+            # whitespace trimmed exactly as the agent trims it, then one or
+            # more int-or-float magnitudes each with ns/us/ms/s/m/h units, or
+            # a bare 0. A total past the int64 nanosecond range (~292 years)
+            # is an overflow error in Go, so the installer refuses it instead
+            # of writing a value the agent would silently default. Zero or
+            # negative values still fall through to the agent default, as
+            # today.
+            _ck_dur="$(printf '%s' "${_ck_value}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            case "${_ck_dur}" in
+                [+-]*) _ck_dur="${_ck_dur#?}" ;;
+            esac
+            # µs/μs spellings are normalized before the ASCII-only checks.
+            _ck_dur="$(printf '%s' "${_ck_dur}" | sed 's/µs/us/g;s/μs/us/g')"
+            if [ "${_ck_dur}" != "0" ] && ! printf '%s' "${_ck_dur}" | grep -Eq '^(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|ms|s|m|h))+$'; then
+                echo "install-agent.sh: ${_ck_key} must be a Go duration such as 5m or 1h30m (got '${_ck_value}')" >&2
+                return 1
+            fi
+            if [ "${_ck_dur}" != "0" ] && ! printf '%s' "${_ck_dur}" | awk '
+                BEGIN { ns["ns"]=1; ns["us"]=1000; ns["ms"]=1000000; ns["s"]=1000000000; ns["m"]=60000000000; ns["h"]=3600000000000 }
+                { s=$0; total=0;
+                  while (s != "") {
+                    if (match(s, /^[0-9]+(\.[0-9]*)?/) || match(s, /^\.[0-9]+/)) { num=substr(s, 1, RLENGTH); s=substr(s, RLENGTH+1) } else { exit 2 }
+                    if (match(s, /^(ns|us|ms|s|m|h)/)) { unit=substr(s, 1, RLENGTH); s=substr(s, RLENGTH+1) } else { exit 2 }
+                    total += num * ns[unit] }
+                  if (total > 9223372036854775807) { exit 1 } }'; then
+                echo "install-agent.sh: ${_ck_key} overflows Go time.Duration (got '${_ck_value}')" >&2
+                return 1
+            fi
+            ;;
+        GOTHAM_AGENT_UPDATE_CHANNEL)
+            if ! printf '%s' "${_ck_value}" | grep -Eq '^[A-Za-z0-9_.-]+$'; then
+                echo "install-agent.sh: ${_ck_key} must be a channel name (letters, digits, . _ -; got '${_ck_value}')" >&2
+                return 1
+            fi
+            ;;
+    esac
+    return 0
+}
+
+# agent_env_validate checks every value agent_env_write would write to
+# <env_file> (ambient GOTHAM_AGENT_* values first, then the previous file's
+# values they would preserve) without writing anything. install-agent.sh runs
+# it before the first mutation so a bad value never leaves a half-applied
+# install; agent_env_write runs it again at write time.
+#
+#   $1 env_file, $2 agent_ca, $3 insecure (same arguments as agent_env_write)
+agent_env_validate() (
+    _v_env_file=$1
+    _v_ca=$2
+    _v_insecure=$3
+    _v_prev=""
+    if [ -f "${_v_env_file}" ]; then
+        _v_prev="$(cat "${_v_env_file}")"
+    fi
+    _v_prev_value() {
+        printf '%s\n' "${_v_prev}" | sed -n "s/^[[:space:]]*$1=//p" | tail -n1
+    }
+    _v_value() {
+        eval "_v_ambient=\${$1:-}"
+        if [ -n "${_v_ambient}" ]; then
+            printf '%s' "${_v_ambient}"
+        else
+            _v_prev_value "$1"
+        fi
+    }
+    for _v_key in \
+        GOTHAM_AGENT_CP_ADDR \
+        GOTHAM_AGENT_NODE_ID \
+        GOTHAM_AGENT_CERT_DIR \
+        GOTHAM_AGENT_KEY \
+        GOTHAM_AGENT_DOCKER_SOCK \
+        GOTHAM_AGENT_LOG_LEVEL \
+        GOTHAM_AGENT_AUTO_UPDATE \
+        GOTHAM_AGENT_UPDATE_INTERVAL \
+        GOTHAM_AGENT_UPDATE_CHANNEL; do
+        _v_val="$(_v_value "${_v_key}")"
+        _env_check_value "${_v_key}" "${_v_val}" || exit 1
+    done
+    # The listener resolves exactly as in agent_env_write (ambient wins; a
+    # plaintext install's stale loopback listener is dropped on the way to
+    # TLS; --insecure without a CA defaults it and pins it to loopback).
+    _v_prior_insecure="$(printf '%s' "$(_v_prev_value GOTHAM_AGENT_INSECURE)" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    [ "${_v_prior_insecure}" = "true" ] || _v_prior_insecure=""
+    eval "_v_ambient_listen=\${GOTHAM_AGENT_LISTEN_ADDR:-}"
+    _v_prior_listen="$(_v_prev_value GOTHAM_AGENT_LISTEN_ADDR)"
+    _v_listen=""
+    if [ -n "${_v_ambient_listen}" ]; then
+        _v_listen="${_v_ambient_listen}"
+    elif [ -n "${_v_prior_listen}" ]; then
+        if [ -n "${_v_ca}" ] && [ "${_v_prior_insecure}" = "true" ]; then
+            _v_listen=""
+        else
+            _v_listen="${_v_prior_listen}"
+        fi
+    fi
+    if [ -z "${_v_ca}" ]; then
+        if [ -z "${_v_listen}" ] && [ "${_v_insecure}" -eq 1 ]; then
+            _v_listen="127.0.0.1:9443"
+        fi
+        if [ "${_v_insecure}" -eq 1 ] && [ -n "${_v_listen}" ] && ! _is_loopback_listener "${_v_listen}"; then
+            if [ -n "${_v_ambient_listen}" ]; then
+                echo "install-agent.sh: GOTHAM_AGENT_LISTEN_ADDR=${_v_listen} is not loopback; --insecure requires a loopback listener" >&2
+                exit 1
+            fi
+        fi
+    fi
+    _env_check_value GOTHAM_AGENT_LISTEN_ADDR "${_v_listen}" || exit 1
+    # The CA path is installer-resolved (never ambient), but a poisoned prior
+    # file feeds it on reinstalls, so it gets the same absolute-path shape
+    # check as the other paths.
+    _env_check_value GOTHAM_AGENT_CA "${_v_ca}" || exit 1
+)
 
 # agent_env_write writes <env_file> for the agent.
 #
@@ -38,6 +381,8 @@ _APT_ROOT=
 # the control plane address and node id and resetting the agent to the local
 # default. A symlinked env file keeps its link (the target is rewritten). The
 # caller owns the file's ownership (chown needs root); this sets mode 0640.
+# Every value is validated (control characters rejected, per-key shapes
+# checked) before the first byte is written; see agent_env_validate.
 agent_env_write() {
     _env_file=$1
     _agent_ca=$2
@@ -80,47 +425,6 @@ agent_env_write() {
                 _env_prev_value "$1"
             fi
         }
-        # _is_loopback_listener mirrors the agent's isLoopbackListenAddr
-        # (agent/grpc_server.go): "localhost" (any case), a bracketed "[::1]",
-        # or a dotted 127.<d>.<d>.<d> IPv4 address. "127.example.com" and an
-        # unbracketed "::1" are not loopback, and leading-zero octets are
-        # rejected because Go's net.ParseIP rejects them.
-        _is_loopback_listener() {
-            _addr=$1
-            case "${_addr}" in
-                "[::1]" | "[::1]:"*) return 0 ;;
-            esac
-            case "${_addr}" in
-                *:*) _host="${_addr%:*}" ;;
-                *) _host="${_addr}" ;;
-            esac
-            _lower="$(printf '%s' "${_host}" | tr '[:upper:]' '[:lower:]')"
-            if [ "${_lower}" = "localhost" ]; then
-                return 0
-            fi
-            case "${_host}" in
-                *[!0-9.]* | "") return 1 ;;
-            esac
-            _oldifs=$IFS
-            IFS=.
-            # shellcheck disable=SC2086
-            set -- ${_host}
-            IFS=${_oldifs}
-            [ "$#" -eq 4 ] || return 1
-            [ "$1" = "127" ] || return 1
-            shift
-            for _octet in "$@"; do
-                case "${_octet}" in
-                    "" | *[!0-9]*) return 1 ;;
-                esac
-                if [ "${_octet}" != "0" ] && [ "${_octet#0}" != "${_octet}" ]; then
-                    return 1
-                fi
-                [ "${#_octet}" -le 3 ] || return 1
-                [ "${_octet}" -le 255 ] || return 1
-            done
-            return 0
-        }
         # Resolve the listener before writing: a plaintext install's loopback
         # address must not survive a switch to TLS. The --insecure loopback rules
         # apply only when there is no CA: with a CA the agent serves TLS and may
@@ -155,6 +459,9 @@ agent_env_write() {
                 _listen="127.0.0.1:9443"
             fi
         fi
+        # Every value below is validated before the first byte is written (the
+        # same pass install-agent.sh runs before its first mutation).
+        agent_env_validate "${_env_file}" "${_agent_ca}" "${_insecure}" || exit 1
         _env_tmp="${_env_target}.tmp.$$"
         # Root-only temp holding operator settings; remove it if any step
         # aborts. The success path moves it into place first, so the trap is a
@@ -173,19 +480,6 @@ agent_env_write() {
             GOTHAM_AGENT_UPDATE_INTERVAL \
             GOTHAM_AGENT_UPDATE_CHANNEL; do
             _value="$(_env_value "${_key}")"
-            # The node id and dial address are written verbatim, so a control
-            # character in either (notably a newline smuggling a second line
-            # such as GOTHAM_AGENT_INSECURE=true) would corrupt agent.env.
-            # Reject any byte below 0x20 or 0x7f before writing.
-            case "${_key}" in
-                GOTHAM_AGENT_CP_ADDR | GOTHAM_AGENT_NODE_ID)
-                    _stripped="$(printf '%s' "${_value}" | tr -d '\000-\037\177')"
-                    if [ "${_stripped}" != "${_value}" ]; then
-                        echo "install-agent.sh: ${_key} contains a control character (rejected)" >&2
-                        exit 1
-                    fi
-                    ;;
-            esac
             if [ -n "${_value}" ]; then
                 printf '%s=%s\n' "${_key}" "${_value}" >>"${_env_tmp}"
             fi

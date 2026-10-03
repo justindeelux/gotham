@@ -208,6 +208,11 @@ if [ "${GOTHAM_AGENT_FULL:-0}" = "1" ]; then
     FULL=1
 fi
 
+# Validate every value that would land in agent.env before the first
+# mutation (system user, binary, CA, Docker): a bad value fails here, never
+# in a half-applied install.
+agent_env_validate "${ENV_FILE}" "${AGENT_CA_PATH}" "${INSECURE}" || exit 1
+
 # Docker Engine + the compose plugin: required at runtime, installed only in
 # --full mode (a no-op when they already work; Ubuntu/Debian only).
 if [ "${FULL}" -eq 1 ]; then

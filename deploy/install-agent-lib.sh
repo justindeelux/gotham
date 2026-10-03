@@ -261,7 +261,13 @@ _env_check_value() {
             # is an overflow error in Go, so the installer refuses it instead
             # of writing a value the agent would silently default. Zero or
             # negative values still fall through to the agent default, as
-            # today.
+            # today — deliberately including the two negative magnitudes Go
+            # itself accepts (-9223372036854775808ns and
+            # -2562047h47m16s854775808ns, both exactly min-int64): the sign
+            # is stripped before the magnitude check, so they are refused
+            # here although they parse. That difference is unobservable (the
+            # agent defaults any non-positive duration anyway) and keeping
+            # the check sign-agnostic avoids a special case.
             _ck_dur="$(printf '%s' "${_ck_value}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
             case "${_ck_dur}" in
                 [+-]*) _ck_dur="${_ck_dur#?}" ;;

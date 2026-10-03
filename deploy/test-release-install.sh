@@ -902,6 +902,47 @@ if grep -q 'install-agent.sh --full' "${SCRATCH}/badhost.log"; then
 fi
 echo "PASS: a hostile hostname fails the derived node-id validation up front (JUS-14/6)"
 
+# ---- JUS-14/6b (fix round 1): the early refusal holds on a real sandbox run
+# The derived-default validation lives in the early decision block, before
+# the first mutation, so a NON-dry-run sandbox run with a hostile hostname
+# must refuse with nothing created: no migrate/start (no etc/var under the
+# sandbox root), no "Gotham is installed" summary, no agent retry banner.
+# Removing the early check (INSTALL_SH_OVERRIDE=<mutant>) lets the run
+# proceed into the control-plane install, so the case pins it.
+echo "==> hostile derived defaults refuse a real sandbox run before any mutation"
+EARLY_ROOT="${SCRATCH}/root-early-refuse"
+EARLY_INSTALLER="${SCRATCH}/install-early-refuse.sh"
+EARLY_AGENT_ENV="${SCRATCH}/early-refuse-agent.env"
+rm -f "${EARLY_AGENT_ENV}"
+bake_installer "${EARLY_INSTALLER}" "${FIXTURES}/ubuntu-release" "${EARLY_AGENT_ENV}"
+EARLY_RC=0
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_ROOT="${EARLY_ROOT}" \
+GOTHAM_SKIP_DEPS=1 \
+PATH="${BADHOST_SHIM}:${SYS_SHIM}:${PATH}" \
+    sh "${EARLY_INSTALLER}" >"${SCRATCH}/early-refuse-out.log" 2>"${SCRATCH}/early-refuse-err.log" || EARLY_RC=$?
+[ "${EARLY_RC}" -ne 0 ] \
+    || { echo "FAIL: a hostile hostname let a real sandbox run proceed (JUS-14/6b)" >&2; exit 1; }
+grep -q 'GOTHAM_AGENT_NODE_ID' "${SCRATCH}/early-refuse-err.log" \
+    || { echo "FAIL: the early refusal does not name the key (JUS-14/6b)" >&2; cat "${SCRATCH}/early-refuse-err.log" >&2; exit 1; }
+grep -q 'refusing to install' "${SCRATCH}/early-refuse-err.log" \
+    || { echo "FAIL: the early refusal does not refuse the install (JUS-14/6b)" >&2; cat "${SCRATCH}/early-refuse-err.log" >&2; exit 1; }
+for _early_path in etc var; do
+    [ ! -e "${EARLY_ROOT}/${_early_path}" ] \
+        || { echo "FAIL: ${EARLY_ROOT}/${_early_path} was created although the install was refused (JUS-14/6b)" >&2; exit 1; }
+done
+if grep -q 'is installed\.' "${SCRATCH}/early-refuse-out.log"; then
+    echo "FAIL: the refused run printed the installed summary (JUS-14/6b)" >&2
+    exit 1
+fi
+if grep -q 'Retry only the agent step' "${SCRATCH}/early-refuse-err.log"; then
+    echo "FAIL: the refused run printed the agent retry banner (JUS-14/6b)" >&2
+    exit 1
+fi
+echo "PASS: hostile derived defaults refuse a real sandbox run before any mutation (JUS-14/6b)"
+
 # ---- H1/M1/L3: production dry-run ignores every test seam (hermetic) ------
 # Differential: the same production-mode dry-run (no GOTHAM_INSTALL_TEST, no
 # GOTHAM_INSTALL_ROOT, so test mode is OFF) with every test-only seam set
@@ -1265,9 +1306,9 @@ _c2_must_reject redis GOTHAM_REDIS_ADDR "$(printf 'localhost:6379\nGOTHAM_EVIL=t
 # systemd continuation, and quotes would not survive the service's read of the
 # file: both fail closed with nothing created, naming the key.
 _c2_must_reject dsn-quote GOTHAM_DATABASE_DSN 'postgres://gotham:gotha"m@localhost:5432/gotham?sslmode=disable'
-_c2_must_reject dsn-backslash GOTHAM_DATABASE_DSN 'postgres://gotham@localhost:5432/gotham\'
+_c2_must_reject dsn-backslash GOTHAM_DATABASE_DSN "$(printf "postgres://gotham@localhost:5432/gotham\\")"
 _c2_must_reject redis-quote GOTHAM_REDIS_ADDR 'rediss://redis.internal:6380"'
-_c2_must_reject redis-backslash GOTHAM_REDIS_ADDR 'localhost:6379\'
+_c2_must_reject redis-backslash GOTHAM_REDIS_ADDR "$(printf "localhost:6379\\")"
 _c2_agent_must_reject() { # $1 case name, $2 key, $3 value
     C2_ROOT="${SCRATCH}/root-c2-$1"
     rm -rf "${C2_ROOT}"

@@ -112,7 +112,10 @@ provisioned when the resolved DSN is the built-in local default. Upgrading from
 an older installer: the quote rejection also applies to values preserved from
 an existing `agent.env`, so a node id containing a quote written by an older
 installer now blocks the upgrade with a clear error naming the key — remove
-the quote from `agent.env` and re-run.
+the quote from `agent.env` and re-run. The same holds for `gotham.env`: a
+preserved DSN or Redis value with quotes or a trailing backslash now blocks
+the upgrade naming the key — fix the value in `gotham.env` (keyword DSNs
+with quoted values must use the URL form) and re-run.
 
 Useful overrides:
 

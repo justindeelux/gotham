@@ -175,7 +175,11 @@ characters, a trailing backslash, quotes), which always runs before the first
 mutation, so a bad value fails the run with nothing created; a failing agent
 step itself still keeps the control plane. `GOTHAM_DATABASE_DSN` and
 `GOTHAM_REDIS_ADDR` get the same control-character check before they go into
-`gotham.env`.
+`gotham.env`. Upgrading from an older installer: the DSN/Redis gate also
+applies to values preserved from an existing `gotham.env`, so a DSN with
+quotes or a trailing backslash written by an older installer now blocks the
+upgrade with a clear error naming the key — fix the value in `gotham.env`
+(keyword DSNs with quoted values must use the URL form) and re-run.
 
 `install-agent.sh --full` (or `GOTHAM_AGENT_FULL=1`) also installs Docker
 Engine and the compose plugin from the official Docker apt repository before

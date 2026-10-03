@@ -225,6 +225,31 @@ _is_loopback_cp_addr() {
     [ "${_lc_ok}" -eq 1 ] && [ "${_lc_n}" -eq 4 ]
 }
 
+# derive_agent_defaults computes the node id / dial address the localhost
+# agent step will use and stores them in _derived_node_id / _derived_cp_addr:
+# an explicit GOTHAM_AGENT_* value wins, otherwise a prior agent.env value is
+# kept (by passing nothing, so the result stays empty), otherwise the derived
+# default (<hostname>-agent, 127.0.0.1:9442). It reads the agent.env path the
+# early decision baked (_la_agent_env). Both the early validation and the
+# late agent step call it, so the validated values are the used values.
+derive_agent_defaults() {
+    _dad_prev_node_id=""
+    _dad_prev_cp_addr=""
+    if [ -f "${_la_agent_env}" ]; then
+        _dad_prev_node_id="$(sed -n "s/^[[:space:]]*GOTHAM_AGENT_NODE_ID=//p" "${_la_agent_env}" | tail -n1)"
+        _dad_prev_cp_addr="$(sed -n "s/^[[:space:]]*GOTHAM_AGENT_CP_ADDR=//p" "${_la_agent_env}" | tail -n1)"
+    fi
+    _derived_node_id="${GOTHAM_AGENT_NODE_ID:-}"
+    if [ -z "${_derived_node_id}" ] && [ -z "${_dad_prev_node_id}" ]; then
+        _derived_node_id="$(hostname 2>/dev/null || true)-agent"
+        [ "${_derived_node_id}" != "-agent" ] || _derived_node_id="local-agent"
+    fi
+    _derived_cp_addr="${GOTHAM_AGENT_CP_ADDR:-}"
+    if [ -z "${_derived_cp_addr}" ] && [ -z "${_dad_prev_cp_addr}" ]; then
+        _derived_cp_addr="127.0.0.1:9442"
+    fi
+}
+
 # Install prefix. Empty = the production layout from deploy/README.md. A
 # non-empty prefix is the test-only redirect used by the dry run so no host
 # path is touched.
@@ -332,7 +357,7 @@ _stripped_redis="$(printf '%s' "${REDIS_ADDR}" | tr -d '\000-\037\177')"
 # through untouched (pinned by the C2c cases in test-release-install.sh).
 case "${DSN}" in
     *\\) die "GOTHAM_DATABASE_DSN must not end with a backslash (systemd would join it with the next line)" ;;
-    *\'* | *\"*) die "GOTHAM_DATABASE_DSN must not contain quotes (got '${DSN}')" ;;
+    *\'* | *\"*) die "GOTHAM_DATABASE_DSN must not contain quotes (got '${DSN}'); keyword DSNs with quoted values (password='sec ret') must use the URL form postgres://user:password@host/db?sslmode=..." ;;
 esac
 case "${REDIS_ADDR}" in
     *\\) die "GOTHAM_REDIS_ADDR must not end with a backslash (systemd would join it with the next line)" ;;
@@ -391,6 +416,20 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
     if [ -z "${LOCAL_AGENT_SKIP}" ]; then
         agent_env_validate "${_la_agent_env}" "${CA_DIR}/ca.crt" 0 \
             || die "invalid agent configuration (see above); refusing to install"
+        # The derived defaults (<hostname>-agent, 127.0.0.1:9442) are
+        # installer-computed, not operator input, but a hostile hostname (or a
+        # mutant default) must still fail closed with the key named — here,
+        # before the first mutation, so "refusing to install" is true: no
+        # migrate, no start, no "installed" summary, no retry banner.
+        # derive_agent_defaults is the same function the agent step calls
+        # below, so the validated values are the used values.
+        derive_agent_defaults
+        [ -z "${_derived_node_id}" ] \
+            || _env_check_value GOTHAM_AGENT_NODE_ID "${_derived_node_id}" \
+                || die "invalid derived agent node id (see above); refusing to install"
+        [ -z "${_derived_cp_addr}" ] \
+            || _env_check_value GOTHAM_AGENT_CP_ADDR "${_derived_cp_addr}" \
+                || die "invalid derived agent address (see above); refusing to install"
     fi
 fi
 
@@ -742,33 +781,12 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
         # define them. A value set in this run's environment still wins;
         # otherwise the prior file's values are kept by passing nothing, so a
         # hostname change is never repointed and no duplicate node is created.
-        # The prior-env lookup reads the path the early decision used
-        # (_la_agent_env, baked on a scratch copy for sandbox real runs).
-        agent_env_prev() {
-            [ -f "${_la_agent_env}" ] || return 0
-            sed -n "s/^[[:space:]]*$1=//p" "${_la_agent_env}" | tail -n1
-        }
-        # The remote-agent.env skip already fired above when no explicit
-        # address repoints deliberately; nothing more to check here.
-        LOCAL_AGENT_NODE_ID="${GOTHAM_AGENT_NODE_ID:-}"
-        if [ -z "${LOCAL_AGENT_NODE_ID}" ] && [ -z "$(agent_env_prev GOTHAM_AGENT_NODE_ID)" ]; then
-            LOCAL_AGENT_NODE_ID="$(hostname 2>/dev/null || true)-agent"
-            [ "${LOCAL_AGENT_NODE_ID}" != "-agent" ] || LOCAL_AGENT_NODE_ID="local-agent"
-        fi
-        LOCAL_AGENT_CP_ADDR="${GOTHAM_AGENT_CP_ADDR:-}"
-        if [ -z "${LOCAL_AGENT_CP_ADDR}" ] && [ -z "$(agent_env_prev GOTHAM_AGENT_CP_ADDR)" ]; then
-            LOCAL_AGENT_CP_ADDR="127.0.0.1:9442"
-        fi
-        # The derived defaults (<hostname>-agent, 127.0.0.1:9442) are
-        # installer-computed, not operator input, but a hostile hostname (or a
-        # mutant default) must still fail closed here — with the key named —
-        # instead of only inside install-agent.sh. Cheap: the same validators.
-        [ -z "${LOCAL_AGENT_NODE_ID}" ] \
-            || _env_check_value GOTHAM_AGENT_NODE_ID "${LOCAL_AGENT_NODE_ID}" \
-                || die "invalid derived agent node id (see above); refusing to install"
-        [ -z "${LOCAL_AGENT_CP_ADDR}" ] \
-            || _env_check_value GOTHAM_AGENT_CP_ADDR "${LOCAL_AGENT_CP_ADDR}" \
-                || die "invalid derived agent address (see above); refusing to install"
+        # The values come from derive_agent_defaults — the same function the
+        # early decision block validated before the first mutation — so no
+        # re-validation happens here.
+        derive_agent_defaults
+        LOCAL_AGENT_NODE_ID="${_derived_node_id}"
+        LOCAL_AGENT_CP_ADDR="${_derived_cp_addr}"
         # The retry line below reuses exactly these assignments, shell-quoted
         # for safe re-execution. Which script runs: the real installer by
         # default; in a GOTHAM_INSTALL_ROOT sandbox together with
@@ -793,7 +811,7 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
         if [ "${DRY_RUN}" -eq 1 ]; then
             echo "[dry-run] ${LOCAL_AGENT_RETRY}"
         else
-            _agent_label="${LOCAL_AGENT_NODE_ID:-$(agent_env_prev GOTHAM_AGENT_NODE_ID)}"
+            _agent_label="${LOCAL_AGENT_NODE_ID:-${_dad_prev_node_id}}"
             [ -n "${_agent_label}" ] || _agent_label="the existing node"
             log "installing the localhost agent node ${_agent_label} (--no-local-agent to skip)"
             # Invoke via sh so a checkout that lost the exec bit still installs.

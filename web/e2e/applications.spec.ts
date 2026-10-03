@@ -74,6 +74,11 @@ test.describe("applications", () => {
     await expect(page).toHaveURL(
       new RegExp(`/applications/${application.id}$`),
     );
+    // The detail view fires its history, config and node reads after the
+    // application row arrives. Wait for those to settle first, otherwise a
+    // dependent API failure can land after the guardrail assertion below and
+    // the smoke still passes.
+    await page.waitForLoadState("networkidle");
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
 
     expect(guardrails.apiFailures).toEqual([]);

@@ -23,7 +23,7 @@ export interface ServerListSync {
    * replace local state. It rejects a response older than one already applied,
    * and any response whose load began before the last mutation.
    */
-  admit(token: ServerListToken): boolean;
+  admit(_token: ServerListToken): boolean;
   /** markMutation invalidates every load that started before it. */
   markMutation(): void;
 }

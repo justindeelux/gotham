@@ -17,34 +17,41 @@ import (
 )
 
 // defaultIntegrationDSN points at the dev database from deploy/compose.dev.yml.
-// Override with GOTHAM_TEST_DSN (or GOTHAM_TEST_DSN=postgres://nope to force a
-// skip), matching internal/store's integration test.
+// Override with GOTHAM_TEST_DSN; an explicit value turns a missing database or
+// a failed migration into a test failure instead of a skip, matching
+// internal/store's integration test.
 const defaultIntegrationDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
 // integrationEnv runs the embedded migrations and returns a repository backed
-// by a real PostgreSQL, skipping the test when no database is reachable so CI
-// stays green without one. The returned cleanup deletes everything the test
-// seeded.
+// by a real PostgreSQL. It skips only when GOTHAM_TEST_DSN is unset; an
+// explicit DSN makes an unreachable database or a failed migration fatal. The
+// returned cleanup deletes everything the test seeded.
 func integrationEnv(t *testing.T) (*storeRepository, *store.Store) {
 	t.Helper()
 
 	dsn := os.Getenv("GOTHAM_TEST_DSN")
-	if dsn == "" {
+	explicit := dsn != ""
+	if !explicit {
 		dsn = defaultIntegrationDSN
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if explicit {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	// Registered first so LIFO order closes the pool after the row cleanups.
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	st := store.New(pool)
 	return newStoreRepository(st), st

@@ -33,6 +33,14 @@ func integrationDSN() string {
 	return defaultIntegrationDSN
 }
 
+// integrationDSNExplicit reports whether the operator opted in by setting
+// GOTHAM_TEST_DSN: an explicit opt-in turns a missing database or a failed
+// migration into a failure instead of a skip, so the lane cannot pass green by
+// skipping.
+func integrationDSNExplicit() bool {
+	return os.Getenv("GOTHAM_TEST_DSN") != ""
+}
+
 // TestStoreRepositoryRoundtrip exercises the PostgreSQL adapter — including
 // secret sealing and the partial unique indexes that make dedupe work —
 // against a real server. It skips when no database is reachable.
@@ -41,14 +49,19 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	defer cancel()
 
 	dsn := integrationDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	st := store.New(pool)
 	repo := newStoreRepository(st, "integration-secret", discardLogger())
@@ -209,14 +222,19 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	defer cancel()
 
 	dsn := integrationDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	st := store.New(pool)
 	repo := newStoreRepository(st, "integration-secret", discardLogger())
@@ -534,14 +552,19 @@ func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 	defer cancel()
 
 	dsn := integrationDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	st := store.New(pool)
 	repo := newStoreRepository(st, "integration-secret", discardLogger())
@@ -612,14 +635,19 @@ func claimFixture(t *testing.T, ctx context.Context, st *store.Store) (uuid.UUID
 func openClaimFixture(t *testing.T, ctx context.Context) *store.Store {
 	t.Helper()
 	dsn := integrationDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 	return store.New(pool)
 }
 
@@ -1059,14 +1087,19 @@ func TestStoreClaimConcurrencyRespectsTheCap(t *testing.T) {
 	defer cancel()
 
 	dsn := integrationDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	st := store.New(pool)
 	email := fmt.Sprintf("be-8.1-cap-%d@example.com", time.Now().UnixNano())
@@ -1392,14 +1425,19 @@ func TestStoreRepositoryLogsUnopenableHookSecret(t *testing.T) {
 	defer cancel()
 
 	dsn := integrationDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	st := store.New(pool)
 	email := fmt.Sprintf("c3-9-%d@example.com", time.Now().UnixNano())

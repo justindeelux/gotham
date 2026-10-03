@@ -1,8 +1,7 @@
-import { expect, request, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
 
 import {
-  baseURL,
   loadAccount,
   seedNodeAddress,
   storageStatePath,

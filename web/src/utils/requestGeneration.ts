@@ -8,7 +8,7 @@
 export interface RequestGeneration {
   current(): number;
   bump(): void;
-  isCurrent(token: number): boolean;
+  isCurrent(_token: number): boolean;
 }
 
 /** createRequestGeneration returns a fresh generation counter. */

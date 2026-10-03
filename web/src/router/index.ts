@@ -3,14 +3,6 @@ import type { RouteRecordRaw } from "vue-router";
 
 import { useAuthStore } from "../stores/auth";
 
-declare module "vue-router" {
-  interface RouteMeta {
-    title?: string;
-    requiresAuth?: boolean;
-    publicOnly?: boolean;
-  }
-}
-
 const routes: RouteRecordRaw[] = [
   {
     path: "",

@@ -34,10 +34,10 @@ export interface Session {
 const storageKey = "gotham.auth.session";
 
 /** Listeners notified whenever the persisted session changes. */
-const listeners = new Set<(session: Session) => void>();
+const listeners = new Set<(_session: Session) => void>();
 
 /** subscribeSession registers a listener and returns an unsubscribe function. */
-export function subscribeSession(listener: (session: Session) => void): () => void {
+export function subscribeSession(listener: (_session: Session) => void): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);

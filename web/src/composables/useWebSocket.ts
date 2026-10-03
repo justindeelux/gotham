@@ -73,9 +73,9 @@ export interface UseWebSocketOptions {
   /** Connect as soon as the composable is created. */
   autoConnect?: boolean;
   /** Called for every frame received, after it enters the buffer. */
-  onMessage?: (message: WebSocketMessage) => void;
+  onMessage?: (_message: WebSocketMessage) => void;
   /** Called for every status transition. */
-  onStatusChange?: (status: WebSocketStatus) => void;
+  onStatusChange?: (_status: WebSocketStatus) => void;
   /**
    * Best-effort hook invoked at most once per reconnect streak, before the
    * second attempt is scheduled. It exists so an expired session can be
@@ -100,13 +100,13 @@ export interface UseWebSocketReturn {
   /** Open the socket (resets the retry budget). No-op when already open. */
   connect: () => void;
   /** Close explicitly and stop reconnecting. */
-  close: (code?: number, reason?: string) => void;
+  close: (_code?: number, _reason?: string) => void;
   /** Send a frame; returns false when the socket is not open. */
-  send: (data: unknown) => boolean;
+  send: (_data: unknown) => boolean;
   /** Subscribe to a channel and remember it for automatic re-subscription. */
-  subscribe: (channel: string) => void;
+  subscribe: (_channel: string) => void;
   /** Unsubscribe from a channel. */
-  unsubscribe: (channel: string) => void;
+  unsubscribe: (_channel: string) => void;
   /** Drop every buffered frame. */
   clearBuffer: () => void;
 }

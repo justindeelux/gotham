@@ -29,7 +29,9 @@ func testDSN() string {
 }
 
 // requirePostgres skips the test when no database is reachable. Only a
-// connection failure skips: any migration error afterwards is a hard failure.
+// connection failure skips, and only when GOTHAM_TEST_DSN is unset: an
+// explicit DSN makes the connection failure fatal so CI cannot pass green by
+// skipping. Any migration error afterwards is always a hard failure.
 func requirePostgres(t *testing.T, dsn string) {
 	t.Helper()
 
@@ -38,6 +40,9 @@ func requirePostgres(t *testing.T, dsn string) {
 
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
+		if os.Getenv("GOTHAM_TEST_DSN") != "" {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	_ = conn.Close(ctx)

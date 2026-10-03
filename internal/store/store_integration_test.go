@@ -46,16 +46,20 @@ func TestStoreUserRoundtrip(t *testing.T) {
 
 	dsn := testDSN()
 
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
-
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	// Registered before the row cleanup so LIFO order closes the pool last.
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	s := store.New(pool)
 
@@ -101,14 +105,19 @@ func TestStoreReplaceApplicationEnvIsAtomic(t *testing.T) {
 	defer cancel()
 
 	dsn := testDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	st := store.New(pool)
 	email := fmt.Sprintf("fx-6b-replace-%d@example.com", time.Now().UnixNano())
@@ -201,14 +210,19 @@ func TestStoreReplaceApplicationStoragesIsAtomic(t *testing.T) {
 	defer cancel()
 
 	dsn := testDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	st := store.New(pool)
 	email := fmt.Sprintf("fx-6b-storage-%d@example.com", time.Now().UnixNano())
@@ -296,14 +310,19 @@ func TestStoreListEnvConfigIsOneSnapshot(t *testing.T) {
 	defer cancel()
 
 	dsn := testDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	st := store.New(pool)
 	email := fmt.Sprintf("fx-6b-snapshot-%d@example.com", time.Now().UnixNano())

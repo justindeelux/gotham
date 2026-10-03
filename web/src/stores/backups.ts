@@ -350,7 +350,7 @@ export const useBackupsStore = defineStore("backups", () => {
     try {
       return await testTarget(targetId);
     } catch (err) {
-      throw new Error(describeBackupError(err));
+      throw new Error(describeBackupError(err), { cause: err });
     }
   }
 

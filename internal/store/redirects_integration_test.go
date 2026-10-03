@@ -25,12 +25,6 @@ func TestDomainRedirectStorage(t *testing.T) {
 
 	dsn := testDSN()
 	explicit := testDSNExplicit()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		if explicit {
-			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres/migrations are unavailable: %v", err)
-		}
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
 		if explicit {
@@ -39,6 +33,11 @@ func TestDomainRedirectStorage(t *testing.T) {
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 	st := store.New(pool)
 
 	suffix := time.Now().UnixNano()

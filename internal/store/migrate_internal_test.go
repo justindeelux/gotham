@@ -33,6 +33,9 @@ func holdMigrationLock(t *testing.T, ctx context.Context, dsn string) *sql.Conn 
 	t.Cleanup(func() { _ = db.Close() })
 
 	if err := db.PingContext(ctx); err != nil {
+		if os.Getenv("GOTHAM_TEST_DSN") != "" {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 

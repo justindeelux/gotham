@@ -29,17 +29,23 @@ func newTestStore(t *testing.T) *store.Store {
 	defer cancel()
 
 	dsn := os.Getenv("GOTHAM_TEST_DSN")
-	if dsn == "" {
+	explicit := dsn != ""
+	if !explicit {
 		dsn = integrationDSN
-	}
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
 	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if explicit {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 	return store.New(pool)
 }
 

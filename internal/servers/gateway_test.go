@@ -43,6 +43,14 @@ func gatewayTestDSN() string {
 	return defaultGatewayTestDSN
 }
 
+// gatewayTestDSNExplicit reports whether the operator opted in by setting
+// GOTHAM_TEST_DSN: an explicit opt-in turns a missing database or a failed
+// migration into a failure instead of a skip, so the gateway tests cannot pass
+// green by skipping.
+func gatewayTestDSNExplicit() bool {
+	return os.Getenv("GOTHAM_TEST_DSN") != ""
+}
+
 // discardLogger silences service logging during tests.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -65,14 +73,19 @@ func newTestServiceWithAuthority(t *testing.T) (*ServerService, *store.Store, *A
 	defer cancel()
 
 	dsn := gatewayTestDSN()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Skipf("Postgres not available: %v", err)
-	}
 	pool, err := store.Open(ctx, dsn)
 	if err != nil {
+		if gatewayTestDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
 		t.Skipf("Postgres not available: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
 
 	st := store.New(pool)
 	authority, err := LoadOrCreateAuthority(t.TempDir())

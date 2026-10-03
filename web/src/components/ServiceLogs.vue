@@ -171,7 +171,7 @@ async function openStream(signal: AbortSignal): Promise<Response> {
         // Genuine auth failure for the current session: drop it and redirect to
         // the login page instead of leaving the reader on a dead session.
         expireSession();
-        throw new Error(sessionExpiredMessage);
+        throw new Error(sessionExpiredMessage, { cause: error });
       }
       // A newer session replaced this one mid-refresh: keep it and retry the
       // request with its token below.
@@ -295,7 +295,7 @@ function clearLines(): void {
 /** toApiError maps a failed response to the shared ApiError shape. */
 async function toApiError(response: Response): Promise<unknown> {
   const text = await response.text().catch(() => "");
-  let message = "";
+  let message: string;
   try {
     const body = JSON.parse(text) as { message?: string };
     message = body.message ?? "";

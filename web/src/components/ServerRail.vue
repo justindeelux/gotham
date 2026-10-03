@@ -115,7 +115,7 @@ onUnmounted(() => {
           <template #trigger>
             <RouterLink
               class="rail-btn"
-              :to="{ name: 'servers' }"
+              :to="{ name: 'server-detail', params: { id: server.id } }"
               :aria-label="serverTip(server)"
             >
               {{ serverInitials(server.name) }}
@@ -136,7 +136,7 @@ onUnmounted(() => {
         <template #trigger>
           <RouterLink
             class="rail-btn rail-btn--add"
-            :to="{ name: 'servers' }"
+            :to="{ name: 'servers', query: { add: '1' } }"
             aria-label="Add server"
           >
             <svg
@@ -347,7 +347,7 @@ onUnmounted(() => {
 }
 
 .dot--offline {
-  background: var(--meta);
+  background: var(--danger);
 }
 
 .rail-badge {

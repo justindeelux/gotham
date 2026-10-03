@@ -534,7 +534,11 @@ watch(
       <NEmpty
         v-else
         class="servers-empty"
-        description="No nodes match the current filters"
+        :description="
+          serversStore.servers.length === 0
+            ? 'No servers yet'
+            : 'No nodes match the current filters'
+        "
       >
         <template #icon>
           <NIcon>
@@ -542,7 +546,13 @@ watch(
           </NIcon>
         </template>
         <template #extra>
-          <p class="servers-empty-hint">Adjust the filters or add a new server over SSH.</p>
+          <p class="servers-empty-hint">
+            {{
+              serversStore.servers.length === 0
+                ? "Add your first server over SSH to begin."
+                : "Adjust the filters or add a new server over SSH."
+            }}
+          </p>
           <NButton type="primary" @click="wizardOpen = true">
             Add server
           </NButton>

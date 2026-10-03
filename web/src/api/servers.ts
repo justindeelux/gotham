@@ -221,19 +221,21 @@ export function describeServerError(error: unknown): string {
 }
 
 /**
- * Backend package names whose "<package>: " prefix is internal detail. The
- * list is derived from the real `"pkg: ..."` error strings produced under
- * internal/ (databases, deploy, auth, providers, proxy, teams, servers,
- * services, notifications, webhooks, server, builds, containers, updates,
- * templates, store, cleanup, ws, docker, spa, oauth, ssh) — ordinary words
- * that never prefix a Go error there (config, clientip, ...) are left alone,
- * so a legitimate message like "config: key X missing" passes through
- * unchanged.
+ * Backend package names whose "<package>: " prefix is internal detail.
+ * Regenerate with:
+ *   grep -rhoE '(errors\.New|Errorf)\("[a-z][0-9a-z_-]*:' internal \
+ *     --include='*.go' --exclude='*_test.go' | grep -oE '"[a-z][0-9a-z_-]*' \
+ *     | tr -d '"' | sort -u
+ * Test-only strings (cleanup:, cloudflare:, rpc:, dial:, hijack:, fake:,
+ * disconnected:) appear solely in *_test.go and stay out, as do the agent/
+ * prefixes (agent, stats, sudo): agent failures cross the API wrapped in
+ * services:/deploy: errors, never bare. Ordinary words that never prefix a
+ * Go error (config, clientip, ...) are left alone, so a legitimate message
+ * like "config: key X missing" passes through unchanged.
  */
 const errorPrefixPackages = new Set([
   "auth",
   "builds",
-  "cleanup",
   "containers",
   "databases",
   "deploy",

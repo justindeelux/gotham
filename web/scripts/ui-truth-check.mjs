@@ -255,12 +255,37 @@ async function loadAuthHarness() {
   };
 }
 
+// ── load the real http layer (axios + token bundled for real) ─────────────
+// loadModule's http stub would also rewrite axios's own adapters/http.js, so
+// the forced-logout test bundles without plugins instead.
+async function loadHttpReal() {
+  const webDir = new URL("..", import.meta.url).pathname;
+  const directory = await mkdtemp(join(webDir, ".tmp-http-check-"));
+  const outfile = join(directory, "module.mjs");
+  await build({
+    entryPoints: [new URL("../src/api/http.ts", import.meta.url).pathname],
+    outfile,
+    bundle: true,
+    packages: "external",
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    logLevel: "silent",
+  });
+  const module = await import(pathToFileURL(outfile).href);
+  return {
+    module,
+    cleanup: () => rm(directory, { recursive: true, force: true }),
+  };
+}
+
 async function main() {
   const format = await loadModule("../src/utils/format.ts");
   const servers = await loadModule("../src/api/servers.ts");
   const teams = await loadModule("../src/api/teams.ts");
   const databases = await loadModule("../src/api/databases.ts");
   const applications = await loadModule("../src/api/applications.ts");
+  const dashboard = await loadModule("../src/utils/dashboard.ts");
 
   console.log("shared usage thresholds (JUS-10)");
   await check("warn at 60 and danger at 80", () => {
@@ -392,6 +417,90 @@ async function main() {
     );
   });
 
+  console.log("dashboard tile states (JUS-10 fix round 2)");
+  await check("loading / error / empty / incomplete / ready and boundaries", () => {
+    const { applicationTileView } = dashboard.module;
+    const base = {
+      loading: false,
+      error: null,
+      total: 2,
+      running: 1,
+      failedReads: 0,
+    };
+    assert(
+      applicationTileView({ ...base, loading: true }).state === "loading",
+      "loading shows the skeleton",
+    );
+    assert(
+      applicationTileView({ ...base, loading: true, error: "x", failedReads: 1 })
+        .state === "loading",
+      "loading beats a set error",
+    );
+    const error = applicationTileView({ ...base, error: "Could not load" });
+    assert(error.state === "error", "error branch renders, never false-empty");
+    assert(error.error === "Could not load", "error text passes through");
+    assert(
+      applicationTileView({ ...base, total: 0 }).state === "empty",
+      "zero applications is genuinely empty",
+    );
+    assert(
+      applicationTileView({ ...base, total: 0, error: "x" }).state === "error",
+      "error beats empty (no false none-yet)",
+    );
+    const ready = applicationTileView(base);
+    assert(
+      ready.state === "ready" &&
+        ready.countText === "1/2" &&
+        ready.incomplete === false &&
+        ready.prefix === "",
+      "complete tile reads 1/2 with no marker",
+    );
+    assert(
+      applicationTileView({ ...base, failedReads: 1 }).countText === "≥1/2",
+      "one failed read marks the figure at least",
+    );
+    const incomplete = applicationTileView({ ...base, failedReads: 1 });
+    assert(
+      incomplete.state === "ready" &&
+        incomplete.incomplete === true &&
+        incomplete.prefix === "≥" &&
+        incomplete.running === 1 &&
+        incomplete.total === 2,
+      "incomplete tile carries the marker and the numbers",
+    );
+    const allFailed = applicationTileView({
+      ...base,
+      total: 3,
+      running: 0,
+      failedReads: 3,
+    });
+    assert(
+      allFailed.countText === "≥0/3" && allFailed.incomplete,
+      "zero running with failed reads is at least 0/3, not 0/3",
+    );
+  });
+
+  await check("tile template delegates to the pure decision", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(
+      new URL("../src/pages/DashboardPage.vue", import.meta.url),
+      "utf8",
+    );
+    for (const branch of ["loading", "error", "ready"]) {
+      assert(
+        source.includes(`tile.state === '${branch}'`),
+        `template switches on tile.state === '${branch}'`,
+      );
+    }
+    for (const stale of [
+      "applicationsIncomplete",
+      'v-else-if="applicationsError"',
+      'v-else-if="applicationTotal > 0"',
+    ]) {
+      assert(!source.includes(stale), `template no longer branches on ${stale}`);
+    }
+  });
+
   console.log("tightened error prefix allowlist (fix round 1)");
   await check("only real Go prefixes strip; ordinary words pass through", () => {
     const { stripErrorPrefix } = servers.module;
@@ -412,8 +521,8 @@ async function main() {
       "ws strips",
     );
     assert(
-      stripErrorPrefix("cleanup: retention failed") === "retention failed",
-      "cleanup strips",
+      stripErrorPrefix("cleanup: retention failed") === "cleanup: retention failed",
+      "cleanup is test-only and stays (round 2)",
     );
     assert(
       stripErrorPrefix("Update: available") === "Update: available",
@@ -423,6 +532,33 @@ async function main() {
       stripErrorPrefix("  Servers: validation failed  ") === "validation failed",
       "match is case-insensitive and trims",
     );
+  });
+
+  await check("allowlist matches the Go sources exactly (fix round 2)", () => {
+    const { stripErrorPrefix } = servers.module;
+    // Every "<pkg>: ..." constructor under internal/ (non-test), per the
+    // grep in the stripErrorPrefix comment.
+    for (const prefix of [
+      "auth", "builds", "containers", "databases", "deploy", "docker",
+      "notifications", "oauth", "providers", "proxy", "server", "servers",
+      "services", "spa", "ssh", "store", "teams", "templates", "updates",
+      "webhooks", "ws",
+    ]) {
+      assert(
+        stripErrorPrefix(`${prefix}: boom`) === "boom",
+        `${prefix} strips`,
+      );
+    }
+    // Test-only strings and agent-internal prefixes never cross the API.
+    for (const prefix of [
+      "cleanup", "cloudflare", "rpc", "dial", "hijack", "fake",
+      "disconnected", "agent", "stats", "sudo",
+    ]) {
+      assert(
+        stripErrorPrefix(`${prefix}: boom`) === `${prefix}: boom`,
+        `${prefix} passes through`,
+      );
+    }
   });
 
   console.log("every describe path strips backend prefixes (fix round 1)");
@@ -765,11 +901,63 @@ async function main() {
     }
   });
 
+  await check("forced logout clears persisted user-scoped keys (fix round 2)", async () => {
+    const store = new Map();
+    const redirects = [];
+    globalThis.window = {
+      localStorage: {
+        getItem: (key) => (store.has(key) ? store.get(key) : null),
+        setItem: (key, value) => {
+          store.set(key, String(value));
+        },
+        removeItem: (key) => {
+          store.delete(key);
+        },
+      },
+      location: {
+        pathname: "/servers",
+        assign: (url) => redirects.push(url),
+      },
+      addEventListener: () => {},
+    };
+    let httpBundle = null;
+    try {
+      httpBundle = await loadHttpReal();
+      const { expireSession } = httpBundle.module;
+      store.set(
+        "gotham.auth.session",
+        JSON.stringify({ user: { id: "u" }, accessToken: "a", refreshToken: "r" }),
+      );
+      store.set("gotham.teams.active", "team-1");
+      store.set(
+        "gotham-refresh-lock",
+        JSON.stringify({ id: "x", expiresAt: Date.now() + 99999 }),
+      );
+      expireSession();
+      assert(!store.has("gotham.auth.session"), "session cleared");
+      assert(
+        !store.has("gotham.teams.active"),
+        "previous user's active team does not survive a 401",
+      );
+      assert(
+        store.has("gotham-refresh-lock"),
+        "cross-tab refresh lease is not user-scoped and survives",
+      );
+      assert(redirects.includes("/login"), "forced logout redirects to login");
+    } finally {
+      delete globalThis.window;
+      if (httpBundle) {
+        await httpBundle.cleanup();
+      }
+    }
+  });
+
   await format.cleanup();
   await servers.cleanup();
   await teams.cleanup();
   await databases.cleanup();
   await applications.cleanup();
+  await dashboard.cleanup();
 
   const failed = results.filter((r) => !r.ok);
   console.log(

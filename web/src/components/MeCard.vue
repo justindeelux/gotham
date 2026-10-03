@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NAvatar, NButton, NDropdown, NSpace, NText } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { useAuthStore } from "../stores/auth";
@@ -30,18 +30,47 @@ const roleText = computed<string>(() => meRoleLabel(teamsStore.activeTeam?.role 
 /**
  * loadRole reads the caller's teams for the footer label. A failed read
  * keeps the neutral fallback and retries on the next mount or account
- * change; a disabled teams feature (loaded with an empty list) keeps the
+ * change, plus a bounded retry (two more attempts, 5s apart) so a transient
+ * failure does not pin the neutral label until the sidebar remounts; a
+ * fetch already in flight needs no retry because the label follows the store
+ * reactively. A disabled teams feature (loaded with an empty list) keeps the
  * neutral fallback permanently. The sign-out path resets the teams store
  * (see the auth store), so a failed or stale read can never pin the
  * previous account's role here.
  */
+const maxRoleRetries = 2;
+const roleRetryMs = 5_000;
+let roleRetries = 0;
+let roleRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
 function loadRole(): void {
-  void teamsStore.ensureTeams().catch(() => {
-    // A failed teams read keeps the neutral fallback; the Teams page reports it.
-  });
+  roleRetries = 0;
+  void readRole();
+}
+
+async function readRole(): Promise<void> {
+  cancelRoleRetry();
+  await teamsStore.ensureTeams();
+  if (teamsStore.loaded || teamsStore.loading) {
+    roleRetries = 0;
+    return;
+  }
+  if (roleRetries < maxRoleRetries) {
+    roleRetries += 1;
+    roleRetryTimer = setTimeout(() => void readRole(), roleRetryMs);
+  }
+}
+
+/** cancelRoleRetry drops a pending retry so it cannot fire after unmount. */
+function cancelRoleRetry(): void {
+  if (roleRetryTimer !== null) {
+    clearTimeout(roleRetryTimer);
+    roleRetryTimer = null;
+  }
 }
 
 onMounted(loadRole);
+onUnmounted(cancelRoleRetry);
 
 // A different signed-in account (or a team change elsewhere) re-reads the
 // role even when the sidebar never remounts.

@@ -511,8 +511,9 @@ func (h *handler) deploy(w http.ResponseWriter, r *http.Request) {
 
 // list serves GET .../deployments. The response is newest first; ?limit=
 // bounds the page to at most that many rows (the dashboard latest-state read
-// uses ?limit=1). An absent limit returns the full history; a non-numeric or
-// negative limit is a 400.
+// uses ?limit=1). An absent limit returns the full history; a present limit
+// must be at least 1 — a non-numeric, zero or negative limit is a 400, so an
+// explicit ?limit=0 can never silently mean "unbounded".
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -546,14 +547,15 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 // limitParam parses the ?limit= page size of a listing. An absent value
-// selects the unbounded read; a non-numeric or negative value is a 400.
+// selects the unbounded read; a present value must be at least 1 —
+// non-numeric, zero or negative is a 400.
 func limitParam(w http.ResponseWriter, r *http.Request) (int, bool) {
 	raw := strings.TrimSpace(r.URL.Query().Get("limit"))
 	if raw == "" {
 		return 0, true
 	}
 	limit, err := strconv.Atoi(raw)
-	if err != nil || limit < 0 {
+	if err != nil || limit < 1 {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid limit"})
 		return 0, false
 	}

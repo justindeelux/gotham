@@ -450,8 +450,9 @@ func (s *Service) ListDeployments(ctx context.Context, userID, appID uuid.UUID) 
 const maxDeploymentListLimit = 100
 
 // ListDeploymentsLimit returns at most limit of the application's newest
-// deployments. A non-positive limit selects one row (the newest deployment);
-// values above the server maximum are clamped.
+// deployments. A non-positive limit selects one row (the newest deployment):
+// the route rejects ?limit=<1 with a 400 before this runs, so the guard only
+// covers in-process callers; values above the server maximum are clamped.
 func (s *Service) ListDeploymentsLimit(ctx context.Context, userID, appID uuid.UUID, limit int) ([]Deployment, error) {
 	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return nil, err

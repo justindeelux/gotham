@@ -417,6 +417,206 @@ func TestStoreRepositoryActiveDeploymentIndex(t *testing.T) {
 	}
 }
 
+// TestStoreRepositoryListDeploymentsByAppLimit proves the bounded deployments
+// read against a real Postgres: newest first (created_at DESC), id DESC on
+// equal timestamps, limit 1 returns exactly the newest, an oversized limit
+// returns every row, other applications' rows never leak, and an application
+// without deployments returns none.
+func TestStoreRepositoryListDeploymentsByAppLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	// ProbeOnce fails fast when no database is listening, sparing Open's
+	// retry loop; an Open failure past a good probe is a real error.
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	// Open proved the database is reachable, so a migration error is a real
+	// failure, never a skip (D1-12).
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	const secret = "integration-secret"
+	st := store.New(pool)
+	repo := newStoreRepository(st, secret)
+
+	email := fmt.Sprintf("limit-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	userID := uuid.UUID(user.ID.Bytes)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete user: %v", err)
+		}
+	})
+
+	newApp := func(name string) uuid.UUID {
+		t.Helper()
+		app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+			UserID:    pgUUID(userID),
+			Name:      name,
+			Provider:  "github",
+			Repo:      "acme/demo",
+			CloneUrl:  "https://github.com/acme/demo.git",
+			Branch:    "main",
+			BuildPack: "dockerfile",
+		})
+		if err != nil {
+			t.Fatalf("CreateApplication(%s): %v", name, err)
+		}
+		return uuid.UUID(app.ID.Bytes)
+	}
+	appA := newApp("limit-app-a")
+	appB := newApp("limit-app-b")
+	appEmpty := newApp("limit-app-empty")
+
+	// Terminal states only: a second active row would trip the
+	// deployments_active_app_idx partial unique index.
+	seed := []Deployment{
+		{ApplicationID: appA, Kind: KindDeploy, State: StateFailed},
+		{ApplicationID: appA, Kind: KindDeploy, State: StateFailed},
+		{ApplicationID: appA, Kind: KindDeploy, State: StateRunning},
+	}
+	created := make([]Deployment, 0, len(seed))
+	for i, dep := range seed {
+		row, err := repo.CreateDeployment(ctx, dep)
+		if err != nil {
+			t.Fatalf("CreateDeployment(%d): %v", i, err)
+		}
+		created = append(created, row)
+	}
+	// Distinct timestamps, oldest first, so created_at DESC is unambiguous
+	// (now() could tie on a fast machine).
+	base := time.Now().UTC().Truncate(time.Second)
+	for i, row := range created {
+		ts := base.Add(time.Duration(i) * time.Second)
+		if _, err := pool.Exec(ctx,
+			"UPDATE deployments SET created_at = $1, updated_at = $1 WHERE id = $2",
+			ts, pgUUID(row.ID)); err != nil {
+			t.Fatalf("stamp deployment %d: %v", i, err)
+		}
+	}
+	ids := func(rows []Deployment) []string {
+		out := make([]string, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, row.ID.String())
+		}
+		return out
+	}
+	newestFirst := []string{created[2].ID.String(), created[1].ID.String(), created[0].ID.String()}
+
+	t.Run("oversized limit returns every row newest first", func(t *testing.T) {
+		rows, err := repo.ListDeploymentsLimit(ctx, appA, 10)
+		if err != nil {
+			t.Fatalf("ListDeploymentsLimit: %v", err)
+		}
+		got := ids(rows)
+		if len(got) != 3 || got[0] != newestFirst[0] || got[1] != newestFirst[1] || got[2] != newestFirst[2] {
+			t.Errorf("order = %v, want %v", got, newestFirst)
+		}
+	})
+
+	t.Run("limit 1 returns exactly the newest", func(t *testing.T) {
+		rows, err := repo.ListDeploymentsLimit(ctx, appA, 1)
+		if err != nil {
+			t.Fatalf("ListDeploymentsLimit: %v", err)
+		}
+		if len(rows) != 1 || rows[0].ID != created[2].ID {
+			t.Errorf("rows = %v, want exactly [%s]", ids(rows), created[2].ID)
+		}
+	})
+
+	t.Run("limit 2 returns the two newest", func(t *testing.T) {
+		rows, err := repo.ListDeploymentsLimit(ctx, appA, 2)
+		if err != nil {
+			t.Fatalf("ListDeploymentsLimit: %v", err)
+		}
+		got := ids(rows)
+		if len(got) != 2 || got[0] != newestFirst[0] || got[1] != newestFirst[1] {
+			t.Errorf("rows = %v, want %v", got, newestFirst[:2])
+		}
+	})
+
+	t.Run("non-positive limit selects one row", func(t *testing.T) {
+		rows, err := repo.ListDeploymentsLimit(ctx, appA, 0)
+		if err != nil {
+			t.Fatalf("ListDeploymentsLimit: %v", err)
+		}
+		if len(rows) != 1 || rows[0].ID != created[2].ID {
+			t.Errorf("rows = %v, want exactly [%s]", ids(rows), created[2].ID)
+		}
+	})
+
+	t.Run("equal timestamps fall back to id DESC", func(t *testing.T) {
+		if _, err := pool.Exec(ctx,
+			"UPDATE deployments SET created_at = $1, updated_at = $1 WHERE application_id = $2",
+			base, pgUUID(appA)); err != nil {
+			t.Fatalf("equalize timestamps: %v", err)
+		}
+		rows, err := repo.ListDeploymentsLimit(ctx, appA, 10)
+		if err != nil {
+			t.Fatalf("ListDeploymentsLimit: %v", err)
+		}
+		got := ids(rows)
+		if len(got) != 3 {
+			t.Fatalf("rows = %v, want 3", got)
+		}
+		// Canonical UUID strings sort in byte order, matching uuid DESC.
+		if got[0] <= got[1] || got[1] <= got[2] {
+			t.Errorf("order = %v, want id DESC", got)
+		}
+	})
+
+	t.Run("other applications never leak", func(t *testing.T) {
+		foreign, err := repo.CreateDeployment(ctx, Deployment{
+			ApplicationID: appB, Kind: KindDeploy, State: StateFailed,
+		})
+		if err != nil {
+			t.Fatalf("CreateDeployment(appB): %v", err)
+		}
+		rows, err := repo.ListDeploymentsLimit(ctx, appA, 10)
+		if err != nil {
+			t.Fatalf("ListDeploymentsLimit(appA): %v", err)
+		}
+		for _, row := range rows {
+			if row.ID == foreign.ID || row.ApplicationID != appA {
+				t.Errorf("appA page contains foreign row %s (app %s)", row.ID, row.ApplicationID)
+			}
+		}
+		own, err := repo.ListDeploymentsLimit(ctx, appB, 10)
+		if err != nil {
+			t.Fatalf("ListDeploymentsLimit(appB): %v", err)
+		}
+		if len(own) != 1 || own[0].ID != foreign.ID {
+			t.Errorf("appB rows = %v, want exactly [%s]", ids(own), foreign.ID)
+		}
+	})
+
+	t.Run("empty application returns none", func(t *testing.T) {
+		rows, err := repo.ListDeploymentsLimit(ctx, appEmpty, 10)
+		if err != nil {
+			t.Fatalf("ListDeploymentsLimit: %v", err)
+		}
+		if len(rows) != 0 {
+			t.Errorf("rows = %v, want none", ids(rows))
+		}
+	})
+}
+
 // TestSystemTeardownRemovesLocalKey is the F7 regression: deleting a preview
 // sibling through the system path removes its local deploy-key rows — the
 // mapping and the sealed private key it points at — while the base

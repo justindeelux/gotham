@@ -33,6 +33,21 @@ export interface Session {
 /** localStorage key holding the serialised session. */
 const storageKey = "gotham.auth.session";
 
+/**
+ * activeTeamStorageKey persists the teams store's active-team selection. It
+ * lives in this framework-free module (rather than the teams store) so the
+ * session layer owns every persisted user-scoped key and can clear them
+ * together; the store imports it from here.
+ */
+export const activeTeamStorageKey = "gotham.teams.active";
+
+/**
+ * userScopedStorageKeys holds every persisted user-scoped key beyond the
+ * session itself. The cross-tab refresh lease (see ./http) is deliberately
+ * absent: it coordinates tabs, not users, and must survive a sign-out.
+ */
+const userScopedStorageKeys = [activeTeamStorageKey];
+
 /** Listeners notified whenever the persisted session changes. */
 const listeners = new Set<(_session: Session) => void>();
 
@@ -112,9 +127,20 @@ export function setSession(session: Session): void {
   notifySession();
 }
 
-/** clearSession removes the persisted session. */
+/**
+ * clearSession removes the persisted session and every other persisted
+ * user-scoped key (the teams store's active-team selection). It is the
+ * single exit path for a dead session: the auth store and expireSession
+ * (the forced logout on 401/refresh failure, which never reaches the Pinia
+ * stores because it only reloads to /login) both funnel through here, so the
+ * next sign-in cannot inherit the previous user's persisted selection.
+ */
 export function clearSession(): void {
-  getStorage()?.removeItem(storageKey);
+  const storage = getStorage();
+  storage?.removeItem(storageKey);
+  for (const key of userScopedStorageKeys) {
+    storage?.removeItem(key);
+  }
   notifySession();
 }
 

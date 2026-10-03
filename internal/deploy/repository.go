@@ -321,7 +321,9 @@ func (r *storeRepository) ListDeployments(ctx context.Context, appID uuid.UUID) 
 }
 
 // ListDeploymentsLimit loads at most limit deployments of an application,
-// newest first. A non-positive limit selects one row: the newest deployment.
+// newest first. A non-positive limit selects one row: the route rejects
+// ?limit=<1 with a 400 before this runs, so the guard only covers
+// in-process callers.
 func (r *storeRepository) ListDeploymentsLimit(ctx context.Context, appID uuid.UUID, limit int) ([]Deployment, error) {
 	if limit <= 0 {
 		limit = 1

@@ -21,6 +21,7 @@ import {
 import type { Server, ServerStatus } from "../api/servers";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
+import { applicationTileView } from "../utils/dashboard";
 import { relativeTime, usageView } from "../utils/format";
 
 /**
@@ -58,7 +59,8 @@ const serversStore = useServersStore();
  */
 const applicationsLoading = ref(true);
 const applicationsError = ref<string | null>(null);
-const applicationsIncomplete = ref(false);
+/** Per-application latest-state reads that failed; >0 marks the tile incomplete. */
+const applicationFailedReads = ref(0);
 const applicationTotal = ref(0);
 const applicationRunning = ref(0);
 
@@ -71,23 +73,39 @@ async function fetchApplicationCounts(): Promise<void> {
     applicationTotal.value = applications.length;
     if (applications.length === 0) {
       applicationRunning.value = 0;
-      applicationsIncomplete.value = false;
+      applicationFailedReads.value = 0;
       return;
     }
     const { states, failed } = await latestDeploymentStates(
       applications.map((application) => application.id),
     );
     applicationRunning.value = countRunning(states);
-    applicationsIncomplete.value = failed > 0;
+    applicationFailedReads.value = failed;
   } catch {
     applicationTotal.value = 0;
     applicationRunning.value = 0;
-    applicationsIncomplete.value = false;
+    applicationFailedReads.value = 0;
     applicationsError.value = "Could not load applications";
   } finally {
     applicationsLoading.value = false;
   }
 }
+
+/**
+ * tile is the pure render decision for the "Running applications" tile
+ * (loading / error / empty / incomplete / ready, plus the "≥N/total" text).
+ * The template switches on tile.state, so every branch is pinned by the
+ * ui-truth harness through applicationTileView.
+ */
+const tile = computed(() =>
+  applicationTileView({
+    loading: applicationsLoading.value,
+    error: applicationsError.value,
+    total: applicationTotal.value,
+    running: applicationRunning.value,
+    failedReads: applicationFailedReads.value,
+  }),
+);
 
 const servers = computed<Server[]>(() => serversStore.servers);
 const readyCount = computed<number>(
@@ -213,11 +231,11 @@ onMounted(() => {
       </NCard>
 
       <NCard class="kpi" title="Running applications" size="small">
-        <NSkeleton v-if="applicationsLoading" text :repeat="2" />
-        <template v-else-if="applicationsError">
+        <NSkeleton v-if="tile.state === 'loading'" text :repeat="2" />
+        <template v-else-if="tile.state === 'error'">
           <p class="kpi-value num">—</p>
           <p class="kpi-sub">
-            <NText depth="3">{{ applicationsError }}</NText>
+            <NText depth="3">{{ tile.error }}</NText>
             <NButton
               size="small"
               quaternary
@@ -227,15 +245,14 @@ onMounted(() => {
             </NButton>
           </p>
         </template>
-        <template v-else-if="applicationTotal > 0">
+        <template v-else-if="tile.state === 'ready'">
           <p class="kpi-value num">
-            <span v-if="applicationsIncomplete" aria-hidden="true">≥</span
-            >{{ applicationRunning
-            }}<span class="kpi-unit">/{{ applicationTotal }}</span>
+            <span v-if="tile.incomplete" aria-hidden="true">≥</span
+            >{{ tile.running }}<span class="kpi-unit">/{{ tile.total }}</span>
           </p>
           <p class="kpi-sub">
             <RouterLink :to="{ name: 'applications' }">View applications</RouterLink>
-            <NText v-if="applicationsIncomplete" depth="3">
+            <NText v-if="tile.incomplete" depth="3">
               Some states could not be read
             </NText>
           </p>

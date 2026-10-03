@@ -407,7 +407,8 @@ export function refreshSession(): Promise<string> {
 }
 
 /**
- * expireSession drops the stored session and sends the browser to the login
+ * expireSession drops the stored session (plus every other persisted
+ * user-scoped key, via clearSession) and sends the browser to the login
  * page. It is the single exit path for a dead session, shared by the axios
  * interceptor and the fetch-based log reader (both call it after a failed
  * refresh).

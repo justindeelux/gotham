@@ -227,8 +227,9 @@ export function deployChannel(serverId: string, deploymentId: string): string {
  * listDeployments returns an application's deployments, newest first. A
  * positive limit bounds the page to that many rows (GET ?limit=, clamped
  * server-side); readers that only need the latest state pass 1 so the full
- * history is never transferred. An absent or non-positive limit returns the
- * full history for the build-history surfaces.
+ * history is never transferred. Omitting the limit returns the full history
+ * for the build-history surfaces; an explicit zero or negative limit is a
+ * 400, so callers must omit rather than send 0.
  */
 export async function listDeployments(
   appId: string,

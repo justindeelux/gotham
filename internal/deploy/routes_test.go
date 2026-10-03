@@ -370,6 +370,15 @@ func TestRoutesListDeploymentsLimit(t *testing.T) {
 			t.Fatalf("status = %d, want 400", rec.Code)
 		}
 	})
+
+	t.Run("zero limit is a 400, never the full history", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, deploymentPath(appID, "")+"?limit=0", nil))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
+		}
+	})
 }
 
 func TestRoutesRollback(t *testing.T) {

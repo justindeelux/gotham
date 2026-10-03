@@ -10,9 +10,7 @@ import {
   renameTeam as renameTeamRequest,
 } from "../api/teams";
 import type { Team } from "../api/teams";
-
-/** localStorage key the active team selection is persisted under. */
-export const activeTeamStorageKey = "gotham.teams.active";
+import { activeTeamStorageKey } from "../api/token";
 
 /**
  * Teams: the caller's team list plus the active team selection.

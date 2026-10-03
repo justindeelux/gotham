@@ -164,6 +164,29 @@ run_install_at() {
         sh "${INSTALL_SH}"
 }
 
+# bake_installer builds a scratch copy of the installer with sandbox-only
+# values baked in ($1 output file, $2 os-release fixture, $3 agent.env path).
+# Production reads fixed paths on any real run, so the suite drives the agent
+# step's platform/env inputs through a file copy, never through the
+# environment. The copy is made from ${INSTALL_SH} so INSTALL_SH_OVERRIDE
+# mutations compose with it.
+bake_installer() {
+    sed -e "s|^    _la_os_release=\"/etc/os-release\"|    _la_os_release=\"$2\"|" \
+        -e "s|^        AGENT_ENV_FILE=\"/etc/gotham/agent.env\"|        AGENT_ENV_FILE=\"$3\"|" \
+        "${INSTALL_SH}" >"$1"
+    grep -qxF "    _la_os_release=\"$2\"" "$1" \
+        || { echo "FAIL: bake_installer did not bake the os-release path" >&2; exit 1; }
+    grep -qxF "        AGENT_ENV_FILE=\"$3\"" "$1" \
+        || { echo "FAIL: bake_installer did not bake the agent.env path" >&2; exit 1; }
+    # The copy runs from its own directory (SCRIPT_DIR), so link the real
+    # siblings next to it; the copy itself stays the file under test.
+    for _sib in release-verify.sh gotham-update.sh gotham-updater.conf \
+        install-sudoers.sh gotham.service install-agent.sh install-agent-lib.sh \
+        gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service; do
+        ln -sf "${SCRIPT_DIR}/${_sib}" "$(dirname "$1")/${_sib}"
+    done
+}
+
 echo "==> install (happy path)"
 run_install >/dev/null
 
@@ -882,19 +905,12 @@ fi
 echo "PASS: a production run ignores every test seam (H1/M1, hermetic)"
 unset GOTHAM_OS_RELEASE_FILE GOTHAM_TEST_UNAME_M GOTHAM_AGENT_ENV_FILE \
     GOTHAM_APT_ROOT GOTHAM_INSTALL_TEST_AGENT_SCRIPT GOTHAM_INSTALL_TEST_RUN_AGENT
-# The agent-script seam additionally requires a sandbox: static guard that the
-# override is keyed on TEST_MODE + RUN_AGENT, never on IN_TEST alone.
-if grep -q 'IN_TEST.*GOTHAM_INSTALL_TEST_AGENT_SCRIPT' "${INSTALL_SH}"; then
-    echo "FAIL: the agent-script seam is still keyed on IN_TEST alone (M1)" >&2
-    exit 1
-fi
-grep -A2 'GOTHAM_INSTALL_TEST_RUN_AGENT' "${INSTALL_SH}" | grep -q 'GOTHAM_INSTALL_TEST_AGENT_SCRIPT' \
-    || { echo "FAIL: the agent-script override lost its RUN_AGENT gate (M1)" >&2; exit 1; }
-grep -q 'TEST_MODE.*GOTHAM_INSTALL_TEST_RUN_AGENT' "${INSTALL_SH}" \
-    || { echo "FAIL: the agent-script override lost its sandbox (TEST_MODE) gate (M1)" >&2; exit 1; }
-grep -q 'GOTHAM_INSTALL_TEST:-0}" = "1" ] && \[ "${DRY_RUN}" -eq 1' "${INSTALL_SH}" \
-    || { echo "FAIL: GOTHAM_INSTALL_TEST=1 alone still enables the seams (M1)" >&2; exit 1; }
-echo "PASS: the agent-script seam requires sandbox + RUN_AGENT; the flag requires --dry-run (M1)"
+# Gating, proved behaviourally rather than by grepping the source: the
+# hermetic differential above shows every seam ignored outside test mode, and
+# the refusal / no-RUN_AGENT / scrub-dump runs show the script seam needs a
+# sandbox + RUN_AGENT + an explicit fake, the child runs scrubbed, and the
+# path seams are dry-run-only.
+echo "PASS: seam gating proved behaviourally (differential + refusal + scrub dump, M1)"
 # install-agent.sh --full dry path: hostile seams change nothing either.
 printf 'dummy CA for the dry-run path\n' >"${SCRATCH}/prod-ca.pem"
 agent_prod_dry() {
@@ -905,8 +921,12 @@ agent_prod_dry() {
 agent_prod_dry >"${SCRATCH}/aprod-clean.log" 2>&1
 GOTHAM_OS_RELEASE_FILE="${FIXTURES}/arch-release" \
 GOTHAM_APT_ROOT="${SCRATCH}/hostile-apt-root" \
+_OS_RELEASE_FILE="${SCRATCH}/hostile-apt-root" \
+_APT_ROOT="${SCRATCH}/hostile-apt-root" \
 GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/hostile-agent.sh" \
 agent_prod_dry >"${SCRATCH}/aprod-hostile.log" 2>&1
+unset GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT _OS_RELEASE_FILE _APT_ROOT \
+    GOTHAM_INSTALL_TEST_AGENT_SCRIPT
 sed 's/gotham-agent-install\.[A-Za-z0-9][A-Za-z0-9]*/gotham-agent-install.RANDOM/g' \
     "${SCRATCH}/aprod-clean.log" >"${SCRATCH}/aprod-clean.norm"
 sed 's/gotham-agent-install\.[A-Za-z0-9][A-Za-z0-9]*/gotham-agent-install.RANDOM/g' \
@@ -954,6 +974,11 @@ exit 1
 SHIM
 chmod +x "${SCRATCH}/fake-agent.sh"
 rm -f "${R3_AGENT_ENV}"
+# The platform/env inputs for this real sandbox run are baked into a scratch
+# installer copy: production reads fixed paths outside --dry-run, so the
+# suite drives them through a file copy, never through the environment.
+R3_INSTALLER="${SCRATCH}/install-r3.sh"
+bake_installer "${R3_INSTALLER}" "${FIXTURES}/ubuntu-release" "${R3_AGENT_ENV}"
 : >"${SCRATCH}/r3-systemctl.log"
 R3_RC=0
 GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
@@ -963,12 +988,10 @@ GOTHAM_INSTALL_ROOT="${R3_ROOT}" \
 GOTHAM_SKIP_DEPS=1 \
 GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
 GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/fake-agent.sh" \
-GOTHAM_AGENT_ENV_FILE="${R3_AGENT_ENV}" \
-GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
 SYSTEMCTL_LOG="${SCRATCH}/r3-systemctl.log" \
 AGENT_MARKER="${SCRATCH}/r3-agent-ran" \
 PATH="${R3_SHIM}:${PATH}" \
-    sh "${INSTALL_SH}" >"${SCRATCH}/r3-out.log" 2>"${SCRATCH}/r3-err.log" || R3_RC=$?
+    sh "${R3_INSTALLER}" >"${SCRATCH}/r3-out.log" 2>"${SCRATCH}/r3-err.log" || R3_RC=$?
 [ "${R3_RC}" -ne 0 ] \
     || { echo "FAIL: the install exited 0 although the agent step failed (R3)" >&2; exit 1; }
 [ -f "${SCRATCH}/r3-agent-ran" ] \
@@ -995,6 +1018,121 @@ if grep -qE 'systemctl (disable|stop) ' "${SCRATCH}/r3-systemctl.log"; then
 fi
 echo "PASS: a failing agent install keeps the control plane, warns on stderr and exits nonzero (R3)"
 
+# ---- Sandbox RUN_AGENT without the script seam is refused -----------------
+# Without an explicit fake the sandbox run would execute the real
+# install-agent.sh, so the installer dies before the agent step (after the
+# control plane itself is installed). Behavioural proof of the gate the old
+# static greps stood in for.
+echo "==> sandbox RUN_AGENT without a script seam is refused"
+REF_ROOT="${SCRATCH}/root-refuse"
+REF_INSTALLER="${SCRATCH}/install-refuse.sh"
+bake_installer "${REF_INSTALLER}" "${FIXTURES}/ubuntu-release" "${SCRATCH}/refuse-agent.env"
+: >"${SCRATCH}/refuse-systemctl.log"
+REF_RC=0
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_ROOT="${REF_ROOT}" \
+GOTHAM_SKIP_DEPS=1 \
+GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
+SYSTEMCTL_LOG="${SCRATCH}/refuse-systemctl.log" \
+PATH="${R3_SHIM}:${PATH}" \
+    sh "${REF_INSTALLER}" >"${SCRATCH}/refuse-out.log" 2>"${SCRATCH}/refuse-err.log" || REF_RC=$?
+[ "${REF_RC}" -ne 0 ] \
+    || { echo "FAIL: sandbox RUN_AGENT without a script seam was not refused" >&2; exit 1; }
+grep -q 'requires GOTHAM_INSTALL_TEST_AGENT_SCRIPT' "${SCRATCH}/refuse-err.log" \
+    || { echo "FAIL: the refusal does not name the missing script seam" >&2; cat "${SCRATCH}/refuse-err.log" >&2; exit 1; }
+if grep -q 'installing the localhost agent node' "${SCRATCH}/refuse-out.log"; then
+    echo "FAIL: the refused run reached the agent step" >&2
+    exit 1
+fi
+[ -x "${REF_ROOT}/var/lib/gotham/bin/gotham" ] \
+    || { echo "FAIL: the refused run did not install the control plane first" >&2; exit 1; }
+echo "PASS: sandbox RUN_AGENT without a script seam is refused before the agent step"
+
+# ---- Sandbox script seam without RUN_AGENT never runs ----------------------
+# The fake runs only past the test-mode gate: with RUN_AGENT unset the
+# install exits after the service files and the fake never executes.
+echo "==> sandbox script seam without RUN_AGENT never runs"
+NORUN_ROOT="${SCRATCH}/root-norun"
+NORUN_MARKER="${SCRATCH}/norun-agent-ran"
+cat >"${SCRATCH}/norun-agent.sh" <<'SHIM'
+#!/bin/sh
+touch "${AGENT_MARKER:?}"
+exit 1
+SHIM
+chmod +x "${SCRATCH}/norun-agent.sh"
+rm -f "${NORUN_MARKER}"
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_ROOT="${NORUN_ROOT}" \
+GOTHAM_SKIP_DEPS=1 \
+GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/norun-agent.sh" \
+AGENT_MARKER="${NORUN_MARKER}" \
+PATH="${R3_SHIM}:${PATH}" \
+    sh "${INSTALL_SH}" >"${SCRATCH}/norun-out.log" 2>&1 \
+    || { echo "FAIL: the no-RUN_AGENT sandbox run failed" >&2; exit 1; }
+grep -q 'test mode: skipping service activation' "${SCRATCH}/norun-out.log" \
+    || { echo "FAIL: the no-RUN_AGENT sandbox run did not exit at the test-mode gate" >&2; exit 1; }
+[ ! -e "${NORUN_MARKER}" ] \
+    || { echo "FAIL: the fake agent ran without RUN_AGENT" >&2; exit 1; }
+echo "PASS: sandbox script seam without RUN_AGENT never runs"
+
+# ---- The agent child runs scrubbed; path seams stay ignored on real runs ---
+# The fake dumps its environment: none of the scrubbed test seams may reach
+# it. The run also exports hostile path seams (os-release, arch, agent.env)
+# plus the flag without --dry-run; the baked ubuntu fixture still wins and
+# the step runs, proving those seams are dry-run-only.
+echo "==> the agent child sees no test seam (scrubbed)"
+DUMP_ROOT="${SCRATCH}/root-dump"
+DUMP_INSTALLER="${SCRATCH}/install-dump.sh"
+DUMP_ENV="${SCRATCH}/dump-agent.env"
+DUMP_CAPTURE="${SCRATCH}/dump-child-env"
+bake_installer "${DUMP_INSTALLER}" "${FIXTURES}/ubuntu-release" "${DUMP_ENV}"
+cat >"${SCRATCH}/dump-agent.sh" <<'SHIM'
+#!/bin/sh
+env | sort >"${ENV_DUMP:?}"
+exit 0
+SHIM
+chmod +x "${SCRATCH}/dump-agent.sh"
+rm -f "${DUMP_CAPTURE}"
+: >"${SCRATCH}/dump-systemctl.log"
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_ROOT="${DUMP_ROOT}" \
+GOTHAM_SKIP_DEPS=1 \
+GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
+GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/dump-agent.sh" \
+GOTHAM_OS_RELEASE_FILE="${FIXTURES}/arch-release" \
+GOTHAM_TEST_UNAME_M=sparc64 \
+GOTHAM_AGENT_ENV_FILE="${R2R_ENV}" \
+GOTHAM_APT_ROOT="${SCRATCH}/hostile-apt-root" \
+GOTHAM_INSTALL_TEST=1 \
+SYSTEMCTL_LOG="${SCRATCH}/dump-systemctl.log" \
+ENV_DUMP="${DUMP_CAPTURE}" \
+PATH="${R3_SHIM}:${PATH}" \
+    sh "${DUMP_INSTALLER}" >"${SCRATCH}/dump-out.log" 2>"${SCRATCH}/dump-err.log" \
+    || { echo "FAIL: the scrub-probe install failed although the fixtures are baked" >&2; cat "${SCRATCH}/dump-err.log" >&2; exit 1; }
+[ -f "${DUMP_CAPTURE}" ] \
+    || { echo "FAIL: the dumping agent step never ran" >&2; exit 1; }
+grep -qx "GOTHAM_VERSION=${VERSION}" "${DUMP_CAPTURE}" \
+    || { echo "FAIL: the dump missed the positive control (GOTHAM_VERSION)" >&2; exit 1; }
+for _seam in GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT GOTHAM_AGENT_ENV_FILE \
+    GOTHAM_TEST_UNAME_M GOTHAM_INSTALL_TEST GOTHAM_INSTALL_TEST_RUN_AGENT \
+    GOTHAM_INSTALL_TEST_AGENT_SCRIPT GOTHAM_INSTALL_TEST_PUBLIC_KEY; do
+    if grep -q "^${_seam}=" "${DUMP_CAPTURE}"; then
+        echo "FAIL: the agent child saw ${_seam} (scrub bypassed)" >&2
+        exit 1
+    fi
+done
+if grep -q 'hostile-apt-root\|sparc64\|arch-release' "${DUMP_CAPTURE}"; then
+    echo "FAIL: a hostile seam value leaked into the agent child" >&2
+    exit 1
+fi
+echo "PASS: the agent child runs scrubbed and hostile path seams change nothing on a real run"
+
 # ---- M2: a metachar node id reaches the agent step verbatim -----------------
 # The agent step must not word-split its assignments: a node id holding a
 # space, a quote, $() and * (plus ;) is passed as one env value, no command
@@ -1012,6 +1150,9 @@ SHIM
 chmod +x "${SCRATCH}/capture-agent.sh"
 rm -f "${M2_PWNED}" "${M2_CAPTURE}"
 : >"${SCRATCH}/m2-systemctl.log"
+# Same baked-copy mechanism as R3: fixed paths on a real run.
+M2_INSTALLER="${SCRATCH}/install-m2.sh"
+bake_installer "${M2_INSTALLER}" "${FIXTURES}/ubuntu-release" "${SCRATCH}/m2-agent.env"
 M2_RC=0
 GOTHAM_AGENT_NODE_ID="${M2_NODE}" \
 GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
@@ -1021,12 +1162,10 @@ GOTHAM_INSTALL_ROOT="${M2_ROOT}" \
 GOTHAM_SKIP_DEPS=1 \
 GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
 GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/capture-agent.sh" \
-GOTHAM_AGENT_ENV_FILE="${SCRATCH}/m2-agent.env" \
-GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
 SYSTEMCTL_LOG="${SCRATCH}/m2-systemctl.log" \
 CAPTURE="${M2_CAPTURE}" \
 PATH="${R3_SHIM}:${PATH}" \
-    sh "${INSTALL_SH}" >"${SCRATCH}/m2-out.log" 2>"${SCRATCH}/m2-err.log" || M2_RC=$?
+    sh "${M2_INSTALLER}" >"${SCRATCH}/m2-out.log" 2>"${SCRATCH}/m2-err.log" || M2_RC=$?
 [ "${M2_RC}" -eq 0 ] \
     || { echo "FAIL: the install failed although the agent step succeeded (M2)" >&2; cat "${SCRATCH}/m2-err.log" >&2; exit 1; }
 [ -f "${M2_CAPTURE}" ] \

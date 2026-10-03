@@ -29,19 +29,22 @@
 #   GOTHAM_INSTALL_TEST_PUBLIC_KEY  test-only: replace the pinned trust anchor
 #                               (PEM or base64); honoured ONLY with
 #                               GOTHAM_INSTALL_ROOT, otherwise warned and ignored
-#   GOTHAM_INSTALL_TEST=1       test-only: honour the GOTHAM_TEST_* /
-#                               GOTHAM_OS_RELEASE_FILE / GOTHAM_AGENT_ENV_FILE /
-#                               GOTHAM_INSTALL_TEST_AGENT_SCRIPT seams in a run
-#                               without GOTHAM_INSTALL_ROOT, but ONLY together
-#                               with --dry-run; with a real run it changes
-#                               nothing, so a stray export cannot redirect an
-#                               install. Never set it in production.
+#   GOTHAM_INSTALL_TEST=1       test-only: honour the GOTHAM_OS_RELEASE_FILE /
+#                               GOTHAM_TEST_UNAME_M / GOTHAM_AGENT_ENV_FILE
+#                               seams in a run without GOTHAM_INSTALL_ROOT, but
+#                               ONLY together with --dry-run (a dry run changes
+#                               nothing, so the flag alone is safe there). With
+#                               a real run it changes nothing, so a stray
+#                               export cannot redirect an install. Never set it
+#                               in production.
 #   GOTHAM_INSTALL_TEST_RUN_AGENT=1 + GOTHAM_INSTALL_TEST_AGENT_SCRIPT=<fake>
 #                               test-only: with GOTHAM_INSTALL_ROOT (a non-/
 #                               sandbox), run past service activation
 #                               (systemctl must be a logging shim on PATH) and
 #                               execute <fake> instead of install-agent.sh, so
-#                               the agent-failure path runs
+#                               the agent-failure path runs. RUN_AGENT=1
+#                               without the script seam is refused outright (it
+#                               would run the real install-agent.sh).
 #
 # Runtime configuration overrides:
 #   GOTHAM_DATABASE_DSN       managed PostgreSQL DSN; skips local provisioning
@@ -243,12 +246,16 @@ else
     TEST_MODE=0
 fi
 
-# Explicit test-harness flag. The GOTHAM_TEST_* / GOTHAM_OS_RELEASE_FILE /
-# GOTHAM_AGENT_ENV_FILE / GOTHAM_INSTALL_TEST_AGENT_SCRIPT seams below are
-# honoured only when IN_TEST is 1: inside a GOTHAM_INSTALL_ROOT sandbox, or
-# with GOTHAM_INSTALL_TEST=1 together with --dry-run (a dry run changes
-# nothing, so the flag alone is safe there). A bare GOTHAM_INSTALL_TEST=1 on
-# a real run changes nothing, so a stray export cannot redirect the install.
+# Explicit test-harness flag. The GOTHAM_OS_RELEASE_FILE /
+# GOTHAM_TEST_UNAME_M / GOTHAM_AGENT_ENV_FILE path seams below are honoured
+# only when IN_TEST is 1 AND the run is a dry run (a dry run changes nothing,
+# so the flag alone is safe there): never on a run that can execute the agent
+# step. IN_TEST is 1 inside a GOTHAM_INSTALL_ROOT sandbox, or with
+# GOTHAM_INSTALL_TEST=1 together with --dry-run. A bare GOTHAM_INSTALL_TEST=1
+# on a real run changes nothing, so a stray export cannot redirect the
+# install. The agent-script seam (GOTHAM_INSTALL_TEST_AGENT_SCRIPT, sandbox +
+# RUN_AGENT only) is the one exception: it names the fake the sandbox run
+# executes, and a sandbox RUN_AGENT run without it is refused outright.
 IN_TEST=0
 if [ "${TEST_MODE}" -eq 1 ]; then
     IN_TEST=1
@@ -625,14 +632,14 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
     # the agent step needs Ubuntu/Debian (for the --full Docker setup),
     # systemd and a supported architecture. Anywhere else the control plane
     # still installs fine on its own, so skip the agent with a notice instead
-    # of failing the whole install. GOTHAM_OS_RELEASE_FILE and
-    # GOTHAM_TEST_UNAME_M are test seams, honoured only when IN_TEST is 1
-    # (see deploy/test-release-install.sh).
+    # of failing the whole install. The production paths below are fixed;
+    # GOTHAM_OS_RELEASE_FILE and GOTHAM_TEST_UNAME_M override them only on a
+    # dry run in test mode (see deploy/test-release-install.sh), never on a
+    # run that can execute the agent step.
     LOCAL_AGENT_SKIP=""
-    if [ "${IN_TEST}" -eq 1 ] && [ -n "${GOTHAM_OS_RELEASE_FILE:-}" ]; then
+    _la_os_release="/etc/os-release"
+    if [ "${IN_TEST}" -eq 1 ] && [ "${DRY_RUN}" -eq 1 ] && [ -n "${GOTHAM_OS_RELEASE_FILE:-}" ]; then
         _la_os_release="${GOTHAM_OS_RELEASE_FILE}"
-    else
-        _la_os_release="/etc/os-release"
     fi
     _la_distro=""
     if [ -f "${_la_os_release}" ]; then
@@ -646,10 +653,9 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
         LOCAL_AGENT_SKIP="systemctl not found; the localhost agent needs a systemd host"
     fi
     if [ -z "${LOCAL_AGENT_SKIP}" ]; then
-        if [ "${IN_TEST}" -eq 1 ] && [ -n "${GOTHAM_TEST_UNAME_M:-}" ]; then
+        _la_uname_m="$(uname -m)"
+        if [ "${IN_TEST}" -eq 1 ] && [ "${DRY_RUN}" -eq 1 ] && [ -n "${GOTHAM_TEST_UNAME_M:-}" ]; then
             _la_uname_m="${GOTHAM_TEST_UNAME_M}"
-        else
-            _la_uname_m="$(uname -m)"
         fi
         case "${_la_uname_m}" in
             x86_64 | amd64 | aarch64 | arm64) ;;
@@ -667,13 +673,13 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
         # define them. A value set in this run's environment still wins;
         # otherwise the prior file's values are kept by passing nothing, so a
         # hostname change is never repointed and no duplicate node is created.
-        # GOTHAM_AGENT_ENV_FILE is a test seam (IN_TEST only); its default is
-        # the path install-agent.sh actually writes (ENV_FILE there), so the
-        # lookup and the write can never drift apart.
-        if [ "${IN_TEST}" -eq 1 ] && [ -n "${GOTHAM_AGENT_ENV_FILE:-}" ]; then
+        # The prior-env lookup reads the path install-agent.sh actually
+        # writes; GOTHAM_AGENT_ENV_FILE redirects it only on a dry run in
+        # test mode (a sandbox real run uses a scratch installer copy with the
+        # path baked in — see deploy/test-release-install.sh).
+        AGENT_ENV_FILE="/etc/gotham/agent.env"
+        if [ "${IN_TEST}" -eq 1 ] && [ "${DRY_RUN}" -eq 1 ] && [ -n "${GOTHAM_AGENT_ENV_FILE:-}" ]; then
             AGENT_ENV_FILE="${GOTHAM_AGENT_ENV_FILE}"
-        else
-            AGENT_ENV_FILE="/etc/gotham/agent.env"
         fi
         agent_env_prev() {
             [ -f "${AGENT_ENV_FILE}" ] || return 0
@@ -704,11 +710,13 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
             LOCAL_AGENT_CP_ADDR="127.0.0.1:9442"
         fi
         # The retry line below reuses exactly these assignments, shell-quoted
-        # for safe re-execution. GOTHAM_INSTALL_TEST_AGENT_SCRIPT overrides
-        # which script runs only in a GOTHAM_INSTALL_ROOT sandbox together
-        # with GOTHAM_INSTALL_TEST_RUN_AGENT=1 (never from a bare
-        # GOTHAM_INSTALL_TEST=1, and never in a real run); the retry line
-        # always shows the canonical command.
+        # for safe re-execution. Which script runs: the real installer by
+        # default; in a GOTHAM_INSTALL_ROOT sandbox together with
+        # GOTHAM_INSTALL_TEST_RUN_AGENT=1 the GOTHAM_INSTALL_TEST_AGENT_SCRIPT
+        # fake (never from a bare GOTHAM_INSTALL_TEST=1, and never in a real
+        # run). RUN_AGENT=1 in a sandbox without the script seam is refused:
+        # it would execute the real install-agent.sh. The retry line always
+        # shows the canonical command.
         LOCAL_AGENT_ENV="GOTHAM_VERSION=$(sh_quote "${VERSION}")"
         [ -z "${LOCAL_AGENT_CP_ADDR}" ] \
             || LOCAL_AGENT_ENV="GOTHAM_AGENT_CP_ADDR=$(sh_quote "${LOCAL_AGENT_CP_ADDR}") ${LOCAL_AGENT_ENV}"
@@ -716,11 +724,11 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
             || LOCAL_AGENT_ENV="GOTHAM_AGENT_NODE_ID=$(sh_quote "${LOCAL_AGENT_NODE_ID}") ${LOCAL_AGENT_ENV}"
         LOCAL_AGENT_RETRY="${LOCAL_AGENT_ENV} sh $(sh_quote "${SCRIPT_DIR}/install-agent.sh") --full --ca $(sh_quote "${CA_DIR}/ca.crt")"
         LOCAL_AGENT_FAILED=0
-        if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" = "1" ] \
-            && [ -n "${GOTHAM_INSTALL_TEST_AGENT_SCRIPT:-}" ]; then
+        _agent_script="${SCRIPT_DIR}/install-agent.sh"
+        if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" = "1" ]; then
+            [ -n "${GOTHAM_INSTALL_TEST_AGENT_SCRIPT:-}" ] \
+                || die "GOTHAM_INSTALL_TEST_RUN_AGENT=1 requires GOTHAM_INSTALL_TEST_AGENT_SCRIPT=<fake agent script>; refusing to run the real install-agent.sh in a sandbox"
             _agent_script="${GOTHAM_INSTALL_TEST_AGENT_SCRIPT}"
-        else
-            _agent_script="${SCRIPT_DIR}/install-agent.sh"
         fi
         if [ "${DRY_RUN}" -eq 1 ]; then
             echo "[dry-run] ${LOCAL_AGENT_RETRY}"
@@ -738,9 +746,10 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
             # The assignments travel as positional parameters through env, one
             # per argument, never through an unquoted string: values holding
             # spaces, quotes, $() or globs arrive verbatim instead of being
-            # split (or run). A real run additionally scrubs every test seam
-            # from the child's environment (defense in depth: the agent-side
-            # lib gates them too), so a stray export cannot redirect it.
+            # split (or run). The child always runs scrubbed: every test seam
+            # is removed from its environment (defense in depth — the
+            # installers ignore them anyway), so a stray export cannot
+            # redirect it; the intended values travel as "$@" below.
             (
                 set -- "GOTHAM_VERSION=${VERSION}"
                 if [ -n "${LOCAL_AGENT_CP_ADDR}" ]; then
@@ -749,16 +758,12 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
                 if [ -n "${LOCAL_AGENT_NODE_ID}" ]; then
                     set -- "$@" "GOTHAM_AGENT_NODE_ID=${LOCAL_AGENT_NODE_ID}"
                 fi
-                if [ "${IN_TEST}" -eq 0 ]; then
-                    env -u GOTHAM_OS_RELEASE_FILE -u GOTHAM_APT_ROOT \
-                        -u GOTHAM_AGENT_ENV_FILE -u GOTHAM_TEST_UNAME_M \
-                        -u GOTHAM_INSTALL_TEST -u GOTHAM_INSTALL_TEST_RUN_AGENT \
-                        -u GOTHAM_INSTALL_TEST_AGENT_SCRIPT \
-                        -u GOTHAM_INSTALL_TEST_PUBLIC_KEY \
-                        "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt"
-                else
-                    env "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt"
-                fi
+                env -u GOTHAM_OS_RELEASE_FILE -u GOTHAM_APT_ROOT \
+                    -u GOTHAM_AGENT_ENV_FILE -u GOTHAM_TEST_UNAME_M \
+                    -u GOTHAM_INSTALL_TEST -u GOTHAM_INSTALL_TEST_RUN_AGENT \
+                    -u GOTHAM_INSTALL_TEST_AGENT_SCRIPT \
+                    -u GOTHAM_INSTALL_TEST_PUBLIC_KEY \
+                    "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt"
             ) || LOCAL_AGENT_FAILED=1
         fi
     fi

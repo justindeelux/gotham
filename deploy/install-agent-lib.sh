@@ -5,6 +5,12 @@
 # tested without root or a systemd host (see deploy/test-agent-install.sh).
 # It is sourced, not run.
 #
+# Fixed production paths for the --full Docker setup. These are plain shell
+# variables with fixed defaults, assigned unconditionally when this file is
+# sourced (never imported from the environment), so no exported variable can
+# redirect them. The test suite overrides them by assigning new values AFTER
+# sourcing this file.
+#
 # agent_env_write     composes /etc/gotham/agent.env, preserving values a prior
 #                     install wrote for keys this invocation does not set.
 # agent_service_restart  restarts an already-running agent on the new binary
@@ -15,6 +21,9 @@
 #                     is already present gets only the compose plugin (the
 #                     engine is never replaced), and a Docker repository the
 #                     operator already defined is reused, never duplicated.
+
+_OS_RELEASE_FILE=/etc/os-release
+_APT_ROOT=
 
 # agent_env_write writes <env_file> for the agent.
 #
@@ -164,6 +173,19 @@ agent_env_write() {
             GOTHAM_AGENT_UPDATE_INTERVAL \
             GOTHAM_AGENT_UPDATE_CHANNEL; do
             _value="$(_env_value "${_key}")"
+            # The node id and dial address are written verbatim, so a control
+            # character in either (notably a newline smuggling a second line
+            # such as GOTHAM_AGENT_INSECURE=true) would corrupt agent.env.
+            # Reject any byte below 0x20 or 0x7f before writing.
+            case "${_key}" in
+                GOTHAM_AGENT_CP_ADDR | GOTHAM_AGENT_NODE_ID)
+                    _stripped="$(printf '%s' "${_value}" | tr -d '\000-\037\177')"
+                    if [ "${_stripped}" != "${_value}" ]; then
+                        echo "install-agent.sh: ${_key} contains a control character (rejected)" >&2
+                        exit 1
+                    fi
+                    ;;
+            esac
             if [ -n "${_value}" ]; then
                 printf '%s=%s\n' "${_key}" "${_value}" >>"${_env_tmp}"
             fi
@@ -291,21 +313,6 @@ _docker_repo_has_active_entry() {
     esac
 }
 
-# _gotham_seams_allowed reports whether the test seams below may be honoured:
-# only inside the hard test mode — a GOTHAM_INSTALL_ROOT sandbox (a non-/
-# absolute path), or GOTHAM_INSTALL_TEST=1 together with DRY_RUN=1 (a dry run
-# changes nothing, so the flag alone is safe there). A bare
-# GOTHAM_INSTALL_TEST=1 on a real run, or any stray seam export, changes
-# nothing. This mirrors install.sh IN_TEST, which additionally scrubs every
-# seam from the agent installer's environment on a real run.
-_gotham_seams_allowed() {
-    case "${GOTHAM_INSTALL_ROOT:-}" in
-        "" | "/") ;;
-        /*) return 0 ;;
-    esac
-    [ "${GOTHAM_INSTALL_TEST:-0}" = "1" ] && [ "${DRY_RUN:-0}" = "1" ]
-}
-
 # ensure_docker_full installs Docker Engine and the compose plugin from the
 # official Docker apt repository (Ubuntu/Debian only). It is idempotent: when
 # `docker` and `docker compose` already work it only logs and returns 0. When
@@ -315,19 +322,14 @@ _gotham_seams_allowed() {
 # (docker.sources, a docker.asc Signed-By line, another .list) is reused
 # instead of adding a conflicting docker.list. On any other distro it fails
 # with a message naming the manual step instead of attempting an unverified
-# install. Test seams (honoured only when _gotham_seams_allowed holds):
-# GOTHAM_OS_RELEASE_FILE overrides /etc/os-release; GOTHAM_APT_ROOT prefixes
-# the apt paths (/etc/apt/...).
+# install. The distro and apt paths come from the fixed _OS_RELEASE_FILE /
+# _APT_ROOT variables above; there are no environment seams.
 ensure_docker_full() {
     if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
         echo "==> Docker Engine and the compose plugin are already installed; skipping"
         return 0
     fi
-    if _gotham_seams_allowed && [ -n "${GOTHAM_OS_RELEASE_FILE:-}" ]; then
-        _os_release="${GOTHAM_OS_RELEASE_FILE}"
-    else
-        _os_release="/etc/os-release"
-    fi
+    _os_release="${_OS_RELEASE_FILE}"
     _distro="" _codename=""
     if [ -f "${_os_release}" ]; then
         _distro="$(sed -n 's/^ID=//p' "${_os_release}" | head -n1 | tr -d '"')"
@@ -357,10 +359,7 @@ ensure_docker_full() {
         ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg ) \
             || return 1
     }
-    _apt_root=""
-    if _gotham_seams_allowed; then
-        _apt_root="${GOTHAM_APT_ROOT:-}"
-    fi
+    _apt_root="${_APT_ROOT}"
     _keyrings_dir="${_apt_root}/etc/apt/keyrings"
     # NOTE: the dearmored (binary) keyring must end in .gpg, not .asc: apt
     # treats a .asc signed-by file as ASCII-armored and silently ignores binary

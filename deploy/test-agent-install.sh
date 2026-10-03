@@ -40,10 +40,13 @@
 #         writing a dead docker.list.
 #   R7    the key download is HTTPS-pinned, TLS 1.2+, retried, and its temp
 #         file is removed on every path without installing an EXIT trap.
-#   H1/M1 the GOTHAM_OS_RELEASE_FILE / GOTHAM_APT_ROOT seams are honoured
-#         only in the hard test mode (a GOTHAM_INSTALL_ROOT sandbox, or
-#         GOTHAM_INSTALL_TEST=1 with DRY_RUN=1): a stray export never
-#         redirects a root install.
+#   H1    the production paths (_OS_RELEASE_FILE / _APT_ROOT) are fixed:
+#         exporting seam-like variables (old GOTHAM_* names or the internal
+#         names) never redirects them; the suite overrides the paths by plain
+#         assignment after sourcing the lib.
+#   C1    control characters (any byte < 0x20 or 0x7f, including newline) in
+#         GOTHAM_AGENT_NODE_ID / GOTHAM_AGENT_CP_ADDR are rejected before
+#         agent.env is written, so a newline cannot smuggle a second line in.
 #   L1    the codename probe times out, surfaces curl errors, and refuses on
 #         a network failure (never silently falling back) while an HTTP 404
 #         keeps the documented fallback/refusal.
@@ -94,13 +97,13 @@ unset_agent_env() {
 }
 unset_agent_env
 
-# Hard test mode for the lib seams: GOTHAM_OS_RELEASE_FILE / GOTHAM_APT_ROOT
-# are honoured only with a GOTHAM_INSTALL_ROOT sandbox (or
-# GOTHAM_INSTALL_TEST=1 with DRY_RUN=1), so a stray export never redirects a
-# root install. Export a scratch sandbox so the seam-driven F2/R cases below
-# keep exercising them; the H1/M1 gating cases unset it in subshells.
-GOTHAM_INSTALL_ROOT="${SCRATCH}/sandbox-root"
-export GOTHAM_INSTALL_ROOT
+# Stray seam-like variables from the caller's environment must not influence
+# the suite: the lib assigns its path variables unconditionally on sourcing,
+# and every case below assigns them explicitly by plain shell assignment
+# (never exported, never read from the environment).
+unset GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT
+_OS_RELEASE_FILE=/etc/os-release
+_APT_ROOT=
 
 # --- A3-7: reinstall preserves values it does not override --------------------
 echo "==> A3-7 reinstall preserves prior CP address and node id"
@@ -484,7 +487,7 @@ DOCKER_MARKER="${F2_DIR}/marker-present"
 export DOCKER_MARKER
 mkdir -p "${DOCKER_MARKER}"
 touch "${DOCKER_MARKER}/installed"
-if GOTHAM_OS_RELEASE_FILE=/nonexistent PATH="${FULL_PATH}" ensure_docker_full >"${F2_DIR}/skip.log" 2>&1; then
+if _OS_RELEASE_FILE=/nonexistent PATH="${FULL_PATH}" ensure_docker_full >"${F2_DIR}/skip.log" 2>&1; then
     grep -q 'already installed; skipping' "${F2_DIR}/skip.log" \
         || fail "skip path did not log the skip"
 else
@@ -495,7 +498,7 @@ DOCKER_MARKER="${F2_DIR}/marker-absent"
 export DOCKER_MARKER
 mkdir -p "${DOCKER_MARKER}"
 # Unsupported distro: fails with the manual step, touching nothing.
-if GOTHAM_OS_RELEASE_FILE="${F2_DIR}/os/arch-release" GOTHAM_APT_ROOT="${F2_DIR}/apt" \
+if _OS_RELEASE_FILE="${F2_DIR}/os/arch-release" _APT_ROOT="${F2_DIR}/apt" \
     PATH="${FULL_PATH}" ensure_docker_full >"${F2_DIR}/arch.log" 2>&1; then
     fail "ensure_docker_full accepted an unsupported distro"
 else
@@ -601,8 +604,9 @@ hash -r 2>/dev/null || true
 # returns, so the minimal PATH is saved and restored around the call.
 SAVED_MINPATH="${PATH}"
 PATH="${F2_MINPATH}"
-if GOTHAM_OS_RELEASE_FILE="${F2_DIR}/os/os-release" GOTHAM_APT_ROOT="${F2_DIR}/apt" \
-    ensure_docker_full >"${F2_DIR}/flow.log" 2>&1; then
+_OS_RELEASE_FILE="${F2_DIR}/os/os-release"
+_APT_ROOT="${F2_DIR}/apt"
+if PATH="${F2_MINPATH}" ensure_docker_full >"${F2_DIR}/flow.log" 2>&1; then
     PATH="${SAVED_MINPATH}"
     grep -qx 'deb \[arch=amd64 signed-by='"${F2_DIR}"'/apt/etc/apt/keyrings/docker.gpg\] https://download.docker.com/linux/ubuntu jammy stable' \
         "${F2_DIR}/apt/etc/apt/sources.list.d/docker.list" \
@@ -631,8 +635,9 @@ exit 1
 SHIM
 chmod +x "${F2_SHIM}/gpg"
 rm -rf "${F2_DIR}/apt2" "${DOCKER_MARKER}/installed"
-if GOTHAM_OS_RELEASE_FILE="${F2_DIR}/os/os-release" GOTHAM_APT_ROOT="${F2_DIR}/apt2" \
-    PATH="${FULL_PATH}" ensure_docker_full >"${F2_DIR}/fp.log" 2>&1; then
+_OS_RELEASE_FILE="${F2_DIR}/os/os-release"
+_APT_ROOT="${F2_DIR}/apt2"
+if PATH="${FULL_PATH}" ensure_docker_full >"${F2_DIR}/fp.log" 2>&1; then
     fail "ensure_docker_full accepted a key with the wrong fingerprint"
 else
     grep -q 'fingerprint mismatch' "${F2_DIR}/fp.log" \
@@ -760,12 +765,15 @@ R_PATH="${R_SHIM}:${PATH}"
 export R_PATH
 run_full() {
     # $1 os-release fixture, $2 apt root, $3 docker marker dir, $4 log prefix.
-    # The marker/log paths are exported so the shim subprocesses see them.
+    # The marker/log paths are exported so the shim subprocesses see them;
+    # the lib paths are plain shell variables assigned after sourcing (never
+    # exported, never read from the environment).
     DOCKER_MARKER="$3"
     APT_LOG="$4-apt.log"
     CURL_LOG="$4-curl.log"
     export DOCKER_MARKER APT_LOG CURL_LOG
-    GOTHAM_OS_RELEASE_FILE="$1" GOTHAM_APT_ROOT="$2" \
+    _OS_RELEASE_FILE="$1"
+    _APT_ROOT="$2"
     PATH="${R_PATH}" ensure_docker_full >"$4-out.log" 2>&1
 }
 set_docker_variant() {
@@ -902,7 +910,8 @@ DOCKER_MARKER="${R6_MARKER}"
 APT_LOG="${R_DIR}/r6-apt.log"
 CURL_LOG="${R_DIR}/r6-curl.log"
 export DOCKER_MARKER APT_LOG CURL_LOG
-GOTHAM_OS_RELEASE_FILE="${R_DIR}/os/ubuntu-release" GOTHAM_APT_ROOT="${R6_APT}" \
+_OS_RELEASE_FILE="${R_DIR}/os/ubuntu-release"
+_APT_ROOT="${R6_APT}"
 PATH="${R_SHIM}/nodpkg:${R_PATH}" ensure_docker_full >"${R_DIR}/r6-out.log" 2>&1 || R6_RC=$?
 if [ "${R6_RC:-0}" -eq 0 ]; then
     fail "R6: a broken dpkg was silently treated as amd64"
@@ -1034,45 +1043,25 @@ if ls "${TMPDIR:-/tmp}"/docker-key.* >/dev/null 2>&1; then
 fi
 pass "R7: hardened curl flags, no EXIT-trap clobbering, no temp file left"
 
-# --- H1/M1: the lib seams are gated behind the hard test mode ---------------
-echo "==> H1/M1 lib seams ignored outside the hard test mode"
-# The gate itself, all six combinations (hermetic: no host file is read).
-GATE_CASE=0
-check_gate() {
-    GATE_CASE=$((GATE_CASE + 1))
-    # $1 want (0/1), $2 shell snippet setting the subshell environment
-    if (
-        unset GOTHAM_INSTALL_ROOT GOTHAM_INSTALL_TEST DRY_RUN
-        eval "$2"
-        _gotham_seams_allowed
-    ); then
-        _got=1
-    else
-        _got=0
-    fi
-    [ "${_got}" = "$1" ] \
-        || fail "H1/M1 gate case ${GATE_CASE}: got ${_got}, want $1 ($2)"
-}
-check_gate 0 true
-check_gate 0 'GOTHAM_INSTALL_TEST=1; export GOTHAM_INSTALL_TEST'
-check_gate 1 'GOTHAM_INSTALL_TEST=1; DRY_RUN=1; export GOTHAM_INSTALL_TEST DRY_RUN'
-check_gate 1 'GOTHAM_INSTALL_ROOT=/tmp/sb-test-root; export GOTHAM_INSTALL_ROOT'
-check_gate 0 'GOTHAM_INSTALL_ROOT=/; export GOTHAM_INSTALL_ROOT'
-check_gate 0 'GOTHAM_INSTALL_ROOT=/; GOTHAM_INSTALL_TEST=1; export GOTHAM_INSTALL_ROOT GOTHAM_INSTALL_TEST'
-pass "H1/M1 _gotham_seams_allowed honors sandbox / flag+dry-run only"
-# No ungated seam read may remain: the old one-line default expansions are
-# gone (both seams now resolve inside a _gotham_seams_allowed branch).
-if grep -q '_os_release="${GOTHAM_OS_RELEASE_FILE:-/etc/os-release}"' "${SCRIPT_DIR}/install-agent-lib.sh"; then
-    fail "H1: install-agent-lib.sh still reads GOTHAM_OS_RELEASE_FILE ungated"
-fi
-if grep -q '^    _apt_root="${GOTHAM_APT_ROOT:-}"' "${SCRIPT_DIR}/install-agent-lib.sh"; then
-    fail "H1: install-agent-lib.sh still reads GOTHAM_APT_ROOT ungated"
-fi
-grep -q '_gotham_seams_allowed' "${SCRIPT_DIR}/install-agent-lib.sh" \
-    || fail "H1: install-agent-lib.sh has no seam gate at all"
-pass "H1: both lib seams are gated (no ungated default expansion)"
-# Differential: with docker present (skip path, no side effects anywhere) a
-# production-mode run with hostile seams behaves exactly like the clean run.
+# --- H1: the production paths are fixed, never read from the environment ----
+echo "==> H1 production paths ignore the environment"
+# Re-sourcing with hostile seam variables exported still yields the fixed
+# defaults: the assignments are unconditional, so an inherited environment
+# cannot survive them (this is exactly what a fresh `sh install-agent.sh` does).
+(
+    GOTHAM_OS_RELEASE_FILE=/hostile-os-release
+    GOTHAM_APT_ROOT=/hostile-apt-root
+    _OS_RELEASE_FILE=/hostile-internal-os-release
+    _APT_ROOT=/hostile-internal-apt-root
+    export GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT _OS_RELEASE_FILE _APT_ROOT
+    # shellcheck source=deploy/install-agent-lib.sh
+    . "${SCRIPT_DIR}/install-agent-lib.sh"
+    [ "${_OS_RELEASE_FILE}" = "/etc/os-release" ] || exit 1
+    [ "${_APT_ROOT}" = "" ] || exit 1
+) || fail "H1: re-sourcing with hostile seam variables did not yield the fixed defaults"
+pass "H1: sourcing overwrites hostile seam variables with the fixed defaults"
+# Differential on the skip path (no side effects anywhere): hostile old-name
+# exports behave exactly like the clean run.
 SKIP_SHIM="${SCRATCH}/skip-shim"
 mkdir -p "${SKIP_SHIM}"
 cat >"${SKIP_SHIM}/docker" <<'SHIM'
@@ -1082,13 +1071,11 @@ exit 0
 SHIM
 chmod +x "${SKIP_SHIM}/docker"
 (
-    unset GOTHAM_INSTALL_ROOT GOTHAM_INSTALL_TEST DRY_RUN
     unset GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT
     PATH="${SKIP_SHIM}:${PATH}" ensure_docker_full >"${SCRATCH}/skip-clean.log" 2>&1
     echo $? >"${SCRATCH}/skip-clean.rc"
 )
 (
-    unset GOTHAM_INSTALL_ROOT GOTHAM_INSTALL_TEST DRY_RUN
     GOTHAM_OS_RELEASE_FILE=/nonexistent-hostile-os-release
     GOTHAM_APT_ROOT=/nonexistent-hostile-apt-root
     export GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT
@@ -1096,46 +1083,143 @@ chmod +x "${SKIP_SHIM}/docker"
     echo $? >"${SCRATCH}/skip-hostile.rc"
 )
 [ "$(cat "${SCRATCH}/skip-clean.rc")" = "$(cat "${SCRATCH}/skip-hostile.rc")" ] \
-    || fail "H1: hostile seams changed the exit status outside test mode"
+    || fail "H1: hostile exports changed the exit status"
 cmp -s "${SCRATCH}/skip-clean.log" "${SCRATCH}/skip-hostile.log" \
-    || fail "H1: hostile seams changed the output outside test mode"
+    || fail "H1: hostile exports changed the output"
 grep -q 'already installed; skipping' "${SCRATCH}/skip-hostile.log" \
     || fail "H1: the differential skip run did not take the skip path"
-pass "H1: hostile seams change nothing outside test mode (differential)"
-# Read-path negative where the real host refuses on its own (no Ubuntu/Debian
-# os-release): the hostile ubuntu fixture must still be ignored in production
-# mode, while the sandbox honors it. On Ubuntu/Debian hosts this is SKIP-noted
-# (a production run there would proceed into real apt paths); the live
-# hostile-env install in the container proof covers it instead.
-if [ ! -f /etc/os-release ] || ! grep -qE '^ID=(ubuntu|debian)' /etc/os-release; then
-    NEG_APT="${SCRATCH}/neg-apt"
-    NEG_MARKER="${SCRATCH}/neg-marker"
-    mkdir -p "${NEG_MARKER}" "${NEG_APT}/etc/apt/sources.list.d"
-    printf 'ID=ubuntu\nVERSION_CODENAME=jammy\n' >"${SCRATCH}/neg-ubuntu-release"
-    set_docker_variant absent
+pass "H1: hostile old-name exports change nothing (differential)"
+# Read-path: hostile old-name exports are ignored. On Ubuntu/Debian the
+# internal fixture install must succeed into the sandbox apt root (a
+# re-opened environment seam would read the hostile arch fixture and refuse);
+# off Ubuntu the fixed real host file must refuse (a re-opened seam would
+# proceed from the hostile ubuntu fixture). All writes stay under SCRATCH.
+H_APT="${SCRATCH}/hostile-apt"
+H_OTHER="${SCRATCH}/hostile-apt-other"
+H_MARKER="${SCRATCH}/hostile-marker"
+mkdir -p "${H_APT}" "${H_OTHER}" "${H_MARKER}"
+printf 'ID=arch\nVERSION_CODENAME=n/a\n' >"${SCRATCH}/hostile-arch-release"
+set_docker_variant absent
+if [ -f /etc/os-release ] && grep -qE '^ID=(ubuntu|debian)' /etc/os-release; then
+    GOTHAM_OS_RELEASE_FILE="${SCRATCH}/hostile-arch-release"
+    GOTHAM_APT_ROOT="${H_OTHER}"
+    export GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT
+    if run_full "${R_DIR}/os/ubuntu-release" "${H_APT}" "${H_MARKER}" "${SCRATCH}/hostile"; then
+        grep -qx 'deb \[arch=amd64 signed-by='"${H_APT}"'/etc/apt/keyrings/docker.gpg\] https://download.docker.com/linux/ubuntu jammy stable' \
+            "${H_APT}/etc/apt/sources.list.d/docker.list" \
+            || fail "H1: hostile exports redirected the install away from the internal paths"
+        if [ -e "${H_OTHER}/etc/apt/sources.list.d/docker.list" ]; then
+            fail "H1: a repo was written under the hostile apt root"
+        fi
+    else
+        fail "H1: the hostile arch fixture was honored instead of the internal ubuntu one"
+    fi
+    unset GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT
+    pass "H1: hostile exports ignored on the read path (Ubuntu host)"
+else
+    printf 'ID=ubuntu\nVERSION_CODENAME=jammy\n' >"${SCRATCH}/hostile-ubuntu-release"
+    _OS_RELEASE_FILE=/etc/os-release
+    _APT_ROOT=
     (
-        unset GOTHAM_INSTALL_ROOT GOTHAM_INSTALL_TEST DRY_RUN
-        GOTHAM_OS_RELEASE_FILE="${SCRATCH}/neg-ubuntu-release"
-        GOTHAM_APT_ROOT="${NEG_APT}"
-        DOCKER_MARKER="${NEG_MARKER}"
-        APT_LOG="${SCRATCH}/neg-apt.log"
-        CURL_LOG="${SCRATCH}/neg-curl.log"
+        GOTHAM_OS_RELEASE_FILE="${SCRATCH}/hostile-ubuntu-release"
+        GOTHAM_APT_ROOT="${H_OTHER}"
+        DOCKER_MARKER="${H_MARKER}"
+        APT_LOG="${SCRATCH}/hostile-apt.log"
+        CURL_LOG="${SCRATCH}/hostile-curl.log"
         export GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT DOCKER_MARKER APT_LOG CURL_LOG
-        PATH="${R_PATH}" ensure_docker_full >"${SCRATCH}/neg-out.log" 2>&1
-    ) && NEG_RC=0 || NEG_RC=$?
-    [ "${NEG_RC}" -ne 0 ] \
-        || fail "H1: the hostile ubuntu fixture was honored outside test mode"
-    grep -q 'supports Ubuntu/Debian only' "${SCRATCH}/neg-out.log" \
-        || fail "H1: production refusal did not use the real host os-release"
-    if grep -q "found 'ubuntu'" "${SCRATCH}/neg-out.log"; then
+        PATH="${R_PATH}" ensure_docker_full >"${SCRATCH}/hostile-out.log" 2>&1
+    ) && H_RC=0 || H_RC=$?
+    [ "${H_RC}" -ne 0 ] \
+        || fail "H1: the hostile ubuntu fixture was honored instead of the real host file"
+    grep -q 'supports Ubuntu/Debian only' "${SCRATCH}/hostile-out.log" \
+        || fail "H1: refusal did not use the real host os-release"
+    if grep -q "found 'ubuntu'" "${SCRATCH}/hostile-out.log"; then
         fail "H1: production run read the hostile fixture instead of the real os-release"
     fi
-    [ ! -e "${NEG_APT}/etc/apt/sources.list.d/docker.list" ] \
-        || fail "H1: a production run wrote an apt source from a hostile seam"
-    pass "H1: hostile fixture ignored outside test mode, real host file used"
-else
-    echo "SKIP: hostile-fixture read-path needs a non-Ubuntu/Debian host (container live proof covers it)"
+    [ ! -e "${H_OTHER}/etc/apt/sources.list.d/docker.list" ] \
+        || fail "H1: a repo was written under the hostile apt root"
+    pass "H1: hostile exports ignored on the read path (non-Ubuntu host)"
 fi
+# Fresh-process proof through install-agent.sh itself: exporting the old and
+# the new names before --full --dry-run changes nothing, because sourcing the
+# lib overwrites them before any path is used.
+printf 'dummy CA for the hostile dry-run path\n' >"${SCRATCH}/hostile-ca.pem"
+agent_full_dry() {
+    GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test \
+        sh "${AGENT_INSTALLER}" --full --ca "${SCRATCH}/hostile-ca.pem" --dry-run
+}
+agent_full_dry >"${SCRATCH}/if-clean.log" 2>&1
+GOTHAM_OS_RELEASE_FILE=/nonexistent-hostile \
+GOTHAM_APT_ROOT=/nonexistent-hostile \
+_OS_RELEASE_FILE=/nonexistent-hostile \
+_APT_ROOT=/nonexistent-hostile \
+    agent_full_dry >"${SCRATCH}/if-hostile.log" 2>&1
+unset GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT _OS_RELEASE_FILE _APT_ROOT
+_OS_RELEASE_FILE=/etc/os-release
+_APT_ROOT=
+sed 's/gotham-agent-install\.[A-Za-z0-9][A-Za-z0-9]*/gotham-agent-install.RANDOM/g' \
+    "${SCRATCH}/if-clean.log" >"${SCRATCH}/if-clean.norm"
+sed 's/gotham-agent-install\.[A-Za-z0-9][A-Za-z0-9]*/gotham-agent-install.RANDOM/g' \
+    "${SCRATCH}/if-hostile.log" >"${SCRATCH}/if-hostile.norm"
+cmp -s "${SCRATCH}/if-clean.norm" "${SCRATCH}/if-hostile.norm" \
+    || fail "H1: hostile seam exports changed install-agent.sh --full --dry-run"
+grep -q 'ensure Docker Engine and the compose plugin (--full)' "${SCRATCH}/if-hostile.log" \
+    || fail "H1: install-agent.sh --full --dry-run lost its Docker step"
+pass "H1: install-agent.sh --full --dry-run ignores hostile old- and new-name exports"
+
+# --- C1: control characters in the node id / dial address are rejected -----
+echo "==> C1 control characters in GOTHAM_AGENT_NODE_ID / GOTHAM_AGENT_CP_ADDR are rejected"
+CC_DIR="${SCRATCH}/ctrl"
+mkdir -p "${CC_DIR}"
+# A newline smuggling a second line (the classic agent.env injection) fails
+# closed with a clear error and writes nothing.
+CC_ENV="${CC_DIR}/agent.env"
+printf 'GOTHAM_AGENT_CP_ADDR=cp.example.com:9443\n' >"${CC_ENV}"
+# shellcheck disable=SC2034  # read by agent_env_write through eval
+GOTHAM_AGENT_NODE_ID="$(printf 'a\nGOTHAM_AGENT_INSECURE=true')"
+if agent_env_write "${CC_ENV}" "/etc/gotham/ca.crt" 0 2>"${CC_DIR}/node-err.log"; then
+    fail "a newline in GOTHAM_AGENT_NODE_ID was written to agent.env"
+else
+    grep -q 'control character' "${CC_DIR}/node-err.log" \
+        || fail "the newline rejection names no control character"
+    if grep -q '^GOTHAM_AGENT_INSECURE=' "${CC_ENV}"; then
+        fail "the smuggled GOTHAM_AGENT_INSECURE line reached agent.env"
+    fi
+fi
+unset_agent_env
+# Same for the dial address (DEL byte, generated so no raw 0x7f sits in source).
+CC_ENV2="${CC_DIR}/cp.env"
+printf 'GOTHAM_AGENT_NODE_ID=node-ctrl\n' >"${CC_ENV2}"
+# shellcheck disable=SC2034  # read by agent_env_write through eval
+GOTHAM_AGENT_CP_ADDR="$(printf 'cp.example.com:9443\177')"
+if agent_env_write "${CC_ENV2}" "/etc/gotham/ca.crt" 0 2>"${CC_DIR}/cp-err.log"; then
+    fail "a DEL byte in GOTHAM_AGENT_CP_ADDR was written to agent.env"
+else
+    grep -q 'control character' "${CC_DIR}/cp-err.log" \
+        || fail "the DEL rejection names no control character"
+fi
+unset_agent_env
+# A poisoned prior file is rejected the same way: the check runs on the value
+# actually written, not just the ambient environment.
+CC_ENV3="${CC_DIR}/prior.env"
+printf 'GOTHAM_AGENT_NODE_ID=a\177b\n' >"${CC_ENV3}"
+if agent_env_write "${CC_ENV3}" "/etc/gotham/ca.crt" 0 2>/dev/null; then
+    fail "a DEL byte from a prior agent.env was kept"
+fi
+# Printable metacharacters still pass through verbatim (no over-rejection):
+# the quoting class must survive this gate.
+CC_ENV4="${CC_DIR}/meta.env"
+printf 'GOTHAM_AGENT_CP_ADDR=cp.example.com:9443\n' >"${CC_ENV4}"
+# shellcheck disable=SC2034  # read by agent_env_write through eval
+GOTHAM_AGENT_NODE_ID="o'dd \$(touch ${CC_DIR}/pwned) *; rm -rf /"
+agent_env_write "${CC_ENV4}" "/etc/gotham/ca.crt" 0
+unset_agent_env
+grep -qxF "GOTHAM_AGENT_NODE_ID=o'dd \$(touch ${CC_DIR}/pwned) *; rm -rf /" "${CC_ENV4}" \
+    || fail "printable metacharacters in the node id were rejected or mangled"
+if [ -e "${CC_DIR}/pwned" ]; then
+    fail "the metachar node id executed during the write"
+fi
+pass "C1: control characters rejected (newline/DEL, ambient and prior), metacharacters kept verbatim"
 
 if [ "${FAILURES}" -eq 0 ]; then
     echo "ALL AGENT-INSTALL TESTS PASSED"

@@ -1,5 +1,5 @@
 import { http, teamHeaders } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 
 /**
  * Typed client for the notification-channel routes served by
@@ -219,17 +219,13 @@ export function describeChannelError(error: unknown): string {
       );
     }
     if (error.status === 400) {
-      return stripPrefix(error.message) || "Invalid channel configuration.";
+      return stripErrorPrefix(error.message) || "Invalid channel configuration.";
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
   }
   return "Something went wrong. Please try again.";
 }
 
-/** stripPrefix drops the domain package prefix from a backend message. */
-function stripPrefix(message: string): string {
-  return (message ?? "").replace(/^notifications:\s*/i, "").trim();
-}

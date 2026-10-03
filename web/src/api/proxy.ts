@@ -1,5 +1,5 @@
 import { http } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 
 /**
  * Typed client for the proxy SSL routes served by `internal/proxy`
@@ -388,27 +388,31 @@ export function describeProxyError(error: unknown): string {
       return "You need the admin scope to manage domains and SSL. Sign in with an admin account or use an admin API token.";
     }
     if (error.status === 400 || error.status === 422) {
-      return error.message || "Invalid request. Check the highlighted fields and retry.";
+      return (
+      stripErrorPrefix(error.message) ||
+      "Invalid request. Check the highlighted fields and retry."
+    );
     }
     if (error.status === 404) {
       return "Not found. It may have been deleted already.";
     }
     if (error.status === 409) {
-      return error.message || "The change conflicts with existing state.";
+      return stripErrorPrefix(error.message) || "The change conflicts with existing state.";
     }
     if (error.status === 502) {
       return "The node agent is unreachable. Check the node status and retry.";
     }
     if (error.status === 503) {
       return (
-        error.message ||
-        "The deployment secret is not configured, so credentials cannot be stored (set GOTHAM_SECRET_KEY)."
+        stripErrorPrefix(error.message) ||
+        "The deployment secret is not configured, so credentials cannot " +
+          "be stored (set GOTHAM_SECRET_KEY)."
       );
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
   }
   return "Something went wrong. Please try again.";
 }

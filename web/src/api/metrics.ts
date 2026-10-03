@@ -1,5 +1,5 @@
 import { http } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 
 /**
  * Typed client for the server metrics range route served by
@@ -76,12 +76,15 @@ export function describeMetricsError(error: unknown): string {
       return "Server metrics are not enabled on this control plane (FEATURE_METRICS=false).";
     }
     if (error.status === 400) {
-      return error.message || "Invalid metrics range. Pick another range and retry.";
+      return (
+      stripErrorPrefix(error.message) ||
+      "Invalid metrics range. Pick another range and retry."
+    );
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
   }
   return "Something went wrong. Please try again.";
 }

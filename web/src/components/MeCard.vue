@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NAvatar, NButton, NDropdown, NSpace, NText } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
-import { computed } from "vue";
+import { computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { useAuthStore } from "../stores/auth";
@@ -27,9 +27,30 @@ const userInitial = computed<string>(() =>
  */
 const roleText = computed<string>(() => meRoleLabel(teamsStore.activeTeam?.role ?? null));
 
-void teamsStore.ensureTeams().catch(() => {
-  // A failed teams read keeps the neutral fallback; the Teams page reports it.
-});
+/**
+ * loadRole reads the caller's teams for the footer label. A failed read
+ * keeps the neutral fallback and retries on the next mount or account
+ * change; a disabled teams feature (loaded with an empty list) keeps the
+ * neutral fallback permanently. The sign-out path resets the teams store
+ * (see the auth store), so a failed or stale read can never pin the
+ * previous account's role here.
+ */
+function loadRole(): void {
+  void teamsStore.ensureTeams().catch(() => {
+    // A failed teams read keeps the neutral fallback; the Teams page reports it.
+  });
+}
+
+onMounted(loadRole);
+
+// A different signed-in account (or a team change elsewhere) re-reads the
+// role even when the sidebar never remounts.
+watch(
+  () => authStore.user?.email,
+  () => {
+    loadRole();
+  },
+);
 
 async function handleSelect(key: string | number): Promise<void> {
   if (key !== "sign-out") {

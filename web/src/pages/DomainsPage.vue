@@ -211,7 +211,8 @@ function domainCell(certificate: Certificate): VNode {
       "span",
       { class: "cell-sub" },
       domain && domain !== certificate.domain
-        ? `${applicationName(certificate.application_id)} · base domain changed to ${domain} — re-save to re-record`
+        ? `${applicationName(certificate.application_id)} · base domain ` +
+          `changed to ${domain} — re-save to re-record`
         : applicationName(certificate.application_id),
     ),
   ]);
@@ -266,7 +267,8 @@ function certificateActions(certificate: Certificate): VNode {
               { default: () => "Delete" },
             ),
           default: () =>
-            `Delete the certificate configuration for ${certificate.domain}? The route falls back to plain HTTP.`,
+            `Delete the certificate configuration for ${certificate.domain}? ` +
+            "The route falls back to plain HTTP.",
         },
       ),
     ],
@@ -343,6 +345,12 @@ function certificateRowKey(row: Certificate): string {
   return row.id;
 }
 
+/**
+ * statsReady flips once the first load settles, so the tiles never flash a
+ * 0 that was never read.
+ */
+const statsReady = ref(false);
+
 /** load refreshes providers, certificates, redirects and the name map. */
 async function load(): Promise<void> {
   try {
@@ -356,12 +364,6 @@ async function load(): Promise<void> {
     statsReady.value = true;
   }
 }
-
-/**
- * statsReady flips once the first load settles, so the tiles never flash a
- * 0 that was never read.
- */
-const statsReady = ref(false);
 
 /**
  * statsBlocked is true while the first load is in flight or when a read

@@ -190,6 +190,15 @@ func (s *Store) ListDeploymentsByApp(ctx context.Context, applicationID pgtype.U
 	return s.queries.ListDeploymentsByApp(ctx, applicationID)
 }
 
+// ListDeploymentsByAppLimit returns at most limit of an application's newest
+// deployments, so latest-state readers never pull the full history.
+func (s *Store) ListDeploymentsByAppLimit(ctx context.Context, applicationID pgtype.UUID, limit int32) ([]sqlc.Deployment, error) {
+	return s.queries.ListDeploymentsByAppLimit(ctx, sqlc.ListDeploymentsByAppLimitParams{
+		ApplicationID: applicationID,
+		Limit:         limit,
+	})
+}
+
 // FailStaleDeployments marks deployments left non-terminal by a previous
 // control plane process as failed and reports how many rows were recovered.
 func (s *Store) FailStaleDeployments(ctx context.Context) (int64, error) {

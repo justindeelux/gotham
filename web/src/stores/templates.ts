@@ -74,6 +74,19 @@ export const useTemplatesStore = defineStore("templates", () => {
     return renderTemplate(slug, values);
   }
 
+  /**
+   * reset drops the cached catalog, so the next sign-in starts empty.
+   * Called on sign-out (see the auth store).
+   */
+  function reset(): void {
+    templates.value = [];
+    details.value = {};
+    loading.value = false;
+    error.value = null;
+    detailLoading.value = false;
+    detailError.value = null;
+  }
+
   return {
     templates,
     details,
@@ -81,6 +94,7 @@ export const useTemplatesStore = defineStore("templates", () => {
     error,
     detailLoading,
     detailError,
+    reset,
     fetchTemplates,
     detailOf,
     fetchDetail,

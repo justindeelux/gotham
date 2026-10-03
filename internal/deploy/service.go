@@ -87,6 +87,10 @@ type DeployService interface {
 	Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
 	// ListDeployments returns the application's deployments, newest first.
 	ListDeployments(ctx context.Context, userID, appID uuid.UUID) ([]Deployment, error)
+	// ListDeploymentsLimit returns at most limit of the application's newest
+	// deployments (clamped server-side), so latest-state readers never pull
+	// the full history.
+	ListDeploymentsLimit(ctx context.Context, userID, appID uuid.UUID, limit int) ([]Deployment, error)
 	// Rollback queues a deployment of a previous release's image. A zero
 	// deploymentID selects the previous successful deployment automatically.
 	Rollback(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error)
@@ -433,6 +437,32 @@ func (s *Service) ListDeployments(ctx context.Context, userID, appID uuid.UUID) 
 		return nil, err
 	}
 	deployments, err := s.repo.ListDeployments(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	if deployments == nil {
+		return []Deployment{}, nil
+	}
+	return deployments, nil
+}
+
+// maxDeploymentListLimit caps one ?limit= page of the deployments list.
+const maxDeploymentListLimit = 100
+
+// ListDeploymentsLimit returns at most limit of the application's newest
+// deployments. A non-positive limit selects one row (the newest deployment);
+// values above the server maximum are clamped.
+func (s *Service) ListDeploymentsLimit(ctx context.Context, userID, appID uuid.UUID, limit int) ([]Deployment, error) {
+	if _, err := s.application(ctx, userID, appID, false); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > maxDeploymentListLimit {
+		limit = maxDeploymentListLimit
+	}
+	deployments, err := s.repo.ListDeploymentsLimit(ctx, appID, limit)
 	if err != nil {
 		return nil, err
 	}

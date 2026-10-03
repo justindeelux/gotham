@@ -1,5 +1,5 @@
 import { http } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 
 /**
  * Typed client for the team-management routes served by `internal/teams`
@@ -223,8 +223,9 @@ export function isFeatureDisabled(error: unknown): boolean {
  * describeTeamError maps a thrown error to a user-facing message. The backend
  * answers 400 for validation, 403 for an insufficient role, 409 for the
  * last-owner / personal-team / non-empty-team protections and 410 for an
- * expired invite, and its message is the actionable part — the "teams: "
- * package prefix is stripped for display.
+ * expired invite, and its message is the actionable part — the internal
+ * "<package>: " prefix is stripped for display through the shared
+ * stripErrorPrefix helper.
  */
 export function describeTeamError(error: unknown): string {
   if (isApiError(error)) {
@@ -232,32 +233,36 @@ export function describeTeamError(error: unknown): string {
       return "Your session expired. Please sign in again.";
     }
     if (error.status === 403) {
-      return stripPrefix(error.message) || "Your team role does not allow this action.";
+      return (
+        stripErrorPrefix(error.message) ||
+        "Your team role does not allow this action."
+      );
     }
     if (error.status === 404) {
-      return stripPrefix(error.message) || "Not found. It may have been removed already.";
+      return (
+        stripErrorPrefix(error.message) ||
+        "Not found. It may have been removed already."
+      );
     }
     if (error.status === 409) {
       return (
-        stripPrefix(error.message) ||
+        stripErrorPrefix(error.message) ||
         "The team changed while you were editing it. Reload and retry."
       );
     }
     if (error.status === 410) {
-      return stripPrefix(error.message) || "This invite expired. Issue a new one.";
+      return stripErrorPrefix(error.message) || "This invite expired. Issue a new one.";
     }
     if (error.status === 400) {
-      return stripPrefix(error.message) || "Invalid request.";
+      return stripErrorPrefix(error.message) || "Invalid request.";
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return (
+      stripErrorPrefix(error.message) || "Something went wrong. Please try again."
+    );
   }
   return "Something went wrong. Please try again.";
 }
 
-/** stripPrefix drops a domain package prefix from a backend message. */
-function stripPrefix(message: string): string {
-  return (message ?? "").replace(/^(teams|notifications):\s*/i, "").trim();
-}

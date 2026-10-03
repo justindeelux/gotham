@@ -13,12 +13,15 @@ import {
 import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 
-import type { DeploymentState } from "../api/applications";
-import { countRunning, listApplications, listDeployments } from "../api/applications";
+import {
+  countRunning,
+  latestDeploymentStates,
+  listApplications,
+} from "../api/applications";
 import type { Server, ServerStatus } from "../api/servers";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
-import { relativeTime, toPercent, usageLevel } from "../utils/format";
+import { relativeTime, usageView } from "../utils/format";
 
 /**
  * Deployment is the typed seam for a deployments store that does not exist
@@ -46,32 +49,41 @@ const serversStore = useServersStore();
 
 /**
  * Applications backing the "Running applications" tile. Read once on mount
- * (no polling): the tile counts running versus total from the real list, and
- * shows an honest empty state only when the list is really empty.
+ * (no polling) from the caller's personal team — the same scope as the
+ * applications page — with at most the latest deployment row per application
+ * (GET ?limit=1, four requests at a time). The tile distinguishes four
+ * states: loading, error (with a retry, never a false "none yet"),
+ * genuinely empty, and ready. When only some per-application reads fail the
+ * figure is marked incomplete ("at least N running") instead of falsely low.
  */
 const applicationsLoading = ref(true);
+const applicationsError = ref<string | null>(null);
+const applicationsIncomplete = ref(false);
 const applicationTotal = ref(0);
 const applicationRunning = ref(0);
 
-/** fetchApplicationCounts loads the list plus each app's newest deployment. */
+/** fetchApplicationCounts loads the personal-team list plus latest states. */
 async function fetchApplicationCounts(): Promise<void> {
   applicationsLoading.value = true;
+  applicationsError.value = null;
   try {
     const applications = await listApplications();
     applicationTotal.value = applications.length;
-    const settled = await Promise.all(
-      applications.map((application) =>
-        listDeployments(application.id)
-          .then((deployments): DeploymentState | null =>
-            deployments.length > 0 ? deployments[0].state : null,
-          )
-          .catch((): DeploymentState | null => null),
-      ),
+    if (applications.length === 0) {
+      applicationRunning.value = 0;
+      applicationsIncomplete.value = false;
+      return;
+    }
+    const { states, failed } = await latestDeploymentStates(
+      applications.map((application) => application.id),
     );
-    applicationRunning.value = countRunning(settled);
+    applicationRunning.value = countRunning(states);
+    applicationsIncomplete.value = failed > 0;
   } catch {
     applicationTotal.value = 0;
     applicationRunning.value = 0;
+    applicationsIncomplete.value = false;
+    applicationsError.value = "Could not load applications";
   } finally {
     applicationsLoading.value = false;
   }
@@ -141,31 +153,6 @@ function nodeSubtitle(server: Server): string {
   return bits.join(" · ");
 }
 
-/** meterStatus maps usage to a Naive progress status via the shared thresholds. */
-function meterStatus(
-  value: number | null,
-): "default" | "success" | "warning" | "error" {
-  if (value === null || value === undefined) {
-    return "default";
-  }
-  switch (usageLevel(toPercent(value))) {
-    case "danger":
-      return "error";
-    case "warn":
-      return "warning";
-    default:
-      return "success";
-  }
-}
-
-/** usageLabel renders a nullable usage reading as a percentage or dash. */
-function usageLabel(value: number | null): string {
-  if (value === null || value === undefined) {
-    return "—";
-  }
-  return `${toPercent(value)}%`;
-}
-
 onMounted(() => {
   void serversStore.fetchServers().catch(() => {
     // The store already exposes the error; alert rendering is enough here.
@@ -227,12 +214,30 @@ onMounted(() => {
 
       <NCard class="kpi" title="Running applications" size="small">
         <NSkeleton v-if="applicationsLoading" text :repeat="2" />
+        <template v-else-if="applicationsError">
+          <p class="kpi-value num">—</p>
+          <p class="kpi-sub">
+            <NText depth="3">{{ applicationsError }}</NText>
+            <NButton
+              size="small"
+              quaternary
+              @click="() => void fetchApplicationCounts()"
+            >
+              Retry
+            </NButton>
+          </p>
+        </template>
         <template v-else-if="applicationTotal > 0">
           <p class="kpi-value num">
-            {{ applicationRunning }}<span class="kpi-unit">/{{ applicationTotal }}</span>
+            <span v-if="applicationsIncomplete" aria-hidden="true">≥</span
+            >{{ applicationRunning
+            }}<span class="kpi-unit">/{{ applicationTotal }}</span>
           </p>
           <p class="kpi-sub">
             <RouterLink :to="{ name: 'applications' }">View applications</RouterLink>
+            <NText v-if="applicationsIncomplete" depth="3">
+              Some states could not be read
+            </NText>
           </p>
         </template>
         <NEmpty v-else size="small" description="No applications yet" />
@@ -320,32 +325,38 @@ onMounted(() => {
               <div class="node-metrics">
                 <div class="node-metric">
                   <NText depth="3" class="metric-label">CPU</NText>
-                  <NText class="num metric-val">{{ usageLabel(server.cpu_usage) }}</NText>
+                  <NText class="num metric-val">
+                    {{ usageView(server.cpu_usage, "var(--accent)").label }}
+                  </NText>
                   <NProgress
                     type="line"
-                    :percentage="toPercent(server.cpu_usage)"
+                    :percentage="usageView(server.cpu_usage, 'var(--accent)').percentage"
                     :show-indicator="false"
-                    :status="meterStatus(server.cpu_usage)"
+                    :color="usageView(server.cpu_usage, 'var(--accent)').color"
                   />
                 </div>
                 <div class="node-metric">
                   <NText depth="3" class="metric-label">RAM</NText>
-                  <NText class="num metric-val">{{ usageLabel(server.mem_usage) }}</NText>
+                  <NText class="num metric-val">
+                    {{ usageView(server.mem_usage, "var(--success)").label }}
+                  </NText>
                   <NProgress
                     type="line"
-                    :percentage="toPercent(server.mem_usage)"
+                    :percentage="usageView(server.mem_usage, 'var(--success)').percentage"
                     :show-indicator="false"
-                    :status="meterStatus(server.mem_usage)"
+                    :color="usageView(server.mem_usage, 'var(--success)').color"
                   />
                 </div>
                 <div class="node-metric">
                   <NText depth="3" class="metric-label">Disk</NText>
-                  <NText class="num metric-val">{{ usageLabel(server.disk_usage) }}</NText>
+                  <NText class="num metric-val">
+                    {{ usageView(server.disk_usage, "var(--success)").label }}
+                  </NText>
                   <NProgress
                     type="line"
-                    :percentage="toPercent(server.disk_usage)"
+                    :percentage="usageView(server.disk_usage, 'var(--success)').percentage"
                     :show-indicator="false"
-                    :status="meterStatus(server.disk_usage)"
+                    :color="usageView(server.disk_usage, 'var(--success)').color"
                   />
                 </div>
               </div>

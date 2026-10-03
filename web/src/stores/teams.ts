@@ -97,6 +97,23 @@ export const useTeamsStore = defineStore("teams", () => {
     await fetchTeams().catch(() => undefined);
   }
 
+  /**
+   * reset drops the cached teams and the persisted selection, so the next
+   * sign-in starts from an empty cache instead of the previous account's
+   * roles. Called on sign-out (see the auth store): without it the sidebar
+   * role can belong to the previous user, because ensureTeams returns early
+   * once `loaded` is set.
+   */
+  function reset(): void {
+    teams.value = [];
+    loading.value = false;
+    loaded.value = false;
+    error.value = null;
+    featureDisabled.value = false;
+    activeTeamId.value = "";
+    persistTeamId("");
+  }
+
   /** create stores a team and selects it. */
   async function create(name: string): Promise<Team> {
     const team = await createTeamRequest(name);
@@ -135,6 +152,7 @@ export const useTeamsStore = defineStore("teams", () => {
     selectTeam,
     fetchTeams,
     ensureTeams,
+    reset,
     create,
     rename,
     remove,

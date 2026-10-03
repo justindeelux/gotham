@@ -75,6 +75,186 @@ async function loadModule(relativePath) {
   };
 }
 
+/** sleep pauses the harness without pulling in a test runner. */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ── load applications.ts with a controllable http layer ───────────────────
+async function loadApplicationsWithHttp() {
+  const directory = await mkdtemp(join(tmpdir(), "gotham-ui-truth-"));
+  const outfile = join(directory, "module.mjs");
+  await build({
+    entryPoints: [new URL("../src/api/applications.ts", import.meta.url).pathname],
+    outfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "controllable-http-layer",
+        setup(httpBuild) {
+          httpBuild.onResolve({ filter: /(^|\/)(\.\/)?http$/ }, () => ({
+            path: "controllable-http-layer",
+            namespace: "ctrl-http",
+          }));
+          httpBuild.onLoad({ filter: /.*/, namespace: "ctrl-http" }, () => ({
+            contents: [
+              "export const http = {",
+              "  get: (...a) => globalThis.__gothamHttp.get(...a),",
+              "  post: (...a) => globalThis.__gothamHttp.post(...a),",
+              "  patch: (...a) => globalThis.__gothamHttp.patch(...a),",
+              "  put: (...a) => globalThis.__gothamHttp.put(...a),",
+              "  delete: (...a) => globalThis.__gothamHttp.delete(...a),",
+              "};",
+              "export function teamHeaders() { return {}; }",
+            ].join("\n"),
+            loader: "js",
+          }));
+        },
+      },
+    ],
+  });
+  const module = await import(pathToFileURL(outfile).href);
+  return {
+    module,
+    cleanup: () => rm(directory, { recursive: true, force: true }),
+  };
+}
+
+// ── load a real Pinia store with stubbed API imports ───────────────────────
+// apiStubs maps an import specifier (as written in the store source, e.g.
+// "../api/teams") to the stub module contents. Pinia and Vue are bundled for
+// real, so setActivePinia reaches the instance under test.
+async function loadStoreHarness(storeFile, storeExport, apiStubs) {
+  const directory = await mkdtemp(join(tmpdir(), "gotham-store-check-"));
+  const outfile = join(directory, "store.mjs");
+  await build({
+    stdin: {
+      contents: [
+        'import { createPinia, setActivePinia } from "pinia";',
+        `import { ${storeExport} } from "./${storeFile}";`,
+        `export { createPinia, setActivePinia, ${storeExport} };`,
+      ].join("\n"),
+      resolveDir: new URL("../src/stores", import.meta.url).pathname,
+      loader: "ts",
+    },
+    outfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "stub-store-apis",
+        setup(stubBuild) {
+          stubBuild.onResolve({ filter: /.*/ }, (args) => {
+            if (Object.hasOwn(apiStubs, args.path)) {
+              return { path: args.path, namespace: "store-stub" };
+            }
+            return null;
+          });
+          stubBuild.onLoad({ filter: /.*/, namespace: "store-stub" }, (args) => ({
+            contents: apiStubs[args.path],
+            loader: "js",
+          }));
+        },
+      },
+    ],
+  });
+  const module = await import(pathToFileURL(outfile).href);
+  return {
+    module,
+    cleanup: () => rm(directory, { recursive: true, force: true }),
+  };
+}
+
+// ── load the real auth store with stubbed HTTP, token and user stores ─────
+async function loadAuthHarness() {
+  const directory = await mkdtemp(join(tmpdir(), "gotham-auth-check-"));
+  const outfile = join(directory, "store.mjs");
+  const storeNames = [
+    "teams", "servers", "applications", "databases", "notifications",
+    "services", "backups", "providers", "templates", "proxy",
+  ];
+  const storeImports = [
+    "teams:useTeamsStore", "servers:useServersStore",
+    "applications:useApplicationsStore", "databases:useDatabasesStore",
+    "notifications:useNotificationsStore", "services:useServicesStore",
+    "backups:useBackupsStore", "providers:useProvidersStore",
+    "templates:useTemplatesStore", "proxy:useProxyStore",
+  ];
+  const apiStubs = {
+    "../api/http": [
+      "export const http = {",
+      "  get: async () => { throw new Error('unused'); },",
+      "  post: (...a) => globalThis.__authHttp.post(...a),",
+      "  patch: async () => { throw new Error('unused'); },",
+      "  put: async () => { throw new Error('unused'); },",
+      "  delete: async () => { throw new Error('unused'); },",
+      "};",
+    ].join("\n"),
+    "../api/token": [
+      "export const getSession = () => ({",
+      "  user: null, accessToken: null, refreshToken: null,",
+      "});",
+      "export const setSession = () => {};",
+      "export const clearSession = () => {};",
+      "export const subscribeSession = () => {};",
+    ].join("\n"),
+    "../api/servers": ["export function stripErrorPrefix(m) { return m; }"].join("\n"),
+  };
+  for (const entry of storeImports) {
+    const [file, hook] = entry.split(":");
+    apiStubs[`./${file}`] = [
+      `export const ${hook} = () => globalThis.__userStores.${file};`,
+    ].join("\n");
+  }
+  void storeNames;
+  await build({
+    stdin: {
+      contents: [
+        'import { createPinia, setActivePinia } from "pinia";',
+        'import { useAuthStore } from "./auth";',
+        "export { createPinia, setActivePinia, useAuthStore };",
+      ].join("\n"),
+      resolveDir: new URL("../src/stores", import.meta.url).pathname,
+      loader: "ts",
+    },
+    outfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "stub-auth-deps",
+        setup(stubBuild) {
+          stubBuild.onResolve({ filter: /.*/ }, (args) => {
+            if (Object.hasOwn(apiStubs, args.path)) {
+              return { path: args.path, namespace: "auth-stub" };
+            }
+            return null;
+          });
+          stubBuild.onLoad({ filter: /.*/, namespace: "auth-stub" }, (args) => ({
+            contents: apiStubs[args.path],
+            loader: "js",
+          }));
+        },
+      },
+    ],
+  });
+  const module = await import(pathToFileURL(outfile).href);
+  return {
+    module,
+    cleanup: () => rm(directory, { recursive: true, force: true }),
+  };
+}
+
 async function main() {
   const format = await loadModule("../src/utils/format.ts");
   const servers = await loadModule("../src/api/servers.ts");
@@ -95,6 +275,39 @@ async function main() {
     assert(usageLevel(79) === "warn", "79 is warn");
     assert(usageLevel(80) === "danger", "80 is danger");
     assert(usageLevel(100) === "danger", "100 is danger");
+  });
+
+  console.log("shared usage view boundaries (JUS-10 fix round 1)");
+  await check("NaN renders as a dash, out-of-range readings clamp", () => {
+    const { usageView, usageBarColor } = format.module;
+    assert(
+      usageBarColor("ok", "var(--accent)") === "var(--accent)",
+      "healthy keeps the metric base hue",
+    );
+    assert(
+      usageBarColor("warn", "var(--accent)") === "var(--warn)",
+      "warn is amber everywhere",
+    );
+    assert(
+      usageBarColor("danger", "var(--accent)") === "var(--danger)",
+      "danger is red everywhere",
+    );
+    const missing = usageView(NaN, "var(--accent)");
+    assert(missing.label === "—", "NaN labels as a dash, not 0%");
+    assert(missing.percentage === 0, "NaN bars at zero");
+    const nullish = usageView(null, "var(--success)");
+    assert(nullish.label === "—", "null labels as a dash");
+    const negative = usageView(-3, "var(--success)");
+    assert(negative.percentage === 0, "negative clamps to 0");
+    assert(negative.label === "0%", "negative labels 0%");
+    const over = usageView(140, "var(--success)");
+    assert(over.percentage === 100, ">100 clamps to 100");
+    assert(over.color === "var(--danger)", ">100 renders danger red");
+    const healthy = usageView(0.49, "var(--accent)");
+    assert(healthy.label === "49%", "fraction scales to percent");
+    assert(healthy.color === "var(--accent)", "healthy keeps the base hue");
+    const warn = usageView(72, "var(--success)");
+    assert(warn.color === "var(--warn)", "72 renders amber");
   });
 
   console.log("server error prefix stripping (JUS-9)");
@@ -177,6 +390,379 @@ async function main() {
       countRunning(["queued", "building"]) === 0,
       "in-flight deploys are not running",
     );
+  });
+
+  console.log("tightened error prefix allowlist (fix round 1)");
+  await check("only real Go prefixes strip; ordinary words pass through", () => {
+    const { stripErrorPrefix } = servers.module;
+    assert(
+      stripErrorPrefix("config: key X missing") === "config: key X missing",
+      "config is not a backend prefix and stays",
+    );
+    assert(
+      stripErrorPrefix("clientip: 1.2.3.4") === "clientip: 1.2.3.4",
+      "clientip is not a backend prefix and stays",
+    );
+    assert(
+      stripErrorPrefix("deploy: list env config: boom") === "list env config: boom",
+      "deploy strips exactly one level",
+    );
+    assert(
+      stripErrorPrefix("ws: hub closed") === "hub closed",
+      "ws strips",
+    );
+    assert(
+      stripErrorPrefix("cleanup: retention failed") === "retention failed",
+      "cleanup strips",
+    );
+    assert(
+      stripErrorPrefix("Update: available") === "Update: available",
+      "sentence-case words are not prefixes",
+    );
+    assert(
+      stripErrorPrefix("  Servers: validation failed  ") === "validation failed",
+      "match is case-insensitive and trims",
+    );
+  });
+
+  console.log("every describe path strips backend prefixes (fix round 1)");
+  await check("database, team, proxy, service and generic paths strip", async () => {
+    const backups = await loadModule("../src/api/backups.ts");
+    const containers = await loadModule("../src/api/containers.ts");
+    const metrics = await loadModule("../src/api/metrics.ts");
+    const notifications = await loadModule("../src/api/notifications.ts");
+    const previews = await loadModule("../src/api/previews.ts");
+    const providers = await loadModule("../src/api/providers.ts");
+    const proxy = await loadModule("../src/api/proxy.ts");
+    const services = await loadModule("../src/api/services.ts");
+    const templates = await loadModule("../src/api/templates.ts");
+    try {
+      const prefixed = (prefix) => ({ message: `${prefix}: boom`, status: 500 });
+      assert(
+        databases.module.describeDatabaseError(prefixed("databases")) === "boom",
+        "database generic strips",
+      );
+      assert(
+        databases.module.describeDatabaseError(new Error("databases: gone")) === "gone",
+        "database Error path strips",
+      );
+      assert(
+        teams.module.describeTeamError({ message: "teams: gone", status: 400 }) ===
+          "gone",
+        "team 400 strips through the shared helper",
+      );
+      assert(
+        teams.module.describeTeamError(prefixed("teams")) === "boom",
+        "team generic strips",
+      );
+      assert(
+        proxy.module.describeProxyError({ message: "proxy: bad", status: 400 }) ===
+          "bad",
+        "proxy 400 strips",
+      );
+      assert(
+        services.module.describeServiceError({ message: "services: down", status: 502 }) ===
+          "Node agent error: down",
+        "service 502 strips the embedded detail",
+      );
+      assert(
+        backups.module.describeBackupError(prefixed("databases")) === "boom",
+        "backup generic strips",
+      );
+      assert(
+        containers.module.describeContainerError(prefixed("containers")) === "boom",
+        "container generic strips",
+      );
+      assert(
+        metrics.module.describeMetricsError(prefixed("ws")) === "boom",
+        "metrics generic strips",
+      );
+      assert(
+        notifications.module.describeChannelError(prefixed("notifications")) === "boom",
+        "channel generic strips",
+      );
+      assert(
+        previews.module.describePreviewError(prefixed("deploy")) === "boom",
+        "preview generic strips",
+      );
+      assert(
+        providers.module.describeProviderError(prefixed("providers")) === "boom",
+        "provider generic strips",
+      );
+      assert(
+        templates.module.describeTemplateError(prefixed("templates")) === "boom",
+        "template generic strips",
+      );
+      assert(
+        applications.module.describeApplicationError(prefixed("deploy")) === "boom",
+        "application generic strips",
+      );
+      assert(
+        applications.module.describeApplicationError(
+          { message: "config: key X missing", status: 500 },
+        ) === "config: key X missing",
+        "ordinary words still pass through",
+      );
+    } finally {
+      for (const loaded of [
+        backups, containers, metrics, notifications, previews,
+        providers, proxy, services, templates,
+      ]) {
+        await loaded.cleanup();
+      }
+    }
+  });
+
+  await check("bounded latest-state reads carry ?limit=1", async () => {
+    const bundled = await loadApplicationsWithHttp();
+    try {
+      const { latestDeploymentStates } = bundled.module;
+      const state = {
+        calls: [],
+        inflight: 0,
+        maxInflight: 0,
+        failApps: new Set(["app-3"]),
+      };
+      globalThis.__gothamHttp = {
+        get: async (url, config) => {
+          state.calls.push({ url, config });
+          state.inflight += 1;
+          state.maxInflight = Math.max(state.maxInflight, state.inflight);
+          await sleep(5);
+          state.inflight -= 1;
+          const id = url.split("/")[2];
+          if (state.failApps.has(id)) {
+            throw new Error("boom");
+          }
+          if (id === "app-empty") {
+            return { data: { deployments: [] } };
+          }
+          return {
+            data: {
+              deployments: [{ state: id === "app-2" ? "failed" : "running" }],
+            },
+          };
+        },
+      };
+      const ids = ["app-1", "app-2", "app-empty", "app-3", "app-4", "app-5"];
+      const { states, failed } = await latestDeploymentStates(ids, 2);
+      assert(state.maxInflight <= 2, `concurrency capped (saw ${state.maxInflight})`);
+      assert(state.calls.length === 6, "one read per application");
+      assert(
+        state.calls.every((call) => call.config?.params?.limit === 1),
+        "every read is bounded to the latest row",
+      );
+      assert(failed === 1, "one failed read counted");
+      assert(states.length === 6, "states keep input order");
+      assert(states[1] === "failed", "failed state preserved");
+      assert(states[2] === null && states[3] === null, "empty/failed read as null");
+      assert(
+        states[0] === "running" && states[4] === "running" && states[5] === "running",
+        "running states preserved",
+      );
+    } finally {
+      delete globalThis.__gothamHttp;
+      await bundled.cleanup();
+    }
+  });
+
+  await check("sign-out resets the teams cache (A owner, B read-only)", async () => {
+    const harness = await loadStoreHarness("teams", "useTeamsStore", {
+      "../api/teams": [
+        "export const listTeams = () => globalThis.__teamsApi.listTeams();",
+        "export const createTeam = async () => { throw new Error('unused'); };",
+        "export const deleteTeam = async () => {};",
+        "export const renameTeam = async () => { throw new Error('unused'); };",
+        "export const describeTeamError = (e) => String((e && e.message) || e);",
+        "export const isFeatureDisabled = () => false;",
+      ].join("\n"),
+    });
+    try {
+      const { useTeamsStore, createPinia, setActivePinia } = harness.module;
+      setActivePinia(createPinia());
+      const store = useTeamsStore();
+      globalThis.__teamsApi = {
+        listTeams: async () => [
+          { id: "t1", name: "A", is_personal: true, role: "owner" },
+        ],
+      };
+      await store.fetchTeams();
+      assert(store.activeTeam?.role === "owner", "A signs in as owner");
+      store.reset();
+      assert(store.teams.length === 0, "reset drops the list");
+      assert(store.loaded === false, "reset clears the loaded flag");
+      assert(store.activeTeamId === "", "reset clears the selection");
+      globalThis.__teamsApi = {
+        listTeams: async () => [
+          { id: "t2", name: "B", is_personal: true, role: "read_only" },
+        ],
+      };
+      await store.fetchTeams();
+      assert(store.activeTeam?.role === "read_only", "B signs in as read-only");
+    } finally {
+      delete globalThis.__teamsApi;
+      await harness.cleanup();
+    }
+  });
+
+  await check("user-scoped stores reset on sign-out", async () => {
+    const serversHarness = await loadStoreHarness("servers", "useServersStore", {
+      "../api/servers": [
+        "const api = () => globalThis.__serversApi;",
+        "export const listServers = (...a) => api().listServers(...a);",
+        "export const createServer = (...a) => api().createServer(...a);",
+        "export const deleteServer = (...a) => api().deleteServer(...a);",
+        "export const validateServer = (...a) => api().validateServer(...a);",
+        "export const updateServer = (...a) => api().updateServer(...a);",
+        "export const describeServerError = (e) => String((e && e.message) || e);",
+      ].join("\n"),
+    });
+    const appsHarness = await loadStoreHarness("applications", "useApplicationsStore", {
+      "../api/applications": [
+        "export const describeApplicationError = (e) => String((e && e.message) || e);",
+        "export const getApplication = async () => { throw new Error('unused'); };",
+        "export const getEnv = async () => [];",
+        "export const getStorages = async () => [];",
+        "export const isActiveDeployment = () => false;",
+        "export const listDeployments = async () => [];",
+        "export const replaceEnv = async () => [];",
+        "export const replaceStorages = async () => [];",
+        "export const rollbackDeployment = async () => { throw new Error('unused'); };",
+        "export const startApplication = async () => { throw new Error('unused'); };",
+        "export const stopApplication = async () => { throw new Error('unused'); };",
+        "export const triggerDeploy = async () => { throw new Error('unused'); };",
+      ].join("\n"),
+    });
+    const databasesHarness = await loadStoreHarness("databases", "useDatabasesStore", {
+      "../api/databases": [
+        "export const createDatabase = async () => { throw new Error('unused'); };",
+        "export const deleteDatabase = async () => {};",
+        "export const describeDatabaseError = (e) => String((e && e.message) || e);",
+        "export const getDatabase = async () => { throw new Error('unused'); };",
+        "export const getDatabaseCredentials = async () => { throw new Error('unused'); };",
+        "export const listDatabases = async () => [];",
+        "export const renameDatabase = async () => { throw new Error('unused'); };",
+        "export const restartDatabase = async () => { throw new Error('unused'); };",
+        "export const startDatabase = async () => { throw new Error('unused'); };",
+        "export const stopDatabase = async () => { throw new Error('unused'); };",
+      ].join("\n"),
+    });
+    const notificationsHarness = await loadStoreHarness(
+      "notifications",
+      "useNotificationsStore",
+      {
+        "../api/notifications": [
+          "export const createChannel = async () => { throw new Error('unused'); };",
+          "export const deleteChannel = async () => {};",
+          "export const describeChannelError = (e) => String((e && e.message) || e);",
+          "export const isFeatureDisabled = () => false;",
+          "export const listChannels = async () => [];",
+          "export const testChannel = async () => { throw new Error('unused'); };",
+          "export const updateChannel = async () => { throw new Error('unused'); };",
+        ].join("\n"),
+        "./teams": [
+          "export const useTeamsStore = () => ({ activeTeamId: '' });",
+        ].join("\n"),
+      },
+    );
+    try {
+      serversHarness.module.setActivePinia(serversHarness.module.createPinia());
+      const serversStore = serversHarness.module.useServersStore();
+      serversStore.servers = [{ id: "s1" }];
+      serversStore.error = "stale";
+      serversStore.reset();
+      assert(serversStore.servers.length === 0, "servers reset drops the list");
+      assert(serversStore.error === null, "servers reset clears the error");
+
+      appsHarness.module.setActivePinia(appsHarness.module.createPinia());
+      const appsStore = appsHarness.module.useApplicationsStore();
+      appsStore.applicationsById = { a: { id: "a" } };
+      appsStore.deploymentsByApp = { a: [] };
+      appsStore.reset();
+      assert(
+        Object.keys(appsStore.applicationsById).length === 0,
+        "applications reset drops the cache",
+      );
+      assert(
+        Object.keys(appsStore.deploymentsByApp).length === 0,
+        "applications reset drops deployments",
+      );
+
+      databasesHarness.module.setActivePinia(
+        databasesHarness.module.createPinia(),
+      );
+      const databasesStore = databasesHarness.module.useDatabasesStore();
+      databasesStore.databases = [{ id: "d1" }];
+      databasesStore.credentialsById = { d1: {} };
+      databasesStore.reset();
+      assert(databasesStore.databases.length === 0, "databases reset drops rows");
+      assert(
+        Object.keys(databasesStore.credentialsById).length === 0,
+        "databases reset drops credentials",
+      );
+
+      notificationsHarness.module.setActivePinia(
+        notificationsHarness.module.createPinia(),
+      );
+      const notificationsStore = notificationsHarness.module.useNotificationsStore();
+      notificationsStore.channels = [{ id: "c1" }];
+      notificationsStore.reset();
+      assert(
+        notificationsStore.channels.length === 0,
+        "notifications reset drops channels",
+      );
+    } finally {
+      await serversHarness.cleanup();
+      await appsHarness.cleanup();
+      await databasesHarness.cleanup();
+      await notificationsHarness.cleanup();
+    }
+  });
+
+  await check("auth sign-out resets every user-scoped store", async () => {
+    const harness = await loadAuthHarness();
+    try {
+      const { useAuthStore, createPinia, setActivePinia } = harness.module;
+      const seen = [];
+      const postCalls = [];
+      globalThis.__userStores = Object.fromEntries(
+        [
+          "teams", "servers", "applications", "databases", "notifications",
+          "services", "backups", "providers", "templates", "proxy",
+        ].map((name) => [
+          name,
+          { reset: () => seen.push(name) },
+        ]),
+      );
+      globalThis.__authHttp = {
+        post: async (...args) => {
+          postCalls.push(args);
+          return { data: {} };
+        },
+      };
+      setActivePinia(createPinia());
+      const store = useAuthStore();
+      store.setSession({
+        user: { email: "a@example.com" },
+        access_token: "access",
+        refresh_token: "refresh",
+      });
+      await store.logout();
+      assert(postCalls.length === 1, "logout revokes the refresh token");
+      assert(seen.length === 10, `all ten stores reset (saw ${seen.length})`);
+      assert(store.accessToken === null, "session cleared");
+      store.setSession({
+        user: { email: "b@example.com" },
+        access_token: "access",
+        refresh_token: "refresh",
+      });
+      store.clearSession();
+      assert(seen.length === 20, "clearSession resets too (401 path)");
+    } finally {
+      delete globalThis.__userStores;
+      delete globalThis.__authHttp;
+      await harness.cleanup();
+    }
   });
 
   await format.cleanup();

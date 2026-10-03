@@ -506,6 +506,54 @@ func (q *Queries) ListDeploymentsByApp(ctx context.Context, applicationID pgtype
 	return items, nil
 }
 
+const listDeploymentsByAppLimit = `-- name: ListDeploymentsByAppLimit :many
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at FROM deployments
+WHERE application_id = $1
+ORDER BY created_at DESC, id DESC
+LIMIT $2
+`
+
+type ListDeploymentsByAppLimitParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	Limit         int32       `json:"limit"`
+}
+
+func (q *Queries) ListDeploymentsByAppLimit(ctx context.Context, arg ListDeploymentsByAppLimitParams) ([]Deployment, error) {
+	rows, err := q.db.Query(ctx, listDeploymentsByAppLimit, arg.ApplicationID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Deployment{}
+	for rows.Next() {
+		var i Deployment
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.Kind,
+			&i.State,
+			&i.ImageTag,
+			&i.RegistryImage,
+			&i.Digest,
+			&i.Error,
+			&i.Attempt,
+			&i.ContainerID,
+			&i.RollbackFrom,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEnvVarsByApp = `-- name: ListEnvVarsByApp :many
 SELECT id, application_id, key, value, created_at FROM env_vars
 WHERE application_id = $1

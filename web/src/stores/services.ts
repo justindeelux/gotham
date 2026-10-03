@@ -53,6 +53,20 @@ export const useServicesStore = defineStore("services", () => {
   let historyReadToken = 0;
   const historyReadTokens = new Map<string, number>();
 
+  /**
+   * reset drops the cached services and histories and invalidates in-flight
+   * history reads, so the next sign-in never sees the previous account's
+   * data. Called on sign-out (see the auth store).
+   */
+  function reset(): void {
+    historyReadToken += 1;
+    historyReadTokens.clear();
+    services.value = [];
+    histories.value = {};
+    loading.value = false;
+    error.value = null;
+  }
+
   /** applyService merges one service into the in-memory list in place. */
   function applyService(updated: Service): void {
     const index = services.value.findIndex((item) => item.id === updated.id);
@@ -222,6 +236,7 @@ export const useServicesStore = defineStore("services", () => {
     histories,
     loading,
     error,
+    reset,
     fetchServices,
     serviceOf,
     fetchService,

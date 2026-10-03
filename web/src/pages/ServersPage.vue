@@ -22,7 +22,7 @@ import EditServerModal from "../components/EditServerModal.vue";
 import GothamIcon from "../components/GothamIcon.vue";
 import ServerStatusTag from "../components/ServerStatusTag.vue";
 import { useServersStore } from "../stores/servers";
-import { formatBytes, relativeTime, toPercent, usageLevel } from "../utils/format";
+import { formatBytes, relativeTime, usageView } from "../utils/format";
 
 const router = useRouter();
 const route = useRoute();
@@ -179,7 +179,6 @@ watch(pageCount, (count) => {
   }
 });
 
-/** meterColor picks the bar color: per-metric base, danger red at 80%+. */
 /**
  * initials builds the node avatar label: the first letters of up to two words
  * ("gotham-prod-01" -> "GP"). Ported from the server-detail avatar.
@@ -188,38 +187,6 @@ function initials(name: string): string {
   const parts = name.split(/[-_.\s]+/).filter(Boolean);
   const letters = parts.slice(0, 2).map((part) => part[0] ?? "");
   return (letters.join("") || name.slice(0, 2)).toUpperCase();
-}
-
-/** MetricView is one rendered usage tile. */
-interface MetricView {
-  /** label is the displayed reading, or an em dash when the node reported none. */
-  label: string;
-  /** color is the bar color from the shared severity scale (see usageLevel). */
-  color: string;
-  /** percentage is the normalized 0..100 reading the bar renders. */
-  percentage: number;
-}
-
-/**
- * metricView normalizes a heartbeat usage fraction (0..1) before applying the
- * shared severity thresholds (see usageLevel) — comparing the raw fraction
- * with a percentage threshold would never turn the bar red. The healthy bar
- * keeps the metric's base color; warn and danger levels render amber and red
- * on every page.
- */
-function metricView(value: number | null, base: string): MetricView {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return { label: "—", color: base, percentage: 0 };
-  }
-  const percentage = Math.max(0, Math.min(100, toPercent(value)));
-  switch (usageLevel(percentage)) {
-    case "danger":
-      return { label: `${percentage}%`, color: "var(--danger)", percentage };
-    case "warn":
-      return { label: `${percentage}%`, color: "var(--warn)", percentage };
-    default:
-      return { label: `${percentage}%`, color: base, percentage };
-  }
 }
 
 /** keyLabel identifies the stored credential without revealing any secret. */
@@ -479,19 +446,22 @@ watch(
             </dd>
             <dt>SSH</dt>
             <dd>
-              <span class="inline-code">{{ keyLabel(server) }}</span><template v-if="server.ssh_user"> · user <span class="mono">{{ server.ssh_user }}</span></template>
+              <span class="inline-code">{{ keyLabel(server) }}</span
+              ><template v-if="server.ssh_user">
+                · user <span class="mono">{{ server.ssh_user }}</span>
+              </template>
             </dd>
           </dl>
 
           <div class="node-metrics">
             <div class="node-metric">
               <p class="stat-label">CPU</p>
-              <p class="val">{{ metricView(server.cpu_usage, 'var(--accent)').label }}</p>
+              <p class="val">{{ usageView(server.cpu_usage, 'var(--accent)').label }}</p>
               <NProgress
                 class="mt-2"
                 type="line"
-                :percentage="metricView(server.cpu_usage, 'var(--accent)').percentage"
-                :color="metricView(server.cpu_usage, 'var(--accent)').color"
+                :percentage="usageView(server.cpu_usage, 'var(--accent)').percentage"
+                :color="usageView(server.cpu_usage, 'var(--accent)').color"
                 :height="6"
                 :show-indicator="false"
                 :rail-style="{ borderRadius: 'var(--radius-pill)' }"
@@ -499,12 +469,12 @@ watch(
             </div>
             <div class="node-metric">
               <p class="stat-label">RAM</p>
-              <p class="val">{{ metricView(server.mem_usage, 'var(--success)').label }}</p>
+              <p class="val">{{ usageView(server.mem_usage, 'var(--success)').label }}</p>
               <NProgress
                 class="mt-2"
                 type="line"
-                :percentage="metricView(server.mem_usage, 'var(--success)').percentage"
-                :color="metricView(server.mem_usage, 'var(--success)').color"
+                :percentage="usageView(server.mem_usage, 'var(--success)').percentage"
+                :color="usageView(server.mem_usage, 'var(--success)').color"
                 :height="6"
                 :show-indicator="false"
                 :rail-style="{ borderRadius: 'var(--radius-pill)' }"
@@ -512,12 +482,12 @@ watch(
             </div>
             <div class="node-metric">
               <p class="stat-label">Disk</p>
-              <p class="val">{{ metricView(server.disk_usage, 'var(--success)').label }}</p>
+              <p class="val">{{ usageView(server.disk_usage, 'var(--success)').label }}</p>
               <NProgress
                 class="mt-2"
                 type="line"
-                :percentage="metricView(server.disk_usage, 'var(--success)').percentage"
-                :color="metricView(server.disk_usage, 'var(--success)').color"
+                :percentage="usageView(server.disk_usage, 'var(--success)').percentage"
+                :color="usageView(server.disk_usage, 'var(--success)').color"
                 :height="6"
                 :show-indicator="false"
                 :rail-style="{ borderRadius: 'var(--radius-pill)' }"
@@ -854,7 +824,7 @@ watch(
   }
 }
 
-/* ── Node grid (docs/design/servers.html) ──────────────────────────────────
+/* ── Node grid (docs/design/servers.html) ──
    The list region is a grid of node cards, not a data table. These rules are
    ported from docs/design/assets/gotham-views.css (.node-card family) and
    docs/design/assets/gotham-ui.css (grid/avatar/tag/meter/kv utilities) that

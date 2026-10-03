@@ -227,6 +227,24 @@ export const useApplicationsStore = defineStore("applications", () => {
     pollTimers.clear();
   }
 
+  /**
+   * reset drops every cached collection and stops polling, so the next
+   * sign-in never sees the previous account's applications. Called on
+   * sign-out (see the auth store).
+   */
+  function reset(): void {
+    stopAllPolling();
+    applicationsById.value = {};
+    deploymentsByApp.value = {};
+    envByApp.value = {};
+    storagesByApp.value = {};
+    loading.value = false;
+    error.value = null;
+    acting.value = false;
+    savingEnv.value = false;
+    savingStorages.value = false;
+  }
+
   /** deploy queues a deployment of the application's current revision. */
   async function deploy(appId: string): Promise<Deployment> {
     acting.value = true;
@@ -310,6 +328,7 @@ export const useApplicationsStore = defineStore("applications", () => {
     saveStorages,
     stopPolling,
     stopAllPolling,
+    reset,
     deploy,
     rollback,
     stopApp,

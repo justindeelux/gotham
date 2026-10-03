@@ -354,6 +354,28 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
+  /**
+   * reset drops every cached collection, so the next sign-in never sees the
+   * previous account's backups. Called on sign-out (see the auth store).
+   */
+  function reset(): void {
+    backupsById.value = {};
+    backupsLoading.value = false;
+    backupsError.value = null;
+    backupsActing.value = false;
+    restoresById.value = {};
+    restoresLoading.value = false;
+    restoresError.value = null;
+    schedulesById.value = {};
+    schedulesLoading.value = false;
+    schedulesError.value = null;
+    schedulesActing.value = false;
+    targets.value = [];
+    targetsLoading.value = false;
+    targetsError.value = null;
+    targetsActing.value = false;
+  }
+
   return {
     backupsById,
     backupsLoading,
@@ -390,5 +412,6 @@ export const useBackupsStore = defineStore("backups", () => {
     editTarget,
     removeTarget,
     checkTarget,
+    reset,
   };
 });

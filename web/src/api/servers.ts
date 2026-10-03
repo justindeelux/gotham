@@ -221,37 +221,48 @@ export function describeServerError(error: unknown): string {
 }
 
 /**
- * Backend package names whose "<package>: " prefix is internal detail.
- * Mirrors the package directories under internal/ that surface errors
- * through the API (for example "servers: validation failed: ...").
+ * Backend package names whose "<package>: " prefix is internal detail. The
+ * list is derived from the real `"pkg: ..."` error strings produced under
+ * internal/ (databases, deploy, auth, providers, proxy, teams, servers,
+ * services, notifications, webhooks, server, builds, containers, updates,
+ * templates, store, cleanup, ws, docker, spa, oauth, ssh) — ordinary words
+ * that never prefix a Go error there (config, clientip, ...) are left alone,
+ * so a legitimate message like "config: key X missing" passes through
+ * unchanged.
  */
 const errorPrefixPackages = new Set([
   "auth",
   "builds",
-  "clientip",
-  "config",
+  "cleanup",
   "containers",
   "databases",
   "deploy",
+  "docker",
   "notifications",
+  "oauth",
   "providers",
   "proxy",
   "server",
   "servers",
   "services",
+  "spa",
+  "ssh",
   "store",
   "teams",
   "templates",
   "updates",
   "webhooks",
+  "ws",
 ]);
 
 /**
- * stripErrorPrefix drops one internal "<package>: " prefix from a backend
- * message, keeping the useful remainder ("servers: validation failed: ssh
- * dial ..." renders as "validation failed: ssh dial ..."). Only known
- * backend package names are stripped, so values like "host:port ..." pass
- * through untouched.
+ * stripErrorPrefix drops one internal "<package>: " prefix from the start of
+ * a backend message, keeping the useful remainder ("servers: validation
+ * failed: ssh dial ..." renders as "validation failed: ssh dial ..."). Only
+ * known backend package names are stripped, and only one level: a nested
+ * "proxy: render static config: ..." becomes "render static config: ...".
+ * Anything else — including ordinary words like "config: key X missing" —
+ * passes through untouched.
  */
 export function stripErrorPrefix(message: string): string {
   const match = /^\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*([\s\S]*)$/.exec(message ?? "");

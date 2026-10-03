@@ -119,6 +119,22 @@ export const useDatabasesStore = defineStore("databases", () => {
   }
 
   /**
+   * reset drops the cached list and credentials and stops polling, so the
+   * next sign-in never sees the previous account's databases. Called on
+   * sign-out (see the auth store).
+   */
+  function reset(): void {
+    stopPolling();
+    databases.value = [];
+    loading.value = false;
+    error.value = null;
+    acting.value = false;
+    credentialsById.value = {};
+    credentialsLoading.value = false;
+    credentialsError.value = null;
+  }
+
+  /**
    * fetchDatabase loads one database and merges it into the list, so the
    * detail page stays consistent with the list after lifecycle actions.
    */
@@ -243,6 +259,7 @@ export const useDatabasesStore = defineStore("databases", () => {
     refreshDatabases,
     pollDatabases,
     stopPolling,
+    reset,
     fetchDatabase,
     provision,
     rename,

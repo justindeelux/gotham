@@ -62,6 +62,12 @@ SELECT * FROM deployments
 WHERE application_id = $1
 ORDER BY created_at DESC, id DESC;
 
+-- name: ListDeploymentsByAppLimit :many
+SELECT * FROM deployments
+WHERE application_id = $1
+ORDER BY created_at DESC, id DESC
+LIMIT $2;
+
 -- name: GetActiveDeploymentByApp :one
 SELECT * FROM deployments
 WHERE application_id = $1 AND state NOT IN ('running', 'failed')

@@ -153,6 +153,18 @@ export const useNotificationsStore = defineStore("notifications", () => {
     return testChannel(activeTeamId(), id);
   }
 
+  /**
+   * reset drops the held list and its team binding, so the next sign-in
+   * never sees the previous account's channels. Called on sign-out (see the
+   * auth store).
+   */
+  function reset(): void {
+    listReadToken += 1;
+    clearList();
+    loadedTeamId.value = "";
+    loading.value = false;
+  }
+
   return {
     channels,
     loading,
@@ -164,5 +176,6 @@ export const useNotificationsStore = defineStore("notifications", () => {
     update,
     remove,
     test,
+    reset,
   };
 });

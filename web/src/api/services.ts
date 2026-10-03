@@ -1,5 +1,5 @@
 import { http } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 
 /**
  * Typed client for the compose-service routes served by `internal/services`
@@ -343,26 +343,33 @@ export function describeServiceError(error: unknown): string {
       return "Your session expired. Please sign in again.";
     }
     if (error.status === 400) {
-      return error.message || "Invalid request. Check the compose document and retry.";
+      return (
+      stripErrorPrefix(error.message) ||
+      "Invalid request. Check the compose document and retry."
+    );
     }
     if (error.status === 404) {
-      return error.message || "Service not found. It may have been deleted already.";
+      return (
+      stripErrorPrefix(error.message) ||
+      "Service not found. It may have been deleted already."
+    );
     }
     if (error.status === 409) {
       return "A service with that name already exists. Pick another name.";
     }
     if (error.status === 502) {
-      return error.message
-        ? `Node agent error: ${error.message}`
+      const detail = stripErrorPrefix(error.message);
+      return detail
+        ? `Node agent error: ${detail}`
         : "The node agent is unreachable. Check the node status and retry.";
     }
     if (error.status === 503) {
       return "Services are disabled on the control plane (FEATURE_SERVICES=false).";
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
   }
   return "Something went wrong. Please try again.";
 }

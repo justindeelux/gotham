@@ -1,5 +1,5 @@
 import { http, teamHeaders } from "./http";
-import { isApiError } from "./servers";
+import { isApiError, stripErrorPrefix } from "./servers";
 
 /**
  * Typed client for the database routes served by `internal/databases`
@@ -223,15 +223,20 @@ export function describeDatabaseError(error: unknown): string {
       return "A database with that name already exists.";
     }
     if (error.status === 502) {
-      return "The node agent is unreachable or the healthcheck failed. Check the node status and retry.";
+      return (
+        "The node agent is unreachable or the healthcheck failed. " +
+        "Check the node status and retry."
+      );
     }
     if (error.status === 503) {
       return "Databases are disabled on the control plane (FEATURE_DATABASES=false).";
     }
-    return error.message || "Request failed";
+    return stripErrorPrefix(error.message) || "Request failed";
   }
   if (error instanceof Error) {
-    return error.message;
+    return (
+      stripErrorPrefix(error.message) || "Something went wrong. Please try again."
+    );
   }
   return "Something went wrong. Please try again.";
 }

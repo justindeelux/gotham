@@ -312,7 +312,7 @@ onUnmounted(() => {
       <div class="stat">
         <p class="stat-label">Stopped</p>
         <p class="stat-value num">{{ filterCounts.stopped }}</p>
-        <p class="stat-sub muted">volume retained 7 days</p>
+        <p class="stat-sub muted">container stopped, volume intact</p>
       </div>
     </div>
 

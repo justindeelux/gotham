@@ -59,12 +59,11 @@ function openApplication(): void {
   void router.push({ name: "application-detail", params: { id } });
 }
 
-/** handleCreated refreshes the list attempt after the wizard succeeds. */
+/** handleCreated navigates to the detail page after the wizard succeeds. */
 function handleCreated(application: Application): void {
   // The wizard already announced the create (and whether the first deploy
-  // queued), so this handler only refreshes and navigates — a second toast
-  // here was a duplicate (C4-15).
-  void fetchKnownApplications();
+  // queued), so this handler only navigates — a list refetch here would run
+  // against a component being unmounted and its result discarded (C4-15).
   void router.push({
     name: "application-detail",
     params: { id: application.id },

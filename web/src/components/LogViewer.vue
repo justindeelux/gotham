@@ -524,10 +524,11 @@ onBeforeUnmount(() => {
     </header>
 
     <div class="log-viewer__toolbar">
+      <!-- The labels already flip (Pause/Resume, Follow/Following), so no
+           aria-pressed: a screen reader would otherwise hear "Resume, pressed". -->
       <NButton
         size="small"
         secondary
-        :aria-pressed="isPaused"
         @click="togglePause"
       >
         {{ isPaused ? "Resume" : "Pause" }}
@@ -536,7 +537,6 @@ onBeforeUnmount(() => {
         size="small"
         secondary
         :type="isFollowing ? 'primary' : 'default'"
-        :aria-pressed="isFollowing"
         @click="toggleFollow"
       >
         {{ isFollowing ? "Following" : "Follow" }}

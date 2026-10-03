@@ -169,9 +169,29 @@ function connectionScheme(engine: string): string {
 }
 
 /**
+ * dbContainerName mirrors the backend's containerName rule
+ * (internal/databases/spec.go): lowercased, non-Docker characters collapsed
+ * to dashes, truncated to 32 chars, suffixed with the id head. The API
+ * exposes no container-name field, so the internal DSN must be derived — a
+ * guessed `gotham-db-<name>` would not resolve.
+ */
+function dbContainerName(name: string, id: string): string {
+  const sanitized = name
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+    .replace(/^-+|-+$/g, "");
+  const suffix = id.slice(0, 8);
+  return sanitized === "" ? `gotham-db-${suffix}` : `gotham-db-${sanitized}-${suffix}`;
+}
+
+/**
  * connectionString builds the full DSN (with the real password) for the Copy
  * button. The public endpoint is preferred when the database exposes a public
- * port; otherwise the in-network address mirrors the mockup's internal host.
+ * port, but only when the node address is actually resolved — substituting the
+ * raw server UUID would copy an unroutable host. The internal fallback uses
+ * the exact backend container-name rule.
  */
 const connectionString = computed<string>(() => {
   const db = database.value;
@@ -180,13 +200,24 @@ const connectionString = computed<string>(() => {
     return "";
   }
   const scheme = connectionScheme(db.engine);
-  const internalPort = enginePorts[db.engine] ?? 0;
   const server = serversStore.servers.find((item) => item.id === db.server_id);
-  const host =
-    db.public_port > 0
-      ? `${server?.ip ?? db.server_id}:${db.public_port}`
-      : `gotham-db-${db.name}:${internalPort}`;
-  return `${scheme}://${creds.username}:${creds.password}@${host}/${creds.database}`;
+  if (db.public_port > 0) {
+    if (!server?.ip) {
+      return "";
+    }
+    return `${scheme}://${creds.username}:${creds.password}@${server.ip}:${db.public_port}/${creds.database}`;
+  }
+  const internalPort = enginePorts[db.engine] ?? 0;
+  return `${scheme}://${creds.username}:${creds.password}@${dbContainerName(db.name, db.id)}:${internalPort}/${creds.database}`;
+});
+
+/** nodeAddressUnknown renders instead of a DSN with an unroutable host. */
+const nodeAddressUnknown = computed<boolean>(() => {
+  const db = database.value;
+  if (!db || !credentials.value || db.public_port <= 0) {
+    return false;
+  }
+  return !serversStore.servers.some((item) => item.id === db.server_id && item.ip);
 });
 
 /** connectionDisplay masks the password for on-screen rendering. */
@@ -196,6 +227,10 @@ const connectionDisplay = computed<string>(() =>
 
 /** copyConnectionString copies the unmasked DSN. */
 function copyConnectionString(): void {
+  if (nodeAddressUnknown.value) {
+    message.error("Node address unknown — cannot build the public DSN yet");
+    return;
+  }
   if (connectionString.value === "") {
     message.error("Credentials are not loaded yet");
     return;
@@ -993,6 +1028,9 @@ onUnmounted(() => {
                       Copy connection string
                     </NButton>
                   </div>
+                  <NText v-else-if="nodeAddressUnknown" depth="3">
+                    Public endpoint unavailable · node address unknown.
+                  </NText>
                 </NSpace>
                 <NEmpty
                   v-else-if="!databasesStore.credentialsLoading"

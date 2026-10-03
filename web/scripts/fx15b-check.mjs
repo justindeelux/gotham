@@ -10,7 +10,7 @@
 //
 // Run from web/:  node scripts/fx15b-check.mjs
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -168,6 +168,59 @@ async function main() {
       assert(USAGE_DANGER_PERCENT === 80, "threshold is 80");
       assert(toPercent(0.8) === 80, "0.8 fraction normalizes to the threshold");
       assert(toPercent(80) === 80, "80 already reads as a percentage");
+    });
+
+    await check("B4-13: dashboard and server list share the threshold (no hard-coded 80)", async () => {
+      const pages = ["../src/pages/DashboardPage.vue", "../src/pages/ServersPage.vue"];
+      for (const page of pages) {
+        const source = await readFile(new URL(page, import.meta.url), "utf8");
+        assert(
+          source.includes("USAGE_DANGER_PERCENT"),
+          `${page} must reference the shared threshold`,
+        );
+        assert(
+          !/[><]=?\s*80\b/.test(source),
+          `${page} must not hard-code a literal 80 comparison`,
+        );
+      }
+    });
+
+    await check("B4-13: exactly 80% counts as danger (inclusive >=)", async () => {
+      const source = await readFile(
+        new URL("../src/pages/ServersPage.vue", import.meta.url),
+        "utf8",
+      );
+      assert(
+        source.includes(">= USAGE_DANGER_PERCENT"),
+        "the server list must compare with >= (a node at exactly 80% is danger-red)",
+      );
+      // Boundary behaviour through the shared normalizer: 0.8 lands exactly
+      // on the threshold, so an inclusive comparison flags it.
+      assert(
+        toPercent(0.8) >= USAGE_DANGER_PERCENT,
+        "0.8 must reach the danger threshold",
+      );
+      assert(
+        toPercent(0.794) < USAGE_DANGER_PERCENT,
+        "just under 0.8 must stay below the danger threshold",
+      );
+    });
+
+    await check("C4-14: EnvEditor/StorageEditor keep stable row keys wired", async () => {
+      const editors = [
+        "../src/components/EnvEditor.vue",
+        "../src/components/StorageEditor.vue",
+      ];
+      for (const editor of editors) {
+        const source = await readFile(new URL(editor, import.meta.url), "utf8");
+        assert(source.includes("useStableRowKeys"), `${editor} must use useStableRowKeys`);
+        assert(source.includes("insertAt"), `${editor} must wire insertAt`);
+        assert(source.includes("removeAt"), `${editor} must wire removeAt`);
+        assert(
+          source.includes("rowKeys[index]"),
+          `${editor} must key rows by rowKeys[index]`,
+        );
+      }
     });
   } finally {
     await applications.cleanup();

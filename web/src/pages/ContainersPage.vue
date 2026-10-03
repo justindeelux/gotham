@@ -159,12 +159,17 @@ function portsCell(row: Container): VNode {
 /**
  * statCell renders a per-container metric. The agent ContainerInfo contract
  * carries no CPU/RAM reading yet, so the mockup's columns render an explicit
- * em dash rather than a fabricated value.
+ * em dash rather than a fabricated value. The aria-label keeps the dash from
+ * reading as punctuation alone.
  */
 function statCell(): VNode {
   return h(
     "span",
-    { class: "mono muted", title: "Not reported by the agent yet" },
+    {
+      class: "mono muted",
+      title: "Not reported by the agent yet",
+      "aria-label": "Not reported by the agent yet",
+    },
     "—",
   );
 }
@@ -287,21 +292,18 @@ function rowKey(row: Container): string {
   return row.id;
 }
 
-/** rowProps makes the whole row clickable and keyboard-operable (B2-14). */
+/**
+ * rowProps makes the whole row clickable for the mouse. There is deliberately
+ * no keyboard affordance on the row: every row already has a focusable Logs
+ * button, and a keydown handler on the row would double-fire when focus sits
+ * on an inner Start/Stop/Restart/Logs button (while swallowing Space's native
+ * activation). A `role="button"` would be invalid here for the same reason —
+ * a button must not contain interactive descendants.
+ */
 function rowProps(row: Container): HTMLAttributes {
-  const label = row.name || row.id;
   return {
     style: "cursor: pointer;",
-    tabindex: 0,
-    role: "button",
-    "aria-label": `Open logs for ${label}`,
     onClick: () => openLogs(row),
-    onKeydown: (event: KeyboardEvent) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        openLogs(row);
-      }
-    },
   };
 }
 

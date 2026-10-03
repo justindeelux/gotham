@@ -241,10 +241,26 @@ _docker_apt_key_fingerprint="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
 
 # _docker_repo_serves reports whether the Docker apt repository serves the
 # given suite by probing .../dists/<codename>/Release with the hardened curl
-# flags (same pinning as the key download). $1 distro, $2 codename.
+# flags (same pinning as the key download, plus a connect and a total
+# timeout). Exit 0: served (HTTP 200). Exit 1: not served (HTTP 404) — the
+# caller may fall back to another suite. Exit 2: the repository could not be
+# reached at all (network failure, unexpected HTTP status) — the caller's
+# curl already printed the real error (errors are NOT sent to /dev/null), and
+# the caller must refuse, never silently fall back to an older suite it could
+# not even verify is served. $1 distro, $2 codename.
 _docker_repo_serves() {
-    curl -fSL --proto '=https' --tlsv1.2 --retry 3 --silent --show-error \
-        -o /dev/null "${_docker_apt_key_url}/$1/dists/$2/Release" 2>/dev/null
+    _probe_code="$(curl -SL --proto '=https' --tlsv1.2 --retry 3 \
+        --connect-timeout 10 --max-time 30 --silent --show-error \
+        -o /dev/null -w '%{http_code}' \
+        "${_docker_apt_key_url}/$1/dists/$2/Release")" || return 2
+    case "${_probe_code}" in
+        200) return 0 ;;
+        404) return 1 ;;
+        *)
+            echo "install-agent.sh --full: unexpected HTTP ${_probe_code} probing ${_docker_apt_key_url}/$1/dists/$2/Release" >&2
+            return 2
+            ;;
+    esac
 }
 
 # _docker_repo_has_active_entry reports whether the apt source file defines an
@@ -275,6 +291,21 @@ _docker_repo_has_active_entry() {
     esac
 }
 
+# _gotham_seams_allowed reports whether the test seams below may be honoured:
+# only inside the hard test mode — a GOTHAM_INSTALL_ROOT sandbox (a non-/
+# absolute path), or GOTHAM_INSTALL_TEST=1 together with DRY_RUN=1 (a dry run
+# changes nothing, so the flag alone is safe there). A bare
+# GOTHAM_INSTALL_TEST=1 on a real run, or any stray seam export, changes
+# nothing. This mirrors install.sh IN_TEST, which additionally scrubs every
+# seam from the agent installer's environment on a real run.
+_gotham_seams_allowed() {
+    case "${GOTHAM_INSTALL_ROOT:-}" in
+        "" | "/") ;;
+        /*) return 0 ;;
+    esac
+    [ "${GOTHAM_INSTALL_TEST:-0}" = "1" ] && [ "${DRY_RUN:-0}" = "1" ]
+}
+
 # ensure_docker_full installs Docker Engine and the compose plugin from the
 # official Docker apt repository (Ubuntu/Debian only). It is idempotent: when
 # `docker` and `docker compose` already work it only logs and returns 0. When
@@ -284,14 +315,19 @@ _docker_repo_has_active_entry() {
 # (docker.sources, a docker.asc Signed-By line, another .list) is reused
 # instead of adding a conflicting docker.list. On any other distro it fails
 # with a message naming the manual step instead of attempting an unverified
-# install. Test seam: GOTHAM_OS_RELEASE_FILE overrides /etc/os-release;
-# GOTHAM_APT_ROOT prefixes the apt paths (/etc/apt/...).
+# install. Test seams (honoured only when _gotham_seams_allowed holds):
+# GOTHAM_OS_RELEASE_FILE overrides /etc/os-release; GOTHAM_APT_ROOT prefixes
+# the apt paths (/etc/apt/...).
 ensure_docker_full() {
     if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
         echo "==> Docker Engine and the compose plugin are already installed; skipping"
         return 0
     fi
-    _os_release="${GOTHAM_OS_RELEASE_FILE:-/etc/os-release}"
+    if _gotham_seams_allowed && [ -n "${GOTHAM_OS_RELEASE_FILE:-}" ]; then
+        _os_release="${GOTHAM_OS_RELEASE_FILE}"
+    else
+        _os_release="/etc/os-release"
+    fi
     _distro="" _codename=""
     if [ -f "${_os_release}" ]; then
         _distro="$(sed -n 's/^ID=//p' "${_os_release}" | head -n1 | tr -d '"')"
@@ -321,7 +357,10 @@ ensure_docker_full() {
         ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg ) \
             || return 1
     }
-    _apt_root="${GOTHAM_APT_ROOT:-}"
+    _apt_root=""
+    if _gotham_seams_allowed; then
+        _apt_root="${GOTHAM_APT_ROOT:-}"
+    fi
     _keyrings_dir="${_apt_root}/etc/apt/keyrings"
     # NOTE: the dearmored (binary) keyring must end in .gpg, not .asc: apt
     # treats a .asc signed-by file as ASCII-armored and silently ignores binary
@@ -356,33 +395,56 @@ ensure_docker_full() {
         fi
         # Resolve the codename against what the Docker repository actually
         # serves: probe .../dists/<codename>/Release first (VERSION_CODENAME
-        # is authoritative for what this host is). Anything the repo does not
-        # serve (Debian testing/sid/unstable, an EOL suite, a typo) falls
-        # back to the newest stable codename the repo serves; when nothing is
-        # served, refuse with a clear message. A dead docker.list is never
-        # written. The probe runs after the arch check so a broken dpkg fails
-        # before any network.
-        if ! _docker_repo_serves "${_distro}" "${_codename}"; then
-            _fallback=""
-            case "${_distro}" in
-                ubuntu) _stable_codenames="noble jammy focal" ;;
-                debian) _stable_codenames="trixie bookworm bullseye" ;;
-            esac
-            for _candidate in ${_stable_codenames}; do
-                if _docker_repo_serves "${_distro}" "${_candidate}"; then
-                    _fallback="${_candidate}"
-                    break
+        # is authoritative for what this host is). An HTTP 404 (the repo does
+        # not serve this suite: Debian testing/sid/unstable, an EOL suite, a
+        # typo) falls back to the newest stable codename the repo serves; when
+        # nothing is served, refuse with a clear message. A dead docker.list
+        # is never written. A probe that cannot reach the repository at all
+        # (network failure, unexpected HTTP status) refuses immediately with
+        # the real error: falling back to a suite that was never confirmed
+        # served would write a repo line on no evidence. The probe runs after
+        # the arch check so a broken dpkg fails before any network.
+        _probe_rc=0
+        _docker_repo_serves "${_distro}" "${_codename}" || _probe_rc=$?
+        case "${_probe_rc}" in
+            0) ;;
+            1)
+                _fallback=""
+                case "${_distro}" in
+                    ubuntu) _stable_codenames="noble jammy focal" ;;
+                    debian) _stable_codenames="trixie bookworm bullseye" ;;
+                esac
+                for _candidate in ${_stable_codenames}; do
+                    _probe_rc=0
+                    _docker_repo_serves "${_distro}" "${_candidate}" || _probe_rc=$?
+                    case "${_probe_rc}" in
+                        0)
+                            _fallback="${_candidate}"
+                            break
+                            ;;
+                        1) ;;
+                        *)
+                            echo "install-agent.sh --full: could not reach the Docker apt repository while probing '${_candidate}' for ${_distro}; refusing (not falling back on an unverified repository)" >&2
+                            echo "  Install Docker Engine and the compose plugin manually (https://docs.docker.com/engine/install/), then re-run without --full." >&2
+                            return 1
+                            ;;
+                    esac
+                done
+                if [ -z "${_fallback}" ]; then
+                    echo "install-agent.sh --full: the Docker apt repository does not serve '${_codename}' for ${_distro}" >&2
+                    echo "  (checked ${_docker_apt_key_url}/${_distro}/dists/${_codename}/Release) and no fallback suite is served either." >&2
+                    echo "  Install Docker Engine and the compose plugin manually (https://docs.docker.com/engine/install/), then re-run without --full." >&2
+                    return 1
                 fi
-            done
-            if [ -z "${_fallback}" ]; then
-                echo "install-agent.sh --full: the Docker apt repository does not serve '${_codename}' for ${_distro}" >&2
-                echo "  (checked ${_docker_apt_key_url}/${_distro}/dists/${_codename}/Release) and no fallback suite is served either." >&2
+                echo "==> the Docker apt repository does not serve '${_codename}'; falling back to '${_fallback}'"
+                _codename="${_fallback}"
+                ;;
+            *)
+                echo "install-agent.sh --full: could not reach the Docker apt repository while probing '${_codename}' for ${_distro}; refusing (not falling back on an unverified repository)" >&2
                 echo "  Install Docker Engine and the compose plugin manually (https://docs.docker.com/engine/install/), then re-run without --full." >&2
                 return 1
-            fi
-            echo "==> the Docker apt repository does not serve '${_codename}'; falling back to '${_fallback}'"
-            _codename="${_fallback}"
-        fi
+                ;;
+        esac
         # No EXIT trap here: this library is sourced by install-agent.sh, whose own
         # EXIT trap owns the installer scratch dir; installing another one would
         # clobber it (I5). The temp key is removed on every path below instead.

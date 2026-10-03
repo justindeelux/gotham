@@ -776,6 +776,48 @@ REMOTE_EXPLICIT="$(GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442 dry_run_agent_line "${R2R
     || { echo "FAIL: an explicit CP_ADDR did not repoint a remote agent.env" >&2; exit 1; }
 echo "PASS: an explicit GOTHAM_AGENT_CP_ADDR still repoints deliberately"
 
+# ---- L2: only loopback literals count as local ------------------------------
+# 127.evil.example.com is NOT local (it merely starts with 127.); only
+# numeric 127.0.0.0/8, localhost and ::1 keep the localhost step, everything
+# else is left untouched like a remote control plane.
+L2_ENV="${SCRATCH}/l2-agent.env"
+l2_case() {
+    # $1 addr, $2 want (local/remote)
+    printf 'GOTHAM_AGENT_CP_ADDR=%s\nGOTHAM_AGENT_NODE_ID=l2-node\n' "$1" >"${L2_ENV}"
+    GOTHAM_AGENT_ENV_FILE="${L2_ENV}" \
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+    GOTHAM_SKIP_DEPS=1 \
+    GOTHAM_INSTALL_TEST=1 \
+    GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
+    PATH="${SYS_SHIM}:${PATH}" \
+        sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/l2.log" 2>&1
+    if [ "$2" = "local" ]; then
+        grep -q 'install-agent.sh --full' "${SCRATCH}/l2.log" \
+            || { echo "FAIL: loopback ${1} skipped the localhost step (L2)" >&2; exit 1; }
+        if grep -q 'leaving it untouched' "${SCRATCH}/l2.log"; then
+            echo "FAIL: loopback ${1} treated as a remote control plane (L2)" >&2
+            exit 1
+        fi
+    else
+        grep -q 'leaving it untouched' "${SCRATCH}/l2.log" \
+            || { echo "FAIL: non-loopback ${1} was not left untouched (L2)" >&2; cat "${SCRATCH}/l2.log" >&2; exit 1; }
+        if grep -q 'install-agent.sh --full' "${SCRATCH}/l2.log"; then
+            echo "FAIL: non-loopback ${1} still schedules the agent install (L2)" >&2
+            exit 1
+        fi
+    fi
+}
+for _local in 127.0.0.1:9442 127.1.2.3:9442 127.0.0.1 localhost:9443 \
+    LOCALHOST:9443 '[::1]:9443'; do
+    l2_case "${_local}" local
+done
+for _remote in 127.evil.example.com:9443 remote.example.com:9443 \
+    128.0.0.1:9442 192.168.1.1:9442 127.0.0.300:9442 10.0.0.1:9442; do
+    l2_case "${_remote}" remote
+done
+echo "PASS: only loopback literals count as local (127.evil.example.com is remote) (L2)"
+
 # ---- Retry quoting: values with spaces/specials stay one re-runnable word --
 QUOTED_LINE="$(GOTHAM_AGENT_NODE_ID='odd id; rm -rf /' dry_run_agent_line "${SCRATCH}/no-such-agent.env")"
 case "${QUOTED_LINE}" in
@@ -797,31 +839,95 @@ grep -q 'AGENT_ENV_FILE="/etc/gotham/agent.env"' "${INSTALL_SH}" \
     || { echo "FAIL: install.sh lookup default is not /etc/gotham/agent.env" >&2; exit 1; }
 echo "PASS: the agent.env lookup default matches the path install-agent.sh writes"
 
-# ---- Production run ignores the test seams ----------------------------------
-# Without GOTHAM_INSTALL_TEST (and without GOTHAM_INSTALL_ROOT) the
-# GOTHAM_*_FILE / GOTHAM_TEST_* seams must change nothing: even an arch
-# fixture, a hostile arch and a remote agent.env still schedule the agent
-# step. Needs a supported host (Ubuntu/Debian + systemctl); elsewhere the
-# live container run covers it.
-if [ -f /etc/os-release ] && grep -qE '^ID=(ubuntu|debian)' /etc/os-release \
-    && command -v systemctl >/dev/null 2>&1; then
+# ---- H1/M1/L3: production dry-run ignores every test seam (hermetic) ------
+# Differential: the same production-mode dry-run (no GOTHAM_INSTALL_TEST, no
+# GOTHAM_INSTALL_ROOT, so test mode is OFF) with every test-only seam set
+# hostile must print byte-identical output to the clean run. Both runs read
+# the same host files, so the comparison is hermetic: it cannot fail
+# spuriously on a developer box (L3), and it runs on macOS (no Linux-only
+# host state needed). Covers GOTHAM_OS_RELEASE_FILE, GOTHAM_TEST_UNAME_M,
+# GOTHAM_AGENT_ENV_FILE, GOTHAM_APT_ROOT, GOTHAM_INSTALL_TEST_AGENT_SCRIPT
+# and GOTHAM_INSTALL_TEST_RUN_AGENT on the install.sh path, plus the
+# install-agent.sh --full dry path.
+unset GOTHAM_INSTALL_TEST GOTHAM_INSTALL_ROOT GOTHAM_OS_RELEASE_FILE \
+    GOTHAM_TEST_UNAME_M GOTHAM_AGENT_ENV_FILE GOTHAM_APT_ROOT \
+    GOTHAM_INSTALL_TEST_AGENT_SCRIPT GOTHAM_INSTALL_TEST_RUN_AGENT
+prod_dry() {
     GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
     GOTHAM_VERSION="${VERSION}" \
     GOTHAM_SKIP_DEPS=1 \
-    GOTHAM_OS_RELEASE_FILE="${FIXTURES}/arch-release" \
-    GOTHAM_TEST_UNAME_M=sparc64 \
-    GOTHAM_AGENT_ENV_FILE="${R2R_ENV}" \
-        sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-prod-seams.log" 2>&1
-    grep -q 'install-agent.sh --full' "${SCRATCH}/dry-prod-seams.log" \
-        || { echo "FAIL: production run honored a test seam" >&2; cat "${SCRATCH}/dry-prod-seams.log" >&2; exit 1; }
-    if grep -q 'skipping the localhost agent' "${SCRATCH}/dry-prod-seams.log"; then
-        echo "FAIL: production run skipped the agent on test-seam input" >&2
-        exit 1
-    fi
-    echo "PASS: a production run ignores the test seams"
-else
-    echo "SKIP: production seam-ignorance needs Ubuntu/Debian + systemctl (container covers it)"
+    PATH="${SYS_SHIM}:${PATH}" \
+        sh "${INSTALL_SH}" --dry-run
+}
+prod_dry >"${SCRATCH}/prod-clean.log" 2>&1
+GOTHAM_OS_RELEASE_FILE="${FIXTURES}/arch-release" \
+GOTHAM_TEST_UNAME_M=sparc64 \
+GOTHAM_AGENT_ENV_FILE="${R2R_ENV}" \
+GOTHAM_APT_ROOT="${SCRATCH}/hostile-apt-root" \
+GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/hostile-agent.sh" \
+GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
+prod_dry >"${SCRATCH}/prod-hostile.log" 2>&1
+# Normalize the random mktemp suffix (gotham-install.XXXXXX differs per run;
+# it is not seam input) before comparing.
+sed 's/gotham-install\.[A-Za-z0-9][A-Za-z0-9]*/gotham-install.RANDOM/g' \
+    "${SCRATCH}/prod-clean.log" >"${SCRATCH}/prod-clean.norm"
+sed 's/gotham-install\.[A-Za-z0-9][A-Za-z0-9]*/gotham-install.RANDOM/g' \
+    "${SCRATCH}/prod-hostile.log" >"${SCRATCH}/prod-hostile.norm"
+cmp -s "${SCRATCH}/prod-clean.norm" "${SCRATCH}/prod-hostile.norm" \
+    || { echo "FAIL: test seams changed a production run (H1/M1)" >&2; diff "${SCRATCH}/prod-clean.norm" "${SCRATCH}/prod-hostile.norm" >&2; exit 1; }
+if grep -q 'hostile-agent' "${SCRATCH}/prod-hostile.log"; then
+    echo "FAIL: GOTHAM_INSTALL_TEST_AGENT_SCRIPT leaked into a production run (M1)" >&2
+    exit 1
 fi
+echo "PASS: a production run ignores every test seam (H1/M1, hermetic)"
+unset GOTHAM_OS_RELEASE_FILE GOTHAM_TEST_UNAME_M GOTHAM_AGENT_ENV_FILE \
+    GOTHAM_APT_ROOT GOTHAM_INSTALL_TEST_AGENT_SCRIPT GOTHAM_INSTALL_TEST_RUN_AGENT
+# The agent-script seam additionally requires a sandbox: static guard that the
+# override is keyed on TEST_MODE + RUN_AGENT, never on IN_TEST alone.
+if grep -q 'IN_TEST.*GOTHAM_INSTALL_TEST_AGENT_SCRIPT' "${INSTALL_SH}"; then
+    echo "FAIL: the agent-script seam is still keyed on IN_TEST alone (M1)" >&2
+    exit 1
+fi
+grep -A2 'GOTHAM_INSTALL_TEST_RUN_AGENT' "${INSTALL_SH}" | grep -q 'GOTHAM_INSTALL_TEST_AGENT_SCRIPT' \
+    || { echo "FAIL: the agent-script override lost its RUN_AGENT gate (M1)" >&2; exit 1; }
+grep -q 'TEST_MODE.*GOTHAM_INSTALL_TEST_RUN_AGENT' "${INSTALL_SH}" \
+    || { echo "FAIL: the agent-script override lost its sandbox (TEST_MODE) gate (M1)" >&2; exit 1; }
+grep -q 'GOTHAM_INSTALL_TEST:-0}" = "1" ] && \[ "${DRY_RUN}" -eq 1' "${INSTALL_SH}" \
+    || { echo "FAIL: GOTHAM_INSTALL_TEST=1 alone still enables the seams (M1)" >&2; exit 1; }
+echo "PASS: the agent-script seam requires sandbox + RUN_AGENT; the flag requires --dry-run (M1)"
+# install-agent.sh --full dry path: hostile seams change nothing either.
+printf 'dummy CA for the dry-run path\n' >"${SCRATCH}/prod-ca.pem"
+agent_prod_dry() {
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+        sh "${AGENT_INSTALLER}" --full --ca "${SCRATCH}/prod-ca.pem" --dry-run
+}
+agent_prod_dry >"${SCRATCH}/aprod-clean.log" 2>&1
+GOTHAM_OS_RELEASE_FILE="${FIXTURES}/arch-release" \
+GOTHAM_APT_ROOT="${SCRATCH}/hostile-apt-root" \
+GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/hostile-agent.sh" \
+agent_prod_dry >"${SCRATCH}/aprod-hostile.log" 2>&1
+sed 's/gotham-agent-install\.[A-Za-z0-9][A-Za-z0-9]*/gotham-agent-install.RANDOM/g' \
+    "${SCRATCH}/aprod-clean.log" >"${SCRATCH}/aprod-clean.norm"
+sed 's/gotham-agent-install\.[A-Za-z0-9][A-Za-z0-9]*/gotham-agent-install.RANDOM/g' \
+    "${SCRATCH}/aprod-hostile.log" >"${SCRATCH}/aprod-hostile.norm"
+cmp -s "${SCRATCH}/aprod-clean.norm" "${SCRATCH}/aprod-hostile.norm" \
+    || { echo "FAIL: test seams changed install-agent.sh --full --dry-run (H1)" >&2; exit 1; }
+grep -q 'ensure Docker Engine and the compose plugin (--full)' "${SCRATCH}/aprod-hostile.log" \
+    || { echo "FAIL: install-agent.sh --full --dry-run lost its Docker step (H1)" >&2; exit 1; }
+echo "PASS: install-agent.sh --full --dry-run ignores hostile seams (H1)"
+# GOTHAM_INSTALL_ROOT=/ is the real root, not a sandbox: refuse before any
+# network or filesystem change (safe: dies during prefix validation).
+if GOTHAM_INSTALL_ROOT=/ \
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/root-slash.log" 2>&1; then
+    echo "FAIL: GOTHAM_INSTALL_ROOT=/ was accepted as a sandbox (M1)" >&2
+    exit 1
+fi
+grep -q 'non-/' "${SCRATCH}/root-slash.log" \
+    || { echo "FAIL: GOTHAM_INSTALL_ROOT=/ refused for an unexpected reason (M1)" >&2; cat "${SCRATCH}/root-slash.log" >&2; exit 1; }
+echo "PASS: GOTHAM_INSTALL_ROOT=/ is refused, never treated as test mode (M1)"
 
 # ---- R3: a failing localhost agent install keeps CP, warns, exits nonzero --
 # Test mode runs past service activation with a logging systemctl shim and
@@ -888,5 +994,48 @@ if grep -qE 'systemctl (disable|stop) ' "${SCRATCH}/r3-systemctl.log"; then
     exit 1
 fi
 echo "PASS: a failing agent install keeps the control plane, warns on stderr and exits nonzero (R3)"
+
+# ---- M2: a metachar node id reaches the agent step verbatim -----------------
+# The agent step must not word-split its assignments: a node id holding a
+# space, a quote, $() and * (plus ;) is passed as one env value, no command
+# in it runs, and no glob expands. The fake captures what it receives.
+echo "==> metachar node id passes through the agent step verbatim (M2)"
+M2_ROOT="${SCRATCH}/root-m2"
+M2_PWNED="${SCRATCH}/m2-pwned"
+M2_CAPTURE="${SCRATCH}/m2-captured-node-id"
+M2_NODE="o'dd \$(touch ${M2_PWNED}) *; rm -rf /"
+cat >"${SCRATCH}/capture-agent.sh" <<'SHIM'
+#!/bin/sh
+printf '%s' "${GOTHAM_AGENT_NODE_ID}" >"${CAPTURE:?}"
+exit 0
+SHIM
+chmod +x "${SCRATCH}/capture-agent.sh"
+rm -f "${M2_PWNED}" "${M2_CAPTURE}"
+: >"${SCRATCH}/m2-systemctl.log"
+M2_RC=0
+GOTHAM_AGENT_NODE_ID="${M2_NODE}" \
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_ROOT="${M2_ROOT}" \
+GOTHAM_SKIP_DEPS=1 \
+GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
+GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/capture-agent.sh" \
+GOTHAM_AGENT_ENV_FILE="${SCRATCH}/m2-agent.env" \
+GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
+SYSTEMCTL_LOG="${SCRATCH}/m2-systemctl.log" \
+CAPTURE="${M2_CAPTURE}" \
+PATH="${R3_SHIM}:${PATH}" \
+    sh "${INSTALL_SH}" >"${SCRATCH}/m2-out.log" 2>"${SCRATCH}/m2-err.log" || M2_RC=$?
+[ "${M2_RC}" -eq 0 ] \
+    || { echo "FAIL: the install failed although the agent step succeeded (M2)" >&2; cat "${SCRATCH}/m2-err.log" >&2; exit 1; }
+[ -f "${M2_CAPTURE}" ] \
+    || { echo "FAIL: the agent step never ran (M2)" >&2; exit 1; }
+printf '%s' "${M2_NODE}" >"${SCRATCH}/m2-expected"
+cmp -s "${SCRATCH}/m2-expected" "${M2_CAPTURE}" \
+    || { echo "FAIL: the node id did not arrive verbatim (M2)" >&2; echo "want: ${M2_NODE}" >&2; echo "got:  $(cat "${M2_CAPTURE}")" >&2; exit 1; }
+[ ! -e "${M2_PWNED}" ] \
+    || { echo "FAIL: a command inside the node id was executed (M2)" >&2; exit 1; }
+echo "PASS: a metachar node id arrives verbatim and nothing in it runs (M2)"
 
 echo "ALL RELEASE-INSTALL TESTS PASSED"

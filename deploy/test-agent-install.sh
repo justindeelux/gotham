@@ -34,11 +34,19 @@
 #         entries and Enabled:no stanzas do not count as a repository.
 #   R6    a broken dpkg fails fast with a clear message (no amd64 fallback);
 #         the codename is probed against the Docker repository
-#         (.../dists/<codename>/Release): Debian testing/sid falls back to
-#         the newest stable suite the repo serves, and an unserved codename
-#         with no fallback refuses instead of writing a dead docker.list.
+#         (.../dists/<codename>/Release): an HTTP 404 for Debian
+#         testing/sid falls back to the newest stable suite the repo serves,
+#         and an unserved codename with no fallback refuses instead of
+#         writing a dead docker.list.
 #   R7    the key download is HTTPS-pinned, TLS 1.2+, retried, and its temp
 #         file is removed on every path without installing an EXIT trap.
+#   H1/M1 the GOTHAM_OS_RELEASE_FILE / GOTHAM_APT_ROOT seams are honoured
+#         only in the hard test mode (a GOTHAM_INSTALL_ROOT sandbox, or
+#         GOTHAM_INSTALL_TEST=1 with DRY_RUN=1): a stray export never
+#         redirects a root install.
+#   L1    the codename probe times out, surfaces curl errors, and refuses on
+#         a network failure (never silently falling back) while an HTTP 404
+#         keeps the documented fallback/refusal.
 #
 # The systemd calls are answered by a PATH shim, so nothing outside the scratch
 # directory (and the process environment) is touched.
@@ -85,6 +93,14 @@ unset_agent_env() {
         GOTHAM_AGENT_CA GOTHAM_AGENT_INSECURE
 }
 unset_agent_env
+
+# Hard test mode for the lib seams: GOTHAM_OS_RELEASE_FILE / GOTHAM_APT_ROOT
+# are honoured only with a GOTHAM_INSTALL_ROOT sandbox (or
+# GOTHAM_INSTALL_TEST=1 with DRY_RUN=1), so a stray export never redirects a
+# root install. Export a scratch sandbox so the seam-driven F2/R cases below
+# keep exercising them; the H1/M1 gating cases unset it in subshells.
+GOTHAM_INSTALL_ROOT="${SCRATCH}/sandbox-root"
+export GOTHAM_INSTALL_ROOT
 
 # --- A3-7: reinstall preserves values it does not override --------------------
 echo "==> A3-7 reinstall preserves prior CP address and node id"
@@ -493,14 +509,15 @@ pass "skip-when-present and refuse-elsewhere hold"
 cat >"${F2_SHIM}/curl" <<'SHIM'
 #!/bin/sh
 # Minimal -o parser: writes a dummy key and drops the installed marker. A
-# .../dists/<suite>/Release probe is answered without writing: only jammy is
-# served by this fake repo.
+# .../dists/<suite>/Release probe is answered with the HTTP code on stdout
+# (200 served, 404 not served); only jammy is served by this fake repo.
 case "$*" in
     */dists/*/Release*)
         case "$*" in
-            */dists/jammy/Release*) exit 0 ;;
-            *) exit 1 ;;
+            */dists/jammy/Release*) printf '200' ;;
+            *) printf '404' ;;
         esac
+        exit 0
         ;;
 esac
 out=""
@@ -660,18 +677,25 @@ exit 1
 SHIM
 cat >"${R_SHIM}/curl" <<'SHIM'
 #!/bin/sh
-# Logs its arguments (R7). A .../dists/<suite>/Release probe is answered from
-# DOCKER_SERVED_SUITES (the suites the fake repo serves) without writing;
-# the key download writes a dummy key to the -o target.
+# Logs its arguments (R7). A .../dists/<suite>/Release probe is answered with
+# the HTTP code on stdout: 200 when the suite is in DOCKER_SERVED_SUITES,
+# 404 otherwise. DOCKER_CURL_FAIL=1 makes every probe fail like a dead
+# network (exit 6 with the real error on stderr). The key download writes a
+# dummy key to the -o target.
 echo "curl $*" >>"${CURL_LOG:?}"
 case "$*" in
     */dists/*/Release*)
+        if [ "${DOCKER_CURL_FAIL:-0}" = "1" ]; then
+            echo "curl: (6) Could not resolve host: download.docker.com" >&2
+            exit 6
+        fi
         for _suite in ${DOCKER_SERVED_SUITES:-}; do
             case "$*" in
-                */dists/"${_suite}"/Release*) exit 0 ;;
+                */dists/"${_suite}"/Release*) printf '200'; exit 0 ;;
             esac
         done
-        exit 1
+        printf '404'
+        exit 0
         ;;
 esac
 out=""
@@ -751,8 +775,10 @@ R_DOCKER_RUN="${R_SHIM}/docker-run"
 export R_DOCKER_RUN
 # Suites the fake Docker repository serves (the codename probe answers from
 # this list); cases that need a different repo override it per call.
+# DOCKER_CURL_FAIL=1 makes every probe fail like a dead network (L1).
 DOCKER_SERVED_SUITES="jammy trixie"
-export DOCKER_SERVED_SUITES
+DOCKER_CURL_FAIL=0
+export DOCKER_SERVED_SUITES DOCKER_CURL_FAIL
 # The docker on PATH delegates to the selected variant.
 cat >"${R_SHIM}/docker" <<'SHIM'
 #!/bin/sh
@@ -941,6 +967,51 @@ DOCKER_SERVED_SUITES="jammy trixie"
 export DOCKER_SERVED_SUITES
 pass "R6: an unserved codename with no fallback refuses without writing a repo"
 
+# --- L1: a dead network refuses with the real error, never falls back -------
+echo "==> L1 network failure refuses instead of falling back"
+L1_APT="${R_DIR}/apt-l1"
+L1_MARKER="${R_DIR}/marker-l1"
+mkdir -p "${L1_MARKER}"
+DOCKER_CURL_FAIL=1
+if run_full "${R_DIR}/os/debian-sid-release" "${L1_APT}" "${L1_MARKER}" "${R_DIR}/l1"; then
+    DOCKER_CURL_FAIL=0
+    fail "L1: a network failure fell back to another suite (or succeeded)"
+else
+    DOCKER_CURL_FAIL=0
+    grep -q 'Could not resolve host' "${R_DIR}/l1-out.log" \
+        || fail "L1: the real curl error is hidden (it must reach stderr)"
+    grep -q 'could not reach the Docker apt repository' "${R_DIR}/l1-out.log" \
+        || fail "L1: the refusal does not say the repository could not be reached"
+    if grep -q "; falling back to '" "${R_DIR}/l1-out.log"; then
+        fail "L1: a network failure fell back to an unverified suite"
+    fi
+    grep -q 'manually' "${R_DIR}/l1-out.log" \
+        || fail "L1: the refusal does not name the manual step"
+fi
+[ ! -e "${L1_APT}/etc/apt/sources.list.d/docker.list" ] \
+    || fail "L1: a network failure still wrote a docker.list"
+[ ! -e "${L1_APT}/etc/apt/keyrings/docker.gpg" ] \
+    || fail "L1: the key was downloaded although the repository is unreachable"
+# A served codename with a dead network refuses the same way (no silent pass).
+L1B_APT="${R_DIR}/apt-l1b"
+L1B_MARKER="${R_DIR}/marker-l1b"
+mkdir -p "${L1B_MARKER}"
+DOCKER_CURL_FAIL=1
+if run_full "${R_DIR}/os/ubuntu-release" "${L1B_APT}" "${L1B_MARKER}" "${R_DIR}/l1b"; then
+    DOCKER_CURL_FAIL=0
+    fail "L1: a served codename was accepted although the network is dead"
+else
+    DOCKER_CURL_FAIL=0
+    grep -q 'could not reach the Docker apt repository' "${R_DIR}/l1b-out.log" \
+        || fail "L1: a served codename with a dead network refused for an unexpected reason"
+    if grep -q "; falling back to '" "${R_DIR}/l1b-out.log"; then
+        fail "L1: a dead network fell back even for a served codename"
+    fi
+fi
+[ ! -e "${L1B_APT}/etc/apt/sources.list.d/docker.list" ] \
+    || fail "L1: a dead network wrote a docker.list for a served codename"
+pass "L1: network failure refuses with the real error and never falls back"
+
 # --- R7: curl hardening + trap-safe temp cleanup ------------------------------
 echo "==> R7 curl hardening and trap-safe cleanup"
 grep -q -- '--proto' "${R_DIR}/r3-curl.log" \
@@ -951,6 +1022,10 @@ grep -q -- '--retry' "${R_DIR}/r3-curl.log" \
     || fail "R7: the key download is not retried"
 grep -q -- '--silent' "${R_DIR}/r3-curl.log" \
     || fail "R7: the key download is not silent (secrets-safe logging)"
+grep -q -- '--connect-timeout' "${R_DIR}/r3-curl.log" \
+    || fail "R7: the probe has no connect timeout"
+grep -q -- '--max-time' "${R_DIR}/r3-curl.log" \
+    || fail "R7: the probe has no total timeout"
 if awk '/^ensure_docker_full\(\)/,/^}/' "${SCRIPT_DIR}/install-agent-lib.sh" | grep -qE '^[[:space:]]*trap[[:space:]]'; then
     fail "R7: ensure_docker_full installs a trap (it would clobber the caller's EXIT trap)"
 fi
@@ -958,6 +1033,109 @@ if ls "${TMPDIR:-/tmp}"/docker-key.* >/dev/null 2>&1; then
     fail "R7: a docker-key temp file survived (success and failure paths must remove it)"
 fi
 pass "R7: hardened curl flags, no EXIT-trap clobbering, no temp file left"
+
+# --- H1/M1: the lib seams are gated behind the hard test mode ---------------
+echo "==> H1/M1 lib seams ignored outside the hard test mode"
+# The gate itself, all six combinations (hermetic: no host file is read).
+GATE_CASE=0
+check_gate() {
+    GATE_CASE=$((GATE_CASE + 1))
+    # $1 want (0/1), $2 shell snippet setting the subshell environment
+    if (
+        unset GOTHAM_INSTALL_ROOT GOTHAM_INSTALL_TEST DRY_RUN
+        eval "$2"
+        _gotham_seams_allowed
+    ); then
+        _got=1
+    else
+        _got=0
+    fi
+    [ "${_got}" = "$1" ] \
+        || fail "H1/M1 gate case ${GATE_CASE}: got ${_got}, want $1 ($2)"
+}
+check_gate 0 true
+check_gate 0 'GOTHAM_INSTALL_TEST=1; export GOTHAM_INSTALL_TEST'
+check_gate 1 'GOTHAM_INSTALL_TEST=1; DRY_RUN=1; export GOTHAM_INSTALL_TEST DRY_RUN'
+check_gate 1 'GOTHAM_INSTALL_ROOT=/tmp/sb-test-root; export GOTHAM_INSTALL_ROOT'
+check_gate 0 'GOTHAM_INSTALL_ROOT=/; export GOTHAM_INSTALL_ROOT'
+check_gate 0 'GOTHAM_INSTALL_ROOT=/; GOTHAM_INSTALL_TEST=1; export GOTHAM_INSTALL_ROOT GOTHAM_INSTALL_TEST'
+pass "H1/M1 _gotham_seams_allowed honors sandbox / flag+dry-run only"
+# No ungated seam read may remain: the old one-line default expansions are
+# gone (both seams now resolve inside a _gotham_seams_allowed branch).
+if grep -q '_os_release="${GOTHAM_OS_RELEASE_FILE:-/etc/os-release}"' "${SCRIPT_DIR}/install-agent-lib.sh"; then
+    fail "H1: install-agent-lib.sh still reads GOTHAM_OS_RELEASE_FILE ungated"
+fi
+if grep -q '^    _apt_root="${GOTHAM_APT_ROOT:-}"' "${SCRIPT_DIR}/install-agent-lib.sh"; then
+    fail "H1: install-agent-lib.sh still reads GOTHAM_APT_ROOT ungated"
+fi
+grep -q '_gotham_seams_allowed' "${SCRIPT_DIR}/install-agent-lib.sh" \
+    || fail "H1: install-agent-lib.sh has no seam gate at all"
+pass "H1: both lib seams are gated (no ungated default expansion)"
+# Differential: with docker present (skip path, no side effects anywhere) a
+# production-mode run with hostile seams behaves exactly like the clean run.
+SKIP_SHIM="${SCRATCH}/skip-shim"
+mkdir -p "${SKIP_SHIM}"
+cat >"${SKIP_SHIM}/docker" <<'SHIM'
+#!/bin/sh
+# Always works (engine + compose present), so the skip path is taken.
+exit 0
+SHIM
+chmod +x "${SKIP_SHIM}/docker"
+(
+    unset GOTHAM_INSTALL_ROOT GOTHAM_INSTALL_TEST DRY_RUN
+    unset GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT
+    PATH="${SKIP_SHIM}:${PATH}" ensure_docker_full >"${SCRATCH}/skip-clean.log" 2>&1
+    echo $? >"${SCRATCH}/skip-clean.rc"
+)
+(
+    unset GOTHAM_INSTALL_ROOT GOTHAM_INSTALL_TEST DRY_RUN
+    GOTHAM_OS_RELEASE_FILE=/nonexistent-hostile-os-release
+    GOTHAM_APT_ROOT=/nonexistent-hostile-apt-root
+    export GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT
+    PATH="${SKIP_SHIM}:${PATH}" ensure_docker_full >"${SCRATCH}/skip-hostile.log" 2>&1
+    echo $? >"${SCRATCH}/skip-hostile.rc"
+)
+[ "$(cat "${SCRATCH}/skip-clean.rc")" = "$(cat "${SCRATCH}/skip-hostile.rc")" ] \
+    || fail "H1: hostile seams changed the exit status outside test mode"
+cmp -s "${SCRATCH}/skip-clean.log" "${SCRATCH}/skip-hostile.log" \
+    || fail "H1: hostile seams changed the output outside test mode"
+grep -q 'already installed; skipping' "${SCRATCH}/skip-hostile.log" \
+    || fail "H1: the differential skip run did not take the skip path"
+pass "H1: hostile seams change nothing outside test mode (differential)"
+# Read-path negative where the real host refuses on its own (no Ubuntu/Debian
+# os-release): the hostile ubuntu fixture must still be ignored in production
+# mode, while the sandbox honors it. On Ubuntu/Debian hosts this is SKIP-noted
+# (a production run there would proceed into real apt paths); the live
+# hostile-env install in the container proof covers it instead.
+if [ ! -f /etc/os-release ] || ! grep -qE '^ID=(ubuntu|debian)' /etc/os-release; then
+    NEG_APT="${SCRATCH}/neg-apt"
+    NEG_MARKER="${SCRATCH}/neg-marker"
+    mkdir -p "${NEG_MARKER}" "${NEG_APT}/etc/apt/sources.list.d"
+    printf 'ID=ubuntu\nVERSION_CODENAME=jammy\n' >"${SCRATCH}/neg-ubuntu-release"
+    set_docker_variant absent
+    (
+        unset GOTHAM_INSTALL_ROOT GOTHAM_INSTALL_TEST DRY_RUN
+        GOTHAM_OS_RELEASE_FILE="${SCRATCH}/neg-ubuntu-release"
+        GOTHAM_APT_ROOT="${NEG_APT}"
+        DOCKER_MARKER="${NEG_MARKER}"
+        APT_LOG="${SCRATCH}/neg-apt.log"
+        CURL_LOG="${SCRATCH}/neg-curl.log"
+        export GOTHAM_OS_RELEASE_FILE GOTHAM_APT_ROOT DOCKER_MARKER APT_LOG CURL_LOG
+        PATH="${R_PATH}" ensure_docker_full >"${SCRATCH}/neg-out.log" 2>&1
+    ) && NEG_RC=0 || NEG_RC=$?
+    [ "${NEG_RC}" -ne 0 ] \
+        || fail "H1: the hostile ubuntu fixture was honored outside test mode"
+    grep -q 'supports Ubuntu/Debian only' "${SCRATCH}/neg-out.log" \
+        || fail "H1: production refusal did not use the real host os-release"
+    if grep -q "found 'ubuntu'" "${SCRATCH}/neg-out.log"; then
+        fail "H1: production run read the hostile fixture instead of the real os-release"
+    fi
+    [ ! -e "${NEG_APT}/etc/apt/sources.list.d/docker.list" ] \
+        || fail "H1: a production run wrote an apt source from a hostile seam"
+    pass "H1: hostile fixture ignored outside test mode, real host file used"
+else
+    echo "SKIP: hostile-fixture read-path needs a non-Ubuntu/Debian host (container live proof covers it)"
+fi
 
 if [ "${FAILURES}" -eq 0 ]; then
     echo "ALL AGENT-INSTALL TESTS PASSED"

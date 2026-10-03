@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NAvatar, NButton, NDropdown, NInput, NTooltip } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import { version as appVersion } from "../../package.json";
 
@@ -9,7 +9,6 @@ import GothamIcon from "../components/GothamIcon.vue";
 import type { IconName } from "../components/GothamIcon.vue";
 import MeCard from "../components/MeCard.vue";
 import ServerRail from "../components/ServerRail.vue";
-import { useAppStore } from "../stores/app";
 import { useAuthStore } from "../stores/auth";
 import { useServersStore } from "../stores/servers";
 
@@ -28,7 +27,6 @@ interface NavItem {
   label: string;
   icon: IconName;
   to?: string;
-  phase?: number;
 }
 
 interface NavSection {
@@ -37,19 +35,19 @@ interface NavSection {
 }
 
 // Group order and English labels follow the docs/design shell renderer
-// (docs/design/assets/gotham-ui.js SECTIONS). Placeholder entries have no
-// route and name the backend phase that will build them.
+// (docs/design/assets/gotham-ui.js SECTIONS). Entries with no route are inert
+// and say so — every backend phase has shipped, so no phase number is claimed.
 const navSections: NavSection[] = [
   {
     label: "Operations",
     items: [
       { key: "dashboard", label: "Dashboard", icon: "grid", to: "dashboard" },
-      { key: "servers", label: "Servers", icon: "server", to: "servers" },
       { key: "applications", label: "Applications", icon: "box", to: "applications" },
       { key: "services", label: "Services", icon: "layers", to: "services" },
       { key: "databases", label: "Databases", icon: "db", to: "databases" },
-      { key: "files", label: "File manager", icon: "folder", phase: 4 },
+      { key: "files", label: "File manager", icon: "folder" },
       { key: "templates", label: "Template library", icon: "rocket", to: "templates" },
+      { key: "servers", label: "Servers", icon: "server", to: "servers" },
       { key: "domains", label: "Domains & SSL", icon: "globe", to: "domains" },
     ],
   },
@@ -63,18 +61,17 @@ const navSections: NavSection[] = [
         icon: "bell",
         to: "notifications",
       },
-      { key: "tokens", label: "API tokens", icon: "key", phase: 8 },
+      { key: "tokens", label: "API tokens", icon: "key" },
     ],
   },
   {
     label: "System",
     items: [
-      { key: "updates", label: "Updates & settings", icon: "gear", phase: 9 },
+      { key: "updates", label: "Updates & settings", icon: "gear" },
     ],
   },
 ];
 
-const appStore = useAppStore();
 const authStore = useAuthStore();
 const serversStore = useServersStore();
 const route = useRoute();
@@ -86,7 +83,18 @@ const accountOptions: DropdownOption[] = [{ label: "Sign out", key: "sign-out" }
 // backend yet, so no pill is rendered rather than a fabricated number.
 const serversCount = computed<number>(() => serversStore.servers.length);
 
-const activeKey = computed<string>(() => String(route.name ?? "dashboard"));
+// Section aliases for paths whose first segment is not the sidebar key.
+const sectionAliases: Record<string, string> = { settings: "notifications" };
+
+/**
+ * activeKey is the sidebar entry for the current route. It follows the first
+ * path segment, so detail routes (/servers/:id, /applications/:id,
+ * /databases/:id, /services/:id) keep their section highlighted (B2-12, B3-5).
+ */
+const activeKey = computed<string>(() => {
+  const segment = route.path.split("/").filter(Boolean)[0] ?? "dashboard";
+  return sectionAliases[segment] ?? segment;
+});
 
 const userInitial = computed<string>(() =>
   (authStore.user?.email?.[0] ?? "?").toUpperCase(),
@@ -101,32 +109,111 @@ const envLabel = computed<string>(() => {
     : "production";
 });
 
-/** stubTip names the backend phase behind an inert sidebar entry. */
-function stubTip(phase: number): string {
-  return `Coming in Phase ${phase}`;
-}
-
 async function handleAccountSelect(key: string | number): Promise<void> {
   if (key !== "sign-out") {
     return;
   }
-  await authStore.logout();
+  try {
+    await authStore.logout();
+  } catch {
+    // logout clears the local session in `finally`; a failed revoke must not
+    // block the redirect or surface as an unhandled rejection (B3-3).
+  }
   await router.push({ name: "login" });
 }
 
-/**
- * toggleNav drives the drawer on small screens and the collapsed sidebar
- * on desktop, matching the ≤1024px responsive behavior.
- */
-function toggleNav(): void {
-  if (window.matchMedia("(max-width: 1024px)").matches) {
-    mobileNavOpen.value = !mobileNavOpen.value;
-    return;
-  }
-  appStore.toggleSidebar();
+const mobileNavOpen = ref(false);
+const sidebarRef = ref<HTMLElement | null>(null);
+
+// mobileQuery tracks the same ≤1024px breakpoint the stylesheet uses.
+const mobileQuery = window.matchMedia("(max-width: 1024px)");
+
+/** restoreFocus is the element focus returns to when the drawer closes. */
+let restoreFocus: HTMLElement | null = null;
+
+/** focusables lists the visible tab stops inside the drawer. */
+function focusables(root: HTMLElement): HTMLElement[] {
+  const selector =
+    'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+  return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(
+    (element) => element.offsetParent !== null,
+  );
 }
 
-const mobileNavOpen = ref(false);
+/** onDrawerKeydown closes on Escape and traps Tab inside the open drawer. */
+function onDrawerKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeMobileNav();
+    return;
+  }
+  if (event.key !== "Tab") {
+    return;
+  }
+  const root = sidebarRef.value;
+  if (!root) {
+    return;
+  }
+  const items = focusables(root);
+  if (items.length === 0) {
+    return;
+  }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey && (active === first || !root.contains(active))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+/** toggleNav opens or closes the mobile drawer (the toggle is mobile-only). */
+function toggleNav(): void {
+  if (mobileNavOpen.value) {
+    closeMobileNav();
+    return;
+  }
+  restoreFocus =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  mobileNavOpen.value = true;
+}
+
+/** closeMobileNav closes the drawer; the watcher below restores focus. */
+function closeMobileNav(): void {
+  mobileNavOpen.value = false;
+}
+
+watch(mobileNavOpen, async (open) => {
+  if (open) {
+    window.addEventListener("keydown", onDrawerKeydown);
+    await nextTick();
+    const root = sidebarRef.value;
+    if (root) {
+      (focusables(root)[0] ?? root).focus();
+    }
+    return;
+  }
+  window.removeEventListener("keydown", onDrawerKeydown);
+  restoreFocus?.focus();
+  restoreFocus = null;
+});
+
+// B3-17: growing past the breakpoint must unmount the drawer and its backdrop.
+function onViewportChange(event: MediaQueryListEvent): void {
+  if (!event.matches) {
+    closeMobileNav();
+  }
+}
+
+onMounted(() => mobileQuery.addEventListener("change", onViewportChange));
+
+onBeforeUnmount(() => {
+  mobileQuery.removeEventListener("change", onViewportChange);
+  window.removeEventListener("keydown", onDrawerKeydown);
+});
 
 watch(
   () => route.path,
@@ -139,14 +226,17 @@ watch(
 <template>
   <div
     class="app"
-    :class="{
-      'is-collapsed': appStore.sidebarCollapsed,
-      'is-open': mobileNavOpen,
-    }"
+    :class="{ 'is-open': mobileNavOpen }"
   >
     <ServerRail />
 
-    <aside class="sidebar" aria-label="Product navigation">
+    <aside
+      id="app-nav"
+      ref="sidebarRef"
+      class="sidebar"
+      aria-label="Product navigation"
+      tabindex="-1"
+    >
       <div class="sidebar-head">
         <span class="brand">Gotham</span>
         <span class="tag" :title="`Web build ${appVersion}`">v{{ appVersion }}</span>
@@ -165,14 +255,24 @@ watch(
               <span>{{ item.label }}</span>
               <span v-if="item.key === 'servers'" class="nav-count">{{ serversCount }}</span>
             </RouterLink>
-            <NTooltip v-else trigger="hover" :tooltip-style="{ maxWidth: '240px' }">
+            <NTooltip
+              v-else
+              trigger="hover"
+              :tooltip-style="{ maxWidth: '240px' }"
+            >
               <template #trigger>
-                <span class="nav-item is-disabled" role="link" aria-disabled="true">
+                <button
+                  type="button"
+                  class="nav-item is-disabled"
+                  aria-disabled="true"
+                  :aria-label="`${item.label} — no UI yet`"
+                  @click.prevent
+                >
                   <GothamIcon :name="item.icon" />
                   <span>{{ item.label }}</span>
-                </span>
+                </button>
               </template>
-              {{ item.phase !== undefined ? stubTip(item.phase) : "Coming soon" }}
+              {{ item.label }} — no UI yet
             </NTooltip>
           </template>
         </template>
@@ -189,6 +289,8 @@ watch(
           circle
           class="nav-toggle"
           aria-label="Toggle navigation"
+          aria-controls="app-nav"
+          :aria-expanded="mobileNavOpen"
           @click="toggleNav"
         >
           <template #icon>
@@ -220,7 +322,7 @@ watch(
                 </template>
               </NButton>
             </template>
-            Notifications — coming in Phase 8
+            Notifications — no UI yet
           </NTooltip>
           <NTooltip trigger="hover">
             <template #trigger>
@@ -252,18 +354,18 @@ watch(
         </div>
       </header>
 
-      <div class="view">
+      <main class="view">
         <div class="page">
           <RouterView />
         </div>
-      </div>
+      </main>
     </div>
 
     <div
       v-if="mobileNavOpen"
       class="backdrop"
       aria-hidden="true"
-      @click="mobileNavOpen = false"
+      @click="closeMobileNav"
     ></div>
   </div>
 </template>
@@ -278,10 +380,6 @@ watch(
   overflow: hidden;
 }
 
-.app.is-collapsed {
-  grid-template-columns: var(--rail-w) 0 minmax(0, 1fr);
-}
-
 .sidebar {
   background: var(--surface);
   display: flex;
@@ -289,10 +387,6 @@ watch(
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-}
-
-.is-collapsed .sidebar {
-  visibility: hidden;
 }
 
 .sidebar-head {
@@ -410,6 +504,16 @@ a.nav-item.is-active .nav-count {
 
 .nav-item.is-disabled {
   opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Inert entries are real disabled buttons (not spans with role=link), so they
+   are announced as disabled controls; reset the UA button chrome. */
+button.nav-item {
+  border: 0;
+  background: none;
+  font-family: inherit;
+  text-align: left;
   cursor: not-allowed;
 }
 
@@ -549,8 +653,7 @@ a.nav-item.is-active .nav-count {
 }
 
 @media (max-width: 1024px) {
-  .app,
-  .app.is-collapsed {
+  .app {
     grid-template-columns: var(--rail-w) minmax(0, 1fr);
   }
 
@@ -563,10 +666,6 @@ a.nav-item.is-active .nav-count {
     z-index: 90;
     border-right: 1px solid var(--border-soft);
     box-shadow: var(--elev-raised);
-    visibility: hidden;
-  }
-
-  .is-collapsed .sidebar {
     visibility: hidden;
   }
 
@@ -602,6 +701,11 @@ a.nav-item.is-active .nav-count {
 @media (max-width: 640px) {
   .app {
     --rail-w: 60px;
+  }
+
+  /* Phone: every nav entry is a 44px touch target (B3-13). */
+  .nav-item {
+    min-height: 44px;
   }
 
   .page {

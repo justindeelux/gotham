@@ -1735,8 +1735,8 @@ test.describe("invite redirect across registration", () => {
     await expect(page).toHaveURL(/\/login\?redirect=/);
 
     // Switching to registration keeps the invitation in the redirect. The
-    // auth switch renders as tabs, not links.
-    await page.getByRole("tab", { name: "Create account" }).click();
+    // auth switch renders as links (B4-18), not tabs.
+    await page.getByRole("link", { name: "Create account" }).click();
     await expect(page).toHaveURL(/\/register\?redirect=/);
     expect(decodeURIComponent(new URL(page.url()).search)).toContain(
       `/invite/accept?token=${token}`,
@@ -1780,9 +1780,9 @@ test.describe("invite redirect across registration", () => {
     // Browsers treat `/\evil.example.com` like `//evil.example.com`, so the
     // value must never be carried into an auth redirect.
     await page.goto(`/login?redirect=${encodeURIComponent("/\\evil.example.com")}`);
-    const registerTab = page.getByRole("tab", { name: "Create account" });
-    await expect(registerTab).toBeVisible();
-    await expect(registerTab).toHaveAttribute("href", "/register");
+    const registerLink = page.getByRole("link", { name: "Create account" });
+    await expect(registerLink).toBeVisible();
+    await expect(registerLink).toHaveAttribute("href", "/register");
   });
 });
 

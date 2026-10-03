@@ -135,10 +135,9 @@ const valueProps: ValueProp[] = [
   color: var(--accent-ink);
 }
 
-.auth-value p {
-  color: var(--fg);
-}
-
+/* The title keeps `.fg-2`; the body keeps `.muted`. Do not force every
+   paragraph to `--fg`, which out-specified `.muted` and brightened the copy
+   (B3-10). */
 .auth-value p.fg-2 {
   color: var(--fg-2);
 }

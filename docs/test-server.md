@@ -54,6 +54,53 @@ GOTHAM_AGENT_CERT_DIR=./data/agent \
 Expected: the agent registers, the control plane shows the server as `ready`
 with live CPU/RAM/disk metrics, and heartbeats arrive every 10s.
 
+### How the box is actually run (updated 2026-10-03)
+
+The box does not match the clone-and-serve snippet above literally: the working
+copy lives at **`/root/gotham`** and is a git working tree pinned to the release
+tag (no separate clone), driven by two systemd units.
+
+- **Control plane** — `gotham.service`: `WorkingDirectory=/root/gotham`,
+  `ExecStart=/root/gotham/bin/gotham serve`; Postgres is the **native** server
+  (`postgres` role, database `gotham`), not the compose dev stack.
+- **Node agent** — `gotham-agent.service`: runs
+  `/var/lib/gotham-agent/bin/gotham-agent`, config in `/etc/gotham/agent.env`
+  (`GOTHAM_AGENT_NODE_ID=test-node-1`).
+- **No CA on this box**, so both sides run in dev plaintext via drop-ins:
+  `/etc/systemd/system/gotham.service.d/dev-insecure.conf`
+  (`GOTHAM_GRPC_INSECURE=true`) and
+  `/etc/systemd/system/gotham-agent.service.d/dev-insecure.conf`
+  (`GOTHAM_AGENT_INSECURE=true`). Without these, both binaries fail closed
+  ("no CA found … refusing to serve the agent channel in plaintext").
+- **Go** is at `/usr/local/go/bin/go` (not on PATH by default).
+
+Update procedure (release → box):
+
+```sh
+cd /root/gotham
+git fetch --tags origin && git checkout -f vX.Y.Z
+export PATH=/usr/local/go/bin:$PATH
+PUBKEY="$(cat deploy/gotham-signing-key.pub | openssl pkey -pubin -outform DER | tail -c32 | base64)"
+make build LDFLAGS="-s -w -X main.version=X.Y.Z \
+  -X github.com/justindeelux/gotham/updatecore.PublicKey=$PUBKEY"
+./bin/gotham migrate up            # forward-only; the DB tracks applied versions
+systemctl restart gotham gotham-agent
+./bin/gotham version                # expect "gotham X.Y.Z"
+```
+
+Caveats learned 2026-10-03:
+
+- `make build` alone stamps `dev`; pass `LDFLAGS` (as above) for a real version.
+- Copying a new agent binary over a **running** one fails with
+  `Text file busy` — `systemctl stop gotham-agent` first, or let the update
+  path swap it.
+- A schema-lagging database makes the agent registration fail
+  (`column "host_key_fingerprint" does not exist` and similar) — run
+  `gotham migrate up` before restarting the control plane.
+- The control plane logs dev-mode warnings on every start (no CA, ephemeral
+  JWT/credential keys); they are expected on this box, not errors.
+
+
 ## Browser UI smoke (Playwright)
 
 The `web/e2e` suite drives the embedded SPA in headless Chromium against a
@@ -93,7 +140,14 @@ CI runs the same suite in `.github/workflows/ui-e2e.yml` (Postgres 16 + Redis
 7 services, port 8099, report/trace artifacts on failure). Trigger it manually
 via *workflow_dispatch* or by opening a PR that touches `web/**`.
 
-## Verified on real hardware (2026-09-27)
+## Verified on real hardware (2026-09-27, box updated to v0.2.0 on 2026-10-03)
+
+On 2026-10-03 the box was updated from a `0.1.2-dev` control plane / `0.1.1`
+agent to **v0.2.0** (both binaries), the database migrated through
+`00028_backup_was_running`, and the agent re-registered against the new control
+plane (`cp_version=0.2.0`, node `test-node-1`). The two new migration-gated
+surfaces (credential versioning, server host-key fingerprint, restores,
+`was_running`) are now present on this host.
 
 Environment prerequisites installed for the current feature set:
 

@@ -65,8 +65,11 @@ const themeOverrides: GlobalThemeOverrides = {
     cardColor: "#2b2d31",
     modalColor: "#2b2d31",
     // Design token for floating surfaces (popovers, dropdowns); the previous
-    // #3b3e44 invent a lighter surface that matched no token (B3-7).
-    popoverColor: "var(--float)",
+    // #3b3e44 invent a lighter surface that matched no token (B3-7). Kept as a
+    // literal because Naive UI parses these colours and rejects CSS vars /
+    // color-mix() (console error: `[seemly/rgba]: Invalid color value`).
+    // #121315 == color-mix(in oklab, #1e1f22 78%, black) == tokens.css --float.
+    popoverColor: "#121315",
     tableColor: "#2b2d31",
     tableHeaderColor: "#232428",
     inputColor: "#1e1f22",
@@ -200,7 +203,7 @@ const themeOverrides: GlobalThemeOverrides = {
   Card: {
     color: "#2b2d31",
     colorModal: "#2b2d31",
-    colorPopover: "var(--float)",
+    colorPopover: "#121315",
     colorEmbedded: "#1e1f22",
     textColor: "#dbdee1",
     titleTextColor: "#f2f3f5",

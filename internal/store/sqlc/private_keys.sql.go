@@ -62,27 +62,31 @@ func (q *Queries) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (Privat
 	return i, err
 }
 
-const listPrivateKeys = `-- name: ListPrivateKeys :many
+const listPrivateKeysByTeam = `-- name: ListPrivateKeysByTeam :many
 SELECT id, name, created_at
 FROM private_keys
+WHERE team_id = $1 OR team_id IS NULL
 ORDER BY created_at DESC, id DESC
 `
 
-type ListPrivateKeysRow struct {
+type ListPrivateKeysByTeamRow struct {
 	ID        pgtype.UUID        `json:"id"`
 	Name      string             `json:"name"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
-func (q *Queries) ListPrivateKeys(ctx context.Context) ([]ListPrivateKeysRow, error) {
-	rows, err := q.db.Query(ctx, listPrivateKeys)
+// The active team's keys plus every legacy key (team_id NULL), newest first,
+// mirroring ListServersByTeam. Listing a legacy key does not make it
+// attachable: keyForTeam still gates the attach.
+func (q *Queries) ListPrivateKeysByTeam(ctx context.Context, teamID pgtype.UUID) ([]ListPrivateKeysByTeamRow, error) {
+	rows, err := q.db.Query(ctx, listPrivateKeysByTeam, teamID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListPrivateKeysRow{}
+	items := []ListPrivateKeysByTeamRow{}
 	for rows.Next() {
-		var i ListPrivateKeysRow
+		var i ListPrivateKeysByTeamRow
 		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -92,4 +96,26 @@ func (q *Queries) ListPrivateKeys(ctx context.Context) ([]ListPrivateKeysRow, er
 		return nil, err
 	}
 	return items, nil
+}
+
+const teamReferencesPrivateKey = `-- name: TeamReferencesPrivateKey :one
+SELECT EXISTS(
+    SELECT 1 FROM servers
+    WHERE ssh_key_id = $1 AND team_id = $2
+)
+`
+
+type TeamReferencesPrivateKeyParams struct {
+	PrivateKeyID pgtype.UUID `json:"private_key_id"`
+	TeamID       pgtype.UUID `json:"team_id"`
+}
+
+// Reports whether the given team already attaches the key to one of its nodes.
+// keyForTeam uses it so a legacy key (team_id NULL) stays usable by the teams
+// that already reference it, and by no other team-scoped caller.
+func (q *Queries) TeamReferencesPrivateKey(ctx context.Context, arg TeamReferencesPrivateKeyParams) (bool, error) {
+	row := q.db.QueryRow(ctx, teamReferencesPrivateKey, arg.PrivateKeyID, arg.TeamID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

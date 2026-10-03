@@ -708,11 +708,14 @@ func (s *ServerService) AddPrivateKey(ctx context.Context, name, privateKeyPEM s
 }
 
 // keyForTeam fetches a private key by ID and enforces that it belongs to the
-// caller's active team (JUS-5 fix round 1, defect 4a). A key from another
-// team answers the same unknown-key validation error as a missing key, so key
-// IDs cannot be probed across teams. Legacy keys (team_id NULL) predate teams
-// and stay usable by every caller, mirroring legacy shared nodes; a request
-// without a team scope keeps pre-teams behavior.
+// caller's active team (JUS-5 fix round 1, defect 4a; tightened in fix round
+// 2). A key from another team answers the same unknown-key validation error as
+// a missing key, so key IDs cannot be probed across teams. A legacy key
+// (team_id NULL: never backfilled because it is unreferenced, shared by
+// several teams, or attached only to legacy nodes) is usable only by a caller
+// without a team scope (the pre-teams path) and by a team that already
+// references it on one of its own nodes; every other team-scoped caller gets
+// unknown-key. A request without a team scope keeps pre-teams behavior.
 func (s *ServerService) keyForTeam(ctx context.Context, id uuid.UUID) (sqlc.PrivateKey, error) {
 	key, err := s.store.GetPrivateKeyByID(ctx, pgUUID(id))
 	if err != nil {
@@ -721,7 +724,24 @@ func (s *ServerService) keyForTeam(ctx context.Context, id uuid.UUID) (sqlc.Priv
 		}
 		return sqlc.PrivateKey{}, fmt.Errorf("lookup ssh key: %w", err)
 	}
-	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(uuidFromPG(key.TeamID), false); err != nil {
+	scope := teams.ScopeFor(ctx, uuid.Nil)
+	if !scope.Active() {
+		return key, nil
+	}
+	if key.TeamID.Valid {
+		if uuidFromPG(key.TeamID) != scope.TeamID {
+			return sqlc.PrivateKey{}, fmt.Errorf("%w: unknown ssh_key_id", ErrValidation)
+		}
+		return key, nil
+	}
+	referenced, err := s.store.TeamReferencesPrivateKey(ctx, sqlc.TeamReferencesPrivateKeyParams{
+		PrivateKeyID: key.ID,
+		TeamID:       pgUUID(scope.TeamID),
+	})
+	if err != nil {
+		return sqlc.PrivateKey{}, fmt.Errorf("lookup ssh key: %w", err)
+	}
+	if !referenced {
 		return sqlc.PrivateKey{}, fmt.Errorf("%w: unknown ssh_key_id", ErrValidation)
 	}
 	return key, nil
@@ -1093,7 +1113,10 @@ func (s *ServerService) credentials(ctx context.Context, row sqlc.Server, auth V
 // the error text matches the cause. An operator-supplied key from another
 // team answers unknown-key, like Add and Update (defect 4a); an attached key
 // the caller's team can no longer see answers the same attached-key error as
-// a deleted key.
+// a deleted key. An attached legacy key (team_id NULL) always loads: the
+// server's own team authorization already gated the read, and the key is the
+// node's credential rather than an operator-supplied UUID, so a legacy node
+// stays validatable from any team scope.
 func (s *ServerService) loadKeyAuth(ctx context.Context, id pgtype.UUID, passphrase string, explicit bool) (SSHAuth, error) {
 	if explicit {
 		key, err := s.keyForTeam(ctx, uuidFromPG(id))
@@ -1110,8 +1133,10 @@ func (s *ServerService) loadKeyAuth(ctx context.Context, id pgtype.UUID, passphr
 		}
 		return SSHAuth{}, fmt.Errorf("load ssh key: %w", err)
 	}
-	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(uuidFromPG(key.TeamID), false); err != nil {
-		return SSHAuth{}, fmt.Errorf("%w: attached SSH key no longer exists", ErrNoCredentials)
+	if key.TeamID.Valid {
+		if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(uuidFromPG(key.TeamID), false); err != nil {
+			return SSHAuth{}, fmt.Errorf("%w: attached SSH key no longer exists", ErrNoCredentials)
+		}
 	}
 
 	return s.decryptKeyAuth(key.EncryptedKey, passphrase)

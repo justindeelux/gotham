@@ -521,8 +521,15 @@ func (s *Store) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (sqlc.Pri
 	return s.queries.GetPrivateKeyByID(ctx, id)
 }
 
-// ListPrivateKeys returns private-key metadata, newest first, without the
-// encrypted material.
-func (s *Store) ListPrivateKeys(ctx context.Context) ([]sqlc.ListPrivateKeysRow, error) {
-	return s.queries.ListPrivateKeys(ctx)
+// TeamReferencesPrivateKey reports whether the given team already attaches the
+// key to one of its nodes. A legacy key (team_id NULL) stays usable by the
+// teams that reference it, and by no other team-scoped caller.
+func (s *Store) TeamReferencesPrivateKey(ctx context.Context, params sqlc.TeamReferencesPrivateKeyParams) (bool, error) {
+	return s.queries.TeamReferencesPrivateKey(ctx, params)
+}
+
+// ListPrivateKeysByTeam returns the team's private-key metadata plus every
+// legacy key (team_id NULL), newest first, without the encrypted material.
+func (s *Store) ListPrivateKeysByTeam(ctx context.Context, teamID pgtype.UUID) ([]sqlc.ListPrivateKeysByTeamRow, error) {
+	return s.queries.ListPrivateKeysByTeam(ctx, teamID)
 }

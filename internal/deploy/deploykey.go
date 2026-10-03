@@ -260,8 +260,15 @@ func (s *Service) detachDeployKey(ctx context.Context, app Application) error {
 // at. The fenced delete normally takes both; when it fails, the private key is
 // removed directly by ID — its FK cascades the mapping — so the application
 // delete that follows cannot strand a sealed credential with no owner (C3-10).
+// The purge is fenced on the mapping: it runs only while the application's
+// mapping still points at that key, so a key the application no longer owns
+// (rotated or deleted concurrently) is never removed by a raw ID.
 func (s *Service) deleteLocalDeployKey(ctx context.Context, key DeployKey) error {
 	if _, err := s.repo.DeleteDeployKey(ctx, key); err != nil && !errors.Is(err, ErrNotFound) {
+		current, getErr := s.repo.GetDeployKey(ctx, key.ApplicationID)
+		if getErr != nil || current.PrivateKeyID != key.PrivateKeyID {
+			return err
+		}
 		if purgeErr := s.repo.DeletePrivateKey(ctx, key.PrivateKeyID); purgeErr != nil {
 			return errors.Join(err, purgeErr)
 		}

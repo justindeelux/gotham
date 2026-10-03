@@ -435,11 +435,14 @@ func TestCrossTeamKeyAttach(t *testing.T) {
 		t.Errorf("own-team Update re-sending the key: %v", err)
 	}
 
-	// A legacy key (team_id NULL, created without a team scope) stays usable
-	// by every caller, mirroring legacy shared nodes.
+	// A legacy key (team_id NULL, never referenced) is not attachable by a
+	// team-scoped caller, but keeps pre-teams behavior without a team scope.
 	legacyKey, err := service.AddPrivateKey(ctx, "legacy-key", string(testPrivateKeyPEM(t)))
 	if err != nil {
 		t.Fatalf("AddPrivateKey legacy: %v", err)
+	}
+	if _, err := st.DB.Exec(ctx, "UPDATE private_keys SET team_id = NULL WHERE id = $1", pgUUID(legacyKey.ID)); err != nil {
+		t.Fatalf("unreference legacy key: %v", err)
 	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -448,7 +451,33 @@ func TestCrossTeamKeyAttach(t *testing.T) {
 			t.Logf("cleanup delete private key: %v", err)
 		}
 	})
+	if _, err := service.Update(bobPersonal, bobNode.ID, UpdateParams{SSHKeyID: &legacyKey.ID}); !errors.Is(err, ErrValidation) {
+		t.Errorf("unreferenced legacy-key Update = %v, want ErrValidation", err)
+	}
+	if _, err := service.Add(ctx, uuid.New(), "legacy-node", "127.0.0.1", 22, "root", legacyKey.ID, ""); err != nil {
+		t.Errorf("no-scope Add with the legacy key = %v, want success", err)
+	} else {
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM servers WHERE ssh_key_id = $1", pgUUID(legacyKey.ID)); err != nil {
+				t.Logf("cleanup legacy server: %v", err)
+			}
+		})
+	}
+
+	// A team that already references the legacy key can still attach it; a
+	// team that does not reference it cannot.
+	if _, err := st.DB.Exec(ctx,
+		`INSERT INTO servers (name, ip, port, ssh_user, ssh_key_id, team_id)
+		 VALUES ('bob-ref', '127.0.0.1', 22, 'root', $1, $2)`,
+		pgUUID(legacyKey.ID), pgUUID(teams.PersonalTeamID(uuid.UUID(bob.ID.Bytes)))); err != nil {
+		t.Fatalf("seed referencing server: %v", err)
+	}
 	if _, err := service.Update(bobPersonal, bobNode.ID, UpdateParams{SSHKeyID: &legacyKey.ID}); err != nil {
-		t.Errorf("legacy-key Update = %v, want success", err)
+		t.Errorf("referencing-team Update = %v, want success", err)
+	}
+	if _, err := service.Update(aliceTeam, aliceNode.ID, UpdateParams{SSHKeyID: &legacyKey.ID}); !errors.Is(err, ErrValidation) {
+		t.Errorf("non-referencing-team Update = %v, want ErrValidation", err)
 	}
 }

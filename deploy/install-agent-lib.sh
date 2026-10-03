@@ -85,11 +85,16 @@ _is_loopback_listener() {
 # key); the remaining keys get a shape check matching what the agent itself
 # accepts:
 # - dial/listen addresses: host:port systemd parses verbatim (spaces, quotes
-#   and = are refused on the dial address);
+#   and = are refused on both: systemd strips a leading quote and unquotes a
+#   balanced pair, so the unit would see a different value than the operator
+#   typed — proven on Ubuntu 22.04 systemd 249: KEY="abc" delivers abc,
+#   KEY="a b" delivers a b);
 # - NODE_ID mirrors the agent's validNodeID (agent/config.go) and the control
 #   plane's validateNodeID (internal/servers/ca.go): at most 253 bytes, no
-#   wildcard, path or whitespace characters. Quotes, = and ; stay accepted:
-#   the agent accepts them and an EnvironmentFile line holds them verbatim;
+#   wildcard, path or whitespace characters. Quotes are refused although the
+#   agent accepts them: an EnvironmentFile line does not hold them verbatim
+#   (a leading quote is silently stripped, a balanced pair is unquoted), so
+#   the running agent would see a different id than the installer wrote;
 # - CERT_DIR/KEY/CA must be absolute paths without whitespace, quotes or
 #   backslashes (a relative path would resolve against the service's working
 #   directory, not the operator's checkout);
@@ -99,8 +104,10 @@ _is_loopback_listener() {
 #   surrounding whitespace trimmed): 1/yes/on silently mean false to the
 #   agent, so the installer refuses them instead of pretending otherwise;
 # - UPDATE_INTERVAL mirrors Go's time.ParseDuration grammar (optional sign,
-#   float or int magnitudes, ns/us/ms/s/m/h units, bare 0); a zero or
-#   negative value still falls through to the agent default, as today;
+#   surrounding whitespace trimmed as the agent trims it, int-or-float
+#   magnitudes, ns/us/ms/s/m/h units, bare 0) and its overflow errors (a
+#   total past ~292 years is refused, not defaulted); a zero or negative
+#   value still falls through to the agent default, as today;
 # - UPDATE_CHANNEL accepts [A-Za-z0-9_.-]+ (the agent maps unknown channels
 #   to stable).
 # Prints the reason on stderr and returns 1 on rejection.
@@ -140,6 +147,12 @@ _env_check_value() {
             ;;
         GOTHAM_AGENT_LISTEN_ADDR)
             case "${_ck_value}" in
+                *" "* | *"$_ck_tab"* | *"'"* | *'"'* | *=*)
+                    echo "install-agent.sh: ${_ck_key} must not contain spaces, quotes or = (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            case "${_ck_value}" in
                 *:*)
                     ;;
                 *)
@@ -154,8 +167,8 @@ _env_check_value() {
                 return 1
             fi
             case "${_ck_value}" in
-                *\** | *\\* | */* | *" "* | *"$_ck_tab"*)
-                    echo "install-agent.sh: ${_ck_key} must not contain spaces, tabs, *, / or backslashes (got '${_ck_value}')" >&2
+                *\** | *\\* | */* | *" "* | *"$_ck_tab"* | *"'"* | *'"'*)
+                    echo "install-agent.sh: ${_ck_key} must not contain spaces, tabs, quotes, *, / or backslashes (got '${_ck_value}')" >&2
                     return 1
                     ;;
             esac
@@ -241,16 +254,33 @@ _env_check_value() {
         GOTHAM_AGENT_UPDATE_INTERVAL)
             # Mirrors Go's time.ParseDuration grammar (agent/config.go parses
             # with it and falls back to the 5m default on error or when the
-            # result is not positive): an optional sign, then one or more
-            # int-or-float magnitudes each with ns/us/ms/s/m/h units, or a
-            # bare 0. Zero/negative values still fall through to the agent
-            # default, as today.
-            case "${_ck_value}" in
-                [+-]*) _ck_dur="${_ck_value#?}" ;;
-                *) _ck_dur="${_ck_value}" ;;
+            # result is not positive): an optional sign, surrounding
+            # whitespace trimmed exactly as the agent trims it, then one or
+            # more int-or-float magnitudes each with ns/us/ms/s/m/h units, or
+            # a bare 0. A total past the int64 nanosecond range (~292 years)
+            # is an overflow error in Go, so the installer refuses it instead
+            # of writing a value the agent would silently default. Zero or
+            # negative values still fall through to the agent default, as
+            # today.
+            _ck_dur="$(printf '%s' "${_ck_value}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            case "${_ck_dur}" in
+                [+-]*) _ck_dur="${_ck_dur#?}" ;;
             esac
-            if [ "${_ck_dur}" != "0" ] && ! printf '%s' "${_ck_dur}" | grep -Eq '^(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$'; then
+            # µs/μs spellings are normalized before the ASCII-only checks.
+            _ck_dur="$(printf '%s' "${_ck_dur}" | sed 's/µs/us/g;s/μs/us/g')"
+            if [ "${_ck_dur}" != "0" ] && ! printf '%s' "${_ck_dur}" | grep -Eq '^(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|ms|s|m|h))+$'; then
                 echo "install-agent.sh: ${_ck_key} must be a Go duration such as 5m or 1h30m (got '${_ck_value}')" >&2
+                return 1
+            fi
+            if [ "${_ck_dur}" != "0" ] && ! printf '%s' "${_ck_dur}" | awk '
+                BEGIN { ns["ns"]=1; ns["us"]=1000; ns["ms"]=1000000; ns["s"]=1000000000; ns["m"]=60000000000; ns["h"]=3600000000000 }
+                { s=$0; total=0;
+                  while (s != "") {
+                    if (match(s, /^[0-9]+(\.[0-9]*)?/) || match(s, /^\.[0-9]+/)) { num=substr(s, 1, RLENGTH); s=substr(s, RLENGTH+1) } else { exit 2 }
+                    if (match(s, /^(ns|us|ms|s|m|h)/)) { unit=substr(s, 1, RLENGTH); s=substr(s, RLENGTH+1) } else { exit 2 }
+                    total += num * ns[unit] }
+                  if (total > 9223372036854775807) { exit 1 } }'; then
+                echo "install-agent.sh: ${_ck_key} overflows Go time.Duration (got '${_ck_value}')" >&2
                 return 1
             fi
             ;;

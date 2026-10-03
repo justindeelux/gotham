@@ -48,11 +48,12 @@
 #         the internal variables on both the Ubuntu and the refusal path.
 #   C1    every value written to agent.env is rejected on control
 #         characters (any byte < 0x20 or 0x7f, including newline); the dial
-#         address additionally refuses spaces, quotes and = and must be
-#         host:port, and the remaining keys get a cheap shape check matching
-#         what the agent accepts (log level, boolean, Go duration, channel
-#         name, listen host:port). Printable metacharacters in the node id
-#         still pass through verbatim.
+#         and listen addresses additionally refuse spaces, quotes and = and
+#         must be host:port, the node id refuses spaces, tabs, quotes, *,
+#         / and backslashes, and the remaining keys get a cheap shape check
+#         matching what the agent accepts (log level, boolean, Go duration
+#         with overflow errors, channel name). Printable metacharacters the
+#         agent also accepts still pass through verbatim.
 #   V1    install-agent.sh validates every agent.env value before its first
 #         mutation (user, binary, CA): a direct run with a bad value fails
 #         with nothing created.
@@ -1215,10 +1216,14 @@ printf 'GOTHAM_AGENT_NODE_ID=a\177b\n' >"${CC_ENV3}"
 if agent_env_write "${CC_ENV3}" "/etc/gotham/ca.crt" 0 2>/dev/null; then
     fail "a DEL byte from a prior agent.env was kept"
 fi
-# Printable metacharacters the agent itself accepts (quotes, ;, $(), =)
-# still pass through verbatim (no over-rejection and no execution): the
-# quoting class must survive this gate. Shapes the agent refuses (spaces,
-# *, /, backslashes) are rejected below instead of passed through.
+# Printable metacharacters the agent itself also accepts (;, $(), =) still
+# pass through verbatim (no over-rejection and no execution): the quoting
+# class must survive this gate. Quotes are refused instead of passed
+# through: systemd's EnvironmentFile parser strips a leading quote and
+# unquotes a balanced pair (proven on Ubuntu 22.04 systemd 249:
+# KEY="abc" delivers abc), so the unit would see a different value than the
+# installer wrote. Shapes the agent refuses (spaces, *, /, backslashes) are
+# rejected below instead of passed through.
 CC_ENV4="${CC_DIR}/meta.env"
 printf 'GOTHAM_AGENT_CP_ADDR=cp.example.com:9443\n' >"${CC_ENV4}"
 # The execution probe stays slash- and space-free (a node id can hold
@@ -1226,10 +1231,10 @@ printf 'GOTHAM_AGENT_CP_ADDR=cp.example.com:9443\n' >"${CC_ENV4}"
 # appear in the suite's working directory.
 rm -f ./c1-pwned-jus12
 # shellcheck disable=SC2034  # read by agent_env_write through eval
-GOTHAM_AGENT_NODE_ID="o'dd;\$(id>c1-pwned-jus12);a=b"
+GOTHAM_AGENT_NODE_ID="odd;\$(id>c1-pwned-jus12);a=b"
 agent_env_write "${CC_ENV4}" "/etc/gotham/ca.crt" 0
 unset_agent_env
-grep -qxF "GOTHAM_AGENT_NODE_ID=o'dd;\$(id>c1-pwned-jus12);a=b" "${CC_ENV4}" \
+grep -qxF "GOTHAM_AGENT_NODE_ID=odd;\$(id>c1-pwned-jus12);a=b" "${CC_ENV4}" \
     || fail "agent-valid metacharacters in the node id were rejected or mangled"
 if [ -e ./c1-pwned-jus12 ]; then
     rm -f ./c1-pwned-jus12
@@ -1308,21 +1313,30 @@ done
 unset_agent_env
 # ... and reject malformed ones (unknown level, non-true/false booleans —
 # 1/yes/on silently mean off to the agent — unit-less or unit-broken
-# durations, channel names with spaces or slashes, node ids the agent itself
+# durations, day/week/year units Go itself rejects, absurd durations Go
+# errors on, channel names with spaces or slashes, node ids the agent itself
 # refuses, relative or whitespace/quoted paths, scheme-broken docker
-# endpoints, a port-less listener), while agent-valid spellings keep passing
-# verbatim (booleans any case/trimmed, Go-duration forms, quoted node ids,
-# absolute paths, socket forms). Each entry is key|value|want.
+# endpoints, a port-less listener, quoted/spaced listeners), while
+# agent-valid spellings keep passing verbatim (booleans any case/trimmed,
+# padded and Go-duration forms, quoteless node ids, absolute paths, socket
+# forms). Each entry is key|value|want.
 for _spec in 'GOTHAM_AGENT_LOG_LEVEL|verbose|reject' 'GOTHAM_AGENT_AUTO_UPDATE|maybe|reject' \
     'GOTHAM_AGENT_AUTO_UPDATE|1|reject' 'GOTHAM_AGENT_AUTO_UPDATE|yes|reject' \
     'GOTHAM_AGENT_AUTO_UPDATE|on|reject' 'GOTHAM_AGENT_AUTO_UPDATE|0|reject' \
     'GOTHAM_AGENT_AUTO_UPDATE|no|reject' 'GOTHAM_AGENT_AUTO_UPDATE|off|reject' \
     'GOTHAM_AGENT_UPDATE_INTERVAL|5|reject' 'GOTHAM_AGENT_UPDATE_INTERVAL|5x|reject' \
     'GOTHAM_AGENT_UPDATE_INTERVAL|5M|reject' 'GOTHAM_AGENT_UPDATE_INTERVAL|5 m|reject' \
+    'GOTHAM_AGENT_UPDATE_INTERVAL|1d|reject' 'GOTHAM_AGENT_UPDATE_INTERVAL|1w|reject' \
+    'GOTHAM_AGENT_UPDATE_INTERVAL|99999999999h|reject' \
     'GOTHAM_AGENT_UPDATE_CHANNEL|a b|reject' \
     'GOTHAM_AGENT_UPDATE_CHANNEL|a/b|reject' 'GOTHAM_AGENT_LISTEN_ADDR|9443|reject' \
+    'GOTHAM_AGENT_LISTEN_ADDR|0.0.0.0: 9443|reject' \
+    "GOTHAM_AGENT_LISTEN_ADDR|:94'43|reject" \
+    'GOTHAM_AGENT_LISTEN_ADDR|:94"43|reject' \
+    'GOTHAM_AGENT_LISTEN_ADDR|:94=43|reject' \
     'GOTHAM_AGENT_NODE_ID|a b|reject' 'GOTHAM_AGENT_NODE_ID|a*b|reject' \
-    'GOTHAM_AGENT_NODE_ID|a/b|reject' 'GOTHAM_AGENT_CP_ADDR|cp.example.com|reject' \
+    'GOTHAM_AGENT_NODE_ID|a/b|reject' "GOTHAM_AGENT_NODE_ID|a'b|reject" \
+    'GOTHAM_AGENT_CP_ADDR|cp.example.com|reject' \
     'GOTHAM_AGENT_CERT_DIR|relative/certs|reject' \
     'GOTHAM_AGENT_CERT_DIR|/opt/my dir/certs|reject' \
     'GOTHAM_AGENT_KEY|relative/key.pem|reject' \
@@ -1333,7 +1347,6 @@ for _spec in 'GOTHAM_AGENT_LOG_LEVEL|verbose|reject' 'GOTHAM_AGENT_AUTO_UPDATE|m
     'GOTHAM_AGENT_DOCKER_SOCK|tcp://docker|reject' \
     'GOTHAM_AGENT_DOCKER_SOCK|http://docker:2375/x|reject' \
     'GOTHAM_AGENT_DOCKER_SOCK|/sock dir/docker.sock|reject' \
-    "GOTHAM_AGENT_NODE_ID|a'b|pass" \
     'GOTHAM_AGENT_NODE_ID|a=b|pass' \
     'GOTHAM_AGENT_NODE_ID|host-with-dashes|pass' \
     'GOTHAM_AGENT_NODE_ID|a\b|reject' \
@@ -1343,6 +1356,7 @@ for _spec in 'GOTHAM_AGENT_LOG_LEVEL|verbose|reject' 'GOTHAM_AGENT_AUTO_UPDATE|m
     'GOTHAM_AGENT_UPDATE_INTERVAL|+5m|pass' \
     'GOTHAM_AGENT_UPDATE_INTERVAL|.5s|pass' \
     'GOTHAM_AGENT_UPDATE_INTERVAL|5.s|pass' \
+    'GOTHAM_AGENT_UPDATE_INTERVAL| 5m |pass' \
     'GOTHAM_AGENT_UPDATE_INTERVAL|0|pass' \
     'GOTHAM_AGENT_UPDATE_INTERVAL|500ms|pass' \
     'GOTHAM_AGENT_UPDATE_INTERVAL|1m30s|pass' \
@@ -1391,13 +1405,11 @@ _cc_direct_reject() { # $1 key: the value in _cc_val must be refused
 _cc_val='a"b'
 # shellcheck disable=SC2034  # read by agent_env_write through eval
 GOTHAM_AGENT_NODE_ID="${_cc_val}"
-CC_SENV="${CC_DIR}/shape-ok.env"
-printf 'GOTHAM_AGENT_CP_ADDR=cp.example.com:9443\nGOTHAM_AGENT_NODE_ID=node-ok\n' >"${CC_SENV}"
-agent_env_write "${CC_SENV}" "/etc/gotham/ca.crt" 0 \
-    || fail "GOTHAM_AGENT_NODE_ID='a\"b' was rejected although the agent accepts it"
-grep -qxF 'GOTHAM_AGENT_NODE_ID=a"b' "${CC_SENV}" \
-    || fail "GOTHAM_AGENT_NODE_ID='a\"b' was not written verbatim"
-unset_agent_env
+_cc_direct_reject GOTHAM_AGENT_NODE_ID
+_cc_val="a'b"
+# shellcheck disable=SC2034  # read by agent_env_write through eval
+GOTHAM_AGENT_NODE_ID="${_cc_val}"
+_cc_direct_reject GOTHAM_AGENT_NODE_ID
 _cc_val="$(printf 'a\tb')"
 # shellcheck disable=SC2034  # read by agent_env_write through eval
 GOTHAM_AGENT_NODE_ID="${_cc_val}"

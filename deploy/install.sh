@@ -150,7 +150,7 @@ CP_HOSTS="${CP_HOSTS}${CP_HOSTS_OPT}"
 CP_HOSTS="$(printf '%s' "${CP_HOSTS}" | tr ',' ' ')"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-for sibling in release-verify.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service; do
+for sibling in release-verify.sh install-agent-lib.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service; do
     if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
         echo "install.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
         exit 2
@@ -158,6 +158,8 @@ for sibling in release-verify.sh gotham-update.sh gotham-updater.conf install-su
 done
 # shellcheck source=deploy/release-verify.sh
 . "${SCRIPT_DIR}/release-verify.sh"
+# shellcheck source=deploy/install-agent-lib.sh
+. "${SCRIPT_DIR}/install-agent-lib.sh"
 
 log() { echo "==> $*"; }
 
@@ -282,6 +284,55 @@ WRAPPER_PATH="${PREFIX}/usr/libexec/gotham/gotham-update"
 WRAPPER_CONF="${ETC_DIR}/updater.conf"
 ENV_FILE="${ETC_DIR}/gotham.env"
 SERVICE_FILE="${PREFIX}/etc/systemd/system/gotham.service"
+
+# ---- Validate every input before the first mutation -------------------------
+# The DSN/Redis values and every GOTHAM_AGENT_* value the localhost agent step
+# would use are checked here, before the service user, directories, binary or
+# any env file is created, so a bad value fails with nothing created. The
+# agent values go through the same validator functions install-agent.sh runs
+# (agent_env_validate also covers values a previous agent.env would preserve
+# for keys this run leaves unset). A failing agent step itself still never
+# rolls the control plane back (see the localhost-agent section below).
+DEFAULT_DSN="postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
+DEFAULT_REDIS="localhost:6379"
+
+# Values a previous install already wrote, so a repair/upgrade keeps a managed
+# DSN and operator edits instead of falling back to local defaults. A DSN or
+# Redis address given on the command line still wins.
+ENV_PREV=""
+if [ -f "${ENV_FILE}" ]; then
+    ENV_PREV="$(cat "${ENV_FILE}")"
+fi
+env_prev() {
+    printf '%s\n' "${ENV_PREV}" | sed -n "s/^$1=//p" | head -n1
+}
+DSN="${GOTHAM_DATABASE_DSN:-$(env_prev GOTHAM_DATABASE_DSN)}"
+DSN="${DSN:-${DEFAULT_DSN}}"
+REDIS_ADDR="${GOTHAM_REDIS_ADDR:-$(env_prev GOTHAM_REDIS_ADDR)}"
+REDIS_ADDR="${REDIS_ADDR:-${DEFAULT_REDIS}}"
+
+# A control character (notably a newline smuggling a second line) in either
+# value would corrupt root-owned gotham.env, so both are rejected before
+# anything is written.
+_stripped_dsn="$(printf '%s' "${DSN}" | tr -d '\000-\037\177')"
+[ "${_stripped_dsn}" = "${DSN}" ] \
+    || die "GOTHAM_DATABASE_DSN contains a control character (rejected)"
+_stripped_redis="$(printf '%s' "${REDIS_ADDR}" | tr -d '\000-\037\177')"
+[ "${_stripped_redis}" = "${REDIS_ADDR}" ] \
+    || die "GOTHAM_REDIS_ADDR contains a control character (rejected)"
+
+if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
+    # The lookup reads the path install-agent.sh actually writes;
+    # GOTHAM_AGENT_ENV_FILE redirects it only on a dry run in test mode (a
+    # sandbox real run uses a scratch installer copy with the path baked in —
+    # see deploy/test-release-install.sh).
+    _VALIDATE_AGENT_ENV="/etc/gotham/agent.env"
+    if [ "${IN_TEST}" -eq 1 ] && [ "${DRY_RUN}" -eq 1 ] && [ -n "${GOTHAM_AGENT_ENV_FILE:-}" ]; then
+        _VALIDATE_AGENT_ENV="${GOTHAM_AGENT_ENV_FILE}"
+    fi
+    agent_env_validate "${_VALIDATE_AGENT_ENV}" "${CA_DIR}/ca.crt" 0 \
+        || die "invalid agent configuration (see above); refusing to install"
+fi
 
 # render_file installs a root-owned config/unit file, rewriting the production
 # absolute roots onto GOTHAM_INSTALL_ROOT when one is set (test mode only).
@@ -430,33 +481,6 @@ run mkdir -p "${ETC_DIR}"
 run chmod 0755 "${ETC_DIR}"
 JWT_KEY="${ETC_DIR}/jwt_ed25519.key"
 JWT_PUB="${ETC_DIR}/jwt_ed25519.pub"
-DEFAULT_DSN="postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
-DEFAULT_REDIS="localhost:6379"
-
-# Values a previous install already wrote, so a repair/upgrade keeps a managed
-# DSN and operator edits instead of falling back to local defaults. A DSN or
-# Redis address given on the command line still wins.
-ENV_PREV=""
-if [ -f "${ENV_FILE}" ]; then
-    ENV_PREV="$(cat "${ENV_FILE}")"
-fi
-env_prev() {
-    printf '%s\n' "${ENV_PREV}" | sed -n "s/^$1=//p" | head -n1
-}
-DSN="${GOTHAM_DATABASE_DSN:-$(env_prev GOTHAM_DATABASE_DSN)}"
-DSN="${DSN:-${DEFAULT_DSN}}"
-REDIS_ADDR="${GOTHAM_REDIS_ADDR:-$(env_prev GOTHAM_REDIS_ADDR)}"
-REDIS_ADDR="${REDIS_ADDR:-${DEFAULT_REDIS}}"
-
-# A control character (notably a newline smuggling a second line) in either
-# value would corrupt root-owned gotham.env, so both are rejected before
-# anything is written.
-_stripped_dsn="$(printf '%s' "${DSN}" | tr -d '\000-\037\177')"
-[ "${_stripped_dsn}" = "${DSN}" ] \
-    || die "GOTHAM_DATABASE_DSN contains a control character (rejected)"
-_stripped_redis="$(printf '%s' "${REDIS_ADDR}" | tr -d '\000-\037\177')"
-[ "${_stripped_redis}" = "${REDIS_ADDR}" ] \
-    || die "GOTHAM_REDIS_ADDR contains a control character (rejected)"
 
 if [ "${DRY_RUN}" -eq 0 ]; then
     # Restrictive umask only around the secret material, so it is never briefly

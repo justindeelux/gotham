@@ -149,12 +149,20 @@ restarted onto the newly installed binary. Pass a value again (flag or
 environment) to override it.
 
 Every value written to `agent.env` is validated before the installer changes
-anything (system user, binary, CA): control characters are rejected everywhere,
-the control-plane address must be `host:port` without spaces, quotes or `=`,
-and the log level, auto-update flag, update interval and update channel must
-match what the agent accepts. A bad value fails the run with nothing created.
-`GOTHAM_DATABASE_DSN` and `GOTHAM_REDIS_ADDR` get the same control-character
-check before they go into `gotham.env`.
+anything (service user, directories, binary, CA): control characters and
+trailing backslashes are rejected everywhere, the node id mirrors the
+agent's own gate (at most 253 bytes; no spaces, tabs, `*`, `/` or
+backslashes), `CERT_DIR`/`KEY`/`CA` must be absolute paths without
+whitespace, quotes or backslashes, the docker endpoint must be
+`unix:///abs/path`, `/abs/path` or `tcp://host:port`, the dial address must
+be `host:port` without spaces, quotes or `=`, auto-update accepts only
+`true`/`false` (the agent only honours `true`), and the interval/channel
+must match Go durations / channel names. `install.sh` runs the same checks
+(plus the DSN/Redis control-character gate) before its first mutation, so a
+bad value fails the run with nothing created; a failing agent step itself
+still keeps the control plane. `GOTHAM_DATABASE_DSN` and
+`GOTHAM_REDIS_ADDR` get the same control-character check before they go into
+`gotham.env`.
 
 `install-agent.sh --full` (or `GOTHAM_AGENT_FULL=1`) also installs Docker
 Engine and the compose plugin from the official Docker apt repository before

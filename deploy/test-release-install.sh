@@ -177,11 +177,14 @@ run_install_at() {
 bake_installer() {
     sed -e "s|^    _la_os_release=\"/etc/os-release\"|    _la_os_release=\"$2\"|" \
         -e "s|^        AGENT_ENV_FILE=\"/etc/gotham/agent.env\"|        AGENT_ENV_FILE=\"$3\"|" \
+        -e "s|^    _VALIDATE_AGENT_ENV=\"/etc/gotham/agent.env\"|    _VALIDATE_AGENT_ENV=\"$3\"|" \
         "${INSTALL_SH}" >"$1"
     grep -qxF "    _la_os_release=\"$2\"" "$1" \
         || { echo "FAIL: bake_installer did not bake the os-release path" >&2; exit 1; }
     grep -qxF "        AGENT_ENV_FILE=\"$3\"" "$1" \
         || { echo "FAIL: bake_installer did not bake the agent.env path" >&2; exit 1; }
+    grep -qxF "    _VALIDATE_AGENT_ENV=\"$3\"" "$1" \
+        || { echo "FAIL: bake_installer did not bake the early-validation agent.env path" >&2; exit 1; }
     # The copy runs from its own directory (SCRIPT_DIR), so link the real
     # siblings next to it; the copy itself stays the file under test.
     for _sib in release-verify.sh gotham-update.sh gotham-updater.conf \
@@ -806,7 +809,10 @@ echo "PASS: an explicit GOTHAM_AGENT_CP_ADDR still repoints deliberately"
 # ---- L2: only loopback literals count as local ------------------------------
 # 127.evil.example.com is NOT local (it merely starts with 127.); only
 # numeric 127.0.0.0/8, localhost and ::1 keep the localhost step, everything
-# else is left untouched like a remote control plane.
+# else is left untouched like a remote control plane. All values here are
+# host:port: a bare 127.0.0.1 never reaches this classifier — the agent
+# itself refuses a port-less dial address, so the installer rejects it up
+# front (covered in C2).
 L2_ENV="${SCRATCH}/l2-agent.env"
 l2_case() {
     # $1 addr, $2 want (local/remote)
@@ -835,7 +841,7 @@ l2_case() {
         fi
     fi
 }
-for _local in 127.0.0.1:9442 127.1.2.3:9442 127.0.0.1 localhost:9443 \
+for _local in 127.0.0.1:9442 127.1.2.3:9442 localhost:9443 \
     LOCALHOST:9443 '[::1]:9443'; do
     l2_case "${_local}" local
 done
@@ -846,9 +852,11 @@ done
 echo "PASS: only loopback literals count as local (127.evil.example.com is remote) (L2)"
 
 # ---- Retry quoting: values with spaces/specials stay one re-runnable word --
-QUOTED_LINE="$(GOTHAM_AGENT_NODE_ID='odd id; rm -rf /' dry_run_agent_line "${SCRATCH}/no-such-agent.env")"
+# (A node id can no longer hold a space — the installer mirrors the agent's
+# own gate — so this schedules an agent-valid but still quoting-hostile id.)
+QUOTED_LINE="$(GOTHAM_AGENT_NODE_ID="odd;\$(id>xq);a=b" dry_run_agent_line "${SCRATCH}/no-such-agent.env")"
 case "${QUOTED_LINE}" in
-    *"GOTHAM_AGENT_NODE_ID='odd id; rm -rf /'"*)
+    *"GOTHAM_AGENT_NODE_ID='odd;\$(id>xq);a=b'"*)
         echo "PASS: the retry command shell-quotes values with spaces/specials"
         ;;
     *)
@@ -1139,13 +1147,17 @@ echo "PASS: the agent child runs scrubbed and hostile path seams change nothing 
 
 # ---- M2: a metachar node id reaches the agent step verbatim -----------------
 # The agent step must not word-split its assignments: a node id holding a
-# space, a quote, $() and * (plus ;) is passed as one env value, no command
-# in it runs, and no glob expands. The fake captures what it receives.
+# quote, $(), ;, = and > (spaces, * and / are refused up front now — the
+# installer mirrors the agent's own gate) is passed as one env value, no
+# command in it runs, and no glob expands. The fake captures what it
+# receives. The execution probe stays slash- and space-free so the id itself
+# is valid: if it were ever expanded, ./m2-pwned-jus12 would appear in the
+# suite's working directory.
 echo "==> metachar node id passes through the agent step verbatim (M2)"
 M2_ROOT="${SCRATCH}/root-m2"
-M2_PWNED="${SCRATCH}/m2-pwned"
+M2_PWNED="m2-pwned-jus12"
 M2_CAPTURE="${SCRATCH}/m2-captured-node-id"
-M2_NODE="o'dd \$(touch ${M2_PWNED}) *; rm -rf /"
+M2_NODE="o'dd;\$(id>${M2_PWNED});a=b"
 cat >"${SCRATCH}/capture-agent.sh" <<'SHIM'
 #!/bin/sh
 printf '%s' "${GOTHAM_AGENT_NODE_ID}" >"${CAPTURE:?}"
@@ -1179,44 +1191,58 @@ cmp -s "${SCRATCH}/m2-expected" "${M2_CAPTURE}" \
     || { echo "FAIL: the node id did not arrive verbatim (M2)" >&2; echo "want: ${M2_NODE}" >&2; echo "got:  $(cat "${M2_CAPTURE}")" >&2; exit 1; }
 [ ! -e "${M2_PWNED}" ] \
     || { echo "FAIL: a command inside the node id was executed (M2)" >&2; exit 1; }
+rm -f "${M2_PWNED}"
 echo "PASS: a metachar node id arrives verbatim and nothing in it runs (M2)"
 
-# ---- C2: control characters in GOTHAM_DATABASE_DSN / GOTHAM_REDIS_ADDR ----
-# A newline smuggling a second line into root-owned gotham.env fails closed
-# before anything is written: the rejection names the key and no gotham.env
-# appears. Sandbox real runs (no --dry-run) prove the write path itself.
-echo "==> control characters in the DSN / Redis addr are rejected (C2)"
-C2_ROOT="${SCRATCH}/root-c2"
-C2_RC=0
-GOTHAM_DATABASE_DSN="$(printf 'postgres://gotham:gotham@localhost:5432/gotham\nGOTHAM_EVIL=true')" \
-GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
-GOTHAM_VERSION="${VERSION}" \
-GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
-GOTHAM_INSTALL_ROOT="${C2_ROOT}" \
-GOTHAM_SKIP_DEPS=1 \
-    sh "${INSTALL_SH}" >"${SCRATCH}/c2-out.log" 2>"${SCRATCH}/c2-err.log" || C2_RC=$?
-[ "${C2_RC}" -ne 0 ] \
-    || { echo "FAIL: a newline in GOTHAM_DATABASE_DSN was accepted (C2)" >&2; exit 1; }
-grep -q 'GOTHAM_DATABASE_DSN.*control character' "${SCRATCH}/c2-err.log" \
-    || { echo "FAIL: the DSN rejection does not name the key and the cause (C2)" >&2; exit 1; }
-[ ! -f "${C2_ROOT}/etc/gotham/gotham.env" ] \
-    || { echo "FAIL: gotham.env was written although the DSN was rejected (C2)" >&2; exit 1; }
-C2R_ROOT="${SCRATCH}/root-c2r"
-C2R_RC=0
-GOTHAM_REDIS_ADDR="$(printf 'localhost:6379\nGOTHAM_EVIL=true')" \
-GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
-GOTHAM_VERSION="${VERSION}" \
-GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
-GOTHAM_INSTALL_ROOT="${C2R_ROOT}" \
-GOTHAM_SKIP_DEPS=1 \
-    sh "${INSTALL_SH}" >"${SCRATCH}/c2r-out.log" 2>"${SCRATCH}/c2r-err.log" || C2R_RC=$?
-[ "${C2R_RC}" -ne 0 ] \
-    || { echo "FAIL: a newline in GOTHAM_REDIS_ADDR was accepted (C2)" >&2; exit 1; }
-grep -q 'GOTHAM_REDIS_ADDR.*control character' "${SCRATCH}/c2r-err.log" \
-    || { echo "FAIL: the Redis rejection does not name the key and the cause (C2)" >&2; exit 1; }
-[ ! -f "${C2R_ROOT}/etc/gotham/gotham.env" ] \
-    || { echo "FAIL: gotham.env was written although the Redis addr was rejected (C2)" >&2; exit 1; }
-echo "PASS: control characters in the DSN / Redis addr fail closed with nothing written (C2)"
+# ---- C2: bad input fails before the first mutation, nothing created --------
+# Every input install.sh consumes — the DSN, the Redis address and each
+# GOTHAM_AGENT_* value the localhost agent step would use — is validated
+# before the service user, directories, binary or any env file is created. A
+# newline smuggling a second line into root-owned gotham.env fails closed the
+# same way. Sandbox real runs (no --dry-run) prove the write path itself: a
+# fresh prefix must hold no etc/, no var/ (hence no binary) and no env files.
+# (No user is created in a sandbox; the container re-proof asserts that.)
+echo "==> bad input fails before the first mutation with nothing created (C2)"
+_c2_must_reject() { # $1 case name, $2 key, $3 value
+    C2_ROOT="${SCRATCH}/root-c2-$1"
+    rm -rf "${C2_ROOT}"
+    C2_RC=0
+    env "$2=$3" \
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+    GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+    GOTHAM_INSTALL_ROOT="${C2_ROOT}" \
+    GOTHAM_SKIP_DEPS=1 \
+        sh "${INSTALL_SH}" >"${SCRATCH}/c2-$1-out.log" 2>"${SCRATCH}/c2-$1-err.log" || C2_RC=$?
+    [ "${C2_RC}" -ne 0 ] \
+        || { echo "FAIL: $2='$3' was accepted (C2/$1)" >&2; exit 1; }
+    grep -q "$2" "${SCRATCH}/c2-$1-err.log" \
+        || { echo "FAIL: the $2 rejection does not name the key (C2/$1)" >&2; exit 1; }
+    for _c2path in etc var; do
+        [ ! -e "${C2_ROOT}/${_c2path}" ] \
+            || { echo "FAIL: ${C2_ROOT}/${_c2path} was created although $2 was rejected (C2/$1)" >&2; exit 1; }
+    done
+    [ ! -f "${C2_ROOT}/etc/gotham/gotham.env" ] \
+        || { echo "FAIL: gotham.env was written although $2 was rejected (C2/$1)" >&2; exit 1; }
+}
+_c2_must_reject dsn GOTHAM_DATABASE_DSN "$(printf 'postgres://gotham:gotham@localhost:5432/gotham\nGOTHAM_EVIL=true')"
+_c2_must_reject redis GOTHAM_REDIS_ADDR "$(printf 'localhost:6379\nGOTHAM_EVIL=true')"
+_c2_must_reject node-space GOTHAM_AGENT_NODE_ID 'bad id'
+_c2_must_reject node-star GOTHAM_AGENT_NODE_ID 'a*b'
+_c2_must_reject node-slash GOTHAM_AGENT_NODE_ID 'a/b'
+_c2_must_reject certdir-rel GOTHAM_AGENT_CERT_DIR 'relative/certs'
+_c2_must_reject certdir-space GOTHAM_AGENT_CERT_DIR '/opt/my dir/certs'
+_c2_must_reject key-rel GOTHAM_AGENT_KEY 'relative/key.pem'
+_c2_must_reject sock-rel GOTHAM_AGENT_DOCKER_SOCK 'unix://relative.sock'
+_c2_must_reject sock-noport GOTHAM_AGENT_DOCKER_SOCK 'tcp://docker'
+_c2_must_reject level GOTHAM_AGENT_LOG_LEVEL 'verbose'
+_c2_must_reject autoupdate GOTHAM_AGENT_AUTO_UPDATE 'yes'
+_c2_must_reject interval GOTHAM_AGENT_UPDATE_INTERVAL '5'
+_c2_must_reject channel GOTHAM_AGENT_UPDATE_CHANNEL 'a/b'
+_c2_must_reject cpaddr GOTHAM_AGENT_CP_ADDR 'not-a-host-port'
+_c2_must_reject cpaddr-noport GOTHAM_AGENT_CP_ADDR '127.0.0.1'
+_c2_must_reject listen GOTHAM_AGENT_LISTEN_ADDR '9443'
+echo "PASS: bad DSN / Redis / agent values fail closed with nothing created (C2)"
 
 # ---- R4: a real run ignores GOTHAM_INSTALL_TEST_AGENT_SCRIPT ---------------
 # No --dry-run, no GOTHAM_INSTALL_ROOT: the installer runs for real with
@@ -1242,7 +1268,8 @@ RR_AGENT_ENV="${SCRATCH}/rr-agent.env"
 rm -f "${RR_AGENT_ENV}"
 RR_INSTALLER="${SCRATCH}/install-rr.sh"
 # Sandbox the five writable roots (the rest derive from them) and bake the
-# platform/agent.env lookups to fixtures; the TEST_MODE derivation, the
+# platform/agent.env lookups to fixtures (both the late localhost-step lookup
+# and the early validate-before-mutate lookup); the TEST_MODE derivation, the
 # gate and everything else stay byte-identical so this is a genuine
 # TEST_MODE=0 real run, only relocated.
 sed -e "s|^ETC_DIR=\"\${PREFIX}/etc/gotham\"\$|ETC_DIR=\"${RR_BOX}/etc/gotham\"|" \
@@ -1252,6 +1279,7 @@ sed -e "s|^ETC_DIR=\"\${PREFIX}/etc/gotham\"\$|ETC_DIR=\"${RR_BOX}/etc/gotham\"|
     -e "s|^SERVICE_FILE=\"\${PREFIX}/etc/systemd/system/gotham.service\"\$|SERVICE_FILE=\"${RR_BOX}/etc/systemd/system/gotham.service\"|" \
     -e "s|^    _la_os_release=\"/etc/os-release\"\$|    _la_os_release=\"${FIXTURES}/ubuntu-release\"|" \
     -e "s|^        AGENT_ENV_FILE=\"/etc/gotham/agent.env\"\$|        AGENT_ENV_FILE=\"${RR_AGENT_ENV}\"|" \
+    -e "s|^    _VALIDATE_AGENT_ENV=\"/etc/gotham/agent.env\"\$|    _VALIDATE_AGENT_ENV=\"${RR_AGENT_ENV}\"|" \
     "${INSTALL_SH}" >"${RR_INSTALLER}"
 for _rrvar in ETC_DIR STATE_DIR STATUS_DIR WRAPPER_PATH SERVICE_FILE; do
     grep -q "^${_rrvar}=\"${RR_BOX}/" "${RR_INSTALLER}" \
@@ -1261,7 +1289,9 @@ grep -qxF "    _la_os_release=\"${FIXTURES}/ubuntu-release\"" "${RR_INSTALLER}" 
     || { echo "FAIL: the R4 copy did not bake the os-release path" >&2; exit 1; }
 grep -qxF "        AGENT_ENV_FILE=\"${RR_AGENT_ENV}\"" "${RR_INSTALLER}" \
     || { echo "FAIL: the R4 copy did not bake the agent.env path" >&2; exit 1; }
-_rr_extra="$(diff "${INSTALL_SH}" "${RR_INSTALLER}" | grep '^>' | grep -vcE '^> ((ETC_DIR|STATE_DIR|STATUS_DIR|WRAPPER_PATH|SERVICE_FILE)=|    _la_os_release=|        AGENT_ENV_FILE=)' || true)"
+grep -qxF "    _VALIDATE_AGENT_ENV=\"${RR_AGENT_ENV}\"" "${RR_INSTALLER}" \
+    || { echo "FAIL: the R4 copy did not bake the early-validation agent.env path" >&2; exit 1; }
+_rr_extra="$(diff "${INSTALL_SH}" "${RR_INSTALLER}" | grep '^>' | grep -vcE '^> ((ETC_DIR|STATE_DIR|STATUS_DIR|WRAPPER_PATH|SERVICE_FILE)=|    _la_os_release=|        AGENT_ENV_FILE=|    _VALIDATE_AGENT_ENV=)' || true)"
 [ "${_rr_extra}" = "0" ] \
     || { echo "FAIL: the R4 copy differs by more than the relocated lines" >&2; diff "${INSTALL_SH}" "${RR_INSTALLER}" >&2; exit 1; }
     # The copy runs from its own directory (SCRIPT_DIR), so link the real

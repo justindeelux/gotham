@@ -5,7 +5,12 @@ import { defineConfig } from "@playwright/test";
 //   npm run test:css
 export default defineConfig({
   testDir: ".",
-  testMatch: ["form-feedback.spec.ts", "form-layout.spec.ts", "profile-layout.spec.ts"],
+  testMatch: [
+    "form-feedback.spec.ts",
+    "form-layout.spec.ts",
+    "profile-layout.spec.ts",
+    "sessions-layout.spec.ts",
+  ],
   workers: 1,
   timeout: 30_000,
   reporter: [["line"]],

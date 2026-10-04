@@ -1,0 +1,322 @@
+import { useMessage } from "naive-ui";
+import { computed, ref, watch } from "vue";
+import type { Ref } from "vue";
+
+import { describeServiceError } from "@/features/services";
+import type { Service } from "@/features/services";
+import {
+  buildTemplateRenderValues,
+  describeTemplateError,
+  templateValuesFromFields,
+  validateTemplateValues,
+} from "@/features/templates/api/templates";
+import type {
+  TemplateDetail,
+  TemplateField,
+  TemplateRender,
+  TemplateValues,
+} from "@/features/templates/api/templates";
+import { useServersStore } from "@/features/servers";
+import { useServicesStore } from "@/features/services";
+import { useTemplatesStore } from "@/features/templates/stores/templates";
+
+/**
+ * Template deploy wizard state: dynamic config form (step 1) → rendered
+ * compose preview (step 2) → name + node (step 3).
+ *
+ * The render contract is the critical part (see templates.ts): secret field
+ * values arrive in `render.env` and are sent, unchanged and only there, as the
+ * service's environment on create. They are never rendered, logged or copied
+ * anywhere else, and the preview shows only the `${key}` references that stay
+ * in `compose_yaml`.
+ *
+ * Deploy is a separate, explicit action after the create: it answers with the
+ * finished attempt (the API deploys synchronously), so the live log pane
+ * streams the project's container log via the services logs endpoint
+ * afterwards. A failed deploy is shown as it comes back — never faked.
+ */
+export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
+  step: Ref<number>;
+  detail: Ref<TemplateDetail | null>;
+  detailLoading: Ref<boolean>;
+  detailError: Ref<string | null>;
+  values: Ref<TemplateValues>;
+  showErrors: Ref<boolean>;
+  render: Ref<TemplateRender | null>;
+  renderLoading: Ref<boolean>;
+  renderError: Ref<string | null>;
+  name: Ref<string>;
+  serverId: Ref<string>;
+  createAttempted: Ref<boolean>;
+  creating: Ref<boolean>;
+  createError: Ref<string | null>;
+  created: Ref<Service | null>;
+  deploying: Ref<boolean>;
+  deployError: Ref<string | null>;
+  deployed: Ref<boolean>;
+  fields: Ref<TemplateField[]>;
+  allErrors: Ref<Record<string, string>>;
+  formErrors: Ref<Record<string, string>>;
+  secretKeys: Ref<string[]>;
+  nameError: Ref<string>;
+  nodeError: Ref<string>;
+  next: () => void;
+  handleCreate: () => Promise<void>;
+  handleDeploy: () => Promise<void>;
+  reset: () => void;
+} {
+  const templatesStore = useTemplatesStore();
+  const servicesStore = useServicesStore();
+  const serversStore = useServersStore();
+  const message = useMessage();
+
+  const step = ref(1);
+  const detail = ref<TemplateDetail | null>(null);
+  const detailLoading = ref(false);
+  const detailError = ref<string | null>(null);
+  const values = ref<TemplateValues>({});
+  const showErrors = ref(false);
+
+  const render = ref<TemplateRender | null>(null);
+  const renderLoading = ref(false);
+  const renderError = ref<string | null>(null);
+
+  const name = ref("");
+  const serverId = ref("");
+  const createAttempted = ref(false);
+  const creating = ref(false);
+  const createError = ref<string | null>(null);
+  const created = ref<Service | null>(null);
+
+  const deploying = ref(false);
+  const deployError = ref<string | null>(null);
+  const deployed = ref(false);
+
+  /**
+   * renderToken invalidates obsolete renders: every request captures the token
+   * it started with, and a completion whose token no longer matches (a newer
+   * render, or a reset/close) is dropped instead of overwriting the state.
+   */
+  let renderToken = 0;
+
+  const fields = computed<TemplateField[]>(() => detail.value?.fields ?? []);
+
+  /** allErrors is the full field validation result; see showErrors below. */
+  const allErrors = computed<Record<string, string>>(() =>
+    validateTemplateValues(fields.value, values.value),
+  );
+
+  /** formErrors reveals messages only after the first Next attempt. */
+  const formErrors = computed<Record<string, string>>(() =>
+    showErrors.value ? allErrors.value : {},
+  );
+
+  /** secretKeys names the environment keys render held back from the document. */
+  const secretKeys = computed<string[]>(() =>
+    Object.keys(render.value?.env ?? {}).sort(),
+  );
+
+  const nameError = computed<string>(() =>
+    createAttempted.value && name.value.trim() === "" ? "Enter a service name." : "",
+  );
+
+  const nodeError = computed<string>(() =>
+    createAttempted.value && serverId.value === "" ? "Select a node." : "",
+  );
+
+  /** open loads the template schema and seeds the form with its defaults. */
+  async function open(): Promise<void> {
+    reset();
+    detailLoading.value = true;
+    detailError.value = null;
+    try {
+      const template = await templatesStore.fetchDetail(slug.value);
+      detail.value = template;
+      values.value = templateValuesFromFields(template.fields);
+      name.value = template.slug;
+    } catch (error) {
+      detailError.value = describeTemplateError(error);
+    } finally {
+      detailLoading.value = false;
+    }
+    void serversStore.fetchServers().catch(() => undefined);
+  }
+
+  /** reset drops every wizard value, including the secret-bearing ones. */
+  function reset(): void {
+    // Invalidate any in-flight render first: its response must not land in a
+    // wizard that has been closed or reopened for another template.
+    renderToken += 1;
+    step.value = 1;
+    detail.value = null;
+    detailError.value = null;
+    values.value = {};
+    showErrors.value = false;
+    render.value = null;
+    renderError.value = null;
+    renderLoading.value = false;
+    name.value = "";
+    serverId.value = "";
+    createAttempted.value = false;
+    creating.value = false;
+    createError.value = null;
+    created.value = null;
+    deploying.value = false;
+    deployError.value = null;
+    deployed.value = false;
+  }
+
+  /**
+   * loadRender renders the form values and shows the preview document. The
+   * previous preview is invalidated immediately, so nothing can be created from
+   * an obsolete document while this request is in flight; navigation and create
+   * are blocked on `renderLoading` instead. A completion that lost its token is
+   * ignored.
+   */
+  async function loadRender(): Promise<void> {
+    if (!detail.value) {
+      return;
+    }
+    const token = ++renderToken;
+    render.value = null;
+    renderError.value = null;
+    renderLoading.value = true;
+    try {
+      const rendered = await templatesStore.render(
+        detail.value.slug,
+        buildTemplateRenderValues(values.value),
+      );
+      if (token !== renderToken) {
+        return;
+      }
+      render.value = rendered;
+    } catch (error) {
+      if (token !== renderToken) {
+        return;
+      }
+      render.value = null;
+      renderError.value = describeTemplateError(error);
+    } finally {
+      if (token === renderToken) {
+        renderLoading.value = false;
+      }
+    }
+  }
+
+  /** next validates step 1 and moves forward. */
+  function next(): void {
+    if (step.value === 1) {
+      showErrors.value = true;
+      if (Object.keys(allErrors.value).length > 0) {
+        return;
+      }
+      step.value = 2;
+      void loadRender();
+      return;
+    }
+    if (
+      step.value === 2 &&
+      !renderLoading.value &&
+      render.value !== null
+    ) {
+      step.value = 3;
+    }
+  }
+
+  /** handleCreate stores the service with the rendered document and its env. */
+  async function handleCreate(): Promise<void> {
+    createAttempted.value = true;
+    const rendered = render.value;
+    if (
+      renderLoading.value ||
+      rendered === null ||
+      name.value.trim() === "" ||
+      serverId.value === ""
+    ) {
+      return;
+    }
+    creating.value = true;
+    createError.value = null;
+    try {
+      created.value = await servicesStore.create({
+        name: name.value.trim(),
+        server_id: serverId.value,
+        compose_yaml: rendered.compose_yaml,
+        env: rendered.env,
+      });
+      message.success(`Service ${created.value.name} created.`);
+    } catch (error) {
+      createError.value = describeServiceError(error);
+    } finally {
+      creating.value = false;
+    }
+  }
+
+  /** handleDeploy sends the project to the node and reports what came back. */
+  async function handleDeploy(): Promise<void> {
+    const service = created.value;
+    if (service === null) {
+      return;
+    }
+    deploying.value = true;
+    deployError.value = null;
+    try {
+      await servicesStore.deploy(service.id);
+      deployed.value = true;
+      message.success("Deploy finished.");
+    } catch (error) {
+      deployError.value = describeServiceError(error);
+    } finally {
+      deploying.value = false;
+    }
+  }
+
+  watch(
+    () => show.value,
+    (visible) => {
+      if (visible) {
+        void open();
+      }
+    },
+  );
+
+  watch(
+    () => slug.value,
+    () => {
+      if (show.value) {
+        void open();
+      }
+    },
+  );
+
+  return {
+    step,
+    detail,
+    detailLoading,
+    detailError,
+    values,
+    showErrors,
+    render,
+    renderLoading,
+    renderError,
+    name,
+    serverId,
+    createAttempted,
+    creating,
+    createError,
+    created,
+    deploying,
+    deployError,
+    deployed,
+    fields,
+    allErrors,
+    formErrors,
+    secretKeys,
+    nameError,
+    nodeError,
+    next,
+    handleCreate,
+    handleDeploy,
+    reset,
+  };
+}

@@ -1,6 +1,17 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import {
+  areaPath,
+  linePath,
+  niceCeil,
+  splitSegments,
+  tickLabel,
+} from "./chartModel";
+import type { ChartPoint, ChartSeries } from "./chartModel";
+
+export type { ChartPoint, ChartSeries };
+
 /**
  * Dependency-free SVG time-series chart.
  *
@@ -13,20 +24,6 @@ import { computed } from "vue";
  * omits empty buckets), so a line is broken whenever the time between two
  * points exceeds 1.5 buckets — nothing is interpolated through a gap.
  */
-
-/** One point of a series; `at` is the bucket timestamp in milliseconds. */
-export interface ChartPoint {
-  at: number;
-  value: number;
-}
-
-/** One named line drawn on the chart. */
-export interface ChartSeries {
-  name: string;
-  /** Any CSS color, including a design token such as `var(--accent)`. */
-  color: string;
-  points: ChartPoint[];
-}
 
 interface Props {
   series: ChartSeries[];
@@ -99,6 +96,14 @@ function y(value: number): number {
   return padTop + plotHeight.value - (clamped / ceiling) * plotHeight.value;
 }
 
+/** project maps a point onto the plot for the path builders. */
+function project(at: number, value: number): { x: number; y: number } {
+  return { x: x(at), y: y(value) };
+}
+
+/** baseline is the fill bottom for the single-series area. */
+const baseline = computed<number>(() => padTop + plotHeight.value);
+
 /** yTicks are the three gridline labels (0, half, ceiling). */
 const yTicks = computed<number[]>(() => [
   0,
@@ -106,72 +111,13 @@ const yTicks = computed<number[]>(() => [
   yCeiling.value,
 ]);
 
-/**
- * segments splits one series wherever the payload has a gap. Consecutive
- * points more than 1.5 buckets apart are a real hole in the series and start
- * a new polyline instead of being bridged.
- */
-function segments(points: ChartPoint[]): ChartPoint[][] {
-  const sorted = [...points].sort((a, b) => a.at - b.at);
-  const groups: ChartPoint[][] = [];
-  let current: ChartPoint[] = [];
-  const gapLimit = props.stepMs * 1.5;
-  for (const point of sorted) {
-    const previous = current[current.length - 1];
-    if (previous && point.at - previous.at > gapLimit) {
-      groups.push(current);
-      current = [];
-    }
-    current.push(point);
-  }
-  if (current.length > 0) {
-    groups.push(current);
-  }
-  return groups;
-}
-
-/** linePath renders one segment as an SVG polyline. */
-function linePath(points: ChartPoint[]): string {
-  return points
-    .map((point) => `${x(point.at).toFixed(2)},${y(point.value).toFixed(2)}`)
-    .join(" ");
-}
-
-/** areaPath closes one segment down to the baseline for the fill. */
-function areaPath(points: ChartPoint[]): string {
-  const first = points[0];
-  const last = points[points.length - 1];
-  if (!first || !last) {
-    return "";
-  }
-  const baseline = padTop + plotHeight.value;
-  return `${linePath(points)} ${x(last.at).toFixed(2)},${baseline.toFixed(2)} ${x(
-    first.at,
-  ).toFixed(2)},${baseline.toFixed(2)}`;
-}
-
-/** xTickLabel renders a bucket timestamp for the axis. */
-function xTickLabel(at: number): string {
-  const date = new Date(at);
-  if (props.stepMs >= 24 * 60 * 60_000) {
-    return date.toLocaleDateString("en-GB", {
-      day: "numeric",
-      month: "short",
-    });
-  }
-  return date.toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 const xLabels = computed<Array<{ at: number; label: string }>>(() => {
   if (!hasData.value) {
     return [];
   }
   return [
-    { at: xMin.value, label: xTickLabel(xMin.value) },
-    { at: xMax.value, label: xTickLabel(xMax.value) },
+    { at: xMin.value, label: tickLabel(xMin.value, props.stepMs) },
+    { at: xMax.value, label: tickLabel(xMax.value, props.stepMs) },
   ];
 });
 
@@ -186,18 +132,6 @@ const ariaLabel = computed<string>(() => {
   const names = props.series.map((item) => item.name).join(", ");
   return `Time series chart of ${names}`;
 });
-
-/** niceCeil rounds a value up to a readable 1/2/5×10ⁿ ceiling. */
-function niceCeil(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) {
-    return 1;
-  }
-  const exponent = Math.floor(Math.log10(value));
-  const magnitude = 10 ** exponent;
-  const fraction = value / magnitude;
-  const nice = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
-  return nice * magnitude;
-}
 </script>
 
 <template>
@@ -242,17 +176,17 @@ function niceCeil(value: number): number {
         </text>
       </g>
       <g v-for="item in series" :key="item.name" :data-series="item.name">
-        <template v-for="group in segments(item.points)" :key="group[0].at">
+        <template v-for="group in splitSegments(item.points, stepMs)" :key="group[0].at">
           <polygon
             v-if="series.length === 1 && group.length > 1"
             class="chart__area"
-            :points="areaPath(group)"
+            :points="areaPath(group, project, baseline)"
             :fill="item.color"
           />
           <polyline
             v-if="group.length > 1"
             class="chart__line"
-            :points="linePath(group)"
+            :points="linePath(group, project)"
             :stroke="item.color"
           />
           <circle

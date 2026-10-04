@@ -81,16 +81,15 @@ func newTestService(t *testing.T) (*Service, *store.Store) {
 }
 
 // requireClosedInstance seeds the "instance already has accounts" precondition
-// through the real bootstrap path and leaves the seed in place. When another
-// package already populated the shared database — or this seed loses the
-// bootstrap race — Register reports ErrRegistrationClosed and there is nothing
-// to seed. Either way the instance is closed on return, so closed-registration
-// assertions hold on a fresh database as well as a dirty one.
+// through the real bootstrap path. When the database already has an account —
+// or this seed loses the bootstrap race — Register reports
+// ErrRegistrationClosed and there is nothing to seed. Either way the instance
+// is closed on return.
 //
-// The seed is deliberately NOT cleaned up: this helper's guarantee is the row
-// itself, and a concurrent package's cleanup could otherwise empty the shared
-// database mid-test and reopen registration. Test databases are throwaway, and
-// the unique email makes the row harmless.
+// Callers that assert closed registration must run on a scratch database (see
+// scratchService): the seed row is the guarantee, and on the shared database
+// another package's cleanup could empty the users table mid-test and reopen
+// registration. The seed is deliberately NOT cleaned up.
 func requireClosedInstance(t *testing.T, svc *Service) {
 	t.Helper()
 
@@ -485,14 +484,24 @@ func TestServiceMeUnknownUser(t *testing.T) {
 // CreateFirstUser, whose emptiness guard would answer ErrRegistrationClosed
 // (that combination broke the UI smoke, which seeds extra accounts).
 func TestServiceRegisterOpenOverride(t *testing.T) {
-	svc, st := newTestService(t)
-	svc.AllowOpenRegistration = true
+	// A private scratch database with one seeded account, so the override
+	// exercises the plain-insert path deterministically instead of depending
+	// on whatever the shared database happens to hold.
+	svc, st := scratchService(t)
 	ctx := context.Background()
+	if _, err := svc.Register(ctx, uniqueEmail("open-seed"), "s3cret-password", "", nil); err != nil {
+		t.Fatalf("seed first account: %v", err)
+	}
+	svc.AllowOpenRegistration = true
 
 	email := uniqueEmail("open-override")
 	cleanupUser(t, st, email)
 
-	if _, err := svc.Register(ctx, email, "s3cret-password", "", nil); err != nil {
+	second, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+	if err != nil {
 		t.Fatalf("Register with the open override: %v", err)
+	}
+	if second.User.Role != defaultRole {
+		t.Fatalf("override user role = %q, want %q (must take the plain-insert path, not the bootstrap)", second.User.Role, defaultRole)
 	}
 }

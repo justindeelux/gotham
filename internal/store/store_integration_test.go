@@ -444,40 +444,13 @@ func secretKeysOf(rows []sqlc.Secret) []string {
 
 // TestStoreCreateFirstUserSerializes proves the first-account guard is atomic:
 // concurrent bootstraps with different emails must yield exactly one account.
-// It skips unless the users table is empty (the bootstrap precondition), so it
-// runs on a fresh database and never touches a populated one.
+// It runs on a private scratch database (the bootstrap precondition), so it
+// neither skips nor touches the shared database.
 func TestStoreCreateFirstUserSerializes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Reachability first: CI has no database, so an unreachable DSN must skip
-	// (the opt-in GOTHAM_TEST_DSN turns a missing database into a failure).
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
-	if err := store.ProbeOnce(ctx, testDSN()); err != nil {
-		if testDSNExplicit() {
-			t.Fatalf("open store: %v", err)
-		}
-		t.Skipf("no database: %v", err)
-	}
-	pool, err := store.Open(ctx, testDSN())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer pool.Close()
-
-	if err := store.Migrate(ctx, testDSN(), store.MigrateUp); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-
-	st := store.New(pool)
-	count, err := st.CountUsers(ctx)
-	if err != nil {
-		t.Fatalf("count users: %v", err)
-	}
-	if count != 0 {
-		t.Skipf("users table is not empty (%d rows); the bootstrap guard needs a fresh database", count)
-	}
+	st := scratchStore(t)
 
 	const attempts = 8
 	type result struct {
@@ -517,8 +490,7 @@ func TestStoreCreateFirstUserSerializes(t *testing.T) {
 		t.Fatal("bootstrap race winner IsPlatformAdmin = false, want true (JUS-21)")
 	}
 
-	// Delete exactly the row this test created: the database is shared, so a
-	// blanket delete could remove an account another process owns.
+	// Delete exactly the row this test created.
 	if err := st.DeleteUserAndPersonalTeam(ctx, winner.ID); err != nil {
 		t.Fatalf("cleanup winner: %v", err)
 	}

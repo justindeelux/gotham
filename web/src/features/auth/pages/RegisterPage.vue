@@ -13,8 +13,16 @@ import type { FormInst, FormItemRule, FormRules } from "naive-ui";
 import { computed, onMounted, reactive, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
+import AuthFootnote from "@/features/auth/components/AuthFootnote.vue";
+import GitHubOAuthButton from "@/features/auth/components/GitHubOAuthButton.vue";
+import PasswordStrengthMeter from "@/features/auth/components/PasswordStrengthMeter.vue";
+import { useRegisterInvite } from "@/features/auth/composables/useRegisterInvite";
 import { describeAuthError, useAuthStore } from "@/features/auth/stores/auth";
 import { authSwitchTarget, safeRedirect } from "@/features/auth/utils/authRedirect";
+import {
+  meetsPasswordPolicy,
+  strengthOf,
+} from "@/features/auth/utils/passwordStrength";
 
 // Error convention (shared with LoginPage): client-side validation errors
 // render inline on the field via NFormItem; server-side submit failures render
@@ -29,6 +37,7 @@ interface RegisterForm {
 const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
+const invite = useRegisterInvite();
 
 const formRef = ref<FormInst | null>(null);
 const submitting = ref(false);
@@ -40,18 +49,6 @@ const form = reactive<RegisterForm>({
   terms: false,
 });
 
-/**
- * Invite mode (P-A2): when the instance already has an account, registration
- * is closed and this page is reachable only through an admin-created invite
- * link (`/register?invite=<token>`). The token is validated up front so the
- * invitee sees which team they are joining; an unusable token bounces to the
- * sign-in form.
- */
-const inviteToken = ref<string>("");
-const inviteTeam = ref<string>("");
-const inviteEmail = ref<string>("");
-const inviteChecking = ref(false);
-
 onMounted(async () => {
   const raw = route.query.invite;
   const token = typeof raw === "string" ? raw : "";
@@ -60,8 +57,7 @@ onMounted(async () => {
   // request: on a slow connection the form is already visible, and a submit
   // during that window would otherwise omit the invite and answer 403.
   if (token) {
-    inviteToken.value = token;
-    inviteChecking.value = true;
+    invite.holdToken(token);
   }
 
   await authStore.fetchAuthConfig();
@@ -77,68 +73,17 @@ onMounted(async () => {
     return;
   }
 
-  try {
-    const info = await authStore.validateInvite(token);
-    inviteTeam.value = info.team;
-    inviteEmail.value = info.email;
-    if (info.email && !form.email) {
-      form.email = info.email;
-    }
-  } catch {
+  const valid = await invite.acceptInvite();
+  if (!valid) {
     void router.replace({ name: "login" });
-  } finally {
-    inviteChecking.value = false;
+    return;
+  }
+  if (invite.inviteEmail.value && !form.email) {
+    form.email = invite.inviteEmail.value;
   }
 });
 
-/** countCharClasses counts the character classes present (lower, upper, digit, symbol). */
-function countCharClasses(value: string): number {
-  let classes = 0;
-  if (/[a-z]/.test(value)) {
-    classes += 1;
-  }
-  if (/[A-Z]/.test(value)) {
-    classes += 1;
-  }
-  if (/[0-9]/.test(value)) {
-    classes += 1;
-  }
-  if (/[^A-Za-z0-9]/.test(value)) {
-    classes += 1;
-  }
-  return classes;
-}
-
-/** scorePassword rates the password 0-4 following docs/design/login.html. */
-function scorePassword(value: string): number {
-  let score = 0;
-  if (value.length >= 10) {
-    score += 1;
-  }
-  if (value.length >= 14) {
-    score += 1;
-  }
-  if (/[a-z]/.test(value) && /[A-Z]/.test(value)) {
-    score += 1;
-  }
-  if (/[0-9]/.test(value)) {
-    score += 1;
-  }
-  if (/[^A-Za-z0-9]/.test(value)) {
-    score += 1;
-  }
-  return Math.min(4, score);
-}
-
-const strengthLabels = ["Not entered", "Very weak", "Weak", "Fair", "Strong"];
-
-const strength = computed<number>(() =>
-  form.password ? Math.max(1, scorePassword(form.password)) : 0,
-);
-const strengthLabel = computed<string>(() => strengthLabels[strength.value]);
-const strengthKind = computed<string>(() =>
-  strength.value >= 4 ? "on" : strength.value === 3 ? "mid" : "weak",
-);
+const strength = computed<number>(() => strengthOf(form.password));
 
 const rules: FormRules = {
   email: [
@@ -153,7 +98,7 @@ const rules: FormRules = {
     { required: true, message: "Password is required", trigger: ["input", "blur"] },
     {
       validator: (_rule: FormItemRule, value: string): boolean =>
-        value.length >= 10 && countCharClasses(value) >= 2,
+        meetsPasswordPolicy(value),
       message:
         "Use at least 10 characters with 2 character classes (lowercase, uppercase, digits, symbols)",
       trigger: ["input", "blur"],
@@ -196,7 +141,7 @@ async function handleSubmit(): Promise<void> {
     await authStore.register(
       form.email,
       form.password,
-      inviteToken.value || undefined,
+      invite.inviteToken.value || undefined,
     );
     await redirectAfterAuth();
   } catch (error) {
@@ -226,9 +171,9 @@ async function handleSubmit(): Promise<void> {
 
         <div>
           <h2 class="auth-title">Create account</h2>
-          <NText v-if="inviteToken" depth="3">
+          <NText v-if="invite.inviteToken.value" depth="3">
             You were invited to join
-            <span class="mono">{{ inviteTeam || "this team" }}</span
+            <span class="mono">{{ invite.inviteTeam.value || "this team" }}</span
             >. Choose your credentials to accept.
           </NText>
           <NText v-else depth="3">
@@ -262,15 +207,7 @@ async function handleSubmit(): Promise<void> {
                   :input-props="{ id: 'register-password', autocomplete: 'new-password' }"
                   @keyup.enter="handleSubmit"
                 />
-                <div class="strength-row">
-                  <span class="strength" aria-hidden="true">
-                    <i :class="strength > 0 ? strengthKind : ''" />
-                    <i :class="strength > 1 ? strengthKind : ''" />
-                    <i :class="strength > 2 ? strengthKind : ''" />
-                    <i :class="strength > 3 ? strengthKind : ''" />
-                  </span>
-                  <span class="small muted">{{ strengthLabel }}</span>
-                </div>
+                <PasswordStrengthMeter :score="strength" />
                 <span class="field-hint">
                   At least 10 characters with 2 character classes: lowercase,
                   uppercase, digits, symbols.
@@ -304,7 +241,7 @@ async function handleSubmit(): Promise<void> {
             type="primary"
             block
             :loading="submitting"
-            :disabled="inviteChecking"
+            :disabled="invite.inviteChecking.value"
             @click="handleSubmit"
           >
             Create account
@@ -314,34 +251,12 @@ async function handleSubmit(): Promise<void> {
             <span>or</span>
           </div>
 
-          <template v-if="!inviteToken">
-            <NButton
-              tag="a"
-              href="/api/v1/auth/oauth/github/login"
-              block
-            >
-              <template #icon>
-                <svg
-                  viewBox="0 0 16 16"
-                  fill="currentColor"
-                  aria-hidden="true"
-                  class="github-icon"
-                >
-                  <path
-                    d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
-                  />
-                </svg>
-              </template>
-              Sign up with GitHub
-            </NButton>
+          <template v-if="!invite.inviteToken.value">
+            <GitHubOAuthButton mode="signup" />
           </template>
         </NForm>
 
-        <p class="auth-footnote">
-          Passwords are hashed with <span class="mono">argon2id</span> · 15-minute
-          JWT access tokens with 30-day rotating refresh tokens · GitHub OAuth
-          via the <span class="mono">OAuthProvider</span> interface.
-        </p>
+        <AuthFootnote />
       </NSpace>
     </div>
   </div>
@@ -355,9 +270,8 @@ async function handleSubmit(): Promise<void> {
   width: min(420px, 100%);
 }
 
-/* Tab switch, strength meter, divider, and footnote ported from
-   docs/design/login.html + docs/design/assets/gotham-views.css; tokens come
-   from styles/tokens.css. */
+/* Tab switch, divider, and footnote ported from docs/design/login.html +
+   docs/design/assets/gotham-views.css; tokens come from styles/tokens.css. */
 .auth-title {
   margin: 0 0 4px;
   font-size: 20px;
@@ -397,42 +311,6 @@ async function handleSubmit(): Promise<void> {
   width: 100%;
 }
 
-.strength-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.strength {
-  display: flex;
-  gap: 4px;
-  flex: 1 1 0;
-}
-
-.strength i {
-  height: 4px;
-  flex: 1 1 0;
-  border-radius: var(--radius-pill);
-  background: var(--surface-warm);
-}
-
-.strength i.on {
-  background: var(--success);
-}
-
-.strength i.mid {
-  background: var(--warn);
-}
-
-.strength i.weak {
-  background: var(--danger);
-}
-
-.small {
-  font-size: var(--text-xs);
-  white-space: nowrap;
-}
-
 .field-hint {
   font-size: var(--text-xs);
   color: var(--muted);
@@ -455,18 +333,5 @@ async function handleSubmit(): Promise<void> {
   height: 1px;
   flex: 1 1 0;
   background: var(--border);
-}
-
-.github-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.auth-footnote {
-  margin: 4px 0 0;
-  font-size: var(--text-xs);
-  color: var(--muted);
-  text-align: center;
-  line-height: 1.6;
 }
 </style>

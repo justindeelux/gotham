@@ -95,9 +95,7 @@
       label: "Vận hành",
       items: [
         { nav: "dashboard", label: "Tổng quan", icon: "i-grid", href: "dashboard.html" },
-        { nav: "applications", label: "Ứng dụng", icon: "i-box", href: "applications.html", count: 12 },
-        { nav: "services", label: "Services", icon: "i-layers", href: "services.html", count: 4 },
-        { nav: "databases", label: "Cơ sở dữ liệu", icon: "i-db", href: "databases.html", count: 5 },
+        { nav: "projects", label: "Projects", icon: "i-layers", href: "projects.html", count: 3 },
         { nav: "files", label: "Quản lý file", icon: "i-folder", href: "files.html" },
         { nav: "templates", label: "Thư viện template", icon: "i-rocket", href: "services.html#templates" },
         { nav: "servers", label: "Máy chủ", icon: "i-server", href: "servers.html", count: 4 },

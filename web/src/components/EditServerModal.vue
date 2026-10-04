@@ -263,22 +263,24 @@ async function handleSave(): Promise<void> {
 
         <section class="connect-group" aria-label="Access">
           <h4 class="connect-group__title">Access</h4>
-          <NFormItem label="SSH user" path="sshUser">
-            <NInput v-model:value="form.sshUser" placeholder="root" :input-props="{ 'aria-label': 'SSH user' }" />
-            <span class="field-hint">The Unix user the control plane connects as.</span>
-          </NFormItem>
+          <div class="form-row">
+            <NFormItem label="SSH user" path="sshUser">
+              <NInput v-model:value="form.sshUser" placeholder="root" :input-props="{ 'aria-label': 'SSH user' }" />
+              <span class="field-hint">The Unix user the control plane connects as.</span>
+            </NFormItem>
+            <NFormItem label="Credentials">
+              <NRadioGroup v-model:value="form.authMode" size="small" aria-label="Credential change">
+                <NRadioButton value="keep">Keep ({{ currentAuth }})</NRadioButton>
+                <NRadioButton value="key">SSH key</NRadioButton>
+                <NRadioButton value="password">Password</NRadioButton>
+              </NRadioGroup>
+              <span class="field-hint">Switching the credential replaces the stored one.</span>
+            </NFormItem>
+          </div>
         </section>
 
         <section class="connect-group" aria-label="Credentials">
           <h4 class="connect-group__title">Credentials</h4>
-          <NFormItem label="Credentials">
-            <NRadioGroup v-model:value="form.authMode" size="small" aria-label="Credential change">
-              <NRadioButton value="keep">Keep ({{ currentAuth }})</NRadioButton>
-              <NRadioButton value="key">SSH key</NRadioButton>
-              <NRadioButton value="password">Password</NRadioButton>
-            </NRadioGroup>
-            <span class="field-hint">Switching the credential replaces the stored one.</span>
-          </NFormItem>
 
           <NFormItem v-if="form.authMode === 'key'" label="Key ID" path="keyId">
             <NInput v-model:value="form.keyId" placeholder="00000000-0000-0000-0000-000000000000" :input-props="{ 'aria-label': 'Key ID' }" />

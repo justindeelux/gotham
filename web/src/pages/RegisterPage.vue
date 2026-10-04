@@ -251,46 +251,48 @@ async function handleSubmit(): Promise<void> {
             />
           </NFormItem>
 
-          <NFormItem label="Password" path="password" :label-props="{ for: 'register-password' }">
-            <NSpace vertical :size="8" class="password-field">
+          <div class="form-row">
+            <NFormItem label="Password" path="password" :label-props="{ for: 'register-password' }">
+              <NSpace vertical :size="8" class="password-field">
+                <NInput
+                  v-model:value="form.password"
+                  type="password"
+                  show-password-on="click"
+                  placeholder="At least 10 characters"
+                  :input-props="{ id: 'register-password', autocomplete: 'new-password' }"
+                  @keyup.enter="handleSubmit"
+                />
+                <div class="strength-row">
+                  <span class="strength" aria-hidden="true">
+                    <i :class="strength > 0 ? strengthKind : ''" />
+                    <i :class="strength > 1 ? strengthKind : ''" />
+                    <i :class="strength > 2 ? strengthKind : ''" />
+                    <i :class="strength > 3 ? strengthKind : ''" />
+                  </span>
+                  <span class="small muted">{{ strengthLabel }}</span>
+                </div>
+                <span class="field-hint">
+                  At least 10 characters with 2 character classes: lowercase,
+                  uppercase, digits, symbols.
+                </span>
+              </NSpace>
+            </NFormItem>
+
+            <NFormItem
+              label="Confirm password"
+              path="confirmPassword"
+              :label-props="{ for: 'register-confirm-password' }"
+            >
               <NInput
-                v-model:value="form.password"
+                v-model:value="form.confirmPassword"
                 type="password"
                 show-password-on="click"
-                placeholder="At least 10 characters"
-                :input-props="{ id: 'register-password', autocomplete: 'new-password' }"
+                placeholder="Repeat your password"
+                :input-props="{ id: 'register-confirm-password', autocomplete: 'new-password' }"
                 @keyup.enter="handleSubmit"
               />
-              <div class="strength-row">
-                <span class="strength" aria-hidden="true">
-                  <i :class="strength > 0 ? strengthKind : ''" />
-                  <i :class="strength > 1 ? strengthKind : ''" />
-                  <i :class="strength > 2 ? strengthKind : ''" />
-                  <i :class="strength > 3 ? strengthKind : ''" />
-                </span>
-                <span class="small muted">{{ strengthLabel }}</span>
-              </div>
-              <span class="field-hint">
-                At least 10 characters with 2 character classes: lowercase,
-                uppercase, digits, symbols.
-              </span>
-            </NSpace>
-          </NFormItem>
-
-          <NFormItem
-            label="Confirm password"
-            path="confirmPassword"
-            :label-props="{ for: 'register-confirm-password' }"
-          >
-            <NInput
-              v-model:value="form.confirmPassword"
-              type="password"
-              show-password-on="click"
-              placeholder="Repeat your password"
-              :input-props="{ id: 'register-confirm-password', autocomplete: 'new-password' }"
-              @keyup.enter="handleSubmit"
-            />
-          </NFormItem>
+            </NFormItem>
+          </div>
 
           <NFormItem path="terms" :show-label="false">
             <NCheckbox v-model:checked="form.terms">

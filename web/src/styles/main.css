@@ -167,6 +167,35 @@ a:hover {
   display: none;
 }
 
+/* Two-column form rows (JUS-19): short fields share one row and collapse to
+ * a single column below ~720px (modal width). Rows are direct NForm children
+ * so the global item-to-item rhythm above owns the vertical spacing; the
+ * items inside own none. A lone item spans both columns (e.g. a conditional
+ * partner that is currently hidden). Column gap matches the connect addr-row;
+ * row gap matches the shared --form-item-gap rhythm for the stacked state. */
+.form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--form-item-gap) var(--space-3);
+  align-items: start;
+  min-width: 0;
+}
+
+.form-row > .n-form-item {
+  margin: 0;
+  min-width: 0;
+}
+
+.form-row > :only-child {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 720px) {
+  .form-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Single-border focus for text fields (JUS-13): the field's own border takes
  * the accent color on focus and the extra Naive UI glow ring is removed. This
  * covers NInput (text, password, textarea) and NInputNumber, which renders an

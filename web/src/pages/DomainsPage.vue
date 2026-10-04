@@ -961,8 +961,8 @@ onMounted(() => {
             <NAlert v-if="redirectError" type="error" :show-icon="true">
               {{ redirectError }}
             </NAlert>
-            <NForm label-placement="top" :show-feedback="false">
-              <div class="redirect-form">
+            <NForm label-placement="top" :show-feedback="false" class="redirect-form">
+              <div class="redirect-form__fields">
                 <NFormItem label="Application" class="field-application">
                   <NSelect
                     v-model:value="redirectForm.application_id"
@@ -992,6 +992,8 @@ onMounted(() => {
                     aria-label="Redirect code"
                   />
                 </NFormItem>
+              </div>
+              <div class="redirect-form__bottom">
                 <NFormItem label="Preserve path" class="field-preserve">
                   <NSwitch
                     v-model:value="redirectForm.preserve_path"
@@ -1004,21 +1006,19 @@ onMounted(() => {
                     aria-label="Redirect enabled now"
                   />
                 </NFormItem>
+                <NButton
+                  type="primary"
+                  :loading="redirectSaving"
+                  @click="handleCreateRedirect"
+                >
+                  Add redirect
+                </NButton>
               </div>
             </NForm>
-            <div class="redirect-submit">
-              <NButton
-                type="primary"
-                :loading="redirectSaving"
-                @click="handleCreateRedirect"
-              >
-                Add redirect
-              </NButton>
-              <NText depth="3" class="small">
-                Source and target must differ. The code applies to GET; HEAD
-                and every other method answer 308/307, keeping the method.
-              </NText>
-            </div>
+            <NText depth="3" class="small">
+              Source and target must differ. The code applies to GET; HEAD
+              and every other method answer 308/307, keeping the method.
+            </NText>
           </NSpace>
         </NCard>
       </NTabPane>
@@ -1035,21 +1035,23 @@ onMounted(() => {
         <NAlert v-if="providerError" type="error" :show-icon="true">
           {{ providerError }}
         </NAlert>
-        <NForm label-placement="top" :show-feedback="false">
-          <NFormItem label="Provider" class="field-provider">
-            <NSelect
-              v-model:value="providerForm.provider"
-              :options="providerTypeOptions"
-              aria-label="Provider type"
-            />
-          </NFormItem>
-          <NFormItem label="Name" class="field-name">
-            <NInput
-              v-model:value="providerForm.name"
-              placeholder="Optional label, e.g. Production Cloudflare"
-              aria-label="Provider name"
-            />
-          </NFormItem>
+        <NForm label-placement="top" :show-feedback="false" class="provider-form">
+          <div class="form-row">
+            <NFormItem label="Provider" class="field-provider">
+              <NSelect
+                v-model:value="providerForm.provider"
+                :options="providerTypeOptions"
+                aria-label="Provider type"
+              />
+            </NFormItem>
+            <NFormItem label="Name" class="field-name">
+              <NInput
+                v-model:value="providerForm.name"
+                placeholder="Optional label, e.g. Production Cloudflare"
+                aria-label="Provider name"
+              />
+            </NFormItem>
+          </div>
           <NFormItem label="Zones" class="field-zones">
             <NSelect
               v-model:value="providerForm.zones"
@@ -1485,18 +1487,38 @@ onMounted(() => {
   background: var(--muted);
 }
 
-.redirect-form {
+.redirect-form__fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
   gap: var(--form-item-gap);
   align-items: start;
 }
 
-.redirect-submit {
+.redirect-form__fields .n-form-item {
+  margin: 0;
+  min-width: 0;
+}
+
+/* Preserve path + Enabled share one row with the submit button, so the
+ * inline form ends in a single action row instead of two lone switches. */
+.redirect-form__bottom {
   display: flex;
-  align-items: center;
-  gap: var(--space-3);
+  align-items: flex-end;
+  gap: var(--space-4);
   flex-wrap: wrap;
+  margin-top: var(--form-item-gap);
+}
+
+.redirect-form__bottom .n-form-item {
+  margin: 0;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .redirect-form__bottom {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 @media (max-width: 1024px) {

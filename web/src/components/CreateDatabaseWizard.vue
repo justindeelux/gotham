@@ -330,25 +330,27 @@ watch(
             </NSpace>
           </NRadioGroup>
         </NFormItem>
-        <NFormItem label="Version" :show-feedback="false">
-          <NSelect
-            v-model:value="form.version"
-            :options="versionOptions"
-            :placeholder="`Default: ${selectedEngine.defaultVersion}`"
-            clearable
-          />
-        </NFormItem>
-        <NFormItem
-          label="Node"
-          feedback="The container and its volume live on this node."
-        >
-          <NSelect
-            v-model:value="form.serverId"
-            :options="serverOptions"
-            placeholder="Select a node"
-            :loading="serversStore.loading"
-          />
-        </NFormItem>
+        <div class="form-row">
+          <NFormItem label="Version" :show-feedback="false">
+            <NSelect
+              v-model:value="form.version"
+              :options="versionOptions"
+              :placeholder="`Default: ${selectedEngine.defaultVersion}`"
+              clearable
+            />
+          </NFormItem>
+          <NFormItem
+            label="Node"
+            feedback="The container and its volume live on this node."
+          >
+            <NSelect
+              v-model:value="form.serverId"
+              :options="serverOptions"
+              placeholder="Select a node"
+              :loading="serversStore.loading"
+            />
+          </NFormItem>
+        </div>
       </template>
 
       <template v-else-if="step === 1">

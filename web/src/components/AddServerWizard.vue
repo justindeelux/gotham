@@ -552,18 +552,32 @@ function resetWizard(): void {
 
               <section class="connect-group" aria-label="Identity">
                 <h4 class="connect-group__title">Identity</h4>
-                <NFormItem
-                  label="Node name"
-                  path="name"
-                  :label-props="{ for: 'add-server-name' }"
-                >
-                  <NInput
-                    v-model:value="form.name"
-                    placeholder="build-node-03"
-                    :input-props="{ id: 'add-server-name', 'aria-label': 'Node name' }"
-                  />
-                  <span class="field-hint">A short unique name, e.g. build-node-03.</span>
-                </NFormItem>
+                <div class="form-row">
+                  <NFormItem
+                    label="Node name"
+                    path="name"
+                    :label-props="{ for: 'add-server-name' }"
+                  >
+                    <NInput
+                      v-model:value="form.name"
+                      placeholder="build-node-03"
+                      :input-props="{ id: 'add-server-name', 'aria-label': 'Node name' }"
+                    />
+                    <span class="field-hint">A short unique name, e.g. build-node-03.</span>
+                  </NFormItem>
+                  <NFormItem
+                    label="SSH user"
+                    path="sshUser"
+                    :label-props="{ for: 'add-server-ssh-user' }"
+                  >
+                    <NInput
+                      v-model:value="form.sshUser"
+                      placeholder="root"
+                      :input-props="{ id: 'add-server-ssh-user', 'aria-label': 'SSH user' }"
+                    />
+                    <span class="field-hint">The Unix user the control plane connects as.</span>
+                  </NFormItem>
+                </div>
               </section>
 
               <section class="connect-group" aria-label="Address">
@@ -600,47 +614,34 @@ function resetWizard(): void {
 
               <section class="connect-group" aria-label="Access">
                 <h4 class="connect-group__title">Access</h4>
-                <NFormItem
-                  label="SSH user"
-                  path="sshUser"
-                  :label-props="{ for: 'add-server-ssh-user' }"
-                >
-                  <NInput
-                    v-model:value="form.sshUser"
-                    placeholder="root"
-                    :input-props="{ id: 'add-server-ssh-user', 'aria-label': 'SSH user' }"
-                  />
-                  <span class="field-hint">The Unix user the control plane connects as.</span>
-                </NFormItem>
-
-                <NFormItem label="Authentication">
-                  <NRadioGroup
-                    v-model:value="form.authMode"
-                    size="small"
-                    aria-label="Authentication method"
-                  >
-                    <NRadioButton value="key">SSH key</NRadioButton>
-                    <NRadioButton value="password">Password</NRadioButton>
-                  </NRadioGroup>
-                  <span class="field-hint">Authenticate with a stored private key or a node password.</span>
-                </NFormItem>
+                <div class="form-row">
+                  <NFormItem label="Authentication">
+                    <NRadioGroup
+                      v-model:value="form.authMode"
+                      size="small"
+                      aria-label="Authentication method"
+                    >
+                      <NRadioButton value="key">SSH key</NRadioButton>
+                      <NRadioButton value="password">Password</NRadioButton>
+                    </NRadioGroup>
+                    <span class="field-hint">Authenticate with a stored private key or a node password.</span>
+                  </NFormItem>
+                  <NFormItem v-if="form.authMode === 'key'" label="SSH key">
+                    <NRadioGroup
+                      v-model:value="form.keyMode"
+                      size="small"
+                      aria-label="SSH key mode"
+                    >
+                      <NRadioButton value="new">Paste a new key</NRadioButton>
+                      <NRadioButton value="existing">Use an existing key ID</NRadioButton>
+                    </NRadioGroup>
+                    <span class="field-hint">Key listing is not exposed by the API yet — paste the key material or a known key ID.</span>
+                  </NFormItem>
+                </div>
               </section>
 
               <section class="connect-group" aria-label="Credentials">
                 <h4 class="connect-group__title">Credentials</h4>
-                <template v-if="form.authMode === 'key'">
-                <NFormItem label="SSH key">
-                  <NRadioGroup
-                    v-model:value="form.keyMode"
-                    size="small"
-                    aria-label="SSH key mode"
-                  >
-                    <NRadioButton value="new">Paste a new key</NRadioButton>
-                    <NRadioButton value="existing">Use an existing key ID</NRadioButton>
-                  </NRadioGroup>
-                  <span class="field-hint">Key listing is not exposed by the API yet — paste the key material or a known key ID.</span>
-                </NFormItem>
-                </template>
 
                 <template v-if="form.authMode === 'key' && form.keyMode === 'new'">
                   <NFormItem

@@ -438,63 +438,65 @@ function resetWizard(): void {
 
           <!-- Step 1: source -->
           <NSpace v-if="step === 0" vertical :size="16">
-            <NFormItem label="Provider" :show-feedback="true">
-              <NSelect
-                v-model:value="form.providerId"
-                :options="providerOptions"
-                :loading="providersStore.loading"
-                placeholder="Select a connected provider"
-              />
-              <span class="field-hint">Each provider uses its own OAuth app.</span>
-            </NFormItem>
+            <div class="form-row">
+              <NFormItem label="Provider" :show-feedback="true">
+                <NSelect
+                  v-model:value="form.providerId"
+                  :options="providerOptions"
+                  :loading="providersStore.loading"
+                  placeholder="Select a connected provider"
+                />
+                <span class="field-hint">Each provider uses its own OAuth app.</span>
+              </NFormItem>
 
-            <NFormItem v-if="isPublicRepo" label="Clone URL">
-              <NInput
-                v-model:value="form.publicCloneUrl"
-                class="mono"
-                placeholder="https://github.com/owner/repo.git"
-              />
-              <span class="field-hint">Any public repo — no provider connection needed.</span>
-            </NFormItem>
+              <NFormItem v-if="isPublicRepo" label="Clone URL">
+                <NInput
+                  v-model:value="form.publicCloneUrl"
+                  class="mono"
+                  placeholder="https://github.com/owner/repo.git"
+                />
+                <span class="field-hint">Any public repo — no provider connection needed.</span>
+              </NFormItem>
 
-            <NFormItem v-else label="Repository">
-              <NSelect
-                v-model:value="form.repoFullName"
-                :options="repoOptions"
-                :loading="providersStore.reposLoading"
-                :disabled="form.providerId === ''"
-                placeholder="Select a repository"
-                filterable
-                @update:value="handleRepoSelect"
-              />
-              <span class="field-hint">Private repos deploy with an SSH deploy key.</span>
-              <NAlert
-                v-if="providersStore.reposError"
-                type="error"
-                :show-icon="true"
-                style="margin-top: 8px"
-              >
-                <NSpace align="center" :size="12" wrap>
-                  <span>{{ providersStore.reposError }}</span>
-                  <NButton size="small" @click="void loadRepos()">Retry</NButton>
-                </NSpace>
-              </NAlert>
-            </NFormItem>
+              <NFormItem v-else label="Repository">
+                <NSelect
+                  v-model:value="form.repoFullName"
+                  :options="repoOptions"
+                  :loading="providersStore.reposLoading"
+                  :disabled="form.providerId === ''"
+                  placeholder="Select a repository"
+                  filterable
+                  @update:value="handleRepoSelect"
+                />
+                <span class="field-hint">Private repos deploy with an SSH deploy key.</span>
+                <NAlert
+                  v-if="providersStore.reposError"
+                  type="error"
+                  :show-icon="true"
+                  style="margin-top: 8px"
+                >
+                  <NSpace align="center" :size="12" wrap>
+                    <span>{{ providersStore.reposError }}</span>
+                    <NButton size="small" @click="void loadRepos()">Retry</NButton>
+                  </NSpace>
+                </NAlert>
+              </NFormItem>
+            </div>
 
             <NAlert v-if="sourceError" type="warning" :show-icon="true">
               {{ sourceError }}
             </NAlert>
 
-            <NSpace :size="12">
-              <NFormItem label="Branch" class="grow">
+            <div class="form-row">
+              <NFormItem label="Branch">
                 <NInput v-model:value="form.branch" class="mono" placeholder="main" />
                 <span class="field-hint">Branch listing is not exposed by the API yet — the default branch is prefilled.</span>
               </NFormItem>
-              <NFormItem label="Application name" class="grow">
+              <NFormItem label="Application name">
                 <NInput v-model:value="form.name" class="mono" placeholder="storefront" />
                 <span class="field-hint">Lowercase, digits and dashes (3-31 chars). Used for the container and image tag.</span>
               </NFormItem>
-            </NSpace>
+            </div>
           </NSpace>
 
           <!-- Step 2: build pack -->
@@ -517,17 +519,28 @@ function resetWizard(): void {
 
           <!-- Step 3: runtime -->
           <NSpace v-else-if="step === 2" vertical :size="16">
-            <NFormItem label="Node">
-              <NSelect
-                v-model:value="form.serverId"
-                :options="serverOptions"
-                placeholder="Select the node that runs the container"
-              />
-              <span class="field-hint">The agent builds the image on this node.</span>
-            </NFormItem>
+            <div class="form-row">
+              <NFormItem label="Node">
+                <NSelect
+                  v-model:value="form.serverId"
+                  :options="serverOptions"
+                  placeholder="Select the node that runs the container"
+                />
+                <span class="field-hint">The agent builds the image on this node.</span>
+              </NFormItem>
 
-            <NSpace :size="12">
-              <NFormItem label="Internal port" class="grow">
+              <NFormItem label="Domain (optional)">
+                <NInput
+                  v-model:value="form.baseDomain"
+                  class="mono"
+                  placeholder="app.gotham.dev"
+                />
+                <span class="field-hint">Leave empty to reach the app by port first.</span>
+              </NFormItem>
+            </div>
+
+            <div class="form-row">
+              <NFormItem label="Internal port">
                 <NInputNumber
                   v-model:value="form.port"
                   :min="1"
@@ -536,7 +549,7 @@ function resetWizard(): void {
                 />
                 <span class="field-hint">The port the app listens on inside the container.</span>
               </NFormItem>
-              <NFormItem label="Host port (0 = auto)" class="grow">
+              <NFormItem label="Host port (0 = auto)">
                 <NInputNumber
                   v-model:value="form.hostPort"
                   :min="0"
@@ -545,16 +558,7 @@ function resetWizard(): void {
                 />
                 <span class="field-hint">Leave empty to let the control plane assign one.</span>
               </NFormItem>
-            </NSpace>
-
-            <NFormItem label="Domain (optional)">
-              <NInput
-                v-model:value="form.baseDomain"
-                class="mono"
-                placeholder="app.gotham.dev"
-              />
-              <span class="field-hint">Leave empty to reach the app by port first.</span>
-            </NFormItem>
+            </div>
           </NSpace>
 
           <!-- Step 4: env & storage -->

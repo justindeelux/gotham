@@ -234,9 +234,15 @@ func TestOAuthCallbackUnknownProvider(t *testing.T) {
 }
 
 func TestOAuthCallbackRefusesNewUserWhenClosed(t *testing.T) {
+	// A private scratch database: the closed-instance precondition must not
+	// depend on the shared database, whose users table other packages'
+	// cleanups empty concurrently (that race reopened registration and
+	// flaked the closed-instance tests).
+	svc, st := scratchService(t)
 	provider := &fakeOAuthProvider{name: "github"}
-	oauth, st := newTestOAuthWithStore(t, provider)
-	requireClosedInstance(t, oauth.auth)
+	oauth := NewOAuthService(svc, testLogger(), provider)
+	t.Cleanup(oauth.Close)
+	requireClosedInstance(t, svc)
 	ctx := context.Background()
 
 	// Closed registration must refuse an unseen OAuth identity (P-A2) rather

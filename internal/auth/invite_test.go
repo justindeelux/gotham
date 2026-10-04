@@ -90,9 +90,12 @@ func newTestInvite(t *testing.T, st *store.Store, email string) string {
 }
 
 // TestServiceRegisterClosedWithoutInvite: on an instance that already has
-// accounts, Register refuses without a token (P-A2).
+// accounts, Register refuses without a token (P-A2). It runs on a private
+// scratch database: the closed-instance precondition must not depend on the
+// shared database, whose users table other packages' cleanups empty
+// concurrently (that race reopened registration and flaked this test).
 func TestServiceRegisterClosedWithoutInvite(t *testing.T) {
-	svc, st := newTestService(t)
+	svc, st := scratchService(t)
 	requireClosedInstance(t, svc)
 	ctx := context.Background()
 

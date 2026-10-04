@@ -24,7 +24,6 @@ import {
   matchesFilter,
   matchesSearch,
 } from "../src/features/databases/utils/databaseFilters";
-import { isValidDatabaseName } from "../src/features/databases/utils/databaseNames";
 import { statusTagType } from "../src/features/databases/utils/backupStatus";
 
 function row(overrides = {}) {
@@ -43,16 +42,6 @@ function row(overrides = {}) {
     ...overrides,
   };
 }
-
-describe("isValidDatabaseName", () => {
-  it("accepts the backend rule and rejects blanks", () => {
-    expect(isValidDatabaseName("pg-orders")).toBe(true);
-    expect(isValidDatabaseName("  pg-orders  ")).toBe(true);
-    expect(isValidDatabaseName("")).toBe(false);
-    expect(isValidDatabaseName("no spaces")).toBe(false);
-    expect(isValidDatabaseName("x".repeat(64))).toBe(false);
-  });
-});
 
 describe("databaseEngines", () => {
   it("falls back to PostgreSQL for unknown engines", () => {

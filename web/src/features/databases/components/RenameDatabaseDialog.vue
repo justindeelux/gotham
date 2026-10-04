@@ -3,7 +3,7 @@ import { NButton, NInput, NModal, NSpace, NText } from "naive-ui";
 import { inject } from "vue";
 
 import { databaseDetailKey } from "@/features/databases/composables/useDatabaseDetail";
-import { isValidDatabaseName } from "@/features/databases/utils/databaseNames";
+import { isDatabaseNameValid } from "@/features/databases/schemas/databases";
 
 const detail = inject(databaseDetailKey)!;
 </script>
@@ -31,7 +31,7 @@ const detail = inject(databaseDetailKey)!;
         <NButton
           type="primary"
           :loading="detail.renaming.value"
-          :disabled="!isValidDatabaseName(detail.renameValue.value)"
+          :disabled="!isDatabaseNameValid(detail.renameValue.value)"
           @click="() => void detail.handleRename()"
         >
           Rename

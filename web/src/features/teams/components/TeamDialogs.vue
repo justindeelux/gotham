@@ -2,6 +2,7 @@
 import { NAlert, NButton, NInput, NModal, NSelect, NSpace, NText } from "naive-ui";
 
 import { useTeamsStore } from "@/features/teams/stores/teams";
+import { isInviteEmailValid, isTeamNameValid } from "@/features/teams/schemas/teams";
 import { acceptLink, registerLink } from "@/features/teams/utils/teamLinks";
 import { expiryLabel } from "@/shared/utils/format";
 import { useTeamsPageContext } from "@/features/teams/composables/useTeamsPage";
@@ -62,7 +63,7 @@ const {
         <NButton
           type="primary"
           :loading="createBusy"
-          :disabled="createName.trim() === ''"
+          :disabled="!isTeamNameValid(createName)"
           @click="void handleCreate()"
         >
           Create team
@@ -93,7 +94,7 @@ const {
         <NButton
           type="primary"
           :loading="renameBusy"
-          :disabled="renameName.trim() === ''"
+          :disabled="!isTeamNameValid(renameName)"
           @click="void handleRename()"
         >
           Save
@@ -134,7 +135,7 @@ const {
         <NButton
           type="primary"
           :loading="inviteBusy"
-          :disabled="inviteEmail.trim() === ''"
+          :disabled="!isInviteEmailValid(inviteEmail)"
           @click="void handleCreateInvite()"
         >
           Create invite

@@ -19,6 +19,7 @@ import {
   CRON_PRESETS,
   databaseBackupsKey,
 } from "@/features/databases/composables/useDatabaseBackups";
+import { isCronPresent } from "@/features/databases/schemas/databases";
 import { relativeTime } from "@/shared/utils/format";
 
 const backups = inject(databaseBackupsKey)!;
@@ -160,7 +161,7 @@ const backups = inject(databaseBackupsKey)!;
         <NButton
           type="primary"
           :loading="backups.backupsStore.schedulesActing"
-          :disabled="backups.scheduleCron.value.trim() === ''"
+          :disabled="!isCronPresent(backups.scheduleCron.value)"
           @click="() => void backups.handleCreateSchedule()"
         >
           {{

@@ -9,6 +9,11 @@ import type {
   BackupTargetKind,
   DatabaseBackup,
 } from "@/features/databases/api/backups";
+import {
+  databaseMessages,
+  isCronPresent,
+  validateTargetForm,
+} from "@/features/databases/schemas/databases";
 import { useBackupsStore } from "@/features/databases/stores/backups";
 import { advanceRestoreStatuses } from "@/features/databases/utils/restoreOutcomes";
 
@@ -305,8 +310,8 @@ export function useDatabaseBackups(
   /** handleCreateSchedule creates or updates one cron entry. */
   async function handleCreateSchedule(): Promise<void> {
     const cron = scheduleCron.value.trim();
-    if (cron === "") {
-      message.error("Cron expression is required, e.g. 0 2 * * *.");
+    if (!isCronPresent(scheduleCron.value)) {
+      message.error(databaseMessages.cronRequired);
       return;
     }
     try {
@@ -398,22 +403,18 @@ export function useDatabaseBackups(
   /** handleSaveTarget creates or updates a target from the editor. */
   async function handleSaveTarget(): Promise<void> {
     const name = targetName.value.trim();
-    if (name === "") {
-      message.error("Target name is required.");
+    const targetError = validateTargetForm({
+      name: targetName.value,
+      kind: targetKind.value,
+      endpoint: targetEndpoint.value,
+      bucket: targetBucket.value,
+      accessKey: targetAccessKey.value,
+      secretKey: targetSecretKey.value,
+      isNew: targetEditingId.value === null,
+    });
+    if (targetError !== null) {
+      message.error(targetError);
       return;
-    }
-    if (targetKind.value === "s3") {
-      if (targetEndpoint.value.trim() === "" || targetBucket.value.trim() === "") {
-        message.error("Endpoint and bucket are required for an S3 target.");
-        return;
-      }
-      if (
-        targetEditingId.value === null &&
-        (targetAccessKey.value === "" || targetSecretKey.value === "")
-      ) {
-        message.error("Access key and secret key are required for a new S3 target.");
-        return;
-      }
     }
     try {
       if (targetEditingId.value === null) {

@@ -14,6 +14,7 @@ import {
   eventLabel,
 } from "@/features/notifications/api/notifications";
 import { useNotificationsStore } from "@/features/notifications/stores/notifications";
+import { canSubmitChannel } from "@/features/notifications/schemas/notifications";
 import {
   allowedEvents,
   buildConfig,
@@ -226,12 +227,7 @@ function createChannelDialogState() {
   }
 
   /** canSubmit mirrors the backend rules: name and at least one event. */
-  const canSubmit = computed<boolean>(
-    () =>
-      form.value.name.trim() !== "" &&
-      form.value.events.length > 0 &&
-      (form.value.resourceType === "" || form.value.resourceId !== ""),
-  );
+  const canSubmit = computed<boolean>(() => canSubmitChannel(form.value));
 
   /** openCreate resets the modal for a new channel. */
   function openCreate(): void {

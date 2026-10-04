@@ -1,0 +1,273 @@
+import { defineStore } from "pinia";
+import { ref } from "vue";
+
+import {
+  createDatabase,
+  deleteDatabase,
+  describeDatabaseError,
+  getDatabase,
+  getDatabaseCredentials,
+  listDatabases,
+  renameDatabase,
+  restartDatabase,
+  startDatabase,
+  stopDatabase,
+} from "@/features/databases/api/databases";
+import type {
+  CreateDatabaseInput,
+  Database,
+  DatabaseCredentials,
+} from "@/features/databases/api/databases";
+import { mergeDatabasesById } from "@/features/databases/utils/storeMerge";
+
+/** Polling cadence for the database list, in milliseconds. */
+const pollIntervalMs = 5_000;
+
+export const useDatabasesStore = defineStore("databases", () => {
+  const databases = ref<Database[]>([]);
+  const loading = ref(false);
+  const error = ref<string | null>(null);
+  const acting = ref(false);
+  const credentialsById = ref<Record<string, DatabaseCredentials>>({});
+  const credentialsLoading = ref(false);
+  const credentialsError = ref<string | null>(null);
+
+  // Interval handle kept outside reactive state; the store instance is a
+  // singleton so a single handle is enough for the whole app.
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Bumped by every local list mutation (create/delete). A list response that
+  // started before the mutation must merge instead of replacing the array, or
+  // it would clobber the row this tab just created.
+  let mutationGeneration = 0;
+
+  // Ids this tab deleted. A list response that started before the delete must
+  // not resurrect them; the set is intentionally never cleared while the store
+  // lives, because a stale pre-delete response can resolve after a fresh
+  // post-delete one. Growth is bounded by the session's deletions.
+  // ponytail: per-session set, cap/expire only if a long session deletes
+  // thousands of databases.
+  const deletedIds = new Set<string>();
+
+  /**
+   * applyServerList writes a server list, merging when a local mutation
+   * happened while it was in flight.
+   */
+  function applyServerList(server: Database[], generation: number): void {
+    if (generation === mutationGeneration) {
+      databases.value = server;
+      return;
+    }
+    databases.value = mergeDatabasesById(server, databases.value, deletedIds);
+  }
+
+  /** applyDatabase merges one database into the in-memory list in place. */
+  function applyDatabase(updated: Database): void {
+    const index = databases.value.findIndex((item) => item.id === updated.id);
+    if (index === -1) {
+      databases.value = [updated, ...databases.value];
+      return;
+    }
+    databases.value[index] = updated;
+  }
+
+  /** fetchDatabases loads the list, toggling the loading flag. */
+  async function fetchDatabases(): Promise<void> {
+    loading.value = true;
+    error.value = null;
+    const generation = mutationGeneration;
+    try {
+      applyServerList(await listDatabases(), generation);
+    } catch (err) {
+      error.value = describeDatabaseError(err);
+      throw err;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  /** refreshDatabases reloads the list without toggling the loading flag. */
+  async function refreshDatabases(): Promise<void> {
+    const generation = mutationGeneration;
+    try {
+      applyServerList(await listDatabases(), generation);
+      error.value = null;
+    } catch (err) {
+      error.value = describeDatabaseError(err);
+    }
+  }
+
+  /**
+   * pollDatabases starts a 5s interval that refreshes the list in place.
+   * Calling it more than once is a no-op until {@link stopPolling} runs.
+   */
+  function pollDatabases(): void {
+    if (pollTimer !== null) {
+      return;
+    }
+    pollTimer = setInterval(() => {
+      void refreshDatabases();
+    }, pollIntervalMs);
+  }
+
+  /** stopPolling clears the interval; safe to call when not polling. */
+  function stopPolling(): void {
+    if (pollTimer !== null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  /**
+   * reset drops the cached list and credentials and stops polling, so the
+   * next sign-in never sees the previous account's databases. Called on
+   * sign-out (see the auth store).
+   */
+  function reset(): void {
+    stopPolling();
+    databases.value = [];
+    loading.value = false;
+    error.value = null;
+    acting.value = false;
+    credentialsById.value = {};
+    credentialsLoading.value = false;
+    credentialsError.value = null;
+  }
+
+  /**
+   * fetchDatabase loads one database and merges it into the list, so the
+   * detail page stays consistent with the list after lifecycle actions.
+   */
+  async function fetchDatabase(id: string): Promise<Database> {
+    const database = await getDatabase(id);
+    applyDatabase(database);
+    return database;
+  }
+
+  /**
+   * provision creates a database and merges the row into the list, keeping
+   * the generated credentials for the success panel. The caller owns the
+   * created row, never the whole list reload.
+   */
+  async function provision(
+    input: CreateDatabaseInput,
+  ): Promise<{ database: Database; credentials: DatabaseCredentials }> {
+    acting.value = true;
+    try {
+      const created = await createDatabase(input);
+      applyDatabase(created.database);
+      credentialsById.value[created.database.id] = created.credentials;
+      mutationGeneration += 1;
+      return created;
+    } finally {
+      acting.value = false;
+    }
+  }
+
+  /** rename changes the display name of one database. */
+  async function rename(id: string, name: string): Promise<Database> {
+    acting.value = true;
+    try {
+      const updated = await renameDatabase(id, { name });
+      applyDatabase(updated);
+      return updated;
+    } finally {
+      acting.value = false;
+    }
+  }
+
+  /** remove deletes a database and drops it from the list. */
+  async function remove(id: string): Promise<void> {
+    acting.value = true;
+    try {
+      await deleteDatabase(id);
+      databases.value = databases.value.filter((item) => item.id !== id);
+      delete credentialsById.value[id];
+      deletedIds.add(id);
+      mutationGeneration += 1;
+    } finally {
+      acting.value = false;
+    }
+  }
+
+  /** fetchCredentials loads the owner-only credentials of one database. */
+  async function fetchCredentials(id: string): Promise<DatabaseCredentials> {
+    credentialsLoading.value = true;
+    credentialsError.value = null;
+    try {
+      const credentials = await getDatabaseCredentials(id);
+      credentialsById.value[id] = credentials;
+      return credentials;
+    } catch (err) {
+      credentialsError.value = describeDatabaseError(err);
+      throw err;
+    } finally {
+      credentialsLoading.value = false;
+    }
+  }
+
+  /** credentialsOf returns the cached credentials of one database, if any. */
+  function credentialsOf(id: string): DatabaseCredentials | null {
+    return credentialsById.value[id] ?? null;
+  }
+
+  /** start powers the container back on and merges the updated row. */
+  async function start(id: string): Promise<Database> {
+    acting.value = true;
+    try {
+      const updated = await startDatabase(id);
+      applyDatabase(updated);
+      return updated;
+    } finally {
+      acting.value = false;
+    }
+  }
+
+  /** stop shuts the container down and merges the updated row. */
+  async function stop(id: string): Promise<Database> {
+    acting.value = true;
+    try {
+      const updated = await stopDatabase(id);
+      applyDatabase(updated);
+      return updated;
+    } finally {
+      acting.value = false;
+    }
+  }
+
+  /** restart re-runs the container in place and merges the updated row. */
+  async function restart(id: string): Promise<Database> {
+    acting.value = true;
+    try {
+      const updated = await restartDatabase(id);
+      applyDatabase(updated);
+      return updated;
+    } finally {
+      acting.value = false;
+    }
+  }
+
+  return {
+    databases,
+    loading,
+    error,
+    acting,
+    credentialsById,
+    credentialsLoading,
+    credentialsError,
+    fetchDatabases,
+    refreshDatabases,
+    pollDatabases,
+    stopPolling,
+    reset,
+    fetchDatabase,
+    provision,
+    rename,
+    remove,
+    fetchCredentials,
+    credentialsOf,
+    start,
+    stop,
+    restart,
+  };
+});

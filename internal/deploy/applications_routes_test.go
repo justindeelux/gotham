@@ -22,7 +22,7 @@ import (
 const applicationsPath = "/v1/applications"
 
 // applicationBody is the create payload exactly as FE-4.1's wizard sends it
-// (see CreateApplicationInput in web/src/api/applications.ts).
+// (see CreateApplicationInput in web/src/features/applications/api/applications.ts).
 const applicationBody = `{
 	"name": "demo app",
 	"provider": "github",

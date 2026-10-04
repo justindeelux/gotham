@@ -9,7 +9,7 @@ import type { Page } from "@playwright/test";
 // lint envs do not cover tests/, so the global is declared here.
 
 // Behavioural proof for the shared .form-row utility (JUS-19 fix 3): real
-// Chromium computes styles from the real web/src/styles/main.css against
+// Chromium computes styles from the real web/src/shared/styles/main.css against
 // plain DOM shaped like paired NFormItems, one box per REAL container width
 // (review-B-r2: 512px modal NForms, 590px Add-server connect-form, 622px
 // CreateAppWizard wizard-main, 640px database card, 420px Register card).

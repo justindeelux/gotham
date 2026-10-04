@@ -63,7 +63,7 @@ type rollbackRequest struct {
 }
 
 // applicationResponse is the wire representation of an application. It mirrors
-// `Application` in web/src/api/applications.ts field for field: server_id is
+// `Application` in web/src/features/applications/api/applications.ts field for field: server_id is
 // null while no node is assigned.
 type applicationResponse struct {
 	ID         string `json:"id"`
@@ -137,7 +137,7 @@ type storageListEnvelope struct {
 }
 
 // createApplicationRequest is the POST /applications body; it matches
-// CreateApplicationInput in web/src/api/applications.ts.
+// CreateApplicationInput in web/src/features/applications/api/applications.ts.
 type createApplicationRequest struct {
 	Name       string            `json:"name"`
 	Provider   string            `json:"provider"`

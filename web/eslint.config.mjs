@@ -65,4 +65,71 @@ export default [
       parserOptions: { parser: tsParser },
     },
   },
+  ...featureBoundaries(),
 ];
+
+// Feature-module boundaries (F1 web layout, JUS-24): shared/ never imports
+// features/ or app/; a feature reaches into another feature only through its
+// index (`@/features/<other>`) or its components
+// (`@/features/<other>/components/*`) — never api, stores, pages, utils or
+// composables directly. The app shell (src/app, including the router's lazy
+// page imports) is outside these blocks, so no router override is needed.
+// Only type-only edges remain between features (erased at build); there are
+// no runtime import cycles.
+function featureBoundaries() {
+  const featureNames = [
+    "auth",
+    "dashboard",
+    "servers",
+    "applications",
+    "databases",
+    "services",
+    "templates",
+    "domains",
+    "teams",
+    "notifications",
+    "version",
+  ];
+  const privateDirs = ["api", "stores", "pages", "utils", "composables"];
+  const blocks = [
+    {
+      files: ["src/shared/**/*"],
+      rules: {
+        "no-restricted-imports": [
+          "error",
+          {
+            patterns: [
+              {
+                group: ["@/features/**", "@/app/**"],
+                message: "shared/ must not import features/ or app/; move the shared piece or the importer.",
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ];
+  for (const name of featureNames) {
+    blocks.push({
+      files: [`src/features/${name}/**/*`],
+      rules: {
+        "no-restricted-imports": [
+          "error",
+          {
+            patterns: featureNames
+              .filter((other) => other !== name)
+              .flatMap((other) =>
+                privateDirs.flatMap((dir) => [
+                  {
+                    group: [`@/features/${other}/${dir}`, `@/features/${other}/${dir}/**`],
+                    message: `import feature ${other} through its index (@/features/${other}) or its components/ instead.`,
+                  },
+                ]),
+              ),
+          },
+        ],
+      },
+    });
+  }
+  return blocks;
+}

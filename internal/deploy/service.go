@@ -36,7 +36,7 @@ func Enabled() bool {
 // The budget, with webhooks.hookRollbackTimeout (3s): a create whose provider
 // answers at this deadline and whose hook-row write then fails spends at most
 // 8s + 3s = 11s before it answers, leaving 4s of the SPA's 15s request timeout
-// (web/src/api/http.ts) for everything else. Raising either bound must keep
+// (web/src/shared/api/http.ts) for everything else. Raising either bound must keep
 // the sum safely below that timeout — TestHookBudgetsStayUnderSPARequestTimeout
 // in internal/webhooks pins it.
 const DefaultHookTimeout = 8 * time.Second

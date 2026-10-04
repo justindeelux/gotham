@@ -36,6 +36,26 @@ function assert(condition, message) {
   }
 }
 
+// Web source root for the "@" import alias (mirrors vite.config.ts).
+const srcDir = new URL("../src", import.meta.url).pathname;
+
+// Vue SFCs are re-exported through feature indexes, so a bundled helper can
+// pull one into the module graph. The Node harnesses never execute them;
+// stub the default export instead of teaching esbuild to compile SFCs.
+const vueStubPlugin = {
+  name: "stub-vue-sfc",
+  setup(vueBuild) {
+    vueBuild.onResolve({ filter: /\.vue$/ }, (args) => ({
+      path: args.path,
+      namespace: "vue-stub",
+    }));
+    vueBuild.onLoad({ filter: /.*/, namespace: "vue-stub" }, () => ({
+      contents: "export default {};",
+      loader: "js",
+    }));
+  },
+};
+
 async function loadModule(relativePath) {
   const directory = await mkdtemp(join(tmpdir(), "gotham-fx15b-check-"));
   // CJS output: applications.ts pulls in axios, whose transitive form-data
@@ -50,6 +70,8 @@ async function loadModule(relativePath) {
     platform: "node",
     target: "node20",
     logLevel: "silent",
+    alias: { "@": srcDir },
+    plugins: [vueStubPlugin],
   });
   const module = await import(pathToFileURL(outfile).href);
   return {
@@ -70,6 +92,7 @@ async function loadInline(contents, resolveDir) {
     platform: "node",
     target: "node20",
     logLevel: "silent",
+    alias: { "@": srcDir },
   });
   const module = await import(pathToFileURL(outfile).href);
   return {
@@ -84,14 +107,14 @@ function apiError(status, message = "") {
 }
 
 async function main() {
-  const applications = await loadModule("../src/api/applications.ts");
-  const format = await loadModule("../src/utils/format.ts");
-  const version = await loadModule("../src/api/version.ts");
+  const applications = await loadModule("../src/features/applications/api/applications.ts");
+  const format = await loadModule("../src/shared/utils/format.ts");
+  const version = await loadModule("../src/features/version/api/version.ts");
   const rowKeys = await loadInline(
     `import { ref } from "vue";
      import { useStableRowKeys } from "./useStableRowKeys";
      export { ref, useStableRowKeys };`,
-    new URL("../src/composables/", import.meta.url).pathname,
+    new URL("../src/shared/composables/", import.meta.url).pathname,
   );
 
   try {
@@ -173,7 +196,7 @@ async function main() {
     });
 
     await check("B4-13: dashboard and server list share the threshold (no hard-coded 80)", async () => {
-      const pages = ["../src/pages/DashboardPage.vue", "../src/pages/ServersPage.vue"];
+      const pages = ["../src/features/dashboard/pages/DashboardPage.vue", "../src/features/servers/pages/ServersPage.vue"];
       for (const page of pages) {
         const source = await readFile(new URL(page, import.meta.url), "utf8");
         assert(
@@ -190,7 +213,7 @@ async function main() {
     });
 
     await check("B4-13: exactly 80% counts as danger (inclusive >=)", async () => {
-      for (const page of ["../src/pages/DashboardPage.vue", "../src/pages/ServersPage.vue"]) {
+      for (const page of ["../src/features/dashboard/pages/DashboardPage.vue", "../src/features/servers/pages/ServersPage.vue"]) {
         const source = await readFile(new URL(page, import.meta.url), "utf8");
         assert(
           source.includes(">= USAGE_DANGER_PERCENT") ||
@@ -213,8 +236,8 @@ async function main() {
 
     await check("C4-14: EnvEditor/StorageEditor keep stable row keys wired", async () => {
       const editors = [
-        "../src/components/EnvEditor.vue",
-        "../src/components/StorageEditor.vue",
+        "../src/features/applications/components/EnvEditor.vue",
+        "../src/features/applications/components/StorageEditor.vue",
       ];
       for (const editor of editors) {
         const source = await readFile(new URL(editor, import.meta.url), "utf8");

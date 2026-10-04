@@ -14,9 +14,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const css = readFileSync(join(root, "src/styles/main.css"), "utf8");
-const tokens = readFileSync(join(root, "src/styles/tokens.css"), "utf8");
-const appVue = readFileSync(join(root, "src/App.vue"), "utf8");
+const css = readFileSync(join(root, "src/shared/styles/main.css"), "utf8");
+const tokens = readFileSync(join(root, "src/shared/styles/tokens.css"), "utf8");
+const appVue = readFileSync(join(root, "src/app/App.vue"), "utf8");
 
 const results = [];
 

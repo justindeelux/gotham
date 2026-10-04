@@ -1,0 +1,154 @@
+import { createRouter, createWebHistory } from "vue-router";
+import type { RouteRecordRaw } from "vue-router";
+
+import { useAuthStore } from "@/features/auth";
+
+const routes: RouteRecordRaw[] = [
+  {
+    path: "",
+    component: () => import("@/app/layouts/AuthLayout.vue"),
+    children: [
+      // The bare root must land on the auth form. Without an index record this
+      // parent matches "/" and its empty router-view renders no form at all
+      // (the catch-all never fires), so `http://<host>:8000/` showed a blank
+      // right pane with no way to sign in or register.
+      { path: "", redirect: { name: "login" } },
+      {
+        path: "/login",
+        name: "login",
+        component: () => import("@/features/auth/pages/LoginPage.vue"),
+        meta: { title: "Sign in", publicOnly: true },
+      },
+      {
+        path: "/register",
+        name: "register",
+        component: () => import("@/features/auth/pages/RegisterPage.vue"),
+        meta: { title: "Create account", publicOnly: true },
+      },
+      {
+        path: "/oauth/callback",
+        name: "oauth-callback",
+        component: () => import("@/features/auth/pages/OAuthCallbackPage.vue"),
+        meta: { title: "Signing in" },
+      },
+    ],
+  },
+  {
+    path: "/",
+    component: () => import("@/app/layouts/AppLayout.vue"),
+    meta: { requiresAuth: true },
+    children: [
+      { path: "", redirect: { name: "dashboard" } },
+      {
+        path: "dashboard",
+        name: "dashboard",
+        component: () => import("@/features/dashboard/pages/DashboardPage.vue"),
+        meta: { title: "Dashboard", requiresAuth: true },
+      },
+      {
+        path: "servers",
+        name: "servers",
+        component: () => import("@/features/servers/pages/ServersPage.vue"),
+        meta: { title: "Servers", requiresAuth: true },
+      },
+      {
+        path: "servers/:id",
+        name: "server-detail",
+        component: () => import("@/features/servers/pages/ServerDetailPage.vue"),
+        meta: { title: "Server detail", requiresAuth: true },
+      },
+      {
+        path: "servers/:id/containers",
+        name: "server-containers",
+        component: () => import("@/features/servers/pages/ContainersPage.vue"),
+        meta: { title: "Containers", requiresAuth: true },
+      },
+      {
+        path: "applications",
+        name: "applications",
+        component: () => import("@/features/applications/pages/ApplicationsPage.vue"),
+        meta: { title: "Applications", requiresAuth: true },
+      },
+      {
+        path: "applications/:id",
+        name: "application-detail",
+        component: () => import("@/features/applications/pages/ApplicationDetailPage.vue"),
+        meta: { title: "Application detail", requiresAuth: true },
+      },
+      {
+        path: "databases",
+        name: "databases",
+        component: () => import("@/features/databases/pages/DatabasesPage.vue"),
+        meta: { title: "Databases", requiresAuth: true },
+      },
+      {
+        path: "databases/:id",
+        name: "database-detail",
+        component: () => import("@/features/databases/pages/DatabaseDetailPage.vue"),
+        meta: { title: "Database detail", requiresAuth: true },
+      },
+      {
+        path: "domains",
+        name: "domains",
+        component: () => import("@/features/domains/pages/DomainsPage.vue"),
+        meta: { title: "Domains & SSL", requiresAuth: true },
+      },
+      {
+        path: "services",
+        name: "services",
+        component: () => import("@/features/services/pages/ServicesPage.vue"),
+        meta: { title: "Services", requiresAuth: true },
+      },
+      {
+        path: "services/:id",
+        name: "service-detail",
+        component: () => import("@/features/services/pages/ServiceDetailPage.vue"),
+        meta: { title: "Service detail", requiresAuth: true },
+      },
+      {
+        path: "templates",
+        name: "templates",
+        component: () => import("@/features/templates/pages/TemplatesPage.vue"),
+        meta: { title: "Template library", requiresAuth: true },
+      },
+      {
+        path: "teams",
+        name: "teams",
+        component: () => import("@/features/teams/pages/TeamsPage.vue"),
+        meta: { title: "Teams", requiresAuth: true },
+      },
+      {
+        path: "settings/notifications",
+        name: "notifications",
+        component: () => import("@/features/notifications/pages/NotificationsPage.vue"),
+        meta: { title: "Notification channels", requiresAuth: true },
+      },
+      {
+        path: "invite/accept",
+        name: "invite-accept",
+        component: () => import("@/features/auth/pages/InviteAcceptPage.vue"),
+        meta: { title: "Team invite", requiresAuth: true },
+      },
+    ],
+  },
+  { path: "/:pathMatch(.*)*", redirect: { name: "dashboard" } },
+];
+
+export const router = createRouter({
+  history: createWebHistory(),
+  routes,
+});
+
+router.beforeEach((to) => {
+  const authStore = useAuthStore();
+
+  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+    return { name: "login", query: { redirect: to.fullPath } };
+  }
+
+  if (to.meta.publicOnly && authStore.isAuthenticated) {
+    return { name: "dashboard" };
+  }
+
+  return true;
+});

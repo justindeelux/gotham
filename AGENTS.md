@@ -60,6 +60,7 @@ docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
 - 2-space indent, LF, UTF-8, max line length ~100
 - Semicolons, double quotes, trailing commas
 - Strict TypeScript; clear names (`isActive`, `getRoomById`) over abbreviations
+- Validation = zod schemas via `web/src/shared/validation` (adapter `ruleFrom`, envelope `parseWith`); feature schemas live in `features/<m>/schemas/`, no new ad-hoc `validator:` closures
 
 ## UI Design
 

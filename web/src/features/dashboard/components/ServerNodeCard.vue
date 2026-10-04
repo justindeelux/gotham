@@ -16,17 +16,17 @@ defineProps<Props>();
     size="small"
     class="node-card"
   >
-    <NSpace vertical :size="12">
-      <NSpace align="center" :size="12" :wrap="false">
+    <NSpace vertical :size="12" class="node-stack">
+      <div class="node-top">
         <div class="node-avatar" aria-hidden="true">
           {{ card.initials }}
         </div>
         <div class="node-head">
           <NText strong>{{ card.name }}</NText>
-          <NText depth="3" class="node-sub">{{ card.subtitle }}</NText>
+          <NText depth="3" class="node-sub" :title="card.subtitle">{{ card.subtitle }}</NText>
         </div>
-        <ServerStatusTag :status="card.status" />
-      </NSpace>
+        <ServerStatusTag class="node-status" :status="card.status" />
+      </div>
       <div class="node-metrics">
         <div class="node-metric">
           <NText depth="3" class="metric-label">CPU</NText>
@@ -81,6 +81,21 @@ defineProps<Props>();
 </template>
 
 <style scoped>
+.node-stack {
+  min-width: 0;
+}
+
+.node-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.node-status {
+  flex: 0 0 auto;
+}
+
 .node-avatar {
   width: 36px;
   height: 36px;

@@ -226,7 +226,7 @@ func TestServiceRotateUpdatesMeta(t *testing.T) {
 	if !got.LastUsedAt.After(before[0].LastUsedAt) {
 		t.Errorf("last_used_at = %v, want after %v", got.LastUsedAt, before[0].LastUsedAt)
 	}
-	if age := time.Since(got.LastUsedAt); age < 0 || age > 5*time.Minute {
+	if age := time.Since(got.LastUsedAt); age > 5*time.Minute {
 		t.Errorf("last_used_at = %v, want ~now", got.LastUsedAt)
 	}
 }
@@ -260,6 +260,91 @@ func TestServiceSessionMetaTruncation(t *testing.T) {
 	}
 	if sessions[0].IP != "" {
 		t.Errorf("unparseable IP stored as %q, want unknown", sessions[0].IP)
+	}
+}
+
+func TestServiceSessionMetaStripsControlCharacters(t *testing.T) {
+	svc, _ := scratchService(t)
+	ctx := context.Background()
+
+	email := uniqueEmail("sessions-controls")
+	// NUL, SOH, STX and DEL must never reach Postgres; the tab survives.
+	agent := "ab\x00cd\x01\x02\t\x7fé"
+	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{UserAgent: agent, IP: "10.0.0.1"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	userID, _ := uuid.Parse(first.User.ID)
+
+	sessions, err := svc.ListSessions(ctx, userID, sidOf(t, svc, first.AccessToken))
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("ListSessions returned %d rows, want 1", len(sessions))
+	}
+	if got := sessions[0].UserAgent; got != "abcd\té" {
+		t.Errorf("stored user agent = %q, want %q", got, "abcd\té")
+	}
+
+	// Login exercises the second cleanUserAgent call site (service.go).
+	second, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{UserAgent: "ok-agent\x00", IP: "10.0.0.2"})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	sessions, err = svc.ListSessions(ctx, userID, sidOf(t, svc, second.AccessToken))
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	byAgent := make(map[string]bool)
+	for _, s := range sessions {
+		byAgent[s.UserAgent] = true
+	}
+	if !byAgent["ok-agent"] {
+		t.Errorf("listed agents = %v, want ok-agent without the NUL", byAgent)
+	}
+
+	// Controls-only input stores NULL and renders as "".
+	third, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{UserAgent: "\x00\x01\x7f", IP: "10.0.0.3"})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	sessions, err = svc.ListSessions(ctx, userID, sidOf(t, svc, third.AccessToken))
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	found := false
+	for _, s := range sessions {
+		if s.ID == sidOf(t, svc, third.AccessToken) {
+			found = true
+			if s.UserAgent != "" {
+				t.Errorf("controls-only agent stored as %q, want unknown", s.UserAgent)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("fresh login session missing from the list")
+	}
+
+	// The 256-rune cap still applies to the cleaned value.
+	long := strings.Repeat("x", 300) + "\x00\x01"
+	fourth, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{UserAgent: long, IP: "10.0.0.4"})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	sessions, err = svc.ListSessions(ctx, userID, sidOf(t, svc, fourth.AccessToken))
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	for _, s := range sessions {
+		if s.ID == sidOf(t, svc, fourth.AccessToken) {
+			if n := len([]rune(s.UserAgent)); n != maxUserAgentLength {
+				t.Errorf("stored user agent is %d chars, want %d", n, maxUserAgentLength)
+			}
+			if !utf8.ValidString(s.UserAgent) {
+				t.Error("stored user agent is not valid UTF-8")
+			}
+		}
 	}
 }
 

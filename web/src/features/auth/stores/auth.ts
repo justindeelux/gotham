@@ -41,6 +41,15 @@ export const useAuthStore = defineStore("auth", () => {
   const refreshToken = ref<string | null>(initial.refreshToken);
 
   /**
+   * userSeq orders local account writes (setSession, setUser, clearSession).
+   * fetchMe captures it at start and discards a response that resolves after
+   * a newer local write, so a slow read cannot overwrite it. Reads that land
+   * through applySession (a token rotation or another tab) do not bump it:
+   * they carry server facts, never a newer local write.
+   */
+  let userSeq = 0;
+
+  /**
    * registrationOpen mirrors `GET /auth/config`: true only on a fresh instance
    * with zero accounts. Afterwards the create-account tab is hidden and
    * members join through an admin-created invite link (P-A2).
@@ -84,6 +93,18 @@ export const useAuthStore = defineStore("auth", () => {
     user.value = input.user ?? null;
     accessToken.value = input.access_token;
     refreshToken.value = input.refresh_token;
+    userSeq += 1;
+    persist();
+  }
+
+  /**
+   * setUser replaces the stored account (a display-name save) and persists
+   * it, so the sidebar follows without a reload. It bumps the write order so
+   * an in-flight fetchMe cannot overwrite it with an older server read.
+   */
+  function setUser(next: User | null): void {
+    user.value = next;
+    userSeq += 1;
     persist();
   }
 
@@ -101,6 +122,7 @@ export const useAuthStore = defineStore("auth", () => {
     user.value = null;
     accessToken.value = null;
     refreshToken.value = null;
+    userSeq += 1;
     clearStoredSession();
     resetUserStores();
   }
@@ -135,14 +157,21 @@ export const useAuthStore = defineStore("auth", () => {
 
   /**
    * fetchMe refreshes the account from GET /auth/me, clearing on 401. A
-   * response that resolves after the session changed (for example the OAuth
-   * exchange installed a new one) is discarded so it cannot overwrite it.
+   * response that resolves after the account changed is discarded so it
+   * cannot overwrite it: a different account id (an OAuth exchange or another
+   * sign-in installed a new session, or sign-out cleared it), or a newer
+   * local write (a display-name save, a password change). A token rotation
+   * that lands mid-flight changes the token but not the account, so the
+   * retried read after a 401 still applies — that is the first open with an
+   * expired access token.
    */
   async function fetchMe(): Promise<void> {
     const tokenAtStart = accessToken.value;
+    const idAtStart = user.value?.id;
+    const seqAtStart = userSeq;
     try {
       const response = await http.get<{ user: User }>("/auth/me");
-      if (accessToken.value !== tokenAtStart) {
+      if (user.value?.id !== idAtStart || userSeq !== seqAtStart) {
         return;
       }
       user.value = response.data.user;
@@ -235,6 +264,7 @@ export const useAuthStore = defineStore("auth", () => {
     isAuthenticated,
     registrationOpen,
     setSession,
+    setUser,
     clearSession,
     persist,
     fetchMe,

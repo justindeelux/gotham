@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -35,6 +38,8 @@ func runAdmin(args []string) int {
 	switch args[0] {
 	case "create":
 		return runAdminCreate(args[1:])
+	case "exists":
+		return runAdminExists(args[1:])
 	case "reset-password":
 		return runAdminResetPassword(args[1:])
 	case "help", "-h", "--help":
@@ -52,15 +57,22 @@ func adminUsage(w io.Writer) {
 	fmt.Fprintf(w, `gotham admin
 
 Usage:
-  gotham admin create --email <email> [--password <pw>] [--force]
+  gotham admin create --email <email> [--password <pw> | --password-stdin | --generate-password] [--force]
                             Create the first account (P-A2: one account per
                             instance; refuses with --force not set otherwise).
+  gotham admin exists        Print "admin-exists: true|false" and exit 0
+                            (exit 1 on error). Lets the installer detect a
+                            re-run without parsing the database.
   gotham admin reset-password --email <email> [--password <pw>]
                             Replace a password and revoke the account's
                             sessions.
   gotham admin help         Show this help
 
-The password is read with a hidden prompt when --password is omitted.
+The password is read with a hidden prompt when none of --password,
+--password-stdin or --generate-password is given. --password is visible in
+the process list; prefer the hidden prompt or --password-stdin (a single
+line on stdin). --generate-password creates a random password and prints it
+once as "generated-password: <value>".
 Configuration comes from gotham.yaml / GOTHAM_* environment variables; when
 %s exists it is loaded first (without overriding the environment).
 `, adminEnvFile)
@@ -71,9 +83,15 @@ Configuration comes from gotham.yaml / GOTHAM_* environment variables; when
 func runAdminCreate(args []string) int {
 	fs := flag.NewFlagSet("admin create", flag.ContinueOnError)
 	email := fs.String("email", "", "account email (required)")
-	password := fs.String("password", "", "account password (hidden prompt when omitted)")
+	password := fs.String("password", "", "account password (visible in ps; prefer --password-stdin or the hidden prompt)")
+	passwordStdin := fs.Bool("password-stdin", false, "read the password from stdin (single line, no echo)")
+	generatePassword := fs.Bool("generate-password", false, "generate a random password and print it once as \"generated-password: <value>\"")
 	force := fs.Bool("force", false, "create the account even when one already exists")
 	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if err := checkAdminPasswordFlags(*password, *passwordStdin, *generatePassword); err != nil {
+		fmt.Fprintf(os.Stderr, "admin create: %v\n", err)
 		return exitUsage
 	}
 	return withAdminStore(fs, func(ctx context.Context, st *store.Store) int {
@@ -94,7 +112,24 @@ func runAdminCreate(args []string) int {
 			return exitError
 		}
 
-		hash, err := adminPasswordHash(*password, "New password: ", "Confirm password: ")
+		var generated string
+		hash, err := func() (string, error) {
+			if *generatePassword {
+				generated, err = generateAdminPassword()
+				if err != nil {
+					return "", err
+				}
+				return adminHashPlaintext(generated)
+			}
+			if *passwordStdin {
+				plaintext, err := readPasswordLine(os.Stdin)
+				if err != nil {
+					return "", err
+				}
+				return adminHashPlaintext(plaintext)
+			}
+			return adminPasswordHash(*password, "New password: ", "Confirm password: ")
+		}()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "admin create: %v\n", err)
 			return exitError
@@ -124,8 +159,54 @@ func runAdminCreate(args []string) int {
 		}
 
 		fmt.Printf("created account %s\n", normalized)
+		if generated != "" {
+			fmt.Printf("generated-password: %s\n", generated)
+		}
 		return exitOK
 	})
+}
+
+// runAdminExists reports whether the instance already has an account, so the
+// installer can skip creation on a re-run without parsing the database. It
+// prints "admin-exists: true|false" and exits 0; any failure exits 1.
+func runAdminExists(args []string) int {
+	fs := flag.NewFlagSet("admin exists", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "admin exists takes no arguments\n")
+		return exitUsage
+	}
+	loadEnvFile(adminEnvFile)
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		return exitError
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	pool, err := store.Open(ctx, cfg.Database.DSN)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "admin: connect to database: %v\n", err)
+		return exitError
+	}
+	defer pool.Close()
+
+	count, err := store.New(pool).CountUsers(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "admin exists: count users: %v\n", err)
+		return exitError
+	}
+	if count > 0 {
+		fmt.Println("admin-exists: true")
+	} else {
+		fmt.Println("admin-exists: false")
+	}
+	return exitOK
 }
 
 // runAdminResetPassword replaces the argon2id hash of an existing account and
@@ -163,6 +244,66 @@ func runAdminResetPassword(args []string) int {
 			"Access tokens already issued stay valid until they expire (15 minutes).\n", user.Email)
 		return exitOK
 	})
+}
+
+// checkAdminPasswordFlags rejects combining --password, --password-stdin and
+// --generate-password: they are mutually exclusive password sources.
+func checkAdminPasswordFlags(password string, passwordStdin, generatePassword bool) error {
+	n := 0
+	if password != "" {
+		n++
+	}
+	if passwordStdin {
+		n++
+	}
+	if generatePassword {
+		n++
+	}
+	if n > 1 {
+		return errors.New("--password, --password-stdin and --generate-password are mutually exclusive")
+	}
+	return nil
+}
+
+// adminHashPlaintext validates an already-resolved password with the same
+// policy as registration and returns its argon2id-encoded hash. Unlike
+// adminPasswordHash it never prompts: an empty value fails validation.
+func adminHashPlaintext(password string) (string, error) {
+	if err := auth.ValidatePassword(password); err != nil {
+		return "", err
+	}
+	return auth.HashPassword(password)
+}
+
+// readPasswordLine reads a single password line from r without echo handling
+// (the caller pipes it, so nothing is displayed). Only the trailing newline
+// is stripped; every other byte is significant.
+func readPasswordLine(r io.Reader) (string, error) {
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("read password from stdin: %w", err)
+	}
+	line = strings.TrimSuffix(line, "\n")
+	line = strings.TrimSuffix(line, "\r")
+	if line == "" && errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("no password on stdin; pipe a single line or use --generate-password")
+	}
+	return line, nil
+}
+
+// generateAdminPassword returns a 32-character random password (24 bytes from
+// crypto/rand, base64url without padding). It satisfies the shared password
+// policy (length bounds) and never touches the process list or disk.
+func generateAdminPassword() (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate password: %w", err)
+	}
+	password := base64.RawURLEncoding.EncodeToString(raw)
+	if err := auth.ValidatePassword(password); err != nil {
+		return "", err
+	}
+	return password, nil
 }
 
 // adminPasswordHash resolves the password (the flag value when given, otherwise

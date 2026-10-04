@@ -31,3 +31,106 @@ func TestAdminPasswordHashEncodesArgon2id(t *testing.T) {
 		t.Fatal("the stored hash does not verify the password")
 	}
 }
+
+// TestCheckAdminPasswordFlags pins the mutual exclusivity of the three
+// password sources: --password, --password-stdin and --generate-password.
+func TestCheckAdminPasswordFlags(t *testing.T) {
+	if err := checkAdminPasswordFlags("", false, false); err != nil {
+		t.Fatalf("no source: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		password   string
+		stdin, gen bool
+	}{
+		"password only": {password: "Gotham-E2E-Password1"},
+		"stdin only":    {stdin: true},
+		"generate only": {gen: true},
+	} {
+		if err := checkAdminPasswordFlags(tc.password, tc.stdin, tc.gen); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		password   string
+		stdin, gen bool
+	}{
+		"password+stdin":    {password: "Gotham-E2E-Password1", stdin: true},
+		"password+generate": {password: "Gotham-E2E-Password1", gen: true},
+		"stdin+generate":    {stdin: true, gen: true},
+		"all three":         {password: "Gotham-E2E-Password1", stdin: true, gen: true},
+	} {
+		if err := checkAdminPasswordFlags(tc.password, tc.stdin, tc.gen); err == nil {
+			t.Fatalf("%s: expected a mutual-exclusivity error", name)
+		}
+	}
+}
+
+// TestReadPasswordLineStripsOneNewline guards the --password-stdin contract:
+// a single line is read, only the trailing newline goes, and every other
+// byte (including spaces) is significant.
+func TestReadPasswordLineStripsOneNewline(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"s3cret pass\n", "s3cret pass"},
+		{"s3cret pass\r\n", "s3cret pass"},
+		{"s3cret pass", "s3cret pass"},
+		{"first\nsecond\n", "first"},
+	} {
+		got, err := readPasswordLine(strings.NewReader(tc.in))
+		if err != nil {
+			t.Fatalf("readPasswordLine(%q): %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("readPasswordLine(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	if _, err := readPasswordLine(strings.NewReader("")); err == nil {
+		t.Fatal("empty stdin: expected an error, not an empty password")
+	}
+}
+
+// TestGenerateAdminPasswordIsStrongAndValid pins the --generate-password
+// contract: 24+ URL-safe characters that pass the shared password policy,
+// and a fresh value on every call.
+func TestGenerateAdminPasswordIsStrongAndValid(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 4; i++ {
+		pw, err := generateAdminPassword()
+		if err != nil {
+			t.Fatalf("generateAdminPassword: %v", err)
+		}
+		if len(pw) < 24 {
+			t.Fatalf("generated password %q is shorter than 24 characters", pw)
+		}
+		for _, r := range pw {
+			if !strings.ContainsRune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", r) {
+				t.Fatalf("generated password %q is not base64url", pw)
+			}
+		}
+		if err := auth.ValidatePassword(pw); err != nil {
+			t.Fatalf("generated password fails the shared policy: %v", err)
+		}
+		hash, err := adminHashPlaintext(pw)
+		if err != nil {
+			t.Fatalf("adminHashPlaintext(generated): %v", err)
+		}
+		ok, err := auth.VerifyPassword(hash, pw)
+		if err != nil || !ok {
+			t.Fatalf("generated hash does not verify: ok=%v err=%v", ok, err)
+		}
+		seen[pw] = true
+	}
+	if len(seen) != 4 {
+		t.Fatal("generateAdminPassword returned a duplicate value")
+	}
+}
+
+// TestAdminHashPlaintextNeverPrompts pins that a resolved password is only
+// validated and hashed: an empty value fails instead of opening a prompt.
+func TestAdminHashPlaintextNeverPrompts(t *testing.T) {
+	if _, err := adminHashPlaintext(""); err == nil {
+		t.Fatal("empty password: expected a validation error")
+	}
+	if _, err := adminHashPlaintext("short"); err == nil {
+		t.Fatal("short password: expected a validation error")
+	}
+}

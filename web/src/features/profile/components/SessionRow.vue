@@ -4,7 +4,7 @@ import { computed } from "vue";
 
 import type { AuthSession } from "@/features/profile/schemas/sessions";
 import { deviceLabel } from "@/features/profile/utils/deviceLabel";
-import { formatDate, relativeTime } from "@/shared/utils/format";
+import { relativeTime } from "@/shared/utils/format";
 
 interface Props {
   session: AuthSession;
@@ -29,11 +29,30 @@ const activeRelative = computed<string>(() =>
   relativeTime(props.session.last_used_at),
 );
 const createdAbsolute = computed<string>(() =>
-  formatDate(props.session.created_at),
+  formatDateTime(props.session.created_at),
 );
 const activeAbsolute = computed<string>(() =>
-  formatDate(props.session.last_used_at),
+  formatDateTime(props.session.last_used_at),
 );
+
+/**
+ * formatDateTime renders date + time for the hover title. No shared
+ * datetime helper exists (shared/utils/format only has the date-only
+ * formatDate), so the row formats locally like ProfileIdentityCard does.
+ */
+function formatDateTime(iso: string): string {
+  const time = new Date(iso);
+  if (Number.isNaN(time.getTime())) {
+    return "unknown";
+  }
+  return time.toLocaleString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 /**
  * confirmText warns harder for the current session: ending it signs the
@@ -125,10 +144,20 @@ const confirmText = computed<string>(() =>
   font-size: var(--text-xs);
 }
 
-@media (max-width: 640px) {
+/* The rows stack by panel width, not viewport (JUS-19 convention): the
+ * panel content is the container, so a narrow sidebar column stacks even
+ * on a wide viewport. In the stacked layout the facts wrap onto their own
+ * lines instead of clipping (touch has no hover title). */
+@container (max-width: 480px) {
   .session-row {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .session-meta {
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
   }
 }
 </style>

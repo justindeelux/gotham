@@ -61,6 +61,15 @@ describe("session messages are byte-exact", () => {
     expect(profileMessages.needsReauth).toBe(
       "Your sign-in predates session management. Sign in again to manage other sessions.",
     );
+    expect(profileMessages.sessionsListStale).toBe(
+      "Signed out, but the session list may be out of date.",
+    );
+    expect(profileMessages.sessionsIntro).toBe(
+      "Every device signed in to your account. Ending a session signs that device out; ending this device signs you out here.",
+    );
+    expect(profileMessages.sessionsEmpty).toBe("No active sessions.");
+    expect(profileMessages.actionRetry).toBe("Retry");
+    expect(profileMessages.signInAgain).toBe("Sign in again");
   });
 });
 

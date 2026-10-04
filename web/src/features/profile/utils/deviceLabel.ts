@@ -23,6 +23,12 @@ function browserName(userAgent: string): string | null {
   if (/\bEdg(e|A|iOS)?\//.test(userAgent)) {
     return "Edge";
   }
+  if (/\bCriOS\//.test(userAgent)) {
+    return "Chrome";
+  }
+  if (/\bFxiOS\//.test(userAgent)) {
+    return "Firefox";
+  }
   if (/\bOPR\/|Opera/.test(userAgent)) {
     return "Opera";
   }

@@ -35,70 +35,76 @@ onMounted(() => {
 
 <template>
   <NCard title="Active sessions">
-    <p class="small muted panel-desc">
-      Every device signed in to your account. Ending a session signs that
-      device out; ending this device signs you out here.
-    </p>
+    <!-- Panel-width container for the row stack rule (JUS-19 convention). -->
+    <div class="sessions-panel">
+      <p class="small muted panel-desc">
+        {{ profileMessages.sessionsIntro }}
+      </p>
 
-    <div v-if="loading && !loaded" class="panel-center">
-      <NSpin aria-label="Loading sessions" />
-    </div>
+      <div v-if="loading && !loaded" class="panel-center">
+        <NSpin aria-label="Loading sessions" />
+      </div>
 
-    <template v-else>
-      <template v-if="errorMessage">
-        <NAlert type="error" :show-icon="true">
+      <template v-else>
+        <NAlert v-if="errorMessage" type="error" :show-icon="true">
           {{ errorMessage }}
         </NAlert>
-        <div class="panel-actions">
-          <NButton size="small" @click="load">Retry</NButton>
+        <div v-if="errorMessage" class="panel-actions">
+          <NButton size="small" @click="load">{{ profileMessages.actionRetry }}</NButton>
         </div>
-      </template>
 
-      <NEmpty
-        v-else-if="sessions.length === 0"
-        description="No active sessions."
-      />
-
-      <ul v-else class="session-list">
-        <SessionRow
-          v-for="session in sessions"
-          :key="session.id"
-          :session="session"
-          :busy="revokingId === session.id"
-          @sign-out="endSession"
+        <NEmpty
+          v-if="loaded && sessions.length === 0"
+          :description="profileMessages.sessionsEmpty"
         />
-      </ul>
 
-      <template v-if="needsReauth">
-        <NAlert type="warning" :show-icon="true" class="reauth-note">
-          {{ profileMessages.needsReauth }}
-        </NAlert>
+        <ul v-if="sessions.length > 0" class="session-list">
+          <SessionRow
+            v-for="session in sessions"
+            :key="session.id"
+            :session="session"
+            :busy="revokingId === session.id"
+            @sign-out="endSession"
+          />
+        </ul>
+
+        <template v-if="needsReauth">
+          <NAlert type="warning" :show-icon="true" class="reauth-note">
+            {{ profileMessages.needsReauth }}
+          </NAlert>
+          <div class="panel-actions">
+            <NButton size="small" @click="signOutHere">
+              {{ profileMessages.signInAgain }}
+            </NButton>
+          </div>
+        </template>
+
         <div class="panel-actions">
-          <NButton size="small" @click="signOutHere">Sign in again</NButton>
+          <NPopconfirm
+            positive-text="Sign out others"
+            negative-text="Keep"
+            @positive-click="endOtherSessions"
+          >
+            <template #trigger>
+              <NButton :disabled="others.length === 0" :loading="revokingOthers">
+                Sign out all other devices
+              </NButton>
+            </template>
+            Sign out {{ others.length }} other
+            {{ others.length === 1 ? "session" : "sessions" }}? Those devices
+            will need to sign in again.
+          </NPopconfirm>
         </div>
       </template>
-
-      <div class="panel-actions">
-        <NPopconfirm
-          positive-text="Sign out others"
-          negative-text="Keep"
-          @positive-click="endOtherSessions"
-        >
-          <template #trigger>
-            <NButton :disabled="others.length === 0" :loading="revokingOthers">
-              Sign out all other devices
-            </NButton>
-          </template>
-          Sign out {{ others.length }} other
-          {{ others.length === 1 ? "session" : "sessions" }}? Those devices
-          will need to sign in again.
-        </NPopconfirm>
-      </div>
-    </template>
+    </div>
   </NCard>
 </template>
 
 <style scoped>
+.sessions-panel {
+  container-type: inline-size;
+}
+
 .panel-desc {
   margin-bottom: var(--space-3);
 }

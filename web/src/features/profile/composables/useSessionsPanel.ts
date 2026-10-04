@@ -11,9 +11,9 @@ import {
 import { profileMessages } from "@/features/profile/schemas/profile";
 import type { AuthSession } from "@/features/profile/schemas/sessions";
 
-// Error convention (shared with the profile forms): submit failures render
-// once in the NAlert above the panel. A 404 on revoke means the session is
-// already gone, so it refreshes silently instead of erroring.
+// Error convention (shared with the profile forms): failures render in the
+// NAlert above the panel, never replacing the list. A 404 on revoke means
+// the session is already gone, so it refreshes silently instead of erroring.
 
 /**
  * useSessionsPanel holds the active-sessions panel state. Created per panel
@@ -35,24 +35,54 @@ export function useSessionsPanel() {
   // so the server cannot tell which session is current.
   const needsReauth = ref(false);
 
+  // listSeq orders every list write. load and the post-revoke refreshes race
+  // (retry while a refresh is in flight, end-one vs end-others), so only the
+  // latest response may replace the list.
+  let listSeq = 0;
+
   /** others lists every session except the caller's. */
   const others = computed<AuthSession[]>(() =>
     sessions.value.filter((session) => !session.current),
   );
 
   async function load(): Promise<void> {
-    if (loading.value) {
-      return;
-    }
+    const seq = ++listSeq;
     loading.value = true;
     errorMessage.value = "";
     try {
-      sessions.value = await listSessions();
+      const list = await listSessions();
+      if (seq !== listSeq) {
+        return;
+      }
+      sessions.value = list;
       loaded.value = true;
     } catch {
+      if (seq !== listSeq) {
+        return;
+      }
       errorMessage.value = profileMessages.sessionsLoadFailed;
     } finally {
-      loading.value = false;
+      if (seq === listSeq) {
+        loading.value = false;
+      }
+    }
+  }
+
+  /**
+   * refreshList reloads the list after a successful revoke. It runs outside
+   * the revoke try/catch: a failing refresh must not report a failed revoke.
+   * Returns false when the refresh failed (the caller then drops the row
+   * locally and shows the stale notice); a superseded response is true.
+   */
+  async function refreshList(seq: number): Promise<boolean> {
+    try {
+      const list = await listSessions();
+      if (seq === listSeq) {
+        sessions.value = list;
+      }
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -69,16 +99,20 @@ export function useSessionsPanel() {
   async function signOutHere(): Promise<void> {
     try {
       await authStore.logout();
-    } finally {
-      await router.push({ name: "login" });
+    } catch {
+      // logout clears the local session in `finally`; a failed revoke must
+      // not block the redirect or surface as an unhandled rejection (B3-3,
+      // like AppTopbar/MeCard).
     }
+    await router.push({ name: "login" });
   }
 
   /**
    * endSession revokes one session and refreshes the list. Ending the
    * current session goes through the existing sign-out path so no half-valid
    * session is left behind; an unknown id (404) is already gone, so it
-   * refreshes silently.
+   * refreshes silently. A refresh that fails after a successful revoke drops
+   * the row locally and shows the stale notice instead of a revoke error.
    */
   async function endSession(session: AuthSession): Promise<void> {
     if (revokingId.value !== null) {
@@ -86,23 +120,28 @@ export function useSessionsPanel() {
     }
     revokingId.value = session.id;
     errorMessage.value = "";
+    const seq = ++listSeq;
     try {
       await revokeSession(session.id);
-      if (session.current) {
-        message.success(profileMessages.sessionsSignedOutHere);
-        await signOutHere();
-        return;
-      }
-      message.success(profileMessages.sessionSignedOut);
-      sessions.value = await listSessions();
     } catch (error) {
+      revokingId.value = null;
       if (statusOf(error) === 404) {
-        sessions.value = await listSessions().catch(() => sessions.value);
+        await refreshList(seq);
         return;
       }
       errorMessage.value = profileMessages.sessionEndFailed;
-    } finally {
-      revokingId.value = null;
+      return;
+    }
+    revokingId.value = null;
+    if (session.current) {
+      message.success(profileMessages.sessionsSignedOutHere);
+      await signOutHere();
+      return;
+    }
+    message.success(profileMessages.sessionSignedOut);
+    if (!(await refreshList(seq))) {
+      sessions.value = sessions.value.filter((row) => row.id !== session.id);
+      errorMessage.value = profileMessages.sessionsListStale;
     }
   }
 
@@ -117,18 +156,23 @@ export function useSessionsPanel() {
     }
     revokingOthers.value = true;
     errorMessage.value = "";
+    const seq = ++listSeq;
     try {
       await revokeOtherSessions();
-      message.success(profileMessages.sessionsSignedOut);
-      sessions.value = await listSessions();
     } catch (error) {
+      revokingOthers.value = false;
       if (statusOf(error) === 409) {
         needsReauth.value = true;
         return;
       }
       errorMessage.value = profileMessages.revokeOthersFailed;
-    } finally {
-      revokingOthers.value = false;
+      return;
+    }
+    revokingOthers.value = false;
+    message.success(profileMessages.sessionsSignedOut);
+    if (!(await refreshList(seq))) {
+      sessions.value = sessions.value.filter((row) => row.current);
+      errorMessage.value = profileMessages.sessionsListStale;
     }
   }
 

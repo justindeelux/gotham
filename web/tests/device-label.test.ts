@@ -49,8 +49,35 @@ describe("deviceLabel", () => {
     ).toBe("Chrome on Android");
   });
 
+  it("names Chrome on iOS from the CriOS token", () => {
+    expect(
+      deviceLabel(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 " +
+          "(KHTML, like Gecko) CriOS/126.0.6465.0 Mobile/15E148 Safari/604.1",
+      ),
+    ).toBe("Chrome on iOS");
+  });
+
+  it("names Firefox on iOS from the FxiOS token", () => {
+    expect(
+      deviceLabel(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 " +
+          "(KHTML, like Gecko) FxiOS/127.0 Mobile/15E148 Safari/605.1.15",
+      ),
+    ).toBe("Firefox on iOS");
+  });
+
   it("returns the OS alone when no browser matches", () => {
     expect(deviceLabel("curl/8.0 (Linux x86_64)")).toBe("Linux");
+  });
+
+  it("handles an extreme-length agent without hanging", () => {
+    const start = Date.now();
+    expect(deviceLabel(`${"Browser/1.0 ".repeat(50_000)}Chrome/126.0`)).toBe(
+      "Chrome",
+    );
+    expect(deviceLabel("z".repeat(500_000))).toBe("Unknown device");
+    expect(Date.now() - start).toBeLessThan(1000);
   });
 
   it("falls back to Unknown device for blank and unknown agents", () => {

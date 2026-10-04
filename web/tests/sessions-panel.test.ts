@@ -211,6 +211,86 @@ describe("useSessionsPanel", () => {
     wrapper.unmount();
   });
 
+  it("drops the row locally when the refresh fails after a revoke", async () => {
+    mockList.mockResolvedValue([currentSession(), otherSession()]);
+    const { holder, wrapper } = await mountProbe();
+    await holder.panel!.load();
+    mockRevoke.mockResolvedValue(undefined);
+    mockList.mockRejectedValueOnce({ status: 500, message: "boom" });
+    await holder.panel!.endSession(otherSession());
+    expect(mockRevoke).toHaveBeenCalledTimes(1);
+    expect(holder.panel!.sessions.value.map((row) => row.id)).toEqual([
+      "s-current",
+    ]);
+    expect(holder.panel!.errorMessage.value).toBe(
+      "Signed out, but the session list may be out of date.",
+    );
+    wrapper.unmount();
+  });
+
+  it("keeps only the current row when the revoke-others refresh fails", async () => {
+    mockList.mockResolvedValue([currentSession(), otherSession()]);
+    const { holder, wrapper } = await mountProbe();
+    await holder.panel!.load();
+    mockRevokeOthers.mockResolvedValue(undefined);
+    mockList.mockRejectedValueOnce({ status: 500, message: "boom" });
+    await holder.panel!.endOtherSessions();
+    expect(holder.panel!.sessions.value.map((row) => row.id)).toEqual([
+      "s-current",
+    ]);
+    expect(holder.panel!.errorMessage.value).toBe(
+      "Signed out, but the session list may be out of date.",
+    );
+    wrapper.unmount();
+  });
+
+  it("applies only the latest load response", async () => {
+    const { holder, wrapper } = await mountProbe();
+    let resolveFirst!: (_list: AuthSession[]) => void;
+    let resolveSecond!: (_list: AuthSession[]) => void;
+    const first = new Promise<AuthSession[]>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const second = new Promise<AuthSession[]>((resolve) => {
+      resolveSecond = resolve;
+    });
+    mockList.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const older = holder.panel!.load();
+    const newer = holder.panel!.load();
+    resolveSecond([currentSession()]);
+    await newer;
+    resolveFirst([currentSession(), otherSession()]);
+    await older;
+    expect(holder.panel!.sessions.value).toHaveLength(1);
+    expect(holder.panel!.loaded.value).toBe(true);
+    expect(holder.panel!.loading.value).toBe(false);
+    expect(holder.panel!.errorMessage.value).toBe("");
+    wrapper.unmount();
+  });
+
+  it("lets a newer load win over a stale revoke refresh", async () => {
+    mockList.mockResolvedValue([currentSession(), otherSession()]);
+    const { holder, wrapper } = await mountProbe();
+    await holder.panel!.load();
+    mockRevoke.mockResolvedValue(undefined);
+    let resolveRefresh!: (_list: AuthSession[]) => void;
+    const refresh = new Promise<AuthSession[]>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    mockList.mockReturnValueOnce(refresh);
+    const ending = holder.panel!.endSession(otherSession());
+    await flushPromises();
+    await flushPromises();
+    mockList.mockResolvedValue([currentSession()]);
+    await holder.panel!.load();
+    resolveRefresh([currentSession(), otherSession()]);
+    await ending;
+    expect(holder.panel!.sessions.value.map((row) => row.id)).toEqual([
+      "s-current",
+    ]);
+    wrapper.unmount();
+  });
+
   it("ends another session and refreshes the list", async () => {
     mockList.mockResolvedValue([currentSession(), otherSession()]);
     const { holder, wrapper } = await mountProbe();
@@ -308,6 +388,15 @@ describe("useSessionsPanel", () => {
     expect(router.currentRoute.value.name).toBe("login");
     wrapper.unmount();
   });
+
+  it("still navigates when logout rejects", async () => {
+    const { holder, wrapper, router, logout } = await mountProbe();
+    logout.mockRejectedValueOnce(new Error("network down"));
+    await expect(holder.panel!.signOutHere()).resolves.toBeUndefined();
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(router.currentRoute.value.name).toBe("login");
+    wrapper.unmount();
+  });
 });
 
 describe("SessionsPanel mount", () => {
@@ -379,6 +468,37 @@ describe("SessionsPanel mount", () => {
     expect(mockRevoke).toHaveBeenCalledTimes(1);
     expect(mockRevoke).toHaveBeenCalledWith("s-other");
     expect(rowWrappers(wrapper)).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("keeps the list visible when a revoke fails", async () => {
+    const { wrapper } = await mountPanel([currentSession(), otherSession()]);
+    mockRevoke.mockRejectedValueOnce({ status: 500, message: "boom" });
+    const rows = rowWrappers(wrapper);
+    await confirmThroughPopover(rows[1]!);
+    expect(mockRevoke).toHaveBeenCalledTimes(1);
+    expect(wrapper.find(".n-alert").text()).toContain(
+      "Could not sign out that session. Try again.",
+    );
+    expect(rowWrappers(wrapper)).toHaveLength(2);
+    wrapper.unmount();
+  });
+
+  it("shows the stale notice with a working retry after a failed refresh", async () => {
+    const { wrapper } = await mountPanel([currentSession(), otherSession()]);
+    mockRevoke.mockResolvedValue(undefined);
+    mockList.mockRejectedValueOnce({ status: 500, message: "boom" });
+    const rows = rowWrappers(wrapper);
+    await confirmThroughPopover(rows[1]!);
+    expect(wrapper.find(".n-alert").text()).toContain(
+      "Signed out, but the session list may be out of date.",
+    );
+    expect(rowWrappers(wrapper)).toHaveLength(1);
+    mockList.mockResolvedValue([currentSession()]);
+    await buttonByLabel(wrapper, "Retry").trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(wrapper.find(".n-alert").exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -506,6 +626,24 @@ describe("SessionRow", () => {
     );
     expect(wrapper.findComponent(NButton).props("loading")).toBe(true);
     expect(wrapper.findComponent(NPopconfirm).exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("titles times with date and time", async () => {
+    seedAuth();
+    const router = testRouter();
+    const wrapper = await mountShell(
+      defineComponent({
+        render: () => h(SessionRow, { session: currentSession(), busy: false }),
+      }),
+      router,
+    );
+    const titles = wrapper.findAll("time").map((node) => node.attributes("title"));
+    expect(titles).toHaveLength(2);
+    for (const title of titles) {
+      expect(title).toMatch(/2026/);
+      expect(title).toContain(":");
+    }
     wrapper.unmount();
   });
 });

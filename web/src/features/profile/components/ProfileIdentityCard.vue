@@ -100,11 +100,27 @@ const memberSince = computed<string>(() => {
   max-width: 560px;
 }
 
-/* Narrow containers stack each fact label-over-value. Naive renders one
- * table row per fact (header + content cells), so both cells go block. */
+/* Narrow containers stack each fact label-over-value: the table, its body,
+ * every row and both cells all go block, so no anonymous table boxes remain
+ * to squeeze the value column. Naive's own display:table-cell rule chains
+ * five classes (0,5,0); repeating its ancestor chain after this wrapper wins
+ * (0,7,0) without !important. */
 @container (max-width: 480px) {
-  .identity-facts-wrap :deep(.n-descriptions-table-header),
-  .identity-facts-wrap :deep(.n-descriptions-table-content) {
+  .identity-facts-wrap :deep(.n-descriptions-table),
+  .identity-facts-wrap :deep(tbody),
+  .identity-facts-wrap :deep(tr.n-descriptions-table-row) {
+    display: block;
+    width: 100%;
+  }
+
+  .identity-facts-wrap
+    :deep(
+      .n-descriptions .n-descriptions-table-wrapper .n-descriptions-table .n-descriptions-table-row .n-descriptions-table-header
+    ),
+  .identity-facts-wrap
+    :deep(
+      .n-descriptions .n-descriptions-table-wrapper .n-descriptions-table .n-descriptions-table-row .n-descriptions-table-content
+    ) {
     display: block;
     width: 100%;
   }

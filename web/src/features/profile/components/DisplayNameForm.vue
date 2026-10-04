@@ -14,18 +14,20 @@ const { formRef, submitting, errorMessage, form, rules, handleSubmit } =
     </NAlert>
 
     <NForm ref="formRef" :model="form" :rules="rules" @submit.prevent="handleSubmit">
-      <NFormItem
-        label="Display name"
-        path="displayName"
-        :label-props="{ for: 'profile-display-name' }"
-        class="display-name-item"
-      >
+      <!-- No visible field label: the card title is the single heading. The
+        input keeps its accessible name via aria-label instead of a label
+        element, so no reserved label row renders above it. -->
+      <NFormItem path="displayName" :show-label="false">
         <NSpace vertical :size="8" class="field-stack">
           <NInput
             v-model:value="form.displayName"
             placeholder="Ada Lovelace"
             maxlength="64"
-            :input-props="{ id: 'profile-display-name', autocomplete: 'nickname' }"
+            :input-props="{
+              id: 'profile-display-name',
+              autocomplete: 'nickname',
+              'aria-label': 'Display name',
+            }"
             @keyup.enter="handleSubmit"
           />
           <span class="field-hint">
@@ -48,17 +50,5 @@ const { formRef, submitting, errorMessage, form, rules, handleSubmit } =
  * hint always renders below it, at any container width. */
 .field-stack {
   width: 100%;
-}
-
-/* The card title is the visible heading; the field label stays in the DOM
- * for the label/input association but is visually hidden. */
-.display-name-item :deep(.n-form-item-label) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
 }
 </style>

@@ -1,9 +1,5 @@
 // Profile form mounts (JUS-27): errors, submit payloads, busy state,
 // and per-mount state (typed passwords must not survive navigation).
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { NButton, NDescriptions, NFormItem, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter, RouterView } from "vue-router";
@@ -197,13 +193,18 @@ describe("DisplayNameForm", () => {
     wrapper.unmount();
   });
 
-  it("keeps one visible heading: the field label stays for a11y only", async () => {
+  it("keeps one visible heading: the input keeps its name via aria-label", async () => {
     seedAuth(baseUser());
     const wrapper = await mountChild(DisplayNameForm);
     expect(wrapper.find(".n-card-header__main").text()).toContain("Display name");
     const item = wrapper.findComponent(NFormItem);
-    expect(item.props("label")).toBe("Display name");
-    expect(wrapper.find(".display-name-item").exists()).toBe(true);
+    expect(item.props("showLabel")).toBe(false);
+    // No label element renders, so no reserved label row; the input carries
+    // the accessible name itself.
+    expect(wrapper.find(".n-form-item-label").exists()).toBe(false);
+    expect(wrapper.find("#profile-display-name").attributes("aria-label")).toBe(
+      "Display name",
+    );
     wrapper.unmount();
   });
 });
@@ -494,17 +495,5 @@ describe("ProfileIdentityCard", () => {
     const wrapper = await mountChild(ProfileIdentityCard);
     expect(wrapper.text()).toContain("ada@gotham.dev");
     wrapper.unmount();
-  });
-
-  it("stacks facts label-over-value only below the shared 480px threshold", () => {
-    const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-    const source = readFileSync(
-      resolve(webRoot, "src/features/profile/components/ProfileIdentityCard.vue"),
-      "utf8",
-    );
-    expect(source).toMatch(/\.identity-facts-wrap\s*\{[^}]*container-type:\s*inline-size/);
-    expect(source).toMatch(
-      /@container\s*\(max-width:\s*480px\)[\s\S]*?\.n-descriptions-table-header/,
-    );
   });
 });

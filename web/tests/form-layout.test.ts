@@ -147,7 +147,7 @@ describe("JUS-19 shared .form-row utility", () => {
     const shared = thresholdOf(mainCss);
     expect(shared).toBe("480px");
     expect(thresholdOf(readSfc("src/features/applications/components/EnvEditor.vue"))).toBe(shared);
-    expect(thresholdOf(readSfc("src/features/domains/pages/DomainsPage.vue"))).toBe(shared);
+    expect(thresholdOf(readSfc("src/features/domains/components/RedirectCreateCard.vue"))).toBe(shared);
   });
 
   it("has no viewport fallback for the row collapse", () => {
@@ -358,27 +358,28 @@ describe("JUS-19 CreateDatabaseWizard rows", () => {
 });
 
 describe("JUS-19 DomainsPage rows", () => {
-  const source = readSfc("src/features/domains/pages/DomainsPage.vue");
+  const providerSource = readSfc("src/features/domains/components/ProviderDialog.vue");
+  const redirectSource = readSfc("src/features/domains/components/RedirectCreateCard.vue");
 
   it("pairs Provider|Name in one row of the DNS provider modal", () => {
-    expectPair(source, 'label="Provider"', 'label="Name"');
+    expectPair(providerSource, 'label="Provider"', 'label="Name"');
   });
 
   it("puts Preserve path|Enabled beside the submit button", () => {
-    expectPair(source, "Redirect preserve path", "Add redirect", "redirect-form__bottom");
-    expectPair(source, "Redirect enabled now", "Add redirect", "redirect-form__bottom");
+    expectPair(redirectSource, "Redirect preserve path", "Add redirect", "redirect-form__bottom");
+    expectPair(redirectSource, "Redirect enabled now", "Add redirect", "redirect-form__bottom");
   });
 
   it("collapses the redirect bottom row per container, not viewport", () => {
-    expect(source).not.toMatch(/@media[^{]*\{[^}]*\.redirect-form__bottom/);
-    expect(source).toMatch(
+    expect(redirectSource).not.toMatch(/@media[^{]*\{[^}]*\.redirect-form__bottom/);
+    expect(redirectSource).toMatch(
       /@container\s*\(max-width:\s*480px\)[\s\S]*?\.redirect-form__bottom/,
     );
   });
 });
 
 describe("JUS-19 NotificationsPage rows", () => {
-  const source = readSfc("src/features/notifications/pages/NotificationsPage.vue");
+  const source = readSfc("src/features/notifications/components/ChannelFormDialog.vue");
 
   it("pairs Name|Kind in one row", () => {
     expectPair(source, 'label="Name"', 'label="Kind"');

@@ -34,4 +34,15 @@ var (
 	// has an account and no valid invite token is supplied (P-A2: exactly one
 	// admin account; members join through admin-created invites).
 	ErrRegistrationClosed = errors.New("auth: registration is closed")
+	// ErrCurrentPasswordIncorrect is returned by ChangePassword when the
+	// account has a password and the supplied current password does not match
+	// (or is missing), or when a concurrent change moved the credential after
+	// the check. The message is the API contract body, so handlers render it
+	// verbatim with a 400 (never 401/403: the web layer treats 401 as session
+	// expiry).
+	ErrCurrentPasswordIncorrect = errors.New("current password is incorrect")
+	// ErrDisplayNameInvalid is returned by UpdateProfile when the trimmed name
+	// is not 1-64 characters. The message is the API contract body, rendered
+	// verbatim with a 400.
+	ErrDisplayNameInvalid = errors.New("display name must be 1-64 characters")
 )

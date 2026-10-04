@@ -28,6 +28,8 @@ type AuthService interface {
 	Refresh(ctx context.Context, refreshToken string) (*auth.AuthResult, error)
 	Logout(ctx context.Context, refreshToken string) error
 	Me(ctx context.Context, userID uuid.UUID) (*auth.User, error)
+	UpdateProfile(ctx context.Context, userID uuid.UUID, displayName *string) (*auth.User, error)
+	ChangePassword(ctx context.Context, userID uuid.UUID, current, newPassword string) (*auth.AuthResult, error)
 	VerifyAccessToken(token string) (*auth.Claims, error)
 }
 
@@ -39,6 +41,7 @@ const (
 	userIDKey contextKey = iota
 	roleKey
 	scopesKey
+	apiTokenKey
 )
 
 // UserIDFromContext returns the authenticated user ID set by RequireAuth.
@@ -58,6 +61,26 @@ func RoleFromContext(ctx context.Context) (string, bool) {
 func ScopesFromContext(ctx context.Context) ([]string, bool) {
 	scopes, ok := ctx.Value(scopesKey).([]string)
 	return scopes, ok
+}
+
+// IsAPITokenRequest reports whether the request was authenticated with a
+// scoped API token rather than an interactive JWT session. The self-service
+// profile routes (PATCH /me, POST /me/password, and the PF-2 session routes)
+// reject API tokens through requireInteractiveSession.
+func IsAPITokenRequest(ctx context.Context) bool {
+	apiToken, _ := ctx.Value(apiTokenKey).(bool)
+	return apiToken
+}
+
+// requireInteractiveSession answers 403 unless the request carries an
+// interactive JWT session. A scoped API token (even admin) must never change
+// profile material. It returns false when it wrote the response.
+func requireInteractiveSession(w http.ResponseWriter, r *http.Request) bool {
+	if IsAPITokenRequest(r.Context()) {
+		writeJSON(w, http.StatusForbidden, apiError{Message: "this action needs an interactive session"})
+		return false
+	}
+	return true
 }
 
 // credentialsRequest is the body of register and login. inviteToken carries
@@ -120,6 +143,11 @@ func (s *Server) mountAuthRoutes(api chi.Router) {
 		r.Group(func(protected chi.Router) {
 			protected.Use(s.RequireAuth)
 			protected.Get("/me", s.handleMe)
+			// Self-service profile routes: interactive JWT sessions only
+			// (API tokens get a 403 in the handler) behind the credential
+			// rate limiter.
+			protected.With(s.rateLimit).Patch("/me", s.handleUpdateProfile)
+			protected.With(s.rateLimit).Post("/me/password", s.handleChangePassword)
 		})
 	})
 }
@@ -343,6 +371,7 @@ func (s *Server) authenticateAPIToken(w http.ResponseWriter, r *http.Request, ne
 	ctx := context.WithValue(r.Context(), userIDKey, identity.UserID)
 	ctx = context.WithValue(ctx, roleKey, apiTokenRole)
 	ctx = context.WithValue(ctx, scopesKey, identity.Scopes)
+	ctx = context.WithValue(ctx, apiTokenKey, true)
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 

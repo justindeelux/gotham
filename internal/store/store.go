@@ -303,6 +303,47 @@ func (s *Store) DeleteUserSessions(ctx context.Context, userID pgtype.UUID) erro
 	return s.queries.DeleteUserSessions(ctx, userID)
 }
 
+// UpdateUserDisplayName replaces the account's display name (nil clears it)
+// and returns the updated row. It answers pgx.ErrNoRows for an unknown id.
+func (s *Store) UpdateUserDisplayName(ctx context.Context, params sqlc.UpdateUserDisplayNameParams) (sqlc.User, error) {
+	return s.queries.UpdateUserDisplayName(ctx, params)
+}
+
+// ChangeUserPassword replaces the account's password hash, purges its refresh
+// sessions, and bumps its credential version in one transaction, so the caller
+// of a self-service password change keeps working on a fresh pair while every
+// other chain dies (P-A5). It takes the per-user session lock first, like
+// ResetUserPassword and RotateSession, so neither can interleave. expectedHash
+// is the credential the caller verified against; a concurrent change that
+// moved it answers pgx.ErrNoRows instead of silently winning second.
+func (s *Store) ChangeUserPassword(ctx context.Context, userID pgtype.UUID, expectedHash *string, newHash *string) (sqlc.User, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.User{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.LockUserSessions(ctx, sessionLockKey(userID)); err != nil {
+		return sqlc.User{}, err
+	}
+	if err := queries.DeleteUserSessions(ctx, userID); err != nil {
+		return sqlc.User{}, err
+	}
+	updated, err := queries.SetUserPasswordHash(ctx, sqlc.SetUserPasswordHashParams{
+		ID:             userID,
+		PasswordHash:   newHash,
+		PasswordHash_2: expectedHash,
+	})
+	if err != nil {
+		return sqlc.User{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.User{}, err
+	}
+	return updated, nil
+}
+
 // CreateAPIToken stores a scoped API token (hash only) and returns the row.
 func (s *Store) CreateAPIToken(ctx context.Context, params sqlc.CreateAPITokenParams) (sqlc.ApiToken, error) {
 	return s.queries.CreateAPIToken(ctx, params)

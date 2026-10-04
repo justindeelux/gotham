@@ -84,6 +84,28 @@ func (f *fakeAuthService) Me(_ context.Context, userID uuid.UUID) (*auth.User, e
 	return f.user, nil
 }
 
+func (f *fakeAuthService) UpdateProfile(_ context.Context, userID uuid.UUID, displayName *string) (*auth.User, error) {
+	if userID != testUserID {
+		return nil, auth.ErrUnauthorized
+	}
+	if displayName != nil && len(*displayName) > 64 {
+		return nil, auth.ErrDisplayNameInvalid
+	}
+	out := *f.user
+	out.DisplayName = displayName
+	return &out, nil
+}
+
+func (f *fakeAuthService) ChangePassword(_ context.Context, userID uuid.UUID, current, _ string) (*auth.AuthResult, error) {
+	if userID != testUserID {
+		return nil, auth.ErrUnauthorized
+	}
+	if current == "wrong-password" {
+		return nil, auth.ErrCurrentPasswordIncorrect
+	}
+	return f.result(), nil
+}
+
 func (f *fakeAuthService) VerifyAccessToken(token string) (*auth.Claims, error) {
 	switch token {
 	case "valid-token":

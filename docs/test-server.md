@@ -160,6 +160,16 @@ commit instead of a tag and a dev stamp (`git checkout -f 0378f65`, build with
   transitions, so modals screenshot half-faded unless transitions are disabled
   first (`*{transition:none!important;animation:none!important}`). Close the
   tunnel with `pkill -f 'ssh.*18000:localhost:8000'`.
+- **Prefer the Playwright MCP over the Orca browser for UI checks (2026-10-04, JUS-15):** it
+  has a real viewport (`browser_resize` to 900 or 1280, no CLI limit), real clicks that open
+  Naive UI modals, no background-tab frozen transitions, and element screenshots
+  (`browser_take_screenshot` with `target`). Recipe: open the SSH tunnel above, then
+  `browser_navigate` to `http://localhost:18000/login`, `browser_resize`, `browser_fill_form`
+  (`input[type=text]`, `input[type=password]`), click `button[type=submit]`, then measure with
+  `browser_evaluate` and screenshot. The profile starts logged out: reset the password first with
+  `gotham admin reset-password --email demo@gotham.dev --password <tmp>` (revokes sessions,
+  including the Orca browser's). Console 401s before login are expected. Keep screenshots out of
+  the repo (pass an absolute `filename` in the scratchpad; `.playwright-mcp/` is gitignored).
 - The CP's CSP allows exactly one remote image host, `avatars.githubusercontent.com`
   (`img-src 'self' data: https://avatars.githubusercontent.com`), shared with the
   OAuth avatar validator. GitHub OAuth is the only provider, and it has not been

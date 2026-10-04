@@ -14,6 +14,12 @@ export interface User {
   /** Platform role ("admin" for the first account, "user" otherwise). Optional: older control planes omit it. */
   role?: string;
   created_at: string;
+  /** Optional display name shown in the sidebar instead of the email. Omitted when unset. */
+  display_name?: string;
+  /** Whether the account has a password set (false for OAuth-created accounts). Optional: older control planes omit it. */
+  has_password?: boolean;
+  /** Whether the account is a platform admin. Optional: older control planes omit it. */
+  is_platform_admin?: boolean;
 }
 
 /** Token-pair body returned by register, login, and refresh. */

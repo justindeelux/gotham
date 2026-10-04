@@ -89,6 +89,7 @@ function featureBoundaries() {
     "teams",
     "notifications",
     "version",
+    "profile",
   ];
   const privateDirs = ["api", "stores", "pages", "utils", "composables"];
   const blocks = [

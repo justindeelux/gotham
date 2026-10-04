@@ -123,6 +123,15 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/features/notifications/pages/NotificationsPage.vue"),
         meta: { title: "Notification channels", requiresAuth: true },
       },
+      // The bare settings path keeps landing on notifications now that the
+      // settings section holds more than one page.
+      { path: "settings", redirect: { name: "notifications" } },
+      {
+        path: "settings/profile",
+        name: "profile",
+        component: () => import("@/features/profile/pages/ProfilePage.vue"),
+        meta: { title: "Profile", requiresAuth: true },
+      },
       {
         path: "invite/accept",
         name: "invite-accept",

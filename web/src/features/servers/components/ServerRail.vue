@@ -1,9 +1,15 @@
 <script setup lang="ts">
-import { NTooltip } from "naive-ui";
 import { computed, onMounted, onUnmounted } from "vue";
-import { RouterLink, useRoute } from "vue-router";
+import { useRoute } from "vue-router";
 
-import type { Server, ServerStatus } from "@/features/servers/api/servers";
+import RailIconButton from "@/features/servers/components/RailIconButton.vue";
+import {
+  alertsLabel,
+  countAlerts,
+  serverInitials,
+  serverTip,
+  statusDots,
+} from "@/features/servers/utils/serverRailView";
 import { useServersStore } from "@/features/servers/stores/servers";
 
 const serversStore = useServersStore();
@@ -11,51 +17,9 @@ const route = useRoute();
 
 const isDashboard = computed<boolean>(() => route.name === "dashboard");
 
-const alertCount = computed<number>(
-  () =>
-    serversStore.servers.filter(
-      (server) => server.status === "offline" || server.status === "error",
-    ).length,
-);
+const alertCount = computed<number>(() => countAlerts(serversStore.servers));
 
-const alertsLabel = computed<string>(() =>
-  alertCount.value === 0
-    ? "No new alerts"
-    : `${alertCount.value} new alert${alertCount.value === 1 ? "" : "s"}`,
-);
-
-const statusDots: Record<ServerStatus, string> = {
-  ready: "dot--online",
-  validating: "dot--idle",
-  pending: "dot--idle",
-  offline: "dot--offline",
-  error: "dot--dnd",
-};
-
-const statusLabels: Record<ServerStatus, string> = {
-  ready: "Ready",
-  validating: "Validating",
-  pending: "Pending",
-  offline: "Offline",
-  error: "Error",
-};
-
-/** serverInitials derives a two-letter avatar from the server name. */
-function serverInitials(name: string): string {
-  const parts = name.split(/[^A-Za-z0-9]+/).filter((part) => part.length > 0);
-  if (parts.length === 0) {
-    return "?";
-  }
-  if (parts.length === 1) {
-    return parts[0].slice(0, 2).toUpperCase();
-  }
-  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-}
-
-/** serverTip builds the English tooltip for one rail avatar. */
-function serverTip(server: Server): string {
-  return `${server.name} · ${statusLabels[server.status] ?? server.status}`;
-}
+const alertText = computed<string>(() => alertsLabel(alertCount.value));
 
 // The persistent rail owns the shared server poll: it arms the interval on
 // mount and is the only component that clears it (on its own unmount). Pages
@@ -78,28 +42,19 @@ onUnmounted(() => {
 <template>
   <nav class="rail" aria-label="Servers">
     <div class="rail-item" :class="{ 'is-active': isDashboard }">
-      <NTooltip placement="right" trigger="hover">
-        <template #trigger>
-          <RouterLink
-            class="rail-btn"
-            :to="{ name: 'dashboard' }"
-            aria-label="Gotham — home"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              aria-hidden="true"
-            >
-              <path d="M5 19V11a7 7 0 0114 0v8" />
-              <path d="M9.5 19v-6.5a2.5 2.5 0 015 0V19" />
-            </svg>
-          </RouterLink>
-        </template>
-        <span>Gotham — home</span>
-      </NTooltip>
+      <RailIconButton :to="{ name: 'dashboard' }" label="Gotham — home">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          aria-hidden="true"
+        >
+          <path d="M5 19V11a7 7 0 0114 0v8" />
+          <path d="M9.5 19v-6.5a2.5 2.5 0 015 0V19" />
+        </svg>
+      </RailIconButton>
     </div>
 
     <div class="rail-sep" aria-hidden="true"></div>
@@ -111,116 +66,90 @@ onUnmounted(() => {
         class="rail-item"
         role="listitem"
       >
-        <NTooltip placement="right" trigger="hover">
-          <template #trigger>
-            <RouterLink
-              class="rail-btn"
-              :to="{ name: 'server-detail', params: { id: server.id } }"
-              :aria-label="serverTip(server)"
-            >
-              {{ serverInitials(server.name) }}
-              <span
-                class="rail-dot"
-                :class="statusDots[server.status]"
-                aria-hidden="true"
-              ></span>
-            </RouterLink>
-          </template>
-          <span>{{ serverTip(server) }}</span>
-        </NTooltip>
+        <RailIconButton
+          :to="{ name: 'server-detail', params: { id: server.id } }"
+          :label="serverTip(server)"
+        >
+          {{ serverInitials(server.name) }}
+          <span
+            class="rail-dot"
+            :class="statusDots[server.status]"
+            aria-hidden="true"
+          ></span>
+        </RailIconButton>
       </div>
     </div>
 
     <div class="rail-item">
-      <NTooltip placement="right" trigger="hover">
-        <template #trigger>
-          <RouterLink
-            class="rail-btn rail-btn--add"
-            :to="{ name: 'servers', query: { add: '1' } }"
-            aria-label="Add server"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.6"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </RouterLink>
-        </template>
-        <span>Add server</span>
-      </NTooltip>
+      <RailIconButton
+        :to="{ name: 'servers', query: { add: '1' } }"
+        label="Add server"
+        link-class="rail-btn--add"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      </RailIconButton>
     </div>
 
     <div class="rail-foot">
       <div class="rail-sep" aria-hidden="true"></div>
       <div class="rail-item">
-        <NTooltip placement="right" trigger="hover">
-          <template #trigger>
-            <RouterLink
-              class="rail-btn"
-              :to="{ name: 'dashboard' }"
-              aria-label="Overview"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
-                <circle cx="16" cy="7" r="2" />
-                <circle cx="10" cy="17" r="2" />
-              </svg>
-            </RouterLink>
-          </template>
-          <span>Overview</span>
-        </NTooltip>
+        <RailIconButton :to="{ name: 'dashboard' }" label="Overview">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
+            <circle cx="16" cy="7" r="2" />
+            <circle cx="10" cy="17" r="2" />
+          </svg>
+        </RailIconButton>
       </div>
       <div class="rail-item">
-        <NTooltip placement="right" trigger="hover">
-          <template #trigger>
-            <RouterLink
-              class="rail-btn"
-              :to="{ name: 'servers' }"
-              :aria-label="`System alerts — ${alertsLabel}`"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path
-                  d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6zM10 20a2 2 0 004 0"
-                />
-              </svg>
-              <span
-                v-if="alertCount > 0"
-                class="rail-badge"
-                aria-hidden="true"
-                >{{ alertCount > 9 ? "9+" : alertCount }}</span
-              >
-            </RouterLink>
-          </template>
-          <span>{{ alertsLabel }}</span>
-        </NTooltip>
+        <RailIconButton
+          :to="{ name: 'servers' }"
+          :label="`System alerts — ${alertText}`"
+          :tip="alertText"
+          :badge-count="alertCount"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path
+              d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6zM10 20a2 2 0 004 0"
+            />
+          </svg>
+        </RailIconButton>
       </div>
     </div>
   </nav>
 </template>
 
 <style scoped>
+/* :deep() on .rail-btn/.rail-badge: those elements render inside
+ * RailIconButton, so the parent scope alone cannot reach them; the deep
+ * selector keeps one rule covering both the icon buttons and the inline
+ * server avatars with identical computed styles. */
 .rail {
   background: var(--surface-warm);
   display: flex;
@@ -257,7 +186,7 @@ onUnmounted(() => {
   width: 100%;
 }
 
-.rail-btn {
+:deep(.rail-btn) {
   position: relative;
   width: 48px;
   height: 48px;
@@ -275,30 +204,30 @@ onUnmounted(() => {
     color var(--motion-base) var(--ease-standard);
 }
 
-.rail-btn:hover,
-.rail-btn:focus-visible {
+:deep(.rail-btn:hover),
+:deep(.rail-btn:focus-visible) {
   border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--accent-on);
 }
 
-.rail-btn svg {
+:deep(.rail-btn) svg {
   width: 22px;
   height: 22px;
 }
 
-.rail-btn--add {
+:deep(.rail-btn--add) {
   background: var(--surface);
   color: var(--success);
 }
 
-.rail-item.is-active .rail-btn {
+.rail-item.is-active :deep(.rail-btn) {
   border-radius: var(--radius-lg);
   background: var(--accent);
   color: var(--accent-on);
 }
 
-.rail-item.is-active .rail-btn:hover {
+.rail-item.is-active :deep(.rail-btn:hover) {
   border-radius: var(--radius-pill);
 }
 
@@ -350,7 +279,7 @@ onUnmounted(() => {
   background: var(--danger);
 }
 
-.rail-badge {
+:deep(.rail-badge) {
   position: absolute;
   right: 6px;
   top: 4px;

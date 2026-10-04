@@ -281,7 +281,9 @@ describe("JUS-19 DynamicForm stays two columns", () => {
 });
 
 describe("JUS-19 AddServerWizard rows", () => {
-  const source = readSfc("src/features/servers/components/AddServerWizard.vue");
+  // The connect step lives in WizardConnectStep (JUS-24 split); the shell
+  // keeps the modal chrome, rail, install step and footer.
+  const source = readSfc("src/features/servers/components/wizard/WizardConnectStep.vue");
 
   it("pairs Node name|SSH user in one row", () => {
     expectPair(source, "add-server-name", "add-server-ssh-user");

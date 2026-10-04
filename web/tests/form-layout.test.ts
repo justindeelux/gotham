@@ -333,20 +333,21 @@ describe("JUS-19 fix 1 EditServerModal: Credentials on its own row", () => {
 });
 
 describe("JUS-19 CreateAppWizard rows", () => {
-  const source = readSfc("src/features/applications/components/CreateAppWizard.vue");
+  const sourceStep = readSfc("src/features/applications/components/WizardSourceStep.vue");
+  const runtimeStep = readSfc("src/features/applications/components/WizardRuntimeStep.vue");
 
   it("pairs Provider|Repository in one row", () => {
-    expectPair(source, "Select a connected provider", "Select a repository");
+    expectPair(sourceStep, "Select a connected provider", "Select a repository");
   });
 
   it("pairs Branch|Application name in a grid row, not a wrapping flex", () => {
-    expectPair(source, 'label="Branch"', 'label="Application name"');
-    expect(source).not.toMatch(/<NSpace[^>]*>\s*<NFormItem label="Branch"/);
+    expectPair(sourceStep, 'label="Branch"', 'label="Application name"');
+    expect(sourceStep).not.toMatch(/<NSpace[^>]*>\s*<NFormItem label="Branch"/);
   });
 
   it("pairs Node|Domain and Internal port|Host port in their own rows", () => {
-    expectPair(source, 'label="Node"', "app.gotham.dev");
-    expectPair(source, 'label="Internal port"', "Host port (0 = auto)");
+    expectPair(runtimeStep, 'label="Node"', "app.gotham.dev");
+    expectPair(runtimeStep, 'label="Internal port"', "Host port (0 = auto)");
   });
 });
 

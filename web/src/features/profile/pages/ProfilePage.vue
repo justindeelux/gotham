@@ -4,9 +4,11 @@ import { NSpace } from "naive-ui";
 import ChangePasswordForm from "@/features/profile/components/ChangePasswordForm.vue";
 import DisplayNameForm from "@/features/profile/components/DisplayNameForm.vue";
 import ProfileIdentityCard from "@/features/profile/components/ProfileIdentityCard.vue";
+import SessionsPanel from "@/features/profile/components/SessionsPanel.vue";
 
 /**
- * Profile page (JUS-27) — account facts, display name, change password.
+ * Profile page (JUS-27, sessions JUS-28) — account facts, display name,
+ * change password, active sessions.
  * Thin route component: each panel owns its state per mount.
  */
 </script>
@@ -28,6 +30,7 @@ import ProfileIdentityCard from "@/features/profile/components/ProfileIdentityCa
       <ProfileIdentityCard />
       <DisplayNameForm />
       <ChangePasswordForm />
+      <SessionsPanel />
     </NSpace>
   </div>
 </template>

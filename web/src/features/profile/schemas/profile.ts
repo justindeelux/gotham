@@ -13,6 +13,14 @@ import { ruleFrom } from "@/shared/validation/naiveAdapter";
 export const profileMessages = {
   displayNameLength: "Display name must be 1-64 characters",
   currentPasswordRequired: "Current password is required",
+  sessionsLoadFailed: "Could not load sessions. Try again.",
+  sessionEndFailed: "Could not sign out that session. Try again.",
+  revokeOthersFailed: "Could not sign out the other sessions. Try again.",
+  sessionsSignedOut: "Other devices were signed out.",
+  sessionSignedOut: "Session signed out.",
+  sessionsSignedOutHere: "Signed out on this device.",
+  needsReauth:
+    "Your sign-in predates session management. Sign in again to manage other sessions.",
 } as const;
 
 /**

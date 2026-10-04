@@ -45,4 +45,9 @@ var (
 	// is not 1-64 characters. The message is the API contract body, rendered
 	// verbatim with a 400.
 	ErrDisplayNameInvalid = errors.New("display name must be 1-64 characters")
+	// ErrSessionUnknown is returned by RevokeOtherSessions when the caller's
+	// access token carries no session id (a token minted before PF-2), so the
+	// current session cannot be told apart from the others. The message is
+	// the API contract body, rendered verbatim with a 409.
+	ErrSessionUnknown = errors.New("sign in again to manage other sessions")
 )

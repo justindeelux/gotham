@@ -26,7 +26,7 @@ func TestServiceRefreshRejectsStaleCredentialVersion(t *testing.T) {
 	email := uniqueEmail("stale-version")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestServiceRefreshRejectsStaleCredentialVersion(t *testing.T) {
 		t.Fatalf("credential version did not advance: %d -> %d", user.CredentialVersion, after.CredentialVersion)
 	}
 
-	if _, err := svc.Refresh(ctx, staleToken); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.Refresh(ctx, staleToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Refresh(stale session) error = %v, want ErrUnauthorized", err)
 	}
 
@@ -93,7 +93,7 @@ func TestServiceRefreshConflictAfterResetDoesNotRevokeFreshSession(t *testing.T)
 	email := uniqueEmail("refresh-reset-race")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -114,13 +114,13 @@ func TestServiceRefreshConflictAfterResetDoesNotRevokeFreshSession(t *testing.T)
 		if err := st.ResetUserPassword(ctx, pgUUID(userID), email, newHash); err != nil {
 			t.Errorf("reset during refresh: %v", err)
 		}
-		fresh, err = svc.Login(ctx, email, "rotated-password")
+		fresh, err = svc.Login(ctx, email, "rotated-password", SessionMeta{})
 		if err != nil {
 			t.Errorf("login during refresh: %v", err)
 		}
 	}
 
-	if _, err := svc.Refresh(ctx, registered.RefreshToken); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.Refresh(ctx, registered.RefreshToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("stale Refresh error = %v, want ErrUnauthorized", err)
 	}
 	svc.beforeRotate = nil
@@ -130,7 +130,7 @@ func TestServiceRefreshConflictAfterResetDoesNotRevokeFreshSession(t *testing.T)
 	}
 	// The fresh session must survive: the stale refresh lost to a deleted
 	// row, not to a replay.
-	if _, err := svc.Refresh(ctx, fresh.RefreshToken); err != nil {
+	if _, err := svc.Refresh(ctx, fresh.RefreshToken, SessionMeta{}); err != nil {
 		t.Fatalf("fresh session was revoked by the stale refresh conflict: %v", err)
 	}
 }
@@ -147,7 +147,7 @@ func TestServiceRefreshStaleTokenReplayDoesNotRevokeFreshSession(t *testing.T) {
 	email := uniqueEmail("stale-replay")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestServiceRefreshStaleTokenReplayDoesNotRevokeFreshSession(t *testing.T) {
 	if err := st.ResetUserPassword(ctx, pgUUID(userID), email, newHash); err != nil {
 		t.Fatalf("ResetUserPassword: %v", err)
 	}
-	fresh, err := svc.Login(ctx, email, "rotated-password")
+	fresh, err := svc.Login(ctx, email, "rotated-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -182,16 +182,16 @@ func TestServiceRefreshStaleTokenReplayDoesNotRevokeFreshSession(t *testing.T) {
 	}
 
 	// First presentation: version mismatch marks the row revoked, plain 401.
-	if _, err := svc.Refresh(ctx, staleToken); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.Refresh(ctx, staleToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("first stale Refresh error = %v, want ErrUnauthorized", err)
 	}
 	// Second presentation: the row is now revoked, but it is still an obsolete
 	// post-reset chain, not theft.
-	if _, err := svc.Refresh(ctx, staleToken); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.Refresh(ctx, staleToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("second stale Refresh error = %v, want ErrUnauthorized", err)
 	}
 
-	if _, err := svc.Refresh(ctx, fresh.RefreshToken); err != nil {
+	if _, err := svc.Refresh(ctx, fresh.RefreshToken, SessionMeta{}); err != nil {
 		t.Fatalf("fresh session was revoked by a stale-token replay: %v", err)
 	}
 }
@@ -206,7 +206,7 @@ func TestServiceLoginRefusesVersionBumpDuringVerify(t *testing.T) {
 	email := uniqueEmail("login-racer")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestServiceLoginRefusesVersionBumpDuringVerify(t *testing.T) {
 		}
 	}
 
-	if _, err := svc.Login(ctx, email, "s3cret-password"); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{}); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login(old password) error = %v, want ErrInvalidCredentials", err)
 	}
 	svc.afterPasswordVerified = nil
@@ -233,7 +233,7 @@ func TestServiceLoginRefusesVersionBumpDuringVerify(t *testing.T) {
 	// The reset really committed: the new password works, and the session it
 	// mints is bound to the account's post-reset version — not a constant and
 	// not an off-by-one, either of which would silently reopen the reset race.
-	loggedIn, err := svc.Login(ctx, email, "rotated-password")
+	loggedIn, err := svc.Login(ctx, email, "rotated-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login(new password): %v", err)
 	}
@@ -257,7 +257,7 @@ func TestServiceIssuedSessionsCarryAccountVersion(t *testing.T) {
 	email := uniqueEmail("mint-version")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -283,13 +283,13 @@ func TestServiceIssuedSessionsCarryAccountVersion(t *testing.T) {
 		t.Fatalf("account version after reset = %d, want 2", account.CredentialVersion)
 	}
 
-	loggedIn, err := svc.Login(ctx, email, "rotated-password")
+	loggedIn, err := svc.Login(ctx, email, "rotated-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 	assertSessionVersion(t, ctx, st, loggedIn.RefreshToken, account.CredentialVersion)
 
-	rotated, err := svc.Refresh(ctx, loggedIn.RefreshToken)
+	rotated, err := svc.Refresh(ctx, loggedIn.RefreshToken, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestServiceRefreshAcceptsPreMigrationSession(t *testing.T) {
 	email := uniqueEmail("pre-migration")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestServiceRefreshAcceptsPreMigrationSession(t *testing.T) {
 		t.Fatalf("insert pre-migration session: %v", err)
 	}
 
-	if _, err := svc.Refresh(ctx, token); err != nil {
+	if _, err := svc.Refresh(ctx, token, SessionMeta{}); err != nil {
 		t.Fatalf("Refresh(pre-migration session): %v", err)
 	}
 }

@@ -303,6 +303,33 @@ func (s *Store) DeleteUserSessions(ctx context.Context, userID pgtype.UUID) erro
 	return s.queries.DeleteUserSessions(ctx, userID)
 }
 
+// ListSessionsByUser returns the user's live sessions (not revoked, not
+// expired as of now), newest last use first, at most 50 rows.
+func (s *Store) ListSessionsByUser(ctx context.Context, userID pgtype.UUID, now time.Time) ([]sqlc.ListSessionsByUserRow, error) {
+	return s.queries.ListSessionsByUser(ctx, sqlc.ListSessionsByUserParams{
+		UserID:    userID,
+		ExpiresAt: pgtype.Timestamptz{Time: now, Valid: true},
+	})
+}
+
+// RevokeSessionByID ends one live session scoped to its owner and reports how
+// many rows were revoked (0 when the id is unknown, foreign, or already dead).
+func (s *Store) RevokeSessionByID(ctx context.Context, id, userID pgtype.UUID) (int64, error) {
+	return s.queries.RevokeSessionByID(ctx, sqlc.RevokeSessionByIDParams{
+		ID:     id,
+		UserID: userID,
+	})
+}
+
+// RevokeOtherSessions ends every live session of a user except the given one
+// (the caller's current session, which keeps working).
+func (s *Store) RevokeOtherSessions(ctx context.Context, userID, sessionID pgtype.UUID) error {
+	return s.queries.RevokeOtherSessions(ctx, sqlc.RevokeOtherSessionsParams{
+		UserID: userID,
+		ID:     sessionID,
+	})
+}
+
 // UpdateUserDisplayName replaces the account's display name (nil clears it)
 // and returns the updated row. It answers pgx.ErrNoRows for an unknown id.
 func (s *Store) UpdateUserDisplayName(ctx context.Context, params sqlc.UpdateUserDisplayNameParams) (sqlc.User, error) {

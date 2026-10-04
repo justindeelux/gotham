@@ -19,9 +19,14 @@ const (
 	tokenIssuer    = "gotham"
 )
 
-// Claims is the payload carried by an access token.
+// Claims is the payload carried by an access token. SessionID is the refresh
+// session the token was minted with (the "sid" claim, PF-2): the sessions
+// list marks that row as the caller's current one. Tokens minted before PF-2
+// carry no sid; a missing or malformed value means "current unknown", never a
+// verification failure.
 type Claims struct {
-	Role string `json:"role"`
+	Role      string `json:"role"`
+	SessionID string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -67,8 +72,11 @@ func (s *Signer) Ephemeral() bool {
 }
 
 // IssueAccessToken signs an access token for userID with the given role and
-// returns it together with its expiry.
-func (s *Signer) IssueAccessToken(userID uuid.UUID, role string) (string, time.Time, error) {
+// returns it together with its expiry. sessionID is the refresh session the
+// token belongs to; it is recorded as the "sid" claim so the sessions list
+// can mark the caller's row. A Nil sessionID omits the claim (pre-PF-2 token
+// shape), which readers treat as "current unknown".
+func (s *Signer) IssueAccessToken(userID uuid.UUID, role string, sessionID uuid.UUID) (string, time.Time, error) {
 	now := s.now()
 	expiresAt := now.Add(accessTokenTTL)
 
@@ -80,6 +88,9 @@ func (s *Signer) IssueAccessToken(userID uuid.UUID, role string) (string, time.T
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
+	}
+	if sessionID != uuid.Nil {
+		claims.SessionID = sessionID.String()
 	}
 
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims).SignedString(s.private)

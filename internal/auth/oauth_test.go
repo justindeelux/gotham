@@ -334,7 +334,7 @@ func TestOAuthCallbackExistingUserLogsIn(t *testing.T) {
 	}
 
 	// The local password must still work: OAuth login must not clobber it.
-	if _, err := oauth.auth.Login(ctx, email, "s3cret-password"); err != nil {
+	if _, err := oauth.auth.Login(ctx, email, "s3cret-password", SessionMeta{}); err != nil {
 		t.Fatalf("Login after OAuth: %v", err)
 	}
 }

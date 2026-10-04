@@ -19,7 +19,7 @@ func TestServiceUpdateProfile(t *testing.T) {
 
 	email := uniqueEmail("profile")
 	cleanupUser(t, st, email)
-	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestServiceUpdateProfile(t *testing.T) {
 	// The override opens the plain-insert path for the second account, which
 	// is not the bootstrap admin.
 	svc.AllowOpenRegistration = true
-	second, err := svc.Register(ctx, uniqueEmail("profile-plain"), "s3cret-password", "", nil)
+	second, err := svc.Register(ctx, uniqueEmail("profile-plain"), "s3cret-password", "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register second: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestServiceUpdateProfileTrimBoundsClear(t *testing.T) {
 
 	email := uniqueEmail("profile-bounds")
 	cleanupUser(t, st, email)
-	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestServiceUpdateProfileRejectsUnstorableText(t *testing.T) {
 
 	email := uniqueEmail("profile-text")
 	cleanupUser(t, st, email)
-	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -172,6 +172,62 @@ func TestServiceUpdateProfileRejectsUnstorableText(t *testing.T) {
 	}
 }
 
+// TestServiceUpdateProfileFormatChars (PF-2 F5): ZWNJ and ZWJ are allowed
+// (Persian/Hindi names and ZWJ emoji sequences need them) while every other
+// invisible formatting character is rejected.
+func TestServiceUpdateProfileFormatChars(t *testing.T) {
+	svc, st := scratchService(t)
+	ctx := context.Background()
+
+	email := uniqueEmail("profile-format")
+	cleanupUser(t, st, email)
+	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	userID, err := uuid.Parse(registered.User.ID)
+	if err != nil {
+		t.Fatalf("parse user ID: %v", err)
+	}
+
+	// Allowed: a Persian name joined with ZWNJ (U+200C) and a ZWJ (U+200D)
+	// emoji sequence.
+	for name, value := range map[string]string{
+		"ZWNJ Persian name": "\u0639\u0644\u06cc\u200c\u0631\u0636\u0627",
+		"ZWJ emoji":         "\U0001F468\u200d\U0001F469\u200d\U0001F467",
+	} {
+		updated, err := svc.UpdateProfile(ctx, userID, strptr(value))
+		if err != nil {
+			t.Errorf("%s (%q): %v, want accepted", name, value, err)
+		} else if updated.DisplayName == nil || *updated.DisplayName != value {
+			t.Errorf("%s: stored = %v, want %q", name, updated.DisplayName, value)
+		}
+	}
+
+	// Denied: every other invisible formatting class.
+	for name, value := range map[string]string{
+		"zero-width space U+200B":    "a\u200bb",
+		"bidi mark U+200E":           "a\u200eb",
+		"bidi mark U+200F":           "a\u200fb",
+		"embedding U+202A":           "a\u202ab",
+		"embedding U+202B":           "a\u202bb",
+		"override U+202C":            "a\u202cb",
+		"override U+202D":            "a\u202db",
+		"override U+202E":            "a\u202eb",
+		"word joiner U+2060":         "a\u2060b",
+		"isolate U+2066":             "a\u2066b",
+		"isolate U+2067":             "a\u2067b",
+		"isolate U+2068":             "a\u2068b",
+		"isolate U+2069":             "a\u2069b",
+		"byte-order mark U+FEFF":     "\ufeffAda",
+		"line separator U+2028":      "a\u2028b",
+		"paragraph separator U+2029": "a\u2029b",
+	} {
+		if _, err := svc.UpdateProfile(ctx, userID, strptr(value)); !errors.Is(err, ErrDisplayNameInvalid) {
+			t.Errorf("%s (%q): error = %v, want ErrDisplayNameInvalid", name, value, err)
+		}
+	}
+}
 func TestServiceChangePassword(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()
@@ -179,7 +235,7 @@ func TestServiceChangePassword(t *testing.T) {
 	email := uniqueEmail("change")
 	cleanupUser(t, st, email)
 	const oldPassword = "s3cret-password"
-	first, err := svc.Register(ctx, email, oldPassword, "", nil)
+	first, err := svc.Register(ctx, email, oldPassword, "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -188,26 +244,26 @@ func TestServiceChangePassword(t *testing.T) {
 		t.Fatalf("parse user ID: %v", err)
 	}
 	// A second session on another device that must die with the change.
-	other, err := svc.Login(ctx, email, oldPassword)
+	other, err := svc.Login(ctx, email, oldPassword, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 
-	if _, err := svc.ChangePassword(ctx, userID, "wrong-password", "new-s3cret-password"); !errors.Is(err, ErrCurrentPasswordIncorrect) {
+	if _, err := svc.ChangePassword(ctx, userID, "wrong-password", "new-s3cret-password", SessionMeta{}); !errors.Is(err, ErrCurrentPasswordIncorrect) {
 		t.Fatalf("wrong current error = %v, want ErrCurrentPasswordIncorrect", err)
 	} else if err.Error() != "current password is incorrect" {
 		t.Fatalf("wrong current message = %q, want the contract body", err.Error())
 	}
-	if _, err := svc.ChangePassword(ctx, userID, "", "new-s3cret-password"); !errors.Is(err, ErrCurrentPasswordIncorrect) {
+	if _, err := svc.ChangePassword(ctx, userID, "", "new-s3cret-password", SessionMeta{}); !errors.Is(err, ErrCurrentPasswordIncorrect) {
 		t.Fatalf("missing current error = %v, want ErrCurrentPasswordIncorrect", err)
 	}
-	if _, err := svc.ChangePassword(ctx, userID, oldPassword, "short"); !errors.Is(err, ErrValidation) {
+	if _, err := svc.ChangePassword(ctx, userID, oldPassword, "short", SessionMeta{}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("weak new error = %v, want ErrValidation", err)
 	} else if want := ValidatePassword("short").Error(); err.Error() != want {
 		t.Fatalf("weak new message = %q, want the register message %q", err.Error(), want)
 	}
 
-	changed, err := svc.ChangePassword(ctx, userID, oldPassword, "new-s3cret-password")
+	changed, err := svc.ChangePassword(ctx, userID, oldPassword, "new-s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
@@ -220,20 +276,20 @@ func TestServiceChangePassword(t *testing.T) {
 
 	// Both pre-change sessions are dead; the returned pair works.
 	for name, token := range map[string]string{"register": first.RefreshToken, "other": other.RefreshToken} {
-		if _, err := svc.Refresh(ctx, token); !errors.Is(err, ErrUnauthorized) {
+		if _, err := svc.Refresh(ctx, token, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 			t.Fatalf("Refresh(%s session) error = %v, want ErrUnauthorized", name, err)
 		}
 	}
-	if _, err := svc.Refresh(ctx, changed.RefreshToken); err != nil {
+	if _, err := svc.Refresh(ctx, changed.RefreshToken, SessionMeta{}); err != nil {
 		t.Fatalf("Refresh(new pair): %v", err)
 	}
-	if _, err := svc.Login(ctx, email, oldPassword); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := svc.Login(ctx, email, oldPassword, SessionMeta{}); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login(old password) error = %v, want ErrInvalidCredentials", err)
 	}
-	if _, err := svc.Login(ctx, email, "new-s3cret-password"); err != nil {
+	if _, err := svc.Login(ctx, email, "new-s3cret-password", SessionMeta{}); err != nil {
 		t.Fatalf("Login(new password): %v", err)
 	}
-	if _, err := svc.ChangePassword(ctx, uuid.New(), oldPassword, "another-s3cret"); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.ChangePassword(ctx, uuid.New(), oldPassword, "another-s3cret", SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("ChangePassword(unknown) error = %v, want ErrUnauthorized", err)
 	}
 }
@@ -252,14 +308,14 @@ func TestServiceChangePasswordOAuthOnly(t *testing.T) {
 	}
 	userID := uuid.UUID(row.ID.Bytes)
 
-	changed, err := svc.ChangePassword(ctx, userID, "whatever-supplied", "new-s3cret-password")
+	changed, err := svc.ChangePassword(ctx, userID, "whatever-supplied", "new-s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
 	if !changed.User.HasPassword {
 		t.Error("HasPassword = false after setting a password, want true")
 	}
-	if _, err := svc.Login(ctx, email, "new-s3cret-password"); err != nil {
+	if _, err := svc.Login(ctx, email, "new-s3cret-password", SessionMeta{}); err != nil {
 		t.Fatalf("Login(new password): %v", err)
 	}
 }
@@ -273,7 +329,7 @@ func TestServiceChangePasswordRacesLogin(t *testing.T) {
 	email := uniqueEmail("change-race-login")
 	cleanupUser(t, st, email)
 	const oldPassword = "s3cret-password"
-	first, err := svc.Register(ctx, email, oldPassword, "", nil)
+	first, err := svc.Register(ctx, email, oldPassword, "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -289,14 +345,14 @@ func TestServiceChangePasswordRacesLogin(t *testing.T) {
 
 	loginErr := make(chan error, 1)
 	go func() {
-		_, err := svc.Login(ctx, email, oldPassword)
+		_, err := svc.Login(ctx, email, oldPassword, SessionMeta{})
 		loginErr <- err
 	}()
 
 	// The login verified the old password and is parked before its
 	// credential-version re-read; the change commits underneath it.
 	<-entered
-	if _, err := svc.ChangePassword(ctx, userID, oldPassword, "new-s3cret-password"); err != nil {
+	if _, err := svc.ChangePassword(ctx, userID, oldPassword, "new-s3cret-password", SessionMeta{}); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
 	close(release)
@@ -315,7 +371,7 @@ func TestServiceChangePasswordRacesRefresh(t *testing.T) {
 	email := uniqueEmail("change-race-refresh")
 	cleanupUser(t, st, email)
 	const oldPassword = "s3cret-password"
-	first, err := svc.Register(ctx, email, oldPassword, "", nil)
+	first, err := svc.Register(ctx, email, oldPassword, "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -326,7 +382,7 @@ func TestServiceChangePasswordRacesRefresh(t *testing.T) {
 
 	refreshErr := make(chan error, 1)
 	go func() {
-		_, err := svc.Refresh(ctx, first.RefreshToken)
+		_, err := svc.Refresh(ctx, first.RefreshToken, SessionMeta{})
 		refreshErr <- err
 	}()
 
@@ -334,7 +390,7 @@ func TestServiceChangePasswordRacesRefresh(t *testing.T) {
 	// change commits first and the read misses the deleted row, or the
 	// refresh reads the live row and its rotation finds nothing to revoke.
 	// The hook only parks the in-flight path so no goroutine leaks.
-	if _, err := svc.ChangePassword(ctx, userID, oldPassword, "new-s3cret-password"); err != nil {
+	if _, err := svc.ChangePassword(ctx, userID, oldPassword, "new-s3cret-password", SessionMeta{}); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
 	close(release)
@@ -354,7 +410,7 @@ func TestServiceChangePasswordConcurrent(t *testing.T) {
 	email := uniqueEmail("change-concurrent")
 	cleanupUser(t, st, email)
 	const oldPassword = "s3cret-password"
-	first, err := svc.Register(ctx, email, oldPassword, "", nil)
+	first, err := svc.Register(ctx, email, oldPassword, "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -368,7 +424,7 @@ func TestServiceChangePasswordConcurrent(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			_, errs[i] = svc.ChangePassword(ctx, userID, oldPassword, "concurrent-new-password")
+			_, errs[i] = svc.ChangePassword(ctx, userID, oldPassword, "concurrent-new-password", SessionMeta{})
 		}(i)
 	}
 	close(start)
@@ -387,7 +443,7 @@ func TestServiceChangePasswordConcurrent(t *testing.T) {
 	if wins != 1 {
 		t.Fatalf("concurrent changes won %d, want exactly 1", wins)
 	}
-	if _, err := svc.Login(ctx, email, "concurrent-new-password"); err != nil {
+	if _, err := svc.Login(ctx, email, "concurrent-new-password", SessionMeta{}); err != nil {
 		t.Fatalf("Login(winner password): %v", err)
 	}
 }

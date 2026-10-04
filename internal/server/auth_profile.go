@@ -91,7 +91,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.auth.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword)
+	result, err := s.auth.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword, s.sessionMeta(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrCurrentPasswordIncorrect):

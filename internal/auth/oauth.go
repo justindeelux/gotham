@@ -191,7 +191,7 @@ func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFr
 		}
 	}
 
-	return s.auth.IssueSession(ctx, user)
+	return s.auth.IssueSession(ctx, user, SessionMeta{})
 }
 
 // createOAuthUser inserts an account for an OAuth-only identity (no local

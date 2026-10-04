@@ -23,13 +23,16 @@ const tokenTypeBearer = "Bearer"
 // AuthService is the subset of auth.Service the HTTP layer depends on. Keeping
 // it an interface lets tests substitute a fake without a database.
 type AuthService interface {
-	Register(ctx context.Context, email, password, inviteToken string, invites auth.InviteAcceptor) (*auth.AuthResult, error)
-	Login(ctx context.Context, email, password string) (*auth.AuthResult, error)
-	Refresh(ctx context.Context, refreshToken string) (*auth.AuthResult, error)
+	Register(ctx context.Context, email, password, inviteToken string, invites auth.InviteAcceptor, meta auth.SessionMeta) (*auth.AuthResult, error)
+	Login(ctx context.Context, email, password string, meta auth.SessionMeta) (*auth.AuthResult, error)
+	Refresh(ctx context.Context, refreshToken string, meta auth.SessionMeta) (*auth.AuthResult, error)
 	Logout(ctx context.Context, refreshToken string) error
 	Me(ctx context.Context, userID uuid.UUID) (*auth.User, error)
 	UpdateProfile(ctx context.Context, userID uuid.UUID, displayName *string) (*auth.User, error)
-	ChangePassword(ctx context.Context, userID uuid.UUID, current, newPassword string) (*auth.AuthResult, error)
+	ChangePassword(ctx context.Context, userID uuid.UUID, current, newPassword string, meta auth.SessionMeta) (*auth.AuthResult, error)
+	ListSessions(ctx context.Context, userID, currentSessionID uuid.UUID) ([]auth.SessionInfo, error)
+	RevokeSession(ctx context.Context, userID, id uuid.UUID) error
+	RevokeOtherSessions(ctx context.Context, userID, currentSessionID uuid.UUID) error
 	VerifyAccessToken(token string) (*auth.Claims, error)
 }
 
@@ -42,6 +45,7 @@ const (
 	roleKey
 	scopesKey
 	apiTokenKey
+	sessionIDKey
 )
 
 // UserIDFromContext returns the authenticated user ID set by RequireAuth.
@@ -70,6 +74,14 @@ func ScopesFromContext(ctx context.Context) ([]string, bool) {
 func IsAPITokenRequest(ctx context.Context) bool {
 	apiToken, _ := ctx.Value(apiTokenKey).(bool)
 	return apiToken
+}
+
+// SessionIDFromContext returns the refresh-session id carried by the access
+// token's "sid" claim (PF-2). It is uuid.Nil when the token predates the
+// claim: "current unknown", never an authentication failure.
+func SessionIDFromContext(ctx context.Context) uuid.UUID {
+	sessionID, _ := ctx.Value(sessionIDKey).(uuid.UUID)
+	return sessionID
 }
 
 // requireInteractiveSession is chi middleware answering 403 unless the request
@@ -156,6 +168,9 @@ func (s *Server) mountAuthRoutes(api chi.Router) {
 				profile.Use(s.requireInteractiveSession)
 				profile.Patch("/me", s.handleUpdateProfile)
 				profile.Post("/me/password", s.handleChangePassword)
+				profile.Get("/me/sessions", s.handleListSessions)
+				profile.Delete("/me/sessions/{id}", s.handleRevokeSession)
+				profile.Post("/me/sessions/revoke-others", s.handleRevokeOtherSessions)
 			})
 		})
 	})
@@ -208,7 +223,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.auth.Register(r.Context(), req.Email, req.Password, req.InviteToken, s.invites)
+	result, err := s.auth.Register(r.Context(), req.Email, req.Password, req.InviteToken, s.invites, s.sessionMeta(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrEmailTaken):
@@ -237,7 +252,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.auth.Login(r.Context(), req.Email, req.Password)
+	result, err := s.auth.Login(r.Context(), req.Email, req.Password, s.sessionMeta(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrInvalidCredentials):
@@ -264,7 +279,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.auth.Refresh(r.Context(), req.RefreshToken)
+	result, err := s.auth.Refresh(r.Context(), req.RefreshToken, s.sessionMeta(r))
 	if err != nil {
 		if errors.Is(err, auth.ErrUnauthorized) {
 			writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
@@ -359,6 +374,7 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 
 		ctx := context.WithValue(r.Context(), userIDKey, userID)
 		ctx = context.WithValue(ctx, roleKey, claims.Role)
+		ctx = context.WithValue(ctx, sessionIDKey, parseSessionClaim(claims.SessionID))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

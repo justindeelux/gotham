@@ -216,10 +216,10 @@ func TestRequireInteractiveSessionMiddleware(t *testing.T) {
 }
 
 // scratchProfileStack builds a Server backed by the real auth service on a
-// private scratch database and returns it with a live JWT for the seeded
-// account. Fake-backed handler tests cannot catch validation the fake does
-// not mirror (F1 reached Postgres and answered 500); this stack can.
-func scratchProfileStack(t *testing.T) (*Server, string) {
+// private scratch database and returns it with a live token pair for the
+// seeded account. Fake-backed handler tests cannot catch validation the fake
+// does not mirror (F1 reached Postgres and answered 500); this stack can.
+func scratchProfileStack(t *testing.T) (*Server, *auth.AuthResult) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -279,11 +279,11 @@ func scratchProfileStack(t *testing.T) (*Server, string) {
 	svc := auth.New(store.New(pool), signer, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	email := fmt.Sprintf("pf1-srv-%d@example.com", time.Now().UnixNano())
-	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil, auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	loggedIn, err := svc.Login(ctx, email, "s3cret-password")
+	loggedIn, err := svc.Login(ctx, email, "s3cret-password", auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -300,15 +300,15 @@ func scratchProfileStack(t *testing.T) (*Server, string) {
 	t.Cleanup(s.closer)
 	s.db = stubPinger{}
 	s.redis = stubPinger{}
-	return s, loggedIn.AccessToken
+	return s, loggedIn
 }
 
 // TestProfileUnstorableTextOverHTTP replays the F1 probe against the real
 // stack: NUL, bidi-override and zero-width names are 400 with the contract
 // message, and a storable name still round-trips.
 func TestProfileUnstorableTextOverHTTP(t *testing.T) {
-	s, token := scratchProfileStack(t)
-	bearer := "Bearer " + token
+	s, pair := scratchProfileStack(t)
+	bearer := "Bearer " + pair.AccessToken
 
 	for name, payload := range map[string]string{
 		"NUL":        `{"display_name":"a\u0000b"}`,

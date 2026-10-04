@@ -1,10 +1,10 @@
 -- name: CreateSession :one
-INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
-VALUES ($1, $2, $3, $4)
-RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version;
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version, user_agent, ip)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version, user_agent, ip, last_used_at;
 
 -- name: GetSessionByRefreshHash :one
-SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version
+SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version, user_agent, ip, last_used_at
 FROM sessions
 WHERE refresh_hash = $1;
 
@@ -64,10 +64,10 @@ WITH revoked AS (
       AND s.revoked_at IS NULL
     RETURNING s.user_id
 )
-INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
-SELECT r.user_id, sqlc.arg(new_refresh_hash), sqlc.arg(expires_at), sqlc.arg(credential_version)
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version, user_agent, ip)
+SELECT r.user_id, sqlc.arg(new_refresh_hash), sqlc.arg(expires_at), sqlc.arg(credential_version), sqlc.arg(user_agent), sqlc.arg(ip)
 FROM revoked AS r
-RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version;
+RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version, user_agent, ip, last_used_at;
 
 -- name: LockUserSessions :exec
 -- LockUserSessions takes the transaction-scoped advisory lock that serializes
@@ -86,3 +86,36 @@ SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(user_id)::text, 0));
 DELETE FROM sessions
 WHERE (revoked_at IS NULL AND expires_at < sqlc.arg(expired_before))
    OR (revoked_at IS NOT NULL AND revoked_at < sqlc.arg(revoked_before));
+
+-- name: ListSessionsByUser :many
+-- ListSessionsByUser returns the caller's live sessions (not revoked, not
+-- expired as of the given time), newest last use first, at most 50 rows. The
+-- existing sessions_user_id_idx serves the per-user lookup: a user holds a
+-- handful of rows, so no new index (measured: no sequential scan on realistic
+-- per-user row counts; revisit if the sessions table grows hot).
+SELECT id, user_agent, ip, created_at, last_used_at
+FROM sessions
+WHERE user_id = $1
+  AND revoked_at IS NULL
+  AND expires_at > $2
+ORDER BY last_used_at DESC
+LIMIT 50;
+
+-- name: RevokeSessionByID :execrows
+-- RevokeSessionByID ends one live session of a user. Zero rows means the id is
+-- unknown, belongs to another user, or is already dead: the caller answers
+-- 404 either way, so a probe cannot distinguish them.
+UPDATE sessions
+SET revoked_at = now()
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL;
+
+-- name: RevokeOtherSessions :exec
+-- RevokeOtherSessions ends every live session of a user except the given one
+-- (the caller's current session, which keeps working).
+UPDATE sessions
+SET revoked_at = now()
+WHERE user_id = $1
+  AND id <> $2
+  AND revoked_at IS NULL;

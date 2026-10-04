@@ -94,7 +94,7 @@ func requireClosedInstance(t *testing.T, svc *Service) {
 	t.Helper()
 
 	email := uniqueEmail("closed-seed")
-	_, err := svc.Register(context.Background(), email, "s3cret-password", "", nil)
+	_, err := svc.Register(context.Background(), email, "s3cret-password", "", nil, SessionMeta{})
 	if err != nil && !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatalf("seed closed-instance account: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestServiceRegisterLoginMe(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	registered, err := svc.Register(ctx, "  "+strings.ToUpper(email)+"  ", password, newTestInvite(t, st, email), storeInvites{st})
+	registered, err := svc.Register(ctx, "  "+strings.ToUpper(email)+"  ", password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestServiceRegisterLoginMe(t *testing.T) {
 		t.Errorf("ExpiresIn = %d, want (0, 900]", registered.ExpiresIn)
 	}
 
-	loggedIn, err := svc.Login(ctx, email, password)
+	loggedIn, err := svc.Login(ctx, email, password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -169,13 +169,13 @@ func TestServiceRegisterDuplicateEmail(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	if _, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}); err != nil {
+	if _, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{}); err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
 
 	// Same email in different case must also collide; a fresh invite keeps
 	// the duplicate past the registration gate so the unique index answers.
-	_, err := svc.Register(ctx, strings.ToUpper(email), password, newTestInvite(t, st, email), storeInvites{st})
+	_, err := svc.Register(ctx, strings.ToUpper(email), password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("second Register error = %v, want ErrEmailTaken", err)
 	}
@@ -189,15 +189,15 @@ func TestServiceLoginFailures(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	if _, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}); err != nil {
+	if _, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	if _, err := svc.Login(ctx, email, "definitely-wrong"); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := svc.Login(ctx, email, "definitely-wrong", SessionMeta{}); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login(wrong password) error = %v, want ErrInvalidCredentials", err)
 	}
 
-	if _, err := svc.Login(ctx, uniqueEmail("nobody"), password); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := svc.Login(ctx, uniqueEmail("nobody"), password, SessionMeta{}); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login(unknown email) error = %v, want ErrInvalidCredentials", err)
 	}
 }
@@ -220,7 +220,7 @@ func TestServiceLoginMissStillVerifies(t *testing.T) {
 		return VerifyPassword(encoded, password)
 	}
 
-	if _, err := svc.Login(ctx, uniqueEmail("missing"), "s3cret-password"); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := svc.Login(ctx, uniqueEmail("missing"), "s3cret-password", SessionMeta{}); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login(unknown email) error = %v, want ErrInvalidCredentials", err)
 	}
 	if calls != 1 {
@@ -238,7 +238,7 @@ func TestServiceLoginMissStillVerifies(t *testing.T) {
 	if _, err := st.CreateUser(ctx, email, nil); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if _, err := svc.Login(ctx, email, "s3cret-password"); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{}); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login(passwordless) error = %v, want ErrInvalidCredentials", err)
 	}
 	if calls != 2 {
@@ -247,10 +247,10 @@ func TestServiceLoginMissStillVerifies(t *testing.T) {
 
 	known := uniqueEmail("known")
 	cleanupUser(t, st, known)
-	if _, err := svc.Register(ctx, known, "right-password", newTestInvite(t, st, known), storeInvites{st}); err != nil {
+	if _, err := svc.Register(ctx, known, "right-password", newTestInvite(t, st, known), storeInvites{st}, SessionMeta{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if _, err := svc.Login(ctx, known, "wrong-password"); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := svc.Login(ctx, known, "wrong-password", SessionMeta{}); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login(wrong password) error = %v, want ErrInvalidCredentials", err)
 	}
 	if calls != 3 {
@@ -262,10 +262,10 @@ func TestServiceRegisterValidation(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Register(ctx, "not-an-email", "s3cret-password", "", nil); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Register(ctx, "not-an-email", "s3cret-password", "", nil, SessionMeta{}); !errors.Is(err, ErrValidation) {
 		t.Errorf("Register(bad email) error = %v, want ErrValidation", err)
 	}
-	if _, err := svc.Register(ctx, uniqueEmail("short"), "short", "", nil); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Register(ctx, uniqueEmail("short"), "short", "", nil, SessionMeta{}); !errors.Is(err, ErrValidation) {
 		t.Errorf("Register(short password) error = %v, want ErrValidation", err)
 	}
 }
@@ -277,12 +277,12 @@ func TestServiceRefreshRotation(t *testing.T) {
 	email := uniqueEmail("refresh")
 	cleanupUser(t, st, email)
 
-	first, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	first, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	second, err := svc.Refresh(ctx, first.RefreshToken)
+	second, err := svc.Refresh(ctx, first.RefreshToken, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestServiceRefreshRotation(t *testing.T) {
 	}
 
 	// The new token must still work.
-	third, err := svc.Refresh(ctx, second.RefreshToken)
+	third, err := svc.Refresh(ctx, second.RefreshToken, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Refresh(new token): %v", err)
 	}
@@ -301,10 +301,10 @@ func TestServiceRefreshRotation(t *testing.T) {
 
 	// Replaying the rotated-away first token is reuse detection: it is
 	// refused, and the whole family (including the live third token) dies.
-	if _, err := svc.Refresh(ctx, first.RefreshToken); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.Refresh(ctx, first.RefreshToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Refresh(replayed token) error = %v, want ErrUnauthorized", err)
 	}
-	if _, err := svc.Refresh(ctx, third.RefreshToken); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.Refresh(ctx, third.RefreshToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatal("the replacement survived reuse detection; the family was not revoked")
 	}
 }
@@ -320,7 +320,7 @@ func TestServiceRefreshExpiredDoesNotRevokeFamily(t *testing.T) {
 	email := uniqueEmail("expired-no-revoke")
 	cleanupUser(t, st, email)
 
-	live, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	live, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -341,13 +341,13 @@ func TestServiceRefreshExpiredDoesNotRevokeFamily(t *testing.T) {
 		t.Fatalf("insert expired session: %v", err)
 	}
 
-	if _, err := svc.Refresh(ctx, expiredToken); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.Refresh(ctx, expiredToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Refresh(expired) error = %v, want ErrUnauthorized", err)
 	}
 
 	// The live session must survive: a revoked replay is theft, an expired one
 	// is not.
-	if _, err := svc.Refresh(ctx, live.RefreshToken); err != nil {
+	if _, err := svc.Refresh(ctx, live.RefreshToken, SessionMeta{}); err != nil {
 		t.Fatalf("live session was revoked by an expired-token replay: %v", err)
 	}
 }
@@ -359,7 +359,7 @@ func TestServiceLogoutDeletesSession(t *testing.T) {
 	email := uniqueEmail("logout")
 	cleanupUser(t, st, email)
 
-	result, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	result, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestServiceLogoutDeletesSession(t *testing.T) {
 	if err := svc.Logout(ctx, result.RefreshToken); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
-	if _, err := svc.Refresh(ctx, result.RefreshToken); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.Refresh(ctx, result.RefreshToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Refresh after logout error = %v, want ErrUnauthorized", err)
 	}
 
@@ -403,12 +403,12 @@ func TestServiceLogoutReplayDoesNotRevokeOtherSessions(t *testing.T) {
 	email := uniqueEmail("logout-replay")
 	cleanupUser(t, st, email)
 
-	loggedOut, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	loggedOut, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	// A second live session on another device that must survive the replay.
-	other, err := svc.Login(ctx, email, "s3cret-password")
+	other, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -417,10 +417,10 @@ func TestServiceLogoutReplayDoesNotRevokeOtherSessions(t *testing.T) {
 		t.Fatalf("Logout: %v", err)
 	}
 
-	if _, err := svc.Refresh(ctx, loggedOut.RefreshToken); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.Refresh(ctx, loggedOut.RefreshToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Refresh(logged-out token) error = %v, want ErrUnauthorized", err)
 	}
-	if _, err := svc.Refresh(ctx, other.RefreshToken); err != nil {
+	if _, err := svc.Refresh(ctx, other.RefreshToken, SessionMeta{}); err != nil {
 		t.Fatalf("other live session was revoked by a logged-out token replay: %v", err)
 	}
 }
@@ -436,12 +436,12 @@ func TestServiceLogoutPreservesRevokedRow(t *testing.T) {
 	email := uniqueEmail("logout-revoked")
 	cleanupUser(t, st, email)
 
-	first, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st})
+	first, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	// Rotating first revokes its row and mints a replacement.
-	if _, err := svc.Refresh(ctx, first.RefreshToken); err != nil {
+	if _, err := svc.Refresh(ctx, first.RefreshToken, SessionMeta{}); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
 
@@ -464,7 +464,7 @@ func TestServiceRefreshRejectsUnknownToken(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Refresh(ctx, "unknown-refresh-token"); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.Refresh(ctx, "unknown-refresh-token", SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Refresh(unknown) error = %v, want ErrUnauthorized", err)
 	}
 }
@@ -489,7 +489,7 @@ func TestServiceRegisterOpenOverride(t *testing.T) {
 	// on whatever the shared database happens to hold.
 	svc, st := scratchService(t)
 	ctx := context.Background()
-	if _, err := svc.Register(ctx, uniqueEmail("open-seed"), "s3cret-password", "", nil); err != nil {
+	if _, err := svc.Register(ctx, uniqueEmail("open-seed"), "s3cret-password", "", nil, SessionMeta{}); err != nil {
 		t.Fatalf("seed first account: %v", err)
 	}
 	svc.AllowOpenRegistration = true
@@ -497,7 +497,7 @@ func TestServiceRegisterOpenOverride(t *testing.T) {
 	email := uniqueEmail("open-override")
 	cleanupUser(t, st, email)
 
-	second, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+	second, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register with the open override: %v", err)
 	}

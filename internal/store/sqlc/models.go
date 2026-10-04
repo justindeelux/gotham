@@ -5,6 +5,8 @@
 package sqlc
 
 import (
+	"net/netip"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -391,6 +393,9 @@ type Session struct {
 	RevokedAt         pgtype.Timestamptz `json:"revoked_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	CredentialVersion int32              `json:"credential_version"`
+	UserAgent         *string            `json:"user_agent"`
+	Ip                *netip.Addr        `json:"ip"`
+	LastUsedAt        pgtype.Timestamptz `json:"last_used_at"`
 }
 
 type Storage struct {

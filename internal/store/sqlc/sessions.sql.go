@@ -7,14 +7,15 @@ package sqlc
 
 import (
 	"context"
+	"net/netip"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createSession = `-- name: CreateSession :one
-INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
-VALUES ($1, $2, $3, $4)
-RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version, user_agent, ip)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version, user_agent, ip, last_used_at
 `
 
 type CreateSessionParams struct {
@@ -22,6 +23,8 @@ type CreateSessionParams struct {
 	RefreshHash       string             `json:"refresh_hash"`
 	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
 	CredentialVersion int32              `json:"credential_version"`
+	UserAgent         *string            `json:"user_agent"`
+	Ip                *netip.Addr        `json:"ip"`
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
@@ -30,6 +33,8 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		arg.RefreshHash,
 		arg.ExpiresAt,
 		arg.CredentialVersion,
+		arg.UserAgent,
+		arg.Ip,
 	)
 	var i Session
 	err := row.Scan(
@@ -40,6 +45,9 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.RevokedAt,
 		&i.CreatedAt,
 		&i.CredentialVersion,
+		&i.UserAgent,
+		&i.Ip,
+		&i.LastUsedAt,
 	)
 	return i, err
 }
@@ -99,7 +107,7 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID pgtype.UUID) er
 }
 
 const getSessionByRefreshHash = `-- name: GetSessionByRefreshHash :one
-SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version
+SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version, user_agent, ip, last_used_at
 FROM sessions
 WHERE refresh_hash = $1
 `
@@ -115,8 +123,65 @@ func (q *Queries) GetSessionByRefreshHash(ctx context.Context, refreshHash strin
 		&i.RevokedAt,
 		&i.CreatedAt,
 		&i.CredentialVersion,
+		&i.UserAgent,
+		&i.Ip,
+		&i.LastUsedAt,
 	)
 	return i, err
+}
+
+const listSessionsByUser = `-- name: ListSessionsByUser :many
+SELECT id, user_agent, ip, created_at, last_used_at
+FROM sessions
+WHERE user_id = $1
+  AND revoked_at IS NULL
+  AND expires_at > $2
+ORDER BY last_used_at DESC
+LIMIT 50
+`
+
+type ListSessionsByUserParams struct {
+	UserID    pgtype.UUID        `json:"user_id"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+}
+
+type ListSessionsByUserRow struct {
+	ID         pgtype.UUID        `json:"id"`
+	UserAgent  *string            `json:"user_agent"`
+	Ip         *netip.Addr        `json:"ip"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+}
+
+// ListSessionsByUser returns the caller's live sessions (not revoked, not
+// expired as of the given time), newest last use first, at most 50 rows. The
+// existing sessions_user_id_idx serves the per-user lookup: a user holds a
+// handful of rows, so no new index (measured: no sequential scan on realistic
+// per-user row counts; revisit if the sessions table grows hot).
+func (q *Queries) ListSessionsByUser(ctx context.Context, arg ListSessionsByUserParams) ([]ListSessionsByUserRow, error) {
+	rows, err := q.db.Query(ctx, listSessionsByUser, arg.UserID, arg.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionsByUserRow{}
+	for rows.Next() {
+		var i ListSessionsByUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserAgent,
+			&i.Ip,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockUserSessions = `-- name: LockUserSessions :exec
@@ -132,6 +197,26 @@ func (q *Queries) LockUserSessions(ctx context.Context, userID string) error {
 	return err
 }
 
+const revokeOtherSessions = `-- name: RevokeOtherSessions :exec
+UPDATE sessions
+SET revoked_at = now()
+WHERE user_id = $1
+  AND id <> $2
+  AND revoked_at IS NULL
+`
+
+type RevokeOtherSessionsParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	ID     pgtype.UUID `json:"id"`
+}
+
+// RevokeOtherSessions ends every live session of a user except the given one
+// (the caller's current session, which keeps working).
+func (q *Queries) RevokeOtherSessions(ctx context.Context, arg RevokeOtherSessionsParams) error {
+	_, err := q.db.Exec(ctx, revokeOtherSessions, arg.UserID, arg.ID)
+	return err
+}
+
 const revokeSession = `-- name: RevokeSession :exec
 UPDATE sessions
 SET revoked_at = now()
@@ -142,6 +227,30 @@ WHERE refresh_hash = $1
 func (q *Queries) RevokeSession(ctx context.Context, refreshHash string) error {
 	_, err := q.db.Exec(ctx, revokeSession, refreshHash)
 	return err
+}
+
+const revokeSessionByID = `-- name: RevokeSessionByID :execrows
+UPDATE sessions
+SET revoked_at = now()
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+`
+
+type RevokeSessionByIDParams struct {
+	ID     pgtype.UUID `json:"id"`
+	UserID pgtype.UUID `json:"user_id"`
+}
+
+// RevokeSessionByID ends one live session of a user. Zero rows means the id is
+// unknown, belongs to another user, or is already dead: the caller answers
+// 404 either way, so a probe cannot distinguish them.
+func (q *Queries) RevokeSessionByID(ctx context.Context, arg RevokeSessionByIDParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeSessionByID, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const revokeSessionIfLive = `-- name: RevokeSessionIfLive :one
@@ -182,20 +291,22 @@ const rotateSession = `-- name: RotateSession :one
 WITH revoked AS (
     UPDATE sessions AS s
     SET revoked_at = now()
-    WHERE s.refresh_hash = $4
+    WHERE s.refresh_hash = $6
       AND s.revoked_at IS NULL
     RETURNING s.user_id
 )
-INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
-SELECT r.user_id, $1, $2, $3
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version, user_agent, ip)
+SELECT r.user_id, $1, $2, $3, $4, $5
 FROM revoked AS r
-RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version
+RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version, user_agent, ip, last_used_at
 `
 
 type RotateSessionParams struct {
 	NewRefreshHash     string             `json:"new_refresh_hash"`
 	ExpiresAt          pgtype.Timestamptz `json:"expires_at"`
 	CredentialVersion  int32              `json:"credential_version"`
+	UserAgent          *string            `json:"user_agent"`
+	Ip                 *netip.Addr        `json:"ip"`
 	RevokedRefreshHash string             `json:"revoked_refresh_hash"`
 }
 
@@ -209,6 +320,8 @@ func (q *Queries) RotateSession(ctx context.Context, arg RotateSessionParams) (S
 		arg.NewRefreshHash,
 		arg.ExpiresAt,
 		arg.CredentialVersion,
+		arg.UserAgent,
+		arg.Ip,
 		arg.RevokedRefreshHash,
 	)
 	var i Session
@@ -220,6 +333,9 @@ func (q *Queries) RotateSession(ctx context.Context, arg RotateSessionParams) (S
 		&i.RevokedAt,
 		&i.CreatedAt,
 		&i.CredentialVersion,
+		&i.UserAgent,
+		&i.Ip,
+		&i.LastUsedAt,
 	)
 	return i, err
 }

@@ -951,7 +951,7 @@ onMounted(() => {
           </template>
         </NCard>
 
-        <NCard style="margin-top: 16px" title="Add redirect">
+        <NCard style="margin-top: 16px" title="Add redirect" class="form-container">
           <template #header-extra>
             <NText depth="3" class="small">
               applies after the next config sync
@@ -1035,7 +1035,7 @@ onMounted(() => {
         <NAlert v-if="providerError" type="error" :show-icon="true">
           {{ providerError }}
         </NAlert>
-        <NForm label-placement="top" :show-feedback="false" class="provider-form">
+        <NForm label-placement="top" :show-feedback="false" class="provider-form form-container">
           <div class="form-row">
             <NFormItem label="Provider" class="field-provider">
               <NSelect
@@ -1514,7 +1514,7 @@ onMounted(() => {
   min-width: 0;
 }
 
-@media (max-width: 720px) {
+@container (max-width: 600px) {
   .redirect-form__bottom {
     flex-direction: column;
     align-items: stretch;

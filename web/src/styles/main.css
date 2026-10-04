@@ -168,11 +168,22 @@ a:hover {
 }
 
 /* Two-column form rows (JUS-19): short fields share one row and collapse to
- * a single column below ~720px (modal width). Rows are direct NForm children
- * so the global item-to-item rhythm above owns the vertical spacing; the
- * items inside own none. A lone item spans both columns (e.g. a conditional
- * partner that is currently hidden). Column gap matches the connect addr-row;
- * row gap matches the shared --form-item-gap rhythm for the stacked state. */
+ * a single column once their container narrows below ~600px (JUS-19 fix 1).
+ * The query keys off the modal/form width via .form-container, not the
+ * viewport: a fixed 560px modal stays single-column at any viewport, while
+ * an 880px wizard keeps two columns. Container queries are baseline in
+ * current Chromium/Firefox/Safari, so there is no viewport fallback.
+ * Rows are direct NForm children so the global item-to-item rhythm above owns
+ * the vertical spacing; the items inside own none. A lone item spans both
+ * columns (e.g. a conditional partner that is currently hidden). Column gap
+ * matches the connect addr-row; row gap matches the shared --form-item-gap
+ * rhythm for the stacked state. Grid minimums (minmax(0, 1fr) + min-width: 0)
+ * mean plain inputs and selects can never overflow their column; controls
+ * with intrinsic minimums (segmented radios) belong on full-width rows. */
+.form-container {
+  container-type: inline-size;
+}
+
 .form-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -190,7 +201,7 @@ a:hover {
   grid-column: 1 / -1;
 }
 
-@media (max-width: 720px) {
+@container (max-width: 600px) {
   .form-row {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -328,6 +339,12 @@ a:hover {
   align-items: center;
   justify-content: center;
   width: 100%;
+  /* Container for the RegisterPage password row (JUS-19 fix 1): the 420px
+   * card is narrower than the collapse threshold, so the card itself cannot
+   * be the container — the page width decides between side-by-side (desktop)
+   * and stacked (narrow viewport) passwords. LoginPage has no .form-row, so
+   * this changes nothing there. */
+  container-type: inline-size;
 }
 
 .auth-card {

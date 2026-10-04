@@ -543,7 +543,7 @@ function resetWizard(): void {
             label-placement="top"
             @submit.prevent="handleCreate"
           >
-            <div class="connect-form">
+            <div class="connect-form form-container">
               <NAlert v-if="hasCreatedServer" type="info" :show-icon="true">
                 This node is already registered. Changing the connection
                 details here does not update it — delete and re-add the node to

@@ -430,7 +430,7 @@ function resetWizard(): void {
         </p>
       </div>
 
-      <div class="wizard-main">
+      <div class="wizard-main form-container">
         <div class="wizard-body">
           <NAlert v-if="errorMessage" type="error" :show-icon="true">
             {{ errorMessage }}

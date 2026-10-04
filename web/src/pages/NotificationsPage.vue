@@ -794,7 +794,7 @@ onMounted(async () => {
         <NAlert v-if="formError" type="error" :show-icon="true">
           {{ formError }}
         </NAlert>
-        <NForm label-placement="top" :show-feedback="false" class="channel-form">
+        <NForm label-placement="top" :show-feedback="false" class="channel-form form-container">
           <div class="form-row">
             <NFormItem label="Name">
               <NInput

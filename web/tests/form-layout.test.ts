@@ -1,11 +1,14 @@
-// Form row layout contract (JUS-19), component half.
+// Form row layout contract (JUS-19 + fix round 1), component half.
 //
 // Short fields share one row via the shared `.form-row` grid utility and
-// collapse to a single column below ~720px. jsdom never applies stylesheets,
-// so the collapse rule itself is asserted as CSS text (same pattern as the
-// JUS-16/17/18 suite); row membership and tab order are asserted on the real
-// Naive UI DOM for the store-free components, and on SFC source text for the
-// store/router-wired wizards and pages.
+// collapse to a single column once their container narrows below ~600px
+// (container query, not viewport). jsdom never applies stylesheets, so the
+// collapse rule itself is asserted as CSS text (same pattern as the
+// JUS-16/17/18 suite); row membership is structural — each pair must sit
+// inside the SAME .form-row block, found with a tag-matching scan, so the
+// tests fail when fields are merely stacked in order. Real-DOM mounts cover
+// the store-free components. The computed-style half lives in
+// form-layout.spec.ts (Playwright, no backend).
 
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -28,20 +31,80 @@ function readSfc(relativePath: string): string {
   return readFileSync(resolve(webRoot, relativePath), "utf8");
 }
 
+/**
+ * rowBlocks returns the inner HTML of each `<div class="...">` block with the
+ * given class, in document order. A depth-counting scan pairs each opener
+ * with its matching closer, so nested divs (field-stack, strength-row) stay
+ * inside their row. Throws on unbalanced markup.
+ */
+export function rowBlocks(source: string, rowClass = "form-row"): string[] {
+  const blocks: string[] = [];
+  const openTag = `<div class="${rowClass}`;
+  let cursor = 0;
+  while (true) {
+    const open = source.indexOf(openTag, cursor);
+    if (open === -1) {
+      return blocks;
+    }
+    const openEnd = source.indexOf(">", open);
+    let depth = 1;
+    let i = openEnd + 1;
+    while (depth > 0) {
+      const nextOpen = source.indexOf("<div", i);
+      const nextClose = source.indexOf("</div>", i);
+      if (nextClose === -1) {
+        throw new Error(`unbalanced divs after offset ${open}`);
+      }
+      if (nextOpen !== -1 && nextOpen < nextClose) {
+        const tagEnd = source.indexOf(">", nextOpen);
+        if (source[tagEnd - 1] === "/") {
+          i = tagEnd + 1;
+          continue;
+        }
+        depth += 1;
+        i = tagEnd + 1;
+      } else {
+        depth -= 1;
+        i = nextClose + "</div>".length;
+      }
+    }
+    blocks.push(source.slice(openEnd + 1, i - "</div>".length));
+    cursor = i;
+  }
+}
+
+/**
+ * expectPair asserts markers a and b sit inside the SAME row block, with a
+ * first — i.e. the fields share one visual row in tab order, not merely
+ * adjacent stacked rows.
+ */
+function expectPair(source: string, a: string, b: string, rowClass = "form-row"): void {
+  const hit = rowBlocks(source, rowClass).some((block) => {
+    const first = block.indexOf(a);
+    return first !== -1 && block.indexOf(b, first) !== -1;
+  });
+  expect(hit, `expected "${a}" and "${b}" in the same .${rowClass} block`).toBe(true);
+}
+
 /** rowTexts returns the text of each .form-row in DOM order. */
 function rowTexts(wrapper: VueWrapper): string[] {
   return wrapper.findAll(".form-row").map((row) => row.text());
 }
 
 describe("JUS-19 shared .form-row utility", () => {
-  it("lays out two equal columns that collapse below ~720px", () => {
-    expect(mainCss).toContain(".form-row");
+  it("lays out two equal columns that collapse per container below ~600px", () => {
+    expect(mainCss).toContain(".form-container");
+    expect(mainCss).toMatch(/\.form-container\s*\{[^}]*container-type:\s*inline-size/);
     expect(mainCss).toMatch(
       /\.form-row\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
     );
     expect(mainCss).toMatch(
-      /@media\s*\(max-width:\s*720px\)[\s\S]*?\.form-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+      /@container\s*\(max-width:\s*600px\)[\s\S]*?\.form-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
     );
+  });
+
+  it("has no viewport fallback for the row collapse", () => {
+    expect(mainCss).not.toContain("@media");
   });
 
   it("gives rows no item margins and lets a lone item span both columns", () => {
@@ -86,9 +149,6 @@ describe("JUS-19 CertificateForm rows", () => {
 
   it("keeps labels visible and the tab order left to right, top to bottom", () => {
     const wrapper = mountForm();
-    for (const label of ["Application", "Challenge", "DNS provider", "Wildcard", "Enabled"]) {
-      expect(wrapper.text()).toContain(label);
-    }
     const labels = wrapper.findAll(".n-form-item-label").map((node) => node.text());
     expect(labels).toEqual([
       "Application",
@@ -98,6 +158,10 @@ describe("JUS-19 CertificateForm rows", () => {
       "Wildcard",
       "Enabled",
     ]);
+  });
+
+  it("establishes its own container so 560px modals collapse", () => {
+    expect(mountForm().find("form").classes()).toContain("form-container");
   });
 });
 
@@ -128,14 +192,16 @@ describe("JUS-19 EnvEditor single-row variables", () => {
     expect(wrapper.text()).toContain("Add variable");
   });
 
-  it("lays out the row as a non-wrapping grid with a single-column fallback", () => {
+  it("lays out the row as a non-wrapping grid with a container fallback", () => {
     const source = readSfc("src/components/EnvEditor.vue");
     expect(source).toMatch(
       /\.env-editor__row\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*minmax\(140px,\s*220px\)\s*minmax\(0,\s*1fr\)\s*auto/,
     );
     expect(source).not.toContain("flex-wrap");
+    expect(source).not.toContain("@media");
+    expect(source).toMatch(/\.env-editor\s*\{[^}]*container-type:\s*inline-size/);
     expect(source).toMatch(
-      /@media\s*\(max-width:\s*720px\)[\s\S]*?\.env-editor__row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+      /@container\s*\(max-width:\s*600px\)[\s\S]*?\.env-editor__row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
     );
   });
 });
@@ -165,33 +231,37 @@ describe("JUS-19 DynamicForm stays two columns", () => {
   });
 });
 
-describe("JUS-19 wired-form pairings (source structure)", () => {
-  it("AddServerWizard pairs Node name|SSH user and Authentication|key mode", () => {
-    const source = readSfc("src/components/AddServerWizard.vue");
-    expect(source).toContain("form-row");
-    const order = [
-      "Node name",
-      "SSH user",
-      "IP address or hostname",
-      "SSH port",
-      "Authentication",
-      "SSH key mode",
-      "Key name",
-    ];
-    let cursor = -1;
-    for (const label of order) {
-      const next = source.indexOf(label, cursor + 1);
-      expect(next, `expected ${label} after position ${cursor}`).toBeGreaterThan(cursor);
-      cursor = next;
-    }
+describe("JUS-19 AddServerWizard rows", () => {
+  const source = readSfc("src/components/AddServerWizard.vue");
+
+  it("pairs Node name|SSH user in one row", () => {
+    expectPair(source, "add-server-name", "add-server-ssh-user");
+  });
+
+  it("pairs Authentication|key-mode in one row", () => {
+    expectPair(source, "Authentication method", "SSH key mode");
+  });
+
+  it("keeps Key name on its own row", () => {
+    const inRow = rowBlocks(source).some((block) => block.includes('label="Key name"'));
+    expect(inRow).toBe(false);
+  });
+
+  it("keeps every locator id and label", () => {
     for (const name of ["add-server-name", "add-server-ssh-user", "add-server-ip", "add-server-port"]) {
       expect(source).toContain(name);
     }
   });
+});
 
-  it("EditServerModal pairs SSH user|Credentials and keeps IP|port", () => {
-    const source = readSfc("src/components/EditServerModal.vue");
-    expect(source).toContain("form-row");
+describe("JUS-19 fix 1 EditServerModal: Credentials on its own row", () => {
+  const source = readSfc("src/components/EditServerModal.vue");
+
+  it("uses no .form-row: no segmented control shares a ~250px column", () => {
+    expect(rowBlocks(source)).toHaveLength(0);
+  });
+
+  it("keeps the logical field order with Credentials under its own heading", () => {
     const order = ["Node name", "IP address or hostname", "SSH port", "SSH user", "Credential change"];
     let cursor = -1;
     for (const label of order) {
@@ -199,64 +269,75 @@ describe("JUS-19 wired-form pairings (source structure)", () => {
       expect(next, `expected ${label} after position ${cursor}`).toBeGreaterThan(cursor);
       cursor = next;
     }
+    const credentialsHeading = source.indexOf('aria-label="Credentials"');
+    expect(source.indexOf("Credential change", credentialsHeading)).toBeGreaterThan(
+      credentialsHeading,
+    );
+  });
+});
+
+describe("JUS-19 CreateAppWizard rows", () => {
+  const source = readSfc("src/components/CreateAppWizard.vue");
+
+  it("pairs Provider|Repository in one row", () => {
+    expectPair(source, "Select a connected provider", "Select a repository");
   });
 
-  it("CreateAppWizard pairs Provider|Repository, Branch|name, Node|domain, ports", () => {
-    const source = readSfc("src/components/CreateAppWizard.vue");
-    // The Branch|name pair is a grid now, not an NSpace flex that wrapped.
+  it("pairs Branch|Application name in a grid row, not a wrapping flex", () => {
+    expectPair(source, 'label="Branch"', 'label="Application name"');
     expect(source).not.toMatch(/<NSpace[^>]*>\s*<NFormItem label="Branch"/);
-    const order = ["Provider", "Repository", "Branch", "Application name", "Node", "Domain (optional)", "Internal port", "Host port"];
-    let cursor = -1;
-    for (const label of order) {
-      const next = source.indexOf(label, cursor + 1);
-      expect(next, `expected ${label} after position ${cursor}`).toBeGreaterThan(cursor);
-      cursor = next;
-    }
   });
 
-  it("CreateDatabaseWizard pairs Version|Node", () => {
-    const source = readSfc("src/components/CreateDatabaseWizard.vue");
-    expect(source).toContain("form-row");
-    expect(source.indexOf("Version")).toBeLessThan(source.indexOf("Node"));
+  it("pairs Node|Domain and Internal port|Host port in their own rows", () => {
+    expectPair(source, 'label="Node"', "app.gotham.dev");
+    expectPair(source, 'label="Internal port"', "Host port (0 = auto)");
+  });
+});
+
+describe("JUS-19 CreateDatabaseWizard rows", () => {
+  it("pairs Version|Node in one row", () => {
+    expectPair(readSfc("src/components/CreateDatabaseWizard.vue"), 'label="Version"', 'label="Node"');
+  });
+});
+
+describe("JUS-19 DomainsPage rows", () => {
+  const source = readSfc("src/pages/DomainsPage.vue");
+
+  it("pairs Provider|Name in one row of the DNS provider modal", () => {
+    expectPair(source, 'label="Provider"', 'label="Name"');
   });
 
-  it("DNS provider modal pairs Provider|Name with Enabled on the last row", () => {
-    const source = readSfc("src/pages/DomainsPage.vue");
-    const order = ["Provider", "Provider type", "Provider name", "Zones", "Provider credential", "Provider enabled"];
-    let cursor = -1;
-    for (const label of order) {
-      const next = source.indexOf(label, cursor + 1);
-      expect(next, `expected ${label} after position ${cursor}`).toBeGreaterThan(cursor);
-      cursor = next;
-    }
+  it("puts Preserve path|Enabled beside the submit button", () => {
+    expectPair(source, "Redirect preserve path", "Add redirect", "redirect-form__bottom");
+    expectPair(source, "Redirect enabled now", "Add redirect", "redirect-form__bottom");
   });
 
-  it("Add redirect puts Preserve path|Enabled beside the submit button", () => {
-    const source = readSfc("src/pages/DomainsPage.vue");
-    expect(source).toContain("redirect-form__bottom");
-    const bottom = source.indexOf("redirect-form__bottom");
-    for (const label of ["Redirect preserve path", "Redirect enabled now", "Add redirect"]) {
-      expect(source.indexOf(label, bottom)).toBeGreaterThan(bottom);
-    }
+  it("collapses the redirect bottom row per container, not viewport", () => {
+    expect(source).not.toMatch(/@media[^{]*\{[^}]*\.redirect-form__bottom/);
+    expect(source).toMatch(
+      /@container\s*\(max-width:\s*600px\)[\s\S]*?\.redirect-form__bottom/,
+    );
+  });
+});
+
+describe("JUS-19 NotificationsPage rows", () => {
+  const source = readSfc("src/pages/NotificationsPage.vue");
+
+  it("pairs Name|Kind in one row", () => {
+    expectPair(source, 'label="Name"', 'label="Kind"');
   });
 
-  it("Notifications modal pairs Name|Kind and Resource scope|Enabled", () => {
-    const source = readSfc("src/pages/NotificationsPage.vue");
-    const order = ["Channel name", "Channel kind", "Webhook URL", "Resource scope", "Channel enabled"];
-    let cursor = -1;
-    for (const label of order) {
-      const next = source.indexOf(label, cursor + 1);
-      expect(next, `expected ${label} after position ${cursor}`).toBeGreaterThan(cursor);
-      cursor = next;
-    }
-    expect(source).toContain("form-row");
+  it("pairs Resource scope|Enabled in one row", () => {
+    expectPair(source, 'label="Resource scope"', 'label="Enabled"');
   });
+});
 
-  it("RegisterPage pairs Password|Confirm password", () => {
-    const source = readSfc("src/pages/RegisterPage.vue");
-    expect(source).toContain("form-row");
-    expect(source.indexOf("register-password")).toBeLessThan(
-      source.indexOf("register-confirm-password"),
+describe("JUS-19 RegisterPage rows", () => {
+  it("pairs Password|Confirm password in one row", () => {
+    expectPair(
+      readSfc("src/pages/RegisterPage.vue"),
+      "register-password",
+      "register-confirm-password",
     );
   });
 });

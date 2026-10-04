@@ -299,6 +299,7 @@ watch(
     title="Create database"
     style="width: 640px; max-width: 94vw"
     :mask-closable="false"
+    class="form-container"
     @update:show="handleClose"
   >
     <NSpace vertical :size="16">

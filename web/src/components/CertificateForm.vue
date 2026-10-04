@@ -84,7 +84,7 @@ function setChallenge(challenge: string): void {
 </script>
 
 <template>
-  <NForm label-placement="top" :show-feedback="false" class="certificate-form">
+  <NForm label-placement="top" :show-feedback="false" class="certificate-form form-container">
     <div class="form-row">
       <NFormItem label="Application" class="field-application">
         <NSelect

@@ -65,7 +65,7 @@ function removeRow(index: number): void {
     >
       <NInput
         :value="row.key"
-        class="mono env-editor__name"
+        class="mono"
         placeholder="NODE_ENV"
         aria-label="Variable name"
         :status="row.key !== '' && !isValidKey(row.key) ? 'error' : undefined"
@@ -104,6 +104,9 @@ function removeRow(index: number): void {
   flex-direction: column;
   gap: var(--space-2);
   align-items: flex-start;
+  /* Container for the single-column fallback below (JUS-19 fix 1): the row
+   * grid follows the editor width, not the viewport. */
+  container-type: inline-size;
 }
 
 .env-editor__empty {
@@ -134,7 +137,7 @@ function removeRow(index: number): void {
   white-space: nowrap;
 }
 
-@media (max-width: 720px) {
+@container (max-width: 600px) {
   .env-editor__row {
     grid-template-columns: minmax(0, 1fr);
   }

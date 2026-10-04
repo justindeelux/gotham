@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Form row layout harness (JUS-19 fix 1)</title>
+<!-- The real global stylesheet under test. -->
+<link rel="stylesheet" href="../src/styles/main.css">
+</head>
+<body>
+  <!-- Wide container: an 880px wizard body is ~640px, a page is wider; 900px
+    stands in for every container above the 600px collapse threshold. -->
+  <div id="wide" class="form-container" style="width: 900px;">
+    <div class="form-row" id="wide-row">
+      <div class="n-form-item" id="wide-first">
+        <div class="n-form-item-label">Challenge</div>
+        <div>dns-01 · TXT record via a DNS provider</div>
+      </div>
+      <div class="n-form-item" id="wide-second">
+        <div class="n-form-item-label">DNS provider</div>
+        <div>Production Cloudflare · cloudflare</div>
+      </div>
+    </div>
+    <div class="form-row" id="wide-lone-row">
+      <div class="n-form-item" id="wide-lone">
+        <div class="n-form-item-label">Authentication</div>
+        <div>Authenticate with a stored private key or a node password.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Narrow container: a 560px modal body is ~520px; 400px stands in for
+    every container below the 600px collapse threshold. -->
+  <div id="narrow" class="form-container" style="width: 400px;">
+    <div class="form-row" id="narrow-row">
+      <div class="n-form-item" id="narrow-first">
+        <div class="n-form-item-label">Challenge</div>
+        <div>dns-01 · TXT record via a DNS provider</div>
+      </div>
+      <div class="n-form-item" id="narrow-second">
+        <div class="n-form-item-label">DNS provider</div>
+        <div>Production Cloudflare · cloudflare</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

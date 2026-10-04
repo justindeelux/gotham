@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:internal/server/webdist/assets/use-message-BvCXsxHi.js
-import{aK as s,ao as o,cP as t}from"./index-Cj3aY4hj.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
-========
-import{aK as s,ao as o,cP as t}from"./index-Dw_1VOup.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
->>>>>>>> 56f0b07f (Web: split domains-notifications components (JUS-24)):internal/server/webdist/assets/use-message-7vZpYUCS.js

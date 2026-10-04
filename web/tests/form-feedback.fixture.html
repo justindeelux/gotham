@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Form feedback CSS harness (JUS-16/17/18)</title>
+<!-- The real global stylesheet under test. -->
+<link rel="stylesheet" href="../src/styles/main.css">
+<style>
+  /* Minimal replica of the two naive-ui 2.45 declarations our rules build
+   * on (es/form/src/styles/form-item.cssr.mjs): the wrapper reads the theme
+   * font size and reserves the feedback height, and only a non-empty wrapper
+   * gets padding. Everything else asserted here comes from main.css. */
+  .n-form-item-feedback-wrapper {
+    min-height: var(--n-feedback-height);
+    font-size: var(--n-feedback-font-size);
+    line-height: 1.25;
+  }
+  .n-form-item-feedback-wrapper:not(:empty) {
+    padding: var(--n-feedback-padding);
+  }
+</style>
+</head>
+<body>
+  <!-- Case A: valid field. The wrapper holds only the comment node Vue's
+    Transition leaves when there is no feedback (comments do not count for
+    :empty), replicating naive-ui FormItem.mjs with no feedback prop and no
+    validation explains. Theme vars replicate NConfigProvider overrides plus
+    naive defaults: 12px is OUR App.vue value, the rest are naive defaults. -->
+  <div
+    class="n-form-item"
+    id="valid-item"
+    style="--n-feedback-font-size: 12px; --n-feedback-height: 24px; --n-feedback-padding: 4px 0 0 2px;"
+  >
+    <div class="n-form-item-blank" id="valid-blank">
+      <input id="valid-input" aria-label="Node name" value="">
+      <span class="field-hint" id="valid-hint">A short unique name.</span>
+    </div>
+    <div class="n-form-item-feedback-wrapper" id="valid-wrapper"><!--v-if--></div>
+  </div>
+
+  <!-- Case B: the same field reporting an error. Naive adds
+    .n-form-item-blank--error to the input row and renders
+    .n-form-item-feedback--error inside the wrapper. -->
+  <div
+    class="n-form-item"
+    id="error-item"
+    style="--n-feedback-font-size: 12px; --n-feedback-height: 24px; --n-feedback-padding: 4px 0 0 2px;"
+  >
+    <div class="n-form-item-blank n-form-item-blank--error" id="error-blank">
+      <input id="error-input" aria-label="Node name" value="" aria-invalid="true">
+      <span class="field-hint" id="error-hint">A short unique name.</span>
+    </div>
+    <div class="n-form-item-feedback-wrapper" id="error-wrapper">
+      <div class="n-form-item-feedback n-form-item-feedback--error" id="error-line">Enter a node name.</div>
+    </div>
+  </div>
+
+  <!-- Case C: stacked fields in a plain NForm share one item-to-item gap. -->
+  <form class="n-form" id="stacked-form">
+    <div class="n-form-item" id="stacked-first"></div>
+    <div class="n-form-item" id="stacked-second"></div>
+  </form>
+</body>
+</html>

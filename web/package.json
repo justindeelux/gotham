@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "type-check": "vue-tsc --noEmit",
-    "test": "node scripts/mock-ws-check.mjs && node scripts/db-web-check.mjs && node scripts/fx15b-check.mjs && node scripts/focus-style-check.mjs && node scripts/jus11-check.mjs && node scripts/jus20-check.mjs && node scripts/ui-truth-check.mjs",
+    "test": "node scripts/mock-ws-check.mjs && node scripts/db-web-check.mjs && node scripts/fx15b-check.mjs && node scripts/focus-style-check.mjs && node scripts/jus11-check.mjs && node scripts/jus20-check.mjs && node scripts/ui-truth-check.mjs && npm run test:unit && npm run test:css",
+    "test:unit": "vitest run",
+    "test:css": "npx playwright install chromium && npx playwright test --config tests/playwright.css.config.ts",
     "e2e": "playwright test",
     "e2e:install": "playwright install --with-deps chromium",
     "lint": "eslint ."
@@ -26,12 +28,15 @@
     "@types/node": "^22.20.4",
     "@typescript-eslint/parser": "^8.71.0",
     "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/test-utils": "^2.5.1",
     "esbuild": "^0.28.2",
     "eslint": "^10.12.0",
     "eslint-plugin-vue": "^10.11.1",
     "globals": "^17.13.0",
+    "jsdom": "^30.1.1",
     "typescript": "~5.9.3",
     "vite": "^7.3.6",
+    "vitest": "^5.0.3",
     "vue-tsc": "^2.2.12"
   }
 }

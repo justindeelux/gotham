@@ -1,7 +1,7 @@
 # Phase 12 — User profile management
 
-Status: approved by the owner 2026-10-04, not started. Written from a read of the current code.
-Decisions are in section 6.
+Status: implemented and deployed to the test box 2026-10-04. Written from a read of the current code.
+Decisions are in section 6; the delivery log is in section 8.
 
 ## 1. Where we are
 
@@ -152,3 +152,34 @@ PF-1 and PF-3 can overlap once the PF-1 contract is fixed. Every package ends gr
 - `sid` in the JWT changes the token shape; old tokens lack it, so the list must treat a missing
   `sid` as "unknown current session" without failing.
 - Writing `last_used_at` on every refresh adds write load; rotation-only keeps it bounded.
+
+## 8. Delivery log (2026-10-04)
+
+| Package | Linear | PRs | Notes |
+|---|---|---|---|
+| PF-1 backend profile + password | JUS-25 | #168 | display name, change password, API-token guard as group middleware |
+| PF-2 backend sessions | JUS-26 | #171 | migration `00033`, `sid` claim, revoke deletes rows, guarded revoke-others |
+| PF-3 web profile page | JUS-27 | #167, #169, #172 | page, forms, layout and a11y fixes, account refresh on open |
+| PF-4 web sessions panel | JUS-28 | #170 | per-mount state, sequence-guarded list writes |
+| PF-5 docs and live check | JUS-29 | this PR | |
+
+Findings that independent review and the live box caught before they shipped: the committed
+webdist was incomplete (PF-3); every form submitted twice (PF-3); revoking a session left a row
+whose replay revoked every session of the user, a denial-of-service on the owner (PF-2);
+revoke-others trusting a stale session id could end the caller's own live session (PF-2); a
+regression that dropped the boot-time account fetch (PF-6); the identity table collapsing to one
+character per line in narrow containers (PF-3b); a stale stored account showing "Member" for an
+operator.
+
+### Follow-ups (not scheduled)
+- Email change, once a system mailer and verification exist (see section 2).
+- A per-device chain id on `sessions`, so revoking a device can also purge its rotated
+  ancestors and theft detection stays scoped to that device. Today rotated rows keep the
+  account-wide family revoke alive for 30 days.
+- A session `id` changes on every refresh rotation, so a DELETE with an id from a list fetched
+  before the device rotated can answer 404; the web already re-lists on 404.
+- A same-account cross-tab display-name save during an in-flight `/me` read can be overwritten
+  by the older read until the next mount (accepted, narrow).
+- Setting a first password on an OAuth-only account needs only a live JWT session, so a stolen
+  short-lived access token can convert into a persistent credential; consider requiring a
+  fresh GitHub re-authentication.

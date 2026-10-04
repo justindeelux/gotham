@@ -169,7 +169,17 @@ commit instead of a tag and a dev stamp (`git checkout -f 0378f65`, build with
   `browser_evaluate` and screenshot. The profile starts logged out: reset the password first with
   `gotham admin reset-password --email demo@gotham.dev --password <tmp>` (revokes sessions,
   including the Orca browser's). Console 401s before login are expected. Keep screenshots out of
-  the repo (pass an absolute `filename` in the scratchpad; `.playwright-mcp/` is gitignored).
+  the repo (`filename` must stay inside the repo roots: an absolute scratchpad path is refused with "outside allowed roots"; use `.playwright-mcp/<name>.png`, which is gitignored and also the default; a bare relative name lands in the repo root and must be deleted).
+- **Redeploy at `b22fd08` (2026-10-04, migrations `00032_profile_display_name` and
+  `00033_session_metadata`):** the profile feature (JUS-25..JUS-27, JUS-28; plan
+  `docs/plans/12-user-profile.md`) is live: `/settings/profile` with display name, change
+  password and an active-sessions list (end one / end all others). Verified through the
+  Playwright MCP at 1280px and 480px: display name updates the sidebar, a password change
+  keeps the current session and kills the old password, ending a device removes its row,
+  "Sign out all other devices" leaves only this device, and the Account card shows "Platform
+  admin" for the env operator (`PLATFORM_ADMINS`) account. The `demo@gotham.dev` password was
+  changed again during that check (not recorded; reset it with `gotham admin reset-password`
+  when needed) and its display name is now "Demo Operator".
 - The CP's CSP allows exactly one remote image host, `avatars.githubusercontent.com`
   (`img-src 'self' data: https://avatars.githubusercontent.com`), shared with the
   OAuth avatar validator. GitHub OAuth is the only provider, and it has not been

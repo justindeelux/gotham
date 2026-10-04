@@ -132,6 +132,27 @@ commit instead of a tag and a dev stamp (`git checkout -f 0378f65`, build with
   `v0.2.1-dev`, round header avatar, add server with a password, edit and delete a
   server, dashboard `Running applications 2 / 2`, sidebar role `owner`, install
   snippet with `--full`, login page without the sample footer.
+- **Redeploy at `0f6341c` (2026-10-04, same day, no new migrations after `00031`):** `main`
+  after PRs #144-#162: form feedback/spacing/row layout (JUS-16..19), install card removed
+  (JUS-20), first registered account is platform admin with migration `00031_platform_admin`
+  (JUS-21), installer creates the first admin (JUS-22: the interactive prompt flow was only
+  verified in containers, this box already has accounts; `gotham admin exists` and
+  `admin create --password-stdin/--generate-password` are live here), web client moved to
+  `app/`, `shared/`, `features/<module>/` with no oversized SFC left (JUS-24), zod validation
+  and `@vueuse/core` (JUS-23). Verified in the browser: every page loads, every form modal opens
+  with zero overflowing elements and the required marks present, no console errors. The two
+  accounts that existed before `00031` are not platform admins; `demo@gotham.dev` is an operator
+  through `PLATFORM_ADMINS` (drop-in above).
+- **Browser automation gotchas (Orca embedded browser):** a background tab does not run
+  `requestAnimationFrame`, so Naive UI/Vue transitions can stay stuck mid-way (for example a
+  field hint that never swaps for its error message, class `fade-down-transition-leave-active`
+  left on the element). That is a harness artifact, not an app bug: bring the tab to the front
+  or check the DOM state, not a screenshot taken right after the click.
+- **CI note:** the `DB-backed tests` job used to fail intermittently with
+  `TestServiceRegisterClosedWithoutInvite` because closed-instance tests shared the database
+  with other packages' cleanups; fixed in #162 (those tests now use private scratch
+  databases). The `proto lint + drift check` job can fail with a GitHub API rate limit in
+  `Set up buf` (no token supplied): rerun it.
 - **Browsing the UI from a workstation (2026-10-04):** forward the CP port with
   `ssh -f -N -L 18000:localhost:8000 gotham` and open `http://localhost:18000`.
   In Orca's embedded browser, `orca click` did not open the Naive UI modals;

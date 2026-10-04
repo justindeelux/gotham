@@ -167,7 +167,7 @@ export const useAuthStore = defineStore("auth", () => {
    */
   async function fetchMe(): Promise<void> {
     const tokenAtStart = accessToken.value;
-    const idAtStart = user.value?.id ?? null;
+    const idAtStart = user.value?.id;
     const seqAtStart = userSeq;
     try {
       const response = await http.get<{ user: User }>("/auth/me");

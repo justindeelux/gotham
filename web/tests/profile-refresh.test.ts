@@ -21,7 +21,10 @@ vi.mock("@/features/profile/api/sessions", () => ({
 }));
 
 import { http } from "@/shared/api/http";
-import { setSession as persistTokenSession } from "@/shared/api/token";
+import {
+  clearSession as clearTokenSession,
+  setSession as persistTokenSession,
+} from "@/shared/api/token";
 import ProfilePage from "@/features/profile/pages/ProfilePage.vue";
 import { useAuthStore } from "@/features/auth";
 import type { User } from "@/shared/api/token";
@@ -206,6 +209,102 @@ describe("ProfilePage account refresh", () => {
     const wrapper = await mountPage();
     await flushPromises();
     useAuthStore().clearSession();
+    gate.resolve({ data: { user: freshUser() } });
+    await flushPromises();
+    await nextTick();
+    expect(useAuthStore().user).toBeNull();
+    expect(useAuthStore().isAuthenticated).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("applies the response when the stored user is null at start", async () => {
+    setActivePinia(createPinia());
+    const auth = useAuthStore();
+    auth.user = null;
+    auth.accessToken = "access";
+    auth.refreshToken = "refresh";
+    expect(auth.user).toBeNull();
+    mockGet.mockResolvedValue({ data: { user: freshUser() } } as never);
+    await auth.fetchMe();
+    expect(auth.user).toEqual(freshUser());
+  });
+
+  it("applies the mount refresh for a token-only session", async () => {
+    setActivePinia(createPinia());
+    const auth = useAuthStore();
+    auth.user = null;
+    auth.accessToken = "access";
+    auth.refreshToken = "refresh";
+    // The App.vue boot condition: tokens restored, account not yet loaded.
+    expect(auth.isAuthenticated && auth.user === null).toBe(true);
+    mockGet.mockResolvedValue({ data: { user: freshUser() } } as never);
+    const wrapper = await mountPage();
+    expect(useAuthStore().user).toEqual(freshUser());
+    expect(wrapper.text()).toContain("Platform rolePlatform admin");
+    wrapper.unmount();
+  });
+
+  it("a null-user boot read is discarded when another account signs in", async () => {
+    setActivePinia(createPinia());
+    const auth = useAuthStore();
+    auth.user = null;
+    auth.accessToken = "access";
+    auth.refreshToken = "refresh";
+    const gate = deferred<{ data: { user: User } }>();
+    mockGet.mockReturnValue(gate.promise as never);
+    const pending = auth.fetchMe();
+    await flushPromises();
+    const other: User = {
+      ...staleUser(),
+      id: "u-2",
+      email: "bob@gotham.dev",
+      display_name: "Bob",
+    };
+    auth.setSession({
+      user: other,
+      access_token: "other-access",
+      refresh_token: "other-refresh",
+    });
+    gate.resolve({ data: { user: staleUser() } });
+    await pending;
+    expect(useAuthStore().user).toEqual(other);
+  });
+
+  it("discards the read on a cross-tab account switch (id only, no local write)", async () => {
+    seedAuth();
+    const gate = deferred<{ data: { user: User } }>();
+    mockGet.mockReturnValue(gate.promise as never);
+    const wrapper = await mountPage();
+    await flushPromises();
+    // Another tab signs in as someone else: the token module notifies, the
+    // store applies, and no sequence is bumped — only the id differs.
+    const other: User = {
+      ...staleUser(),
+      id: "u-2",
+      email: "bob@gotham.dev",
+      display_name: "Bob",
+    };
+    persistTokenSession({
+      user: other,
+      accessToken: "other-access",
+      refreshToken: "other-refresh",
+    });
+    gate.resolve({ data: { user: freshUser() } });
+    await flushPromises();
+    await nextTick();
+    expect(useAuthStore().user).toEqual(other);
+    wrapper.unmount();
+  });
+
+  it("does not resurrect on a cross-tab sign-out (id only, no local write)", async () => {
+    seedAuth();
+    const gate = deferred<{ data: { user: User } }>();
+    mockGet.mockReturnValue(gate.promise as never);
+    const wrapper = await mountPage();
+    await flushPromises();
+    // Another tab (or a forced 401 logout) clears the token module: the
+    // store applies the empty session without a sequence bump.
+    clearTokenSession();
     gate.resolve({ data: { user: freshUser() } });
     await flushPromises();
     await nextTick();

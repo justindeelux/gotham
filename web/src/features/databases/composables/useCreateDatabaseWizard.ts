@@ -16,7 +16,7 @@ import {
   imagePreviewFor,
   versionOptionsFor,
 } from "@/features/databases/utils/databaseEngines";
-import { isValidDatabaseName } from "@/features/databases/utils/databaseNames";
+import { isWizardConfigureValid } from "@/features/databases/schemas/databases";
 import { useDatabasesStore } from "@/features/databases/stores/databases";
 import { useServersStore } from "@/features/servers";
 
@@ -95,20 +95,13 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   const engineValid = computed<boolean>(() => form.serverId !== "");
 
   /** configureValid gates the Configure step: backend name rule + port range. */
-  const configureValid = computed<boolean>(() => {
-    if (!isValidDatabaseName(form.name)) {
-      return false;
-    }
-    if (form.exposePublic) {
-      return (
-        form.publicPort !== null &&
-        Number.isInteger(form.publicPort) &&
-        form.publicPort >= 1 &&
-        form.publicPort <= 65535
-      );
-    }
-    return true;
-  });
+  const configureValid = computed<boolean>(() =>
+    isWizardConfigureValid({
+      name: form.name,
+      exposePublic: form.exposePublic,
+      publicPort: form.publicPort,
+    }),
+  );
 
   const canContinue = computed<boolean>(() => {
     switch (step.value) {

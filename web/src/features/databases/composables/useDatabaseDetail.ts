@@ -7,12 +7,15 @@ import { useRoute, useRouter } from "vue-router";
 import { describeDatabaseError } from "@/features/databases/api/databases";
 import type { Database } from "@/features/databases/api/databases";
 import {
+  databaseMessages,
+  isDatabaseNameValid,
+} from "@/features/databases/schemas/databases";
+import {
   connectionScheme,
   dbContainerName,
   enginePorts,
   maskConnectionPassword,
 } from "@/features/databases/utils/databaseConnection";
-import { isValidDatabaseName } from "@/features/databases/utils/databaseNames";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { useDatabasesStore } from "@/features/databases/stores/databases";
 import { useServersStore } from "@/features/servers";
@@ -224,8 +227,8 @@ export function useDatabaseDetail() {
   /** handleRename submits the PATCH rename. */
   async function handleRename(): Promise<void> {
     const name = renameValue.value.trim();
-    if (!isValidDatabaseName(name)) {
-      message.error("Name must be 1-63 characters of letters, digits, ., _ or -.");
+    if (!isDatabaseNameValid(name)) {
+      message.error(databaseMessages.nameRule);
       return;
     }
     renaming.value = true;

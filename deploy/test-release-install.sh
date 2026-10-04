@@ -1631,10 +1631,14 @@ SHIM
     rm -f "${SCRATCH}/rr-agent-ran" "${SCRATCH}/rr-admin-ran"
     : >"${SCRATCH}/rr-systemctl.log"
     RR_RC=0
+    # GOTHAM_ADMIN_EMAIL="" pins the phase-1 collection to the non-interactive
+    # no-email path: this is a genuine TEST_MODE=0 run, so on a developer
+    # terminal it would otherwise stop at the tty prompt.
     TMPDIR="${RR_BOX}/tmp" \
     SYSTEMCTL_LOG="${SCRATCH}/rr-systemctl.log" \
     AGENT_MARKER="${SCRATCH}/rr-agent-ran" \
     ADMIN_MARKER="${SCRATCH}/rr-admin-ran" \
+    GOTHAM_ADMIN_EMAIL="" \
     GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
     GOTHAM_VERSION="${VERSION}" \
     GOTHAM_SKIP_DEPS=1 \
@@ -1713,6 +1717,22 @@ case "${cmd}" in
         pw=""
         IFS= read -r pw || true
         printf '%s' "${pw}" >"${state}/password"
+        if [ "${ADMIN_CREATE_FAIL:-0}" = "1" ]; then
+            echo "fake-admin: create refused (ADMIN_CREATE_FAIL)" >&2
+            exit 1
+        fi
+        if [ "${ADMIN_CREATE_FAIL_ONCE:-0}" = "1" ] && [ ! -f "${state}/failed-once" ]; then
+            touch "${state}/failed-once"
+            echo "fake-admin: first create refused (ADMIN_CREATE_FAIL_ONCE)" >&2
+            exit 1
+        fi
+        if [ "${ADMIN_FLIP_FLOP:-0}" = "1" ]; then
+            # Race stand-in: the create loses to a concurrent registration
+            # (the account now exists) and reports the conflict.
+            touch "${state}/users"
+            echo "fake-admin: email already registered" >&2
+            exit 1
+        fi
         if [ "${stdin_mode}" != "1" ]; then
             echo "fake-admin: password did not arrive on stdin" >&2
             exit 1
@@ -1748,10 +1768,20 @@ chmod +x "${SCRATCH}/ok-agent.sh"
 # $4 stderr log. ADMIN_EMAIL/ADMIN_PWFILE/ADMIN_TTY shell vars steer the run
 # (empty means unset-equivalent).
 run_admin_install() {
+    _ar_root="$1"
+    _ar_state="$2"
+    _ar_out="$3"
+    _ar_err="$4"
+    # Extra argv for the installer itself (empty, or -x for the xtrace case);
+    # "$@" below keeps it word-split-free.
+    set -- "${INSTALL_SH}"
+    if [ "${ADMIN_XTRACE:-0}" = "1" ]; then
+        set -- -x "$@"
+    fi
     GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
     GOTHAM_VERSION="${VERSION}" \
     GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
-    GOTHAM_INSTALL_ROOT="$1" \
+    GOTHAM_INSTALL_ROOT="${_ar_root}" \
     GOTHAM_SKIP_DEPS=1 \
     GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
     GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/ok-agent.sh" \
@@ -1760,10 +1790,18 @@ run_admin_install() {
     GOTHAM_ADMIN_PASSWORD_FILE="${ADMIN_PWFILE:-}" \
     GOTHAM_INSTALL_TEST_ADMIN_TTY="${ADMIN_TTY:-}" \
     ADMIN_EXISTS_FAIL="${ADMIN_EXISTS_FAIL:-0}" \
-    ADMIN_STATE_DIR="$2" \
+    ADMIN_CREATE_FAIL="${ADMIN_CREATE_FAIL:-0}" \
+    ADMIN_CREATE_FAIL_ONCE="${ADMIN_CREATE_FAIL_ONCE:-0}" \
+    ADMIN_FLIP_FLOP="${ADMIN_FLIP_FLOP:-0}" \
+    ADMIN_STATE_DIR="${_ar_state}" \
     SYSTEMCTL_LOG="${SCRATCH}/admin-systemctl.log" \
     PATH="${R3_SHIM}:${PATH}" \
-        sh "${INSTALL_SH}" >"$3" 2>"$4"
+        sh "$@" >"${_ar_out}" 2>"${_ar_err}"
+    _ar_rc=$?
+    # One-shot fake controls: never leak them into later runs.
+    unset ADMIN_EXISTS_FAIL ADMIN_CREATE_FAIL ADMIN_CREATE_FAIL_ONCE
+    unset ADMIN_FLIP_FLOP ADMIN_XTRACE
+    return "${_ar_rc}"
 }
 # The password must never be passed as a command-line argument: only
 # --password-stdin (no value) may appear in the installer.
@@ -1870,7 +1908,6 @@ mkdir -p "${I_STATE}"
 I_RC=0
 ADMIN_EMAIL="ops@example.com" ADMIN_PWFILE="" ADMIN_TTY="" ADMIN_EXISTS_FAIL=1 \
     run_admin_install "${SCRATCH}/root-admin-fail" "${I_STATE}" "${SCRATCH}/i-out.log" "${SCRATCH}/i-err.log" || I_RC=$?
-unset ADMIN_EXISTS_FAIL
 [ "${I_RC}" -ne 0 ] \
     || { echo "FAIL: an exists-check failure exited 0 (JUS-22/i)" >&2; exit 1; }
 grep -q 'could not check for an existing admin account' "${SCRATCH}/i-err.log" \
@@ -1907,137 +1944,310 @@ grep -q '\[dry-run\] /var/lib/gotham/bin/gotham admin create --email' "${SCRATCH
     || { echo "FAIL: --dry-run does not show the admin step on the real binary (JUS-22/f)" >&2; cat "${SCRATCH}/f-out.log" >&2; exit 1; }
 echo "PASS: --dry-run prompts nothing and changes nothing (JUS-22/f)"
 
-# JUS-22/g: interactive prompt under a pty (email + hidden password twice).
-# `script` gives the installer a controlling terminal, so /dev/tty works and
-# [ -t ] is true; the TTY seam only unlocks the step in test mode.
-# JUS-22/g-h: interactive prompt under a pty. Linux uses script(1); macOS
-# uses expect(1) because macOS script echoes piped stdin on the pty but never
-# delivers it to a child reading /dev/tty.
-PTY_DRIVER=""
-if [ "$(uname -s)" = "Darwin" ]; then
-    command -v expect >/dev/null 2>&1 && PTY_DRIVER="expect"
-else
-    command -v script >/dev/null 2>&1 && PTY_DRIVER="script"
+# JUS-22/g-h: interactive prompt under a pty, driven by deploy/pty-drive.py
+# (stdlib only; python3 is already required above): every SEND waits for its
+# EXPECT first, so nothing is typed ahead and the kernel never echoes secrets
+# while echo is still on. Assertions below are on what the installer prints
+# and the fake records, never on type-ahead.
+G_STATE="${SCRATCH}/admin-state-tty"
+mkdir -p "${G_STATE}"
+G_ROOT="${SCRATCH}/root-admin-tty"
+cat >"${SCRATCH}/pty-g.txt" <<'SCRIPT'
+EXPECT Admin email
+SEND pty@example.com
+EXPECT Admin password
+SEND PtY-s3cret!
+EXPECT Confirm password
+SEND PtY-s3cret!
+EXPECT-EOF
+SCRIPT
+cat >"${SCRATCH}/pty-h.txt" <<'SCRIPT'
+EXPECT Admin email
+SEND bogus
+EXPECT Invalid email address
+EXPECT Admin email
+SEND pty2@example.com
+EXPECT Admin password
+SEND
+EXPECT Confirm password
+SEND
+EXPECT-EOF
+SCRIPT
+pty_run() {
+    python3 "${SCRIPT_DIR}/pty-drive.py" "$1" -- sh "${INSTALL_SH}"
+}
+# pty_run is a function, so its environment travels through exports (a
+# VAR=... prefix would stop at the function on dash).
+export GOTHAM_BASE_URL="http://127.0.0.1:${PORT}"
+export GOTHAM_VERSION="${VERSION}"
+export GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}"
+export GOTHAM_INSTALL_TEST_RUN_AGENT=1
+export GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/ok-agent.sh"
+export GOTHAM_INSTALL_TEST_ADMIN_BIN="${SCRATCH}/fake-admin.sh"
+export GOTHAM_INSTALL_TEST_ADMIN_TTY=/dev/tty
+export GOTHAM_SKIP_DEPS=1
+export SYSTEMCTL_LOG="${SCRATCH}/admin-systemctl.log"
+export PATH="${R3_SHIM}:${PATH}"
+export GOTHAM_INSTALL_ROOT="${G_ROOT}"
+export ADMIN_STATE_DIR="${G_STATE}"
+# One-shot fake controls default off; tests needing them export 1 and
+# unset after (a leak would corrupt later cases).
+export ADMIN_EXISTS_FAIL=0 ADMIN_CREATE_FAIL=0
+export ADMIN_CREATE_FAIL_ONCE=0 ADMIN_FLIP_FLOP=0
+pty_run "${SCRATCH}/pty-g.txt" >"${SCRATCH}/g-out.log" 2>"${SCRATCH}/g-err.log" \
+    || { echo "FAIL: the pty admin run failed (JUS-22/g)" >&2; cat "${SCRATCH}/g-err.log" >&2; exit 1; }
+tr -d '\r' <"${SCRATCH}/g-out.log" >"${SCRATCH}/g-out.clean"
+[ -f "${G_STATE}/users" ] \
+    || { echo "FAIL: the pty run created no account (JUS-22/g)" >&2; exit 1; }
+[ "$(cat "${G_STATE}/password")" = 'PtY-s3cret!' ] \
+    || { echo "FAIL: the tty password did not arrive verbatim (JUS-22/g)" >&2; exit 1; }
+grep -q 'Account:  pty@example.com' "${SCRATCH}/g-out.clean" \
+    || { echo "FAIL: the pty summary misses the email (JUS-22/g)" >&2; exit 1; }
+if grep -qF 'PtY-s3cret!' "${SCRATCH}/g-out.clean" "${SCRATCH}/g-err.log"; then
+    echo "FAIL: the tty password leaked into the logs (JUS-22/g)" >&2
+    exit 1
 fi
-if [ -z "${PTY_DRIVER}" ]; then
-    echo "SKIP: no pty driver for the interactive cases (JUS-22/g-h; need 'script' on Linux, 'expect' on macOS)"
-else
-    G_STATE="${SCRATCH}/admin-state-tty"
-    mkdir -p "${G_STATE}"
-    G_ROOT="${SCRATCH}/root-admin-tty"
-    cat >"${SCRATCH}/pty-g.exp" <<EXP
-set timeout 300
-spawn -noecho sh "${INSTALL_SH}"
-expect {
-    -re "Admin email.*:" {}
-    timeout { puts stderr "EXPECT-TIMEOUT email"; exit 3 }
-}
-send "pty@example.com\\r"
-expect {
-    -re "Admin password.*:" {}
-    timeout { puts stderr "EXPECT-TIMEOUT pw1"; exit 3 }
-}
-send "PtY-s3cret!\\r"
-expect {
-    -re "Confirm password.*:" {}
-    timeout { puts stderr "EXPECT-TIMEOUT pw2"; exit 3 }
-}
-send "PtY-s3cret!\\r"
-expect {
-    eof { catch wait result; exit [lindex \$result 3] }
-}
-EXP
-    cat >"${SCRATCH}/pty-h.exp" <<EXP
-set timeout 300
-spawn -noecho sh "${INSTALL_SH}"
-expect {
-    -re "Admin email.*:" {}
-    timeout { puts stderr "EXPECT-TIMEOUT email"; exit 3 }
-}
-send "bogus\\r"
-expect {
-    -re "Invalid email address" {}
-    timeout { puts stderr "EXPECT-TIMEOUT reprompt"; exit 3 }
-}
-expect {
-    -re "Admin email.*:" {}
-    timeout { puts stderr "EXPECT-TIMEOUT email2"; exit 3 }
-}
-send "pty2@example.com\\r"
-expect {
-    -re "Admin password.*:" {}
-    timeout { puts stderr "EXPECT-TIMEOUT pw1"; exit 3 }
-}
-send "\\r"
-expect {
-    -re "Confirm password.*:" {}
-    timeout { puts stderr "EXPECT-TIMEOUT pw2"; exit 3 }
-}
-send "\\r"
-expect {
-    eof { catch wait result; exit [lindex \$result 3] }
-}
-EXP
-    pty_run() {
-        # $1 is the expect script (expect driver); the script driver feeds
-        # piped stdin through the pty instead.
-        if [ "${PTY_DRIVER}" = "expect" ]; then
-            expect "$1"
-        else
-            script -qec "sh \"${INSTALL_SH}\"" /dev/null
-        fi
-    }
-    # pty_run is a function, so its environment travels through exports (a
-    # VAR=... prefix would stop at the function on dash).
-    export GOTHAM_BASE_URL="http://127.0.0.1:${PORT}"
-    export GOTHAM_VERSION="${VERSION}"
-    export GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}"
-    export GOTHAM_INSTALL_TEST_RUN_AGENT=1
-    export GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/ok-agent.sh"
-    export GOTHAM_INSTALL_TEST_ADMIN_BIN="${SCRATCH}/fake-admin.sh"
-    export GOTHAM_INSTALL_TEST_ADMIN_TTY=/dev/tty
-    export GOTHAM_SKIP_DEPS=1
-    export SYSTEMCTL_LOG="${SCRATCH}/admin-systemctl.log"
-    export PATH="${R3_SHIM}:${PATH}"
-    export GOTHAM_INSTALL_ROOT="${G_ROOT}"
-    export ADMIN_STATE_DIR="${G_STATE}"
-    printf '%s\n' 'pty@example.com' 'PtY-s3cret!' 'PtY-s3cret!' | \
-        pty_run "${SCRATCH}/pty-g.exp" >"${SCRATCH}/g-out.log" 2>"${SCRATCH}/g-err.log" \
-        || { echo "FAIL: the pty admin run failed (JUS-22/g)" >&2; cat "${SCRATCH}/g-err.log" >&2; exit 1; }
-    tr -d '\r' <"${SCRATCH}/g-out.log" >"${SCRATCH}/g-out.clean"
-    [ -f "${G_STATE}/users" ] \
-        || { echo "FAIL: the pty run created no account (JUS-22/g)" >&2; exit 1; }
-    [ "$(cat "${G_STATE}/password")" = 'PtY-s3cret!' ] \
-        || { echo "FAIL: the tty password did not arrive verbatim (JUS-22/g)" >&2; exit 1; }
-    grep -q 'Account:  pty@example.com' "${SCRATCH}/g-out.clean" \
-        || { echo "FAIL: the pty summary misses the email (JUS-22/g)" >&2; exit 1; }
-    if grep -qF 'PtY-s3cret!' "${SCRATCH}/g-out.clean" "${SCRATCH}/g-err.log"; then
-        echo "FAIL: the tty password leaked into the logs (JUS-22/g)" >&2
-        exit 1
-    fi
-    echo "PASS: the interactive tty prompt creates the account secretly (JUS-22/g)"
+echo "PASS: the interactive tty prompt creates the account secretly (JUS-22/g)"
 
-    # JUS-22/h: empty tty password means generate; a bad email reprompts.
-    H_STATE="${SCRATCH}/admin-state-tty-gen"
-    mkdir -p "${H_STATE}"
-    export GOTHAM_INSTALL_ROOT="${SCRATCH}/root-admin-tty-gen"
-    export ADMIN_STATE_DIR="${H_STATE}"
-    printf '%s\n' 'bogus' 'pty2@example.com' '' '' | \
-        pty_run "${SCRATCH}/pty-h.exp" >"${SCRATCH}/h-out.log" 2>"${SCRATCH}/h-err.log" \
-        || { echo "FAIL: the pty generate run failed (JUS-22/h)" >&2; cat "${SCRATCH}/h-err.log" >&2; exit 1; }
-    tr -d '\r' <"${SCRATCH}/h-out.log" >"${SCRATCH}/h-out.clean"
-    grep -q 'Invalid email address, try again' "${SCRATCH}/h-out.clean" \
-        || { echo "FAIL: the bad tty email did not reprompt (JUS-22/h)" >&2; exit 1; }
-    H_GEN="$(cat "${H_STATE}/password")"
-    [ "$(printf '%s' "${H_GEN}" | wc -c)" -ge 24 ] \
-        || { echo "FAIL: the empty tty password did not generate (JUS-22/h)" >&2; exit 1; }
-    grep -q 'Store the password now, it is not shown again' "${SCRATCH}/h-out.clean" \
-        || { echo "FAIL: the pty generate summary misses the store-it-now line (JUS-22/h)" >&2; exit 1; }
-    if grep -qF "${H_GEN}" "${SCRATCH}/h-err.log"; then
-        echo "FAIL: the pty-generated password leaked onto stderr (JUS-22/h)" >&2
+# JUS-22/h: empty tty password means generate; a bad email reprompts.
+H_STATE="${SCRATCH}/admin-state-tty-gen"
+mkdir -p "${H_STATE}"
+export GOTHAM_INSTALL_ROOT="${SCRATCH}/root-admin-tty-gen"
+export ADMIN_STATE_DIR="${H_STATE}"
+pty_run "${SCRATCH}/pty-h.txt" >"${SCRATCH}/h-out.log" 2>"${SCRATCH}/h-err.log" \
+    || { echo "FAIL: the pty generate run failed (JUS-22/h)" >&2; cat "${SCRATCH}/h-err.log" >&2; exit 1; }
+tr -d '\r' <"${SCRATCH}/h-out.log" >"${SCRATCH}/h-out.clean"
+grep -q 'Invalid email address, try again' "${SCRATCH}/h-out.clean" \
+    || { echo "FAIL: the bad tty email did not reprompt (JUS-22/h)" >&2; exit 1; }
+H_GEN="$(cat "${H_STATE}/password")"
+[ "$(printf '%s' "${H_GEN}" | wc -c)" -ge 24 ] \
+    || { echo "FAIL: the empty tty password did not generate (JUS-22/h)" >&2; exit 1; }
+grep -q 'Store the password now, it is not shown again' "${SCRATCH}/h-out.clean" \
+    || { echo "FAIL: the pty generate summary misses the store-it-now line (JUS-22/h)" >&2; exit 1; }
+if grep -qF "${H_GEN}" "${SCRATCH}/h-err.log"; then
+    echo "FAIL: the pty-generated password leaked onto stderr (JUS-22/h)" >&2
+    exit 1
+fi
+echo "PASS: an empty tty password generates, a bad email reprompts (JUS-22/h)"
+
+# ---- JUS-22 fix round 1 --------------------------------------------------
+# Order statics: collection precedes the first mutation, creation precedes
+# the service start, so registration can never open before the first
+# account exists.
+P1_LINE="$(grep -nx 'admin_phase1_collect' "${INSTALL_SH}" | cut -d: -f1 || true)"
+P2_LINE="$(grep -nx 'admin_phase2_create' "${INSTALL_SH}" | cut -d: -f1 || true)"
+[ -n "${P1_LINE}" ] && [ -n "${P2_LINE}" ] \
+    || { echo "FAIL: admin phases are not called (JUS-22/order)" >&2; exit 1; }
+MUT_LINE="$(grep -n 'useradd --system' "${INSTALL_SH}" | head -n1 | cut -d: -f1 || true)"
+MIG_LINE="$(grep -n 'gotham-migrate' "${INSTALL_SH}" | head -n1 | cut -d: -f1 || true)"
+START_LINE="$(grep -n 'BINARY_NAME}.service' "${INSTALL_SH}" | head -n1 | cut -d: -f1 || true)"
+[ "${P1_LINE}" -lt "${MUT_LINE}" ] \
+    || { echo "FAIL: collection is not before the first mutation (JUS-22/order)" >&2; exit 1; }
+[ "${P2_LINE}" -gt "${MIG_LINE}" ] && [ "${P2_LINE}" -lt "${START_LINE}" ] \
+    || { echo "FAIL: creation is not between migrate and start (JUS-22/order)" >&2; exit 1; }
+echo "PASS: collection precedes mutation, creation precedes start (JUS-22/order)"
+
+# JUS-22/j: tty streams without a controlling terminal fall back to the
+# non-interactive branch (never prompt, never die silently). Skipped on
+# macOS: its sh (bash) re-acquires a controlling terminal on startup, so
+# the state cannot be simulated there; Linux sh (dash) does not.
+if [ "$(uname -s)" = "Darwin" ]; then
+    echo "SKIP: no-ctty needs a non-acquiring sh (JUS-22/j)"
+else
+    J_STATE="${SCRATCH}/admin-state-noctty"
+    mkdir -p "${J_STATE}"
+    export GOTHAM_INSTALL_ROOT="${SCRATCH}/root-admin-noctty"
+    export ADMIN_STATE_DIR="${J_STATE}"
+    export GOTHAM_ADMIN_EMAIL="noctty@example.com"
+    python3 "${SCRIPT_DIR}/pty-drive.py" --no-ctty -- sh "${INSTALL_SH}" \
+        >"${SCRATCH}/j-out.log" 2>"${SCRATCH}/j-err.log" \
+        || { echo "FAIL: the no-ctty run failed (JUS-22/j)" >&2; cat "${SCRATCH}/j-err.log" >&2; exit 1; }
+    unset GOTHAM_ADMIN_EMAIL
+    [ -f "${J_STATE}/users" ] \
+        || { echo "FAIL: the no-ctty run created no account (JUS-22/j)" >&2; exit 1; }
+    if grep -q 'Admin email' "${SCRATCH}/j-out.log"; then
+        echo "FAIL: the no-ctty run prompted although /dev/tty is unusable (JUS-22/j)" >&2
         exit 1
     fi
-    echo "PASS: an empty tty password generates, a bad email reprompts (JUS-22/h)"
+    grep -q 'Account:  noctty@example.com' "${SCRATCH}/j-out.log" \
+        || { echo "FAIL: the no-ctty summary misses the account (JUS-22/j)" >&2; exit 1; }
+    echo "PASS: tty streams without a controlling terminal use the non-interactive branch (JUS-22/j)"
 fi
+
+# JUS-22/k: a policy-rejected interactive password re-prompts (mirrored
+# 8..128 bounds) instead of failing the install.
+cat >"${SCRATCH}/pty-k.txt" <<'SCRIPT'
+EXPECT Admin email
+SEND policy@example.com
+EXPECT Admin password
+SEND short
+EXPECT Confirm password
+SEND short
+EXPECT Password must be between
+EXPECT Admin password
+SEND long-enough-PW1
+EXPECT Confirm password
+SEND long-enough-PW1
+EXPECT-EOF
+SCRIPT
+K_STATE="${SCRATCH}/admin-state-policy"
+mkdir -p "${K_STATE}"
+export GOTHAM_INSTALL_ROOT="${SCRATCH}/root-admin-policy"
+export ADMIN_STATE_DIR="${K_STATE}"
+pty_run "${SCRATCH}/pty-k.txt" >"${SCRATCH}/k-out.log" 2>"${SCRATCH}/k-err.log" \
+    || { echo "FAIL: the policy-reprompt run failed (JUS-22/k)" >&2; cat "${SCRATCH}/k-err.log" >&2; exit 1; }
+tr -d '\r' <"${SCRATCH}/k-out.log" >"${SCRATCH}/k-out.clean"
+[ -f "${K_STATE}/users" ] \
+    || { echo "FAIL: the policy-reprompt run created no account (JUS-22/k)" >&2; exit 1; }
+[ "$(cat "${K_STATE}/password")" = 'long-enough-PW1' ] \
+    || { echo "FAIL: the reprompted password did not arrive (JUS-22/k)" >&2; exit 1; }
+grep -q 'Password must be between 8 and 128 characters' "${SCRATCH}/k-out.clean" \
+    || { echo "FAIL: the policy rejection printed no bounds message (JUS-22/k)" >&2; exit 1; }
+echo "PASS: a policy-rejected password re-prompts (JUS-22/k)"
+
+# JUS-22/l: a binary rejection retries interactively (bounded): the first
+# create fails, the operator retries once, the second succeeds.
+cat >"${SCRATCH}/pty-l.txt" <<'SCRIPT'
+EXPECT Admin email
+SEND retry@example.com
+EXPECT Admin password
+SEND Retry-pw123
+EXPECT Confirm password
+SEND Retry-pw123
+EXPECT Could not create the account
+EXPECT Admin password
+SEND Retry-pw123
+EXPECT Confirm password
+SEND Retry-pw123
+EXPECT-EOF
+SCRIPT
+L_STATE="${SCRATCH}/admin-state-retry"
+mkdir -p "${L_STATE}"
+export GOTHAM_INSTALL_ROOT="${SCRATCH}/root-admin-retry"
+export ADMIN_STATE_DIR="${L_STATE}"
+export ADMIN_CREATE_FAIL_ONCE=1
+pty_run "${SCRATCH}/pty-l.txt" >"${SCRATCH}/l-out.log" 2>"${SCRATCH}/l-err.log" \
+    || { echo "FAIL: the create-retry run failed (JUS-22/l)" >&2; cat "${SCRATCH}/l-err.log" >&2; exit 1; }
+unset ADMIN_CREATE_FAIL_ONCE
+tr -d '\r' <"${SCRATCH}/l-out.log" >"${SCRATCH}/l-out.clean"
+[ -f "${L_STATE}/users" ] \
+    || { echo "FAIL: the retried create produced no account (JUS-22/l)" >&2; exit 1; }
+grep -q 'Could not create the account' "${SCRATCH}/l-out.clean" \
+    || { echo "FAIL: the rejection was not shown before retrying (JUS-22/l)" >&2; exit 1; }
+grep -q 'Account:  retry@example.com' "${SCRATCH}/l-out.clean" \
+    || { echo "FAIL: the retried summary misses the account (JUS-22/l)" >&2; exit 1; }
+echo "PASS: a rejected create retries interactively (JUS-22/l)"
+
+# JUS-22/l2: the retry is bounded at 3 attempts, then warns and exits nonzero.
+cat >"${SCRATCH}/pty-l2.txt" <<'SCRIPT'
+EXPECT Admin email
+SEND bound@example.com
+EXPECT Admin password
+SEND Bound-pw123
+EXPECT Confirm password
+SEND Bound-pw123
+EXPECT Admin password
+SEND Bound-pw123
+EXPECT Confirm password
+SEND Bound-pw123
+EXPECT Admin password
+SEND Bound-pw123
+EXPECT Confirm password
+SEND Bound-pw123
+EXPECT-EOF
+SCRIPT
+L2_STATE="${SCRATCH}/admin-state-bound"
+mkdir -p "${L2_STATE}"
+export GOTHAM_INSTALL_ROOT="${SCRATCH}/root-admin-bound"
+export ADMIN_STATE_DIR="${L2_STATE}"
+export ADMIN_CREATE_FAIL=1
+L2_RC=0
+pty_run "${SCRATCH}/pty-l2.txt" >"${SCRATCH}/l2-out.log" 2>"${SCRATCH}/l2-err.log" || L2_RC=$?
+unset ADMIN_CREATE_FAIL
+[ "${L2_RC}" -ne 0 ] \
+    || { echo "FAIL: triple rejection exited 0 (JUS-22/l2)" >&2; exit 1; }
+tr -d '\r' <"${SCRATCH}/l2-out.log" >"${SCRATCH}/l2-out.clean"
+[ "$(grep -c 'Admin password' "${SCRATCH}/l2-out.clean")" -eq 3 ] \
+    || { echo "FAIL: the retry was not bounded at 3 prompts (JUS-22/l2)" >&2; exit 1; }
+[ ! -e "${L2_STATE}/users" ] \
+    || { echo "FAIL: an account was created although every create failed (JUS-22/l2)" >&2; exit 1; }
+echo "PASS: the interactive retry is bounded at 3 attempts (JUS-22/l2)"
+
+# JUS-22/m: on a terminal, GOTHAM_ADMIN_EMAIL is the prompt default (empty
+# keeps it) and GOTHAM_ADMIN_PASSWORD_FILE is used without prompting.
+printf '%s' "File \$ecret2!" >"${SCRATCH}/admin-default-pw.txt"
+chmod 600 "${SCRATCH}/admin-default-pw.txt"
+cat >"${SCRATCH}/pty-m.txt" <<'SCRIPT'
+EXPECT Admin email \[default@example.com\]
+SEND
+EXPECT-EOF
+SCRIPT
+M_STATE="${SCRATCH}/admin-state-default"
+mkdir -p "${M_STATE}"
+export GOTHAM_INSTALL_ROOT="${SCRATCH}/root-admin-default"
+export ADMIN_STATE_DIR="${M_STATE}"
+export GOTHAM_ADMIN_EMAIL="default@example.com"
+export GOTHAM_ADMIN_PASSWORD_FILE="${SCRATCH}/admin-default-pw.txt"
+pty_run "${SCRATCH}/pty-m.txt" >"${SCRATCH}/m-out.log" 2>"${SCRATCH}/m-err.log" \
+    || { echo "FAIL: the env-default run failed (JUS-22/m)" >&2; cat "${SCRATCH}/m-err.log" >&2; exit 1; }
+unset GOTHAM_ADMIN_EMAIL GOTHAM_ADMIN_PASSWORD_FILE
+tr -d '\r' <"${SCRATCH}/m-out.log" >"${SCRATCH}/m-out.clean"
+[ -f "${M_STATE}/users" ] \
+    || { echo "FAIL: the env-default run created no account (JUS-22/m)" >&2; exit 1; }
+[ "$(cat "${M_STATE}/password")" = "File \$ecret2!" ] \
+    || { echo "FAIL: the default password file was not used (JUS-22/m)" >&2; exit 1; }
+grep -q 'Account:  default@example.com' "${SCRATCH}/m-out.clean" \
+    || { echo "FAIL: the default email was not kept (JUS-22/m)" >&2; exit 1; }
+if grep -q 'Admin password' "${SCRATCH}/m-out.clean"; then
+    echo "FAIL: the password file did not suppress the prompt (JUS-22/m)" >&2
+    exit 1
+fi
+echo "PASS: env values are prompt defaults on a terminal (JUS-22/m)"
+
+# JUS-22/n: a group/world-readable password file warns but still works.
+printf '%s' 'Perm-warn-pw1' >"${SCRATCH}/admin-open-pw.txt"
+chmod 644 "${SCRATCH}/admin-open-pw.txt"
+N_STATE="${SCRATCH}/admin-state-perms"
+mkdir -p "${N_STATE}"
+ADMIN_EMAIL="perms@example.com" ADMIN_PWFILE="${SCRATCH}/admin-open-pw.txt" ADMIN_TTY="" \
+    ADMIN_CREATE_FAIL=0 ADMIN_CREATE_FAIL_ONCE=0 ADMIN_FLIP_FLOP=0 ADMIN_EXISTS_FAIL=0 \
+    run_admin_install "${SCRATCH}/root-admin-perms" "${N_STATE}" "${SCRATCH}/n-out.log" "${SCRATCH}/n-err.log" \
+    || { echo "FAIL: the readable-pwfile run failed (JUS-22/n)" >&2; cat "${SCRATCH}/n-err.log" >&2; exit 1; }
+[ -f "${N_STATE}/users" ] \
+    || { echo "FAIL: the readable-pwfile run created no account (JUS-22/n)" >&2; exit 1; }
+grep -q 'readable by group/others' "${SCRATCH}/n-out.log" \
+    || { echo "FAIL: no group/world-readable warning (JUS-22/n)" >&2; exit 1; }
+echo "PASS: a group/world-readable password file warns but works (JUS-22/n)"
+
+# JUS-22/o: losing the first-account race reports a likely takeover instead
+# of the generic failure (the binary guard stays atomic: still one account).
+O_STATE="${SCRATCH}/admin-state-flip"
+mkdir -p "${O_STATE}"
+O_RC=0
+ADMIN_EMAIL="race@example.com" ADMIN_PWFILE="" ADMIN_TTY="" ADMIN_FLIP_FLOP=1 \
+    run_admin_install "${SCRATCH}/root-admin-flip" "${O_STATE}" "${SCRATCH}/o-out.log" "${SCRATCH}/o-err.log" || O_RC=$?
+[ "${O_RC}" -ne 0 ] \
+    || { echo "FAIL: the lost race exited 0 (JUS-22/o)" >&2; exit 1; }
+grep -q 'created by someone else' "${SCRATCH}/o-err.log" \
+    || { echo "FAIL: the lost race names no takeover (JUS-22/o)" >&2; cat "${SCRATCH}/o-err.log" >&2; exit 1; }
+echo "PASS: a lost first-account race reports a likely takeover (JUS-22/o)"
+
+# JUS-22/x: sh -x never prints the password (xtrace disabled around secrets).
+printf '%s' "Xtrace \$ecret1!" >"${SCRATCH}/admin-xtrace-pw.txt"
+chmod 600 "${SCRATCH}/admin-xtrace-pw.txt"
+X_STATE="${SCRATCH}/admin-state-xtrace"
+mkdir -p "${X_STATE}"
+ADMIN_EMAIL="xtrace@example.com" ADMIN_PWFILE="${SCRATCH}/admin-xtrace-pw.txt" ADMIN_TTY="" ADMIN_XTRACE=1 \
+    run_admin_install "${SCRATCH}/root-admin-xtrace" "${X_STATE}" "${SCRATCH}/x-out.log" "${SCRATCH}/x-err.log" \
+    || { echo "FAIL: the xtrace run failed (JUS-22/x)" >&2; cat "${SCRATCH}/x-err.log" >&2; exit 1; }
+[ -f "${X_STATE}/users" ] \
+    || { echo "FAIL: the xtrace run created no account (JUS-22/x)" >&2; exit 1; }
+if grep -qF "Xtrace \$ecret1!" "${SCRATCH}/x-out.log" "${SCRATCH}/x-err.log"; then
+    echo "FAIL: sh -x printed the password (JUS-22/x)" >&2
+    exit 1
+fi
+grep -q '^+' "${SCRATCH}/x-err.log" \
+    || { echo "FAIL: xtrace produced no trace lines at all (JUS-22/x)" >&2; exit 1; }
+echo "PASS: sh -x never prints the password (JUS-22/x)"
 
 echo "ALL RELEASE-INSTALL TESTS PASSED"

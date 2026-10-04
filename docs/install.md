@@ -128,8 +128,8 @@ Useful overrides:
 | `GOTHAM_DATABASE_DSN` | Managed PostgreSQL DSN; skips local provisioning. |
 | `GOTHAM_REDIS_ADDR` | Redis `host:port` (default `localhost:6379`). |
 | `GOTHAM_SKIP_DEPS=1` | Do not install or configure PostgreSQL/Redis. |
-| `GOTHAM_ADMIN_EMAIL` | Email of the first admin account (non-interactive installs; without it creation is skipped). |
-| `GOTHAM_ADMIN_PASSWORD_FILE` | Single-line file holding the first admin password (with `GOTHAM_ADMIN_EMAIL`); without it a random password is generated and printed once. |
+| `GOTHAM_ADMIN_EMAIL` | Email of the first admin account (non-interactive installs; without it creation is skipped). On a terminal it is the email prompt default. |
+| `GOTHAM_ADMIN_PASSWORD_FILE` | Single-line file holding the first admin password (with `GOTHAM_ADMIN_EMAIL`, or as the tty default without prompting); without it a random password is generated and printed once. A group/world-readable file prints a warning. |
 | `GOTHAM_AUTH_ALLOW_REGISTRATION` | Test/dev only: reopens self-registration after the first account (the default is closed — members join through invites). |
 | `--cp-host <name-or-ip>` | Add a DNS name or IP to the gRPC listener certificate SANs (repeatable). |
 | `--no-local-agent` / `GOTHAM_NO_LOCAL_AGENT=1` | Skip the localhost agent install (remote-only control plane). |
@@ -147,27 +147,38 @@ Useful overrides:
 Registration is closed: exactly one account bootstraps the instance and members
 join through admin-created invites.
 
-The installer creates that first account for you, after the control plane is
-up and the database is migrated:
+The installer creates that first account for you. Credentials are collected
+before anything is installed, and the account is created right after the
+database migrations and before the service starts — so nobody can register
+first through the open web form while you ponder the prompt:
 
 - **Interactive install** (a terminal is present, `curl | sh` included): the
   installer prompts for the admin email, then for the password with hidden
-  input and confirmation. Leaving the password empty generates a strong random
-  one, printed once in the final summary together with the email and the login
-  URL — store it now, it is not shown again.
+  input and confirmation (mismatches and policy violations re-prompt, up to
+  3 creation attempts). Leaving the password empty generates a strong random
+  one, printed once in the final summary together with the email and the
+  login URL — store it now, it is not shown again.
 - **Non-interactive install** (no terminal): the installer never prompts.
   Set `GOTHAM_ADMIN_EMAIL` — and optionally `GOTHAM_ADMIN_PASSWORD_FILE`
   (a path to a root-readable file holding the password on a single line) —
   to create the account; without a password file a random password is
   generated and printed once in the final summary. Without an email the
   installer skips creation and prints the manual command below.
+- **Set both ways**: on a terminal, `GOTHAM_ADMIN_EMAIL` is the email prompt
+  default (empty input keeps it, `-` skips) and `GOTHAM_ADMIN_PASSWORD_FILE`
+  is used without prompting. A group/world-readable password file prints a
+  warning but is still used.
 - **Re-run / upgrade**: if the instance already has an account the installer
-  says `admin already exists, skipping` and changes nothing.
+  says `admin already exists, skipping` and changes nothing (it checks before
+  prompting). If creation loses a race with another registration, it says
+  `an account already exists (created by someone else?)` instead of the
+  generic failure.
 - **`--dry-run`** prompts nothing and changes nothing.
 
 The password is never passed as a command-line argument, never put in the
 environment, and never written to disk, the env file, logs or shell history:
-it travels to the binary on stdin only.
+it travels to the binary on stdin only (`sh -x` tracing is disabled around
+the secret handling).
 
 Prefer to do it by hand (or skipped the prompt with an empty email)?
 

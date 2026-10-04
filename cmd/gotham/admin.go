@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -71,8 +70,8 @@ Usage:
 The password is read with a hidden prompt when none of --password,
 --password-stdin or --generate-password is given. --password is visible in
 the process list; prefer the hidden prompt or --password-stdin (a single
-line on stdin). --generate-password creates a random password and prints it
-once as "generated-password: <value>".
+piped line, refused on a terminal). --generate-password creates a random
+password and prints it once as "generated-password: <value>".
 Configuration comes from gotham.yaml / GOTHAM_* environment variables; when
 %s exists it is loaded first (without overriding the environment).
 `, adminEnvFile)
@@ -83,14 +82,20 @@ Configuration comes from gotham.yaml / GOTHAM_* environment variables; when
 func runAdminCreate(args []string) int {
 	fs := flag.NewFlagSet("admin create", flag.ContinueOnError)
 	email := fs.String("email", "", "account email (required)")
-	password := fs.String("password", "", "account password (visible in ps; prefer --password-stdin or the hidden prompt)")
-	passwordStdin := fs.Bool("password-stdin", false, "read the password from stdin (single line, no echo)")
+	password := fs.String("password", "", "account password (visible in ps output; prefer the hidden prompt)")
+	passwordStdin := fs.Bool("password-stdin", false, "read the password from stdin (single piped line; refused on a terminal)")
 	generatePassword := fs.Bool("generate-password", false, "generate a random password and print it once as \"generated-password: <value>\"")
 	force := fs.Bool("force", false, "create the account even when one already exists")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if err := checkAdminPasswordFlags(*password, *passwordStdin, *generatePassword); err != nil {
+	passwordSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "password" {
+			passwordSet = true
+		}
+	})
+	if err := checkAdminPasswordFlags(passwordSet, *passwordStdin, *generatePassword); err != nil {
 		fmt.Fprintf(os.Stderr, "admin create: %v\n", err)
 		return exitUsage
 	}
@@ -122,6 +127,9 @@ func runAdminCreate(args []string) int {
 				return adminHashPlaintext(generated)
 			}
 			if *passwordStdin {
+				if term.IsTerminal(int(os.Stdin.Fd())) {
+					return "", errors.New("--password-stdin needs piped input; omit the flag for the hidden prompt")
+				}
 				plaintext, err := readPasswordLine(os.Stdin)
 				if err != nil {
 					return "", err
@@ -160,7 +168,7 @@ func runAdminCreate(args []string) int {
 
 		fmt.Printf("created account %s\n", normalized)
 		if generated != "" {
-			fmt.Printf("generated-password: %s\n", generated)
+			printGeneratedPassword(os.Stdout, generated)
 		}
 		return exitOK
 	})
@@ -247,10 +255,12 @@ func runAdminResetPassword(args []string) int {
 }
 
 // checkAdminPasswordFlags rejects combining --password, --password-stdin and
-// --generate-password: they are mutually exclusive password sources.
-func checkAdminPasswordFlags(password string, passwordStdin, generatePassword bool) error {
+// --generate-password: they are mutually exclusive password sources. An
+// explicitly passed --password counts even when empty (it still selects the
+// flag source); only an omitted --password falls through to the prompt.
+func checkAdminPasswordFlags(passwordSet, passwordStdin, generatePassword bool) error {
 	n := 0
-	if password != "" {
+	if passwordSet {
 		n++
 	}
 	if passwordStdin {
@@ -275,20 +285,35 @@ func adminHashPlaintext(password string) (string, error) {
 	return auth.HashPassword(password)
 }
 
-// readPasswordLine reads a single password line from r without echo handling
-// (the caller pipes it, so nothing is displayed). Only the trailing newline
-// is stripped; every other byte is significant.
+// maxPasswordStdinBytes bounds the --password-stdin read: a piped password is
+// at most 128 characters, so 1 KiB is generous and keeps a stray dump from
+// allocating unbounded memory in a local operator command.
+const maxPasswordStdinBytes = 1024
+
+// readPasswordLine reads a single password line from r. Only the first line
+// is significant (a trailing newline is stripped); every other byte of it,
+// including spaces, is significant.
 func readPasswordLine(r io.Reader) (string, error) {
-	line, err := bufio.NewReader(r).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	data, err := io.ReadAll(io.LimitReader(r, maxPasswordStdinBytes+1))
+	if err != nil {
 		return "", fmt.Errorf("read password from stdin: %w", err)
 	}
-	line = strings.TrimSuffix(line, "\n")
+	if len(data) > maxPasswordStdinBytes {
+		return "", fmt.Errorf("password on stdin exceeds %d bytes", maxPasswordStdinBytes)
+	}
+	line, _, _ := strings.Cut(string(data), "\n")
 	line = strings.TrimSuffix(line, "\r")
-	if line == "" && errors.Is(err, io.EOF) {
+	if line == "" {
 		return "", fmt.Errorf("no password on stdin; pipe a single line or use --generate-password")
 	}
 	return line, nil
+}
+
+// printGeneratedPassword reports a generated password exactly once, on the
+// given writer only. runAdminCreate passes os.Stdout after a successful
+// insert; failures never reach it, and nothing is ever written to stderr.
+func printGeneratedPassword(w io.Writer, password string) {
+	fmt.Fprintf(w, "generated-password: %s\n", password)
 }
 
 // generateAdminPassword returns a 32-character random password (24 bytes from

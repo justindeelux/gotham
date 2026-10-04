@@ -34,15 +34,16 @@ func TestAdminPasswordHashEncodesArgon2id(t *testing.T) {
 
 // TestCheckAdminPasswordFlags pins the mutual exclusivity of the three
 // password sources: --password, --password-stdin and --generate-password.
+// An explicitly passed --password counts even when empty.
 func TestCheckAdminPasswordFlags(t *testing.T) {
-	if err := checkAdminPasswordFlags("", false, false); err != nil {
+	if err := checkAdminPasswordFlags(false, false, false); err != nil {
 		t.Fatalf("no source: %v", err)
 	}
 	for name, tc := range map[string]struct {
-		password   string
+		password   bool
 		stdin, gen bool
 	}{
-		"password only": {password: "Gotham-E2E-Password1"},
+		"password only": {password: true},
 		"stdin only":    {stdin: true},
 		"generate only": {gen: true},
 	} {
@@ -51,13 +52,13 @@ func TestCheckAdminPasswordFlags(t *testing.T) {
 		}
 	}
 	for name, tc := range map[string]struct {
-		password   string
+		password   bool
 		stdin, gen bool
 	}{
-		"password+stdin":    {password: "Gotham-E2E-Password1", stdin: true},
-		"password+generate": {password: "Gotham-E2E-Password1", gen: true},
+		"password+stdin":    {password: true, stdin: true},
+		"password+generate": {password: true, gen: true},
 		"stdin+generate":    {stdin: true, gen: true},
-		"all three":         {password: "Gotham-E2E-Password1", stdin: true, gen: true},
+		"all three":         {password: true, stdin: true, gen: true},
 	} {
 		if err := checkAdminPasswordFlags(tc.password, tc.stdin, tc.gen); err == nil {
 			t.Fatalf("%s: expected a mutual-exclusivity error", name)
@@ -85,6 +86,23 @@ func TestReadPasswordLineStripsOneNewline(t *testing.T) {
 	}
 	if _, err := readPasswordLine(strings.NewReader("")); err == nil {
 		t.Fatal("empty stdin: expected an error, not an empty password")
+	}
+	if _, err := readPasswordLine(strings.NewReader(strings.Repeat("x", maxPasswordStdinBytes+1))); err == nil {
+		t.Fatal("oversize stdin: expected a bound error")
+	}
+	if _, err := readPasswordLine(strings.NewReader(strings.Repeat("y", 128) + "\n")); err != nil {
+		t.Fatalf("128-char line must fit the bound: %v", err)
+	}
+}
+
+// TestPrintGeneratedPasswordOnce pins the generated-password stdout contract:
+// exactly one machine-readable line on the given writer (the caller passes
+// os.Stdout only after a successful insert; failures never reach it).
+func TestPrintGeneratedPasswordOnce(t *testing.T) {
+	var buf strings.Builder
+	printGeneratedPassword(&buf, "s3cret-value")
+	if got, want := buf.String(), "generated-password: s3cret-value\n"; got != want {
+		t.Fatalf("printGeneratedPassword = %q, want %q", got, want)
 	}
 }
 

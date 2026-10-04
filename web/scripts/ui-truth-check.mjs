@@ -14,6 +14,26 @@ import { pathToFileURL } from "node:url";
 
 import { build } from "esbuild";
 
+// Web source root for the "@" import alias (mirrors vite.config.ts).
+const srcDir = new URL("../src", import.meta.url).pathname;
+
+// Vue SFCs are re-exported through feature indexes, so a bundled helper can
+// pull one into the module graph. The Node harnesses never execute them;
+// stub the default export instead of teaching esbuild to compile SFCs.
+const vueStubPlugin = {
+  name: "stub-vue-sfc",
+  setup(vueBuild) {
+    vueBuild.onResolve({ filter: /\.vue$/ }, (args) => ({
+      path: args.path,
+      namespace: "vue-stub",
+    }));
+    vueBuild.onLoad({ filter: /.*/, namespace: "vue-stub" }, () => ({
+      contents: "export default {};",
+      loader: "js",
+    }));
+  },
+};
+
 // ── tiny assertion harness ───────────────────────────────────────────────
 const results = [];
 
@@ -48,7 +68,9 @@ async function loadModule(relativePath) {
     platform: "node",
     target: "node20",
     logLevel: "silent",
+    alias: { "@": srcDir },
     plugins: [
+      vueStubPlugin,
       {
         name: "stub-http-layer",
         setup(httpBuild) {
@@ -85,14 +107,16 @@ async function loadApplicationsWithHttp() {
   const directory = await mkdtemp(join(tmpdir(), "gotham-ui-truth-"));
   const outfile = join(directory, "module.mjs");
   await build({
-    entryPoints: [new URL("../src/api/applications.ts", import.meta.url).pathname],
+    entryPoints: [new URL("../src/features/applications/api/applications.ts", import.meta.url).pathname],
     outfile,
     bundle: true,
     format: "esm",
     platform: "node",
     target: "node20",
     logLevel: "silent",
+    alias: { "@": srcDir },
     plugins: [
+      vueStubPlugin,
       {
         name: "controllable-http-layer",
         setup(httpBuild) {
@@ -126,9 +150,9 @@ async function loadApplicationsWithHttp() {
 
 // ── load a real Pinia store with stubbed API imports ───────────────────────
 // apiStubs maps an import specifier (as written in the store source, e.g.
-// "../api/teams") to the stub module contents. Pinia and Vue are bundled for
-// real, so setActivePinia reaches the instance under test.
-async function loadStoreHarness(storeFile, storeExport, apiStubs) {
+// "@/features/teams/api/teams") to the stub module contents. Pinia and Vue
+// are bundled for real, so setActivePinia reaches the instance under test.
+async function loadStoreHarness(storeDir, storeFile, storeExport, apiStubs) {
   const directory = await mkdtemp(join(tmpdir(), "gotham-store-check-"));
   const outfile = join(directory, "store.mjs");
   await build({
@@ -138,7 +162,7 @@ async function loadStoreHarness(storeFile, storeExport, apiStubs) {
         `import { ${storeExport} } from "./${storeFile}";`,
         `export { createPinia, setActivePinia, ${storeExport} };`,
       ].join("\n"),
-      resolveDir: new URL("../src/stores", import.meta.url).pathname,
+      resolveDir: new URL(storeDir, import.meta.url).pathname,
       loader: "ts",
     },
     outfile,
@@ -147,7 +171,9 @@ async function loadStoreHarness(storeFile, storeExport, apiStubs) {
     platform: "node",
     target: "node20",
     logLevel: "silent",
+    alias: { "@": srcDir },
     plugins: [
+      vueStubPlugin,
       {
         name: "stub-store-apis",
         setup(stubBuild) {
@@ -176,19 +202,8 @@ async function loadStoreHarness(storeFile, storeExport, apiStubs) {
 async function loadAuthHarness() {
   const directory = await mkdtemp(join(tmpdir(), "gotham-auth-check-"));
   const outfile = join(directory, "store.mjs");
-  const storeNames = [
-    "teams", "servers", "applications", "databases", "notifications",
-    "services", "backups", "providers", "templates", "proxy",
-  ];
-  const storeImports = [
-    "teams:useTeamsStore", "servers:useServersStore",
-    "applications:useApplicationsStore", "databases:useDatabasesStore",
-    "notifications:useNotificationsStore", "services:useServicesStore",
-    "backups:useBackupsStore", "providers:useProvidersStore",
-    "templates:useTemplatesStore", "proxy:useProxyStore",
-  ];
   const apiStubs = {
-    "../api/http": [
+    "@/shared/api/http": [
       "export const http = {",
       "  get: async () => { throw new Error('unused'); },",
       "  post: (...a) => globalThis.__authHttp.post(...a),",
@@ -197,7 +212,7 @@ async function loadAuthHarness() {
       "  delete: async () => { throw new Error('unused'); },",
       "};",
     ].join("\n"),
-    "../api/token": [
+    "@/shared/api/token": [
       "export const getSession = () => ({",
       "  user: null, accessToken: null, refreshToken: null,",
       "});",
@@ -205,15 +220,34 @@ async function loadAuthHarness() {
       "export const clearSession = () => {};",
       "export const subscribeSession = () => {};",
     ].join("\n"),
-    "../api/servers": ["export function stripErrorPrefix(m) { return m; }"].join("\n"),
+    "@/features/servers": [
+      "export function stripErrorPrefix(m) { return m; }",
+      "export const useServersStore = () => globalThis.__userStores.servers;",
+    ].join("\n"),
+    "@/features/teams": [
+      "export const useTeamsStore = () => globalThis.__userStores.teams;",
+    ].join("\n"),
+    "@/features/applications": [
+      "export const useApplicationsStore = () => globalThis.__userStores.applications;",
+      "export const useProvidersStore = () => globalThis.__userStores.providers;",
+    ].join("\n"),
+    "@/features/databases": [
+      "export const useDatabasesStore = () => globalThis.__userStores.databases;",
+      "export const useBackupsStore = () => globalThis.__userStores.backups;",
+    ].join("\n"),
+    "@/features/notifications": [
+      "export const useNotificationsStore = () => globalThis.__userStores.notifications;",
+    ].join("\n"),
+    "@/features/services": [
+      "export const useServicesStore = () => globalThis.__userStores.services;",
+    ].join("\n"),
+    "@/features/domains": [
+      "export const useProxyStore = () => globalThis.__userStores.proxy;",
+    ].join("\n"),
+    "@/features/templates": [
+      "export const useTemplatesStore = () => globalThis.__userStores.templates;",
+    ].join("\n"),
   };
-  for (const entry of storeImports) {
-    const [file, hook] = entry.split(":");
-    apiStubs[`./${file}`] = [
-      `export const ${hook} = () => globalThis.__userStores.${file};`,
-    ].join("\n");
-  }
-  void storeNames;
   await build({
     stdin: {
       contents: [
@@ -221,7 +255,7 @@ async function loadAuthHarness() {
         'import { useAuthStore } from "./auth";',
         "export { createPinia, setActivePinia, useAuthStore };",
       ].join("\n"),
-      resolveDir: new URL("../src/stores", import.meta.url).pathname,
+      resolveDir: new URL("../src/features/auth/stores", import.meta.url).pathname,
       loader: "ts",
     },
     outfile,
@@ -230,7 +264,9 @@ async function loadAuthHarness() {
     platform: "node",
     target: "node20",
     logLevel: "silent",
+    alias: { "@": srcDir },
     plugins: [
+      vueStubPlugin,
       {
         name: "stub-auth-deps",
         setup(stubBuild) {
@@ -263,7 +299,7 @@ async function loadHttpReal() {
   const directory = await mkdtemp(join(webDir, ".tmp-http-check-"));
   const outfile = join(directory, "module.mjs");
   await build({
-    entryPoints: [new URL("../src/api/http.ts", import.meta.url).pathname],
+    entryPoints: [new URL("../src/shared/api/http.ts", import.meta.url).pathname],
     outfile,
     bundle: true,
     packages: "external",
@@ -280,12 +316,12 @@ async function loadHttpReal() {
 }
 
 async function main() {
-  const format = await loadModule("../src/utils/format.ts");
-  const servers = await loadModule("../src/api/servers.ts");
-  const teams = await loadModule("../src/api/teams.ts");
-  const databases = await loadModule("../src/api/databases.ts");
-  const applications = await loadModule("../src/api/applications.ts");
-  const dashboard = await loadModule("../src/utils/dashboard.ts");
+  const format = await loadModule("../src/shared/utils/format.ts");
+  const servers = await loadModule("../src/features/servers/api/servers.ts");
+  const teams = await loadModule("../src/features/teams/api/teams.ts");
+  const databases = await loadModule("../src/features/databases/api/databases.ts");
+  const applications = await loadModule("../src/features/applications/api/applications.ts");
+  const dashboard = await loadModule("../src/features/dashboard/utils/dashboard.ts");
 
   console.log("shared usage thresholds (JUS-10)");
   await check("warn at 60 and danger at 80", () => {
@@ -507,7 +543,7 @@ async function main() {
     );
     const { readFile } = await import("node:fs/promises");
     const page = await readFile(
-      new URL("../src/pages/DashboardPage.vue", import.meta.url),
+      new URL("../src/features/dashboard/pages/DashboardPage.vue", import.meta.url),
       "utf8",
     );
     const callAt = page.indexOf("buildApplicationTileInput({");
@@ -530,7 +566,7 @@ async function main() {
   await check("tile template renders the tested output only", async () => {
     const { readFile } = await import("node:fs/promises");
     const source = await readFile(
-      new URL("../src/pages/DashboardPage.vue", import.meta.url),
+      new URL("../src/features/dashboard/pages/DashboardPage.vue", import.meta.url),
       "utf8",
     );
     const start = source.indexOf('title="Running applications"');
@@ -603,7 +639,7 @@ async function main() {
     );
     const { readFile } = await import("node:fs/promises");
     const card = await readFile(
-      new URL("../src/components/MeCard.vue", import.meta.url),
+      new URL("../src/shared/ui/MeCard.vue", import.meta.url),
       "utf8",
     );
     assert(card.includes("shouldRetryRoleRead("), "MeCard decides via the helper");
@@ -674,7 +710,7 @@ async function main() {
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
     const source = await readFile(
-      new URL("../src/api/servers.ts", import.meta.url),
+      new URL("../src/features/servers/api/servers.ts", import.meta.url),
       "utf8",
     );
     const setStart = source.indexOf("new Set([");
@@ -710,15 +746,15 @@ async function main() {
 
   console.log("every describe path strips backend prefixes (fix round 1)");
   await check("database, team, proxy, service and generic paths strip", async () => {
-    const backups = await loadModule("../src/api/backups.ts");
-    const containers = await loadModule("../src/api/containers.ts");
-    const metrics = await loadModule("../src/api/metrics.ts");
-    const notifications = await loadModule("../src/api/notifications.ts");
-    const previews = await loadModule("../src/api/previews.ts");
-    const providers = await loadModule("../src/api/providers.ts");
-    const proxy = await loadModule("../src/api/proxy.ts");
-    const services = await loadModule("../src/api/services.ts");
-    const templates = await loadModule("../src/api/templates.ts");
+    const backups = await loadModule("../src/features/databases/api/backups.ts");
+    const containers = await loadModule("../src/features/servers/api/containers.ts");
+    const metrics = await loadModule("../src/features/servers/api/metrics.ts");
+    const notifications = await loadModule("../src/features/notifications/api/notifications.ts");
+    const previews = await loadModule("../src/features/applications/api/previews.ts");
+    const providers = await loadModule("../src/features/applications/api/providers.ts");
+    const proxy = await loadModule("../src/features/domains/api/proxy.ts");
+    const services = await loadModule("../src/features/services/api/services.ts");
+    const templates = await loadModule("../src/features/templates/api/templates.ts");
     try {
       const prefixed = (prefix) => ({ message: `${prefix}: boom`, status: 500 });
       assert(
@@ -850,8 +886,8 @@ async function main() {
   });
 
   await check("sign-out resets the teams cache (A owner, B read-only)", async () => {
-    const harness = await loadStoreHarness("teams", "useTeamsStore", {
-      "../api/teams": [
+    const harness = await loadStoreHarness("../src/features/teams/stores", "teams", "useTeamsStore", {
+      "@/features/teams/api/teams": [
         "export const listTeams = () => globalThis.__teamsApi.listTeams();",
         "export const createTeam = async () => { throw new Error('unused'); };",
         "export const deleteTeam = async () => {};",
@@ -889,8 +925,8 @@ async function main() {
   });
 
   await check("user-scoped stores reset on sign-out", async () => {
-    const serversHarness = await loadStoreHarness("servers", "useServersStore", {
-      "../api/servers": [
+    const serversHarness = await loadStoreHarness("../src/features/servers/stores", "servers", "useServersStore", {
+      "@/features/servers/api/servers": [
         "const api = () => globalThis.__serversApi;",
         "export const listServers = (...a) => api().listServers(...a);",
         "export const createServer = (...a) => api().createServer(...a);",
@@ -900,8 +936,8 @@ async function main() {
         "export const describeServerError = (e) => String((e && e.message) || e);",
       ].join("\n"),
     });
-    const appsHarness = await loadStoreHarness("applications", "useApplicationsStore", {
-      "../api/applications": [
+    const appsHarness = await loadStoreHarness("../src/features/applications/stores", "applications", "useApplicationsStore", {
+      "@/features/applications/api/applications": [
         "export const describeApplicationError = (e) => String((e && e.message) || e);",
         "export const getApplication = async () => { throw new Error('unused'); };",
         "export const getEnv = async () => [];",
@@ -916,8 +952,8 @@ async function main() {
         "export const triggerDeploy = async () => { throw new Error('unused'); };",
       ].join("\n"),
     });
-    const databasesHarness = await loadStoreHarness("databases", "useDatabasesStore", {
-      "../api/databases": [
+    const databasesHarness = await loadStoreHarness("../src/features/databases/stores", "databases", "useDatabasesStore", {
+      "@/features/databases/api/databases": [
         "export const createDatabase = async () => { throw new Error('unused'); };",
         "export const deleteDatabase = async () => {};",
         "export const describeDatabaseError = (e) => String((e && e.message) || e);",
@@ -931,10 +967,11 @@ async function main() {
       ].join("\n"),
     });
     const notificationsHarness = await loadStoreHarness(
+      "../src/features/notifications/stores",
       "notifications",
       "useNotificationsStore",
       {
-        "../api/notifications": [
+        "@/features/notifications/api/notifications": [
           "export const createChannel = async () => { throw new Error('unused'); };",
           "export const deleteChannel = async () => {};",
           "export const describeChannelError = (e) => String((e && e.message) || e);",
@@ -943,7 +980,7 @@ async function main() {
           "export const testChannel = async () => { throw new Error('unused'); };",
           "export const updateChannel = async () => { throw new Error('unused'); };",
         ].join("\n"),
-        "./teams": [
+        "@/features/teams": [
           "export const useTeamsStore = () => ({ activeTeamId: '' });",
         ].join("\n"),
       },

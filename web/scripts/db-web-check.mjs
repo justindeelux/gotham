@@ -34,6 +34,9 @@ function assert(condition, message) {
   }
 }
 
+// Web source root for the "@" import alias (mirrors vite.config.ts).
+const srcDir = new URL("../src", import.meta.url).pathname;
+
 // ── load a TypeScript module through esbuild ─────────────────────────────
 async function loadModule(relativePath) {
   const directory = await mkdtemp(join(tmpdir(), "gotham-db-check-"));
@@ -46,6 +49,7 @@ async function loadModule(relativePath) {
     platform: "node",
     target: "node20",
     logLevel: "silent",
+    alias: { "@": srcDir },
   });
   const module = await import(pathToFileURL(outfile).href);
   return {
@@ -60,10 +64,10 @@ function isoOffset(deltaSeconds) {
 }
 
 async function main() {
-  const format = await loadModule("../src/utils/format.ts");
-  const targetBody = await loadModule("../src/utils/backupTarget.ts");
-  const storeMerge = await loadModule("../src/utils/storeMerge.ts");
-  const restoreOutcomes = await loadModule("../src/utils/restoreOutcomes.ts");
+  const format = await loadModule("../src/shared/utils/format.ts");
+  const targetBody = await loadModule("../src/features/databases/utils/backupTarget.ts");
+  const storeMerge = await loadModule("../src/shared/utils/storeMerge.ts");
+  const restoreOutcomes = await loadModule("../src/features/databases/utils/restoreOutcomes.ts");
 
   try {
     const { relativeTime } = format.module;

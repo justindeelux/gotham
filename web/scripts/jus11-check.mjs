@@ -12,10 +12,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const css = readFileSync(join(root, "src/styles/main.css"), "utf8");
-const rail = readFileSync(join(root, "src/components/ServerRail.vue"), "utf8");
-const edit = readFileSync(join(root, "src/components/EditServerModal.vue"), "utf8");
-const wizard = readFileSync(join(root, "src/components/AddServerWizard.vue"), "utf8");
+const css = readFileSync(join(root, "src/shared/styles/main.css"), "utf8");
+const rail = readFileSync(join(root, "src/features/servers/components/ServerRail.vue"), "utf8");
+const edit = readFileSync(join(root, "src/features/servers/components/EditServerModal.vue"), "utf8");
+const wizard = readFileSync(join(root, "src/features/servers/components/AddServerWizard.vue"), "utf8");
 
 const results = [];
 

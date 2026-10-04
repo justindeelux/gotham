@@ -30,7 +30,7 @@ internal/        # CP packages (server, deploy, builds, proxy, databases, servic
 agent/           # node agent implementation
 updatecore/      # shared, transport-agnostic self-update engine (verify + swap), imported by internal/updates and agent/
 proto/           # protobuf contracts (buf-managed)
-web/             # Vue 3 SPA (Vite)
+web/             # Vue 3 SPA (Vite; src/: app/ shell, features/<module>/, shared/)
 templates/       # one-click service templates (YAML)
 deploy/          # install scripts, systemd units, compose
 docs/plan/       # per-phase development plans

@@ -18,13 +18,13 @@ import { mount } from "@vue/test-utils";
 import type { VueWrapper } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 
-import CertificateForm from "../src/components/CertificateForm.vue";
-import DynamicForm from "../src/components/DynamicForm.vue";
-import EnvEditor from "../src/components/EnvEditor.vue";
-import type { CertificateDraft } from "../src/api/proxy";
+import CertificateForm from "../src/features/domains/components/CertificateForm.vue";
+import DynamicForm from "../src/shared/ui/DynamicForm.vue";
+import EnvEditor from "../src/features/applications/components/EnvEditor.vue";
+import type { CertificateDraft } from "../src/features/domains/api/proxy";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const mainCss = readFileSync(resolve(webRoot, "src/styles/main.css"), "utf8");
+const mainCss = readFileSync(resolve(webRoot, "src/shared/styles/main.css"), "utf8");
 
 /** readSfc returns the raw source of one single-file component. */
 function readSfc(relativePath: string): string {
@@ -146,8 +146,8 @@ describe("JUS-19 shared .form-row utility", () => {
     }
     const shared = thresholdOf(mainCss);
     expect(shared).toBe("480px");
-    expect(thresholdOf(readSfc("src/components/EnvEditor.vue"))).toBe(shared);
-    expect(thresholdOf(readSfc("src/pages/DomainsPage.vue"))).toBe(shared);
+    expect(thresholdOf(readSfc("src/features/applications/components/EnvEditor.vue"))).toBe(shared);
+    expect(thresholdOf(readSfc("src/features/domains/pages/DomainsPage.vue"))).toBe(shared);
   });
 
   it("has no viewport fallback for the row collapse", () => {
@@ -242,7 +242,7 @@ describe("JUS-19 EnvEditor single-row variables", () => {
   });
 
   it("lays out the row as a non-wrapping grid with a container fallback", () => {
-    const source = readSfc("src/components/EnvEditor.vue");
+    const source = readSfc("src/features/applications/components/EnvEditor.vue");
     expect(source).toMatch(
       /\.env-editor__row\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*minmax\(140px,\s*220px\)\s*minmax\(0,\s*1fr\)\s*auto/,
     );
@@ -257,7 +257,7 @@ describe("JUS-19 EnvEditor single-row variables", () => {
 
 describe("JUS-19 DynamicForm stays two columns", () => {
   it("keeps the 2-column grid with the single-column fallback and schema order", () => {
-    const source = readSfc("src/components/DynamicForm.vue");
+    const source = readSfc("src/shared/ui/DynamicForm.vue");
     expect(source).toMatch(
       /\.dynamic-form\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
     );
@@ -281,7 +281,7 @@ describe("JUS-19 DynamicForm stays two columns", () => {
 });
 
 describe("JUS-19 AddServerWizard rows", () => {
-  const source = readSfc("src/components/AddServerWizard.vue");
+  const source = readSfc("src/features/servers/components/AddServerWizard.vue");
 
   it("pairs Node name|SSH user in one row", () => {
     expectPair(source, "add-server-name", "add-server-ssh-user");
@@ -311,7 +311,7 @@ describe("JUS-19 AddServerWizard rows", () => {
 });
 
 describe("JUS-19 fix 1 EditServerModal: Credentials on its own row", () => {
-  const source = readSfc("src/components/EditServerModal.vue");
+  const source = readSfc("src/features/servers/components/EditServerModal.vue");
 
   it("uses no .form-row: no segmented control shares a ~250px column", () => {
     expect(rowBlocks(source)).toHaveLength(0);
@@ -333,7 +333,7 @@ describe("JUS-19 fix 1 EditServerModal: Credentials on its own row", () => {
 });
 
 describe("JUS-19 CreateAppWizard rows", () => {
-  const source = readSfc("src/components/CreateAppWizard.vue");
+  const source = readSfc("src/features/applications/components/CreateAppWizard.vue");
 
   it("pairs Provider|Repository in one row", () => {
     expectPair(source, "Select a connected provider", "Select a repository");
@@ -352,12 +352,12 @@ describe("JUS-19 CreateAppWizard rows", () => {
 
 describe("JUS-19 CreateDatabaseWizard rows", () => {
   it("pairs Version|Node in one row", () => {
-    expectPair(readSfc("src/components/CreateDatabaseWizard.vue"), 'label="Version"', 'label="Node"');
+    expectPair(readSfc("src/features/databases/components/CreateDatabaseWizard.vue"), 'label="Version"', 'label="Node"');
   });
 });
 
 describe("JUS-19 DomainsPage rows", () => {
-  const source = readSfc("src/pages/DomainsPage.vue");
+  const source = readSfc("src/features/domains/pages/DomainsPage.vue");
 
   it("pairs Provider|Name in one row of the DNS provider modal", () => {
     expectPair(source, 'label="Provider"', 'label="Name"');
@@ -377,7 +377,7 @@ describe("JUS-19 DomainsPage rows", () => {
 });
 
 describe("JUS-19 NotificationsPage rows", () => {
-  const source = readSfc("src/pages/NotificationsPage.vue");
+  const source = readSfc("src/features/notifications/pages/NotificationsPage.vue");
 
   it("pairs Name|Kind in one row", () => {
     expectPair(source, 'label="Name"', 'label="Kind"');
@@ -391,7 +391,7 @@ describe("JUS-19 NotificationsPage rows", () => {
 describe("JUS-19 RegisterPage rows", () => {
   it("pairs Password|Confirm password in one row", () => {
     expectPair(
-      readSfc("src/pages/RegisterPage.vue"),
+      readSfc("src/features/auth/pages/RegisterPage.vue"),
       "register-password",
       "register-confirm-password",
     );

@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const wizard = readFileSync(join(root, "src/components/AddServerWizard.vue"), "utf8");
+const wizard = readFileSync(join(root, "src/features/servers/components/AddServerWizard.vue"), "utf8");
 
 const results = [];
 

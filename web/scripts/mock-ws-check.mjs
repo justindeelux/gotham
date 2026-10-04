@@ -1,4 +1,4 @@
-// Mock realtime-hub integration check for web/src/composables/useWebSocket.ts.
+// Mock realtime-hub integration check for web/src/shared/composables/useWebSocket.ts.
 //
 // The repo has no web test runner (no vitest/jsdom), so this script stands in
 // for a unit test: it bundles the composable with the project's own esbuild,
@@ -17,6 +17,26 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
 const wsGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+// Web source root for the "@" import alias (mirrors vite.config.ts).
+const srcDir = new URL("../src", import.meta.url).pathname;
+
+// Vue SFCs are re-exported through feature indexes, so a bundled helper can
+// pull one into the module graph. The Node harnesses never execute them;
+// stub the default export instead of teaching esbuild to compile SFCs.
+const vueStubPlugin = {
+  name: "stub-vue-sfc",
+  setup(vueBuild) {
+    vueBuild.onResolve({ filter: /\.vue$/ }, (args) => ({
+      path: args.path,
+      namespace: "vue-stub",
+    }));
+    vueBuild.onLoad({ filter: /.*/, namespace: "vue-stub" }, () => ({
+      contents: "export default {};",
+      loader: "js",
+    }));
+  },
+};
 
 // ── tiny assertion harness ───────────────────────────────────────────────
 const results = [];
@@ -209,6 +229,8 @@ async function loadModule(relativePath) {
     platform: "node",
     target: "node20",
     logLevel: "silent",
+    alias: { "@": srcDir },
+    plugins: [vueStubPlugin],
   });
   const module = await import(pathToFileURL(outfile).href);
   return {
@@ -233,7 +255,7 @@ async function loadServersStore() {
         'import { useServersStore } from "./servers";',
         "export { createPinia, setActivePinia, useServersStore };",
       ].join("\n"),
-      resolveDir: new URL("../src/stores", import.meta.url).pathname,
+      resolveDir: new URL("../src/features/servers/stores", import.meta.url).pathname,
       loader: "ts",
     },
     outfile,
@@ -242,7 +264,9 @@ async function loadServersStore() {
     platform: "node",
     target: "node20",
     logLevel: "silent",
+    alias: { "@": srcDir },
     plugins: [
+      vueStubPlugin,
       {
         name: "stub-servers-api",
         setup(build) {
@@ -324,7 +348,7 @@ async function loadStoreModule() {
   `;
   await build({
     entryPoints: [
-      new URL("../src/stores/applications.ts", import.meta.url).pathname,
+      new URL("../src/features/applications/stores/applications.ts", import.meta.url).pathname,
     ],
     outfile,
     bundle: true,
@@ -333,7 +357,9 @@ async function loadStoreModule() {
     target: "node20",
     logLevel: "silent",
     external: ["pinia", "vue"],
+    alias: { "@": srcDir },
     plugins: [
+      vueStubPlugin,
       {
         name: "fake-applications",
         setup(buildApi) {
@@ -361,11 +387,11 @@ async function main() {
     throw new Error("global WebSocket is unavailable; Node 22+ is required");
   }
 
-  const composable = await loadModule("../src/composables/useWebSocket.ts");
+  const composable = await loadModule("../src/shared/composables/useWebSocket.ts");
   const channelBuffers = await loadModule(
-    "../src/composables/logChannelBuffers.ts",
+    "../src/shared/composables/logChannelBuffers.ts",
   );
-  const serverListSync = await loadModule("../src/stores/serverListSync.ts");
+  const serverListSync = await loadModule("../src/features/servers/stores/serverListSync.ts");
   const serversStoreHarness = await loadServersStore();
   const {
     useWebSocket,
@@ -884,12 +910,12 @@ async function main() {
   });
 
   console.log("FX-14a pure logic");
-  const deployPipeline = await loadModule("../src/utils/deployPipeline.ts");
-  const envSecret = await loadModule("../src/utils/envSecret.ts");
-  const requestGeneration = await loadModule("../src/utils/requestGeneration.ts");
-  const polling = await loadModule("../src/utils/polling.ts");
-  const wizardValidation = await loadModule("../src/utils/wizardValidation.ts");
-  const inFlightGuard = await loadModule("../src/composables/useInFlightGuard.ts");
+  const deployPipeline = await loadModule("../src/features/applications/utils/deployPipeline.ts");
+  const envSecret = await loadModule("../src/features/applications/utils/envSecret.ts");
+  const requestGeneration = await loadModule("../src/shared/utils/requestGeneration.ts");
+  const polling = await loadModule("../src/shared/utils/polling.ts");
+  const wizardValidation = await loadModule("../src/features/applications/utils/wizardValidation.ts");
+  const inFlightGuard = await loadModule("../src/shared/composables/useInFlightGuard.ts");
 
   await check("a failed pipeline claims no completed stage (C4-3)", () => {
     const { pipelineStepsFor } = deployPipeline.module;

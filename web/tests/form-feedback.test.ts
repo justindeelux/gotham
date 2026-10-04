@@ -16,12 +16,12 @@ import { NFormItem, NInput } from "naive-ui";
 import { describe, expect, it } from "vitest";
 import { h } from "vue";
 
-import DynamicForm from "../src/components/DynamicForm.vue";
-import type { TemplateField } from "../src/api/templates";
+import DynamicForm from "../src/shared/ui/DynamicForm.vue";
+import type { TemplateField } from "../src/features/templates/api/templates";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const mainCss = readFileSync(resolve(webRoot, "src/styles/main.css"), "utf8");
-const appVue = readFileSync(resolve(webRoot, "src/App.vue"), "utf8");
+const mainCss = readFileSync(resolve(webRoot, "src/shared/styles/main.css"), "utf8");
+const appVue = readFileSync(resolve(webRoot, "src/app/App.vue"), "utf8");
 
 const fields: TemplateField[] = [
   {

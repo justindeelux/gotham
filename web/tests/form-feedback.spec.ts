@@ -9,7 +9,7 @@ import { expect, test } from "@playwright/test";
 // lint envs do not cover tests/, so the global is declared here.
 
 // Behavioural proof for the global form-feedback rules (JUS-16/17/18): real
-// Chromium computes styles from the real web/src/styles/main.css against DOM
+// Chromium computes styles from the real web/src/shared/styles/main.css against DOM
 // shaped exactly like naive-ui 2.45 renders NFormItem (see the fixture). No
 // backend is involved — the fixture is a static file.
 
@@ -27,7 +27,7 @@ test("JUS-16 error text is 12px once the App theme token applies", async ({
   // The token half: App.vue sets all three Naive feedback sizes to 12px, and
   // Naive maps them onto --n-feedback-font-size on every item (verified in
   // naive-ui es/form source). The fixture replicates that inline var.
-  const appVue = readFileSync(resolve(webRoot, "src/App.vue"), "utf8");
+  const appVue = readFileSync(resolve(webRoot, "src/app/App.vue"), "utf8");
   for (const size of ["Small", "Medium", "Large"]) {
     expect(appVue).toContain(`feedbackFontSize${size}: "12px"`);
   }

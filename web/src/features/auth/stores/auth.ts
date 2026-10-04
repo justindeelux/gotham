@@ -137,12 +137,20 @@ export const useAuthStore = defineStore("auth", () => {
    * fetchMe refreshes the account from GET /auth/me, clearing on 401. A
    * response that resolves after the session changed (for example the OAuth
    * exchange installed a new one) is discarded so it cannot overwrite it.
+   * The same applies when the account itself was replaced locally while the
+   * request was in flight (a display-name save, a password change): the
+   * snapshot comparison discards the older server read, while a background
+   * token rotation carrying identical facts still applies.
    */
   async function fetchMe(): Promise<void> {
     const tokenAtStart = accessToken.value;
+    const userAtStart = JSON.stringify(user.value);
     try {
       const response = await http.get<{ user: User }>("/auth/me");
-      if (accessToken.value !== tokenAtStart) {
+      if (
+        accessToken.value !== tokenAtStart ||
+        JSON.stringify(user.value) !== userAtStart
+      ) {
         return;
       }
       user.value = response.data.user;

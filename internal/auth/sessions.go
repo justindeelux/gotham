@@ -25,10 +25,21 @@ type SessionMeta struct {
 }
 
 // cleanUserAgent truncates the User-Agent to 256 characters and drops invalid
-// UTF-8 rather than failing the login. Empty (or all-invalid) input stores
-// NULL, which the list renders as "".
+// UTF-8 rather than failing the login. Control characters (below 0x20 except
+// tab, plus DEL) are stripped after the UTF-8 repair so a NUL can never reach
+// Postgres, which rejects it. Empty (or all-invalid) input stores NULL, which
+// the list renders as "".
 func cleanUserAgent(ua string) *string {
 	ua = strings.ToValidUTF8(ua, "")
+	ua = strings.Map(func(r rune) rune {
+		if r == '\t' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, ua)
 	if utf8.RuneCountInString(ua) > maxUserAgentLength {
 		ua = string([]rune(ua)[:maxUserAgentLength])
 	}

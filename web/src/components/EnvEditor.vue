@@ -66,7 +66,6 @@ function removeRow(index: number): void {
       <NInput
         :value="row.key"
         class="mono"
-        style="max-width: 260px"
         placeholder="NODE_ENV"
         aria-label="Variable name"
         :status="row.key !== '' && !isValidKey(row.key) ? 'error' : undefined"
@@ -105,21 +104,30 @@ function removeRow(index: number): void {
   flex-direction: column;
   gap: var(--space-2);
   align-items: flex-start;
+  /* Container for the single-column fallback below (JUS-19 fix 1): the row
+   * grid follows the editor width, not the viewport. */
+  container-type: inline-size;
 }
 
 .env-editor__empty {
   margin-bottom: var(--space-1);
 }
 
+/* One variable is one row: name | value | delete. The grid (not a wrapping
+ * flex) keeps the three controls on a single row at modal width; the sealed
+ * badge drops onto its own line only when present. */
 .env-editor__row {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto;
   gap: var(--space-2);
+  align-items: center;
   width: 100%;
-  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .env-editor__secret {
+  grid-column: 1 / -1;
+  justify-self: start;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--warn-ink);
@@ -127,6 +135,16 @@ function removeRow(index: number): void {
   border-radius: var(--radius-pill);
   padding: 2px 8px;
   white-space: nowrap;
+}
+
+@container (max-width: 480px) {
+  .env-editor__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .env-editor__row > .n-button {
+    justify-self: start;
+  }
 }
 
 .env-editor__hint {

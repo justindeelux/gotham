@@ -84,71 +84,77 @@ function setChallenge(challenge: string): void {
 </script>
 
 <template>
-  <NForm label-placement="top" :show-feedback="false">
-    <NFormItem label="Application" class="field-application">
-      <NSelect
-        :value="modelValue.application_id"
-        :options="applicationOptions"
-        :disabled="lockApplication"
-        placeholder="Select an application"
-        aria-label="Application"
-        @update:value="(value: string) => patch({ application_id: value })"
-      />
-    </NFormItem>
-    <NFormItem label="Domain (from the application)">
-      <NText v-if="domainPreview" class="mono">{{ domainPreview }}</NText>
-      <NText v-else depth="3">
-        No base domain yet — set one on the application first.
-      </NText>
-    </NFormItem>
-    <NFormItem label="Challenge">
-      <NRadioGroup
-        :value="modelValue.challenge"
-        @update:value="(value: string | number) => setChallenge(String(value))"
-      >
-        <NRadio value="http-01">
-          <span class="mono">http-01</span> · shared HTTP resolver
-        </NRadio>
-        <NRadio value="dns-01">
-          <span class="mono">dns-01</span> · TXT record via a DNS provider
-        </NRadio>
-      </NRadioGroup>
-    </NFormItem>
-    <NFormItem label="DNS provider" class="field-provider-select">
-      <NSelect
-        :value="modelValue.dns_provider_id"
-        :options="providerOptions"
-        :disabled="!isDns01"
-        placeholder="Select a DNS provider"
-        aria-label="DNS provider"
-        clearable
-        @update:value="(value: string | number | null) =>
-          patch({ dns_provider_id: value === null ? '' : String(value) })
-        "
-      />
-      <NText v-if="!isDns01" depth="3" class="hint">
-        The shared HTTP-01 resolver needs no provider.
-      </NText>
-    </NFormItem>
-    <NFormItem label="Wildcard">
-      <NSwitch
-        :value="modelValue.wildcard"
-        :disabled="!isDns01"
-        aria-label="Wildcard certificate"
-        @update:value="(value: boolean) => patch({ wildcard: value })"
-      />
-      <NTag v-if="modelValue.wildcard" size="small" class="hint">requested</NTag>
-      <NText v-else depth="3" class="hint">
-        Wildcards require the DNS-01 challenge.
-      </NText>
-    </NFormItem>
-    <NFormItem label="Enabled">
-      <NSwitch
-        :value="modelValue.enabled"
-        aria-label="Certificate configuration enabled"
-        @update:value="(value: boolean) => patch({ enabled: value })"
-      />
-    </NFormItem>
+  <NForm label-placement="top" :show-feedback="false" class="certificate-form form-container">
+    <div class="form-row">
+      <NFormItem label="Application" class="field-application">
+        <NSelect
+          :value="modelValue.application_id"
+          :options="applicationOptions"
+          :disabled="lockApplication"
+          placeholder="Select an application"
+          aria-label="Application"
+          @update:value="(value: string) => patch({ application_id: value })"
+        />
+      </NFormItem>
+      <NFormItem label="Domain (from the application)">
+        <NText v-if="domainPreview" class="mono">{{ domainPreview }}</NText>
+        <NText v-else depth="3">
+          No base domain yet — set one on the application first.
+        </NText>
+      </NFormItem>
+    </div>
+    <div class="form-row">
+      <NFormItem label="Challenge">
+        <NRadioGroup
+          :value="modelValue.challenge"
+          @update:value="(value: string | number) => setChallenge(String(value))"
+        >
+          <NRadio value="http-01">
+            <span class="mono">http-01</span> · shared HTTP resolver
+          </NRadio>
+          <NRadio value="dns-01">
+            <span class="mono">dns-01</span> · TXT record via a DNS provider
+          </NRadio>
+        </NRadioGroup>
+      </NFormItem>
+      <NFormItem label="DNS provider" class="field-provider-select">
+        <NSelect
+          :value="modelValue.dns_provider_id"
+          :options="providerOptions"
+          :disabled="!isDns01"
+          placeholder="Select a DNS provider"
+          aria-label="DNS provider"
+          clearable
+          @update:value="(value: string | number | null) =>
+            patch({ dns_provider_id: value === null ? '' : String(value) })
+          "
+        />
+        <NText v-if="!isDns01" depth="3" class="hint">
+          The shared HTTP-01 resolver needs no provider.
+        </NText>
+      </NFormItem>
+    </div>
+    <div class="form-row">
+      <NFormItem label="Wildcard">
+        <NSwitch
+          :value="modelValue.wildcard"
+          :disabled="!isDns01"
+          aria-label="Wildcard certificate"
+          @update:value="(value: boolean) => patch({ wildcard: value })"
+        />
+        <NTag v-if="modelValue.wildcard" size="small" class="hint">requested</NTag>
+        <NText v-else depth="3" class="hint">
+          Wildcards require the DNS-01 challenge.
+        </NText>
+      </NFormItem>
+      <NFormItem label="Enabled">
+        <NSwitch
+          :value="modelValue.enabled"
+          aria-label="Certificate configuration enabled"
+          @update:value="(value: boolean) => patch({ enabled: value })"
+        />
+      </NFormItem>
+    </div>
   </NForm>
 </template>
 

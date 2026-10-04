@@ -543,7 +543,7 @@ function resetWizard(): void {
             label-placement="top"
             @submit.prevent="handleCreate"
           >
-            <div class="connect-form">
+            <div class="connect-form form-container">
               <NAlert v-if="hasCreatedServer" type="info" :show-icon="true">
                 This node is already registered. Changing the connection
                 details here does not update it — delete and re-add the node to
@@ -552,18 +552,32 @@ function resetWizard(): void {
 
               <section class="connect-group" aria-label="Identity">
                 <h4 class="connect-group__title">Identity</h4>
-                <NFormItem
-                  label="Node name"
-                  path="name"
-                  :label-props="{ for: 'add-server-name' }"
-                >
-                  <NInput
-                    v-model:value="form.name"
-                    placeholder="build-node-03"
-                    :input-props="{ id: 'add-server-name', 'aria-label': 'Node name' }"
-                  />
-                  <span class="field-hint">A short unique name, e.g. build-node-03.</span>
-                </NFormItem>
+                <div class="form-row">
+                  <NFormItem
+                    label="Node name"
+                    path="name"
+                    :label-props="{ for: 'add-server-name' }"
+                  >
+                    <NInput
+                      v-model:value="form.name"
+                      placeholder="build-node-03"
+                      :input-props="{ id: 'add-server-name', 'aria-label': 'Node name' }"
+                    />
+                    <span class="field-hint">A short unique name, e.g. build-node-03.</span>
+                  </NFormItem>
+                  <NFormItem
+                    label="SSH user"
+                    path="sshUser"
+                    :label-props="{ for: 'add-server-ssh-user' }"
+                  >
+                    <NInput
+                      v-model:value="form.sshUser"
+                      placeholder="root"
+                      :input-props="{ id: 'add-server-ssh-user', 'aria-label': 'SSH user' }"
+                    />
+                    <span class="field-hint">The Unix user the control plane connects as.</span>
+                  </NFormItem>
+                </div>
               </section>
 
               <section class="connect-group" aria-label="Address">
@@ -600,19 +614,6 @@ function resetWizard(): void {
 
               <section class="connect-group" aria-label="Access">
                 <h4 class="connect-group__title">Access</h4>
-                <NFormItem
-                  label="SSH user"
-                  path="sshUser"
-                  :label-props="{ for: 'add-server-ssh-user' }"
-                >
-                  <NInput
-                    v-model:value="form.sshUser"
-                    placeholder="root"
-                    :input-props="{ id: 'add-server-ssh-user', 'aria-label': 'SSH user' }"
-                  />
-                  <span class="field-hint">The Unix user the control plane connects as.</span>
-                </NFormItem>
-
                 <NFormItem label="Authentication">
                   <NRadioGroup
                     v-model:value="form.authMode"
@@ -624,12 +625,7 @@ function resetWizard(): void {
                   </NRadioGroup>
                   <span class="field-hint">Authenticate with a stored private key or a node password.</span>
                 </NFormItem>
-              </section>
-
-              <section class="connect-group" aria-label="Credentials">
-                <h4 class="connect-group__title">Credentials</h4>
-                <template v-if="form.authMode === 'key'">
-                <NFormItem label="SSH key">
+                <NFormItem v-if="form.authMode === 'key'" label="SSH key">
                   <NRadioGroup
                     v-model:value="form.keyMode"
                     size="small"
@@ -640,7 +636,10 @@ function resetWizard(): void {
                   </NRadioGroup>
                   <span class="field-hint">Key listing is not exposed by the API yet — paste the key material or a known key ID.</span>
                 </NFormItem>
-                </template>
+              </section>
+
+              <section class="connect-group" aria-label="Credentials">
+                <h4 class="connect-group__title">Credentials</h4>
 
                 <template v-if="form.authMode === 'key' && form.keyMode === 'new'">
                   <NFormItem

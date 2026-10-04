@@ -167,6 +167,51 @@ a:hover {
   display: none;
 }
 
+/* Two-column form rows (JUS-19): short fields share one row and collapse to
+ * a single column once their container narrows below the shared collapse
+ * threshold (JUS-19 fix 3). The query keys off the modal/form width via
+ * .form-container, not the viewport. Measured real container widths
+ * (review-B-r2): 512px NForms in the 560px modals, 590px Add-server
+ * connect-form, 622px CreateAppWizard wizard-main, 640px database card —
+ * all pair; the 420px Register card stays single-column via the page-width
+ * container. Container queries are baseline in current
+ * Chromium/Firefox/Safari, so there is no viewport fallback.
+ * Rows are direct NForm children so the global item-to-item rhythm above owns
+ * the vertical spacing; the items inside own none. A lone item spans both
+ * columns (e.g. a conditional partner that is currently hidden). Column gap
+ * matches the connect addr-row; row gap matches the shared --form-item-gap
+ * rhythm for the stacked state. Grid minimums (minmax(0, 1fr) + min-width: 0)
+ * mean plain inputs and selects can never overflow their column; controls
+ * with intrinsic minimums (segmented radios, ~294px for the key-mode pair)
+ * belong on full-width rows. The 480px value is shared with the EnvEditor
+ * and redirect-form fallbacks — a vitest check keeps the three in sync. */
+.form-container {
+  container-type: inline-size;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--form-item-gap) var(--space-3);
+  align-items: start;
+  min-width: 0;
+}
+
+.form-row > .n-form-item {
+  margin: 0;
+  min-width: 0;
+}
+
+.form-row > :only-child {
+  grid-column: 1 / -1;
+}
+
+@container (max-width: 480px) {
+  .form-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Single-border focus for text fields (JUS-13): the field's own border takes
  * the accent color on focus and the extra Naive UI glow ring is removed. This
  * covers NInput (text, password, textarea) and NInputNumber, which renders an
@@ -299,6 +344,12 @@ a:hover {
   align-items: center;
   justify-content: center;
   width: 100%;
+  /* Container for the RegisterPage password row (JUS-19 fix 1): the 420px
+   * card is narrower than the collapse threshold, so the card itself cannot
+   * be the container — the page width decides between side-by-side (desktop)
+   * and stacked (narrow viewport) passwords. LoginPage has no .form-row, so
+   * this changes nothing there. */
+  container-type: inline-size;
 }
 
 .auth-card {

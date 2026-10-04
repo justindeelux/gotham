@@ -794,22 +794,24 @@ onMounted(async () => {
         <NAlert v-if="formError" type="error" :show-icon="true">
           {{ formError }}
         </NAlert>
-        <NForm label-placement="top" :show-feedback="false">
-          <NFormItem label="Name">
-            <NInput
-              v-model:value="form.name"
-              placeholder="e.g. Deploy alerts"
-              aria-label="Channel name"
-            />
-          </NFormItem>
-          <NFormItem label="Kind">
-            <NSelect
-              v-model:value="form.kind"
-              :options="kindOptions"
-              :disabled="editing"
-              aria-label="Channel kind"
-            />
-          </NFormItem>
+        <NForm label-placement="top" :show-feedback="false" class="channel-form form-container">
+          <div class="form-row">
+            <NFormItem label="Name">
+              <NInput
+                v-model:value="form.name"
+                placeholder="e.g. Deploy alerts"
+                aria-label="Channel name"
+              />
+            </NFormItem>
+            <NFormItem label="Kind">
+              <NSelect
+                v-model:value="form.kind"
+                :options="kindOptions"
+                :disabled="editing"
+                aria-label="Channel kind"
+              />
+            </NFormItem>
+          </div>
 
           <template v-if="form.kind === 'discord' || form.kind === 'slack'">
             <NFormItem label="Webhook URL">
@@ -932,35 +934,37 @@ onMounted(async () => {
             </div>
           </NFormItem>
 
-          <NFormItem label="Resource scope">
-            <div class="field-stack">
-              <NSelect
-                :value="form.resourceType"
-                :options="scopeOptions"
-                aria-label="Resource scope"
-                @update:value="(value: string) => selectScope(value)"
-              />
-              <NSelect
-                v-if="form.resourceType !== ''"
-                v-model:value="form.resourceId"
-                :options="resourcePickerOptions"
-                filterable
-                :placeholder="
-                  form.resourceType === 'application'
-                    ? 'Select an application'
-                    : 'Select a database'
-                "
-                aria-label="Resource"
-              />
-              <NText v-if="unavailableScopeHint !== ''" depth="3" class="small">
-                {{ unavailableScopeHint }}
-              </NText>
-            </div>
-          </NFormItem>
+          <div class="form-row">
+            <NFormItem label="Resource scope">
+              <div class="field-stack">
+                <NSelect
+                  :value="form.resourceType"
+                  :options="scopeOptions"
+                  aria-label="Resource scope"
+                  @update:value="(value: string) => selectScope(value)"
+                />
+                <NSelect
+                  v-if="form.resourceType !== ''"
+                  v-model:value="form.resourceId"
+                  :options="resourcePickerOptions"
+                  filterable
+                  :placeholder="
+                    form.resourceType === 'application'
+                      ? 'Select an application'
+                      : 'Select a database'
+                  "
+                  aria-label="Resource"
+                />
+                <NText v-if="unavailableScopeHint !== ''" depth="3" class="small">
+                  {{ unavailableScopeHint }}
+                </NText>
+              </div>
+            </NFormItem>
 
-          <NFormItem label="Enabled">
-            <NSwitch v-model:value="form.enabled" aria-label="Channel enabled" />
-          </NFormItem>
+            <NFormItem label="Enabled">
+              <NSwitch v-model:value="form.enabled" aria-label="Channel enabled" />
+            </NFormItem>
+          </div>
         </NForm>
         <NText depth="3" class="small">
           Secrets travel once, are sealed server-side and are never displayed

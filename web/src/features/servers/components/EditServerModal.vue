@@ -17,6 +17,11 @@ import { computed, reactive, ref, watch } from "vue";
 
 import type { Server, UpdateServerInput } from "@/features/servers/api/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
+import {
+  NAME_PATTERN,
+  USER_PATTERN,
+  isValidHost,
+} from "@/features/servers/utils/serverValidation";
 
 interface Props {
   show: boolean;
@@ -54,10 +59,6 @@ const form = reactive<EditForm>({
   password: "",
 });
 
-const HOST_PATTERN = /^[0-9a-zA-Z.-]+$/;
-const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/;
-const USER_PATTERN = /^[a-z_][a-z0-9_-]*[$]?$/;
-
 const rules = computed<FormRules>(() => ({
   name: [
     { required: true, message: "Enter a node name.", trigger: ["input", "blur"] },
@@ -71,17 +72,7 @@ const rules = computed<FormRules>(() => ({
   ip: [
     { required: true, message: "Enter an IP address or hostname.", trigger: ["input", "blur"] },
     {
-      validator: (_rule, value: string) => {
-        const trimmed = value.trim();
-        if (trimmed === "" || !HOST_PATTERN.test(trimmed)) {
-          return false;
-        }
-        const ipv4 =
-          /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
-        const hostname =
-          /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-        return ipv4.test(trimmed) || hostname.test(trimmed);
-      },
+      validator: (_rule, value: string) => isValidHost(value),
       message: "Enter a valid IPv4 address or hostname.",
       trigger: ["input", "blur"],
     },

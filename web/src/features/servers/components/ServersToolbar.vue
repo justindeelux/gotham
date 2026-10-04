@@ -1,0 +1,149 @@
+<script setup lang="ts">
+import { NIcon, NInput } from "naive-ui";
+
+import GothamIcon from "@/shared/ui/GothamIcon.vue";
+import type { ServerFilter } from "@/features/servers/utils/serverListView";
+
+interface Props {
+  activeFilter: ServerFilter;
+  readyCount: number;
+  offlineCount: number;
+  updateCount: number;
+  totalCount: number;
+}
+
+const props = defineProps<Props>();
+const emit = defineEmits<{
+  "update:activeFilter": [filter: ServerFilter];
+}>();
+
+const searchQuery = defineModel<string>("searchQuery", { required: true });
+
+function selectFilter(filter: ServerFilter): void {
+  emit("update:activeFilter", filter);
+}
+
+function isActive(filter: ServerFilter): boolean {
+  return props.activeFilter === filter;
+}
+</script>
+
+<template>
+  <div class="toolbar">
+    <div class="filters" role="group" aria-label="Filter servers by status">
+      <button
+        class="chip"
+        type="button"
+        :class="{ 'is-active': isActive('all') }"
+        :aria-pressed="isActive('all')"
+        @click="selectFilter('all')"
+      >
+        All <span class="nav-count">{{ totalCount }}</span>
+      </button>
+      <button
+        class="chip"
+        type="button"
+        :class="{ 'is-active': isActive('ready') }"
+        :aria-pressed="isActive('ready')"
+        @click="selectFilter('ready')"
+      >
+        Ready <span class="nav-count">{{ readyCount }}</span>
+      </button>
+      <button
+        class="chip"
+        type="button"
+        :class="{ 'is-active': isActive('offline') }"
+        :aria-pressed="isActive('offline')"
+        @click="selectFilter('offline')"
+      >
+        Offline <span class="nav-count">{{ offlineCount }}</span>
+      </button>
+      <button
+        class="chip"
+        type="button"
+        :class="{ 'is-active': isActive('update') }"
+        :aria-pressed="isActive('update')"
+        @click="selectFilter('update')"
+      >
+        Agent update needed <span class="nav-count">{{ updateCount }}</span>
+      </button>
+    </div>
+    <NInput
+      v-model:value="searchQuery"
+      class="search-input"
+      placeholder="Search by name, IP, OS…"
+      aria-label="Search servers"
+      clearable
+    >
+      <template #prefix>
+        <NIcon>
+          <GothamIcon name="search" />
+        </NIcon>
+      </template>
+    </NInput>
+  </div>
+</template>
+
+<style scoped>
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background var(--motion-base) var(--ease-standard),
+    color var(--motion-base) var(--ease-standard),
+    border-color var(--motion-base) var(--ease-standard);
+}
+
+.chip:hover {
+  background: var(--hover-row);
+  color: var(--fg-2);
+  border-color: var(--border-soft);
+}
+
+.chip.is-active {
+  background: var(--selected-row);
+  color: var(--fg-2);
+  border-color: var(--border-soft);
+}
+
+.chip .nav-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.search-input {
+  margin-left: auto;
+  max-width: 280px;
+}
+
+@media (max-width: 860px) {
+  .search-input {
+    margin-left: 0;
+    max-width: none;
+    width: 100%;
+  }
+}
+</style>

@@ -3,18 +3,16 @@ import { ref, watch, type Ref } from "vue";
 
 import { describeApplicationError, updateApplication } from "@/features/applications/api/applications";
 import type { Application } from "@/features/applications/api/applications";
+import { hostDomainSchema } from "@/features/applications/schemas/applications";
+import { fieldErrors } from "@/shared/validation/naiveAdapter";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
 
-/** HOST_PATTERN mirrors the generator's ValidateDomain boundary. */
-const HOST_PATTERN =
-  /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
-
-/** isValidDomain accepts an empty value (clears) or a plain hostname. */
+/**
+ * isValidDomain accepts an empty value (clears) or a plain hostname.
+ * Schema-backed: see `schemas/applications.ts hostDomainSchema`.
+ */
 export function isValidDomain(value: string): boolean {
-  if (value === "") {
-    return true;
-  }
-  return value.length <= 253 && HOST_PATTERN.test(value);
+  return hostDomainSchema.safeParse(value).success;
 }
 
 /**
@@ -32,9 +30,9 @@ export function useApplicationDomain(application: Ref<Application>) {
   /** handleSaveDomain writes base_domain through the applications API. */
   async function handleSaveDomain(): Promise<void> {
     const next = baseDomain.value.trim().toLowerCase();
-    if (!isValidDomain(next)) {
-      domainError.value =
-        "Enter a plain hostname such as app.example.com (letters, digits, hyphens and dots; no wildcard).";
+    const issues = fieldErrors(hostDomainSchema, next);
+    if (issues.length > 0) {
+      domainError.value = issues[0];
       return;
     }
     domainError.value = null;

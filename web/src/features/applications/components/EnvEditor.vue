@@ -3,6 +3,7 @@ import { NButton, NIcon, NInput, NText } from "naive-ui";
 import { computed } from "vue";
 
 import type { EnvVar } from "@/features/applications/api/applications";
+import { isRecommendedEnvKey } from "@/features/applications/schemas/env";
 import { useStableRowKeys } from "@/shared/composables/useStableRowKeys";
 import { isSecretValue } from "@/features/applications/utils/envSecret";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
@@ -22,14 +23,12 @@ const emit = defineEmits<{
   "update:modelValue": [value: EnvVar[]];
 }>();
 
-const KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
-
 const rows = computed<EnvVar[]>(() => props.modelValue);
 const { keys: rowKeys, insertAt, removeAt } = useStableRowKeys(() => rows.value.length);
 
-/** isValidKey enforces the backend-adjacent KEY shape ^[A-Z][A-Z0-9_]*$. */
+/** isValidKey marks the convention shape; display-only, never blocking. */
 function isValidKey(key: string): boolean {
-  return KEY_PATTERN.test(key.trim());
+  return isRecommendedEnvKey(key);
 }
 
 /** updateRow replaces one row, keeping the array immutable for v-model. */

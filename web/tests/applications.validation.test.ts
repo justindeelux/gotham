@@ -1,0 +1,136 @@
+// Differential test (JUS-23): application schemas and env warnings must
+// reproduce the recorded outcomes of the hand-written checks they replace.
+// Recorded 2026-10-04 from the pre-migration code.
+import { mount } from "@vue/test-utils";
+import { NMessageProvider } from "naive-ui";
+import { createPinia, setActivePinia } from "pinia";
+import { describe, expect, it } from "vitest";
+import { defineComponent, h, ref } from "vue";
+
+import {
+  countDroppedEnvRows,
+  hasEnvKeyWarnings,
+  isRecommendedEnvKey,
+} from "@/features/applications/schemas/env";
+import { hostDomainSchema } from "@/features/applications/schemas/applications";
+import { isValidDomain } from "@/features/applications/composables/useApplicationDomain";
+import { useCreateAppWizard } from "@/features/applications/composables/useCreateAppWizard";
+import { fieldErrors } from "@/shared/validation/naiveAdapter";
+
+describe("env convention warnings stay non-blocking", () => {
+  it("matches recorded recommendations", () => {
+    const rows: Array<{ key: string; recommended: boolean }> = [
+      { key: "", recommended: false },
+      { key: "   ", recommended: false },
+      { key: "NODE_ENV", recommended: true },
+      { key: "node_env", recommended: false },
+      { key: "A", recommended: true },
+      { key: "A1_", recommended: true },
+      { key: "1A", recommended: false },
+      { key: "A-B", recommended: false },
+      { key: "A B", recommended: false },
+      { key: "A=B", recommended: false },
+      { key: "FOOé", recommended: false },
+    ];
+    for (const row of rows) {
+      expect(isRecommendedEnvKey(row.key)).toBe(row.recommended);
+    }
+  });
+
+  it("matches recorded warning/dropped counts", () => {
+    const sets: Array<{ rows: Array<{ key: string; value: string }>; warn: boolean; dropped: number }> = [
+      { rows: [], warn: false, dropped: 0 },
+      { rows: [{"key": "", "value": ""}], warn: false, dropped: 0 },
+      { rows: [{"key": "", "value": "x"}], warn: false, dropped: 1 },
+      { rows: [{"key": "ok_key", "value": "v"}], warn: true, dropped: 0 },
+      { rows: [{"key": "lower", "value": "v"}], warn: true, dropped: 0 },
+      { rows: [{"key": "GOOD", "value": "v"}, {"key": "", "value": "dropped"}, {"key": "bad-key", "value": "v"}], warn: true, dropped: 1 },
+    ];
+    for (const set of sets) {
+      expect(hasEnvKeyWarnings(set.rows)).toBe(set.warn);
+      expect(countDroppedEnvRows(set.rows)).toBe(set.dropped);
+    }
+  });
+});
+
+describe("domain schema matches recorded outcomes", () => {
+  it("matches recorded validity and keeps the exact message", () => {
+    const rows: Array<{ value: string; valid: boolean }> = [
+      { value: "", valid: true },
+      { value: "app.example.com", valid: true },
+      { value: "UPPER.example", valid: false },
+      { value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", valid: false },
+      { value: "-bad-", valid: false },
+      { value: "ok-host_1", valid: false },
+      { value: "x.y", valid: true },
+      { value: "a..b", valid: false },
+    ];
+    for (const row of rows) {
+      expect(isValidDomain(row.value)).toBe(row.valid);
+      expect(hostDomainSchema.safeParse(row.value).success).toBe(row.valid);
+    }
+    expect(fieldErrors(hostDomainSchema, "UPPER.example")[0]).toBe(
+      "Enter a plain hostname such as app.example.com (letters, digits, hyphens and dots; no wildcard).",
+    );
+  });
+});
+
+describe("wizard gates match recorded outcomes", () => {
+  it("sourceValid and runtimeValid agree row by row", () => {
+    setActivePinia(createPinia());
+    let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
+    const Harness = defineComponent({
+      setup() {
+        wiz = useCreateAppWizard(ref(false), (() => undefined) as never);
+        return () => h("div");
+      },
+    });
+    const wrapper = mount({ render: () => h(NMessageProvider, null, { default: () => h(Harness) }) });
+    const w = wiz!;
+    const reset = {
+      providerId: "", publicCloneUrl: "", repoFullName: "", cloneUrl: "", branch: "main", name: "",
+      buildPack: "", serverId: "", port: 3000, hostPort: null, baseDomain: "", env: [], storage: [],
+    };
+    const sourceCases: Array<{ name: string; patch: Record<string, unknown>; sourceValid: boolean }> = [
+      { name: "empty", patch: {}, sourceValid: false },
+      { name: "public-valid", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "storefront"}, sourceValid: true },
+      { name: "public-blank-url", patch: {"providerId": "public", "publicCloneUrl": "   ", "branch": "main", "name": "storefront"}, sourceValid: false },
+      { name: "public-bad-name", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "Bad_Name!"}, sourceValid: false },
+      { name: "public-short-name", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "ab"}, sourceValid: false },
+      { name: "public-blank-branch", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "  ", "name": "storefront"}, sourceValid: false },
+      { name: "private-valid", patch: {"providerId": "p1", "repoFullName": "o/r", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: true },
+      { name: "private-no-clone", patch: {"providerId": "p1", "repoFullName": "o/r", "cloneUrl": "  ", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "private-no-repo", patch: {"providerId": "p1", "repoFullName": "", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "name-31-chars", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, sourceValid: true },
+      { name: "name-32-chars", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, sourceValid: false },
+      { name: "no-provider-else-valid", patch: {"providerId":"","repoFullName":"o/r","cloneUrl":"git@h:o/r.git","branch":"main","name":"storefront"}, sourceValid: false },
+      { name: "no-repo-else-valid", patch: {"providerId":"p1","repoFullName":"","cloneUrl":"git@h:o/r.git","branch":"main","name":"storefront"}, sourceValid: false },
+    ];
+    for (const c of sourceCases) {
+      Object.assign(w.form, { ...reset }, c.patch);
+      expect({ name: c.name, actual: w.sourceValid.value }).toEqual({ name: c.name, actual: c.sourceValid });
+    }
+    const runtimeCases: Array<{ name: string; patch: Record<string, unknown>; runtimeValid: boolean }> = [
+      { name: "empty", patch: {}, runtimeValid: false },
+      { name: "valid", patch: {"serverId": "s1", "port": 3000, "hostPort": null, "baseDomain": ""}, runtimeValid: true },
+      { name: "null-port", patch: {"serverId": "s1", "port": null, "hostPort": null, "baseDomain": ""}, runtimeValid: false },
+      { name: "port-0", patch: {"serverId": "s1", "port": 0, "hostPort": null, "baseDomain": ""}, runtimeValid: false },
+      { name: "port-65536", patch: {"serverId": "s1", "port": 65536, "hostPort": null, "baseDomain": ""}, runtimeValid: false },
+      { name: "port-1.5", patch: {"serverId": "s1", "port": 1.5, "hostPort": null, "baseDomain": ""}, runtimeValid: false },
+      { name: "port-nan", patch: { serverId: "s1", port: NaN, hostPort: null, baseDomain: "" }, runtimeValid: false },
+      { name: "hostport-0", patch: {"serverId": "s1", "port": 3000, "hostPort": 0, "baseDomain": ""}, runtimeValid: true },
+      { name: "hostport-neg", patch: {"serverId": "s1", "port": 3000, "hostPort": -1, "baseDomain": ""}, runtimeValid: false },
+      { name: "hostport-big", patch: {"serverId": "s1", "port": 3000, "hostPort": 70000, "baseDomain": ""}, runtimeValid: false },
+      { name: "domain-ok", patch: {"serverId": "s1", "port": 3000, "hostPort": null, "baseDomain": "app.gotham.dev"}, runtimeValid: true },
+      { name: "domain-bad", patch: {"serverId": "s1", "port": 3000, "hostPort": null, "baseDomain": "not a domain"}, runtimeValid: false },
+      { name: "domain-upper", patch: {"serverId": "s1", "port": 3000, "hostPort": null, "baseDomain": "APP.EXAMPLE.COM"}, runtimeValid: false },
+      { name: "domain-spaces", patch: {"serverId": "s1", "port": 3000, "hostPort": null, "baseDomain": "  app.gotham.dev  "}, runtimeValid: true },
+      { name: "no-server-else-valid", patch: {"serverId":"","port":3000,"hostPort":null,"baseDomain":""}, runtimeValid: false },
+    ];
+    for (const c of runtimeCases) {
+      Object.assign(w.form, { serverId: "", port: 3000, hostPort: null, baseDomain: "" }, c.patch);
+      expect({ name: c.name, actual: w.runtimeValid.value }).toEqual({ name: c.name, actual: c.runtimeValid });
+    }
+    wrapper.unmount();
+  });
+});

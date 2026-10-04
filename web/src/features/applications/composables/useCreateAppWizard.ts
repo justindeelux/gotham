@@ -19,7 +19,18 @@ import { cloneUrlFor, suggestAppName } from "@/features/applications/utils/wizar
 import {
   countDroppedEnvRows,
   hasEnvKeyWarnings,
-} from "@/features/applications/utils/wizardValidation";
+} from "@/features/applications/schemas/env";
+import {
+  appNameSchema,
+  branchSchema,
+  cloneUrlSchema,
+  hostPortSchema,
+  providerSchema,
+  repoSchema,
+  serverSchema,
+  wizardDomainSchema,
+} from "@/features/applications/schemas/applications";
+import { portSchema } from "@/shared/validation/primitives";
 
 export interface WizardForm {
   providerId: string;
@@ -40,9 +51,6 @@ export interface WizardForm {
 export const PUBLIC_PROVIDER = "public";
 
 export const STEP_NAMES = ["Source", "Build pack", "Runtime", "Env & storage", "Deploy"];
-
-const NAME_PATTERN = /^[a-z][a-z0-9-]{2,30}$/;
-const DOMAIN_PATTERN = /^[a-z0-9.-]+\.[a-z]{2,}$/;
 
 export interface BuildPackOption {
   value: BuildPack;
@@ -153,43 +161,42 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
 
   /** sourceValid gates the Source step: provider, repo (or URL), branch, name. */
   const sourceValid = computed<boolean>(() => {
-    if (form.providerId === "") {
+    if (!providerSchema.safeParse(form.providerId).success) {
       return false;
     }
     if (isPublicRepo.value) {
-      if (form.publicCloneUrl.trim() === "") {
+      if (!cloneUrlSchema.safeParse(form.publicCloneUrl).success) {
         return false;
       }
     } else {
-      if (form.repoFullName === "") {
+      if (!repoSchema.safeParse(form.repoFullName).success) {
         return false;
       }
       // A private repository without a provider ssh_url is rejected rather than
       // silently degraded to https: the keyed cloner would rewrite that URL and
       // drop a self-hosted SSH port. sourceError names the gap.
-      if (form.cloneUrl.trim() === "") {
+      if (!cloneUrlSchema.safeParse(form.cloneUrl).success) {
         return false;
       }
     }
-    return form.branch.trim() !== "" && NAME_PATTERN.test(form.name.trim());
+    return (
+      branchSchema.safeParse(form.branch).success &&
+      appNameSchema.safeParse(form.name).success
+    );
   });
 
   /** runtimeValid gates the Runtime step: a node and a valid port. */
   const runtimeValid = computed<boolean>(() => {
-    if (form.serverId === "") {
+    if (!serverSchema.safeParse(form.serverId).success) {
       return false;
     }
-    if (form.port === null || !Number.isInteger(form.port) || form.port < 1 || form.port > 65535) {
+    if (!portSchema.safeParse(form.port).success) {
       return false;
     }
-    if (
-      form.hostPort !== null &&
-      (!Number.isInteger(form.hostPort) || form.hostPort < 0 || form.hostPort > 65535)
-    ) {
+    if (!hostPortSchema.safeParse(form.hostPort).success) {
       return false;
     }
-    const domain = form.baseDomain.trim();
-    return domain === "" || DOMAIN_PATTERN.test(domain);
+    return wizardDomainSchema.safeParse(form.baseDomain).success;
   });
 
   /**

@@ -5,6 +5,8 @@ import { useRouter } from "vue-router";
 
 import { describeServiceError } from "@/features/services/api/services";
 import type { Service } from "@/features/services/api/services";
+import { serviceNameSchema, serviceNodeSchema } from "@/shared/validation/primitives";
+import { fieldErrors } from "@/shared/validation/naiveAdapter";
 import { useServersStore } from "@/features/servers";
 import { useServicesStore } from "@/features/services/stores/services";
 import { useTemplatesStore } from "@/features/templates";
@@ -148,13 +150,11 @@ export function useServicesList(): ServicesPageContext {
   );
 
   const importNameError = computed<string>(() =>
-    importAttempted.value && importName.value.trim() === ""
-      ? "Enter a service name."
-      : "",
+    !importAttempted.value ? "" : (fieldErrors(serviceNameSchema, importName.value)[0] ?? ""),
   );
 
   const importNodeError = computed<string>(() =>
-    importAttempted.value && importServerId.value === "" ? "Select a node." : "",
+    !importAttempted.value ? "" : (fieldErrors(serviceNodeSchema, importServerId.value)[0] ?? ""),
   );
 
   /**
@@ -216,7 +216,10 @@ export function useServicesList(): ServicesPageContext {
   /** handleImport stores the pasted document as a new service. */
   async function handleImport(): Promise<void> {
     importAttempted.value = true;
-    if (importName.value.trim() === "" || importServerId.value === "") {
+    if (
+      !serviceNameSchema.safeParse(importName.value).success ||
+      !serviceNodeSchema.safeParse(importServerId.value).success
+    ) {
       return;
     }
     importing.value = true;

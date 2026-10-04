@@ -16,6 +16,8 @@ import type {
   TemplateRender,
   TemplateValues,
 } from "@/features/templates/api/templates";
+import { fieldErrors } from "@/shared/validation/naiveAdapter";
+import { serviceNameSchema, serviceNodeSchema } from "@/shared/validation/primitives";
 import { useServersStore } from "@/features/servers";
 import { useServicesStore } from "@/features/services";
 import { useTemplatesStore } from "@/features/templates/stores/templates";
@@ -117,11 +119,11 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
   );
 
   const nameError = computed<string>(() =>
-    createAttempted.value && name.value.trim() === "" ? "Enter a service name." : "",
+    !createAttempted.value ? "" : (fieldErrors(serviceNameSchema, name.value)[0] ?? ""),
   );
 
   const nodeError = computed<string>(() =>
-    createAttempted.value && serverId.value === "" ? "Select a node." : "",
+    !createAttempted.value ? "" : (fieldErrors(serviceNodeSchema, serverId.value)[0] ?? ""),
   );
 
   /** open loads the template schema and seeds the form with its defaults. */
@@ -230,8 +232,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     if (
       renderLoading.value ||
       rendered === null ||
-      name.value.trim() === "" ||
-      serverId.value === ""
+      !serviceNameSchema.safeParse(name.value).success ||
+      !serviceNodeSchema.safeParse(serverId.value).success
     ) {
       return;
     }

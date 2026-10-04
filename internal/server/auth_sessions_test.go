@@ -184,7 +184,7 @@ func TestSessionsRateLimit(t *testing.T) {
 // list with the current marker, revoke-other, revoke-own, foreign 404,
 // revoke-others, and the empty-list shape.
 func TestSessionsEndToEndOverHTTP(t *testing.T) {
-	s, pair := scratchProfileStack(t)
+	s, _, pair := scratchProfileStack(t)
 	bearer := "Bearer " + pair.AccessToken
 
 	// The stack seeds its sessions through direct service calls (zero device
@@ -273,7 +273,7 @@ func TestSessionsEndToEndOverHTTP(t *testing.T) {
 // TestSessionsCaptureMetaOverHTTP: a refresh over HTTP records the request's
 // User-Agent and client IP on the rotated session, and the list shows them.
 func TestSessionsCaptureMetaOverHTTP(t *testing.T) {
-	s, pair := scratchProfileStack(t)
+	s, _, pair := scratchProfileStack(t)
 
 	refreshBody := `{"refresh_token":"` + pair.RefreshToken + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", strings.NewReader(refreshBody))
@@ -313,10 +313,108 @@ func TestSessionsCaptureMetaOverHTTP(t *testing.T) {
 	t.Error("no session marked current after the HTTP refresh")
 }
 
+// TestSessionsRevokeReplayStaysPlain401OverHTTP (F1): revoking a session
+// deletes its row, so replaying its refresh token is a plain 401 that leaves
+// every other session alone — including over HTTP.
+func TestSessionsRevokeReplayStaysPlain401OverHTTP(t *testing.T) {
+	s, reg, login := scratchProfileStack(t)
+
+	old := s.authLimiter
+	limiter := newIPRateLimiter(rate.Limit(1000), 1000)
+	s.authLimiter = limiter
+	t.Cleanup(func() {
+		limiter.Close()
+		old.Close()
+	})
+
+	bearer := "Bearer " + login.AccessToken
+	var body sessionsResponse
+	if rec := doRequest(t, s, http.MethodGet, "/api/v1/auth/me/sessions", "", bearer); rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", rec.Code)
+	} else if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode list body: %v", err)
+	}
+	if len(body.Sessions) != 2 {
+		t.Fatalf("list returned %d rows, want 2", len(body.Sessions))
+	}
+	var otherID string
+	for _, session := range body.Sessions {
+		if !session.Current {
+			otherID = session.ID.String()
+		}
+	}
+
+	// Revoke the other session, then replay its refresh token: 401, and the
+	// current session is untouched.
+	if rec := doRequest(t, s, http.MethodDelete, "/api/v1/auth/me/sessions/"+otherID, "", bearer); rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+	}
+	replay := doRequest(t, s, http.MethodPost, "/api/v1/auth/refresh",
+		`{"refresh_token":"`+reg.RefreshToken+`"}`, "")
+	if replay.Code != http.StatusUnauthorized {
+		t.Fatalf("replay status = %d, want 401 (body %s)", replay.Code, replay.Body.String())
+	}
+	again := doRequest(t, s, http.MethodGet, "/api/v1/auth/me/sessions", "", bearer)
+	var remaining sessionsResponse
+	if err := json.Unmarshal(again.Body.Bytes(), &remaining); err != nil {
+		t.Fatalf("decode list body: %v", err)
+	}
+	if len(remaining.Sessions) != 1 || !remaining.Sessions[0].Current {
+		t.Fatalf("list after replay = %+v, want only the current session", remaining.Sessions)
+	}
+	refreshed := doRequest(t, s, http.MethodPost, "/api/v1/auth/refresh",
+		`{"refresh_token":"`+login.RefreshToken+`"}`, "")
+	if refreshed.Code != http.StatusOK {
+		t.Fatalf("refresh after replay status = %d, want 200 (the family must be intact)", refreshed.Code)
+	}
+}
+
+// TestSessionsStaleSidConflictOverHTTP (F2): revoke-others with the
+// pre-rotation access token answers 409 and deletes nothing.
+func TestSessionsStaleSidConflictOverHTTP(t *testing.T) {
+	s, _, login := scratchProfileStack(t)
+
+	old := s.authLimiter
+	limiter := newIPRateLimiter(rate.Limit(1000), 1000)
+	s.authLimiter = limiter
+	t.Cleanup(func() {
+		limiter.Close()
+		old.Close()
+	})
+
+	rotated := doRequest(t, s, http.MethodPost, "/api/v1/auth/refresh",
+		`{"refresh_token":"`+login.RefreshToken+`"}`, "")
+	if rotated.Code != http.StatusOK {
+		t.Fatalf("refresh status = %d, want 200", rotated.Code)
+	}
+	var fresh authResponse
+	if err := json.Unmarshal(rotated.Body.Bytes(), &fresh); err != nil {
+		t.Fatalf("decode refresh body: %v", err)
+	}
+
+	stale := doRequest(t, s, http.MethodPost, "/api/v1/auth/me/sessions/revoke-others", "", "Bearer "+login.AccessToken)
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale-sid revoke-others status = %d, want 409 (body %s)", stale.Code, stale.Body.String())
+	}
+	if body := stale.Body.String(); !strings.Contains(body, `"sign in again to manage other sessions"`) {
+		t.Errorf("stale-sid body = %s, want the contract message", body)
+	}
+
+	// Nothing was revoked: both sessions still list under the fresh token.
+	list := doRequest(t, s, http.MethodGet, "/api/v1/auth/me/sessions", "", "Bearer "+fresh.AccessToken)
+	var body sessionsResponse
+	if err := json.Unmarshal(list.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode list body: %v", err)
+	}
+	if len(body.Sessions) != 2 {
+		t.Errorf("list after refused revoke-others = %d rows, want 2", len(body.Sessions))
+	}
+}
+
 // TestProfileFormatCharsOverHTTP: the F5 fix at the HTTP layer — a ZWNJ name
 // and a ZWJ emoji round-trip with 200, a word-joiner name is a 400.
 func TestProfileFormatCharsOverHTTP(t *testing.T) {
-	s, pair := scratchProfileStack(t)
+	s, _, pair := scratchProfileStack(t)
 	bearer := "Bearer " + pair.AccessToken
 
 	// A Persian name joined with ZWNJ plus a ZWJ emoji sequence: 200.

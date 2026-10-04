@@ -93,20 +93,24 @@ func (s *Service) ListSessions(ctx context.Context, userID, currentSessionID uui
 	return out, nil
 }
 
-// RevokeSession ends one of the caller's sessions. It answers ErrNotFound
-// when the id is unknown, belongs to another user, or is already dead (never
-// a 403, so a probe cannot distinguish them). Ending the caller's own session
+// RevokeSession ends one of the caller's sessions by deleting its row, like
+// logout does. It answers ErrNotFound when the id is unknown, belongs to
+// another user, is already dead (revoked or deleted), or is expired (never a
+// 403, so a probe cannot distinguish them). Ending the caller's own session
 // is allowed; the web signs out afterwards.
 //
-// Revoking a session makes its refresh token unusable immediately; access
-// tokens already issued live out their 15-minute life (the same documented
-// window as reset-password and the PF-1 password change).
+// Deletion means a replayed refresh token is unknown: a plain 401 that can
+// never trigger the reuse-detection family revoke, so revoking a stolen
+// session cannot log the owner out everywhere (F1). Already-rotated rows stay
+// untouched, preserving genuine-theft evidence. Access tokens already issued
+// live out their 15-minute life (the same documented window as
+// reset-password and the PF-1 password change).
 func (s *Service) RevokeSession(ctx context.Context, userID, id uuid.UUID) error {
-	revoked, err := s.store.RevokeSessionByID(ctx, pgUUID(id), pgUUID(userID))
+	deleted, err := s.store.DeleteSessionByID(ctx, pgUUID(id), pgUUID(userID))
 	if err != nil {
 		return fmt.Errorf("auth: revoke session: %w", err)
 	}
-	if revoked == 0 {
+	if deleted == 0 {
 		return ErrNotFound
 	}
 	s.logger.Info("auth: session revoked", "user_id", userID)
@@ -114,18 +118,26 @@ func (s *Service) RevokeSession(ctx context.Context, userID, id uuid.UUID) error
 }
 
 // RevokeOtherSessions ends every live session of the caller except the
-// current one. A token without a session id (minted before PF-2) answers
-// ErrSessionUnknown rather than guessing which row is current.
+// current one, by deleting those rows. The current session id must itself be
+// a live session of the caller; a missing, stale (post-rotation), revoked,
+// deleted, expired, or foreign sid answers ErrSessionUnknown ("sign in again
+// to manage other sessions") and deletes nothing, rather than guessing which
+// row is current (F2).
 //
-// Revoking a session makes its refresh token unusable immediately; access
-// tokens already issued live out their 15-minute life (the same documented
-// window as reset-password and the PF-1 password change).
+// Deletion means replayed refresh tokens are unknown: plain 401s that can
+// never trigger the reuse-detection family revoke (F1). Access tokens already
+// issued live out their 15-minute life (the same documented window as
+// reset-password and the PF-1 password change).
 func (s *Service) RevokeOtherSessions(ctx context.Context, userID, currentSessionID uuid.UUID) error {
 	if currentSessionID == uuid.Nil {
 		return ErrSessionUnknown
 	}
-	if err := s.store.RevokeOtherSessions(ctx, pgUUID(userID), pgUUID(currentSessionID)); err != nil {
+	_, currentLive, err := s.store.DeleteOtherSessionsGuarded(ctx, pgUUID(userID), pgUUID(currentSessionID))
+	if err != nil {
 		return fmt.Errorf("auth: revoke other sessions: %w", err)
+	}
+	if !currentLive {
+		return ErrSessionUnknown
 	}
 	s.logger.Info("auth: other sessions revoked", "user_id", userID)
 	return nil

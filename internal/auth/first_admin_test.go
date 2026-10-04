@@ -198,7 +198,7 @@ func TestOAuthBootstrapIsAdminWithOverrideOnAndOff(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Begin: %v", err)
 				}
-				result, err := oauth.Callback(ctx, "github", "auth-code", state)
+				result, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{})
 				if err != nil {
 					t.Fatalf("Callback: %v", err)
 				}
@@ -219,7 +219,7 @@ func TestOAuthBootstrapIsAdminWithOverrideOnAndOff(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Begin: %v", err)
 				}
-				if _, err := oauth.Callback(ctx, "github", "auth-code", state); !errors.Is(err, ErrRegistrationClosed) {
+				if _, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{}); !errors.Is(err, ErrRegistrationClosed) {
 					t.Fatalf("Callback(closed) error = %v, want ErrRegistrationClosed", err)
 				}
 				return

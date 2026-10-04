@@ -56,16 +56,18 @@ WHERE user_id = $1
 -- replacement in one statement, so a failed insert or a cancelled request
 -- cannot consume the user's only refresh token. Zero rows (pgx.ErrNoRows)
 -- means the presented session was already revoked or deleted, so the caller
--- must refuse to issue a replacement.
+-- must refuse to issue a replacement. The replacement inherits the original
+-- sign-in created_at (F3: the list's Created means sign-in time, not last
+-- rotation); last_used_at is the rotation time via the column default.
 WITH revoked AS (
     UPDATE sessions AS s
     SET revoked_at = now()
     WHERE s.refresh_hash = sqlc.arg(revoked_refresh_hash)
       AND s.revoked_at IS NULL
-    RETURNING s.user_id
+    RETURNING s.user_id, s.created_at
 )
-INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version, user_agent, ip)
-SELECT r.user_id, sqlc.arg(new_refresh_hash), sqlc.arg(expires_at), sqlc.arg(credential_version), sqlc.arg(user_agent), sqlc.arg(ip)
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version, user_agent, ip, created_at)
+SELECT r.user_id, sqlc.arg(new_refresh_hash), sqlc.arg(expires_at), sqlc.arg(credential_version), sqlc.arg(user_agent), sqlc.arg(ip), r.created_at
 FROM revoked AS r
 RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version, user_agent, ip, last_used_at;
 
@@ -101,21 +103,36 @@ WHERE user_id = $1
 ORDER BY last_used_at DESC
 LIMIT 50;
 
--- name: RevokeSessionByID :execrows
--- RevokeSessionByID ends one live session of a user. Zero rows means the id is
--- unknown, belongs to another user, or is already dead: the caller answers
--- 404 either way, so a probe cannot distinguish them.
-UPDATE sessions
-SET revoked_at = now()
+-- name: CheckSessionLive :one
+-- CheckSessionLive reports whether a session id is a live session of a user
+-- (present, not revoked, not expired). The guarded bulk delete uses it to
+-- refuse a stale sid with 409 instead of guessing which row is current (F2).
+SELECT id
+FROM sessions
 WHERE id = $1
   AND user_id = $2
-  AND revoked_at IS NULL;
+  AND revoked_at IS NULL
+  AND expires_at > now();
 
--- name: RevokeOtherSessions :exec
--- RevokeOtherSessions ends every live session of a user except the given one
--- (the caller's current session, which keeps working).
-UPDATE sessions
-SET revoked_at = now()
+-- name: DeleteSessionByID :execrows
+-- DeleteSessionByID deletes one live session scoped to its owner, like logout
+-- does: a replayed token is then unknown (a plain 401) and can never trigger
+-- the reuse-detection family revoke (F1). Zero rows means the id is unknown,
+-- foreign, already revoked (a rotated-away row keeps its reuse evidence), or
+-- expired (F4): the caller answers 404 either way, so a probe cannot
+-- distinguish them.
+DELETE FROM sessions
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+  AND expires_at > now();
+
+-- name: DeleteOtherSessions :execrows
+-- DeleteOtherSessions deletes every live session of a user except the given
+-- one (the caller's current session, which keeps working). Already-rotated
+-- (revoked) rows stay untouched so genuine-theft evidence survives. The store
+-- wrapper only runs this after proving the given session is live (F2).
+DELETE FROM sessions
 WHERE user_id = $1
   AND id <> $2
   AND revoked_at IS NULL;

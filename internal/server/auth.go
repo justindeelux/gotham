@@ -321,7 +321,9 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleMe returns the authenticated account.
+// handleMe returns the authenticated account. is_platform_admin is the stored
+// flag or a PLATFORM_ADMINS allowlist match, using the same helper as the
+// admin gate, so an env-named operator sees the same bit the gate enforces.
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
@@ -339,6 +341,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
 		return
 	}
+	user.IsPlatformAdmin = user.IsPlatformAdmin || s.isPlatformAdminEmail(user.Email)
 
 	writeJSON(w, http.StatusOK, meResponse{User: user})
 }

@@ -12,6 +12,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const checkSessionLive = `-- name: CheckSessionLive :one
+SELECT id
+FROM sessions
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+  AND expires_at > now()
+`
+
+type CheckSessionLiveParams struct {
+	ID     pgtype.UUID `json:"id"`
+	UserID pgtype.UUID `json:"user_id"`
+}
+
+// CheckSessionLive reports whether a session id is a live session of a user
+// (present, not revoked, not expired). The guarded bulk delete uses it to
+// refuse a stale sid with 409 instead of guessing which row is current (F2).
+func (q *Queries) CheckSessionLive(ctx context.Context, arg CheckSessionLiveParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, checkSessionLive, arg.ID, arg.UserID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const createSession = `-- name: CreateSession :one
 INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version, user_agent, ip)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -52,6 +76,30 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 	return i, err
 }
 
+const deleteOtherSessions = `-- name: DeleteOtherSessions :execrows
+DELETE FROM sessions
+WHERE user_id = $1
+  AND id <> $2
+  AND revoked_at IS NULL
+`
+
+type DeleteOtherSessionsParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	ID     pgtype.UUID `json:"id"`
+}
+
+// DeleteOtherSessions deletes every live session of a user except the given
+// one (the caller's current session, which keeps working). Already-rotated
+// (revoked) rows stay untouched so genuine-theft evidence survives. The store
+// wrapper only runs this after proving the given session is live (F2).
+func (q *Queries) DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOtherSessions, arg.UserID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions
 WHERE refresh_hash = $1
@@ -67,6 +115,33 @@ WHERE refresh_hash = $1
 func (q *Queries) DeleteSession(ctx context.Context, refreshHash string) error {
 	_, err := q.db.Exec(ctx, deleteSession, refreshHash)
 	return err
+}
+
+const deleteSessionByID = `-- name: DeleteSessionByID :execrows
+DELETE FROM sessions
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+  AND expires_at > now()
+`
+
+type DeleteSessionByIDParams struct {
+	ID     pgtype.UUID `json:"id"`
+	UserID pgtype.UUID `json:"user_id"`
+}
+
+// DeleteSessionByID deletes one live session scoped to its owner, like logout
+// does: a replayed token is then unknown (a plain 401) and can never trigger
+// the reuse-detection family revoke (F1). Zero rows means the id is unknown,
+// foreign, already revoked (a rotated-away row keeps its reuse evidence), or
+// expired (F4): the caller answers 404 either way, so a probe cannot
+// distinguish them.
+func (q *Queries) DeleteSessionByID(ctx context.Context, arg DeleteSessionByIDParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSessionByID, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteStaleSessions = `-- name: DeleteStaleSessions :execrows
@@ -197,26 +272,6 @@ func (q *Queries) LockUserSessions(ctx context.Context, userID string) error {
 	return err
 }
 
-const revokeOtherSessions = `-- name: RevokeOtherSessions :exec
-UPDATE sessions
-SET revoked_at = now()
-WHERE user_id = $1
-  AND id <> $2
-  AND revoked_at IS NULL
-`
-
-type RevokeOtherSessionsParams struct {
-	UserID pgtype.UUID `json:"user_id"`
-	ID     pgtype.UUID `json:"id"`
-}
-
-// RevokeOtherSessions ends every live session of a user except the given one
-// (the caller's current session, which keeps working).
-func (q *Queries) RevokeOtherSessions(ctx context.Context, arg RevokeOtherSessionsParams) error {
-	_, err := q.db.Exec(ctx, revokeOtherSessions, arg.UserID, arg.ID)
-	return err
-}
-
 const revokeSession = `-- name: RevokeSession :exec
 UPDATE sessions
 SET revoked_at = now()
@@ -227,30 +282,6 @@ WHERE refresh_hash = $1
 func (q *Queries) RevokeSession(ctx context.Context, refreshHash string) error {
 	_, err := q.db.Exec(ctx, revokeSession, refreshHash)
 	return err
-}
-
-const revokeSessionByID = `-- name: RevokeSessionByID :execrows
-UPDATE sessions
-SET revoked_at = now()
-WHERE id = $1
-  AND user_id = $2
-  AND revoked_at IS NULL
-`
-
-type RevokeSessionByIDParams struct {
-	ID     pgtype.UUID `json:"id"`
-	UserID pgtype.UUID `json:"user_id"`
-}
-
-// RevokeSessionByID ends one live session of a user. Zero rows means the id is
-// unknown, belongs to another user, or is already dead: the caller answers
-// 404 either way, so a probe cannot distinguish them.
-func (q *Queries) RevokeSessionByID(ctx context.Context, arg RevokeSessionByIDParams) (int64, error) {
-	result, err := q.db.Exec(ctx, revokeSessionByID, arg.ID, arg.UserID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const revokeSessionIfLive = `-- name: RevokeSessionIfLive :one
@@ -293,10 +324,10 @@ WITH revoked AS (
     SET revoked_at = now()
     WHERE s.refresh_hash = $6
       AND s.revoked_at IS NULL
-    RETURNING s.user_id
+    RETURNING s.user_id, s.created_at
 )
-INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version, user_agent, ip)
-SELECT r.user_id, $1, $2, $3, $4, $5
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version, user_agent, ip, created_at)
+SELECT r.user_id, $1, $2, $3, $4, $5, r.created_at
 FROM revoked AS r
 RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version, user_agent, ip, last_used_at
 `
@@ -314,7 +345,9 @@ type RotateSessionParams struct {
 // replacement in one statement, so a failed insert or a cancelled request
 // cannot consume the user's only refresh token. Zero rows (pgx.ErrNoRows)
 // means the presented session was already revoked or deleted, so the caller
-// must refuse to issue a replacement.
+// must refuse to issue a replacement. The replacement inherits the original
+// sign-in created_at (F3: the list's Created means sign-in time, not last
+// rotation); last_used_at is the rotation time via the column default.
 func (q *Queries) RotateSession(ctx context.Context, arg RotateSessionParams) (Session, error) {
 	row := q.db.QueryRow(ctx, rotateSession,
 		arg.NewRefreshHash,

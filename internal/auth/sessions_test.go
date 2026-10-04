@@ -212,6 +212,11 @@ func TestServiceRotateUpdatesMeta(t *testing.T) {
 	if !got.Current {
 		t.Error("rotated session not marked current")
 	}
+	// F3: the rotated row inherits the original sign-in created_at, while
+	// last_used_at is the rotation time.
+	if !got.CreatedAt.Equal(before[0].CreatedAt) {
+		t.Errorf("created_at = %v, want the original sign-in time %v", got.CreatedAt, before[0].CreatedAt)
+	}
 	if got.UserAgent != "new-agent/2.0" {
 		t.Errorf("user agent = %q, want the rotation value", got.UserAgent)
 	}
@@ -269,43 +274,58 @@ func TestServiceRevokeSession(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 	userID, _ := uuid.Parse(first.User.ID)
-	other, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
+	second, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	current := sidOf(t, svc, other.AccessToken)
+	third, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	current := sidOf(t, svc, third.AccessToken)
 
 	sessions, err := svc.ListSessions(ctx, userID, current)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if len(sessions) != 2 {
-		t.Fatalf("ListSessions returned %d rows, want 2", len(sessions))
+	if len(sessions) != 3 {
+		t.Fatalf("ListSessions returned %d rows, want 3", len(sessions))
 	}
 	var victim uuid.UUID
+	tokens := map[uuid.UUID]string{
+		sidOf(t, svc, first.AccessToken):  first.RefreshToken,
+		sidOf(t, svc, second.AccessToken): second.RefreshToken,
+		sidOf(t, svc, third.AccessToken):  third.RefreshToken,
+	}
 	for _, s := range sessions {
-		if s.ID != current {
+		if s.ID != current && victim == uuid.Nil {
 			victim = s.ID
 		}
 	}
+	victimToken := tokens[victim]
 
-	// Ending the other session removes it from the list; its refresh chain
-	// is dead. Note the refresh below also trips the pre-existing
-	// reuse detector (a revoked-but-present row is a replay), which ends the
-	// family: the assertions after it use a fresh login.
+	// Ending another session deletes its row. Replaying its refresh token is
+	// then unknown: a plain 401 that leaves every other session alone (F1).
 	if err := svc.RevokeSession(ctx, userID, victim); err != nil {
 		t.Fatalf("RevokeSession: %v", err)
+	}
+	if _, err := svc.Refresh(ctx, victimToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Refresh(revoked) error = %v, want ErrUnauthorized", err)
 	}
 	remaining, err := svc.ListSessions(ctx, userID, current)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if len(remaining) != 1 || remaining[0].ID != current {
-		t.Errorf("list after revoke = %v, want only the current session", liveIDs(remaining))
+	if got := liveIDs(remaining); len(got) != 2 || got[victim] || !got[current] {
+		t.Errorf("list after revoke = %v, want the victim gone and the rest live", got)
 	}
-	if _, err := svc.Refresh(ctx, first.RefreshToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("Refresh(revoked) error = %v, want ErrUnauthorized", err)
+	// The surviving sessions keep working: no family revoke happened.
+	// Refreshing rotates the survivor, so re-read its sid afterwards.
+	rotated, err := svc.Refresh(ctx, third.RefreshToken, SessionMeta{})
+	if err != nil {
+		t.Fatalf("Refresh(survivor): %v, want the family intact", err)
 	}
+	newCurrent := sidOf(t, svc, rotated.AccessToken)
 
 	// Already dead: 404-shaped.
 	if err := svc.RevokeSession(ctx, userID, victim); !errors.Is(err, ErrNotFound) {
@@ -316,18 +336,33 @@ func TestServiceRevokeSession(t *testing.T) {
 		t.Fatalf("RevokeSession(unknown) error = %v, want ErrNotFound", err)
 	}
 
-	// Ending the caller's own session is allowed: a fresh login's session
-	// revokes cleanly and its refresh chain dies with it.
-	fresh, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
+	// Expired: 404-shaped (F4).
+	expired, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	freshCurrent := sidOf(t, svc, fresh.AccessToken)
-	if err := svc.RevokeSession(ctx, userID, freshCurrent); err != nil {
+	expiredID := sidOf(t, svc, expired.AccessToken)
+	if _, err := st.DB.Exec(ctx, `UPDATE sessions SET expires_at = now() - interval '1 hour' WHERE refresh_hash = $1`, hashRefreshToken(expired.RefreshToken)); err != nil {
+		t.Fatalf("expire session: %v", err)
+	}
+	if err := svc.RevokeSession(ctx, userID, expiredID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("RevokeSession(expired) error = %v, want ErrNotFound", err)
+	}
+
+	// Ending the caller's own session is allowed: its refresh chain dies
+	// while the other survivor keeps working.
+	if err := svc.RevokeSession(ctx, userID, newCurrent); err != nil {
 		t.Fatalf("RevokeSession(current): %v", err)
 	}
-	if _, err := svc.Refresh(ctx, fresh.RefreshToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
+	if _, err := svc.Refresh(ctx, rotated.RefreshToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Refresh(own revoked) error = %v, want ErrUnauthorized", err)
+	}
+	afterOwn, err := svc.ListSessions(ctx, userID, uuid.Nil)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if got := liveIDs(afterOwn); len(got) != 1 || got[newCurrent] || got[victim] {
+		t.Errorf("list after revoking own = %v, want only the unrevoked survivor", got)
 	}
 }
 
@@ -397,16 +432,110 @@ func TestServiceRevokeOtherSessions(t *testing.T) {
 		t.Errorf("list after revoke-others = %+v, want only the current session", remaining)
 	}
 
-	// The current chain works; every other chain is dead. The dead refreshes
-	// come last: replaying a revoked-but-present token trips the pre-existing
-	// reuse detector and would end the family mid-test.
-	if _, err := svc.Refresh(ctx, third.RefreshToken, SessionMeta{}); err != nil {
+	// Replaying a deleted session is unknown: a plain 401, and the current
+	// chain is untouched (F1). The current refresh comes first so its
+	// rotation cannot be mistaken for damage from the replays below.
+	refreshed, err := svc.Refresh(ctx, third.RefreshToken, SessionMeta{})
+	if err != nil {
 		t.Fatalf("Refresh(current): %v", err)
 	}
 	for name, token := range map[string]string{"register": first.RefreshToken, "second": second.RefreshToken} {
 		if _, err := svc.Refresh(ctx, token, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 			t.Fatalf("Refresh(%s) error = %v, want ErrUnauthorized", name, err)
 		}
+	}
+	// The current chain survived the replays.
+	if _, err := svc.Refresh(ctx, refreshed.RefreshToken, SessionMeta{}); err != nil {
+		t.Fatalf("Refresh(current after replays): %v, want the family intact", err)
+	}
+}
+
+func TestServiceRevokeOtherSessionsStaleSid(t *testing.T) {
+	svc, st := scratchService(t)
+	ctx := context.Background()
+
+	email := uniqueEmail("sessions-stale-sid")
+	cleanupUser(t, st, email)
+	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	userID, _ := uuid.Parse(first.User.ID)
+	second, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	// Rotate the login session: its old access token now carries a stale sid
+	// (a revoked-but-present row).
+	rotated, err := svc.Refresh(ctx, second.RefreshToken, SessionMeta{})
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	stale := sidOf(t, svc, second.AccessToken)
+	fresh := sidOf(t, svc, rotated.AccessToken)
+
+	// A stale sid refuses with 409 and deletes nothing (F2).
+	if err := svc.RevokeOtherSessions(ctx, userID, stale); !errors.Is(err, ErrSessionUnknown) {
+		t.Fatalf("RevokeOtherSessions(stale) error = %v, want ErrSessionUnknown", err)
+	} else if err.Error() != "sign in again to manage other sessions" {
+		t.Fatalf("message = %q, want the contract body", err.Error())
+	}
+	sessions, err := svc.ListSessions(ctx, userID, fresh)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("list after refused revoke-others = %d rows, want both live", len(sessions))
+	}
+	latestPair, err := svc.Refresh(ctx, rotated.RefreshToken, SessionMeta{})
+	if err != nil {
+		t.Fatalf("Refresh(fresh after refused revoke-others): %v", err)
+	}
+	latest := sidOf(t, svc, latestPair.AccessToken)
+
+	// A deleted session's sid also refuses: revoke the register session
+	// outright, then present its access token's sid.
+	registerSid := sidOf(t, svc, first.AccessToken)
+	if err := svc.RevokeSession(ctx, userID, registerSid); err != nil {
+		t.Fatalf("RevokeSession(register): %v", err)
+	}
+	if err := svc.RevokeOtherSessions(ctx, userID, registerSid); !errors.Is(err, ErrSessionUnknown) {
+		t.Fatalf("RevokeOtherSessions(deleted sid) error = %v, want ErrSessionUnknown", err)
+	}
+	// Only the register session is gone; the rotated login session is live.
+	sessions, err = svc.ListSessions(ctx, userID, latest)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != latest {
+		t.Fatalf("list = %v, want only the fresh session", liveIDs(sessions))
+	}
+
+	// A foreign sid refuses and touches nothing on either account (F2).
+	svc.AllowOpenRegistration = true
+	foreign, err := svc.Register(ctx, uniqueEmail("sessions-stale-foreign"), "s3cret-password", "", nil, SessionMeta{})
+	if err != nil {
+		t.Fatalf("Register foreign: %v", err)
+	}
+	foreignID, _ := uuid.Parse(foreign.User.ID)
+	foreignSid := sidOf(t, svc, foreign.AccessToken)
+	if err := svc.RevokeOtherSessions(ctx, userID, foreignSid); !errors.Is(err, ErrSessionUnknown) {
+		t.Fatalf("RevokeOtherSessions(foreign sid) error = %v, want ErrSessionUnknown", err)
+	}
+	sessions, err = svc.ListSessions(ctx, userID, latest)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("list after foreign-sid refusal = %d rows, want 1", len(sessions))
+	}
+	foreignSessions, err := svc.ListSessions(ctx, foreignID, foreignSid)
+	if err != nil {
+		t.Fatalf("ListSessions foreign: %v", err)
+	}
+	if len(foreignSessions) != 1 {
+		t.Fatalf("foreign list = %d rows, want the foreign session untouched", len(foreignSessions))
 	}
 }
 

@@ -86,14 +86,16 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sessionsResponse{Sessions: out})
 }
 
-// handleRevokeSession ends one of the caller's sessions. An unknown, foreign,
-// or already-dead id answers 404 (never 403, so a probe cannot distinguish
-// them); ending the caller's own session is allowed and the web signs out
-// afterwards.
+// handleRevokeSession deletes one of the caller's sessions, like logout does.
+// An unknown, foreign, expired, or already-dead id answers 404 (never 403,
+// so a probe cannot distinguish them); ending the caller's own session is
+// allowed and the web signs out afterwards.
 //
-// Revoking a session makes its refresh token unusable immediately; access
-// tokens already issued live out their 15-minute life (the same documented
-// window as reset-password and the PF-1 password change).
+// Deleting the row makes its refresh token unknown: a replay is a plain 401
+// that can never trigger the reuse-detection family revoke, so revoking a
+// stolen session cannot log the owner out everywhere. Access tokens already
+// issued live out their 15-minute life (the same documented window as
+// reset-password and the PF-1 password change).
 func (s *Server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
@@ -123,13 +125,16 @@ func (s *Server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleRevokeOtherSessions ends every live session of the caller except the
-// current one. A token without a "sid" claim (minted before PF-2) answers
-// 409: without a trustworthy current row the server refuses to guess.
+// handleRevokeOtherSessions deletes every live session of the caller except
+// the current one. The current session id must itself be live: a token
+// without a "sid" claim (minted before PF-2), or a stale, revoked, deleted,
+// expired, or foreign sid, answers 409 and deletes nothing rather than
+// guessing.
 //
-// Revoking a session makes its refresh token unusable immediately; access
-// tokens already issued live out their 15-minute life (the same documented
-// window as reset-password and the PF-1 password change).
+// Deleted refresh tokens replay as plain 401s that can never trigger the
+// reuse-detection family revoke. Access tokens already issued live out their
+// 15-minute life (the same documented window as reset-password and the PF-1
+// password change).
 func (s *Server) handleRevokeOtherSessions(w http.ResponseWriter, r *http.Request) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {

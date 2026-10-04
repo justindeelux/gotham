@@ -195,7 +195,7 @@ func TestOAuthCallbackStateMismatch(t *testing.T) {
 	ctx := context.Background()
 
 	// Unknown state.
-	if _, err := oauth.Callback(ctx, "github", "code", "bogus-state"); !errors.Is(err, ErrStateMismatch) {
+	if _, err := oauth.Callback(ctx, "github", "code", "bogus-state", SessionMeta{}); !errors.Is(err, ErrStateMismatch) {
 		t.Fatalf("Callback(bad state) error = %v, want ErrStateMismatch", err)
 	}
 
@@ -207,7 +207,7 @@ func TestOAuthCallbackStateMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewState: %v", err)
 	}
-	if _, err := oauth.Callback(ctx, "gitlab", "code", state); !errors.Is(err, ErrStateMismatch) {
+	if _, err := oauth.Callback(ctx, "gitlab", "code", state, SessionMeta{}); !errors.Is(err, ErrStateMismatch) {
 		t.Fatalf("Callback(foreign provider) error = %v, want ErrStateMismatch", err)
 	}
 }
@@ -220,7 +220,7 @@ func TestOAuthCallbackMissingEmail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewState: %v", err)
 	}
-	if _, err := oauth.Callback(ctx, "github", "code", state); !errors.Is(err, ErrMissingEmail) {
+	if _, err := oauth.Callback(ctx, "github", "code", state, SessionMeta{}); !errors.Is(err, ErrMissingEmail) {
 		t.Fatalf("Callback(no email) error = %v, want ErrMissingEmail", err)
 	}
 }
@@ -228,7 +228,7 @@ func TestOAuthCallbackMissingEmail(t *testing.T) {
 func TestOAuthCallbackUnknownProvider(t *testing.T) {
 	oauth := newTestOAuth(t, &fakeOAuthProvider{name: "github", identity: &OAuthIdentity{Email: "a@example.com"}})
 
-	if _, err := oauth.Callback(context.Background(), "gitlab", "code", "state"); !errors.Is(err, ErrProviderDisabled) {
+	if _, err := oauth.Callback(context.Background(), "gitlab", "code", "state", SessionMeta{}); !errors.Is(err, ErrProviderDisabled) {
 		t.Fatalf("Callback(unknown provider) error = %v, want ErrProviderDisabled", err)
 	}
 }
@@ -255,7 +255,7 @@ func TestOAuthCallbackRefusesNewUserWhenClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	if _, err := oauth.Callback(ctx, "github", "auth-code", state); !errors.Is(err, ErrRegistrationClosed) {
+	if _, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{}); !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatalf("Callback(closed) error = %v, want ErrRegistrationClosed", err)
 	}
 	if _, err := st.GetUserByEmail(ctx, email); err == nil {
@@ -280,7 +280,7 @@ func TestOAuthCallbackCreatesUser(t *testing.T) {
 		t.Fatalf("Begin: %v", err)
 	}
 
-	result, err := oauth.Callback(ctx, "github", "auth-code", state)
+	result, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Callback: %v", err)
 	}
@@ -297,6 +297,52 @@ func TestOAuthCallbackCreatesUser(t *testing.T) {
 	}
 	if user.PasswordHash != nil {
 		t.Error("OAuth user has a password hash, want nil")
+	}
+}
+
+func TestOAuthCallbackRecordsSessionMeta(t *testing.T) {
+	provider := &fakeOAuthProvider{name: "github"}
+	oauth, st := newTestOAuthWithStore(t, provider)
+	oauth.auth.AllowOpenRegistration = true
+	ctx := context.Background()
+
+	email := uniqueEmail("oauth-meta")
+	cleanupUser(t, st, email)
+	provider.identity = &OAuthIdentity{Email: email}
+
+	_, state, err := oauth.Begin(ctx, "github", "")
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+
+	result, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{UserAgent: "oauth-agent/1.0", IP: "10.9.9.9"})
+	if err != nil {
+		t.Fatalf("Callback: %v", err)
+	}
+	claims, err := oauth.auth.VerifyAccessToken(result.AccessToken)
+	if err != nil {
+		t.Fatalf("VerifyAccessToken: %v", err)
+	}
+	sid, err := uuid.Parse(claims.SessionID)
+	if err != nil {
+		t.Fatalf("parse sid: %v", err)
+	}
+	userID, err := uuid.Parse(result.User.ID)
+	if err != nil {
+		t.Fatalf("parse user ID: %v", err)
+	}
+	sessions, err := oauth.auth.ListSessions(ctx, userID, sid)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("ListSessions returned %d rows, want 1", len(sessions))
+	}
+	if !sessions[0].Current {
+		t.Error("OAuth session not marked current")
+	}
+	if sessions[0].UserAgent != "oauth-agent/1.0" || sessions[0].IP != "10.9.9.9" {
+		t.Errorf("OAuth session meta = %q/%q, want the callback values", sessions[0].UserAgent, sessions[0].IP)
 	}
 }
 
@@ -325,7 +371,7 @@ func TestOAuthCallbackExistingUserLogsIn(t *testing.T) {
 		t.Fatalf("Begin: %v", err)
 	}
 
-	result, err := oauth.Callback(ctx, "github", "auth-code", state)
+	result, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Callback: %v", err)
 	}

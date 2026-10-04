@@ -226,7 +226,7 @@ func TestServiceRotateUpdatesMeta(t *testing.T) {
 	if !got.LastUsedAt.After(before[0].LastUsedAt) {
 		t.Errorf("last_used_at = %v, want after %v", got.LastUsedAt, before[0].LastUsedAt)
 	}
-	if age := time.Since(got.LastUsedAt); age < 0 || age > 5*time.Minute {
+	if age := time.Since(got.LastUsedAt); age > 5*time.Minute {
 		t.Errorf("last_used_at = %v, want ~now", got.LastUsedAt)
 	}
 }

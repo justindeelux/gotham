@@ -52,8 +52,7 @@ export function useDisplayNameForm() {
     try {
       const trimmed = form.displayName.trim();
       const user = await patchDisplayName(trimmed === "" ? null : trimmed);
-      authStore.user = user;
-      authStore.persist();
+      authStore.setUser(user);
       message.success("Display name updated.");
     } catch (error) {
       errorMessage.value = describeAuthError(error);

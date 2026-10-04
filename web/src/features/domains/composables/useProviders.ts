@@ -1,5 +1,6 @@
+import { inject, provide, ref } from "vue";
+import type { InjectionKey } from "vue";
 import { useMessage } from "naive-ui";
-import { ref } from "vue";
 
 import { describeProxyError } from "@/features/domains/api/proxy";
 import type { DNSProvider, DNSProviderName } from "@/features/domains/api/proxy";
@@ -14,13 +15,6 @@ export interface ProviderForm {
   enabled: boolean;
 }
 
-/** Dialog state is module-scoped: the page head, the providers panel and the dialog share it. */
-const providerOpen = ref(false);
-const providerSaving = ref(false);
-const providerError = ref<string | null>(null);
-const editingProvider = ref<DNSProvider | null>(null);
-const providerForm = ref<ProviderForm>(emptyProviderForm());
-
 /** emptyProviderForm returns a create-mode provider draft. */
 export function emptyProviderForm(): ProviderForm {
   return {
@@ -32,10 +26,20 @@ export function emptyProviderForm(): ProviderForm {
   };
 }
 
-/** useProviders owns the DNS provider dialog, toggles and deletions. */
-export function useProviders() {
+/**
+ * Provider state is per page instance (created by provideProviders in the
+ * page, shared via inject): a typed credential never outlives the page, and
+ * a revisit starts with closed dialogs and blank drafts.
+ */
+function createProvidersState() {
   const message = useMessage();
   const proxyStore = useProxyStore();
+
+  const providerOpen = ref(false);
+  const providerSaving = ref(false);
+  const providerError = ref<string | null>(null);
+  const editingProvider = ref<DNSProvider | null>(null);
+  const providerForm = ref<ProviderForm>(emptyProviderForm());
 
   /**
    * clearProviderCredential drops the plaintext API token from component
@@ -160,4 +164,27 @@ export function useProviders() {
     handleToggleProvider,
     handleDeleteProvider,
   };
+}
+
+export type ProvidersState = ReturnType<typeof createProvidersState>;
+
+const providersKey: InjectionKey<ProvidersState> = Symbol("domains.providers");
+
+/**
+ * provideProviders creates the provider state for one page mount.
+ * Call once in the page; descendants share it through useProviders.
+ */
+export function provideProviders(): ProvidersState {
+  const state = createProvidersState();
+  provide(providersKey, state);
+  return state;
+}
+
+/** useProviders shares the page instance; call in descendant components. */
+export function useProviders(): ProvidersState {
+  const state = inject(providersKey);
+  if (!state) {
+    throw new Error("useProviders must be used inside a page providing it.");
+  }
+  return state;
 }

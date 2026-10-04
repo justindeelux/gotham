@@ -1,4 +1,5 @@
-import { computed, ref } from "vue";
+import { computed, inject, provide, ref } from "vue";
+import type { InjectionKey } from "vue";
 import { useMessage } from "naive-ui";
 
 import type { TeamRole } from "@/features/teams";
@@ -27,37 +28,37 @@ import type {
 } from "@/features/notifications/utils/channelHelpers";
 
 /**
- * Channel dialog state (module-scoped: the page, the cards and the dialog
- * share one draft) plus the team/permissions surface of the page.
+ * Channel dialog state is per page instance (created by provideChannelDialog
+ * in the page, shared via inject): typed secrets, the draft, the resource
+ * lists and the read token never outlive the page.
  */
-const formOpen = ref(false);
-const editingId = ref("");
-const saving = ref(false);
-const formError = ref<string | null>(null);
-/** Masked secrets as read, so an untouched field is never sent back. */
-const secretOriginals = ref({ webhook_url: "", bot_token: "", password: "" });
-
-const form = ref<ChannelForm>(emptyChannelForm());
-
-/** Applications of the active team, offered when the scope is one app. */
-const resourceApplications = ref<ResourceOption[]>([]);
-/** Databases of the active team, offered when the scope is one database. */
-const resourceDatabases = ref<ResourceOption[]>([]);
-/** Team the resource lists belong to; a switch drops them. */
-const loadedResourcesTeamId = ref("");
-/** Token of the newest resource read; a stale response never writes state. */
-let resourcesReadToken = 0;
-
-/** applicationsUnavailable is true when the picker's app list cannot load. */
-const applicationsUnavailable = ref(false);
-/** databasesUnavailable is true when the picker's database list cannot load. */
-const databasesUnavailable = ref(false);
-
-/** useChannelDialog owns the channel create/edit draft and its save. */
-export function useChannelDialog() {
+function createChannelDialogState() {
   const message = useMessage();
   const channelsStore = useNotificationsStore();
   const teamsStore = useTeamsStore();
+
+  const formOpen = ref(false);
+  const editingId = ref("");
+  const saving = ref(false);
+  const formError = ref<string | null>(null);
+  /** Masked secrets as read, so an untouched field is never sent back. */
+  const secretOriginals = ref({ webhook_url: "", bot_token: "", password: "" });
+
+  const form = ref<ChannelForm>(emptyChannelForm());
+
+  /** Applications of the active team, offered when the scope is one app. */
+  const resourceApplications = ref<ResourceOption[]>([]);
+  /** Databases of the active team, offered when the scope is one database. */
+  const resourceDatabases = ref<ResourceOption[]>([]);
+  /** Team the resource lists belong to; a switch drops them. */
+  const loadedResourcesTeamId = ref("");
+  /** Token of the newest resource read; a stale response never writes state. */
+  let resourcesReadToken = 0;
+
+  /** applicationsUnavailable is true when the picker's app list cannot load. */
+  const applicationsUnavailable = ref(false);
+  /** databasesUnavailable is true when the picker's database list cannot load. */
+  const databasesUnavailable = ref(false);
 
   /** outOfScopeEvents lists stored events the current scope cannot deliver. */
   const outOfScopeEvents = computed<NotificationEventKey[]>(() => {
@@ -344,4 +345,28 @@ export function useChannelDialog() {
     handleSave,
     resolveResourceName,
   };
+}
+
+export type ChannelDialogState = ReturnType<typeof createChannelDialogState>;
+
+const channelDialogKey: InjectionKey<ChannelDialogState> =
+  Symbol("notifications.channel-dialog");
+
+/**
+ * provideChannelDialog creates the dialog state for one page mount.
+ * Call once in the page; descendants share it through useChannelDialog.
+ */
+export function provideChannelDialog(): ChannelDialogState {
+  const state = createChannelDialogState();
+  provide(channelDialogKey, state);
+  return state;
+}
+
+/** useChannelDialog shares the page instance; call in descendant components. */
+export function useChannelDialog(): ChannelDialogState {
+  const state = inject(channelDialogKey);
+  if (!state) {
+    throw new Error("useChannelDialog must be used inside a page providing it.");
+  }
+  return state;
 }

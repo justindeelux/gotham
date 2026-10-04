@@ -11,9 +11,10 @@ import RedirectCreateCard from "@/features/domains/components/RedirectCreateCard
 import RedirectEditDialog from "@/features/domains/components/RedirectEditDialog.vue";
 import RedirectRulesPanel from "@/features/domains/components/RedirectRulesPanel.vue";
 import RoutersStubPanel from "@/features/domains/components/RoutersStubPanel.vue";
-import { useCertificates } from "@/features/domains/composables/useCertificates";
-import { useDomainsOverview } from "@/features/domains/composables/useDomainsOverview";
-import { useProviders } from "@/features/domains/composables/useProviders";
+import { provideCertificates } from "@/features/domains/composables/useCertificates";
+import { provideDomainsOverview } from "@/features/domains/composables/useDomainsOverview";
+import { provideProviders } from "@/features/domains/composables/useProviders";
+import { provideRedirects } from "@/features/domains/composables/useRedirects";
 import { useProxyStore } from "@/features/domains/stores/proxy";
 
 /**
@@ -29,9 +30,13 @@ import { useProxyStore } from "@/features/domains/stores/proxy";
  */
 
 const proxyStore = useProxyStore();
-const { load } = useDomainsOverview();
-const { openProviderCreate } = useProviders();
-const { openCertificateCreate } = useCertificates();
+// Per page instance: the panels and dialogs share this state via inject,
+// and it is dropped on unmount — a revisit starts with closed dialogs,
+// blank drafts and pending tiles.
+const { load } = provideDomainsOverview();
+const { openProviderCreate } = provideProviders();
+const { openCertificateCreate } = provideCertificates();
+provideRedirects();
 
 const activeTab = ref("certificates");
 

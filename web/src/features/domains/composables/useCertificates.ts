@@ -1,5 +1,6 @@
+import { inject, provide, ref } from "vue";
+import type { InjectionKey } from "vue";
 import { useMessage } from "naive-ui";
-import { ref } from "vue";
 
 import {
   describeProxyError,
@@ -9,28 +10,19 @@ import {
 import type { Certificate, CertificateDraft } from "@/features/domains/api/proxy";
 import { useProxyStore } from "@/features/domains/stores/proxy";
 
-/** Dialog state is module-scoped: the page head, the certificates panel and the dialog share it. */
-const certificateOpen = ref(false);
-const certificateSaving = ref(false);
-const certificateError = ref<string | null>(null);
-const editingCertificate = ref<Certificate | null>(null);
-const certificateDraft = ref<CertificateDraft>(emptyCertificateDraft());
-
-/** emptyCertificateDraft returns a create-mode certificate draft. */
-export function emptyCertificateDraft(): CertificateDraft {
-  return {
-    application_id: "",
-    challenge: "http-01",
-    dns_provider_id: "",
-    wildcard: false,
-    enabled: true,
-  };
-}
-
-/** useCertificates owns the certificate dialog, saves and deletions. */
-export function useCertificates() {
+/**
+ * Certificate state is per page instance (created by provideCertificates in
+ * the page, shared via inject): drafts and dialog flags never outlive the page.
+ */
+function createCertificatesState() {
   const message = useMessage();
   const proxyStore = useProxyStore();
+
+  const certificateOpen = ref(false);
+  const certificateSaving = ref(false);
+  const certificateError = ref<string | null>(null);
+  const editingCertificate = ref<Certificate | null>(null);
+  const certificateDraft = ref<CertificateDraft>(emptyCertificateDraft());
 
   /** openCertificateCreate resets the dialog for a new configuration. */
   function openCertificateCreate(): void {
@@ -94,4 +86,38 @@ export function useCertificates() {
     handleSaveCertificate,
     handleDeleteCertificate,
   };
+}
+
+export type CertificatesState = ReturnType<typeof createCertificatesState>;
+
+const certificatesKey: InjectionKey<CertificatesState> = Symbol("domains.certificates");
+
+/** emptyCertificateDraft returns a create-mode certificate draft. */
+export function emptyCertificateDraft(): CertificateDraft {
+  return {
+    application_id: "",
+    challenge: "http-01",
+    dns_provider_id: "",
+    wildcard: false,
+    enabled: true,
+  };
+}
+
+/**
+ * provideCertificates creates the certificate state for one page mount.
+ * Call once in the page; descendants share it through useCertificates.
+ */
+export function provideCertificates(): CertificatesState {
+  const state = createCertificatesState();
+  provide(certificatesKey, state);
+  return state;
+}
+
+/** useCertificates shares the page instance; call in descendant components. */
+export function useCertificates(): CertificatesState {
+  const state = inject(certificatesKey);
+  if (!state) {
+    throw new Error("useCertificates must be used inside a page providing it.");
+  }
+  return state;
 }

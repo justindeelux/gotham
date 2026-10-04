@@ -1,23 +1,23 @@
-import { computed, ref } from "vue";
+import { computed, inject, provide, ref } from "vue";
+import type { InjectionKey } from "vue";
 
 import { useProxyStore } from "@/features/domains/stores/proxy";
 
 /**
  * Overview state of the Domains page: first-load orchestration and the
- * KPI tile counts. The tile state is module-scoped so the page (which
- * triggers the load) and DomainsStats (which renders the tiles) share it
- * without prop drilling.
+ * KPI tile counts. State is per page instance (created by provideDomainsOverview
+ * in the page, shared via inject) so a revisit starts clean: the tiles show
+ * a dash until the first load settles instead of stale counts.
  */
 
-/**
- * statsReady flips once the first load settles, so the tiles never flash a
- * 0 that was never read.
- */
-const statsReady = ref(false);
-
-/** useDomainsOverview exposes the page load and the KPI tile values. */
-export function useDomainsOverview() {
+function createDomainsOverviewState() {
   const proxyStore = useProxyStore();
+
+  /**
+   * statsReady flips once the first load settles, so the tiles never flash a
+   * 0 that was never read.
+   */
+  const statsReady = ref(false);
 
   const enabledProviders = computed(() =>
     proxyStore.providers.filter((provider) => provider.enabled),
@@ -75,4 +75,28 @@ export function useDomainsOverview() {
     statText,
     load,
   };
+}
+
+export type DomainsOverviewState = ReturnType<typeof createDomainsOverviewState>;
+
+const domainsOverviewKey: InjectionKey<DomainsOverviewState> =
+  Symbol("domains.overview");
+
+/**
+ * provideDomainsOverview creates the overview state for one page mount.
+ * Call once in the page; descendants share it through useDomainsOverview.
+ */
+export function provideDomainsOverview(): DomainsOverviewState {
+  const state = createDomainsOverviewState();
+  provide(domainsOverviewKey, state);
+  return state;
+}
+
+/** useDomainsOverview shares the page instance; call in descendant components. */
+export function useDomainsOverview(): DomainsOverviewState {
+  const state = inject(domainsOverviewKey);
+  if (!state) {
+    throw new Error("useDomainsOverview must be used inside a page providing it.");
+  }
+  return state;
 }

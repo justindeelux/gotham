@@ -12,7 +12,7 @@ import { onMounted, watch } from "vue";
 import ChannelCard from "@/features/notifications/components/ChannelCard.vue";
 import ChannelFormDialog from "@/features/notifications/components/ChannelFormDialog.vue";
 import TeamScopeCard from "@/features/notifications/components/TeamScopeCard.vue";
-import { useChannelDialog } from "@/features/notifications/composables/useChannelDialog";
+import { provideChannelDialog } from "@/features/notifications/composables/useChannelDialog";
 import { useNotificationsStore } from "@/features/notifications/stores/notifications";
 import { useTeamsStore } from "@/features/teams";
 
@@ -31,7 +31,9 @@ import { useTeamsStore } from "@/features/teams";
  */
 const channelsStore = useNotificationsStore();
 const teamsStore = useTeamsStore();
-const { canMutate, loadResources, openCreate } = useChannelDialog();
+// Per page instance: the cards and the dialog share this draft via inject,
+// and it is dropped on unmount — typed secrets never survive a route change.
+const { canMutate, loadResources, openCreate } = provideChannelDialog();
 
 watch(
   () => teamsStore.activeTeamId,

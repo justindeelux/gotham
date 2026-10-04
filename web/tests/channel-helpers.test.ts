@@ -93,6 +93,16 @@ describe("channelHelpers", () => {
     expect(configSummary(channel)).toBe("smtp.example.com:587 → a@x.io");
   });
 
+  it("falls back to a dash for a telegram channel without a chat id", () => {
+    const withoutChat = { kind: "telegram", config: {} } as NotificationChannel;
+    expect(configSummary(withoutChat)).toBe("chat —");
+    const withChat = {
+      kind: "telegram",
+      config: { chat_id: "-100123" },
+    } as NotificationChannel;
+    expect(configSummary(withChat)).toBe("chat -100123");
+  });
+
   it("labels scopes with resolved names and falls back to ids", () => {
     const teamWide = { resource_type: "", resource_id: "" } as NotificationChannel;
     expect(scopeLabel(teamWide, () => undefined)).toBe("Team-wide");

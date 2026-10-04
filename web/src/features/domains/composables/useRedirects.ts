@@ -1,4 +1,5 @@
-import { computed, ref } from "vue";
+import { computed, inject, provide, ref } from "vue";
+import type { InjectionKey } from "vue";
 import { useMessage } from "naive-ui";
 
 import { describeProxyError } from "@/features/domains/api/proxy";
@@ -14,16 +15,6 @@ export interface RedirectForm {
   preserve_path: boolean;
   enabled: boolean;
 }
-
-/** Form state is module-scoped: the create card and the edit dialog share the option lists. */
-const redirectForm = ref<RedirectForm>(emptyRedirectForm());
-const redirectSaving = ref(false);
-const redirectError = ref<string | null>(null);
-const editingRedirect = ref<DomainRedirect | null>(null);
-const redirectEditOpen = ref(false);
-const redirectEditSaving = ref(false);
-const redirectEditError = ref<string | null>(null);
-const redirectEditForm = ref<RedirectForm>(emptyRedirectForm());
 
 /** emptyRedirectForm returns a create-mode redirect draft. */
 export function emptyRedirectForm(): RedirectForm {
@@ -42,10 +33,22 @@ export const redirectCodeOptions = [
   { label: "302 · temporary", value: 302 },
 ];
 
-/** useRedirects owns the redirect create form, edit dialog and row actions. */
-export function useRedirects() {
+/**
+ * Redirect state is per page instance (created by provideRedirects in the
+ * page, shared via inject): drafts and dialog flags never outlive the page.
+ */
+function createRedirectsState() {
   const message = useMessage();
   const proxyStore = useProxyStore();
+
+  const redirectForm = ref<RedirectForm>(emptyRedirectForm());
+  const redirectSaving = ref(false);
+  const redirectError = ref<string | null>(null);
+  const editingRedirect = ref<DomainRedirect | null>(null);
+  const redirectEditOpen = ref(false);
+  const redirectEditSaving = ref(false);
+  const redirectEditError = ref<string | null>(null);
+  const redirectEditForm = ref<RedirectForm>(emptyRedirectForm());
 
   const enabledRedirects = computed<number>(
     () => proxyStore.redirects.filter((item) => item.enabled).length,
@@ -168,4 +171,27 @@ export function useRedirects() {
     handleToggleRedirect,
     handleDeleteRedirect,
   };
+}
+
+export type RedirectsState = ReturnType<typeof createRedirectsState>;
+
+const redirectsKey: InjectionKey<RedirectsState> = Symbol("domains.redirects");
+
+/**
+ * provideRedirects creates the redirect state for one page mount.
+ * Call once in the page; descendants share it through useRedirects.
+ */
+export function provideRedirects(): RedirectsState {
+  const state = createRedirectsState();
+  provide(redirectsKey, state);
+  return state;
+}
+
+/** useRedirects shares the page instance; call in descendant components. */
+export function useRedirects(): RedirectsState {
+  const state = inject(redirectsKey);
+  if (!state) {
+    throw new Error("useRedirects must be used inside a page providing it.");
+  }
+  return state;
 }

@@ -35,11 +35,14 @@ const (
 
 // User is the public representation of an account, safe to serialise to JSON.
 type User struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Avatar    *string   `json:"avatar,omitempty"`
-	Role      string    `json:"role"`
-	CreatedAt time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	Email           string    `json:"email"`
+	Avatar          *string   `json:"avatar,omitempty"`
+	Role            string    `json:"role"`
+	CreatedAt       time.Time `json:"created_at"`
+	DisplayName     *string   `json:"display_name,omitempty"`
+	HasPassword     bool      `json:"has_password"`
+	IsPlatformAdmin bool      `json:"is_platform_admin"`
 }
 
 // AuthResult bundles the account and the freshly issued token pair.
@@ -529,11 +532,14 @@ func isUniqueViolation(err error) bool {
 // toUser converts a stored row into the public representation.
 func toUser(user sqlc.User) *User {
 	return &User{
-		ID:        uuid.UUID(user.ID.Bytes).String(),
-		Email:     user.Email,
-		Avatar:    user.Avatar,
-		Role:      roleFor(user),
-		CreatedAt: user.CreatedAt.Time,
+		ID:              uuid.UUID(user.ID.Bytes).String(),
+		Email:           user.Email,
+		Avatar:          user.Avatar,
+		Role:            roleFor(user),
+		CreatedAt:       user.CreatedAt.Time,
+		DisplayName:     user.DisplayName,
+		HasPassword:     user.PasswordHash != nil,
+		IsPlatformAdmin: user.IsPlatformAdmin,
 	}
 }
 

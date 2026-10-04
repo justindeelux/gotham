@@ -178,7 +178,12 @@ admin-scoped API token).
 Takeover risk: on a fresh instance registration is open until the first
 account exists, so whoever registers first becomes the admin. On a public,
 unconfigured instance create that account (or set `PLATFORM_ADMINS`) before
-exposing the control plane.
+exposing the control plane. Emptying the users table by hand re-opens
+first-run registration, and the next registrant becomes platform admin again.
+
+An admin-scoped API token minted by an admin session outlives a later
+demotion of that account: no session or token revoke is tied to role changes
+(out of scope to fix here), so rotate the token if the grant must end.
 
 ## Node agent
 

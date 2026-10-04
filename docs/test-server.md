@@ -253,13 +253,12 @@ repeated against this shared box's CP/agent yet.
   as non-admin) and an operator must still set `PLATFORM_ADMINS` (or mint an
   admin-scoped token) to manage global DNS providers. Takeover risk: on a
   fresh instance whoever registers first becomes the admin, so create that
-  account before exposing an unconfigured public instance. Per-application certificates and redirects are not
-  affected: they stay with the owning team's `owner`/`admin` members.
-  Today `PLATFORM_ADMINS` is the only way a login session becomes an operator:
-  login always issues the JWT role `user` (`internal/auth/service.go`), `users`
-  has no role column, and the team role `admin` is not a platform role. Minting
-  an `admin` token itself needs operator access. Making the first registered
-  account the platform admin is tracked in Linear JUS-21.
+  account before exposing an unconfigured public instance. Per-application
+  certificates and redirects are not affected: they stay with the owning
+  team's `owner`/`admin` members.
+  The team role `admin` is not a platform role. Minting an `admin` token
+  itself needs operator access. Making the first registered account the
+  platform admin was done in Linear JUS-21.
 - **API-token scopes (FX-2c):** the resource routes enforce the token scope
   boundary — reads (`GET`/`HEAD`) need `read`, mutations need `deploy`, and
   platform-management surfaces need `admin`. The decrypted database credentials

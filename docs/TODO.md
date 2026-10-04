@@ -19,6 +19,7 @@ Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
 - [x] Phase 9 — Self-update & Release (gate G2 approved with conditions): BE-9.1 control-plane self-update merged `390a2fa` (PR #71); BE-9.2 agent remote update merged `ae78888` (PR #72); INFRA-9.1 release pipeline + signed installers merged `9a6268d` (PR #73); install hardening merged `e99ef49` (PR #74); G2 conditions closed: e2e determinism (#79 `8928b49`), agent channel TLS by default + release-environment gating + supply-chain pins (#78 `d716734`), download budget + CLI ownership + CP backoff + wrapper health gate (#77 `4220931`), docs/UI + residual register (#80 `0deee90`); the real newer-release `gotham update` + AUTO_UPDATE exercise and the real agent rollout from the GitHub CDN are proven (M9 evidence below); code residuals closed 2026-10-01 (#92, #93, #96)
 - [x] Phase 11 — UI Alignment side track
 - [x] Phase 12 — User profile management (JUS-25..JUS-29; PRs #167–#172; follow-ups listed in [`plans/12-user-profile.md`](plans/12-user-profile.md))
+- [ ] Phase 13 — Projects and environments (JUS-30..JUS-36; planned, waiting for owner approval to implement; [`plans/13-projects-environments.md`](plans/13-projects-environments.md))
 
 ## Retro review Phases 0–5
 

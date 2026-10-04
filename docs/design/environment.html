@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Environment · production · Gotham</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+</head>
+<body data-page="environment" data-nav="projects">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Managed servers"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head">
+          <div>
+            <p class="breadcrumb"><a href="projects.html">Projects</a><span>/</span><a href="project-detail.html">storefront</a><span>/</span><span>production</span></p>
+            <h1>production</h1>
+            <p class="page-desc">Everything that runs for storefront in production. Each resource is pinned to one server.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-outline" type="button">Variables</button>
+            <button class="btn btn-primary" type="button" data-open="add-resource">Add resource</button>
+          </div>
+        </div>
+
+        <div data-od-id="environment-resources">
+          <div class="tabs" role="tablist" data-tabs="env">
+            <button class="tab" role="tab" data-tab="all" aria-selected="true">All <span class="nav-count">6</span></button>
+            <button class="tab" role="tab" data-tab="apps" aria-selected="false">Applications <span class="nav-count">3</span></button>
+            <button class="tab" role="tab" data-tab="svcs" aria-selected="false">Services <span class="nav-count">1</span></button>
+            <button class="tab" role="tab" data-tab="dbs" aria-selected="false">Databases <span class="nav-count">2</span></button>
+          </div>
+          <div class="tab-panel mt-4" data-panel="all">
+            <div class="card"><div class="table-wrap"><table class="table">
+              <thead><tr><th>Name</th><th>Type</th><th>Server</th><th>Status</th><th class="actions">Actions</th></tr></thead>
+              <tbody>
+                <tr><td><span class="fg-2">storefront</span><span class="cell-sub mono" style="display:block">medusajs/medusa · main</span></td><td><span class="tag">Application</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--online"></span>running</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="application-detail.html">Open</a></div></td></tr>
+                <tr><td><span class="fg-2">api-core</span><span class="cell-sub mono" style="display:block">justindeelux/gotham · main</span></td><td><span class="tag">Application</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--dnd"></span>failed</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="application-detail.html#logs">Logs</a></div></td></tr>
+                <tr><td><span class="fg-2">worker-queue</span></td><td><span class="tag">Application</span></td><td class="mono muted">build-02</td><td><span class="dot dot--online"></span>running</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="application-detail.html">Open</a></div></td></tr>
+                <tr><td><span class="fg-2">plausible</span><span class="cell-sub" style="display:block">Template service</span></td><td><span class="tag">Service</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--online"></span>running</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="services.html">Open</a></div></td></tr>
+                <tr><td><span class="fg-2">pg-orders</span><span class="cell-sub" style="display:block">PostgreSQL 16</span></td><td><span class="tag">Database</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--online"></span>running</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="databases.html">Open</a></div></td></tr>
+                <tr><td><span class="fg-2">redis-cache</span><span class="cell-sub" style="display:block">Redis 7</span></td><td><span class="tag">Database</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--idle"></span>stopped</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="databases.html">Open</a></div></td></tr>
+              </tbody>
+            </table></div></div>
+            <p class="small muted mt-3">Preview deployments of an application appear under it in this list when expanded; they run in this environment on the same server.</p>
+          </div>
+          <div class="tab-panel mt-4" data-panel="apps" hidden><p class="muted">Same table filtered to applications.</p></div>
+          <div class="tab-panel mt-4" data-panel="svcs" hidden><p class="muted">Same table filtered to services.</p></div>
+          <div class="tab-panel mt-4" data-panel="dbs" hidden><p class="muted">Same table filtered to databases.</p></div>
+          <!-- Empty state: "Nothing here yet. Deploy an application, run a service from a template, or create a database." with the Add resource button. -->
+        </div>
+
+<div class="overlay" id="add-resource" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ar-title">
+    <div class="modal-head">
+      <div><h3 id="ar-title">Add resource</h3><p class="small muted">Creating in <span class="mono">storefront / production</span>.</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Close"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-3">
+      <div class="grid cols-3">
+        <button class="card" type="button" style="padding:var(--space-3)"><p class="fg-2 bold">Application</p><p class="small muted">From a Git repository</p></button>
+        <button class="card" type="button" style="padding:var(--space-3)"><p class="fg-2 bold">Service</p><p class="small muted">Compose or template</p></button>
+        <button class="card" type="button" style="padding:var(--space-3)"><p class="fg-2 bold">Database</p><p class="small muted">PostgreSQL, MySQL, Redis…</p></button>
+      </div>
+      <div class="field">
+        <label class="field-label" for="ar-server">Server <span class="muted">(required)</span></label>
+        <select class="select" id="ar-server"><option>prod-01 · online</option><option>build-02 · offline (disabled)</option></select>
+        <p class="field-hint">Where this resource runs. You can change it later in the resource settings. Preselected when only one server exists.</p>
+      </div>
+      <p class="small muted">The creation steps of each type are unchanged (see the application, service and database mockups); the first step of each now shows project, environment and server as a read-only summary with a change link.</p>
+    </div>
+  </div>
+</div>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="assets/gotham-ui.js"></script>
+</body>
+</html>

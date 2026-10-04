@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Project · storefront · Gotham</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+</head>
+<body data-page="project-detail" data-nav="projects">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Managed servers"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head">
+          <div>
+            <p class="breadcrumb"><a href="projects.html">Projects</a><span>/</span><span>storefront</span></p>
+            <h1>storefront</h1>
+            <p class="page-desc">Online shop and its backing stores.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-outline" type="button">Rename</button>
+            <button class="btn btn-outline" type="button" data-toast="Delete is blocked while an environment still has resources.|warn">Delete project</button>
+          </div>
+        </div>
+
+        <div data-od-id="project-tabs">
+          <div class="tabs" role="tablist" data-tabs="project">
+            <button class="tab" role="tab" data-tab="envs" aria-selected="true">Environments</button>
+            <button class="tab" role="tab" data-tab="vars" aria-selected="false">Shared variables</button>
+          </div>
+
+          <div class="tab-panel mt-4" data-panel="envs">
+            <div class="toolbar"><button class="btn btn-primary" type="button" data-open="new-env">Add environment</button></div>
+            <div class="card"><div class="table-wrap"><table class="table">
+              <thead><tr><th>Environment</th><th>Applications</th><th>Services</th><th>Databases</th><th class="actions">Actions</th></tr></thead>
+              <tbody>
+                <tr><td><a class="fg-2 link" href="environment.html">production</a></td><td class="num">3</td><td class="num">1</td><td class="num">2</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="environment.html">Open</a></div></td></tr>
+                <tr><td><a class="fg-2 link" href="environment.html">staging</a></td><td class="num">2</td><td class="num">0</td><td class="num">0</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="environment.html">Open</a><button class="btn btn-sm btn-outline" type="button" data-toast="Delete is blocked: staging still has 2 resources.|warn">Delete</button></div></td></tr>
+                <tr><td><a class="fg-2 link" href="environment.html">preview-lab</a></td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="environment.html">Open</a><button class="btn btn-sm btn-outline" type="button" data-toast="Environment deleted.|success">Delete</button></div></td></tr>
+              </tbody>
+            </table></div></div>
+          </div>
+
+          <div class="tab-panel mt-4" data-panel="vars" hidden>
+            <p class="small muted mb-3">Project variables apply to every resource in every environment of this project. An environment variable overrides a project one; an application variable overrides both.</p>
+            <div class="card"><div class="table-wrap"><table class="table">
+              <thead><tr><th>Key</th><th>Value</th><th class="actions">Actions</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">NODE_ENV</td><td class="mono">production</td><td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button">Edit</button><button class="btn btn-sm btn-outline" type="button">Remove</button></div></td></tr>
+                <tr><td class="mono">SENTRY_DSN <span class="tag">secret</span></td><td class="mono muted">••••••••</td><td class="actions"><div class="row-actions"><button class="btn btn-sm btn-outline" type="button">Replace</button><button class="btn btn-sm btn-outline" type="button">Remove</button></div></td></tr>
+              </tbody>
+            </table></div></div>
+            <button class="btn btn-outline mt-3" type="button">Add variable</button>
+          </div>
+        </div>
+
+<div class="overlay" id="new-env" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ne-title">
+    <div class="modal-head"><h3 id="ne-title">Add environment</h3><button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Close"><svg aria-hidden="true"><use href="#i-x"></use></svg></button></div>
+    <div class="modal-body stack gap-3"><div class="field"><label class="field-label" for="ne-name">Name</label><input class="input" id="ne-name" placeholder="staging" /><p class="field-hint">Unique within the project.</p></div></div>
+    <div class="modal-foot"><button class="btn btn-outline" type="button" data-close>Cancel</button><button class="btn btn-primary" type="button" data-close data-toast="Environment added.|success">Add environment</button></div>
+  </div>
+</div>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="assets/gotham-ui.js"></script>
+</body>
+</html>

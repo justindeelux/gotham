@@ -22,6 +22,7 @@ exit criteria, work packages, dependencies, and rollback. Start with the
 | 9 — Self-update & Release | [10-self-update-release.md](plans/10-self-update-release.md) |
 | 11 — UI Alignment (side track) | [11-ui-alignment.md](plans/11-ui-alignment.md) |
 | 12 — User profile management | [12-user-profile.md](plans/12-user-profile.md) |
+| 13 — Projects and environments | [13-projects-environments.md](plans/13-projects-environments.md) |
 
 Phase status and remaining work live only in [`TODO.md`](TODO.md).
 

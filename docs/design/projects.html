@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Projects · Gotham</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+</head>
+<body data-page="projects" data-nav="projects">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Managed servers"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Workspace</p>
+            <h1>Projects</h1>
+            <p class="page-desc">A project groups the applications, services and databases that make up one product. Each project has environments (production, staging, …); every resource runs on one server you choose.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary" type="button" data-open="new-project">New project</button>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="search grow" style="max-width:300px">
+            <svg aria-hidden="true"><use href="#i-search"></use></svg>
+            <input type="search" placeholder="Search projects…" aria-label="Search projects" data-search="[data-project-card]" />
+          </div>
+        </div>
+
+        <div class="grid cols-3" data-od-id="project-list">
+          <a class="card" href="project-detail.html" data-project-card style="padding:var(--space-4);display:block">
+            <div class="cell-main"><span class="avatar avatar--neutral">S</span><span><span class="fg-2 bold">storefront</span><span class="cell-sub" style="display:block">Online shop and its backing stores</span></span></div>
+            <p class="small muted mt-3">Environments</p>
+            <p class="mt-1"><span class="tag">production</span> <span class="tag">staging</span></p>
+            <p class="small muted mt-3">5 applications · 1 service · 2 databases</p>
+            <p class="small"><span class="dot dot--online"></span>All running</p>
+          </a>
+          <a class="card" href="project-detail.html" data-project-card style="padding:var(--space-4);display:block">
+            <div class="cell-main"><span class="avatar avatar--neutral">I</span><span><span class="fg-2 bold">internal-tools</span><span class="cell-sub" style="display:block">Docs site, wiki, CI helpers</span></span></div>
+            <p class="small muted mt-3">Environments</p>
+            <p class="mt-1"><span class="tag">production</span></p>
+            <p class="small muted mt-3">2 applications · 2 services · 0 databases</p>
+            <p class="small"><span class="dot dot--dnd"></span>1 deploy failed</p>
+          </a>
+          <button class="card" type="button" data-open="new-project" style="padding:var(--space-4);border-style:dashed;text-align:center;color:var(--muted)">
+            <p class="fg-2 bold">New project</p>
+            <p class="small">Starts with a <span class="mono">production</span> environment</p>
+          </button>
+        </div>
+
+        <!-- Empty state (no project yet): "Create your first project to deploy an application, service or database." with a New project button. -->
+
+<div class="overlay" id="new-project" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="np-title">
+    <div class="modal-head">
+      <div><h3 id="np-title">New project</h3><p class="small muted">A <span class="mono">production</span> environment is created with it.</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Close"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-3">
+      <div class="field"><label class="field-label" for="np-name">Name</label><input class="input" id="np-name" placeholder="storefront" /><p class="field-hint">Unique within the team. 1-64 characters.</p></div>
+      <div class="field"><label class="field-label" for="np-desc">Description (optional)</label><input class="input" id="np-desc" /></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" type="button" data-close>Cancel</button><button class="btn btn-primary" type="button" data-close data-toast="Project created.|success">Create project</button></div>
+  </div>
+</div>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="assets/gotham-ui.js"></script>
+</body>
+</html>

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -35,6 +37,8 @@ func runAdmin(args []string) int {
 	switch args[0] {
 	case "create":
 		return runAdminCreate(args[1:])
+	case "exists":
+		return runAdminExists(args[1:])
 	case "reset-password":
 		return runAdminResetPassword(args[1:])
 	case "help", "-h", "--help":
@@ -52,15 +56,22 @@ func adminUsage(w io.Writer) {
 	fmt.Fprintf(w, `gotham admin
 
 Usage:
-  gotham admin create --email <email> [--password <pw>] [--force]
+  gotham admin create --email <email> [--password <pw> | --password-stdin | --generate-password] [--force]
                             Create the first account (P-A2: one account per
                             instance; refuses with --force not set otherwise).
+  gotham admin exists        Print "admin-exists: true|false" and exit 0
+                            (exit 1 on error). Lets the installer detect a
+                            re-run without parsing the database.
   gotham admin reset-password --email <email> [--password <pw>]
                             Replace a password and revoke the account's
                             sessions.
   gotham admin help         Show this help
 
-The password is read with a hidden prompt when --password is omitted.
+The password is read with a hidden prompt when none of --password,
+--password-stdin or --generate-password is given. --password is visible in
+the process list; prefer the hidden prompt or --password-stdin (a single
+piped line, refused on a terminal). --generate-password creates a random
+password and prints it once as "generated-password: <value>".
 Configuration comes from gotham.yaml / GOTHAM_* environment variables; when
 %s exists it is loaded first (without overriding the environment).
 `, adminEnvFile)
@@ -71,9 +82,21 @@ Configuration comes from gotham.yaml / GOTHAM_* environment variables; when
 func runAdminCreate(args []string) int {
 	fs := flag.NewFlagSet("admin create", flag.ContinueOnError)
 	email := fs.String("email", "", "account email (required)")
-	password := fs.String("password", "", "account password (hidden prompt when omitted)")
+	password := fs.String("password", "", "account password (visible in ps output; prefer the hidden prompt)")
+	passwordStdin := fs.Bool("password-stdin", false, "read the password from stdin (single piped line; refused on a terminal)")
+	generatePassword := fs.Bool("generate-password", false, "generate a random password and print it once as \"generated-password: <value>\"")
 	force := fs.Bool("force", false, "create the account even when one already exists")
 	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	passwordSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "password" {
+			passwordSet = true
+		}
+	})
+	if err := checkAdminPasswordFlags(passwordSet, *passwordStdin, *generatePassword); err != nil {
+		fmt.Fprintf(os.Stderr, "admin create: %v\n", err)
 		return exitUsage
 	}
 	return withAdminStore(fs, func(ctx context.Context, st *store.Store) int {
@@ -94,7 +117,27 @@ func runAdminCreate(args []string) int {
 			return exitError
 		}
 
-		hash, err := adminPasswordHash(*password, "New password: ", "Confirm password: ")
+		var generated string
+		hash, err := func() (string, error) {
+			if *generatePassword {
+				generated, err = generateAdminPassword()
+				if err != nil {
+					return "", err
+				}
+				return adminHashPlaintext(generated)
+			}
+			if *passwordStdin {
+				if term.IsTerminal(int(os.Stdin.Fd())) {
+					return "", errors.New("--password-stdin needs piped input; omit the flag for the hidden prompt")
+				}
+				plaintext, err := readPasswordLine(os.Stdin)
+				if err != nil {
+					return "", err
+				}
+				return adminHashPlaintext(plaintext)
+			}
+			return adminPasswordHash(*password, "New password: ", "Confirm password: ")
+		}()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "admin create: %v\n", err)
 			return exitError
@@ -124,8 +167,54 @@ func runAdminCreate(args []string) int {
 		}
 
 		fmt.Printf("created account %s\n", normalized)
+		if generated != "" {
+			printGeneratedPassword(os.Stdout, generated)
+		}
 		return exitOK
 	})
+}
+
+// runAdminExists reports whether the instance already has an account, so the
+// installer can skip creation on a re-run without parsing the database. It
+// prints "admin-exists: true|false" and exits 0; any failure exits 1.
+func runAdminExists(args []string) int {
+	fs := flag.NewFlagSet("admin exists", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "admin exists takes no arguments\n")
+		return exitUsage
+	}
+	loadEnvFile(adminEnvFile)
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		return exitError
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	pool, err := store.Open(ctx, cfg.Database.DSN)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "admin: connect to database: %v\n", err)
+		return exitError
+	}
+	defer pool.Close()
+
+	count, err := store.New(pool).CountUsers(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "admin exists: count users: %v\n", err)
+		return exitError
+	}
+	if count > 0 {
+		fmt.Println("admin-exists: true")
+	} else {
+		fmt.Println("admin-exists: false")
+	}
+	return exitOK
 }
 
 // runAdminResetPassword replaces the argon2id hash of an existing account and
@@ -163,6 +252,83 @@ func runAdminResetPassword(args []string) int {
 			"Access tokens already issued stay valid until they expire (15 minutes).\n", user.Email)
 		return exitOK
 	})
+}
+
+// checkAdminPasswordFlags rejects combining --password, --password-stdin and
+// --generate-password: they are mutually exclusive password sources. An
+// explicitly passed --password counts even when empty (it still selects the
+// flag source); only an omitted --password falls through to the prompt.
+func checkAdminPasswordFlags(passwordSet, passwordStdin, generatePassword bool) error {
+	n := 0
+	if passwordSet {
+		n++
+	}
+	if passwordStdin {
+		n++
+	}
+	if generatePassword {
+		n++
+	}
+	if n > 1 {
+		return errors.New("--password, --password-stdin and --generate-password are mutually exclusive")
+	}
+	return nil
+}
+
+// adminHashPlaintext validates an already-resolved password with the same
+// policy as registration and returns its argon2id-encoded hash. Unlike
+// adminPasswordHash it never prompts: an empty value fails validation.
+func adminHashPlaintext(password string) (string, error) {
+	if err := auth.ValidatePassword(password); err != nil {
+		return "", err
+	}
+	return auth.HashPassword(password)
+}
+
+// maxPasswordStdinBytes bounds the --password-stdin read: a piped password is
+// at most 128 characters, so 1 KiB is generous and keeps a stray dump from
+// allocating unbounded memory in a local operator command.
+const maxPasswordStdinBytes = 1024
+
+// readPasswordLine reads a single password line from r. Only the first line
+// is significant (a trailing newline is stripped); every other byte of it,
+// including spaces, is significant.
+func readPasswordLine(r io.Reader) (string, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxPasswordStdinBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read password from stdin: %w", err)
+	}
+	if len(data) > maxPasswordStdinBytes {
+		return "", fmt.Errorf("password on stdin exceeds %d bytes", maxPasswordStdinBytes)
+	}
+	line, _, _ := strings.Cut(string(data), "\n")
+	line = strings.TrimSuffix(line, "\r")
+	if line == "" {
+		return "", fmt.Errorf("no password on stdin; pipe a single line or use --generate-password")
+	}
+	return line, nil
+}
+
+// printGeneratedPassword reports a generated password exactly once, on the
+// given writer only. runAdminCreate passes os.Stdout after a successful
+// insert; failures never reach it, and nothing is ever written to stderr.
+func printGeneratedPassword(w io.Writer, password string) {
+	fmt.Fprintf(w, "generated-password: %s\n", password)
+}
+
+// generateAdminPassword returns a 32-character random password (24 bytes from
+// crypto/rand, base64url without padding). It satisfies the shared password
+// policy (length bounds) and never touches the process list or disk.
+func generateAdminPassword() (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate password: %w", err)
+	}
+	password := base64.RawURLEncoding.EncodeToString(raw)
+	if err := auth.ValidatePassword(password); err != nil {
+		return "", err
+	}
+	return password, nil
 }
 
 // adminPasswordHash resolves the password (the flag value when given, otherwise

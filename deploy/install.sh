@@ -6,8 +6,17 @@
 # the architecture, downloads the release binary, verifies the Ed25519-signed
 # manifest and the artifact digest (see deploy/release-verify.sh), installs the
 # binary into the BE-9.1 layout, installs the root-owned update wrapper, its
-# config, the sudoers rule and the systemd unit, and prints the web UI URL and
-# the first-login steps.
+# config, the sudoers rule and the systemd unit, creates the first admin
+# account, and prints the web UI URL and the first-login steps.
+#
+# The first admin account is collected before the first mutation (a tty
+# prompt, or GOTHAM_ADMIN_EMAIL non-interactively) and created right after
+# the migrations and before the service starts, so nobody can register first
+# through the open web form. On a terminal, GOTHAM_ADMIN_EMAIL is the email
+# prompt default (empty keeps it) and GOTHAM_ADMIN_PASSWORD_FILE is used
+# without prompting; without a terminal they drive creation directly (a
+# missing email skips with the manual command). A generated password is
+# printed once in the final summary. The password travels on stdin only.
 #
 # Run it from a repository checkout (it uses its sibling files: the wrapper,
 # the updater config, the sudoers installer and the unit). Example:
@@ -45,11 +54,33 @@
 #                               the agent-failure path runs. RUN_AGENT=1
 #                               without the script seam is refused outright (it
 #                               would run the real install-agent.sh).
+#   GOTHAM_INSTALL_TEST_ADMIN_BIN=<fake> + GOTHAM_INSTALL_TEST_ADMIN_TTY=<path>
+#                               test-only: with GOTHAM_INSTALL_ROOT, use <fake>
+#                               instead of the installed binary for the first-
+#                               admin step (`admin exists` / `admin create`),
+#                               and drive interactive prompts from <path>
+#                               instead of /dev/tty. Without the BIN seam test
+#                               mode skips admin creation; /dev/tty is never
+#                               opened in test mode unless the TTY seam is set.
 #
 # Runtime configuration overrides:
 #   GOTHAM_DATABASE_DSN       managed PostgreSQL DSN; skips local provisioning
 #   GOTHAM_REDIS_ADDR         Redis host:port (default localhost:6379)
 #   GOTHAM_SKIP_DEPS=1        do not install/configure PostgreSQL + Redis
+#   GOTHAM_ADMIN_EMAIL        email of the first admin account. Without a
+#                             terminal it drives creation non-interactively
+#                             (password from GOTHAM_ADMIN_PASSWORD_FILE,
+#                             else generated and printed once in the final
+#                             summary); without an email creation is skipped
+#                             with the manual command. On a terminal it is
+#                             the email prompt default (empty keeps it).
+#   GOTHAM_ADMIN_PASSWORD_FILE  path to a file holding the first admin
+#                             password (single line, root-readable; a warning
+#                             is printed when group/world readable). On a
+#                             terminal it is used without prompting. Never
+#                             passed on a command line or stored anywhere:
+#                             it travels to the binary on stdin only. `sh -x`
+#                             tracing is disabled around the secret handling.
 #
 # Re-running the installer preserves /etc/gotham/gotham.env: managed keys are
 # refreshed (a DSN given on the command line wins; otherwise the existing value
@@ -549,6 +580,431 @@ else
     verify_release "${RELEASE_BASE}" "${VERSION}" "${ARCH}" "${FAMILY}" "${PUBKEY_FILE}" "${TMP_BINARY}"
 fi
 
+# ---- First admin account ----------------------------------------------------
+# Credentials are collected in phase 1 (before the first mutation, while the
+# service cannot serve registration yet) and the account is created in phase
+# 2 (right after the migrations, before `systemctl start`). The password only
+# ever travels on stdin (never argv, environment, disk or logs): interactive
+# prompts read from the tty, the non-interactive password file is piped, and
+# a generated password is printed once in the final summary below.
+# `sh -x` tracing is disabled around the secret handling.
+#
+# Test seams (honoured ONLY in test mode, ignored in production):
+#   GOTHAM_INSTALL_TEST_ADMIN_BIN=<fake>  binary used for `admin exists` /
+#                               `admin create` instead of the installed one.
+#                               Without it test mode skips this step.
+#   GOTHAM_INSTALL_TEST_ADMIN_TTY=<path>   interactive prompts use this file
+#                               instead of /dev/tty, so the suite can drive
+#                               them without a pty. /dev/tty is never opened
+#                               in test mode unless this seam is set.
+_admin_tty_path() {
+    if [ "${TEST_MODE}" -eq 1 ] && [ -n "${GOTHAM_INSTALL_TEST_ADMIN_TTY:-}" ]; then
+        printf '%s' "${GOTHAM_INSTALL_TEST_ADMIN_TTY}"
+    else
+        printf '/dev/tty'
+    fi
+}
+
+# Interactive when a terminal is really usable: a tty stream alone is not
+# enough (setsid or a CI pty gives tty fds without a controlling terminal),
+# so /dev/tty must also open for reading and writing. Otherwise the
+# non-interactive branch runs and nothing blocks or dies silently.
+# In test mode only the TTY seam counts, so sandbox runs never touch /dev/tty
+# unasked (the seam path itself is what gets probed there).
+_admin_interactive() {
+    if [ "${TEST_MODE}" -eq 1 ]; then
+        [ -n "${GOTHAM_INSTALL_TEST_ADMIN_TTY:-}" ] || return 1
+    else
+        { [ -t 0 ] || [ -t 1 ] || [ -t 2 ]; } || return 1
+    fi
+    _ai_tty="$(_admin_tty_path)"
+    ( : <"${_ai_tty}" ) 2>/dev/null || return 1
+    ( : >>"${_ai_tty}" ) 2>/dev/null || return 1
+    return 0
+}
+
+# Basic email shape check (the binary revalidates strictly): one @, a dot
+# after it, no spaces or control characters.
+_admin_valid_email() {
+    _ave_stripped="$(printf '%s' "$1" | tr -d '\000-\037\177')"
+    [ "${_ave_stripped}" = "$1" ] || return 1
+    case "$1" in
+        *" "* | *@*@* | @* | *@) return 1 ;;
+    esac
+    case "$1" in
+        ?*@?*.?*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Mirrors the shared password policy (internal/auth/service.go:
+# minPasswordLength/maxPasswordLength): length bounds only, so the shell can
+# re-prompt before the binary ever sees a hopeless password.
+_admin_pw_min_len=8
+_admin_pw_max_len=128
+_admin_pw_policy_ok() {
+    [ "${#1}" -ge "${_admin_pw_min_len}" ] && [ "${#1}" -le "${_admin_pw_max_len}" ]
+}
+
+# Run the admin subcommand as the service user in production (the binary
+# reads the root-owned env file through the gotham group), directly in test
+# mode like `ca init` above.
+_admin_run() {
+    if [ "${TEST_MODE}" -eq 1 ]; then
+        "${_ADMIN_BIN}" "$@"
+    else
+        runuser -u "${SERVICE_USER}" -- "${_ADMIN_BIN}" "$@"
+    fi
+}
+
+# Restore the tty echo after a hidden prompt.
+_admin_restore_tty() {
+    if [ -c "${_ADMIN_TTY_ACTIVE:-/nonexistent}" ]; then
+        stty echo <"${_ADMIN_TTY_ACTIVE}" 2>/dev/null || true
+    fi
+}
+
+# Uniform prompt traps for a prompt section: EXIT/INT/TERM/HUP/QUIT all
+# restore echo first, then chain the installer's own handlers (the WORK_DIR
+# cleanup on EXIT, `exit 1` on INT/TERM; HUP/QUIT had none). Restated
+# explicitly because POSIX cannot introspect traps without parsing (see
+# release-verify.sh for the parsing variant).
+_admin_prompt_traps() {
+    trap '_admin_restore_tty; rm -rf "${WORK_DIR}"' EXIT
+    trap '_admin_restore_tty; exit 1' INT TERM HUP QUIT
+}
+
+# Put back exactly what _admin_prompt_traps replaced.
+_admin_restore_prompt_traps() {
+    trap 'rm -rf "${WORK_DIR}"' EXIT
+    trap 'exit 1' INT TERM
+    trap - HUP QUIT
+}
+
+# Hidden single-line prompt on the tty into _ADMIN_SECRET. Empty input is a
+# valid answer (the caller treats it as "generate"). Echo is disabled before
+# the prompt prints, so bytes arriving from that point on — including
+# type-ahead sent the moment the prompt appears — are never echoed. (Bytes
+# typed long before, while echo was still on, were already echoed by the
+# terminal itself.) Prompt-section traps (above) cover signals and set -e
+# aborts, so echo is always restored.
+_admin_prompt_secret() {
+    _ADMIN_TTY_ACTIVE="$2"
+    if [ -c "${_ADMIN_TTY_ACTIVE}" ]; then
+        stty -echo <"${_ADMIN_TTY_ACTIVE}" 2>/dev/null || true
+    fi
+    printf '%s' "$1" >"${_ADMIN_TTY_ACTIVE}"
+    _ADMIN_SECRET=""
+    IFS= read -r _ADMIN_SECRET <"${_ADMIN_TTY_ACTIVE}" || true
+    _admin_restore_tty
+    printf '\n' >"${_ADMIN_TTY_ACTIVE}"
+}
+
+# Keep xtrace (sh -x) from printing secrets: every command line the shell
+# traces is expanded first, so assignments, tests and the stdin printf would
+# all leak the password. Regions are never nested; each off has its on.
+_admin_xtrace_off() {
+    case $- in
+        *x*) _ADMIN_XTRACE_WAS_ON=1; set +x ;;
+        *) _ADMIN_XTRACE_WAS_ON=0 ;;
+    esac
+}
+_admin_xtrace_on() {
+    if [ "${_ADMIN_XTRACE_WAS_ON:-0}" = "1" ]; then
+        set -x
+    fi
+    _ADMIN_XTRACE_WAS_ON=0
+}
+
+# Forget every in-memory secret. Called the moment the binary has the
+# password (success or failure) and at the end of collection.
+_admin_wipe() {
+    _admin_pw=""
+    _admin_pw1=""
+    _ADMIN_SECRET=""
+    _admin_generated=""
+}
+
+# Warn (not fail) when the password file is readable beyond its owner.
+_admin_warn_pwfile_perms() {
+    _awp_mode=""
+    if _awp_out="$(stat -c '%a' "$1" 2>/dev/null)"; then
+        _awp_mode="${_awp_out}"
+    elif _awp_out="$(stat -f '%Lp' "$1" 2>/dev/null)"; then
+        _awp_mode="${_awp_out}"
+    fi
+    [ -n "${_awp_mode}" ] || return 0
+    if [ $((_awp_mode / 10 % 10 & 4)) -ne 0 ] || [ $((_awp_mode % 10 & 4)) -ne 0 ]; then
+        log "WARNING: $1 is readable by group/others; restrict it to root (chmod 600)"
+    fi
+}
+
+# Generate a 32-character base64url password (24 random bytes). openssl is
+# already a hard requirement above.
+_admin_generate_password() {
+    openssl rand -base64 24 2>/dev/null | tr -d '\n=' | tr '+/' '-_' | tr -d '\n'
+}
+
+# Read the password file into _admin_pw (single line). Dies on unreadable or
+# empty files; warns on group/world readability. Call with xtrace off.
+_admin_read_pwfile() {
+    [ -r "$1" ] \
+        || die "GOTHAM_ADMIN_PASSWORD_FILE is not readable (got '$1')"
+    _admin_warn_pwfile_perms "$1"
+    _admin_pw=""
+    IFS= read -r _admin_pw <"$1" || true
+    _admin_pw="$(printf '%s' "${_admin_pw}" | tr -d '\r\n')"
+    [ -n "${_admin_pw}" ] \
+        || die "GOTHAM_ADMIN_PASSWORD_FILE is empty (remove it to generate a password)"
+}
+
+# Prompt for the password with confirmation into _admin_pw (hidden input on
+# $1; empty input generates into _admin_generated and uses it). Rejects
+# mismatches and policy violations with a re-prompt. Call with xtrace off
+# and prompt traps installed.
+_admin_prompt_password() {
+    while true; do
+        _admin_prompt_secret 'Admin password (empty to generate): ' "$1"
+        _admin_pw1="${_ADMIN_SECRET}"
+        _admin_prompt_secret 'Confirm password: ' "$1"
+        if [ "${_admin_pw1}" != "${_ADMIN_SECRET}" ]; then
+            printf 'Passwords do not match, try again.\n' >"$1"
+            continue
+        fi
+        _admin_pw="${_admin_pw1}"
+        if [ -z "${_admin_pw}" ]; then
+            _admin_generated="$(_admin_generate_password)" || _admin_generated=""
+            [ -n "${_admin_generated}" ] || die "could not generate an admin password"
+            _admin_pw="${_admin_generated}"
+            break
+        fi
+        if _admin_pw_policy_ok "${_admin_pw}"; then
+            break
+        fi
+        printf 'Password must be between 8 and 128 characters, try again.\n' >"$1"
+    done
+}
+
+# Collection (phase 1) runs before the first host mutation, while the service
+# cannot serve registration yet: credentials are gathered up front, and
+# creation happens in phase 2 right after the migrations and before
+# `systemctl start`, so nobody can claim the first account through the open
+# web form while the operator ponders the prompt. Both phases always return
+# 0; the outcome is in ADMIN_STATUS (runtime failures set ADMIN_FAILED and
+# exit nonzero at the end, like the localhost agent step). Operator config
+# errors (bad email, bad password file) die here, before anything is created.
+admin_phase1_collect() {
+    ADMIN_STATUS=""
+    ADMIN_EMAIL=""
+    ADMIN_GENERATED=""
+    ADMIN_FAILED=0
+    ADMIN_FAIL_REASON=""
+    ADMIN_HAVE_CREDS=0
+    _ADMIN_BIN="${INSTALL_PATH}"
+    if [ "${TEST_MODE}" -eq 1 ]; then
+        if [ -z "${GOTHAM_INSTALL_TEST_ADMIN_BIN:-}" ]; then
+            log "test mode: skipping admin creation (no GOTHAM_INSTALL_TEST_ADMIN_BIN seam)"
+            ADMIN_STATUS="test-skip"
+            return 0
+        fi
+        _ADMIN_BIN="${GOTHAM_INSTALL_TEST_ADMIN_BIN}"
+    fi
+    if [ "${DRY_RUN}" -eq 1 ]; then
+        echo "[dry-run] ${_ADMIN_BIN} admin create --email <tty prompt or \$GOTHAM_ADMIN_EMAIL> (password via stdin only)"
+        ADMIN_STATUS="dry-run"
+        return 0
+    fi
+
+    # Re-run fast path: a previously installed binary plus an existing
+    # account means no prompt and no collection. A missing binary (fresh
+    # install) or an unreachable database falls through to collection;
+    # phase 2 checks again once the database is migrated.
+    if [ -x "${_ADMIN_BIN}" ]; then
+        if _admin_exists_out="$(_admin_run admin exists 2>/dev/null)"; then
+            case "${_admin_exists_out}" in
+                *"admin-exists: true"*)
+                    log "admin already exists, skipping"
+                    ADMIN_STATUS="exists"
+                    return 0
+                    ;;
+            esac
+        fi
+    fi
+
+    _admin_email=""
+    _admin_pw=""
+    _admin_generated=""
+    if _admin_interactive; then
+        _admin_tty="$(_admin_tty_path)"
+        _admin_email_default="${GOTHAM_ADMIN_EMAIL:-}"
+        _admin_prompt_traps
+        while true; do
+            if [ -n "${_admin_email_default}" ]; then
+                printf 'Admin email [%s] (empty keeps it, - to skip): ' "${_admin_email_default}" >"${_admin_tty}"
+            else
+                printf 'Admin email (empty to skip): ' >"${_admin_tty}"
+            fi
+            IFS= read -r _admin_email <"${_admin_tty}" || _admin_email=""
+            # The seam file carries scripted input without newlines trimmed
+            # by a terminal; strip a possible carriage return.
+            _admin_email="$(printf '%s' "${_admin_email}" | tr -d '\r')"
+            if [ -z "${_admin_email}" ]; then
+                if [ -n "${_admin_email_default}" ]; then
+                    _admin_email="${_admin_email_default}"
+                    break
+                fi
+                break
+            fi
+            if [ "${_admin_email}" = "-" ] && [ -n "${_admin_email_default}" ]; then
+                _admin_email=""
+                break
+            fi
+            if _admin_valid_email "${_admin_email}"; then
+                break
+            fi
+            printf 'Invalid email address, try again.\n' >"${_admin_tty}"
+        done
+        if [ -z "${_admin_email}" ]; then
+            _admin_restore_prompt_traps
+            ADMIN_STATUS="no-email"
+            return 0
+        fi
+        _admin_xtrace_off
+        if [ -n "${GOTHAM_ADMIN_PASSWORD_FILE:-}" ]; then
+            _admin_read_pwfile "${GOTHAM_ADMIN_PASSWORD_FILE}"
+        else
+            _admin_prompt_password "${_admin_tty}"
+        fi
+        ADMIN_GENERATED="${_admin_generated}"
+        _admin_restore_prompt_traps
+        ADMIN_EMAIL="${_admin_email}"
+        ADMIN_HAVE_CREDS=1
+        _admin_pw1=""
+        _ADMIN_SECRET=""
+        _admin_xtrace_on
+        return 0
+    else
+        _admin_email="${GOTHAM_ADMIN_EMAIL:-}"
+        if [ -z "${_admin_email}" ]; then
+            ADMIN_STATUS="no-email"
+            return 0
+        fi
+        _admin_valid_email "${_admin_email}" \
+            || die "GOTHAM_ADMIN_EMAIL is not a valid email address (got '${_admin_email}')"
+        _admin_xtrace_off
+        if [ -n "${GOTHAM_ADMIN_PASSWORD_FILE:-}" ]; then
+            _admin_read_pwfile "${GOTHAM_ADMIN_PASSWORD_FILE}"
+        else
+            _admin_generated="$(_admin_generate_password)" || _admin_generated=""
+            [ -n "${_admin_generated}" ] || die "could not generate an admin password"
+            _admin_pw="${_admin_generated}"
+        fi
+        ADMIN_GENERATED="${_admin_generated}"
+        ADMIN_EMAIL="${_admin_email}"
+        ADMIN_HAVE_CREDS=1
+        _admin_pw1=""
+        _ADMIN_SECRET=""
+        _admin_xtrace_on
+        return 0
+    fi
+}
+
+# Creation (phase 2) runs right after the migrations and before the service
+# starts, so the first account exists before registration opens. It never
+# prompts except for the bounded interactive retry below. The binary carries
+# its own atomic first-account guard, so a concurrent registration cannot
+# yield a second admin; a failure followed by an existing account is reported
+# as a likely takeover ("created by someone else").
+admin_phase2_create() {
+    case "${ADMIN_STATUS}" in
+        test-skip | dry-run | exists | no-email) return 0 ;;
+    esac
+    if [ "${ADMIN_HAVE_CREDS}" != "1" ]; then
+        ADMIN_STATUS="no-email"
+        return 0
+    fi
+
+    _admin_exists_out=""
+    if ! _admin_exists_out="$(_admin_run admin exists 2>"${WORK_DIR}/admin-exists.err")"; then
+        cat "${WORK_DIR}/admin-exists.err" >&2 || true
+        ADMIN_FAIL_REASON="could not check for an existing admin account (is the database up?)"
+        ADMIN_FAILED=1
+        ADMIN_STATUS="failed"
+        _admin_wipe
+        return 0
+    fi
+    case "${_admin_exists_out}" in
+        *"admin-exists: true"*)
+            log "admin already exists, skipping"
+            ADMIN_STATUS="exists"
+            _admin_wipe
+            return 0
+            ;;
+        *"admin-exists: false"*) ;;
+        *)
+            ADMIN_FAIL_REASON="unexpected output from '${_ADMIN_BIN} admin exists': ${_admin_exists_out}"
+            ADMIN_FAILED=1
+            ADMIN_STATUS="failed"
+            _admin_wipe
+            return 0
+            ;;
+    esac
+
+    # printf is a shell builtin, so the password never appears in a process
+    # list; the pipe keeps it off the command line, out of the environment
+    # and off disk. It is wiped the moment the binary has it.
+    _admin_xtrace_off
+    _admin_attempts=0
+    _admin_created=0
+    while [ "${_admin_attempts}" -lt 3 ]; do
+        _admin_attempts=$((_admin_attempts + 1))
+        if printf '%s\n' "${_admin_pw}" | _admin_run admin create --email "${_admin_email}" --password-stdin 2>"${WORK_DIR}/admin-create.err"; then
+            _admin_created=1
+            break
+        fi
+        _admin_wipe
+        if _admin_interactive && [ "${_admin_attempts}" -lt 3 ]; then
+            _admin_tty="$(_admin_tty_path)"
+            _admin_prompt_traps
+            printf 'Could not create the account (%s).\n' "$(cat "${WORK_DIR}/admin-create.err")" >"${_admin_tty}"
+            printf 'Check the email and try another password.\n' >"${_admin_tty}"
+            _admin_prompt_password "${_admin_tty}"
+            ADMIN_GENERATED="${_admin_generated}"
+            _admin_restore_prompt_traps
+            continue
+        fi
+        break
+    done
+    _admin_wipe
+    _admin_xtrace_on
+    if [ "${_admin_created}" = "1" ]; then
+        ADMIN_STATUS="created"
+        return 0
+    fi
+    if _admin_exists_again="$(_admin_run admin exists 2>/dev/null)"; then
+        case "${_admin_exists_again}" in
+            *"admin-exists: true"*)
+                ADMIN_FAIL_REASON="an account already exists (created by someone else?): check the instance"
+                ;;
+            *)
+                ADMIN_FAIL_REASON="could not create the admin account for '${_admin_email}'"
+                ;;
+        esac
+    else
+        ADMIN_FAIL_REASON="could not create the admin account for '${_admin_email}'"
+    fi
+    ADMIN_FAILED=1
+    ADMIN_STATUS="failed"
+    return 0
+}
+# ---- First admin account: collection (phase 1) -----------------------------
+# After every pre-check and the verified download, before the first mutation
+# (and while the service cannot serve registration yet): prompt for (or read)
+# the first-admin credentials, so creation in phase 2 runs before
+# `systemctl start`. No prompts on --dry-run, in test mode without the BIN
+# seam, or when the instance already has an account.
+admin_phase1_collect
+
 # ---- Service user and directories -------------------------------------------
 if [ "${TEST_MODE}" -eq 0 ] && [ "${DRY_RUN}" -eq 0 ]; then
     if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
@@ -749,6 +1205,11 @@ if [ "${DRY_RUN}" -eq 0 ] && [ "${TEST_MODE}" -eq 0 ]; then
         || die "database migrations failed (check PostgreSQL and GOTHAM_DATABASE_DSN)"
 fi
 
+# ---- First admin account: creation (phase 2) --------------------------------
+# Right after the migrations and before the service starts, so the first
+# account exists before registration opens (no first-account window).
+admin_phase2_create
+
 log "starting ${BINARY_NAME}"
 run systemctl daemon-reload
 run systemctl enable --now "${BINARY_NAME}.service"
@@ -841,6 +1302,8 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
                     -u GOTHAM_INSTALL_TEST -u GOTHAM_INSTALL_TEST_RUN_AGENT \
                     -u GOTHAM_INSTALL_TEST_AGENT_SCRIPT \
                     -u GOTHAM_INSTALL_TEST_PUBLIC_KEY \
+                    -u GOTHAM_INSTALL_TEST_ADMIN_BIN \
+                    -u GOTHAM_INSTALL_TEST_ADMIN_TTY \
                     "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt"
             ) || LOCAL_AGENT_FAILED=1
         fi
@@ -849,8 +1312,51 @@ else
     log "skipping the localhost agent install (--no-local-agent)"
 fi
 
+# ---- First admin account: summary -------------------------------------------
+# Credentials were collected in phase 1 (before the first mutation); the
+# account itself was created in phase 2 (before the service start), so
+# registration was never open before the first account existed.
+
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [ -n "${HOST_IP}" ] || HOST_IP="127.0.0.1"
+
+_admin_xtrace_off
+ADMIN_LOGIN_LINE="Login:    http://${HOST_IP}:8000"
+case "${ADMIN_STATUS}" in
+    created)
+        if [ -n "${ADMIN_GENERATED}" ]; then
+            ADMIN_FIRST_LOGIN="  Account:  ${ADMIN_EMAIL}
+  Password: ${ADMIN_GENERATED}
+  ${ADMIN_LOGIN_LINE}
+  Store the password now, it is not shown again."
+        else
+            ADMIN_FIRST_LOGIN="  Account:  ${ADMIN_EMAIL}
+  ${ADMIN_LOGIN_LINE}"
+        fi
+        ;;
+    exists)
+        ADMIN_FIRST_LOGIN="  The admin account already exists, skipping.
+  ${ADMIN_LOGIN_LINE}"
+        ;;
+    no-email)
+        ADMIN_FIRST_LOGIN="  No admin account was created (no email given).
+  Create it with:
+    sudo ${INSTALL_PATH} admin create --email ops@example.com
+  Then open:
+  ${ADMIN_LOGIN_LINE}"
+        ;;
+    failed)
+        ADMIN_FIRST_LOGIN="  The admin account could not be created automatically.
+  Create it with:
+    sudo ${INSTALL_PATH} admin create --email ${ADMIN_EMAIL:-ops@example.com}
+  Then open:
+  ${ADMIN_LOGIN_LINE}"
+        ;;
+    *)
+        ADMIN_FIRST_LOGIN="  Open the Web UI and sign in with the admin account.
+  ${ADMIN_LOGIN_LINE}"
+        ;;
+esac
 
 cat <<EOF
 
@@ -861,20 +1367,26 @@ Gotham ${VERSION} is installed.
   Logs:     journalctl -u gotham -f
 
 First login:
-  1. Open the Web UI and create an account through the sign-up form.
-  2. Sign in: the Servers page already lists this host's agent node (ready
-     once its first heartbeat lands). Add more nodes with deploy/install-agent.sh.
+${ADMIN_FIRST_LOGIN}
+  The Servers page already lists this host's agent node (ready once its
+  first heartbeat lands). Add more nodes with deploy/install-agent.sh.
+  To add members, create an invite in Teams and send the shown link.
   Platform-global operations (node-wide proxy sync, DNS providers) also require
-  the account email in PLATFORM_ADMINS in /etc/gotham/gotham.env.
+  the account email in PLATFORM_ADMINS in /etc/gotham/gotham.env. Lost the
+  password? sudo ${INSTALL_PATH} admin reset-password --email <email>.
 
 Self-update checking is enabled by default. To apply new releases unattended,
 add AUTO_UPDATE=true to /etc/gotham/gotham.env (operator edits there are kept
 across reinstalls).
 EOF
+_admin_xtrace_on
 
 # A failed localhost agent step leaves the control plane installed and running
 # (nothing was rolled back): report it loudly with the exact retry command and
-# exit nonzero only now that the control plane is fully up.
+# exit nonzero only now that the control plane is fully up. A failed admin
+# step behaves the same way: the summary above already shows the manual
+# command, so warn with the reason and exit nonzero too.
+FINAL_RC=0
 if [ "${LOCAL_AGENT_FAILED:-0}" -eq 1 ]; then
     cat >&2 <<EOF
 
@@ -886,5 +1398,19 @@ Retry only the agent step with:
 or re-run this installer (an existing agent.env is kept as-is).
 ================================================================
 EOF
-    exit 1
+    FINAL_RC=1
+fi
+if [ "${ADMIN_FAILED:-0}" -eq 1 ]; then
+    cat >&2 <<EOF
+
+================================================================
+WARNING: the control plane is installed and running, but ${ADMIN_FAIL_REASON}.
+Nothing was rolled back. Create the account with the command shown above
+and re-run this installer to verify (an existing account is kept as-is).
+================================================================
+EOF
+    FINAL_RC=1
+fi
+if [ "${FINAL_RC}" -ne 0 ]; then
+    exit "${FINAL_RC}"
 fi

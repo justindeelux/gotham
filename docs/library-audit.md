@@ -57,6 +57,14 @@ Bundle-size evidence (measured `vite build` gzip, G1; baseline index chunk
 - F2 @vueuse/core, importing only `useMediaQuery` + `useClipboard`: +0.13 kB
   raw / +0.04 kB gzip on the index chunk (tree-shaken; unused exports are
   dropped by Vite/Rollup).
+- F1 follow-up (auth-servers migration, PR #161): `/login` and `/register`
+  now fetch the shared zod chunk (53.18 kB raw / 12.20 kB gzip), which those
+  unauthenticated routes did not load before. The chunk is shared with every
+  other migrated page (single copy, no duplication); total gzip across all
+  emitted assets moved +0.25 kB. Accepted: the chunk is the price of the
+  single validation source the migration exists for, and it amortises to
+  zero marginal cost as further form packages (templates, databases,
+  notifications) migrate onto it.
 
 Bundle (templates-env-apps-services migration, PR #160): zod now ships once
 in the entry chunk — index 441,967 B / 139,868 B gzip before, 496,560 B /

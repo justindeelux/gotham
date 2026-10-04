@@ -15,9 +15,9 @@ import {
   confirmPasswordSchema,
   emailSchema,
   loginPasswordSchema,
-  loginSchema,
+  loginRules,
   registerPasswordSchema,
-  registerSchema,
+  registerRules,
   termsSchema,
 } from "@/features/auth/schemas/auth";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
@@ -150,32 +150,14 @@ describe("terms checkbox", () => {
   });
 });
 
-describe("form object schemas", () => {
-  it("accepts a valid login and register pair", () => {
-    expect(
-      loginSchema.safeParse({ email: "a@example.com", password: "x" }).success,
-    ).toBe(true);
-    expect(
-      registerSchema.safeParse({
-        email: "a@example.com",
-        password: "Abcdefghij",
-        confirmPassword: "Abcdefghij",
-        terms: true,
-      }).success,
-    ).toBe(true);
-  });
-
-  it("reports the confirmation mismatch on confirmPassword", () => {
-    const result = registerSchema.safeParse({
-      email: "a@example.com",
-      password: "Abcdefghij",
-      confirmPassword: "other",
-      terms: true,
-    });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues[0]?.message).toBe("Passwords do not match");
-      expect(result.error.issues[0]?.path).toEqual(["confirmPassword"]);
-    }
+describe("login and register rule builders", () => {
+  it("cover every field the pages render", () => {
+    expect(Object.keys(loginRules()).sort()).toEqual(["email", "password"]);
+    expect(Object.keys(registerRules(() => "")).sort()).toEqual([
+      "confirmPassword",
+      "email",
+      "password",
+      "terms",
+    ]);
   });
 });

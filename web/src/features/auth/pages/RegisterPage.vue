@@ -17,21 +17,20 @@ import AuthFootnote from "@/features/auth/components/AuthFootnote.vue";
 import GitHubOAuthButton from "@/features/auth/components/GitHubOAuthButton.vue";
 import PasswordStrengthMeter from "@/features/auth/components/PasswordStrengthMeter.vue";
 import { useRegisterInvite } from "@/features/auth/composables/useRegisterInvite";
-import {
-  confirmPasswordSchema,
-  emailSchema,
-  registerPasswordSchema,
-  termsSchema,
-  type RegisterForm,
-} from "@/features/auth/schemas/auth";
+import { registerRules } from "@/features/auth/schemas/auth";
 import { describeAuthError, useAuthStore } from "@/features/auth/stores/auth";
 import { authSwitchTarget, safeRedirect } from "@/features/auth/utils/authRedirect";
 import { strengthOf } from "@/features/auth/utils/passwordStrength";
-import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 // Error convention (shared with LoginPage): client-side validation errors
 // render inline on the field via NFormItem; server-side submit failures render
 // once in the NAlert above the form, with text from describeAuthError.
+interface RegisterForm {
+  email: string;
+  password: string;
+  confirmPassword: string;
+  terms: boolean;
+}
 
 const authStore = useAuthStore();
 const route = useRoute();
@@ -86,14 +85,7 @@ const strength = computed<number>(() => strengthOf(form.password));
 
 // The confirm rule reads the live password through a reader (not a
 // snapshot), so retyping the password revalidates the confirmation.
-const confirmSchema = confirmPasswordSchema(() => form.password);
-
-const rules: FormRules = {
-  email: [{ ...ruleFrom(emailSchema), trigger: ["input", "blur"] }],
-  password: [{ ...ruleFrom(registerPasswordSchema), trigger: ["input", "blur"] }],
-  confirmPassword: [{ ...ruleFrom(confirmSchema), trigger: ["input", "blur"] }],
-  terms: [{ ...ruleFrom(termsSchema), trigger: ["change"] }],
-};
+const rules: FormRules = registerRules(() => form.password);
 
 /** redirectAfterAuth honours ?redirect when it is a safe local path. */
 async function redirectAfterAuth(): Promise<void> {

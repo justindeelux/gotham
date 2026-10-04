@@ -1,6 +1,8 @@
+import type { FormRules } from "naive-ui";
 import { z } from "zod";
 
 import { meetsPasswordPolicy } from "@/features/auth/utils/passwordStrength";
+import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 /**
  * Login/register schemas (JUS-23 V1/V2). Message strings are preserved
@@ -46,12 +48,19 @@ export const loginPasswordSchema = z
   })
   .min(1, authMessages.passwordRequired);
 
-export const loginSchema = z.object({
-  email: emailSchema,
-  password: loginPasswordSchema,
-});
-
-export type LoginForm = z.infer<typeof loginSchema>;
+/**
+ * loginRules builds the LoginPage NForm rules: one schema-backed entry per
+ * field with the original triggers and require marks, so the module (not
+ * the page) is the single source the mount tests assert against.
+ */
+export function loginRules(): FormRules {
+  return {
+    email: [{ ...ruleFrom(emailSchema, { required: true }), trigger: ["input", "blur"] }],
+    password: [
+      { ...ruleFrom(loginPasswordSchema, { required: true }), trigger: ["input", "blur"] },
+    ],
+  };
+}
 
 /** registerPasswordSchema gates on length >= 10 with >= 2 character classes. */
 export const registerPasswordSchema = z
@@ -90,21 +99,23 @@ export const termsSchema = z
   })
   .refine((value) => value === true, { message: authMessages.termsRequired });
 
-export const registerSchema = z
-  .object({
-    email: emailSchema,
-    password: registerPasswordSchema,
-    confirmPassword: z
-      .string({
-        required_error: authMessages.confirmRequired,
-        invalid_type_error: authMessages.confirmRequired,
-      })
-      .min(1, authMessages.confirmRequired),
-    terms: termsSchema,
-  })
-  .refine((data) => data.confirmPassword === data.password, {
-    message: authMessages.confirmMismatch,
-    path: ["confirmPassword"],
-  });
-
-export type RegisterForm = z.infer<typeof registerSchema>;
+/**
+ * registerRules builds the RegisterPage NForm rules. The password reader
+ * keeps the confirmation check live, exactly like the old closure over the
+ * reactive form. Terms carry no require mark, as before.
+ */
+export function registerRules(password: () => string): FormRules {
+  return {
+    email: [{ ...ruleFrom(emailSchema, { required: true }), trigger: ["input", "blur"] }],
+    password: [
+      { ...ruleFrom(registerPasswordSchema, { required: true }), trigger: ["input", "blur"] },
+    ],
+    confirmPassword: [
+      {
+        ...ruleFrom(confirmPasswordSchema(password), { required: true }),
+        trigger: ["input", "blur"],
+      },
+    ],
+    terms: [{ ...ruleFrom(termsSchema), trigger: ["change"] }],
+  };
+}

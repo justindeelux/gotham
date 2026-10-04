@@ -55,6 +55,9 @@ describe("server name field", () => {
       [
         ["empty", "", false, "Enter a node name."],
         ["whitespace", "   ", true, null],
+        ["padded", "  build-node-03  ", true, null],
+        ["tabbed", "\tnode3\t", true, null],
+        ["nbsp padded", "\u00a0node3\u00a0", true, null],
         ["typical", "build-node-03", true, null],
         ["dots", "node_1.prod", true, null],
         ["single", "A", true, null],
@@ -126,6 +129,9 @@ describe("ssh user field", () => {
       [
         ["empty", "", false, "Enter the SSH user."],
         ["whitespace", "   ", true, null],
+        ["padded", "  root  ", true, null],
+        ["tabbed", "\troot\t", true, null],
+        ["nbsp padded", "\u00a0root\u00a0", true, null],
         ["root", "root", true, null],
         ["underscored", "deploy_2", true, null],
         ["trailing dollar", "depl-oy$", true, null],

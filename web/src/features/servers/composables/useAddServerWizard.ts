@@ -18,17 +18,11 @@ import {
 } from "@/features/servers/api/servers";
 import type { CheckResult, Server, ServerCheckName } from "@/features/servers/api/servers";
 import {
-  requiredField,
-  serverHostSchema,
-  serverMessages,
-  serverNameSchema,
-  serverPortSchema,
-  serverUserSchema,
+  connectionRules,
 } from "@/features/servers/schemas/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
 import { useInFlightGuard } from "@/shared/composables/useInFlightGuard";
 import { formatBytes } from "@/shared/utils/format";
-import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 export interface ConnectionForm {
   name: string;
@@ -135,44 +129,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     trustHostKey: false,
   });
 
-  const rules = computed<FormRules>(() => ({
-    name: [{ ...ruleFrom(serverNameSchema), trigger: ["input", "blur"] }],
-    ip: [{ ...ruleFrom(serverHostSchema), trigger: ["input", "blur"] }],
-    port: [{ ...ruleFrom(serverPortSchema), trigger: ["input", "blur"] }],
-    sshUser: [{ ...ruleFrom(serverUserSchema), trigger: ["input", "blur"] }],
-    keyName: [
-      {
-        ...ruleFrom(requiredField(serverMessages.keyNameRequired), {
-          when: () => form.authMode === "key" && form.keyMode === "new",
-        }),
-        trigger: ["input", "blur"],
-      },
-    ],
-    privateKey: [
-      {
-        ...ruleFrom(requiredField(serverMessages.privateKeyRequired), {
-          when: () => form.authMode === "key" && form.keyMode === "new",
-        }),
-        trigger: ["input", "blur"],
-      },
-    ],
-    keyId: [
-      {
-        ...ruleFrom(requiredField(serverMessages.wizardKeyIdRequired), {
-          when: () => form.authMode === "key" && form.keyMode === "existing",
-        }),
-        trigger: ["input", "blur"],
-      },
-    ],
-    password: [
-      {
-        ...ruleFrom(requiredField(serverMessages.nodePasswordRequired), {
-          when: () => form.authMode === "password",
-        }),
-        trigger: ["input", "blur"],
-      },
-    ],
-  }));
+  const rules = computed<FormRules>(() => connectionRules(form));
 
   /** hasCreatedServer reports whether the connection step already registered a node. */
   const hasCreatedServer = computed<boolean>(() => createdServer.value !== null);

@@ -16,16 +16,8 @@ import {
 import { computed, reactive, ref, watch } from "vue";
 
 import type { Server, UpdateServerInput } from "@/features/servers/api/servers";
-import {
-  requiredField,
-  serverHostSchema,
-  serverMessages,
-  serverNameSchema,
-  serverPortSchema,
-  serverUserSchema,
-} from "@/features/servers/schemas/servers";
+import { editRules } from "@/features/servers/schemas/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
-import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 interface Props {
   show: boolean;
@@ -63,20 +55,7 @@ const form = reactive<EditForm>({
   password: "",
 });
 
-const rules = computed<FormRules>(() => ({
-  name: [{ ...ruleFrom(serverNameSchema), trigger: ["input", "blur"] }],
-  ip: [{ ...ruleFrom(serverHostSchema), trigger: ["input", "blur"] }],
-  port: [{ ...ruleFrom(serverPortSchema), trigger: ["input", "blur"] }],
-  sshUser: [{ ...ruleFrom(serverUserSchema), trigger: ["input", "blur"] }],
-  keyId: [
-    {
-      ...ruleFrom(requiredField(serverMessages.editKeyIdRequired), {
-        when: () => form.authMode === "key",
-      }),
-      trigger: ["input", "blur"],
-    },
-  ],
-}));
+const rules = computed<FormRules>(() => editRules(form.authMode));
 
 /** currentAuth describes the stored credential without revealing it. */
 const currentAuth = computed<string>(() => {

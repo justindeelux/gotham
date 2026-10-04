@@ -18,7 +18,7 @@
 
 ## INFRA-0.1 — Scaffold repo + Makefile + CI — `ws/p0-scaffold`
 
-- **Context brief:** the repo currently only has `README.md` and `docs/plan/`. Create the full directory structure per section 3 of the README: `cmd/gotham/`, `cmd/gotham-agent/`, `internal/{server,deploy,builds,proxy,databases,services,auth,updates,store}/`, `agent/`, `proto/`, `web/`, `templates/`, `deploy/`. Each internal package gets a `doc.go` with a one-sentence responsibility description. `cmd/gotham-agent/main.go` temporarily prints the version and exits (the real agent lands in Phase 2).
+- **Context brief:** the repo currently only has `README.md` and `docs/plans/`. Create the full directory structure per section 3 of the README: `cmd/gotham/`, `cmd/gotham-agent/`, `internal/{server,deploy,builds,proxy,databases,services,auth,updates,store}/`, `agent/`, `proto/`, `web/`, `templates/`, `deploy/`. Each internal package gets a `doc.go` with a one-sentence responsibility description. `cmd/gotham-agent/main.go` temporarily prints the version and exits (the real agent lands in Phase 2).
 - **Deliverables:**
   - `go.mod` (module `github.com/<org>/gotham`, Go 1.27), Makefile with targets: `build`, `test`, `lint`, `migrate`, `dev`.
   - `.golangci.yml`, `.gitignore`, `.editorconfig`.

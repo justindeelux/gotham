@@ -1,7 +1,7 @@
 # Gotham TODO
 
 Remaining work, checkbox by checkbox. Workflow, invariants and gates: [`../AGENTS.md`](../AGENTS.md).
-Plan: [`plan/00-roadmap.md`](plan/00-roadmap.md).
+Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
 
 ## Phases
 

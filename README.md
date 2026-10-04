@@ -211,7 +211,7 @@ suspect it.
 
 ## 4. Development Plan
 
-Development is phased — one file per phase in `docs/plan/`. See
+Development is phased — one file per phase in `docs/plans/`. See
 [`docs/README.md`](docs/README.md) for the plan index with per-phase status,
 [`AGENTS.md`](AGENTS.md) for how we work, and
 [`docs/TODO.md`](docs/TODO.md) for what is left.

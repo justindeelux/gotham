@@ -83,6 +83,50 @@ func TestProfileMeCarriesNewFields(t *testing.T) {
 	}
 }
 
+// TestMePlatformAdminSources: GET /me reports is_platform_admin from the
+// stored flag OR a PLATFORM_ADMINS allowlist match, using the same helper as
+// the admin gate.
+func TestMePlatformAdminSources(t *testing.T) {
+	s, _ := newTestProfileServer(t)
+
+	// The fake account has no stored flag and the allowlist is empty.
+	t.Setenv(PlatformAdminsEnv, "")
+	plain := doRequest(t, s, http.MethodGet, "/api/v1/auth/me", "", "Bearer valid-token")
+	if plain.Code != http.StatusOK {
+		t.Fatalf("me status = %d, want 200", plain.Code)
+	}
+	var plainBody meResponse
+	if err := json.Unmarshal(plain.Body.Bytes(), &plainBody); err != nil {
+		t.Fatalf("decode me body: %v", err)
+	}
+	if plainBody.User.IsPlatformAdmin {
+		t.Error("is_platform_admin = true, want false with no flag and no allowlist")
+	}
+
+	// The allowlist alone flips the bit (case-insensitive, like the gate).
+	t.Setenv(PlatformAdminsEnv, "USER@example.com")
+	listed := doRequest(t, s, http.MethodGet, "/api/v1/auth/me", "", "Bearer valid-token")
+	var listedBody meResponse
+	if err := json.Unmarshal(listed.Body.Bytes(), &listedBody); err != nil {
+		t.Fatalf("decode me body: %v", err)
+	}
+	if !listedBody.User.IsPlatformAdmin {
+		t.Errorf("is_platform_admin = false for an allowlisted email, want true (body %s)", listed.Body.String())
+	}
+
+	// The stored flag alone flips the bit: the scratch bootstrap account.
+	t.Setenv(PlatformAdminsEnv, "")
+	stack, _, pair := scratchProfileStack(t)
+	stored := doRequest(t, stack, http.MethodGet, "/api/v1/auth/me", "", "Bearer "+pair.AccessToken)
+	var storedBody meResponse
+	if err := json.Unmarshal(stored.Body.Bytes(), &storedBody); err != nil {
+		t.Fatalf("decode me body: %v", err)
+	}
+	if !storedBody.User.IsPlatformAdmin {
+		t.Errorf("is_platform_admin = false for the bootstrap account, want true (body %s)", stored.Body.String())
+	}
+}
+
 func TestProfileChangePassword(t *testing.T) {
 	s, _ := newTestProfileServer(t)
 
@@ -216,10 +260,11 @@ func TestRequireInteractiveSessionMiddleware(t *testing.T) {
 }
 
 // scratchProfileStack builds a Server backed by the real auth service on a
-// private scratch database and returns it with a live JWT for the seeded
-// account. Fake-backed handler tests cannot catch validation the fake does
-// not mirror (F1 reached Postgres and answered 500); this stack can.
-func scratchProfileStack(t *testing.T) (*Server, string) {
+// private scratch database and returns it with the service and live token
+// pairs for the seeded account (registered and logged in). Fake-backed
+// handler tests cannot catch validation the fake does not mirror (F1 reached
+// Postgres and answered 500); this stack can.
+func scratchProfileStack(t *testing.T) (*Server, *auth.AuthResult, *auth.AuthResult) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -279,15 +324,14 @@ func scratchProfileStack(t *testing.T) (*Server, string) {
 	svc := auth.New(store.New(pool), signer, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	email := fmt.Sprintf("pf1-srv-%d@example.com", time.Now().UnixNano())
-	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil, auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	loggedIn, err := svc.Login(ctx, email, "s3cret-password")
+	loggedIn, err := svc.Login(ctx, email, "s3cret-password", auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	_ = registered
 
 	cfg := &config.Config{
 		Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}},
@@ -300,15 +344,15 @@ func scratchProfileStack(t *testing.T) (*Server, string) {
 	t.Cleanup(s.closer)
 	s.db = stubPinger{}
 	s.redis = stubPinger{}
-	return s, loggedIn.AccessToken
+	return s, registered, loggedIn
 }
 
 // TestProfileUnstorableTextOverHTTP replays the F1 probe against the real
 // stack: NUL, bidi-override and zero-width names are 400 with the contract
 // message, and a storable name still round-trips.
 func TestProfileUnstorableTextOverHTTP(t *testing.T) {
-	s, token := scratchProfileStack(t)
-	bearer := "Bearer " + token
+	s, _, pair := scratchProfileStack(t)
+	bearer := "Bearer " + pair.AccessToken
 
 	for name, payload := range map[string]string{
 		"NUL":        `{"display_name":"a\u0000b"}`,

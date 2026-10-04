@@ -137,8 +137,9 @@ func (s *OAuthService) Begin(ctx context.Context, providerName, redirectBase str
 // exchanges code for a provider token, resolves the identity, and finds or
 // creates the local account before issuing a token pair through the same path as
 // a password login. A missing, expired, or foreign state yields ErrStateMismatch;
-// an identity without an email yields ErrMissingEmail.
-func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFromQuery string) (*AuthResult, error) {
+// an identity without an email yields ErrMissingEmail. meta records the
+// calling browser's device metadata on the new session, like a login does.
+func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFromQuery string, meta SessionMeta) (*AuthResult, error) {
 	provider, ok := s.providers[providerName]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrProviderDisabled, providerName)
@@ -191,7 +192,7 @@ func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFr
 		}
 	}
 
-	return s.auth.IssueSession(ctx, user)
+	return s.auth.IssueSession(ctx, user, meta)
 }
 
 // createOAuthUser inserts an account for an OAuth-only identity (no local

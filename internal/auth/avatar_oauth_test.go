@@ -54,7 +54,7 @@ func TestOAuthCallbackPersistsAvatarOnCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	result, err := oauth.Callback(ctx, "github", "auth-code", state)
+	result, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Callback: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestOAuthCallbackRefreshesAvatarOnLogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	result, err := oauth.Callback(ctx, "github", "auth-code", state)
+	result, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Callback: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestOAuthCallbackInvalidAvatarStoresNothing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Begin: %v", err)
 			}
-			result, err := oauth.Callback(ctx, "github", "auth-code", state)
+			result, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{})
 			if err != nil {
 				t.Fatalf("Callback with invalid avatar: %v (login must still succeed)", err)
 			}
@@ -180,7 +180,7 @@ func TestOAuthCallbackInvalidAvatarKeepsExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	result, err := oauth.Callback(ctx, "github", "auth-code", state)
+	result, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Callback: %v", err)
 	}

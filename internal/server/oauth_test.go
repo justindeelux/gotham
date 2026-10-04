@@ -35,7 +35,7 @@ func (f *fakeOAuthService) Begin(_ context.Context, providerName, _ string) (str
 	return "https://github.example/authorize?state=test-state", "test-state", nil
 }
 
-func (f *fakeOAuthService) Callback(_ context.Context, _ string, _, _ string) (*auth.AuthResult, error) {
+func (f *fakeOAuthService) Callback(_ context.Context, _ string, _, _ string, _ auth.SessionMeta) (*auth.AuthResult, error) {
 	if f.callbackErr != nil {
 		return nil, f.callbackErr
 	}

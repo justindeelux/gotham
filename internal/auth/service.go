@@ -109,7 +109,7 @@ type InviteAcceptor interface {
 // invite token issued to the same email is required; any token problem
 // answers ErrRegistrationClosed so token validity is never publicly
 // distinguishable from a closed instance.
-func (s *Service) Register(ctx context.Context, email, password, inviteToken string, invites InviteAcceptor) (*AuthResult, error) {
+func (s *Service) Register(ctx context.Context, email, password, inviteToken string, invites InviteAcceptor, meta SessionMeta) (*AuthResult, error) {
 	normalized, err := NormalizeEmail(email)
 	if err != nil {
 		return nil, err
@@ -183,7 +183,7 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 		}
 	}
 
-	return s.issue(ctx, user)
+	return s.issue(ctx, user, meta)
 }
 
 // checkInvite reports whether the pending invite token admits email to
@@ -204,7 +204,7 @@ func checkInvite(ctx context.Context, email, token string, invites InviteAccepto
 
 // Login verifies credentials and returns an authenticated token pair. Unknown
 // emails and wrong passwords return the same ErrInvalidCredentials.
-func (s *Service) Login(ctx context.Context, email, password string) (*AuthResult, error) {
+func (s *Service) Login(ctx context.Context, email, password string, meta SessionMeta) (*AuthResult, error) {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 
 	user, err := s.store.GetUserByEmail(ctx, normalized)
@@ -252,7 +252,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*AuthResul
 		return nil, ErrInvalidCredentials
 	}
 
-	return s.issue(ctx, current)
+	return s.issue(ctx, current, meta)
 }
 
 // dummyPasswordHash is a fixed argon2id hash with the production parameters,
@@ -287,7 +287,7 @@ func (s *Service) spendPasswordCheck(password string) {
 // A session whose credential version is older than the account's current
 // version (a password reset committed after it was minted) is refused as well,
 // so the old chain cannot mint a replacement under the new credential.
-func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult, error) {
+func (s *Service) Refresh(ctx context.Context, refreshToken string, meta SessionMeta) (*AuthResult, error) {
 	if refreshToken == "" {
 		return nil, ErrUnauthorized
 	}
@@ -333,12 +333,10 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 		return nil, ErrUnauthorized
 	}
 
-	// Sign before rotating: a signer failure must not consume the session.
-	accessToken, err := s.signAccessToken(user)
-	if err != nil {
-		return nil, err
-	}
-
+	// Rotate first, then sign the access token from the replacement row so it
+	// carries the new session's id (the "sid" claim). Signing cannot fail in a
+	// way rotation would need to undo (deterministic EdDSA, no I/O); a signer
+	// failure after rotation answers 401 and the caller logs in again.
 	refreshTokenNext, refreshHashNext, err := newRefreshToken()
 	if err != nil {
 		return nil, err
@@ -346,12 +344,15 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 	if s.beforeRotate != nil {
 		s.beforeRotate()
 	}
-	if _, err := s.store.RotateSession(ctx, session.UserID, sqlc.RotateSessionParams{
+	rotated, err := s.store.RotateSession(ctx, session.UserID, sqlc.RotateSessionParams{
 		RevokedRefreshHash: hash,
 		NewRefreshHash:     refreshHashNext,
 		ExpiresAt:          pgTimestamp(s.now().Add(refreshTokenTTL)),
 		CredentialVersion:  user.CredentialVersion,
-	}); err != nil {
+		UserAgent:          cleanUserAgent(meta.UserAgent),
+		Ip:                 parseSessionIP(meta.IP),
+	})
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// The row stopped being live between the read and the rotation.
 			// Classify it atomically: a rotation race (row revoked, current
@@ -361,6 +362,13 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResult
 			return nil, ErrUnauthorized
 		}
 		return nil, fmt.Errorf("auth: rotate session: %w", err)
+	}
+
+	// The replacement row records the fresh device metadata and now() as its
+	// last use; the access token binds to it.
+	accessToken, err := s.signAccessToken(user, uuid.UUID(rotated.ID.Bytes))
+	if err != nil {
+		return nil, err
 	}
 
 	return &AuthResult{
@@ -423,31 +431,37 @@ func (s *Service) VerifyAccessToken(token string) (*Claims, error) {
 // IssueSession creates a refresh session and signs an access token for user. It
 // exposes the internal issue path so alternative flows (for example OAuth2
 // logins) mint sessions exactly like a password login, without duplicating the
-// token logic.
-func (s *Service) IssueSession(ctx context.Context, user sqlc.User) (*AuthResult, error) {
-	return s.issue(ctx, user)
+// token logic. A zero meta records unknown device metadata (the OAuth HTTP
+// layer lives outside this package's session contract); the first refresh
+// rotation backfills it.
+func (s *Service) IssueSession(ctx context.Context, user sqlc.User, meta SessionMeta) (*AuthResult, error) {
+	return s.issue(ctx, user, meta)
 }
 
 // issue creates a refresh session and signs an access token for user. The
 // session records the account's credential version, so a later password reset
-// invalidates it.
-func (s *Service) issue(ctx context.Context, user sqlc.User) (*AuthResult, error) {
+// invalidates it, plus the caller's device metadata. The access token carries
+// the new session's id as its "sid" claim so the sessions list can mark the
+// caller's row.
+func (s *Service) issue(ctx context.Context, user sqlc.User, meta SessionMeta) (*AuthResult, error) {
 	refreshToken, refreshHash, err := newRefreshToken()
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = s.store.CreateSession(ctx, sqlc.CreateSessionParams{
+	created, err := s.store.CreateSession(ctx, sqlc.CreateSessionParams{
 		UserID:            user.ID,
 		RefreshHash:       refreshHash,
 		ExpiresAt:         pgTimestamp(s.now().Add(refreshTokenTTL)),
 		CredentialVersion: user.CredentialVersion,
+		UserAgent:         cleanUserAgent(meta.UserAgent),
+		Ip:                parseSessionIP(meta.IP),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("auth: create session: %w", err)
 	}
 
-	accessToken, err := s.signAccessToken(user)
+	accessToken, err := s.signAccessToken(user, uuid.UUID(created.ID.Bytes))
 	if err != nil {
 		return nil, err
 	}
@@ -467,8 +481,8 @@ func (s *Service) issue(ctx context.Context, user sqlc.User) (*AuthResult, error
 // effect at the next refresh: a stale role never outlives the access-token TTL
 // (a demoted admin's old access token expires within 15 minutes and its refresh
 // chain mints "user" tokens from then on).
-func (s *Service) signAccessToken(user sqlc.User) (string, error) {
-	accessToken, _, err := s.signer.IssueAccessToken(uuid.UUID(user.ID.Bytes), roleFor(user))
+func (s *Service) signAccessToken(user sqlc.User, sessionID uuid.UUID) (string, error) {
+	accessToken, _, err := s.signer.IssueAccessToken(uuid.UUID(user.ID.Bytes), roleFor(user), sessionID)
 	return accessToken, err
 }
 

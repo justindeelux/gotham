@@ -46,7 +46,7 @@ func (f *fakeAuthService) result() *auth.AuthResult {
 	}
 }
 
-func (f *fakeAuthService) Register(_ context.Context, email string, _ string, _ string, _ auth.InviteAcceptor) (*auth.AuthResult, error) {
+func (f *fakeAuthService) Register(_ context.Context, email string, _ string, _ string, _ auth.InviteAcceptor, _ auth.SessionMeta) (*auth.AuthResult, error) {
 	switch email {
 	case "taken@example.com":
 		return nil, auth.ErrEmailTaken
@@ -59,14 +59,14 @@ func (f *fakeAuthService) Register(_ context.Context, email string, _ string, _ 
 	}
 }
 
-func (f *fakeAuthService) Login(_ context.Context, _ string, password string) (*auth.AuthResult, error) {
+func (f *fakeAuthService) Login(_ context.Context, _ string, password string, _ auth.SessionMeta) (*auth.AuthResult, error) {
 	if password == "wrong-password" {
 		return nil, auth.ErrInvalidCredentials
 	}
 	return f.result(), nil
 }
 
-func (f *fakeAuthService) Refresh(_ context.Context, refreshToken string) (*auth.AuthResult, error) {
+func (f *fakeAuthService) Refresh(_ context.Context, refreshToken string, _ auth.SessionMeta) (*auth.AuthResult, error) {
 	if refreshToken != "refresh-token" {
 		return nil, auth.ErrUnauthorized
 	}
@@ -96,7 +96,7 @@ func (f *fakeAuthService) UpdateProfile(_ context.Context, userID uuid.UUID, dis
 	return &out, nil
 }
 
-func (f *fakeAuthService) ChangePassword(_ context.Context, userID uuid.UUID, current, _ string) (*auth.AuthResult, error) {
+func (f *fakeAuthService) ChangePassword(_ context.Context, userID uuid.UUID, current, _ string, _ auth.SessionMeta) (*auth.AuthResult, error) {
 	if userID != testUserID {
 		return nil, auth.ErrUnauthorized
 	}
@@ -106,11 +106,59 @@ func (f *fakeAuthService) ChangePassword(_ context.Context, userID uuid.UUID, cu
 	return f.result(), nil
 }
 
+// fakeSessions is the deterministic session list behind the fake.
+var fakeSessions = []auth.SessionInfo{
+	{ID: uuid.MustParse("22222222-2222-3333-4444-555555555555"), UserAgent: "test-agent", IP: "10.0.0.1", Current: true},
+	{ID: uuid.MustParse("33333333-2222-3333-4444-555555555555"), UserAgent: "other-agent", IP: "10.0.0.2"},
+}
+
+func (f *fakeAuthService) ListSessions(_ context.Context, userID, currentSessionID uuid.UUID) ([]auth.SessionInfo, error) {
+	if userID != testUserID {
+		return nil, auth.ErrUnauthorized
+	}
+	out := make([]auth.SessionInfo, 0, len(fakeSessions))
+	for _, session := range fakeSessions {
+		session.Current = session.ID == currentSessionID
+		out = append(out, session)
+	}
+	return out, nil
+}
+
+func (f *fakeAuthService) RevokeSession(_ context.Context, userID, id uuid.UUID) error {
+	if userID != testUserID {
+		return auth.ErrUnauthorized
+	}
+	for _, session := range fakeSessions {
+		if session.ID == id {
+			return nil
+		}
+	}
+	return auth.ErrNotFound
+}
+
+func (f *fakeAuthService) RevokeOtherSessions(_ context.Context, userID, currentSessionID uuid.UUID) error {
+	if userID != testUserID {
+		return auth.ErrUnauthorized
+	}
+	if currentSessionID == uuid.Nil {
+		return auth.ErrSessionUnknown
+	}
+	return nil
+}
+
 func (f *fakeAuthService) VerifyAccessToken(token string) (*auth.Claims, error) {
 	switch token {
 	case "valid-token":
 		return &auth.Claims{
 			Role:             "user",
+			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
+		}, nil
+	case "sid-token":
+		// A PF-2 session-bound token: the sessions handlers see the first
+		// fake session as the caller's current one.
+		return &auth.Claims{
+			Role:             "user",
+			SessionID:        fakeSessions[0].ID.String(),
 			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
 		}, nil
 	case "admin-token":

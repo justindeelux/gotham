@@ -22,7 +22,7 @@ func TestSignerIssueVerifyRoundtrip(t *testing.T) {
 	}
 
 	userID := uuid.New()
-	token, expiresAt, err := signer.IssueAccessToken(userID, "user")
+	token, expiresAt, err := signer.IssueAccessToken(userID, "user", uuid.Nil)
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestVerifyRejectsExpiredToken(t *testing.T) {
 	// Issue the token as if it were created an hour ago, so it is already
 	// expired at verification time.
 	signer.now = func() time.Time { return time.Now().Add(-time.Hour) }
-	token, _, err := signer.IssueAccessToken(uuid.New(), "user")
+	token, _, err := signer.IssueAccessToken(uuid.New(), "user", uuid.Nil)
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestVerifyRejectsWrongKey(t *testing.T) {
 		t.Fatalf("NewSigner B: %v", err)
 	}
 
-	token, _, err := signerA.IssueAccessToken(uuid.New(), "user")
+	token, _, err := signerA.IssueAccessToken(uuid.New(), "user", uuid.Nil)
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestNewSignerFromPEM(t *testing.T) {
 	}
 
 	userID := uuid.New()
-	token, _, err := signer.IssueAccessToken(userID, "user")
+	token, _, err := signer.IssueAccessToken(userID, "user", uuid.Nil)
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}

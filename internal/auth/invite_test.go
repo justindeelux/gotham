@@ -102,19 +102,19 @@ func TestServiceRegisterClosedWithoutInvite(t *testing.T) {
 	email := uniqueEmail("closed")
 	cleanupUser(t, st, email)
 
-	_, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+	_, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
 	if !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatalf("Register error = %v, want ErrRegistrationClosed", err)
 	}
 
 	// A bad token is indistinguishable from a closed instance.
-	_, err = svc.Register(ctx, email, "s3cret-password", "not-a-real-token", storeInvites{st})
+	_, err = svc.Register(ctx, email, "s3cret-password", "not-a-real-token", storeInvites{st}, SessionMeta{})
 	if !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatalf("Register(bad token) error = %v, want ErrRegistrationClosed", err)
 	}
 
 	// An invite issued to a different email admits nobody else.
-	_, err = svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, uniqueEmail("other")), storeInvites{st})
+	_, err = svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, uniqueEmail("other")), storeInvites{st}, SessionMeta{})
 	if !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatalf("Register(foreign invite) error = %v, want ErrRegistrationClosed", err)
 	}
@@ -134,7 +134,7 @@ func TestServiceRegisterInviteAccepts(t *testing.T) {
 	cleanupUser(t, st, email)
 	token := newTestInvite(t, st, email)
 
-	result, err := svc.Register(ctx, email, "s3cret-password", token, storeInvites{st})
+	result, err := svc.Register(ctx, email, "s3cret-password", token, storeInvites{st}, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -165,14 +165,14 @@ func TestServiceRegisterInviteAccepts(t *testing.T) {
 	}
 
 	// The account now exists: a replay of the token is an email collision.
-	if _, err := svc.Register(ctx, email, "s3cret-password", token, storeInvites{st}); !errors.Is(err, ErrEmailTaken) {
+	if _, err := svc.Register(ctx, email, "s3cret-password", token, storeInvites{st}, SessionMeta{}); !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("Register(replayed token) error = %v, want ErrEmailTaken", err)
 	}
 
 	// And the token admits nobody else: the email gate answers closed.
 	other := uniqueEmail("replay")
 	cleanupUser(t, st, other)
-	if _, err := svc.Register(ctx, other, "s3cret-password", token, storeInvites{st}); !errors.Is(err, ErrRegistrationClosed) {
+	if _, err := svc.Register(ctx, other, "s3cret-password", token, storeInvites{st}, SessionMeta{}); !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatalf("Register(foreign replay) error = %v, want ErrRegistrationClosed", err)
 	}
 }

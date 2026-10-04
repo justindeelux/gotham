@@ -47,10 +47,10 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, displayNa
 // normalizeDisplayName trims the name; nil or blank clears (nil), otherwise
 // the trimmed value must be 1-64 characters of storable text. Anything that
 // is not valid UTF-8, any control character (this covers NUL, newlines and
-// tabs), and any invisible format character (unicode.Cf covers the zero-width
-// and bidi-override ranges U+200B-U+200F, U+202A-U+202E, U+2066-U+2069 and
-// U+FEFF) is rejected: Postgres would refuse NUL with a 500, and the rest
-// have no place in a rendered name.
+// tabs), and any invisible formatting character in the narrow deny-list below
+// is rejected: Postgres would refuse NUL with a 500, and the rest have no
+// place in a rendered name. ZWNJ (U+200C) and ZWJ (U+200D) are allowed:
+// Persian/Hindi names and ZWJ emoji sequences need them (F5).
 func normalizeDisplayName(displayName *string) (*string, error) {
 	if displayName == nil {
 		return nil, nil
@@ -63,7 +63,7 @@ func normalizeDisplayName(displayName *string) (*string, error) {
 		return nil, ErrDisplayNameInvalid
 	}
 	for _, r := range trimmed {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+		if unicode.IsControl(r) || isDeniedFormatChar(r) {
 			return nil, ErrDisplayNameInvalid
 		}
 	}
@@ -71,6 +71,28 @@ func normalizeDisplayName(displayName *string) (*string, error) {
 		return nil, ErrDisplayNameInvalid
 	}
 	return &trimmed, nil
+}
+
+// isDeniedFormatChar reports invisible formatting characters with no place in
+// a rendered name: the zero-width space, bidi marks, bidi embeddings and
+// overrides, the word joiner, isolates, the BOM, and the line/paragraph
+// separators. ZWNJ (U+200C) and ZWJ (U+200D) are deliberately absent: they join
+// Persian/Hindi words and build ZWJ emoji sequences.
+func isDeniedFormatChar(r rune) bool {
+	switch r {
+	case 0x200B, // zero-width space
+		0x200E, 0x200F, // bidi marks
+		0x2028, 0x2029, // line/paragraph separators
+		0x2060, // word joiner
+		0xFEFF: // byte-order mark
+		return true
+	}
+	switch {
+	case r >= 0x202A && r <= 0x202E, // bidi embeddings and overrides
+		r >= 0x2066 && r <= 0x2069: // isolates
+		return true
+	}
+	return false
 }
 
 // ChangePassword replaces the account's password and ends every other session.
@@ -81,7 +103,7 @@ func normalizeDisplayName(displayName *string) (*string, error) {
 // credential-version bump and the session purge commit in one transaction, and
 // the returned pair is minted from the post-bump row, so the caller keeps
 // working while every other chain is refused by Refresh (P-A5).
-func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current, newPassword string) (*AuthResult, error) {
+func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current, newPassword string, meta SessionMeta) (*AuthResult, error) {
 	if err := ValidatePassword(newPassword); err != nil {
 		return nil, err
 	}
@@ -130,5 +152,5 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current,
 	// The new credential is already committed and every other session is
 	// gone; if issuing the caller's pair fails now, it logs in again with
 	// the new password rather than retrying the change.
-	return s.issue(ctx, updated)
+	return s.issue(ctx, updated, meta)
 }

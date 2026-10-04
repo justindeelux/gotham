@@ -62,7 +62,7 @@ type oauthExchangeRequest struct {
 // real provider.
 type OAuthService interface {
 	Begin(ctx context.Context, providerName, redirectBase string) (url string, state string, err error)
-	Callback(ctx context.Context, providerName, code, state string) (*auth.AuthResult, error)
+	Callback(ctx context.Context, providerName, code, state string, meta auth.SessionMeta) (*auth.AuthResult, error)
 	Close()
 }
 
@@ -165,7 +165,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.oauth.Callback(r.Context(), provider, code, queryState)
+	result, err := s.oauth.Callback(r.Context(), provider, code, queryState, s.sessionMeta(r))
 	if err != nil {
 		s.logger.Warn("oauth: callback failed", "provider", provider, "error", err)
 		s.redirectOAuthFailure(w, r)

@@ -7,14 +7,39 @@ package sqlc
 
 import (
 	"context"
+	"net/netip"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const checkSessionLive = `-- name: CheckSessionLive :one
+SELECT id
+FROM sessions
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+  AND expires_at > now()
+`
+
+type CheckSessionLiveParams struct {
+	ID     pgtype.UUID `json:"id"`
+	UserID pgtype.UUID `json:"user_id"`
+}
+
+// CheckSessionLive reports whether a session id is a live session of a user
+// (present, not revoked, not expired). The guarded bulk delete uses it to
+// refuse a stale sid with 409 instead of guessing which row is current (F2).
+func (q *Queries) CheckSessionLive(ctx context.Context, arg CheckSessionLiveParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, checkSessionLive, arg.ID, arg.UserID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const createSession = `-- name: CreateSession :one
-INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
-VALUES ($1, $2, $3, $4)
-RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version, user_agent, ip)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version, user_agent, ip, last_used_at
 `
 
 type CreateSessionParams struct {
@@ -22,6 +47,8 @@ type CreateSessionParams struct {
 	RefreshHash       string             `json:"refresh_hash"`
 	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
 	CredentialVersion int32              `json:"credential_version"`
+	UserAgent         *string            `json:"user_agent"`
+	Ip                *netip.Addr        `json:"ip"`
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
@@ -30,6 +57,8 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		arg.RefreshHash,
 		arg.ExpiresAt,
 		arg.CredentialVersion,
+		arg.UserAgent,
+		arg.Ip,
 	)
 	var i Session
 	err := row.Scan(
@@ -40,8 +69,35 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.RevokedAt,
 		&i.CreatedAt,
 		&i.CredentialVersion,
+		&i.UserAgent,
+		&i.Ip,
+		&i.LastUsedAt,
 	)
 	return i, err
+}
+
+const deleteOtherSessions = `-- name: DeleteOtherSessions :execrows
+DELETE FROM sessions
+WHERE user_id = $1
+  AND id <> $2
+  AND revoked_at IS NULL
+`
+
+type DeleteOtherSessionsParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	ID     pgtype.UUID `json:"id"`
+}
+
+// DeleteOtherSessions deletes every live session of a user except the given
+// one (the caller's current session, which keeps working). Already-rotated
+// (revoked) rows stay untouched so genuine-theft evidence survives. The store
+// wrapper only runs this after proving the given session is live (F2).
+func (q *Queries) DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOtherSessions, arg.UserID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteSession = `-- name: DeleteSession :exec
@@ -59,6 +115,33 @@ WHERE refresh_hash = $1
 func (q *Queries) DeleteSession(ctx context.Context, refreshHash string) error {
 	_, err := q.db.Exec(ctx, deleteSession, refreshHash)
 	return err
+}
+
+const deleteSessionByID = `-- name: DeleteSessionByID :execrows
+DELETE FROM sessions
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+  AND expires_at > now()
+`
+
+type DeleteSessionByIDParams struct {
+	ID     pgtype.UUID `json:"id"`
+	UserID pgtype.UUID `json:"user_id"`
+}
+
+// DeleteSessionByID deletes one live session scoped to its owner, like logout
+// does: a replayed token is then unknown (a plain 401) and can never trigger
+// the reuse-detection family revoke (F1). Zero rows means the id is unknown,
+// foreign, already revoked (a rotated-away row keeps its reuse evidence), or
+// expired (F4): the caller answers 404 either way, so a probe cannot
+// distinguish them.
+func (q *Queries) DeleteSessionByID(ctx context.Context, arg DeleteSessionByIDParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSessionByID, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteStaleSessions = `-- name: DeleteStaleSessions :execrows
@@ -99,7 +182,7 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID pgtype.UUID) er
 }
 
 const getSessionByRefreshHash = `-- name: GetSessionByRefreshHash :one
-SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version
+SELECT id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version, user_agent, ip, last_used_at
 FROM sessions
 WHERE refresh_hash = $1
 `
@@ -115,8 +198,65 @@ func (q *Queries) GetSessionByRefreshHash(ctx context.Context, refreshHash strin
 		&i.RevokedAt,
 		&i.CreatedAt,
 		&i.CredentialVersion,
+		&i.UserAgent,
+		&i.Ip,
+		&i.LastUsedAt,
 	)
 	return i, err
+}
+
+const listSessionsByUser = `-- name: ListSessionsByUser :many
+SELECT id, user_agent, ip, created_at, last_used_at
+FROM sessions
+WHERE user_id = $1
+  AND revoked_at IS NULL
+  AND expires_at > $2
+ORDER BY last_used_at DESC
+LIMIT 50
+`
+
+type ListSessionsByUserParams struct {
+	UserID    pgtype.UUID        `json:"user_id"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+}
+
+type ListSessionsByUserRow struct {
+	ID         pgtype.UUID        `json:"id"`
+	UserAgent  *string            `json:"user_agent"`
+	Ip         *netip.Addr        `json:"ip"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+}
+
+// ListSessionsByUser returns the caller's live sessions (not revoked, not
+// expired as of the given time), newest last use first, at most 50 rows. The
+// existing sessions_user_id_idx serves the per-user lookup: a user holds a
+// handful of rows, so no new index (measured: no sequential scan on realistic
+// per-user row counts; revisit if the sessions table grows hot).
+func (q *Queries) ListSessionsByUser(ctx context.Context, arg ListSessionsByUserParams) ([]ListSessionsByUserRow, error) {
+	rows, err := q.db.Query(ctx, listSessionsByUser, arg.UserID, arg.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionsByUserRow{}
+	for rows.Next() {
+		var i ListSessionsByUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserAgent,
+			&i.Ip,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockUserSessions = `-- name: LockUserSessions :exec
@@ -182,20 +322,22 @@ const rotateSession = `-- name: RotateSession :one
 WITH revoked AS (
     UPDATE sessions AS s
     SET revoked_at = now()
-    WHERE s.refresh_hash = $4
+    WHERE s.refresh_hash = $6
       AND s.revoked_at IS NULL
-    RETURNING s.user_id
+    RETURNING s.user_id, s.created_at
 )
-INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
-SELECT r.user_id, $1, $2, $3
+INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version, user_agent, ip, created_at)
+SELECT r.user_id, $1, $2, $3, $4, $5, r.created_at
 FROM revoked AS r
-RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version
+RETURNING id, user_id, refresh_hash, expires_at, revoked_at, created_at, credential_version, user_agent, ip, last_used_at
 `
 
 type RotateSessionParams struct {
 	NewRefreshHash     string             `json:"new_refresh_hash"`
 	ExpiresAt          pgtype.Timestamptz `json:"expires_at"`
 	CredentialVersion  int32              `json:"credential_version"`
+	UserAgent          *string            `json:"user_agent"`
+	Ip                 *netip.Addr        `json:"ip"`
 	RevokedRefreshHash string             `json:"revoked_refresh_hash"`
 }
 
@@ -203,12 +345,16 @@ type RotateSessionParams struct {
 // replacement in one statement, so a failed insert or a cancelled request
 // cannot consume the user's only refresh token. Zero rows (pgx.ErrNoRows)
 // means the presented session was already revoked or deleted, so the caller
-// must refuse to issue a replacement.
+// must refuse to issue a replacement. The replacement inherits the original
+// sign-in created_at (F3: the list's Created means sign-in time, not last
+// rotation); last_used_at is the rotation time via the column default.
 func (q *Queries) RotateSession(ctx context.Context, arg RotateSessionParams) (Session, error) {
 	row := q.db.QueryRow(ctx, rotateSession,
 		arg.NewRefreshHash,
 		arg.ExpiresAt,
 		arg.CredentialVersion,
+		arg.UserAgent,
+		arg.Ip,
 		arg.RevokedRefreshHash,
 	)
 	var i Session
@@ -220,6 +366,9 @@ func (q *Queries) RotateSession(ctx context.Context, arg RotateSessionParams) (S
 		&i.RevokedAt,
 		&i.CreatedAt,
 		&i.CredentialVersion,
+		&i.UserAgent,
+		&i.Ip,
+		&i.LastUsedAt,
 	)
 	return i, err
 }

@@ -303,6 +303,67 @@ func (s *Store) DeleteUserSessions(ctx context.Context, userID pgtype.UUID) erro
 	return s.queries.DeleteUserSessions(ctx, userID)
 }
 
+// ListSessionsByUser returns the user's live sessions (not revoked, not
+// expired as of now), newest last use first, at most 50 rows.
+func (s *Store) ListSessionsByUser(ctx context.Context, userID pgtype.UUID, now time.Time) ([]sqlc.ListSessionsByUserRow, error) {
+	return s.queries.ListSessionsByUser(ctx, sqlc.ListSessionsByUserParams{
+		UserID:    userID,
+		ExpiresAt: pgtype.Timestamptz{Time: now, Valid: true},
+	})
+}
+
+// DeleteSessionByID deletes one live session scoped to its owner and reports
+// how many rows were removed (0 when the id is unknown, foreign, already
+// revoked, or expired). Like logout, deletion (not revocation) means a
+// replayed token is unknown — a plain 401 that can never trigger the
+// reuse-detection family revoke (F1).
+func (s *Store) DeleteSessionByID(ctx context.Context, id, userID pgtype.UUID) (int64, error) {
+	return s.queries.DeleteSessionByID(ctx, sqlc.DeleteSessionByIDParams{
+		ID:     id,
+		UserID: userID,
+	})
+}
+
+// DeleteOtherSessionsGuarded deletes every live session of a user except the
+// given one, but only when that one is itself a live session of the user. It
+// holds the per-user session lock across the liveness check and the delete
+// (the same lock rotation and resets take), so the current session cannot be
+// retired in between and a stale sid cannot wipe the fresh one (F2). It
+// reports how many rows were deleted and whether the given session was live;
+// a dead sid deletes nothing.
+func (s *Store) DeleteOtherSessionsGuarded(ctx context.Context, userID, sessionID pgtype.UUID) (int64, bool, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.LockUserSessions(ctx, sessionLockKey(userID)); err != nil {
+		return 0, false, err
+	}
+	if _, err := queries.CheckSessionLive(ctx, sqlc.CheckSessionLiveParams{
+		ID:     sessionID,
+		UserID: userID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	deleted, err := queries.DeleteOtherSessions(ctx, sqlc.DeleteOtherSessionsParams{
+		UserID: userID,
+		ID:     sessionID,
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, false, err
+	}
+	return deleted, true, nil
+}
+
 // UpdateUserDisplayName replaces the account's display name (nil clears it)
 // and returns the updated row. It answers pgx.ErrNoRows for an unknown id.
 func (s *Store) UpdateUserDisplayName(ctx context.Context, params sqlc.UpdateUserDisplayNameParams) (sqlc.User, error) {

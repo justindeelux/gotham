@@ -99,7 +99,7 @@ func TestServiceFirstRegistrationBecomesAdmin(t *testing.T) {
 	svc, _ := scratchService(t)
 	ctx := context.Background()
 
-	first, err := svc.Register(ctx, "first@example.com", "s3cret-password", "", nil)
+	first, err := svc.Register(ctx, "first@example.com", "s3cret-password", "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
@@ -110,12 +110,12 @@ func TestServiceFirstRegistrationBecomesAdmin(t *testing.T) {
 		t.Fatalf("first access-token role = %q, want %q", got, adminRole)
 	}
 
-	if _, err := svc.Register(ctx, "second@example.com", "s3cret-password", "", nil); !errors.Is(err, ErrRegistrationClosed) {
+	if _, err := svc.Register(ctx, "second@example.com", "s3cret-password", "", nil, SessionMeta{}); !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatalf("second Register error = %v, want ErrRegistrationClosed", err)
 	}
 
 	svc.AllowOpenRegistration = true
-	second, err := svc.Register(ctx, "second@example.com", "s3cret-password", "", nil)
+	second, err := svc.Register(ctx, "second@example.com", "s3cret-password", "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("override Register: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestServiceConcurrentFirstRegistrations(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			email := fmt.Sprintf("race-%d-%d@example.com", time.Now().UnixNano(), i)
-			res, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+			res, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
 			results <- result{res: res, err: err}
 		}(i)
 	}
@@ -198,7 +198,7 @@ func TestOAuthBootstrapIsAdminWithOverrideOnAndOff(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Begin: %v", err)
 				}
-				result, err := oauth.Callback(ctx, "github", "auth-code", state)
+				result, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{})
 				if err != nil {
 					t.Fatalf("Callback: %v", err)
 				}
@@ -219,7 +219,7 @@ func TestOAuthBootstrapIsAdminWithOverrideOnAndOff(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Begin: %v", err)
 				}
-				if _, err := oauth.Callback(ctx, "github", "auth-code", state); !errors.Is(err, ErrRegistrationClosed) {
+				if _, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{}); !errors.Is(err, ErrRegistrationClosed) {
 					t.Fatalf("Callback(closed) error = %v, want ErrRegistrationClosed", err)
 				}
 				return
@@ -246,7 +246,7 @@ func TestServiceTokenRoleFollowsDatabase(t *testing.T) {
 	ctx := context.Background()
 
 	email := "role-follow@example.com"
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestServiceTokenRoleFollowsDatabase(t *testing.T) {
 	}
 
 	setAdmin(false)
-	loggedIn, err := svc.Login(ctx, email, "s3cret-password")
+	loggedIn, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestServiceTokenRoleFollowsDatabase(t *testing.T) {
 	}
 
 	setAdmin(true)
-	promoted, err := svc.Login(ctx, email, "s3cret-password")
+	promoted, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login after promote: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestServiceTokenRoleFollowsDatabase(t *testing.T) {
 		t.Fatalf("promoted access-token role = %q, want %q", got, adminRole)
 	}
 
-	refreshed, err := svc.Refresh(ctx, promoted.RefreshToken)
+	refreshed, err := svc.Refresh(ctx, promoted.RefreshToken, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestServiceTokenRoleFollowsDatabase(t *testing.T) {
 	// Demotion is picked up by the next refresh: the stale "admin" role does
 	// not outlive the access-token TTL.
 	setAdmin(false)
-	afterDemote, err := svc.Refresh(ctx, refreshed.RefreshToken)
+	afterDemote, err := svc.Refresh(ctx, refreshed.RefreshToken, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Refresh after demote: %v", err)
 	}

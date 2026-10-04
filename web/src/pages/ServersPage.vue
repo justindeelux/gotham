@@ -12,7 +12,7 @@ import {
   NSpin,
   useMessage,
 } from "naive-ui";
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { describeServerError } from "../api/servers";
@@ -34,48 +34,6 @@ const editOpen = ref(false);
 const editTarget = ref<Server | null>(null);
 const validatingId = ref<string | null>(null);
 const checkingAll = ref(false);
-
-/**
- * The install snippet, kept as data so the mockup's copy button can write the
- * exact command to the clipboard instead of scraping rendered markup.
- */
-const installCommand = `scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .
-git clone --depth 1 https://github.com/justindeelux/gotham /tmp/gotham
-sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=<node> \\
-  /tmp/gotham/deploy/install-agent.sh --ca ./ca.crt --full
-
-# --full installs Docker Engine + the compose plugin (Ubuntu/Debian).
-# install.sh already adds a localhost agent by default (--no-local-agent
-# opts out); use this snippet for every further node.
-# The installer verifies the signed manifest + digest, writes
-# /etc/gotham/ca.crt, then enables the systemd unit.
-systemctl status gotham-agent`;
-
-const copiedInstall = ref(false);
-let copiedInstallTimer: ReturnType<typeof setTimeout> | null = null;
-
-/** copyInstallCommand writes the install snippet to the clipboard. */
-async function copyInstallCommand(): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(installCommand);
-    copiedInstall.value = true;
-    if (copiedInstallTimer !== null) {
-      clearTimeout(copiedInstallTimer);
-    }
-    copiedInstallTimer = setTimeout(() => {
-      copiedInstall.value = false;
-      copiedInstallTimer = null;
-    }, 2000);
-  } catch {
-    message.error("Could not copy — select the command and copy it manually.");
-  }
-}
-
-onUnmounted(() => {
-  if (copiedInstallTimer !== null) {
-    clearTimeout(copiedInstallTimer);
-  }
-});
 
 /** Filter chip keys mirroring the servers.html toolbar. */
 type ServerFilter = "all" | "ready" | "offline" | "update";
@@ -560,51 +518,6 @@ watch(
       </NEmpty>
     </NCard>
 
-    <NCard class="install-card" title="Install the agent on a new node">
-      <template #header-extra>
-        <span class="install-head">
-          <code class="inline-code">deploy/install-agent.sh</code>
-          <NButton
-            size="small"
-            secondary
-            :aria-label="copiedInstall ? 'Install command copied' : 'Copy install command'"
-            @click="() => void copyInstallCommand()"
-          >
-            {{ copiedInstall ? "Copied" : "Copy" }}
-          </NButton>
-        </span>
-      </template>
-      <pre class="install-cmd"><code>{{ installCommand }}</code></pre>
-      <div class="callouts">
-        <div class="callout">
-          <NIcon>
-            <GothamIcon name="shield" />
-          </NIcon>
-          <div>
-            <h4>Server-authenticated TLS</h4>
-            <p>
-              The control plane signs its listener with its internal CA, and the
-              agent verifies it against the copied <code class="inline-code">ca.crt</code>.
-              An agent client certificate (mutual TLS) is planned.
-            </p>
-          </div>
-        </div>
-        <div class="callout">
-          <NIcon>
-            <GothamIcon name="refresh" />
-          </NIcon>
-          <div>
-            <h4>10-second heartbeat</h4>
-            <p>
-              Every heartbeat carries CPU, RAM, disk, and container count. Three
-              missed beats in a row mark the node
-              <span class="mono">offline</span> and raise an alert.
-            </p>
-          </div>
-        </div>
-      </div>
-    </NCard>
-
     <AddServerWizard v-model:show="wizardOpen" />
     <EditServerModal
       v-model:show="editOpen"
@@ -752,66 +665,7 @@ watch(
   margin: 0 0 var(--space-3);
 }
 
-.install-card {
-  margin-top: var(--space-4);
-}
-
-.install-head {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.install-cmd {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  line-height: 1.6;
-  color: var(--fg);
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-4);
-  margin: 0 0 var(--space-4);
-  overflow-x: auto;
-  white-space: pre;
-}
-
-.install-cmd code {
-  font-family: inherit;
-}
-
-.callouts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-4);
-}
-
-.callout {
-  display: flex;
-  gap: var(--space-3);
-  align-items: flex-start;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-4);
-}
-
-.callout h4 {
-  font-size: var(--text-sm);
-  color: var(--fg-2);
-  margin: 0 0 var(--space-2);
-}
-
-.callout p {
-  font-size: var(--text-sm);
-  color: var(--muted);
-  margin: 0;
-}
-
 @media (max-width: 860px) {
-  .callouts {
-    grid-template-columns: 1fr;
-  }
-
   .page-actions {
     margin-left: 0;
     width: 100%;

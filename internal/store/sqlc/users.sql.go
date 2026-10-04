@@ -37,10 +37,10 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 }
 
 const createFirstUser = `-- name: CreateFirstUser :one
-INSERT INTO users (email, password_hash)
-SELECT $1, $2
+INSERT INTO users (email, password_hash, is_platform_admin)
+SELECT $1, $2, TRUE
 WHERE NOT EXISTS (SELECT 1 FROM users)
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, is_platform_admin
 `
 
 type CreateFirstUserParams struct {
@@ -51,7 +51,8 @@ type CreateFirstUserParams struct {
 // CreateFirstUser inserts the bootstrap account only while the table is empty,
 // so two concurrent first registrations cannot both succeed (P-A2). Zero rows
 // means an account already exists and the caller must fall back to the invite
-// path.
+// path. The bootstrap account is the platform admin (JUS-21); every other
+// account keeps the column default (false).
 func (q *Queries) CreateFirstUser(ctx context.Context, arg CreateFirstUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, createFirstUser, arg.Email, arg.PasswordHash)
 	var i User
@@ -63,6 +64,7 @@ func (q *Queries) CreateFirstUser(ctx context.Context, arg CreateFirstUserParams
 		&i.Avatar,
 		&i.UpdatedAt,
 		&i.CredentialVersion,
+		&i.IsPlatformAdmin,
 	)
 	return i, err
 }
@@ -70,7 +72,7 @@ func (q *Queries) CreateFirstUser(ctx context.Context, arg CreateFirstUserParams
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash)
 VALUES ($1, $2)
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, is_platform_admin
 `
 
 type CreateUserParams struct {
@@ -89,12 +91,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Avatar,
 		&i.UpdatedAt,
 		&i.CredentialVersion,
+		&i.IsPlatformAdmin,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version
+SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version, is_platform_admin
 FROM users
 WHERE lower(email) = lower($1)
 `
@@ -110,12 +113,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error
 		&i.Avatar,
 		&i.UpdatedAt,
 		&i.CredentialVersion,
+		&i.IsPlatformAdmin,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version
+SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version, is_platform_admin
 FROM users
 WHERE id = $1
 `
@@ -131,6 +135,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.Avatar,
 		&i.UpdatedAt,
 		&i.CredentialVersion,
+		&i.IsPlatformAdmin,
 	)
 	return i, err
 }
@@ -139,7 +144,7 @@ const updateUserAvatar = `-- name: UpdateUserAvatar :one
 UPDATE users
 SET avatar = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, is_platform_admin
 `
 
 type UpdateUserAvatarParams struct {
@@ -162,6 +167,7 @@ func (q *Queries) UpdateUserAvatar(ctx context.Context, arg UpdateUserAvatarPara
 		&i.Avatar,
 		&i.UpdatedAt,
 		&i.CredentialVersion,
+		&i.IsPlatformAdmin,
 	)
 	return i, err
 }

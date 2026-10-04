@@ -33,7 +33,7 @@ type fakeAuthService struct {
 
 func newFakeAuthService() *fakeAuthService {
 	return &fakeAuthService{
-		user: &auth.User{ID: testUserID.String(), Email: "user@example.com"},
+		user: &auth.User{ID: testUserID.String(), Email: "user@example.com", Role: "user"},
 	}
 }
 
@@ -85,13 +85,22 @@ func (f *fakeAuthService) Me(_ context.Context, userID uuid.UUID) (*auth.User, e
 }
 
 func (f *fakeAuthService) VerifyAccessToken(token string) (*auth.Claims, error) {
-	if token != "valid-token" {
+	switch token {
+	case "valid-token":
+		return &auth.Claims{
+			Role:             "user",
+			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
+		}, nil
+	case "admin-token":
+		// A first-account session: the control plane issues the "admin"
+		// role claim for the platform admin (JUS-21).
+		return &auth.Claims{
+			Role:             "admin",
+			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
+		}, nil
+	default:
 		return nil, auth.ErrInvalidToken
 	}
-	return &auth.Claims{
-		Role:             "user",
-		RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
-	}, nil
 }
 
 // fakeInvites is a deterministic auth.InviteAcceptor for handler tests.

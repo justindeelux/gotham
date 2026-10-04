@@ -242,13 +242,18 @@ repeated against this shared box's CP/agent yet.
 
 ## Notes
 
-- **Platform operators (BE-8.2):** the node-wide `POST /api/v1/proxy/sync` and
+- **Platform operators (BE-8.2, JUS-21):** the node-wide `POST /api/v1/proxy/sync` and
   the DNS-provider CRUD require a platform operator. An API token holding the
-  `admin` scope always passes; a session (JWT) passes only with an `admin` role
+  `admin` scope always passes; a session (JWT) passes with an `admin` role
   claim or when the account email is listed in the comma-separated
-  `PLATFORM_ADMINS` environment variable. Unset means no session passes, so an
-  operator must set `PLATFORM_ADMINS` (or mint an admin-scoped token) to manage
-  global DNS providers. Per-application certificates and redirects are not
+  `PLATFORM_ADMINS` environment variable. **On a fresh instance the first
+  registered account is automatically the platform admin** (its sessions carry
+  the `admin` claim), so no `PLATFORM_ADMINS` entry is needed there; on
+  upgraded instances with existing accounts nothing changes (all rows migrate
+  as non-admin) and an operator must still set `PLATFORM_ADMINS` (or mint an
+  admin-scoped token) to manage global DNS providers. Takeover risk: on a
+  fresh instance whoever registers first becomes the admin, so create that
+  account before exposing an unconfigured public instance. Per-application certificates and redirects are not
   affected: they stay with the owning team's `owner`/`admin` members.
   Today `PLATFORM_ADMINS` is the only way a login session becomes an operator:
   login always issues the JWT role `user` (`internal/auth/service.go`), `users`

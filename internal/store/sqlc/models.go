@@ -425,6 +425,7 @@ type User struct {
 	Avatar            *string            `json:"avatar"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 	CredentialVersion int32              `json:"credential_version"`
+	IsPlatformAdmin   bool               `json:"is_platform_admin"`
 }
 
 type WebhookEvent struct {

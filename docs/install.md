@@ -165,9 +165,20 @@ Lost the admin password? `sudo /var/lib/gotham/bin/gotham admin reset-password
 Bearer access tokens are stateless JWTs, so a token already minted stays valid
 until it expires (15 minutes); resetting is not an instant, fleet-wide logout.
 
-The first account is a normal account, not a platform administrator. The
-platform-global operations (node-wide proxy sync, DNS providers) require the
-account email in `PLATFORM_ADMINS` in `/etc/gotham/gotham.env`.
+The first account is automatically the platform administrator: on a fresh
+instance the account created while the users table is empty (first
+registration, first OAuth sign-in, or `gotham admin create` without `--force`)
+gets the platform-admin flag and its sessions carry the `admin` role claim, so
+the platform-global operations (node-wide proxy sync, DNS providers) work
+without further configuration. Upgraded instances are unchanged — the
+migration leaves every existing row non-admin, so keep listing the operator
+account email in `PLATFORM_ADMINS` in `/etc/gotham/gotham.env` (or mint an
+admin-scoped API token).
+
+Takeover risk: on a fresh instance registration is open until the first
+account exists, so whoever registers first becomes the admin. On a public,
+unconfigured instance create that account (or set `PLATFORM_ADMINS`) before
+exposing the control plane.
 
 ## Node agent
 

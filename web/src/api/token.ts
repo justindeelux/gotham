@@ -11,6 +11,8 @@ export interface User {
   id: string;
   email: string;
   avatar?: string;
+  /** Platform role ("admin" for the first account, "user" otherwise). Optional: older control planes omit it. */
+  role?: string;
   created_at: string;
 }
 

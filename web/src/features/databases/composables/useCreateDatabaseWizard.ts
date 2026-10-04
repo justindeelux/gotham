@@ -1,4 +1,4 @@
-import { useClipboard } from "@vueuse/core";
+import { useCopyText } from "@/shared/composables/useCopyText";
 import { useMessage } from "naive-ui";
 import { computed, reactive, ref, watch } from "vue";
 import type { InjectionKey, Ref } from "vue";
@@ -50,7 +50,7 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   const databasesStore = useDatabasesStore();
   const serversStore = useServersStore();
   const message = useMessage();
-  const { copy } = useClipboard();
+  const { copyText } = useCopyText();
 
   const step = ref(0);
   const submitting = ref(false);
@@ -120,16 +120,6 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
         return true;
     }
   });
-
-  /** copyText copies a secret to the clipboard and confirms with a toast. */
-  async function copyText(value: string, label: string): Promise<void> {
-    try {
-      await copy(value);
-      message.success(`${label} copied to clipboard`);
-    } catch {
-      message.error(`Could not copy ${label.toLowerCase()}`);
-    }
-  }
 
   /** credentialRows renders the generated credentials as label/value pairs. */
   function credentialRows(

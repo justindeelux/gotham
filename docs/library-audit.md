@@ -6,8 +6,11 @@ validation, retry/backoff, CLI flags, table output, cron/ID parsing, HTTP
 middleware, argon2/JWT, SSH). Read-only; no source files changed.
 
 G1 update (2026-10-04): verdicts F1/F2/F3 decided DO. F1 (zod) and F2
-(@vueuse/core) landed in the G1 foundation PR; F3 (robfig/cron) is owned by a
-separate PR. Paths below reflect the post-restructure layout: `web/src` is now
+(@vueuse/core) landed in the G1 foundation PR; F3 (robfig/cron) was
+evaluated in PR #157 and REJECTED (closed): a full implementation passed a
+2080-case differential test with zero differences but was net +238/-55, so
+the hand-written parser stays. Paths below reflect the post-restructure
+layout: `web/src` is now
 `app/`, `shared/`, `features/<module>/` (api, stores, pages, utils,
 composables, components per feature).
 
@@ -23,7 +26,7 @@ google/uuid, redis, goose, minio; `sethvargo/go-retry` and
 |---|------|------------------|----------|---------|
 | F1 | Form + API validation (web) | zod | ~150 lines hand rules across 8 sites | **DO (landed G1)** |
 | F2 | `useMediaQuery`, clipboard copy (web) | @vueuse/core (tree-shaken fns) | ~45 lines in 3 sites | **DO (landed G1)** |
-| F3 | Cron parse + schedule (Go) | robfig/cron/v3 | ~200 lines `internal/databases/backup_scheduler.go` | **DO (separate PR)** |
+| F3 | Cron parse + schedule (Go) | robfig/cron/v3 | ~200 lines `internal/databases/backup_scheduler.go` | **REJECTED (PR #157)** |
 | F4 | Struct validation for new Go endpoints | go-playground/validator/v10 | future code only | **MAYBE** |
 | F5 | Relative time / absolute date (web) | date-fns (or native Intl) | `relativeTime`, `formatDate`, `expiryLabel` (~80 lines) | **SKIP** |
 | F6 | Byte/duration formatting (web) | filesize / humanize | `formatBytes` (~22 lines), `durationText` x2 (~20 lines each) | **SKIP** |
@@ -110,24 +113,27 @@ Bundle-size evidence (measured `vite build` gzip, G1; baseline index chunk
   copy helpers pair the write with a Naive UI toast and a fallback error
   path — keep that wrapper either way. `useMediaQuery` is a 1:1 swap.
 - Effort: S. Verdict: **DO — landed in G1 with F1.** `useMediaQuery.ts` is a
-  thin re-export (5 importers); both database copy helpers use `useClipboard`
-  `copy()` with the existing success/error toasts unchanged.
+  thin re-export (5 importers); both database copy helpers share
+  `shared/composables/useCopyText.ts`, which uses `useClipboard`
+  `{ legacy: true }` (so plain-http pages copy via the textarea+execCommand
+  fallback instead of resolving as a silent no-op) and shows the success
+  toast only when `copied` is set, keeping both toast strings byte-identical.
 
-### F3 — robfig/cron/v3 for Go cron parsing — DO (separate PR)
+### F3 — robfig/cron/v3 for Go cron parsing — REJECTED (PR #157, closed)
 
 - Location: `internal/databases/backup_scheduler.go:49-~150`
   (`parseCron`, `parseCronField`, `cronSpec`, next-run computation).
-- Proposed library: **github.com/robfig/cron/v3** (`v3.0.1`, MIT).
-  Maintenance: stable/mature, commits infrequent (feature-complete, not
-  abandoned).
-- Replaces: ~150-200 lines including scheduler math.
-- Risks: grammar expansion — the custom parser is deliberately numeric-only
-  ("the schedule editor emits numbers"); robfig accepts names (`JAN`, `MON`)
-  and descriptors (`@daily`), widening accepted input and changing error
-  strings the UI may display. Next-run semantics (day-of-month vs
-  day-of-week rule) must be verified identical. Effort: M (needs a
-  differential test of next-run times before/after).
-- Verdict: **DO — owned by a separate PR, not G1.**
+- Evaluated library: **github.com/robfig/cron/v3** (`v3.0.1`, MIT).
+- Evidence: a full implementation passed a 2080-case differential test with
+  zero next-run differences but landed net +238/-55 lines: robfig only built
+  value sets, so the numeric-only grammar gate and the historical error
+  messages still needed the hand-written pre-check, and robfig's
+  `Schedule.Next` re-fires the repeated fall-back hour and skips spring-gap
+  days, so the wall-clock next-run scan stayed too. The dependency bought no
+  deletion and changed DST edge semantics — not worth it. PR #157 closed,
+  hand-written parser stays.
+- Verdict: **REJECTED — keep the numeric-only parser; do not revisit
+  without a grammar requirement change (named months/weekdays).**
 
 ### F4 — go-playground/validator for new Go endpoints — MAYBE
 

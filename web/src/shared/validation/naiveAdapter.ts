@@ -13,12 +13,18 @@ export interface RuleFromOptions {
 
 /**
  * ruleFrom adapts a zod field schema to one Naive UI FormItemRule.
- * safeParse success returns true; failure returns Error(first issue message)
- * so the schema's message string is what the user sees. Trigger handling is
- * unchanged by the caller. No form is migrated yet; see docs/library-audit.md.
+ * Sync schemas only: safeParse throws on async refinements, so schemas used
+ * here must not contain async refinements. Success returns true; failure
+ * returns Error(first issue message) so the schema's message string is what
+ * the user sees. Trigger handling is unchanged by the caller. No form is
+ * migrated yet; see docs/library-audit.md.
+ *
+ * The schema is typed on its output T with unknown input: plain field
+ * schemas have identical input/output, and the validator always receives an
+ * unknown form value.
  */
 export function ruleFrom<T>(
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   opts?: RuleFromOptions,
 ): FormItemRule {
   return {
@@ -36,10 +42,11 @@ export function ruleFrom<T>(
 }
 
 /**
- * rulesFor builds one FormItemRule per field from a shape of field schemas.
+ * rulesFor builds one rule per field from a shape of field schemas.
  * Keys match the form model so the result spreads straight into FormRules.
+ * Sync schemas only, like ruleFrom.
  */
-export function rulesFor<T extends Record<string, z.ZodType>>(
+export function rulesFor<T extends Record<string, z.ZodType<unknown, z.ZodTypeDef, unknown>>>(
   shape: T,
   opts?: Partial<Record<keyof T, RuleFromOptions>>,
 ): Record<keyof T, FormItemRule> {
@@ -52,9 +59,13 @@ export function rulesFor<T extends Record<string, z.ZodType>>(
 
 /**
  * fieldErrors validates outside Naive UI (plain computed guards, submit
- * checks) and returns every issue message, empty on success.
+ * checks) and returns every issue message, empty on success. Sync schemas
+ * only, like ruleFrom.
  */
-export function fieldErrors<T>(schema: z.ZodType<T>, value: unknown): string[] {
+export function fieldErrors<T>(
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  value: unknown,
+): string[] {
   const result = schema.safeParse(value);
   if (result.success) {
     return [];

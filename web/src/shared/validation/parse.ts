@@ -15,7 +15,10 @@ export interface ParseWithOptions {
  * parseWith validates an API response envelope at the axios boundary.
  * Warn-only by default: logs the zod issues with context and returns the raw
  * payload cast, so a newer server shape degrades to a warning, not a blank
- * page. Escalation to surfacing errors waits for one release of telemetry.
+ * page. The RAW payload is returned on success too, never zod's parsed
+ * output (which strips unknown keys and applies transforms/defaults), so a
+ * newer server field always survives. Escalation to surfacing errors waits
+ * for one release of telemetry.
  */
 export function parseWith<T>(
   schema: z.ZodType<T>,
@@ -24,7 +27,7 @@ export function parseWith<T>(
 ): T {
   const result = schema.safeParse(data);
   if (result.success) {
-    return result.data;
+    return data as T;
   }
   const label = opts?.context ? ` (${opts.context})` : "";
   if (opts?.strict) {

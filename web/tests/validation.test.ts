@@ -10,7 +10,12 @@ import {
   rulesFor,
 } from "@/shared/validation/naiveAdapter";
 import { parseWith } from "@/shared/validation/parse";
-import { nonEmptyString, portSchema } from "@/shared/validation/primitives";
+import {
+  intInRange,
+  nonEmptyString,
+  portSchema,
+  requiredString,
+} from "@/shared/validation/primitives";
 
 const emailSchema = z.string().min(1, "Email is required").email("Enter a valid email address");
 
@@ -81,6 +86,13 @@ describe("parseWith", () => {
     expect(parseWith(envelope, { items: ["a"] })).toEqual({ items: ["a"] });
   });
 
+  it("returns the raw payload reference on success, extras intact", () => {
+    const raw = { items: ["a"], extra: 2 };
+    const parsed = parseWith(envelope, raw);
+    expect(parsed).toBe(raw);
+    expect((parsed as { extra?: number }).extra).toBe(2);
+  });
+
   it("warns and returns the raw payload on failure", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
@@ -119,5 +131,26 @@ describe("primitives", () => {
     const schema = nonEmptyString("Name is required");
     expect(schema.safeParse("  a  ").success).toBe(true);
     expect(fieldErrors(schema, "   ")).toEqual(["Name is required"]);
+  });
+
+  it("requiredString reports the caller message for every absent value", () => {
+    const schema = requiredString("Name is required");
+    expect(schema.safeParse("ok").success).toBe(true);
+    for (const value of [undefined, null, "", "   "]) {
+      expect(fieldErrors(schema, value)).toEqual(["Name is required"]);
+    }
+  });
+
+  it("intInRange reports the caller message for null, NaN and range misses", () => {
+    const schema = intInRange("Port must be between 1 and 65535", {
+      min: 1,
+      max: 65535,
+    });
+    expect(schema.safeParse(80).success).toBe(true);
+    for (const value of [undefined, null, Number.NaN, 0, 65536, 1.5]) {
+      expect(fieldErrors(schema, value)).toEqual([
+        "Port must be between 1 and 65535",
+      ]);
+    }
   });
 });

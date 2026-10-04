@@ -33,14 +33,16 @@ proto/           # protobuf contracts (buf-managed)
 web/             # Vue 3 SPA (Vite; src/: app/ shell, features/<module>/, shared/)
 templates/       # one-click service templates (YAML)
 deploy/          # install scripts, systemd units, compose
-docs/plan/       # per-phase development plans
+docs/plans/      # feature/phase plans (medium to large work)
+docs/sub-plans/  # small focused plans (single UI fix, one-off work package)
+docs/design-plans/ # UI-only design briefs (what each screen must do)
 docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
 ```
 
 ## Development Workflow
 
 - Docs index: `docs/README.md` (plan status, process, test server, design).
-- 10 phases defined in `docs/plan/00-roadmap.md`; each task = 1 work package in an orca workspace (`ws/p<phase>-<slug>`), merged via its own PR; CI must be green before merge.
+- 10 phases defined in `docs/plans/00-roadmap.md`; each task = 1 work package in an orca workspace (`ws/p<phase>-<slug>`), merged via its own PR; CI must be green before merge.
 - Invariants (run after every task, before merge):
   1. `go build ./...` clean
   2. `go test ./...` green
@@ -48,7 +50,7 @@ docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
   4. Migrations are **forward-only** — never edit a merged migration; schema change = new migration
   5. `npm run build` + `npm run type-check` clean (web/)
   6. No cross-scope imports: `agent/` must not import `internal/`; domain packages must not import the HTTP server
-- Mandatory review gates: G0 (end of Phase 0), G1 (Phase 4), G2 (Phase 9) — see `docs/plan/00-roadmap.md`.
+- Mandatory review gates: G0 (end of Phase 0), G1 (Phase 4), G2 (Phase 9) — see `docs/plans/00-roadmap.md`.
 - **Review tooling priority (owner requirement, 2026-10-02):** independent reviews run on **Claude Code CLI first** (from the worktree: `cat prompt.md | claude -p --allowedTools "Read,Grep,Glob,Bash" --add-dir <main repo>`, loading the tracked skill `.claude/skills/code-reviewer/SKILL.md`), then **Codex** if Claude is unavailable, and **stop** (report the block) if neither is available — no silent substitution of another reviewer for the external slot. Built-in subagents remain the second reviewer alongside it.
 - Phase gate: after each phase meets its exit criteria, STOP and ask the project owner before starting the next phase.
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).

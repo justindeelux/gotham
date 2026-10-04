@@ -1,8 +1,8 @@
 # Side plans
 
 Implementation plans for owner-approved post-Phase-9 work packages. These sit
-outside `docs/plan/` (which holds the per-phase roadmap and milestone reports)
-and move into `docs/plan/` reports as they complete.
+outside `docs/plans/` (which holds the per-phase roadmap and milestone reports)
+and move into `docs/plans/` reports as they complete.
 
 | File | Work package | Status |
 |---|---|---|

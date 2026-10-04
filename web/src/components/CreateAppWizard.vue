@@ -445,9 +445,7 @@ function resetWizard(): void {
                 :loading="providersStore.loading"
                 placeholder="Select a connected provider"
               />
-              <template #feedback>
-                <span class="field-hint">Each provider uses its own OAuth app.</span>
-              </template>
+              <span class="field-hint">Each provider uses its own OAuth app.</span>
             </NFormItem>
 
             <NFormItem v-if="isPublicRepo" label="Clone URL">
@@ -456,9 +454,7 @@ function resetWizard(): void {
                 class="mono"
                 placeholder="https://github.com/owner/repo.git"
               />
-              <template #feedback>
-                <span class="field-hint">Any public repo — no provider connection needed.</span>
-              </template>
+              <span class="field-hint">Any public repo — no provider connection needed.</span>
             </NFormItem>
 
             <NFormItem v-else label="Repository">
@@ -471,9 +467,7 @@ function resetWizard(): void {
                 filterable
                 @update:value="handleRepoSelect"
               />
-              <template #feedback>
-                <span class="field-hint">Private repos deploy with an SSH deploy key.</span>
-              </template>
+              <span class="field-hint">Private repos deploy with an SSH deploy key.</span>
               <NAlert
                 v-if="providersStore.reposError"
                 type="error"
@@ -494,15 +488,11 @@ function resetWizard(): void {
             <NSpace :size="12">
               <NFormItem label="Branch" class="grow">
                 <NInput v-model:value="form.branch" class="mono" placeholder="main" />
-                <template #feedback>
-                  <span class="field-hint">Branch listing is not exposed by the API yet — the default branch is prefilled.</span>
-                </template>
+                <span class="field-hint">Branch listing is not exposed by the API yet — the default branch is prefilled.</span>
               </NFormItem>
               <NFormItem label="Application name" class="grow">
                 <NInput v-model:value="form.name" class="mono" placeholder="storefront" />
-                <template #feedback>
-                  <span class="field-hint">Lowercase, digits and dashes (3-31 chars). Used for the container and image tag.</span>
-                </template>
+                <span class="field-hint">Lowercase, digits and dashes (3-31 chars). Used for the container and image tag.</span>
               </NFormItem>
             </NSpace>
           </NSpace>
@@ -533,9 +523,7 @@ function resetWizard(): void {
                 :options="serverOptions"
                 placeholder="Select the node that runs the container"
               />
-              <template #feedback>
-                <span class="field-hint">The agent builds the image on this node.</span>
-              </template>
+              <span class="field-hint">The agent builds the image on this node.</span>
             </NFormItem>
 
             <NSpace :size="12">
@@ -546,9 +534,7 @@ function resetWizard(): void {
                   :max="65535"
                   placeholder="3000"
                 />
-                <template #feedback>
-                  <span class="field-hint">The port the app listens on inside the container.</span>
-                </template>
+                <span class="field-hint">The port the app listens on inside the container.</span>
               </NFormItem>
               <NFormItem label="Host port (0 = auto)" class="grow">
                 <NInputNumber
@@ -557,9 +543,7 @@ function resetWizard(): void {
                   :max="65535"
                   placeholder="0"
                 />
-                <template #feedback>
-                  <span class="field-hint">Leave empty to let the control plane assign one.</span>
-                </template>
+                <span class="field-hint">Leave empty to let the control plane assign one.</span>
               </NFormItem>
             </NSpace>
 
@@ -569,9 +553,7 @@ function resetWizard(): void {
                 class="mono"
                 placeholder="app.gotham.dev"
               />
-              <template #feedback>
-                <span class="field-hint">Leave empty to reach the app by port first.</span>
-              </template>
+              <span class="field-hint">Leave empty to reach the app by port first.</span>
             </NFormItem>
           </NSpace>
 

@@ -1,10 +1,11 @@
-// Form feedback styling contract (JUS-16/17/18).
+// Form feedback styling contract (JUS-16/17/18), component half.
 //
-// jsdom does not apply stylesheets to computed styles, so these tests assert
-// the two halves separately: (1) the global CSS text carries the three rules
-// exactly once, and (2) the real Naive UI DOM provides the structural hooks
-// those rules rely on (:empty wrapper when valid, .n-form-item-blank--error
-// when in error, single-line feedback swap in DynamicForm).
+// Computed-style behaviour lives in the Playwright suite
+// (form-feedback.spec.ts, run via npm run test:css): jsdom never applies
+// stylesheets, so this suite only asserts what jsdom can prove — the real
+// Naive UI DOM provides the structural hooks the global rules rely on
+// (:empty wrapper when valid, .n-form-item-blank--error when in error,
+// single-line feedback swap in DynamicForm), plus the theme token value.
 
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -21,10 +22,6 @@ import type { TemplateField } from "../src/api/templates";
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const mainCss = readFileSync(resolve(webRoot, "src/styles/main.css"), "utf8");
 const appVue = readFileSync(resolve(webRoot, "src/App.vue"), "utf8");
-const dynamicFormVue = readFileSync(
-  resolve(webRoot, "src/components/DynamicForm.vue"),
-  "utf8",
-);
 
 const fields: TemplateField[] = [
   {
@@ -49,10 +46,6 @@ describe("JUS-16 error text size token", () => {
 });
 
 describe("JUS-17 no reserved feedback height when valid", () => {
-  it("collapses the empty feedback wrapper globally", () => {
-    expect(mainCss).toContain(".n-form-item-feedback-wrapper:empty");
-  });
-
   it("renders a valid field with an empty feedback wrapper", () => {
     const wrapper = mount(NFormItem, {
       props: { label: "Node name" },
@@ -68,23 +61,9 @@ describe("JUS-17 no reserved feedback height when valid", () => {
     expect(feedback.element.children.length).toBe(0);
     expect(feedback.element.textContent).toBe("");
   });
-
-  it("shares one item-to-item gap for stacked and grouped forms", () => {
-    expect(mainCss).toContain(".n-form:not(.dynamic-form) > * + *");
-    expect(mainCss).toMatch(
-      /\.wizard-modal \.connect-group,\s*\n\.edit-server-modal \.connect-group \{[^}]*gap: var\(--space-4\)/,
-    );
-    expect(dynamicFormVue).toContain("gap: var(--space-4) var(--space-4);");
-  });
 });
 
 describe("JUS-18 hint hidden while error shown", () => {
-  it("hides the hint hook globally when the input row reports an error", () => {
-    expect(mainCss).toContain(
-      ".n-form-item-blank--error .field-hint",
-    );
-  });
-
   it("marks the input row in error while keeping the hint in the DOM", () => {
     const wrapper = mount(NFormItem, {
       props: {

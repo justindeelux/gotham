@@ -770,7 +770,7 @@ onMounted(() => {
 .import-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 var(--space-4);
+  gap: var(--form-item-gap) var(--space-4);
 }
 
 .mono {

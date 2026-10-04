@@ -166,6 +166,11 @@
   --context-w: 240px;
   --topbar-h: 48px;
 
+  /* Single item-to-item rhythm shared by every form (JUS-17): stacked NForm
+   * fields, connect groups, and inline/grid rows all reuse this token so the
+   * vertical rhythm is one value everywhere. */
+  --form-item-gap: var(--space-4);
+
   /* ── Typography override ──────────────────────────────────────────
    * Block 1 above stays the reference for the design system; the font
    * stacks below are intentional overrides:

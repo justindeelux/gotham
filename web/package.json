@@ -8,8 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "type-check": "vue-tsc --noEmit",
-    "test": "node scripts/mock-ws-check.mjs && node scripts/db-web-check.mjs && node scripts/fx15b-check.mjs && node scripts/focus-style-check.mjs && node scripts/jus11-check.mjs && node scripts/jus20-check.mjs && node scripts/ui-truth-check.mjs && npm run test:unit",
+    "test": "node scripts/mock-ws-check.mjs && node scripts/db-web-check.mjs && node scripts/fx15b-check.mjs && node scripts/focus-style-check.mjs && node scripts/jus11-check.mjs && node scripts/jus20-check.mjs && node scripts/ui-truth-check.mjs && npm run test:unit && npm run test:css",
     "test:unit": "vitest run",
+    "test:css": "npx playwright install chromium && npx playwright test --config tests/playwright.css.config.ts",
     "e2e": "playwright test",
     "e2e:install": "playwright install --with-deps chromium",
     "lint": "eslint ."

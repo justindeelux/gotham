@@ -1488,7 +1488,7 @@ onMounted(() => {
 .redirect-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
-  gap: var(--space-3);
+  gap: var(--form-item-gap);
   align-items: start;
 }
 

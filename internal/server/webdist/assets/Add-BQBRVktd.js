@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:internal/server/webdist/assets/Add-B7Yv1OzK.js
-import{d as o,bz as t,a as r}from"./index-CpGISgfF.js";var a=o({name:"Add",render(){return(()=>{const e=t("b30130fbba5c5b23");return e[0]||(e[0]=r("svg",{width:"512",height:"512",viewBox:"0 0 512 512",fill:"none",xmlns:"http://www.w3.org/2000/svg"},[r("path",{d:"M256 112V400M400 256H112",stroke:"currentColor","stroke-width":"32","stroke-linecap":"round","stroke-linejoin":"round"})],-1))})()}});export{a as A};
-========
-import{d as o,bw as t,a as r}from"./index-B9tI3yZl.js";var a=o({name:"Add",render(){return(()=>{const e=t("b30130fbba5c5b23");return e[0]||(e[0]=r("svg",{width:"512",height:"512",viewBox:"0 0 512 512",fill:"none",xmlns:"http://www.w3.org/2000/svg"},[r("path",{d:"M256 112V400M400 256H112",stroke:"currentColor","stroke-width":"32","stroke-linecap":"round","stroke-linejoin":"round"})],-1))})()}});export{a as A};
->>>>>>>> d81c43b0 (Web: split shell-dash-auth components with per-mount drawer state (JUS-24)):internal/server/webdist/assets/Add-BQBRVktd.js

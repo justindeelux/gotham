@@ -1,0 +1,61 @@
+/* Row layout shared by the backup-tab cards (runs, restores, schedules,
+   targets). Imported with `<style scoped src="./backupRows.css">` so the
+   selectors stay scoped to each card while the definition lives in one place. */
+.backup-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.backup-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.backup-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.backup-row__location {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-row__error {
+  overflow-wrap: anywhere;
+}
+
+.backup-row__actions {
+  flex-shrink: 0;
+}
+
+.empty-hint {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: 0;
+  max-width: 62ch;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 640px) {
+  .backup-row {
+    flex-direction: column;
+  }
+}

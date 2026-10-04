@@ -1,1 +1,0 @@
-import{s as t,n as o}from"./types-ChtOpemJ.js";const u=e("Port must be between 1 and 65535",{min:1,max:65535});function d(r){return t({required_error:r,invalid_type_error:r}).trim().min(1,r)}function e(r,n){let i=o({required_error:r,invalid_type_error:r});return n?.min!==void 0&&(i=i.min(n.min,r)),n?.max!==void 0&&(i=i.max(n.max,r)),i.int(r)}export{u as p,d as r};

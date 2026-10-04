@@ -68,19 +68,12 @@ export const targetBucketSchema = requiredString(
 );
 
 /**
- * S3 key schemas deliberately do NOT trim: the old guard compared the raw
- * value (`=== ""`), so a blank-space key passed. Trimming here would reject
- * input the old code accepted.
+ * targetKeySchema guards both key fields on a new S3 target. It deliberately
+ * does NOT trim: the old guard compared the raw value (`=== ""`), so a
+ * blank-space key passed. Trimming here would reject input the old code
+ * accepted.
  */
-export const targetAccessKeySchema = z
-  .string({
-    required_error: databaseMessages.s3KeysRequired,
-    invalid_type_error: databaseMessages.s3KeysRequired,
-  })
-  .min(1, databaseMessages.s3KeysRequired);
-
-/** targetSecretKeySchema shares the new-target keys message, untrimmed. */
-export const targetSecretKeySchema = z
+export const targetKeySchema = z
   .string({
     required_error: databaseMessages.s3KeysRequired,
     invalid_type_error: databaseMessages.s3KeysRequired,
@@ -117,8 +110,8 @@ export function validateTargetForm(draft: BackupTargetDraft): string | null {
     }
     if (
       draft.isNew &&
-      (!targetAccessKeySchema.safeParse(draft.accessKey).success ||
-        !targetSecretKeySchema.safeParse(draft.secretKey).success)
+      (!targetKeySchema.safeParse(draft.accessKey).success ||
+        !targetKeySchema.safeParse(draft.secretKey).success)
     ) {
       return databaseMessages.s3KeysRequired;
     }

@@ -1,14 +1,12 @@
 // Differential tests for the V8 notifications zod migration (JUS-23).
-// canSubmit rows pin the old boolean outcomes; recipient rows pin
-// parseRecipients outputs, which recipientsSchema must reproduce exactly.
+// canSubmit rows pin the old boolean outcomes. Recipient splitting stays
+// tested directly on parseRecipients in channel-helpers.test.ts.
 import { describe, expect, it } from "vitest";
 
 import {
   canSubmitChannel,
   channelSubmitSchema,
-  recipientsSchema,
 } from "@/features/notifications/schemas/notifications";
-import { parseRecipients } from "@/features/notifications/utils/channelHelpers";
 
 describe("canSubmitChannel matches canSubmit", () => {
   const rows: Array<
@@ -53,27 +51,5 @@ describe("canSubmitChannel matches canSubmit", () => {
       to: "",
     };
     expect(canSubmitChannel(full)).toBe(true);
-  });
-});
-
-describe("recipientsSchema matches parseRecipients", () => {
-  const raws = [
-    "a@x.io, b@x.io\nc@x.io  ,",
-    "   ",
-    "",
-    "a,,b",
-    "a b\tc\nd",
-    "single@example.com",
-  ];
-  it("splits on /[\\s,]+/, trims, drops empties", () => {
-    for (const raw of raws) {
-      expect(recipientsSchema.parse(raw)).toEqual(parseRecipients(raw));
-    }
-    expect(recipientsSchema.parse("a@x.io, b@x.io\nc@x.io  ,")).toEqual([
-      "a@x.io",
-      "b@x.io",
-      "c@x.io",
-    ]);
-    expect(recipientsSchema.parse("   ")).toEqual([]);
   });
 });

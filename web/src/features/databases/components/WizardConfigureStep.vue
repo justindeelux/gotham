@@ -11,7 +11,10 @@ import {
 import { inject } from "vue";
 
 import { wizardFormKey } from "@/features/databases/composables/useCreateDatabaseWizard";
-import { isDatabaseNameValid } from "@/features/databases/schemas/databases";
+import {
+  databaseMessages,
+  isDatabaseNameValid,
+} from "@/features/databases/schemas/databases";
 
 const form = inject(wizardFormKey)!;
 </script>
@@ -22,7 +25,7 @@ const form = inject(wizardFormKey)!;
     :feedback="
       form.name === '' || isDatabaseNameValid(form.name)
         ? 'Used for the container and the credentials; 1-63 chars: letters, digits, ., _ or -.'
-        : 'Name must be 1-63 characters of letters, digits, ., _ or -.'
+        : databaseMessages.nameRule
     "
     :validation-status="
       form.name === '' || isDatabaseNameValid(form.name)

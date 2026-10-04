@@ -2,6 +2,7 @@
 // and per-mount state (typed passwords must not survive navigation).
 import { NButton, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
+import { createMemoryHistory, createRouter, RouterView } from "vue-router";
 import { defineComponent, h, nextTick } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import type { VueWrapper } from "@vue/test-utils";
@@ -51,7 +52,10 @@ function baseUser(): User {
 }
 
 async function mountChild(child: object): Promise<VueWrapper> {
+  // Attached: only a connected form dispatches the native submit, which is
+  // what the exactly-once submit tests need.
   const wrapper = mount(shell(child), {
+    attachTo: globalThis.document.body,
     global: { stubs: { transition: false } },
   });
   await nextTick();
@@ -132,6 +136,31 @@ describe("DisplayNameForm", () => {
     wrapper.unmount();
   });
 
+  it("submits exactly once per button click", async () => {
+    seedAuth(baseUser());
+    mockPatch.mockResolvedValue({ ...baseUser(), display_name: "Ada" });
+    const wrapper = await mountChild(DisplayNameForm);
+    await setInput(wrapper, "#profile-display-name", "Ada");
+    await clickButton(wrapper, "Save display name");
+    expect(mockPatch).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("submits exactly once per Enter", async () => {
+    seedAuth(baseUser());
+    mockPatch.mockResolvedValue({ ...baseUser(), display_name: "Ada" });
+    const wrapper = await mountChild(DisplayNameForm);
+    await setInput(wrapper, "#profile-display-name", "Ada");
+    // Enter fires the input keyup handler and the native form submit in the
+    // same tick; the submitting guard dedupes them into one request.
+    await wrapper.find("#profile-display-name").trigger("keyup.enter");
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+    await nextTick();
+    expect(mockPatch).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
   it("shows a busy submit and recovers", async () => {
     seedAuth(baseUser());
     const gate = deferred<User>();
@@ -175,6 +204,7 @@ describe("ChangePasswordForm", () => {
       new_password: "new-secret-1234",
     });
     expect(setSession).toHaveBeenCalledWith(pair);
+    expect(mockChange).toHaveBeenCalledTimes(1);
     // Success clears the typed passwords.
     for (const id of [
       "#profile-current-password",
@@ -183,6 +213,71 @@ describe("ChangePasswordForm", () => {
     ]) {
       expect(inputValue(wrapper, id)).toBe("");
     }
+    wrapper.unmount();
+  });
+
+  it("submits exactly once per Enter", async () => {
+    seedAuth(baseUser());
+    mockChange.mockResolvedValue({
+      user: baseUser(),
+      access_token: "new-access",
+      token_type: "Bearer",
+      expires_in: 900,
+      refresh_token: "new-refresh",
+    });
+    const wrapper = await mountChild(ChangePasswordForm);
+    await setInput(wrapper, "#profile-current-password", "old-secret-123");
+    await setInput(wrapper, "#profile-new-password", "new-secret-1234");
+    await setInput(wrapper, "#profile-confirm-password", "new-secret-1234");
+    // Enter fires the input keyup handler and the native form submit in the
+    // same tick; the submitting guard dedupes them into one request.
+    await wrapper.find("#profile-confirm-password").trigger("keyup.enter");
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+    await nextTick();
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("follows has_password flips while mounted", async () => {
+    seedAuth({ ...baseUser(), has_password: false });
+    const pair = {
+      user: baseUser(),
+      access_token: "new-access",
+      token_type: "Bearer",
+      expires_in: 900,
+      refresh_token: "new-refresh",
+    };
+    mockChange.mockResolvedValue(pair);
+    const wrapper = await mountChild(ChangePasswordForm);
+    expect(wrapper.find("#profile-current-password").exists()).toBe(false);
+
+    // A late fetchMe (or a first password set) flips the field live.
+    useAuthStore().user!.has_password = true;
+    await nextTick();
+    await flushPromises();
+    expect(wrapper.find("#profile-current-password").exists()).toBe(true);
+    await setInput(wrapper, "#profile-current-password", "old-secret-123");
+    await setInput(wrapper, "#profile-new-password", "new-secret-1234");
+    await setInput(wrapper, "#profile-confirm-password", "new-secret-1234");
+    await clickButton(wrapper, "Change password");
+    expect(mockChange).toHaveBeenCalledWith({
+      current_password: "old-secret-123",
+      new_password: "new-secret-1234",
+    });
+
+    // And back: the field leaves and the payload omits the current password.
+    mockChange.mockClear();
+    useAuthStore().user!.has_password = false;
+    await nextTick();
+    await flushPromises();
+    expect(wrapper.find("#profile-current-password").exists()).toBe(false);
+    await setInput(wrapper, "#profile-new-password", "new-secret-1234");
+    await setInput(wrapper, "#profile-confirm-password", "new-secret-1234");
+    await clickButton(wrapper, "Change password");
+    expect(mockChange).toHaveBeenCalledWith({
+      new_password: "new-secret-1234",
+    });
     wrapper.unmount();
   });
 
@@ -255,6 +350,7 @@ describe("ChangePasswordForm", () => {
     const first = await mountChild(ChangePasswordForm);
     await setInput(first, "#profile-current-password", "old-secret-123");
     await setInput(first, "#profile-new-password", "new-secret-1234");
+    await setInput(first, "#profile-confirm-password", "new-secret-1234");
     first.unmount();
     const second = await mountChild(ChangePasswordForm);
     for (const id of [
@@ -267,6 +363,50 @@ describe("ChangePasswordForm", () => {
       );
     }
     second.unmount();
+  });
+
+  it("drops typed passwords across route navigation away and back", async () => {
+    seedAuth(baseUser());
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/a", component: ChangePasswordForm },
+        { path: "/b", component: { template: "<div />" } },
+      ],
+    });
+    await router.push("/a");
+    await router.isReady();
+    const wrapper = mount(
+      defineComponent({
+        render: () =>
+          h(NMessageProvider, null, { default: () => h(RouterView) }),
+      }),
+      {
+        attachTo: globalThis.document.body,
+        global: { plugins: [router], stubs: { transition: false } },
+      },
+    );
+    await flushPromises();
+    await nextTick();
+    await setInput(wrapper, "#profile-current-password", "old-secret-123");
+    await setInput(wrapper, "#profile-new-password", "new-secret-1234");
+    await setInput(wrapper, "#profile-confirm-password", "new-secret-1234");
+    await router.push("/b");
+    await flushPromises();
+    await nextTick();
+    await router.push("/a");
+    await flushPromises();
+    await nextTick();
+    for (const id of [
+      "#profile-current-password",
+      "#profile-new-password",
+      "#profile-confirm-password",
+    ]) {
+      expect(inputValue(wrapper, id), `expected ${id} to clear after navigation`).toBe(
+        "",
+      );
+    }
+    wrapper.unmount();
   });
 });
 

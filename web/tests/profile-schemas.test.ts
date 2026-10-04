@@ -133,11 +133,11 @@ describe("profile required marks", () => {
     );
   }
 
-  it("marks the display-name field required", () => {
+  it("leaves the optional display-name field unmarked", () => {
     const wrapper = mountFields({ displayName: "" }, displayNameRules(), [
       "displayName",
     ]);
-    expect(fieldMarks(wrapper, 1)).toEqual([true]);
+    expect(fieldMarks(wrapper, 1)).toEqual([false]);
     wrapper.unmount();
   });
 

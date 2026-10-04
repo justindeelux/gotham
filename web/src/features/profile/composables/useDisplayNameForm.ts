@@ -33,15 +33,22 @@ export function useDisplayNameForm() {
   const rules: FormRules = displayNameRules();
 
   async function handleSubmit(): Promise<void> {
+    // Guard: a click on a submit button plus the native submit (or Enter
+    // plus the submit event) invoke this twice in the same tick; the second
+    // call must not start a second request.
+    if (submitting.value) {
+      return;
+    }
+    submitting.value = true;
     errorMessage.value = "";
 
     try {
       await formRef.value?.validate();
     } catch {
+      submitting.value = false;
       return;
     }
 
-    submitting.value = true;
     try {
       const trimmed = form.displayName.trim();
       const user = await patchDisplayName(trimmed === "" ? null : trimmed);

@@ -32,12 +32,7 @@ const { formRef, submitting, errorMessage, form, rules, handleSubmit } =
         </span>
       </NFormItem>
 
-      <NButton
-        type="primary"
-        :loading="submitting"
-        attr-type="submit"
-        @click="handleSubmit"
-      >
+      <NButton type="primary" :loading="submitting" @click="handleSubmit">
         Save display name
       </NButton>
     </NForm>

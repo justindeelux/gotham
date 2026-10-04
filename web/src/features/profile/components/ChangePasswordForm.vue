@@ -84,12 +84,7 @@ const {
         </NFormItem>
       </div>
 
-      <NButton
-        type="primary"
-        :loading="submitting"
-        attr-type="submit"
-        @click="handleSubmit"
-      >
+      <NButton type="primary" :loading="submitting" @click="handleSubmit">
         Change password
       </NButton>
     </NForm>

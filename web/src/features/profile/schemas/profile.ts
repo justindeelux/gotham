@@ -38,13 +38,12 @@ export const currentPasswordSchema = z
 
 /**
  * displayNameRules builds the DisplayNameForm NForm rules: one schema-backed
- * entry with the required mark, so the module (not the page) is the single
- * source the mount tests assert against.
+ * entry with no required mark, because blank is valid and clears the name.
  */
 export function displayNameRules(): FormRules {
   return {
     displayName: [
-      { ...ruleFrom(displayNameFieldSchema, { required: true }), trigger: ["input", "blur"] },
+      { ...ruleFrom(displayNameFieldSchema), trigger: ["input", "blur"] },
     ],
   };
 }

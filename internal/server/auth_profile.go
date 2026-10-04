@@ -25,9 +25,6 @@ type changePasswordRequest struct {
 // handleUpdateProfile replaces the account's display name (null or blank
 // clears it) and returns the updated account.
 func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
-	if !requireInteractiveSession(w, r) {
-		return
-	}
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
@@ -83,9 +80,6 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 // handleChangePassword replaces the account's password, ends every other
 // session, and returns a fresh token pair for the caller.
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
-	if !requireInteractiveSession(w, r) {
-		return
-	}
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})

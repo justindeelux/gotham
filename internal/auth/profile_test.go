@@ -127,6 +127,51 @@ func TestServiceUpdateProfileTrimBoundsClear(t *testing.T) {
 	}
 }
 
+// TestServiceUpdateProfileRejectsUnstorableText: NUL, invalid UTF-8, control
+// characters and invisible format/bidi-override characters are 400s, not
+// stored values (F1/F3). NUL would otherwise reach Postgres and answer 500.
+func TestServiceUpdateProfileRejectsUnstorableText(t *testing.T) {
+	svc, st := scratchService(t)
+	ctx := context.Background()
+
+	email := uniqueEmail("profile-text")
+	cleanupUser(t, st, email)
+	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	userID, err := uuid.Parse(registered.User.ID)
+	if err != nil {
+		t.Fatalf("parse user ID: %v", err)
+	}
+
+	for name, value := range map[string]string{
+		"NUL":            "a\x00b",
+		"invalid UTF-8":  "a\xffb",
+		"newline":        "a\nb",
+		"tab":            "a\tb",
+		"zero-width":     "a\u200bb",
+		"bidi override":  "a\u202eb",
+		"isolate":        "a\u2066b",
+		"byte-order":     "\ufeffAda",
+		"only controls":  "\x00",
+		"only invisible": "\u200b",
+	} {
+		if _, err := svc.UpdateProfile(ctx, userID, strptr(value)); !errors.Is(err, ErrDisplayNameInvalid) {
+			t.Errorf("%s: error = %v, want ErrDisplayNameInvalid", name, err)
+		}
+	}
+	// Storable multibyte text still works.
+	for _, value := range []string{"Ada Lovelace", "王小明", "Ada 😀"} {
+		updated, err := svc.UpdateProfile(ctx, userID, strptr(value))
+		if err != nil {
+			t.Errorf("UpdateProfile(%q): %v", value, err)
+		} else if updated.DisplayName == nil || *updated.DisplayName != value {
+			t.Errorf("display name = %v, want %q", updated.DisplayName, value)
+		}
+	}
+}
+
 func TestServiceChangePassword(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()

@@ -3,13 +3,24 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/time/rate"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/justindeelux/gotham/internal/auth"
+	"github.com/justindeelux/gotham/internal/config"
+	"github.com/justindeelux/gotham/internal/store"
 )
 
 // newTestProfileServer builds a Server whose RequireAuth also resolves API
@@ -172,4 +183,156 @@ func TestProfileRateLimit(t *testing.T) {
 	}
 }
 
-var _ = auth.ErrDisplayNameInvalid
+// TestRequireInteractiveSessionMiddleware: the guard is route-level
+// middleware, so a route mounted in the group is rejected for API tokens
+// without any per-handler code. The dummy handler proves the middleware (not
+// the handler) wrote the 403.
+func TestRequireInteractiveSessionMiddleware(t *testing.T) {
+	s, _ := newTestProfileServer(t)
+
+	r := chi.NewRouter()
+	r.Use(s.requireInteractiveSession)
+	r.Get("/guarded", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, apiError{Message: "reached"})
+	})
+
+	apiTokenReq := httptest.NewRequest(http.MethodGet, "/guarded", nil)
+	apiTokenReq = apiTokenReq.WithContext(context.WithValue(apiTokenReq.Context(), apiTokenKey, true))
+	apiTokenRec := httptest.NewRecorder()
+	r.ServeHTTP(apiTokenRec, apiTokenReq)
+	if apiTokenRec.Code != http.StatusForbidden {
+		t.Fatalf("API-token status = %d, want 403", apiTokenRec.Code)
+	}
+	if body := apiTokenRec.Body.String(); !strings.Contains(body, `"this action needs an interactive session"`) {
+		t.Fatalf("API-token body = %s, want the contract message", body)
+	}
+
+	plainReq := httptest.NewRequest(http.MethodGet, "/guarded", nil)
+	plainRec := httptest.NewRecorder()
+	r.ServeHTTP(plainRec, plainReq)
+	if plainRec.Code != http.StatusOK {
+		t.Fatalf("interactive status = %d, want 200", plainRec.Code)
+	}
+}
+
+// scratchProfileStack builds a Server backed by the real auth service on a
+// private scratch database and returns it with a live JWT for the seeded
+// account. Fake-backed handler tests cannot catch validation the fake does
+// not mirror (F1 reached Postgres and answered 500); this stack can.
+func scratchProfileStack(t *testing.T) (*Server, string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	base := os.Getenv("GOTHAM_TEST_DSN")
+	if base == "" {
+		base = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
+	}
+	admin, err := pgx.Connect(ctx, base)
+	if err != nil {
+		if os.Getenv("GOTHAM_TEST_DSN") != "" {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	name := fmt.Sprintf("pf1srv%d", time.Now().UnixNano())
+	if _, err := admin.Exec(ctx, `CREATE DATABASE "`+name+`"`); err != nil {
+		_ = admin.Close(ctx)
+		t.Skipf("cannot create a disposable database (needs CREATEDB): %v", err)
+	}
+	_ = admin.Close(ctx)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		admin, err := pgx.Connect(cleanupCtx, base)
+		if err != nil {
+			t.Logf("reconnect for scratch drop: %v", err)
+			return
+		}
+		defer admin.Close(cleanupCtx)
+		if _, err := admin.Exec(cleanupCtx, `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`); err != nil {
+			t.Logf("drop scratch database: %v", err)
+		}
+	})
+
+	parsed, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("parse test DSN: %v", err)
+	}
+	parsed.Path = "/" + name
+	dsn := parsed.String()
+
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migrate scratch database: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open scratch store: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	signer, err := auth.NewSigner(nil, nil)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	svc := auth.New(store.New(pool), signer, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	email := fmt.Sprintf("pf1-srv-%d@example.com", time.Now().UnixNano())
+	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	loggedIn, err := svc.Login(ctx, email, "s3cret-password")
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	_ = registered
+
+	cfg := &config.Config{
+		Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s, err := New(cfg, logger, svc, nil, nil, nil, store.New(pool))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(s.closer)
+	s.db = stubPinger{}
+	s.redis = stubPinger{}
+	return s, loggedIn.AccessToken
+}
+
+// TestProfileUnstorableTextOverHTTP replays the F1 probe against the real
+// stack: NUL, bidi-override and zero-width names are 400 with the contract
+// message, and a storable name still round-trips.
+func TestProfileUnstorableTextOverHTTP(t *testing.T) {
+	s, token := scratchProfileStack(t)
+	bearer := "Bearer " + token
+
+	for name, payload := range map[string]string{
+		"NUL":        `{"display_name":"a\u0000b"}`,
+		"bidi":       `{"display_name":"a\u202eb"}`,
+		"zero-width": `{"display_name":"a\u200bb"}`,
+	} {
+		rec := doRequest(t, s, http.MethodPatch, "/api/v1/auth/me", payload, bearer)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400 (body %s)", name, rec.Code, rec.Body.String())
+		} else if body := rec.Body.String(); !strings.Contains(body, `"display name must be 1-64 characters"`) {
+			t.Errorf("%s: body = %s, want the contract message", name, body)
+		}
+	}
+
+	ok := doRequest(t, s, http.MethodPatch, "/api/v1/auth/me",
+		`{"display_name":"Ada Lovelace"}`, bearer)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("valid name status = %d, want 200 (body %s)", ok.Code, ok.Body.String())
+	}
+	var body meResponse
+	if err := json.Unmarshal(ok.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.User == nil || body.User.DisplayName == nil || *body.User.DisplayName != "Ada Lovelace" {
+		t.Fatalf("stored name = %+v, want Ada Lovelace", body.User)
+	}
+}

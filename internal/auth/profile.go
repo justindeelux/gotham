@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -44,7 +45,12 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, displayNa
 }
 
 // normalizeDisplayName trims the name; nil or blank clears (nil), otherwise
-// the trimmed value must fit the bounds.
+// the trimmed value must be 1-64 characters of storable text. Anything that
+// is not valid UTF-8, any control character (this covers NUL, newlines and
+// tabs), and any invisible format character (unicode.Cf covers the zero-width
+// and bidi-override ranges U+200B-U+200F, U+202A-U+202E, U+2066-U+2069 and
+// U+FEFF) is rejected: Postgres would refuse NUL with a 500, and the rest
+// have no place in a rendered name.
 func normalizeDisplayName(displayName *string) (*string, error) {
 	if displayName == nil {
 		return nil, nil
@@ -52,6 +58,14 @@ func normalizeDisplayName(displayName *string) (*string, error) {
 	trimmed := strings.TrimSpace(*displayName)
 	if trimmed == "" {
 		return nil, nil
+	}
+	if !utf8.ValidString(trimmed) {
+		return nil, ErrDisplayNameInvalid
+	}
+	for _, r := range trimmed {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return nil, ErrDisplayNameInvalid
+		}
 	}
 	if utf8.RuneCountInString(trimmed) < minDisplayNameLength || utf8.RuneCountInString(trimmed) > maxDisplayNameLength {
 		return nil, ErrDisplayNameInvalid
@@ -113,5 +127,8 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current,
 	}
 
 	s.logger.Info("auth: password changed", "user_id", userID)
+	// The new credential is already committed and every other session is
+	// gone; if issuing the caller's pair fails now, it logs in again with
+	// the new password rather than retrying the change.
 	return s.issue(ctx, updated)
 }

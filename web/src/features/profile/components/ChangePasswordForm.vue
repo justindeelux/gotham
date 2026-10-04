@@ -2,8 +2,10 @@
 import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSpace } from "naive-ui";
 
 import PasswordStrengthMeter from "@/features/auth/components/PasswordStrengthMeter.vue";
+import { useAuthStore } from "@/features/auth";
 import { useChangePasswordForm } from "@/features/profile/composables/useChangePasswordForm";
 
+const authStore = useAuthStore();
 const {
   formRef,
   submitting,
@@ -23,6 +25,19 @@ const {
     </NAlert>
 
     <NForm ref="formRef" :model="form" :rules="rules" @submit.prevent="handleSubmit">
+      <!-- Hidden username for password managers (Chrome warns without one):
+        no name attribute so it is never submitted, readonly + tabindex -1
+        so it is never edited or focused, aria-hidden + clipped so it is
+        never announced or seen. Value follows the signed-in email. -->
+      <input
+        class="username-fix"
+        type="text"
+        autocomplete="username"
+        :value="authStore.user?.email ?? ''"
+        readonly
+        tabindex="-1"
+        aria-hidden="true"
+      />
       <NFormItem
         v-if="hasPassword"
         label="Current password"
@@ -90,3 +105,18 @@ const {
     </NForm>
   </NCard>
 </template>
+
+<style scoped>
+/* Visually hidden without affecting layout: absolute so it takes no space. */
+.username-fix {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  padding: 0;
+}
+</style>

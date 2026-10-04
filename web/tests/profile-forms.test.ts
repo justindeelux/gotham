@@ -1,6 +1,10 @@
 // Profile form mounts (JUS-27): errors, submit payloads, busy state,
 // and per-mount state (typed passwords must not survive navigation).
-import { NButton, NMessageProvider } from "naive-ui";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { NButton, NDescriptions, NFormItem, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter, RouterView } from "vue-router";
 import { defineComponent, h, nextTick } from "vue";
@@ -180,6 +184,28 @@ describe("DisplayNameForm", () => {
     expect(target.props("loading")).toBe(false);
     wrapper.unmount();
   });
+
+  it("stacks the input above its hint in a full-width vertical stack", async () => {
+    seedAuth(baseUser());
+    const wrapper = await mountChild(DisplayNameForm);
+    // Same vertical field stack as the password fields: input and hint share
+    // one column container, so the hint can never sit beside the input.
+    const stack = wrapper.find(".field-stack");
+    expect(stack.exists()).toBe(true);
+    expect(stack.find("#profile-display-name").exists()).toBe(true);
+    expect(stack.find(".field-hint").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("keeps one visible heading: the field label stays for a11y only", async () => {
+    seedAuth(baseUser());
+    const wrapper = await mountChild(DisplayNameForm);
+    expect(wrapper.find(".n-card-header__main").text()).toContain("Display name");
+    const item = wrapper.findComponent(NFormItem);
+    expect(item.props("label")).toBe("Display name");
+    expect(wrapper.find(".display-name-item").exists()).toBe(true);
+    wrapper.unmount();
+  });
 });
 
 describe("ChangePasswordForm", () => {
@@ -345,6 +371,27 @@ describe("ChangePasswordForm", () => {
     wrapper.unmount();
   });
 
+  it("renders a hidden username input for password managers", async () => {
+    seedAuth(baseUser());
+    const wrapper = await mountChild(ChangePasswordForm);
+    const username = wrapper.find('input[autocomplete="username"]');
+    expect(username.exists()).toBe(true);
+    const element = username.element as unknown as {
+      value: string;
+      readOnly: boolean;
+      tabIndex: number;
+    };
+    expect(element.value).toBe("ada@gotham.dev");
+    expect(element.readOnly).toBe(true);
+    expect(element.tabIndex).toBe(-1);
+    expect(username.attributes("aria-hidden")).toBe("true");
+    // No name attribute: never submitted. Class clips it out of view and
+    // the absolute position keeps it out of the layout.
+    expect(username.attributes("name")).toBeUndefined();
+    expect(username.classes()).toContain("username-fix");
+    wrapper.unmount();
+  });
+
   it("drops typed passwords on remount", async () => {
     seedAuth(baseUser());
     const first = await mountChild(ChangePasswordForm);
@@ -411,6 +458,18 @@ describe("ChangePasswordForm", () => {
 });
 
 describe("ProfileIdentityCard", () => {
+  it("renders facts side by side with labels left of values", async () => {
+    seedAuth(baseUser());
+    const wrapper = await mountChild(ProfileIdentityCard);
+    const descriptions = wrapper.findComponent(NDescriptions);
+    expect(descriptions.props("labelPlacement")).toBe("left");
+    expect(descriptions.props("column")).toBe(1);
+    expect(descriptions.props("bordered")).toBe(true);
+    // Narrow containers stack label-over-value via a container query.
+    expect(wrapper.find(".identity-facts-wrap").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it("renders facts, role, member-since and the avatar note", async () => {
     seedAuth(baseUser());
     const wrapper = await mountChild(ProfileIdentityCard);
@@ -435,5 +494,17 @@ describe("ProfileIdentityCard", () => {
     const wrapper = await mountChild(ProfileIdentityCard);
     expect(wrapper.text()).toContain("ada@gotham.dev");
     wrapper.unmount();
+  });
+
+  it("stacks facts label-over-value only below the shared 480px threshold", () => {
+    const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const source = readFileSync(
+      resolve(webRoot, "src/features/profile/components/ProfileIdentityCard.vue"),
+      "utf8",
+    );
+    expect(source).toMatch(/\.identity-facts-wrap\s*\{[^}]*container-type:\s*inline-size/);
+    expect(source).toMatch(
+      /@container\s*\(max-width:\s*480px\)[\s\S]*?\.n-descriptions-table-header/,
+    );
   });
 });

@@ -58,8 +58,16 @@ export const sectionAliases: Record<string, string> = { settings: "notifications
  * activeNavKey is the sidebar entry for a route path. It follows the first
  * path segment, so detail routes (/servers/:id, /applications/:id,
  * /databases/:id, /services/:id) keep their section highlighted (B2-12, B3-5).
+ * Settings pages resolve via the second segment: /settings/notifications
+ * highlights Notification channels, while /settings/profile matches no
+ * sidebar entry (profile is reached from the MeCard menu) so nothing
+ * highlights instead of the wrong item. Bare /settings redirects to
+ * notifications, so it keeps that highlight.
  */
 export function activeNavKey(path: string): string {
-  const segment = path.split("/").filter(Boolean)[0] ?? "dashboard";
+  const [segment = "dashboard", section] = path.split("/").filter(Boolean);
+  if (segment === "settings") {
+    return section ?? sectionAliases[segment] ?? segment;
+  }
   return sectionAliases[segment] ?? segment;
 }

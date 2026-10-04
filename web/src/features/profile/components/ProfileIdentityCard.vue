@@ -58,11 +58,18 @@ const memberSince = computed<string>(() => {
         </span>
       </div>
     </div>
-    <NDescriptions :column="1" bordered class="identity-facts">
-      <NDescriptionsItem label="Email">{{ authStore.user?.email }}</NDescriptionsItem>
-      <NDescriptionsItem label="Platform role">{{ platformRoleLabel }}</NDescriptionsItem>
-      <NDescriptionsItem label="Member since">{{ memberSince }}</NDescriptionsItem>
-    </NDescriptions>
+    <div class="identity-facts-wrap">
+      <NDescriptions
+        :column="1"
+        bordered
+        label-placement="left"
+        class="identity-facts"
+      >
+        <NDescriptionsItem label="Email">{{ authStore.user?.email }}</NDescriptionsItem>
+        <NDescriptionsItem label="Platform role">{{ platformRoleLabel }}</NDescriptionsItem>
+        <NDescriptionsItem label="Member since">{{ memberSince }}</NDescriptionsItem>
+      </NDescriptions>
+    </div>
   </NCard>
 </template>
 
@@ -88,8 +95,19 @@ const memberSince = computed<string>(() => {
   white-space: nowrap;
 }
 
-.identity-facts {
+.identity-facts-wrap {
+  container-type: inline-size;
   max-width: 560px;
+}
+
+/* Narrow containers stack each fact label-over-value. Naive renders one
+ * table row per fact (header + content cells), so both cells go block. */
+@container (max-width: 480px) {
+  .identity-facts-wrap :deep(.n-descriptions-table-header),
+  .identity-facts-wrap :deep(.n-descriptions-table-content) {
+    display: block;
+    width: 100%;
+  }
 }
 
 .small {

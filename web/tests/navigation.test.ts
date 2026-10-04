@@ -12,7 +12,18 @@ describe("activeNavKey", () => {
   });
 
   it("maps aliased sections", () => {
-    expect(activeNavKey("/settings/tokens")).toBe("notifications");
+    expect(activeNavKey("/settings")).toBe("notifications");
+    expect(activeNavKey("/settings/notifications")).toBe("notifications");
+  });
+
+  it("highlights nothing on profile: no sidebar entry exists", () => {
+    // Profile is reached from the MeCard menu; the key matches no nav item,
+    // so AppSidebar renders no is-active entry instead of the wrong one.
+    expect(activeNavKey("/settings/profile")).toBe("profile");
+    const keys = navSections.flatMap((section) =>
+      section.items.map((item) => item.key),
+    );
+    expect(keys).not.toContain("profile");
   });
 });
 

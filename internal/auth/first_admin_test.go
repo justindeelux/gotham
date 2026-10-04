@@ -177,6 +177,65 @@ func TestServiceConcurrentFirstRegistrations(t *testing.T) {
 	}
 }
 
+// TestOAuthBootstrapIsAdminWithOverrideOnAndOff proves the F1 consistency:
+// the first OAuth sign-up on an empty instance is the platform admin whether
+// or not the test/dev open-registration override is on, and later sign-ups
+// under the override are plain users.
+func TestOAuthBootstrapIsAdminWithOverrideOnAndOff(t *testing.T) {
+	for _, override := range []bool{false, true} {
+		t.Run(fmt.Sprintf("override=%v", override), func(t *testing.T) {
+			svc, _ := scratchService(t)
+			svc.AllowOpenRegistration = override
+			provider := &fakeOAuthProvider{name: "github"}
+			oauth := NewOAuthService(svc, testLogger(), provider)
+			t.Cleanup(oauth.Close)
+			ctx := context.Background()
+
+			bootstrap := func(email string) *AuthResult {
+				t.Helper()
+				provider.identity = &OAuthIdentity{Email: email}
+				_, state, err := oauth.Begin(ctx, "github", "")
+				if err != nil {
+					t.Fatalf("Begin: %v", err)
+				}
+				result, err := oauth.Callback(ctx, "github", "auth-code", state)
+				if err != nil {
+					t.Fatalf("Callback: %v", err)
+				}
+				return result
+			}
+
+			first := bootstrap("oauth-first@example.com")
+			if first.User.Role != adminRole {
+				t.Fatalf("bootstrap OAuth role = %q, want %q", first.User.Role, adminRole)
+			}
+			if got := claimRole(t, svc, first.AccessToken); got != adminRole {
+				t.Fatalf("bootstrap OAuth access-token role = %q, want %q", got, adminRole)
+			}
+
+			if !override {
+				provider.identity = &OAuthIdentity{Email: "oauth-uninvited@example.com"}
+				_, state, err := oauth.Begin(ctx, "github", "")
+				if err != nil {
+					t.Fatalf("Begin: %v", err)
+				}
+				if _, err := oauth.Callback(ctx, "github", "auth-code", state); !errors.Is(err, ErrRegistrationClosed) {
+					t.Fatalf("Callback(closed) error = %v, want ErrRegistrationClosed", err)
+				}
+				return
+			}
+
+			second := bootstrap("oauth-second@example.com")
+			if second.User.Role != defaultRole {
+				t.Fatalf("second OAuth role = %q, want %q", second.User.Role, defaultRole)
+			}
+			if got := claimRole(t, svc, second.AccessToken); got != defaultRole {
+				t.Fatalf("second OAuth access-token role = %q, want %q", got, defaultRole)
+			}
+		})
+	}
+}
+
 // TestServiceTokenRoleFollowsDatabase proves the token role is read from the
 // account row at issue time: a plain login mints "user", promoting the row
 // mints "admin", refresh keeps the current role, and demoting the row is

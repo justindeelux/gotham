@@ -1,6 +1,7 @@
 import { http } from "@/shared/api/http";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
 import type { ServiceDomainRoute } from "@/features/services";
+import { checkTemplateField, validateTemplateFields } from "@/features/templates/schemas/templates";
 
 /**
  * Typed client for the template routes served by `internal/templates`
@@ -142,69 +143,13 @@ export function templateValuesFromFields(fields: TemplateField[]): TemplateValue
  * checkTemplateValue mirrors `Field.check` in internal/templates/render.go so
  * the form blocks an invalid value before the render request is sent. Returns
  * null when the value is acceptable, otherwise the message to display.
+ * Schema-backed: see `schemas/templates.ts templateFieldSchema`.
  */
 export function checkTemplateValue(
   field: TemplateField,
   value: string,
 ): string | null {
-  switch (field.type) {
-    case "text":
-    case "secret": {
-      if (field.required && value.trim() === "") {
-        return "This field is required.";
-      }
-      if (field.max_length !== undefined && [...value].length > field.max_length) {
-        return `Must be at most ${field.max_length} characters.`;
-      }
-      if (field.pattern !== undefined && !matchesPattern(field.pattern, value)) {
-        return "Does not match the required format.";
-      }
-      return null;
-    }
-    case "number": {
-      const trimmed = value.trim();
-      if (trimmed === "") {
-        return field.required ? "This field is required." : null;
-      }
-      if (!/^-?\d+$/.test(trimmed)) {
-        return "Must be a whole number.";
-      }
-      const parsed = Number(trimmed);
-      if (field.min !== undefined && parsed < field.min) {
-        return `Must be at least ${field.min}.`;
-      }
-      if (field.max !== undefined && parsed > field.max) {
-        return `Must be at most ${field.max}.`;
-      }
-      return null;
-    }
-    case "bool":
-      return value === "true" || value === "false"
-        ? null
-        : "Must be true or false.";
-    case "select": {
-      if ((field.options ?? []).includes(value.trim())) {
-        return null;
-      }
-      if (field.required && value.trim() === "") {
-        return "This field is required.";
-      }
-      return `Must be one of: ${(field.options ?? []).join(", ")}.`;
-    }
-    default:
-      return null;
-  }
-}
-
-/** matchesPattern anchors the field pattern exactly like the server does. */
-function matchesPattern(pattern: string, value: string): boolean {
-  try {
-    return new RegExp(`^(?:${pattern})$`).test(value);
-  } catch {
-    // The server rejects an uncompilable pattern at catalog load, so this can
-    // only mean the pattern arrived through a newer API; do not block on it.
-    return true;
-  }
+  return checkTemplateField(field, value);
 }
 
 /** validateTemplateValues returns the first message of every invalid field. */
@@ -212,14 +157,7 @@ export function validateTemplateValues(
   fields: TemplateField[],
   values: TemplateValues,
 ): Record<string, string> {
-  const errors: Record<string, string> = {};
-  for (const field of fields) {
-    const message = checkTemplateValue(field, values[field.key] ?? "");
-    if (message !== null) {
-      errors[field.key] = message;
-    }
-  }
-  return errors;
+  return validateTemplateFields(fields, values);
 }
 
 /**

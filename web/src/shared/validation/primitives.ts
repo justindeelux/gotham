@@ -17,6 +17,20 @@ export const portSchema = intInRange("Port must be between 1 and 65535", {
   max: 65535,
 });
 
+/**
+ * serviceNameSchema backs "Enter a service name." wherever a service is
+ * named: the services import dialog and the template wizard target form.
+ * Shared (not per-feature) because both need the identical shape and message.
+ */
+export const serviceNameSchema = requiredString("Enter a service name.");
+
+/**
+ * serviceNodeSchema backs "Select a node." wherever a node is picked for a
+ * service: the services import dialog and the template wizard target form.
+ * The value is a select output (never padded), so no trim is applied.
+ */
+export const serviceNodeSchema = z.string().min(1, "Select a node.");
+
 /** nonEmptyString trims and rejects blank input with the caller's message. */
 export function nonEmptyString(message: string): z.ZodString {
   return z.string().trim().min(1, message);

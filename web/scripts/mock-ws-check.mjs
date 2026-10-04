@@ -915,7 +915,7 @@ async function main() {
   const envSecret = await loadModule("../src/features/applications/utils/envSecret.ts");
   const requestGeneration = await loadModule("../src/shared/utils/requestGeneration.ts");
   const polling = await loadModule("../src/shared/utils/polling.ts");
-  const wizardValidation = await loadModule("../src/features/applications/utils/wizardValidation.ts");
+  const wizardValidation = await loadModule("../src/features/applications/schemas/env.ts");
   const inFlightGuard = await loadModule("../src/shared/composables/useInFlightGuard.ts");
 
   await check("a failed pipeline claims no completed stage (C4-3)", () => {

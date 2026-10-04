@@ -58,6 +58,15 @@ Bundle-size evidence (measured `vite build` gzip, G1; baseline index chunk
   raw / +0.04 kB gzip on the index chunk (tree-shaken; unused exports are
   dropped by Vite/Rollup).
 
+Bundle (templates-env-apps-services migration, PR #160): zod now ships once
+in the entry chunk — index 441,967 B / 139,868 B gzip before, 496,560 B /
+152,544 B gzip after (+54.6 kB raw / +12.7 kB gzip). It lands in the entry
+chunk rather than a lazy shared chunk because the gating schemas are
+reachable from the entry graph (template wizard, app wizard, import dialog
+all render from first interaction). Accepted: single copy, no duplication,
+matches the G1 ~14 kB estimate; lazy-splitting would only defer a schema
+needed on first use.
+
 ## Details
 
 ### F1 — zod for all web validation — DO (landed G1)

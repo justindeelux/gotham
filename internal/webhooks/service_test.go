@@ -421,7 +421,7 @@ func TestRemoveHookTranslatesProviderFailures(t *testing.T) {
 }
 
 // TestHookBudgetsStayUnderSPARequestTimeout pins the latency budget: the SPA
-// aborts a create at 15s (web/src/api/http.ts), and the worst-case hook
+// aborts a create at 15s (web/src/shared/api/http.ts), and the worst-case hook
 // latency is one bounded install (deploy.DefaultHookTimeout) plus the detached
 // rollback (hookRollbackTimeout). Raising either bound must fail here rather
 // than surface as a client timeout after the application row committed, with a

@@ -30,7 +30,7 @@ import {
 import { getServer } from "@/features/servers/api/servers";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
-import LogViewer from "@/shared/ui/LogViewer.vue";
+import LogViewer from "@/features/servers/components/LogViewer.vue";
 
 /** Polling cadence for the container list, in milliseconds. */
 const pollIntervalMs = 5_000;

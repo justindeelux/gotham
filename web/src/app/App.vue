@@ -29,7 +29,7 @@ onMounted(() => {
 });
 
 // Gotham dark-theme mapping for Naive UI, derived from
-// web/src/styles/tokens.css (docs/design is the source of truth).
+// web/src/shared/styles/tokens.css (docs/design is the source of truth).
 const themeOverrides: GlobalThemeOverrides = {
   common: {
     primaryColor: "#5865f2",

@@ -28,7 +28,7 @@ import {
   toCertificateInput,
 } from "@/features/domains";
 import type { CertificateDraft, Certificate, DNSProvider } from "@/features/domains";
-import { CertificateForm } from "@/features/domains";
+import CertificateForm from "@/features/domains/components/CertificateForm.vue";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
 import { useProxyStore } from "@/features/domains";
 import { expiryLabel, formatDate, relativeTime } from "@/shared/utils/format";

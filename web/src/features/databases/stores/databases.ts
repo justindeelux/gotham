@@ -18,7 +18,7 @@ import type {
   Database,
   DatabaseCredentials,
 } from "@/features/databases/api/databases";
-import { mergeDatabasesById } from "@/shared/utils/storeMerge";
+import { mergeDatabasesById } from "@/features/databases/utils/storeMerge";
 
 /** Polling cadence for the database list, in milliseconds. */
 const pollIntervalMs = 5_000;

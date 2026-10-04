@@ -7,8 +7,8 @@ import { getVersion, formatVersionTag } from "@/features/version";
 
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import type { IconName } from "@/shared/ui/GothamIcon.vue";
-import MeCard from "@/shared/ui/MeCard.vue";
-import { ServerRail } from "@/features/servers";
+import MeCard from "./MeCard.vue";
+import ServerRail from "@/features/servers/components/ServerRail.vue";
 import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers";
 

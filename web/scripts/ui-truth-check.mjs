@@ -639,7 +639,7 @@ async function main() {
     );
     const { readFile } = await import("node:fs/promises");
     const card = await readFile(
-      new URL("../src/shared/ui/MeCard.vue", import.meta.url),
+      new URL("../src/app/layouts/MeCard.vue", import.meta.url),
       "utf8",
     );
     assert(card.includes("shouldRetryRoleRead("), "MeCard decides via the helper");

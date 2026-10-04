@@ -3,7 +3,7 @@ import { computed } from "vue";
 
 import { deployChannel } from "@/features/applications/api/applications";
 import type { Deployment } from "@/features/applications/api/applications";
-import LogViewer from "@/shared/ui/LogViewer.vue";
+import LogViewer from "@/features/servers/components/LogViewer.vue";
 
 /**
  * Realtime build/deploy log for one deployment.

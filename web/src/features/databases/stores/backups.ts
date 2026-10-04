@@ -30,7 +30,7 @@ import type {
   UpdateBackupScheduleInput,
   UpdateBackupTargetInput,
 } from "@/features/databases/api/backups";
-import { mergeBackupsById } from "@/shared/utils/storeMerge";
+import { mergeBackupsById } from "@/features/databases/utils/storeMerge";
 
 export const useBackupsStore = defineStore("backups", () => {
   const backupsById = ref<Record<string, DatabaseBackup[]>>({});

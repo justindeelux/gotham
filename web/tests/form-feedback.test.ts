@@ -16,7 +16,7 @@ import { NFormItem, NInput } from "naive-ui";
 import { describe, expect, it } from "vitest";
 import { h } from "vue";
 
-import DynamicForm from "../src/shared/ui/DynamicForm.vue";
+import DynamicForm from "../src/features/templates/components/DynamicForm.vue";
 import type { TemplateField } from "../src/features/templates/api/templates";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");

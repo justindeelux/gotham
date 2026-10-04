@@ -19,7 +19,7 @@ import {
   listApplications,
 } from "@/features/applications";
 import type { Server, ServerStatus } from "@/features/servers";
-import { ServerStatusTag } from "@/features/servers";
+import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
 import { useServersStore } from "@/features/servers";
 import { applicationTileView, buildApplicationTileInput } from "@/features/dashboard/utils/dashboard";
 import { relativeTime, usageView } from "@/shared/utils/format";
@@ -29,7 +29,7 @@ import { relativeTime, usageView } from "@/shared/utils/format";
  * yet. The recent-deploys widget renders an explicit empty state until that
  * store exists — never fabricated rows.
  *
- * TODO: add web/src/stores/deployments.ts backed by the deployments API,
+ * TODO: add features/dashboard/stores/deployments.ts backed by the deployments API,
  * replace `deployments` below with live data, and remove the empty state.
  */
 interface Deployment {

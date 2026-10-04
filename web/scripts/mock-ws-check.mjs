@@ -243,7 +243,8 @@ async function loadModule(relativePath) {
 // The pure ordering guard alone does not prove the store wires it up: deleting
 // markMutation() from addServer/removeServer/validate, or bypassing admit() in
 // loadServerList, would still pass the pure checks. esbuild stubs
-// ../api/servers so the real store runs against a controllable API, and pinia
+// features/servers/api/servers so the real store runs against a controllable
+// API, and pinia
 // is bundled in the same module graph so setActivePinia reaches the instance.
 async function loadServersStore() {
   const directory = await mkdtemp(join(tmpdir(), "gotham-servers-check-"));
@@ -308,7 +309,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-/** makeServersApi returns a controllable stub of ../api/servers. */
+/** makeServersApi returns a controllable stub of features/servers/api/servers. */
 function makeServersApi() {
   return {
     listServers: async () => [],

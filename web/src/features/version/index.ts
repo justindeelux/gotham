@@ -1,1 +1,1 @@
-export * from "./api/version";
+export { formatVersionTag, getVersion } from "./api/version";

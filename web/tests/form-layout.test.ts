@@ -19,7 +19,7 @@ import type { VueWrapper } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 
 import CertificateForm from "../src/features/domains/components/CertificateForm.vue";
-import DynamicForm from "../src/shared/ui/DynamicForm.vue";
+import DynamicForm from "../src/features/templates/components/DynamicForm.vue";
 import EnvEditor from "../src/features/applications/components/EnvEditor.vue";
 import type { CertificateDraft } from "../src/features/domains/api/proxy";
 
@@ -257,7 +257,7 @@ describe("JUS-19 EnvEditor single-row variables", () => {
 
 describe("JUS-19 DynamicForm stays two columns", () => {
   it("keeps the 2-column grid with the single-column fallback and schema order", () => {
-    const source = readSfc("src/shared/ui/DynamicForm.vue");
+    const source = readSfc("src/features/templates/components/DynamicForm.vue");
     expect(source).toMatch(
       /\.dynamic-form\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
     );

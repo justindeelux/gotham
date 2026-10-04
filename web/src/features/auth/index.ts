@@ -1,1 +1,1 @@
-export * from "./stores/auth";
+export { useAuthStore } from "./stores/auth";

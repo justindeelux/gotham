@@ -32,8 +32,8 @@ import type {
   TemplateRender,
   TemplateValues,
 } from "@/features/templates/api/templates";
-import DynamicForm from "@/shared/ui/DynamicForm.vue";
-import { ServiceLogs } from "@/features/services";
+import DynamicForm from "./DynamicForm.vue";
+import ServiceLogs from "@/features/services/components/ServiceLogs.vue";
 import { useServersStore } from "@/features/servers";
 import { useServicesStore } from "@/features/services";
 import { useTemplatesStore } from "@/features/templates/stores/templates";

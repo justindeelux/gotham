@@ -1,2 +1,1 @@
-export * from "./api/notifications";
-export * from "./stores/notifications";
+export { useNotificationsStore } from "./stores/notifications";

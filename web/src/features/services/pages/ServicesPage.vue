@@ -22,8 +22,8 @@ import { RouterLink, useRouter } from "vue-router";
 
 import { describeServiceError, serviceStatusTagType } from "@/features/services/api/services";
 import type { Service } from "@/features/services/api/services";
-import { TemplateGallery } from "@/features/templates";
-import { TemplateWizard } from "@/features/templates";
+import TemplateGallery from "@/features/templates/components/TemplateGallery.vue";
+import TemplateWizard from "@/features/templates/components/TemplateWizard.vue";
 import { useServersStore } from "@/features/servers";
 import { useServicesStore } from "@/features/services/stores/services";
 import { useTemplatesStore } from "@/features/templates";

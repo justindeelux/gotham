@@ -136,6 +136,32 @@ a:hover {
   color: var(--meta);
 }
 
+/* Form feedback rhythm (JUS-16/17/18), set once globally.
+ * JUS-17: Naive reserves a min-height feedback row under every field even
+ * when the field is valid. Collapse the empty row so no blank line renders,
+ * then give stacked fields in a plain NForm one shared item-to-item gap
+ * (space-4). Only .dynamic-form needs a :not() exclusion: the row pairs
+ * (addr-row, import-grid) are not direct NForm children, so the child
+ * selector already skips them and their own gap owns the rhythm — a sibling
+ * margin there would tilt the columns if they ever move directly under NForm.
+ * JUS-18: while a field reports an error its hint hides and returns when the
+ * error clears. Naive marks the input row .n-form-item-blank--error for rule
+ * failures and explicit validation-status alike, so one selector covers every
+ * form. Fields that render help through the feedback prop/slot (DynamicForm,
+ * the import dialogs) already swap help for error in that single line.
+ * JUS-16: the 12px error size lives in the Naive theme (App.vue), not here. */
+.n-form-item-feedback-wrapper:empty {
+  display: none;
+}
+
+.n-form:not(.dynamic-form) > * + * {
+  margin-top: var(--space-4);
+}
+
+.n-form-item-blank--error .field-hint {
+  display: none;
+}
+
 /* Single-border focus for text fields (JUS-13): the field's own border takes
  * the accent color on focus and the extra Naive UI glow ring is removed. This
  * covers NInput (text, password, textarea) and NInputNumber, which renders an
@@ -197,7 +223,7 @@ a:hover {
 .edit-server-modal .connect-group {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-4);
   min-width: 0;
   margin: 0;
   padding: 0;

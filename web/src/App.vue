@@ -218,6 +218,12 @@ const themeOverrides: GlobalThemeOverrides = {
     feedbackTextColorError: "#f67c7c",
     feedbackTextColorWarning: "#f3c057",
     feedbackTextColor: "#949ba4",
+    // JUS-16: validation error text is smaller than labels/inputs (12px, the
+    // --text-xs token) while the #f67c7c error ink keeps readable contrast on
+    // the dark surfaces. Set once here so every NFormItem follows it.
+    feedbackFontSizeSmall: "12px",
+    feedbackFontSizeMedium: "12px",
+    feedbackFontSizeLarge: "12px",
   },
 };
 </script>

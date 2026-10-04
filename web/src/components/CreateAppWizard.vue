@@ -437,7 +437,7 @@ function resetWizard(): void {
           </NAlert>
 
           <!-- Step 1: source -->
-          <NSpace v-if="step === 0" vertical :size="4">
+          <NSpace v-if="step === 0" vertical :size="16">
             <NFormItem label="Provider" :show-feedback="true">
               <NSelect
                 v-model:value="form.providerId"
@@ -526,7 +526,7 @@ function resetWizard(): void {
           </NSpace>
 
           <!-- Step 3: runtime -->
-          <NSpace v-else-if="step === 2" vertical :size="4">
+          <NSpace v-else-if="step === 2" vertical :size="16">
             <NFormItem label="Node">
               <NSelect
                 v-model:value="form.serverId"

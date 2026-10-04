@@ -17,14 +17,18 @@ import {
   describeServerError,
 } from "@/features/servers/api/servers";
 import type { CheckResult, Server, ServerCheckName } from "@/features/servers/api/servers";
+import {
+  requiredField,
+  serverHostSchema,
+  serverMessages,
+  serverNameSchema,
+  serverPortSchema,
+  serverUserSchema,
+} from "@/features/servers/schemas/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
 import { useInFlightGuard } from "@/shared/composables/useInFlightGuard";
 import { formatBytes } from "@/shared/utils/format";
-import {
-  NAME_PATTERN,
-  USER_PATTERN,
-  isValidHost,
-} from "@/features/servers/utils/serverValidation";
+import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 export interface ConnectionForm {
   name: string;
@@ -132,62 +136,42 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
   });
 
   const rules = computed<FormRules>(() => ({
-    name: [
-      { required: true, message: "Enter a node name.", trigger: ["input", "blur"] },
+    name: [{ ...ruleFrom(serverNameSchema), trigger: ["input", "blur"] }],
+    ip: [{ ...ruleFrom(serverHostSchema), trigger: ["input", "blur"] }],
+    port: [{ ...ruleFrom(serverPortSchema), trigger: ["input", "blur"] }],
+    sshUser: [{ ...ruleFrom(serverUserSchema), trigger: ["input", "blur"] }],
+    keyName: [
       {
-        validator: (_rule, value: string) =>
-          value.trim() === "" || NAME_PATTERN.test(value.trim()),
-        message: "Letters, digits, dots, dashes, and underscores only.",
+        ...ruleFrom(requiredField(serverMessages.keyNameRequired), {
+          when: () => form.authMode === "key" && form.keyMode === "new",
+        }),
         trigger: ["input", "blur"],
       },
     ],
-    ip: [
-      { required: true, message: "Enter an IP address or hostname.", trigger: ["input", "blur"] },
+    privateKey: [
       {
-        validator: (_rule, value: string) => isValidHost(value),
-        message: "Enter a valid IPv4 address or hostname.",
+        ...ruleFrom(requiredField(serverMessages.privateKeyRequired), {
+          when: () => form.authMode === "key" && form.keyMode === "new",
+        }),
         trigger: ["input", "blur"],
       },
     ],
-    port: [
+    keyId: [
       {
-        type: "number",
-        required: true,
-        message: "Enter an SSH port (1-65535).",
-        trigger: ["input", "blur"],
-      },
-      {
-        validator: (_rule, value: number | null) =>
-          value === null || (Number.isInteger(value) && value >= 1 && value <= 65535),
-        message: "Port must be a number from 1 to 65535.",
+        ...ruleFrom(requiredField(serverMessages.wizardKeyIdRequired), {
+          when: () => form.authMode === "key" && form.keyMode === "existing",
+        }),
         trigger: ["input", "blur"],
       },
     ],
-    sshUser: [
-      { required: true, message: "Enter the SSH user.", trigger: ["input", "blur"] },
+    password: [
       {
-        validator: (_rule, value: string) =>
-          value.trim() === "" || USER_PATTERN.test(value.trim()),
-        message: "Enter a valid Unix username (lowercase, digits, _, -).",
+        ...ruleFrom(requiredField(serverMessages.nodePasswordRequired), {
+          when: () => form.authMode === "password",
+        }),
         trigger: ["input", "blur"],
       },
     ],
-    keyName:
-      form.authMode === "key" && form.keyMode === "new"
-        ? { required: true, message: "Enter a key name.", trigger: ["input", "blur"] }
-        : [],
-    privateKey:
-      form.authMode === "key" && form.keyMode === "new"
-        ? { required: true, message: "Paste the PEM-encoded private key.", trigger: ["input", "blur"] }
-        : [],
-    keyId:
-      form.authMode === "key" && form.keyMode === "existing"
-        ? { required: true, message: "Enter an existing key ID.", trigger: ["input", "blur"] }
-        : [],
-    password:
-      form.authMode === "password"
-        ? { required: true, message: "Enter the node password.", trigger: ["input", "blur"] }
-        : [],
   }));
 
   /** hasCreatedServer reports whether the connection step already registered a node. */

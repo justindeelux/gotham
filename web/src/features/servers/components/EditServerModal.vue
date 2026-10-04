@@ -16,12 +16,16 @@ import {
 import { computed, reactive, ref, watch } from "vue";
 
 import type { Server, UpdateServerInput } from "@/features/servers/api/servers";
-import { useServersStore } from "@/features/servers/stores/servers";
 import {
-  NAME_PATTERN,
-  USER_PATTERN,
-  isValidHost,
-} from "@/features/servers/utils/serverValidation";
+  requiredField,
+  serverHostSchema,
+  serverMessages,
+  serverNameSchema,
+  serverPortSchema,
+  serverUserSchema,
+} from "@/features/servers/schemas/servers";
+import { useServersStore } from "@/features/servers/stores/servers";
+import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 interface Props {
   show: boolean;
@@ -60,50 +64,18 @@ const form = reactive<EditForm>({
 });
 
 const rules = computed<FormRules>(() => ({
-  name: [
-    { required: true, message: "Enter a node name.", trigger: ["input", "blur"] },
+  name: [{ ...ruleFrom(serverNameSchema), trigger: ["input", "blur"] }],
+  ip: [{ ...ruleFrom(serverHostSchema), trigger: ["input", "blur"] }],
+  port: [{ ...ruleFrom(serverPortSchema), trigger: ["input", "blur"] }],
+  sshUser: [{ ...ruleFrom(serverUserSchema), trigger: ["input", "blur"] }],
+  keyId: [
     {
-      validator: (_rule, value: string) =>
-        value.trim() === "" || NAME_PATTERN.test(value.trim()),
-      message: "Letters, digits, dots, dashes, and underscores only.",
+      ...ruleFrom(requiredField(serverMessages.editKeyIdRequired), {
+        when: () => form.authMode === "key",
+      }),
       trigger: ["input", "blur"],
     },
   ],
-  ip: [
-    { required: true, message: "Enter an IP address or hostname.", trigger: ["input", "blur"] },
-    {
-      validator: (_rule, value: string) => isValidHost(value),
-      message: "Enter a valid IPv4 address or hostname.",
-      trigger: ["input", "blur"],
-    },
-  ],
-  port: [
-    {
-      type: "number",
-      required: true,
-      message: "Enter an SSH port (1-65535).",
-      trigger: ["input", "blur"],
-    },
-    {
-      validator: (_rule, value: number | null) =>
-        value === null || (Number.isInteger(value) && value >= 1 && value <= 65535),
-      message: "Port must be a number from 1 to 65535.",
-      trigger: ["input", "blur"],
-    },
-  ],
-  sshUser: [
-    { required: true, message: "Enter the SSH user.", trigger: ["input", "blur"] },
-    {
-      validator: (_rule, value: string) =>
-        value.trim() === "" || USER_PATTERN.test(value.trim()),
-      message: "Enter a valid Unix username (lowercase, digits, _, -).",
-      trigger: ["input", "blur"],
-    },
-  ],
-  keyId:
-    form.authMode === "key"
-      ? { required: true, message: "Enter a key ID.", trigger: ["input", "blur"] }
-      : [],
 }));
 
 /** currentAuth describes the stored credential without revealing it. */

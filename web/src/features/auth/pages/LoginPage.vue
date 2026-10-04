@@ -14,17 +14,19 @@ import { onMounted, reactive, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { describeAuthError, useAuthStore } from "@/features/auth/stores/auth";
+import {
+  emailSchema,
+  loginPasswordSchema,
+  type LoginForm,
+} from "@/features/auth/schemas/auth";
 import { authSwitchTarget, safeRedirect } from "@/features/auth/utils/authRedirect";
 import AuthFootnote from "@/features/auth/components/AuthFootnote.vue";
 import GitHubOAuthButton from "@/features/auth/components/GitHubOAuthButton.vue";
+import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 // Error convention (shared with RegisterPage): client-side validation errors
 // render inline on the field via NFormItem; server-side submit failures render
 // once in the NAlert above the form, with text from describeAuthError.
-interface LoginForm {
-  email: string;
-  password: string;
-}
 
 const authStore = useAuthStore();
 const route = useRoute();
@@ -37,17 +39,8 @@ const errorMessage = ref("");
 const form = reactive<LoginForm>({ email: "", password: "" });
 
 const rules: FormRules = {
-  email: [
-    { required: true, message: "Email is required", trigger: ["input", "blur"] },
-    {
-      type: "email",
-      message: "Enter a valid email address",
-      trigger: ["input", "blur"],
-    },
-  ],
-  password: [
-    { required: true, message: "Password is required", trigger: ["input", "blur"] },
-  ],
+  email: [{ ...ruleFrom(emailSchema), trigger: ["input", "blur"] }],
+  password: [{ ...ruleFrom(loginPasswordSchema), trigger: ["input", "blur"] }],
 };
 
 /** redirectAfterAuth honours ?redirect when it is a safe local path. */

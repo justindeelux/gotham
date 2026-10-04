@@ -72,6 +72,12 @@ tag (no separate clone), driven by two systemd units.
   `/etc/systemd/system/gotham-agent.service.d/dev-insecure.conf`
   (`GOTHAM_AGENT_INSECURE=true`). Without these, both binaries fail closed
   ("no CA found … refusing to serve the agent channel in plaintext").
+- **Platform operator** — `/etc/systemd/system/gotham.service.d/platform-admins.conf`
+  sets `PLATFORM_ADMINS=demo@gotham.dev` (added 2026-10-04, then `systemctl
+  daemon-reload && systemctl restart gotham`). Without it the Domains & SSL page
+  shows "You need the admin scope" for every login, because no session can carry
+  an `admin` role (see Notes). Drop-ins on this box: `dev-insecure.conf` and
+  `platform-admins.conf`; there is no `/etc/gotham/gotham.env` here.
 - **Go** is at `/usr/local/go/bin/go` (not on PATH by default).
 
 Update procedure (release → box):
@@ -126,6 +132,13 @@ commit instead of a tag and a dev stamp (`git checkout -f 0378f65`, build with
   `v0.2.1-dev`, round header avatar, add server with a password, edit and delete a
   server, dashboard `Running applications 2 / 2`, sidebar role `owner`, install
   snippet with `--full`, login page without the sample footer.
+- **Browsing the UI from a workstation (2026-10-04):** forward the CP port with
+  `ssh -f -N -L 18000:localhost:8000 gotham` and open `http://localhost:18000`.
+  In Orca's embedded browser, `orca click` did not open the Naive UI modals;
+  calling `button.click()` through `orca eval` did. A backgrounded tab freezes CSS
+  transitions, so modals screenshot half-faded unless transitions are disabled
+  first (`*{transition:none!important;animation:none!important}`). Close the
+  tunnel with `pkill -f 'ssh.*18000:localhost:8000'`.
 - The CP's CSP allows exactly one remote image host, `avatars.githubusercontent.com`
   (`img-src 'self' data: https://avatars.githubusercontent.com`), shared with the
   OAuth avatar validator. GitHub OAuth is the only provider, and it has not been
@@ -237,6 +250,11 @@ repeated against this shared box's CP/agent yet.
   operator must set `PLATFORM_ADMINS` (or mint an admin-scoped token) to manage
   global DNS providers. Per-application certificates and redirects are not
   affected: they stay with the owning team's `owner`/`admin` members.
+  Today `PLATFORM_ADMINS` is the only way a login session becomes an operator:
+  login always issues the JWT role `user` (`internal/auth/service.go`), `users`
+  has no role column, and the team role `admin` is not a platform role. Minting
+  an `admin` token itself needs operator access. Making the first registered
+  account the platform admin is tracked in Linear JUS-21.
 - **API-token scopes (FX-2c):** the resource routes enforce the token scope
   boundary — reads (`GET`/`HEAD`) need `read`, mutations need `deploy`, and
   platform-management surfaces need `admin`. The decrypted database credentials

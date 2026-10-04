@@ -16,12 +16,8 @@ import {
 import { computed, reactive, ref, watch } from "vue";
 
 import type { Server, UpdateServerInput } from "@/features/servers/api/servers";
+import { editRules } from "@/features/servers/schemas/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
-import {
-  NAME_PATTERN,
-  USER_PATTERN,
-  isValidHost,
-} from "@/features/servers/utils/serverValidation";
 
 interface Props {
   show: boolean;
@@ -59,52 +55,7 @@ const form = reactive<EditForm>({
   password: "",
 });
 
-const rules = computed<FormRules>(() => ({
-  name: [
-    { required: true, message: "Enter a node name.", trigger: ["input", "blur"] },
-    {
-      validator: (_rule, value: string) =>
-        value.trim() === "" || NAME_PATTERN.test(value.trim()),
-      message: "Letters, digits, dots, dashes, and underscores only.",
-      trigger: ["input", "blur"],
-    },
-  ],
-  ip: [
-    { required: true, message: "Enter an IP address or hostname.", trigger: ["input", "blur"] },
-    {
-      validator: (_rule, value: string) => isValidHost(value),
-      message: "Enter a valid IPv4 address or hostname.",
-      trigger: ["input", "blur"],
-    },
-  ],
-  port: [
-    {
-      type: "number",
-      required: true,
-      message: "Enter an SSH port (1-65535).",
-      trigger: ["input", "blur"],
-    },
-    {
-      validator: (_rule, value: number | null) =>
-        value === null || (Number.isInteger(value) && value >= 1 && value <= 65535),
-      message: "Port must be a number from 1 to 65535.",
-      trigger: ["input", "blur"],
-    },
-  ],
-  sshUser: [
-    { required: true, message: "Enter the SSH user.", trigger: ["input", "blur"] },
-    {
-      validator: (_rule, value: string) =>
-        value.trim() === "" || USER_PATTERN.test(value.trim()),
-      message: "Enter a valid Unix username (lowercase, digits, _, -).",
-      trigger: ["input", "blur"],
-    },
-  ],
-  keyId:
-    form.authMode === "key"
-      ? { required: true, message: "Enter a key ID.", trigger: ["input", "blur"] }
-      : [],
-}));
+const rules = computed<FormRules>(() => editRules(form.authMode));
 
 /** currentAuth describes the stored credential without revealing it. */
 const currentAuth = computed<string>(() => {

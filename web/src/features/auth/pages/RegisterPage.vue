@@ -9,7 +9,7 @@ import {
   NSpace,
   NText,
 } from "naive-ui";
-import type { FormInst, FormItemRule, FormRules } from "naive-ui";
+import type { FormInst, FormRules } from "naive-ui";
 import { computed, onMounted, reactive, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
@@ -17,12 +17,10 @@ import AuthFootnote from "@/features/auth/components/AuthFootnote.vue";
 import GitHubOAuthButton from "@/features/auth/components/GitHubOAuthButton.vue";
 import PasswordStrengthMeter from "@/features/auth/components/PasswordStrengthMeter.vue";
 import { useRegisterInvite } from "@/features/auth/composables/useRegisterInvite";
+import { registerRules } from "@/features/auth/schemas/auth";
 import { describeAuthError, useAuthStore } from "@/features/auth/stores/auth";
 import { authSwitchTarget, safeRedirect } from "@/features/auth/utils/authRedirect";
-import {
-  meetsPasswordPolicy,
-  strengthOf,
-} from "@/features/auth/utils/passwordStrength";
+import { strengthOf } from "@/features/auth/utils/passwordStrength";
 
 // Error convention (shared with LoginPage): client-side validation errors
 // render inline on the field via NFormItem; server-side submit failures render
@@ -85,42 +83,9 @@ onMounted(async () => {
 
 const strength = computed<number>(() => strengthOf(form.password));
 
-const rules: FormRules = {
-  email: [
-    { required: true, message: "Email is required", trigger: ["input", "blur"] },
-    {
-      type: "email",
-      message: "Enter a valid email address",
-      trigger: ["input", "blur"],
-    },
-  ],
-  password: [
-    { required: true, message: "Password is required", trigger: ["input", "blur"] },
-    {
-      validator: (_rule: FormItemRule, value: string): boolean =>
-        meetsPasswordPolicy(value),
-      message:
-        "Use at least 10 characters with 2 character classes (lowercase, uppercase, digits, symbols)",
-      trigger: ["input", "blur"],
-    },
-  ],
-  confirmPassword: [
-    { required: true, message: "Please confirm your password", trigger: ["input", "blur"] },
-    {
-      validator: (_rule: FormItemRule, value: string): boolean =>
-        value === form.password,
-      message: "Passwords do not match",
-      trigger: ["input", "blur"],
-    },
-  ],
-  terms: [
-    {
-      validator: (_rule: FormItemRule, value: boolean): boolean => value === true,
-      message: "You must accept the terms to create an account",
-      trigger: ["change"],
-    },
-  ],
-};
+// The confirm rule reads the live password through a reader (not a
+// snapshot), so retyping the password revalidates the confirmation.
+const rules: FormRules = registerRules(() => form.password);
 
 /** redirectAfterAuth honours ?redirect when it is a safe local path. */
 async function redirectAfterAuth(): Promise<void> {

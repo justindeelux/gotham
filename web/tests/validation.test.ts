@@ -48,6 +48,18 @@ describe("ruleFrom", () => {
     ).toBe(true);
   });
 
+  it("sets the Naive required flag only when asked", () => {
+    expect(ruleFrom(emailSchema).required).toBeUndefined();
+    expect(ruleFrom(emailSchema, { required: true }).required).toBe(true);
+    expect(ruleFrom(emailSchema, { required: false }).required).toBeUndefined();
+  });
+
+  it("keeps the required flag alongside a when predicate", () => {
+    const rule = ruleFrom(emailSchema, { when: () => false, required: true });
+    expect(rule.required).toBe(true);
+    expect(rule.validator?.({}, "not-an-email")).toBe(true);
+  });
+
   it("validates when the when predicate is true", () => {
     expect(
       runValidator(emailSchema, "not-an-email", { when: () => true }),

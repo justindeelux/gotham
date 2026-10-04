@@ -9,6 +9,16 @@ export interface RuleFromOptions {
    * passes without touching the schema.
    */
   when?: () => boolean;
+  /**
+   * required sets the Naive `required` flag on the returned rule. Naive
+   * reads the flag only for the red asterisk label mark; validation still
+   * goes through `validator`, so this never changes what is accepted.
+   * Pass it wherever the pre-zod rule had `required: true`, or the mark
+   * silently disappears. For conditional fields pass the same mode check
+   * the `when` predicate uses (evaluated by the caller's computed, which
+   * re-runs on mode change) so the mark follows the mode.
+   */
+  required?: boolean;
 }
 
 /**
@@ -28,6 +38,7 @@ export function ruleFrom<T>(
   opts?: RuleFromOptions,
 ): FormItemRule {
   return {
+    ...(opts?.required === true ? { required: true as const } : {}),
     validator: (_rule: unknown, value: unknown): boolean | Error => {
       if (opts?.when && !opts.when()) {
         return true;

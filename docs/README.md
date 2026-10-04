@@ -28,6 +28,13 @@ Phase status and remaining work live only in [`TODO.md`](TODO.md).
 
 [`../AGENTS.md`](../AGENTS.md) — workflow, invariants, review gates and the phase gate.
 
+## Library decisions
+
+[`library-audit.md`](library-audit.md) — which third-party libraries replace
+hand-rolled code and which stay hand-written (JUS-23): zod for all web
+validation, @vueuse/core for media-query/clipboard only, everything else
+stays as-is.
+
 ## Test server
 
 [`test-server.md`](test-server.md) — the long-lived all-in-one test box

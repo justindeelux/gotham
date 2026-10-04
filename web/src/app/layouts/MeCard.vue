@@ -13,12 +13,22 @@ const authStore = useAuthStore();
 const teamsStore = useTeamsStore();
 const router = useRouter();
 
-const accountOptions: DropdownOption[] = [{ label: "Sign out", key: "sign-out" }];
+const accountOptions: DropdownOption[] = [
+  { label: "Profile", key: "profile" },
+  { label: "Sign out", key: "sign-out" },
+];
 
-const userEmail = computed<string>(() => authStore.user?.email ?? "Signed in");
+/** displayName is the footer name: display name, falling back to the email. */
+const displayName = computed<string>(() => {
+  const name = authStore.user?.display_name?.trim();
+  if (name) {
+    return name;
+  }
+  return authStore.user?.email ?? "Signed in";
+});
 
 const userInitial = computed<string>(() =>
-  (authStore.user?.email?.[0] ?? "?").toUpperCase(),
+  (displayName.value[0] ?? "?").toUpperCase(),
 );
 
 /**
@@ -86,6 +96,10 @@ watch(
 );
 
 async function handleSelect(key: string | number): Promise<void> {
+  if (key === "profile") {
+    await router.push({ name: "profile" });
+    return;
+  }
   if (key !== "sign-out") {
     return;
   }
@@ -108,7 +122,7 @@ async function handleSelect(key: string | number): Promise<void> {
           <template #fallback>{{ userInitial }}</template>
         </NAvatar>
         <span class="me-meta">
-          <NText class="me-email">{{ userEmail }}</NText>
+          <NText class="me-email">{{ displayName }}</NText>
           <NText depth="3" class="me-role">{{ roleText }}</NText>
         </span>
         <GothamIcon name="chevron-down" class="me-chevron" />

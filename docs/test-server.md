@@ -242,19 +242,23 @@ repeated against this shared box's CP/agent yet.
 
 ## Notes
 
-- **Platform operators (BE-8.2):** the node-wide `POST /api/v1/proxy/sync` and
+- **Platform operators (BE-8.2, JUS-21):** the node-wide `POST /api/v1/proxy/sync` and
   the DNS-provider CRUD require a platform operator. An API token holding the
-  `admin` scope always passes; a session (JWT) passes only with an `admin` role
+  `admin` scope always passes; a session (JWT) passes with an `admin` role
   claim or when the account email is listed in the comma-separated
-  `PLATFORM_ADMINS` environment variable. Unset means no session passes, so an
-  operator must set `PLATFORM_ADMINS` (or mint an admin-scoped token) to manage
-  global DNS providers. Per-application certificates and redirects are not
-  affected: they stay with the owning team's `owner`/`admin` members.
-  Today `PLATFORM_ADMINS` is the only way a login session becomes an operator:
-  login always issues the JWT role `user` (`internal/auth/service.go`), `users`
-  has no role column, and the team role `admin` is not a platform role. Minting
-  an `admin` token itself needs operator access. Making the first registered
-  account the platform admin is tracked in Linear JUS-21.
+  `PLATFORM_ADMINS` environment variable. **On a fresh instance the first
+  registered account is automatically the platform admin** (its sessions carry
+  the `admin` claim), so no `PLATFORM_ADMINS` entry is needed there; on
+  upgraded instances with existing accounts nothing changes (all rows migrate
+  as non-admin) and an operator must still set `PLATFORM_ADMINS` (or mint an
+  admin-scoped token) to manage global DNS providers. Takeover risk: on a
+  fresh instance whoever registers first becomes the admin, so create that
+  account before exposing an unconfigured public instance. Per-application
+  certificates and redirects are not affected: they stay with the owning
+  team's `owner`/`admin` members.
+  The team role `admin` is not a platform role. Minting an `admin` token
+  itself needs operator access. Making the first registered account the
+  platform admin was done in Linear JUS-21.
 - **API-token scopes (FX-2c):** the resource routes enforce the token scope
   boundary — reads (`GET`/`HEAD`) need `read`, mutations need `deploy`, and
   platform-management surfaces need `admin`. The decrypted database credentials

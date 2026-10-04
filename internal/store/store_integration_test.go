@@ -513,6 +513,9 @@ func TestStoreCreateFirstUserSerializes(t *testing.T) {
 	if wins != 1 {
 		t.Fatalf("concurrent bootstraps succeeded %d times, want exactly 1", wins)
 	}
+	if !winner.IsPlatformAdmin {
+		t.Fatal("bootstrap race winner IsPlatformAdmin = false, want true (JUS-21)")
+	}
 
 	// Delete exactly the row this test created: the database is shared, so a
 	// blanket delete could remove an account another process owns.

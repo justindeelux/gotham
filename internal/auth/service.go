@@ -30,6 +30,7 @@ const (
 	minPasswordLength = 8
 	maxPasswordLength = 128
 	defaultRole       = "user"
+	adminRole         = "admin"
 )
 
 // User is the public representation of an account, safe to serialise to JSON.
@@ -37,6 +38,7 @@ type User struct {
 	ID        string    `json:"id"`
 	Email     string    `json:"email"`
 	Avatar    *string   `json:"avatar,omitempty"`
+	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -455,10 +457,24 @@ func (s *Service) issue(ctx context.Context, user sqlc.User) (*AuthResult, error
 	}, nil
 }
 
-// signAccessToken mints the short-lived JWT for user.
+// signAccessToken mints the short-lived JWT for user. The role claim reflects
+// the account's current platform-admin flag, so the first account's sessions
+// pass isPlatformOperator while every other account stays "user". Login and
+// Refresh both sign from a fresh read, so a role change in the database takes
+// effect at the next refresh: a stale role never outlives the access-token TTL
+// (a demoted admin's old access token expires within 15 minutes and its refresh
+// chain mints "user" tokens from then on).
 func (s *Service) signAccessToken(user sqlc.User) (string, error) {
-	accessToken, _, err := s.signer.IssueAccessToken(uuid.UUID(user.ID.Bytes), defaultRole)
+	accessToken, _, err := s.signer.IssueAccessToken(uuid.UUID(user.ID.Bytes), roleFor(user))
 	return accessToken, err
+}
+
+// roleFor maps a stored row to its access-token role claim.
+func roleFor(user sqlc.User) string {
+	if user.IsPlatformAdmin {
+		return adminRole
+	}
+	return defaultRole
 }
 
 // newRefreshToken generates an opaque refresh token and the SHA-256 hash that is
@@ -516,6 +532,7 @@ func toUser(user sqlc.User) *User {
 		ID:        uuid.UUID(user.ID.Bytes).String(),
 		Email:     user.Email,
 		Avatar:    user.Avatar,
+		Role:      roleFor(user),
 		CreatedAt: user.CreatedAt.Time,
 	}
 }

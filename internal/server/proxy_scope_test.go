@@ -105,3 +105,47 @@ func TestPlatformAdminBoundary(t *testing.T) {
 		t.Fatalf("service calls = %d, want 2 after the admin token", calls)
 	}
 }
+
+// TestPlatformAdminRoleSessionPasses proves the JUS-21 session path: a
+// session whose access token carries the "admin" role claim (the first
+// account's sessions) passes RequirePlatformAdmin with PLATFORM_ADMINS unset,
+// while a plain "user" session is still refused.
+func TestPlatformAdminRoleSessionPasses(t *testing.T) {
+	s, _ := newTestTokenServer(t)
+
+	if err := unsetPlatformAdmins(t); err != nil {
+		t.Fatalf("unset %s: %v", PlatformAdminsEnv, err)
+	}
+
+	calls := 0
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+	})
+	// The exact chain internal/server mounts for POST /v1/proxy/sync.
+	handler := s.RequireAuth(s.RequirePlatformAdmin(next))
+
+	do := func(authorization string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/proxy/sync", nil)
+		if authorization != "" {
+			request.Header.Set("Authorization", authorization)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	if recorder := do("Bearer admin-token"); recorder.Code != http.StatusOK {
+		t.Fatalf("admin-role session status = %d, want 200", recorder.Code)
+	}
+	if calls != 1 {
+		t.Fatalf("service calls = %d, want 1 after the admin-role session", calls)
+	}
+
+	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusForbidden {
+		t.Fatalf("plain session status = %d, want 403", recorder.Code)
+	}
+	if calls != 1 {
+		t.Fatalf("service calls = %d, want 1 after the refused plain session", calls)
+	}
+}

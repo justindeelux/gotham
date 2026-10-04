@@ -211,8 +211,13 @@ func (s *OAuthService) createOAuthUser(ctx context.Context, email string) (sqlc.
 		return sqlc.User{}, ErrRegistrationClosed
 	}
 
+	// An empty instance bootstraps through CreateFirstUser whether or not the
+	// override is on, so the first OAuth sign-up is the platform admin
+	// (JUS-21) exactly like the first web registration. The advisory lock +
+	// NOT EXISTS guard inside admits exactly one winner, so the override can
+	// never mint a second admin here.
 	var user sqlc.User
-	if count == 0 && !s.auth.AllowOpenRegistration {
+	if count == 0 {
 		user, err = s.auth.store.CreateFirstUser(ctx, email, nil)
 	} else {
 		user, err = s.auth.store.CreateUser(ctx, email, nil)
@@ -221,12 +226,22 @@ func (s *OAuthService) createOAuthUser(ctx context.Context, email string) (sqlc.
 		return user, nil
 	}
 	if errors.Is(err, store.ErrInstanceHasAccount) {
-		// We lost the bootstrap race. If the winner is this same identity, the
-		// callback is a valid login, not a closed registration.
-		if existing, readErr := s.auth.store.GetUserByEmail(ctx, email); readErr == nil {
-			return existing, nil
+		if s.auth.AllowOpenRegistration {
+			// Lost the bootstrap race while the override is on: registration
+			// stays open, so join as a plain account instead of refusing.
+			// The winner is already the admin (see above).
+			user, err = s.auth.store.CreateUser(ctx, email, nil)
+			if err == nil {
+				return user, nil
+			}
+		} else {
+			// We lost the bootstrap race. If the winner is this same identity, the
+			// callback is a valid login, not a closed registration.
+			if existing, readErr := s.auth.store.GetUserByEmail(ctx, email); readErr == nil {
+				return existing, nil
+			}
+			return sqlc.User{}, ErrRegistrationClosed
 		}
-		return sqlc.User{}, ErrRegistrationClosed
 	}
 	if !isUniqueViolation(err) {
 		return sqlc.User{}, fmt.Errorf("auth: oauth create user: %w", err)

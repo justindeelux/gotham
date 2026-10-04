@@ -10,11 +10,19 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 )
+
+// cronParser parses the five-field schedule grammar. Descriptors (@daily and
+// friends) are deliberately excluded: the schedule editor emits numeric
+// fields only, and a separate pre-check below rejects names, descriptors and
+// "?" before robfig ever sees the expression.
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
 // cronFieldBounds is the accepted value range of one cron field, in the
 // canonical order of a five-field expression. Day-of-week accepts 0-7 where 7
-// is Sunday, the usual vixie-cron spelling.
+// is Sunday, the usual vixie-cron spelling; robfig accepts 0-6, so the
+// pre-check rewrites a 7 into its canonical form before parsing.
 var cronFieldBounds = [5][2]int{
 	{0, 59}, // minute
 	{0, 23}, // hour
@@ -23,32 +31,24 @@ var cronFieldBounds = [5][2]int{
 	{0, 7},  // day of week
 }
 
-// cronSpec is a parsed five-field cron expression: minute, hour, day of
-// month, month, day of week. Fields accept "*", "*/step", "a", "a-b",
-// "a-b/step" and comma lists of those — the vocabulary the schedule editor
-// in the UI offers.
+// cronSpec is a parsed five-field cron expression. The value sets come from
+// robfig; any marks a field written as a bare "*", which decides the classic
+// day-of-month/day-of-week rule: when both are restricted, either one
+// matches.
 type cronSpec struct {
-	fields [5]cronField
+	sched *cron.SpecSchedule
 	// any marks a field written as a bare "*", which decides the classic
 	// day-of-month/day-of-week rule: when both are restricted, either one
 	// matches.
 	any [5]bool
 }
 
-// cronField is the set of allowed values of one field.
-type cronField struct {
-	values map[int]struct{}
-}
-
-// has reports whether v is allowed.
-func (f cronField) has(v int) bool {
-	_, ok := f.values[v]
-	return ok
-}
-
 // parseCron parses a five-field expression. Numeric fields only: the schedule
-// editor emits numbers, and keeping names out of the grammar keeps the parser
-// (and its tests) small.
+// editor emits numbers, and keeping names out of the grammar keeps the
+// accepted vocabulary (and its tests) small. robfig does the parsing; the
+// pre-check keeps the old grammar gate (no month/weekday names, no
+// descriptors, no "?") and the old error messages, and rewrites day-of-week 7
+// (Sunday) into the 0-6 range robfig accepts.
 func parseCron(expression string) (cronSpec, error) {
 	var spec cronSpec
 	parts := strings.Fields(strings.TrimSpace(expression))
@@ -56,32 +56,48 @@ func parseCron(expression string) (cronSpec, error) {
 		return cronSpec{}, fmt.Errorf("%w: cron expression must have 5 fields (minute hour day month weekday), got %d",
 			ErrValidation, len(parts))
 	}
+	normalized := make([]string, 5)
 	for i, part := range parts {
-		field, any, err := parseCronField(part, cronFieldBounds[i][0], cronFieldBounds[i][1])
+		field, isAny, err := checkCronField(part, cronFieldBounds[i][0], cronFieldBounds[i][1], i == 4)
 		if err != nil {
 			return cronSpec{}, fmt.Errorf("%w: cron field %q: %v", ErrValidation, part, err)
 		}
-		spec.fields[i] = field
-		spec.any[i] = any
+		normalized[i] = field
+		spec.any[i] = isAny
 	}
+	schedule, err := cronParser.Parse(strings.Join(normalized, " "))
+	if err != nil {
+		// Unreachable for pre-checked input; robfig stays the parser of
+		// record so its validation is the one building the schedule.
+		return cronSpec{}, fmt.Errorf("%w: cron field: %v", ErrValidation, err)
+	}
+	sched, ok := schedule.(*cron.SpecSchedule)
+	if !ok {
+		return cronSpec{}, fmt.Errorf("%w: cron expression %q is not a standard schedule", ErrValidation, expression)
+	}
+	spec.sched = sched
 	return spec, nil
 }
 
-// parseCronField expands one field into its allowed values.
-func parseCronField(expression string, min, max int) (cronField, bool, error) {
-	field := cronField{values: make(map[int]struct{})}
+// checkCronField validates one numeric-only field with the historical error
+// messages and returns its robfig-compatible spelling. Only the day-of-week
+// field is rewritten (normalizeDow): a 7 (Sunday) becomes 0, so "7", "5-7"
+// and "5/2" keep matching exactly the values the old parser canonicalised.
+func checkCronField(expression string, min, max int, normalizeDow bool) (string, bool, error) {
 	any := false
-	for _, item := range strings.Split(expression, ",") {
+	items := strings.Split(expression, ",")
+	normalized := make([]string, 0, len(items))
+	for _, item := range items {
 		item = strings.TrimSpace(item)
 		if item == "" {
-			return field, any, fmt.Errorf("empty list item")
+			return "", any, fmt.Errorf("empty list item")
 		}
 		rangePart, stepPart, hasStep := strings.Cut(item, "/")
 		step := 1
 		if hasStep {
 			parsed, err := strconv.Atoi(stepPart)
 			if err != nil || parsed <= 0 {
-				return field, any, fmt.Errorf("step must be a positive number")
+				return "", any, fmt.Errorf("step must be a positive number")
 			}
 			step = parsed
 		}
@@ -94,15 +110,15 @@ func parseCronField(expression string, min, max int) (cronField, bool, error) {
 			bounds := strings.SplitN(rangePart, "-", 2)
 			var err error
 			if low, err = strconv.Atoi(bounds[0]); err != nil {
-				return field, any, fmt.Errorf("invalid range %q", rangePart)
+				return "", any, fmt.Errorf("invalid range %q", rangePart)
 			}
 			if high, err = strconv.Atoi(bounds[1]); err != nil {
-				return field, any, fmt.Errorf("invalid range %q", rangePart)
+				return "", any, fmt.Errorf("invalid range %q", rangePart)
 			}
 		default:
 			parsed, err := strconv.Atoi(rangePart)
 			if err != nil {
-				return field, any, fmt.Errorf("invalid value %q", rangePart)
+				return "", any, fmt.Errorf("invalid value %q", rangePart)
 			}
 			low = parsed
 			if hasStep {
@@ -113,22 +129,36 @@ func parseCronField(expression string, min, max int) (cronField, bool, error) {
 			}
 		}
 		if low < min || high > max || low > high {
-			return field, any, fmt.Errorf("value out of range %d-%d", min, max)
+			return "", any, fmt.Errorf("value out of range %d-%d", min, max)
 		}
-		for value := low; value <= high; value += step {
-			// The day-of-week field accepts 7 as a second spelling of
-			// Sunday, so it is canonicalised to 0 while expanding.
-			canonical := value
-			if max == 7 && canonical == 7 {
-				canonical = 0
-			}
-			field.values[canonical] = struct{}{}
+		if normalizeDow {
+			item = normalizeDowItem(item, rangePart, low, high, step, hasStep)
 		}
+		normalized = append(normalized, item)
 	}
-	if len(field.values) == 0 {
-		return field, any, fmt.Errorf("field matches nothing")
+	return strings.Join(normalized, ","), any, nil
+}
+
+// normalizeDowItem rewrites one validated day-of-week item into the 0-6
+// range robfig accepts, preserving the value set (7 is Sunday). Bare "*" and
+// "*/step" already cover identical sets in both ranges and pass through.
+func normalizeDowItem(item, rangePart string, low, high, step int, hasStep bool) string {
+	if rangePart == "*" || high < 7 {
+		return item
 	}
-	return field, any, nil
+	if low == 7 {
+		return "0"
+	}
+	base := fmt.Sprintf("%d-6", low)
+	if hasStep {
+		base += "/" + strconv.Itoa(step)
+	}
+	// Without a step the range always reaches 7; with one it does only when
+	// the stride lands on it.
+	if (7-low)%step == 0 {
+		return base + ",0"
+	}
+	return base
 }
 
 // nextRunTime returns the next run after a scheduler served `served` at tick
@@ -156,18 +186,22 @@ func nextRunTime(cron string, served, now time.Time, loc *time.Location) (time.T
 const maxCronSteps = 500_000
 
 // nextCronTime returns the first time strictly after `after`, evaluated in
-// loc, that matches the expression. It walks day → hour → minute so a yearly
-// schedule does not iterate over four years of minutes, and it refuses an
-// expression that can never fire (for example February 30th).
+// loc, that matches the expression. The value sets come from robfig; the
+// scan walks day → hour → minute so a yearly schedule does not iterate over
+// four years of minutes, and it refuses an expression that can never fire
+// (for example February 30th).
 //
 // The scan walks the local *wall clock*, not absolute time, and treats each
 // wall-clock slot as served at most once. On a fall-back day a repeated hour
 // therefore fires once, not twice — including wildcard-hour schedules, which
 // skip the second pass of the repeated hour entirely. On a spring-forward day a
 // slot inside the skipped interval fires at the transition instant (the first
-// valid instant after the gap) instead of being missed. Walking wall time also
-// makes the scan incapable of stalling on a transition, so the bounded step cap
-// is only a safety net.
+// valid instant after the gap) instead of being missed. This wall-clock
+// policy is the thin wrapper keeping the historical schedule results:
+// robfig's own Schedule.Next walks absolute time, so it would fire the
+// second pass of a repeated hour again and skip a gap day entirely.
+// Walking wall time also makes the scan incapable of stalling on a
+// transition, so the bounded step cap is only a safety net.
 func nextCronTime(expression string, after time.Time, loc *time.Location) (time.Time, error) {
 	spec, err := parseCron(expression)
 	if err != nil {
@@ -183,7 +217,7 @@ func nextCronTime(expression string, after time.Time, loc *time.Location) (time.
 	limit := cursor.AddDate(4, 0, 0)
 
 	for steps := 0; cursor.Before(limit) && steps < maxCronSteps; steps++ {
-		if !spec.fields[3].has(int(cursor.Month())) {
+		if 1<<uint(cursor.Month())&spec.sched.Month == 0 {
 			cursor = nextWallDay(cursor)
 			continue
 		}
@@ -191,11 +225,11 @@ func nextCronTime(expression string, after time.Time, loc *time.Location) (time.
 			cursor = nextWallDay(cursor)
 			continue
 		}
-		if !spec.fields[1].has(cursor.Hour()) {
+		if 1<<uint(cursor.Hour())&spec.sched.Hour == 0 {
 			cursor = cursor.Truncate(time.Hour).Add(time.Hour)
 			continue
 		}
-		if !spec.fields[0].has(cursor.Minute()) {
+		if 1<<uint(cursor.Minute())&spec.sched.Minute == 0 {
 			cursor = cursor.Add(time.Minute)
 			continue
 		}
@@ -311,10 +345,11 @@ func wallBefore(a, b time.Time) bool {
 
 // dayMatches applies the day-of-month/day-of-week rule of classic cron: a
 // bare "*" never restricts, and when both fields are restricted either one
-// is enough.
+// is enough. The value sets are robfig's; the star flags keep the historical
+// meaning (only a bare "*" counts, "*/1" stays restricted).
 func (s cronSpec) dayMatches(t time.Time) bool {
-	dayOfMonth := s.fields[2].has(t.Day())
-	dayOfWeek := s.fields[4].has(int(t.Weekday()))
+	dayOfMonth := 1<<uint(t.Day())&s.sched.Dom != 0
+	dayOfWeek := 1<<uint(t.Weekday())&s.sched.Dow != 0
 	switch {
 	case s.any[2] && s.any[4]:
 		return true

@@ -69,14 +69,21 @@ const message = useMessage();
 // The agent installer is not a release asset and needs its sibling files
 // (deploy/release-verify.sh, gotham-agent-updater.conf, ...); it also fails
 // closed without the control-plane CA, and the agent dials 127.0.0.1 unless
-// GOTHAM_AGENT_CP_ADDR is set. This is the same complete checkout block the
-// Servers page and docs/install.md use — keep it a single copy-pasteable
-// command (the copy button copies this exact string).
+// GOTHAM_AGENT_CP_ADDR is set. This is the same complete checkout block
+// docs/install.md uses — keep it a single copy-pasteable command (the copy
+// button copies this exact string).
 const installCommand = [
   "scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .",
   "git clone --depth 1 https://github.com/justindeelux/gotham /tmp/gotham",
   "sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=<node> \\",
-  "  /tmp/gotham/deploy/install-agent.sh --ca ./ca.crt",
+  "  /tmp/gotham/deploy/install-agent.sh --ca ./ca.crt --full",
+  "",
+  "# --full installs Docker Engine + the compose plugin (Ubuntu/Debian).",
+  "# install.sh already adds a localhost agent by default (--no-local-agent",
+  "# opts out); use this snippet for every further node.",
+  "# The installer verifies the signed manifest + digest, writes",
+  "# /etc/gotham/ca.crt, then enables the systemd unit.",
+  "systemctl status gotham-agent",
 ].join("\n");
 
 const stepNames = ["Connect", "Validate", "Install", "Finish"];
@@ -817,7 +824,7 @@ function resetWizard(): void {
                 :value="installCommand"
                 type="textarea"
                 readonly
-                :autosize="{ minRows: 4, maxRows: 4 }"
+                :autosize="{ minRows: 8, maxRows: 11 }"
                 class="grow install-command"
               />
               <NButton @click="copyInstallCommand">Copy</NButton>

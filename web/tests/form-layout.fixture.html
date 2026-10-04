@@ -2,43 +2,84 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Form row layout harness (JUS-19 fix 1)</title>
+<title>Form row layout harness (JUS-19 fix 3)</title>
 <!-- The real global stylesheet under test. -->
 <link rel="stylesheet" href="../src/styles/main.css">
 </head>
 <body>
-  <!-- Wide container: an 880px wizard body is ~640px, a page is wider; 900px
-    stands in for every container above the 600px collapse threshold. -->
-  <div id="wide" class="form-container" style="width: 900px;">
-    <div class="form-row" id="wide-row">
-      <div class="n-form-item" id="wide-first">
+  <!-- One box per real container width (review-B-r2 measurements): 512px
+    NForms in the 560px modals, the 590px Add-server connect-form, the 622px
+    CreateAppWizard wizard-main, the 640px database card, and the 420px
+    Register card. Content uses the longest real wrapping labels; intrinsic-
+    minimum controls (segmented radios) never share a row by construction,
+    which the structural vitest suite locks per form. -->
+  <div id="box-512" class="form-container" style="width: 512px;">
+    <div class="form-row" id="row-512">
+      <div class="n-form-item" id="cell-512-a">
         <div class="n-form-item-label">Challenge</div>
         <div>dns-01 · TXT record via a DNS provider</div>
       </div>
-      <div class="n-form-item" id="wide-second">
+      <div class="n-form-item" id="cell-512-b">
         <div class="n-form-item-label">DNS provider</div>
         <div>Production Cloudflare · cloudflare</div>
-      </div>
-    </div>
-    <div class="form-row" id="wide-lone-row">
-      <div class="n-form-item" id="wide-lone">
-        <div class="n-form-item-label">Authentication</div>
-        <div>Authenticate with a stored private key or a node password.</div>
       </div>
     </div>
   </div>
 
-  <!-- Narrow container: a 560px modal body is ~520px; 400px stands in for
-    every container below the 600px collapse threshold. -->
-  <div id="narrow" class="form-container" style="width: 400px;">
-    <div class="form-row" id="narrow-row">
-      <div class="n-form-item" id="narrow-first">
-        <div class="n-form-item-label">Challenge</div>
-        <div>dns-01 · TXT record via a DNS provider</div>
+  <div id="box-590" class="form-container" style="width: 590px;">
+    <div class="form-row" id="row-590">
+      <div class="n-form-item" id="cell-590-a">
+        <div class="n-form-item-label">Node name</div>
+        <div>A short unique name, e.g. build-node-03.</div>
       </div>
-      <div class="n-form-item" id="narrow-second">
-        <div class="n-form-item-label">DNS provider</div>
-        <div>Production Cloudflare · cloudflare</div>
+      <div class="n-form-item" id="cell-590-b">
+        <div class="n-form-item-label">SSH user</div>
+        <div>The Unix user the control plane connects as.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="box-622" class="form-container" style="width: 622px;">
+    <div class="form-row" id="row-622">
+      <div class="n-form-item" id="cell-622-a">
+        <div class="n-form-item-label">Branch</div>
+        <div>Branch listing is not exposed by the API yet — the default branch is prefilled.</div>
+      </div>
+      <div class="n-form-item" id="cell-622-b">
+        <div class="n-form-item-label">Application name</div>
+        <div>Lowercase, digits and dashes (3-31 chars). Used for the container and image tag.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="box-640" class="form-container" style="width: 640px;">
+    <div class="form-row" id="row-640">
+      <div class="n-form-item" id="cell-640-a">
+        <div class="n-form-item-label">Version</div>
+        <div>16-alpine</div>
+      </div>
+      <div class="n-form-item" id="cell-640-b">
+        <div class="n-form-item-label">Node</div>
+        <div>The container and its volume live on this node.</div>
+      </div>
+    </div>
+    <div class="form-row" id="row-640-lone">
+      <div class="n-form-item" id="cell-640-lone">
+        <div class="n-form-item-label">Key name</div>
+        <div>A label so you can reuse the key for other nodes.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="box-420" class="form-container" style="width: 420px;">
+    <div class="form-row" id="row-420">
+      <div class="n-form-item" id="cell-420-a">
+        <div class="n-form-item-label">Password</div>
+        <div>At least 10 characters with 2 character classes.</div>
+      </div>
+      <div class="n-form-item" id="cell-420-b">
+        <div class="n-form-item-label">Confirm password</div>
+        <div>Repeat your password.</div>
       </div>
     </div>
   </div>

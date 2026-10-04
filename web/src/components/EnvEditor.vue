@@ -137,7 +137,7 @@ function removeRow(index: number): void {
   white-space: nowrap;
 }
 
-@container (max-width: 600px) {
+@container (max-width: 480px) {
   .env-editor__row {
     grid-template-columns: minmax(0, 1fr);
   }

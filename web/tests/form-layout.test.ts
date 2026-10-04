@@ -86,25 +86,74 @@ function expectPair(source: string, a: string, b: string, rowClass = "form-row")
   expect(hit, `expected "${a}" and "${b}" in the same .${rowClass} block`).toBe(true);
 }
 
+/**
+ * mediaBlocksMentioning returns the @media bodies that name a selector, so
+ * viewport fallbacks can be scoped to one rule instead of the whole file.
+ */
+export function mediaBlocksMentioning(source: string, selector: string): string[] {
+  const hits: string[] = [];
+  let cursor = 0;
+  while (true) {
+    const at = source.indexOf("@media", cursor);
+    if (at === -1) {
+      return hits;
+    }
+    const open = source.indexOf("{", at);
+    let depth = 1;
+    let i = open + 1;
+    while (depth > 0) {
+      if (i >= source.length) {
+        throw new Error("unbalanced braces in @media rule");
+      }
+      if (source[i] === "{") {
+        depth += 1;
+      } else if (source[i] === "}") {
+        depth -= 1;
+      }
+      i += 1;
+    }
+    const body = source.slice(open + 1, i - 1);
+    if (body.includes(selector)) {
+      hits.push(body);
+    }
+    cursor = i;
+  }
+}
+
 /** rowTexts returns the text of each .form-row in DOM order. */
 function rowTexts(wrapper: VueWrapper): string[] {
   return wrapper.findAll(".form-row").map((row) => row.text());
 }
 
 describe("JUS-19 shared .form-row utility", () => {
-  it("lays out two equal columns that collapse per container below ~600px", () => {
+  it("lays out two equal columns that collapse per container below 480px", () => {
     expect(mainCss).toContain(".form-container");
     expect(mainCss).toMatch(/\.form-container\s*\{[^}]*container-type:\s*inline-size/);
     expect(mainCss).toMatch(
       /\.form-row\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
     );
     expect(mainCss).toMatch(
-      /@container\s*\(max-width:\s*600px\)[\s\S]*?\.form-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+      /@container\s*\(max-width:\s*480px\)[\s\S]*?\.form-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
     );
   });
 
+  it("shares one collapse threshold with EnvEditor and the redirect form", () => {
+    /** thresholdOf reads the max-width of the first @container rule. */
+    function thresholdOf(source: string): string {
+      const match = source.match(/@container\s*\(max-width:\s*(\d+px)\)/);
+      expect(match, "expected one @container collapse rule").not.toBeNull();
+      return match?.[1] ?? "";
+    }
+    const shared = thresholdOf(mainCss);
+    expect(shared).toBe("480px");
+    expect(thresholdOf(readSfc("src/components/EnvEditor.vue"))).toBe(shared);
+    expect(thresholdOf(readSfc("src/pages/DomainsPage.vue"))).toBe(shared);
+  });
+
   it("has no viewport fallback for the row collapse", () => {
-    expect(mainCss).not.toContain("@media");
+    // Scoped to @media bodies mentioning .form-row: unrelated future media
+    // queries elsewhere in main.css must not fail this test.
+    expect(mediaBlocksMentioning(mainCss, ".form-row")).toEqual([]);
   });
 
   it("gives rows no item margins and lets a lone item span both columns", () => {
@@ -201,7 +250,7 @@ describe("JUS-19 EnvEditor single-row variables", () => {
     expect(source).not.toContain("@media");
     expect(source).toMatch(/\.env-editor\s*\{[^}]*container-type:\s*inline-size/);
     expect(source).toMatch(
-      /@container\s*\(max-width:\s*600px\)[\s\S]*?\.env-editor__row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+      /@container\s*\(max-width:\s*480px\)[\s\S]*?\.env-editor__row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
     );
   });
 });
@@ -238,8 +287,15 @@ describe("JUS-19 AddServerWizard rows", () => {
     expectPair(source, "add-server-name", "add-server-ssh-user");
   });
 
-  it("pairs Authentication|key-mode in one row", () => {
-    expectPair(source, "Authentication method", "SSH key mode");
+  it("keeps Authentication and the key-mode selector on full-width rows", () => {
+    // Measured with the real Naive controls: the nowrap key-mode group needs
+    // 294px but a half column at the real 590px container is 289px, so the
+    // pair would clip by 5px. Neither control may share a row.
+    const inRow = rowBlocks(source).some(
+      (block) =>
+        block.includes("Authentication method") || block.includes("SSH key mode"),
+    );
+    expect(inRow).toBe(false);
   });
 
   it("keeps Key name on its own row", () => {
@@ -315,7 +371,7 @@ describe("JUS-19 DomainsPage rows", () => {
   it("collapses the redirect bottom row per container, not viewport", () => {
     expect(source).not.toMatch(/@media[^{]*\{[^}]*\.redirect-form__bottom/);
     expect(source).toMatch(
-      /@container\s*\(max-width:\s*600px\)[\s\S]*?\.redirect-form__bottom/,
+      /@container\s*\(max-width:\s*480px\)[\s\S]*?\.redirect-form__bottom/,
     );
   });
 });
@@ -339,5 +395,11 @@ describe("JUS-19 RegisterPage rows", () => {
       "register-password",
       "register-confirm-password",
     );
+  });
+
+  it("keys the collapse off the page width, not the 420px card", () => {
+    // The card itself is narrower than the collapse threshold, so it cannot
+    // be the container — otherwise the required pairing would never render.
+    expect(mainCss).toMatch(/\.auth-page\s*\{[^}]*container-type:\s*inline-size/);
   });
 });

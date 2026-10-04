@@ -168,18 +168,23 @@ a:hover {
 }
 
 /* Two-column form rows (JUS-19): short fields share one row and collapse to
- * a single column once their container narrows below ~600px (JUS-19 fix 1).
- * The query keys off the modal/form width via .form-container, not the
- * viewport: a fixed 560px modal stays single-column at any viewport, while
- * an 880px wizard keeps two columns. Container queries are baseline in
- * current Chromium/Firefox/Safari, so there is no viewport fallback.
+ * a single column once their container narrows below the shared collapse
+ * threshold (JUS-19 fix 3). The query keys off the modal/form width via
+ * .form-container, not the viewport. Measured real container widths
+ * (review-B-r2): 512px NForms in the 560px modals, 590px Add-server
+ * connect-form, 622px CreateAppWizard wizard-main, 640px database card —
+ * all pair; the 420px Register card stays single-column via the page-width
+ * container. Container queries are baseline in current
+ * Chromium/Firefox/Safari, so there is no viewport fallback.
  * Rows are direct NForm children so the global item-to-item rhythm above owns
  * the vertical spacing; the items inside own none. A lone item spans both
  * columns (e.g. a conditional partner that is currently hidden). Column gap
  * matches the connect addr-row; row gap matches the shared --form-item-gap
  * rhythm for the stacked state. Grid minimums (minmax(0, 1fr) + min-width: 0)
  * mean plain inputs and selects can never overflow their column; controls
- * with intrinsic minimums (segmented radios) belong on full-width rows. */
+ * with intrinsic minimums (segmented radios, ~294px for the key-mode pair)
+ * belong on full-width rows. The 480px value is shared with the EnvEditor
+ * and redirect-form fallbacks — a vitest check keeps the three in sync. */
 .form-container {
   container-type: inline-size;
 }
@@ -201,7 +206,7 @@ a:hover {
   grid-column: 1 / -1;
 }
 
-@container (max-width: 600px) {
+@container (max-width: 480px) {
   .form-row {
     grid-template-columns: minmax(0, 1fr);
   }

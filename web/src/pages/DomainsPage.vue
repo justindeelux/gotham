@@ -1514,7 +1514,7 @@ onMounted(() => {
   min-width: 0;
 }
 
-@container (max-width: 600px) {
+@container (max-width: 480px) {
   .redirect-form__bottom {
     flex-direction: column;
     align-items: stretch;

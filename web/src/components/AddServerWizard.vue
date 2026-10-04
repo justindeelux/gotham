@@ -614,30 +614,28 @@ function resetWizard(): void {
 
               <section class="connect-group" aria-label="Access">
                 <h4 class="connect-group__title">Access</h4>
-                <div class="form-row">
-                  <NFormItem label="Authentication">
-                    <NRadioGroup
-                      v-model:value="form.authMode"
-                      size="small"
-                      aria-label="Authentication method"
-                    >
-                      <NRadioButton value="key">SSH key</NRadioButton>
-                      <NRadioButton value="password">Password</NRadioButton>
-                    </NRadioGroup>
-                    <span class="field-hint">Authenticate with a stored private key or a node password.</span>
-                  </NFormItem>
-                  <NFormItem v-if="form.authMode === 'key'" label="SSH key">
-                    <NRadioGroup
-                      v-model:value="form.keyMode"
-                      size="small"
-                      aria-label="SSH key mode"
-                    >
-                      <NRadioButton value="new">Paste a new key</NRadioButton>
-                      <NRadioButton value="existing">Use an existing key ID</NRadioButton>
-                    </NRadioGroup>
-                    <span class="field-hint">Key listing is not exposed by the API yet — paste the key material or a known key ID.</span>
-                  </NFormItem>
-                </div>
+                <NFormItem label="Authentication">
+                  <NRadioGroup
+                    v-model:value="form.authMode"
+                    size="small"
+                    aria-label="Authentication method"
+                  >
+                    <NRadioButton value="key">SSH key</NRadioButton>
+                    <NRadioButton value="password">Password</NRadioButton>
+                  </NRadioGroup>
+                  <span class="field-hint">Authenticate with a stored private key or a node password.</span>
+                </NFormItem>
+                <NFormItem v-if="form.authMode === 'key'" label="SSH key">
+                  <NRadioGroup
+                    v-model:value="form.keyMode"
+                    size="small"
+                    aria-label="SSH key mode"
+                  >
+                    <NRadioButton value="new">Paste a new key</NRadioButton>
+                    <NRadioButton value="existing">Use an existing key ID</NRadioButton>
+                  </NRadioGroup>
+                  <span class="field-hint">Key listing is not exposed by the API yet — paste the key material or a known key ID.</span>
+                </NFormItem>
               </section>
 
               <section class="connect-group" aria-label="Credentials">

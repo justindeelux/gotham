@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:internal/server/webdist/assets/use-message-F1TaoMXp.js
-import{aK as s,ao as o,cP as t}from"./index-BewcL_vV.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
-========
-import{aK as s,ao as o,cP as t}from"./index-BM8xPrYg.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
->>>>>>>> 5666a313 (Web: split databases pages into components and composables (JUS-24)):internal/server/webdist/assets/use-message-Dj_OKDY7.js

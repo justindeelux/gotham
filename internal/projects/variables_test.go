@@ -878,3 +878,229 @@ func TestReplaceAgainstDeletedScopeIsNotFound(t *testing.T) {
 		t.Fatalf("HTTP PUT vs deleted environment = %d (body %s), want 404", rec.Code, rec.Body.String())
 	}
 }
+
+// TestConcurrentEnvironmentReplaceSerializes mirrors the project-scope F1
+// test on the environment scope: 16 concurrent PUTs must all succeed with
+// one consistent final set. It kills the mutant that drops the environment
+// row lock.
+func TestConcurrentEnvironmentReplaceSerializes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	st := newScratchStore(t)
+	svc := NewService(Config{Store: st, Counter: newFakeCounter(), Secret: testVariableSecret, Logger: discardLogger()})
+	userID := seedUser(t, ctx, st, fmt.Sprintf("envrace-%d@example.com", time.Now().UnixNano()))
+	project, _, err := svc.CreateProject(ctx, userID, "Shop", "")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	staging, err := svc.CreateEnvironment(ctx, userID, project.ID, "staging")
+	if err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+
+	const writers = 16
+	start := make(chan struct{})
+	results := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		go func(i int) {
+			<-start
+			_, err := svc.ReplaceEnvironmentVariables(ctx, userID, staging.ID, []VariableInput{
+				{Key: "K1", Value: strPtr(fmt.Sprintf("v1-%d", i))},
+				{Key: "K2", Value: strPtr(fmt.Sprintf("v2-%d", i))},
+			})
+			results <- err
+		}(i)
+	}
+	close(start)
+	for i := 0; i < writers; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent PUT %d: %v, want success", i, err)
+		}
+	}
+	final, err := svc.GetEnvironmentVariables(ctx, userID, staging.ID)
+	if err != nil {
+		t.Fatalf("GetEnvironmentVariables: %v", err)
+	}
+	if len(final) != 2 {
+		t.Fatalf("final set = %+v, want exactly one winner's two keys", final)
+	}
+	byKey := make(map[string]string, len(final))
+	for _, variable := range final {
+		byKey[variable.Key] = variable.Value
+	}
+	var first, second int
+	if _, err := fmt.Sscanf(byKey["K1"], "v1-%d", &first); err != nil {
+		t.Fatalf("K1 value %q does not name its writer: %v", byKey["K1"], err)
+	}
+	if _, err := fmt.Sscanf(byKey["K2"], "v2-%d", &second); err != nil {
+		t.Fatalf("K2 value %q does not name its writer: %v", byKey["K2"], err)
+	}
+	if first != second {
+		t.Fatalf("final set mixes writers: K1 from %d, K2 from %d", first, second)
+	}
+}
+
+// raceResult collects one racer's error.
+type raceResult struct {
+	name string
+	err  error
+}
+
+// assertRaceClean fails on any error other than a missing scope: a deadlock
+// (SQLSTATE 40P01) or a raw constraint violation surfaces as a wrapped
+// database error, never as ErrNotFound.
+func assertRaceClean(t *testing.T, round int, results []raceResult) {
+	t.Helper()
+	for _, result := range results {
+		if result.err != nil && !errors.Is(result.err, ErrNotFound) {
+			t.Fatalf("round %d: %s = %v, want nil or ErrNotFound", round, result.name, result.err)
+		}
+	}
+}
+
+// TestEnvironmentPutRacesDeleteSerializes is the R1 regression: an
+// environment PUT racing the environment delete must serialize (one side
+// wins, the loser answers 404), never deadlock. The old lock order
+// deadlocked about half the rounds.
+func TestEnvironmentPutRacesDeleteSerializes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	st := newScratchStore(t)
+	svc := NewService(Config{Store: st, Counter: newFakeCounter(), Secret: testVariableSecret, Logger: discardLogger()})
+	userID := seedUser(t, ctx, st, fmt.Sprintf("putdel-%d@example.com", time.Now().UnixNano()))
+
+	const rounds = 20
+	for i := 0; i < rounds; i++ {
+		project, _, err := svc.CreateProject(ctx, userID, fmt.Sprintf("race-%d", i), "")
+		if err != nil {
+			t.Fatalf("round %d: CreateProject: %v", i, err)
+		}
+		staging, err := svc.CreateEnvironment(ctx, userID, project.ID, "staging")
+		if err != nil {
+			t.Fatalf("round %d: CreateEnvironment: %v", i, err)
+		}
+		if _, err := svc.ReplaceEnvironmentVariables(ctx, userID, staging.ID, []VariableInput{
+			{Key: "K", Value: strPtr("seed")},
+		}); err != nil {
+			t.Fatalf("round %d: seed: %v", i, err)
+		}
+
+		start := make(chan struct{})
+		results := make(chan raceResult, 2)
+		go func() {
+			<-start
+			_, err := svc.ReplaceEnvironmentVariables(ctx, userID, staging.ID, []VariableInput{
+				{Key: "K", Value: strPtr("put")},
+			})
+			results <- raceResult{name: "put", err: err}
+		}()
+		go func() {
+			<-start
+			results <- raceResult{name: "delete", err: svc.DeleteEnvironment(ctx, userID, staging.ID)}
+		}()
+		close(start)
+		assertRaceClean(t, i, []raceResult{<-results, <-results})
+	}
+}
+
+// TestEnvironmentPutRacesProjectDeleteSerializes races an environment PUT
+// against the project delete over 20 rounds: no deadlock, the loser answers
+// 404.
+func TestEnvironmentPutRacesProjectDeleteSerializes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	st := newScratchStore(t)
+	svc := NewService(Config{Store: st, Counter: newFakeCounter(), Secret: testVariableSecret, Logger: discardLogger()})
+	userID := seedUser(t, ctx, st, fmt.Sprintf("putpdel-%d@example.com", time.Now().UnixNano()))
+
+	const rounds = 20
+	for i := 0; i < rounds; i++ {
+		project, production, err := svc.CreateProject(ctx, userID, fmt.Sprintf("race-%d", i), "")
+		if err != nil {
+			t.Fatalf("round %d: CreateProject: %v", i, err)
+		}
+		if _, err := svc.ReplaceEnvironmentVariables(ctx, userID, production.ID, []VariableInput{
+			{Key: "K", Value: strPtr("seed")},
+		}); err != nil {
+			t.Fatalf("round %d: seed: %v", i, err)
+		}
+
+		start := make(chan struct{})
+		results := make(chan raceResult, 2)
+		go func() {
+			<-start
+			_, err := svc.ReplaceEnvironmentVariables(ctx, userID, production.ID, []VariableInput{
+				{Key: "K", Value: strPtr("put")},
+			})
+			results <- raceResult{name: "put", err: err}
+		}()
+		go func() {
+			<-start
+			results <- raceResult{name: "project delete", err: svc.DeleteProject(ctx, userID, project.ID)}
+		}()
+		close(start)
+		assertRaceClean(t, i, []raceResult{<-results, <-results})
+	}
+}
+
+// TestMixedScopeRaceSerializes runs project PUT, environment PUT, environment
+// delete and environment create at once over 20 rounds: every operation ends
+// cleanly (PUTs and the delete may answer 404 when they lose the race; the
+// uniquely-named create always succeeds).
+func TestMixedScopeRaceSerializes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	st := newScratchStore(t)
+	svc := NewService(Config{Store: st, Counter: newFakeCounter(), Secret: testVariableSecret, Logger: discardLogger()})
+	userID := seedUser(t, ctx, st, fmt.Sprintf("mixrace-%d@example.com", time.Now().UnixNano()))
+
+	const rounds = 20
+	for i := 0; i < rounds; i++ {
+		project, _, err := svc.CreateProject(ctx, userID, fmt.Sprintf("race-%d", i), "")
+		if err != nil {
+			t.Fatalf("round %d: CreateProject: %v", i, err)
+		}
+		staging, err := svc.CreateEnvironment(ctx, userID, project.ID, "staging")
+		if err != nil {
+			t.Fatalf("round %d: CreateEnvironment: %v", i, err)
+		}
+
+		start := make(chan struct{})
+		results := make(chan raceResult, 4)
+		go func() {
+			<-start
+			_, err := svc.ReplaceProjectVariables(ctx, userID, project.ID, []VariableInput{
+				{Key: "P", Value: strPtr("put")},
+			})
+			results <- raceResult{name: "project put", err: err}
+		}()
+		go func() {
+			<-start
+			_, err := svc.ReplaceEnvironmentVariables(ctx, userID, staging.ID, []VariableInput{
+				{Key: "E", Value: strPtr("put")},
+			})
+			results <- raceResult{name: "environment put", err: err}
+		}()
+		go func() {
+			<-start
+			results <- raceResult{name: "environment delete", err: svc.DeleteEnvironment(ctx, userID, staging.ID)}
+		}()
+		go func() {
+			<-start
+			_, err := svc.CreateEnvironment(ctx, userID, project.ID, fmt.Sprintf("extra-%d", i))
+			results <- raceResult{name: "environment create", err: err}
+		}()
+		close(start)
+		collected := []raceResult{<-results, <-results, <-results, <-results}
+		assertRaceClean(t, i, collected)
+		for _, result := range collected {
+			if result.name == "environment create" && result.err != nil {
+				t.Fatalf("round %d: uniquely-named create = %v, want success", i, result.err)
+			}
+		}
+	}
+}

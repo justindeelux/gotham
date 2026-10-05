@@ -128,7 +128,10 @@ func (s *Store) UpdateEnvironment(ctx context.Context, params sqlc.UpdateEnviron
 
 // DeleteEnvironmentGuarded removes one environment of a team in a
 // transaction that first locks the parent project row (SELECT ... FOR
-// UPDATE), and reports whether the row was removed. removed=false means the
+// UPDATE), and reports whether the row was removed. The order is always
+// project first, then environment — ReplaceSharedVariablesLocked takes the
+// same order, so a variable PUT racing this delete serializes instead of
+// deadlocking. removed=false means the
 // delete would leave the project without an environment, so nothing was
 // deleted and the caller must refuse with its last-environment error.
 // pgx.ErrNoRows means the environment is unknown or foreign. A foreign-key
@@ -216,13 +219,14 @@ func (s *Store) ListSharedVariablesForEnvironment(ctx context.Context, projectID
 
 // ReplaceSharedVariablesLocked swaps one scope's whole set in a transaction
 // that first locks the scope parent: the project row for the project level,
-// the environment row for an environment scope. The lock serializes
-// concurrent PUTs on one scope (under READ COMMITTED two delete-then-insert
-// transactions would otherwise collide on the scope uniqueness index), and
-// the existing set is read inside the same transaction so the
-// keep-ciphertext path cannot restore a value a concurrent PUT replaced. A
-// missing parent answers pgx.ErrNoRows; a parent deleted by a racing
-// transaction trips the foreign key, which the caller maps.
+// the project row and then the environment row for an environment scope.
+// The order is always project first, then environment — the same order
+// DeleteEnvironmentGuarded and DeleteProject take — so a PUT racing an
+// environment or project delete serializes instead of deadlocking. The
+// existing set is read inside the same transaction so the keep-ciphertext
+// path cannot restore a value a concurrent PUT replaced. A missing parent
+// answers pgx.ErrNoRows; a parent deleted by a racing transaction trips the
+// foreign key, which the caller maps.
 func (s *Store) ReplaceSharedVariablesLocked(ctx context.Context, projectID, environmentID pgtype.UUID, build func(existing []sqlc.SharedVariable) ([]sqlc.InsertSharedVariableParams, error)) error {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -230,17 +234,22 @@ func (s *Store) ReplaceSharedVariablesLocked(ctx context.Context, projectID, env
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Project first, then environment (see the lock-order note above): the
+	// environment row alone is not enough, because each insert's foreign-key
+	// check takes the project row next while the deletes hold it first.
+	var exist pgtype.UUID
+	if err := tx.QueryRow(ctx,
+		`SELECT id FROM projects WHERE id = $1 FOR UPDATE`, projectID).Scan(&exist); err != nil {
+		return err
+	}
 	if environmentID.Valid {
 		var parent pgtype.UUID
 		if err := tx.QueryRow(ctx,
 			`SELECT project_id FROM environments WHERE id = $1 FOR UPDATE`, environmentID).Scan(&parent); err != nil {
 			return err
 		}
-	} else {
-		var exist pgtype.UUID
-		if err := tx.QueryRow(ctx,
-			`SELECT id FROM projects WHERE id = $1 FOR UPDATE`, projectID).Scan(&exist); err != nil {
-			return err
+		if parent != projectID {
+			return pgx.ErrNoRows
 		}
 	}
 

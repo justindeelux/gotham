@@ -13,8 +13,21 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
 <template>
   <div class="page-head">
     <div class="page-head__title">
-      <RouterLink :to="{ name: 'services' }" class="back">
-        ← Services
+      <RouterLink
+        :to="
+          service
+            ? {
+                name: 'environment-detail',
+                params: {
+                  projectId: service.project_id,
+                  environmentId: service.environment_id,
+                },
+              }
+            : { name: 'projects' }
+        "
+        class="back"
+      >
+        ← {{ service?.environment_name ?? "Projects" }}
       </RouterLink>
       <h1 class="mono">{{ service?.name ?? serviceId.slice(0, 8) }}</h1>
       <NSpace :size="8" align="center">

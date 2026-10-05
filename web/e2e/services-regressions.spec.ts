@@ -3,6 +3,7 @@ import type { APIRequestContext } from "@playwright/test";
 
 import {
   loadAccount,
+  nestedURL,
   seedNodeAddress,
   seedProjectEnvironment,
   storageStatePath,
@@ -41,6 +42,8 @@ interface SeededService {
   serviceId: string;
   serviceName: string;
   serverName: string;
+  projectId: string;
+  environmentId: string;
 }
 
 /** seedServer registers a node row and returns its id and generated name. */
@@ -97,7 +100,7 @@ async function seedService(
   prefix: string,
 ): Promise<SeededService> {
   const server = await seedServer(api, headers, suffix, prefix);
-  const { environmentId } = await seedProjectEnvironment(api, headers);
+  const { projectId, environmentId } = await seedProjectEnvironment(api, headers);
   const serviceName = `${prefix}-svc-${suffix}`;
   const service = await createService(
     api,
@@ -108,7 +111,13 @@ async function seedService(
     {},
     "fix.example.test",
   );
-  return { serviceId: service.id, serviceName: service.name, serverName: server.name };
+  return {
+    serviceId: service.id,
+    serviceName: service.name,
+    serverName: server.name,
+    projectId,
+    environmentId,
+  };
 }
 
 /** serviceDetail reads one service through the API. */
@@ -149,7 +158,8 @@ test.describe("services fix regressions", () => {
 
     const account = loadAccount();
     const headers = { Authorization: `Bearer ${account.accessToken}` };
-    const { serviceId } = await seedService(request, headers, uniqueSuffix(), "fix1");
+    const seeded = await seedService(request, headers, uniqueSuffix(), "fix1");
+    const { serviceId } = seeded;
 
     let responseHeld = false;
     await page.route("**/api/v1/services/*/deploy", async (route) => {
@@ -162,7 +172,9 @@ test.describe("services fix regressions", () => {
       await route.fulfill({ response });
     });
 
-    await page.goto(`/services/${serviceId}`);
+    await page.goto(
+      nestedURL(seeded.projectId, seeded.environmentId, "services", serviceId),
+    );
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await page.getByRole("button", { name: "Deploy" }).click();
 
@@ -185,7 +197,7 @@ test.describe("services fix regressions", () => {
     const headers = { Authorization: `Bearer ${account.accessToken}` };
     const suffix = uniqueSuffix();
     const server = await seedServer(request, headers, suffix, "fix2");
-    const { environmentId } = await seedProjectEnvironment(request, headers);
+    const { projectName, environmentId } = await seedProjectEnvironment(request, headers);
     const oldDomain = `fix-old-${suffix}.example.test`;
     const newDomain = `fix-new-${suffix}.example.test`;
     const serviceName = `fix2-tpl-${suffix}`;
@@ -235,28 +247,34 @@ test.describe("services fix regressions", () => {
     await expect(preview).not.toContainText(oldDomain);
 
     // Create from the refreshed preview and prove the persisted document
-    // carries the value the operator last entered. Until PE-5 wires the
-    // project/environment picker the dialog sends no environment, so the
-    // smoke injects the seeded one at the API boundary.
+    // carries the value the operator last entered. The wizard takes the
+    // scope through its picker (PE-5): the seeded project and environment.
     await wizard.getByRole("button", { name: "Next" }).click();
     const step3 = wizard.locator('[data-testid="wizard-step-3"]');
     await step3.locator(".field-service-name input").fill(serviceName);
-    await step3.locator(".field-service-node .n-select").click();
+    await step3.locator('[aria-label="Project"]').click();
+    await page
+      .locator(".n-base-select-option")
+      .filter({ hasText: projectName })
+      .click();
+    await step3.locator('[aria-label="Environment"]').click();
+    await page
+      .locator(".n-base-select-option")
+      .filter({ hasText: "production" })
+      .click();
+    await step3.locator(".wizard__metaform .n-select").click();
     await page
       .locator(".n-base-select-option")
       .filter({ hasText: server.name })
       .click();
-    await page.route("**/api/v1/services", async (route) => {
-      if (route.request().method() !== "POST") {
-        await route.continue();
-        return;
-      }
-      const body = route.request().postDataJSON() as Record<string, unknown>;
-      await route.continue({
-        postData: JSON.stringify({ ...body, environment_id: environmentId }),
-      });
-    });
+    const createRequest = page.waitForRequest(
+      (request) =>
+        request.url().endsWith("/api/v1/services") &&
+        request.method() === "POST",
+    );
     await wizard.getByRole("button", { name: "Create service" }).click();
+    const createBody = (await createRequest).postDataJSON() as Record<string, unknown>;
+    expect(createBody["environment_id"]).toBe(environmentId);
     await expect(wizard.locator('[data-testid="wizard-created"]')).toBeVisible();
 
     const listResponse = await request.get("/api/v1/services", { headers });
@@ -279,19 +297,25 @@ test.describe("services fix regressions", () => {
   }) => {
     const account = loadAccount();
     const headers = { Authorization: `Bearer ${account.accessToken}` };
-    const { serviceId, serviceName } = await seedService(
+    const seeded = await seedService(
       request,
       headers,
       uniqueSuffix(),
       "fix3",
     );
+    const { serviceId } = seeded;
 
     // Abort only the history read; the service detail response still arrives.
     const historyPattern = "**/api/v1/services/*/deploys";
     await page.route(historyPattern, (route) => route.abort("failed"));
 
     // ── detail page: unavailable + retry, never the empty claims ─────────
-    await page.goto(`/services/${serviceId}`);
+    // (PE-5 fix round 1: the list half of this regression went away with
+    // the flat Services page; the environment table shows the service
+    // status, not the history availability.)
+    await page.goto(
+      nestedURL(seeded.projectId, seeded.environmentId, "services", serviceId),
+    );
     const unavailable = page.locator('[data-testid="history-unavailable"]');
     await expect(unavailable).toBeVisible();
     await expect(unavailable).toContainText("Deploy history unavailable");
@@ -300,23 +324,9 @@ test.describe("services fix regressions", () => {
     await expect(page.getByText("Nothing has been deployed yet.")).toHaveCount(0);
     await expect(page.getByText(/\d+ attempts/)).toHaveCount(0);
 
-    // ── list: the card marks the history unavailable, not empty ──────────
-    await page.goto("/services");
-    const card = page.locator(`[data-service="${serviceName}"]`);
-    await expect(card).toBeVisible();
-    await expect(card).toContainText("deploy history unavailable");
-    await expect(card).not.toContainText("no deploys yet");
-    const listAlert = page.locator('[data-testid="list-history-unavailable"]');
-    await expect(listAlert).toBeVisible();
-
     // ── retry after the API is reachable: a real empty read is claimed ───
     await page.unroute(historyPattern);
-    await listAlert.getByRole("button", { name: "Retry" }).click();
-    await expect(card).toContainText("no deploys yet");
-    await expect(listAlert).toHaveCount(0);
-
-    // The detail page recovers through the same successful read.
-    await page.goto(`/services/${serviceId}`);
+    await unavailable.getByRole("button", { name: "Retry" }).click();
     await expect(page.locator('[data-testid="history-empty"]')).toBeVisible();
     await expect(page.getByText("Nothing has been deployed yet.")).toBeVisible();
   });
@@ -331,7 +341,7 @@ test.describe("services fix regressions", () => {
     const headers = { Authorization: `Bearer ${account.accessToken}` };
     const suffix = uniqueSuffix();
     const server = await seedServer(request, headers, suffix, "fix5");
-    const { environmentId } = await seedProjectEnvironment(request, headers);
+    const { projectId, environmentId } = await seedProjectEnvironment(request, headers);
     const domainA = `fix5-a-${suffix}.example.test`;
     const domainB = `fix5-b-${suffix}.example.test`;
     const serviceA = await createService(
@@ -370,17 +380,20 @@ test.describe("services fix regressions", () => {
       },
     );
 
-    await page.goto(`/services/${serviceA.id}`);
+    await page.goto(
+      nestedURL(projectId, environmentId, "services", serviceA.id),
+    );
     await expect.poll(() => held).toBe(true);
 
     // Move to B inside the SPA (no reload), so A's load keeps running in the
     // same component instance and its completion races B's.
-    await page.evaluate((id: string) => {
-      window.history.pushState({}, "", `/services/${id}`);
+    const nestedB = nestedURL(projectId, environmentId, "services", serviceB.id);
+    await page.evaluate((url: string) => {
+      window.history.pushState({}, "", url);
       window.dispatchEvent(new PopStateEvent("popstate", { state: {} }));
-    }, serviceB.id);
+    }, nestedB);
 
-    await expect(page).toHaveURL(new RegExp(`/services/${serviceB.id}$`));
+    await expect(page).toHaveURL(new RegExp(`${nestedB}$`));
     await expect(page.getByRole("heading", { level: 1 })).toContainText(
       serviceB.name,
     );
@@ -440,12 +453,13 @@ test.describe("services fix regressions", () => {
   }) => {
     const account = loadAccount();
     const headers = { Authorization: `Bearer ${account.accessToken}` };
-    const { serviceId } = await seedService(
+    const seeded = await seedService(
       request,
       headers,
       uniqueSuffix(),
       "fix4",
     );
+    const { serviceId } = seeded;
 
     // The log endpoint answers 401 on every call (the first try and the retry
     // after a real refresh), so the reader's own refresh path runs against the
@@ -464,7 +478,9 @@ test.describe("services fix regressions", () => {
       }
     });
 
-    await page.goto(`/services/${serviceId}`);
+    await page.goto(
+      nestedURL(seeded.projectId, seeded.environmentId, "services", serviceId),
+    );
     await page.getByRole("button", { name: "Stream logs" }).click();
     await expect(
       page.getByText("Your session expired. Please sign in again."),

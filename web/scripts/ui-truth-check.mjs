@@ -955,6 +955,7 @@ async function main() {
         "export const startApplication = async () => { throw new Error('unused'); };",
         "export const stopApplication = async () => { throw new Error('unused'); };",
         "export const triggerDeploy = async () => { throw new Error('unused'); };",
+        "export const updateApplication = async () => { throw new Error('unused'); };",
       ].join("\n"),
     });
     const databasesHarness = await loadStoreHarness("../src/features/databases/stores", "databases", "useDatabasesStore", {
@@ -969,6 +970,7 @@ async function main() {
         "export const restartDatabase = async () => { throw new Error('unused'); };",
         "export const startDatabase = async () => { throw new Error('unused'); };",
         "export const stopDatabase = async () => { throw new Error('unused'); };",
+        "export const updateDatabase = async () => { throw new Error('unused'); };",
       ].join("\n"),
     });
     const notificationsHarness = await loadStoreHarness(

@@ -155,11 +155,12 @@ describe("create and deploy", () => {
     if (wizard) {
       wizard.name.value = "redis";
       wizard.serverId.value = "srv-1";
+      wizard.scopeEnvironmentId.value = "env-1";
     }
     await wizard?.handleCreate();
     expect(createService).toHaveBeenCalledWith({
       name: "redis",
-      environment_id: "",
+      environment_id: "env-1",
       server_id: "srv-1",
       compose_yaml: "services:\n  redis: {}",
       env: { REDIS_PASSWORD: "secret" },
@@ -170,7 +171,7 @@ describe("create and deploy", () => {
     expect(wizard?.deployed.value).toBe(true);
   });
 
-  it("blocks create without a name or node", async () => {
+  it("blocks create without a name, node or scope", async () => {
     await openWizard();
     if (wizard) {
       wizard.values.value = { password: "hunter2", port: "6379" };
@@ -185,6 +186,7 @@ describe("create and deploy", () => {
     expect(createService).not.toHaveBeenCalled();
     expect(wizard?.nameError.value).not.toBe("");
     expect(wizard?.nodeError.value).not.toBe("");
+    expect(wizard?.scopeError.value).not.toBe("");
   });
 
   it("resets every value including secrets", async () => {

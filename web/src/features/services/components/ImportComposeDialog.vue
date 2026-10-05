@@ -6,42 +6,63 @@ import {
   NFormItem,
   NInput,
   NModal,
-  NSelect,
   NSpace,
   NSpin,
   NText,
 } from "naive-ui";
+import { toRef } from "vue";
 
-import { useServicesPageContext } from "@/features/services/composables/useServicesList";
-import { useServersStore } from "@/features/servers";
+import { useImportService } from "@/features/services/composables/useImportService";
+import type { Service } from "@/features/services/api/services";
+import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
+import ServerPicker from "@/features/projects/components/ServerPicker.vue";
 
-/** ImportComposeDialog renders the compose import modal and its form. */
-const serversStore = useServersStore();
-const {
-  importOpen,
-  importName,
-  importServerId,
-  importYaml,
-  importing,
-  importError,
-  envReference,
-  serverOptions,
-  importNameError,
-  importNodeError,
-  handleImport,
-} = useServicesPageContext();
+interface Props {
+  show: boolean;
+  /** Project the service is created in (the route's, changeable). */
+  projectId?: string;
+  /** Environment the service is created in (the route's, changeable). */
+  environmentId?: string;
+}
+
+const props = withDefaults(defineProps<Props>(), { projectId: "", environmentId: "" });
+
+const emit = defineEmits<{
+  "update:show": [value: boolean];
+  created: [service: Service];
+}>();
+
+/**
+ * ImportComposeDialog renders the compose import modal and its form. Hosted
+ * by the environment page with the route's scope (PE-5, Linear JUS-34).
+ */
+const dialog = useImportService(
+  toRef(props, "show"),
+  { projectId: toRef(props, "projectId"), environmentId: toRef(props, "environmentId") },
+  (service) => emit("created", service),
+);
 </script>
 
 <template>
   <NModal
-    v-model:show="importOpen"
+    :show="props.show"
     preset="card"
     title="Import compose"
     style="width: 640px; max-width: 96vw"
+    @update:show="(value: boolean) => emit('update:show', value)"
   >
-    <NSpin :show="importing">
-      <NAlert v-if="importError" type="error" :show-icon="true" class="mb-3">
-        {{ importError }}
+    <NSpin :show="dialog.importing.value">
+      <ResourceScopeSummary
+        :project-id="dialog.scopeProjectId.value"
+        :environment-id="dialog.scopeEnvironmentId.value"
+        @update:project-id="(value) => (dialog.scopeProjectId.value = value)"
+        @update:environment-id="(value) => (dialog.scopeEnvironmentId.value = value)"
+      />
+      <NAlert v-if="dialog.scopeError.value" type="error" :show-icon="true" class="mb-3">
+        {{ dialog.scopeError.value }}
+      </NAlert>
+      <NAlert v-if="dialog.importError.value" type="error" :show-icon="true" class="mb-3">
+        {{ dialog.importError.value }}
       </NAlert>
       <p class="small muted mb-3">
         Paste an existing compose document. The control plane stores it
@@ -53,34 +74,25 @@ const {
           <NFormItem
             label="Service name"
             required
-            :feedback="importNameError"
-            :validation-status="importNameError ? 'error' : undefined"
+            :feedback="dialog.nameError.value"
+            :validation-status="dialog.nameError.value ? 'error' : undefined"
             class="field-import-name"
           >
             <NInput
-              v-model:value="importName"
+              v-model:value="dialog.name.value"
               placeholder="blog-staging"
               aria-label="Service name"
             />
           </NFormItem>
-          <NFormItem
+          <ServerPicker
+            v-model="dialog.serverId.value"
             label="Node"
-            required
-            :feedback="importNodeError"
-            :validation-status="importNodeError ? 'error' : undefined"
-            class="field-import-node"
-          >
-            <NSelect
-              v-model:value="importServerId"
-              :options="serverOptions"
-              placeholder="Select a node"
-              aria-label="Node"
-            />
-          </NFormItem>
+            :feedback="dialog.nodeError.value"
+          />
         </div>
         <NFormItem label="compose.yaml" class="field-import-yaml">
           <NInput
-            v-model:value="importYaml"
+            v-model:value="dialog.yaml.value"
             type="textarea"
             class="mono"
             spellcheck="false"
@@ -91,7 +103,7 @@ const {
         </NFormItem>
       </NForm>
       <NText depth="3" class="small">
-        <span class="mono">{{ envReference }}</span> references are substituted from
+        <span class="mono">{{ dialog.envReference }}</span> references are substituted from
         the environment before the agent validates the document. A compose
         service is routed by the
         <span class="mono">gotham.domain</span> label. Files larger than
@@ -100,12 +112,11 @@ const {
     </NSpin>
     <template #footer>
       <NSpace :size="8" justify="end">
-        <NButton @click="importOpen = false">Cancel</NButton>
+        <NButton @click="emit('update:show', false)">Cancel</NButton>
         <NButton
           type="primary"
-          :loading="importing"
-          :disabled="serversStore.servers.length === 0"
-          @click="handleImport"
+          :loading="dialog.importing.value"
+          @click="dialog.handleImport"
         >
           Import service
         </NButton>

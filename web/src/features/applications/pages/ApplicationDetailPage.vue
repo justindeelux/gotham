@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { NAlert, NCard, NEmpty, NSpace, NSpin, NTabPane, NTabs } from "naive-ui";
-import { RouterLink } from "vue-router";
 
 import ApplicationDeploymentsTab from "@/features/applications/components/ApplicationDeploymentsTab.vue";
 import ApplicationEnvTab from "@/features/applications/components/ApplicationEnvTab.vue";
@@ -12,15 +11,23 @@ import ApplicationStorageTab from "@/features/applications/components/Applicatio
 import DomainEditor from "@/features/applications/components/DomainEditor.vue";
 import RollbackDialog from "@/features/applications/components/RollbackDialog.vue";
 import { useApplicationDetail } from "@/features/applications/composables/useApplicationDetail";
+import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
+import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
 
 const detail = useApplicationDetail();
 </script>
 
 <template>
   <NSpace vertical :size="16">
-    <nav class="breadcrumb" aria-label="Breadcrumb">
-      <RouterLink to="/applications">Applications</RouterLink>
-      <span class="breadcrumb__sep">/</span>
+    <ProjectBreadcrumb
+      v-if="detail.application.value"
+      :project-name="detail.application.value.project_name"
+      :project-id="detail.application.value.project_id"
+      :environment-name="detail.application.value.environment_name"
+      :environment-id="detail.application.value.environment_id"
+      :resource-name="detail.application.value.name"
+    />
+    <nav v-else class="breadcrumb" aria-label="Breadcrumb">
       <span class="muted mono">{{ detail.shortId.value || detail.appId.value }}</span>
     </nav>
 
@@ -138,6 +145,18 @@ const detail = useApplicationDetail();
             :previews-error="detail.previewsError.value"
             :branch="detail.application.value?.branch ?? ''"
             @refresh="detail.loadPreviews()"
+          />
+        </NTabPane>
+
+        <NTabPane v-if="detail.canWrite.value" name="settings" tab="Settings">
+          <ResourceMoveCard
+            v-if="detail.application.value"
+            :project-id="detail.application.value.project_id"
+            :environment-id="detail.application.value.environment_id"
+            :server-id="detail.application.value.server_id ?? ''"
+            :saving="detail.moveSaving.value"
+            :error="detail.moveError.value"
+            @save="detail.handleMove"
           />
         </NTabPane>
       </NTabs>

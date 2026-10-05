@@ -1,5 +1,5 @@
 import { useMessage } from "naive-ui";
-import { computed, ref, watch } from "vue";
+import { computed, ref, toValue, watch } from "vue";
 import type { Ref } from "vue";
 
 import { describeServiceError } from "@/features/services";
@@ -37,7 +37,14 @@ import { useTemplatesStore } from "@/features/templates/stores/templates";
  * streams the project's container log via the services logs endpoint
  * afterwards. A failed deploy is shown as it comes back — never faked.
  */
-export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
+export function useTemplateWizard(
+  show: Ref<boolean>,
+  slug: Ref<string>,
+  scope: { projectId: string | Ref<string>; environmentId: string | Ref<string> } = {
+    projectId: "",
+    environmentId: "",
+  },
+): {
   step: Ref<number>;
   detail: Ref<TemplateDetail | null>;
   detailLoading: Ref<boolean>;
@@ -48,6 +55,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
   renderLoading: Ref<boolean>;
   renderError: Ref<string | null>;
   name: Ref<string>;
+  scopeProjectId: Ref<string>;
+  scopeEnvironmentId: Ref<string>;
   serverId: Ref<string>;
   createAttempted: Ref<boolean>;
   creating: Ref<boolean>;
@@ -62,6 +71,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
   secretKeys: Ref<string[]>;
   nameError: Ref<string>;
   nodeError: Ref<string>;
+  scopeError: Ref<string>;
+  scopeValid: Ref<boolean>;
   next: () => void;
   handleCreate: () => Promise<void>;
   handleDeploy: () => Promise<void>;
@@ -84,6 +95,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
   const renderError = ref<string | null>(null);
 
   const name = ref("");
+  const scopeProjectId = ref(toValue(scope.projectId));
+  const scopeEnvironmentId = ref(toValue(scope.environmentId));
   const serverId = ref("");
   const createAttempted = ref(false);
   const creating = ref(false);
@@ -126,6 +139,13 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     !createAttempted.value ? "" : (fieldErrors(serviceNodeSchema, serverId.value)[0] ?? ""),
   );
 
+  /** scopeValid gates the create: the API requires an environment. */
+  const scopeValid = computed<boolean>(() => scopeEnvironmentId.value !== "");
+
+  const scopeError = computed<string>(() =>
+    !createAttempted.value || scopeValid.value ? "" : "Select a project and environment.",
+  );
+
   /** open loads the template schema and seeds the form with its defaults. */
   async function open(): Promise<void> {
     reset();
@@ -158,6 +178,7 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     renderError.value = null;
     renderLoading.value = false;
     name.value = "";
+    seedScope();
     serverId.value = "";
     createAttempted.value = false;
     creating.value = false;
@@ -166,6 +187,12 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     deploying.value = false;
     deployError.value = null;
     deployed.value = false;
+  }
+
+  /** seedScope copies the live route scope into the form. */
+  function seedScope(): void {
+    scopeProjectId.value = toValue(scope.projectId);
+    scopeEnvironmentId.value = toValue(scope.environmentId);
   }
 
   /**
@@ -228,12 +255,16 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
   /** handleCreate stores the service with the rendered document and its env. */
   async function handleCreate(): Promise<void> {
     createAttempted.value = true;
+    if (creating.value) {
+      return;
+    }
     const rendered = render.value;
     if (
       renderLoading.value ||
       rendered === null ||
       !serviceNameSchema.safeParse(name.value).success ||
-      !serviceNodeSchema.safeParse(serverId.value).success
+      !serviceNodeSchema.safeParse(serverId.value).success ||
+      !scopeValid.value
     ) {
       return;
     }
@@ -242,9 +273,7 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     try {
       created.value = await servicesStore.create({
         name: name.value.trim(),
-        // PE-5 wires the project/environment picker; until then creation
-        // through this dialog answers 400 (environment is required).
-        environment_id: "",
+        environment_id: scopeEnvironmentId.value,
         server_id: serverId.value,
         compose_yaml: rendered.compose_yaml,
         env: rendered.env,
@@ -280,9 +309,20 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     () => show.value,
     (visible) => {
       if (visible) {
+        // Re-seed from the live scope: the route may have moved while the
+        // wizard was closed, and reset-on-close alone would keep the stale
+        // environment for the next open.
+        seedScope();
         void open();
       }
     },
+  );
+
+  // A route change while the wizard is mounted re-seeds the scope, so the
+  // summary and the payload always name the current environment.
+  watch(
+    [() => toValue(scope.projectId), () => toValue(scope.environmentId)],
+    () => seedScope(),
   );
 
   watch(
@@ -305,6 +345,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     renderLoading,
     renderError,
     name,
+    scopeProjectId,
+    scopeEnvironmentId,
     serverId,
     createAttempted,
     creating,
@@ -319,6 +361,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     secretKeys,
     nameError,
     nodeError,
+    scopeError,
+    scopeValid,
     next,
     handleCreate,
     handleDeploy,

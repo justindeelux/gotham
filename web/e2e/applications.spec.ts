@@ -1,7 +1,9 @@
 import { expect, test } from "./fixtures";
 import {
   cloneURL,
+  environmentURL,
   loadAccount,
+  nestedURL,
   seedNodeAddress,
   seedProjectEnvironment,
   storageStatePath,
@@ -15,7 +17,8 @@ test.use({ storageState: storageStatePath });
 /**
  * QA-4.1b (c): seed one server row and one application row through the API
  * (configuration only — no deployment, so nothing is cloned) and prove the
- * application appears in the list and opens on its detail page.
+ * application appears on the environment page and opens on its nested
+ * detail page (PE-5 routes).
  */
 test.describe("applications", () => {
   test("lists an API-seeded application and opens its detail page", async ({
@@ -43,7 +46,7 @@ test.describe("applications", () => {
       server: { id: string };
     };
 
-    const { environmentId } = await seedProjectEnvironment(request, headers);
+    const { projectId, environmentId } = await seedProjectEnvironment(request, headers);
     const created = await request.post("/api/v1/applications", {
       headers,
       data: {
@@ -65,12 +68,12 @@ test.describe("applications", () => {
     };
     expect(application.name).toBe(name);
 
-    await page.goto("/applications");
+    await page.goto(environmentURL(projectId, environmentId));
     await expect(
-      page.getByRole("heading", { name: "Applications", level: 1 }),
+      page.locator(".environment-page .title"),
     ).toBeVisible();
 
-    const row = page.locator(".provider-row").filter({ hasText: name });
+    const row = page.locator(".resource-table tbody tr").filter({ hasText: name });
     await expect(row).toHaveCount(1);
 
     // The detail view fires its history, config and node reads after the
@@ -102,7 +105,7 @@ test.describe("applications", () => {
     ]);
     await row.getByRole("button", { name: "Open" }).click();
     await expect(page).toHaveURL(
-      new RegExp(`/applications/${application.id}$`),
+      nestedURL(projectId, environmentId, "applications", application.id),
     );
     await settled;
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible();

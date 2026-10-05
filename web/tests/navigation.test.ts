@@ -7,7 +7,9 @@ describe("activeNavKey", () => {
   it("follows the first path segment", () => {
     expect(activeNavKey("/servers/abc")).toBe("servers");
     expect(activeNavKey("/projects/abc")).toBe("projects");
-    expect(activeNavKey("/applications/1")).toBe("applications");
+    // PE-5: nested resource pages highlight Projects through its segment.
+    expect(activeNavKey("/projects/abc/environments/def")).toBe("projects");
+    expect(activeNavKey("/projects/abc/environments/def/applications/1")).toBe("projects");
     expect(activeNavKey("/dashboard")).toBe("dashboard");
     expect(activeNavKey("/")).toBe("dashboard");
   });
@@ -31,8 +33,7 @@ describe("activeNavKey", () => {
 describe("navSections", () => {
   it("lists Projects instead of the flat resource entries", () => {
     // PE-4 (JUS-33): Projects replaces Applications, Services and Databases.
-    // The flat routes stay until PE-5 removes them, but the sidebar no
-    // longer links them.
+    // PE-5 removed the flat routes; the sidebar never linked them.
     const keys = navSections.flatMap((section) =>
       section.items.map((item) => item.key),
     );

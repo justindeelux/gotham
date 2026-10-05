@@ -1,5 +1,5 @@
 import { http } from "@/shared/api/http";
-import { isApiError, stripErrorPrefix } from "@/features/servers";
+import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
  * Typed client for the compose-service routes served by `internal/services`
@@ -106,9 +106,15 @@ export interface CreateServiceInput {
 /**
  * Body of PATCH /services/{id}. Omitted fields stay unchanged; an empty `env`
  * map clears the environment (`env` is omitted, not cleared, when undefined).
+ * `environment_id` moves the service within the caller's team (409 on a name
+ * collision in the target); `server_id` changes the node (409 `a deploy is in
+ * progress` while one runs, `a deployed service cannot change server` once
+ * the service has deployed).
  */
 export interface UpdateServiceInput {
   name?: string;
+  environment_id?: string;
+  server_id?: string;
   compose_yaml?: string;
   env?: Record<string, string>;
 }
@@ -156,9 +162,23 @@ interface ContainerListEnvelope {
  */
 const lifecycleTimeoutMs = 15 * 60_000;
 
-/** listServices returns the caller's services, newest first (GET → 200). */
-export async function listServices(): Promise<Service[]> {
-  const response = await http.get<ServiceListEnvelope>("/services");
+/**
+ * listServices returns the caller's services, newest first (GET → 200).
+ * `filter` optionally scopes the list to one environment or project
+ * (?environment_id= / ?project_id=).
+ */
+export async function listServices(filter: {
+  environment_id?: string;
+  project_id?: string;
+} = {}): Promise<Service[]> {
+  const params: Record<string, string> = {};
+  if (filter.environment_id) {
+    params.environment_id = filter.environment_id;
+  }
+  if (filter.project_id) {
+    params.project_id = filter.project_id;
+  }
+  const response = await http.get<ServiceListEnvelope>("/services", { params });
   return response.data.services ?? [];
 }
 
@@ -363,7 +383,14 @@ export function describeServiceError(error: unknown): string {
     );
     }
     if (error.status === 409) {
-      return "A service with that name already exists. Pick another name.";
+      // The backend names the refusal exactly (a duplicate name, `a deploy
+      // is in progress`, `a deployed service cannot change server`), so the
+      // message passes through for the move/server-change settings to
+      // render inline.
+      return (
+        conflictDetail(stripErrorPrefix(error.message)) ||
+        "A service with that name already exists. Pick another name."
+      );
     }
     if (error.status === 502) {
       const detail = stripErrorPrefix(error.message);

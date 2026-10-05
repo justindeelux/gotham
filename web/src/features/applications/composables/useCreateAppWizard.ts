@@ -1,5 +1,5 @@
 import { useMessage } from "naive-ui";
-import { computed, inject, provide, reactive, ref, watch, type InjectionKey, type Ref } from "vue";
+import { computed, inject, provide, reactive, ref, toValue, watch, type InjectionKey, type Ref } from "vue";
 
 import {
   createApplication,
@@ -40,6 +40,10 @@ export interface WizardForm {
   branch: string;
   name: string;
   buildPack: BuildPack;
+  /** Project the application is created in (read-only summary, changeable). */
+  projectId: string;
+  /** Environment the application is created in (required by the API). */
+  environmentId: string;
   serverId: string;
   port: number | null;
   hostPort: number | null;
@@ -92,12 +96,25 @@ export interface WizardEvents {
   (_event: "created", _application: Application): void;
 }
 
+/** WizardScope carries the project/environment the wizard creates in. */
+export interface WizardScope {
+  projectId: string | Ref<string>;
+  environmentId: string | Ref<string>;
+}
+
 /**
  * Form state, validation and submission behind the create-application wizard.
  * The shell provides the returned state to the step components through
  * `createWizardKey`, so steps read one typed source instead of long prop lists.
+ * `scope` is reactive (refs stay live): a route change while the wizard is
+ * mounted re-seeds the form, so data can never be written to a stale
+ * environment.
  */
-export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
+export function useCreateAppWizard(
+  show: Ref<boolean>,
+  emit: WizardEvents,
+  scope: WizardScope = { projectId: "", environmentId: "" },
+) {
   const providersStore = useProvidersStore();
   const serversStore = useServersStore();
   const appsStore = useApplicationsStore();
@@ -116,6 +133,8 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
     branch: "main",
     name: "",
     buildPack: "",
+    projectId: toValue(scope.projectId),
+    environmentId: toValue(scope.environmentId),
     serverId: "",
     port: 3000,
     hostPort: null,
@@ -199,6 +218,9 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
     return wizardDomainSchema.safeParse(form.baseDomain).success;
   });
 
+  /** scopeValid gates the submit: the API requires an environment. */
+  const scopeValid = computed<boolean>(() => form.environmentId !== "");
+
   /**
    * Environment names are warn-only: the API accepts any structurally valid
    * name, so the wizard must not block one it accepts. The alert names rows that
@@ -235,12 +257,23 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
     show,
     (visible) => {
       if (visible) {
+        // Re-seed from the live scope: the route may have moved while the
+        // wizard was closed (or mounted), and reset-on-close alone would keep
+        // the stale environment for the next open.
+        seedScope();
         void providersStore.fetchProviders().catch(() => undefined);
         void serversStore.fetchServers().catch(() => undefined);
       } else {
         resetWizard();
       }
     },
+  );
+
+  // A route change while the wizard is mounted re-seeds the scope, so the
+  // summary and the payload always name the current environment.
+  watch(
+    [() => toValue(scope.projectId), () => toValue(scope.environmentId)],
+    () => seedScope(),
   );
 
   watch(
@@ -287,6 +320,7 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
   function buildPayload(): CreateApplicationInput {
     return {
       name: form.name.trim(),
+      environment_id: form.environmentId,
       provider: selectedProviderName.value,
       repo: isPublicRepo.value ? form.publicCloneUrl.trim() : form.repoFullName,
       clone_url: isPublicRepo.value ? form.publicCloneUrl.trim() : form.cloneUrl,
@@ -304,6 +338,10 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
   /** handleSubmit posts the wizard payload, queues the first deploy and reports. */
   async function handleSubmit(): Promise<void> {
     errorMessage.value = "";
+    if (!scopeValid.value) {
+      errorMessage.value = "Select a project and environment first.";
+      return;
+    }
     submitting.value = true;
     try {
       const { application, webhook } = await createApplication(buildPayload());
@@ -344,6 +382,12 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
     resetWizard();
   }
 
+  /** seedScope copies the live route scope into the form. */
+  function seedScope(): void {
+    form.projectId = toValue(scope.projectId);
+    form.environmentId = toValue(scope.environmentId);
+  }
+
   /** handleShowChange mirrors the modal visibility and resets when closing. */
   function handleShowChange(value: boolean): void {
     emit("update:show", value);
@@ -362,6 +406,7 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
     form.branch = "main";
     form.name = "";
     form.buildPack = "";
+    seedScope();
     form.serverId = "";
     form.port = 3000;
     form.hostPort = null;
@@ -391,6 +436,7 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
     serverOptions,
     sourceValid,
     runtimeValid,
+    scopeValid,
     envKeyWarnings,
     droppedEnvRows,
     canContinue,

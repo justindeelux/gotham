@@ -14,12 +14,14 @@ import {
   startApplication,
   stopApplication,
   triggerDeploy,
+  updateApplication,
 } from "@/features/applications/api/applications";
 import type {
   Application,
   Deployment,
   EnvVar,
   StorageMapping,
+  UpdateApplicationInput,
 } from "@/features/applications/api/applications";
 import { desiredPollIntervalMs } from "@/shared/utils/polling";
 
@@ -90,6 +92,24 @@ export const useApplicationsStore = defineStore("applications", () => {
       throw err;
     } finally {
       loading.value = false;
+    }
+  }
+
+  /**
+   * update applies a partial update (rename, move environment, change node)
+   * and merges the returned row into the cache.
+   */
+  async function update(
+    appId: string,
+    input: UpdateApplicationInput,
+  ): Promise<Application> {
+    acting.value = true;
+    try {
+      const application = await updateApplication(appId, input);
+      applicationsById.value[appId] = application;
+      return application;
+    } finally {
+      acting.value = false;
     }
   }
 
@@ -320,6 +340,7 @@ export const useApplicationsStore = defineStore("applications", () => {
     envOf,
     storagesOf,
     fetchApplication,
+    update,
     fetchDeployments,
     refreshDeployments,
     fetchEnv,

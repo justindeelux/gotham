@@ -8,8 +8,11 @@ import type {
   ComposeServiceContainer,
   Service,
   ServiceDeploy,
+  UpdateServiceInput,
 } from "@/features/services/api/services";
 import { isApiError } from "@/features/servers";
+import { resolveEnvironmentScope } from "@/features/projects/utils/canonicalRoutes";
+import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useServersStore } from "@/features/servers";
 import { useServicesStore } from "@/features/services/stores/services";
 
@@ -56,6 +59,10 @@ export interface ServiceDetailContext {
   historyUnavailable: ComputedRef<string | null>;
   historyLoading: ComputedRef<boolean>;
   loggableServices: ComputedRef<string[]>;
+  canWrite: ComputedRef<boolean>;
+  moveSaving: Ref<boolean>;
+  moveError: Ref<string | null>;
+  handleMove(_scope: { projectId: string; environmentId: string; serverId: string }): Promise<void>;
   handleSaveCompose(_text: string): Promise<void>;
   addEnvRow(): void;
   updateEnvRow(_id: number, _patch: Partial<EnvRow>): void;
@@ -92,6 +99,7 @@ export function useServiceDetail(): ServiceDetailContext {
   const router = useRouter();
   const message = useMessage();
   const servicesStore = useServicesStore();
+  const projectsStore = useProjectsStore();
   const serversStore = useServersStore();
 
   /** envReference is the compose `${VAR}` substitution form shown in copy. */
@@ -202,6 +210,8 @@ export function useServiceDetail(): ServiceDetailContext {
     error.value = null;
     notFound.value = false;
     actionError.value = null;
+    moveSaving.value = false;
+    moveError.value = null;
     composeError.value = null;
     composeEditing.value = false;
     envError.value = null;
@@ -213,6 +223,23 @@ export function useServiceDetail(): ServiceDetailContext {
     try {
       const fetched = await servicesStore.fetchService(id);
       if (token !== loadToken) {
+        return;
+      }
+      // The row ids are the authority: a wrong project/environment in the
+      // URL replaces it with the canonical nested URL instead of rendering
+      // silently. The route watcher reloads from there.
+      const canonical = resolveEnvironmentScope(
+        { projectId: fetched.project_id, environmentId: fetched.environment_id },
+        {
+          projectId: String(route.params.projectId ?? ""),
+          environmentId: String(route.params.environmentId ?? ""),
+        },
+      );
+      if (canonical !== null) {
+        await router.replace({
+          name: "service-detail",
+          params: { projectId: canonical.projectId, environmentId: canonical.environmentId, id },
+        });
         return;
       }
       composeYaml.value = fetched.compose_yaml ?? "";
@@ -380,12 +407,20 @@ export function useServiceDetail(): ServiceDetailContext {
 
   /** handleDelete stops the project and removes the row. */
   async function handleDelete(): Promise<void> {
+    const current = service.value;
     busy.value = "delete";
     actionError.value = null;
     try {
       await servicesStore.remove(serviceId.value);
       message.success("Service deleted. Named volumes were kept on the node.");
-      await router.push({ name: "services" });
+      if (current) {
+        await router.push({
+          name: "environment-detail",
+          params: { projectId: current.project_id, environmentId: current.environment_id },
+        });
+      } else {
+        await router.push({ name: "projects" });
+      }
     } catch (err) {
       actionError.value = describeServiceError(err);
     } finally {
@@ -393,13 +428,100 @@ export function useServiceDetail(): ServiceDetailContext {
     }
   }
 
+  /** canWrite follows the contract's roles: viewers read, members write. */
+  const canWrite = computed<boolean>(() => projectsStore.canWrite);
+
+  const moveSaving = ref(false);
+  const moveError = ref<string | null>(null);
+
+  /**
+   * handleMove applies the location settings (move environment, change
+   * node). Only changed fields ride the PATCH; a move retargets the nested
+   * route to the new environment. The contract's 409 refusals (in-flight
+   * deploy, deployed service, name collision) render inline through
+   * moveError. The navigation is identity-guarded: leaving the service
+   * mid-request never yanks the user back to it.
+   */
+  async function handleMove(scope: {
+    projectId: string;
+    environmentId: string;
+    serverId: string;
+  }): Promise<void> {
+    const current = service.value;
+    if (!current) {
+      return;
+    }
+    const input: UpdateServiceInput = {};
+    if (scope.environmentId !== current.environment_id) {
+      input.environment_id = scope.environmentId;
+    }
+    if (scope.serverId !== current.server_id) {
+      input.server_id = scope.serverId;
+    }
+    if (Object.keys(input).length === 0) {
+      return;
+    }
+    const targetId = serviceId.value;
+    moveSaving.value = true;
+    moveError.value = null;
+    try {
+      const updated = await servicesStore.update(targetId, input);
+      if (targetId !== serviceId.value) {
+        return; // the route moved on while the write was in flight
+      }
+      message.success("Location saved");
+      await refreshProjectCounts([current.project_id, updated.project_id]);
+      if (targetId !== serviceId.value) {
+        return;
+      }
+      if (input.environment_id) {
+        await router.push({
+          name: "service-detail",
+          params: {
+            projectId: updated.project_id,
+            environmentId: updated.environment_id,
+            id: updated.id,
+          },
+        });
+      }
+    } catch (err) {
+      if (targetId === serviceId.value) {
+        moveError.value = describeServiceError(err);
+      }
+    } finally {
+      if (targetId === serviceId.value) {
+        moveSaving.value = false;
+      }
+    }
+  }
+
+  /**
+   * refreshProjectCounts invalidates the projects store after a move, so
+   * project/environment counts converge without relying on a remount.
+   */
+  async function refreshProjectCounts(projectIds: string[]): Promise<void> {
+    try {
+      await projectsStore.fetchProjects();
+    } catch {
+      // The store already exposes the error; counts converge on next load.
+    }
+    const detail = projectsStore.detail;
+    if (detail && projectIds.includes(detail.id)) {
+      try {
+        await projectsStore.fetchDetail(detail.id);
+      } catch {
+        // Same as above; the detail alert renders it.
+      }
+    }
+  }
+
   onMounted(() => {
     void load();
   });
 
-  // The detail route is reused when navigating between services: reload when the
-  // id changes so the page never shows the previous service's data.
-  watch(serviceId, () => {
+  // The detail route is reused when navigating between services, and a move
+  // keeps the id while the environment changes: reload on either.
+  watch([serviceId, () => String(route.params.environmentId ?? "")], () => {
     void load();
   });
 
@@ -430,6 +552,10 @@ export function useServiceDetail(): ServiceDetailContext {
     historyUnavailable,
     historyLoading,
     loggableServices,
+    canWrite,
+    moveSaving,
+    moveError,
+    handleMove,
     handleSaveCompose,
     addEnvRow,
     updateEnvRow,

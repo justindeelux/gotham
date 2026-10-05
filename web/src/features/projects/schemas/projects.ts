@@ -68,7 +68,6 @@ export const createdProjectEnvelopeSchema = z.object({
 export const environmentEnvelopeSchema = z.object({
   environment: environmentSchema,
 });
-
 /** projectNameSchema gates the create/rename name: 1-64 chars after trim. */
 export const projectNameSchema: z.ZodString = z
   .string()
@@ -210,5 +209,111 @@ export function parseEnvironment(
 ): z.infer<typeof environmentEnvelopeSchema> {
   return parseWith(environmentEnvelopeSchema, data, {
     context: "EnvironmentEnvelope",
+  });
+}
+
+/**
+ * environmentResourceApplicationSchema mirrors one application of
+ * GET /environments/{id}/resources: the deploy list item plus the grouping
+ * fields and the node name (see environmentResourceApplication in
+ * internal/projects/routes.go).
+ */
+export const environmentResourceApplicationSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  environment_id: z.string().uuid(),
+  environment_name: z.string(),
+  project_id: z.string().uuid(),
+  project_name: z.string(),
+  provider: z.string(),
+  repo: z.string(),
+  clone_url: z.string(),
+  branch: z.string(),
+  build_pack: z.string(),
+  base_domain: z.string(),
+  base_domain_disabled: z.boolean(),
+  port: z.number().int(),
+  host_port: z.number().int(),
+  server_id: z.string(),
+  server_name: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  is_preview: z.boolean(),
+  preview_of: z.string().optional(),
+});
+
+/** serviceDomainRouteSchema mirrors one ServiceDomainRoute of a service. */
+export const serviceDomainRouteSchema = z.object({
+  service: z.string(),
+  domain: z.string(),
+  port: z.number().int(),
+});
+
+/**
+ * environmentResourceServiceSchema mirrors one service of
+ * GET /environments/{id}/resources: the services response shape
+ * (see ServiceResponse in internal/services/response.go), so the
+ * environment page renders service cards unchanged.
+ */
+export const environmentResourceServiceSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  status: z.string(),
+  server_id: z.string(),
+  server_name: z.string(),
+  environment_id: z.string().uuid(),
+  environment_name: z.string(),
+  project_id: z.string().uuid(),
+  project_name: z.string(),
+  compose_project: z.string(),
+  compose_yaml: z.string().optional(),
+  env: z.record(z.string()),
+  domains: z.array(serviceDomainRouteSchema),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+/**
+ * environmentResourceDatabaseSchema mirrors one database of
+ * GET /environments/{id}/resources: the databases list item plus the
+ * grouping fields and the node name (see environmentResourceDatabase in
+ * internal/projects/routes.go).
+ */
+export const environmentResourceDatabaseSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  environment_id: z.string().uuid(),
+  environment_name: z.string(),
+  project_id: z.string().uuid(),
+  project_name: z.string(),
+  engine: z.string(),
+  version: z.string().optional(),
+  status: z.string(),
+  server_id: z.string(),
+  server_name: z.string(),
+  public_port: z.number().int(),
+  volume: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+/** environmentResourcesEnvelopeSchema mirrors GET /environments/{id}/resources. */
+export const environmentResourcesEnvelopeSchema = z.object({
+  environment: environmentSchema,
+  project: projectSchema,
+  applications: z.array(environmentResourceApplicationSchema),
+  services: z.array(environmentResourceServiceSchema),
+  databases: z.array(environmentResourceDatabaseSchema),
+});
+
+/**
+ * parseEnvironmentResources validates a GET /environments/{id}/resources
+ * payload (warn-only).
+ */
+export function parseEnvironmentResources(
+  data: unknown,
+): z.infer<typeof environmentResourcesEnvelopeSchema> {
+  return parseWith(environmentResourcesEnvelopeSchema, data, {
+    context: "EnvironmentResourcesEnvelope",
   });
 }

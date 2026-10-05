@@ -1,7 +1,7 @@
 import type { APIRequestContext, Locator, Page, Route } from "@playwright/test";
 
 import { expect, test } from "./fixtures";
-import { loadAccount, seedNodeAddress, seedProjectEnvironment, storageStatePath, uniqueSuffix } from "./support";
+import { loadAccount, nestedURL, seedNodeAddress, seedProjectEnvironment, storageStatePath, uniqueSuffix } from "./support";
 
 // Every scenario starts from the session global setup created.
 test.use({ storageState: storageStatePath });
@@ -30,8 +30,8 @@ async function seedApplication(
   request: APIRequestContext,
   serverId: string,
   name: string,
-): Promise<{ id: string; name: string }> {
-  const { environmentId } = await seedProjectEnvironment(request, authHeaders());
+): Promise<{ id: string; name: string; projectId: string; environmentId: string }> {
+  const { projectId, environmentId } = await seedProjectEnvironment(request, authHeaders());
   const response = await request.post("/api/v1/applications", {
     headers: authHeaders(),
     data: {
@@ -51,7 +51,7 @@ async function seedApplication(
   const { application } = (await response.json()) as {
     application: { id: string; name: string };
   };
-  return application;
+  return { ...application, projectId, environmentId };
 }
 
 /**
@@ -115,7 +115,9 @@ test.describe("previews tab", () => {
       }),
     );
 
-    await page.goto(`/applications/${application.id}`);
+    await page.goto(
+      nestedURL(application.projectId, application.environmentId, "applications", application.id),
+    );
 
     const previewsTab = page.locator(".n-tabs-tab").filter({ hasText: "Previews" });
     await expect(previewsTab).toContainText("Previews (1)");

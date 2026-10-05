@@ -7,13 +7,14 @@ import {
   NTabs,
 } from "naive-ui";
 import { provide, ref, watch } from "vue";
-import { RouterLink } from "vue-router";
 
 import DatabaseBackupsTab from "@/features/databases/components/DatabaseBackupsTab.vue";
 import DatabaseDetailHeader from "@/features/databases/components/DatabaseDetailHeader.vue";
 import DatabaseOverviewPanel from "@/features/databases/components/DatabaseOverviewPanel.vue";
 import RenameDatabaseDialog from "@/features/databases/components/RenameDatabaseDialog.vue";
 import RestoreConfirmDialog from "@/features/databases/components/RestoreConfirmDialog.vue";
+import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
+import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
 import {
   databaseDetailKey,
   useDatabaseDetail,
@@ -38,10 +39,16 @@ watch(detail.dbId, () => {
 
 <template>
   <NSpace vertical :size="16">
-    <nav class="breadcrumb" aria-label="Breadcrumb">
-      <RouterLink to="/databases">Databases</RouterLink>
-      <span class="breadcrumb__sep">/</span>
-      <span class="muted mono">{{ detail.database.value?.name ?? detail.shortId.value }}</span>
+    <ProjectBreadcrumb
+      v-if="detail.database.value"
+      :project-name="detail.database.value.project_name"
+      :project-id="detail.database.value.project_id"
+      :environment-name="detail.database.value.environment_name"
+      :environment-id="detail.database.value.environment_id"
+      :resource-name="detail.database.value.name"
+    />
+    <nav v-else class="breadcrumb" aria-label="Breadcrumb">
+      <span class="muted mono">{{ detail.shortId.value }}</span>
     </nav>
 
     <NSpin :show="detail.pageLoading.value">
@@ -72,6 +79,20 @@ watch(detail.dbId, () => {
 
         <NTabPane name="backups" tab="Backups">
           <DatabaseBackupsTab />
+        </NTabPane>
+
+        <NTabPane v-if="detail.canWrite.value" name="settings" tab="Settings">
+          <ResourceMoveCard
+            v-if="detail.database.value"
+            :project-id="detail.database.value.project_id"
+            :environment-id="detail.database.value.environment_id"
+            :server-id="detail.database.value.server_id"
+            :saving="detail.moveSaving.value"
+            :error="detail.moveError.value"
+            server-pinned
+            server-pinned-reason="A database cannot change server once created; only moving it to another environment is possible."
+            @save="detail.handleMove"
+          />
         </NTabPane>
       </NTabs>
     </NSpin>

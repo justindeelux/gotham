@@ -1,5 +1,5 @@
 import { http, teamHeaders } from "@/shared/api/http";
-import { isApiError, stripErrorPrefix } from "@/features/servers";
+import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
  * Typed client for the database routes served by `internal/databases`
@@ -44,10 +44,16 @@ export type DatabaseEngineName =
 export interface Database {
   id: string;
   name: string;
+  environment_id: string;
+  environment_name: string;
+  project_id: string;
+  /** The Gotham project the environment belongs to. */
+  project_name: string;
   engine: string;
   version: string;
   status: DatabaseStatus;
   server_id: string;
+  server_name: string;
   container_id: string;
   public_port: number;
   volume: string;
@@ -71,6 +77,8 @@ export interface CreateDatabaseInput {
   name: string;
   engine: string;
   version?: string;
+  /** Environment the database belongs to (required since PE-2). */
+  environment_id: string;
   server_id: string;
   public_port?: number;
 }
@@ -78,6 +86,19 @@ export interface CreateDatabaseInput {
 /** Body accepted by PATCH /databases/{id}: rename only. */
 export interface RenameDatabaseInput {
   name: string;
+}
+
+/**
+ * Body accepted by PATCH /databases/{id} for the resource settings (see
+ * updateRequest). `environment_id` moves the database within the caller's
+ * team (409 on a name collision in the target); `server_id` changes the
+ * node, which the backend refuses once created (409 `a database cannot
+ * change server once created`) — the settings render that refusal inline.
+ */
+export interface UpdateDatabaseInput {
+  name?: string;
+  environment_id?: string;
+  server_id?: string;
 }
 
 /** Wire envelope for a single database. */
@@ -117,11 +138,23 @@ export interface CreatedDatabase {
 /**
  * listDatabases returns one team's live databases, newest first. An empty
  * teamId reads the caller's personal team, matching the other pre-teams
- * surfaces.
+ * surfaces. `filter` optionally scopes the list to one environment or
+ * project (?environment_id= / ?project_id=).
  */
-export async function listDatabases(teamId = ""): Promise<Database[]> {
+export async function listDatabases(
+  teamId = "",
+  filter: { environment_id?: string; project_id?: string } = {},
+): Promise<Database[]> {
+  const params: Record<string, string> = {};
+  if (filter.environment_id) {
+    params.environment_id = filter.environment_id;
+  }
+  if (filter.project_id) {
+    params.project_id = filter.project_id;
+  }
   const response = await http.get<DatabaseListEnvelope>("/databases", {
     headers: teamHeaders(teamId),
+    params,
   });
   return response.data.databases ?? [];
 }
@@ -144,6 +177,7 @@ export async function createDatabase(
   const body: Record<string, unknown> = {
     name: input.name,
     engine: input.engine,
+    environment_id: input.environment_id,
     server_id: input.server_id,
   };
   if (input.version && input.version.trim() !== "") {
@@ -171,6 +205,18 @@ export async function renameDatabase(
   const response = await http.patch<DatabaseEnvelope>(`/databases/${id}`, {
     name: input.name,
   });
+  return response.data.database;
+}
+
+/**
+ * updateDatabase applies a partial update (rename, move environment, change
+ * node) to a database the caller owns (PATCH → 200).
+ */
+export async function updateDatabase(
+  id: string,
+  input: UpdateDatabaseInput,
+): Promise<Database> {
+  const response = await http.patch<DatabaseEnvelope>(`/databases/${id}`, input);
   return response.data.database;
 }
 
@@ -220,7 +266,14 @@ export function describeDatabaseError(error: unknown): string {
       return "Database not found. It may have been deleted or belong to another account.";
     }
     if (error.status === 409) {
-      return "A database with that name already exists.";
+      // The backend names the refusal exactly (a duplicate name, `a deploy
+      // is in progress`, `a database cannot change server once created`), so
+      // the message passes through for the move/server-change settings to
+      // render inline.
+      return (
+        conflictDetail(stripErrorPrefix(error.message)) ||
+        "A database with that name already exists."
+      );
     }
     if (error.status === 502) {
       return (

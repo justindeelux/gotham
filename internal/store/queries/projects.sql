@@ -91,3 +91,14 @@ WHERE project_id = $1 AND environment_id IS NOT DISTINCT FROM $2;
 INSERT INTO shared_variables (id, project_id, environment_id, key, value, ciphertext, secret)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
+
+-- name: ListPreviewBases :many
+-- ListPreviewBases maps preview application rows to their base application
+-- for the environment resources surface (PE-5 M1): the preview marker rides
+-- the applications row itself, but the base id lives in preview_deploys.
+-- Team-scoped, so a foreign preview id simply resolves to no row.
+SELECT application_id, preview_application_id
+FROM preview_deploys
+WHERE preview_application_id = ANY(sqlc.slice('preview_app_ids'))
+  AND team_id = sqlc.arg('team_id')
+  AND deleted_at IS NULL;

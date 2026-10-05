@@ -5,7 +5,7 @@ import type { InjectionKey } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { describeDatabaseError } from "@/features/databases/api/databases";
-import type { Database } from "@/features/databases/api/databases";
+import type { Database, UpdateDatabaseInput } from "@/features/databases/api/databases";
 import {
   databaseMessages,
   isDatabaseNameValid,
@@ -18,6 +18,8 @@ import {
 } from "@/features/databases/utils/databaseConnection";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { useDatabasesStore } from "@/features/databases/stores/databases";
+import { resolveEnvironmentScope } from "@/features/projects/utils/canonicalRoutes";
+import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useServersStore } from "@/features/servers";
 
 export type CredentialField = "username" | "password" | "database" | "root_password";
@@ -32,6 +34,7 @@ export function useDatabaseDetail() {
   const router = useRouter();
   const message = useMessage();
   const databasesStore = useDatabasesStore();
+  const projectsStore = useProjectsStore();
   const serversStore = useServersStore();
   const { copyText } = useCopyText();
 
@@ -174,7 +177,25 @@ export function useDatabaseDetail() {
     pageLoading.value = true;
     pageError.value = null;
     try {
-      await databasesStore.fetchDatabase(dbId.value);
+      const database = await databasesStore.fetchDatabase(dbId.value);
+      // The row ids are the authority: a wrong project/environment in the
+      // URL replaces it with the canonical nested URL instead of rendering
+      // silently. The route watcher reloads from there.
+      const canonical = resolveEnvironmentScope(
+        { projectId: database.project_id, environmentId: database.environment_id },
+        {
+          projectId: String(route.params.projectId ?? ""),
+          environmentId: String(route.params.environmentId ?? ""),
+        },
+      );
+      if (canonical !== null) {
+        await router.replace({
+          name: "database-detail",
+          params: { projectId: canonical.projectId, environmentId: canonical.environmentId, id: dbId.value },
+        });
+        pageLoading.value = false;
+        return;
+      }
     } catch (error) {
       pageError.value = describeDatabaseError(error);
       pageLoading.value = false;
@@ -194,6 +215,8 @@ export function useDatabaseDetail() {
     revealed.value = false;
     renameOpen.value = false;
     renameValue.value = "";
+    moveSaving.value = false;
+    moveError.value = null;
   }
 
   /** handleLifecycle runs one start/stop/restart action. */
@@ -243,19 +266,116 @@ export function useDatabaseDetail() {
     }
   }
 
-  /** handleDelete soft-deletes the row and returns to the list. */
+  /** handleDelete soft-deletes the row and returns to the environment. */
   async function handleDelete(): Promise<void> {
-    const name = database.value?.name ?? dbId.value;
+    const current = database.value;
+    const name = current?.name ?? dbId.value;
     try {
       await databasesStore.remove(dbId.value);
       message.success(`Database "${name}" deleted · volume kept for 7 days`);
-      await router.push({ name: "databases" });
+      if (current) {
+        await router.push({
+          name: "environment-detail",
+          params: { projectId: current.project_id, environmentId: current.environment_id },
+        });
+      } else {
+        await router.push({ name: "projects" });
+      }
     } catch (error) {
       message.error(describeDatabaseError(error));
     }
   }
 
-  watch(dbId, () => {
+  /** canWrite follows the contract's roles: viewers read, members write. */
+  const canWrite = computed<boolean>(() => projectsStore.canWrite);
+
+  const moveSaving = ref(false);
+  const moveError = ref<string | null>(null);
+
+  /**
+   * handleMove applies the location settings (move environment, change
+   * node). Only changed fields ride the PATCH; a move retargets the nested
+   * route to the new environment. The contract's 409 refusals (in-flight
+   * deploy, pinned node, name collision) render inline through moveError.
+   * The navigation is identity-guarded: leaving the database mid-request
+   * never yanks the user back to it.
+   */
+  async function handleMove(scope: {
+    projectId: string;
+    environmentId: string;
+    serverId: string;
+  }): Promise<void> {
+    const current = database.value;
+    if (!current) {
+      return;
+    }
+    const input: UpdateDatabaseInput = {};
+    if (scope.environmentId !== current.environment_id) {
+      input.environment_id = scope.environmentId;
+    }
+    if (scope.serverId !== current.server_id) {
+      input.server_id = scope.serverId;
+    }
+    if (Object.keys(input).length === 0) {
+      return;
+    }
+    const targetId = dbId.value;
+    moveSaving.value = true;
+    moveError.value = null;
+    try {
+      const updated = await databasesStore.update(targetId, input);
+      if (targetId !== dbId.value) {
+        return; // the route moved on while the write was in flight
+      }
+      message.success("Location saved");
+      await refreshProjectCounts([current.project_id, updated.project_id]);
+      if (targetId !== dbId.value) {
+        return;
+      }
+      if (input.environment_id) {
+        await router.push({
+          name: "database-detail",
+          params: {
+            projectId: updated.project_id,
+            environmentId: updated.environment_id,
+            id: updated.id,
+          },
+        });
+      }
+    } catch (error) {
+      if (targetId === dbId.value) {
+        moveError.value = describeDatabaseError(error);
+      }
+    } finally {
+      if (targetId === dbId.value) {
+        moveSaving.value = false;
+      }
+    }
+  }
+
+  /**
+   * refreshProjectCounts invalidates the projects store after a move, so
+   * project/environment counts converge without relying on a remount.
+   */
+  async function refreshProjectCounts(projectIds: string[]): Promise<void> {
+    try {
+      await projectsStore.fetchProjects();
+    } catch {
+      // The store already exposes the error; counts converge on next load.
+    }
+    const detail = projectsStore.detail;
+    if (detail && projectIds.includes(detail.id)) {
+      try {
+        await projectsStore.fetchDetail(detail.id);
+      } catch {
+        // Same as above; the detail alert renders it.
+      }
+    }
+  }
+
+  // The detail route is reused when navigating between databases, and a
+  // move keeps the id while the environment changes: reload on either.
+  watch([dbId, () => String(route.params.environmentId ?? "")], () => {
     resetView();
     void fetchAll();
   });
@@ -301,6 +421,10 @@ export function useDatabaseDetail() {
     openRename,
     handleRename,
     handleDelete,
+    canWrite,
+    moveSaving,
+    moveError,
+    handleMove,
   };
 }
 

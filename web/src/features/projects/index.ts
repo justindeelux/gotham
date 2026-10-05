@@ -5,6 +5,7 @@ export {
   deleteProject,
   describeProjectError,
   environmentResourceTotal,
+  getEnvironmentResources,
   getProject,
   isNameTakenError,
   listProjects,
@@ -18,6 +19,9 @@ export type {
   CreateProjectInput,
   Environment,
   EnvironmentNameInput,
+  EnvironmentResourceApplication,
+  EnvironmentResourceDatabase,
+  EnvironmentResources,
   Project,
   ProjectDetailEnvelope,
   ResourceCounts,
@@ -28,6 +32,10 @@ export {
   environmentEnvelopeSchema,
   environmentNameRules,
   environmentNameSchema,
+  environmentResourceApplicationSchema,
+  environmentResourceDatabaseSchema,
+  environmentResourcesEnvelopeSchema,
+  environmentResourceServiceSchema,
   environmentSchema,
   filterProjects,
   isEnvironmentNameValid,
@@ -35,6 +43,7 @@ export {
   isProjectNameValid,
   parseCreatedProject,
   parseEnvironment,
+  parseEnvironmentResources,
   parseProject,
   parseProjectDetail,
   parseProjectList,
@@ -49,6 +58,15 @@ export {
   resourceCountsSchema,
 } from "./schemas/projects";
 export { useProjectsStore } from "./stores/projects";
+export { useEnvironmentOptions } from "./composables/useEnvironmentOptions";
+export type { EnvironmentOptions } from "./composables/useEnvironmentOptions";
+export { useEnvironmentPage } from "./composables/useEnvironmentPage";
+export type {
+  EnvironmentPageState,
+  EnvironmentResourceKind,
+  EnvironmentResourceTab,
+  EnvironmentRow,
+} from "./composables/useEnvironmentPage";
 export { useProjectPage } from "./composables/useProjectPage";
 export type { ProjectPageState, ProjectTab } from "./composables/useProjectPage";
 export { useProjectsPage } from "./composables/useProjectsPage";
@@ -56,3 +74,10 @@ export type { ProjectsPageState } from "./composables/useProjectsPage";
 export { useNameConflict } from "./composables/useNameConflict";
 export type { NameConflictState } from "./composables/useNameConflict";
 export { submitOnEnter } from "./utils/submitOnEnter";
+export {
+  buildServerOptions,
+  isUsableServer,
+  singleUsableServerId,
+  unusableReason,
+  unusableServerHint,
+} from "./utils/serverOptions";

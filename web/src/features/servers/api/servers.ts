@@ -274,3 +274,19 @@ export function stripErrorPrefix(message: string): string {
   }
   return (message ?? "").trim();
 }
+
+/**
+ * conflictDetail trims a move-collision refusal to its specific half. The
+ * backend wraps the sentinel ("name already exists in the target
+ * environment: a service named \"x\" already exists in the target
+ * environment"), so the first half only repeats the second; messages without
+ * a colon pass through untouched.
+ */
+export function conflictDetail(message: string): string {
+  const text = (message ?? "").trim();
+  const separator = text.indexOf(": ");
+  if (separator === -1) {
+    return text;
+  }
+  return text.slice(separator + 2).trim() || text;
+}

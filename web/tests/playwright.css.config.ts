@@ -6,6 +6,7 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: ".",
   testMatch: [
+    "environment-layout.spec.ts",
     "form-feedback.spec.ts",
     "form-layout.spec.ts",
     "profile-layout.spec.ts",

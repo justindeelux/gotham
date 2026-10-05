@@ -14,7 +14,7 @@ import {
   NTabs,
   NText,
 } from "naive-ui";
-import { useRoute } from "vue-router";
+import { RouterLink, useRoute } from "vue-router";
 
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
 import {
@@ -42,8 +42,7 @@ import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
  * Delete buttons stay enabled so the block is reachable by keyboard and
  * touch: the dialog explains why ("Move or delete the N resources first")
  * with a disabled confirm while blocked, and the backend's 409 stays the
- * authority. The resource Open buttons route to the environment page that
- * PE-5 adds, so they render disabled with a tooltip until then.
+ * authority. The resource Open buttons route to the environment page.
  *
  * Forms render through NForm with schema rules (inline client errors),
  * visible labels and a 409 taken name inline on the name field. Submits run
@@ -168,13 +167,17 @@ const envRules = environmentNameRules();
                   <td class="num" data-label="Databases">{{ environment.resource_counts.databases }}</td>
                   <td class="actions" data-label="Actions">
                     <NSpace :size="8" justify="end" class="action-buttons">
-                      <NButton
-                        size="small"
-                        disabled
-                        title="The environment page lands in PE-5."
+                      <RouterLink
+                        :to="{
+                          name: 'environment-detail',
+                          params: {
+                            projectId: projectsStore.detail.id,
+                            environmentId: environment.id,
+                          },
+                        }"
                       >
-                        Open
-                      </NButton>
+                        <NButton size="small">Open</NButton>
+                      </RouterLink>
                       <template v-if="canWrite">
                         <NButton size="small" @click="openEnvRename(environment)">
                           Rename

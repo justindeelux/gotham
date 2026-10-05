@@ -23,9 +23,15 @@ import {
   wizardStepNames,
 } from "@/features/databases/composables/useCreateDatabaseWizard";
 import { ENGINES } from "@/features/databases/utils/databaseEngines";
+import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
+import ServerPicker from "@/features/projects/components/ServerPicker.vue";
 
 interface Props {
   show: boolean;
+  /** Project the database is created in (the route's, changeable). */
+  projectId?: string;
+  /** Environment the database is created in (the route's, changeable). */
+  environmentId?: string;
 }
 
 interface Emits {
@@ -33,13 +39,15 @@ interface Emits {
   created: [created: CreatedDatabase];
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { projectId: "", environmentId: "" });
 const emit = defineEmits<Emits>();
 
 const wizard = useCreateDatabaseWizard({
   show: toRef(props, "show"),
   onCreated: (created) => emit("created", created),
   onUpdateShow: (value) => emit("update:show", value),
+  projectId: toRef(props, "projectId"),
+  environmentId: toRef(props, "environmentId"),
 });
 
 provide(wizardFormKey, wizard.form);
@@ -65,6 +73,13 @@ provide(wizardFormKey, wizard.form);
       <NAlert v-if="wizard.errorMessage.value" type="error" :show-icon="true">
         {{ wizard.errorMessage.value }}
       </NAlert>
+
+      <ResourceScopeSummary
+        :project-id="wizard.form.projectId"
+        :environment-id="wizard.form.environmentId"
+        @update:project-id="(value) => (wizard.form.projectId = value)"
+        @update:environment-id="(value) => (wizard.form.environmentId = value)"
+      />
 
       <template v-if="wizard.step.value === 0">
         <NFormItem label="Engine" :show-feedback="false">
@@ -93,17 +108,7 @@ provide(wizardFormKey, wizard.form);
               clearable
             />
           </NFormItem>
-          <NFormItem
-            label="Node"
-            feedback="The container and its volume live on this node."
-          >
-            <NSelect
-              v-model:value="wizard.form.serverId"
-              :options="wizard.serverOptions.value"
-              placeholder="Select a node"
-              :loading="wizard.serversStore.loading"
-            />
-          </NFormItem>
+          <ServerPicker v-model="wizard.form.serverId" label="Node" />
         </div>
       </template>
 

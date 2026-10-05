@@ -63,6 +63,10 @@ type Repository interface {
 	// from the existing rows inside that transaction, so keep-ciphertext
 	// reads the latest committed set; a missing scope answers ErrNotFound.
 	ReplaceVariables(ctx context.Context, projectID, environmentID uuid.UUID, build func(existing []SharedVariable) ([]SharedVariable, error)) error
+	// PreviewBaseIDs maps preview application rows to their base application
+	// for the resources surface (PE-5 M1). Team-scoped: a foreign preview id
+	// resolves to no row. An empty input answers an empty map without a query.
+	PreviewBaseIDs(ctx context.Context, teamID uuid.UUID, previewAppIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
 }
 
 // storeRepository adapts *store.Store to Repository.
@@ -265,6 +269,30 @@ func (r *storeRepository) CountEnvironments(ctx context.Context, projectID uuid.
 		return 0, fmt.Errorf("projects: count environments: %w", err)
 	}
 	return int(count), nil
+}
+
+// PreviewBaseIDs implements Repository: preview application rows map to
+// their base application through preview_deploys, scoped to the team.
+func (r *storeRepository) PreviewBaseIDs(ctx context.Context, teamID uuid.UUID, previewAppIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	bases := make(map[uuid.UUID]uuid.UUID, len(previewAppIDs))
+	if len(previewAppIDs) == 0 {
+		return bases, nil
+	}
+	ids := make([]pgtype.UUID, 0, len(previewAppIDs))
+	for _, id := range previewAppIDs {
+		ids = append(ids, pgUUID(id))
+	}
+	rows, err := r.store.ListPreviewBases(ctx, sqlc.ListPreviewBasesParams{
+		PreviewAppIds: ids,
+		TeamID:        pgUUID(teamID),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("projects: list preview bases: %w", err)
+	}
+	for _, row := range rows {
+		bases[uuidFromPG(row.PreviewApplicationID)] = uuidFromPG(row.ApplicationID)
+	}
+	return bases, nil
 }
 
 // projectFromRow maps a sqlc row to the domain project.

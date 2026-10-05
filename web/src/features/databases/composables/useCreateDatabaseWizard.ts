@@ -1,6 +1,6 @@
 import { useCopyText } from "@/shared/composables/useCopyText";
 import { useMessage } from "naive-ui";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, reactive, ref, toValue, watch } from "vue";
 import type { InjectionKey, Ref } from "vue";
 
 import {
@@ -23,6 +23,10 @@ import { useServersStore } from "@/features/servers";
 export interface WizardForm {
   engine: string;
   version: string;
+  /** Project the database is created in (read-only summary, changeable). */
+  projectId: string;
+  /** Environment the database is created in (required by the API). */
+  environmentId: string;
   serverId: string;
   name: string;
   exposePublic: boolean;
@@ -39,6 +43,12 @@ interface WizardOptions {
   show: Ref<boolean>;
   onCreated: (_created: CreatedDatabase) => void;
   onUpdateShow: (_value: boolean) => void;
+  /**
+   * Preselected scope (the host passes its route by ref so a route change
+   * while the wizard is mounted re-seeds the form).
+   */
+  projectId?: string | Ref<string>;
+  environmentId?: string | Ref<string>;
 }
 
 /**
@@ -60,6 +70,8 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   const form = reactive<WizardForm>({
     engine: "postgres",
     version: "",
+    projectId: toValue(options.projectId ?? ""),
+    environmentId: toValue(options.environmentId ?? ""),
     serverId: "",
     name: "",
     exposePublic: false,
@@ -91,8 +103,10 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
         ?.label ?? form.serverId,
   );
 
-  /** engineValid gates the Engine step: an engine and a node. */
-  const engineValid = computed<boolean>(() => form.serverId !== "");
+  /** engineValid gates the Engine step: a scope, an engine and a node. */
+  const engineValid = computed<boolean>(
+    () => form.environmentId !== "" && form.serverId !== "",
+  );
 
   /** configureValid gates the Configure step: backend name rule + port range. */
   const configureValid = computed<boolean>(() =>
@@ -141,10 +155,17 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     created.value = null;
     form.engine = "postgres";
     form.version = "";
+    seedScope();
     form.serverId = "";
     form.name = "";
     form.exposePublic = false;
     form.publicPort = null;
+  }
+
+  /** seedScope copies the live route scope into the form. */
+  function seedScope(): void {
+    form.projectId = toValue(options.projectId ?? "");
+    form.environmentId = toValue(options.environmentId ?? "");
   }
 
   /** goNext advances one step, or submits on the review step. */
@@ -171,11 +192,17 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   async function handleSubmit(): Promise<void> {
     submitting.value = true;
     errorMessage.value = "";
+    if (form.environmentId === "") {
+      errorMessage.value = "Select a project and environment first.";
+      submitting.value = false;
+      return;
+    }
     try {
       created.value = await databasesStore.provision({
         name: form.name.trim(),
         engine: form.engine,
         version: form.version || undefined,
+        environment_id: form.environmentId,
         server_id: form.serverId,
         public_port: form.exposePublic ? (form.publicPort ?? undefined) : undefined,
       });
@@ -193,16 +220,25 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     options.onUpdateShow(value);
   }
 
-  // Entering the wizard loads the node list; closing resets the form.
+  // Entering the wizard loads the node list and re-seeds the live scope;
+  // closing resets the form.
   watch(
     () => options.show.value,
     (visible) => {
       if (visible) {
+        seedScope();
         void serversStore.fetchServers().catch(() => undefined);
       } else {
         resetWizard();
       }
     },
+  );
+
+  // A route change while the wizard is mounted re-seeds the scope, so the
+  // summary and the payload always name the current environment.
+  watch(
+    [() => toValue(options.projectId ?? ""), () => toValue(options.environmentId ?? "")],
+    () => seedScope(),
   );
 
   // Switching engine resets the version pick to the engine default.

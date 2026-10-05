@@ -1,5 +1,5 @@
 import { http, teamHeaders } from "@/shared/api/http";
-import { isApiError, stripErrorPrefix } from "@/features/servers";
+import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
  * Typed client for the application routes served by `internal/deploy`
@@ -33,15 +33,23 @@ import { isApiError, stripErrorPrefix } from "@/features/servers";
 export interface Application {
   id: string;
   name: string;
+  environment_id: string;
+  environment_name: string;
+  project_id: string;
+  /** The Gotham project the environment belongs to. */
+  project_name: string;
   provider: string;
   repo: string;
   clone_url: string;
   branch: string;
   build_pack: string;
   base_domain: string;
+  /** True when a legacy duplicate binding was disabled; an explicit domain update re-enables it. */
+  base_domain_disabled: boolean;
   port: number;
   host_port: number;
   server_id: string | null;
+  server_name: string;
   created_at: string;
   updated_at: string;
 }
@@ -104,6 +112,8 @@ export type BuildPack = "" | "dockerfile" | "railpack" | "buildpacks" | "static"
 /** Body sent to create an application (mirrors the applications table). */
 export interface CreateApplicationInput {
   name: string;
+  /** Environment the application belongs to (required since PE-2). */
+  environment_id: string;
   provider: string;
   repo: string;
   clone_url: string;
@@ -120,6 +130,12 @@ export interface CreateApplicationInput {
 /** Body accepted by PUT /applications/{id} (see updateApplicationRequest). */
 export interface UpdateApplicationInput {
   name?: string;
+  /**
+   * environment_id moves the application within the caller's team. A move
+   * that collides with a name in the target answers 409; a base application
+   * with open previews answers 409 (`close the open previews first`).
+   */
+  environment_id?: string;
   branch?: string;
   build_pack?: string;
   base_domain?: string;
@@ -321,11 +337,24 @@ export async function rollbackDeployment(
 /**
  * listApplications returns one team's applications, newest first
  * (GET /applications → 200). An empty teamId reads the caller's personal
- * team, matching the other pre-teams surfaces.
+ * team, matching the other pre-teams surfaces. `filter` optionally scopes
+ * the list to one environment or project (?environment_id= / ?project_id=,
+ * mutually exclusive server-side).
  */
-export async function listApplications(teamId = ""): Promise<Application[]> {
+export async function listApplications(
+  teamId = "",
+  filter: { environment_id?: string; project_id?: string } = {},
+): Promise<Application[]> {
+  const params: Record<string, string> = {};
+  if (filter.environment_id) {
+    params.environment_id = filter.environment_id;
+  }
+  if (filter.project_id) {
+    params.project_id = filter.project_id;
+  }
   const response = await http.get<ApplicationListEnvelope>("/applications", {
     headers: teamHeaders(teamId),
+    params,
   });
   return response.data.applications ?? [];
 }
@@ -494,9 +523,15 @@ export function describeApplicationError(
       return "Application not found. It may have been deleted or belong to another account.";
     }
     if (error.status === 409) {
+      // The backend names the refusal exactly (`a deploy is in progress`
+      // while one runs, `close the open previews first` for a base
+      // application with open previews, or the name-collision text on a
+      // move), so the message passes through for the move/server-change
+      // settings to render inline.
       return (
+        conflictDetail(stripErrorPrefix(error.message)) ||
         "A deployment is already in progress for this application. " +
-        "Wait for it to finish and retry."
+          "Wait for it to finish and retry."
       );
     }
     if (error.status === 502) {

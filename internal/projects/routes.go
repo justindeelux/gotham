@@ -97,7 +97,9 @@ type (
 )
 
 // environmentResourceApplication is one application of the resources
-// surface. It mirrors deploy's list item field for field.
+// surface. It mirrors deploy's list item field for field, plus the preview
+// marker: is_preview flags a PR-preview sibling, preview_of names its base
+// application (empty when none).
 type environmentResourceApplication struct {
 	ID                 string    `json:"id"`
 	Name               string    `json:"name"`
@@ -116,6 +118,8 @@ type environmentResourceApplication struct {
 	HostPort           int32     `json:"host_port"`
 	ServerID           string    `json:"server_id"`
 	ServerName         string    `json:"server_name"`
+	IsPreview          bool      `json:"is_preview"`
+	PreviewOf          string    `json:"preview_of,omitempty"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
@@ -373,10 +377,31 @@ func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request
 		return
 	}
 	applications := make([]environmentResourceApplication, 0, len(resources.Applications))
+	previewIDs := make([]uuid.UUID, 0)
+	for _, application := range resources.Applications {
+		if application.IsPreview {
+			previewIDs = append(previewIDs, application.ID)
+		}
+	}
+	// The base-application mapping is a second read only when previews are
+	// on the page; a failure here must not fail the whole envelope, so an
+	// unmapped preview renders with its tag and no parent.
+	bases := map[uuid.UUID]uuid.UUID{}
+	if len(previewIDs) > 0 {
+		if mapped, err := h.svc.PreviewBases(r.Context(), userID, previewIDs); err == nil {
+			bases = mapped
+		} else {
+			h.logger.Error("projects: preview bases unavailable", "error", err)
+		}
+	}
 	for _, application := range resources.Applications {
 		serverID := ""
 		if application.ServerID != uuid.Nil {
 			serverID = application.ServerID.String()
+		}
+		previewOf := ""
+		if base, ok := bases[application.ID]; ok && base != uuid.Nil {
+			previewOf = base.String()
 		}
 		applications = append(applications, environmentResourceApplication{
 			ID:                 application.ID.String(),
@@ -396,6 +421,8 @@ func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request
 			HostPort:           application.HostPort,
 			ServerID:           serverID,
 			ServerName:         application.ServerName,
+			IsPreview:          application.IsPreview,
+			PreviewOf:          previewOf,
 			CreatedAt:          application.CreatedAt,
 			UpdatedAt:          application.UpdatedAt,
 		})

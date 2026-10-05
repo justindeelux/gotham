@@ -120,7 +120,7 @@ Variable    {key, value?: string, secret: boolean}   // value omitted when secre
 | `POST /projects/{id}/environments` | `{name}` → 201 `{environment}`; 1-64 chars, unique per project (case-insensitive) |
 | `PATCH /environments/{id}` | `{name}` → `{environment}` |
 | `DELETE /environments/{id}` | 204; 409 `environment still has resources (including previews)`; the last environment of a project cannot be deleted (409 `a project needs at least one environment`) |
-| `GET /environments/{id}/resources` | → `{environment, project, applications: [...], services: [...], databases: [...]}` using the existing list item shapes of each resource, each with `server_id` and `server_name`; previews excluded unless `?previews=1` |
+| `GET /environments/{id}/resources` | → `{environment, project, applications: [...], services: [...], databases: [...]}` using the existing list item shapes of each resource, each with `server_id` and `server_name`; previews excluded unless `?previews=1`; application items carry `is_preview` and `preview_of` (the base application id, empty when none) so the page can nest them |
 | `GET /projects/{id}/variables`, `GET /environments/{id}/variables` | → `{variables: Variable[]}` |
 | `PUT /projects/{id}/variables`, `PUT /environments/{id}/variables` | `{variables: [{key, value, secret}]}` replaces the whole set; omitted `value` for an existing secret key keeps its sealed value; key `^[A-Za-z_][A-Za-z0-9_]*$`, max 128 keys |
 | `POST /applications`, `/services`, `/databases` | existing body plus required `environment_id` (400 `environment is required`), required `server_id` (400 `server is required`, 404 if not in the team, 409 if the server is offline/unusable as today) |

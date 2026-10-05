@@ -62,7 +62,7 @@ function testRouter() {
     history: createMemoryHistory(),
     routes: [
       { path: "/", component: { template: "<div/>" } },
-      { name: "applications", path: "/applications", component: { template: "<div/>" } },
+      { name: "projects", path: "/projects", component: { template: "<div/>" } },
     ],
   });
   router.push("/");

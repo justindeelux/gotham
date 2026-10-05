@@ -3,6 +3,7 @@ import type { Locator, Page } from "@playwright/test";
 import {
   cloneURL,
   loadAccount,
+  nestedURL,
   seedNodeAddress,
   seedProjectEnvironment,
   storageStatePath,
@@ -102,7 +103,7 @@ test.describe("domains", () => {
     const { server } = (await serverResponse.json()) as {
       server: { id: string };
     };
-    const { environmentId } = await seedProjectEnvironment(request, headers);
+    const { environmentId, projectId } = await seedProjectEnvironment(request, headers);
 
     const appResponse = await request.post("/api/v1/applications", {
       headers,
@@ -478,7 +479,7 @@ test.describe("domains", () => {
     await expect(redirectRow).toHaveCount(0);
 
     // ── application detail: change the domain and re-record the cert ─────
-    await page.goto(`/applications/${app.id}`);
+    await page.goto(nestedURL(projectId, environmentId, "applications", app.id));
     await tab(page, "Domains").click();
     const domainCard = page.locator(".n-card").filter({ hasText: "Application domain" });
     await expect(domainCard.locator("input").first()).toHaveValue(domain);

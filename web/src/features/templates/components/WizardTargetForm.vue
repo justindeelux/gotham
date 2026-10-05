@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { NAlert, NForm, NFormItem, NInput, NSelect } from "naive-ui";
-import { computed } from "vue";
-import { RouterLink } from "vue-router";
+import { NAlert, NForm, NFormItem, NInput } from "naive-ui";
 
-import { useServersStore } from "@/features/servers";
+import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
+import ServerPicker from "@/features/projects/components/ServerPicker.vue";
 
 interface Props {
   name: string;
+  projectId: string;
+  environmentId: string;
   serverId: string;
   nameError: string;
+  scopeError: string;
   nodeError: string;
   createError: string | null;
 }
@@ -17,32 +19,21 @@ defineProps<Props>();
 
 const emit = defineEmits<{
   "update:name": [value: string];
+  "update:projectId": [value: string];
+  "update:environmentId": [value: string];
   "update:serverId": [value: string];
 }>();
-
-const serversStore = useServersStore();
-
-const serverOptions = computed<Array<{ label: string; value: string }>>(() =>
-  serversStore.servers.map((server) => ({
-    label: `${server.name} · ${server.ip}`,
-    value: server.id,
-  })),
-);
-
-const noServers = computed<boolean>(
-  () => !serversStore.loading && serversStore.servers.length === 0,
-);
 </script>
 
 <template>
-  <NAlert
-    v-if="noServers"
-    type="warning"
-    :show-icon="true"
-  >
-    No node is registered yet.
-    <RouterLink to="/servers">Add a server</RouterLink>
-    before creating a service.
+  <ResourceScopeSummary
+    :project-id="projectId"
+    :environment-id="environmentId"
+    @update:project-id="(value) => emit('update:projectId', value)"
+    @update:environment-id="(value) => emit('update:environmentId', value)"
+  />
+  <NAlert v-if="scopeError" type="error" :show-icon="true">
+    {{ scopeError }}
   </NAlert>
   <NForm label-placement="top" class="wizard__metaform">
     <NFormItem
@@ -58,22 +49,11 @@ const noServers = computed<boolean>(
         @update:value="(value) => emit('update:name', value)"
       />
     </NFormItem>
-    <NFormItem
-      label="Node"
-      required
+    <ServerPicker
+      :model-value="serverId"
       :feedback="nodeError"
-      :validation-status="nodeError ? 'error' : undefined"
-      class="field-service-node"
-    >
-      <NSelect
-        :value="serverId"
-        :options="serverOptions"
-        :loading="serversStore.loading"
-        placeholder="Select a node"
-        aria-label="Node"
-        @update:value="(value) => emit('update:serverId', value)"
-      />
-    </NFormItem>
+      @update:model-value="(value) => emit('update:serverId', value)"
+    />
   </NForm>
   <NAlert v-if="createError" type="error" :show-icon="true">
     {{ createError }}

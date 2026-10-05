@@ -187,7 +187,7 @@ onMounted(() => {
         <template v-else-if="tile.state === 'ready'">
           <p class="kpi-value num">{{ tile.countText }}</p>
           <p class="kpi-sub">
-            <RouterLink :to="{ name: 'applications' }">View applications</RouterLink>
+            <RouterLink :to="{ name: 'projects' }">View projects</RouterLink>
             <NText v-if="tile.hint" depth="3">{{ tile.hint }}</NText>
           </p>
         </template>

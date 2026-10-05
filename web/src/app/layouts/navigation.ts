@@ -54,10 +54,11 @@ export const sectionAliases: Record<string, string> = { settings: "notifications
 
 /**
  * activeNavKey is the sidebar entry for a route path. It follows the first
- * path segment, so detail routes (/servers/:id, /projects/:projectId,
- * /applications/:id, /databases/:id, /services/:id) keep their section
- * highlighted (B2-12, B3-5). Projects replaces the Applications, Services
- * and Databases entries; those flat routes stay until PE-5 removes them.
+ * path segment, so detail routes (/servers/:id, /projects/:projectId and
+ * the nested /projects/:projectId/environments/:environmentId/... pages)
+ * keep their section highlighted (B2-12, B3-5). Projects replaced the
+ * Applications, Services and Databases entries; the flat routes were removed
+ * in PE-5 and redirect to Projects.
  * Settings pages resolve via the second segment: /settings/notifications
  * highlights Notification channels, while /settings/profile matches no
  * sidebar entry (profile is reached from the MeCard menu) so nothing

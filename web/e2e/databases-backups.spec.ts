@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures";
-import { storageStatePath } from "./support";
+import { nestedURL, storageStatePath } from "./support";
 
 // Every scenario starts from the session global setup created.
 test.use({ storageState: storageStatePath });
@@ -7,6 +7,10 @@ test.use({ storageState: storageStatePath });
 const dbId = "11111111-1111-1111-1111-111111111111";
 const scheduleId = "22222222-2222-2222-2222-222222222222";
 const targetId = "33333333-3333-3333-3333-333333333333";
+// The mocked database rides a fixed scope so the nested URL resolves; the
+// breadcrumb reads the grouping fields, never the typed URL.
+const projectId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const environmentId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const cron = "0 2 * * *";
 
 const now = new Date().toISOString();
@@ -15,10 +19,15 @@ const inTwoHours = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
 const database = {
   id: dbId,
   name: "ui-e2e-backups-db",
+  environment_id: environmentId,
+  environment_name: "production",
+  project_id: projectId,
+  project_name: "shop",
   engine: "postgres",
   version: "16",
   status: "running",
   server_id: "99999999-9999-9999-9999-999999999999",
+  server_name: "node",
   container_id: "container-1",
   public_port: 5432,
   volume: "volume-1",
@@ -140,7 +149,7 @@ test.describe("database backups", () => {
       }),
     );
 
-    await page.goto(`/databases/${dbId}`);
+    await page.goto(nestedURL(projectId, environmentId, "databases", dbId));
     await page.locator(".n-tabs-tab").filter({ hasText: "Backups" }).click();
   });
 

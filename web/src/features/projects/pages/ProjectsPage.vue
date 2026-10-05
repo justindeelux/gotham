@@ -176,6 +176,7 @@ const createRules = projectCreateRules();
               placeholder="storefront"
               maxlength="64"
               show-count
+              :input-props="{ id: 'project-create-name', 'aria-label': 'Project name' }"
               @update:value="createConflict.clear()"
               @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleCreate)"
             />
@@ -187,6 +188,7 @@ const createRules = projectCreateRules();
               placeholder="What this product is"
               maxlength="500"
               show-count
+              :input-props="{ id: 'project-create-description', 'aria-label': 'Project description' }"
               @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleCreate)"
             />
           </NFormItem>

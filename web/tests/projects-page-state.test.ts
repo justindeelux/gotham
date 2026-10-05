@@ -262,6 +262,24 @@ describe("projects list page states", () => {
     wrapper.unmount();
   });
 
+  it("names every create input programmatically", async () => {
+    setActivePinia(createPinia());
+    seedTeams();
+    vi.mocked(listProjects).mockResolvedValue([]);
+
+    const wrapper = await mountList();
+    await clickButton(wrapper, "New project");
+    // Visible labels are not linked by Naive UI, so each input carries its
+    // own accessible name matching the visible label.
+    expect(wrapper.find("#project-create-name").attributes("aria-label")).toBe(
+      "Project name",
+    );
+    expect(
+      wrapper.find("#project-create-description").attributes("aria-label"),
+    ).toBe("Project description");
+    wrapper.unmount();
+  });
+
   it("renders a taken name inline on the field, not the dialog alert", async () => {
     setActivePinia(createPinia());
     seedTeams();
@@ -282,6 +300,12 @@ describe("projects list page states", () => {
     expect(feedback.exists()).toBe(true);
     expect(feedback.text()).toContain("project name already exists");
     expect(wrapper.text()).toContain("New project");
+    // Editing the field clears the inline conflict.
+    await wrapper.find(".n-modal .n-form-item input").setValue("storefront-2");
+    await nextTick();
+    expect(
+      wrapper.find(".n-modal .n-form-item-feedback__line").exists(),
+    ).toBe(false);
     wrapper.unmount();
   });
 });
@@ -343,6 +367,46 @@ describe("project detail page states", () => {
     // Row Delete stays enabled; the dialog carries the visible block reason.
     await clickButton(wrapper, "Delete");
     expect(wrapper.text()).toContain("Move or delete them first");
+    wrapper.unmount();
+  });
+
+  it("names every detail dialog input programmatically", async () => {
+    setActivePinia(createPinia());
+    seedTeams();
+    vi.mocked(getProject).mockResolvedValue({
+      project: projectRow(),
+      environments: [environmentRow(emptyCounts)],
+    });
+
+    const { wrapper } = await mountDetail(id);
+    const renames = () =>
+      wrapper
+        .findAllComponents(NButton)
+        .filter((button) => button.text() === "Rename");
+
+    // Project rename (first Rename button, in the page head).
+    await renames()[0]!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(wrapper.find("#project-rename-name").attributes("aria-label")).toBe(
+      "Project name",
+    );
+    await clickButton(wrapper, "Cancel");
+
+    // Environment create.
+    await clickButton(wrapper, "Add environment");
+    expect(
+      wrapper.find("#environment-create-name").attributes("aria-label"),
+    ).toBe("Environment name");
+    await clickButton(wrapper, "Cancel");
+
+    // Environment rename (second Rename button, in the table row).
+    await renames()[1]!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(
+      wrapper.find("#environment-rename-name").attributes("aria-label"),
+    ).toBe("Environment name");
     wrapper.unmount();
   });
 
@@ -426,8 +490,93 @@ describe("project detail page states", () => {
     wrapper.unmount();
   });
 
-  it("reloads when the route moves to another project", async () => {
+  it("submits environment dialogs on keydown Enter, never on keyup", async () => {
     setActivePinia(createPinia());
+    seedTeams();
+    vi.mocked(getProject).mockResolvedValue({
+      project: projectRow(),
+      environments: [environmentRow(emptyCounts)],
+    });
+    const { createEnvironment, renameEnvironment } = await import(
+      "@/features/projects/api/projects"
+    );
+    vi.mocked(createEnvironment).mockResolvedValue(environmentRow());
+    vi.mocked(renameEnvironment).mockResolvedValue(environmentRow());
+
+    const { wrapper } = await mountDetail(id);
+    // Environment create: keyup submits nothing, keydown submits once.
+    await clickButton(wrapper, "Add environment");
+    const createInput = wrapper.find(".n-modal input");
+    await createInput.setValue("staging");
+    await createInput.trigger("keyup.enter");
+    await flushPromises();
+    expect(vi.mocked(createEnvironment)).not.toHaveBeenCalled();
+    await createInput.trigger("keydown.enter");
+    await flushPromises();
+    await nextTick();
+    expect(vi.mocked(createEnvironment)).toHaveBeenCalledTimes(1);
+
+    // Environment rename: keyup submits nothing, keydown submits once.
+    const rowRename = wrapper
+      .findAllComponents(NButton)
+      .filter((button) => button.text() === "Rename")[1]!;
+    await rowRename.trigger("click");
+    await flushPromises();
+    await nextTick();
+    const renameInput = wrapper.find(".n-modal input");
+    await renameInput.trigger("keyup.enter");
+    await flushPromises();
+    expect(vi.mocked(renameEnvironment)).not.toHaveBeenCalled();
+    await renameInput.trigger("keydown.enter");
+    await flushPromises();
+    await nextTick();
+    expect(vi.mocked(renameEnvironment)).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("keeps the busy guard across a route change mid-request", async () => {
+    setActivePinia(createPinia());
+    seedTeams();
+    const otherId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getProject).mockImplementation(async (_teamId: string, pid: string) => ({
+      project: projectRow({ id: pid, name: pid === id ? "storefront" : "other" }),
+      environments: [],
+    }));
+    const { renameProject } = await import("@/features/projects/api/projects");
+    let resolveRename!: (_value: Project) => void;
+    vi.mocked(renameProject).mockReturnValue(
+      new Promise<Project>((resolvePromise) => {
+        resolveRename = resolvePromise;
+      }),
+    );
+
+    const { wrapper, router } = await mountDetail(id);
+    await clickButton(wrapper, "Rename");
+    const input = wrapper.find(".n-modal input");
+    await input.setValue("renamed");
+    // First submit starts the request.
+    await input.trigger("keydown.enter");
+    await flushPromises();
+    expect(vi.mocked(renameProject)).toHaveBeenCalledTimes(1);
+    // Moving to another project resets dialogs but must not release the
+    // in-flight guard: submitting the new project's dialog stays blocked.
+    await router.push(`/projects/${otherId}`);
+    await flushPromises();
+    await nextTick();
+    await clickButton(wrapper, "Rename");
+    const otherInput = wrapper.find(".n-modal input");
+    await otherInput.setValue("renamed-b");
+    await otherInput.trigger("keydown.enter");
+    await flushPromises();
+    expect(vi.mocked(renameProject)).toHaveBeenCalledTimes(1);
+    resolveRename(projectRow({ id, name: "renamed" }));
+    await flushPromises();
+    await nextTick();
+    expect(vi.mocked(renameProject)).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("reloads when the route moves to another project", async () => {    setActivePinia(createPinia());
     seedTeams();
     const otherId = "33333333-3333-4333-8333-333333333333";
     vi.mocked(getProject).mockImplementation(async (_teamId: string, pid: string) => ({
@@ -442,6 +591,82 @@ describe("project detail page states", () => {
     await nextTick();
     expect(wrapper.text()).toContain("other");
     expect(vi.mocked(getProject)).toHaveBeenCalledWith("team-1", otherId);
+    wrapper.unmount();
+  });
+
+  it("late rename success does not close another project's dialog", async () => {
+    setActivePinia(createPinia());
+    seedTeams();
+    const otherId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getProject).mockImplementation(async (_teamId: string, pid: string) => ({
+      project: projectRow({ id: pid, name: pid === id ? "storefront" : "other" }),
+      environments: [],
+    }));
+    const { renameProject } = await import("@/features/projects/api/projects");
+    let resolveRename!: (_value: Project) => void;
+    vi.mocked(renameProject).mockReturnValue(
+      new Promise<Project>((resolvePromise) => {
+        resolveRename = resolvePromise;
+      }),
+    );
+
+    const { wrapper, router } = await mountDetail(id);
+    await clickButton(wrapper, "Rename");
+    await wrapper.find(".n-modal input").setValue("renamed");
+    await wrapper.find(".n-modal input").trigger("keydown.enter");
+    await flushPromises();
+    expect(vi.mocked(renameProject)).toHaveBeenCalledTimes(1);
+    // Move to B and open its rename dialog before A resolves.
+    await router.push(`/projects/${otherId}`);
+    await flushPromises();
+    await nextTick();
+    await clickButton(wrapper, "Rename");
+    resolveRename(projectRow({ id, name: "renamed" }));
+    await flushPromises();
+    await nextTick();
+    // B's dialog stays open with B's draft, not A's result.
+    expect(wrapper.find(".n-modal").exists()).toBe(true);
+    expect(
+      (wrapper.find(".n-modal input").element as unknown as { value: string })
+        .value,
+    ).toBe("other");
+    wrapper.unmount();
+  });
+
+  it("late delete success does not navigate away from another project", async () => {
+    setActivePinia(createPinia());
+    seedTeams();
+    const otherId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getProject).mockImplementation(async (_teamId: string, pid: string) => ({
+      project: projectRow({ id: pid, name: pid === id ? "storefront" : "other" }),
+      environments: [],
+    }));
+    const { deleteProject } = await import("@/features/projects/api/projects");
+    let resolveDelete!: (_value: void) => void;
+    vi.mocked(deleteProject).mockReturnValue(
+      new Promise<void>((resolvePromise) => {
+        resolveDelete = resolvePromise;
+      }),
+    );
+
+    const { wrapper, router } = await mountDetail(id);
+    await clickButton(wrapper, "Delete project");
+    const confirm = wrapper
+      .find(".n-modal")
+      .findAllComponents(NButton)
+      .find((button) => button.text() === "Delete project")!;
+    await confirm.trigger("click");
+    await flushPromises();
+    expect(vi.mocked(deleteProject)).toHaveBeenCalledTimes(1);
+    // Move to B before A resolves: the success must not leave B.
+    await router.push(`/projects/${otherId}`);
+    await flushPromises();
+    await nextTick();
+    resolveDelete();
+    await flushPromises();
+    await nextTick();
+    expect(router.currentRoute.value.params.projectId).toBe(otherId);
+    expect(wrapper.text()).toContain("other");
     wrapper.unmount();
   });
 });

@@ -1,1 +1,0 @@
-import{b7 as s,aY as i,z as n,s as c}from"./index-CUvFmr9Z.js";function f(){const e=c(null),r=n(()=>e.value??void 0),u=n(()=>e.value===null?void 0:"error");function a(){e.value=null}function o(t){return s(t)?(e.value=i(t),!0):!1}return{feedback:r,status:u,clear:a,take:o}}function m(e,r){e.isComposing||e.repeat||(e.preventDefault(),r())}export{m as s,f as u};

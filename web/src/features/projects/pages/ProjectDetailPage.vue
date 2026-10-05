@@ -228,6 +228,7 @@ const envRules = environmentNameRules();
               v-model:value="renameName"
               maxlength="64"
               show-count
+              :input-props="{ id: 'project-rename-name', 'aria-label': 'Project name' }"
               @update:value="renameConflict.clear()"
               @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleRename)"
             />
@@ -315,6 +316,7 @@ const envRules = environmentNameRules();
               placeholder="staging"
               maxlength="64"
               show-count
+              :input-props="{ id: 'environment-create-name', 'aria-label': 'Environment name' }"
               @update:value="envConflict.clear()"
               @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleEnvCreate)"
             />
@@ -360,6 +362,7 @@ const envRules = environmentNameRules();
               v-model:value="envRenameName"
               maxlength="64"
               show-count
+              :input-props="{ id: 'environment-rename-name', 'aria-label': 'Environment name' }"
               @update:value="envRenameConflict.clear()"
               @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleEnvRename)"
             />

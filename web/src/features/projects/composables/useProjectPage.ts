@@ -134,12 +134,18 @@ export function useProjectPage(
     if (renameBusy.value || !detail || !isProjectNameValid(renameName.value)) {
       return;
     }
+    // Identity of the project that started this mutation: a late success
+    // must not close a dialog the user opened after moving to another
+    // project (see resetDialogs, which drops the old dialogs on the move).
+    const projectId = currentId();
     renameBusy.value = true;
     renameError.value = null;
     try {
       await projectsStore.rename(detail.id, { name: renameName.value.trim() });
       message.success("Project renamed");
-      renameOpen.value = false;
+      if (currentId() === projectId) {
+        renameOpen.value = false;
+      }
     } catch (error) {
       if (!renameConflict.take(error)) {
         renameError.value = describeProjectError(error);
@@ -155,12 +161,16 @@ export function useProjectPage(
     if (deleting.value || !detail) {
       return;
     }
+    const projectId = currentId();
     deleting.value = true;
     deleteError.value = null;
     try {
       const name = detail.name;
       await projectsStore.remove(detail.id);
       message.success(`Deleted project ${name}`);
+      if (currentId() !== projectId) {
+        return;
+      }
       deleteOpen.value = false;
       await router.push({ name: "projects" });
     } catch (error) {
@@ -185,15 +195,18 @@ export function useProjectPage(
     if (envBusy.value || !isEnvironmentNameValid(envName.value)) {
       return;
     }
+    const projectId = currentId();
     envBusy.value = true;
     envError.value = null;
     try {
       const environment = await projectsStore.addEnvironment(
-        currentId(),
+        projectId,
         envName.value,
       );
       message.success(`Added environment ${environment.name}`);
-      envCreateOpen.value = false;
+      if (currentId() === projectId) {
+        envCreateOpen.value = false;
+      }
     } catch (error) {
       if (!envConflict.take(error)) {
         envError.value = describeProjectError(error);
@@ -229,7 +242,12 @@ export function useProjectPage(
         envRenameName.value,
       );
       message.success("Environment renamed");
-      envRenameTarget.value = null;
+      // Same late-response guard, on dialog identity: only the dialog this
+      // mutation opened may close (a move already dropped it via
+      // resetDialogs, so the check also covers the cross-project case).
+      if (envRenameTarget.value?.id === target.id) {
+        envRenameTarget.value = null;
+      }
     } catch (error) {
       if (!envRenameConflict.take(error)) {
         envRenameError.value = describeProjectError(error);
@@ -256,7 +274,9 @@ export function useProjectPage(
     try {
       await projectsStore.removeEnvironment(target.id);
       message.success(`Deleted environment ${target.name}`);
-      envDeleteTarget.value = null;
+      if (envDeleteTarget.value?.id === target.id) {
+        envDeleteTarget.value = null;
+      }
     } catch (error) {
       envDeleteError.value = describeProjectError(error);
     } finally {

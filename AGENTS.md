@@ -22,7 +22,7 @@ Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node a
 | Self-update | Built-in atomic swap + Ed25519 signed manifest (GitHub Releases) |
 | CI/CD | GitHub Actions + GoReleaser |
 
-## Repository Layout (planned)
+## Repository Layout
 
 ```
 cmd/             # control-plane + agent entrypoints
@@ -51,7 +51,6 @@ docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
   5. `npm run build` + `npm run type-check` clean (web/)
   6. No cross-scope imports: `agent/` must not import `internal/`; domain packages must not import the HTTP server
 - Mandatory review gates: G0 (end of Phase 0), G1 (Phase 4), G2 (Phase 9) — see `docs/plans/00-roadmap.md`.
-- **Review tooling priority (owner requirement, 2026-10-02):** independent reviews run on **Claude Code CLI first** (from the worktree: `cat prompt.md | claude -p --allowedTools "Read,Grep,Glob,Bash" --add-dir <main repo>`, loading the tracked skill `.claude/skills/code-reviewer/SKILL.md`), then **Codex** if Claude is unavailable, and **stop** (report the block) if neither is available — no silent substitution of another reviewer for the external slot. Built-in subagents remain the second reviewer alongside it.
 - Phase gate: after each phase meets its exit criteria, STOP and ask the project owner before starting the next phase.
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
 

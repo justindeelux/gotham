@@ -1,6 +1,6 @@
 # Phase 13 — Projects and environments
 
-Status: planned, prepared and waiting for the owner's go-ahead to implement (decisions fixed 2026-10-05; Linear JUS-30..JUS-36). Written from a read of the schema, routes and web
+Status: implemented and deployed to the test box 2026-10-05 (Linear JUS-30..JUS-37). Written from a read of the schema, routes and web layout; the delivery log is in section 9.
 layout; handler-level details are to be confirmed by each package's spec.
 
 ## 1. Where we are
@@ -173,4 +173,43 @@ mockups: `docs/design/{projects,project-detail,environment}.html`.
 
 ## 9. Delivery log
 
-Not started. Specs, UI brief, mockups and Linear issues are ready; implementation starts only when the owner approves, and the worker/reviewer variants are chosen then.
+Implemented 2026-10-05 and deployed to the test box (`main` `8d4d2f7`, migrations 00034-00036). Worker: default variant;
+every package went through independent review at high effort (Claude Code CLI) until MERGE-GO.
+
+| Package | PR | Review rounds | Linear |
+|---|---|---|---|
+| Plan, UI brief, mockups, specs | #174 | docs only | JUS-30..36 |
+| PE-1 projects and environments backend | #175 | 2 (+1 CI allowlist fix) | JUS-30 |
+| PE-4 web foundation | #176 | 3 (+1 smoke-spec fix) | JUS-33 |
+| PE-2 resources attach to environment and server | #177 | 2 (+1 e2e/smoke fixture fix) | JUS-31 |
+| PE-3 shared variables backend | #178 | 3 | JUS-32 |
+| PE-5 environment page, nested routes, create flows | #179 | 2 + merge pass | JUS-34 |
+| PE-6 shared variables UI | #180 | 2 | JUS-35 |
+| PE-7 e2e flow and docs | #181 | 2 | JUS-36 |
+| PE-8 fixes from the live check | #182 | 1 | JUS-37 |
+
+What review caught before shipping (all fixed): last-environment delete race (59/60 concurrent runs), name length counted
+in bytes, FK races answering 500, soft-deleted services/databases pinning environment/project/server delete forever,
+changing the server of a database/service orphaning its workload and data, unlocked service/database updates losing
+moves, `project_name` clash with the compose project (now `compose_project`), previews left behind when their base app
+moves, concurrent shared-variable PUT 500s and a lost secret update, a lock-order deadlock introduced by that fix
+(project row first, then environment), stale create-wizard scope, template deploy ignoring the environment, missing
+accessible names, a duplicate-key Save with no explanation, wrong project-vs-environment override display.
+
+Live check on the box (Playwright MCP at 1280 and 480): create project, add environment, environment page, create a
+database through the wizard, database Settings (server change refused with the reason shown, environment move panel),
+shared variable saved and persisted, 480px layout. It found three defects that review and CI had missed, fixed in PE-8:
+empty red alerts in the "Change" panel (Ref used without `.value`), a database named `pg-...` failing initdb because
+its generated user began with `pg_` (now never), and a blank Version select. Re-verified after redeploy: no empty alerts,
+`pg-shop` reaches running and healthy.
+
+Process lessons: CI jobs the reviewers did not run (Playwright smoke, gated e2e) failed on three PRs (flat pages gone,
+fixtures without `environment_id`/`server_id`); from PE-5 on the review prompt required running the smoke job exactly as
+`ui-e2e.yml` does. A worker's local question TUI blocks it until answered (answer or have it use the orchestration ask).
+
+Follow-ups (not scheduled; the detailed lists are in `docs/TODO.md`): PE-2 R2-R4 (service update waits up to the deploy
+timeout for the lifecycle lock, error-message precedence, preview-creation sliver), PE-5 residuals (404 page for a missing
+application/database detail, tab reset after a move, database node pinned in the UI for never-provisioned error rows),
+PE-6 residuals (unsaved-changes guard), shared variables for services (applications only in v1), per-project roles.
+Test data left on the box: project `storefront` (production, staging) with two databases (`pg-orders` in error from the
+old naming bug, `pg-shop` running).

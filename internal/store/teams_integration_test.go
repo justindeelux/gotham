@@ -174,8 +174,10 @@ func TestTeamsMigrationBackfillsPersonalTeams(t *testing.T) {
 		t.Fatalf("insert legacy server: %v", err)
 	}
 
-	if _, err := provider.Up(ctx); err != nil {
-		t.Fatalf("migrate to latest: %v", err)
+	// 00034 truncates the resource tables by design, so this backfill test
+	// stops at 00033: everything it asserts about lives below that wipe.
+	if _, err := provider.UpTo(ctx, 33); err != nil {
+		t.Fatalf("migrate to 00033: %v", err)
 	}
 
 	// One personal team per user, named after the account, with the user as

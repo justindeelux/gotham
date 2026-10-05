@@ -125,9 +125,11 @@ func TestDomainUniquenessMigrationFailsClosedOnLegacyDuplicates(t *testing.T) {
 	insertApp(userB, "legacy-b", "legacy.example.com")
 	insertApp(userA, "healthy", "healthy.example.com")
 
-	// Apply the uniqueness and history migrations.
-	if _, err := provider.Up(ctx); err != nil {
-		t.Fatalf("migrate to latest: %v", err)
+	// Apply the uniqueness and history migrations, stopping at 00033: 00034
+	// truncates the resource tables by design, which is outside this
+	// test's scope.
+	if _, err := provider.UpTo(ctx, 33); err != nil {
+		t.Fatalf("migrate to 00033: %v", err)
 	}
 
 	rows, err := pool.Query(ctx,

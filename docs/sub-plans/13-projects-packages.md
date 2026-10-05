@@ -65,6 +65,8 @@ Ownership: `internal/projects/**`, `internal/store/**` (migration, queries, sqlc
    blocking resources.
 6. Tests: each creator rejects missing/foreign environment and server; move collision 409; server
    change blocked mid-deploy; preview inherits; delete blocks; update existing tests and fixtures.
+7. PE-2 checklist: swap `ZeroResourceCounter` in `projectService()` (`internal/server/server.go`)
+   for the real counter and delete the stub (`ZeroResourceCounter` in `internal/projects`).
 
 Ownership: `internal/deploy/**`, `internal/services/**`, `internal/databases/**`,
 `internal/templates/**`, `internal/servers/**` (delete guard), `internal/projects/**` (counter),

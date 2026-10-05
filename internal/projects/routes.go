@@ -1,0 +1,433 @@
+package projects
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/teams"
+)
+
+// maxBodyBytes bounds project request bodies (they are tiny).
+const maxBodyBytes = 1 << 20 // 1 MiB
+
+// UserIDFunc resolves the authenticated user from the request context. The
+// server passes its own accessor, so this package never imports the HTTP
+// server (it mirrors services.UserIDFunc for the same reason).
+type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
+
+// resourceCountsResponse is the wire representation of resource counts.
+type resourceCountsResponse struct {
+	Applications int `json:"applications"`
+	Services     int `json:"services"`
+	Databases    int `json:"databases"`
+}
+
+// projectResponse is the wire representation of a project.
+type projectResponse struct {
+	ID               string                 `json:"id"`
+	Name             string                 `json:"name"`
+	Description      string                 `json:"description"`
+	CreatedAt        time.Time              `json:"created_at"`
+	UpdatedAt        time.Time              `json:"updated_at"`
+	EnvironmentCount int                    `json:"environment_count"`
+	ResourceCounts   resourceCountsResponse `json:"resource_counts"`
+}
+
+// environmentResponse is the wire representation of an environment.
+type environmentResponse struct {
+	ID             string                 `json:"id"`
+	ProjectID      string                 `json:"project_id"`
+	Name           string                 `json:"name"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+	ResourceCounts resourceCountsResponse `json:"resource_counts"`
+}
+
+// envelope types.
+type (
+	projectListEnvelope struct {
+		Projects []projectResponse `json:"projects"`
+	}
+	projectEnvelope struct {
+		Project projectResponse `json:"project"`
+	}
+	projectDetailEnvelope struct {
+		Project      projectResponse       `json:"project"`
+		Environments []environmentResponse `json:"environments"`
+	}
+	projectCreateEnvelope struct {
+		Project      projectResponse       `json:"project"`
+		Environments []environmentResponse `json:"environments"`
+	}
+	environmentListEnvelope struct {
+		Environments []environmentResponse `json:"environments"`
+	}
+	environmentEnvelope struct {
+		Environment environmentResponse `json:"environment"`
+	}
+)
+
+// request bodies.
+type (
+	createProjectRequest struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	updateProjectRequest struct {
+		Name        *string `json:"name"`
+		Description *string `json:"description"`
+	}
+	createEnvironmentRequest struct {
+		Name string `json:"name"`
+	}
+	updateEnvironmentRequest struct {
+		Name string `json:"name"`
+	}
+)
+
+// errorBody is the JSON body returned for failures.
+type errorBody struct {
+	Message string `json:"message"`
+}
+
+// handler serves the project routes for one ProjectService.
+type handler struct {
+	svc    ProjectService
+	userID UserIDFunc
+	logger *slog.Logger
+}
+
+// Mount registers the authenticated project endpoints under /api:
+//
+//	GET    /v1/projects
+//	POST   /v1/projects
+//	GET    /v1/projects/{id}
+//	PATCH  /v1/projects/{id}
+//	DELETE /v1/projects/{id}
+//	GET    /v1/projects/{id}/environments
+//	POST   /v1/projects/{id}/environments
+//	PATCH  /v1/environments/{id}
+//	DELETE /v1/environments/{id}
+//
+// auth wraps the group: the server passes its team chain (RequireAuth,
+// RequireTeam and the owner/admin gate for mutating methods, so a read_only
+// member reads and every mutation is refused before the handler). A nil svc
+// mounts nothing, so the control plane can call Mount unconditionally.
+func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc ProjectService) {
+	if svc == nil {
+		return
+	}
+	h := &handler{svc: svc, userID: userID, logger: slog.Default()}
+	r.Group(func(protected chi.Router) {
+		protected.Use(auth)
+		protected.Get("/v1/projects", h.listProjects)
+		protected.Post("/v1/projects", h.createProject)
+		protected.Get("/v1/projects/{id}", h.getProject)
+		protected.Patch("/v1/projects/{id}", h.updateProject)
+		protected.Delete("/v1/projects/{id}", h.deleteProject)
+		protected.Get("/v1/projects/{id}/environments", h.listEnvironments)
+		protected.Post("/v1/projects/{id}/environments", h.createEnvironment)
+		protected.Patch("/v1/environments/{id}", h.updateEnvironment)
+		protected.Delete("/v1/environments/{id}", h.deleteEnvironment)
+	})
+}
+
+// listProjects serves GET /v1/projects.
+func (h *handler) listProjects(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	projects, err := h.svc.ListProjects(r.Context(), userID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, projectListEnvelope{Projects: newProjectList(projects)})
+}
+
+// createProject serves POST /v1/projects: 201 with the stored project and
+// its production environment, created in one transaction.
+func (h *handler) createProject(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	var req createProjectRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	project, environment, err := h.svc.CreateProject(r.Context(), userID, req.Name, req.Description)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, projectCreateEnvelope{
+		Project:      newProjectResponse(project),
+		Environments: []environmentResponse{newEnvironmentResponse(environment)},
+	})
+}
+
+// getProject serves GET /v1/projects/{id}.
+func (h *handler) getProject(w http.ResponseWriter, r *http.Request) {
+	userID, projectID, ok := h.projectParams(w, r)
+	if !ok {
+		return
+	}
+	project, environments, err := h.svc.GetProject(r.Context(), userID, projectID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, projectDetailEnvelope{
+		Project:      newProjectResponse(project),
+		Environments: newEnvironmentList(environments),
+	})
+}
+
+// updateProject serves PATCH /v1/projects/{id}.
+func (h *handler) updateProject(w http.ResponseWriter, r *http.Request) {
+	userID, projectID, ok := h.projectParams(w, r)
+	if !ok {
+		return
+	}
+	var req updateProjectRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	project, err := h.svc.UpdateProject(r.Context(), userID, projectID, req.Name, req.Description)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, projectEnvelope{Project: newProjectResponse(project)})
+}
+
+// deleteProject serves DELETE /v1/projects/{id}: 204 on success.
+func (h *handler) deleteProject(w http.ResponseWriter, r *http.Request) {
+	userID, projectID, ok := h.projectParams(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.DeleteProject(r.Context(), userID, projectID); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// listEnvironments serves GET /v1/projects/{id}/environments.
+func (h *handler) listEnvironments(w http.ResponseWriter, r *http.Request) {
+	userID, projectID, ok := h.projectParams(w, r)
+	if !ok {
+		return
+	}
+	environments, err := h.svc.ListEnvironments(r.Context(), userID, projectID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, environmentListEnvelope{Environments: newEnvironmentList(environments)})
+}
+
+// createEnvironment serves POST /v1/projects/{id}/environments: 201 with
+// the stored environment.
+func (h *handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
+	userID, projectID, ok := h.projectParams(w, r)
+	if !ok {
+		return
+	}
+	var req createEnvironmentRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	environment, err := h.svc.CreateEnvironment(r.Context(), userID, projectID, req.Name)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, environmentEnvelope{Environment: newEnvironmentResponse(environment)})
+}
+
+// updateEnvironment serves PATCH /v1/environments/{id}.
+func (h *handler) updateEnvironment(w http.ResponseWriter, r *http.Request) {
+	userID, environmentID, ok := h.environmentParams(w, r)
+	if !ok {
+		return
+	}
+	var req updateEnvironmentRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	environment, err := h.svc.UpdateEnvironment(r.Context(), userID, environmentID, req.Name)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, environmentEnvelope{Environment: newEnvironmentResponse(environment)})
+}
+
+// deleteEnvironment serves DELETE /v1/environments/{id}: 204 on success.
+func (h *handler) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
+	userID, environmentID, ok := h.environmentParams(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.DeleteEnvironment(r.Context(), userID, environmentID); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// currentUser resolves the authenticated user, answering 401 when absent.
+func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	if h.userID == nil {
+		writeJSON(w, http.StatusUnauthorized, errorBody{Message: "unauthorized"})
+		return uuid.Nil, false
+	}
+	userID, ok := h.userID(r.Context())
+	if !ok || userID == uuid.Nil {
+		writeJSON(w, http.StatusUnauthorized, errorBody{Message: "unauthorized"})
+		return uuid.Nil, false
+	}
+	return userID, true
+}
+
+// projectParams resolves the authenticated user and the {id} path parameter,
+// answering 401/400 as needed.
+func (h *handler) projectParams(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return uuid.Nil, uuid.Nil, false
+	}
+	projectID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid project id"})
+		return uuid.Nil, uuid.Nil, false
+	}
+	return userID, projectID, true
+}
+
+// environmentParams resolves the authenticated user and the environment {id}
+// path parameter, answering 401/400 as needed.
+func (h *handler) environmentParams(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return uuid.Nil, uuid.Nil, false
+	}
+	environmentID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid environment id"})
+		return uuid.Nil, uuid.Nil, false
+	}
+	return userID, environmentID, true
+}
+
+// writeServiceError maps service sentinels to HTTP responses. The conflict
+// and refusal bodies are the exact strings of the API contract.
+func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
+	case errors.Is(err, ErrForbidden), errors.Is(err, teams.ErrForbidden):
+		writeJSON(w, http.StatusForbidden, errorBody{Message: "insufficient team role"})
+	case errors.Is(err, ErrProjectExists):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "project name already exists"})
+	case errors.Is(err, ErrEnvironmentExists):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "environment name already exists"})
+	case errors.Is(err, ErrProjectNotEmpty):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "project still has resources"})
+	case errors.Is(err, ErrEnvironmentNotEmpty):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "environment still has resources"})
+	case errors.Is(err, ErrLastEnvironment):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "a project needs at least one environment"})
+	case errors.Is(err, ErrValidation):
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
+	default:
+		h.logger.Error("projects: request failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error"})
+	}
+}
+
+// newProjectResponse maps a domain project to its wire representation.
+func newProjectResponse(project Project) projectResponse {
+	return projectResponse{
+		ID:               project.ID.String(),
+		Name:             project.Name,
+		Description:      project.Description,
+		CreatedAt:        project.CreatedAt,
+		UpdatedAt:        project.UpdatedAt,
+		EnvironmentCount: project.EnvironmentCount,
+		ResourceCounts:   resourceCountsResponse(project.Resources),
+	}
+}
+
+// newProjectList maps domain projects, never rendering a null list.
+func newProjectList(projects []Project) []projectResponse {
+	response := make([]projectResponse, 0, len(projects))
+	for _, project := range projects {
+		response = append(response, newProjectResponse(project))
+	}
+	return response
+}
+
+// newEnvironmentResponse maps a domain environment to its wire
+// representation.
+func newEnvironmentResponse(environment Environment) environmentResponse {
+	return environmentResponse{
+		ID:             environment.ID.String(),
+		ProjectID:      environment.ProjectID.String(),
+		Name:           environment.Name,
+		CreatedAt:      environment.CreatedAt,
+		UpdatedAt:      environment.UpdatedAt,
+		ResourceCounts: resourceCountsResponse(environment.Resources),
+	}
+}
+
+// newEnvironmentList maps domain environments, never rendering a null list.
+func newEnvironmentList(environments []Environment) []environmentResponse {
+	response := make([]environmentResponse, 0, len(environments))
+	for _, environment := range environments {
+		response = append(response, newEnvironmentResponse(environment))
+	}
+	return response
+}
+
+// decodeBody decodes a required JSON body into dst. An empty or malformed
+// body answers 400.
+func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+		return false
+	}
+	if len(strings.TrimSpace(string(body))) == 0 {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "request body is required"})
+		return false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+		return false
+	}
+	return true
+}
+
+// writeJSON serialises payload with the given HTTP status.
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}

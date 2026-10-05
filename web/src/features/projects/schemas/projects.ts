@@ -1,0 +1,214 @@
+import type { FormRules } from "naive-ui";
+import { z } from "zod";
+
+import { ruleFrom } from "@/shared/validation/naiveAdapter";
+import { parseWith } from "@/shared/validation/parse";
+
+/**
+ * Project and environment schemas (PE-4, Linear JUS-33). Response schemas
+ * mirror the API contract in docs/plans/13-projects-environments.md section
+ * 6 exactly; form schemas carry the contract's validation (names 1-64
+ * chars). Forms render through `NForm` with the `*Rules` builders below
+ * (one `ruleFrom` schema rule per field, so client errors show inline) plus
+ * the `is*Valid` helpers for the submit disabled state; responses go
+ * through `parseWith` at the axios boundary.
+ */
+
+/** resourceCountsSchema mirrors ResourceCounts in the contract. */
+export const resourceCountsSchema = z.object({
+  applications: z.number().int().nonnegative(),
+  services: z.number().int().nonnegative(),
+  databases: z.number().int().nonnegative(),
+});
+
+/** projectSchema mirrors Project in the contract. */
+export const projectSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  description: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  environment_count: z.number().int().nonnegative(),
+  resource_counts: resourceCountsSchema,
+});
+
+/** environmentSchema mirrors Environment in the contract. */
+export const environmentSchema = z.object({
+  id: z.string().uuid(),
+  project_id: z.string().uuid(),
+  name: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  resource_counts: resourceCountsSchema,
+});
+
+/** projectListEnvelopeSchema mirrors GET /projects. */
+export const projectListEnvelopeSchema = z.object({
+  projects: z.array(projectSchema),
+});
+
+/** projectEnvelopeSchema mirrors the project write routes (`{project}`). */
+export const projectEnvelopeSchema = z.object({
+  project: projectSchema,
+});
+
+/** projectDetailEnvelopeSchema mirrors GET /projects/{id}. */
+export const projectDetailEnvelopeSchema = z.object({
+  project: projectSchema,
+  environments: z.array(environmentSchema),
+});
+
+/** createdProjectEnvelopeSchema mirrors POST /projects (201). */
+export const createdProjectEnvelopeSchema = z.object({
+  project: projectSchema,
+  environments: z.array(environmentSchema),
+});
+
+/** environmentEnvelopeSchema mirrors the environment write routes. */
+export const environmentEnvelopeSchema = z.object({
+  environment: environmentSchema,
+});
+
+/** projectNameSchema gates the create/rename name: 1-64 chars after trim. */
+export const projectNameSchema: z.ZodString = z
+  .string()
+  .trim()
+  .min(1, "Name is required")
+  .max(64, "Name must be 64 characters or fewer");
+
+/** environmentNameSchema gates the environment name: 1-64 chars after trim. */
+export const environmentNameSchema: z.ZodString = z
+  .string()
+  .trim()
+  .min(1, "Name is required")
+  .max(64, "Name must be 64 characters or fewer");
+
+/** projectDescriptionSchema gates the optional description (no max yet). */
+export const projectDescriptionSchema: z.ZodString = z.string().trim().max(500);
+
+/** isProjectNameValid is the single source for the project submit gating. */
+export function isProjectNameValid(value: unknown): boolean {
+  return projectNameSchema.safeParse(value).success;
+}
+
+/** isEnvironmentNameValid is the single source for the environment gating. */
+export function isEnvironmentNameValid(value: unknown): boolean {
+  return environmentNameSchema.safeParse(value).success;
+}
+
+/** isProjectDescriptionValid gates the optional description (max 500). */
+export function isProjectDescriptionValid(value: unknown): boolean {
+  return projectDescriptionSchema.safeParse(value).success;
+}
+
+/**
+ * projectNameRules builds the NForm rules for a lone project name field
+ * (rename dialog): one schema-backed rule, so the message renders inline.
+ */
+export function projectNameRules(): FormRules {
+  return {
+    name: [
+      { ...ruleFrom(projectNameSchema, { required: true }), trigger: ["input", "blur"] },
+    ],
+  };
+}
+
+/**
+ * projectCreateRules builds the NForm rules for the create dialog
+ * (name required, description optional).
+ */
+export function projectCreateRules(): FormRules {
+  return {
+    name: [
+      { ...ruleFrom(projectNameSchema, { required: true }), trigger: ["input", "blur"] },
+    ],
+    description: [{ ...ruleFrom(projectDescriptionSchema), trigger: ["input", "blur"] }],
+  };
+}
+
+/**
+ * environmentNameRules builds the NForm rules for the environment
+ * create/rename dialogs.
+ */
+export function environmentNameRules(): FormRules {
+  return {
+    name: [
+      { ...ruleFrom(environmentNameSchema, { required: true }), trigger: ["input", "blur"] },
+    ],
+  };
+}
+
+/**
+ * filterProjects matches the list search: case-insensitive substring on the
+ * name (and description when present). An empty query matches everything.
+ */
+export function filterProjects<T extends { name: string; description: string }>(
+  projects: T[],
+  query: string,
+): T[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) {
+    return projects;
+  }
+  return projects.filter(
+    (project) =>
+      project.name.toLowerCase().includes(needle) ||
+      project.description.toLowerCase().includes(needle),
+  );
+}
+
+/**
+ * parseProjectList validates a GET /projects payload. Warn-only like every
+ * other envelope: server/client skew never breaks a render.
+ */
+export function parseProjectList(
+  data: unknown,
+): z.infer<typeof projectListEnvelopeSchema> {
+  return parseWith(projectListEnvelopeSchema, data, {
+    context: "ProjectListEnvelope",
+  });
+}
+
+/**
+ * parseProjectDetail validates a GET /projects/{id} payload (warn-only).
+ */
+export function parseProjectDetail(
+  data: unknown,
+): z.infer<typeof projectDetailEnvelopeSchema> {
+  return parseWith(projectDetailEnvelopeSchema, data, {
+    context: "ProjectDetailEnvelope",
+  });
+}
+
+/**
+ * parseCreatedProject validates a POST /projects payload (warn-only).
+ */
+export function parseCreatedProject(
+  data: unknown,
+): z.infer<typeof createdProjectEnvelopeSchema> {
+  return parseWith(createdProjectEnvelopeSchema, data, {
+    context: "CreatedProjectEnvelope",
+  });
+}
+
+/**
+ * parseProject validates a PATCH /projects/{id} payload (warn-only).
+ */
+export function parseProject(
+  data: unknown,
+): z.infer<typeof projectEnvelopeSchema> {
+  return parseWith(projectEnvelopeSchema, data, {
+    context: "ProjectEnvelope",
+  });
+}
+
+/**
+ * parseEnvironment validates an environment write payload (warn-only).
+ */
+export function parseEnvironment(
+  data: unknown,
+): z.infer<typeof environmentEnvelopeSchema> {
+  return parseWith(environmentEnvelopeSchema, data, {
+    context: "EnvironmentEnvelope",
+  });
+}

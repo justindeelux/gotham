@@ -64,6 +64,18 @@ const routes: RouteRecordRaw[] = [
         meta: { title: "Containers", requiresAuth: true },
       },
       {
+        path: "projects",
+        name: "projects",
+        component: () => import("@/features/projects/pages/ProjectsPage.vue"),
+        meta: { title: "Projects", requiresAuth: true },
+      },
+      {
+        path: "projects/:projectId",
+        name: "project-detail",
+        component: () => import("@/features/projects/pages/ProjectDetailPage.vue"),
+        meta: { title: "Project detail", requiresAuth: true },
+      },
+      {
         path: "applications",
         name: "applications",
         component: () => import("@/features/applications/pages/ApplicationsPage.vue"),

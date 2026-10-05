@@ -33,10 +33,12 @@ test("the server rail keeps polling after leaving the dashboard", async ({
   // The dashboard starts the shared poll; wait for one list poll to prove it.
   await page.waitForResponse(isServerListPoll);
 
-  await page.getByRole("link", { name: "Applications", exact: true }).click();
-  await expect(page).toHaveURL(/\/applications$/);
+  // PE-4 (JUS-33): the sidebar links Projects instead of Applications; the
+  // purpose is unchanged (leave the dashboard for a non-dashboard page).
+  await page.getByRole("link", { name: "Projects", exact: true }).click();
+  await expect(page).toHaveURL(/\/projects$/);
 
-  // ApplicationsPage never starts the poll, and the rail owns the interval, so
+  // ProjectsPage never starts the poll, and the rail owns the interval, so
   // two further list polls prove navigation did not freeze it (the round-0
   // regression had the outgoing dashboard stop the shared timer).
   await page.waitForResponse(isServerListPoll, { timeout: 15_000 });

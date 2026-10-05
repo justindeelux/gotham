@@ -21,9 +21,7 @@ export const navSections: NavSection[] = [
     label: "Operations",
     items: [
       { key: "dashboard", label: "Dashboard", icon: "grid", to: "dashboard" },
-      { key: "applications", label: "Applications", icon: "box", to: "applications" },
-      { key: "services", label: "Services", icon: "layers", to: "services" },
-      { key: "databases", label: "Databases", icon: "db", to: "databases" },
+      { key: "projects", label: "Projects", icon: "layers", to: "projects" },
       { key: "files", label: "File manager", icon: "folder" },
       { key: "templates", label: "Template library", icon: "rocket", to: "templates" },
       { key: "servers", label: "Servers", icon: "server", to: "servers" },
@@ -56,8 +54,10 @@ export const sectionAliases: Record<string, string> = { settings: "notifications
 
 /**
  * activeNavKey is the sidebar entry for a route path. It follows the first
- * path segment, so detail routes (/servers/:id, /applications/:id,
- * /databases/:id, /services/:id) keep their section highlighted (B2-12, B3-5).
+ * path segment, so detail routes (/servers/:id, /projects/:projectId,
+ * /applications/:id, /databases/:id, /services/:id) keep their section
+ * highlighted (B2-12, B3-5). Projects replaces the Applications, Services
+ * and Databases entries; those flat routes stay until PE-5 removes them.
  * Settings pages resolve via the second segment: /settings/notifications
  * highlights Notification channels, while /settings/profile matches no
  * sidebar entry (profile is reached from the MeCard menu) so nothing

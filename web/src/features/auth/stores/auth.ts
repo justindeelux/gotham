@@ -17,6 +17,7 @@ import { useApplicationsStore } from "@/features/applications";
 import { useBackupsStore } from "@/features/databases";
 import { useDatabasesStore } from "@/features/databases";
 import { useNotificationsStore } from "@/features/notifications";
+import { useProjectsStore } from "@/features/projects";
 import { useProvidersStore } from "@/features/applications";
 import { useProxyStore } from "@/features/domains";
 import { useServersStore } from "@/features/servers";
@@ -140,6 +141,7 @@ export const useAuthStore = defineStore("auth", () => {
       () => useApplicationsStore().reset(),
       () => useDatabasesStore().reset(),
       () => useNotificationsStore().reset(),
+      () => useProjectsStore().reset(),
       () => useServicesStore().reset(),
       () => useBackupsStore().reset(),
       () => useProvidersStore().reset(),

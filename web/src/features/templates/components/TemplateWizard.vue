@@ -18,15 +18,21 @@ import WizardTargetForm from "./WizardTargetForm.vue";
 interface Props {
   show: boolean;
   slug: string;
+  /** Preselected scope (empty on the flat library: the picker asks). */
+  projectId?: string;
+  environmentId?: string;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { projectId: "", environmentId: "" });
 
 const emit = defineEmits<{
   "update:show": [value: boolean];
 }>();
 
-const wizard = useTemplateWizard(toRef(props, "show"), toRef(props, "slug"));
+const wizard = useTemplateWizard(toRef(props, "show"), toRef(props, "slug"), {
+  projectId: props.projectId,
+  environmentId: props.environmentId,
+});
 
 function close(): void {
   emit("update:show", false);
@@ -81,11 +87,16 @@ function close(): void {
           <WizardTargetForm
             v-if="wizard.created.value === null"
             :name="wizard.name.value"
+            :project-id="wizard.scopeProjectId.value"
+            :environment-id="wizard.scopeEnvironmentId.value"
             :server-id="wizard.serverId.value"
             :name-error="wizard.nameError.value"
+            :scope-error="wizard.scopeError.value"
             :node-error="wizard.nodeError.value"
             :create-error="wizard.createError.value"
             @update:name="(next) => (wizard.name.value = next)"
+            @update:project-id="(next) => (wizard.scopeProjectId.value = next)"
+            @update:environment-id="(next) => (wizard.scopeEnvironmentId.value = next)"
             @update:server-id="(next) => (wizard.serverId.value = next)"
           />
 

@@ -4,13 +4,18 @@ import { RouterLink } from "vue-router";
 
 /**
  * Breadcrumb for the project surfaces: `Projects / <project>` on the detail
- * page, `Projects / <project> / <environment>` once PE-5 adds the
- * environment page. Long names truncate with a native tooltip.
+ * page, `Projects / <project> / <environment>` on the environment page
+ * (PE-5), and `Projects / <project> / <environment> / <resource>` on the
+ * nested resource pages. Long names truncate with a native tooltip.
  */
 const props = defineProps<{
   projectName: string;
   projectId: string;
   environmentName?: string;
+  /** Links the environment crumb to the environment page when set. */
+  environmentId?: string;
+  /** Appends a current resource crumb when set. */
+  resourceName?: string;
 }>();
 
 interface Crumb {
@@ -29,7 +34,23 @@ const crumbs = computed<Crumb[]>(() => {
     },
   ];
   if (props.environmentName) {
-    trail.push({ label: props.environmentName, to: null, current: true });
+    trail.push({
+      label: props.environmentName,
+      to:
+        props.environmentId && props.resourceName
+          ? {
+              name: "environment-detail",
+              params: {
+                projectId: props.projectId,
+                environmentId: props.environmentId,
+              },
+            }
+          : null,
+      current: !props.resourceName,
+    });
+  }
+  if (props.resourceName) {
+    trail.push({ label: props.resourceName, to: null, current: true });
   }
   return trail;
 });

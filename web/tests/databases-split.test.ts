@@ -1,10 +1,9 @@
 // Unit tests for the pure helpers extracted by the JUS-24 databases split.
-// They pin the exact behaviour the monoliths had inline.
-import { mount } from "@vue/test-utils";
+// They pin the exact behaviour the monoliths had inline. (PE-5 removed the
+// flat DatabasesPage with its table, KPI row and empty state; the pure
+// utils below stay and are still pinned here.)
 import { describe, expect, it } from "vitest";
 
-import DatabasesEmptyState from "../src/features/databases/components/DatabasesEmptyState.vue";
-import DatabasesKpiRow from "../src/features/databases/components/DatabasesKpiRow.vue";
 import {
   connectionScheme,
   dbContainerName,
@@ -30,10 +29,15 @@ function row(overrides = {}) {
   return {
     id: "db-1",
     name: "pg-orders",
+    environment_id: "env-1",
+    environment_name: "production",
+    project_id: "proj-1",
+    project_name: "shop",
     engine: "postgres",
     version: "16-alpine",
     status: "running",
     server_id: "srv-1",
+    server_name: "node",
     container_id: "c-1",
     public_port: 0,
     volume: "vol-1",
@@ -128,28 +132,5 @@ describe("statusTagType", () => {
     expect(statusTagType("completed")).toBe("success");
     expect(statusTagType("failed")).toBe("error");
     expect(statusTagType("running")).toBe("warning");
-  });
-});
-
-describe("DatabasesKpiRow", () => {
-  it("renders counts and the breakdown", () => {
-    const wrapper = mount(DatabasesKpiRow, {
-      props: {
-        counts: { all: 3, running: 2, stopped: 1, public: 1 },
-        breakdown: "3 postgres",
-      },
-    });
-    expect(wrapper.findAll(".stat").length).toBe(4);
-    expect(wrapper.text()).toContain("3 postgres");
-    expect(wrapper.text()).toContain("reachable outside the node");
-  });
-});
-
-describe("DatabasesEmptyState", () => {
-  it("renders the honest empty copy and emits create", async () => {
-    const wrapper = mount(DatabasesEmptyState, { props: { totalCount: 0 } });
-    expect(wrapper.text()).toContain("No databases yet");
-    await wrapper.find("button").trigger("click");
-    expect(wrapper.emitted("create")).toHaveLength(1);
   });
 });

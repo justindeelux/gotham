@@ -23,6 +23,10 @@ import { useServersStore } from "@/features/servers";
 export interface WizardForm {
   engine: string;
   version: string;
+  /** Project the database is created in (read-only summary, changeable). */
+  projectId: string;
+  /** Environment the database is created in (required by the API). */
+  environmentId: string;
   serverId: string;
   name: string;
   exposePublic: boolean;
@@ -39,6 +43,9 @@ interface WizardOptions {
   show: Ref<boolean>;
   onCreated: (_created: CreatedDatabase) => void;
   onUpdateShow: (_value: boolean) => void;
+  /** Preselected scope (the environment page passes its route). */
+  projectId?: string;
+  environmentId?: string;
 }
 
 /**
@@ -60,6 +67,8 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   const form = reactive<WizardForm>({
     engine: "postgres",
     version: "",
+    projectId: options.projectId ?? "",
+    environmentId: options.environmentId ?? "",
     serverId: "",
     name: "",
     exposePublic: false,
@@ -91,8 +100,10 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
         ?.label ?? form.serverId,
   );
 
-  /** engineValid gates the Engine step: an engine and a node. */
-  const engineValid = computed<boolean>(() => form.serverId !== "");
+  /** engineValid gates the Engine step: a scope, an engine and a node. */
+  const engineValid = computed<boolean>(
+    () => form.environmentId !== "" && form.serverId !== "",
+  );
 
   /** configureValid gates the Configure step: backend name rule + port range. */
   const configureValid = computed<boolean>(() =>
@@ -141,6 +152,8 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     created.value = null;
     form.engine = "postgres";
     form.version = "";
+    form.projectId = options.projectId ?? "";
+    form.environmentId = options.environmentId ?? "";
     form.serverId = "";
     form.name = "";
     form.exposePublic = false;
@@ -171,11 +184,17 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   async function handleSubmit(): Promise<void> {
     submitting.value = true;
     errorMessage.value = "";
+    if (form.environmentId === "") {
+      errorMessage.value = "Select a project and environment first.";
+      submitting.value = false;
+      return;
+    }
     try {
       created.value = await databasesStore.provision({
         name: form.name.trim(),
         engine: form.engine,
         version: form.version || undefined,
+        environment_id: form.environmentId,
         server_id: form.serverId,
         public_port: form.exposePublic ? (form.publicPort ?? undefined) : undefined,
       });

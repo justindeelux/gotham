@@ -12,11 +12,13 @@ import {
   restartDatabase,
   startDatabase,
   stopDatabase,
+  updateDatabase,
 } from "@/features/databases/api/databases";
 import type {
   CreateDatabaseInput,
   Database,
   DatabaseCredentials,
+  UpdateDatabaseInput,
 } from "@/features/databases/api/databases";
 import { mergeDatabasesById } from "@/features/databases/utils/storeMerge";
 
@@ -176,6 +178,24 @@ export const useDatabasesStore = defineStore("databases", () => {
     }
   }
 
+  /**
+   * update applies a partial update (rename, move environment, change node)
+   * and merges the returned row into the list.
+   */
+  async function update(
+    id: string,
+    input: UpdateDatabaseInput,
+  ): Promise<Database> {
+    acting.value = true;
+    try {
+      const updated = await updateDatabase(id, input);
+      applyDatabase(updated);
+      return updated;
+    } finally {
+      acting.value = false;
+    }
+  }
+
   /** remove deletes a database and drops it from the list. */
   async function remove(id: string): Promise<void> {
     acting.value = true;
@@ -263,6 +283,7 @@ export const useDatabasesStore = defineStore("databases", () => {
     fetchDatabase,
     provision,
     rename,
+    update,
     remove,
     fetchCredentials,
     credentialsOf,

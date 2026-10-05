@@ -8,8 +8,10 @@ import type {
   ComposeServiceContainer,
   Service,
   ServiceDeploy,
+  UpdateServiceInput,
 } from "@/features/services/api/services";
 import { isApiError } from "@/features/servers";
+import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useServersStore } from "@/features/servers";
 import { useServicesStore } from "@/features/services/stores/services";
 
@@ -56,6 +58,10 @@ export interface ServiceDetailContext {
   historyUnavailable: ComputedRef<string | null>;
   historyLoading: ComputedRef<boolean>;
   loggableServices: ComputedRef<string[]>;
+  canWrite: ComputedRef<boolean>;
+  moveSaving: Ref<boolean>;
+  moveError: Ref<string | null>;
+  handleMove(_scope: { projectId: string; environmentId: string; serverId: string }): Promise<void>;
   handleSaveCompose(_text: string): Promise<void>;
   addEnvRow(): void;
   updateEnvRow(_id: number, _patch: Partial<EnvRow>): void;
@@ -92,6 +98,7 @@ export function useServiceDetail(): ServiceDetailContext {
   const router = useRouter();
   const message = useMessage();
   const servicesStore = useServicesStore();
+  const projectsStore = useProjectsStore();
   const serversStore = useServersStore();
 
   /** envReference is the compose `${VAR}` substitution form shown in copy. */
@@ -380,16 +387,78 @@ export function useServiceDetail(): ServiceDetailContext {
 
   /** handleDelete stops the project and removes the row. */
   async function handleDelete(): Promise<void> {
+    const current = service.value;
     busy.value = "delete";
     actionError.value = null;
     try {
       await servicesStore.remove(serviceId.value);
       message.success("Service deleted. Named volumes were kept on the node.");
-      await router.push({ name: "services" });
+      if (current) {
+        await router.push({
+          name: "environment-detail",
+          params: { projectId: current.project_id, environmentId: current.environment_id },
+        });
+      } else {
+        await router.push({ name: "projects" });
+      }
     } catch (err) {
       actionError.value = describeServiceError(err);
     } finally {
       busy.value = null;
+    }
+  }
+
+  /** canWrite follows the contract's roles: viewers read, members write. */
+  const canWrite = computed<boolean>(() => projectsStore.canWrite);
+
+  const moveSaving = ref(false);
+  const moveError = ref<string | null>(null);
+
+  /**
+   * handleMove applies the location settings (move environment, change
+   * node). Only changed fields ride the PATCH; a move retargets the nested
+   * route to the new environment. The contract's 409 refusals (in-flight
+   * deploy, deployed service, name collision) render inline through
+   * moveError.
+   */
+  async function handleMove(scope: {
+    projectId: string;
+    environmentId: string;
+    serverId: string;
+  }): Promise<void> {
+    const current = service.value;
+    if (!current) {
+      return;
+    }
+    const input: UpdateServiceInput = {};
+    if (scope.environmentId !== current.environment_id) {
+      input.environment_id = scope.environmentId;
+    }
+    if (scope.serverId !== current.server_id) {
+      input.server_id = scope.serverId;
+    }
+    if (Object.keys(input).length === 0) {
+      return;
+    }
+    moveSaving.value = true;
+    moveError.value = null;
+    try {
+      const updated = await servicesStore.update(serviceId.value, input);
+      message.success("Location saved");
+      if (input.environment_id) {
+        await router.push({
+          name: "service-detail",
+          params: {
+            projectId: updated.project_id,
+            environmentId: updated.environment_id,
+            id: updated.id,
+          },
+        });
+      }
+    } catch (err) {
+      moveError.value = describeServiceError(err);
+    } finally {
+      moveSaving.value = false;
     }
   }
 
@@ -430,6 +499,10 @@ export function useServiceDetail(): ServiceDetailContext {
     historyUnavailable,
     historyLoading,
     loggableServices,
+    canWrite,
+    moveSaving,
+    moveError,
+    handleMove,
     handleSaveCompose,
     addEnvRow,
     updateEnvRow,

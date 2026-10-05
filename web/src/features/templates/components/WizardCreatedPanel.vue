@@ -44,7 +44,14 @@ const emit = defineEmits<{
     </NAlert>
     <NSpace :size="8" align="center">
       <RouterLink
-        :to="{ name: 'service-detail', params: { id: created.id } }"
+        :to="{
+          name: 'service-detail',
+          params: {
+            projectId: created.project_id,
+            environmentId: created.environment_id,
+            id: created.id,
+          },
+        }"
         @click="emit('close')"
       >
         <NButton size="small">Open service detail</NButton>

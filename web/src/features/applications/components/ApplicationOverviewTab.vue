@@ -55,7 +55,7 @@ const emit = defineEmits<{
           <span class="mono">{{ props.application.port }}:{{ props.application.host_port }}</span>
         </NDescriptionsItem>
         <NDescriptionsItem label="Node">
-          <span class="mono">{{ props.application.server_id ? props.application.server_id.slice(0, 8) : "unassigned" }}</span>
+          <span class="mono">{{ props.application.server_name || (props.application.server_id ? props.application.server_id.slice(0, 8) : "unassigned") }}</span>
         </NDescriptionsItem>
       </NDescriptions>
     </NCard>

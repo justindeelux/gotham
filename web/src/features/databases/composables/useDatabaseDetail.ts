@@ -5,7 +5,7 @@ import type { InjectionKey } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { describeDatabaseError } from "@/features/databases/api/databases";
-import type { Database } from "@/features/databases/api/databases";
+import type { Database, UpdateDatabaseInput } from "@/features/databases/api/databases";
 import {
   databaseMessages,
   isDatabaseNameValid,
@@ -18,6 +18,7 @@ import {
 } from "@/features/databases/utils/databaseConnection";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { useDatabasesStore } from "@/features/databases/stores/databases";
+import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useServersStore } from "@/features/servers";
 
 export type CredentialField = "username" | "password" | "database" | "root_password";
@@ -32,6 +33,7 @@ export function useDatabaseDetail() {
   const router = useRouter();
   const message = useMessage();
   const databasesStore = useDatabasesStore();
+  const projectsStore = useProjectsStore();
   const serversStore = useServersStore();
   const { copyText } = useCopyText();
 
@@ -243,15 +245,76 @@ export function useDatabaseDetail() {
     }
   }
 
-  /** handleDelete soft-deletes the row and returns to the list. */
+  /** handleDelete soft-deletes the row and returns to the environment. */
   async function handleDelete(): Promise<void> {
-    const name = database.value?.name ?? dbId.value;
+    const current = database.value;
+    const name = current?.name ?? dbId.value;
     try {
       await databasesStore.remove(dbId.value);
       message.success(`Database "${name}" deleted · volume kept for 7 days`);
-      await router.push({ name: "databases" });
+      if (current) {
+        await router.push({
+          name: "environment-detail",
+          params: { projectId: current.project_id, environmentId: current.environment_id },
+        });
+      } else {
+        await router.push({ name: "projects" });
+      }
     } catch (error) {
       message.error(describeDatabaseError(error));
+    }
+  }
+
+  /** canWrite follows the contract's roles: viewers read, members write. */
+  const canWrite = computed<boolean>(() => projectsStore.canWrite);
+
+  const moveSaving = ref(false);
+  const moveError = ref<string | null>(null);
+
+  /**
+   * handleMove applies the location settings (move environment, change
+   * node). Only changed fields ride the PATCH; a move retargets the nested
+   * route to the new environment. The contract's 409 refusals (in-flight
+   * deploy, pinned node, name collision) render inline through moveError.
+   */
+  async function handleMove(scope: {
+    projectId: string;
+    environmentId: string;
+    serverId: string;
+  }): Promise<void> {
+    const current = database.value;
+    if (!current) {
+      return;
+    }
+    const input: UpdateDatabaseInput = {};
+    if (scope.environmentId !== current.environment_id) {
+      input.environment_id = scope.environmentId;
+    }
+    if (scope.serverId !== current.server_id) {
+      input.server_id = scope.serverId;
+    }
+    if (Object.keys(input).length === 0) {
+      return;
+    }
+    moveSaving.value = true;
+    moveError.value = null;
+    try {
+      const updated = await databasesStore.update(dbId.value, input);
+      message.success("Location saved");
+      if (input.environment_id) {
+        await router.push({
+          name: "database-detail",
+          params: {
+            projectId: updated.project_id,
+            environmentId: updated.environment_id,
+            id: updated.id,
+          },
+        });
+      }
+    } catch (error) {
+      moveError.value = describeDatabaseError(error);
+    } finally {
+      moveSaving.value = false;
     }
   }
 
@@ -301,6 +364,10 @@ export function useDatabaseDetail() {
     openRename,
     handleRename,
     handleDelete,
+    canWrite,
+    moveSaving,
+    moveError,
+    handleMove,
   };
 }
 

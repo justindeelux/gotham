@@ -12,18 +12,26 @@ import {
   provideCreateWizard,
   useCreateAppWizard,
 } from "@/features/applications/composables/useCreateAppWizard";
+import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
 
 interface Props {
   show: boolean;
+  /** Project the application is created in (the route's, changeable). */
+  projectId?: string;
+  /** Environment the application is created in (the route's, changeable). */
+  environmentId?: string;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { projectId: "", environmentId: "" });
 const emit = defineEmits<{
   "update:show": [value: boolean];
   created: [application: Application];
 }>();
 
-const wizard = useCreateAppWizard(toRef(props, "show"), emit);
+const wizard = useCreateAppWizard(toRef(props, "show"), emit, {
+  projectId: props.projectId,
+  environmentId: props.environmentId,
+});
 provideCreateWizard(wizard);
 </script>
 
@@ -42,6 +50,13 @@ provideCreateWizard(wizard);
       pack and runtime are fixed once created; environment variables, volumes
       and domains can be changed afterwards.
     </NText>
+
+    <ResourceScopeSummary
+      :project-id="wizard.form.projectId"
+      :environment-id="wizard.form.environmentId"
+      @update:project-id="(value) => (wizard.form.projectId = value)"
+      @update:environment-id="(value) => (wizard.form.environmentId = value)"
+    />
 
     <div class="wizard">
       <div class="wizard-rail">
@@ -90,7 +105,7 @@ provideCreateWizard(wizard);
             <NButton
               type="primary"
               :loading="wizard.submitting.value"
-              :disabled="!wizard.sourceValid.value || !wizard.runtimeValid.value"
+              :disabled="!wizard.sourceValid.value || !wizard.runtimeValid.value || !wizard.scopeValid.value"
               @click="wizard.handleSubmit"
             >
               Create &amp; deploy

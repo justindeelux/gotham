@@ -40,6 +40,10 @@ export interface WizardForm {
   branch: string;
   name: string;
   buildPack: BuildPack;
+  /** Project the application is created in (read-only summary, changeable). */
+  projectId: string;
+  /** Environment the application is created in (required by the API). */
+  environmentId: string;
   serverId: string;
   port: number | null;
   hostPort: number | null;
@@ -96,8 +100,14 @@ export interface WizardEvents {
  * Form state, validation and submission behind the create-application wizard.
  * The shell provides the returned state to the step components through
  * `createWizardKey`, so steps read one typed source instead of long prop lists.
+ * `scope` preselects the project/environment the wizard creates in (the
+ * environment page passes its route); the summary stays changeable.
  */
-export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
+export function useCreateAppWizard(
+  show: Ref<boolean>,
+  emit: WizardEvents,
+  scope: { projectId: string; environmentId: string } = { projectId: "", environmentId: "" },
+) {
   const providersStore = useProvidersStore();
   const serversStore = useServersStore();
   const appsStore = useApplicationsStore();
@@ -116,6 +126,8 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
     branch: "main",
     name: "",
     buildPack: "",
+    projectId: scope.projectId,
+    environmentId: scope.environmentId,
     serverId: "",
     port: 3000,
     hostPort: null,
@@ -198,6 +210,9 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
     }
     return wizardDomainSchema.safeParse(form.baseDomain).success;
   });
+
+  /** scopeValid gates the submit: the API requires an environment. */
+  const scopeValid = computed<boolean>(() => form.environmentId !== "");
 
   /**
    * Environment names are warn-only: the API accepts any structurally valid
@@ -287,6 +302,7 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
   function buildPayload(): CreateApplicationInput {
     return {
       name: form.name.trim(),
+      environment_id: form.environmentId,
       provider: selectedProviderName.value,
       repo: isPublicRepo.value ? form.publicCloneUrl.trim() : form.repoFullName,
       clone_url: isPublicRepo.value ? form.publicCloneUrl.trim() : form.cloneUrl,
@@ -304,6 +320,10 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
   /** handleSubmit posts the wizard payload, queues the first deploy and reports. */
   async function handleSubmit(): Promise<void> {
     errorMessage.value = "";
+    if (!scopeValid.value) {
+      errorMessage.value = "Select a project and environment first.";
+      return;
+    }
     submitting.value = true;
     try {
       const { application, webhook } = await createApplication(buildPayload());
@@ -362,6 +382,8 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
     form.branch = "main";
     form.name = "";
     form.buildPack = "";
+    form.projectId = scope.projectId;
+    form.environmentId = scope.environmentId;
     form.serverId = "";
     form.port = 3000;
     form.hostPort = null;
@@ -391,6 +413,7 @@ export function useCreateAppWizard(show: Ref<boolean>, emit: WizardEvents) {
     serverOptions,
     sourceValid,
     runtimeValid,
+    scopeValid,
     envKeyWarnings,
     droppedEnvRows,
     canContinue,

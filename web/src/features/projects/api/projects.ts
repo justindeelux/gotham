@@ -1,8 +1,10 @@
 import { http, teamHeaders } from "@/shared/api/http";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
+import type { Service } from "@/features/services/api/services";
 import {
   parseCreatedProject,
   parseEnvironment,
+  parseEnvironmentResources,
   parseProject,
   parseProjectDetail,
   parseProjectList,
@@ -85,6 +87,69 @@ export interface ProjectDetailEnvelope {
 export interface CreatedProjectEnvelope {
   project: Project;
   environments: Environment[];
+}
+
+/**
+ * One application of GET /environments/{id}/resources: the deploy list item
+ * plus the grouping fields and the node name (mirrors
+ * environmentResourceApplication in internal/projects/routes.go).
+ */
+export interface EnvironmentResourceApplication {
+  id: string;
+  name: string;
+  environment_id: string;
+  environment_name: string;
+  project_id: string;
+  project_name: string;
+  provider: string;
+  repo: string;
+  clone_url: string;
+  branch: string;
+  build_pack: string;
+  base_domain: string;
+  base_domain_disabled: boolean;
+  port: number;
+  host_port: number;
+  server_id: string;
+  server_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One database of GET /environments/{id}/resources: the databases list item
+ * plus the grouping fields and the node name (mirrors
+ * environmentResourceDatabase in internal/projects/routes.go).
+ */
+export interface EnvironmentResourceDatabase {
+  id: string;
+  name: string;
+  environment_id: string;
+  environment_name: string;
+  project_id: string;
+  project_name: string;
+  engine: string;
+  version?: string;
+  status: string;
+  server_id: string;
+  server_name: string;
+  public_port: number;
+  volume: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * GET /environments/{id}/resources as the environment page consumes it. The
+ * services ride the services response shape unchanged (see ServiceResponse
+ * in internal/services/response.go).
+ */
+export interface EnvironmentResources {
+  environment: Environment;
+  project: Project;
+  applications: EnvironmentResourceApplication[];
+  services: Service[];
+  databases: EnvironmentResourceDatabase[];
 }
 
 /** listProjects returns the active team's projects. */
@@ -178,6 +243,26 @@ export async function deleteEnvironment(
   id: string,
 ): Promise<void> {
   await http.delete(`/environments/${id}`, { headers: teamHeaders(teamId) });
+}
+
+/**
+ * getEnvironmentResources returns one environment with its project and the
+ * workloads attached to it (GET /environments/{id}/resources → 200).
+ * Previews stay out of the default listing; `includePreviews` adds them
+ * (?previews=1) for the environment page's preview switch.
+ */
+export async function getEnvironmentResources(
+  teamId: string,
+  id: string,
+  includePreviews = false,
+): Promise<EnvironmentResources> {
+  const response = await http.get<unknown>(`/environments/${id}/resources`, {
+    headers: teamHeaders(teamId),
+    params: includePreviews ? { previews: "1" } : {},
+  });
+  // Warn-only envelope check: the services ride their own response shape, so
+  // the parsed result is adopted as the resources view.
+  return parseEnvironmentResources(response.data) as unknown as EnvironmentResources;
 }
 
 /** environmentResourceTotal counts every resource in one environment. */

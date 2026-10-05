@@ -91,6 +91,10 @@ function testRouter(path: string) {
       {
         path: "/projects/:projectId",
         name: "project-detail",
+        component: { render: () => h("div") } },
+      {
+        path: "/projects/:projectId/environments/:environmentId",
+        name: "environment-detail",
         component: { render: () => h("div") },
       },
     ],
@@ -326,11 +330,15 @@ describe("project detail page states", () => {
     expect(wrapper.text()).toContain("Projects");
     expect(wrapper.text()).toContain("production");
     expect(wrapper.text()).toContain("Shared variables");
-    // The environment page lands in PE-5: Open stays disabled until then.
+    // PE-5: Open links to the environment page.
     const open = wrapper
       .findAllComponents(NButton)
       .find((button) => button.text() === "Open");
-    expect(open?.attributes("disabled")).toBeDefined();
+    expect(open?.attributes("disabled")).toBeUndefined();
+    const link = wrapper.find(
+      'a[href="/projects/11111111-1111-4111-8111-111111111111/environments/22222222-2222-4222-8222-222222222222"]',
+    );
+    expect(link.exists()).toBe(true);
     wrapper.unmount();
   });
 

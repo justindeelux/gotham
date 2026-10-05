@@ -13,7 +13,7 @@ import { RouterLink } from "vue-router";
           resulting routers. A live router table arrives in a later backend
           package; nothing is shown here rather than invented.
         </p>
-        <RouterLink :to="{ name: 'applications' }">
+        <RouterLink :to="{ name: 'projects' }">
           Manage application domains
         </RouterLink>
       </template>

@@ -1,6 +1,6 @@
 import { useMessage } from "naive-ui";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
 import { describeApplicationError, isActiveDeployment } from "@/features/applications/api/applications";
 import type {
@@ -8,6 +8,7 @@ import type {
   Deployment,
   EnvVar,
   StorageMapping,
+  UpdateApplicationInput,
 } from "@/features/applications/api/applications";
 import type { Preview } from "@/features/applications/api/previews";
 import {
@@ -16,6 +17,7 @@ import {
   listPreviews,
 } from "@/features/applications/api/previews";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
+import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useServersStore } from "@/features/servers";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { pipelineStepsFor } from "@/features/applications/utils/deployPipeline";
@@ -27,8 +29,10 @@ import { createRequestGeneration } from "@/shared/utils/requestGeneration";
  */
 export function useApplicationDetail() {
   const route = useRoute();
+  const router = useRouter();
   const message = useMessage();
   const appsStore = useApplicationsStore();
+  const projectsStore = useProjectsStore();
   const serversStore = useServersStore();
 
   const appId = computed<string>(() => String(route.params.id ?? ""));
@@ -397,6 +401,60 @@ export function useApplicationDetail() {
     rollbackOpen.value = true;
   }
 
+  /** canWrite follows the contract's roles: viewers read, members write. */
+  const canWrite = computed<boolean>(() => projectsStore.canWrite);
+
+  const moveSaving = ref(false);
+  const moveError = ref<string | null>(null);
+
+  /**
+   * handleMove applies the location settings (move environment, change
+   * node). Only changed fields ride the PUT; a move retargets the nested
+   * route to the new environment. The contract's 409 refusals (open
+   * previews, in-flight deploy, name collision) render inline through
+   * moveError.
+   */
+  async function handleMove(scope: {
+    projectId: string;
+    environmentId: string;
+    serverId: string;
+  }): Promise<void> {
+    const current = application.value;
+    if (!current) {
+      return;
+    }
+    const input: UpdateApplicationInput = {};
+    if (scope.environmentId !== current.environment_id) {
+      input.environment_id = scope.environmentId;
+    }
+    if (scope.serverId !== (current.server_id ?? "")) {
+      input.server_id = scope.serverId;
+    }
+    if (Object.keys(input).length === 0) {
+      return;
+    }
+    moveSaving.value = true;
+    moveError.value = null;
+    try {
+      const updated = await appsStore.update(appId.value, input);
+      message.success("Location saved");
+      if (input.environment_id) {
+        await router.push({
+          name: "application-detail",
+          params: {
+            projectId: updated.project_id,
+            environmentId: updated.environment_id,
+            id: updated.id,
+          },
+        });
+      }
+    } catch (error) {
+      moveError.value = describeApplicationError(error);
+    } finally {
+      moveSaving.value = false;
+    }
+  }
+
   watch(appId, () => {
     // Invalidate any in-flight config read for the previous application.
     draftGeneration.bump();
@@ -488,6 +546,10 @@ export function useApplicationDetail() {
     previewsError,
     previewsAvailable,
     appsStore,
+    canWrite,
+    moveSaving,
+    moveError,
+    handleMove,
     handleSaveEnv,
     handleSaveStorages,
     handleDeploy,

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { NFormItem, NInput, NInputNumber, NSelect, NSpace } from "naive-ui";
+import { NFormItem, NInput, NInputNumber, NSpace } from "naive-ui";
 
 import { useCreateWizardState } from "@/features/applications/composables/useCreateAppWizard";
+import ServerPicker from "@/features/projects/components/ServerPicker.vue";
 
 const wizard = useCreateWizardState();
 const { form } = wizard;
@@ -10,14 +11,7 @@ const { form } = wizard;
 <template>
   <NSpace vertical :size="16">
     <div class="form-row">
-      <NFormItem label="Node">
-        <NSelect
-          v-model:value="form.serverId"
-          :options="wizard.serverOptions.value"
-          placeholder="Select the node that runs the container"
-        />
-        <span class="field-hint">The agent builds the image on this node.</span>
-      </NFormItem>
+      <ServerPicker v-model="form.serverId" label="Node" />
 
       <NFormItem label="Domain (optional)">
         <NInput

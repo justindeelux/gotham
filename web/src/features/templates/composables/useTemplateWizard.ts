@@ -37,7 +37,11 @@ import { useTemplatesStore } from "@/features/templates/stores/templates";
  * streams the project's container log via the services logs endpoint
  * afterwards. A failed deploy is shown as it comes back — never faked.
  */
-export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
+export function useTemplateWizard(
+  show: Ref<boolean>,
+  slug: Ref<string>,
+  scope: { projectId: string; environmentId: string } = { projectId: "", environmentId: "" },
+): {
   step: Ref<number>;
   detail: Ref<TemplateDetail | null>;
   detailLoading: Ref<boolean>;
@@ -48,6 +52,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
   renderLoading: Ref<boolean>;
   renderError: Ref<string | null>;
   name: Ref<string>;
+  scopeProjectId: Ref<string>;
+  scopeEnvironmentId: Ref<string>;
   serverId: Ref<string>;
   createAttempted: Ref<boolean>;
   creating: Ref<boolean>;
@@ -62,6 +68,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
   secretKeys: Ref<string[]>;
   nameError: Ref<string>;
   nodeError: Ref<string>;
+  scopeError: Ref<string>;
+  scopeValid: Ref<boolean>;
   next: () => void;
   handleCreate: () => Promise<void>;
   handleDeploy: () => Promise<void>;
@@ -84,6 +92,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
   const renderError = ref<string | null>(null);
 
   const name = ref("");
+  const scopeProjectId = ref(scope.projectId);
+  const scopeEnvironmentId = ref(scope.environmentId);
   const serverId = ref("");
   const createAttempted = ref(false);
   const creating = ref(false);
@@ -126,6 +136,13 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     !createAttempted.value ? "" : (fieldErrors(serviceNodeSchema, serverId.value)[0] ?? ""),
   );
 
+  /** scopeValid gates the create: the API requires an environment. */
+  const scopeValid = computed<boolean>(() => scopeEnvironmentId.value !== "");
+
+  const scopeError = computed<string>(() =>
+    !createAttempted.value || scopeValid.value ? "" : "Select a project and environment.",
+  );
+
   /** open loads the template schema and seeds the form with its defaults. */
   async function open(): Promise<void> {
     reset();
@@ -158,6 +175,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     renderError.value = null;
     renderLoading.value = false;
     name.value = "";
+    scopeProjectId.value = scope.projectId;
+    scopeEnvironmentId.value = scope.environmentId;
     serverId.value = "";
     createAttempted.value = false;
     creating.value = false;
@@ -233,7 +252,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
       renderLoading.value ||
       rendered === null ||
       !serviceNameSchema.safeParse(name.value).success ||
-      !serviceNodeSchema.safeParse(serverId.value).success
+      !serviceNodeSchema.safeParse(serverId.value).success ||
+      !scopeValid.value
     ) {
       return;
     }
@@ -242,9 +262,7 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     try {
       created.value = await servicesStore.create({
         name: name.value.trim(),
-        // PE-5 wires the project/environment picker; until then creation
-        // through this dialog answers 400 (environment is required).
-        environment_id: "",
+        environment_id: scopeEnvironmentId.value,
         server_id: serverId.value,
         compose_yaml: rendered.compose_yaml,
         env: rendered.env,
@@ -305,6 +323,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     renderLoading,
     renderError,
     name,
+    scopeProjectId,
+    scopeEnvironmentId,
     serverId,
     createAttempted,
     creating,
@@ -319,6 +339,8 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     secretKeys,
     nameError,
     nodeError,
+    scopeError,
+    scopeValid,
     next,
     handleCreate,
     handleDeploy,

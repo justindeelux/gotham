@@ -11,6 +11,8 @@ import ServiceEnvCard from "@/features/services/components/ServiceEnvCard.vue";
 import ServiceLogs from "@/features/services/components/ServiceLogs.vue";
 import ServiceOverviewCard from "@/features/services/components/ServiceOverviewCard.vue";
 import { serviceDetailKey, useServiceDetail } from "@/features/services/composables/useServiceDetail";
+import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
+import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
 
 /**
  * One compose service: the stored document (view/edit → PATCH), its
@@ -34,11 +36,23 @@ const {
   notFound,
   actionError,
   loggableServices,
+  canWrite,
+  moveSaving,
+  moveError,
+  handleMove,
 } = page;
 </script>
 
 <template>
   <div class="service-detail-page">
+    <ProjectBreadcrumb
+      v-if="service"
+      :project-name="service.project_name"
+      :project-id="service.project_id"
+      :environment-name="service.environment_name"
+      :environment-id="service.environment_id"
+      :resource-name="service.name"
+    />
     <ServiceDetailHeader />
 
     <NAlert v-if="error" type="error" :show-icon="true">
@@ -50,8 +64,8 @@ const {
       description="This service does not exist (or belongs to another account)."
     >
       <template #extra>
-        <RouterLink :to="{ name: 'services' }">
-          <NButton>Back to services</NButton>
+        <RouterLink :to="{ name: 'projects' }">
+          <NButton>Back to projects</NButton>
         </RouterLink>
       </template>
     </NEmpty>
@@ -62,6 +76,16 @@ const {
       </NAlert>
 
       <ServiceOverviewCard />
+
+      <ResourceMoveCard
+        v-if="canWrite"
+        :project-id="service.project_id"
+        :environment-id="service.environment_id"
+        :server-id="service.server_id"
+        :saving="moveSaving"
+        :error="moveError"
+        @save="handleMove"
+      />
 
       <ServiceComposeCard />
 

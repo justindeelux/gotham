@@ -1,7 +1,6 @@
 # Phase 13 — Projects and environments
 
 Status: implemented and deployed to the test box 2026-10-05 (Linear JUS-30..JUS-37). Written from a read of the schema, routes and web layout; the delivery log is in section 9.
-layout; handler-level details are to be confirmed by each package's spec.
 
 ## 1. Where we are
 

@@ -17,8 +17,14 @@ import {
   listPreviews,
 } from "@/features/applications/api/previews";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
+import {
+  getEnvironmentVariables,
+  getProjectVariables,
+} from "@/features/projects/api/variables";
+import type { InheritedVariable } from "@/features/projects/schemas/variables";
 import { resolveEnvironmentScope } from "@/features/projects/utils/canonicalRoutes";
 import { useProjectsStore } from "@/features/projects/stores/projects";
+import { useTeamsStore } from "@/features/teams";
 import { useServersStore } from "@/features/servers";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { pipelineStepsFor } from "@/features/applications/utils/deployPipeline";
@@ -34,6 +40,7 @@ export function useApplicationDetail() {
   const message = useMessage();
   const appsStore = useApplicationsStore();
   const projectsStore = useProjectsStore();
+  const teamsStore = useTeamsStore();
   const serversStore = useServersStore();
 
   const appId = computed<string>(() => String(route.params.id ?? ""));
@@ -55,6 +62,14 @@ export function useApplicationDetail() {
   const storagesLoading = ref(false);
   const storagesError = ref<string | null>(null);
   const storagesLoadedFor = ref<string>("");
+
+  // Inherited shared variables (PE-6): the project's and the environment's
+  // masked sets, shown read-only above the application editor with their
+  // origin. Context only — a failed read renders as no section, never an
+  // error over the application editor the user came to change.
+  const inheritedVars = ref<InheritedVariable[]>([]);
+  const inheritedLoading = ref(false);
+  const inheritedReady = ref(false);
 
   // Invalidates in-flight config reads when the route's application changes, so
   // a late response cannot overwrite the new application's draft.
@@ -208,6 +223,7 @@ export function useApplicationDetail() {
     }
     void loadEnv();
     void loadStorages();
+    void loadInherited();
     void loadPreviews();
     void serversStore.fetchServers().catch(() => undefined);
   }
@@ -240,6 +256,53 @@ export function useApplicationDetail() {
     } finally {
       if (draftGeneration.isCurrent(token) && target === appId.value) {
         envLoading.value = false;
+      }
+    }
+  }
+
+  /** loadInherited refreshes the read-only project/environment context rows. */
+  async function loadInherited(): Promise<void> {
+    const target = appId.value;
+    const scope = application.value;
+    if (target === "" || !scope) {
+      return;
+    }
+    const teamId = teamsStore.activeTeamId;
+    const projectId = scope.project_id;
+    const environmentId = scope.environment_id;
+    inheritedLoading.value = true;
+    try {
+      // Either scope may fail independently (a 404 on one must not drop
+      // the other scope's rows): render whichever half succeeded.
+      const [projectResult, environmentResult] = await Promise.allSettled([
+        getProjectVariables(teamId, projectId),
+        getEnvironmentVariables(teamId, environmentId),
+      ]);
+      if (target !== appId.value) {
+        return; // superseded by an application switch
+      }
+      const projectVars =
+        projectResult.status === "fulfilled" ? projectResult.value : [];
+      const environmentVars =
+        environmentResult.status === "fulfilled" ? environmentResult.value : [];
+      inheritedVars.value = [
+        ...projectVars.map((row) => ({ ...row, origin: "project" as const })),
+        ...environmentVars.map((row) => ({ ...row, origin: "environment" as const })),
+      ];
+      inheritedReady.value =
+        projectResult.status === "fulfilled" ||
+        environmentResult.status === "fulfilled";
+    } catch {
+      if (target !== appId.value) {
+        return;
+      }
+      // Context only: a failed read renders as no section, and the
+      // application editor below keeps working.
+      inheritedVars.value = [];
+      inheritedReady.value = false;
+    } finally {
+      if (target === appId.value) {
+        inheritedLoading.value = false;
       }
     }
   }
@@ -525,6 +588,9 @@ export function useApplicationDetail() {
     envError.value = null;
     envLoadedFor.value = "";
     envLoading.value = false;
+    inheritedVars.value = [];
+    inheritedLoading.value = false;
+    inheritedReady.value = false;
     storagesDraft.value = [];
     storagesError.value = null;
     storagesLoadedFor.value = "";
@@ -594,6 +660,9 @@ export function useApplicationDetail() {
     envLoading,
     envError,
     envLoadedFor,
+    inheritedVars,
+    inheritedLoading,
+    inheritedReady,
     storagesDraft,
     storagesLoading,
     storagesError,
@@ -619,6 +688,7 @@ export function useApplicationDetail() {
     openRollbackFor,
     loadEnv,
     loadStorages,
+    loadInherited,
     loadPreviews,
   };
 }

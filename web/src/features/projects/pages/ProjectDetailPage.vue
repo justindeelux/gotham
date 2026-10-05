@@ -17,11 +17,13 @@ import {
 import { RouterLink, useRoute } from "vue-router";
 
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
+import SharedVariablesEditor from "@/features/projects/components/SharedVariablesEditor.vue";
 import {
   environmentResourceTotal,
   resourceSummary,
 } from "@/features/projects/api/projects";
 import { useProjectPage } from "@/features/projects/composables/useProjectPage";
+import { useSharedVariables } from "@/features/projects/composables/useSharedVariables";
 import {
   environmentNameRules,
   isEnvironmentNameValid,
@@ -32,12 +34,14 @@ import { useProjectsStore } from "@/features/projects/stores/projects";
 import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 
 /**
- * Project detail (`/projects/:projectId`, PE-4 Linear JUS-33).
+ * Project detail (`/projects/:projectId`, PE-4 Linear JUS-33, shared
+ * variables PE-6 Linear JUS-35).
  *
  * Ported from docs/design/project-detail.html: a `Projects / <project>`
  * breadcrumb, rename and delete actions, an Environments tab (table with
  * resource counts, open, add, rename, delete) and a Shared variables tab
- * that is a placeholder until PE-6 fills it.
+ * with the precedence hint. Secrets are write-only: stored values are never
+ * shown, and saving an untouched secret keeps its sealed value.
  *
  * Delete buttons stay enabled so the block is reachable by keyboard and
  * touch: the dialog explains why ("Move or delete the N resources first")
@@ -55,6 +59,11 @@ import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 const route = useRoute();
 const projectsStore = useProjectsStore();
 const page = useProjectPage(() => String(route.params.projectId ?? ""));
+/** projectVariables owns the Shared variables tab (one scope per mount). */
+const projectVariables = useSharedVariables(() => ({
+  kind: "project",
+  projectId: String(route.params.projectId ?? ""),
+}));
 const {
   tab,
   renameOpen,
@@ -196,18 +205,20 @@ const envRules = environmentNameRules();
         </NTabPane>
 
         <NTabPane name="variables" tab="Shared variables">
-          <NCard title="Shared variables">
-            <NSpace vertical :size="8">
-              <NText depth="3">
-                Project variables apply to every resource in every environment
-                of this project. An environment variable overrides a project
-                one; an application variable overrides both.
-              </NText>
-              <NText depth="3">
-                The variables editor lands in PE-6.
-              </NText>
-            </NSpace>
-          </NCard>
+          <SharedVariablesEditor
+            :draft="projectVariables.draft.value"
+            :loading="projectVariables.loading.value"
+            :load-error="projectVariables.loadError.value"
+            :save-error="projectVariables.saveError.value"
+            :saving="projectVariables.saving.value"
+            :save-disabled="projectVariables.saveDisabled.value"
+            :can-write="canWrite"
+            :stored-secrets="[...projectVariables.storedSecrets.value]"
+            precedence-hint="Project variables apply to every resource in every environment of this project. An environment variable overrides a project one; an application variable overrides both."
+            @update:draft="projectVariables.draft.value = $event"
+            @save="void projectVariables.save()"
+            @retry="void projectVariables.retry()"
+          />
         </NTabPane>
       </NTabs>
     </template>

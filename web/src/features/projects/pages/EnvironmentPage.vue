@@ -23,21 +23,56 @@ import type { CreatedDatabase } from "@/features/databases/api/databases";
 import ImportComposeDialog from "@/features/services/components/ImportComposeDialog.vue";
 import type { Service } from "@/features/services/api/services";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
+import SharedVariablesEditor from "@/features/projects/components/SharedVariablesEditor.vue";
 import { useEnvironmentPage } from "@/features/projects/composables/useEnvironmentPage";
 import type { EnvironmentResourceTab } from "@/features/projects/composables/useEnvironmentPage";
+import { useSharedVariables } from "@/features/projects/composables/useSharedVariables";
+import type { InheritedVariable } from "@/features/projects/schemas/variables";
 
 /**
  * Environment page (`/projects/:projectId/environments/:environmentId`,
- * PE-5 Linear JUS-34), ported from docs/design/environment.html: a
+ * PE-5 Linear JUS-34, shared variables PE-6 Linear JUS-35), ported from docs/design/environment.html: a
  * `Projects / <project> / <environment>` breadcrumb, a unified resource
  * table with type tabs and a preview switch, and an Add resource dialog
  * that opens the existing create wizards with this route's scope.
+ *
+ * The Shared variables section below the table edits this environment's
+ * variables with the project's ones shown read-only above for context
+ * (precedence: application overrides environment overrides project).
  *
  * Thin route component: table state lives in `useEnvironmentPage`; the
  * create wizards own their forms and report back through `created`.
  */
 const router = useRouter();
 const page = useEnvironmentPage();
+
+/** projectVariables renders read-only above the environment editor. */
+const projectVariables = useSharedVariables(() => ({
+  kind: "project",
+  projectId: page.projectId.value,
+}));
+/** environmentVariables owns the environment editor (one scope per mount). */
+const environmentVariables = useSharedVariables(() => ({
+  kind: "environment",
+  environmentId: page.environmentId.value,
+}));
+
+/** projectInherited maps the project draft onto read-only context rows. */
+const projectInherited = computed<InheritedVariable[]>(() =>
+  projectVariables.draft.value.map((row) => ({
+    key: row.key,
+    value: row.secret ? undefined : row.value,
+    secret: row.secret,
+    origin: "project" as const,
+  })),
+);
+
+/** scrollToVariables jumps to the Shared variables section. */
+function scrollToVariables(): void {
+  document
+    .querySelector(".variables-section")
+    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
 
 const tabs: Array<{ key: EnvironmentResourceTab; label: string }> = [
   { key: "all", label: "All" },
@@ -218,7 +253,7 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
           </div>
         </div>
         <div class="page-actions">
-          <NButton disabled title="Shared variables land in PE-6.">
+          <NButton @click="scrollToVariables()">
             Variables
           </NButton>
           <NButton
@@ -325,6 +360,26 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
         Preview deployments of an application run in this environment on the
         same server; flip the switch to list them nested under their base.
       </p>
+
+      <section class="variables-section" aria-label="Shared variables">
+        <SharedVariablesEditor
+          :draft="environmentVariables.draft.value"
+          :loading="environmentVariables.loading.value"
+          :load-error="environmentVariables.loadError.value"
+          :save-error="environmentVariables.saveError.value"
+          :saving="environmentVariables.saving.value"
+          :save-disabled="environmentVariables.saveDisabled.value"
+          :can-write="page.canWrite.value"
+          :stored-secrets="[...environmentVariables.storedSecrets.value]"
+          :inherited="projectInherited"
+          :inherited-loading="projectVariables.loading.value"
+          card-title="Shared variables"
+          precedence-hint="Environment variables override project ones; application variables override both. The project rows above are read-only context."
+          @update:draft="environmentVariables.draft.value = $event"
+          @save="void environmentVariables.save()"
+          @retry="void environmentVariables.retry()"
+        />
+      </section>
     </template>
 
     <!-- Add resource -->
@@ -575,6 +630,10 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
 
 .small {
   font-size: var(--text-xs);
+}
+
+.variables-section {
+  scroll-margin-top: var(--space-4);
 }
 
 .sr-only {

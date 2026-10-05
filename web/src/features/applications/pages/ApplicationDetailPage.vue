@@ -105,6 +105,8 @@ const detail = useApplicationDetail();
             :env-error="detail.envError.value"
             :save-disabled="detail.envLoading.value || detail.envLoadedFor.value !== detail.appId.value"
             :saving="detail.appsStore.savingEnv"
+            :inherited="detail.inheritedReady.value ? detail.inheritedVars.value : []"
+            :inherited-loading="detail.inheritedLoading.value"
             @update:draft="detail.envDraft.value = $event"
             @save="detail.handleSaveEnv"
             @retry="detail.loadEnv()"

@@ -9,6 +9,7 @@ export default defineConfig({
     "form-feedback.spec.ts",
     "form-layout.spec.ts",
     "profile-layout.spec.ts",
+    "projects-layout.spec.ts",
     "sessions-layout.spec.ts",
   ],
   workers: 1,

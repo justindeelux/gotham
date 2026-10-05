@@ -211,6 +211,7 @@ async function loadAuthHarness() {
       "  put: async () => { throw new Error('unused'); },",
       "  delete: async () => { throw new Error('unused'); },",
       "};",
+      "export function teamHeaders() { return {}; }",
     ].join("\n"),
     "@/shared/api/token": [
       "export const getSession = () => ({",
@@ -222,6 +223,7 @@ async function loadAuthHarness() {
     ].join("\n"),
     "@/features/servers": [
       "export function stripErrorPrefix(m) { return m; }",
+      "export function isApiError() { return false; }",
       "export const useServersStore = () => globalThis.__userStores.servers;",
     ].join("\n"),
     "@/features/teams": [
@@ -237,6 +239,9 @@ async function loadAuthHarness() {
     ].join("\n"),
     "@/features/notifications": [
       "export const useNotificationsStore = () => globalThis.__userStores.notifications;",
+    ].join("\n"),
+    "@/features/projects": [
+      "export const useProjectsStore = () => globalThis.__userStores.projects;",
     ].join("\n"),
     "@/features/services": [
       "export const useServicesStore = () => globalThis.__userStores.services;",
@@ -1049,6 +1054,7 @@ async function main() {
         [
           "teams", "servers", "applications", "databases", "notifications",
           "services", "backups", "providers", "templates", "proxy",
+          "projects",
         ].map((name) => [
           name,
           { reset: () => seen.push(name) },
@@ -1069,7 +1075,7 @@ async function main() {
       });
       await store.logout();
       assert(postCalls.length === 1, "logout revokes the refresh token");
-      assert(seen.length === 10, `all ten stores reset (saw ${seen.length})`);
+      assert(seen.length === 11, `all eleven stores reset (saw ${seen.length})`);
       assert(store.accessToken === null, "session cleared");
       store.setSession({
         user: { email: "b@example.com" },
@@ -1077,7 +1083,7 @@ async function main() {
         refresh_token: "refresh",
       });
       store.clearSession();
-      assert(seen.length === 20, "clearSession resets too (401 path)");
+      assert(seen.length === 22, "clearSession resets too (401 path)");
     } finally {
       delete globalThis.__userStores;
       delete globalThis.__authHttp;

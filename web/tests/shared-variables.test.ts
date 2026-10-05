@@ -24,9 +24,12 @@ import {
   findDuplicateVariableKey,
   inheritedOriginLabel,
   isOverriddenBy,
+  isShadowedByEnvironment,
   isSharedVariableKeyValid,
   isSharedVariableValueValid,
   parseSharedVariables,
+  rowKeyFromServerError,
+  secretWithoutValueKey,
   toVariableDrafts,
   validateVariableDrafts,
 } from "@/features/projects/schemas/variables";
@@ -131,6 +134,31 @@ describe("validateVariableDrafts", () => {
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('Secret "FRESH" needs a value');
   });
+
+  it("blocks a secret-to-plain toggle that would silently clear the secret", () => {
+    // Toggling a stored secret to plain with an empty value writes an empty
+    // plain value (the backend allows it): require an explicit value.
+    const problems = validateVariableDrafts(
+      [{ key: "SENTRY_DSN", value: "", secret: false }],
+      new Set(["SENTRY_DSN"]),
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('Saving "SENTRY_DSN" as plain');
+    // The same toggle with a replacement value is an explicit overwrite.
+    expect(
+      validateVariableDrafts(
+        [{ key: "SENTRY_DSN", value: "rotated", secret: false }],
+        new Set(["SENTRY_DSN"]),
+      ),
+    ).toEqual([]);
+    // An empty plain value for a key that was never a secret stays valid.
+    expect(
+      validateVariableDrafts(
+        [{ key: "EMPTY_PLAIN", value: "", secret: false }],
+        new Set(["SENTRY_DSN"]),
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe("buildVariablesPayload", () => {
@@ -185,6 +213,40 @@ describe("inherited display helpers", () => {
     expect(isOverriddenBy("LOG_LEVEL", [{ key: "", value: "x" }])).toBe(false);
     // Case-sensitive like the deploy merge.
     expect(isOverriddenBy("LOG_LEVEL", [{ key: "log_level", value: "x" }])).toBe(false);
+  });
+
+  it("marks a project row shadowed by the environment set", () => {
+    const inherited = [
+      { key: "SHARED", origin: "project" as const },
+      { key: "SHARED", origin: "environment" as const },
+      { key: "SHSEC", origin: "project" as const },
+      { key: "SHSEC", origin: "environment" as const },
+      { key: "ONLY_PROJ", origin: "project" as const },
+    ];
+    // Plain-vs-plain and secret-vs-plain across levels both shadow.
+    expect(isShadowedByEnvironment("SHARED", inherited)).toBe(true);
+    expect(isShadowedByEnvironment("SHSEC", inherited)).toBe(true);
+    expect(isShadowedByEnvironment("ONLY_PROJ", inherited)).toBe(false);
+    expect(isShadowedByEnvironment("MISSING", inherited)).toBe(false);
+    expect(isShadowedByEnvironment("", inherited)).toBe(false);
+  });
+});
+
+describe("server error key extraction", () => {
+  it("names the row a backend 400 complains about", () => {
+    expect(rowKeyFromServerError('secret "ESEC" has no value')).toBe("ESEC");
+    expect(rowKeyFromServerError('duplicate variable key "A"')).toBe("A");
+    expect(
+      rowKeyFromServerError('variable key "1A" must match ^[A-Za-z_][A-Za-z0-9_]*$'),
+    ).toBe("1A");
+    expect(rowKeyFromServerError("insufficient team role")).toBeNull();
+    expect(rowKeyFromServerError("")).toBeNull();
+  });
+
+  it("spots only the missing-secret refusal for the stored-set drop", () => {
+    expect(secretWithoutValueKey('secret "ESEC" has no value')).toBe("ESEC");
+    expect(secretWithoutValueKey('duplicate variable key "A"')).toBeNull();
+    expect(secretWithoutValueKey("insufficient team role")).toBeNull();
   });
 });
 

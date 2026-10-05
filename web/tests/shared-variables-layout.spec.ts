@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/* global URL, window:readonly */
+/* global URL, setTimeout, window:readonly */
 // Real-browser proof for the PE-6 shared-variables surface: the committed
 // webdist is served statically with the control-plane API mocked, a session
 // is seeded in localStorage, and real Chromium measures the real Naive UI
@@ -75,11 +75,19 @@ const environment = {
 };
 
 // Secrets are write-only: the list responses never carry their values.
+// SHARED/SHSEC exist in both scopes so the override markers have something
+// to mark (F3): the project rows are shadowed by the environment set.
 const projectVariables = [
   { key: "LOG_LEVEL", value: "info", secret: false },
+  { key: "SHARED", value: "proj", secret: false },
   { key: "SENTRY_DSN", secret: true },
+  { key: "SHSEC", secret: true },
 ];
-const environmentVariables = [{ key: "CACHE_SIZE", value: "256", secret: false }];
+const environmentVariables = [
+  { key: "CACHE_SIZE", value: "256", secret: false },
+  { key: "SHARED", value: "env", secret: false },
+  { key: "SHSEC", value: "env-plain", secret: false },
+];
 const applicationEnv = [{ key: "LOG_LEVEL", value: "trace" }];
 
 const application = {
@@ -146,7 +154,7 @@ test.afterAll(async () => {
 });
 
 /** mockApi seeds the session and answers the calls the variables surface makes. */
-async function mockApi(page: Page): Promise<void> {
+async function mockApi(page: Page, role = "owner"): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
@@ -154,7 +162,7 @@ async function mockApi(page: Page): Promise<void> {
     await route.fulfill({ json: session.user });
   });
   await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams: [team] } });
+    await route.fulfill({ json: { teams: [{ ...team, role }] } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });
@@ -216,7 +224,8 @@ test("project variables tab edits plain rows and masks secrets at both widths", 
     const editor = page.locator(".variables-card");
     // Editor rows are inputs: assert their values, not text content.
     await expect(editor.locator("input").nth(0)).toHaveValue("LOG_LEVEL");
-    await expect(editor.locator("input").nth(2)).toHaveValue("SENTRY_DSN");
+    await expect(editor.locator("input").nth(4)).toHaveValue("SENTRY_DSN");
+    await expect(editor.locator("input").nth(6)).toHaveValue("SHSEC");
     // The precedence hint teaches project < environment < application.
     await expect(editor).toContainText(
       "An environment variable overrides a project one",
@@ -277,8 +286,184 @@ test("application env tab lists inherited rows with their origin", async ({
     const tab = page.locator(".n-tab-pane", { hasText: "Inherited shared variables" });
     await expect(tab).toContainText("from project");
     await expect(tab).toContainText("from environment");
-    // The application's LOG_LEVEL shadows both scopes.
-    await expect(tab).toContainText("overridden");
+    // LOG_LEVEL is overridden by the application draft; the SHARED row and
+    // the SHSEC secret are shadowed by the environment set (plain-vs-plain
+    // and secret-vs-plain across levels).
+    await expect(tab.getByText("overridden", { exact: true })).toHaveCount(3);
     await expect(tab).toContainText("project < environment < application");
   }
+});
+
+test("editor inputs expose accessible names and autocomplete hints", async ({
+  page,
+}) => {
+  for (const width of [1280, 480]) {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page);
+    await page.goto(`${baseURL}/projects/${projectId}`);
+    await page.locator(".project-page .title").waitFor();
+    await page.locator(".n-tabs-tab", { hasText: "Shared variables" }).click();
+    const editor = page.locator(".variables-card");
+    await expect(editor.locator("input").nth(0)).toHaveValue("LOG_LEVEL");
+    // Every key input shares one name; value inputs are named after their
+    // key so rows stay distinguishable without placeholder text.
+    await expect(
+      editor.getByRole("textbox", { name: "Variable name" }),
+    ).toHaveCount(4);
+    const plainValue = editor.getByRole("textbox", { name: "Value for LOG_LEVEL" });
+    await expect(plainValue).toHaveValue("info");
+    await expect(plainValue).toHaveAttribute("autocomplete", "off");
+    await expect(
+      editor.getByRole("textbox", { name: "Variable name" }).first(),
+    ).toHaveAttribute("autocomplete", "off");
+    const secretValue = editor.getByRole("textbox", {
+      name: "Secret value for SENTRY_DSN",
+    });
+    await expect(secretValue).toHaveValue("");
+    await expect(secretValue).toHaveAttribute("autocomplete", "new-password");
+    // The kept-secret placeholder fits without truncation at phone width.
+    await expect(secretValue).toHaveAttribute(
+      "placeholder",
+      "•••••••• (stored — kept)",
+    );
+    await expect(
+      editor.getByRole("switch", { name: "Secret for SENTRY_DSN" }),
+    ).toBeVisible();
+  }
+});
+
+test("duplicate keys explain the disabled Save inline and in a summary", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/projects/${projectId}`);
+  await page.locator(".project-page .title").waitFor();
+  await page.locator(".n-tabs-tab", { hasText: "Shared variables" }).click();
+  const editor = page.locator(".variables-card");
+  await expect(editor.locator("input").nth(0)).toHaveValue("LOG_LEVEL");
+  await editor.getByRole("button", { name: "Add variable" }).click();
+  // Typing an existing key marks only the second occurrence inline.
+  await editor
+    .getByRole("textbox", { name: "Variable name" })
+    .last()
+    .fill("SHARED");
+  await expect(
+    editor.getByText("Duplicate key.", { exact: true }),
+  ).toHaveCount(1);
+  // The summary names the key so Save is never dead without a reason.
+  await expect(editor).toContainText("Fix these before saving");
+  await expect(editor).toContainText('Duplicate key "SHARED".');
+  await expect(editor.getByRole("button", { name: "Save" })).toBeDisabled();
+});
+
+test("inputs lock while a save is in flight", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  // A slow PUT wins over the immediate mock (most recent handler first);
+  // every other request falls through to the shared mock.
+  await page.route("**/api/v1/projects/*/variables", async (route) => {
+    if (route.request().method() !== "PUT") {
+      await route.fallback();
+      return;
+    }
+    await new Promise((done) => setTimeout(done, 1200));
+    await route.fulfill({ json: { variables: projectVariables } });
+  });
+  await page.goto(`${baseURL}/projects/${projectId}`);
+  await page.locator(".project-page .title").waitFor();
+  await page.locator(".n-tabs-tab", { hasText: "Shared variables" }).click();
+  const editor = page.locator(".variables-card");
+  const save = editor.getByRole("button", { name: "Save" });
+  await expect(save).toBeEnabled();
+  await save.click();
+  // Nothing edits the draft mid-save, so the response cannot discard typing.
+  // (Naive switches expose disabled as a class, not aria-disabled.)
+  await expect(editor.locator("input").nth(0)).toBeDisabled();
+  const secretSwitch = editor.getByRole("switch", {
+    name: "Secret for SENTRY_DSN",
+  });
+  await expect(secretSwitch).toHaveClass(/n-switch--disabled/);
+  await expect(
+    editor.getByRole("button", { name: "Add variable" }),
+  ).toBeDisabled();
+  // The save lands and the editor unlocks with the stored rows intact.
+  await expect(save).toBeEnabled({ timeout: 10000 });
+  await expect(editor.locator("input").nth(0)).toBeEnabled();
+  await expect(secretSwitch).not.toHaveClass(/n-switch--disabled/);
+  await expect(editor.locator("input").nth(0)).toHaveValue("LOG_LEVEL");
+});
+
+test("secret-to-plain toggle warns and requires a value", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/projects/${projectId}`);
+  await page.locator(".project-page .title").waitFor();
+  await page.locator(".n-tabs-tab", { hasText: "Shared variables" }).click();
+  const editor = page.locator(".variables-card");
+  await expect(editor.locator("input").nth(0)).toHaveValue("LOG_LEVEL");
+  const save = editor.getByRole("button", { name: "Save" });
+  await expect(save).toBeEnabled();
+  // Flipping a stored secret to plain with an empty value would silently
+  // clear the ciphertext: the row says so and Save blocks until a value.
+  await editor.getByRole("switch", { name: "Secret for SENTRY_DSN" }).click();
+  await expect(editor).toContainText("clears the stored secret");
+  await expect(save).toBeDisabled();
+  await editor
+    .getByRole("textbox", { name: "Value for SENTRY_DSN" })
+    .fill("rotated");
+  await expect(save).toBeEnabled();
+});
+
+test("viewers see no write footer or editor controls", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page, "read_only");
+  await page.goto(`${baseURL}/projects/${projectId}`);
+  await page.locator(".project-page .title").waitFor();
+  await page.locator(".n-tabs-tab", { hasText: "Shared variables" }).click();
+  const editor = page.locator(".variables-card");
+  await expect(editor).toContainText("SENTRY_DSN");
+  // Secrets stay masked, and nothing invites a write.
+  await expect(editor).toContainText("••••••••");
+  await expect(
+    editor.getByRole("button", { name: "Save" }),
+  ).toHaveCount(0);
+  await expect(
+    editor.getByRole("button", { name: "Add variable" }),
+  ).toHaveCount(0);
+  await expect(editor.locator("input")).toHaveCount(0);
+  await expect(editor).not.toContainText("Saving replaces the whole set");
+});
+
+test("a secret refusal maps to its row and drops the keep path", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  // The stored ciphertext vanished concurrently: the keep-path PUT is a 400.
+  await page.route("**/api/v1/projects/*/variables", async (route) => {
+    if (route.request().method() !== "PUT") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 400,
+      json: { message: 'secret "SENTRY_DSN" has no value' },
+    });
+  });
+  await page.goto(`${baseURL}/projects/${projectId}`);
+  await page.locator(".project-page .title").waitFor();
+  await page.locator(".n-tabs-tab", { hasText: "Shared variables" }).click();
+  const editor = page.locator(".variables-card");
+  const save = editor.getByRole("button", { name: "Save" });
+  await expect(save).toBeEnabled();
+  await save.click();
+  // The refusal renders on the row as well as in the card alert.
+  await expect(
+    editor.locator(".row-error", { hasText: 'secret "SENTRY_DSN"' }),
+  ).toContainText('secret "SENTRY_DSN" has no value');
+  // The key is no longer treated as stored: the draft asks for a value
+  // instead of offering a keep that would 400 again.
+  await expect(editor).toContainText('Secret "SENTRY_DSN" needs a value.');
+  await expect(save).toBeDisabled();
 });

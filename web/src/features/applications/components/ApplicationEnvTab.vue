@@ -6,6 +6,7 @@ import EnvEditor from "@/features/applications/components/EnvEditor.vue";
 import {
   inheritedOriginLabel,
   isOverriddenBy,
+  isShadowedByEnvironment,
 } from "@/features/projects/schemas/variables";
 import type { InheritedVariable } from "@/features/projects/schemas/variables";
 
@@ -30,6 +31,22 @@ const emit = defineEmits<{
   save: [];
   retry: [];
 }>();
+
+/**
+ * isRowOverridden marks a row the application draft shadows, and — for
+ * project rows — a key the environment set already shadows. Deploy
+ * precedence is project < environment < application, so a project row with
+ * the same key in the environment set never takes effect.
+ */
+function isRowOverridden(row: InheritedVariable): boolean {
+  if (isOverriddenBy(row.key, props.envDraft)) {
+    return true;
+  }
+  return (
+    row.origin === "project" &&
+    isShadowedByEnvironment(row.key, props.inherited)
+  );
+}
 </script>
 
 <template>
@@ -93,7 +110,7 @@ const emit = defineEmits<{
                     <NSpace :size="4" align="center" wrap>
                       <NTag size="small">{{ inheritedOriginLabel(row.origin) }}</NTag>
                       <NTag
-                        v-if="isOverriddenBy(row.key, props.envDraft)"
+                        v-if="isRowOverridden(row)"
                         size="small"
                         type="warning"
                       >

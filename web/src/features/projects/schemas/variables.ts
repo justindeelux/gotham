@@ -168,6 +168,13 @@ export function validateVariableDrafts(
     if (row.secret && row.value === "" && !existingSecretKeys.has(row.key)) {
       problems.push(`Secret "${row.key || "?"}" needs a value.`);
     }
+    if (!row.secret && row.value === "" && existingSecretKeys.has(row.key)) {
+      // Secret-to-plain with an empty value would silently clear the stored
+      // ciphertext (the backend allows it): require an explicit value.
+      problems.push(
+        `Saving "${row.key}" as plain with no value clears the stored secret.`,
+      );
+    }
   }
   return problems;
 }
@@ -224,4 +231,43 @@ export function isOverriddenBy(
   appDraft: Array<{ key: string }>,
 ): boolean {
   return appDraft.some((row) => row.key !== "" && row.key === key);
+}
+
+/**
+ * isShadowedByEnvironment reports whether a project-level key is shadowed by
+ * the environment set, so an inherited table can mark the project row
+ * "overridden" even when the application overrides neither. Case-sensitive
+ * like the deploy merge.
+ */
+export function isShadowedByEnvironment(
+  key: string,
+  inherited: Array<{ key: string; origin: SharedVariableOrigin }>,
+): boolean {
+  if (key === "") {
+    return false;
+  }
+  return inherited.some(
+    (row) => row.origin === "environment" && row.key === key,
+  );
+}
+
+/**
+ * rowKeyFromServerError extracts a quoted row key from a backend 400 (e.g.
+ * `secret "ESEC" has no value`, `duplicate variable key "A"`), so the editor
+ * can render it inline on the matching row. Null when no key is named.
+ */
+export function rowKeyFromServerError(message: string): string | null {
+  const match = /"([^"]+)"/.exec(message);
+  return match?.[1] ?? null;
+}
+
+/**
+ * secretWithoutValueKey extracts the key from a `secret "X" has no value`
+ * 400. After such a refusal the stored ciphertext is gone (concurrent
+ * delete), so the editor drops the key from its stored set and asks for a
+ * value instead of retrying the keep path forever.
+ */
+export function secretWithoutValueKey(message: string): string | null {
+  const match = /secret "([^"]+)" has no value/.exec(message);
+  return match?.[1] ?? null;
 }

@@ -19,6 +19,7 @@ import {
   isSharedVariableKeyValid,
   isSharedVariableValueValid,
   maxSharedVariables,
+  rowKeyFromServerError,
 } from "@/features/projects/schemas/variables";
 import type {
   InheritedVariable,
@@ -38,6 +39,12 @@ const props = withDefaults(
     canWrite: boolean;
     /** storedSecrets holds the keys currently stored as secrets (keep hint). */
     storedSecrets?: string[];
+    /**
+     * problems lists the client-side draft problems blocking a save
+     * (duplicates, cap, secret without value). Rendered as a summary so Save
+     * is never disabled without an explanation.
+     */
+    problems?: string[];
     /** inherited renders read-only context rows above the editor, if any. */
     inherited?: InheritedVariable[];
     inheritedLoading?: boolean;
@@ -46,6 +53,7 @@ const props = withDefaults(
   }>(),
   {
     storedSecrets: () => [],
+    problems: () => [],
     inherited: () => [],
     inheritedLoading: false,
     cardTitle: "Shared variables",
@@ -81,13 +89,29 @@ function keyStatus(key: string): "error" | undefined {
   return key !== "" && !isSharedVariableKeyValid(key) ? "error" : undefined;
 }
 
+/**
+ * duplicateKeyAt marks every occurrence after the first: the first row owns
+ * the key, each later twin renders "Duplicate key." inline.
+ */
+function duplicateKeyAt(index: number): boolean {
+  const key = rows.value[index]?.key;
+  return (
+    key !== undefined &&
+    key !== "" &&
+    rows.value.findIndex((row) => row.key === key) !== index
+  );
+}
+
 /** rowProblem names one row's client-side problem for inline display. */
-function rowProblem(row: VariableDraft): string | null {
+function rowProblem(row: VariableDraft, index: number): string | null {
   if (row.key === "") {
     return "Key is required.";
   }
   if (!isSharedVariableKeyValid(row.key)) {
     return "Must match ^[A-Za-z_][A-Za-z0-9_]*$, 128 characters or fewer.";
+  }
+  if (duplicateKeyAt(index)) {
+    return "Duplicate key.";
   }
   if (row.value !== "" && !isSharedVariableValueValid(row.value)) {
     return "Value must not contain NUL.";
@@ -95,7 +119,51 @@ function rowProblem(row: VariableDraft): string | null {
   if (row.secret && row.value === "" && !storedSet.value.has(row.key)) {
     return "A new secret needs a value.";
   }
+  if (!row.secret && row.value === "" && storedSet.value.has(row.key)) {
+    return "Saving clears the stored secret — enter a value.";
+  }
   return null;
+}
+
+/**
+ * serverRowKey extracts the row key a backend 400 names (if any), so the
+ * refusal renders inline on the matching row as well as in the alert.
+ */
+const serverRowKey = computed<string | null>(() =>
+  props.saveError ? rowKeyFromServerError(props.saveError) : null,
+);
+
+/**
+ * keyInputProps names the native key input for assistive tech (the NInput
+ * `aria-label` prop lands on the wrapper, not the `<input>`) and opts it
+ * out of password-manager autofill.
+ */
+const keyInputProps = {
+  "aria-label": "Variable name",
+  autocomplete: "off",
+} as const;
+
+/**
+ * valueInputProps names the native value input after its key (so rows are
+ * distinguishable) and steers password managers: secrets hint
+ * `new-password`, plain values opt out.
+ */
+function valueInputProps(row: VariableDraft): Record<string, string> {
+  const name =
+    row.key !== ""
+      ? row.secret
+        ? `Secret value for ${row.key}`
+        : `Value for ${row.key}`
+      : "Variable value";
+  return {
+    "aria-label": name,
+    autocomplete: row.secret ? "new-password" : "off",
+  };
+}
+
+/** secretSwitchLabel names the secret toggle after its row key. */
+function secretSwitchLabel(row: VariableDraft): string {
+  return row.key !== "" ? `Secret for ${row.key}` : "Secret variable";
 }
 
 /** updateRow replaces one row, keeping the array immutable for v-model. */
@@ -228,8 +296,9 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
               :value="row.key"
               class="mono"
               placeholder="LOG_LEVEL"
-              aria-label="Variable name"
+              :input-props="keyInputProps"
               :status="keyStatus(row.key)"
+              :disabled="props.saving"
               @update:value="(value: string) => updateRow(index, { key: value })"
             />
             <NInput
@@ -238,23 +307,31 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
               :type="row.secret ? 'password' : 'text'"
               :placeholder="
                 row.secret && storedSet.has(row.key)
-                  ? '•••••••• (stored — leave empty to keep)'
+                  ? '•••••••• (stored — kept)'
                   : 'value'
               "
-              aria-label="Variable value"
+              :input-props="valueInputProps(row)"
               :status="row.value !== '' && !isSharedVariableValueValid(row.value) ? 'error' : undefined"
+              :disabled="props.saving"
               @update:value="(value: string) => updateRow(index, { value })"
             />
             <label class="secret-switch">
               <NSwitch
                 :value="row.secret"
                 size="small"
-                aria-label="Secret variable"
+                :aria-label="secretSwitchLabel(row)"
+                :disabled="props.saving"
                 @update:value="(value: boolean) => updateRow(index, { secret: value })"
               />
               <NText depth="3">Secret</NText>
             </label>
-            <NButton quaternary type="error" aria-label="Remove variable" @click="removeRow(index)">
+            <NButton
+              quaternary
+              type="error"
+              aria-label="Remove variable"
+              :disabled="props.saving"
+              @click="removeRow(index)"
+            >
               <template #icon>
                 <NIcon>
                   <GothamIcon name="trash" />
@@ -262,11 +339,37 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
               </template>
             </NButton>
             <span v-if="isKeptSecret(row)" class="kept-badge">stored — kept on save</span>
-            <span v-else-if="rowProblem(row) !== null" class="row-error">
-              {{ rowProblem(row) }}
+            <span
+              v-else-if="serverRowKey !== null && serverRowKey === row.key"
+              class="row-error"
+            >
+              {{ props.saveError }}
+            </span>
+            <span v-else-if="rowProblem(row, index) !== null" class="row-error">
+              {{ rowProblem(row, index) }}
             </span>
           </div>
-          <NButton secondary size="small" :disabled="rows.length >= maxSharedVariables" @click="addRow">
+          <NAlert
+            v-if="props.problems.length > 0"
+            type="warning"
+            :show-icon="true"
+            class="problems"
+          >
+            <NSpace vertical :size="4">
+              <span>Fix these before saving:</span>
+              <ul class="problems-list">
+                <li v-for="problem in props.problems" :key="problem">
+                  {{ problem }}
+                </li>
+              </ul>
+            </NSpace>
+          </NAlert>
+          <NButton
+            secondary
+            size="small"
+            :disabled="props.saving || rows.length >= maxSharedVariables"
+            @click="addRow"
+          >
             Add variable
           </NButton>
         </div>
@@ -277,7 +380,7 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
       </NAlert>
     </NSpace>
 
-    <template #footer>
+    <template v-if="props.canWrite" #footer>
       <NText depth="3">
         Saving replaces the whole set; removing every row clears it. Secrets
         are write-only and never shown again. New variables apply to the next
@@ -378,6 +481,16 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
   justify-self: start;
   font-size: var(--text-xs);
   color: var(--danger);
+}
+
+.problems {
+  width: 100%;
+}
+
+.problems-list {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--text-xs);
 }
 
 .mono {

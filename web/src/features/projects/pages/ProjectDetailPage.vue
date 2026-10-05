@@ -214,6 +214,7 @@ const envRules = environmentNameRules();
             :save-disabled="projectVariables.saveDisabled.value"
             :can-write="canWrite"
             :stored-secrets="[...projectVariables.storedSecrets.value]"
+            :problems="projectVariables.problems.value"
             precedence-hint="Project variables apply to every resource in every environment of this project. An environment variable overrides a project one; an application variable overrides both."
             @update:draft="projectVariables.draft.value = $event"
             @save="void projectVariables.save()"

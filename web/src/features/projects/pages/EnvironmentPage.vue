@@ -371,6 +371,7 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
           :save-disabled="environmentVariables.saveDisabled.value"
           :can-write="page.canWrite.value"
           :stored-secrets="[...environmentVariables.storedSecrets.value]"
+          :problems="environmentVariables.problems.value"
           :inherited="projectInherited"
           :inherited-loading="projectVariables.loading.value"
           card-title="Shared variables"

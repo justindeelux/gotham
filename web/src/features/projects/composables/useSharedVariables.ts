@@ -13,6 +13,7 @@ import {
   buildVariablesPayload,
   existingSecretKeysOf,
   maxSharedVariables,
+  secretWithoutValueKey,
   toVariableDrafts,
   validateVariableDrafts,
 } from "@/features/projects/schemas/variables";
@@ -186,6 +187,15 @@ export function useSharedVariables(
     } catch (error) {
       if (scopeKey(currentScope()) === key) {
         saveError.value = describeProjectError(error);
+        // A `secret "X" has no value` 400 means the stored ciphertext is gone
+        // (concurrent delete): stop offering the keep path for that key, so
+        // the draft asks for a value instead of retrying the 400 forever.
+        const dropped = secretWithoutValueKey(saveError.value);
+        if (dropped !== null) {
+          const next = new Set(storedSecrets.value);
+          next.delete(dropped);
+          storedSecrets.value = next;
+        }
       }
     } finally {
       // The flag belongs to the finished request, not the current scope: a

@@ -180,6 +180,31 @@ commit instead of a tag and a dev stamp (`git checkout -f 0378f65`, build with
   admin" for the env operator (`PLATFORM_ADMINS`) account. The `demo@gotham.dev` password was
   changed again during that check (not recorded; reset it with `gotham admin reset-password`
   when needed) and its display name is now "Demo Operator".
+- **Redeploy for Phase 13 (migrations `00034_projects_environments`,
+  `00035_resources_environment`, `00036_shared_variables`):** these wipe
+  resource data by design — `00034`/`00035` truncate `applications`,
+  `databases` and `services` (cascade to deployments, env vars, backups,
+  previews, webhooks, proxy versions) because no production data exists, then
+  re-add `environment_id NOT NULL … ON DELETE RESTRICT` and pin `server_id
+  NOT NULL … ON DELETE RESTRICT`. Run `gotham migrate up` before restarting
+  the control plane (a schema-lagging DB fails agent registration, same as
+  before). After the redeploy the box holds no applications/services/databases
+  until they are recreated under a project.
+- **Phase 13 UI recipe (Playwright MCP, 1280px and 480px):** create a project
+  (a `production` environment comes with it), add a `staging` environment,
+  then project → environment → resource: the environment page
+  (`/projects/:projectId/environments/:envId`) lists the applications,
+  services and databases sections with an "Add resource" menu; resource
+  detail pages live under the nested URL
+  (`/projects/:p/environments/:e/applications/:id`, same for
+  `services/:id`, `databases/:id`) with `Project / Environment / Resource`
+  breadcrumbs. Old flat routes (`/applications`, `/services`, `/databases`)
+  redirect once to `/projects`. Create flows pick project + environment
+  (preselected from the URL) and a **required** server; project and
+  environment shared variables live on the project page and the environment
+  page (secret values are masked everywhere except the node payload).
+  Projects list: `/projects`; project detail with environment tabs:
+  `/projects/:id`.
 - The CP's CSP allows exactly one remote image host, `avatars.githubusercontent.com`
   (`img-src 'self' data: https://avatars.githubusercontent.com`), shared with the
   OAuth avatar validator. GitHub OAuth is the only provider, and it has not been
@@ -307,10 +332,20 @@ repeated against this shared box's CP/agent yet.
   because it returns the database and root passwords; application environment
   reads (`GET /api/v1/applications/{id}/env`) stay `read`. JWT sessions hold
   every scope, so the SPA is unaffected. The project and environment routes
-  (Phase 13 PE-1, JUS-30: `GET/POST /api/v1/projects`, `GET/PATCH/DELETE
+  (Phase 13, JUS-30..JUS-36: `GET/POST /api/v1/projects`, `GET/PATCH/DELETE
   /api/v1/projects/{id}`, `GET/POST /api/v1/projects/{id}/environments`,
-  `PATCH/DELETE /api/v1/environments/{id}`) ride the same chain: reads need
-  `read`, mutations need `deploy` plus an owner/admin team role.
+  `PATCH/DELETE /api/v1/environments/{id}`,
+  `GET /api/v1/environments/{id}/resources`,
+  `GET/PUT /api/v1/projects/{id}/variables`,
+  `GET/PUT /api/v1/environments/{id}/variables`) ride the same chain: reads need
+  `read`, mutations need `deploy` plus an owner/admin team role. Resource
+  creates take required `environment_id` + `server_id` (400 `environment is
+  required` / `server is required`); moves take optional `environment_id` /
+  `server_id` with the contract's 409s (name collision, deploy in flight,
+  open previews, pinned service/database server). Deleting a non-empty
+  environment or project answers 409, deleting a node that still holds
+  resources answers 409, and the last environment of a project cannot be
+  deleted (409).
 - Development mode: when there is no CA (empty `GOTHAM_CA_DIR`), the control
   plane refuses to start unless `GOTHAM_GRPC_INSECURE=true`, and the agent
   unless `GOTHAM_AGENT_INSECURE=true`; both then dial/serve plaintext. As soon

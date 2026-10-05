@@ -74,7 +74,7 @@ re-runs.
                         └───────────────────────────────────────┘
 ```
 
-- The **control plane** is a modular monolith: each domain (servers, applications, databases, services, proxy, updates) is a package with its own service interface and store. Boundaries are drawn so any module can be extracted later.
+- The **control plane** is a modular monolith: each domain (servers, projects/environments, applications, databases, services, proxy, updates) is a package with its own service interface and store. Boundaries are drawn so any module can be extracted later.
 - The **agent** calls the Docker Engine API on its node and streams logs/status to the control plane.
 - **Traefik** runs on one or more nodes; containers are wired to it via Docker labels managed by the control plane.
 
@@ -91,6 +91,7 @@ re-runs.
 │   ├── server/               # REST API, middleware, WebSocket hub
 │   ├── deploy/               # deploy orchestration
 │   ├── builds/               # build engines (dockerfile, railpack, buildpacks, static)
+│   ├── projects/             # projects, environments, shared variables
 │   ├── proxy/                # Traefik integration
 │   ├── databases/            # managed databases & backups
 │   ├── services/             # one-click service templates

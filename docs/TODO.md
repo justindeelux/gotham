@@ -19,7 +19,58 @@ Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
 - [x] Phase 9 — Self-update & Release (gate G2 approved with conditions): BE-9.1 control-plane self-update merged `390a2fa` (PR #71); BE-9.2 agent remote update merged `ae78888` (PR #72); INFRA-9.1 release pipeline + signed installers merged `9a6268d` (PR #73); install hardening merged `e99ef49` (PR #74); G2 conditions closed: e2e determinism (#79 `8928b49`), agent channel TLS by default + release-environment gating + supply-chain pins (#78 `d716734`), download budget + CLI ownership + CP backoff + wrapper health gate (#77 `4220931`), docs/UI + residual register (#80 `0deee90`); the real newer-release `gotham update` + AUTO_UPDATE exercise and the real agent rollout from the GitHub CDN are proven (M9 evidence below); code residuals closed 2026-10-01 (#92, #93, #96)
 - [x] Phase 11 — UI Alignment side track
 - [x] Phase 12 — User profile management (JUS-25..JUS-29; PRs #167–#172; follow-ups listed in [`plans/12-user-profile.md`](plans/12-user-profile.md))
-- [ ] Phase 13 — Projects and environments (JUS-30..JUS-36; planned, waiting for owner approval to implement; [`plans/13-projects-environments.md`](plans/13-projects-environments.md))
+- [x] Phase 13 — Projects and environments (JUS-30..JUS-36; PRs #175–#180 plus
+  the PE-7 e2e/docs PR; [`plans/13-projects-environments.md`](plans/13-projects-environments.md)).
+  PE-1 projects backend (#175), PE-2 resource attach + guards (#177), PE-3
+  shared variables (#178), PE-4 projects web foundation (#176), PE-5
+  environment page + nested routes (#179), PE-6 shared-variables UI (#180),
+  PE-7 e2e flow (`internal/e2e/pe7_projects_test.go`: project → environment →
+  application → deploy → running, merged variable precedence in the container
+  env, move, environment/service/database/server 409 guards) and docs.
+  Live test-box redeploy + check: coordinator-owned (plan §9).
+
+## Phase 13 residuals (from the PE-2/PE-5/PE-6 reviews; none blocking)
+
+- [ ] **PE-2 R1 — database mid-creation can still change server.** Create does
+  not hold the job lease: a row in `creating` with an empty container accepts
+  `PATCH {server_id}` while provisioning still runs against the old node.
+  Fix: claim the lifecycle lease in Create, or require `status == error` as
+  well as an empty container id for a server change.
+- [ ] **PE-2 R2 — `PATCH /services/{id}` can wait up to the deploy timeout**
+  for a running deploy (lock acquire is not context-aware). Consider a
+  try-lock answering the contract's 409 `a deploy is in progress`.
+- [ ] **PE-2 R3 — message precedence.** A service with deploy history answers
+  `a deployed service cannot change server` even while a deploy runs, where
+  the contract names `a deploy is in progress` first. Precedence choice only.
+- [ ] **PE-2 R4 — preview-creation sliver.** `CreatePreviewApplication` reads
+  the base then inserts the sibling without the app lock: a base move landing
+  in that window leaves the preview on the old environment/node. Tiny window;
+  the next PR close cleans it up.
+- [ ] **PE-5 M-A — application/database detail ghost shell on 404.** Unknown
+  ids render the red "not found" alert under the full detail shell instead of
+  the NEmpty not-found state the environment/service pages use. UX-only, no
+  data leak (API is 404).
+- [ ] **PE-5 L-A — a successful move resets the application page to Overview.**
+  Keep the tab when the id is unchanged.
+- [ ] **PE-5 L-B — "Show previews" label text does not toggle the switch.**
+  The `<label>` wraps a div-based NSwitch; add a click handler or id/for.
+- [ ] **PE-5 L-C — database node is always pinned in the UI.** The backend
+  permits a server change for a never-provisioned row in `error` status; such
+  a failed database cannot be re-pinned from the UI. Matches the stated
+  "always for databases" decision; noted for awareness.
+- [ ] **PE-5 L-D — duplicate reads around the canonical redirect.** Wrong-URL
+  loads fetch the resource twice (detect, then after `router.replace`).
+  Harmless; acceptable.
+- [ ] **PE-6 N1 — server-error text sticks after the row is fixed.** Clear
+  `saveError` on draft edit.
+- [ ] **PE-6 N2 — raw inline server message.** The variables editor shows the
+  `replace shared variables: projects: validation: …` prefix; extend
+  `stripErrorPrefix`.
+- [ ] **PE-6 N3 — saving drops keyboard focus.** Inputs/Save disable while
+  saving; focus is not restored afterwards.
+- [ ] **PE-6 N4 — no unsaved-changes guard in the variables editor.**
+  Leaving the page or switching scope drops the draft silently (consistent
+  with the rest of the app; not in the spec).
 
 ## Retro review Phases 0–5
 

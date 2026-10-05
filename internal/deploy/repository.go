@@ -120,6 +120,11 @@ type Repository interface {
 	// GetDNSProviderInfo returns the zones and usability of one DNS provider,
 	// or ErrNotFound (the certificate FK keeps a referenced row alive).
 	GetDNSProviderInfo(ctx context.Context, providerID uuid.UUID) (DNSProviderInfo, error)
+	// ListSharedVariables returns one application's project-level variables
+	// and its environment's variables (in that order) from one snapshot, so
+	// the deploy merge reads both scopes without a concurrent replace
+	// slipping between them. Secrets stay sealed; the payload opens them.
+	ListSharedVariables(ctx context.Context, projectID, environmentID uuid.UUID) (project []SharedVariable, environment []SharedVariable, err error)
 	// CreateCertificateIntent stores one application's certificate
 	// configuration. The per-application unique index is a conflict.
 	CreateCertificateIntent(ctx context.Context, in CertificateIntent) error
@@ -576,6 +581,39 @@ func (r *storeRepository) ListSecrets(ctx context.Context, appID uuid.UUID) ([]S
 		})
 	}
 	return secrets, nil
+}
+
+// ListSharedVariables implements Repository: the project-level rows and one
+// environment's rows from one snapshot, split by scope so the merge can layer
+// them (project < environment). Secrets stay sealed; buildEnv opens every
+// ciphertext when the payload is assembled. A zero project or environment id
+// fails explicitly instead of silently matching no rows.
+func (r *storeRepository) ListSharedVariables(ctx context.Context, projectID, environmentID uuid.UUID) ([]SharedVariable, []SharedVariable, error) {
+	if projectID == uuid.Nil {
+		return nil, nil, fmt.Errorf("%w: application has no project assigned", ErrValidation)
+	}
+	if environmentID == uuid.Nil {
+		return nil, nil, fmt.Errorf("%w: application has no environment assigned", ErrValidation)
+	}
+	rows, err := r.store.ListSharedVariablesForEnvironment(ctx, pgUUID(projectID), pgUUID(environmentID))
+	if err != nil {
+		return nil, nil, fmt.Errorf("deploy: list shared variables: %w", err)
+	}
+	var project, environment []SharedVariable
+	for _, row := range rows {
+		variable := SharedVariable{
+			Key:        row.Key,
+			Value:      row.Value,
+			Ciphertext: row.Ciphertext,
+			Secret:     row.Secret,
+		}
+		if uuidFromPG(row.EnvironmentID) == uuid.Nil {
+			project = append(project, variable)
+		} else {
+			environment = append(environment, variable)
+		}
+	}
+	return project, environment, nil
 }
 
 // ListStorages loads the application's volume map.

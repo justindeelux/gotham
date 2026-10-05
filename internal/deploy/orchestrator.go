@@ -443,6 +443,16 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 	if err != nil {
 		return err
 	}
+	// Shared variables layer beneath the application's own (project <
+	// environment < application). The read lands before the payload is
+	// assembled and validated, so a failure still fails the deploy without
+	// retiring the live release. A preview inherits its base application's
+	// environment, so its deploys merge the same scopes.
+	sharedProject, sharedEnvironment, err := o.repo.ListSharedVariables(ctx, st.app.ProjectID, st.app.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	envVars, secrets = mergeSharedVariables(sharedProject, sharedEnvironment, envVars, secrets)
 	storages, err := o.repo.ListStorages(ctx, st.app.ID)
 	if err != nil {
 		return err

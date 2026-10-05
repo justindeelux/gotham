@@ -151,6 +151,71 @@ func buildEnv(envVars []EnvVar, secrets []Secret, secretKey string, defaults map
 	return env, nil
 }
 
+// mergeSharedVariables layers shared variables beneath the application's own
+// (project < environment < application). A key set at a nearer scope wins
+// outright, whether it is plain or sealed: an application plain var hides a
+// shared secret of the same key and vice versa. Shared secrets stay sealed
+// end to end — their ciphertext passes through untouched and buildEnv opens
+// it with the other secrets. The output is sorted by key for a deterministic
+// payload. Preview deploys merge through the same path: a preview inherits
+// its base application's environment, so it sees the same shared scopes.
+func mergeSharedVariables(project, environment []SharedVariable, envVars []EnvVar, secrets []Secret) ([]EnvVar, []Secret) {
+	plain := make(map[string]string)
+	sealed := make(map[string]string)
+	applyPlain := func(key, value string) {
+		delete(sealed, key)
+		plain[key] = value
+	}
+	applySealed := func(key, ciphertext string) {
+		delete(plain, key)
+		sealed[key] = ciphertext
+	}
+	for _, scope := range [][]SharedVariable{project, environment} {
+		for _, variable := range scope {
+			if variable.Key == "" {
+				continue
+			}
+			if variable.Secret {
+				applySealed(variable.Key, variable.Ciphertext)
+			} else {
+				applyPlain(variable.Key, variable.Value)
+			}
+		}
+	}
+	for _, v := range envVars {
+		if v.Key == "" {
+			continue
+		}
+		applyPlain(v.Key, v.Value)
+	}
+	for _, s := range secrets {
+		if s.Key == "" {
+			continue
+		}
+		applySealed(s.Key, s.Ciphertext)
+	}
+	keys := make([]string, 0, len(plain)+len(sealed))
+	for key := range plain {
+		keys = append(keys, key)
+	}
+	for key := range sealed {
+		if _, ok := plain[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	mergedVars := make([]EnvVar, 0, len(plain))
+	mergedSecrets := make([]Secret, 0, len(sealed))
+	for _, key := range keys {
+		if ciphertext, ok := sealed[key]; ok {
+			mergedSecrets = append(mergedSecrets, Secret{Key: key, Ciphertext: ciphertext})
+		} else {
+			mergedVars = append(mergedVars, EnvVar{Key: key, Value: plain[key]})
+		}
+	}
+	return mergedVars, mergedSecrets
+}
+
 // volumeSpecs renders the storage map as Docker mount specs. A named volume
 // (a non-absolute host) is passed through unchanged; an absolute host is a bind
 // and is confined to the application's managed directory; an empty host is a

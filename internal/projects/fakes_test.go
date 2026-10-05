@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 
@@ -25,12 +26,16 @@ type fakeRepository struct {
 	mu           sync.Mutex
 	projects     map[uuid.UUID]Project
 	environments map[uuid.UUID]Environment
+	// variables holds one scope's rows, keyed by project ID with the
+	// environment ID (Nil for the project level) nested inside.
+	variables map[uuid.UUID]map[uuid.UUID][]SharedVariable
 }
 
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
 		projects:     make(map[uuid.UUID]Project),
 		environments: make(map[uuid.UUID]Environment),
+		variables:    make(map[uuid.UUID]map[uuid.UUID][]SharedVariable),
 	}
 }
 
@@ -268,4 +273,40 @@ func newTestService(repo *fakeRepository, counter ResourceCounter, userID, teamI
 // equalFold compares names the way the lower(name) indexes do.
 func equalFold(a, b string) bool {
 	return strings.EqualFold(a, b)
+}
+
+// ListVariables implements Repository: one scope's rows, ordered by key like
+// the SQL query.
+func (f *fakeRepository) ListVariables(_ context.Context, projectID, environmentID uuid.UUID) ([]SharedVariable, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rows := append([]SharedVariable{}, f.variables[projectID][environmentID]...)
+	sortSharedVariables(rows)
+	return rows, nil
+}
+
+// ReplaceVariables implements Repository: the whole set is swapped. The
+// build runs under the fake's mutex, mimicking the locked store transaction
+// (concurrent PUTs serialize; the build sees the latest committed set).
+func (f *fakeRepository) ReplaceVariables(_ context.Context, projectID, environmentID uuid.UUID, build func(existing []SharedVariable) ([]SharedVariable, error)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	existing := append([]SharedVariable{}, f.variables[projectID][environmentID]...)
+	sortSharedVariables(existing)
+	vars, err := build(existing)
+	if err != nil {
+		return err
+	}
+	scopes := f.variables[projectID]
+	if scopes == nil {
+		scopes = make(map[uuid.UUID][]SharedVariable)
+		f.variables[projectID] = scopes
+	}
+	scopes[environmentID] = append([]SharedVariable{}, vars...)
+	return nil
+}
+
+// sortSharedVariables orders rows by key (the SQL ORDER BY key ASC).
+func sortSharedVariables(rows []SharedVariable) {
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Key < rows[j].Key })
 }

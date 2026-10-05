@@ -418,6 +418,18 @@ type Session struct {
 	LastUsedAt        pgtype.Timestamptz `json:"last_used_at"`
 }
 
+type SharedVariable struct {
+	ID            pgtype.UUID        `json:"id"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
+	EnvironmentID pgtype.UUID        `json:"environment_id"`
+	Key           string             `json:"key"`
+	Value         string             `json:"value"`
+	Ciphertext    string             `json:"ciphertext"`
+	Secret        bool               `json:"secret"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Storage struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`

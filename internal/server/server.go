@@ -912,6 +912,7 @@ func (s *Server) projectService(deploySvc deploy.DeployService, composeSvc servi
 	cfg := projects.Config{
 		Store:   s.persistence,
 		Counter: projects.StoreCounter{Store: s.persistence},
+		Secret:  s.secretKey,
 		Logger:  s.logger,
 	}
 	if deploySvc != nil {

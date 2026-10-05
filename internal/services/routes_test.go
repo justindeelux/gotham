@@ -38,7 +38,7 @@ func (f *fakeRouteService) Create(context.Context, uuid.UUID, CreateRequest) (Se
 }
 
 // List implements ServiceService.
-func (f *fakeRouteService) List(context.Context, uuid.UUID) ([]Service, error) {
+func (f *fakeRouteService) List(context.Context, uuid.UUID, ServiceFilter) ([]Service, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -139,15 +139,16 @@ func routeTestServer(t *testing.T, svc ServiceService, userID uuid.UUID) http.Ha
 // sampleService is one live service row for the fake.
 func sampleService() Service {
 	return Service{
-		ID:          uuid.New(),
-		UserID:      uuid.New(),
-		ServerID:    uuid.New(),
-		Name:        "wordpress",
-		Status:      StatusRunning,
-		ComposeYAML: testDocument,
-		Env:         testEnv,
-		CreatedAt:   time.Now().UTC(),
-		UpdatedAt:   time.Now().UTC(),
+		ID:            uuid.New(),
+		UserID:        uuid.New(),
+		ServerID:      uuid.New(),
+		EnvironmentID: uuid.New(),
+		Name:          "wordpress",
+		Status:        StatusRunning,
+		ComposeYAML:   testDocument,
+		Env:           testEnv,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
 	}
 }
 
@@ -158,7 +159,7 @@ func TestRoutesCreateAndRead(t *testing.T) {
 	fake := &fakeRouteService{service: service}
 	router := routeTestServer(t, fake, service.UserID)
 
-	createBody := `{"name":"wordpress","server_id":"` + service.ServerID.String() + `","compose_yaml":"services:\n  web:\n    image: nginx\n","env":{"A":"b"}}`
+	createBody := `{"name":"wordpress","environment_id":"` + service.EnvironmentID.String() + `","server_id":"` + service.ServerID.String() + `","compose_yaml":"services:\n  web:\n    image: nginx\n","env":{"A":"b"}}`
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/services", strings.NewReader(createBody)))
 	if recorder.Code != http.StatusCreated {

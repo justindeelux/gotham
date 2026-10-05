@@ -58,15 +58,50 @@ func TestDeployKeyStampedWithAppTeam(t *testing.T) {
 	aliceTeam := teams.WithScope(ctx, teams.Scope{UserID: uuid.UUID(alice.ID.Bytes), TeamID: uuid.UUID(shared.ID.Bytes), Role: teams.RoleOwner})
 	bobPersonal := teams.WithScope(ctx, teams.Scope{UserID: uuid.UUID(bob.ID.Bytes), TeamID: teams.PersonalTeamID(uuid.UUID(bob.ID.Bytes)), Role: teams.RoleOwner})
 
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
+		ID:     pgUUID(uuid.New()),
+		TeamID: shared.ID,
+		Name:   fmt.Sprintf("deploy-key-%d", suffix),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+		ID:        pgUUID(uuid.New()),
+		ProjectID: project.ID,
+		Name:      "production",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	serverRow, err := st.CreateServer(ctx, sqlc.CreateServerParams{
+		Name:    fmt.Sprintf("deploy-key-node-%d", suffix),
+		Ip:      "127.0.0.1",
+		Port:    22,
+		SshUser: "root",
+	})
+	if err != nil {
+		t.Fatalf("create server: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverRow.ID); err != nil {
+			t.Logf("cleanup server: %v", err)
+		}
+	})
+
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID:    alice.ID,
-		TeamID:    shared.ID,
-		Name:      "deploy-key-app",
-		Provider:  "github",
-		Repo:      "acme/demo",
-		CloneUrl:  "https://github.com/acme/demo.git",
-		Branch:    "main",
-		BuildPack: "dockerfile",
+		UserID:        alice.ID,
+		TeamID:        shared.ID,
+		ServerID:      serverRow.ID,
+		EnvironmentID: environment.ID,
+		Name:          "deploy-key-app",
+		Provider:      "github",
+		Repo:          "acme/demo",
+		CloneUrl:      "https://github.com/acme/demo.git",
+		Branch:        "main",
+		BuildPack:     "dockerfile",
 	})
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)

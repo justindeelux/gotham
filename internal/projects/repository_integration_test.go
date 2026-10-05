@@ -234,7 +234,7 @@ func TestServiceConcurrentDeleteKeepsOneEnvironment(t *testing.T) {
 	defer cancel()
 
 	st := newScratchStore(t)
-	svc := NewService(Config{Store: st, Counter: ZeroResourceCounter{}, Logger: discardLogger()})
+	svc := NewService(Config{Store: st, Counter: newFakeCounter(), Logger: discardLogger()})
 	userID := seedUser(t, ctx, st, fmt.Sprintf("race-%d@example.com", time.Now().UnixNano()))
 
 	const iterations = 30

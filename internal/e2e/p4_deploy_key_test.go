@@ -98,15 +98,16 @@ func TestP4DeployPrivateRepoOverSSH(t *testing.T) {
 	hostPort := freeHostPort(t)
 
 	app := h.createApplication(t, p4CreateApplication{
-		Name:      "p4-private-" + suffix,
-		Provider:  "github",
-		Repo:      fixture.repo,
-		CloneURL:  "ssh://git@fixture.invalid" + filepath.ToSlash(fixture.dir),
-		Branch:    "main",
-		BuildPack: "dockerfile",
-		Port:      p4ContainerPort,
-		HostPort:  hostPort,
-		ServerID:  h.serverID.String(),
+		EnvironmentID: h.envID.String(),
+		Name:          "p4-private-" + suffix,
+		Provider:      "github",
+		Repo:          fixture.repo,
+		CloneURL:      "ssh://git@fixture.invalid" + filepath.ToSlash(fixture.dir),
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		Port:          p4ContainerPort,
+		HostPort:      hostPort,
+		ServerID:      h.serverID.String(),
 	})
 	// The create route installed the push hook through the production seam:
 	// the harness wires cfg.Hooks to the real webhook service (with a stub

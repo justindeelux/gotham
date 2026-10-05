@@ -26,6 +26,21 @@ type Repository interface {
 	// ListApplications returns the applications of the scope's active team
 	// (or, without a team context, of the creator), newest first.
 	ListApplications(ctx context.Context, scope teams.Scope) ([]Application, error)
+	// ListApplicationsByEnvironment returns one environment's applications,
+	// newest first (previews only when includePreviews is true).
+	ListApplicationsByEnvironment(ctx context.Context, environmentID uuid.UUID, includePreviews bool) ([]Application, error)
+	// ListApplicationsByProject returns every environment's applications of
+	// one project, newest first (previews only when includePreviews is true).
+	ListApplicationsByProject(ctx context.Context, projectID uuid.UUID, includePreviews bool) ([]Application, error)
+	// NameInEnvironment reports whether the environment holds another
+	// application with name (the move-collision pre-check).
+	NameInEnvironment(ctx context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error)
+	// ResolveEnvironment validates that environmentID belongs to teamID and
+	// returns it (ErrNotFound for a foreign or missing one).
+	ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error)
+	// ResolveProject validates that projectID belongs to teamID
+	// (ErrNotFound for a foreign or missing one).
+	ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error)
 	// CreateApplication stores a new application together with its env vars,
 	// sealed secrets and storages in one transaction.
 	CreateApplication(ctx context.Context, app Application, envVars []EnvVar, secrets []Secret, storages []Storage) (Application, error)
@@ -129,7 +144,11 @@ func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (
 		}
 		return Application{}, fmt.Errorf("deploy: get application: %w", err)
 	}
-	return applicationFromRow(row), nil
+	enriched, err := r.enrich(ctx, []sqlc.Application{row})
+	if err != nil {
+		return Application{}, err
+	}
+	return enriched[0], nil
 }
 
 // ListApplications loads the active team's applications, or the creator's when
@@ -147,9 +166,134 @@ func (r *storeRepository) ListApplications(ctx context.Context, scope teams.Scop
 	if err != nil {
 		return nil, fmt.Errorf("deploy: list applications: %w", err)
 	}
+	return r.enrich(ctx, rows)
+}
+
+// ListApplicationsByEnvironment implements Repository.
+func (r *storeRepository) ListApplicationsByEnvironment(ctx context.Context, environmentID uuid.UUID, includePreviews bool) ([]Application, error) {
+	rows, err := r.store.ListApplicationsByEnvironment(ctx, sqlc.ListApplicationsByEnvironmentParams{
+		EnvironmentID:   pgUUID(environmentID),
+		IncludePreviews: includePreviews,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("deploy: list applications by environment: %w", err)
+	}
+	return r.enrich(ctx, rows)
+}
+
+// ListApplicationsByProject implements Repository.
+func (r *storeRepository) ListApplicationsByProject(ctx context.Context, projectID uuid.UUID, includePreviews bool) ([]Application, error) {
+	rows, err := r.store.ListApplicationsByProject(ctx, sqlc.ListApplicationsByProjectParams{
+		ProjectID:       pgUUID(projectID),
+		IncludePreviews: includePreviews,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("deploy: list applications by project: %w", err)
+	}
+	return r.enrich(ctx, rows)
+}
+
+// NameInEnvironment implements Repository: the move-collision pre-check. The
+// comparison is exact, matching the (environment_id, name) unique index.
+func (r *storeRepository) NameInEnvironment(ctx context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error) {
+	collision, err := r.store.ApplicationNameInEnvironment(ctx, sqlc.ApplicationNameInEnvironmentParams{
+		EnvironmentID: pgUUID(environmentID),
+		Name:          name,
+		ID:            pgUUID(exceptID),
+	})
+	if err != nil {
+		return false, fmt.Errorf("deploy: name in environment: %w", err)
+	}
+	return collision, nil
+}
+
+// ResolveEnvironment implements Repository: a foreign or missing environment
+// answers ErrNotFound, so environment IDs cannot be probed across teams.
+func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error) {
+	row, err := r.store.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
+		ID:     pgUUID(environmentID),
+		TeamID: pgUUID(teamID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return EnvironmentRef{}, ErrNotFound
+		}
+		return EnvironmentRef{}, fmt.Errorf("deploy: get environment: %w", err)
+	}
+	return EnvironmentRef{
+		ID:        uuidFromPG(row.ID),
+		ProjectID: uuidFromPG(row.ProjectID),
+		Name:      row.Name,
+	}, nil
+}
+
+// ResolveProject implements Repository.
+func (r *storeRepository) ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error) {
+	if _, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
+		ID:     pgUUID(projectID),
+		TeamID: pgUUID(teamID),
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrNotFound
+		}
+		return uuid.Nil, fmt.Errorf("deploy: get project: %w", err)
+	}
+	return projectID, nil
+}
+
+// enrich maps rows to the domain model and fills the environment, project
+// and server names from the contract. Rows of one listing share environments,
+// so each distinct parent is read once.
+func (r *storeRepository) enrich(ctx context.Context, rows []sqlc.Application) ([]Application, error) {
 	applications := make([]Application, 0, len(rows))
+	envs := make(map[uuid.UUID]sqlc.Environment)
+	projects := make(map[uuid.UUID]sqlc.Project)
+	servers := make(map[uuid.UUID]string)
 	for _, row := range rows {
-		applications = append(applications, applicationFromRow(row))
+		app := applicationFromRow(row)
+		envID := uuidFromPG(row.EnvironmentID)
+		if envID != uuid.Nil {
+			env, ok := envs[envID]
+			if !ok {
+				fetched, err := r.store.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
+					ID:     pgUUID(envID),
+					TeamID: pgUUID(app.TeamID),
+				})
+				if err != nil {
+					return nil, fmt.Errorf("deploy: get environment: %w", err)
+				}
+				env, envs[envID] = fetched, fetched
+			}
+			app.EnvironmentName = env.Name
+			projectID := uuidFromPG(env.ProjectID)
+			app.ProjectID = projectID
+			if projectID != uuid.Nil {
+				project, ok := projects[projectID]
+				if !ok {
+					fetched, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
+						ID:     pgUUID(projectID),
+						TeamID: pgUUID(app.TeamID),
+					})
+					if err != nil {
+						return nil, fmt.Errorf("deploy: get project: %w", err)
+					}
+					project, projects[projectID] = fetched, fetched
+				}
+				app.ProjectName = project.Name
+			}
+		}
+		if app.ServerID != uuid.Nil {
+			name, ok := servers[app.ServerID]
+			if !ok {
+				server, err := r.store.GetServerByID(ctx, pgUUID(app.ServerID))
+				if err != nil {
+					return nil, fmt.Errorf("deploy: get server: %w", err)
+				}
+				name, servers[app.ServerID] = server.Name, server.Name
+			}
+			app.ServerName = name
+		}
+		applications = append(applications, app)
 	}
 	return applications, nil
 }
@@ -166,20 +310,21 @@ func (r *storeRepository) CreateApplication(
 ) (Application, error) {
 	row, err := r.store.CreateApplicationWithConfig(ctx,
 		sqlc.CreateApplicationParams{
-			ID:         pgUUID(app.ID),
-			UserID:     pgUUID(app.UserID),
-			TeamID:     pgUUID(app.TeamID),
-			ServerID:   pgUUID(app.ServerID),
-			Name:       app.Name,
-			Provider:   app.Provider,
-			Repo:       app.Repo,
-			CloneUrl:   app.CloneURL,
-			Branch:     app.Branch,
-			BuildPack:  app.BuildPack,
-			BaseDomain: app.BaseDomain,
-			Port:       app.Port,
-			HostPort:   app.HostPort,
-			IsPreview:  app.IsPreview,
+			ID:            pgUUID(app.ID),
+			UserID:        pgUUID(app.UserID),
+			TeamID:        pgUUID(app.TeamID),
+			ServerID:      pgUUID(app.ServerID),
+			EnvironmentID: pgUUID(app.EnvironmentID),
+			Name:          app.Name,
+			Provider:      app.Provider,
+			Repo:          app.Repo,
+			CloneUrl:      app.CloneURL,
+			Branch:        app.Branch,
+			BuildPack:     app.BuildPack,
+			BaseDomain:    app.BaseDomain,
+			Port:          app.Port,
+			HostPort:      app.HostPort,
+			IsPreview:     app.IsPreview,
 		},
 		envVarParams(envVars),
 		secretParams(secrets),
@@ -188,7 +333,11 @@ func (r *storeRepository) CreateApplication(
 	if err != nil {
 		return Application{}, applicationWriteError(err, app.Name)
 	}
-	return applicationFromRow(row), nil
+	enriched, err := r.enrich(ctx, []sqlc.Application{row})
+	if err != nil {
+		return Application{}, err
+	}
+	return enriched[0], nil
 }
 
 // UpdateApplication persists the mutable application fields and returns the row.
@@ -203,6 +352,7 @@ func (r *storeRepository) UpdateApplication(ctx context.Context, app Application
 		HostPort:           app.HostPort,
 		ServerID:           pgUUID(app.ServerID),
 		BaseDomainDisabled: app.BaseDomainDisabled,
+		EnvironmentID:      pgUUID(app.EnvironmentID),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -210,7 +360,11 @@ func (r *storeRepository) UpdateApplication(ctx context.Context, app Application
 		}
 		return Application{}, applicationWriteError(err, app.Name)
 	}
-	return applicationFromRow(row), nil
+	enriched, err := r.enrich(ctx, []sqlc.Application{row})
+	if err != nil {
+		return Application{}, err
+	}
+	return enriched[0], nil
 }
 
 // DeleteApplication removes the application row (children cascade).
@@ -600,14 +754,14 @@ func (r *storeRepository) CreateCertificateIntent(ctx context.Context, in Certif
 	return nil
 }
 
-// applicationFromRow maps a sqlc row to the domain model. A NULL server_id
-// becomes the zero UUID, which validation rejects at enqueue time.
+// applicationFromRow maps a sqlc row to the domain model.
 func applicationFromRow(row sqlc.Application) Application {
 	return Application{
 		ID:                 uuidFromPG(row.ID),
 		UserID:             uuidFromPG(row.UserID),
 		TeamID:             uuidFromPG(row.TeamID),
 		ServerID:           uuidFromPG(row.ServerID),
+		EnvironmentID:      uuidFromPG(row.EnvironmentID),
 		Name:               row.Name,
 		Provider:           row.Provider,
 		Repo:               row.Repo,
@@ -682,16 +836,21 @@ func storageParams(storages []Storage) []sqlc.InsertStorageParams {
 }
 
 // applicationWriteError classifies a failed application write: the unique
-// index on (user_id, name) surfaces as ErrValidation with a message the API
+// index on (environment_id, name) surfaces as ErrValidation with a message the API
 // can show, a duplicate domain binding as ErrConflict (another application on
-// the same node owns the hostname), every other failure is wrapped for the
-// log.
+// the same node owns the hostname), a foreign key violation on the
+// environment (deleted between validation and write) as ErrNotFound, and
+// every other failure is wrapped for the log.
 func applicationWriteError(err error, name string) error {
 	if pgErr := uniqueViolation(err); pgErr != nil {
 		if pgErr.ConstraintName == "applications_server_domain_idx" {
 			return fmt.Errorf("%w: the domain is already bound to another application on this node", ErrConflict)
 		}
 		return fmt.Errorf("%w: an application named %q already exists", ErrValidation, name)
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return ErrNotFound
 	}
 	return fmt.Errorf("deploy: write application: %w", err)
 }

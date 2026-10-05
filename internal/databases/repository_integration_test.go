@@ -74,7 +74,7 @@ func seedUserAndServer(t *testing.T, st *store.Store) (uuid.UUID, uuid.UUID) {
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := poolExec(st, cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+		if err := poolExec(st, cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
 			t.Logf("cleanup user: %v", err)
 		}
 	})
@@ -100,14 +100,59 @@ func seedUserAndServer(t *testing.T, st *store.Store) (uuid.UUID, uuid.UUID) {
 	return uuidFromPG(user.ID), uuidFromPG(server.ID)
 }
 
+// seedProjectEnvironment creates a team, a project and an environment on the
+// shared test database and returns their IDs, cleaning them up at test end.
+func seedProjectEnvironment(t *testing.T, st *store.Store) (teamID, projectID, envID uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+
+	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
+		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Name: fmt.Sprintf("p13-%d", time.Now().UnixNano()),
+	})
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
+		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		TeamID: team.ID,
+		Name:   fmt.Sprintf("shop-%d", time.Now().UnixNano()),
+	})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+		ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		ProjectID: project.ID,
+		Name:      "production",
+	})
+	if err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for _, query := range []string{
+			"DELETE FROM applications WHERE environment_id = $1",
+			"DELETE FROM services WHERE environment_id = $1",
+			"DELETE FROM databases WHERE environment_id = $1",
+		} {
+			if err := poolExec(st, cleanupCtx, query, environment.ID); err != nil {
+				t.Logf("cleanup resources: %v", err)
+			}
+		}
+		if err := poolExec(st, cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID); err != nil {
+			t.Logf("cleanup team: %v", err)
+		}
+	})
+	return uuidFromPG(team.ID), uuidFromPG(project.ID), uuidFromPG(environment.ID)
+}
+
 // poolExec hides the pool type behind the Store so the test cleanup does not
 // need to thread the pool around.
-func poolExec(st *store.Store, ctx context.Context, query string, args ...any) (int64, error) {
-	tag, err := st.DB.Exec(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	return tag.RowsAffected(), nil
+func poolExec(st *store.Store, ctx context.Context, query string, args ...any) error {
+	_, err := st.DB.Exec(ctx, query, args...)
+	return err
 }
 
 // TestRepositoryRoundTrip exercises the SQL behind the repository: the
@@ -119,19 +164,34 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	ownerID, serverID := seedUserAndServer(t, st)
 	otherUserID, _ := seedUserAndServer(t, st)
 
+	teamID, projectID, envID := seedProjectEnvironment(t, st)
+	otherEnvID := func() uuid.UUID {
+		environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+			ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
+			ProjectID: pgtype.UUID{Bytes: projectID, Valid: true},
+			Name:      "staging",
+		})
+		if err != nil {
+			t.Fatalf("CreateEnvironment (staging): %v", err)
+		}
+		return uuidFromPG(environment.ID)
+	}()
+
 	now := time.Now().UTC()
 	created, err := repo.CreateDatabase(ctx, Database{
-		ID:          uuid.New(),
-		UserID:      ownerID,
-		ServerID:    serverID,
-		Name:        "orders",
-		Engine:      EnginePostgres,
-		Version:     "16-alpine",
-		Status:      StatusCreating,
-		PublicPort:  5433,
-		StoragePath: "gotham-db-" + uuid.New().String(),
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:            uuid.New(),
+		UserID:        ownerID,
+		TeamID:        teamID,
+		ServerID:      serverID,
+		EnvironmentID: envID,
+		Name:          "orders",
+		Engine:        EnginePostgres,
+		Version:       "16-alpine",
+		Status:        StatusCreating,
+		PublicPort:    5433,
+		StoragePath:   "gotham-db-" + uuid.New().String(),
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	})
 	if err != nil {
 		t.Fatalf("CreateDatabase: %v", err)
@@ -152,15 +212,21 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("ownership = %s/%s, want %s/%s", fetched.UserID, fetched.ServerID, ownerID, serverID)
 	}
 
-	// Same name, same user → conflict; same name, other user → allowed.
+	// Same name, same environment → conflict (per-environment uniqueness),
+	// even for another user; another environment may reuse the name.
 	duplicate := created
 	duplicate.ID = uuid.New()
 	if _, err := repo.CreateDatabase(ctx, duplicate); !errors.Is(err, ErrConflict) {
 		t.Errorf("duplicate CreateDatabase error = %v, want ErrConflict", err)
 	}
 	duplicate.UserID = otherUserID
+	if _, err := repo.CreateDatabase(ctx, duplicate); !errors.Is(err, ErrConflict) {
+		t.Errorf("same-environment duplicate for another user error = %v, want ErrConflict", err)
+	}
+	duplicate.EnvironmentID = otherEnvID
+	duplicate.ID = uuid.New()
 	if _, err := repo.CreateDatabase(ctx, duplicate); err != nil {
-		t.Errorf("another user's database with the same name: %v", err)
+		t.Errorf("another environment may reuse a name: %v", err)
 	}
 
 	// Sealed credentials round-trip through the SQL table.
@@ -212,8 +278,12 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("colliding rename error = %v, want ErrConflict", err)
 	}
 
-	if _, err := repo.UpdateDatabaseName(ctx, duplicate.ID, "warehouse"); err != nil {
-		t.Errorf("another user may reuse a name: %v", err)
+	relocated := second
+	relocated.ID = uuid.New()
+	relocated.Name = "warehouse"
+	relocated.EnvironmentID = otherEnvID
+	if _, err := repo.CreateDatabase(ctx, relocated); err != nil {
+		t.Errorf("another environment may reuse a name: %v", err)
 	}
 
 	// Status vocabulary is enforced by the CHECK constraint.
@@ -254,13 +324,14 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("PublicPortInUse(free) = %v, %v, want false", inUse, err)
 	}
 
-	// The owner sees both live databases; a stranger sees only their own.
+	// The owner sees all three live databases (two in production, one in
+	// staging); a stranger sees only their own.
 	list, err := repo.ListDatabases(ctx, teams.Scope{UserID: ownerID})
 	if err != nil {
 		t.Fatalf("ListDatabasesByUser: %v", err)
 	}
-	if len(list) != 2 {
-		t.Fatalf("owner list = %+v, want the two live rows", list)
+	if len(list) != 3 {
+		t.Fatalf("owner list = %+v, want the three live rows", list)
 	}
 	otherList, err := repo.ListDatabases(ctx, teams.Scope{UserID: otherUserID})
 	if err != nil {
@@ -274,16 +345,18 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	// ignore it in PublicPortInUse (adding this row after the list check
 	// keeps the earlier counts stable).
 	portRow, err := repo.CreateDatabase(ctx, Database{
-		ID:          uuid.New(),
-		UserID:      ownerID,
-		ServerID:    serverID,
-		Name:        "port-check",
-		Engine:      EnginePostgres,
-		Status:      StatusCreating,
-		PublicPort:  5555,
-		StoragePath: "gotham-db-" + uuid.New().String(),
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:            uuid.New(),
+		UserID:        ownerID,
+		TeamID:        teamID,
+		ServerID:      serverID,
+		EnvironmentID: envID,
+		Name:          "port-check",
+		Engine:        EnginePostgres,
+		Status:        StatusCreating,
+		PublicPort:    5555,
+		StoragePath:   "gotham-db-" + uuid.New().String(),
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	})
 	if err != nil {
 		t.Fatalf("CreateDatabase (port-check): %v", err)
@@ -356,18 +429,21 @@ func TestRepositoryRetentionQueries(t *testing.T) {
 	ctx := context.Background()
 	ownerID, serverID := seedUserAndServer(t, st)
 
+	teamID, _, envID := seedProjectEnvironment(t, st)
 	makeDB := func(name string) Database {
 		now := time.Now().UTC()
 		created, err := repo.CreateDatabase(ctx, Database{
-			ID:          uuid.New(),
-			UserID:      ownerID,
-			ServerID:    serverID,
-			Name:        name,
-			Engine:      EnginePostgres,
-			Status:      StatusCreating,
-			StoragePath: "gotham-db-" + uuid.New().String(),
-			CreatedAt:   now,
-			UpdatedAt:   now,
+			ID:            uuid.New(),
+			UserID:        ownerID,
+			TeamID:        teamID,
+			ServerID:      serverID,
+			EnvironmentID: envID,
+			Name:          name,
+			Engine:        EnginePostgres,
+			Status:        StatusCreating,
+			StoragePath:   "gotham-db-" + uuid.New().String(),
+			CreatedAt:     now,
+			UpdatedAt:     now,
 		})
 		if err != nil {
 			t.Fatalf("CreateDatabase(%s): %v", name, err)

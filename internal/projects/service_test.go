@@ -23,22 +23,26 @@ func TestNewServiceRequiresCounter(t *testing.T) {
 	NewService(Config{Repository: newFakeRepository(), Logger: discardLogger()})
 }
 
-// TestZeroResourceCounterReadsZero documents the PE-1 stub: every count is
-// zero until PE-2 replaces it.
-func TestZeroResourceCounterReadsZero(t *testing.T) {
-	var counter ResourceCounter = ZeroResourceCounter{}
-	projectCounts, err := counter.CountProjectResources(context.Background(), uuid.New())
-	if err != nil {
-		t.Fatalf("count project: %v", err)
-	}
-	environmentCounts, err := counter.CountEnvironmentResources(context.Background(), uuid.New())
+// TestFakeCounterScriptedCounts pins the test counter: scripted counts come
+// back verbatim, unscripted IDs read zero.
+func TestFakeCounterScriptedCounts(t *testing.T) {
+	counter := newFakeCounter()
+	envID, projectID := uuid.New(), uuid.New()
+	counter.environments[envID] = ResourceCounts{Applications: 2, Services: 1}
+	counter.projects[projectID] = ResourceCounts{Databases: 3}
+	environmentCounts, err := counter.CountEnvironmentResources(context.Background(), envID)
 	if err != nil {
 		t.Fatalf("count environment: %v", err)
 	}
-	for _, counts := range []ResourceCounts{projectCounts, environmentCounts} {
-		if counts != (ResourceCounts{}) {
-			t.Fatalf("stub counts = %+v, want zeros", counts)
-		}
+	if environmentCounts != (ResourceCounts{Applications: 2, Services: 1}) {
+		t.Fatalf("environment counts = %+v", environmentCounts)
+	}
+	projectCounts, err := counter.CountProjectResources(context.Background(), projectID)
+	if err != nil {
+		t.Fatalf("count project: %v", err)
+	}
+	if projectCounts != (ResourceCounts{Databases: 3}) {
+		t.Fatalf("project counts = %+v", projectCounts)
 	}
 }
 
@@ -46,7 +50,7 @@ func TestZeroResourceCounterReadsZero(t *testing.T) {
 // shape: one project plus its production environment.
 func TestServiceCreateProjectStartsWithProduction(t *testing.T) {
 	repo := newFakeRepository()
-	svc, ctx := newTestService(repo, ZeroResourceCounter{}, uuid.New(), uuid.New(), teams.RoleAdmin)
+	svc, ctx := newTestService(repo, newFakeCounter(), uuid.New(), uuid.New(), teams.RoleAdmin)
 
 	project, environment, err := svc.CreateProject(ctx, uuid.New(), "  Shop  ", "storefront")
 	if err != nil {
@@ -74,7 +78,7 @@ func TestServiceCreateProjectStartsWithProduction(t *testing.T) {
 func TestServiceNameValidation(t *testing.T) {
 	repo := newFakeRepository()
 	userID, teamID := uuid.New(), uuid.New()
-	svc, ctx := newTestService(repo, ZeroResourceCounter{}, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newTestService(repo, newFakeCounter(), userID, teamID, teams.RoleAdmin)
 
 	for _, name := range []string{"", "   ", strings.Repeat("x", 65)} {
 		if _, _, err := svc.CreateProject(ctx, userID, name, ""); !errors.Is(err, ErrValidation) {
@@ -105,7 +109,7 @@ func TestServiceNameValidation(t *testing.T) {
 func TestServiceNameCountsRunes(t *testing.T) {
 	repo := newFakeRepository()
 	userID, teamID := uuid.New(), uuid.New()
-	svc, ctx := newTestService(repo, ZeroResourceCounter{}, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newTestService(repo, newFakeCounter(), userID, teamID, teams.RoleAdmin)
 
 	fitting := strings.Repeat("ệ", 64)
 	if _, _, err := svc.CreateProject(ctx, userID, fitting, ""); err != nil {
@@ -128,7 +132,7 @@ func TestServiceNameCountsRunes(t *testing.T) {
 func TestServiceDescriptionIsCapped(t *testing.T) {
 	repo := newFakeRepository()
 	userID, teamID := uuid.New(), uuid.New()
-	svc, ctx := newTestService(repo, ZeroResourceCounter{}, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newTestService(repo, newFakeCounter(), userID, teamID, teams.RoleAdmin)
 
 	if _, _, err := svc.CreateProject(ctx, userID, "fits", strings.Repeat("ệ", 512)); err != nil {
 		t.Fatalf("CreateProject(512-rune description) = %v, want success", err)
@@ -150,7 +154,7 @@ func TestServiceDescriptionIsCapped(t *testing.T) {
 func TestServiceDuplicateNamesConflict(t *testing.T) {
 	repo := newFakeRepository()
 	userID, teamID := uuid.New(), uuid.New()
-	svc, ctx := newTestService(repo, ZeroResourceCounter{}, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newTestService(repo, newFakeCounter(), userID, teamID, teams.RoleAdmin)
 
 	first, _, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {
@@ -191,14 +195,14 @@ func TestServiceDuplicateNamesConflict(t *testing.T) {
 func TestServiceViewerCannotMutate(t *testing.T) {
 	repo := newFakeRepository()
 	owner, teamID := uuid.New(), uuid.New()
-	adminSvc, adminCtx := newTestService(repo, ZeroResourceCounter{}, owner, teamID, teams.RoleAdmin)
+	adminSvc, adminCtx := newTestService(repo, newFakeCounter(), owner, teamID, teams.RoleAdmin)
 	project, _, err := adminSvc.CreateProject(adminCtx, owner, "Shop", "")
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 
 	viewerID := uuid.New()
-	svc, ctx := newTestService(repo, ZeroResourceCounter{}, viewerID, teamID, teams.RoleReadOnly)
+	svc, ctx := newTestService(repo, newFakeCounter(), viewerID, teamID, teams.RoleReadOnly)
 	if _, _, err := svc.CreateProject(ctx, viewerID, "Other", ""); !errors.Is(err, ErrForbidden) {
 		t.Errorf("viewer create = %v, want ErrForbidden", err)
 	}
@@ -228,13 +232,13 @@ func TestServiceViewerCannotMutate(t *testing.T) {
 func TestServiceCrossTeamIsNotFound(t *testing.T) {
 	repo := newFakeRepository()
 	owner, teamID := uuid.New(), uuid.New()
-	adminSvc, adminCtx := newTestService(repo, ZeroResourceCounter{}, owner, teamID, teams.RoleAdmin)
+	adminSvc, adminCtx := newTestService(repo, newFakeCounter(), owner, teamID, teams.RoleAdmin)
 	project, env, err := adminSvc.CreateProject(adminCtx, owner, "Shop", "")
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 
-	strangerSvc, strangerCtx := newTestService(repo, ZeroResourceCounter{}, uuid.New(), uuid.New(), teams.RoleAdmin)
+	strangerSvc, strangerCtx := newTestService(repo, newFakeCounter(), uuid.New(), uuid.New(), teams.RoleAdmin)
 	if _, _, err := strangerSvc.GetProject(strangerCtx, uuid.New(), project.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("cross-team get = %v, want ErrNotFound", err)
 	}

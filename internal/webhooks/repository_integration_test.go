@@ -77,6 +77,7 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	userID := uuid.UUID(user.ID.Bytes)
+	envID, serverID := seedAppColumns(t, ctx, st, userID)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
@@ -85,7 +86,7 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		}
 	})
 
-	createdApp, err := st.CreateApplication(ctx, createApplicationParams(userID))
+	createdApp, err := st.CreateApplication(ctx, createApplicationParams(userID, uuid.UUID(envID.Bytes), uuid.UUID(serverID.Bytes)))
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
 	}
@@ -255,6 +256,7 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	userID := uuid.UUID(user.ID.Bytes)
+	envID, serverID := seedAppColumns(t, ctx, st, userID)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
@@ -263,13 +265,14 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		}
 	})
 
-	base, err := st.CreateApplication(ctx, createApplicationParams(userID))
+	base, err := st.CreateApplication(ctx, createApplicationParams(userID, uuid.UUID(envID.Bytes), uuid.UUID(serverID.Bytes)))
 	if err != nil {
 		t.Fatalf("CreateApplication(base): %v", err)
 	}
 	baseID := uuid.UUID(base.ID.Bytes)
 	sibling, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: pgUUID(userID), Name: "wh-app-pr-7", Provider: "github",
+		UserID: pgUUID(userID), TeamID: pgUUID(userID), ServerID: serverID, EnvironmentID: envID,
+		Name: "wh-app-pr-7", Provider: "github",
 		Repo: base.Repo, CloneUrl: base.CloneUrl, Branch: "feat/x", BuildPack: "auto",
 		BaseDomain: "pr-7-wh-app.example.com",
 	})
@@ -488,7 +491,8 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	// work list; marking its binding deleted puts it back in scope even when
 	// the application row itself survived.
 	previewApp, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: pgUUID(userID), Name: "wh-app-pr-11", Provider: "github",
+		UserID: pgUUID(userID), TeamID: pgUUID(userID), ServerID: serverID, EnvironmentID: envID,
+		Name: "wh-app-pr-11", Provider: "github",
 		Repo: base.Repo, CloneUrl: base.CloneUrl, Branch: "feat/w", BuildPack: "auto",
 		BaseDomain: "pr-11-wh-app.example.com", IsPreview: true,
 	})
@@ -590,6 +594,7 @@ func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	userID := uuid.UUID(user.ID.Bytes)
+	envID, serverID := seedAppColumns(t, ctx, st, userID)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
@@ -598,7 +603,7 @@ func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 		}
 	})
 
-	params := createApplicationParams(userID)
+	params := createApplicationParams(userID, uuid.UUID(envID.Bytes), uuid.UUID(serverID.Bytes))
 	params.BaseDomain = "wh-app.example.com"
 	createdApp, err := st.CreateApplication(ctx, params)
 	if err != nil {
@@ -624,7 +629,7 @@ func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 }
 
 // claimFixture creates a user and a base application for claim-level tests.
-func claimFixture(t *testing.T, ctx context.Context, st *store.Store) (uuid.UUID, uuid.UUID) {
+func claimFixture(t *testing.T, ctx context.Context, st *store.Store) (uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) {
 	t.Helper()
 	email := fmt.Sprintf("be-8.1-claim-%d@example.com", time.Now().UnixNano())
 	user, err := st.CreateUser(ctx, email, nil)
@@ -632,6 +637,7 @@ func claimFixture(t *testing.T, ctx context.Context, st *store.Store) (uuid.UUID
 		t.Fatalf("CreateUser: %v", err)
 	}
 	userID := uuid.UUID(user.ID.Bytes)
+	envID, serverID := seedAppColumns(t, ctx, st, userID)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
@@ -639,11 +645,11 @@ func claimFixture(t *testing.T, ctx context.Context, st *store.Store) (uuid.UUID
 			t.Logf("cleanup delete: %v", err)
 		}
 	})
-	base, err := st.CreateApplication(ctx, createApplicationParams(userID))
+	base, err := st.CreateApplication(ctx, createApplicationParams(userID, uuid.UUID(envID.Bytes), uuid.UUID(serverID.Bytes)))
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
 	}
-	return userID, uuid.UUID(base.ID.Bytes)
+	return userID, uuid.UUID(base.ID.Bytes), uuid.UUID(envID.Bytes), uuid.UUID(serverID.Bytes)
 }
 
 // openClaimFixture opens the integration database and returns the store.
@@ -678,7 +684,7 @@ func TestStoreClosingSameHeadClaimRetries(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID := claimFixture(t, ctx, st)
+	userID, baseID, _, _ := claimFixture(t, ctx, st)
 
 	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
 		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
@@ -738,7 +744,7 @@ func TestStoreExpiredWorkerCannotPromote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID := claimFixture(t, ctx, st)
+	userID, baseID, _, _ := claimFixture(t, ctx, st)
 
 	slow, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 		ApplicationID: pgUUID(baseID), PrNumber: 1, Kind: store.PreviewClaimStart,
@@ -804,7 +810,7 @@ func TestStoreClosedBindingCannotBeResurrected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID := claimFixture(t, ctx, st)
+	userID, baseID, _, _ := claimFixture(t, ctx, st)
 
 	claim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
@@ -854,7 +860,7 @@ func TestStoreCloseSerializesWithPromotion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID := claimFixture(t, ctx, st)
+	userID, baseID, _, _ := claimFixture(t, ctx, st)
 
 	// Seed the existing binding (head-a) so the close has a row to update.
 	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
@@ -980,7 +986,7 @@ func TestStoreLeaseExpiryDuringLockWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID := claimFixture(t, ctx, st)
+	userID, baseID, _, _ := claimFixture(t, ctx, st)
 
 	claim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
@@ -1048,10 +1054,11 @@ func TestStoreSiblingDeleteClearsLedger(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID := claimFixture(t, ctx, st)
+	userID, baseID, envID, serverID := claimFixture(t, ctx, st)
 
 	sibling, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: pgUUID(userID), Name: "octo-gotham-pr-7", Provider: "github",
+		UserID: pgUUID(userID), TeamID: pgUUID(userID), ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
+		Name: "octo-gotham-pr-7", Provider: "github",
 		Repo: "octo/gotham", CloneUrl: "https://github.com/octo/gotham.git",
 		Branch: "feat/x", BuildPack: "auto", BaseDomain: "pr-7.example.com", IsPreview: true,
 	})
@@ -1133,6 +1140,7 @@ func TestStoreClaimConcurrencyRespectsTheCap(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	userID := uuid.UUID(user.ID.Bytes)
+	envID, serverID := seedAppColumns(t, ctx, st, userID)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
@@ -1140,7 +1148,7 @@ func TestStoreClaimConcurrencyRespectsTheCap(t *testing.T) {
 			t.Logf("cleanup delete: %v", err)
 		}
 	})
-	base, err := st.CreateApplication(ctx, createApplicationParams(userID))
+	base, err := st.CreateApplication(ctx, createApplicationParams(userID, uuid.UUID(envID.Bytes), uuid.UUID(serverID.Bytes)))
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
 	}
@@ -1233,7 +1241,7 @@ func TestStoreNoBindingCloseRefusesTheRacingPromote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID := claimFixture(t, ctx, st)
+	userID, baseID, _, _ := claimFixture(t, ctx, st)
 
 	const pr = 7
 	open, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
@@ -1315,7 +1323,7 @@ func TestStoreFailedNoBindingCloseRetryReclaims(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID := claimFixture(t, ctx, st)
+	userID, baseID, _, _ := claimFixture(t, ctx, st)
 
 	const pr = 8
 	open, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
@@ -1387,7 +1395,7 @@ func TestStoreUpsertPreviewDeployTakesTheApplicationLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID := claimFixture(t, ctx, st)
+	userID, baseID, _, _ := claimFixture(t, ctx, st)
 
 	params := sqlc.UpsertPreviewDeployParams{
 		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
@@ -1476,6 +1484,7 @@ func TestStoreRepositoryLogsUnopenableHookSecret(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	userID := uuid.UUID(user.ID.Bytes)
+	envID, serverID := seedAppColumns(t, ctx, st, userID)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
@@ -1483,7 +1492,7 @@ func TestStoreRepositoryLogsUnopenableHookSecret(t *testing.T) {
 			t.Logf("cleanup delete: %v", err)
 		}
 	})
-	createdApp, err := st.CreateApplication(ctx, createApplicationParams(userID))
+	createdApp, err := st.CreateApplication(ctx, createApplicationParams(userID, uuid.UUID(envID.Bytes), uuid.UUID(serverID.Bytes)))
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
 	}
@@ -1519,14 +1528,58 @@ func TestStoreRepositoryLogsUnopenableHookSecret(t *testing.T) {
 
 // createApplicationParams builds the row the webhook tests watch. The ID comes
 // from the database default, so callers read it back from the returned row.
-func createApplicationParams(userID uuid.UUID) sqlc.CreateApplicationParams {
+func createApplicationParams(userID, envID, serverID uuid.UUID) sqlc.CreateApplicationParams {
 	return sqlc.CreateApplicationParams{
-		UserID:    pgUUID(userID),
-		Name:      "wh-app",
-		Provider:  "github",
-		Repo:      "Octo/Gotham",
-		CloneUrl:  "https://github.com/Octo/Gotham.git",
-		Branch:    "main",
-		BuildPack: "auto",
+		UserID:        pgUUID(userID),
+		ServerID:      pgUUID(serverID),
+		EnvironmentID: pgUUID(envID),
+		Name:          "wh-app",
+		Provider:      "github",
+		Repo:          "Octo/Gotham",
+		CloneUrl:      "https://github.com/Octo/Gotham.git",
+		Branch:        "main",
+		BuildPack:     "auto",
 	}
+}
+
+// seedAppColumns creates a project, an environment and a node for tests that
+// insert application rows directly (environment_id and server_id are NOT
+// NULL since PE-2). The team is the user's personal team (ID = user ID),
+// which CreateUser already created.
+func seedAppColumns(t *testing.T, ctx context.Context, st *store.Store, userID uuid.UUID) (envID, serverID pgtype.UUID) {
+	pool := st.DB
+	t.Helper()
+	suffix := time.Now().UnixNano()
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
+		ID: pgUUID(uuid.New()), TeamID: pgUUID(userID), Name: fmt.Sprintf("wh-%d", suffix),
+	})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+		ID: pgUUID(uuid.New()), ProjectID: project.ID, Name: "production",
+	})
+	if err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	server, err := st.CreateServer(ctx, sqlc.CreateServerParams{
+		Name: fmt.Sprintf("wh-node-%d", suffix), Ip: "127.0.0.1", Port: 22, SshUser: "root",
+	})
+	if err != nil {
+		t.Fatalf("CreateServer: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM applications WHERE environment_id = $1", environment.ID); err != nil {
+			t.Logf("cleanup applications: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM projects WHERE id = $1", project.ID); err != nil {
+			t.Logf("cleanup project: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", server.ID); err != nil {
+			t.Logf("cleanup server: %v", err)
+		}
+	})
+	return environment.ID, server.ID
 }

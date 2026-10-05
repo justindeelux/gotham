@@ -77,7 +77,7 @@ func (f *fakeDeployService) CreateApplication(_ context.Context, userID uuid.UUI
 }
 
 // ListApplications implements DeployService.
-func (f *fakeDeployService) ListApplications(_ context.Context, userID uuid.UUID) ([]Application, error) {
+func (f *fakeDeployService) ListApplications(_ context.Context, userID uuid.UUID, _ ApplicationFilter) ([]Application, error) {
 	f.seenUser = userID
 	if f.listAppsErr != nil {
 		return nil, f.listAppsErr

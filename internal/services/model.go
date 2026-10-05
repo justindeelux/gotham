@@ -40,8 +40,11 @@ type Service struct {
 	UserID   uuid.UUID
 	TeamID   uuid.UUID
 	ServerID uuid.UUID
-	Name     string
-	Status   Status
+	// EnvironmentID is the environment the service belongs to (Phase 13,
+	// PE-2); ProjectID derives from it.
+	EnvironmentID uuid.UUID
+	Name          string
+	Status        Status
 	// ComposeYAML is the stored compose document exactly as supplied.
 	ComposeYAML string
 	// Env is the environment variable substitution input. It is stored with
@@ -52,6 +55,14 @@ type Service struct {
 	UpdatedAt time.Time
 	// DeletedAt marks the soft delete; zero while the service is live.
 	DeletedAt time.Time
+	// EnvironmentName, ProjectID and ServerName enrich the list and get
+	// responses per the Phase 13 contract (the wire `project_name` stays the
+	// compose project name the FE renders; the Gotham project rides the
+	// resources endpoint's project object and the projects API). They derive
+	// from EnvironmentID and ServerID and are never written directly.
+	EnvironmentName string
+	ProjectID       uuid.UUID
+	ServerName      string
 }
 
 // DeployState is one deploy attempt's state.
@@ -85,6 +96,14 @@ type Deploy struct {
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 	FinishedAt time.Time
+}
+
+// EnvironmentRef is the slice of an environment row service validation and
+// response enrichment needs: which project it belongs to and its name.
+type EnvironmentRef struct {
+	ID        uuid.UUID
+	ProjectID uuid.UUID
+	Name      string
 }
 
 // DomainRoute is one compose service mapped to a public host through the

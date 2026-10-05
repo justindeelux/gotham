@@ -48,6 +48,9 @@ type CreateRequest struct {
 	Name    string
 	Engine  string
 	Version string
+	// EnvironmentID is the environment the database belongs to; it must be
+	// in the caller's team.
+	EnvironmentID uuid.UUID
 	// ServerID is the node that runs the container; it must exist.
 	ServerID uuid.UUID
 	// PublicPort optionally publishes the engine port on the host. 0 keeps the
@@ -55,11 +58,22 @@ type CreateRequest struct {
 	PublicPort int32
 }
 
-// UpdateRequest carries the mutable fields of a database. Only the name can
-// change after creation: the public port is a Docker port binding fixed when
-// the container is created.
+// UpdateRequest carries the mutable fields of a database. A nil Name keeps
+// the stored value; EnvironmentID moves the database to another environment
+// of the same team and ServerID changes the node (refused while a backup,
+// restore or lifecycle operation holds the database).
 type UpdateRequest struct {
-	Name string `json:"name"`
+	Name          *string    `json:"name,omitempty"`
+	EnvironmentID *uuid.UUID `json:"-"`
+	ServerID      *uuid.UUID `json:"-"`
+}
+
+// DatabaseFilter scopes a list to one environment or project of the caller's
+// team (the ?environment_id= and ?project_id= filters). At most one may be
+// set; a foreign ID answers ErrNotFound.
+type DatabaseFilter struct {
+	EnvironmentID uuid.UUID
+	ProjectID     uuid.UUID
 }
 
 // DatabaseService is the control-plane surface the HTTP layer depends on. It
@@ -67,8 +81,9 @@ type UpdateRequest struct {
 type DatabaseService interface {
 	// Create provisions a database and returns the row with its credentials.
 	Create(ctx context.Context, userID uuid.UUID, req CreateRequest) (Database, Credentials, error)
-	// List returns the caller's live databases, newest first.
-	List(ctx context.Context, userID uuid.UUID) ([]Database, error)
+	// List returns the caller's live databases, newest first, optionally
+	// scoped to one environment or project.
+	List(ctx context.Context, userID uuid.UUID, filter DatabaseFilter) ([]Database, error)
 	// Get returns one database the caller owns (404 for anyone else's).
 	Get(ctx context.Context, userID, databaseID uuid.UUID) (Database, error)
 	// Credentials returns the decrypted credentials of a database the caller
@@ -205,6 +220,13 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 		return Database{}, Credentials{}, fmt.Errorf(
 			"%w: name must be 1-63 characters of letters, digits, \".\", \"_\" or \"-\"", ErrValidation)
 	}
+	teamID := teamIDFor(ctx, userID)
+	if req.EnvironmentID == uuid.Nil {
+		return Database{}, Credentials{}, fmt.Errorf("%w: environment is required", ErrValidation)
+	}
+	if _, err := s.repo.ResolveEnvironment(ctx, req.EnvironmentID, teamID); err != nil {
+		return Database{}, Credentials{}, err
+	}
 	if err := ValidateVersion(req.Version); err != nil {
 		return Database{}, Credentials{}, err
 	}
@@ -243,17 +265,18 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	}
 	now := time.Now().UTC()
 	database := Database{
-		ID:         uuid.New(),
-		UserID:     userID,
-		TeamID:     teams.ScopeFor(ctx, userID).TeamID,
-		ServerID:   req.ServerID,
-		Name:       name,
-		Engine:     canonical,
-		Version:    strings.TrimSpace(req.Version),
-		Status:     StatusCreating,
-		PublicPort: req.PublicPort,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:            uuid.New(),
+		UserID:        userID,
+		TeamID:        teamID,
+		ServerID:      req.ServerID,
+		EnvironmentID: req.EnvironmentID,
+		Name:          name,
+		Engine:        canonical,
+		Version:       strings.TrimSpace(req.Version),
+		Status:        StatusCreating,
+		PublicPort:    req.PublicPort,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 	// The ID seeds the named volume, so the volume exists for every row from
 	// the moment it is written.
@@ -325,9 +348,25 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 
 // List returns the active team's live databases, newest first. Without a team
 // context it returns the creator's databases, which is the pre-teams behavior.
-func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Database, error) {
+// A filter scopes the list to one environment or project of the team.
+func (s *Service) List(ctx context.Context, userID uuid.UUID, filter DatabaseFilter) ([]Database, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
+	}
+	if filter.EnvironmentID != uuid.Nil && filter.ProjectID != uuid.Nil {
+		return nil, fmt.Errorf("%w: environment_id and project_id are mutually exclusive", ErrValidation)
+	}
+	if filter.EnvironmentID != uuid.Nil {
+		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID, teamIDFor(ctx, userID)); err != nil {
+			return nil, err
+		}
+		return s.repo.ListDatabasesByEnvironment(ctx, filter.EnvironmentID)
+	}
+	if filter.ProjectID != uuid.Nil {
+		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID, teamIDFor(ctx, userID)); err != nil {
+			return nil, err
+		}
+		return s.repo.ListDatabasesByProject(ctx, filter.ProjectID)
 	}
 	databases, err := s.repo.ListDatabases(ctx, teams.ScopeFor(ctx, userID))
 	if err != nil {
@@ -359,19 +398,56 @@ func (s *Service) Credentials(ctx context.Context, userID, databaseID uuid.UUID)
 	return openCredentials(s.secret, secrets)
 }
 
-// Update renames a database of the active team. The partial unique index turns
-// a collision with a live database into ErrConflict.
+// Update renames a database of the active team, optionally moving it to
+// another environment of the same team or another node. The partial unique
+// index turns a collision with a live database into ErrConflict; a move
+// refuses a name the target already holds (409). A node change while a
+// backup, restore or lifecycle operation holds the database is refused with
+// the contract's 409. Backup schedules hang off the database row, so they
+// follow it to the target environment unchanged.
 func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req UpdateRequest) (Database, error) {
 	database, err := s.database(ctx, userID, databaseID, true)
 	if err != nil {
 		return Database{}, err
 	}
-	name := strings.TrimSpace(req.Name)
-	if !namePattern.MatchString(name) {
-		return Database{}, fmt.Errorf(
-			"%w: name must be 1-63 characters of letters, digits, \".\", \"_\" or \"-\"", ErrValidation)
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if !namePattern.MatchString(name) {
+			return Database{}, fmt.Errorf(
+				"%w: name must be 1-63 characters of letters, digits, \".\", \"_\" or \"-\"", ErrValidation)
+		}
+		database.Name = name
 	}
-	return s.repo.UpdateDatabaseName(ctx, database.ID, name)
+	if req.EnvironmentID != nil && *req.EnvironmentID != database.EnvironmentID {
+		if _, err := s.repo.ResolveEnvironment(ctx, *req.EnvironmentID, database.TeamID); err != nil {
+			return Database{}, err
+		}
+		collision, err := s.repo.NameInEnvironment(ctx, *req.EnvironmentID, database.Name, database.ID)
+		if err != nil {
+			return Database{}, err
+		}
+		if collision {
+			return Database{}, fmt.Errorf("%w: a database named %q already exists in the target environment", ErrNameConflict, database.Name)
+		}
+		database.EnvironmentID = *req.EnvironmentID
+	}
+	if req.ServerID != nil && *req.ServerID != database.ServerID {
+		if *req.ServerID == uuid.Nil {
+			return Database{}, fmt.Errorf("%w: server_id is required", ErrValidation)
+		}
+		exists, err := s.repo.ServerExists(ctx, *req.ServerID, teams.ScopeFor(ctx, userID))
+		if err != nil {
+			return Database{}, err
+		}
+		if !exists {
+			return Database{}, ErrServerNotFound
+		}
+		if s.leases != nil && s.leases.Held(databaseID) != "" {
+			return Database{}, ErrDeployInFlight
+		}
+		database.ServerID = *req.ServerID
+	}
+	return s.repo.UpdateDatabaseTarget(ctx, database)
 }
 
 // Delete stops and removes the container of a database of the active team,
@@ -492,6 +568,17 @@ func (s *Service) ready() error {
 		return errors.New("databases: container service is not configured")
 	}
 	return nil
+}
+
+// teamIDFor resolves the team a resource call operates in: the request's
+// active team, or the caller's personal team when no team context is present
+// (the pre-teams path), matching the projects surface.
+func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
+	scope := teams.ScopeFor(ctx, userID)
+	if scope.Active() {
+		return scope.TeamID
+	}
+	return teams.PersonalTeamID(userID)
 }
 
 // database loads a database of the caller's active team, mapping a row of

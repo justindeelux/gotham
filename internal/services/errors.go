@@ -14,6 +14,11 @@ var (
 	ErrConflict = errors.New("services: conflict")
 	// ErrServerNotFound — target server missing (404).
 	ErrServerNotFound = errors.New("services: server not found")
+	// ErrDeployInFlight — a deploy is running, so a server change is refused
+	// (409 with the contract's exact body).
+	ErrDeployInFlight = errors.New("services: a deploy is in progress")
+	// ErrNameConflict — the target environment already holds the name (409).
+	ErrNameConflict = errors.New("services: name already exists in the target environment")
 	// ErrAgentUnavailable — node agent unreachable; the only retryable
 	// failure (502).
 	ErrAgentUnavailable = errors.New("services: agent unavailable")

@@ -14,14 +14,15 @@ import (
 func deletedRow(repo *fakeRepository, serverID uuid.UUID, deletedAt time.Time) Database {
 	id := uuid.New()
 	return repo.seed(Database{
-		ID:          id,
-		UserID:      uuid.New(),
-		ServerID:    serverID,
-		Name:        "amount-" + id.String()[:8],
-		Engine:      EnginePostgres,
-		Status:      StatusDeleting,
-		StoragePath: VolumeName(id),
-		DeletedAt:   deletedAt,
+		ID:            id,
+		UserID:        uuid.New(),
+		ServerID:      serverID,
+		EnvironmentID: uuid.New(),
+		Name:          "amount-" + id.String()[:8],
+		Engine:        EnginePostgres,
+		Status:        StatusDeleting,
+		StoragePath:   VolumeName(id),
+		DeletedAt:     deletedAt,
 	})
 }
 
@@ -37,13 +38,14 @@ func TestRetentionSweepExpiresOnlyPastWindow(t *testing.T) {
 	expired := deletedRow(repo, serverID, now.Add(-VolumeRetention-time.Hour))
 	fresh := deletedRow(repo, serverID, now.Add(-time.Hour))
 	live := repo.seed(Database{
-		ID:          uuid.New(),
-		UserID:      uuid.New(),
-		ServerID:    serverID,
-		Name:        "live",
-		Engine:      EnginePostgres,
-		Status:      StatusRunning,
-		StoragePath: VolumeName(uuid.New()),
+		ID:            uuid.New(),
+		UserID:        uuid.New(),
+		ServerID:      serverID,
+		EnvironmentID: uuid.New(),
+		Name:          "live",
+		Engine:        EnginePostgres,
+		Status:        StatusRunning,
+		StoragePath:   VolumeName(uuid.New()),
 	})
 
 	cs := &fakeContainers{}

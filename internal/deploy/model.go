@@ -11,17 +11,20 @@ import (
 // Env vars, secrets and storages hang off the application so every redeploy
 // and rollback sees the same configuration.
 type Application struct {
-	ID         uuid.UUID
-	UserID     uuid.UUID
-	TeamID     uuid.UUID
-	ServerID   uuid.UUID
-	Name       string
-	Provider   string
-	Repo       string
-	CloneURL   string
-	Branch     string
-	BuildPack  string
-	BaseDomain string
+	ID       uuid.UUID
+	UserID   uuid.UUID
+	TeamID   uuid.UUID
+	ServerID uuid.UUID
+	// EnvironmentID is the environment the application belongs to (Phase 13,
+	// PE-2); ProjectID derives from it.
+	EnvironmentID uuid.UUID
+	Name          string
+	Provider      string
+	Repo          string
+	CloneURL      string
+	Branch        string
+	BuildPack     string
+	BaseDomain    string
 	// BaseDomainDisabled marks a binding the domain-uniqueness migration had
 	// to disable because another application owned the domain first. The
 	// value is preserved; an explicit domain update re-enables it.
@@ -33,8 +36,15 @@ type Application struct {
 	IsPreview bool
 	Port      int32
 	HostPort  int32
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// EnvironmentName, ProjectID, ProjectName and ServerName enrich the list
+	// and get responses per the Phase 13 contract; they derive from
+	// EnvironmentID and ServerID and are never written directly.
+	EnvironmentName string
+	ProjectID       uuid.UUID
+	ProjectName     string
+	ServerName      string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // Deployment is one attempt to run an application revision (kind "deploy" or
@@ -57,6 +67,14 @@ type Deployment struct {
 	FinishedAt    time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+// EnvironmentRef is the slice of an environment row resource validation and
+// response enrichment needs: which project it belongs to and its name.
+type EnvironmentRef struct {
+	ID        uuid.UUID
+	ProjectID uuid.UUID
+	Name      string
 }
 
 // EnvVar is a plain KEY=VALUE setting sent to the container. It is not

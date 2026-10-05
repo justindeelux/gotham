@@ -55,6 +55,7 @@ func TestApplicationDomainUniquenessConcurrent(t *testing.T) {
 		t.Fatalf("create server: %v", err)
 	}
 	serverID := uuid.UUID(serverRow.ID.Bytes)
+	teamID, envID, _ := seedProjectEnvironment(t, ctx, st)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
@@ -87,15 +88,17 @@ func TestApplicationDomainUniquenessConcurrent(t *testing.T) {
 		go func(i int, userID uuid.UUID) {
 			<-start
 			_, err := repo.CreateApplication(ctx, Application{
-				UserID:     userID,
-				ServerID:   serverID,
-				Name:       fmt.Sprintf("app-%d", i),
-				CloneURL:   "https://github.com/acme/demo.git",
-				Branch:     "main",
-				BuildPack:  "dockerfile",
-				BaseDomain: domain,
-				Port:       3000,
-				HostPort:   18080,
+				UserID:        userID,
+				TeamID:        teamID,
+				ServerID:      serverID,
+				EnvironmentID: envID,
+				Name:          fmt.Sprintf("app-%d", i),
+				CloneURL:      "https://github.com/acme/demo.git",
+				Branch:        "main",
+				BuildPack:     "dockerfile",
+				BaseDomain:    domain,
+				Port:          3000,
+				HostPort:      18080,
 			}, nil, nil, nil)
 			results <- err
 		}(i, userID)

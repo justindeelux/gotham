@@ -27,6 +27,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// ptr boxes a value for the optional update fields.
+func ptr[T any](v T) *T { return &v }
+
 // discardLogger keeps the service's operational logging out of the test
 // output.
 func discardLogger() *slog.Logger {
@@ -55,6 +58,11 @@ type fakeRepository struct {
 	portErr          error
 	serverErr        error
 	serverMissing    bool
+	// environments holds the seeded environments ResolveEnvironment
+	// answers with; resolveErr fails every environment and project
+	// resolution.
+	environments map[uuid.UUID]EnvironmentRef
+	resolveErr   error
 
 	// expiredListCalls counts ListExpiredDatabases invocations so a lifecycle
 	// test can prove the sweeper loop started (or was refused).
@@ -147,7 +155,7 @@ func (r *fakeRepository) CreateDatabase(_ context.Context, database Database) (D
 	}
 	for _, id := range r.order {
 		existing := r.databases[id]
-		if existing.UserID == database.UserID && existing.Name == database.Name && r.live(existing) {
+		if existing.EnvironmentID == database.EnvironmentID && existing.Name == database.Name && r.live(existing) {
 			r.mu.Unlock()
 			return Database{}, ErrConflict
 		}
@@ -234,7 +242,7 @@ func (r *fakeRepository) UpdateDatabaseName(ctx context.Context, databaseID uuid
 	}
 	for _, id := range r.order {
 		existing := r.databases[id]
-		if id != databaseID && existing.UserID == stored.UserID &&
+		if id != databaseID && existing.EnvironmentID == stored.EnvironmentID &&
 			existing.Name == name && r.live(existing) {
 			return Database{}, ErrConflict
 		}
@@ -443,6 +451,119 @@ func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
 	}
 	r.serverTeams[id] = teamID
 	return id
+}
+
+// UpdateDatabaseTarget mirrors the production write: rename, move and node
+// change in one step, with the target-environment collision check.
+func (r *fakeRepository) UpdateDatabaseTarget(_ context.Context, database Database) (Database, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.updateError(); err != nil {
+		return Database{}, err
+	}
+	stored, ok := r.databases[database.ID]
+	if !ok || !r.live(stored) {
+		return Database{}, ErrNotFound
+	}
+	for _, id := range r.order {
+		existing := r.databases[id]
+		if id != database.ID && existing.EnvironmentID == database.EnvironmentID &&
+			existing.Name == database.Name && r.live(existing) {
+			return Database{}, ErrConflict
+		}
+	}
+	stored.Name = database.Name
+	stored.EnvironmentID = database.EnvironmentID
+	stored.ServerID = database.ServerID
+	stored.UpdatedAt = time.Now().UTC()
+	r.databases[database.ID] = stored
+	return stored, nil
+}
+
+// ListDatabasesByEnvironment implements Repository.
+func (r *fakeRepository) ListDatabasesByEnvironment(_ context.Context, environmentID uuid.UUID) ([]Database, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	databases := []Database{}
+	for i := len(r.order) - 1; i >= 0; i-- {
+		database := r.databases[r.order[i]]
+		if r.live(database) && database.EnvironmentID == environmentID {
+			databases = append(databases, database)
+		}
+	}
+	return databases, nil
+}
+
+// ListDatabasesByProject implements Repository.
+func (r *fakeRepository) ListDatabasesByProject(_ context.Context, projectID uuid.UUID) ([]Database, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	databases := []Database{}
+	for i := len(r.order) - 1; i >= 0; i-- {
+		database := r.databases[r.order[i]]
+		if r.live(database) && r.environmentProject(database.EnvironmentID) == projectID {
+			databases = append(databases, database)
+		}
+	}
+	return databases, nil
+}
+
+// NameInEnvironment implements Repository.
+func (r *fakeRepository) NameInEnvironment(_ context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range r.order {
+		database := r.databases[id]
+		if id != exceptID && database.EnvironmentID == environmentID && database.Name == name && r.live(database) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ResolveEnvironment implements Repository.
+func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ uuid.UUID) (EnvironmentRef, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.resolveErr != nil {
+		return EnvironmentRef{}, r.resolveErr
+	}
+	if ref, ok := r.environments[environmentID]; ok {
+		return ref, nil
+	}
+	return EnvironmentRef{ID: environmentID}, nil
+}
+
+// ResolveProject implements Repository.
+func (r *fakeRepository) ResolveProject(_ context.Context, projectID, _ uuid.UUID) (uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.resolveErr != nil {
+		return uuid.Nil, r.resolveErr
+	}
+	return projectID, nil
+}
+
+// seedEnvironment registers an environment the service accepts on create and
+// move; resolveErr fails every resolution instead.
+func (r *fakeRepository) seedEnvironment() (uuid.UUID, uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.environments == nil {
+		r.environments = map[uuid.UUID]EnvironmentRef{}
+	}
+	envID, projectID := uuid.New(), uuid.New()
+	r.environments[envID] = EnvironmentRef{ID: envID, ProjectID: projectID, Name: "env"}
+	return envID, projectID
+}
+
+// environmentProject returns the project of a seeded environment (zero for
+// unknown IDs). Callers hold r.mu.
+func (r *fakeRepository) environmentProject(environmentID uuid.UUID) uuid.UUID {
+	if ref, ok := r.environments[environmentID]; ok {
+		return ref.ProjectID
+	}
+	return uuid.Nil
 }
 
 // fakeContainers is a scriptable containers.ContainerService: it records every

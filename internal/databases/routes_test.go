@@ -53,7 +53,7 @@ func (f *fakeDatabaseService) Create(_ context.Context, userID uuid.UUID, req Cr
 	return f.create, f.creds, f.createErr
 }
 
-func (f *fakeDatabaseService) List(_ context.Context, userID uuid.UUID) ([]Database, error) {
+func (f *fakeDatabaseService) List(_ context.Context, userID uuid.UUID, _ DatabaseFilter) ([]Database, error) {
 	f.seenUser = userID
 	return f.list, f.listErr
 }
@@ -126,18 +126,19 @@ func databasePath(databaseID uuid.UUID, suffix string) string {
 // sampleRow is the domain row the fakes hand back.
 func sampleRow(userID uuid.UUID) Database {
 	return Database{
-		ID:          uuid.New(),
-		UserID:      userID,
-		ServerID:    uuid.New(),
-		Name:        "orders",
-		Engine:      EnginePostgres,
-		Version:     "16-alpine",
-		Status:      StatusRunning,
-		ContainerID: "container-1",
-		PublicPort:  5433,
-		StoragePath: "gotham-db-00000000-0000-0000-0000-000000000000",
-		CreatedAt:   time.Now().UTC(),
-		UpdatedAt:   time.Now().UTC(),
+		ID:            uuid.New(),
+		UserID:        userID,
+		ServerID:      uuid.New(),
+		EnvironmentID: uuid.New(),
+		Name:          "orders",
+		Engine:        EnginePostgres,
+		Version:       "16-alpine",
+		Status:        StatusRunning,
+		ContainerID:   "container-1",
+		PublicPort:    5433,
+		StoragePath:   "gotham-db-00000000-0000-0000-0000-000000000000",
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
 	}
 }
 
@@ -152,7 +153,8 @@ func TestCreateRouteReturnsRowAndCredentials(t *testing.T) {
 	}
 	srv := newRouteServer(svc, alwaysUser(userID))
 
-	body := `{"name":"orders","engine":"postgres","version":"16-alpine","server_id":"` +
+	body := `{"name":"orders","engine":"postgres","version":"16-alpine","environment_id":"` +
+		row.EnvironmentID.String() + `","server_id":"` +
 		row.ServerID.String() + `","public_port":5433}`
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, databasePath(uuid.Nil, ""), strings.NewReader(body)))
@@ -178,7 +180,7 @@ func TestCreateRouteReturnsRowAndCredentials(t *testing.T) {
 	}
 	if svc.seenRequest.Name != "orders" || svc.seenRequest.Engine != EnginePostgres ||
 		svc.seenRequest.Version != "16-alpine" || svc.seenRequest.ServerID != row.ServerID ||
-		svc.seenRequest.PublicPort != 5433 {
+		svc.seenRequest.EnvironmentID != row.EnvironmentID || svc.seenRequest.PublicPort != 5433 {
 		t.Errorf("request = %+v", svc.seenRequest)
 	}
 }
@@ -196,6 +198,7 @@ func TestCreateRouteRejections(t *testing.T) {
 		{name: "malformed json", body: `{"name":`},
 		{name: "unknown field", body: `{"name":"db","engine":"postgres","surprise":true}`},
 		{name: "invalid server id", body: `{"name":"db","engine":"postgres","server_id":"nope"}`},
+		{name: "invalid environment id", body: `{"name":"db","engine":"postgres","environment_id":"nope","server_id":"` + serverID.String() + `"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -214,7 +217,7 @@ func TestCreateRouteRejections(t *testing.T) {
 	srv := newRouteServer(svc, alwaysUser(userID))
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, databasePath(uuid.Nil, ""),
-		strings.NewReader(`{"name":"db","engine":"postgres","server_id":"`+serverID.String()+`"}`)))
+		strings.NewReader(`{"name":"db","engine":"postgres","environment_id":"`+uuid.NewString()+`","server_id":"`+serverID.String()+`"}`)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -321,7 +324,7 @@ func TestUpdateAndDeleteRoutes(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 		}
-		if svc.seenUpdate.Name != "warehouse" {
+		if svc.seenUpdate.Name == nil || *svc.seenUpdate.Name != "warehouse" {
 			t.Errorf("update = %+v", svc.seenUpdate)
 		}
 	})
@@ -418,7 +421,7 @@ func TestServiceErrorMapping(t *testing.T) {
 				req = httptest.NewRequest(http.MethodPost, databasePath(databaseID, "/start"), nil)
 			case "port conflict":
 				req = httptest.NewRequest(http.MethodPost, databasePath(uuid.Nil, ""),
-					strings.NewReader(`{"name":"orders","engine":"postgres","server_id":"`+uuid.New().String()+`","public_port":5433}`))
+					strings.NewReader(`{"name":"orders","engine":"postgres","environment_id":"`+uuid.NewString()+`","server_id":"`+uuid.New().String()+`","public_port":5433}`))
 			default:
 				req = httptest.NewRequest(http.MethodGet, databasePath(databaseID, ""), nil)
 			}
@@ -439,7 +442,7 @@ func TestRoutesRequireAuthentication(t *testing.T) {
 	srv := newRouteServer(svc, func(context.Context) (uuid.UUID, bool) { return uuid.Nil, false })
 
 	requests := []*http.Request{
-		httptest.NewRequest(http.MethodPost, databasePath(uuid.Nil, ""), strings.NewReader(`{"name":"db","engine":"postgres","server_id":"`+uuid.New().String()+`"}`)),
+		httptest.NewRequest(http.MethodPost, databasePath(uuid.Nil, ""), strings.NewReader(`{"name":"db","engine":"postgres","environment_id":"`+uuid.NewString()+`","server_id":"`+uuid.NewString()+`"}`)),
 		httptest.NewRequest(http.MethodGet, databasePath(uuid.Nil, ""), nil),
 		httptest.NewRequest(http.MethodGet, databasePath(databaseID, ""), nil),
 		httptest.NewRequest(http.MethodGet, databasePath(databaseID, "/credentials"), nil),

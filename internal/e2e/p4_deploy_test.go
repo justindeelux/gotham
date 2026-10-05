@@ -23,15 +23,16 @@ func TestP4DeployRunning(t *testing.T) {
 	hostPort := freeHostPort(t)
 
 	app := h.createApplication(t, p4CreateApplication{
-		Name:      "p4-running-" + suffix,
-		Provider:  "github",
-		Repo:      fixture.repo,
-		CloneURL:  fixture.dir,
-		Branch:    "main",
-		BuildPack: "dockerfile",
-		Port:      p4ContainerPort,
-		HostPort:  hostPort,
-		ServerID:  h.serverID.String(),
+		EnvironmentID: h.envID.String(),
+		Name:          "p4-running-" + suffix,
+		Provider:      "github",
+		Repo:          fixture.repo,
+		CloneURL:      fixture.dir,
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		Port:          p4ContainerPort,
+		HostPort:      hostPort,
+		ServerID:      h.serverID.String(),
 	})
 
 	queued := h.deploy(t, app.ID)
@@ -76,15 +77,16 @@ func TestP4FailedBuild(t *testing.T) {
 	t.Cleanup(func() { removeContainersMatchingCommand(t, "P4-BUILD-BOOM") })
 
 	app := h.createApplication(t, p4CreateApplication{
-		Name:      "p4-broken-" + suffix,
-		Provider:  "github",
-		Repo:      fixture.repo,
-		CloneURL:  fixture.dir,
-		Branch:    "main",
-		BuildPack: "dockerfile",
-		Port:      p4ContainerPort,
-		HostPort:  hostPort,
-		ServerID:  h.serverID.String(),
+		EnvironmentID: h.envID.String(),
+		Name:          "p4-broken-" + suffix,
+		Provider:      "github",
+		Repo:          fixture.repo,
+		CloneURL:      fixture.dir,
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		Port:          p4ContainerPort,
+		HostPort:      hostPort,
+		ServerID:      h.serverID.String(),
 	})
 
 	queued := h.deploy(t, app.ID)
@@ -126,15 +128,16 @@ func TestP4Rollback(t *testing.T) {
 	appURL := fmt.Sprintf("http://127.0.0.1:%d/index.html", hostPort)
 
 	app := h.createApplication(t, p4CreateApplication{
-		Name:      "p4-rollback-" + suffix,
-		Provider:  "github",
-		Repo:      fixture.repo,
-		CloneURL:  fixture.dir,
-		Branch:    "main",
-		BuildPack: "dockerfile",
-		Port:      p4ContainerPort,
-		HostPort:  hostPort,
-		ServerID:  h.serverID.String(),
+		EnvironmentID: h.envID.String(),
+		Name:          "p4-rollback-" + suffix,
+		Provider:      "github",
+		Repo:          fixture.repo,
+		CloneURL:      fixture.dir,
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		Port:          p4ContainerPort,
+		HostPort:      hostPort,
+		ServerID:      h.serverID.String(),
 	})
 
 	// 1. Release v1.

@@ -11,6 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const applicationNameInEnvironment = `-- name: ApplicationNameInEnvironment :one
+SELECT EXISTS (
+    SELECT 1 FROM applications
+    WHERE environment_id = $1 AND name = $2 AND id <> $3
+)
+`
+
+type ApplicationNameInEnvironmentParams struct {
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	Name          string      `json:"name"`
+	ID            pgtype.UUID `json:"id"`
+}
+
+// The move-collision pre-check: whether the environment holds another
+// application with the name (exact match, like the unique index).
+func (q *Queries) ApplicationNameInEnvironment(ctx context.Context, arg ApplicationNameInEnvironmentParams) (bool, error) {
+	row := q.db.QueryRow(ctx, applicationNameInEnvironment, arg.EnvironmentID, arg.Name, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const clearEnvVarsByApp = `-- name: ClearEnvVarsByApp :exec
 DELETE FROM env_vars WHERE application_id = $1
 `
@@ -38,36 +60,61 @@ func (q *Queries) ClearStoragesByApp(ctx context.Context, applicationID pgtype.U
 	return err
 }
 
+const countApplicationsByEnvironment = `-- name: CountApplicationsByEnvironment :one
+SELECT count(*) FROM applications WHERE environment_id = $1
+`
+
+func (q *Queries) CountApplicationsByEnvironment(ctx context.Context, environmentID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countApplicationsByEnvironment, environmentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countApplicationsByProject = `-- name: CountApplicationsByProject :one
+SELECT count(*) FROM applications a
+JOIN environments e ON e.id = a.environment_id
+WHERE e.project_id = $1
+`
+
+func (q *Queries) CountApplicationsByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countApplicationsByProject, projectID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createApplication = `-- name: CreateApplication :one
 INSERT INTO applications (
-    id, user_id, server_id, name, provider, repo, clone_url,
+    id, user_id, server_id, environment_id, name, provider, repo, clone_url,
     branch, build_pack, base_domain, port, host_port, team_id, is_preview
 )
 VALUES (
     COALESCE($1::uuid, gen_random_uuid()),
-    $2, $3, $4, $5,
-    $6, $7, $8, $9,
-    $10, $11, $12, $13,
-    $14
+    $2, $3, $4, $5, $6,
+    $7, $8, $9, $10,
+    $11, $12, $13, $14,
+    $15
 )
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id
 `
 
 type CreateApplicationParams struct {
-	ID         pgtype.UUID `json:"id"`
-	UserID     pgtype.UUID `json:"user_id"`
-	ServerID   pgtype.UUID `json:"server_id"`
-	Name       string      `json:"name"`
-	Provider   string      `json:"provider"`
-	Repo       string      `json:"repo"`
-	CloneUrl   string      `json:"clone_url"`
-	Branch     string      `json:"branch"`
-	BuildPack  string      `json:"build_pack"`
-	BaseDomain string      `json:"base_domain"`
-	Port       int32       `json:"port"`
-	HostPort   int32       `json:"host_port"`
-	TeamID     pgtype.UUID `json:"team_id"`
-	IsPreview  bool        `json:"is_preview"`
+	ID            pgtype.UUID `json:"id"`
+	UserID        pgtype.UUID `json:"user_id"`
+	ServerID      pgtype.UUID `json:"server_id"`
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	Name          string      `json:"name"`
+	Provider      string      `json:"provider"`
+	Repo          string      `json:"repo"`
+	CloneUrl      string      `json:"clone_url"`
+	Branch        string      `json:"branch"`
+	BuildPack     string      `json:"build_pack"`
+	BaseDomain    string      `json:"base_domain"`
+	Port          int32       `json:"port"`
+	HostPort      int32       `json:"host_port"`
+	TeamID        pgtype.UUID `json:"team_id"`
+	IsPreview     bool        `json:"is_preview"`
 }
 
 // The id is optional: a caller that must know the application id before the
@@ -79,6 +126,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		arg.ID,
 		arg.UserID,
 		arg.ServerID,
+		arg.EnvironmentID,
 		arg.Name,
 		arg.Provider,
 		arg.Repo,
@@ -110,6 +158,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.BaseDomainDisabled,
 		&i.TeamID,
 		&i.IsPreview,
+		&i.EnvironmentID,
 	)
 	return i, err
 }
@@ -225,7 +274,7 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 }
 
 const getApplication = `-- name: GetApplication :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview FROM applications WHERE id = $1
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id FROM applications WHERE id = $1
 `
 
 func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Application, error) {
@@ -249,6 +298,7 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 		&i.BaseDomainDisabled,
 		&i.TeamID,
 		&i.IsPreview,
+		&i.EnvironmentID,
 	)
 	return i, err
 }
@@ -376,8 +426,146 @@ func (q *Queries) InsertStorage(ctx context.Context, arg InsertStorageParams) (S
 	return i, err
 }
 
+const listApplicationsByEnvironment = `-- name: ListApplicationsByEnvironment :many
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id FROM applications
+WHERE environment_id = $1 AND (is_preview = false OR $2::bool = true)
+ORDER BY created_at DESC, id DESC
+`
+
+type ListApplicationsByEnvironmentParams struct {
+	EnvironmentID   pgtype.UUID `json:"environment_id"`
+	IncludePreviews bool        `json:"include_previews"`
+}
+
+// One environment's applications, newest first. Previews stay out of the
+// default listing; ?previews=1 passes true to include them.
+func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApplicationsByEnvironmentParams) ([]Application, error) {
+	rows, err := q.db.Query(ctx, listApplicationsByEnvironment, arg.EnvironmentID, arg.IncludePreviews)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Application{}
+	for rows.Next() {
+		var i Application
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ServerID,
+			&i.Name,
+			&i.Provider,
+			&i.Repo,
+			&i.CloneUrl,
+			&i.Branch,
+			&i.BuildPack,
+			&i.BaseDomain,
+			&i.Port,
+			&i.HostPort,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.BaseDomainDisabled,
+			&i.TeamID,
+			&i.IsPreview,
+			&i.EnvironmentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listApplicationsByProject = `-- name: ListApplicationsByProject :many
+SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.base_domain, a.port, a.host_port, a.created_at, a.updated_at, a.base_domain_disabled, a.team_id, a.is_preview, a.environment_id FROM applications a
+JOIN environments e ON e.id = a.environment_id
+WHERE e.project_id = $1 AND (a.is_preview = false OR $2::bool = true)
+ORDER BY a.created_at DESC, a.id DESC
+`
+
+type ListApplicationsByProjectParams struct {
+	ProjectID       pgtype.UUID `json:"project_id"`
+	IncludePreviews bool        `json:"include_previews"`
+}
+
+// Every environment's applications of one project (the ?project_id= filter),
+// newest first. Previews are included only on request, as above.
+func (q *Queries) ListApplicationsByProject(ctx context.Context, arg ListApplicationsByProjectParams) ([]Application, error) {
+	rows, err := q.db.Query(ctx, listApplicationsByProject, arg.ProjectID, arg.IncludePreviews)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Application{}
+	for rows.Next() {
+		var i Application
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ServerID,
+			&i.Name,
+			&i.Provider,
+			&i.Repo,
+			&i.CloneUrl,
+			&i.Branch,
+			&i.BuildPack,
+			&i.BaseDomain,
+			&i.Port,
+			&i.HostPort,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.BaseDomainDisabled,
+			&i.TeamID,
+			&i.IsPreview,
+			&i.EnvironmentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listApplicationsByServer = `-- name: ListApplicationsByServer :many
+SELECT id, name FROM applications
+WHERE server_id = $1
+ORDER BY created_at DESC, id DESC
+`
+
+type ListApplicationsByServerRow struct {
+	ID   pgtype.UUID `json:"id"`
+	Name string      `json:"name"`
+}
+
+// One node's applications (id and name only): the server-delete 409 names its
+// blocking resources.
+func (q *Queries) ListApplicationsByServer(ctx context.Context, serverID pgtype.UUID) ([]ListApplicationsByServerRow, error) {
+	rows, err := q.db.Query(ctx, listApplicationsByServer, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListApplicationsByServerRow{}
+	for rows.Next() {
+		var i ListApplicationsByServerRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listApplicationsByTeam = `-- name: ListApplicationsByTeam :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id FROM applications
 WHERE team_id = $1
 ORDER BY created_at DESC, id DESC
 `
@@ -409,6 +597,7 @@ func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID
 			&i.BaseDomainDisabled,
 			&i.TeamID,
 			&i.IsPreview,
+			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
 		}
@@ -421,7 +610,7 @@ func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID
 }
 
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id FROM applications
 WHERE user_id = $1
 ORDER BY created_at DESC, id DESC
 `
@@ -453,6 +642,7 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 			&i.BaseDomainDisabled,
 			&i.TeamID,
 			&i.IsPreview,
+			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
 		}
@@ -675,9 +865,10 @@ SET name = $2,
     host_port = $7,
     server_id = $8,
     base_domain_disabled = $9,
+    environment_id = $10,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id
 `
 
 type UpdateApplicationParams struct {
@@ -690,6 +881,7 @@ type UpdateApplicationParams struct {
 	HostPort           int32       `json:"host_port"`
 	ServerID           pgtype.UUID `json:"server_id"`
 	BaseDomainDisabled bool        `json:"base_domain_disabled"`
+	EnvironmentID      pgtype.UUID `json:"environment_id"`
 }
 
 func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (Application, error) {
@@ -703,6 +895,7 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		arg.HostPort,
 		arg.ServerID,
 		arg.BaseDomainDisabled,
+		arg.EnvironmentID,
 	)
 	var i Application
 	err := row.Scan(
@@ -723,6 +916,7 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		&i.BaseDomainDisabled,
 		&i.TeamID,
 		&i.IsPreview,
+		&i.EnvironmentID,
 	)
 	return i, err
 }

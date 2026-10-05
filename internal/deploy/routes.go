@@ -66,14 +66,18 @@ type rollbackRequest struct {
 // `Application` in web/src/features/applications/api/applications.ts field for field: server_id is
 // null while no node is assigned.
 type applicationResponse struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Provider   string `json:"provider"`
-	Repo       string `json:"repo"`
-	CloneURL   string `json:"clone_url"`
-	Branch     string `json:"branch"`
-	BuildPack  string `json:"build_pack"`
-	BaseDomain string `json:"base_domain"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	EnvironmentID   string `json:"environment_id"`
+	EnvironmentName string `json:"environment_name"`
+	ProjectID       string `json:"project_id"`
+	ProjectName     string `json:"project_name"`
+	Provider        string `json:"provider"`
+	Repo            string `json:"repo"`
+	CloneURL        string `json:"clone_url"`
+	Branch          string `json:"branch"`
+	BuildPack       string `json:"build_pack"`
+	BaseDomain      string `json:"base_domain"`
 	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
 	// migration (legacy duplicate); the value is preserved and an explicit
 	// domain update re-enables it.
@@ -81,6 +85,7 @@ type applicationResponse struct {
 	Port               int32     `json:"port"`
 	HostPort           int32     `json:"host_port"`
 	ServerID           *string   `json:"server_id"`
+	ServerName         string    `json:"server_name"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
@@ -139,31 +144,33 @@ type storageListEnvelope struct {
 // createApplicationRequest is the POST /applications body; it matches
 // CreateApplicationInput in web/src/features/applications/api/applications.ts.
 type createApplicationRequest struct {
-	Name       string            `json:"name"`
-	Provider   string            `json:"provider"`
-	Repo       string            `json:"repo"`
-	CloneURL   string            `json:"clone_url"`
-	Branch     string            `json:"branch"`
-	BuildPack  string            `json:"build_pack"`
-	BaseDomain string            `json:"base_domain"`
-	Port       int32             `json:"port"`
-	HostPort   int32             `json:"host_port"`
-	ServerID   string            `json:"server_id"`
-	Env        []envEntryRequest `json:"env"`
-	Storage    []storageRequest  `json:"storage"`
+	Name          string            `json:"name"`
+	EnvironmentID string            `json:"environment_id"`
+	Provider      string            `json:"provider"`
+	Repo          string            `json:"repo"`
+	CloneURL      string            `json:"clone_url"`
+	Branch        string            `json:"branch"`
+	BuildPack     string            `json:"build_pack"`
+	BaseDomain    string            `json:"base_domain"`
+	Port          int32             `json:"port"`
+	HostPort      int32             `json:"host_port"`
+	ServerID      string            `json:"server_id"`
+	Env           []envEntryRequest `json:"env"`
+	Storage       []storageRequest  `json:"storage"`
 }
 
 // updateApplicationRequest is the PUT /applications/{id} body. Fields are
-// optional pointers: absent fields stay unchanged, an empty server_id clears
-// the assignment.
+// optional pointers: absent fields stay unchanged. server_id must name a
+// server (clearing it is a 400 since the assignment is required).
 type updateApplicationRequest struct {
-	Name       *string `json:"name"`
-	Branch     *string `json:"branch"`
-	BuildPack  *string `json:"build_pack"`
-	BaseDomain *string `json:"base_domain"`
-	Port       *int32  `json:"port"`
-	HostPort   *int32  `json:"host_port"`
-	ServerID   *string `json:"server_id"`
+	Name          *string `json:"name"`
+	EnvironmentID *string `json:"environment_id"`
+	Branch        *string `json:"branch"`
+	BuildPack     *string `json:"build_pack"`
+	BaseDomain    *string `json:"base_domain"`
+	Port          *int32  `json:"port"`
+	HostPort      *int32  `json:"host_port"`
+	ServerID      *string `json:"server_id"`
 }
 
 // errorBody is the JSON body returned for failures.
@@ -266,20 +273,25 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	environmentID, ok := optionalUUID(w, "environment_id", req.EnvironmentID)
+	if !ok {
+		return
+	}
 
 	application, err := h.svc.CreateApplication(r.Context(), userID, CreateApplicationInput{
-		Name:       req.Name,
-		Provider:   req.Provider,
-		Repo:       req.Repo,
-		CloneURL:   req.CloneURL,
-		Branch:     req.Branch,
-		BuildPack:  req.BuildPack,
-		BaseDomain: req.BaseDomain,
-		Port:       req.Port,
-		HostPort:   req.HostPort,
-		ServerID:   serverID,
-		Env:        toEnvEntries(req.Env),
-		Storage:    toStorages(req.Storage),
+		Name:          req.Name,
+		EnvironmentID: environmentID,
+		Provider:      req.Provider,
+		Repo:          req.Repo,
+		CloneURL:      req.CloneURL,
+		Branch:        req.Branch,
+		BuildPack:     req.BuildPack,
+		BaseDomain:    req.BaseDomain,
+		Port:          req.Port,
+		HostPort:      req.HostPort,
+		ServerID:      serverID,
+		Env:           toEnvEntries(req.Env),
+		Storage:       toStorages(req.Storage),
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -310,13 +322,17 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 }
 
 // listApplications serves GET /applications: the caller's own rows, newest
-// first.
+// first, optionally scoped by ?environment_id= or ?project_id=.
 func (h *handler) listApplications(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
 		return
 	}
-	applications, err := h.svc.ListApplications(r.Context(), userID)
+	filter, ok := applicationFilter(w, r)
+	if !ok {
+		return
+	}
+	applications, err := h.svc.ListApplications(r.Context(), userID, filter)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -367,6 +383,13 @@ func (h *handler) updateApplication(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		in.ServerID = &serverID
+	}
+	if req.EnvironmentID != nil {
+		environmentID, parsed := optionalUUID(w, "environment_id", *req.EnvironmentID)
+		if !parsed {
+			return
+		}
+		in.EnvironmentID = &environmentID
 	}
 
 	application, err := h.svc.UpdateApplication(r.Context(), userID, appID, in)
@@ -660,6 +683,10 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deployment is already in progress"})
+	case errors.Is(err, ErrDeployInFlight):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "a deploy is in progress"})
+	case errors.Is(err, ErrNameConflict):
+		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrNotConnected):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrDisabled):
@@ -751,6 +778,46 @@ func applicationServerID(w http.ResponseWriter, raw string) (uuid.UUID, bool) {
 	return serverID, true
 }
 
+// optionalUUID parses an optional UUID field: empty means unset (uuid.Nil,
+// still valid), anything else must parse.
+func optionalUUID(w http.ResponseWriter, field, raw string) (uuid.UUID, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return uuid.Nil, true
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid " + field})
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// applicationFilter parses the ?environment_id= and ?project_id= list filters.
+// At most one may be present; a malformed UUID is a 400.
+func applicationFilter(w http.ResponseWriter, r *http.Request) (ApplicationFilter, bool) {
+	var filter ApplicationFilter
+	rawEnv := strings.TrimSpace(r.URL.Query().Get("environment_id"))
+	rawProject := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if rawEnv != "" {
+		envID, err := uuid.Parse(rawEnv)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid environment id"})
+			return ApplicationFilter{}, false
+		}
+		filter.EnvironmentID = envID
+	}
+	if rawProject != "" {
+		projectID, err := uuid.Parse(rawProject)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid project id"})
+			return ApplicationFilter{}, false
+		}
+		filter.ProjectID = projectID
+	}
+	return filter, true
+}
+
 // toEnvEntries maps the wire environment rows to the domain view. The two
 // types are field-identical on purpose, so the conversion fails to compile the
 // moment either side grows a field the other does not carry.
@@ -803,6 +870,10 @@ func newApplicationResponse(application Application) applicationResponse {
 	response := applicationResponse{
 		ID:                 application.ID.String(),
 		Name:               application.Name,
+		EnvironmentID:      application.EnvironmentID.String(),
+		EnvironmentName:    application.EnvironmentName,
+		ProjectID:          application.ProjectID.String(),
+		ProjectName:        application.ProjectName,
 		Provider:           application.Provider,
 		Repo:               application.Repo,
 		CloneURL:           application.CloneURL,
@@ -812,6 +883,7 @@ func newApplicationResponse(application Application) applicationResponse {
 		BaseDomainDisabled: application.BaseDomainDisabled,
 		Port:               application.Port,
 		HostPort:           application.HostPort,
+		ServerName:         application.ServerName,
 		CreatedAt:          application.CreatedAt,
 		UpdatedAt:          application.UpdatedAt,
 	}

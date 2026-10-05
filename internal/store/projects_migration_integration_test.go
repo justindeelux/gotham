@@ -173,9 +173,10 @@ func TestProjectsEnvironmentsMigration(t *testing.T) {
 		}
 	}
 
-	// Down rolls 00034 back: the two tables are gone.
-	if _, err := provider.Down(ctx); err != nil {
-		t.Fatalf("roll back 00034: %v", err)
+	// Down rolls the phase back: both migrations go, so the two tables are
+	// gone.
+	if _, err := provider.DownTo(ctx, 33); err != nil {
+		t.Fatalf("roll back to 00033: %v", err)
 	}
 	if tableExists("projects") || tableExists("environments") {
 		t.Fatal("Down did not drop projects and environments")

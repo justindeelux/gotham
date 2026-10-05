@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -143,8 +144,10 @@ func TestStoreReplaceApplicationEnvIsAtomic(t *testing.T) {
 		}
 	})
 
+	teamID, envID, serverID := seedEnvColumns(t, ctx, st, pool)
+
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID:   user.ID,
+		UserID: user.ID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
 		Name:     "replace-race-app",
 		Provider: "github",
 		Repo:     "acme/demo",
@@ -253,8 +256,10 @@ func TestStoreReplaceApplicationStoragesIsAtomic(t *testing.T) {
 		}
 	})
 
+	teamID, envID, serverID := seedEnvColumns(t, ctx, st, pool)
+
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID:   user.ID,
+		UserID: user.ID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
 		Name:     "storage-race-app",
 		Provider: "github",
 		Repo:     "acme/demo",
@@ -358,8 +363,11 @@ func TestStoreListEnvConfigIsOneSnapshot(t *testing.T) {
 		}
 	})
 
+	teamID, envID, serverID := seedEnvColumns(t, ctx, st, pool)
+
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: user.ID, Name: "snapshot-app", Provider: "github",
+		UserID: user.ID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
+		Name: "snapshot-app", Provider: "github",
 		Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git", Branch: "main",
 	})
 	if err != nil {
@@ -420,6 +428,67 @@ func TestStoreListEnvConfigIsOneSnapshot(t *testing.T) {
 // pgUUID converts a domain UUID into the pgtype form the sqlc params take.
 func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+// seedEnvColumns creates a team, project, environment and server for tests
+// that insert resource rows directly (environment_id and server_id are NOT
+// NULL since PE-2). Cleanup removes the resources first so the RESTRICT
+// references never block the team and server deletes.
+func seedEnvColumns(t *testing.T, ctx context.Context, st *store.Store, pool *pgxpool.Pool) (teamID, envID, serverID pgtype.UUID) {
+	t.Helper()
+	suffix := time.Now().UnixNano()
+	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
+		ID:   pgUUID(uuid.New()),
+		Name: fmt.Sprintf("store-seed-%d", suffix),
+	})
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
+		ID:     pgUUID(uuid.New()),
+		TeamID: team.ID,
+		Name:   fmt.Sprintf("store-seed-%d", suffix),
+	})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+		ID:        pgUUID(uuid.New()),
+		ProjectID: project.ID,
+		Name:      "production",
+	})
+	if err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	server, err := st.CreateServer(ctx, sqlc.CreateServerParams{
+		Name:    fmt.Sprintf("store-seed-node-%d", suffix),
+		Ip:      "127.0.0.1",
+		Port:    22,
+		SshUser: "root",
+	})
+	if err != nil {
+		t.Fatalf("CreateServer: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		for _, query := range []string{
+			"DELETE FROM applications WHERE environment_id = $1",
+			"DELETE FROM services WHERE environment_id = $1",
+			"DELETE FROM databases WHERE environment_id = $1",
+		} {
+			if _, err := pool.Exec(cleanupCtx, query, environment.ID); err != nil {
+				t.Logf("cleanup resources: %v", err)
+			}
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID); err != nil {
+			t.Logf("cleanup team: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", server.ID); err != nil {
+			t.Logf("cleanup server: %v", err)
+		}
+	})
+	return team.ID, environment.ID, server.ID
 }
 
 // keysOf returns the sorted env-var keys.

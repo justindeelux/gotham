@@ -84,14 +84,19 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 		}
 	})
 
+	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID:    pgUUID(userID),
-		Name:      "deploy-key-app",
-		Provider:  "github",
-		Repo:      "acme/demo",
-		CloneUrl:  "https://github.com/acme/demo.git",
-		Branch:    "main",
-		BuildPack: "dockerfile",
+		UserID:        pgUUID(userID),
+		TeamID:        pgUUID(teamID),
+		ServerID:      pgUUID(serverID),
+		EnvironmentID: pgUUID(envID),
+		Name:          "deploy-key-app",
+		Provider:      "github",
+		Repo:          "acme/demo",
+		CloneUrl:      "https://github.com/acme/demo.git",
+		Branch:        "main",
+		BuildPack:     "dockerfile",
 	})
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
@@ -253,14 +258,19 @@ func TestStoreRepositoryDeleteDeployKeyFence(t *testing.T) {
 		}
 	})
 
+	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID:    pgUUID(userID),
-		Name:      "fence-app",
-		Provider:  "github",
-		Repo:      "acme/fence",
-		CloneUrl:  "https://github.com/acme/fence.git",
-		Branch:    "main",
-		BuildPack: "dockerfile",
+		UserID:        pgUUID(userID),
+		TeamID:        pgUUID(teamID),
+		ServerID:      pgUUID(serverID),
+		EnvironmentID: pgUUID(envID),
+		Name:          "fence-app",
+		Provider:      "github",
+		Repo:          "acme/fence",
+		CloneUrl:      "https://github.com/acme/fence.git",
+		Branch:        "main",
+		BuildPack:     "dockerfile",
 	})
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
@@ -367,14 +377,19 @@ func TestStoreRepositoryActiveDeploymentIndex(t *testing.T) {
 		}
 	})
 
+	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID:    pgUUID(userID),
-		Name:      "active-index-app",
-		Provider:  "github",
-		Repo:      "acme/demo",
-		CloneUrl:  "https://github.com/acme/demo.git",
-		Branch:    "main",
-		BuildPack: "dockerfile",
+		UserID:        pgUUID(userID),
+		TeamID:        pgUUID(teamID),
+		ServerID:      pgUUID(serverID),
+		EnvironmentID: pgUUID(envID),
+		Name:          "active-index-app",
+		Provider:      "github",
+		Repo:          "acme/demo",
+		CloneUrl:      "https://github.com/acme/demo.git",
+		Branch:        "main",
+		BuildPack:     "dockerfile",
 	})
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
@@ -464,16 +479,21 @@ func TestStoreRepositoryListDeploymentsByAppLimit(t *testing.T) {
 		}
 	})
 
+	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+
 	newApp := func(name string) uuid.UUID {
 		t.Helper()
 		app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-			UserID:    pgUUID(userID),
-			Name:      name,
-			Provider:  "github",
-			Repo:      "acme/demo",
-			CloneUrl:  "https://github.com/acme/demo.git",
-			Branch:    "main",
-			BuildPack: "dockerfile",
+			UserID:        pgUUID(userID),
+			TeamID:        pgUUID(teamID),
+			ServerID:      pgUUID(serverID),
+			EnvironmentID: pgUUID(envID),
+			Name:          name,
+			Provider:      "github",
+			Repo:          "acme/demo",
+			CloneUrl:      "https://github.com/acme/demo.git",
+			Branch:        "main",
+			BuildPack:     "dockerfile",
 		})
 		if err != nil {
 			t.Fatalf("CreateApplication(%s): %v", name, err)
@@ -675,8 +695,11 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 		}
 	})
 
+	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+
 	base, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: pgUUID(userID), Name: "preview-base", Provider: "github",
+		UserID: pgUUID(userID), TeamID: pgUUID(teamID), ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
+		Name: "preview-base", Provider: "github",
 		Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git",
 		Branch: "main", BuildPack: "dockerfile", BaseDomain: "app.example.com",
 	})
@@ -685,7 +708,8 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 	}
 	baseID := uuid.UUID(base.ID.Bytes)
 	preview, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: pgUUID(userID), Name: "preview-base-pr-7", Provider: "github",
+		UserID: pgUUID(userID), TeamID: pgUUID(teamID), ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
+		Name: "preview-base-pr-7", Provider: "github",
 		Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git",
 		Branch: "feat/x", BuildPack: "dockerfile", BaseDomain: "pr-7-app.example.com",
 		IsPreview: true,

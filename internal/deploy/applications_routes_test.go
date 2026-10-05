@@ -33,6 +33,7 @@ const applicationBody = `{
 	"base_domain": "demo.example.com",
 	"port": 3000,
 	"host_port": 8080,
+	"environment_id": "%s",
 	"server_id": "%s",
 	"env": [
 		{"key": "NODE_ENV", "value": "production"},
@@ -47,9 +48,10 @@ const applicationBody = `{
 // the additive `base_domain_disabled` visibility flag; the envelope must carry
 // exactly these, or the SPA reads undefined values.
 var applicationWireKeys = []string{
-	"id", "name", "provider", "repo", "clone_url", "branch", "build_pack",
+	"id", "name", "environment_id", "environment_name", "project_id",
+	"project_name", "provider", "repo", "clone_url", "branch", "build_pack",
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
-	"created_at", "updated_at",
+	"server_name", "created_at", "updated_at",
 }
 
 // assertJSONKeys fails unless body is an object with exactly the given keys.
@@ -81,18 +83,19 @@ func keysOf(payload map[string]json.RawMessage) []string {
 // sampleApplication returns an application with every wire field filled.
 func sampleApplication() Application {
 	return Application{
-		ID:         uuid.New(),
-		UserID:     uuid.New(),
-		ServerID:   uuid.New(),
-		Name:       "demo app",
-		Provider:   "github",
-		Repo:       "acme/demo",
-		CloneURL:   "https://github.com/acme/demo.git",
-		Branch:     "main",
-		BuildPack:  "dockerfile",
-		BaseDomain: "demo.example.com",
-		Port:       3000,
-		HostPort:   8080,
+		ID:            uuid.New(),
+		UserID:        uuid.New(),
+		ServerID:      uuid.New(),
+		EnvironmentID: uuid.New(),
+		Name:          "demo app",
+		Provider:      "github",
+		Repo:          "acme/demo",
+		CloneURL:      "https://github.com/acme/demo.git",
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		BaseDomain:    "demo.example.com",
+		Port:          3000,
+		HostPort:      8080,
 	}
 }
 
@@ -105,7 +108,7 @@ func TestRoutesCreateApplication(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
-		strings.NewReader(strings.Replace(applicationBody, "%s", serverID.String(), 1))))
+		strings.NewReader(strings.Replace(strings.Replace(applicationBody, "%s", uuid.New().String(), 1), "%s", serverID.String(), 1))))
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
@@ -138,7 +141,7 @@ func TestRoutesCreateApplicationRejectsBadInput(t *testing.T) {
 	userID, serverID := uuid.New(), uuid.New()
 	app := sampleApplication()
 	app.UserID = userID
-	valid := strings.Replace(applicationBody, "%s", serverID.String(), 1)
+	valid := strings.Replace(strings.Replace(applicationBody, "%s", uuid.New().String(), 1), "%s", serverID.String(), 1)
 
 	cases := []struct {
 		name string
@@ -183,7 +186,7 @@ func TestRoutesCreateApplicationInstallsProviderHook(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
-		strings.NewReader(strings.Replace(applicationBody, "%s", serverID.String(), 1))))
+		strings.NewReader(strings.Replace(strings.Replace(applicationBody, "%s", uuid.New().String(), 1), "%s", serverID.String(), 1))))
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
@@ -218,7 +221,7 @@ func TestRoutesCreateApplicationSkipsHookWithoutProvider(t *testing.T) {
 
 			rec := httptest.NewRecorder()
 			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
-				strings.NewReader(strings.Replace(applicationBody, "%s", serverID.String(), 1))))
+				strings.NewReader(strings.Replace(strings.Replace(applicationBody, "%s", uuid.New().String(), 1), "%s", serverID.String(), 1))))
 
 			if rec.Code != http.StatusCreated {
 				t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
@@ -249,7 +252,7 @@ func TestRoutesCreateApplicationSurvivesHookFailure(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
-		strings.NewReader(strings.Replace(applicationBody, "%s", serverID.String(), 1))))
+		strings.NewReader(strings.Replace(strings.Replace(applicationBody, "%s", uuid.New().String(), 1), "%s", serverID.String(), 1))))
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
@@ -299,7 +302,7 @@ func TestRoutesCreateApplicationBoundsStalledHookProvider(t *testing.T) {
 	start := time.Now()
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
-		strings.NewReader(strings.Replace(applicationBody, "%s", serverID.String(), 1))))
+		strings.NewReader(strings.Replace(strings.Replace(applicationBody, "%s", uuid.New().String(), 1), "%s", serverID.String(), 1))))
 	elapsed := time.Since(start)
 
 	if rec.Code != http.StatusCreated {

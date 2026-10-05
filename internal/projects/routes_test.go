@@ -60,7 +60,7 @@ func errorMessage(t *testing.T, rec *httptest.ResponseRecorder) string {
 // routes and asserts the exact response shapes.
 func TestProjectRoutesLifecycle(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
-	svc := NewService(Config{Repository: newFakeRepository(), Counter: ZeroResourceCounter{}, Logger: discardLogger()})
+	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Logger: discardLogger()})
 	handler := newRouteServer(userID, teamID, teams.RoleAdmin, svc)
 
 	rec := doRequest(handler, http.MethodPost, "/v1/projects", `{"name":"Shop","description":"storefront"}`)
@@ -167,7 +167,7 @@ func TestProjectRoutesLifecycle(t *testing.T) {
 // TestProjectRoutesConflicts asserts the contract's exact 409 bodies.
 func TestProjectRoutesConflicts(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
-	svc := NewService(Config{Repository: newFakeRepository(), Counter: ZeroResourceCounter{}, Logger: discardLogger()})
+	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Logger: discardLogger()})
 	handler := newRouteServer(userID, teamID, teams.RoleAdmin, svc)
 
 	rec := doRequest(handler, http.MethodPost, "/v1/projects", `{"name":"Shop"}`)
@@ -205,7 +205,7 @@ func TestProjectRoutesConflicts(t *testing.T) {
 func TestProjectRoutesAuthorization(t *testing.T) {
 	owner, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
-	svc := NewService(Config{Repository: repo, Counter: ZeroResourceCounter{}, Logger: discardLogger()})
+	svc := NewService(Config{Repository: repo, Counter: newFakeCounter(), Logger: discardLogger()})
 	admin := newRouteServer(owner, teamID, teams.RoleAdmin, svc)
 
 	rec := doRequest(admin, http.MethodPost, "/v1/projects", `{"name":"Shop"}`)
@@ -268,7 +268,7 @@ func TestProjectRoutesAuthorization(t *testing.T) {
 // TestProjectRoutesBadInput asserts malformed IDs and bodies answer 400.
 func TestProjectRoutesBadInput(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
-	svc := NewService(Config{Repository: newFakeRepository(), Counter: ZeroResourceCounter{}, Logger: discardLogger()})
+	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Logger: discardLogger()})
 	handler := newRouteServer(userID, teamID, teams.RoleAdmin, svc)
 
 	if rec := doRequest(handler, http.MethodGet, "/v1/projects/nope", ""); rec.Code != http.StatusBadRequest {

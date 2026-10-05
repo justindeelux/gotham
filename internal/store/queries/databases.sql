@@ -1,8 +1,8 @@
 -- name: CreateDatabase :one
 INSERT INTO databases (
-    id, user_id, server_id, name, engine, version, status, public_port, storage_path, team_id
+    id, user_id, server_id, environment_id, name, engine, version, status, public_port, storage_path, team_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING *;
 
 -- name: GetDatabase :one
@@ -19,9 +19,53 @@ SELECT * FROM databases
 WHERE team_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC;
 
+-- name: ListDatabasesByEnvironment :many
+SELECT * FROM databases
+WHERE environment_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC;
+
+-- name: ListDatabasesByProject :many
+SELECT d.* FROM databases d
+JOIN environments e ON e.id = d.environment_id
+WHERE e.project_id = $1 AND d.deleted_at IS NULL
+ORDER BY d.created_at DESC, d.id DESC;
+
+-- name: CountDatabasesByEnvironment :one
+SELECT count(*) FROM databases WHERE environment_id = $1 AND deleted_at IS NULL;
+
+-- name: CountDatabasesByProject :one
+SELECT count(*) FROM databases d
+JOIN environments e ON e.id = d.environment_id
+WHERE e.project_id = $1 AND d.deleted_at IS NULL;
+
+-- name: ListDatabasesByServer :many
+SELECT id, name FROM databases
+WHERE server_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC;
+
+-- name: DatabaseNameInEnvironment :one
+-- The move-collision pre-check: whether the environment holds another live
+-- database with the name (exact match, like the unique index).
+SELECT EXISTS (
+    SELECT 1 FROM databases
+    WHERE environment_id = $1 AND name = $2 AND id <> $3 AND deleted_at IS NULL
+);
+
 -- name: UpdateDatabaseName :one
 UPDATE databases
 SET name = $2,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;
+
+-- name: UpdateDatabaseTarget :one
+-- Rename, move environment and change node in one write. The row stays live
+-- throughout: the write is fenced on deleted_at, so a concurrent delete wins
+-- and the move silently no-ops to ErrNotFound instead.
+UPDATE databases
+SET name = $2,
+    environment_id = $3,
+    server_id = $4,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;

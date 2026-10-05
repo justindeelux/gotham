@@ -56,8 +56,9 @@ type DeployService interface {
 	// attempted is false when no hook lifecycle is wired: there is no outcome
 	// to report, and the create response omits the webhook field.
 	InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) (attempted bool, err error)
-	// ListApplications returns the caller's applications, newest first.
-	ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error)
+	// ListApplications returns the caller's applications, newest first,
+	// optionally scoped to one environment or project.
+	ListApplications(ctx context.Context, userID uuid.UUID, filter ApplicationFilter) ([]Application, error)
 	// GetApplication returns one application the caller owns (404 otherwise).
 	GetApplication(ctx context.Context, userID, appID uuid.UUID) (Application, error)
 	// UpdateApplication applies a partial update to the mutable fields.

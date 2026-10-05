@@ -37,16 +37,20 @@ type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 // included because its values are already embedded in the rendered documents
 // the owner can read, and the UI needs them to prefill the editor.
 type serviceResponse struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Status      Status            `json:"status"`
-	ServerID    string            `json:"server_id"`
-	ProjectName string            `json:"project_name"`
-	ComposeYAML string            `json:"compose_yaml,omitempty"`
-	Env         map[string]string `json:"env"`
-	Domains     []DomainRoute     `json:"domains"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Status          Status            `json:"status"`
+	ServerID        string            `json:"server_id"`
+	ServerName      string            `json:"server_name"`
+	EnvironmentID   string            `json:"environment_id"`
+	EnvironmentName string            `json:"environment_name"`
+	ProjectID       string            `json:"project_id"`
+	ProjectName     string            `json:"project_name"`
+	ComposeYAML     string            `json:"compose_yaml,omitempty"`
+	Env             map[string]string `json:"env"`
+	Domains         []DomainRoute     `json:"domains"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
 }
 
 // deployResponse is the wire representation of one deploy attempt. The
@@ -103,16 +107,23 @@ type containerListEnvelope struct {
 
 // createRequest is the body of POST /v1/services.
 type createRequest struct {
-	Name        string            `json:"name"`
-	ServerID    string            `json:"server_id"`
-	ComposeYAML string            `json:"compose_yaml"`
-	Env         map[string]string `json:"env,omitempty"`
+	Name          string            `json:"name"`
+	EnvironmentID string            `json:"environment_id"`
+	ServerID      string            `json:"server_id"`
+	ComposeYAML   string            `json:"compose_yaml"`
+	Env           map[string]string `json:"env,omitempty"`
 }
 
-// updateRequest is the body of PATCH /v1/services/{id}. It aliases the
-// service-level UpdateRequest so the handler decodes straight into the value
-// it will send.
-type updateRequest = UpdateRequest
+// updateRequest is the body of PATCH /v1/services/{id}. Environment and
+// server moves ride string fields (UUIDs do not decode from JSON strings);
+// the handler converts them into the service-level UpdateRequest.
+type updateRequest struct {
+	Name          *string           `json:"name,omitempty"`
+	ComposeYAML   *string           `json:"compose_yaml,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	EnvironmentID *string           `json:"environment_id,omitempty"`
+	ServerID      *string           `json:"server_id,omitempty"`
+}
 
 // errorBody is the JSON body returned for failures.
 type errorBody struct {
@@ -181,11 +192,17 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid server id"})
 		return
 	}
+	environmentID, err := uuid.Parse(strings.TrimSpace(req.EnvironmentID))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid environment id"})
+		return
+	}
 	service, err := h.svc.Create(r.Context(), userID, CreateRequest{
-		Name:        req.Name,
-		ServerID:    serverID,
-		ComposeYAML: req.ComposeYAML,
-		Env:         req.Env,
+		Name:          req.Name,
+		EnvironmentID: environmentID,
+		ServerID:      serverID,
+		ComposeYAML:   req.ComposeYAML,
+		Env:           req.Env,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -194,13 +211,18 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, serviceEnvelope{Service: h.newServiceResponse(service, true)})
 }
 
-// list serves GET .../services.
+// list serves GET .../services, optionally scoped by ?environment_id= or
+// ?project_id=.
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
 		return
 	}
-	services, err := h.svc.List(r.Context(), userID)
+	filter, ok := serviceFilter(w, r)
+	if !ok {
+		return
+	}
+	services, err := h.svc.List(r.Context(), userID, filter)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -236,7 +258,28 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	service, err := h.svc.Update(r.Context(), userID, serviceID, req)
+	in := UpdateRequest{
+		Name:        req.Name,
+		ComposeYAML: req.ComposeYAML,
+		Env:         req.Env,
+	}
+	if req.EnvironmentID != nil {
+		environmentID, err := uuid.Parse(strings.TrimSpace(*req.EnvironmentID))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid environment id"})
+			return
+		}
+		in.EnvironmentID = &environmentID
+	}
+	if req.ServerID != nil {
+		serverID, err := uuid.Parse(strings.TrimSpace(*req.ServerID))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid server id"})
+			return
+		}
+		in.ServerID = &serverID
+	}
+	service, err := h.svc.Update(r.Context(), userID, serviceID, in)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -426,6 +469,29 @@ func (h *handler) serviceParams(w http.ResponseWriter, r *http.Request) (uuid.UU
 	return userID, serviceID, true
 }
 
+// serviceFilter parses the ?environment_id= and ?project_id= list filters.
+// At most one may be present; a malformed UUID is a 400.
+func serviceFilter(w http.ResponseWriter, r *http.Request) (ServiceFilter, bool) {
+	var filter ServiceFilter
+	if raw := strings.TrimSpace(r.URL.Query().Get("environment_id")); raw != "" {
+		envID, err := uuid.Parse(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid environment id"})
+			return ServiceFilter{}, false
+		}
+		filter.EnvironmentID = envID
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("project_id")); raw != "" {
+		projectID, err := uuid.Parse(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid project id"})
+			return ServiceFilter{}, false
+		}
+		filter.ProjectID = projectID
+	}
+	return filter, true
+}
+
 // writeServiceError maps service sentinels to HTTP responses.
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
@@ -437,6 +503,10 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a service with that name already exists"})
+	case errors.Is(err, ErrDeployInFlight):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "a deploy is in progress"})
+	case errors.Is(err, ErrNameConflict):
+		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrDisabled):
 		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "services are disabled"})
 	case errors.Is(err, ErrAgentUnavailable), errors.Is(err, ErrDeployFailed):
@@ -453,15 +523,19 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 // deploy path is where the error surfaces).
 func (h *handler) newServiceResponse(service Service, withCompose bool) serviceResponse {
 	response := serviceResponse{
-		ID:          service.ID.String(),
-		Name:        service.Name,
-		Status:      service.Status,
-		ServerID:    service.ServerID.String(),
-		ProjectName: ProjectName(service.ID),
-		Env:         service.Env,
-		Domains:     []DomainRoute{},
-		CreatedAt:   service.CreatedAt,
-		UpdatedAt:   service.UpdatedAt,
+		ID:              service.ID.String(),
+		Name:            service.Name,
+		Status:          service.Status,
+		ServerID:        service.ServerID.String(),
+		ServerName:      service.ServerName,
+		EnvironmentID:   service.EnvironmentID.String(),
+		EnvironmentName: service.EnvironmentName,
+		ProjectID:       service.ProjectID.String(),
+		ProjectName:     ProjectName(service.ID),
+		Env:             service.Env,
+		Domains:         []DomainRoute{},
+		CreatedAt:       service.CreatedAt,
+		UpdatedAt:       service.UpdatedAt,
 	}
 	if withCompose {
 		response.ComposeYAML = service.ComposeYAML

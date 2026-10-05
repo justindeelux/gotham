@@ -32,8 +32,45 @@ func (s *Store) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID) 
 	return s.queries.ListApplicationsByTeam(ctx, teamID)
 }
 
+// ListApplicationsByEnvironment returns one environment's applications,
+// newest first. Previews are included only when includePreviews is true.
+func (s *Store) ListApplicationsByEnvironment(ctx context.Context, params sqlc.ListApplicationsByEnvironmentParams) ([]sqlc.Application, error) {
+	return s.queries.ListApplicationsByEnvironment(ctx, params)
+}
+
+// ListApplicationsByProject returns every environment's applications of one
+// project, newest first. Previews are included only when includePreviews is
+// true.
+func (s *Store) ListApplicationsByProject(ctx context.Context, params sqlc.ListApplicationsByProjectParams) ([]sqlc.Application, error) {
+	return s.queries.ListApplicationsByProject(ctx, params)
+}
+
+// CountApplicationsByEnvironment tallies one environment's applications
+// (previews included: they block the environment delete like any row).
+func (s *Store) CountApplicationsByEnvironment(ctx context.Context, environmentID pgtype.UUID) (int64, error) {
+	return s.queries.CountApplicationsByEnvironment(ctx, environmentID)
+}
+
+// CountApplicationsByProject tallies every environment's applications of one
+// project.
+func (s *Store) CountApplicationsByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
+	return s.queries.CountApplicationsByProject(ctx, projectID)
+}
+
+// ListApplicationsByServer returns one node's applications (id and name) for
+// the server-delete 409.
+func (s *Store) ListApplicationsByServer(ctx context.Context, serverID pgtype.UUID) ([]sqlc.ListApplicationsByServerRow, error) {
+	return s.queries.ListApplicationsByServer(ctx, serverID)
+}
+
+// ApplicationNameInEnvironment reports whether the environment holds another
+// application with the name (the move-collision pre-check).
+func (s *Store) ApplicationNameInEnvironment(ctx context.Context, params sqlc.ApplicationNameInEnvironmentParams) (bool, error) {
+	return s.queries.ApplicationNameInEnvironment(ctx, params)
+}
+
 // UpdateApplication persists the mutable application fields and returns the
-// row. Unset columns (server_id NULL) serialise as NULL through pgUUID.
+// row. server_id is NOT NULL since PE-2; pgUUID maps it straight through.
 func (s *Store) UpdateApplication(ctx context.Context, params sqlc.UpdateApplicationParams) (sqlc.Application, error) {
 	return s.queries.UpdateApplication(ctx, params)
 }

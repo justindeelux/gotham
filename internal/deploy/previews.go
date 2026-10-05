@@ -57,18 +57,19 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 	}
 
 	app := Application{
-		UserID:     base.UserID,
-		TeamID:     base.TeamID,
-		ServerID:   base.ServerID,
-		Name:       strings.TrimSpace(in.Name),
-		Provider:   base.Provider,
-		Repo:       base.Repo,
-		CloneURL:   base.CloneURL,
-		Branch:     strings.TrimSpace(in.Branch),
-		BuildPack:  base.BuildPack,
-		BaseDomain: proxy.NormalizeDomain(in.BaseDomain),
-		IsPreview:  true,
-		Port:       base.Port,
+		UserID:        base.UserID,
+		TeamID:        base.TeamID,
+		ServerID:      base.ServerID,
+		EnvironmentID: base.EnvironmentID,
+		Name:          strings.TrimSpace(in.Name),
+		Provider:      base.Provider,
+		Repo:          base.Repo,
+		CloneURL:      base.CloneURL,
+		Branch:        strings.TrimSpace(in.Branch),
+		BuildPack:     base.BuildPack,
+		BaseDomain:    proxy.NormalizeDomain(in.BaseDomain),
+		IsPreview:     true,
+		Port:          base.Port,
 		// HostPort stays 0: the agent assigns a free port, so the preview
 		// never collides with the base application's binding.
 	}

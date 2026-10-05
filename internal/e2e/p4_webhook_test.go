@@ -35,15 +35,16 @@ func TestP4WebhookAutoDeploy(t *testing.T) {
 	hostPort := freeHostPort(t)
 
 	app := h.createApplication(t, p4CreateApplication{
-		Name:      "p4-hook-" + suffix,
-		Provider:  "github",
-		Repo:      fixture.repo,
-		CloneURL:  fixture.dir,
-		Branch:    "main",
-		BuildPack: "dockerfile",
-		Port:      p4ContainerPort,
-		HostPort:  hostPort,
-		ServerID:  h.serverID.String(),
+		EnvironmentID: h.envID.String(),
+		Name:          "p4-hook-" + suffix,
+		Provider:      "github",
+		Repo:          fixture.repo,
+		CloneURL:      fixture.dir,
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		Port:          p4ContainerPort,
+		HostPort:      hostPort,
+		ServerID:      h.serverID.String(),
 	})
 
 	hookSecret := "p4-e2e-secret-" + suffix

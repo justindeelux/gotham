@@ -11,23 +11,48 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countServicesByEnvironment = `-- name: CountServicesByEnvironment :one
+SELECT count(*) FROM services WHERE environment_id = $1 AND deleted_at IS NULL
+`
+
+func (q *Queries) CountServicesByEnvironment(ctx context.Context, environmentID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countServicesByEnvironment, environmentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countServicesByProject = `-- name: CountServicesByProject :one
+SELECT count(*) FROM services s
+JOIN environments e ON e.id = s.environment_id
+WHERE e.project_id = $1 AND s.deleted_at IS NULL
+`
+
+func (q *Queries) CountServicesByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countServicesByProject, projectID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createService = `-- name: CreateService :one
 INSERT INTO services (
-    id, user_id, server_id, name, status, compose_yaml, env, team_id
+    id, user_id, server_id, environment_id, name, status, compose_yaml, env, team_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id, environment_id
 `
 
 type CreateServiceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	UserID      pgtype.UUID `json:"user_id"`
-	ServerID    pgtype.UUID `json:"server_id"`
-	Name        string      `json:"name"`
-	Status      string      `json:"status"`
-	ComposeYaml string      `json:"compose_yaml"`
-	Env         []byte      `json:"env"`
-	TeamID      pgtype.UUID `json:"team_id"`
+	ID            pgtype.UUID `json:"id"`
+	UserID        pgtype.UUID `json:"user_id"`
+	ServerID      pgtype.UUID `json:"server_id"`
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	Name          string      `json:"name"`
+	Status        string      `json:"status"`
+	ComposeYaml   string      `json:"compose_yaml"`
+	Env           []byte      `json:"env"`
+	TeamID        pgtype.UUID `json:"team_id"`
 }
 
 func (q *Queries) CreateService(ctx context.Context, arg CreateServiceParams) (Service, error) {
@@ -35,6 +60,7 @@ func (q *Queries) CreateService(ctx context.Context, arg CreateServiceParams) (S
 		arg.ID,
 		arg.UserID,
 		arg.ServerID,
+		arg.EnvironmentID,
 		arg.Name,
 		arg.Status,
 		arg.ComposeYaml,
@@ -54,6 +80,7 @@ func (q *Queries) CreateService(ctx context.Context, arg CreateServiceParams) (S
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.TeamID,
+		&i.EnvironmentID,
 	)
 	return i, err
 }
@@ -93,7 +120,7 @@ func (q *Queries) CreateServiceDeploy(ctx context.Context, arg CreateServiceDepl
 }
 
 const getService = `-- name: GetService :one
-SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id FROM services
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id, environment_id FROM services
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -112,12 +139,28 @@ func (q *Queries) GetService(ctx context.Context, id pgtype.UUID) (Service, erro
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.TeamID,
+		&i.EnvironmentID,
 	)
 	return i, err
 }
 
+const hasActiveServiceDeploy = `-- name: HasActiveServiceDeploy :one
+SELECT EXISTS (
+    SELECT 1 FROM service_deploys WHERE service_id = $1 AND state = 'deploying'
+)
+`
+
+// A service with a deploy in flight refuses a server change (409), like an
+// application with a non-terminal deployment.
+func (q *Queries) HasActiveServiceDeploy(ctx context.Context, serviceID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasActiveServiceDeploy, serviceID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listRoutableServices = `-- name: ListRoutableServices :many
-SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id FROM services
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id, environment_id FROM services
 WHERE deleted_at IS NULL
 ORDER BY created_at ASC, id ASC
 `
@@ -147,6 +190,7 @@ func (q *Queries) ListRoutableServices(ctx context.Context) ([]Service, error) {
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.TeamID,
+			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
 		}
@@ -199,8 +243,118 @@ func (q *Queries) ListServiceDeploys(ctx context.Context, arg ListServiceDeploys
 	return items, nil
 }
 
+const listServicesByEnvironment = `-- name: ListServicesByEnvironment :many
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id, environment_id FROM services
+WHERE environment_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+`
+
+func (q *Queries) ListServicesByEnvironment(ctx context.Context, environmentID pgtype.UUID) ([]Service, error) {
+	rows, err := q.db.Query(ctx, listServicesByEnvironment, environmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Service{}
+	for rows.Next() {
+		var i Service
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ServerID,
+			&i.Name,
+			&i.Status,
+			&i.ComposeYaml,
+			&i.Env,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.TeamID,
+			&i.EnvironmentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listServicesByProject = `-- name: ListServicesByProject :many
+SELECT s.id, s.user_id, s.server_id, s.name, s.status, s.compose_yaml, s.env, s.created_at, s.updated_at, s.deleted_at, s.team_id, s.environment_id FROM services s
+JOIN environments e ON e.id = s.environment_id
+WHERE e.project_id = $1 AND s.deleted_at IS NULL
+ORDER BY s.created_at DESC, s.id DESC
+`
+
+func (q *Queries) ListServicesByProject(ctx context.Context, projectID pgtype.UUID) ([]Service, error) {
+	rows, err := q.db.Query(ctx, listServicesByProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Service{}
+	for rows.Next() {
+		var i Service
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ServerID,
+			&i.Name,
+			&i.Status,
+			&i.ComposeYaml,
+			&i.Env,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.TeamID,
+			&i.EnvironmentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listServicesByServer = `-- name: ListServicesByServer :many
+SELECT id, name FROM services
+WHERE server_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+`
+
+type ListServicesByServerRow struct {
+	ID   pgtype.UUID `json:"id"`
+	Name string      `json:"name"`
+}
+
+func (q *Queries) ListServicesByServer(ctx context.Context, serverID pgtype.UUID) ([]ListServicesByServerRow, error) {
+	rows, err := q.db.Query(ctx, listServicesByServer, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListServicesByServerRow{}
+	for rows.Next() {
+		var i ListServicesByServerRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listServicesByTeam = `-- name: ListServicesByTeam :many
-SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id FROM services
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id, environment_id FROM services
 WHERE team_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 `
@@ -226,6 +380,7 @@ func (q *Queries) ListServicesByTeam(ctx context.Context, teamID pgtype.UUID) ([
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.TeamID,
+			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
 		}
@@ -238,7 +393,7 @@ func (q *Queries) ListServicesByTeam(ctx context.Context, teamID pgtype.UUID) ([
 }
 
 const listServicesByUser = `-- name: ListServicesByUser :many
-SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id FROM services
+SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id, environment_id FROM services
 WHERE user_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 `
@@ -264,6 +419,7 @@ func (q *Queries) ListServicesByUser(ctx context.Context, userID pgtype.UUID) ([
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.TeamID,
+			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
 		}
@@ -275,13 +431,35 @@ func (q *Queries) ListServicesByUser(ctx context.Context, userID pgtype.UUID) ([
 	return items, nil
 }
 
+const serviceNameInEnvironment = `-- name: ServiceNameInEnvironment :one
+SELECT EXISTS (
+    SELECT 1 FROM services
+    WHERE environment_id = $1 AND name = $2 AND id <> $3 AND deleted_at IS NULL
+)
+`
+
+type ServiceNameInEnvironmentParams struct {
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	Name          string      `json:"name"`
+	ID            pgtype.UUID `json:"id"`
+}
+
+// The move-collision pre-check: whether the environment holds another live
+// service with the name (exact match, like the unique index).
+func (q *Queries) ServiceNameInEnvironment(ctx context.Context, arg ServiceNameInEnvironmentParams) (bool, error) {
+	row := q.db.QueryRow(ctx, serviceNameInEnvironment, arg.EnvironmentID, arg.Name, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const softDeleteService = `-- name: SoftDeleteService :one
 UPDATE services
 SET status = 'deleting',
     deleted_at = now(),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id, environment_id
 `
 
 func (q *Queries) SoftDeleteService(ctx context.Context, id pgtype.UUID) (Service, error) {
@@ -299,6 +477,7 @@ func (q *Queries) SoftDeleteService(ctx context.Context, id pgtype.UUID) (Servic
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.TeamID,
+		&i.EnvironmentID,
 	)
 	return i, err
 }
@@ -308,16 +487,20 @@ UPDATE services
 SET name = $2,
     compose_yaml = $3,
     env = $4,
+    environment_id = $5,
+    server_id = $6,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id, environment_id
 `
 
 type UpdateServiceConfigParams struct {
-	ID          pgtype.UUID `json:"id"`
-	Name        string      `json:"name"`
-	ComposeYaml string      `json:"compose_yaml"`
-	Env         []byte      `json:"env"`
+	ID            pgtype.UUID `json:"id"`
+	Name          string      `json:"name"`
+	ComposeYaml   string      `json:"compose_yaml"`
+	Env           []byte      `json:"env"`
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	ServerID      pgtype.UUID `json:"server_id"`
 }
 
 func (q *Queries) UpdateServiceConfig(ctx context.Context, arg UpdateServiceConfigParams) (Service, error) {
@@ -326,6 +509,8 @@ func (q *Queries) UpdateServiceConfig(ctx context.Context, arg UpdateServiceConf
 		arg.Name,
 		arg.ComposeYaml,
 		arg.Env,
+		arg.EnvironmentID,
+		arg.ServerID,
 	)
 	var i Service
 	err := row.Scan(
@@ -340,6 +525,7 @@ func (q *Queries) UpdateServiceConfig(ctx context.Context, arg UpdateServiceConf
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.TeamID,
+		&i.EnvironmentID,
 	)
 	return i, err
 }
@@ -387,7 +573,7 @@ UPDATE services
 SET status = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id
+RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id, environment_id
 `
 
 type UpdateServiceStatusParams struct {
@@ -410,6 +596,7 @@ func (q *Queries) UpdateServiceStatus(ctx context.Context, arg UpdateServiceStat
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.TeamID,
+		&i.EnvironmentID,
 	)
 	return i, err
 }

@@ -60,6 +60,7 @@ type p4Harness struct {
 	client   *http.Client
 	userID   uuid.UUID
 	serverID uuid.UUID
+	envID    uuid.UUID
 	secret   string
 	st       *store.Store
 	logs     *p4LogBuffer
@@ -67,16 +68,17 @@ type p4Harness struct {
 
 // p4CreateApplication is the POST /v1/applications payload.
 type p4CreateApplication struct {
-	Name       string `json:"name"`
-	Provider   string `json:"provider"`
-	Repo       string `json:"repo"`
-	CloneURL   string `json:"clone_url"`
-	Branch     string `json:"branch"`
-	BuildPack  string `json:"build_pack"`
-	BaseDomain string `json:"base_domain"`
-	Port       int32  `json:"port"`
-	HostPort   int32  `json:"host_port"`
-	ServerID   string `json:"server_id"`
+	EnvironmentID string `json:"environment_id"`
+	Name          string `json:"name"`
+	Provider      string `json:"provider"`
+	Repo          string `json:"repo"`
+	CloneURL      string `json:"clone_url"`
+	Branch        string `json:"branch"`
+	BuildPack     string `json:"build_pack"`
+	BaseDomain    string `json:"base_domain"`
+	Port          int32  `json:"port"`
+	HostPort      int32  `json:"host_port"`
+	ServerID      string `json:"server_id"`
 }
 
 // p4Application is the application half of the API wire format.
@@ -275,6 +277,27 @@ func newP4Harness(t *testing.T) *p4Harness {
 		t.Fatalf("create server: %v", err)
 	}
 	serverID := uuid.UUID(serverRow.ID.Bytes)
+	// The harness mounts no team middleware, so requests run creator-scoped
+	// and the personal team (ID = user ID, owner by construction) scopes
+	// the environment validation.
+	if _, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
+		ID: pgtype.UUID{Bytes: userID, Valid: true}, Name: "p4-e2e",
+	}); err != nil {
+		t.Fatalf("create team: %v", err)
+	}
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, TeamID: pgtype.UUID{Bytes: userID, Valid: true}, Name: "p4-e2e",
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, ProjectID: project.ID, Name: "production",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	envID := uuid.UUID(environment.ID.Bytes)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cleanupCancel()
@@ -367,6 +390,7 @@ func newP4Harness(t *testing.T) *p4Harness {
 		client:   &http.Client{Timeout: 30 * time.Second},
 		userID:   userID,
 		serverID: serverID,
+		envID:    envID,
 		secret:   p4Secret,
 		st:       st,
 		logs:     buffer,

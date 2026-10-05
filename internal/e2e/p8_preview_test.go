@@ -37,16 +37,17 @@ func TestP8PreviewLifecycle(t *testing.T) {
 
 	baseDomain := "p8-" + suffix + ".apps.example.test"
 	app := h.createApplication(t, p4CreateApplication{
-		Name:       "p8-preview-" + suffix,
-		Provider:   "github",
-		Repo:       fixture.repo,
-		CloneURL:   fixture.dir,
-		Branch:     "main",
-		BuildPack:  "dockerfile",
-		BaseDomain: baseDomain,
-		Port:       p4ContainerPort,
-		HostPort:   freeHostPort(t),
-		ServerID:   h.serverID.String(),
+		EnvironmentID: h.envID.String(),
+		Name:          "p8-preview-" + suffix,
+		Provider:      "github",
+		Repo:          fixture.repo,
+		CloneURL:      fixture.dir,
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		BaseDomain:    baseDomain,
+		Port:          p4ContainerPort,
+		HostPort:      freeHostPort(t),
+		ServerID:      h.serverID.String(),
 	})
 	hookSecret := "p8-e2e-secret-" + suffix
 	h.seedWebhook(t, app, hookSecret)

@@ -23,16 +23,19 @@ import (
 // server, a cloneable repository and one plain variable plus one sealed secret.
 func validCreateInput(serverID uuid.UUID) CreateApplicationInput {
 	return CreateApplicationInput{
-		Name:       "demo app",
-		Provider:   "github",
-		Repo:       "acme/demo",
-		CloneURL:   "https://github.com/acme/demo.git",
-		Branch:     "main",
-		BuildPack:  "dockerfile",
-		BaseDomain: "demo.example.com",
-		Port:       3000,
-		HostPort:   8080,
-		ServerID:   serverID,
+		// The fake repository resolves any environment permissively; tests
+		// that need a seeded or shared environment override the ID after.
+		EnvironmentID: uuid.New(),
+		Name:          "demo app",
+		Provider:      "github",
+		Repo:          "acme/demo",
+		CloneURL:      "https://github.com/acme/demo.git",
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		BaseDomain:    "demo.example.com",
+		Port:          3000,
+		HostPort:      8080,
+		ServerID:      serverID,
 		Env: []EnvEntry{
 			{Key: "NODE_ENV", Value: "production"},
 			{Key: "API_TOKEN", Value: "secret:super-secret"},
@@ -307,6 +310,7 @@ func TestServiceCreateApplicationRejectsDuplicateName(t *testing.T) {
 
 	in := validCreateInput(serverID)
 	in.Name = app.Name
+	in.EnvironmentID = app.EnvironmentID
 
 	if _, err := svc.CreateApplication(context.Background(), userID, in); !errors.Is(err, ErrValidation) {
 		t.Fatalf("err = %v, want ErrValidation for a name already in use", err)
@@ -332,7 +336,7 @@ func TestServiceListApplications(t *testing.T) {
 		t.Fatalf("create foreign: %v", err)
 	}
 
-	applications, err := svc.ListApplications(context.Background(), userID)
+	applications, err := svc.ListApplications(context.Background(), userID, ApplicationFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -431,14 +435,10 @@ func TestServiceUpdateApplication(t *testing.T) {
 		t.Errorf("unpatched fields changed: %+v", updated)
 	}
 
-	t.Run("clears the server assignment", func(t *testing.T) {
+	t.Run("refuses to clear the server assignment", func(t *testing.T) {
 		cleared := uuid.Nil
-		updated, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{ServerID: &cleared})
-		if err != nil {
-			t.Fatalf("update: %v", err)
-		}
-		if updated.ServerID != uuid.Nil {
-			t.Errorf("server_id = %s, want it cleared", updated.ServerID)
+		if _, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{ServerID: &cleared}); !errors.Is(err, ErrValidation) {
+			t.Fatalf("err = %v, want ErrValidation: the server assignment is required since PE-2", err)
 		}
 	})
 

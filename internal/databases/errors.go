@@ -26,6 +26,12 @@ var (
 	// ErrDatabaseBusy — a backup or restore job owns the database's volume, so
 	// a lifecycle action (Start/Restart) is refused (409).
 	ErrDatabaseBusy = errors.New("databases: a backup or restore is running")
+	// ErrDeployInFlight — a backup, restore or lifecycle operation holds the
+	// database, so a server change is refused (409 with the contract's exact
+	// body).
+	ErrDeployInFlight = errors.New("databases: a deploy is in progress")
+	// ErrNameConflict — the target environment already holds the name (409).
+	ErrNameConflict = errors.New("databases: name already exists in the target environment")
 )
 
 // Backup-surface sentinels, mapped to HTTP statuses by the backup routes.

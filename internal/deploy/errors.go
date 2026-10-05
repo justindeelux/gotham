@@ -10,6 +10,11 @@ var (
 	ErrValidation = errors.New("deploy: validation")
 	// ErrConflict — an active deployment already exists for the application (409).
 	ErrConflict = errors.New("deploy: conflict")
+	// ErrDeployInFlight — a deployment is running, so a server change is
+	// refused (409 with the contract's exact body).
+	ErrDeployInFlight = errors.New("deploy: a deploy is in progress")
+	// ErrNameConflict — the target environment already holds the name (409).
+	ErrNameConflict = errors.New("deploy: name already exists in the target environment")
 	// ErrServerNotFound — target server missing or not assigned to the user (404).
 	ErrServerNotFound = errors.New("deploy: server not found")
 	// ErrAgentUnavailable — node agent unreachable; the only retryable failure.

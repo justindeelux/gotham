@@ -34,15 +34,18 @@ const (
 // named volume in storage_path. Credentials never live on this struct — they
 // are sealed rows in database_secrets referenced by ID (database_id).
 type Database struct {
-	ID          uuid.UUID
-	UserID      uuid.UUID
-	TeamID      uuid.UUID
-	ServerID    uuid.UUID
-	Name        string
-	Engine      string
-	Version     string
-	Status      Status
-	ContainerID string
+	ID       uuid.UUID
+	UserID   uuid.UUID
+	TeamID   uuid.UUID
+	ServerID uuid.UUID
+	// EnvironmentID is the environment the database belongs to (Phase 13,
+	// PE-2); ProjectID derives from it.
+	EnvironmentID uuid.UUID
+	Name          string
+	Engine        string
+	Version       string
+	Status        Status
+	ContainerID   string
 	// PublicPort is the host port published for external clients; 0 means the
 	// engine is only reachable from containers on the node (set at creation:
 	// Docker port bindings cannot change on a live container).
@@ -54,6 +57,21 @@ type Database struct {
 	UpdatedAt   time.Time
 	// DeletedAt marks the soft delete; zero while the database is live.
 	DeletedAt time.Time
+	// EnvironmentName, ProjectID, ProjectName and ServerName enrich the list
+	// and get responses per the Phase 13 contract; they derive from
+	// EnvironmentID and ServerID and are never written directly.
+	EnvironmentName string
+	ProjectID       uuid.UUID
+	ProjectName     string
+	ServerName      string
+}
+
+// EnvironmentRef is the slice of an environment row database validation and
+// response enrichment needs: which project it belongs to and its name.
+type EnvironmentRef struct {
+	ID        uuid.UUID
+	ProjectID uuid.UUID
+	Name      string
 }
 
 // Secret is one sealed credential of a database. Ciphertext is

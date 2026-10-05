@@ -205,7 +205,7 @@ func TestServerChangeDomainCollisionAnswersOwn409(t *testing.T) {
 	app.BaseDomain = "taken.example.com"
 	repo := &fakeRepository{
 		app:          app,
-		updateErr:    ErrConflict, // the per-server domain index fired
+		updateErr:    ErrDomainConflict, // the per-server domain index fired
 		environments: map[uuid.UUID]EnvironmentRef{app.EnvironmentID: {ID: app.EnvironmentID}},
 	}
 	svc := newTestService(t, repo)

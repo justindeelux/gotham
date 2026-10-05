@@ -91,10 +91,11 @@ volumes:
 	pullCancel()
 
 	created, err := h.compose.Create(ctx, h.userID, services.CreateRequest{
-		Name:        "p7-" + h.suffix,
-		ServerID:    h.serverID,
-		ComposeYAML: document,
-		Env:         map[string]string{"DOMAIN": domain, "MESSAGE": message},
+		Name:          "p7-" + h.suffix,
+		EnvironmentID: h.envID,
+		ServerID:      h.serverID,
+		ComposeYAML:   document,
+		Env:           map[string]string{"DOMAIN": domain, "MESSAGE": message},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

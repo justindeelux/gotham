@@ -472,8 +472,11 @@ func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req 
 			return Database{}, fmt.Errorf("%w: server_id is required", ErrValidation)
 		}
 		// The container and its volume live on the stored node: only a
-		// database that never provisioned (no container yet) may move.
-		if database.ContainerID != "" {
+		// database that never provisioned (no container) and already
+		// failed (status error, so no provision is in flight) may move.
+		// A row stuck in creating with an empty container is still
+		// provisioning: its Run continues against the old node.
+		if database.ContainerID != "" || database.Status != StatusError {
 			return Database{}, ErrServerPinned
 		}
 		exists, err := s.repo.ServerExists(ctx, *req.ServerID, teams.ScopeFor(ctx, userID))

@@ -110,7 +110,7 @@ func TestApplicationDomainUniquenessConcurrent(t *testing.T) {
 		switch err := <-results; {
 		case err == nil:
 			success++
-		case errors.Is(err, ErrConflict):
+		case errors.Is(err, ErrDomainConflict):
 			conflicts++
 		default:
 			t.Fatalf("unexpected write error: %v", err)

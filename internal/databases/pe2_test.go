@@ -75,7 +75,7 @@ func TestUpdateRefusesServerChangeWhileBusy(t *testing.T) {
 	envID, _ := repo.seedEnvironment()
 	created := repo.seed(Database{
 		UserID: owner, ServerID: repo.seedServer(), EnvironmentID: envID,
-		Name: "orders", Engine: EnginePostgres, Status: StatusStopped,
+		Name: "orders", Engine: EnginePostgres, Status: StatusError,
 	})
 	other := repo.seedServer()
 
@@ -118,6 +118,25 @@ func TestUpdateRefusesServerChangeOnceCreated(t *testing.T) {
 	if _, err := svc.Update(context.Background(), owner, created.ID,
 		UpdateRequest{Name: ptr("orders"), ServerID: &other}); !errors.Is(err, ErrServerPinned) {
 		t.Fatalf("server change on a created database err = %v, want ErrServerPinned", err)
+	}
+}
+
+// TestUpdateRefusesServerChangeWhileCreating pins R1: a row stuck in
+// creating with an empty container is still provisioning (its Run
+// continues against the old node), so a server change is refused.
+func TestUpdateRefusesServerChangeWhileCreating(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newTestService(repo, &fakeContainers{runID: "container-1"})
+	owner := uuid.New()
+	envID, _ := repo.seedEnvironment()
+	created := repo.seed(Database{
+		UserID: owner, ServerID: repo.seedServer(), EnvironmentID: envID,
+		Name: "orders", Engine: EnginePostgres, Status: StatusCreating,
+	})
+	other := repo.seedServer()
+	if _, err := svc.Update(context.Background(), owner, created.ID,
+		UpdateRequest{Name: ptr("orders"), ServerID: &other}); !errors.Is(err, ErrServerPinned) {
+		t.Fatalf("server change while creating err = %v, want ErrServerPinned", err)
 	}
 }
 

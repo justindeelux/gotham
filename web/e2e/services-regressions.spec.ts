@@ -4,6 +4,7 @@ import type { APIRequestContext } from "@playwright/test";
 import {
   loadAccount,
   seedNodeAddress,
+  seedProjectEnvironment,
   storageStatePath,
   uniqueSuffix,
 } from "./support";
@@ -66,6 +67,7 @@ async function createService(
   api: APIRequestContext,
   headers: Record<string, string>,
   serverId: string,
+  environmentId: string,
   name: string,
   env: Record<string, string>,
   domain: string,
@@ -74,6 +76,7 @@ async function createService(
     headers,
     data: {
       name,
+      environment_id: environmentId,
       server_id: serverId,
       compose_yaml: sampleCompose.replace("fix.example.test", domain),
       env,
@@ -94,11 +97,13 @@ async function seedService(
   prefix: string,
 ): Promise<SeededService> {
   const server = await seedServer(api, headers, suffix, prefix);
+  const { environmentId } = await seedProjectEnvironment(api, headers);
   const serviceName = `${prefix}-svc-${suffix}`;
   const service = await createService(
     api,
     headers,
     server.id,
+    environmentId,
     serviceName,
     {},
     "fix.example.test",
@@ -180,6 +185,7 @@ test.describe("services fix regressions", () => {
     const headers = { Authorization: `Bearer ${account.accessToken}` };
     const suffix = uniqueSuffix();
     const server = await seedServer(request, headers, suffix, "fix2");
+    const { environmentId } = await seedProjectEnvironment(request, headers);
     const oldDomain = `fix-old-${suffix}.example.test`;
     const newDomain = `fix-new-${suffix}.example.test`;
     const serviceName = `fix2-tpl-${suffix}`;
@@ -229,7 +235,9 @@ test.describe("services fix regressions", () => {
     await expect(preview).not.toContainText(oldDomain);
 
     // Create from the refreshed preview and prove the persisted document
-    // carries the value the operator last entered.
+    // carries the value the operator last entered. Until PE-5 wires the
+    // project/environment picker the dialog sends no environment, so the
+    // smoke injects the seeded one at the API boundary.
     await wizard.getByRole("button", { name: "Next" }).click();
     const step3 = wizard.locator('[data-testid="wizard-step-3"]');
     await step3.locator(".field-service-name input").fill(serviceName);
@@ -238,6 +246,16 @@ test.describe("services fix regressions", () => {
       .locator(".n-base-select-option")
       .filter({ hasText: server.name })
       .click();
+    await page.route("**/api/v1/services", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      await route.continue({
+        postData: JSON.stringify({ ...body, environment_id: environmentId }),
+      });
+    });
     await wizard.getByRole("button", { name: "Create service" }).click();
     await expect(wizard.locator('[data-testid="wizard-created"]')).toBeVisible();
 
@@ -313,12 +331,14 @@ test.describe("services fix regressions", () => {
     const headers = { Authorization: `Bearer ${account.accessToken}` };
     const suffix = uniqueSuffix();
     const server = await seedServer(request, headers, suffix, "fix5");
+    const { environmentId } = await seedProjectEnvironment(request, headers);
     const domainA = `fix5-a-${suffix}.example.test`;
     const domainB = `fix5-b-${suffix}.example.test`;
     const serviceA = await createService(
       request,
       headers,
       server.id,
+      environmentId,
       `fix5-a-${suffix}`,
       { MARK: "route-a" },
       domainA,
@@ -327,6 +347,7 @@ test.describe("services fix regressions", () => {
       request,
       headers,
       server.id,
+      environmentId,
       `fix5-b-${suffix}`,
       { MARK: "route-b" },
       domainB,

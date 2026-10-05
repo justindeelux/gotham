@@ -339,12 +339,6 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 			return Application{}, fmt.Errorf("%w: an application named %q already exists in the target environment",
 				ErrNameConflict, app.Name)
 		}
-		// A domain collision on the target node answers 409 with its own
-		// message (not the deploy-in-flight text): at this point the only
-		// ErrConflict source left is the per-server domain index.
-		if errors.Is(err, ErrConflict) {
-			return Application{}, ErrDomainConflict
-		}
 		return Application{}, err
 	}
 	// Routing input changed: refresh the hosting node's configuration. A node

@@ -278,13 +278,8 @@ func newP4Harness(t *testing.T) *p4Harness {
 	}
 	serverID := uuid.UUID(serverRow.ID.Bytes)
 	// The harness mounts no team middleware, so requests run creator-scoped
-	// and the personal team (ID = user ID, owner by construction) scopes
-	// the environment validation.
-	if _, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
-		ID: pgtype.UUID{Bytes: userID, Valid: true}, Name: "p4-e2e",
-	}); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	// and the personal team (ID = user ID, created with the account,
+	// owner by construction) scopes the environment validation.
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
 		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, TeamID: pgtype.UUID{Bytes: userID, Valid: true}, Name: "p4-e2e",
 	})

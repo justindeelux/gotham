@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { APIRequestContext } from "@playwright/test";
+
 /** Directory holding this file (used to anchor generated artifacts). */
 const e2eDir = fileURLToPath(new URL(".", import.meta.url));
 
@@ -65,4 +67,27 @@ export function accountDir(): string {
 /** loadAccount reads the account written by global setup. */
 export function loadAccount(): E2EAccount {
   return JSON.parse(readFileSync(accountPath, "utf8")) as E2EAccount;
+}
+
+/**
+ * seedProjectEnvironment creates a project (with its `production`
+ * environment) through the API. Resource seeds pass the returned
+ * environment id since PE-2 requires it.
+ */
+export async function seedProjectEnvironment(
+  request: APIRequestContext,
+  headers: Record<string, string>,
+): Promise<{ projectId: string; environmentId: string }> {
+  const project = await request.post("/api/v1/projects", {
+    headers,
+    data: { name: `ui-e2e-${uniqueSuffix()}` },
+  });
+  if (project.status() !== 201) {
+    throw new Error(`seed project: ${project.status()} ${await project.text()}`);
+  }
+  const { project: created, environments } = (await project.json()) as {
+    project: { id: string };
+    environments: Array<{ id: string }>;
+  };
+  return { projectId: created.id, environmentId: environments[0].id };
 }

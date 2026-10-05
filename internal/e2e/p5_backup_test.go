@@ -369,11 +369,9 @@ func newP5Harness(t *testing.T) *p5Harness {
 		t.Fatalf("create server: %v", err)
 	}
 	serverID := uuid.UUID(serverRow.ID.Bytes)
-	if _, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
-		ID: pgtype.UUID{Bytes: userID, Valid: true}, Name: "p5-backup-smoke",
-	}); err != nil {
-		t.Fatalf("create team: %v", err)
-	}
+	// No team middleware is mounted, so requests run creator-scoped; the
+	// personal team (ID = user ID, created with the account) scopes the
+	// environment validation.
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
 		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, TeamID: pgtype.UUID{Bytes: userID, Valid: true}, Name: "p5-backup-smoke",
 	})

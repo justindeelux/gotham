@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/agent"
 	"github.com/justindeelux/gotham/internal/containers"
@@ -36,6 +37,7 @@ type p7Harness struct {
 	proxy    proxy.ProxyService
 	userID   uuid.UUID
 	serverID uuid.UUID
+	envID    uuid.UUID
 	logger   *slog.Logger
 
 	// suffix is the per-run identifier every fixture name carries.
@@ -109,6 +111,22 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 		t.Fatalf("create server: %v", err)
 	}
 	h.serverID = uuid.UUID(serverRow.ID.Bytes)
+	// Services require an environment since PE-2; the harness calls the
+	// service directly without a team scope, so the personal team
+	// (ID = user ID, created with the account) scopes it.
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, TeamID: userRow.ID, Name: "p7-e2e-" + suffix,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, ProjectID: project.ID, Name: "production",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	h.envID = uuid.UUID(environment.ID.Bytes)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()

@@ -857,7 +857,7 @@ func storageParams(storages []Storage) []sqlc.InsertStorageParams {
 func applicationWriteError(err error, name string) error {
 	if pgErr := uniqueViolation(err); pgErr != nil {
 		if pgErr.ConstraintName == "applications_server_domain_idx" {
-			return fmt.Errorf("%w: the domain is already bound to another application on this node", ErrConflict)
+			return ErrDomainConflict
 		}
 		return fmt.Errorf("%w: an application named %q already exists", ErrValidation, name)
 	}

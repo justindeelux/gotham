@@ -339,12 +339,16 @@ func (s *service) Get(ctx context.Context, userID, serviceID uuid.UUID) (Service
 // stored document is always the renderable one: a patch that introduces an
 // unresolvable environment reference is rejected. The write touches only the
 // config columns, so it can never clobber a lifecycle status a concurrent
-// deploy/stop is writing.
+// deploy/stop is writing. It runs under the service's lifecycle lock with a
+// fresh read, so a concurrent deploy or delete serializes against it; the
+// placement columns (environment, server) are only written when the request
+// changes them, so a stale snapshot can never undo a committed move.
 func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req UpdateRequest) (Service, error) {
-	service, err := s.service(ctx, userID, serviceID, true)
+	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
 		return Service{}, err
 	}
+	defer release()
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
 		if !namePattern.MatchString(name) {
@@ -375,8 +379,9 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 		}
 		service.EnvironmentID = *req.EnvironmentID
 	}
-	// A node change while a deploy is in flight would strand the run's
-	// target, so it is refused with the contract's 409.
+	// A node change is refused once the compose project runs on a node: only
+	// a service that was never deployed may move. A deploy in flight is
+	// refused with the contract's 409 either way.
 	if req.ServerID != nil && *req.ServerID != service.ServerID {
 		if *req.ServerID == uuid.Nil {
 			return Service{}, fmt.Errorf("%w: server_id is required", ErrValidation)
@@ -387,6 +392,13 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 		}
 		if !exists {
 			return Service{}, ErrServerNotFound
+		}
+		deployed, err := s.repo.HasDeploys(ctx, service.ID)
+		if err != nil {
+			return Service{}, err
+		}
+		if deployed {
+			return Service{}, ErrServerPinned
 		}
 		active, err := s.repo.HasActiveDeploy(ctx, service.ID)
 		if err != nil {
@@ -402,6 +414,16 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 	}
 	if err := Validate(service.ComposeYAML, service.Env); err != nil {
 		return Service{}, RedactError(err, service.Env)
+	}
+	// Placement columns the request leaves alone are zeroed, so the
+	// conditional write below keeps the freshly read values instead of a
+	// possibly stale snapshot (a Nil UUID never persists: both columns are
+	// NOT NULL). The repository returns the stored row.
+	if req.EnvironmentID == nil {
+		service.EnvironmentID = uuid.Nil
+	}
+	if req.ServerID == nil {
+		service.ServerID = uuid.Nil
 	}
 	return s.repo.UpdateServiceConfig(ctx, service)
 }

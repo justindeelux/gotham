@@ -314,7 +314,8 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 	} else if blocking != "" {
 		return fmt.Errorf("%w: server still has resources: %s", ErrConflict, blocking)
 	}
-	if err := s.store.DeleteServer(ctx, pgUUID(id)); err != nil {
+	volumes, err := s.store.DeleteServerPurging(ctx, pgUUID(id))
+	if err != nil {
 		// A resource created past the pre-check trips the RESTRICT
 		// reference instead: still a 409, with a fresh listing when the
 		// re-read succeeds.
@@ -326,6 +327,13 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 			return fmt.Errorf("%w: server still has resources", ErrConflict)
 		}
 		return fmt.Errorf("delete server: %w", err)
+	}
+	for _, volume := range volumes {
+		if volume == "" {
+			continue
+		}
+		s.logger.Warn("servers: purged database tombstone left its volume on the node",
+			"server_id", id, "volume", volume)
 	}
 	return nil
 }

@@ -61,9 +61,12 @@ func (q *Queries) ClearStoragesByApp(ctx context.Context, applicationID pgtype.U
 }
 
 const countApplicationsByEnvironment = `-- name: CountApplicationsByEnvironment :one
-SELECT count(*) FROM applications WHERE environment_id = $1
+SELECT count(*) FROM applications WHERE environment_id = $1 AND is_preview = false
 `
 
+// Live applications only: previews are hidden from the default listing, so
+// the display counts match it. Delete guards consult the preview counts
+// below instead.
 func (q *Queries) CountApplicationsByEnvironment(ctx context.Context, environmentID pgtype.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countApplicationsByEnvironment, environmentID)
 	var count int64
@@ -74,11 +77,38 @@ func (q *Queries) CountApplicationsByEnvironment(ctx context.Context, environmen
 const countApplicationsByProject = `-- name: CountApplicationsByProject :one
 SELECT count(*) FROM applications a
 JOIN environments e ON e.id = a.environment_id
-WHERE e.project_id = $1
+WHERE e.project_id = $1 AND a.is_preview = false
 `
 
 func (q *Queries) CountApplicationsByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countApplicationsByProject, projectID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPreviewApplicationsByEnvironment = `-- name: CountPreviewApplicationsByEnvironment :one
+SELECT count(*) FROM applications WHERE environment_id = $1 AND is_preview = true
+`
+
+// Live previews of one environment: they stay out of every count and
+// listing, but they still block the environment delete.
+func (q *Queries) CountPreviewApplicationsByEnvironment(ctx context.Context, environmentID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countPreviewApplicationsByEnvironment, environmentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPreviewApplicationsByProject = `-- name: CountPreviewApplicationsByProject :one
+SELECT count(*) FROM applications a
+JOIN environments e ON e.id = a.environment_id
+WHERE e.project_id = $1 AND a.is_preview = true
+`
+
+// Live previews of every environment of one project (see above).
+func (q *Queries) CountPreviewApplicationsByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countPreviewApplicationsByProject, projectID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -438,7 +468,7 @@ type ListApplicationsByEnvironmentParams struct {
 }
 
 // One environment's applications, newest first. Previews stay out of the
-// default listing; ?previews=1 passes true to include them.
+// default listing; the resources endpoint passes true for ?previews=1.
 func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApplicationsByEnvironmentParams) ([]Application, error) {
 	rows, err := q.db.Query(ctx, listApplicationsByEnvironment, arg.EnvironmentID, arg.IncludePreviews)
 	if err != nil {
@@ -566,7 +596,7 @@ func (q *Queries) ListApplicationsByServer(ctx context.Context, serverID pgtype.
 
 const listApplicationsByTeam = `-- name: ListApplicationsByTeam :many
 SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id FROM applications
-WHERE team_id = $1
+WHERE team_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
 
@@ -611,7 +641,7 @@ func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID
 
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
 SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id FROM applications
-WHERE user_id = $1
+WHERE user_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
 

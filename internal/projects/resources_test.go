@@ -21,8 +21,17 @@ type fakeListers struct {
 	databases    []databases.Database
 }
 
-func (f *fakeListers) ListApplications(context.Context, uuid.UUID, deploy.ApplicationFilter) ([]deploy.Application, error) {
-	return f.applications, nil
+func (f *fakeListers) ListApplications(_ context.Context, _ uuid.UUID, filter deploy.ApplicationFilter) ([]deploy.Application, error) {
+	if filter.IncludePreviews {
+		return f.applications, nil
+	}
+	kept := f.applications[:0]
+	for _, application := range f.applications {
+		if !application.IsPreview {
+			kept = append(kept, application)
+		}
+	}
+	return kept, nil
 }
 
 func (f *fakeListers) List(_ context.Context, _ uuid.UUID, _ databases.DatabaseFilter) ([]databases.Database, error) {

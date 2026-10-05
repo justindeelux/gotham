@@ -48,6 +48,9 @@ type Repository interface {
 	// HasActiveDeploy reports whether a service deploy is in flight, so a
 	// server change can be refused while one runs.
 	HasActiveDeploy(ctx context.Context, serviceID uuid.UUID) (bool, error)
+	// HasDeploys reports whether the service was ever deployed, so a server
+	// change can be refused once its compose project runs on a node.
+	HasDeploys(ctx context.Context, serviceID uuid.UUID) (bool, error)
 	// UpdateServiceConfig persists the mutable configuration fields (name,
 	// document, environment) without touching the status, so a concurrent
 	// lifecycle completion cannot clobber an edit (and an edit cannot clobber
@@ -259,11 +262,21 @@ func (r *storeRepository) HasActiveDeploy(ctx context.Context, serviceID uuid.UU
 	return active, nil
 }
 
+// HasDeploys implements Repository.
+func (r *storeRepository) HasDeploys(ctx context.Context, serviceID uuid.UUID) (bool, error) {
+	deployed, err := r.store.HasServiceDeploys(ctx, pgUUID(serviceID))
+	if err != nil {
+		return false, fmt.Errorf("services: deploy history check: %w", err)
+	}
+	return deployed, nil
+}
+
 // enrich fills the environment, project and server names of listed services.
 // Rows of one listing share environments, so each distinct parent is read
 // once.
 func (r *storeRepository) enrich(ctx context.Context, services []Service) ([]Service, error) {
 	envs := make(map[uuid.UUID]sqlc.Environment)
+	projects := make(map[uuid.UUID]sqlc.Project)
 	servers := make(map[uuid.UUID]string)
 	for i, service := range services {
 		if service.EnvironmentID != uuid.Nil {
@@ -280,6 +293,20 @@ func (r *storeRepository) enrich(ctx context.Context, services []Service) ([]Ser
 			}
 			services[i].EnvironmentName = env.Name
 			services[i].ProjectID = uuidFromPG(env.ProjectID)
+			if projectID := uuidFromPG(env.ProjectID); projectID != uuid.Nil {
+				project, ok := projects[projectID]
+				if !ok {
+					fetched, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
+						ID:     pgUUID(projectID),
+						TeamID: pgUUID(service.TeamID),
+					})
+					if err != nil {
+						return nil, fmt.Errorf("services: get project: %w", err)
+					}
+					project, projects[projectID] = fetched, fetched
+				}
+				services[i].ProjectName = project.Name
+			}
 		}
 		if service.ServerID != uuid.Nil {
 			name, ok := servers[service.ServerID]

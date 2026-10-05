@@ -358,20 +358,32 @@ func TestDeployDoesNotClobberConcurrentEdit(t *testing.T) {
 	}()
 	waitForUp(t, agent)
 
-	name := "updated-during-deploy"
-	if _, err := svc.Update(context.Background(), userID, created.ID, UpdateRequest{Name: &name}); err != nil {
-		t.Fatalf("Update: %v", err)
+	// The update serializes behind the deploy's lifecycle lock: it must not
+	// complete (and must not be clobbered) while the deploy runs.
+	updateDone := make(chan error, 1)
+	go func() {
+		name := "updated-during-deploy"
+		_, err := svc.Update(context.Background(), userID, created.ID, UpdateRequest{Name: &name})
+		updateDone <- err
+	}()
+	select {
+	case err := <-updateDone:
+		t.Fatalf("Update completed during a deploy: %v (want it to wait for the lifecycle lock)", err)
+	case <-time.After(200 * time.Millisecond):
 	}
 	close(gate)
 	if err := <-deployDone; err != nil {
 		t.Fatalf("Deploy: %v", err)
+	}
+	if err := <-updateDone; err != nil {
+		t.Fatalf("Update after deploy: %v", err)
 	}
 
 	after, err := svc.Get(context.Background(), userID, created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if after.Name != name {
+	if after.Name != "updated-during-deploy" {
 		t.Fatalf("the concurrent rename was overwritten by the deploy completion: %q", after.Name)
 	}
 	if after.Status != StatusRunning {

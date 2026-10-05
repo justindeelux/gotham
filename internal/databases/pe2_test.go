@@ -73,12 +73,10 @@ func TestUpdateRefusesServerChangeWhileBusy(t *testing.T) {
 	svc := NewService(Config{Repository: repo, Containers: &fakeContainers{runID: "container-1"}, Secret: testSecret, Leases: leases, Logger: discardLogger()})
 	owner := uuid.New()
 	envID, _ := repo.seedEnvironment()
-	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
-		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: repo.seedServer(),
+	created := repo.seed(Database{
+		UserID: owner, ServerID: repo.seedServer(), EnvironmentID: envID,
+		Name: "orders", Engine: EnginePostgres, Status: StatusStopped,
 	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
 	other := repo.seedServer()
 
 	if !leases.Claim(created.ID, JobLeaseBackup) {
@@ -98,6 +96,82 @@ func TestUpdateRefusesServerChangeWhileBusy(t *testing.T) {
 	if moved.ServerID != other {
 		t.Fatalf("server = %s, want %s", moved.ServerID, other)
 	}
+}
+
+// TestUpdateRefusesServerChangeOnceCreated pins F2: a database that ever
+// provisioned a container cannot change node, even when idle.
+func TestUpdateRefusesServerChangeOnceCreated(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newTestService(repo, &fakeContainers{runID: "container-1"})
+	owner := uuid.New()
+	envID, _ := repo.seedEnvironment()
+	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
+		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: repo.seedServer(),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ContainerID == "" {
+		t.Fatal("provisioned database has no container")
+	}
+	other := repo.seedServer()
+	if _, err := svc.Update(context.Background(), owner, created.ID,
+		UpdateRequest{Name: ptr("orders"), ServerID: &other}); !errors.Is(err, ErrServerPinned) {
+		t.Fatalf("server change on a created database err = %v, want ErrServerPinned", err)
+	}
+}
+
+// TestUpdateHoldsLease pins F3: the service holds the database's job lease
+// for the whole update, so a backup starting mid-update serializes against
+// it, and the lease is released afterwards.
+func TestUpdateHoldsLease(t *testing.T) {
+	repo := newFakeRepository()
+	leases := NewJobLeases()
+	svc := NewService(Config{Repository: repo, Containers: &fakeContainers{runID: "container-1"}, Secret: testSecret, Leases: leases, Logger: discardLogger()})
+	owner := uuid.New()
+	envID, _ := repo.seedEnvironment()
+	created := repo.seed(Database{
+		UserID: owner, ServerID: repo.seedServer(), EnvironmentID: envID,
+		Name: "orders", Engine: EnginePostgres, Status: StatusStopped,
+	})
+
+	heldDuring := JobLeaseKind("")
+	repo.beforeTargetUpdate = func(Database) {
+		heldDuring = leases.Held(created.ID)
+	}
+	if _, err := svc.Update(context.Background(), owner, created.ID,
+		UpdateRequest{Name: ptr("renamed")}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if heldDuring != JobLeaseLifecycle {
+		t.Fatalf("lease during update = %q, want the lifecycle claim", heldDuring)
+	}
+	if held := leases.Held(created.ID); held != "" {
+		t.Fatalf("lease after update = %q, want it released", held)
+	}
+}
+
+// TestUpdateRefusedWhileBackupHoldsLease pins F3: a backup that owns the
+// volume refuses even a rename, instead of racing it.
+func TestUpdateRefusedWhileBackupHoldsLease(t *testing.T) {
+	repo := newFakeRepository()
+	leases := NewJobLeases()
+	svc := NewService(Config{Repository: repo, Containers: &fakeContainers{runID: "container-1"}, Secret: testSecret, Leases: leases, Logger: discardLogger()})
+	owner := uuid.New()
+	envID, _ := repo.seedEnvironment()
+	created := repo.seed(Database{
+		UserID: owner, ServerID: repo.seedServer(), EnvironmentID: envID,
+		Name: "orders", Engine: EnginePostgres, Status: StatusStopped,
+	})
+
+	if !leases.Claim(created.ID, JobLeaseBackup) {
+		t.Fatal("claim backup lease")
+	}
+	if _, err := svc.Update(context.Background(), owner, created.ID,
+		UpdateRequest{Name: ptr("renamed")}); !errors.Is(err, ErrDatabaseBusy) {
+		t.Fatalf("update under backup err = %v, want ErrDatabaseBusy", err)
+	}
+	leases.Release(created.ID)
 }
 
 // TestListFilters scopes the list to one environment or project.

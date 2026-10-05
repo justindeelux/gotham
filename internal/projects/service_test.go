@@ -46,8 +46,44 @@ func TestFakeCounterScriptedCounts(t *testing.T) {
 	}
 }
 
+// TestDeleteBlockedByPreviewsOnly pins F5: previews stay out of the display
+// counts but still block the environment and project deletes, whose 409
+// names them.
+func TestDeleteBlockedByPreviewsOnly(t *testing.T) {
+	repo := newFakeRepository()
+	counter := newFakeCounter()
+	userID, teamID := uuid.New(), uuid.New()
+	svc, ctx := newTestService(repo, counter, userID, teamID, teams.RoleAdmin)
+
+	project, environment, err := svc.CreateProject(ctx, userID, "Shop", "")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	counter.previewEnvs[environment.ID] = 2
+	counter.previewProjs[project.ID] = 2
+
+	proj, envs, err := svc.GetProject(ctx, userID, project.ID)
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if proj.Resources.Applications != 0 {
+		t.Fatalf("display counts = %+v, want previews excluded", proj.Resources)
+	}
+	if len(envs) != 1 || envs[0].Resources.Applications != 0 {
+		t.Fatalf("environments = %+v, want zero display counts", envs)
+	}
+	if _, err := svc.CreateEnvironment(ctx, userID, project.ID, "staging"); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	if err := svc.DeleteEnvironment(ctx, userID, environment.ID); !errors.Is(err, ErrEnvironmentNotEmpty) {
+		t.Fatalf("delete preview-only env err = %v, want ErrEnvironmentNotEmpty", err)
+	}
+	if err := svc.DeleteProject(ctx, userID, project.ID); !errors.Is(err, ErrProjectNotEmpty) {
+		t.Fatalf("delete preview-only project err = %v, want ErrProjectNotEmpty", err)
+	}
+}
+
 // TestServiceCreateProjectStartsWithProduction asserts the contract's create
-// shape: one project plus its production environment.
 func TestServiceCreateProjectStartsWithProduction(t *testing.T) {
 	repo := newFakeRepository()
 	svc, ctx := newTestService(repo, newFakeCounter(), uuid.New(), uuid.New(), teams.RoleAdmin)

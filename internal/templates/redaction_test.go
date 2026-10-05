@@ -134,6 +134,11 @@ func (f *fakeRepository) HasActiveDeploy(_ context.Context, _ uuid.UUID) (bool, 
 	return false, nil
 }
 
+// HasDeploys implements services.Repository.
+func (f *fakeRepository) HasDeploys(_ context.Context, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
+
 // failingAgent is a node whose compose up fails while quoting the secret.
 type failingAgent struct {
 	message string

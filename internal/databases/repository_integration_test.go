@@ -155,6 +155,47 @@ func poolExec(st *store.Store, ctx context.Context, query string, args ...any) e
 	return err
 }
 
+// TestUpdateDatabaseTargetKeepsUnsetPlacement pins F3 at the SQL level: a
+// Nil environment or server (the service zeroes placement the request
+// leaves alone) keeps the stored values instead of writing NULL, while a
+// set value moves the row.
+func TestUpdateDatabaseTargetKeepsUnsetPlacement(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	teamID, _, envID := seedProjectEnvironment(t, st)
+
+	created, err := repo.CreateDatabase(ctx, Database{
+		ID:            uuid.New(),
+		UserID:        ownerID,
+		TeamID:        teamID,
+		ServerID:      serverID,
+		EnvironmentID: envID,
+		Name:          "orders",
+		Engine:        EnginePostgres,
+		Status:        StatusCreating,
+		StoragePath:   "gotham-db-" + uuid.New().String(),
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase: %v", err)
+	}
+
+	renamed, err := repo.UpdateDatabaseTarget(ctx, Database{
+		ID:   created.ID,
+		Name: "warehouse",
+	})
+	if err != nil {
+		t.Fatalf("UpdateDatabaseTarget (rename only): %v", err)
+	}
+	if renamed.Name != "warehouse" {
+		t.Fatalf("name = %q, want warehouse", renamed.Name)
+	}
+	if renamed.EnvironmentID != envID || renamed.ServerID != serverID {
+		t.Fatalf("placement = %s/%s, want the stored %s/%s",
+			renamed.EnvironmentID, renamed.ServerID, envID, serverID)
+	}
+}
+
 // TestRepositoryRoundTrip exercises the SQL behind the repository: the
 // migration, the ownership reads, the unique-name index, the sealed secrets
 // and the soft delete that keeps the row and its volume.

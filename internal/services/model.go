@@ -55,13 +55,14 @@ type Service struct {
 	UpdatedAt time.Time
 	// DeletedAt marks the soft delete; zero while the service is live.
 	DeletedAt time.Time
-	// EnvironmentName, ProjectID and ServerName enrich the list and get
-	// responses per the Phase 13 contract (the wire `project_name` stays the
-	// compose project name the FE renders; the Gotham project rides the
-	// resources endpoint's project object and the projects API). They derive
-	// from EnvironmentID and ServerID and are never written directly.
+	// EnvironmentName, ProjectID, ProjectName and ServerName enrich the list
+	// and get responses per the Phase 13 contract (ProjectName is the Gotham
+	// project; the compose project name rides the wire as compose_project).
+	// They derive from EnvironmentID and ServerID and are never written
+	// directly.
 	EnvironmentName string
 	ProjectID       uuid.UUID
+	ProjectName     string
 	ServerName      string
 }
 

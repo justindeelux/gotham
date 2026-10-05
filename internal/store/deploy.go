@@ -51,10 +51,23 @@ func (s *Store) CountApplicationsByEnvironment(ctx context.Context, environmentI
 	return s.queries.CountApplicationsByEnvironment(ctx, environmentID)
 }
 
-// CountApplicationsByProject tallies every environment's applications of one
-// project.
+// CountApplicationsByProject tallies every environment's live applications
+// of one project (previews excluded; see CountPreviewApplicationsByProject).
 func (s *Store) CountApplicationsByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
 	return s.queries.CountApplicationsByProject(ctx, projectID)
+}
+
+// CountPreviewApplicationsByEnvironment tallies one environment's live
+// previews. Previews stay out of every display count, but they still block
+// the environment delete.
+func (s *Store) CountPreviewApplicationsByEnvironment(ctx context.Context, environmentID pgtype.UUID) (int64, error) {
+	return s.queries.CountPreviewApplicationsByEnvironment(ctx, environmentID)
+}
+
+// CountPreviewApplicationsByProject tallies every environment's live
+// previews of one project (see above).
+func (s *Store) CountPreviewApplicationsByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
+	return s.queries.CountPreviewApplicationsByProject(ctx, projectID)
 }
 
 // ListApplicationsByServer returns one node's applications (id and name) for

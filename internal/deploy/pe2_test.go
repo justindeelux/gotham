@@ -160,6 +160,86 @@ func TestListApplicationsFilters(t *testing.T) {
 	}
 }
 
+// TestMoveRefusedWhilePreviewsOpen pins F5: moving the base application to
+// another environment, or changing its node, answers 409 while live
+// previews exist.
+func TestMoveRefusedWhilePreviewsOpen(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	app.EnvironmentID = uuid.New()
+	repo := &fakeRepository{
+		app:          app,
+		livePreviews: map[uuid.UUID]bool{app.ID: true},
+		environments: map[uuid.UUID]EnvironmentRef{app.EnvironmentID: {ID: app.EnvironmentID}},
+	}
+	svc := newTestService(t, repo)
+
+	otherEnv := uuid.New()
+	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID,
+		UpdateApplicationInput{EnvironmentID: &otherEnv}); !errors.Is(err, ErrPreviewsOpen) {
+		t.Fatalf("move with open previews err = %v, want ErrPreviewsOpen", err)
+	}
+	otherServer := uuid.New()
+	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID,
+		UpdateApplicationInput{ServerID: &otherServer}); !errors.Is(err, ErrPreviewsOpen) {
+		t.Fatalf("server change with open previews err = %v, want ErrPreviewsOpen", err)
+	}
+
+	delete(repo.livePreviews, app.ID)
+	moved, err := svc.UpdateApplication(context.Background(), userID, app.ID,
+		UpdateApplicationInput{EnvironmentID: &otherEnv})
+	if err != nil {
+		t.Fatalf("move after previews closed: %v", err)
+	}
+	if moved.EnvironmentID != otherEnv {
+		t.Fatalf("environment = %s, want %s", moved.EnvironmentID, otherEnv)
+	}
+}
+
+// TestServerChangeDomainCollisionAnswersOwn409 pins F6: a server change
+// that collides on the target node's domain answers 409 with the domain
+// message, not the deploy-in-flight text.
+func TestServerChangeDomainCollisionAnswersOwn409(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	app.BaseDomain = "taken.example.com"
+	repo := &fakeRepository{
+		app:          app,
+		updateErr:    ErrConflict, // the per-server domain index fired
+		environments: map[uuid.UUID]EnvironmentRef{app.EnvironmentID: {ID: app.EnvironmentID}},
+	}
+	svc := newTestService(t, repo)
+
+	other := uuid.New()
+	err := func() error {
+		_, err := svc.UpdateApplication(context.Background(), userID, app.ID,
+			UpdateApplicationInput{ServerID: &other})
+		return err
+	}()
+	if !errors.Is(err, ErrDomainConflict) {
+		t.Fatalf("domain collision on server change err = %v, want ErrDomainConflict", err)
+	}
+}
+
+// TestServerChangeDeployCheckPassesThrough pins F6: a ListDeployments failure
+// inside the in-flight check surfaces as-is, never as the 409.
+func TestServerChangeDeployCheckPassesThrough(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app, listDeploymentsErr: errors.New("database down")}
+	svc := newTestService(t, repo)
+
+	other := uuid.New()
+	_, err := svc.UpdateApplication(context.Background(), userID, app.ID,
+		UpdateApplicationInput{ServerID: &other})
+	if err == nil || errors.Is(err, ErrDeployInFlight) {
+		t.Fatalf("err = %v, want the raw ListDeployments failure", err)
+	}
+	if err.Error() != "database down" {
+		t.Fatalf("err = %v, want the raw ListDeployments failure", err)
+	}
+}
+
 // TestUpdateApplicationTeamScope keeps the move inside the team even when the
 // caller names an environment of another team: the repository resolves it,
 // and a refusal surfaces as ErrNotFound.

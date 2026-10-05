@@ -90,8 +90,33 @@ func TestResourcesEnvironmentMigration(t *testing.T) {
 		t.Fatalf("insert environment: %v", err)
 	}
 
+	// A box that ran PE-1's create routes may hold resource rows; 00035
+	// wipes them deliberately (like 00034) instead of aborting boot on the
+	// new NOT NULL columns.
+	for _, seed := range []string{
+		`INSERT INTO applications (user_id, team_id, server_id, name, clone_url, branch, build_pack)
+		 VALUES ($1, $1, $2, 'legacy-app', 'https://github.com/acme/demo.git', 'main', 'dockerfile')`,
+		`INSERT INTO services (user_id, team_id, server_id, name, compose_yaml)
+		 VALUES ($1, $1, $2, 'legacy-svc', 'services: {}')`,
+		`INSERT INTO databases (user_id, team_id, server_id, name, engine)
+		 VALUES ($1, $1, $2, 'legacy-db', 'postgres')`,
+	} {
+		if _, err := db.ExecContext(ctx, seed, userID, serverID); err != nil {
+			t.Fatalf("seed legacy resource: %v", err)
+		}
+	}
+
 	if _, err := provider.UpTo(ctx, 35); err != nil {
 		t.Fatalf("migrate to 00035: %v", err)
+	}
+	for _, table := range []string{"applications", "services", "databases"} {
+		var count int
+		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s has %d rows, want the deliberate wipe to empty it", table, count)
+		}
 	}
 
 	indexExists := func(index string) bool {
@@ -104,8 +129,11 @@ func TestResourcesEnvironmentMigration(t *testing.T) {
 	}
 	for _, index := range []string{
 		"applications_environment_name_idx",
+		"applications_environment_idx",
 		"databases_environment_name_idx",
+		"databases_environment_idx",
 		"services_environment_name_idx",
+		"services_environment_idx",
 	} {
 		if !indexExists(index) {
 			t.Errorf("00035 did not create index %s", index)

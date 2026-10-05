@@ -159,6 +159,21 @@ func (q *Queries) HasActiveServiceDeploy(ctx context.Context, serviceID pgtype.U
 	return exists, err
 }
 
+const hasServiceDeploys = `-- name: HasServiceDeploys :one
+SELECT EXISTS (
+    SELECT 1 FROM service_deploys WHERE service_id = $1
+)
+`
+
+// Whether the service was ever deployed. A deployed service cannot change
+// node: its compose project runs there.
+func (q *Queries) HasServiceDeploys(ctx context.Context, serviceID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasServiceDeploys, serviceID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listRoutableServices = `-- name: ListRoutableServices :many
 SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id, environment_id FROM services
 WHERE deleted_at IS NULL
@@ -431,6 +446,52 @@ func (q *Queries) ListServicesByUser(ctx context.Context, userID pgtype.UUID) ([
 	return items, nil
 }
 
+const purgeTombstonedServicesByEnvironment = `-- name: PurgeTombstonedServicesByEnvironment :execrows
+DELETE FROM services
+WHERE environment_id = $1 AND deleted_at IS NOT NULL
+`
+
+// Hard-deletes the soft-deleted services of one environment. An
+// environment delete purges these in the same transaction first, so only
+// live services block it (409); the compose volumes intentionally survive
+// (they are the project's data, like on a soft delete).
+func (q *Queries) PurgeTombstonedServicesByEnvironment(ctx context.Context, environmentID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeTombstonedServicesByEnvironment, environmentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const purgeTombstonedServicesByProject = `-- name: PurgeTombstonedServicesByProject :execrows
+DELETE FROM services
+WHERE environment_id IN (SELECT id FROM environments WHERE project_id = $1)
+AND deleted_at IS NOT NULL
+`
+
+// Same as above for every environment of one project.
+func (q *Queries) PurgeTombstonedServicesByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeTombstonedServicesByProject, projectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const purgeTombstonedServicesByServer = `-- name: PurgeTombstonedServicesByServer :execrows
+DELETE FROM services
+WHERE server_id = $1 AND deleted_at IS NOT NULL
+`
+
+// Same as above for one node.
+func (q *Queries) PurgeTombstonedServicesByServer(ctx context.Context, serverID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeTombstonedServicesByServer, serverID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const serviceNameInEnvironment = `-- name: ServiceNameInEnvironment :one
 SELECT EXISTS (
     SELECT 1 FROM services
@@ -487,8 +548,8 @@ UPDATE services
 SET name = $2,
     compose_yaml = $3,
     env = $4,
-    environment_id = $5,
-    server_id = $6,
+    environment_id = COALESCE($5, environment_id),
+    server_id = COALESCE($6, server_id),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, team_id, environment_id
@@ -503,6 +564,10 @@ type UpdateServiceConfigParams struct {
 	ServerID      pgtype.UUID `json:"server_id"`
 }
 
+// Only the name, document, environment and variables are written, and the
+// placement columns only when the caller passes them (COALESCE with narg):
+// the service zeroes placement fields the request leaves alone, so a stale
+// snapshot can never write back an old environment or server.
 func (q *Queries) UpdateServiceConfig(ctx context.Context, arg UpdateServiceConfigParams) (Service, error) {
 	row := q.db.QueryRow(ctx, updateServiceConfig,
 		arg.ID,

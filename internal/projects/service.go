@@ -39,6 +39,13 @@ type ResourceCounter interface {
 	CountProjectResources(ctx context.Context, projectID uuid.UUID) (ResourceCounts, error)
 	// CountEnvironmentResources tallies the workloads of one environment.
 	CountEnvironmentResources(ctx context.Context, environmentID uuid.UUID) (ResourceCounts, error)
+	// CountProjectPreviews tallies the live previews of every environment
+	// of a project. Previews stay out of the display counts, but they
+	// still block the project delete.
+	CountProjectPreviews(ctx context.Context, projectID uuid.UUID) (int, error)
+	// CountEnvironmentPreviews tallies the live previews of one
+	// environment (see above).
+	CountEnvironmentPreviews(ctx context.Context, environmentID uuid.UUID) (int, error)
 }
 
 // ProjectService is the control-plane surface the HTTP layer depends on. It
@@ -321,7 +328,20 @@ func (s *Service) DeleteProject(ctx context.Context, userID, projectID uuid.UUID
 	if counts.Applications+counts.Services+counts.Databases > 0 {
 		return ErrProjectNotEmpty
 	}
-	return s.repo.DeleteProject(ctx, teamID, projectID)
+	// Previews stay out of the display counts but still block the delete.
+	previews, err := s.counter.CountProjectPreviews(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if previews > 0 {
+		return ErrProjectNotEmpty
+	}
+	volumes, err := s.repo.DeleteProject(ctx, teamID, projectID)
+	if err != nil {
+		return err
+	}
+	s.logOrphanVolumes(projectID, volumes)
+	return nil
 }
 
 // ListEnvironments implements ProjectService.
@@ -427,7 +447,32 @@ func (s *Service) DeleteEnvironment(ctx context.Context, userID, environmentID u
 	if counts.Applications+counts.Services+counts.Databases > 0 {
 		return ErrEnvironmentNotEmpty
 	}
-	return s.repo.DeleteEnvironmentIfNotLast(ctx, teamID, environmentID)
+	// Previews stay out of the display counts but still block the delete.
+	previews, err := s.counter.CountEnvironmentPreviews(ctx, environmentID)
+	if err != nil {
+		return err
+	}
+	if previews > 0 {
+		return ErrEnvironmentNotEmpty
+	}
+	volumes, err := s.repo.DeleteEnvironmentIfNotLast(ctx, teamID, environmentID)
+	if err != nil {
+		return err
+	}
+	s.logOrphanVolumes(environmentID, volumes)
+	return nil
+}
+
+// logOrphanVolumes warns about database volumes a tombstone purge left on
+// their nodes: the rows are gone, so nothing will ever remove them.
+func (s *Service) logOrphanVolumes(scopeID uuid.UUID, volumes []string) {
+	for _, volume := range volumes {
+		if volume == "" {
+			continue
+		}
+		s.logger.Warn("projects: purged database tombstone left its volume on the node",
+			"scope_id", scopeID, "volume", volume)
+	}
 }
 
 // GetEnvironmentResources implements ProjectService: one environment of the
@@ -452,7 +497,7 @@ func (s *Service) GetEnvironmentResources(ctx context.Context, userID, environme
 	if s.applications == nil || s.services == nil || s.databases == nil {
 		return EnvironmentResources{}, errors.New("projects: resource listers are not configured")
 	}
-	apps, err := s.applications.ListApplications(ctx, userID, deploy.ApplicationFilter{EnvironmentID: environmentID})
+	apps, err := s.applications.ListApplications(ctx, userID, deploy.ApplicationFilter{EnvironmentID: environmentID, IncludePreviews: includePreviews})
 	if err != nil {
 		return EnvironmentResources{}, err
 	}

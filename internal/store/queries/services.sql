@@ -38,6 +38,25 @@ SELECT count(*) FROM services s
 JOIN environments e ON e.id = s.environment_id
 WHERE e.project_id = $1 AND s.deleted_at IS NULL;
 
+-- name: PurgeTombstonedServicesByEnvironment :execrows
+-- Hard-deletes the soft-deleted services of one environment. An
+-- environment delete purges these in the same transaction first, so only
+-- live services block it (409); the compose volumes intentionally survive
+-- (they are the project's data, like on a soft delete).
+DELETE FROM services
+WHERE environment_id = $1 AND deleted_at IS NOT NULL;
+
+-- name: PurgeTombstonedServicesByProject :execrows
+-- Same as above for every environment of one project.
+DELETE FROM services
+WHERE environment_id IN (SELECT id FROM environments WHERE project_id = $1)
+AND deleted_at IS NOT NULL;
+
+-- name: PurgeTombstonedServicesByServer :execrows
+-- Same as above for one node.
+DELETE FROM services
+WHERE server_id = $1 AND deleted_at IS NOT NULL;
+
 -- name: ListServicesByServer :many
 SELECT id, name FROM services
 WHERE server_id = $1 AND deleted_at IS NULL
@@ -58,13 +77,24 @@ SELECT EXISTS (
     SELECT 1 FROM service_deploys WHERE service_id = $1 AND state = 'deploying'
 );
 
+-- name: HasServiceDeploys :one
+-- Whether the service was ever deployed. A deployed service cannot change
+-- node: its compose project runs there.
+SELECT EXISTS (
+    SELECT 1 FROM service_deploys WHERE service_id = $1
+);
+
 -- name: UpdateServiceConfig :one
+-- Only the name, document, environment and variables are written, and the
+-- placement columns only when the caller passes them (COALESCE with narg):
+-- the service zeroes placement fields the request leaves alone, so a stale
+-- snapshot can never write back an old environment or server.
 UPDATE services
 SET name = $2,
     compose_yaml = $3,
     env = $4,
-    environment_id = $5,
-    server_id = $6,
+    environment_id = COALESCE(sqlc.narg(environment_id), environment_id),
+    server_id = COALESCE(sqlc.narg(server_id), server_id),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;

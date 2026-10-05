@@ -30,6 +30,9 @@ var (
 	// database, so a server change is refused (409 with the contract's exact
 	// body).
 	ErrDeployInFlight = errors.New("databases: a deploy is in progress")
+	// ErrServerPinned — the database was already created, so it cannot
+	// change node (409): its container and volume live there.
+	ErrServerPinned = errors.New("databases: a database cannot change server once created")
 	// ErrNameConflict — the target environment already holds the name (409).
 	ErrNameConflict = errors.New("databases: name already exists in the target environment")
 )

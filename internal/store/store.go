@@ -490,6 +490,34 @@ func (s *Store) DeleteServer(ctx context.Context, id pgtype.UUID) error {
 	return s.queries.DeleteServer(ctx, id)
 }
 
+// DeleteServerPurging removes the node in a transaction that first purges
+// its soft-deleted services and databases, so only live resources block the
+// delete (see DeleteEnvironmentGuarded). Purged database volumes may still
+// exist on the node and come back as orphanVolumes for the caller to log.
+func (s *Store) DeleteServerPurging(ctx context.Context, id pgtype.UUID) ([]string, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if _, err := queries.PurgeTombstonedServicesByServer(ctx, id); err != nil {
+		return nil, err
+	}
+	volumes, err := queries.PurgeTombstonedDatabasesByServer(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := queries.DeleteServer(ctx, id); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return volumes, nil
+}
+
 // UpdateServerAgentInfo records the capabilities reported by an SSH validation
 // or an agent registration and returns the updated row. It never changes status
 // or last_seen: only a heartbeat marks a node ready. The

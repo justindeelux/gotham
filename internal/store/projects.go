@@ -59,10 +59,48 @@ func (s *Store) UpdateProject(ctx context.Context, params sqlc.UpdateProjectPara
 	return s.queries.UpdateProject(ctx, params)
 }
 
-// DeleteProject removes one project of a team and reports how many rows were
-// removed (0 when the ID is unknown or foreign). Environments cascade.
-func (s *Store) DeleteProject(ctx context.Context, params sqlc.DeleteProjectParams) (int64, error) {
-	return s.queries.DeleteProject(ctx, params)
+// DeleteProject removes one project of a team in a transaction and reports
+// how many rows were removed (0 when the ID is unknown or foreign).
+// Environments cascade. Soft-deleted services and databases of every
+// environment are purged in the same transaction first, so only live
+// resources block the delete (see DeleteEnvironmentGuarded); purged
+// database volumes may still exist on the node and come back as
+// orphanVolumes for the caller to log.
+func (s *Store) DeleteProject(ctx context.Context, params sqlc.DeleteProjectParams) (int64, []string, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	// Team-scoped existence first: a foreign project ID must neither purge
+	// nor delete, and reports zero rows like the old single-query delete.
+	var exists bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1 AND team_id = $2)`,
+		params.ID, params.TeamID).Scan(&exists); err != nil {
+		return 0, nil, err
+	}
+	if !exists {
+		// Rollback below; report zero rows removed.
+		return 0, nil, nil
+	}
+	if _, err := queries.PurgeTombstonedServicesByProject(ctx, params.ID); err != nil {
+		return 0, nil, err
+	}
+	volumes, err := queries.PurgeTombstonedDatabasesByProject(ctx, params.ID)
+	if err != nil {
+		return 0, nil, err
+	}
+	affected, err := queries.DeleteProject(ctx, params)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, nil, err
+	}
+	return affected, volumes, nil
 }
 
 // CreateEnvironment stores an environment row and returns it.
@@ -96,10 +134,17 @@ func (s *Store) UpdateEnvironment(ctx context.Context, params sqlc.UpdateEnviron
 // pgx.ErrNoRows means the environment is unknown or foreign. A foreign-key
 // refusal (PE-2's RESTRICT against a racing resource insert) propagates for
 // the caller to map.
-func (s *Store) DeleteEnvironmentGuarded(ctx context.Context, teamID, environmentID pgtype.UUID) (removed bool, err error) {
+//
+// Soft-deleted services and databases of the environment are purged in the
+// same transaction first, so only live resources block the delete: a
+// tombstone must never pin its environment forever (there is no other purge
+// path for services, and database retention only sees live rows). Purged
+// database volumes may still exist on the node; their storage paths come
+// back as orphanVolumes for the caller to log.
+func (s *Store) DeleteEnvironmentGuarded(ctx context.Context, teamID, environmentID pgtype.UUID) (removed bool, orphanVolumes []string, err error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -109,32 +154,39 @@ func (s *Store) DeleteEnvironmentGuarded(ctx context.Context, teamID, environmen
 		TeamID: teamID,
 	})
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if _, err := queries.GetProjectForUpdate(ctx, env.ProjectID); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	count, err := queries.CountEnvironmentsByProject(ctx, env.ProjectID)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if count <= 1 {
-		return false, nil
+		return false, nil, nil
+	}
+	if _, err := queries.PurgeTombstonedServicesByEnvironment(ctx, environmentID); err != nil {
+		return false, nil, err
+	}
+	volumes, err := queries.PurgeTombstonedDatabasesByEnvironment(ctx, environmentID)
+	if err != nil {
+		return false, nil, err
 	}
 	affected, err := queries.DeleteEnvironment(ctx, sqlc.DeleteEnvironmentParams{
 		ID:     environmentID,
 		TeamID: teamID,
 	})
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if affected == 0 {
-		return false, pgx.ErrNoRows
+		return false, nil, pgx.ErrNoRows
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, err
+		return false, nil, err
 	}
-	return true, nil
+	return true, volumes, nil
 }
 
 // CountEnvironmentsByProject reports how many environments a project holds.

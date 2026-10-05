@@ -48,13 +48,20 @@ export interface ServiceDomainRoute {
   port: number;
 }
 
-/** One compose service as the API returns it (see serviceResponse in routes.go). */
+/** One compose service as the API returns it (see ServiceResponse). */
 export interface Service {
   id: string;
   name: string;
   status: ServiceStatus;
   server_id: string;
+  server_name: string;
+  environment_id: string;
+  environment_name: string;
+  project_id: string;
+  /** The Gotham project (see compose_project for the compose name). */
   project_name: string;
+  /** The compose project name (`gotham-<id>`) the node runs. */
+  compose_project: string;
   /** Present on get/create/update/lifecycle responses, omitted in the list. */
   compose_yaml?: string;
   env: Record<string, string>;
@@ -89,6 +96,7 @@ export interface ComposeServiceContainer {
 /** Body of POST /services. */
 export interface CreateServiceInput {
   name: string;
+  environment_id: string;
   server_id: string;
   compose_yaml: string;
   /** `${VAR}` substitution input; template secret values live here only. */

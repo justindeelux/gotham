@@ -17,6 +17,9 @@ var (
 	// ErrDeployInFlight — a deploy is running, so a server change is refused
 	// (409 with the contract's exact body).
 	ErrDeployInFlight = errors.New("services: a deploy is in progress")
+	// ErrServerPinned — the service was already deployed, so it cannot
+	// change node (409): its compose project runs there.
+	ErrServerPinned = errors.New("services: a deployed service cannot change server")
 	// ErrNameConflict — the target environment already holds the name (409).
 	ErrNameConflict = errors.New("services: name already exists in the target environment")
 	// ErrAgentUnavailable — node agent unreachable; the only retryable

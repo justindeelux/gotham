@@ -148,10 +148,10 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Fatalf("UpdateEnvironment = %+v, %v", renamedEnv, err)
 	}
 
-	if err := repo.DeleteEnvironmentIfNotLast(ctx, teamID, staging.ID); err != nil {
+	if _, err := repo.DeleteEnvironmentIfNotLast(ctx, teamID, staging.ID); err != nil {
 		t.Fatalf("DeleteEnvironmentIfNotLast: %v", err)
 	}
-	if err := repo.DeleteProject(ctx, teamID, project.ID); err != nil {
+	if _, err := repo.DeleteProject(ctx, teamID, project.ID); err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	}
 	if _, err := repo.GetProject(ctx, teamID, project.ID); !errors.Is(err, ErrNotFound) {
@@ -319,7 +319,10 @@ func TestStoreRepositoryCreateRacesDeleteProject(t *testing.T) {
 		}()
 		go func() {
 			<-start
-			deleted <- repo.DeleteProject(ctx, teamID, project.ID)
+			deleted <- func() error {
+				_, err := repo.DeleteProject(ctx, teamID, project.ID)
+				return err
+			}()
 		}()
 		close(start)
 		got := <-created
@@ -350,10 +353,10 @@ func TestStoreRepositoryCrossTeamIsNotFound(t *testing.T) {
 	for name, err := range map[string]error{
 		"get project":    mustErr(repo.GetProject(ctx, teamB, project.ID)),
 		"update project": mustErr(repo.UpdateProject(ctx, teamB, project.ID, "x", "")),
-		"delete project": repo.DeleteProject(ctx, teamB, project.ID),
+		"delete project": mustErr(repo.DeleteProject(ctx, teamB, project.ID)),
 		"get env":        mustErr(repo.GetEnvironment(ctx, teamB, production.ID)),
 		"update env":     mustErr(repo.UpdateEnvironment(ctx, teamB, production.ID, "x")),
-		"delete env":     repo.DeleteEnvironmentIfNotLast(ctx, teamB, production.ID),
+		"delete env":     mustErr(repo.DeleteEnvironmentIfNotLast(ctx, teamB, production.ID)),
 		"create env":     mustErr(repo.CreateEnvironment(ctx, teamB, project.ID, "staging")),
 		"list envs":      mustErr(repo.ListEnvironments(ctx, teamB, project.ID)),
 	} {

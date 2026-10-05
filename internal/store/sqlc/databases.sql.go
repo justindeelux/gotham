@@ -487,6 +487,92 @@ func (q *Queries) PurgeDatabase(ctx context.Context, id pgtype.UUID) (int64, err
 	return result.RowsAffected(), nil
 }
 
+const purgeTombstonedDatabasesByEnvironment = `-- name: PurgeTombstonedDatabasesByEnvironment :many
+DELETE FROM databases
+WHERE environment_id = $1 AND deleted_at IS NOT NULL
+RETURNING storage_path
+`
+
+// Hard-deletes the soft-deleted databases of one environment and returns
+// their storage paths. An environment delete purges these in the same
+// transaction first, so only live databases block it (409). A returned
+// volume may still exist on the node (the retention sweeper only sees rows),
+// so the caller logs it; the data stays recoverable from the node.
+func (q *Queries) PurgeTombstonedDatabasesByEnvironment(ctx context.Context, environmentID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, purgeTombstonedDatabasesByEnvironment, environmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var storage_path string
+		if err := rows.Scan(&storage_path); err != nil {
+			return nil, err
+		}
+		items = append(items, storage_path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const purgeTombstonedDatabasesByProject = `-- name: PurgeTombstonedDatabasesByProject :many
+DELETE FROM databases
+WHERE environment_id IN (SELECT id FROM environments WHERE project_id = $1)
+AND deleted_at IS NOT NULL
+RETURNING storage_path
+`
+
+// Same as above for every environment of one project.
+func (q *Queries) PurgeTombstonedDatabasesByProject(ctx context.Context, projectID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, purgeTombstonedDatabasesByProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var storage_path string
+		if err := rows.Scan(&storage_path); err != nil {
+			return nil, err
+		}
+		items = append(items, storage_path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const purgeTombstonedDatabasesByServer = `-- name: PurgeTombstonedDatabasesByServer :many
+DELETE FROM databases
+WHERE server_id = $1 AND deleted_at IS NOT NULL
+RETURNING storage_path
+`
+
+// Same as above for one node.
+func (q *Queries) PurgeTombstonedDatabasesByServer(ctx context.Context, serverID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, purgeTombstonedDatabasesByServer, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var storage_path string
+		if err := rows.Scan(&storage_path); err != nil {
+			return nil, err
+		}
+		items = append(items, storage_path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const softDeleteDatabase = `-- name: SoftDeleteDatabase :one
 UPDATE databases
 SET status = 'deleting',
@@ -630,8 +716,8 @@ func (q *Queries) UpdateDatabaseStatus(ctx context.Context, arg UpdateDatabaseSt
 const updateDatabaseTarget = `-- name: UpdateDatabaseTarget :one
 UPDATE databases
 SET name = $2,
-    environment_id = $3,
-    server_id = $4,
+    environment_id = COALESCE($3, environment_id),
+    server_id = COALESCE($4, server_id),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
@@ -644,9 +730,12 @@ type UpdateDatabaseTargetParams struct {
 	ServerID      pgtype.UUID `json:"server_id"`
 }
 
-// Rename, move environment and change node in one write. The row stays live
-// throughout: the write is fenced on deleted_at, so a concurrent delete wins
-// and the move silently no-ops to ErrNotFound instead.
+// Rename, move environment and change node in one write, with the placement
+// columns conditional (COALESCE with narg): the service zeroes placement
+// fields the request leaves alone, so a stale snapshot can never write back
+// an old environment or server. The row stays live throughout: the write is
+// fenced on deleted_at, so a concurrent delete wins and the move silently
+// no-ops to ErrNotFound instead.
 func (q *Queries) UpdateDatabaseTarget(ctx context.Context, arg UpdateDatabaseTargetParams) (Database, error) {
 	row := q.db.QueryRow(ctx, updateDatabaseTarget,
 		arg.ID,

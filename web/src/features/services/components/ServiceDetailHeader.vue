@@ -35,7 +35,7 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
           {{ route.domain }}:{{ route.port }}
         </NTag>
         <NTag v-if="service" size="small" class="mono">
-          {{ service.project_name }}
+          {{ service.compose_project }}
         </NTag>
       </NSpace>
     </div>

@@ -20,10 +20,13 @@ var (
 	// ErrEnvironmentExists — an environment name is already taken in the
 	// project (409).
 	ErrEnvironmentExists = errors.New("projects: environment name already exists")
-	// ErrProjectNotEmpty — the project still holds resources (409).
-	ErrProjectNotEmpty = errors.New("projects: project still has resources")
-	// ErrEnvironmentNotEmpty — the environment still holds resources (409).
-	ErrEnvironmentNotEmpty = errors.New("projects: environment still has resources")
+	// ErrProjectNotEmpty — the project still holds resources (409). The
+	// message names previews because they block too while staying out of
+	// every count.
+	ErrProjectNotEmpty = errors.New("projects: project still has resources (including previews)")
+	// ErrEnvironmentNotEmpty — the environment still holds resources (409;
+	// see above).
+	ErrEnvironmentNotEmpty = errors.New("projects: environment still has resources (including previews)")
 	// ErrLastEnvironment — the project's only environment cannot be deleted
 	// (409).
 	ErrLastEnvironment = errors.New("projects: a project needs at least one environment")

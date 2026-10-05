@@ -151,17 +151,29 @@ func (r *fakeRepository) UpdateServiceConfig(_ context.Context, service Service)
 	if !ok || !r.live(existing) {
 		return Service{}, ErrNotFound
 	}
+	// The conflict check runs against the effective environment: an
+	// unchanged placement arrives Nil (the SQL write is conditional).
+	effectiveEnv := service.EnvironmentID
+	if effectiveEnv == uuid.Nil {
+		effectiveEnv = existing.EnvironmentID
+	}
 	for _, id := range r.order {
 		other := r.services[id]
-		if other.EnvironmentID == service.EnvironmentID && other.Name == service.Name && other.ID != service.ID && r.live(other) {
+		if other.EnvironmentID == effectiveEnv && other.Name == service.Name && other.ID != service.ID && r.live(other) {
 			return Service{}, ErrConflict
 		}
 	}
 	existing.Name = service.Name
 	existing.ComposeYAML = service.ComposeYAML
 	existing.Env = service.Env
-	existing.EnvironmentID = service.EnvironmentID
-	existing.ServerID = service.ServerID
+	// Placement columns arrive Nil when the request leaves them alone (the
+	// SQL write is conditional); only a set value moves the row.
+	if service.EnvironmentID != uuid.Nil {
+		existing.EnvironmentID = service.EnvironmentID
+	}
+	if service.ServerID != uuid.Nil {
+		existing.ServerID = service.ServerID
+	}
 	r.services[service.ID] = existing
 	return existing, nil
 }
@@ -356,6 +368,13 @@ func (r *fakeRepository) HasActiveDeploy(_ context.Context, serviceID uuid.UUID)
 		}
 	}
 	return false, nil
+}
+
+// HasDeploys implements Repository.
+func (r *fakeRepository) HasDeploys(_ context.Context, serviceID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.deploys[serviceID]) > 0, nil
 }
 
 // environmentProject returns the project of a seeded environment (zero for

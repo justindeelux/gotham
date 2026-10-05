@@ -41,6 +41,10 @@ type Repository interface {
 	// ResolveProject validates that projectID belongs to teamID
 	// (ErrNotFound for a foreign or missing one).
 	ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error)
+	// HasLivePreviews reports whether the base application has live
+	// (non-deleted) preview bindings, so a move or server change can be
+	// refused while previews are open.
+	HasLivePreviews(ctx context.Context, appID uuid.UUID) (bool, error)
 	// CreateApplication stores a new application together with its env vars,
 	// sealed secrets and storages in one transaction.
 	CreateApplication(ctx context.Context, app Application, envVars []EnvVar, secrets []Secret, storages []Storage) (Application, error)
@@ -239,6 +243,15 @@ func (r *storeRepository) ResolveProject(ctx context.Context, projectID, teamID 
 		return uuid.Nil, fmt.Errorf("deploy: get project: %w", err)
 	}
 	return projectID, nil
+}
+
+// HasLivePreviews implements Repository.
+func (r *storeRepository) HasLivePreviews(ctx context.Context, appID uuid.UUID) (bool, error) {
+	live, err := r.store.HasLivePreviewBindings(ctx, pgUUID(appID))
+	if err != nil {
+		return false, fmt.Errorf("deploy: live preview check: %w", err)
+	}
+	return live, nil
 }
 
 // enrich maps rows to the domain model and fills the environment, project

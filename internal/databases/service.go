@@ -405,8 +405,39 @@ func (s *Service) Credentials(ctx context.Context, userID, databaseID uuid.UUID)
 // backup, restore or lifecycle operation holds the database is refused with
 // the contract's 409. Backup schedules hang off the database row, so they
 // follow it to the target environment unchanged.
+//
+// The whole update runs under the database's job lease with a fresh read,
+// so a concurrent backup, lifecycle action or second update serializes
+// against it; the placement columns (environment, server) are only written
+// when the request changes them, so a stale snapshot can never undo a
+// committed move.
 func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req UpdateRequest) (Database, error) {
 	database, err := s.database(ctx, userID, databaseID, true)
+	if err != nil {
+		return Database{}, err
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if !namePattern.MatchString(name) {
+			return Database{}, fmt.Errorf(
+				"%w: name must be 1-63 characters of letters, digits, \".\", \"_\" or \"-\"", ErrValidation)
+		}
+	}
+	// A node change while a backup or restore holds the database is refused
+	// with the contract's 409 before the update claims the lease below.
+	if req.ServerID != nil && *req.ServerID != database.ServerID {
+		if held := s.leases.Held(databaseID); held == JobLeaseBackup || held == JobLeaseRestore {
+			return Database{}, ErrDeployInFlight
+		}
+	}
+	if err := s.claimUpdate(databaseID); err != nil {
+		return Database{}, err
+	}
+	defer s.leases.Release(databaseID)
+	// Re-read under the lease: a concurrent update, backup or lifecycle
+	// action serializes against it, so this write never acts on a stale
+	// snapshot.
+	database, err = s.database(ctx, userID, databaseID, true)
 	if err != nil {
 		return Database{}, err
 	}
@@ -430,10 +461,20 @@ func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req 
 			return Database{}, fmt.Errorf("%w: a database named %q already exists in the target environment", ErrNameConflict, database.Name)
 		}
 		database.EnvironmentID = *req.EnvironmentID
+	} else {
+		// Unchanged placement zeroes out, so the conditional write keeps
+		// the freshly read value instead of a stale snapshot (a Nil UUID
+		// never persists: both columns are NOT NULL).
+		database.EnvironmentID = uuid.Nil
 	}
 	if req.ServerID != nil && *req.ServerID != database.ServerID {
 		if *req.ServerID == uuid.Nil {
 			return Database{}, fmt.Errorf("%w: server_id is required", ErrValidation)
+		}
+		// The container and its volume live on the stored node: only a
+		// database that never provisioned (no container yet) may move.
+		if database.ContainerID != "" {
+			return Database{}, ErrServerPinned
 		}
 		exists, err := s.repo.ServerExists(ctx, *req.ServerID, teams.ScopeFor(ctx, userID))
 		if err != nil {
@@ -442,12 +483,44 @@ func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req 
 		if !exists {
 			return Database{}, ErrServerNotFound
 		}
-		if s.leases != nil && s.leases.Held(databaseID) != "" {
-			return Database{}, ErrDeployInFlight
+		// The update already holds the lifecycle lease here, so no backup,
+		// restore or concurrent lifecycle action can interleave from this
+		// point on.
+		// A published port binds at creation, so re-check it against the
+		// target node before the row moves.
+		if database.PublicPort > 0 {
+			inUse, err := s.repo.PublicPortInUse(ctx, *req.ServerID, database.PublicPort)
+			if err != nil {
+				return Database{}, err
+			}
+			if inUse {
+				return Database{}, fmt.Errorf(
+					"%w: public port %d is already in use on this node", ErrPortConflict, database.PublicPort)
+			}
 		}
 		database.ServerID = *req.ServerID
+	} else {
+		database.ServerID = uuid.Nil
 	}
 	return s.repo.UpdateDatabaseTarget(ctx, database)
+}
+
+// claimUpdate takes the database's job lease for an update, mapping a lease
+// already held by a backup, restore or lifecycle action to ErrDatabaseBusy.
+// A nil registry never blocks, so a service built without exclusion keeps
+// working. Callers release the lease when done.
+func (s *Service) claimUpdate(databaseID uuid.UUID) error {
+	if !s.leases.Claim(databaseID, JobLeaseLifecycle) {
+		switch s.leases.Held(databaseID) {
+		case JobLeaseBackup:
+			return fmt.Errorf("%w: a backup is running for this database", ErrDatabaseBusy)
+		case JobLeaseRestore:
+			return fmt.Errorf("%w: a restore is running for this database", ErrDatabaseBusy)
+		default:
+			return fmt.Errorf("%w: another operation is running for this database", ErrDatabaseBusy)
+		}
+	}
+	return nil
 }
 
 // Delete stops and removes the container of a database of the active team,

@@ -63,6 +63,10 @@ type fakeRepository struct {
 	// resolution.
 	environments map[uuid.UUID]EnvironmentRef
 	resolveErr   error
+	// beforeTargetUpdate, when set, runs inside UpdateDatabaseTarget while
+	// the fake holds its lock, so a test can observe the in-flight write
+	// (e.g. which job lease the service holds around the update).
+	beforeTargetUpdate func(Database)
 
 	// expiredListCalls counts ListExpiredDatabases invocations so a lifecycle
 	// test can prove the sweeper loop started (or was refused).
@@ -458,6 +462,9 @@ func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
 func (r *fakeRepository) UpdateDatabaseTarget(_ context.Context, database Database) (Database, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.beforeTargetUpdate != nil {
+		r.beforeTargetUpdate(database)
+	}
 	if err := r.updateError(); err != nil {
 		return Database{}, err
 	}
@@ -465,16 +472,28 @@ func (r *fakeRepository) UpdateDatabaseTarget(_ context.Context, database Databa
 	if !ok || !r.live(stored) {
 		return Database{}, ErrNotFound
 	}
+	// The conflict check runs against the effective environment: an
+	// unchanged placement arrives Nil (the SQL write is conditional).
+	effectiveEnv := database.EnvironmentID
+	if effectiveEnv == uuid.Nil {
+		effectiveEnv = stored.EnvironmentID
+	}
 	for _, id := range r.order {
 		existing := r.databases[id]
-		if id != database.ID && existing.EnvironmentID == database.EnvironmentID &&
+		if id != database.ID && existing.EnvironmentID == effectiveEnv &&
 			existing.Name == database.Name && r.live(existing) {
 			return Database{}, ErrConflict
 		}
 	}
 	stored.Name = database.Name
-	stored.EnvironmentID = database.EnvironmentID
-	stored.ServerID = database.ServerID
+	// Placement columns arrive Nil when the request leaves them alone (the
+	// SQL write is conditional); only a set value moves the row.
+	if database.EnvironmentID != uuid.Nil {
+		stored.EnvironmentID = database.EnvironmentID
+	}
+	if database.ServerID != uuid.Nil {
+		stored.ServerID = database.ServerID
+	}
 	stored.UpdatedAt = time.Now().UTC()
 	r.databases[database.ID] = stored
 	return stored, nil

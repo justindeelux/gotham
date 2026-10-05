@@ -32,26 +32,10 @@ const defaultLogTail = 200
 // server (it mirrors databases.UserIDFunc for the same reason).
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
-// serviceResponse is the wire representation of a service. compose_yaml is
-// omitted from list responses (a document may be a megabyte); env is always
-// included because its values are already embedded in the rendered documents
-// the owner can read, and the UI needs them to prefill the editor.
-type serviceResponse struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Status          Status            `json:"status"`
-	ServerID        string            `json:"server_id"`
-	ServerName      string            `json:"server_name"`
-	EnvironmentID   string            `json:"environment_id"`
-	EnvironmentName string            `json:"environment_name"`
-	ProjectID       string            `json:"project_id"`
-	ProjectName     string            `json:"project_name"`
-	ComposeYAML     string            `json:"compose_yaml,omitempty"`
-	Env             map[string]string `json:"env"`
-	Domains         []DomainRoute     `json:"domains"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
-}
+// serviceResponse is the wire representation of a service (see
+// ServiceResponse, which the projects resources surface reuses so the
+// shapes cannot drift).
+type serviceResponse = ServiceResponse
 
 // deployResponse is the wire representation of one deploy attempt. The
 // rendered document is omitted (it can be large and contains the values the
@@ -187,14 +171,12 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	serverID, err := uuid.Parse(strings.TrimSpace(req.ServerID))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid server id"})
+	environmentID, ok := parseRequiredUUID(w, req.EnvironmentID, "environment_id", "environment is required")
+	if !ok {
 		return
 	}
-	environmentID, err := uuid.Parse(strings.TrimSpace(req.EnvironmentID))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid environment id"})
+	serverID, ok := parseRequiredUUID(w, req.ServerID, "server_id", "server is required")
+	if !ok {
 		return
 	}
 	service, err := h.svc.Create(r.Context(), userID, CreateRequest{
@@ -469,6 +451,22 @@ func (h *handler) serviceParams(w http.ResponseWriter, r *http.Request) (uuid.UU
 	return userID, serviceID, true
 }
 
+// parseRequiredUUID parses a required UUID field: empty answers 400 with
+// the required message, anything else must parse (400 naming the field).
+func parseRequiredUUID(w http.ResponseWriter, raw, field, requiredMessage string) (uuid.UUID, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: requiredMessage})
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid " + strings.ReplaceAll(field, "_", " ")})
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
 // serviceFilter parses the ?environment_id= and ?project_id= list filters.
 // At most one may be present; a malformed UUID is a 400.
 func serviceFilter(w http.ResponseWriter, r *http.Request) (ServiceFilter, bool) {
@@ -505,6 +503,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a service with that name already exists"})
 	case errors.Is(err, ErrDeployInFlight):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deploy is in progress"})
+	case errors.Is(err, ErrServerPinned):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "a deployed service cannot change server"})
 	case errors.Is(err, ErrNameConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrDisabled):
@@ -517,40 +517,10 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// newServiceResponse maps a domain service to its wire representation. The
-// domain map is computed from the stored document and environment; a document
-// that no longer renders reports no routes instead of failing the read (the
-// deploy path is where the error surfaces).
+// newServiceResponse maps a domain service to its wire representation (see
+// NewServiceResponse).
 func (h *handler) newServiceResponse(service Service, withCompose bool) serviceResponse {
-	response := serviceResponse{
-		ID:              service.ID.String(),
-		Name:            service.Name,
-		Status:          service.Status,
-		ServerID:        service.ServerID.String(),
-		ServerName:      service.ServerName,
-		EnvironmentID:   service.EnvironmentID.String(),
-		EnvironmentName: service.EnvironmentName,
-		ProjectID:       service.ProjectID.String(),
-		ProjectName:     ProjectName(service.ID),
-		Env:             service.Env,
-		Domains:         []DomainRoute{},
-		CreatedAt:       service.CreatedAt,
-		UpdatedAt:       service.UpdatedAt,
-	}
-	if withCompose {
-		response.ComposeYAML = service.ComposeYAML
-	}
-	if response.Env == nil {
-		response.Env = map[string]string{}
-	}
-	rendered, err := Render(service.ComposeYAML, service.Env)
-	if err != nil {
-		h.logger.Warn("services: stored document does not render",
-			"service_id", service.ID.String(), "error", Redact(err.Error(), service.Env))
-		return response
-	}
-	response.Domains = rendered.Spec.Domains
-	return response
+	return NewServiceResponse(service, withCompose)
 }
 
 // newDeployResponse maps a deploy row to its wire representation.

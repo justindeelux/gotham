@@ -25,6 +25,15 @@ SELECT * FROM preview_deploys
 WHERE application_id = $1
 ORDER BY created_at DESC;
 
+-- name: HasLivePreviewBindings :one
+-- Whether the base application has live (non-deleted) preview bindings. A
+-- base with open previews cannot move environment or change node until
+-- they are closed.
+SELECT EXISTS (
+    SELECT 1 FROM preview_deploys
+    WHERE application_id = $1 AND state <> 'deleted'
+);
+
 -- name: GetLivePreviewDeployBySibling :one
 -- The live binding a preview sibling application backs: the terminal deploy
 -- hook resolves the pull request through it. A sibling backs at most one

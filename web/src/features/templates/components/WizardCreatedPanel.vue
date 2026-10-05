@@ -25,7 +25,7 @@ const emit = defineEmits<{
     <h4>{{ created.name }} created</h4>
     <NSpace :size="8" align="center">
       <NTag size="small" type="warning">{{ created.status }}</NTag>
-      <NTag size="small" class="mono">{{ created.project_name }}</NTag>
+      <NTag size="small" class="mono">{{ created.compose_project }}</NTag>
       <NTag
         v-for="route in created.domains"
         :key="route.domain"

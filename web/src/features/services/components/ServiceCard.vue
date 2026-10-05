@@ -36,7 +36,7 @@ const { serverNameOf, deploySummary, deployTagType, handleDelete } =
         </h3>
         <p class="small muted">
           {{ serverNameOf(service) }} ·
-          <span class="mono">{{ service.project_name }}</span>
+          <span class="mono">{{ service.compose_project }}</span>
         </p>
       </div>
       <NTag size="small" :type="serviceStatusTagType(service.status)">

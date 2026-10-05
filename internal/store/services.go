@@ -72,6 +72,12 @@ func (s *Store) HasActiveServiceDeploy(ctx context.Context, serviceID pgtype.UUI
 	return s.queries.HasActiveServiceDeploy(ctx, serviceID)
 }
 
+// HasServiceDeploys reports whether the service was ever deployed, so a
+// server change can be refused once its compose project runs on a node.
+func (s *Store) HasServiceDeploys(ctx context.Context, serviceID pgtype.UUID) (bool, error) {
+	return s.queries.HasServiceDeploys(ctx, serviceID)
+}
+
 // UpdateServiceConfig persists the mutable service configuration (name,
 // document, environment) without touching the status column, so a lifecycle
 // completion and a configuration edit cannot overwrite each other.

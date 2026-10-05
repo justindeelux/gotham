@@ -68,10 +68,13 @@ type UpdateApplicationInput struct {
 
 // ApplicationFilter scopes a list to one environment or one project of the
 // caller's team (the ?environment_id= and ?project_id= filters). At most one
-// may be set; a foreign ID answers ErrNotFound.
+// may be set; a foreign ID answers ErrNotFound. IncludePreviews lists
+// preview siblings too (the resources endpoint's ?previews=1); the default
+// listing hides them.
 type ApplicationFilter struct {
-	EnvironmentID uuid.UUID
-	ProjectID     uuid.UUID
+	EnvironmentID   uuid.UUID
+	ProjectID       uuid.UUID
+	IncludePreviews bool
 }
 
 // empty reports whether the update carries no field at all.
@@ -183,13 +186,13 @@ func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID, filter
 		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID, teamIDFor(ctx, userID)); err != nil {
 			return nil, err
 		}
-		return s.repo.ListApplicationsByEnvironment(ctx, filter.EnvironmentID, true)
+		return s.repo.ListApplicationsByEnvironment(ctx, filter.EnvironmentID, filter.IncludePreviews)
 	}
 	if filter.ProjectID != uuid.Nil {
 		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID, teamIDFor(ctx, userID)); err != nil {
 			return nil, err
 		}
-		return s.repo.ListApplicationsByProject(ctx, filter.ProjectID, true)
+		return s.repo.ListApplicationsByProject(ctx, filter.ProjectID, filter.IncludePreviews)
 	}
 	applications, err := s.repo.ListApplications(ctx, teams.ScopeFor(ctx, userID))
 	if err != nil {
@@ -235,8 +238,16 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	// delete. The worker does not take this lock, so the guard is what keeps a
 	// move from stranding a container on the previous node.
 	if in.ServerID != nil && *in.ServerID != app.ServerID {
+		if open, err := s.repo.HasLivePreviews(ctx, app.ID); err != nil {
+			return Application{}, err
+		} else if open {
+			return Application{}, ErrPreviewsOpen
+		}
 		if err := s.rejectInFlight(ctx, app.ID); err != nil {
-			return Application{}, ErrDeployInFlight
+			if errors.Is(err, ErrConflict) {
+				return Application{}, ErrDeployInFlight
+			}
+			return Application{}, err
 		}
 	}
 	// A move to another environment stays in the team (a foreign environment
@@ -244,6 +255,13 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	// per-environment uniqueness.
 	movedEnvironment := false
 	if in.EnvironmentID != nil && *in.EnvironmentID != app.EnvironmentID {
+		// Open previews stay pinned to the old environment and node, so a
+		// base with live previews cannot move until they are closed.
+		if open, err := s.repo.HasLivePreviews(ctx, app.ID); err != nil {
+			return Application{}, err
+		} else if open {
+			return Application{}, ErrPreviewsOpen
+		}
 		if _, err := s.repo.ResolveEnvironment(ctx, *in.EnvironmentID, app.TeamID); err != nil {
 			return Application{}, err
 		}
@@ -320,6 +338,12 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 			strings.Contains(err.Error(), "already exists") {
 			return Application{}, fmt.Errorf("%w: an application named %q already exists in the target environment",
 				ErrNameConflict, app.Name)
+		}
+		// A domain collision on the target node answers 409 with its own
+		// message (not the deploy-in-flight text): at this point the only
+		// ErrConflict source left is the per-server domain index.
+		if errors.Is(err, ErrConflict) {
+			return Application{}, ErrDomainConflict
 		}
 		return Application{}, err
 	}

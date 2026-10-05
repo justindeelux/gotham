@@ -191,13 +191,16 @@ func TestCreateRouteRejections(t *testing.T) {
 	serverID := uuid.New()
 
 	tests := []struct {
-		name string
-		body string
+		name    string
+		body    string
+		message string
 	}{
 		{name: "empty body", body: ""},
 		{name: "malformed json", body: `{"name":`},
 		{name: "unknown field", body: `{"name":"db","engine":"postgres","surprise":true}`},
 		{name: "invalid server id", body: `{"name":"db","engine":"postgres","server_id":"nope"}`},
+		{name: "missing server id", body: `{"name":"db","engine":"postgres","environment_id":"` + uuid.NewString() + `"}`, message: "server is required"},
+		{name: "missing environment id", body: `{"name":"db","engine":"postgres","server_id":"` + serverID.String() + `"}`, message: "environment is required"},
 		{name: "invalid environment id", body: `{"name":"db","engine":"postgres","environment_id":"nope","server_id":"` + serverID.String() + `"}`},
 	}
 	for _, tt := range tests {
@@ -208,6 +211,17 @@ func TestCreateRouteRejections(t *testing.T) {
 			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, databasePath(uuid.Nil, ""), strings.NewReader(tt.body)))
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			if tt.message != "" {
+				var decoded struct {
+					Message string `json:"message"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				if decoded.Message != tt.message {
+					t.Errorf("message = %q, want %q", decoded.Message, tt.message)
+				}
 			}
 		})
 	}

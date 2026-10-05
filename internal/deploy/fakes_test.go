@@ -56,6 +56,9 @@ type fakeRepository struct {
 	// resolution (the foreign-environment tests).
 	environments map[uuid.UUID]EnvironmentRef
 	resolveErr   error
+	// livePreviews marks base applications with open preview bindings for
+	// HasLivePreviews (the move/server-change guard tests).
+	livePreviews map[uuid.UUID]bool
 
 	// deployKeys holds the single deploy key per application (the unique
 	// index on application_id); privateKeys mirrors private_keys, keyed by
@@ -80,6 +83,9 @@ type fakeRepository struct {
 	getErr       error
 	createErr    error
 	failStaleErr error
+	// updateErr, when set, fails every UpdateApplication (the server-change
+	// domain-collision test).
+	updateErr error
 
 	// failUpdateState, when non-empty, makes UpdateDeployment fail for that
 	// state (the failed-persist regression: the in-memory state must not
@@ -264,6 +270,9 @@ func (r *fakeRepository) CreateApplication(_ context.Context, app Application, e
 func (r *fakeRepository) UpdateApplication(_ context.Context, app Application) (Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.updateErr != nil {
+		return Application{}, r.updateErr
+	}
 	if r.app.ID == app.ID {
 		app.CreatedAt = r.app.CreatedAt
 		app.UpdatedAt = time.Now().UTC()
@@ -499,6 +508,13 @@ func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ 
 		return ref, nil
 	}
 	return EnvironmentRef{ID: environmentID}, nil
+}
+
+// HasLivePreviews implements Repository.
+func (r *fakeRepository) HasLivePreviews(_ context.Context, appID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.livePreviews[appID], nil
 }
 
 // ResolveProject implements Repository.

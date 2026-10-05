@@ -28,8 +28,10 @@ type Repository interface {
 	// name answers ErrProjectExists; a foreign ID answers ErrNotFound.
 	UpdateProject(ctx context.Context, teamID, projectID uuid.UUID, name, description string) (Project, error)
 	// DeleteProject removes one project of a team (its environments
-	// cascade), or ErrNotFound when no row matched.
-	DeleteProject(ctx context.Context, teamID, projectID uuid.UUID) error
+	// cascade), or ErrNotFound when no row matched. Soft-deleted services
+	// and databases are purged in the same transaction; purged database
+	// volumes may still exist on their nodes and come back as orphanVolumes.
+	DeleteProject(ctx context.Context, teamID, projectID uuid.UUID) (orphanVolumes []string, err error)
 	// CreateEnvironment stores an environment of a project. A foreign project
 	// ID answers ErrNotFound — including a project deleted between the team
 	// check and the INSERT (the FK refusal maps to 404, never 500); a
@@ -47,8 +49,10 @@ type Repository interface {
 	// in one transaction that locks the parent project row, so two
 	// concurrent deletes of a project's last two environments cannot both
 	// succeed. A refusal because the project would be left empty answers
-	// ErrLastEnvironment.
-	DeleteEnvironmentIfNotLast(ctx context.Context, teamID, environmentID uuid.UUID) error
+	// ErrLastEnvironment. Soft-deleted services and databases are purged in
+	// the same transaction; purged database volumes may still exist on
+	// their nodes and come back as orphanVolumes.
+	DeleteEnvironmentIfNotLast(ctx context.Context, teamID, environmentID uuid.UUID) (orphanVolumes []string, err error)
 	// CountEnvironments reports how many environments a project holds.
 	CountEnvironments(ctx context.Context, projectID uuid.UUID) (int, error)
 }
@@ -136,21 +140,21 @@ func (r *storeRepository) UpdateProject(ctx context.Context, teamID, projectID u
 // DeleteProject implements Repository. The environments cascade; a
 // foreign-key refusal (PE-2's RESTRICT from a racing resource insert)
 // surfaces as ErrProjectNotEmpty, matching the service's pre-check.
-func (r *storeRepository) DeleteProject(ctx context.Context, teamID, projectID uuid.UUID) error {
-	affected, err := r.store.DeleteProject(ctx, sqlc.DeleteProjectParams{
+func (r *storeRepository) DeleteProject(ctx context.Context, teamID, projectID uuid.UUID) ([]string, error) {
+	affected, volumes, err := r.store.DeleteProject(ctx, sqlc.DeleteProjectParams{
 		ID:     pgUUID(projectID),
 		TeamID: pgUUID(teamID),
 	})
 	if err != nil {
 		if isForeignKeyViolation(err) {
-			return ErrProjectNotEmpty
+			return nil, ErrProjectNotEmpty
 		}
-		return fmt.Errorf("projects: delete project: %w", err)
+		return nil, fmt.Errorf("projects: delete project: %w", err)
 	}
 	if affected == 0 {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
-	return nil
+	return volumes, nil
 }
 
 // CreateEnvironment implements Repository.
@@ -229,21 +233,21 @@ func (r *storeRepository) UpdateEnvironment(ctx context.Context, teamID, environ
 
 // DeleteEnvironmentIfNotLast implements Repository, with the same
 // racing-insert mapping as DeleteProject.
-func (r *storeRepository) DeleteEnvironmentIfNotLast(ctx context.Context, teamID, environmentID uuid.UUID) error {
-	removed, err := r.store.DeleteEnvironmentGuarded(ctx, pgUUID(teamID), pgUUID(environmentID))
+func (r *storeRepository) DeleteEnvironmentIfNotLast(ctx context.Context, teamID, environmentID uuid.UUID) ([]string, error) {
+	removed, volumes, err := r.store.DeleteEnvironmentGuarded(ctx, pgUUID(teamID), pgUUID(environmentID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+			return nil, ErrNotFound
 		}
 		if isForeignKeyViolation(err) {
-			return ErrEnvironmentNotEmpty
+			return nil, ErrEnvironmentNotEmpty
 		}
-		return fmt.Errorf("projects: delete environment: %w", err)
+		return nil, fmt.Errorf("projects: delete environment: %w", err)
 	}
 	if !removed {
-		return ErrLastEnvironment
+		return nil, ErrLastEnvironment
 	}
-	return nil
+	return volumes, nil
 }
 
 // CountEnvironments implements Repository.

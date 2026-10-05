@@ -61,3 +61,21 @@ func (c StoreCounter) CountEnvironmentResources(ctx context.Context, environment
 		Databases:    int(databases),
 	}, nil
 }
+
+// CountProjectPreviews implements ResourceCounter.
+func (c StoreCounter) CountProjectPreviews(ctx context.Context, projectID uuid.UUID) (int, error) {
+	count, err := c.Store.CountPreviewApplicationsByProject(ctx, pgUUID(projectID))
+	if err != nil {
+		return 0, fmt.Errorf("projects: count project previews: %w", err)
+	}
+	return int(count), nil
+}
+
+// CountEnvironmentPreviews implements ResourceCounter.
+func (c StoreCounter) CountEnvironmentPreviews(ctx context.Context, environmentID uuid.UUID) (int, error) {
+	count, err := c.Store.CountPreviewApplicationsByEnvironment(ctx, pgUUID(environmentID))
+	if err != nil {
+		return 0, fmt.Errorf("projects: count environment previews: %w", err)
+	}
+	return int(count), nil
+}

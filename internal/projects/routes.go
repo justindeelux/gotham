@@ -120,23 +120,9 @@ type environmentResourceApplication struct {
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 
-// environmentResourceService is one service of the resources surface. It
-// mirrors services' list item; project_name stays the compose project name
-// there, so the Gotham project rides the envelope's project object.
-type environmentResourceService struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Status          string            `json:"status"`
-	ServerID        string            `json:"server_id"`
-	ServerName      string            `json:"server_name"`
-	EnvironmentID   string            `json:"environment_id"`
-	EnvironmentName string            `json:"environment_name"`
-	ProjectID       string            `json:"project_id"`
-	ProjectName     string            `json:"project_name"`
-	Env             map[string]string `json:"env"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
-}
+// environmentResourceService is one service of the resources surface: the
+// services package's own response type, so the shapes cannot drift.
+type environmentResourceService = servicespkg.ServiceResponse
 
 // environmentResourceDatabase is one database of the resources surface. It
 // mirrors databases' list item field for field.
@@ -408,24 +394,7 @@ func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request
 	}
 	services := make([]environmentResourceService, 0, len(resources.Services))
 	for _, service := range resources.Services {
-		env := service.Env
-		if env == nil {
-			env = map[string]string{}
-		}
-		services = append(services, environmentResourceService{
-			ID:              service.ID.String(),
-			Name:            service.Name,
-			Status:          string(service.Status),
-			ServerID:        service.ServerID.String(),
-			ServerName:      service.ServerName,
-			EnvironmentID:   service.EnvironmentID.String(),
-			EnvironmentName: service.EnvironmentName,
-			ProjectID:       service.ProjectID.String(),
-			ProjectName:     servicespkg.ProjectName(service.ID),
-			Env:             env,
-			CreatedAt:       service.CreatedAt,
-			UpdatedAt:       service.UpdatedAt,
-		})
+		services = append(services, servicespkg.NewServiceResponse(service, false))
 	}
 	databases := make([]environmentResourceDatabase, 0, len(resources.Databases))
 	for _, database := range resources.Databases {
@@ -513,9 +482,9 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrEnvironmentExists):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "environment name already exists"})
 	case errors.Is(err, ErrProjectNotEmpty):
-		writeJSON(w, http.StatusConflict, errorBody{Message: "project still has resources"})
+		writeJSON(w, http.StatusConflict, errorBody{Message: "project still has resources (including previews)"})
 	case errors.Is(err, ErrEnvironmentNotEmpty):
-		writeJSON(w, http.StatusConflict, errorBody{Message: "environment still has resources"})
+		writeJSON(w, http.StatusConflict, errorBody{Message: "environment still has resources (including previews)"})
 	case errors.Is(err, ErrLastEnvironment):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a project needs at least one environment"})
 	case errors.Is(err, ErrValidation):

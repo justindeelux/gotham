@@ -242,6 +242,9 @@ export function useTemplateWizard(show: Ref<boolean>, slug: Ref<string>): {
     try {
       created.value = await servicesStore.create({
         name: name.value.trim(),
+        // PE-5 wires the project/environment picker; until then creation
+        // through this dialog answers 400 (environment is required).
+        environment_id: "",
         server_id: serverId.value,
         compose_yaml: rendered.compose_yaml,
         env: rendered.env,

@@ -162,6 +162,23 @@ func (q *Queries) GetPreviewDeploy(ctx context.Context, arg GetPreviewDeployPara
 	return i, err
 }
 
+const hasLivePreviewBindings = `-- name: HasLivePreviewBindings :one
+SELECT EXISTS (
+    SELECT 1 FROM preview_deploys
+    WHERE application_id = $1 AND state <> 'deleted'
+)
+`
+
+// Whether the base application has live (non-deleted) preview bindings. A
+// base with open previews cannot move environment or change node until
+// they are closed.
+func (q *Queries) HasLivePreviewBindings(ctx context.Context, applicationID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasLivePreviewBindings, applicationID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const hasLivePreviewClose = `-- name: HasLivePreviewClose :one
 SELECT EXISTS (
     SELECT 1 FROM preview_deliveries

@@ -155,14 +155,12 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	serverID, err := uuid.Parse(strings.TrimSpace(req.ServerID))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid server id"})
+	serverID, ok := parseRequiredUUID(w, req.ServerID, "server_id", "server is required")
+	if !ok {
 		return
 	}
-	environmentID, err := uuid.Parse(strings.TrimSpace(req.EnvironmentID))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid environment id"})
+	environmentID, ok := parseRequiredUUID(w, req.EnvironmentID, "environment_id", "environment is required")
+	if !ok {
 		return
 	}
 
@@ -358,6 +356,22 @@ func (h *handler) databaseParams(w http.ResponseWriter, r *http.Request) (uuid.U
 	return userID, databaseID, true
 }
 
+// parseRequiredUUID parses a required UUID field: empty answers 400 with
+// the required message, anything else must parse (400 naming the field).
+func parseRequiredUUID(w http.ResponseWriter, raw, field, requiredMessage string) (uuid.UUID, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: requiredMessage})
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid " + strings.ReplaceAll(field, "_", " ")})
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
 // writeServiceError maps service sentinels to HTTP responses.
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
@@ -371,6 +385,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a database with that name already exists"})
 	case errors.Is(err, ErrDeployInFlight):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deploy is in progress"})
+	case errors.Is(err, ErrServerPinned):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "a database cannot change server once created"})
 	case errors.Is(err, ErrNameConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrPortConflict):

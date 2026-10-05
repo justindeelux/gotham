@@ -21,17 +21,17 @@ SELECT * FROM applications WHERE id = $1;
 
 -- name: ListApplicationsByUser :many
 SELECT * FROM applications
-WHERE user_id = $1
+WHERE user_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC;
 
 -- name: ListApplicationsByTeam :many
 SELECT * FROM applications
-WHERE team_id = $1
+WHERE team_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC;
 
 -- name: ListApplicationsByEnvironment :many
 -- One environment's applications, newest first. Previews stay out of the
--- default listing; ?previews=1 passes true to include them.
+-- default listing; the resources endpoint passes true for ?previews=1.
 SELECT * FROM applications
 WHERE environment_id = $1 AND (is_preview = false OR sqlc.arg(include_previews)::bool = true)
 ORDER BY created_at DESC, id DESC;
@@ -45,12 +45,26 @@ WHERE e.project_id = $1 AND (a.is_preview = false OR sqlc.arg(include_previews):
 ORDER BY a.created_at DESC, a.id DESC;
 
 -- name: CountApplicationsByEnvironment :one
-SELECT count(*) FROM applications WHERE environment_id = $1;
+-- Live applications only: previews are hidden from the default listing, so
+-- the display counts match it. Delete guards consult the preview counts
+-- below instead.
+SELECT count(*) FROM applications WHERE environment_id = $1 AND is_preview = false;
 
 -- name: CountApplicationsByProject :one
 SELECT count(*) FROM applications a
 JOIN environments e ON e.id = a.environment_id
-WHERE e.project_id = $1;
+WHERE e.project_id = $1 AND a.is_preview = false;
+
+-- name: CountPreviewApplicationsByEnvironment :one
+-- Live previews of one environment: they stay out of every count and
+-- listing, but they still block the environment delete.
+SELECT count(*) FROM applications WHERE environment_id = $1 AND is_preview = true;
+
+-- name: CountPreviewApplicationsByProject :one
+-- Live previews of every environment of one project (see above).
+SELECT count(*) FROM applications a
+JOIN environments e ON e.id = a.environment_id
+WHERE e.project_id = $1 AND a.is_preview = true;
 
 -- name: ListApplicationsByServer :many
 -- One node's applications (id and name only): the server-delete 409 names its

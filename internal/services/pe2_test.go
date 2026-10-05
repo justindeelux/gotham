@@ -109,7 +109,83 @@ func TestUpdateRefusesServerChangeWhileDeploying(t *testing.T) {
 	}
 }
 
-// TestListFilters scopes the list to one environment or project.
+// TestUpdateRefusesServerChangeOnceDeployed pins F2: a service with deploy
+// history cannot change node, even when idle; a never-deployed one may.
+func TestUpdateRefusesServerChangeOnceDeployed(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newTestService(t, repo, &fakeAgent{})
+	userID := uuid.New()
+	envID, _ := repo.seedEnvironment()
+	created, err := svc.Create(context.Background(), userID, CreateRequest{
+		Name: "wordpress", EnvironmentID: envID, ServerID: repo.seedServer(),
+		ComposeYAML: testDocument, Env: testEnv,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	other := repo.seedServer()
+	moved, err := svc.Update(context.Background(), userID, created.ID, UpdateRequest{ServerID: &other})
+	if err != nil {
+		t.Fatalf("server change before any deploy: %v", err)
+	}
+	if moved.ServerID != other {
+		t.Fatalf("server = %s, want %s", moved.ServerID, other)
+	}
+
+	if _, err := repo.CreateServiceDeploy(context.Background(), Deploy{
+		ID: uuid.New(), ServiceID: created.ID, State: DeployRunning, ComposeYAML: testDocument,
+	}); err != nil {
+		t.Fatalf("CreateServiceDeploy: %v", err)
+	}
+	third := repo.seedServer()
+	if _, err := svc.Update(context.Background(), userID, created.ID,
+		UpdateRequest{ServerID: &third}); !errors.Is(err, ErrServerPinned) {
+		t.Fatalf("server change after a deploy err = %v, want ErrServerPinned", err)
+	}
+}
+
+// TestConcurrentUpdatesConverge pins F3 at the service level: a rename and
+// a move racing each other both land (the lifecycle lock serializes them
+// and the conditional write keeps the fields each request leaves alone).
+func TestConcurrentUpdatesConverge(t *testing.T) {
+	repo := newFakeRepository()
+	svc := newTestService(t, repo, &fakeAgent{})
+	userID := uuid.New()
+	envA, _ := repo.seedEnvironment()
+	envB, _ := repo.seedEnvironment()
+	created, err := svc.Create(context.Background(), userID, CreateRequest{
+		Name: "wordpress", EnvironmentID: envA, ServerID: repo.seedServer(),
+		ComposeYAML: testDocument, Env: testEnv,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	name := "renamed"
+	done := make(chan error, 2)
+	go func() {
+		_, err := svc.Update(context.Background(), userID, created.ID, UpdateRequest{Name: &name})
+		done <- err
+	}()
+	go func() {
+		_, err := svc.Update(context.Background(), userID, created.ID, UpdateRequest{EnvironmentID: &envB})
+		done <- err
+	}()
+	for i := 0; i < 2; i++ {
+		if err := <-done; err != nil {
+			t.Fatalf("concurrent update %d: %v", i, err)
+		}
+	}
+
+	final, err := svc.Get(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if final.Name != name || final.EnvironmentID != envB {
+		t.Fatalf("final = %+v, want the rename and the move both applied", final)
+	}
+}
+
 func TestListFilters(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(t, repo, &fakeAgent{})

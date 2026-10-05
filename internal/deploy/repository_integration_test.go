@@ -331,6 +331,77 @@ func TestStoreRepositoryDeleteDeployKeyFence(t *testing.T) {
 	}
 }
 
+// TestListApplicationsByEnvironmentPreviewsFlag pins the include_previews
+// plumbing end to end: the default environment listing hides preview
+// siblings while an explicit true returns them (the resources endpoint's
+// ?previews=1 rides this flag).
+func TestListApplicationsByEnvironmentPreviewsFlag(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	st := store.New(pool)
+	repo := newStoreRepository(st, "integration-secret")
+	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+
+	user, err := st.CreateUser(ctx, fmt.Sprintf("preview-flag-%d@example.com", time.Now().UnixNano()), nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	userID := uuid.UUID(user.ID.Bytes)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete user: %v", err)
+		}
+	})
+
+	mkApp := func(name string, preview bool) {
+		t.Helper()
+		if _, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+			UserID: pgUUID(userID), TeamID: pgUUID(teamID),
+			ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
+			Name: name, CloneUrl: "https://github.com/acme/demo.git",
+			Branch: "main", BuildPack: "dockerfile", IsPreview: preview,
+		}); err != nil {
+			t.Fatalf("CreateApplication(%s): %v", name, err)
+		}
+	}
+	mkApp("base", false)
+	mkApp("base-pr-7", true)
+
+	byDefault, err := repo.ListApplicationsByEnvironment(ctx, envID, false)
+	if err != nil {
+		t.Fatalf("list default: %v", err)
+	}
+	if len(byDefault) != 1 || byDefault[0].Name != "base" {
+		t.Fatalf("default listing = %+v, want only the base application", byDefault)
+	}
+	withPreviews, err := repo.ListApplicationsByEnvironment(ctx, envID, true)
+	if err != nil {
+		t.Fatalf("list with previews: %v", err)
+	}
+	if len(withPreviews) != 2 {
+		t.Fatalf("previews listing = %d rows, want base plus sibling", len(withPreviews))
+	}
+}
+
 // TestStoreRepositoryActiveDeploymentIndex pins the partial unique index that
 // allows at most one active deployment per application (deployments_active_app_idx):
 // a second active submit must surface as ErrConflict, and a row that becomes

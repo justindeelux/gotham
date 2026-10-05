@@ -685,6 +685,10 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deployment is already in progress"})
 	case errors.Is(err, ErrDeployInFlight):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deploy is in progress"})
+	case errors.Is(err, ErrDomainConflict):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "domain already in use on the target server"})
+	case errors.Is(err, ErrPreviewsOpen):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "close the open previews first"})
 	case errors.Is(err, ErrNameConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrNotConnected):

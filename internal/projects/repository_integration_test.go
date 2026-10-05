@@ -148,8 +148,8 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Fatalf("UpdateEnvironment = %+v, %v", renamedEnv, err)
 	}
 
-	if err := repo.DeleteEnvironment(ctx, teamID, staging.ID); err != nil {
-		t.Fatalf("DeleteEnvironment: %v", err)
+	if err := repo.DeleteEnvironmentIfNotLast(ctx, teamID, staging.ID); err != nil {
+		t.Fatalf("DeleteEnvironmentIfNotLast: %v", err)
 	}
 	if err := repo.DeleteProject(ctx, teamID, project.ID); err != nil {
 		t.Fatalf("DeleteProject: %v", err)
@@ -223,6 +223,115 @@ func TestStoreRepositoryFailedCreateLeavesNoRows(t *testing.T) {
 	}
 }
 
+// TestServiceConcurrentDeleteKeepsOneEnvironment is the F1 regression:
+// two admins deleting a project's last two environments at once must leave
+// exactly one behind. The survivor check and the delete run in one
+// transaction that locks the parent project row, so the second delete
+// observes the first. It fails on the old check-then-delete code, where both
+// deletes routinely succeed and the project ends with zero environments.
+func TestServiceConcurrentDeleteKeepsOneEnvironment(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	st := newScratchStore(t)
+	svc := NewService(Config{Store: st, Counter: ZeroResourceCounter{}, Logger: discardLogger()})
+	userID := seedUser(t, ctx, st, fmt.Sprintf("race-%d@example.com", time.Now().UnixNano()))
+
+	const iterations = 30
+	for i := 0; i < iterations; i++ {
+		project, production, err := svc.CreateProject(ctx, userID, fmt.Sprintf("race-%d", i), "")
+		if err != nil {
+			t.Fatalf("iter %d: CreateProject: %v", i, err)
+		}
+		_ = project
+		staging, err := svc.CreateEnvironment(ctx, userID, production.ProjectID, "staging")
+		if err != nil {
+			t.Fatalf("iter %d: CreateEnvironment: %v", i, err)
+		}
+
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		for _, envID := range []uuid.UUID{production.ID, staging.ID} {
+			go func(id uuid.UUID) {
+				<-start
+				results <- svc.DeleteEnvironment(ctx, userID, id)
+			}(envID)
+		}
+		close(start)
+		first, second := <-results, <-results
+
+		succeeded := 0
+		for _, err := range []error{first, second} {
+			switch {
+			case err == nil:
+				succeeded++
+			case errors.Is(err, ErrLastEnvironment):
+			default:
+				t.Fatalf("iter %d: delete = %v, want nil or ErrLastEnvironment", i, err)
+			}
+		}
+		if succeeded != 1 {
+			t.Fatalf("iter %d: %d deletes succeeded, want exactly 1", i, succeeded)
+		}
+		remaining, err := st.CountEnvironmentsByProject(ctx, pgUUID(production.ProjectID))
+		if err != nil {
+			t.Fatalf("iter %d: count: %v", i, err)
+		}
+		if remaining != 1 {
+			t.Fatalf("iter %d: %d environments remain, want 1", i, remaining)
+		}
+		if err := svc.DeleteProject(ctx, userID, production.ProjectID); err != nil {
+			t.Fatalf("iter %d: cleanup: %v", i, err)
+		}
+	}
+}
+
+// TestStoreRepositoryCreateRacesDeleteProject is the F3 regression: an
+// environment created while its project is deleted must answer ErrNotFound
+// (or succeed when the create wins), never a raw foreign-key error. It fails
+// on the old code, where the 23503 from the lost INSERT races through to
+// the caller.
+func TestStoreRepositoryCreateRacesDeleteProject(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	st := newScratchStore(t)
+	repo := newStoreRepository(st)
+	teamID := seedUser(t, ctx, st, fmt.Sprintf("f3race-%d@example.com", time.Now().UnixNano()))
+
+	const iterations = 60
+	for i := 0; i < iterations; i++ {
+		project, _, err := repo.CreateProject(ctx, teamID, fmt.Sprintf("f3-%d", i), "")
+		if err != nil {
+			t.Fatalf("iter %d: CreateProject: %v", i, err)
+		}
+		start := make(chan struct{})
+		type outcome struct {
+			env Environment
+			err error
+		}
+		created := make(chan outcome, 1)
+		deleted := make(chan error, 1)
+		go func() {
+			<-start
+			env, err := repo.CreateEnvironment(ctx, teamID, project.ID, "staging")
+			created <- outcome{env, err}
+		}()
+		go func() {
+			<-start
+			deleted <- repo.DeleteProject(ctx, teamID, project.ID)
+		}()
+		close(start)
+		got := <-created
+		if derr := <-deleted; derr != nil {
+			t.Fatalf("iter %d: DeleteProject: %v", i, derr)
+		}
+		if got.err != nil && !errors.Is(got.err, ErrNotFound) {
+			t.Fatalf("iter %d: CreateEnvironment during delete = %v, want nil or ErrNotFound", i, got.err)
+		}
+	}
+}
+
 // TestStoreRepositoryCrossTeamIsNotFound asserts the team filter on every
 // read and delete.
 func TestStoreRepositoryCrossTeamIsNotFound(t *testing.T) {
@@ -244,7 +353,7 @@ func TestStoreRepositoryCrossTeamIsNotFound(t *testing.T) {
 		"delete project": repo.DeleteProject(ctx, teamB, project.ID),
 		"get env":        mustErr(repo.GetEnvironment(ctx, teamB, production.ID)),
 		"update env":     mustErr(repo.UpdateEnvironment(ctx, teamB, production.ID, "x")),
-		"delete env":     repo.DeleteEnvironment(ctx, teamB, production.ID),
+		"delete env":     repo.DeleteEnvironmentIfNotLast(ctx, teamB, production.ID),
 		"create env":     mustErr(repo.CreateEnvironment(ctx, teamB, project.ID, "staging")),
 		"list envs":      mustErr(repo.ListEnvironments(ctx, teamB, project.ID)),
 	} {

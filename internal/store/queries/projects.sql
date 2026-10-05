@@ -51,6 +51,12 @@ FROM projects p
 WHERE e.id = $1 AND e.project_id = p.id AND p.team_id = $3
 RETURNING e.*;
 
+-- name: GetProjectForUpdate :one
+-- GetProjectForUpdate locks the project row for the duration of a guarded
+-- environment delete, so two concurrent deletes of one project's last two
+-- environments serialize and the survivor check cannot race.
+SELECT * FROM projects WHERE id = $1 FOR UPDATE;
+
 -- name: DeleteEnvironment :execrows
 DELETE FROM environments e
 USING projects p

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -87,10 +88,53 @@ func (s *Store) UpdateEnvironment(ctx context.Context, params sqlc.UpdateEnviron
 	return s.queries.UpdateEnvironment(ctx, params)
 }
 
-// DeleteEnvironment removes one environment of a team and reports how many
-// rows were removed (0 when the ID is unknown or foreign).
-func (s *Store) DeleteEnvironment(ctx context.Context, params sqlc.DeleteEnvironmentParams) (int64, error) {
-	return s.queries.DeleteEnvironment(ctx, params)
+// DeleteEnvironmentGuarded removes one environment of a team in a
+// transaction that first locks the parent project row (SELECT ... FOR
+// UPDATE), and reports whether the row was removed. removed=false means the
+// delete would leave the project without an environment, so nothing was
+// deleted and the caller must refuse with its last-environment error.
+// pgx.ErrNoRows means the environment is unknown or foreign. A foreign-key
+// refusal (PE-2's RESTRICT against a racing resource insert) propagates for
+// the caller to map.
+func (s *Store) DeleteEnvironmentGuarded(ctx context.Context, teamID, environmentID pgtype.UUID) (removed bool, err error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	env, err := queries.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
+		ID:     environmentID,
+		TeamID: teamID,
+	})
+	if err != nil {
+		return false, err
+	}
+	if _, err := queries.GetProjectForUpdate(ctx, env.ProjectID); err != nil {
+		return false, err
+	}
+	count, err := queries.CountEnvironmentsByProject(ctx, env.ProjectID)
+	if err != nil {
+		return false, err
+	}
+	if count <= 1 {
+		return false, nil
+	}
+	affected, err := queries.DeleteEnvironment(ctx, sqlc.DeleteEnvironmentParams{
+		ID:     environmentID,
+		TeamID: teamID,
+	})
+	if err != nil {
+		return false, err
+	}
+	if affected == 0 {
+		return false, pgx.ErrNoRows
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // CountEnvironmentsByProject reports how many environments a project holds.

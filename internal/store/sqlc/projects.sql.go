@@ -168,6 +168,27 @@ func (q *Queries) GetProject(ctx context.Context, arg GetProjectParams) (Project
 	return i, err
 }
 
+const getProjectForUpdate = `-- name: GetProjectForUpdate :one
+SELECT id, team_id, name, description, created_at, updated_at FROM projects WHERE id = $1 FOR UPDATE
+`
+
+// GetProjectForUpdate locks the project row for the duration of a guarded
+// environment delete, so two concurrent deletes of one project's last two
+// environments serialize and the survivor check cannot race.
+func (q *Queries) GetProjectForUpdate(ctx context.Context, id pgtype.UUID) (Project, error) {
+	row := q.db.QueryRow(ctx, getProjectForUpdate, id)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.TeamID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listEnvironmentsByProject = `-- name: ListEnvironmentsByProject :many
 SELECT id, project_id, name, created_at, updated_at FROM environments
 WHERE project_id = $1

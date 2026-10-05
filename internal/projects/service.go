@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -19,7 +20,13 @@ const ProductionEnvironment = "production"
 
 // Name policy: the API contract allows 1-64 characters per project and
 // environment name, unique case-insensitively within the team or project.
-const maxNameLength = 64
+// Descriptions are free text capped at 512 characters; the contract is
+// silent on the cap, so over-long descriptions answer 400 instead of being
+// silently truncated.
+const (
+	maxNameLength        = 64
+	maxDescriptionLength = 512
+)
 
 // ResourceCounter reports how many workloads hang off a project or an
 // environment. PE-2 implements it over the resource tables; until then the
@@ -182,7 +189,11 @@ func (s *Service) CreateProject(ctx context.Context, userID uuid.UUID, name, des
 	if err != nil {
 		return Project{}, Environment{}, err
 	}
-	project, environment, err := s.repo.CreateProject(ctx, teamIDFor(ctx, userID), clean, description)
+	cleanDescription, err := validateDescription(description)
+	if err != nil {
+		return Project{}, Environment{}, err
+	}
+	project, environment, err := s.repo.CreateProject(ctx, teamIDFor(ctx, userID), clean, cleanDescription)
 	if err != nil {
 		return Project{}, Environment{}, err
 	}
@@ -250,7 +261,11 @@ func (s *Service) UpdateProject(ctx context.Context, userID, projectID uuid.UUID
 		nextName = clean
 	}
 	if description != nil {
-		nextDescription = *description
+		cleanDescription, err := validateDescription(*description)
+		if err != nil {
+			return Project{}, err
+		}
+		nextDescription = cleanDescription
 	}
 	updated, err := s.repo.UpdateProject(ctx, teamID, projectID, nextName, nextDescription)
 	if err != nil {
@@ -356,7 +371,11 @@ func (s *Service) UpdateEnvironment(ctx context.Context, userID, environmentID u
 
 // DeleteEnvironment implements ProjectService: the project's last
 // environment cannot be deleted, and an environment that still holds
-// resources is refused.
+// resources is refused. The survivor check and the delete run in one
+// repository transaction that locks the parent project row; the pre-checks
+// below only preserve the refusal order (last, then resources) in the
+// uncontended case, and a racing resource insert trips the repository's
+// RESTRICT mapping to the same 409.
 func (s *Service) DeleteEnvironment(ctx context.Context, userID, environmentID uuid.UUID) error {
 	if err := s.ready(); err != nil {
 		return err
@@ -386,7 +405,7 @@ func (s *Service) DeleteEnvironment(ctx context.Context, userID, environmentID u
 	if counts.Applications+counts.Services+counts.Databases > 0 {
 		return ErrEnvironmentNotEmpty
 	}
-	return s.repo.DeleteEnvironment(ctx, teamID, environmentID)
+	return s.repo.DeleteEnvironmentIfNotLast(ctx, teamID, environmentID)
 }
 
 // withProjectCounts attaches the environment and resource counts to a
@@ -466,16 +485,25 @@ func authorizeWrite(ctx context.Context, userID uuid.UUID) error {
 }
 
 // validateName trims and bounds a project or environment name: 1-64
-// characters after trimming, per the API contract.
+// characters after trimming, per the API contract. The count is in runes,
+// so multi-byte names are measured the way clients count them.
 func validateName(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
 	if name == "" {
 		return "", fmt.Errorf("%w: name is required", ErrValidation)
 	}
-	if len(name) > maxNameLength {
+	if utf8.RuneCountInString(name) > maxNameLength {
 		return "", fmt.Errorf("%w: name must be at most %d characters", ErrValidation, maxNameLength)
 	}
 	return name, nil
+}
+
+// validateDescription bounds a project description.
+func validateDescription(raw string) (string, error) {
+	if utf8.RuneCountInString(raw) > maxDescriptionLength {
+		return "", fmt.Errorf("%w: description must be at most %d characters", ErrValidation, maxDescriptionLength)
+	}
+	return raw, nil
 }
 
 // loggerOr returns logger, or the process default.

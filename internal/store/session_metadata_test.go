@@ -152,14 +152,12 @@ func TestSessionMetadataMigrationUpDownBackfill(t *testing.T) {
 		t.Errorf("backfilled metadata = %v/%v, want NULL/NULL", uaStr, ipStr)
 	}
 
-	// Down rolls back one version per call: 00034 first, then 00033, which
-	// drops the columns. (00034 only truncates resource tables and drops
+	// DownTo(32) rolls 00034 and 00033 back in version order, so a later
+	// migration can never strand this test one single-step Down short of
+	// the columns again. (00034 only truncates resource tables and drops
 	// its own tables on the way down; it leaves sessions alone.)
-	if err := Migrate(ctx, dsn, MigrateDown); err != nil {
-		t.Fatalf("migrate down (00034): %v", err)
-	}
-	if err := Migrate(ctx, dsn, MigrateDown); err != nil {
-		t.Fatalf("migrate down (00033): %v", err)
+	if _, err := provider.DownTo(ctx, 32); err != nil {
+		t.Fatalf("migrate down to 32: %v", err)
 	}
 	if cols := sessionMetadataColumns(t, ctx, conn); len(cols) != 0 {
 		t.Errorf("columns after down = %v, want none", cols)

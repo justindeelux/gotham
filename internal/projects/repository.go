@@ -31,7 +31,9 @@ type Repository interface {
 	// cascade), or ErrNotFound when no row matched.
 	DeleteProject(ctx context.Context, teamID, projectID uuid.UUID) error
 	// CreateEnvironment stores an environment of a project. A foreign project
-	// ID answers ErrNotFound; a duplicate name answers ErrEnvironmentExists.
+	// ID answers ErrNotFound — including a project deleted between the team
+	// check and the INSERT (the FK refusal maps to 404, never 500); a
+	// duplicate name answers ErrEnvironmentExists.
 	CreateEnvironment(ctx context.Context, teamID, projectID uuid.UUID, name string) (Environment, error)
 	// ListEnvironments returns a project's environments, oldest first, or
 	// ErrNotFound when the project is foreign.
@@ -40,9 +42,13 @@ type Repository interface {
 	GetEnvironment(ctx context.Context, teamID, environmentID uuid.UUID) (Environment, error)
 	// UpdateEnvironment renames one environment of a team.
 	UpdateEnvironment(ctx context.Context, teamID, environmentID uuid.UUID, name string) (Environment, error)
-	// DeleteEnvironment removes one environment of a team, or ErrNotFound
-	// when no row matched.
-	DeleteEnvironment(ctx context.Context, teamID, environmentID uuid.UUID) error
+	// DeleteEnvironmentIfNotLast removes one environment of a team, or
+	// ErrNotFound when no row matched. The survivor check and the delete run
+	// in one transaction that locks the parent project row, so two
+	// concurrent deletes of a project's last two environments cannot both
+	// succeed. A refusal because the project would be left empty answers
+	// ErrLastEnvironment.
+	DeleteEnvironmentIfNotLast(ctx context.Context, teamID, environmentID uuid.UUID) error
 	// CountEnvironments reports how many environments a project holds.
 	CountEnvironments(ctx context.Context, projectID uuid.UUID) (int, error)
 }
@@ -161,6 +167,11 @@ func (r *storeRepository) CreateEnvironment(ctx context.Context, teamID, project
 		if isUniqueViolation(err) {
 			return Environment{}, ErrEnvironmentExists
 		}
+		// The project was deleted between the GetProject above and this
+		// INSERT: a foreign project answers 404, never 500.
+		if isForeignKeyViolation(err) {
+			return Environment{}, ErrNotFound
+		}
 		return Environment{}, fmt.Errorf("projects: create environment: %w", err)
 	}
 	return environmentFromRow(row), nil
@@ -216,21 +227,21 @@ func (r *storeRepository) UpdateEnvironment(ctx context.Context, teamID, environ
 	return environmentFromRow(row), nil
 }
 
-// DeleteEnvironment implements Repository, with the same racing-insert
-// mapping as DeleteProject.
-func (r *storeRepository) DeleteEnvironment(ctx context.Context, teamID, environmentID uuid.UUID) error {
-	affected, err := r.store.DeleteEnvironment(ctx, sqlc.DeleteEnvironmentParams{
-		ID:     pgUUID(environmentID),
-		TeamID: pgUUID(teamID),
-	})
+// DeleteEnvironmentIfNotLast implements Repository, with the same
+// racing-insert mapping as DeleteProject.
+func (r *storeRepository) DeleteEnvironmentIfNotLast(ctx context.Context, teamID, environmentID uuid.UUID) error {
+	removed, err := r.store.DeleteEnvironmentGuarded(ctx, pgUUID(teamID), pgUUID(environmentID))
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
 		if isForeignKeyViolation(err) {
 			return ErrEnvironmentNotEmpty
 		}
 		return fmt.Errorf("projects: delete environment: %w", err)
 	}
-	if affected == 0 {
-		return ErrNotFound
+	if !removed {
+		return ErrLastEnvironment
 	}
 	return nil
 }

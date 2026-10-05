@@ -178,7 +178,7 @@ func (f *fakeRepository) UpdateEnvironment(_ context.Context, teamID, environmen
 	return environment, nil
 }
 
-func (f *fakeRepository) DeleteEnvironment(_ context.Context, teamID, environmentID uuid.UUID) error {
+func (f *fakeRepository) DeleteEnvironmentIfNotLast(_ context.Context, teamID, environmentID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	environment, ok := f.environments[environmentID]
@@ -188,6 +188,15 @@ func (f *fakeRepository) DeleteEnvironment(_ context.Context, teamID, environmen
 	project, ok := f.projects[environment.ProjectID]
 	if !ok || project.TeamID != teamID {
 		return ErrNotFound
+	}
+	remaining := 0
+	for _, other := range f.environments {
+		if other.ProjectID == environment.ProjectID {
+			remaining++
+		}
+	}
+	if remaining <= 1 {
+		return ErrLastEnvironment
 	}
 	delete(f.environments, environmentID)
 	return nil

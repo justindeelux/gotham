@@ -306,7 +306,11 @@ repeated against this shared box's CP/agent yet.
   read (`GET /api/v1/databases/{id}/credentials`) requires `deploy`, not `read`,
   because it returns the database and root passwords; application environment
   reads (`GET /api/v1/applications/{id}/env`) stay `read`. JWT sessions hold
-  every scope, so the SPA is unaffected.
+  every scope, so the SPA is unaffected. The project and environment routes
+  (Phase 13 PE-1, JUS-30: `GET/POST /api/v1/projects`, `GET/PATCH/DELETE
+  /api/v1/projects/{id}`, `GET/POST /api/v1/projects/{id}/environments`,
+  `PATCH/DELETE /api/v1/environments/{id}`) ride the same chain: reads need
+  `read`, mutations need `deploy` plus an owner/admin team role.
 - Development mode: when there is no CA (empty `GOTHAM_CA_DIR`), the control
   plane refuses to start unless `GOTHAM_GRPC_INSECURE=true`, and the agent
   unless `GOTHAM_AGENT_INSECURE=true`; both then dial/serve plaintext. As soon

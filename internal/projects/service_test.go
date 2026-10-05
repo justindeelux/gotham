@@ -100,6 +100,51 @@ func TestServiceNameValidation(t *testing.T) {
 	}
 }
 
+// TestServiceNameCountsRunes checks the 1-64 contract rule counts
+// characters, not bytes: 64 Vietnamese runes (192 bytes) fit, 65 do not.
+func TestServiceNameCountsRunes(t *testing.T) {
+	repo := newFakeRepository()
+	userID, teamID := uuid.New(), uuid.New()
+	svc, ctx := newTestService(repo, ZeroResourceCounter{}, userID, teamID, teams.RoleAdmin)
+
+	fitting := strings.Repeat("ệ", 64)
+	if _, _, err := svc.CreateProject(ctx, userID, fitting, ""); err != nil {
+		t.Fatalf("CreateProject(64 runes) = %v, want success", err)
+	}
+	if _, _, err := svc.CreateProject(ctx, userID, strings.Repeat("ệ", 65), ""); !errors.Is(err, ErrValidation) {
+		t.Fatalf("CreateProject(65 runes) = %v, want ErrValidation", err)
+	}
+	project, _, err := svc.CreateProject(ctx, userID, "rune-env", "")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if _, err := svc.CreateEnvironment(ctx, userID, project.ID, strings.Repeat("ệ", 65)); !errors.Is(err, ErrValidation) {
+		t.Fatalf("CreateEnvironment(65 runes) = %v, want ErrValidation", err)
+	}
+}
+
+// TestServiceDescriptionIsCapped checks the 512-rune description cap the
+// contract leaves silent: over-long descriptions answer 400.
+func TestServiceDescriptionIsCapped(t *testing.T) {
+	repo := newFakeRepository()
+	userID, teamID := uuid.New(), uuid.New()
+	svc, ctx := newTestService(repo, ZeroResourceCounter{}, userID, teamID, teams.RoleAdmin)
+
+	if _, _, err := svc.CreateProject(ctx, userID, "fits", strings.Repeat("ệ", 512)); err != nil {
+		t.Fatalf("CreateProject(512-rune description) = %v, want success", err)
+	}
+	if _, _, err := svc.CreateProject(ctx, userID, "toobig", strings.Repeat("x", 513)); !errors.Is(err, ErrValidation) {
+		t.Fatalf("CreateProject(513-rune description) = %v, want ErrValidation", err)
+	}
+	project, _, err := svc.CreateProject(ctx, userID, "patchable", "")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if _, err := svc.UpdateProject(ctx, userID, project.ID, nil, ptr(strings.Repeat("x", 513))); !errors.Is(err, ErrValidation) {
+		t.Fatalf("UpdateProject(513-rune description) = %v, want ErrValidation", err)
+	}
+}
+
 // TestServiceDuplicateNamesConflict checks case-insensitive uniqueness in
 // both scopes.
 func TestServiceDuplicateNamesConflict(t *testing.T) {

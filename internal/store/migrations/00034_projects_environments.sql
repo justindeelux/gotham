@@ -35,8 +35,10 @@ CREATE INDEX environments_project_idx ON environments (project_id, created_at AS
 
 -- Deliberate wipe (see the header comment): no production data exists, so the
 -- resource rows are truncated instead of migrated. CASCADE reaches the rows
--- that hang off them (deployments, env vars, backups, previews, webhooks,
--- proxy versions).
+-- that hang off them (deployments, env vars, secrets, backups, previews,
+-- webhooks, deploy keys). It does NOT reach proxy_config_versions: stale
+-- proxy history stays, and orphan containers on nodes are untouched either
+-- way. Both are acceptable because there is no production data (decision 6).
 TRUNCATE applications, databases, services CASCADE;
 
 -- +goose Down

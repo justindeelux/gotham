@@ -147,8 +147,10 @@ func TestProjectsEnvironmentsMigration(t *testing.T) {
 			t.Fatalf("index %s was not created", index)
 		}
 	}
-	// The deliberate wipe: every resource table is empty.
-	for _, table := range []string{"applications", "databases", "services"} {
+	// The deliberate wipe: every resource table is empty, including the
+	// seeded deployment, which proves CASCADE reached the child rows (a
+	// bare TRUNCATE would have refused while they existed).
+	for _, table := range []string{"applications", "databases", "services", "deployments"} {
 		var count int
 		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)
@@ -157,13 +159,18 @@ func TestProjectsEnvironmentsMigration(t *testing.T) {
 			t.Fatalf("%s has %d rows, want the deliberate wipe to empty it", table, count)
 		}
 	}
-	// Users, teams and servers survive the wipe.
-	var users int
-	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM users").Scan(&users); err != nil {
-		t.Fatalf("count users: %v", err)
-	}
-	if users == 0 {
-		t.Fatal("the wipe took users with it")
+	// CASCADE only follows FKs to the referenced rows, so the account, its
+	// team and membership, and the node survive the wipe.
+	for table, want := range map[string]int{
+		"users": 1, "teams": 1, "team_members": 1, "servers": 1,
+	} {
+		var count int
+		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != want {
+			t.Fatalf("%s has %d rows, want %d survivors", table, count, want)
+		}
 	}
 
 	// Down rolls 00034 back: the two tables are gone.

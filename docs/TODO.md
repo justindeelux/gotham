@@ -31,11 +31,6 @@ Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
 
 ## Phase 13 residuals (from the PE-2/PE-5/PE-6 reviews; none blocking)
 
-- [ ] **PE-2 R1 — database mid-creation can still change server.** Create does
-  not hold the job lease: a row in `creating` with an empty container accepts
-  `PATCH {server_id}` while provisioning still runs against the old node.
-  Fix: claim the lifecycle lease in Create, or require `status == error` as
-  well as an empty container id for a server change.
 - [ ] **PE-2 R2 — `PATCH /services/{id}` can wait up to the deploy timeout**
   for a running deploy (lock acquire is not context-aware). Consider a
   try-lock answering the contract's 409 `a deploy is in progress`.

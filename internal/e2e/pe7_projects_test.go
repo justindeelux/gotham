@@ -380,6 +380,10 @@ func TestPE7ProjectsFlow(t *testing.T) {
 	appID := createdApp.Application.ID
 	t.Cleanup(func() { removeImages(t, "gotham/"+appID) })
 	t.Cleanup(func() { removeLabelledContainers(t, "gotham.app_id="+appID) })
+	// Resource rows go before the harness server rows (registered earlier,
+	// so they run later): on a mid-flow failure the node row's RESTRICT
+	// references are gone by the time its delete runs.
+	t.Cleanup(func() { h.deleteAppRow(t, appID) })
 	status, raw = h.api(t, http.MethodPut, "/v1/applications/"+appID+"/env", map[string]any{"env": []map[string]string{
 		{"key": "PE7_WIN", "value": "application"},
 		{"key": "PE7_APP_ONLY", "value": "a"},
@@ -414,7 +418,7 @@ func TestPE7ProjectsFlow(t *testing.T) {
 		"PE7_PSEC":      "plain-wins",
 	} {
 		if env[key] != want {
-			t.Errorf("container env %s = %q, want %q", key, env[key], want)
+			t.Fatalf("container env %s = %q, want %q", key, env[key], want)
 		}
 	}
 
@@ -501,6 +505,7 @@ func TestPE7ProjectsFlow(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed service deploy: %v", err)
 	}
+	t.Cleanup(func() { h.deleteServiceRows(t, serviceID) })
 	if status, raw := h.api(t, http.MethodPatch, "/v1/services/"+serviceID,
 		map[string]string{"server_id": secondServerID.String()}, nil); status != http.StatusConflict {
 		t.Fatalf("PATCH service server: status %d, want 409: %s", status, raw)
@@ -520,6 +525,7 @@ func TestPE7ProjectsFlow(t *testing.T) {
 		t.Fatalf("seed database: %v", err)
 	}
 	dbID := uuid.UUID(dbRow.ID.Bytes).String()
+	t.Cleanup(func() { h.deleteDatabaseRow(t, dbID) })
 	if status, raw := h.api(t, http.MethodPatch, "/v1/databases/"+dbID,
 		map[string]string{"server_id": secondServerID.String()}, nil); status != http.StatusConflict {
 		t.Fatalf("PATCH database server: status %d, want 409: %s", status, raw)
@@ -561,6 +567,49 @@ func TestPE7ProjectsFlow(t *testing.T) {
 	}
 
 	t.Logf("pe7 flow ok: project=%s app=%s service=%s db=%s", projectID, appID, serviceID, dbID)
+}
+
+// deleteAppRow removes the application through the API (its container goes
+// with it), falling back to a row delete when the API path already failed.
+// Best-effort: it runs as a cleanup, so it never fails the test.
+func (h *pe7Harness) deleteAppRow(t *testing.T, appID string) {
+	t.Helper()
+	if status, _ := h.api(t, http.MethodDelete, "/v1/applications/"+appID, nil, nil); status == http.StatusNoContent || status == http.StatusNotFound {
+		return
+	}
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cleanupCancel()
+	if _, err := h.pool.Exec(cleanupCtx, "DELETE FROM applications WHERE id = $1", pgUUID(uuid.MustParse(appID))); err != nil {
+		t.Logf("cleanup application row: %v", err)
+	}
+}
+
+// deleteServiceRows hard-deletes the seeded service and its deploy rows. The
+// service never deployed, so no node state exists; a hard delete (not the
+// soft delete) also drops the server_id RESTRICT reference.
+func (h *pe7Harness) deleteServiceRows(t *testing.T, serviceID string) {
+	t.Helper()
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cleanupCancel()
+	id := pgUUID(uuid.MustParse(serviceID))
+	if _, err := h.pool.Exec(cleanupCtx, "DELETE FROM service_deploys WHERE service_id = $1", id); err != nil {
+		t.Logf("cleanup service deploy rows: %v", err)
+	}
+	if _, err := h.pool.Exec(cleanupCtx, "DELETE FROM services WHERE id = $1", id); err != nil {
+		t.Logf("cleanup service row: %v", err)
+	}
+}
+
+// deleteDatabaseRow hard-deletes the seeded database row. It never
+// provisioned, so no container or volume exists; a hard delete drops the
+// server_id RESTRICT reference the soft delete would keep.
+func (h *pe7Harness) deleteDatabaseRow(t *testing.T, dbID string) {
+	t.Helper()
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cleanupCancel()
+	if _, err := h.pool.Exec(cleanupCtx, "DELETE FROM databases WHERE id = $1", pgUUID(uuid.MustParse(dbID))); err != nil {
+		t.Logf("cleanup database row: %v", err)
+	}
 }
 
 // deployApp queues a deployment of the current revision (202).

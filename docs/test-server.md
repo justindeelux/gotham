@@ -193,8 +193,9 @@ commit instead of a tag and a dev stamp (`git checkout -f 0378f65`, build with
 - **Phase 13 UI recipe (Playwright MCP, 1280px and 480px):** create a project
   (a `production` environment comes with it), add a `staging` environment,
   then project → environment → resource: the environment page
-  (`/projects/:projectId/environments/:envId`) lists the applications,
-  services and databases sections with an "Add resource" menu; resource
+  (`/projects/:projectId/environments/:envId`) shows one resource table with
+  type tabs (Applications / Services / Databases), a Show previews switch, an
+  Add resource dialog, and a Shared variables section below; resource
   detail pages live under the nested URL
   (`/projects/:p/environments/:e/applications/:id`, same for
   `services/:id`, `databases/:id`) with `Project / Environment / Resource`

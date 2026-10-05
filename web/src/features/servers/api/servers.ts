@@ -243,6 +243,7 @@ const errorPrefixPackages = new Set([
   "notifications",
   "oauth",
   "providers",
+  "projects",
   "proxy",
   "server",
   "servers",

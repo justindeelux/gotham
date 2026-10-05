@@ -505,6 +505,13 @@ func (s *Store) ListPreviewDeploysByApplication(ctx context.Context, application
 	return s.queries.ListPreviewDeploysByApplication(ctx, applicationID)
 }
 
+// HasLivePreviewBindings reports whether the base application has live
+// (non-deleted) preview bindings, so a move or server change can be refused
+// while previews are open.
+func (s *Store) HasLivePreviewBindings(ctx context.Context, applicationID pgtype.UUID) (bool, error) {
+	return s.queries.HasLivePreviewBindings(ctx, applicationID)
+}
+
 // ListOrphanedPreviewDeploys returns live bindings whose sibling application
 // is gone (or was never linked).
 func (s *Store) ListOrphanedPreviewDeploys(ctx context.Context) ([]sqlc.PreviewDeploy, error) {

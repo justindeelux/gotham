@@ -19,6 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
@@ -82,6 +83,7 @@ type p5Harness struct {
 	baseURL  string
 	client   *http.Client
 	serverID uuid.UUID
+	envID    uuid.UUID
 	// logs observes the control plane's own structured records so a restore
 	// that already failed terminally can end SQL polling immediately.
 	logs *p5LogWatcher
@@ -367,6 +369,22 @@ func newP5Harness(t *testing.T) *p5Harness {
 		t.Fatalf("create server: %v", err)
 	}
 	serverID := uuid.UUID(serverRow.ID.Bytes)
+	// No team middleware is mounted, so requests run creator-scoped; the
+	// personal team (ID = user ID, created with the account) scopes the
+	// environment validation.
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, TeamID: pgtype.UUID{Bytes: userID, Valid: true}, Name: "p5-backup-smoke",
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, ProjectID: project.ID, Name: "production",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	envID := uuid.UUID(environment.ID.Bytes)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
@@ -433,6 +451,7 @@ func newP5Harness(t *testing.T) *p5Harness {
 		baseURL:  httpServer.URL + "/api",
 		client:   &http.Client{Timeout: 60 * time.Second},
 		serverID: serverID,
+		envID:    envID,
 		logs:     watcher,
 	}
 }
@@ -480,7 +499,7 @@ func (h *p5Harness) api(t *testing.T, method, path string, body, out any) (int, 
 // database id, never another worker's.
 func (h *p5Harness) createDatabase(t *testing.T, name string) (p5Database, databases.Credentials) {
 	t.Helper()
-	body := map[string]any{"name": name, "engine": "postgres", "server_id": h.serverID.String()}
+	body := map[string]any{"name": name, "engine": "postgres", "environment_id": h.envID.String(), "server_id": h.serverID.String()}
 	var out p5CreateDatabaseResponse
 	status, raw := h.api(t, http.MethodPost, "/v1/databases", body, &out)
 	if status != http.StatusCreated {

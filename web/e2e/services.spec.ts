@@ -1,5 +1,11 @@
 import { expect, test } from "./fixtures";
-import { loadAccount, seedNodeAddress, storageStatePath, uniqueSuffix } from "./support";
+import {
+  loadAccount,
+  seedNodeAddress,
+  seedProjectEnvironment,
+  storageStatePath,
+  uniqueSuffix,
+} from "./support";
 
 // Reuse the authenticated session so the page starts signed in; the seed
 // calls authenticate separately with the access token from global setup.
@@ -76,6 +82,7 @@ test.describe("services & templates", () => {
       data: { name: nodeName, ip: seedNodeAddress, ssh_user: "root" },
     });
     expect(serverResponse.status(), await serverResponse.text()).toBe(201);
+    const { environmentId } = await seedProjectEnvironment(request, headers);
 
     // ── the gallery loads the live catalog ───────────────────────────────
     await page.goto("/templates");
@@ -145,6 +152,18 @@ test.describe("services & templates", () => {
       .filter({ hasText: nodeName })
       .click();
     // The wizard footer (not the step body) carries the submit button.
+    // Until PE-5 wires the project/environment picker the dialog sends no
+    // environment, so the smoke injects the seeded one at the API boundary.
+    await page.route("**/api/v1/services", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      await route.continue({
+        postData: JSON.stringify({ ...body, environment_id: environmentId }),
+      });
+    });
     await wizard.getByRole("button", { name: "Create service" }).click();
 
     const created = wizard.locator('[data-testid="wizard-created"]');

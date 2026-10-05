@@ -1,7 +1,7 @@
 import type { APIRequestContext, Locator, Page, Route } from "@playwright/test";
 
 import { expect, test } from "./fixtures";
-import { loadAccount, seedNodeAddress, storageStatePath, uniqueSuffix } from "./support";
+import { loadAccount, seedNodeAddress, seedProjectEnvironment, storageStatePath, uniqueSuffix } from "./support";
 
 // Every scenario starts from the session global setup created.
 test.use({ storageState: storageStatePath });
@@ -31,10 +31,12 @@ async function seedApplication(
   serverId: string,
   name: string,
 ): Promise<{ id: string; name: string }> {
+  const { environmentId } = await seedProjectEnvironment(request, authHeaders());
   const response = await request.post("/api/v1/applications", {
     headers: authHeaders(),
     data: {
       name,
+      environment_id: environmentId,
       provider: "github",
       repo: "docker/welcome-to-docker",
       clone_url: "https://github.com/docker/welcome-to-docker.git",

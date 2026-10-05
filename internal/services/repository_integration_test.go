@@ -101,6 +101,54 @@ func seedUserAndServer(t *testing.T, st *store.Store) (uuid.UUID, uuid.UUID) {
 	return uuidFromPG(user.ID), uuidFromPG(server.ID)
 }
 
+// seedProjectEnvironment creates a team, a project and an environment on the
+// shared test database and returns their IDs, cleaning them up at test end.
+func seedProjectEnvironment(t *testing.T, st *store.Store) (teamID, projectID, envID uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+
+	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
+		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Name: fmt.Sprintf("p13-%d", time.Now().UnixNano()),
+	})
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
+		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		TeamID: team.ID,
+		Name:   fmt.Sprintf("shop-%d", time.Now().UnixNano()),
+	})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+		ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		ProjectID: project.ID,
+		Name:      "production",
+	})
+	if err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for _, query := range []string{
+			"DELETE FROM applications WHERE environment_id = $1",
+			"DELETE FROM services WHERE environment_id = $1",
+			"DELETE FROM databases WHERE environment_id = $1",
+		} {
+			if _, err := st.DB.Exec(cleanupCtx, query, environment.ID); err != nil {
+				t.Logf("cleanup resources: %v", err)
+			}
+		}
+		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID); err != nil {
+			t.Logf("cleanup team: %v", err)
+		}
+	})
+	return uuidFromPG(team.ID), uuidFromPG(project.ID), uuidFromPG(environment.ID)
+}
+
 // TestProxySourceRendersDomainMap proves the proxy adapter derives the routing
 // input from the stored document and environment (no stored copy), reports an
 // unrenderable routing document as unroutable, and skips services without
@@ -109,23 +157,27 @@ func TestProxySourceRendersDomainMap(t *testing.T) {
 	repo, st := integrationEnv(t)
 	ctx := context.Background()
 	ownerID, serverID := seedUserAndServer(t, st)
+	teamID, _, envID := seedProjectEnvironment(t, st)
 
 	routed, err := repo.CreateService(ctx, Service{
-		ID: uuid.New(), UserID: ownerID, ServerID: serverID, Name: "routed", Status: StatusRunning,
+		ID: uuid.New(), UserID: ownerID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
+		Name: "routed", Status: StatusRunning,
 		ComposeYAML: testDocument, Env: testEnv,
 	})
 	if err != nil {
 		t.Fatalf("CreateService(routed): %v", err)
 	}
 	unrouted, err := repo.CreateService(ctx, Service{
-		ID: uuid.New(), UserID: ownerID, ServerID: serverID, Name: "plain", Status: StatusRunning,
+		ID: uuid.New(), UserID: ownerID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
+		Name: "plain", Status: StatusRunning,
 		ComposeYAML: "services:\n  web:\n    image: nginx:1.23\n", Env: map[string]string{},
 	})
 	if err != nil {
 		t.Fatalf("CreateService(plain): %v", err)
 	}
 	broken, err := repo.CreateService(ctx, Service{
-		ID: uuid.New(), UserID: ownerID, ServerID: serverID, Name: "broken", Status: StatusRunning,
+		ID: uuid.New(), UserID: ownerID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
+		Name: "broken", Status: StatusRunning,
 		ComposeYAML: testDocument, Env: map[string]string{}, // DOMAIN/PASSWORD unresolved
 	})
 	if err != nil {
@@ -163,26 +215,80 @@ func TestProxySourceRendersDomainMap(t *testing.T) {
 	}
 }
 
-// TestRepositoryRoundTrip exercises the SQL behind the repository: the
-// migrations, ownership reads, the unique-name index, the jsonb environment,
-// the deploy history and the soft delete that keeps the volumes.
+// TestUpdateServiceConfigKeepsUnsetPlacement pins F3 at the SQL level: a
+// Nil environment or server (the service zeroes placement the request
+// leaves alone) keeps the stored values instead of writing NULL, while a
+// set value moves the row.
+func TestUpdateServiceConfigKeepsUnsetPlacement(t *testing.T) {
+	repo, st := integrationEnv(t)
+	ctx := context.Background()
+	ownerID, serverID := seedUserAndServer(t, st)
+	teamID, projectID, envID := seedProjectEnvironment(t, st)
+
+	created, err := repo.CreateService(ctx, Service{
+		ID: uuid.New(), UserID: ownerID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
+		Name: "wordpress", Status: StatusCreating, ComposeYAML: testDocument, Env: testEnv,
+	})
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	renamed, err := repo.UpdateServiceConfig(ctx, Service{
+		ID: created.ID, Name: "renamed", ComposeYAML: testDocument, Env: testEnv,
+	})
+	if err != nil {
+		t.Fatalf("UpdateServiceConfig (rename only): %v", err)
+	}
+	if renamed.Name != "renamed" {
+		t.Fatalf("name = %q, want renamed", renamed.Name)
+	}
+	if renamed.EnvironmentID != envID || renamed.ServerID != serverID {
+		t.Fatalf("placement = %s/%s, want the stored %s/%s",
+			renamed.EnvironmentID, renamed.ServerID, envID, serverID)
+	}
+
+	_, otherProjectID, _ := seedProjectEnvironment(t, st)
+	_ = otherProjectID
+	otherEnv, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+		ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		ProjectID: pgtype.UUID{Bytes: projectID, Valid: true},
+		Name:      "staging",
+	})
+	if err != nil {
+		t.Fatalf("CreateEnvironment (staging): %v", err)
+	}
+	otherEnvID := uuidFromPG(otherEnv.ID)
+	moved, err := repo.UpdateServiceConfig(ctx, Service{
+		ID: created.ID, Name: "renamed", ComposeYAML: testDocument, Env: testEnv,
+		EnvironmentID: otherEnvID, ServerID: serverID,
+	})
+	if err != nil {
+		t.Fatalf("UpdateServiceConfig (explicit move): %v", err)
+	}
+	if moved.EnvironmentID != otherEnvID {
+		t.Fatalf("environment = %s, want %s", moved.EnvironmentID, otherEnvID)
+	}
+}
 func TestRepositoryRoundTrip(t *testing.T) {
 	repo, st := integrationEnv(t)
 	ctx := context.Background()
 	ownerID, serverID := seedUserAndServer(t, st)
 	otherUserID, _ := seedUserAndServer(t, st)
+	teamID, _, envID := seedProjectEnvironment(t, st)
 
 	now := time.Now().UTC()
 	created, err := repo.CreateService(ctx, Service{
-		ID:          uuid.New(),
-		UserID:      ownerID,
-		ServerID:    serverID,
-		Name:        "wordpress",
-		Status:      StatusCreating,
-		ComposeYAML: testDocument,
-		Env:         testEnv,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:            uuid.New(),
+		UserID:        ownerID,
+		TeamID:        teamID,
+		ServerID:      serverID,
+		EnvironmentID: envID,
+		Name:          "wordpress",
+		Status:        StatusCreating,
+		ComposeYAML:   testDocument,
+		Env:           testEnv,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	})
 	if err != nil {
 		t.Fatalf("CreateService: %v", err)
@@ -205,15 +311,17 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("compose_yaml = %q", fetched.ComposeYAML)
 	}
 
-	// Same name, same user → conflict; same name, other user → allowed.
+	// Same name, same environment → conflict (per-environment uniqueness);
+	// same name, other user, same environment → still conflict; a different
+	// environment allows the name.
 	duplicate := created
 	duplicate.ID = uuid.New()
 	if _, err := repo.CreateService(ctx, duplicate); !errors.Is(err, ErrConflict) {
 		t.Errorf("duplicate CreateService error = %v, want ErrConflict", err)
 	}
 	duplicate.UserID = otherUserID
-	if _, err := repo.CreateService(ctx, duplicate); err != nil {
-		t.Errorf("another user's service with the same name: %v", err)
+	if _, err := repo.CreateService(ctx, duplicate); !errors.Is(err, ErrConflict) {
+		t.Errorf("same-environment duplicate for another user error = %v, want ErrConflict", err)
 	}
 
 	// Status vocabulary is enforced by the CHECK constraint.

@@ -4,12 +4,12 @@
 -- one, and COALESCE keeps the database-generated default for every other
 -- caller.
 INSERT INTO applications (
-    id, user_id, server_id, name, provider, repo, clone_url,
+    id, user_id, server_id, environment_id, name, provider, repo, clone_url,
     branch, build_pack, base_domain, port, host_port, team_id, is_preview
 )
 VALUES (
     COALESCE(sqlc.arg(id)::uuid, gen_random_uuid()),
-    sqlc.arg(user_id), sqlc.arg(server_id), sqlc.arg(name), sqlc.arg(provider),
+    sqlc.arg(user_id), sqlc.arg(server_id), sqlc.arg(environment_id), sqlc.arg(name), sqlc.arg(provider),
     sqlc.arg(repo), sqlc.arg(clone_url), sqlc.arg(branch), sqlc.arg(build_pack),
     sqlc.arg(base_domain), sqlc.arg(port), sqlc.arg(host_port), sqlc.arg(team_id),
     sqlc.arg(is_preview)
@@ -21,13 +21,65 @@ SELECT * FROM applications WHERE id = $1;
 
 -- name: ListApplicationsByUser :many
 SELECT * FROM applications
-WHERE user_id = $1
+WHERE user_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC;
 
 -- name: ListApplicationsByTeam :many
 SELECT * FROM applications
-WHERE team_id = $1
+WHERE team_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC;
+
+-- name: ListApplicationsByEnvironment :many
+-- One environment's applications, newest first. Previews stay out of the
+-- default listing; the resources endpoint passes true for ?previews=1.
+SELECT * FROM applications
+WHERE environment_id = $1 AND (is_preview = false OR sqlc.arg(include_previews)::bool = true)
+ORDER BY created_at DESC, id DESC;
+
+-- name: ListApplicationsByProject :many
+-- Every environment's applications of one project (the ?project_id= filter),
+-- newest first. Previews are included only on request, as above.
+SELECT a.* FROM applications a
+JOIN environments e ON e.id = a.environment_id
+WHERE e.project_id = $1 AND (a.is_preview = false OR sqlc.arg(include_previews)::bool = true)
+ORDER BY a.created_at DESC, a.id DESC;
+
+-- name: CountApplicationsByEnvironment :one
+-- Live applications only: previews are hidden from the default listing, so
+-- the display counts match it. Delete guards consult the preview counts
+-- below instead.
+SELECT count(*) FROM applications WHERE environment_id = $1 AND is_preview = false;
+
+-- name: CountApplicationsByProject :one
+SELECT count(*) FROM applications a
+JOIN environments e ON e.id = a.environment_id
+WHERE e.project_id = $1 AND a.is_preview = false;
+
+-- name: CountPreviewApplicationsByEnvironment :one
+-- Live previews of one environment: they stay out of every count and
+-- listing, but they still block the environment delete.
+SELECT count(*) FROM applications WHERE environment_id = $1 AND is_preview = true;
+
+-- name: CountPreviewApplicationsByProject :one
+-- Live previews of every environment of one project (see above).
+SELECT count(*) FROM applications a
+JOIN environments e ON e.id = a.environment_id
+WHERE e.project_id = $1 AND a.is_preview = true;
+
+-- name: ListApplicationsByServer :many
+-- One node's applications (id and name only): the server-delete 409 names its
+-- blocking resources.
+SELECT id, name FROM applications
+WHERE server_id = $1
+ORDER BY created_at DESC, id DESC;
+
+-- name: ApplicationNameInEnvironment :one
+-- The move-collision pre-check: whether the environment holds another
+-- application with the name (exact match, like the unique index).
+SELECT EXISTS (
+    SELECT 1 FROM applications
+    WHERE environment_id = $1 AND name = $2 AND id <> $3
+);
 
 -- name: UpdateApplication :one
 UPDATE applications
@@ -39,6 +91,7 @@ SET name = $2,
     host_port = $7,
     server_id = $8,
     base_domain_disabled = $9,
+    environment_id = $10,
     updated_at = now()
 WHERE id = $1
 RETURNING *;

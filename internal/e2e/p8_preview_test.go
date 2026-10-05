@@ -37,16 +37,17 @@ func TestP8PreviewLifecycle(t *testing.T) {
 
 	baseDomain := "p8-" + suffix + ".apps.example.test"
 	app := h.createApplication(t, p4CreateApplication{
-		Name:       "p8-preview-" + suffix,
-		Provider:   "github",
-		Repo:       fixture.repo,
-		CloneURL:   fixture.dir,
-		Branch:     "main",
-		BuildPack:  "dockerfile",
-		BaseDomain: baseDomain,
-		Port:       p4ContainerPort,
-		HostPort:   freeHostPort(t),
-		ServerID:   h.serverID.String(),
+		EnvironmentID: h.envID.String(),
+		Name:          "p8-preview-" + suffix,
+		Provider:      "github",
+		Repo:          fixture.repo,
+		CloneURL:      fixture.dir,
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		BaseDomain:    baseDomain,
+		Port:          p4ContainerPort,
+		HostPort:      freeHostPort(t),
+		ServerID:      h.serverID.String(),
 	})
 	hookSecret := "p8-e2e-secret-" + suffix
 	h.seedWebhook(t, app, hookSecret)
@@ -71,8 +72,14 @@ func TestP8PreviewLifecycle(t *testing.T) {
 		t.Fatalf("preview host = %q, want %q", opened.Host, wantHost)
 	}
 
-	// 2. The sibling application is a real row cloned from the base config.
-	sibling := h.applicationByName(t, app.Name+"-pr-7")
+	// 2. The sibling application is a real row cloned from the base config,
+	// resolved through its binding (previews stay out of the default
+	// application listing).
+	preview := h.previewRow(t, app.ID, 7)
+	if preview.PreviewApplicationID == "" {
+		t.Fatalf("preview row = %+v, want a linked sibling", preview)
+	}
+	sibling := h.applicationByID(t, preview.PreviewApplicationID)
 	// The webhook service created the sibling, not createApplication, so its
 	// containers and built images need their own cleanup.
 	h.removeAppArtifacts(t, sibling.ID)
@@ -84,7 +91,6 @@ func TestP8PreviewLifecycle(t *testing.T) {
 	}
 
 	// 3. The binding row is active and points at the sibling.
-	preview := h.previewRow(t, app.ID, 7)
 	if preview.State != "active" || preview.Host != wantHost ||
 		preview.Branch != "feature/preview" || preview.HeadSHA != headSHA {
 		t.Fatalf("preview row = %+v", preview)
@@ -186,38 +192,37 @@ func (h *p4Harness) previewRow(t *testing.T, appID string, prNumber int) p8Previ
 	return row
 }
 
-// applicationByName finds the caller's application with the given name.
-func (h *p4Harness) applicationByName(t *testing.T, name string) p4Application {
+// applicationByID loads one application row by ID (previews included: the
+// default listing hides them, so the binding's PreviewApplicationID is the
+// way to reach a sibling).
+func (h *p4Harness) applicationByID(t *testing.T, id string) p4Application {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	rows, err := h.st.ListApplicationsByUser(ctx, pgUUID(h.userID))
+	appID, err := uuid.Parse(id)
 	if err != nil {
-		t.Fatalf("list applications: %v", err)
+		t.Fatalf("parse application id %q: %v", id, err)
 	}
-	for _, row := range rows {
-		if row.Name != name {
-			continue
-		}
-		serverID := ""
-		if row.ServerID.Valid {
-			serverID = uuid.UUID(row.ServerID.Bytes).String()
-		}
-		return p4Application{
-			ID:         uuid.UUID(row.ID.Bytes).String(),
-			Name:       row.Name,
-			Repo:       row.Repo,
-			CloneURL:   row.CloneUrl,
-			Branch:     row.Branch,
-			BuildPack:  row.BuildPack,
-			BaseDomain: row.BaseDomain,
-			Port:       row.Port,
-			HostPort:   row.HostPort,
-			ServerID:   serverID,
-		}
+	row, err := h.st.GetApplication(ctx, pgUUID(appID))
+	if err != nil {
+		t.Fatalf("get application %s: %v", id, err)
 	}
-	t.Fatalf("application %q not found", name)
-	return p4Application{}
+	serverID := ""
+	if row.ServerID.Valid {
+		serverID = uuid.UUID(row.ServerID.Bytes).String()
+	}
+	return p4Application{
+		ID:         uuid.UUID(row.ID.Bytes).String(),
+		Name:       row.Name,
+		Repo:       row.Repo,
+		CloneURL:   row.CloneUrl,
+		Branch:     row.Branch,
+		BuildPack:  row.BuildPack,
+		BaseDomain: row.BaseDomain,
+		Port:       row.Port,
+		HostPort:   row.HostPort,
+		ServerID:   serverID,
+	}
 }
 
 // deliverGitHubPR replays one signed GitHub pull_request delivery.

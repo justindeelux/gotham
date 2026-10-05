@@ -4,6 +4,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/databases"
+	"github.com/justindeelux/gotham/internal/deploy"
+	"github.com/justindeelux/gotham/internal/services"
 )
 
 // ResourceCounts tallies the workloads attached to a project or an
@@ -35,4 +39,15 @@ type Environment struct {
 	Resources ResourceCounts
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// EnvironmentResources is one environment with its project and workloads: the
+// GET /environments/{id}/resources surface. Previews are included only on
+// request.
+type EnvironmentResources struct {
+	Environment  Environment
+	Project      Project
+	Applications []deploy.Application
+	Services     []services.Service
+	Databases    []databases.Database
 }

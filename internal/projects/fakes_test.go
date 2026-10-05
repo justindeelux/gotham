@@ -91,12 +91,12 @@ func (f *fakeRepository) UpdateProject(_ context.Context, teamID, projectID uuid
 	return project, nil
 }
 
-func (f *fakeRepository) DeleteProject(_ context.Context, teamID, projectID uuid.UUID) error {
+func (f *fakeRepository) DeleteProject(_ context.Context, teamID, projectID uuid.UUID) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	project, ok := f.projects[projectID]
 	if !ok || project.TeamID != teamID {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	delete(f.projects, projectID)
 	for id, environment := range f.environments {
@@ -104,7 +104,7 @@ func (f *fakeRepository) DeleteProject(_ context.Context, teamID, projectID uuid
 			delete(f.environments, id)
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 func (f *fakeRepository) CreateEnvironment(_ context.Context, teamID, projectID uuid.UUID, name string) (Environment, error) {
@@ -178,16 +178,16 @@ func (f *fakeRepository) UpdateEnvironment(_ context.Context, teamID, environmen
 	return environment, nil
 }
 
-func (f *fakeRepository) DeleteEnvironmentIfNotLast(_ context.Context, teamID, environmentID uuid.UUID) error {
+func (f *fakeRepository) DeleteEnvironmentIfNotLast(_ context.Context, teamID, environmentID uuid.UUID) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	environment, ok := f.environments[environmentID]
 	if !ok {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	project, ok := f.projects[environment.ProjectID]
 	if !ok || project.TeamID != teamID {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	remaining := 0
 	for _, other := range f.environments {
@@ -196,10 +196,10 @@ func (f *fakeRepository) DeleteEnvironmentIfNotLast(_ context.Context, teamID, e
 		}
 	}
 	if remaining <= 1 {
-		return ErrLastEnvironment
+		return nil, ErrLastEnvironment
 	}
 	delete(f.environments, environmentID)
-	return nil
+	return nil, nil
 }
 
 func (f *fakeRepository) CountEnvironments(_ context.Context, projectID uuid.UUID) (int, error) {
@@ -219,6 +219,8 @@ type fakeCounter struct {
 	mu           sync.Mutex
 	environments map[uuid.UUID]ResourceCounts
 	projects     map[uuid.UUID]ResourceCounts
+	previewEnvs  map[uuid.UUID]int
+	previewProjs map[uuid.UUID]int
 	err          error
 }
 
@@ -226,6 +228,8 @@ func newFakeCounter() *fakeCounter {
 	return &fakeCounter{
 		environments: make(map[uuid.UUID]ResourceCounts),
 		projects:     make(map[uuid.UUID]ResourceCounts),
+		previewEnvs:  make(map[uuid.UUID]int),
+		previewProjs: make(map[uuid.UUID]int),
 	}
 }
 
@@ -239,6 +243,18 @@ func (f *fakeCounter) CountEnvironmentResources(_ context.Context, environmentID
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.environments[environmentID], f.err
+}
+
+func (f *fakeCounter) CountProjectPreviews(_ context.Context, projectID uuid.UUID) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.previewProjs[projectID], f.err
+}
+
+func (f *fakeCounter) CountEnvironmentPreviews(_ context.Context, environmentID uuid.UUID) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.previewEnvs[environmentID], f.err
 }
 
 // newTestService wires the real service onto the in-memory repository with

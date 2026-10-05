@@ -11,25 +11,50 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countDatabasesByEnvironment = `-- name: CountDatabasesByEnvironment :one
+SELECT count(*) FROM databases WHERE environment_id = $1 AND deleted_at IS NULL
+`
+
+func (q *Queries) CountDatabasesByEnvironment(ctx context.Context, environmentID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countDatabasesByEnvironment, environmentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countDatabasesByProject = `-- name: CountDatabasesByProject :one
+SELECT count(*) FROM databases d
+JOIN environments e ON e.id = d.environment_id
+WHERE e.project_id = $1 AND d.deleted_at IS NULL
+`
+
+func (q *Queries) CountDatabasesByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countDatabasesByProject, projectID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createDatabase = `-- name: CreateDatabase :one
 INSERT INTO databases (
-    id, user_id, server_id, name, engine, version, status, public_port, storage_path, team_id
+    id, user_id, server_id, environment_id, name, engine, version, status, public_port, storage_path, team_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
 `
 
 type CreateDatabaseParams struct {
-	ID          pgtype.UUID `json:"id"`
-	UserID      pgtype.UUID `json:"user_id"`
-	ServerID    pgtype.UUID `json:"server_id"`
-	Name        string      `json:"name"`
-	Engine      string      `json:"engine"`
-	Version     string      `json:"version"`
-	Status      string      `json:"status"`
-	PublicPort  int32       `json:"public_port"`
-	StoragePath string      `json:"storage_path"`
-	TeamID      pgtype.UUID `json:"team_id"`
+	ID            pgtype.UUID `json:"id"`
+	UserID        pgtype.UUID `json:"user_id"`
+	ServerID      pgtype.UUID `json:"server_id"`
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	Name          string      `json:"name"`
+	Engine        string      `json:"engine"`
+	Version       string      `json:"version"`
+	Status        string      `json:"status"`
+	PublicPort    int32       `json:"public_port"`
+	StoragePath   string      `json:"storage_path"`
+	TeamID        pgtype.UUID `json:"team_id"`
 }
 
 func (q *Queries) CreateDatabase(ctx context.Context, arg CreateDatabaseParams) (Database, error) {
@@ -37,6 +62,7 @@ func (q *Queries) CreateDatabase(ctx context.Context, arg CreateDatabaseParams) 
 		arg.ID,
 		arg.UserID,
 		arg.ServerID,
+		arg.EnvironmentID,
 		arg.Name,
 		arg.Engine,
 		arg.Version,
@@ -61,6 +87,7 @@ func (q *Queries) CreateDatabase(ctx context.Context, arg CreateDatabaseParams) 
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.TeamID,
+		&i.EnvironmentID,
 	)
 	return i, err
 }
@@ -90,6 +117,28 @@ func (q *Queries) CreateDatabaseSecret(ctx context.Context, arg CreateDatabaseSe
 	return i, err
 }
 
+const databaseNameInEnvironment = `-- name: DatabaseNameInEnvironment :one
+SELECT EXISTS (
+    SELECT 1 FROM databases
+    WHERE environment_id = $1 AND name = $2 AND id <> $3 AND deleted_at IS NULL
+)
+`
+
+type DatabaseNameInEnvironmentParams struct {
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	Name          string      `json:"name"`
+	ID            pgtype.UUID `json:"id"`
+}
+
+// The move-collision pre-check: whether the environment holds another live
+// database with the name (exact match, like the unique index).
+func (q *Queries) DatabaseNameInEnvironment(ctx context.Context, arg DatabaseNameInEnvironmentParams) (bool, error) {
+	row := q.db.QueryRow(ctx, databaseNameInEnvironment, arg.EnvironmentID, arg.Name, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const deleteDatabaseSecrets = `-- name: DeleteDatabaseSecrets :exec
 DELETE FROM database_secrets
 WHERE database_id = $1
@@ -101,7 +150,7 @@ func (q *Queries) DeleteDatabaseSecrets(ctx context.Context, databaseID pgtype.U
 }
 
 const getDatabase = `-- name: GetDatabase :one
-SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id FROM databases
+SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id FROM databases
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -123,6 +172,7 @@ func (q *Queries) GetDatabase(ctx context.Context, id pgtype.UUID) (Database, er
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.TeamID,
+		&i.EnvironmentID,
 	)
 	return i, err
 }
@@ -159,8 +209,124 @@ func (q *Queries) ListDatabaseSecrets(ctx context.Context, databaseID pgtype.UUI
 	return items, nil
 }
 
+const listDatabasesByEnvironment = `-- name: ListDatabasesByEnvironment :many
+SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id FROM databases
+WHERE environment_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+`
+
+func (q *Queries) ListDatabasesByEnvironment(ctx context.Context, environmentID pgtype.UUID) ([]Database, error) {
+	rows, err := q.db.Query(ctx, listDatabasesByEnvironment, environmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Database{}
+	for rows.Next() {
+		var i Database
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ServerID,
+			&i.Name,
+			&i.Engine,
+			&i.Version,
+			&i.Status,
+			&i.ContainerID,
+			&i.PublicPort,
+			&i.StoragePath,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.TeamID,
+			&i.EnvironmentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDatabasesByProject = `-- name: ListDatabasesByProject :many
+SELECT d.id, d.user_id, d.server_id, d.name, d.engine, d.version, d.status, d.container_id, d.public_port, d.storage_path, d.created_at, d.updated_at, d.deleted_at, d.team_id, d.environment_id FROM databases d
+JOIN environments e ON e.id = d.environment_id
+WHERE e.project_id = $1 AND d.deleted_at IS NULL
+ORDER BY d.created_at DESC, d.id DESC
+`
+
+func (q *Queries) ListDatabasesByProject(ctx context.Context, projectID pgtype.UUID) ([]Database, error) {
+	rows, err := q.db.Query(ctx, listDatabasesByProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Database{}
+	for rows.Next() {
+		var i Database
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ServerID,
+			&i.Name,
+			&i.Engine,
+			&i.Version,
+			&i.Status,
+			&i.ContainerID,
+			&i.PublicPort,
+			&i.StoragePath,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.TeamID,
+			&i.EnvironmentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDatabasesByServer = `-- name: ListDatabasesByServer :many
+SELECT id, name FROM databases
+WHERE server_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+`
+
+type ListDatabasesByServerRow struct {
+	ID   pgtype.UUID `json:"id"`
+	Name string      `json:"name"`
+}
+
+func (q *Queries) ListDatabasesByServer(ctx context.Context, serverID pgtype.UUID) ([]ListDatabasesByServerRow, error) {
+	rows, err := q.db.Query(ctx, listDatabasesByServer, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDatabasesByServerRow{}
+	for rows.Next() {
+		var i ListDatabasesByServerRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDatabasesByTeam = `-- name: ListDatabasesByTeam :many
-SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id FROM databases
+SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id FROM databases
 WHERE team_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 `
@@ -189,6 +355,7 @@ func (q *Queries) ListDatabasesByTeam(ctx context.Context, teamID pgtype.UUID) (
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.TeamID,
+			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
 		}
@@ -201,7 +368,7 @@ func (q *Queries) ListDatabasesByTeam(ctx context.Context, teamID pgtype.UUID) (
 }
 
 const listDatabasesByUser = `-- name: ListDatabasesByUser :many
-SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id FROM databases
+SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id FROM databases
 WHERE user_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 `
@@ -230,6 +397,7 @@ func (q *Queries) ListDatabasesByUser(ctx context.Context, userID pgtype.UUID) (
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.TeamID,
+			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
 		}
@@ -242,7 +410,7 @@ func (q *Queries) ListDatabasesByUser(ctx context.Context, userID pgtype.UUID) (
 }
 
 const listExpiredDatabases = `-- name: ListExpiredDatabases :many
-SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id FROM databases
+SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id FROM databases
 WHERE deleted_at IS NOT NULL AND deleted_at <= $1
 ORDER BY deleted_at ASC, id ASC
 `
@@ -273,6 +441,7 @@ func (q *Queries) ListExpiredDatabases(ctx context.Context, deletedAt pgtype.Tim
 			&i.UpdatedAt,
 			&i.DeletedAt,
 			&i.TeamID,
+			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
 		}
@@ -318,13 +487,99 @@ func (q *Queries) PurgeDatabase(ctx context.Context, id pgtype.UUID) (int64, err
 	return result.RowsAffected(), nil
 }
 
+const purgeTombstonedDatabasesByEnvironment = `-- name: PurgeTombstonedDatabasesByEnvironment :many
+DELETE FROM databases
+WHERE environment_id = $1 AND deleted_at IS NOT NULL
+RETURNING storage_path
+`
+
+// Hard-deletes the soft-deleted databases of one environment and returns
+// their storage paths. An environment delete purges these in the same
+// transaction first, so only live databases block it (409). A returned
+// volume may still exist on the node (the retention sweeper only sees rows),
+// so the caller logs it; the data stays recoverable from the node.
+func (q *Queries) PurgeTombstonedDatabasesByEnvironment(ctx context.Context, environmentID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, purgeTombstonedDatabasesByEnvironment, environmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var storage_path string
+		if err := rows.Scan(&storage_path); err != nil {
+			return nil, err
+		}
+		items = append(items, storage_path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const purgeTombstonedDatabasesByProject = `-- name: PurgeTombstonedDatabasesByProject :many
+DELETE FROM databases
+WHERE environment_id IN (SELECT id FROM environments WHERE project_id = $1)
+AND deleted_at IS NOT NULL
+RETURNING storage_path
+`
+
+// Same as above for every environment of one project.
+func (q *Queries) PurgeTombstonedDatabasesByProject(ctx context.Context, projectID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, purgeTombstonedDatabasesByProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var storage_path string
+		if err := rows.Scan(&storage_path); err != nil {
+			return nil, err
+		}
+		items = append(items, storage_path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const purgeTombstonedDatabasesByServer = `-- name: PurgeTombstonedDatabasesByServer :many
+DELETE FROM databases
+WHERE server_id = $1 AND deleted_at IS NOT NULL
+RETURNING storage_path
+`
+
+// Same as above for one node.
+func (q *Queries) PurgeTombstonedDatabasesByServer(ctx context.Context, serverID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, purgeTombstonedDatabasesByServer, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var storage_path string
+		if err := rows.Scan(&storage_path); err != nil {
+			return nil, err
+		}
+		items = append(items, storage_path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const softDeleteDatabase = `-- name: SoftDeleteDatabase :one
 UPDATE databases
 SET status = 'deleting',
     deleted_at = now(),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
 `
 
 func (q *Queries) SoftDeleteDatabase(ctx context.Context, id pgtype.UUID) (Database, error) {
@@ -345,6 +600,7 @@ func (q *Queries) SoftDeleteDatabase(ctx context.Context, id pgtype.UUID) (Datab
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.TeamID,
+		&i.EnvironmentID,
 	)
 	return i, err
 }
@@ -354,7 +610,7 @@ UPDATE databases
 SET container_id = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
 `
 
 type UpdateDatabaseContainerParams struct {
@@ -380,6 +636,7 @@ func (q *Queries) UpdateDatabaseContainer(ctx context.Context, arg UpdateDatabas
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.TeamID,
+		&i.EnvironmentID,
 	)
 	return i, err
 }
@@ -389,7 +646,7 @@ UPDATE databases
 SET name = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
 `
 
 type UpdateDatabaseNameParams struct {
@@ -415,6 +672,7 @@ func (q *Queries) UpdateDatabaseName(ctx context.Context, arg UpdateDatabaseName
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.TeamID,
+		&i.EnvironmentID,
 	)
 	return i, err
 }
@@ -424,7 +682,7 @@ UPDATE databases
 SET status = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
 `
 
 type UpdateDatabaseStatusParams struct {
@@ -450,6 +708,58 @@ func (q *Queries) UpdateDatabaseStatus(ctx context.Context, arg UpdateDatabaseSt
 		&i.UpdatedAt,
 		&i.DeletedAt,
 		&i.TeamID,
+		&i.EnvironmentID,
+	)
+	return i, err
+}
+
+const updateDatabaseTarget = `-- name: UpdateDatabaseTarget :one
+UPDATE databases
+SET name = $2,
+    environment_id = COALESCE($3, environment_id),
+    server_id = COALESCE($4, server_id),
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
+`
+
+type UpdateDatabaseTargetParams struct {
+	ID            pgtype.UUID `json:"id"`
+	Name          string      `json:"name"`
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	ServerID      pgtype.UUID `json:"server_id"`
+}
+
+// Rename, move environment and change node in one write, with the placement
+// columns conditional (COALESCE with narg): the service zeroes placement
+// fields the request leaves alone, so a stale snapshot can never write back
+// an old environment or server. The row stays live throughout: the write is
+// fenced on deleted_at, so a concurrent delete wins and the move silently
+// no-ops to ErrNotFound instead.
+func (q *Queries) UpdateDatabaseTarget(ctx context.Context, arg UpdateDatabaseTargetParams) (Database, error) {
+	row := q.db.QueryRow(ctx, updateDatabaseTarget,
+		arg.ID,
+		arg.Name,
+		arg.EnvironmentID,
+		arg.ServerID,
+	)
+	var i Database
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ServerID,
+		&i.Name,
+		&i.Engine,
+		&i.Version,
+		&i.Status,
+		&i.ContainerID,
+		&i.PublicPort,
+		&i.StoragePath,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.TeamID,
+		&i.EnvironmentID,
 	)
 	return i, err
 }

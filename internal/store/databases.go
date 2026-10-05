@@ -32,6 +32,47 @@ func (s *Store) ListDatabasesByTeam(ctx context.Context, teamID pgtype.UUID) ([]
 	return s.queries.ListDatabasesByTeam(ctx, teamID)
 }
 
+// ListDatabasesByEnvironment returns one environment's live databases,
+// newest first.
+func (s *Store) ListDatabasesByEnvironment(ctx context.Context, environmentID pgtype.UUID) ([]sqlc.Database, error) {
+	return s.queries.ListDatabasesByEnvironment(ctx, environmentID)
+}
+
+// ListDatabasesByProject returns every environment's live databases of one
+// project, newest first.
+func (s *Store) ListDatabasesByProject(ctx context.Context, projectID pgtype.UUID) ([]sqlc.Database, error) {
+	return s.queries.ListDatabasesByProject(ctx, projectID)
+}
+
+// CountDatabasesByEnvironment tallies one environment's live databases.
+func (s *Store) CountDatabasesByEnvironment(ctx context.Context, environmentID pgtype.UUID) (int64, error) {
+	return s.queries.CountDatabasesByEnvironment(ctx, environmentID)
+}
+
+// CountDatabasesByProject tallies every environment's live databases of one
+// project.
+func (s *Store) CountDatabasesByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
+	return s.queries.CountDatabasesByProject(ctx, projectID)
+}
+
+// ListDatabasesByServer returns one node's live databases (id and name) for
+// the server-delete 409.
+func (s *Store) ListDatabasesByServer(ctx context.Context, serverID pgtype.UUID) ([]sqlc.ListDatabasesByServerRow, error) {
+	return s.queries.ListDatabasesByServer(ctx, serverID)
+}
+
+// DatabaseNameInEnvironment reports whether the environment holds another
+// live database with the name (the move-collision pre-check).
+func (s *Store) DatabaseNameInEnvironment(ctx context.Context, params sqlc.DatabaseNameInEnvironmentParams) (bool, error) {
+	return s.queries.DatabaseNameInEnvironment(ctx, params)
+}
+
+// UpdateDatabaseTarget renames, moves environment and changes node in one
+// live-row-fenced write.
+func (s *Store) UpdateDatabaseTarget(ctx context.Context, params sqlc.UpdateDatabaseTargetParams) (sqlc.Database, error) {
+	return s.queries.UpdateDatabaseTarget(ctx, params)
+}
+
 // UpdateDatabaseName persists only the name and returns the fresh row. The
 // update is fenced on the row still being live, so a rename cannot follow a
 // soft delete back into visibility, and it cannot clobber a concurrent status

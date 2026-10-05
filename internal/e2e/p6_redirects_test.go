@@ -92,6 +92,7 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 			t.Logf("cleanup user: %v", err)
 		}
 	})
+	envID := p6SeedEnvironment(t, ctx, pool, st, suffix)
 	serverRow, err := st.CreateServer(ctx, sqlc.CreateServerParams{
 		Name:    "p6-redirects-" + suffix,
 		Ip:      "127.0.0.1",
@@ -199,7 +200,7 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	targetDomain := "target-" + suffix + ".example.test"
 	sourceDomain := "legacy-" + suffix + ".example.test"
 	targetContainer := p6RunNginx(t, ctx, engine, "p6-redirect-target-"+suffix, fmt.Sprintf("%d:80", freeTCPPort(t)))
-	targetApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "redirect-target-"+suffix, targetDomain, 0, false)
+	targetApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "redirect-target-"+suffix, targetDomain, 0, false)
 	p6CreateRunningDeployment(t, ctx, pool, targetApp, targetContainer)
 
 	// The real services over the real store: a redirect rule and a
@@ -399,7 +400,7 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	// node's intent keeps its real observation in the same call.
 	p6WriteACMEStorage(t, acmeDir, fixture)
 	ghostDomain := "ghost-" + suffix + ".example.test"
-	ghostApp := p6CreateApplication(t, ctx, pool, userRow.ID, ghostRow.ID, "redirect-ghost-"+suffix, ghostDomain, 0, false)
+	ghostApp := p6CreateApplication(t, ctx, pool, userRow.ID, ghostRow.ID, envID, "redirect-ghost-"+suffix, ghostDomain, 0, false)
 	ghostCertificate, err := certificateService.CreateCertificate(ctx, proxy.CreateCertificateInput{
 		ApplicationID: ghostApp,
 		Challenge:     proxy.ChallengeHTTP01,

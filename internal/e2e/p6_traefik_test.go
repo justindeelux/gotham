@@ -103,6 +103,7 @@ func TestP6ProxySyncProduction(t *testing.T) {
 			t.Logf("cleanup user: %v", err)
 		}
 	})
+	envID := p6SeedEnvironment(t, ctx, pool, st, suffix)
 	serverRow, err := st.CreateServer(ctx, sqlc.CreateServerParams{
 		Name:    "p6-e2e-" + suffix,
 		Ip:      "127.0.0.1",
@@ -212,17 +213,17 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	invalidContainer := p6RunNginx(t, ctx, engine, "p6-app-invalid-"+suffix, "80")
 	disabledContainer := p6RunNginx(t, ctx, engine, "p6-app-disabled-"+suffix, "80")
 
-	pinnedApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "pinned-"+suffix, pinnedDomain, pinnedHostPort, false)
+	pinnedApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "pinned-"+suffix, pinnedDomain, pinnedHostPort, false)
 	p6CreateRunningDeployment(t, ctx, pool, pinnedApp, pinnedContainer)
-	ephemeralApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "ephemeral-"+suffix, ephemeralDomain, 0, false)
+	ephemeralApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "ephemeral-"+suffix, ephemeralDomain, 0, false)
 	p6CreateRunningDeployment(t, ctx, pool, ephemeralApp, ephemeralContainer)
 	// Pending: a domain without a running deployment.
-	p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "pending-"+suffix, pendingDomain, freeTCPPort(t), false)
+	p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "pending-"+suffix, pendingDomain, freeTCPPort(t), false)
 	// Invalid legacy domain and a migration-disabled duplicate: both must be
 	// isolated, not block the healthy rows.
-	invalidApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "invalid-"+suffix, invalidDomain, freeTCPPort(t), false)
+	invalidApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "invalid-"+suffix, invalidDomain, freeTCPPort(t), false)
 	p6CreateRunningDeployment(t, ctx, pool, invalidApp, invalidContainer)
-	disabledApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "disabled-"+suffix, disabledDomain, freeTCPPort(t), true)
+	disabledApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "disabled-"+suffix, disabledDomain, freeTCPPort(t), true)
 	p6CreateRunningDeployment(t, ctx, pool, disabledApp, disabledContainer)
 
 	syncCtx, syncCancel := context.WithTimeout(ctx, p6SyncTimeout)
@@ -460,18 +461,59 @@ func p6RunNginx(t *testing.T, ctx context.Context, engine *agent.DockerClient, n
 	return id
 }
 
+// p6SeedEnvironment creates a team, project and environment for the direct
+// SQL application seeds below (environment_id is NOT NULL since PE-2) and
+// returns the environment id.
+func p6SeedEnvironment(t *testing.T, ctx context.Context, pool *pgxpool.Pool, st *store.Store, suffix string) pgtype.UUID {
+	t.Helper()
+	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
+		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Name: "p6-e2e-" + suffix,
+	})
+	if err != nil {
+		t.Fatalf("create team: %v", err)
+	}
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
+		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		TeamID: team.ID,
+		Name:   "p6-" + suffix,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+		ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		ProjectID: project.ID,
+		Name:      "production",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM applications WHERE environment_id = $1", environment.ID); err != nil {
+			t.Logf("cleanup applications: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID); err != nil {
+			t.Logf("cleanup team: %v", err)
+		}
+	})
+	return environment.ID
+}
+
 // p6CreateApplication inserts an application row with a direct SQL write so
 // the test can seed legacy values (invalid domain, disabled duplicate) the
 // API validation would reject, and returns its id. The row is attributed to the
 // creator's personal team (team_id = user_id, see migration 00019).
-func p6CreateApplication(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, serverID pgtype.UUID, name, domain string, hostPort int32, disabled bool) uuid.UUID {
+func p6CreateApplication(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, serverID, envID pgtype.UUID, name, domain string, hostPort int32, disabled bool) uuid.UUID {
 	t.Helper()
 	var id pgtype.UUID
 	err := pool.QueryRow(ctx,
-		`INSERT INTO applications (user_id, team_id, server_id, name, clone_url, branch, build_pack, base_domain, port, host_port, base_domain_disabled)
-		 VALUES ($1, $1, $2, $3, 'https://github.com/acme/demo.git', 'main', 'dockerfile', $4, 80, $5, $6)
+		`INSERT INTO applications (user_id, team_id, server_id, environment_id, name, clone_url, branch, build_pack, base_domain, port, host_port, base_domain_disabled)
+		 VALUES ($1, $1, $2, $7, $3, 'https://github.com/acme/demo.git', 'main', 'dockerfile', $4, 80, $5, $6)
 		 RETURNING id`,
-		userID, serverID, name, domain, hostPort, disabled).Scan(&id)
+		userID, serverID, name, domain, hostPort, disabled, envID).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert application %s: %v", name, err)
 	}

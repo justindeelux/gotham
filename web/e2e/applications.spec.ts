@@ -3,6 +3,7 @@ import {
   cloneURL,
   loadAccount,
   seedNodeAddress,
+  seedProjectEnvironment,
   storageStatePath,
   uniqueSuffix,
 } from "./support";
@@ -42,10 +43,12 @@ test.describe("applications", () => {
       server: { id: string };
     };
 
+    const { environmentId } = await seedProjectEnvironment(request, headers);
     const created = await request.post("/api/v1/applications", {
       headers,
       data: {
         name,
+        environment_id: environmentId,
         provider: "github",
         repo: "docker/welcome-to-docker",
         clone_url: cloneURL,

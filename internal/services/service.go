@@ -46,6 +46,9 @@ var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // deployable.
 type CreateRequest struct {
 	Name string
+	// EnvironmentID is the environment the service belongs to; it must be in
+	// the caller's team.
+	EnvironmentID uuid.UUID
 	// ServerID is the node that runs the project; it must exist.
 	ServerID uuid.UUID
 	// ComposeYAML is the user-supplied compose document.
@@ -55,11 +58,23 @@ type CreateRequest struct {
 }
 
 // UpdateRequest carries the mutable fields of a service. A nil pointer keeps
-// the stored value; an empty Env map clears the environment.
+// the stored value; an empty Env map clears the environment. EnvironmentID
+// moves the service to another environment of the same team; ServerID changes
+// the node (refused while a deploy is in flight).
 type UpdateRequest struct {
-	Name        *string           `json:"name,omitempty"`
-	ComposeYAML *string           `json:"compose_yaml,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
+	Name          *string           `json:"name,omitempty"`
+	ComposeYAML   *string           `json:"compose_yaml,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	EnvironmentID *uuid.UUID        `json:"-"`
+	ServerID      *uuid.UUID        `json:"-"`
+}
+
+// ServiceFilter scopes a list to one environment or project of the caller's
+// team (the ?environment_id= and ?project_id= filters). At most one may be
+// set; a foreign ID answers ErrNotFound.
+type ServiceFilter struct {
+	EnvironmentID uuid.UUID
+	ProjectID     uuid.UUID
 }
 
 // ServiceService is the control-plane surface the HTTP layer depends on. It is
@@ -68,8 +83,9 @@ type ServiceService interface {
 	// Create stores a validated service (status creating); it does not
 	// deploy.
 	Create(ctx context.Context, userID uuid.UUID, req CreateRequest) (Service, error)
-	// List returns the caller's live services, newest first.
-	List(ctx context.Context, userID uuid.UUID) ([]Service, error)
+	// List returns the caller's live services, newest first, optionally
+	// scoped to one environment or project.
+	List(ctx context.Context, userID uuid.UUID, filter ServiceFilter) ([]Service, error)
 	// Get returns one service the caller owns (404 for anyone else's).
 	Get(ctx context.Context, userID, serviceID uuid.UUID) (Service, error)
 	// Update patches the mutable fields and re-validates the result.
@@ -242,6 +258,13 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 		return Service{}, fmt.Errorf(
 			"%w: name must be 1-63 characters of letters, digits, \".\", \"_\" or \"-\"", ErrValidation)
 	}
+	teamID := teamIDFor(ctx, userID)
+	if req.EnvironmentID == uuid.Nil {
+		return Service{}, fmt.Errorf("%w: environment is required", ErrValidation)
+	}
+	if _, err := s.repo.ResolveEnvironment(ctx, req.EnvironmentID, teamID); err != nil {
+		return Service{}, err
+	}
 	if req.ServerID == uuid.Nil {
 		return Service{}, fmt.Errorf("%w: server_id is required", ErrValidation)
 	}
@@ -260,25 +283,42 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	}
 	now := time.Now().UTC()
 	service := Service{
-		ID:          uuid.New(),
-		UserID:      userID,
-		TeamID:      teams.ScopeFor(ctx, userID).TeamID,
-		ServerID:    req.ServerID,
-		Name:        name,
-		Status:      StatusCreating,
-		ComposeYAML: req.ComposeYAML,
-		Env:         normalizeEnv(req.Env),
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:            uuid.New(),
+		UserID:        userID,
+		TeamID:        teamID,
+		ServerID:      req.ServerID,
+		EnvironmentID: req.EnvironmentID,
+		Name:          name,
+		Status:        StatusCreating,
+		ComposeYAML:   req.ComposeYAML,
+		Env:           normalizeEnv(req.Env),
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 	return s.repo.CreateService(ctx, service)
 }
 
 // List returns the active team's live services, newest first. Without a team
 // context it returns the creator's services, which is the pre-teams behavior.
-func (s *service) List(ctx context.Context, userID uuid.UUID) ([]Service, error) {
+// A filter scopes the list to one environment or project of the team.
+func (s *service) List(ctx context.Context, userID uuid.UUID, filter ServiceFilter) ([]Service, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
+	}
+	if filter.EnvironmentID != uuid.Nil && filter.ProjectID != uuid.Nil {
+		return nil, fmt.Errorf("%w: environment_id and project_id are mutually exclusive", ErrValidation)
+	}
+	if filter.EnvironmentID != uuid.Nil {
+		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID, teamIDFor(ctx, userID)); err != nil {
+			return nil, err
+		}
+		return s.repo.ListServicesByEnvironment(ctx, filter.EnvironmentID)
+	}
+	if filter.ProjectID != uuid.Nil {
+		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID, teamIDFor(ctx, userID)); err != nil {
+			return nil, err
+		}
+		return s.repo.ListServicesByProject(ctx, filter.ProjectID)
 	}
 	services, err := s.repo.ListServices(ctx, teams.ScopeFor(ctx, userID))
 	if err != nil {
@@ -299,12 +339,16 @@ func (s *service) Get(ctx context.Context, userID, serviceID uuid.UUID) (Service
 // stored document is always the renderable one: a patch that introduces an
 // unresolvable environment reference is rejected. The write touches only the
 // config columns, so it can never clobber a lifecycle status a concurrent
-// deploy/stop is writing.
+// deploy/stop is writing. It runs under the service's lifecycle lock with a
+// fresh read, so a concurrent deploy or delete serializes against it; the
+// placement columns (environment, server) are only written when the request
+// changes them, so a stale snapshot can never undo a committed move.
 func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req UpdateRequest) (Service, error) {
-	service, err := s.service(ctx, userID, serviceID, true)
+	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
 		return Service{}, err
 	}
+	defer release()
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
 		if !namePattern.MatchString(name) {
@@ -319,11 +363,67 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 	if req.Env != nil {
 		service.Env = normalizeEnv(req.Env)
 	}
+	// A move to another environment stays in the team (a foreign environment
+	// answers 404) and refuses a name the target already holds (409), per the
+	// per-environment uniqueness.
+	if req.EnvironmentID != nil && *req.EnvironmentID != service.EnvironmentID {
+		if _, err := s.repo.ResolveEnvironment(ctx, *req.EnvironmentID, service.TeamID); err != nil {
+			return Service{}, err
+		}
+		collision, err := s.repo.NameInEnvironment(ctx, *req.EnvironmentID, service.Name, service.ID)
+		if err != nil {
+			return Service{}, err
+		}
+		if collision {
+			return Service{}, fmt.Errorf("%w: a service named %q already exists in the target environment", ErrNameConflict, service.Name)
+		}
+		service.EnvironmentID = *req.EnvironmentID
+	}
+	// A node change is refused once the compose project runs on a node: only
+	// a service that was never deployed may move. A deploy in flight is
+	// refused with the contract's 409 either way.
+	if req.ServerID != nil && *req.ServerID != service.ServerID {
+		if *req.ServerID == uuid.Nil {
+			return Service{}, fmt.Errorf("%w: server_id is required", ErrValidation)
+		}
+		exists, err := s.repo.ServerExists(ctx, *req.ServerID, teams.ScopeFor(ctx, userID))
+		if err != nil {
+			return Service{}, err
+		}
+		if !exists {
+			return Service{}, ErrServerNotFound
+		}
+		deployed, err := s.repo.HasDeploys(ctx, service.ID)
+		if err != nil {
+			return Service{}, err
+		}
+		if deployed {
+			return Service{}, ErrServerPinned
+		}
+		active, err := s.repo.HasActiveDeploy(ctx, service.ID)
+		if err != nil {
+			return Service{}, err
+		}
+		if active {
+			return Service{}, ErrDeployInFlight
+		}
+		service.ServerID = *req.ServerID
+	}
 	if err := validateEnv(service.Env); err != nil {
 		return Service{}, err
 	}
 	if err := Validate(service.ComposeYAML, service.Env); err != nil {
 		return Service{}, RedactError(err, service.Env)
+	}
+	// Placement columns the request leaves alone are zeroed, so the
+	// conditional write below keeps the freshly read values instead of a
+	// possibly stale snapshot (a Nil UUID never persists: both columns are
+	// NOT NULL). The repository returns the stored row.
+	if req.EnvironmentID == nil {
+		service.EnvironmentID = uuid.Nil
+	}
+	if req.ServerID == nil {
+		service.ServerID = uuid.Nil
 	}
 	return s.repo.UpdateServiceConfig(ctx, service)
 }
@@ -712,6 +812,17 @@ func (s *service) ready() error {
 		return errors.New("services: repository is not configured")
 	}
 	return nil
+}
+
+// teamIDFor resolves the team a resource call operates in: the request's
+// active team, or the caller's personal team when no team context is present
+// (the pre-teams path), matching the projects surface.
+func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
+	scope := teams.ScopeFor(ctx, userID)
+	if scope.Active() {
+		return scope.TeamID
+	}
+	return teams.PersonalTeamID(userID)
 }
 
 // service loads a service of the caller's active team, mapping a row of

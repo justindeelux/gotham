@@ -25,11 +25,13 @@ func TestServiceTeamIsolation(t *testing.T) {
 
 	// Creation stamps the caller's active team.
 	mineCtx := teams.WithScope(bg, teams.Scope{UserID: bob, TeamID: teamB, Role: teams.RoleAdmin})
+	envID, _ := repo.seedEnvironment()
 	created, err := svc.Create(mineCtx, bob, CreateRequest{
-		Name:        "bobs-service",
-		ServerID:    repo.seedServer(),
-		ComposeYAML: testDocument,
-		Env:         testEnv,
+		Name:          "bobs-service",
+		EnvironmentID: envID,
+		ServerID:      repo.seedServer(),
+		ComposeYAML:   testDocument,
+		Env:           testEnv,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -39,10 +41,11 @@ func TestServiceTeamIsolation(t *testing.T) {
 	}
 
 	other, err := svc.Create(teams.WithScope(bg, teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner}), alice, CreateRequest{
-		Name:        "alices-service",
-		ServerID:    repo.seedServer(),
-		ComposeYAML: testDocument,
-		Env:         testEnv,
+		Name:          "alices-service",
+		EnvironmentID: envID,
+		ServerID:      repo.seedServer(),
+		ComposeYAML:   testDocument,
+		Env:           testEnv,
 	})
 	if err != nil {
 		t.Fatalf("Create (team A): %v", err)
@@ -52,7 +55,7 @@ func TestServiceTeamIsolation(t *testing.T) {
 	}
 
 	// Team B sees only its own service.
-	all, err := svc.List(mineCtx, bob)
+	all, err := svc.List(mineCtx, bob, ServiceFilter{})
 	if err != nil {
 		t.Fatalf("list team B: %v", err)
 	}
@@ -124,18 +127,19 @@ func TestServiceCreateRejectsForeignServer(t *testing.T) {
 	svc := newTestService(t, repo, &fakeAgent{})
 	ctxA := teams.WithScope(context.Background(), teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner})
 
+	envID, _ := repo.seedEnvironment()
 	if _, err := svc.Create(ctxA, alice, CreateRequest{
-		Name: "foreign", ServerID: foreignNode, ComposeYAML: testDocument, Env: testEnv,
+		Name: "foreign", EnvironmentID: envID, ServerID: foreignNode, ComposeYAML: testDocument, Env: testEnv,
 	}); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("create on a foreign node = %v, want ErrServerNotFound", err)
 	}
 	if _, err := svc.Create(ctxA, alice, CreateRequest{
-		Name: "own", ServerID: ownNode, ComposeYAML: testDocument, Env: testEnv,
+		Name: "own", EnvironmentID: envID, ServerID: ownNode, ComposeYAML: testDocument, Env: testEnv,
 	}); err != nil {
 		t.Fatalf("create on the team's node: %v", err)
 	}
 	if _, err := svc.Create(ctxA, alice, CreateRequest{
-		Name: "legacy", ServerID: legacyNode, ComposeYAML: testDocument, Env: testEnv,
+		Name: "legacy", EnvironmentID: envID, ServerID: legacyNode, ComposeYAML: testDocument, Env: testEnv,
 	}); err != nil {
 		t.Fatalf("create on a legacy node: %v", err)
 	}

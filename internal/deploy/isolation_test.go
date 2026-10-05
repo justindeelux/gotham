@@ -31,7 +31,7 @@ func TestApplicationTeamIsolation(t *testing.T) {
 
 	// A member of team A sees exactly their team's application.
 	aliceCtx := teams.WithScope(bg, teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner})
-	applications, err := svc.ListApplications(aliceCtx, alice)
+	applications, err := svc.ListApplications(aliceCtx, alice, ApplicationFilter{})
 	if err != nil {
 		t.Fatalf("list team A: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestApplicationTeamIsolation(t *testing.T) {
 	if _, err := svc.GetApplication(viewerCtx, bob, inTeamB.ID); err != nil {
 		t.Fatalf("read_only Get: %v", err)
 	}
-	if applications, err := svc.ListApplications(viewerCtx, bob); err != nil || len(applications) != 1 {
+	if applications, err := svc.ListApplications(viewerCtx, bob, ApplicationFilter{}); err != nil || len(applications) != 1 {
 		t.Fatalf("read_only list = %+v, %v", applications, err)
 	}
 	name := "renamed"
@@ -80,7 +80,7 @@ func TestApplicationTeamIsolation(t *testing.T) {
 	// The same user, active team A, sees only A's application again: the active
 	// team decides per request.
 	dualCtxA := teams.WithScope(bg, teams.Scope{UserID: bob, TeamID: teamA, Role: teams.RoleOwner})
-	if applications, err := svc.ListApplications(dualCtxA, bob); err != nil || len(applications) != 1 || applications[0].ID != inTeamA.ID {
+	if applications, err := svc.ListApplications(dualCtxA, bob, ApplicationFilter{}); err != nil || len(applications) != 1 || applications[0].ID != inTeamA.ID {
 		t.Fatalf("active team A list = %+v, %v; want team A's application", applications, err)
 	}
 	if _, err := svc.GetApplication(dualCtxA, bob, inTeamB.ID); !errors.Is(err, ErrNotFound) {

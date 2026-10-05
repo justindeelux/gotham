@@ -187,6 +187,39 @@ func TestDeleteTeamSerializesWithConcurrentInsert(t *testing.T) {
 
 	svc := NewService(Config{Store: st, Logger: discardLogger()})
 
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
+		ID:     pgUUID(uuid.New()),
+		TeamID: team.ID,
+		Name:   fmt.Sprintf("r2-%d", suffix),
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
+		ID:        pgUUID(uuid.New()),
+		ProjectID: project.ID,
+		Name:      "production",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	serverRow, err := st.CreateServer(ctx, sqlc.CreateServerParams{
+		Name:    fmt.Sprintf("r2-node-%d", suffix),
+		Ip:      "127.0.0.1",
+		Port:    22,
+		SshUser: "root",
+	})
+	if err != nil {
+		t.Fatalf("create server: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverRow.ID); err != nil {
+			t.Logf("cleanup server: %v", err)
+		}
+	})
+
 	// The racing insert is uncommitted when the delete starts; its foreign-key
 	// share lock makes the delete's SELECT ... FOR UPDATE wait.
 	tx, err := st.DB.Begin(ctx)
@@ -195,9 +228,9 @@ func TestDeleteTeamSerializesWithConcurrentInsert(t *testing.T) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO applications (user_id, team_id, name, clone_url, branch, build_pack, port, host_port)
-		 VALUES ($1, $2, $3, '', 'main', 'dockerfile', 0, 0)`,
-		user.ID, team.ID, "race-app"); err != nil {
+		`INSERT INTO applications (user_id, team_id, server_id, environment_id, name, clone_url, branch, build_pack, port, host_port)
+		 VALUES ($1, $2, $3, $4, $5, '', 'main', 'dockerfile', 0, 0)`,
+		user.ID, team.ID, serverRow.ID, environment.ID, "race-app"); err != nil {
 		t.Fatalf("insert racing application: %v", err)
 	}
 

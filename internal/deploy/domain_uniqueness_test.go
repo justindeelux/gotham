@@ -125,15 +125,15 @@ func TestUpdateApplicationPreservesDisabledLegacyMixedCaseDomain(t *testing.T) {
 }
 
 // TestApplicationWriteErrorMapsDomainConflict proves the new per-node domain
-// index surfaces as ErrConflict while the existing name index keeps its
-// validation mapping (BE-6.1 F6).
+// index surfaces as ErrDomainConflict while the existing name index keeps its
+// validation mapping (BE-6.1 F6, PE-2 R5).
 func TestApplicationWriteErrorMapsDomainConflict(t *testing.T) {
 	domainErr := applicationWriteError(&pgconn.PgError{
 		Code:           "23505",
 		ConstraintName: "applications_server_domain_idx",
 	}, "demo")
-	if !errors.Is(domainErr, ErrConflict) {
-		t.Fatalf("domain conflict err = %v, want ErrConflict", domainErr)
+	if !errors.Is(domainErr, ErrDomainConflict) {
+		t.Fatalf("domain conflict err = %v, want ErrDomainConflict", domainErr)
 	}
 
 	nameErr := applicationWriteError(&pgconn.PgError{

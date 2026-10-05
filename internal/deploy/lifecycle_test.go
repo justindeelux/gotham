@@ -473,8 +473,8 @@ func TestUpdateApplicationRefusesMoveWhileDeploying(t *testing.T) {
 	newServer := uuid.New()
 
 	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID,
-		UpdateApplicationInput{ServerID: &newServer}); !errors.Is(err, ErrConflict) {
-		t.Fatalf("err = %v, want ErrConflict while a deployment is in flight", err)
+		UpdateApplicationInput{ServerID: &newServer}); !errors.Is(err, ErrDeployInFlight) {
+		t.Fatalf("err = %v, want ErrDeployInFlight while a deployment is in flight", err)
 	}
 	got, err := svc.GetApplication(context.Background(), userID, app.ID)
 	if err != nil {

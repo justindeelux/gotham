@@ -51,6 +51,14 @@ type fakeRepository struct {
 	envVars     []EnvVar
 	secrets     []Secret
 	storages    []Storage
+	// environments holds the seeded environments ResolveEnvironment
+	// answers with; resolveErr fails every environment and project
+	// resolution (the foreign-environment tests).
+	environments map[uuid.UUID]EnvironmentRef
+	resolveErr   error
+	// livePreviews marks base applications with open preview bindings for
+	// HasLivePreviews (the move/server-change guard tests).
+	livePreviews map[uuid.UUID]bool
 
 	// deployKeys holds the single deploy key per application (the unique
 	// index on application_id); privateKeys mirrors private_keys, keyed by
@@ -75,6 +83,9 @@ type fakeRepository struct {
 	getErr       error
 	createErr    error
 	failStaleErr error
+	// updateErr, when set, fails every UpdateApplication (the server-change
+	// domain-collision test).
+	updateErr error
 
 	// failUpdateState, when non-empty, makes UpdateDeployment fail for that
 	// state (the failed-persist regression: the in-memory state must not
@@ -217,7 +228,7 @@ func (r *fakeRepository) CreateApplication(_ context.Context, app Application, e
 		return Application{}, r.createErr
 	}
 	for _, existing := range r.ownedApplications() {
-		if existing.UserID == app.UserID && existing.Name == app.Name {
+		if existing.EnvironmentID == app.EnvironmentID && existing.Name == app.Name {
 			return Application{}, fmt.Errorf("%w: an application named %q already exists", ErrValidation, app.Name)
 		}
 	}
@@ -259,6 +270,9 @@ func (r *fakeRepository) CreateApplication(_ context.Context, app Application, e
 func (r *fakeRepository) UpdateApplication(_ context.Context, app Application) (Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.updateErr != nil {
+		return Application{}, r.updateErr
+	}
 	if r.app.ID == app.ID {
 		app.CreatedAt = r.app.CreatedAt
 		app.UpdatedAt = time.Now().UTC()
@@ -417,6 +431,109 @@ func (r *fakeRepository) ServerTeam(_ context.Context, serverID uuid.UUID) (uuid
 		return uuid.Nil, false, nil
 	}
 	return r.serverTeams[serverID], true, nil
+}
+
+// ListApplicationsByEnvironment implements Repository.
+func (r *fakeRepository) ListApplicationsByEnvironment(_ context.Context, environmentID uuid.UUID, includePreviews bool) ([]Application, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []Application
+	collect := func(app Application) {
+		if app.EnvironmentID == environmentID && (includePreviews || !app.IsPreview) {
+			out = append(out, app)
+		}
+	}
+	if r.app.ID != uuid.Nil {
+		collect(r.app)
+	}
+	for _, app := range r.apps {
+		collect(app)
+	}
+	if out == nil {
+		out = []Application{}
+	}
+	return out, nil
+}
+
+// ListApplicationsByProject implements Repository.
+func (r *fakeRepository) ListApplicationsByProject(_ context.Context, projectID uuid.UUID, includePreviews bool) ([]Application, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []Application
+	collect := func(app Application) {
+		if r.environmentProject(app.EnvironmentID) == projectID && (includePreviews || !app.IsPreview) {
+			out = append(out, app)
+		}
+	}
+	if r.app.ID != uuid.Nil {
+		collect(r.app)
+	}
+	for _, app := range r.apps {
+		collect(app)
+	}
+	if out == nil {
+		out = []Application{}
+	}
+	return out, nil
+}
+
+// NameInEnvironment implements Repository.
+func (r *fakeRepository) NameInEnvironment(_ context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	match := func(app Application) bool {
+		return app.ID != exceptID && app.EnvironmentID == environmentID && app.Name == name
+	}
+	if r.app.ID != uuid.Nil && match(r.app) {
+		return true, nil
+	}
+	for _, app := range r.apps {
+		if match(app) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ResolveEnvironment implements Repository: seeded environments resolve with
+// their project; any other ID resolves permissively (the team check is
+// covered by integration tests), unless resolveErr is set.
+func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ uuid.UUID) (EnvironmentRef, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.resolveErr != nil {
+		return EnvironmentRef{}, r.resolveErr
+	}
+	if ref, ok := r.environments[environmentID]; ok {
+		return ref, nil
+	}
+	return EnvironmentRef{ID: environmentID}, nil
+}
+
+// HasLivePreviews implements Repository.
+func (r *fakeRepository) HasLivePreviews(_ context.Context, appID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.livePreviews[appID], nil
+}
+
+// ResolveProject implements Repository.
+func (r *fakeRepository) ResolveProject(_ context.Context, projectID, _ uuid.UUID) (uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.resolveErr != nil {
+		return uuid.Nil, r.resolveErr
+	}
+	return projectID, nil
+}
+
+// environmentProject returns the project of a seeded environment (zero for
+// unknown IDs). Callers hold r.mu.
+func (r *fakeRepository) environmentProject(environmentID uuid.UUID) uuid.UUID {
+	if ref, ok := r.environments[environmentID]; ok {
+		return ref.ProjectID
+	}
+	return uuid.Nil
 }
 
 // seedServerForTeam registers a node owned by teamID (the zero UUID seeds a
@@ -1110,17 +1227,18 @@ func dialScript(node Node, failures int, err error) (DialFunc, *int) {
 // testApplication returns an application wired to a fake server and repo.
 func testApplication(userID uuid.UUID) Application {
 	return Application{
-		ID:        uuid.New(),
-		UserID:    userID,
-		ServerID:  uuid.New(),
-		Name:      "demo app",
-		Provider:  "github",
-		Repo:      "acme/demo",
-		CloneURL:  "https://github.com/acme/demo.git",
-		Branch:    "main",
-		BuildPack: "dockerfile",
-		Port:      3000,
-		HostPort:  8080,
+		ID:            uuid.New(),
+		UserID:        userID,
+		ServerID:      uuid.New(),
+		EnvironmentID: uuid.New(),
+		Name:          "demo app",
+		Provider:      "github",
+		Repo:          "acme/demo",
+		CloneURL:      "https://github.com/acme/demo.git",
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		Port:          3000,
+		HostPort:      8080,
 	}
 }
 

@@ -16,7 +16,7 @@ const { service, serverName } = useServiceDetailContext();
         {{ service?.status }}
       </NDescriptionsItem>
       <NDescriptionsItem label="Compose project">
-        <span class="mono">{{ service?.project_name }}</span>
+        <span class="mono">{{ service?.compose_project }}</span>
       </NDescriptionsItem>
       <NDescriptionsItem label="Service id">
         <span class="mono">{{ service?.id }}</span>

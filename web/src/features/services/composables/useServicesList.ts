@@ -125,7 +125,7 @@ export function useServicesList(): ServicesPageContext {
       }
       const haystack = [
         service.name,
-        service.project_name,
+        service.compose_project,
         serverNameOf(service),
         ...service.domains.map((route) => route.domain),
       ]
@@ -227,6 +227,9 @@ export function useServicesList(): ServicesPageContext {
     try {
       const created = await servicesStore.create({
         name: importName.value.trim(),
+        // PE-5 wires the project/environment picker; until then creation
+        // through this dialog answers 400 (environment is required).
+        environment_id: "",
         server_id: importServerId.value,
         compose_yaml: importYaml.value,
       });

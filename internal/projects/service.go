@@ -10,6 +10,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/databases"
+	"github.com/justindeelux/gotham/internal/deploy"
+	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/teams"
 )
@@ -29,33 +32,20 @@ const (
 )
 
 // ResourceCounter reports how many workloads hang off a project or an
-// environment. PE-2 implements it over the resource tables; until then the
-// server wires ZeroResourceCounter, so every count reads zero.
+// environment. StoreCounter implements it over the resource tables.
 type ResourceCounter interface {
 	// CountProjectResources tallies the workloads of every environment of a
 	// project.
 	CountProjectResources(ctx context.Context, projectID uuid.UUID) (ResourceCounts, error)
 	// CountEnvironmentResources tallies the workloads of one environment.
 	CountEnvironmentResources(ctx context.Context, environmentID uuid.UUID) (ResourceCounts, error)
-}
-
-// ZeroResourceCounter is the PE-1 stub: no resource table carries an
-// environment yet, so every count is zero. PE-2 replaces it with the real
-// counter; the constructor refuses a nil counter so the replacement cannot
-// be forgotten silently.
-type ZeroResourceCounter struct{}
-
-// Compile-time guarantee.
-var _ ResourceCounter = ZeroResourceCounter{}
-
-// CountProjectResources implements ResourceCounter.
-func (ZeroResourceCounter) CountProjectResources(context.Context, uuid.UUID) (ResourceCounts, error) {
-	return ResourceCounts{}, nil
-}
-
-// CountEnvironmentResources implements ResourceCounter.
-func (ZeroResourceCounter) CountEnvironmentResources(context.Context, uuid.UUID) (ResourceCounts, error) {
-	return ResourceCounts{}, nil
+	// CountProjectPreviews tallies the live previews of every environment
+	// of a project. Previews stay out of the display counts, but they
+	// still block the project delete.
+	CountProjectPreviews(ctx context.Context, projectID uuid.UUID) (int, error)
+	// CountEnvironmentPreviews tallies the live previews of one
+	// environment (see above).
+	CountEnvironmentPreviews(ctx context.Context, environmentID uuid.UUID) (int, error)
 }
 
 // ProjectService is the control-plane surface the HTTP layer depends on. It
@@ -87,6 +77,28 @@ type ProjectService interface {
 	// (owner/admin). The project's last environment cannot be deleted, and
 	// an environment that still holds resources is refused.
 	DeleteEnvironment(ctx context.Context, userID, environmentID uuid.UUID) error
+	// GetEnvironmentResources returns one environment of the active team with
+	// its project and workloads (404 for others). Previews are included only
+	// when includePreviews is true.
+	GetEnvironmentResources(ctx context.Context, userID, environmentID uuid.UUID, includePreviews bool) (EnvironmentResources, error)
+}
+
+// ApplicationLister lists the applications of one environment for the
+// resources surface. It is satisfied by the deploy service.
+type ApplicationLister interface {
+	ListApplications(ctx context.Context, userID uuid.UUID, filter deploy.ApplicationFilter) ([]deploy.Application, error)
+}
+
+// ServiceLister lists the services of one environment for the resources
+// surface. It is satisfied by the services service.
+type ServiceLister interface {
+	List(ctx context.Context, userID uuid.UUID, filter services.ServiceFilter) ([]services.Service, error)
+}
+
+// DatabaseLister lists the databases of one environment for the resources
+// surface. It is satisfied by the databases service.
+type DatabaseLister interface {
+	List(ctx context.Context, userID uuid.UUID, filter databases.DatabaseFilter) ([]databases.Database, error)
 }
 
 // Config wires a Service. Store (or an explicit Repository) backs
@@ -98,9 +110,16 @@ type Config struct {
 	Store *store.Store
 	// Repository overrides Store (tests).
 	Repository Repository
-	// Counter tallies workloads per project and environment. Required: pass
-	// ZeroResourceCounter until PE-2 provides the real one.
+	// Counter tallies workloads per project and environment. Required: the
+	// server wires StoreCounter.
 	Counter ResourceCounter
+	// Applications lists an environment's applications for the resources
+	// surface. Nil answers it with a clear error instead of panicking.
+	Applications ApplicationLister
+	// Services lists an environment's services for the resources surface.
+	Services ServiceLister
+	// Databases lists an environment's databases for the resources surface.
+	Databases DatabaseLister
 	// Logger defaults to slog.Default.
 	Logger *slog.Logger
 }
@@ -121,9 +140,12 @@ func (c Config) repository() Repository {
 // resolves, so the rules hold for every caller — the route middlewares only
 // pre-filter. It is safe for concurrent use.
 type Service struct {
-	repo    Repository
-	counter ResourceCounter
-	logger  *slog.Logger
+	repo         Repository
+	counter      ResourceCounter
+	applications ApplicationLister
+	services     ServiceLister
+	databases    DatabaseLister
+	logger       *slog.Logger
 }
 
 // Compile-time guarantee that Service satisfies the route-level contract.
@@ -135,9 +157,16 @@ var _ ProjectService = (*Service)(nil)
 // resources.
 func NewService(cfg Config) *Service {
 	if cfg.Counter == nil {
-		panic("projects: ResourceCounter is required (pass ZeroResourceCounter until PE-2 wires the real counter)")
+		panic("projects: ResourceCounter is required (wire StoreCounter)")
 	}
-	return &Service{repo: cfg.repository(), counter: cfg.Counter, logger: loggerOr(cfg.Logger)}
+	return &Service{
+		repo:         cfg.repository(),
+		counter:      cfg.Counter,
+		applications: cfg.Applications,
+		services:     cfg.Services,
+		databases:    cfg.Databases,
+		logger:       loggerOr(cfg.Logger),
+	}
 }
 
 // NewDefaultService builds the production service for the HTTP wiring. It
@@ -299,7 +328,20 @@ func (s *Service) DeleteProject(ctx context.Context, userID, projectID uuid.UUID
 	if counts.Applications+counts.Services+counts.Databases > 0 {
 		return ErrProjectNotEmpty
 	}
-	return s.repo.DeleteProject(ctx, teamID, projectID)
+	// Previews stay out of the display counts but still block the delete.
+	previews, err := s.counter.CountProjectPreviews(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if previews > 0 {
+		return ErrProjectNotEmpty
+	}
+	volumes, err := s.repo.DeleteProject(ctx, teamID, projectID)
+	if err != nil {
+		return err
+	}
+	s.logOrphanVolumes(projectID, volumes)
+	return nil
 }
 
 // ListEnvironments implements ProjectService.
@@ -405,7 +447,101 @@ func (s *Service) DeleteEnvironment(ctx context.Context, userID, environmentID u
 	if counts.Applications+counts.Services+counts.Databases > 0 {
 		return ErrEnvironmentNotEmpty
 	}
-	return s.repo.DeleteEnvironmentIfNotLast(ctx, teamID, environmentID)
+	// Previews stay out of the display counts but still block the delete.
+	previews, err := s.counter.CountEnvironmentPreviews(ctx, environmentID)
+	if err != nil {
+		return err
+	}
+	if previews > 0 {
+		return ErrEnvironmentNotEmpty
+	}
+	volumes, err := s.repo.DeleteEnvironmentIfNotLast(ctx, teamID, environmentID)
+	if err != nil {
+		return err
+	}
+	s.logOrphanVolumes(environmentID, volumes)
+	return nil
+}
+
+// logOrphanVolumes warns about database volumes a tombstone purge left on
+// their nodes: the rows are gone, so nothing will ever remove them.
+func (s *Service) logOrphanVolumes(scopeID uuid.UUID, volumes []string) {
+	for _, volume := range volumes {
+		if volume == "" {
+			continue
+		}
+		s.logger.Warn("projects: purged database tombstone left its volume on the node",
+			"scope_id", scopeID, "volume", volume)
+	}
+}
+
+// GetEnvironmentResources implements ProjectService: one environment of the
+// active team with its project and workloads. A foreign environment answers
+// ErrNotFound, so IDs cannot be probed across teams. Viewers may read.
+func (s *Service) GetEnvironmentResources(ctx context.Context, userID, environmentID uuid.UUID, includePreviews bool) (EnvironmentResources, error) {
+	if err := s.ready(); err != nil {
+		return EnvironmentResources{}, err
+	}
+	if userID == uuid.Nil || environmentID == uuid.Nil {
+		return EnvironmentResources{}, ErrNotFound
+	}
+	teamID := teamIDFor(ctx, userID)
+	environment, err := s.repo.GetEnvironment(ctx, teamID, environmentID)
+	if err != nil {
+		return EnvironmentResources{}, err
+	}
+	project, err := s.repo.GetProject(ctx, teamID, environment.ProjectID)
+	if err != nil {
+		return EnvironmentResources{}, err
+	}
+	if s.applications == nil || s.services == nil || s.databases == nil {
+		return EnvironmentResources{}, errors.New("projects: resource listers are not configured")
+	}
+	apps, err := s.applications.ListApplications(ctx, userID, deploy.ApplicationFilter{EnvironmentID: environmentID, IncludePreviews: includePreviews})
+	if err != nil {
+		return EnvironmentResources{}, err
+	}
+	if !includePreviews {
+		kept := apps[:0]
+		for _, application := range apps {
+			if !application.IsPreview {
+				kept = append(kept, application)
+			}
+		}
+		apps = kept
+	}
+	svcs, err := s.services.List(ctx, userID, services.ServiceFilter{EnvironmentID: environmentID})
+	if err != nil {
+		return EnvironmentResources{}, err
+	}
+	dbs, err := s.databases.List(ctx, userID, databases.DatabaseFilter{EnvironmentID: environmentID})
+	if err != nil {
+		return EnvironmentResources{}, err
+	}
+	withCounts, err := s.withEnvironmentCounts(ctx, environment)
+	if err != nil {
+		return EnvironmentResources{}, err
+	}
+	withProjectCounts, err := s.withProjectCounts(ctx, project)
+	if err != nil {
+		return EnvironmentResources{}, err
+	}
+	if apps == nil {
+		apps = []deploy.Application{}
+	}
+	if svcs == nil {
+		svcs = []services.Service{}
+	}
+	if dbs == nil {
+		dbs = []databases.Database{}
+	}
+	return EnvironmentResources{
+		Environment:  withCounts,
+		Project:      withProjectCounts,
+		Applications: apps,
+		Services:     svcs,
+		Databases:    dbs,
+	}, nil
 }
 
 // withProjectCounts attaches the environment and resource counts to a

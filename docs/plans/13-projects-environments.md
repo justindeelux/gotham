@@ -116,17 +116,25 @@ Variable    {key, value?: string, secret: boolean}   // value omitted when secre
 | `POST /projects` | `{name, description?}` → 201 `{project, environments:[production]}`; name 1-64 chars, unique per team (case-insensitive) else 409 `project name already exists` |
 | `GET /projects/{id}` | → `{project, environments: Environment[]}` |
 | `PATCH /projects/{id}` | `{name?, description?}` → `{project}` |
-| `DELETE /projects/{id}` | 204; 409 `project still has resources` when any environment has resources; otherwise removes its environments and shared variables |
+| `DELETE /projects/{id}` | 204; 409 `project still has resources (including previews)` when any environment has resources or live previews; otherwise removes its environments and shared variables |
 | `POST /projects/{id}/environments` | `{name}` → 201 `{environment}`; 1-64 chars, unique per project (case-insensitive) |
 | `PATCH /environments/{id}` | `{name}` → `{environment}` |
-| `DELETE /environments/{id}` | 204; 409 `environment still has resources`; the last environment of a project cannot be deleted (409 `a project needs at least one environment`) |
+| `DELETE /environments/{id}` | 204; 409 `environment still has resources (including previews)`; the last environment of a project cannot be deleted (409 `a project needs at least one environment`) |
 | `GET /environments/{id}/resources` | → `{environment, project, applications: [...], services: [...], databases: [...]}` using the existing list item shapes of each resource, each with `server_id` and `server_name`; previews excluded unless `?previews=1` |
 | `GET /projects/{id}/variables`, `GET /environments/{id}/variables` | → `{variables: Variable[]}` |
 | `PUT /projects/{id}/variables`, `PUT /environments/{id}/variables` | `{variables: [{key, value, secret}]}` replaces the whole set; omitted `value` for an existing secret key keeps its sealed value; key `^[A-Za-z_][A-Za-z0-9_]*$`, max 128 keys |
-| `POST /applications`, `/services`, `/databases` | existing body plus required `environment_id`, required `server_id` (400 `server is required`, 404 if not in the team, 409 if the server is offline/unusable as today) |
-| `PUT /applications/{id}`, `PATCH /services/{id}`, `PATCH /databases/{id}` | optional `environment_id` (move within the team, 409 on name collision in the target) and `server_id` (change node; 409 `a deploy is in progress` while one runs); both optional so existing edits keep working |
-| `GET /applications`, `/services`, `/databases` | existing list plus optional `?environment_id=` and `?project_id=` filters; every item gains `environment_id`, `environment_name`, `project_id`, `project_name` |
-| `GET /applications/{id}`, `/services/{id}`, `/databases/{id}` | same four extra fields |
+| `POST /applications`, `/services`, `/databases` | existing body plus required `environment_id` (400 `environment is required`), required `server_id` (400 `server is required`, 404 if not in the team, 409 if the server is offline/unusable as today) |
+| `PUT /applications/{id}`, `PATCH /services/{id}`, `PATCH /databases/{id}` | optional `environment_id` (move within the team, 409 on name collision in the target) and `server_id` (change node; 409 `a deploy is in progress` while one runs; a base application with open previews answers 409 `close the open previews first`; a deployed service answers 409 `a deployed service cannot change server`; a created database answers 409 `a database cannot change server once created`); both optional so existing edits keep working |
+| `GET /applications`, `/services`, `/databases` | existing list plus optional `?environment_id=` and `?project_id=` filters; every item gains `environment_id`, `environment_name`, `project_id`, `project_name` (the Gotham project; services carry the compose project name separately as `compose_project`) |
+| `GET /applications/{id}`, `/services/{id}`, `/databases/{id}` | same extra fields (`project_name` is the Gotham project everywhere; `compose_project` is services-only) |
+
+Service items (list, get and the resources envelope) always include
+`domains` alongside the grouping fields, reusing the services response
+shape so the environment page can render service cards unchanged.
+`resource_counts` exclude previews (they match the default listing);
+previews still block project and environment deletes, whose 409 bodies
+read `project still has resources (including previews)` and
+`environment still has resources (including previews)`.
 
 Roles: viewers read; members and admins write (same `Scope.CanWrite()` rule as the other resources).
 Team isolation: an id from another team answers 404, as elsewhere.

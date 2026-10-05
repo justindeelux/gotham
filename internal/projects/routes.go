@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	servicespkg "github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
@@ -95,6 +96,63 @@ type (
 	}
 )
 
+// environmentResourceApplication is one application of the resources
+// surface. It mirrors deploy's list item field for field.
+type environmentResourceApplication struct {
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	EnvironmentID      string    `json:"environment_id"`
+	EnvironmentName    string    `json:"environment_name"`
+	ProjectID          string    `json:"project_id"`
+	ProjectName        string    `json:"project_name"`
+	Provider           string    `json:"provider"`
+	Repo               string    `json:"repo"`
+	CloneURL           string    `json:"clone_url"`
+	Branch             string    `json:"branch"`
+	BuildPack          string    `json:"build_pack"`
+	BaseDomain         string    `json:"base_domain"`
+	BaseDomainDisabled bool      `json:"base_domain_disabled"`
+	Port               int32     `json:"port"`
+	HostPort           int32     `json:"host_port"`
+	ServerID           string    `json:"server_id"`
+	ServerName         string    `json:"server_name"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// environmentResourceService is one service of the resources surface: the
+// services package's own response type, so the shapes cannot drift.
+type environmentResourceService = servicespkg.ServiceResponse
+
+// environmentResourceDatabase is one database of the resources surface. It
+// mirrors databases' list item field for field.
+type environmentResourceDatabase struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	EnvironmentID   string    `json:"environment_id"`
+	EnvironmentName string    `json:"environment_name"`
+	ProjectID       string    `json:"project_id"`
+	ProjectName     string    `json:"project_name"`
+	Engine          string    `json:"engine"`
+	Version         string    `json:"version,omitempty"`
+	Status          string    `json:"status"`
+	ServerID        string    `json:"server_id"`
+	ServerName      string    `json:"server_name"`
+	PublicPort      int32     `json:"public_port"`
+	Volume          string    `json:"volume"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// environmentResourcesEnvelope is the GET /environments/{id}/resources body.
+type environmentResourcesEnvelope struct {
+	Environment  environmentResponse              `json:"environment"`
+	Project      projectResponse                  `json:"project"`
+	Applications []environmentResourceApplication `json:"applications"`
+	Services     []environmentResourceService     `json:"services"`
+	Databases    []environmentResourceDatabase    `json:"databases"`
+}
+
 // errorBody is the JSON body returned for failures.
 type errorBody struct {
 	Message string `json:"message"`
@@ -118,6 +176,7 @@ type handler struct {
 //	POST   /v1/projects/{id}/environments
 //	PATCH  /v1/environments/{id}
 //	DELETE /v1/environments/{id}
+//	GET    /v1/environments/{id}/resources
 //
 // auth wraps the group: the server passes its team chain (RequireAuth,
 // RequireTeam and the owner/admin gate for mutating methods, so a read_only
@@ -139,6 +198,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Post("/v1/projects/{id}/environments", h.createEnvironment)
 		protected.Patch("/v1/environments/{id}", h.updateEnvironment)
 		protected.Delete("/v1/environments/{id}", h.deleteEnvironment)
+		protected.Get("/v1/environments/{id}/resources", h.getEnvironmentResources)
 	})
 }
 
@@ -290,6 +350,81 @@ func (h *handler) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// getEnvironmentResources serves GET /environments/{id}/resources: the
+// environment, its project and the workloads attached to it. Previews are
+// excluded unless ?previews=1.
+func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request) {
+	userID, environmentID, ok := h.environmentParams(w, r)
+	if !ok {
+		return
+	}
+	includePreviews := strings.TrimSpace(r.URL.Query().Get("previews")) == "1"
+	resources, err := h.svc.GetEnvironmentResources(r.Context(), userID, environmentID, includePreviews)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	applications := make([]environmentResourceApplication, 0, len(resources.Applications))
+	for _, application := range resources.Applications {
+		serverID := ""
+		if application.ServerID != uuid.Nil {
+			serverID = application.ServerID.String()
+		}
+		applications = append(applications, environmentResourceApplication{
+			ID:                 application.ID.String(),
+			Name:               application.Name,
+			EnvironmentID:      application.EnvironmentID.String(),
+			EnvironmentName:    application.EnvironmentName,
+			ProjectID:          application.ProjectID.String(),
+			ProjectName:        application.ProjectName,
+			Provider:           application.Provider,
+			Repo:               application.Repo,
+			CloneURL:           application.CloneURL,
+			Branch:             application.Branch,
+			BuildPack:          application.BuildPack,
+			BaseDomain:         application.BaseDomain,
+			BaseDomainDisabled: application.BaseDomainDisabled,
+			Port:               application.Port,
+			HostPort:           application.HostPort,
+			ServerID:           serverID,
+			ServerName:         application.ServerName,
+			CreatedAt:          application.CreatedAt,
+			UpdatedAt:          application.UpdatedAt,
+		})
+	}
+	services := make([]environmentResourceService, 0, len(resources.Services))
+	for _, service := range resources.Services {
+		services = append(services, servicespkg.NewServiceResponse(service, false))
+	}
+	databases := make([]environmentResourceDatabase, 0, len(resources.Databases))
+	for _, database := range resources.Databases {
+		databases = append(databases, environmentResourceDatabase{
+			ID:              database.ID.String(),
+			Name:            database.Name,
+			EnvironmentID:   database.EnvironmentID.String(),
+			EnvironmentName: database.EnvironmentName,
+			ProjectID:       database.ProjectID.String(),
+			ProjectName:     database.ProjectName,
+			Engine:          database.Engine,
+			Version:         database.Version,
+			Status:          string(database.Status),
+			ServerID:        database.ServerID.String(),
+			ServerName:      database.ServerName,
+			PublicPort:      database.PublicPort,
+			Volume:          database.StoragePath,
+			CreatedAt:       database.CreatedAt,
+			UpdatedAt:       database.UpdatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, environmentResourcesEnvelope{
+		Environment:  newEnvironmentResponse(resources.Environment),
+		Project:      newProjectResponse(resources.Project),
+		Applications: applications,
+		Services:     services,
+		Databases:    databases,
+	})
+}
+
 // currentUser resolves the authenticated user, answering 401 when absent.
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if h.userID == nil {
@@ -347,9 +482,9 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrEnvironmentExists):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "environment name already exists"})
 	case errors.Is(err, ErrProjectNotEmpty):
-		writeJSON(w, http.StatusConflict, errorBody{Message: "project still has resources"})
+		writeJSON(w, http.StatusConflict, errorBody{Message: "project still has resources (including previews)"})
 	case errors.Is(err, ErrEnvironmentNotEmpty):
-		writeJSON(w, http.StatusConflict, errorBody{Message: "environment still has resources"})
+		writeJSON(w, http.StatusConflict, errorBody{Message: "environment still has resources (including previews)"})
 	case errors.Is(err, ErrLastEnvironment):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a project needs at least one environment"})
 	case errors.Is(err, ErrValidation):

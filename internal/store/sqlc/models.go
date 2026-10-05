@@ -39,6 +39,7 @@ type Application struct {
 	BaseDomainDisabled bool               `json:"base_domain_disabled"`
 	TeamID             pgtype.UUID        `json:"team_id"`
 	IsPreview          bool               `json:"is_preview"`
+	EnvironmentID      pgtype.UUID        `json:"environment_id"`
 }
 
 type ApplicationDeployKey struct {
@@ -116,20 +117,21 @@ type BackupTargetSecret struct {
 }
 
 type Database struct {
-	ID          pgtype.UUID        `json:"id"`
-	UserID      pgtype.UUID        `json:"user_id"`
-	ServerID    pgtype.UUID        `json:"server_id"`
-	Name        string             `json:"name"`
-	Engine      string             `json:"engine"`
-	Version     string             `json:"version"`
-	Status      string             `json:"status"`
-	ContainerID string             `json:"container_id"`
-	PublicPort  int32              `json:"public_port"`
-	StoragePath string             `json:"storage_path"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
-	TeamID      pgtype.UUID        `json:"team_id"`
+	ID            pgtype.UUID        `json:"id"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	ServerID      pgtype.UUID        `json:"server_id"`
+	Name          string             `json:"name"`
+	Engine        string             `json:"engine"`
+	Version       string             `json:"version"`
+	Status        string             `json:"status"`
+	ContainerID   string             `json:"container_id"`
+	PublicPort    int32              `json:"public_port"`
+	StoragePath   string             `json:"storage_path"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
+	TeamID        pgtype.UUID        `json:"team_id"`
+	EnvironmentID pgtype.UUID        `json:"environment_id"`
 }
 
 type DatabaseSecret struct {
@@ -378,17 +380,18 @@ type ServerMetric struct {
 }
 
 type Service struct {
-	ID          pgtype.UUID        `json:"id"`
-	UserID      pgtype.UUID        `json:"user_id"`
-	ServerID    pgtype.UUID        `json:"server_id"`
-	Name        string             `json:"name"`
-	Status      string             `json:"status"`
-	ComposeYaml string             `json:"compose_yaml"`
-	Env         []byte             `json:"env"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
-	TeamID      pgtype.UUID        `json:"team_id"`
+	ID            pgtype.UUID        `json:"id"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	ServerID      pgtype.UUID        `json:"server_id"`
+	Name          string             `json:"name"`
+	Status        string             `json:"status"`
+	ComposeYaml   string             `json:"compose_yaml"`
+	Env           []byte             `json:"env"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
+	TeamID        pgtype.UUID        `json:"team_id"`
+	EnvironmentID pgtype.UUID        `json:"environment_id"`
 }
 
 type ServiceDeploy struct {

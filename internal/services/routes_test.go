@@ -38,7 +38,7 @@ func (f *fakeRouteService) Create(context.Context, uuid.UUID, CreateRequest) (Se
 }
 
 // List implements ServiceService.
-func (f *fakeRouteService) List(context.Context, uuid.UUID) ([]Service, error) {
+func (f *fakeRouteService) List(context.Context, uuid.UUID, ServiceFilter) ([]Service, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -139,15 +139,16 @@ func routeTestServer(t *testing.T, svc ServiceService, userID uuid.UUID) http.Ha
 // sampleService is one live service row for the fake.
 func sampleService() Service {
 	return Service{
-		ID:          uuid.New(),
-		UserID:      uuid.New(),
-		ServerID:    uuid.New(),
-		Name:        "wordpress",
-		Status:      StatusRunning,
-		ComposeYAML: testDocument,
-		Env:         testEnv,
-		CreatedAt:   time.Now().UTC(),
-		UpdatedAt:   time.Now().UTC(),
+		ID:            uuid.New(),
+		UserID:        uuid.New(),
+		ServerID:      uuid.New(),
+		EnvironmentID: uuid.New(),
+		Name:          "wordpress",
+		Status:        StatusRunning,
+		ComposeYAML:   testDocument,
+		Env:           testEnv,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
 	}
 }
 
@@ -158,7 +159,7 @@ func TestRoutesCreateAndRead(t *testing.T) {
 	fake := &fakeRouteService{service: service}
 	router := routeTestServer(t, fake, service.UserID)
 
-	createBody := `{"name":"wordpress","server_id":"` + service.ServerID.String() + `","compose_yaml":"services:\n  web:\n    image: nginx\n","env":{"A":"b"}}`
+	createBody := `{"name":"wordpress","environment_id":"` + service.EnvironmentID.String() + `","server_id":"` + service.ServerID.String() + `","compose_yaml":"services:\n  web:\n    image: nginx\n","env":{"A":"b"}}`
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/services", strings.NewReader(createBody)))
 	if recorder.Code != http.StatusCreated {
@@ -168,7 +169,7 @@ func TestRoutesCreateAndRead(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
-	if created.Service.ProjectName != ProjectName(service.ID) || created.Service.ComposeYAML == "" {
+	if created.Service.ComposeProject != ProjectName(service.ID) || created.Service.ComposeYAML == "" {
 		t.Errorf("created = %+v", created.Service)
 	}
 
@@ -200,6 +201,45 @@ func TestRoutesCreateAndRead(t *testing.T) {
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/services/not-a-uuid", nil))
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("GET bad id = %d, want 400", recorder.Code)
+	}
+}
+
+// TestRoutesCreateRejections pins F6: a missing server_id or environment_id
+// answers 400 with the required message (not the invalid-id text), and a
+// malformed UUID names its field.
+func TestRoutesCreateRejections(t *testing.T) {
+	service := sampleService()
+	newRouter := func() (http.Handler, *fakeRouteService) {
+		fake := &fakeRouteService{service: service}
+		return routeTestServer(t, fake, service.UserID), fake
+	}
+	for _, tc := range []struct {
+		name    string
+		body    string
+		message string
+	}{
+		{"missing server", `{"name":"wordpress","environment_id":"` + service.EnvironmentID.String() + `","compose_yaml":"services:\n  web:\n    image: nginx\n"}`, "server is required"},
+		{"missing environment", `{"name":"wordpress","server_id":"` + service.ServerID.String() + `","compose_yaml":"services:\n  web:\n    image: nginx\n"}`, "environment is required"},
+		{"invalid server", `{"name":"wordpress","environment_id":"` + service.EnvironmentID.String() + `","server_id":"nope","compose_yaml":"x"}`, "invalid server id"},
+		{"invalid environment", `{"name":"wordpress","environment_id":"nope","server_id":"` + service.ServerID.String() + `","compose_yaml":"x"}`, "invalid environment id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			router, _ := newRouter()
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/services", strings.NewReader(tc.body)))
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", recorder.Code, recorder.Body.String())
+			}
+			var decoded struct {
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &decoded); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if decoded.Message != tc.message {
+				t.Errorf("message = %q, want %q", decoded.Message, tc.message)
+			}
+		})
 	}
 }
 

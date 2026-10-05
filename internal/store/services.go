@@ -31,6 +31,53 @@ func (s *Store) ListServicesByTeam(ctx context.Context, teamID pgtype.UUID) ([]s
 	return s.queries.ListServicesByTeam(ctx, teamID)
 }
 
+// ListServicesByEnvironment returns one environment's live services, newest
+// first.
+func (s *Store) ListServicesByEnvironment(ctx context.Context, environmentID pgtype.UUID) ([]sqlc.Service, error) {
+	return s.queries.ListServicesByEnvironment(ctx, environmentID)
+}
+
+// ListServicesByProject returns every environment's live services of one
+// project, newest first.
+func (s *Store) ListServicesByProject(ctx context.Context, projectID pgtype.UUID) ([]sqlc.Service, error) {
+	return s.queries.ListServicesByProject(ctx, projectID)
+}
+
+// CountServicesByEnvironment tallies one environment's live services.
+func (s *Store) CountServicesByEnvironment(ctx context.Context, environmentID pgtype.UUID) (int64, error) {
+	return s.queries.CountServicesByEnvironment(ctx, environmentID)
+}
+
+// CountServicesByProject tallies every environment's live services of one
+// project.
+func (s *Store) CountServicesByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
+	return s.queries.CountServicesByProject(ctx, projectID)
+}
+
+// ListServicesByServer returns one node's live services (id and name) for
+// the server-delete 409.
+func (s *Store) ListServicesByServer(ctx context.Context, serverID pgtype.UUID) ([]sqlc.ListServicesByServerRow, error) {
+	return s.queries.ListServicesByServer(ctx, serverID)
+}
+
+// ServiceNameInEnvironment reports whether the environment holds another live
+// service with the name (the move-collision pre-check).
+func (s *Store) ServiceNameInEnvironment(ctx context.Context, params sqlc.ServiceNameInEnvironmentParams) (bool, error) {
+	return s.queries.ServiceNameInEnvironment(ctx, params)
+}
+
+// HasActiveServiceDeploy reports whether a service deploy is in flight, so a
+// server change can be refused while one runs.
+func (s *Store) HasActiveServiceDeploy(ctx context.Context, serviceID pgtype.UUID) (bool, error) {
+	return s.queries.HasActiveServiceDeploy(ctx, serviceID)
+}
+
+// HasServiceDeploys reports whether the service was ever deployed, so a
+// server change can be refused once its compose project runs on a node.
+func (s *Store) HasServiceDeploys(ctx context.Context, serviceID pgtype.UUID) (bool, error) {
+	return s.queries.HasServiceDeploys(ctx, serviceID)
+}
+
 // UpdateServiceConfig persists the mutable service configuration (name,
 // document, environment) without touching the status column, so a lifecycle
 // completion and a configuration edit cannot overwrite each other.

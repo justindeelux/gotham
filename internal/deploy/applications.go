@@ -35,38 +35,53 @@ type EnvEntry struct {
 // CreateApplicationInput is the validated creation payload (the wire shape in
 // routes.go mirrors it one to one).
 type CreateApplicationInput struct {
-	Name       string
-	Provider   string
-	Repo       string
-	CloneURL   string
-	Branch     string
-	BuildPack  string
-	BaseDomain string
-	Port       int32
-	HostPort   int32
-	ServerID   uuid.UUID
-	Env        []EnvEntry
-	Storage    []Storage
+	Name          string
+	EnvironmentID uuid.UUID
+	Provider      string
+	Repo          string
+	CloneURL      string
+	Branch        string
+	BuildPack     string
+	BaseDomain    string
+	Port          int32
+	HostPort      int32
+	ServerID      uuid.UUID
+	Env           []EnvEntry
+	Storage       []Storage
 }
 
 // UpdateApplicationInput carries the mutable application fields. Every field is
-// optional (a zero value means "leave unchanged"); an empty ServerID clears the
-// assignment so an application can be moved between nodes.
+// optional (a zero value means "leave unchanged"). ServerID changes the node
+// (refused while a deployment runs); it must name a server, clearing it is
+// rejected since PE-2 made the assignment required. EnvironmentID moves the
+// application to another environment of the same team.
 type UpdateApplicationInput struct {
-	Name       *string
-	Branch     *string
-	BuildPack  *string
-	BaseDomain *string
-	Port       *int32
-	HostPort   *int32
-	ServerID   *uuid.UUID
+	Name          *string
+	Branch        *string
+	BuildPack     *string
+	BaseDomain    *string
+	Port          *int32
+	HostPort      *int32
+	ServerID      *uuid.UUID
+	EnvironmentID *uuid.UUID
+}
+
+// ApplicationFilter scopes a list to one environment or one project of the
+// caller's team (the ?environment_id= and ?project_id= filters). At most one
+// may be set; a foreign ID answers ErrNotFound. IncludePreviews lists
+// preview siblings too (the resources endpoint's ?previews=1); the default
+// listing hides them.
+type ApplicationFilter struct {
+	EnvironmentID   uuid.UUID
+	ProjectID       uuid.UUID
+	IncludePreviews bool
 }
 
 // empty reports whether the update carries no field at all.
 func (in UpdateApplicationInput) empty() bool {
 	return in.Name == nil && in.Branch == nil && in.BuildPack == nil &&
 		in.BaseDomain == nil && in.Port == nil && in.HostPort == nil &&
-		in.ServerID == nil
+		in.ServerID == nil && in.EnvironmentID == nil
 }
 
 // CreateApplication validates and stores a new application together with its
@@ -76,20 +91,28 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if !Enabled() {
 		return Application{}, ErrDisabled
 	}
+	teamID := teamIDFor(ctx, userID)
+	if in.EnvironmentID == uuid.Nil {
+		return Application{}, fmt.Errorf("%w: environment is required", ErrValidation)
+	}
+	if _, err := s.repo.ResolveEnvironment(ctx, in.EnvironmentID, teamID); err != nil {
+		return Application{}, err
+	}
 	app := Application{
-		ID:         uuid.New(),
-		UserID:     userID,
-		TeamID:     teams.ScopeFor(ctx, userID).TeamID,
-		Name:       strings.TrimSpace(in.Name),
-		Provider:   strings.TrimSpace(in.Provider),
-		Repo:       strings.TrimSpace(in.Repo),
-		CloneURL:   strings.TrimSpace(in.CloneURL),
-		Branch:     strings.TrimSpace(in.Branch),
-		BuildPack:  strings.TrimSpace(in.BuildPack),
-		BaseDomain: proxy.NormalizeDomain(in.BaseDomain),
-		Port:       in.Port,
-		HostPort:   in.HostPort,
-		ServerID:   in.ServerID,
+		ID:            uuid.New(),
+		UserID:        userID,
+		TeamID:        teamID,
+		EnvironmentID: in.EnvironmentID,
+		Name:          strings.TrimSpace(in.Name),
+		Provider:      strings.TrimSpace(in.Provider),
+		Repo:          strings.TrimSpace(in.Repo),
+		CloneURL:      strings.TrimSpace(in.CloneURL),
+		Branch:        strings.TrimSpace(in.Branch),
+		BuildPack:     strings.TrimSpace(in.BuildPack),
+		BaseDomain:    proxy.NormalizeDomain(in.BaseDomain),
+		Port:          in.Port,
+		HostPort:      in.HostPort,
+		ServerID:      in.ServerID,
 	}
 	if app.Branch == "" {
 		app.Branch = defaultBranch
@@ -150,10 +173,26 @@ func (s *Service) InstallHook(ctx context.Context, userID, appID uuid.UUID, r *h
 
 // ListApplications returns the active team's applications, newest first.
 // Without a team context it returns the creator's applications, which is the
-// pre-teams behavior.
-func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error) {
+// pre-teams behavior. A filter scopes the list to one environment or project
+// of the caller's team (a foreign ID answers ErrNotFound).
+func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID, filter ApplicationFilter) ([]Application, error) {
 	if s == nil || s.repo == nil {
 		return nil, errors.New("deploy: repository is not configured")
+	}
+	if filter.EnvironmentID != uuid.Nil && filter.ProjectID != uuid.Nil {
+		return nil, fmt.Errorf("%w: environment_id and project_id are mutually exclusive", ErrValidation)
+	}
+	if filter.EnvironmentID != uuid.Nil {
+		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID, teamIDFor(ctx, userID)); err != nil {
+			return nil, err
+		}
+		return s.repo.ListApplicationsByEnvironment(ctx, filter.EnvironmentID, filter.IncludePreviews)
+	}
+	if filter.ProjectID != uuid.Nil {
+		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID, teamIDFor(ctx, userID)); err != nil {
+			return nil, err
+		}
+		return s.repo.ListApplicationsByProject(ctx, filter.ProjectID, filter.IncludePreviews)
 	}
 	applications, err := s.repo.ListApplications(ctx, teams.ScopeFor(ctx, userID))
 	if err != nil {
@@ -199,9 +238,46 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	// delete. The worker does not take this lock, so the guard is what keeps a
 	// move from stranding a container on the previous node.
 	if in.ServerID != nil && *in.ServerID != app.ServerID {
+		if open, err := s.repo.HasLivePreviews(ctx, app.ID); err != nil {
+			return Application{}, err
+		} else if open {
+			return Application{}, ErrPreviewsOpen
+		}
 		if err := s.rejectInFlight(ctx, app.ID); err != nil {
+			if errors.Is(err, ErrConflict) {
+				return Application{}, ErrDeployInFlight
+			}
 			return Application{}, err
 		}
+	}
+	// A move to another environment stays in the team (a foreign environment
+	// answers 404) and refuses a name the target already holds (409), per the
+	// per-environment uniqueness.
+	movedEnvironment := false
+	if in.EnvironmentID != nil && *in.EnvironmentID != app.EnvironmentID {
+		// Open previews stay pinned to the old environment and node, so a
+		// base with live previews cannot move until they are closed.
+		if open, err := s.repo.HasLivePreviews(ctx, app.ID); err != nil {
+			return Application{}, err
+		} else if open {
+			return Application{}, ErrPreviewsOpen
+		}
+		if _, err := s.repo.ResolveEnvironment(ctx, *in.EnvironmentID, app.TeamID); err != nil {
+			return Application{}, err
+		}
+		name := app.Name
+		if in.Name != nil {
+			name = strings.TrimSpace(*in.Name)
+		}
+		collision, err := s.repo.NameInEnvironment(ctx, *in.EnvironmentID, name, app.ID)
+		if err != nil {
+			return Application{}, err
+		}
+		if collision {
+			return Application{}, fmt.Errorf("%w: an application named %q already exists in the target environment", ErrNameConflict, name)
+		}
+		app.EnvironmentID = *in.EnvironmentID
+		movedEnvironment = true
 	}
 	previousServer := app.ServerID
 	previousDomain, previousPort, previousHostPort := app.BaseDomain, app.Port, app.HostPort
@@ -232,10 +308,11 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		app.HostPort = *in.HostPort
 	}
 	if in.ServerID != nil {
-		if *in.ServerID != uuid.Nil {
-			if err := s.validateServer(ctx, userID, *in.ServerID); err != nil {
-				return Application{}, err
-			}
+		if *in.ServerID == uuid.Nil {
+			return Application{}, fmt.Errorf("%w: server is required", ErrValidation)
+		}
+		if err := s.validateServer(ctx, userID, *in.ServerID); err != nil {
+			return Application{}, err
 		}
 		app.ServerID = *in.ServerID
 	}
@@ -255,6 +332,13 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	}
 	updated, err := s.repo.UpdateApplication(ctx, app)
 	if err != nil {
+		// A concurrent create or move that committed past the pre-check trips
+		// the unique index instead: still a 409, with the move message.
+		if movedEnvironment && errors.Is(err, ErrValidation) &&
+			strings.Contains(err.Error(), "already exists") {
+			return Application{}, fmt.Errorf("%w: an application named %q already exists in the target environment",
+				ErrNameConflict, app.Name)
+		}
 		return Application{}, err
 	}
 	// Routing input changed: refresh the hosting node's configuration. A node
@@ -691,6 +775,17 @@ func (s *Service) removeApplicationContainers(ctx context.Context, app Applicati
 				"application_id", app.ID, "container_id", id, "error", err)
 		}
 	}
+}
+
+// teamIDFor resolves the team a resource call operates in: the request's
+// active team, or the caller's personal team when no team context is present
+// (the pre-teams path), matching the projects surface.
+func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
+	scope := teams.ScopeFor(ctx, userID)
+	if scope.Active() {
+		return scope.TeamID
+	}
+	return teams.PersonalTeamID(userID)
 }
 
 // validateServer enforces that the application points at a server the control

@@ -30,6 +30,27 @@ type Repository interface {
 	// ListServices returns the live services of the scope's active team (or,
 	// without a team context, of the creator), newest first.
 	ListServices(ctx context.Context, scope teams.Scope) ([]Service, error)
+	// ListServicesByEnvironment returns one environment's live services,
+	// newest first.
+	ListServicesByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]Service, error)
+	// ListServicesByProject returns every environment's live services of one
+	// project, newest first.
+	ListServicesByProject(ctx context.Context, projectID uuid.UUID) ([]Service, error)
+	// NameInEnvironment reports whether the environment holds another live
+	// service with name (the move-collision pre-check).
+	NameInEnvironment(ctx context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error)
+	// ResolveEnvironment validates that environmentID belongs to teamID and
+	// returns it (ErrNotFound for a foreign or missing one).
+	ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error)
+	// ResolveProject validates that projectID belongs to teamID
+	// (ErrNotFound for a foreign or missing one).
+	ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error)
+	// HasActiveDeploy reports whether a service deploy is in flight, so a
+	// server change can be refused while one runs.
+	HasActiveDeploy(ctx context.Context, serviceID uuid.UUID) (bool, error)
+	// HasDeploys reports whether the service was ever deployed, so a server
+	// change can be refused once its compose project runs on a node.
+	HasDeploys(ctx context.Context, serviceID uuid.UUID) (bool, error)
 	// UpdateServiceConfig persists the mutable configuration fields (name,
 	// document, environment) without touching the status, so a concurrent
 	// lifecycle completion cannot clobber an edit (and an edit cannot clobber
@@ -74,22 +95,34 @@ func (r *storeRepository) CreateService(ctx context.Context, service Service) (S
 		return Service{}, err
 	}
 	row, err := r.store.CreateService(ctx, sqlc.CreateServiceParams{
-		ID:          pgUUID(service.ID),
-		UserID:      pgUUID(service.UserID),
-		TeamID:      pgUUID(service.TeamID),
-		ServerID:    pgUUID(service.ServerID),
-		Name:        service.Name,
-		Status:      string(service.Status),
-		ComposeYaml: service.ComposeYAML,
-		Env:         env,
+		ID:            pgUUID(service.ID),
+		UserID:        pgUUID(service.UserID),
+		TeamID:        pgUUID(service.TeamID),
+		ServerID:      pgUUID(service.ServerID),
+		EnvironmentID: pgUUID(service.EnvironmentID),
+		Name:          service.Name,
+		Status:        string(service.Status),
+		ComposeYaml:   service.ComposeYAML,
+		Env:           env,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
 			return Service{}, ErrConflict
 		}
+		if isForeignKeyViolation(err) {
+			return Service{}, ErrNotFound
+		}
 		return Service{}, fmt.Errorf("services: create service: %w", err)
 	}
-	return serviceFromRow(row)
+	stored, convErr := serviceFromRow(row)
+	if convErr != nil {
+		return Service{}, convErr
+	}
+	enriched, err := r.enrich(ctx, []Service{stored})
+	if err != nil {
+		return Service{}, err
+	}
+	return enriched[0], nil
 }
 
 // GetService implements Repository, mapping a missing row to ErrNotFound.
@@ -101,7 +134,15 @@ func (r *storeRepository) GetService(ctx context.Context, serviceID uuid.UUID) (
 		}
 		return Service{}, fmt.Errorf("services: get service: %w", err)
 	}
-	return serviceFromRow(row)
+	stored, convErr := serviceFromRow(row)
+	if convErr != nil {
+		return Service{}, convErr
+	}
+	enriched, err := r.enrich(ctx, []Service{stored})
+	if err != nil {
+		return Service{}, err
+	}
+	return enriched[0], nil
 }
 
 // ListServices implements Repository: the active team's live services, or the
@@ -127,6 +168,158 @@ func (r *storeRepository) ListServices(ctx context.Context, scope teams.Scope) (
 		}
 		services = append(services, service)
 	}
+	return r.enrich(ctx, services)
+}
+
+// ListServicesByEnvironment implements Repository.
+func (r *storeRepository) ListServicesByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]Service, error) {
+	rows, err := r.store.ListServicesByEnvironment(ctx, pgUUID(environmentID))
+	if err != nil {
+		return nil, fmt.Errorf("services: list services by environment: %w", err)
+	}
+	services := make([]Service, 0, len(rows))
+	for _, row := range rows {
+		service, err := serviceFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		services = append(services, service)
+	}
+	return r.enrich(ctx, services)
+}
+
+// ListServicesByProject implements Repository.
+func (r *storeRepository) ListServicesByProject(ctx context.Context, projectID uuid.UUID) ([]Service, error) {
+	rows, err := r.store.ListServicesByProject(ctx, pgUUID(projectID))
+	if err != nil {
+		return nil, fmt.Errorf("services: list services by project: %w", err)
+	}
+	services := make([]Service, 0, len(rows))
+	for _, row := range rows {
+		service, err := serviceFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		services = append(services, service)
+	}
+	return r.enrich(ctx, services)
+}
+
+// NameInEnvironment implements Repository: the move-collision pre-check. The
+// comparison is exact, matching the (environment_id, name) unique index.
+func (r *storeRepository) NameInEnvironment(ctx context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error) {
+	collision, err := r.store.ServiceNameInEnvironment(ctx, sqlc.ServiceNameInEnvironmentParams{
+		EnvironmentID: pgUUID(environmentID),
+		Name:          name,
+		ID:            pgUUID(exceptID),
+	})
+	if err != nil {
+		return false, fmt.Errorf("services: name in environment: %w", err)
+	}
+	return collision, nil
+}
+
+// ResolveEnvironment implements Repository: a foreign or missing environment
+// answers ErrNotFound, so environment IDs cannot be probed across teams.
+func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error) {
+	row, err := r.store.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
+		ID:     pgUUID(environmentID),
+		TeamID: pgUUID(teamID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return EnvironmentRef{}, ErrNotFound
+		}
+		return EnvironmentRef{}, fmt.Errorf("services: get environment: %w", err)
+	}
+	return EnvironmentRef{
+		ID:        uuidFromPG(row.ID),
+		ProjectID: uuidFromPG(row.ProjectID),
+		Name:      row.Name,
+	}, nil
+}
+
+// ResolveProject implements Repository.
+func (r *storeRepository) ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error) {
+	if _, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
+		ID:     pgUUID(projectID),
+		TeamID: pgUUID(teamID),
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrNotFound
+		}
+		return uuid.Nil, fmt.Errorf("services: get project: %w", err)
+	}
+	return projectID, nil
+}
+
+// HasActiveDeploy implements Repository.
+func (r *storeRepository) HasActiveDeploy(ctx context.Context, serviceID uuid.UUID) (bool, error) {
+	active, err := r.store.HasActiveServiceDeploy(ctx, pgUUID(serviceID))
+	if err != nil {
+		return false, fmt.Errorf("services: active deploy check: %w", err)
+	}
+	return active, nil
+}
+
+// HasDeploys implements Repository.
+func (r *storeRepository) HasDeploys(ctx context.Context, serviceID uuid.UUID) (bool, error) {
+	deployed, err := r.store.HasServiceDeploys(ctx, pgUUID(serviceID))
+	if err != nil {
+		return false, fmt.Errorf("services: deploy history check: %w", err)
+	}
+	return deployed, nil
+}
+
+// enrich fills the environment, project and server names of listed services.
+// Rows of one listing share environments, so each distinct parent is read
+// once.
+func (r *storeRepository) enrich(ctx context.Context, services []Service) ([]Service, error) {
+	envs := make(map[uuid.UUID]sqlc.Environment)
+	projects := make(map[uuid.UUID]sqlc.Project)
+	servers := make(map[uuid.UUID]string)
+	for i, service := range services {
+		if service.EnvironmentID != uuid.Nil {
+			env, ok := envs[service.EnvironmentID]
+			if !ok {
+				fetched, err := r.store.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
+					ID:     pgUUID(service.EnvironmentID),
+					TeamID: pgUUID(service.TeamID),
+				})
+				if err != nil {
+					return nil, fmt.Errorf("services: get environment: %w", err)
+				}
+				env, envs[service.EnvironmentID] = fetched, fetched
+			}
+			services[i].EnvironmentName = env.Name
+			services[i].ProjectID = uuidFromPG(env.ProjectID)
+			if projectID := uuidFromPG(env.ProjectID); projectID != uuid.Nil {
+				project, ok := projects[projectID]
+				if !ok {
+					fetched, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
+						ID:     pgUUID(projectID),
+						TeamID: pgUUID(service.TeamID),
+					})
+					if err != nil {
+						return nil, fmt.Errorf("services: get project: %w", err)
+					}
+					project, projects[projectID] = fetched, fetched
+				}
+				services[i].ProjectName = project.Name
+			}
+		}
+		if service.ServerID != uuid.Nil {
+			name, ok := servers[service.ServerID]
+			if !ok {
+				server, err := r.store.GetServerByID(ctx, pgUUID(service.ServerID))
+				if err != nil {
+					return nil, fmt.Errorf("services: get server: %w", err)
+				}
+				name, servers[service.ServerID] = server.Name, server.Name
+			}
+			services[i].ServerName = name
+		}
+	}
 	return services, nil
 }
 
@@ -138,21 +331,34 @@ func (r *storeRepository) UpdateServiceConfig(ctx context.Context, service Servi
 		return Service{}, err
 	}
 	row, err := r.store.UpdateServiceConfig(ctx, sqlc.UpdateServiceConfigParams{
-		ID:          pgUUID(service.ID),
-		Name:        service.Name,
-		ComposeYaml: service.ComposeYAML,
-		Env:         env,
+		ID:            pgUUID(service.ID),
+		Name:          service.Name,
+		ComposeYaml:   service.ComposeYAML,
+		Env:           env,
+		EnvironmentID: pgUUID(service.EnvironmentID),
+		ServerID:      pgUUID(service.ServerID),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
 			return Service{}, ErrConflict
+		}
+		if isForeignKeyViolation(err) {
+			return Service{}, ErrNotFound
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Service{}, ErrNotFound
 		}
 		return Service{}, fmt.Errorf("services: update service config: %w", err)
 	}
-	return serviceFromRow(row)
+	stored, convErr := serviceFromRow(row)
+	if convErr != nil {
+		return Service{}, convErr
+	}
+	enriched, err := r.enrich(ctx, []Service{stored})
+	if err != nil {
+		return Service{}, err
+	}
+	return enriched[0], nil
 }
 
 // UpdateServiceStatus implements Repository, mapping a missing row to
@@ -261,17 +467,18 @@ func serviceFromRow(row sqlc.Service) (Service, error) {
 		return Service{}, err
 	}
 	return Service{
-		ID:          uuidFromPG(row.ID),
-		UserID:      uuidFromPG(row.UserID),
-		TeamID:      uuidFromPG(row.TeamID),
-		ServerID:    uuidFromPG(row.ServerID),
-		Name:        row.Name,
-		Status:      Status(row.Status),
-		ComposeYAML: row.ComposeYaml,
-		Env:         env,
-		CreatedAt:   timeFromPG(row.CreatedAt),
-		UpdatedAt:   timeFromPG(row.UpdatedAt),
-		DeletedAt:   timeFromPG(row.DeletedAt),
+		ID:            uuidFromPG(row.ID),
+		UserID:        uuidFromPG(row.UserID),
+		TeamID:        uuidFromPG(row.TeamID),
+		ServerID:      uuidFromPG(row.ServerID),
+		EnvironmentID: uuidFromPG(row.EnvironmentID),
+		Name:          row.Name,
+		Status:        Status(row.Status),
+		ComposeYAML:   row.ComposeYaml,
+		Env:           env,
+		CreatedAt:     timeFromPG(row.CreatedAt),
+		UpdatedAt:     timeFromPG(row.UpdatedAt),
+		DeletedAt:     timeFromPG(row.DeletedAt),
 	}, nil
 }
 
@@ -352,4 +559,11 @@ func timeFromPG(value pgtype.Timestamptz) time.Time {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// isForeignKeyViolation reports a PostgreSQL foreign-key violation (SQLSTATE
+// 23503): an environment deleted between validation and write.
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }

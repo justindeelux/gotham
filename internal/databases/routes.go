@@ -29,17 +29,22 @@ type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 // never appear here — credentials are served by the credentials endpoint to
 // their owner only.
 type databaseResponse struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Engine      string    `json:"engine"`
-	Version     string    `json:"version,omitempty"`
-	Status      Status    `json:"status"`
-	ServerID    string    `json:"server_id"`
-	ContainerID string    `json:"container_id,omitempty"`
-	PublicPort  int32     `json:"public_port"`
-	Volume      string    `json:"volume"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	EnvironmentID   string    `json:"environment_id"`
+	EnvironmentName string    `json:"environment_name"`
+	ProjectID       string    `json:"project_id"`
+	ProjectName     string    `json:"project_name"`
+	Engine          string    `json:"engine"`
+	Version         string    `json:"version,omitempty"`
+	Status          Status    `json:"status"`
+	ServerID        string    `json:"server_id"`
+	ServerName      string    `json:"server_name"`
+	ContainerID     string    `json:"container_id,omitempty"`
+	PublicPort      int32     `json:"public_port"`
+	Volume          string    `json:"volume"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // databaseEnvelope wraps a single database.
@@ -70,6 +75,8 @@ type createRequest struct {
 	Engine string `json:"engine"`
 	// Version is the optional image tag; empty selects the engine default.
 	Version string `json:"version,omitempty"`
+	// EnvironmentID is the environment the database belongs to.
+	EnvironmentID string `json:"environment_id"`
 	// ServerID is the node that runs the database.
 	ServerID string `json:"server_id"`
 	// PublicPort optionally publishes the engine port on the host; 0 keeps the
@@ -78,10 +85,15 @@ type createRequest struct {
 	PublicPort int32 `json:"public_port,omitempty"`
 }
 
-// updateRequest is the body of PATCH /v1/databases/{id}. It aliases the
-// service-level UpdateRequest so the handler decodes straight into the value
-// it will send.
-type updateRequest = UpdateRequest
+// updateRequest is the body of PATCH /v1/databases/{id}. Every field is
+// optional: absent fields stay unchanged. Environment and server moves ride
+// string fields (UUIDs do not decode from JSON strings); the handler
+// converts them into the service-level UpdateRequest.
+type updateRequest struct {
+	Name          *string `json:"name,omitempty"`
+	EnvironmentID *string `json:"environment_id,omitempty"`
+	ServerID      *string `json:"server_id,omitempty"`
+}
 
 // errorBody is the JSON body returned for failures.
 type errorBody struct {
@@ -143,18 +155,22 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	serverID, err := uuid.Parse(strings.TrimSpace(req.ServerID))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid server id"})
+	serverID, ok := parseRequiredUUID(w, req.ServerID, "server_id", "server is required")
+	if !ok {
+		return
+	}
+	environmentID, ok := parseRequiredUUID(w, req.EnvironmentID, "environment_id", "environment is required")
+	if !ok {
 		return
 	}
 
 	database, credentials, err := h.svc.Create(r.Context(), userID, CreateRequest{
-		Name:       req.Name,
-		Engine:     req.Engine,
-		Version:    req.Version,
-		ServerID:   serverID,
-		PublicPort: req.PublicPort,
+		Name:          req.Name,
+		Engine:        req.Engine,
+		Version:       req.Version,
+		EnvironmentID: environmentID,
+		ServerID:      serverID,
+		PublicPort:    req.PublicPort,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -166,13 +182,18 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// list serves GET .../databases.
+// list serves GET .../databases, optionally scoped by ?environment_id= or
+// ?project_id=.
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
 		return
 	}
-	databases, err := h.svc.List(r.Context(), userID)
+	filter, ok := databaseFilter(w, r)
+	if !ok {
+		return
+	}
+	databases, err := h.svc.List(r.Context(), userID, filter)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -213,7 +234,8 @@ func (h *handler) credentials(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, credentialsEnvelope{Credentials: credentials})
 }
 
-// update serves PATCH .../databases/{id} (rename).
+// update serves PATCH .../databases/{id} (rename, move environment, change
+// node).
 func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	userID, databaseID, ok := h.databaseParams(w, r)
 	if !ok {
@@ -223,7 +245,24 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	database, err := h.svc.Update(r.Context(), userID, databaseID, req)
+	in := UpdateRequest{Name: req.Name}
+	if req.EnvironmentID != nil {
+		environmentID, err := uuid.Parse(strings.TrimSpace(*req.EnvironmentID))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid environment id"})
+			return
+		}
+		in.EnvironmentID = &environmentID
+	}
+	if req.ServerID != nil {
+		serverID, err := uuid.Parse(strings.TrimSpace(*req.ServerID))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid server id"})
+			return
+		}
+		in.ServerID = &serverID
+	}
+	database, err := h.svc.Update(r.Context(), userID, databaseID, in)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -317,6 +356,22 @@ func (h *handler) databaseParams(w http.ResponseWriter, r *http.Request) (uuid.U
 	return userID, databaseID, true
 }
 
+// parseRequiredUUID parses a required UUID field: empty answers 400 with
+// the required message, anything else must parse (400 naming the field).
+func parseRequiredUUID(w http.ResponseWriter, raw, field, requiredMessage string) (uuid.UUID, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: requiredMessage})
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid " + strings.ReplaceAll(field, "_", " ")})
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
 // writeServiceError maps service sentinels to HTTP responses.
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
@@ -328,6 +383,12 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a database with that name already exists"})
+	case errors.Is(err, ErrDeployInFlight):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "a deploy is in progress"})
+	case errors.Is(err, ErrServerPinned):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "a database cannot change server once created"})
+	case errors.Is(err, ErrNameConflict):
+		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrPortConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "the requested public port is already in use"})
 	case errors.Is(err, ErrDatabaseBusy):
@@ -345,18 +406,46 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 // newDatabaseResponse maps a domain database to its wire representation.
 func newDatabaseResponse(database Database) databaseResponse {
 	return databaseResponse{
-		ID:          database.ID.String(),
-		Name:        database.Name,
-		Engine:      database.Engine,
-		Version:     database.Version,
-		Status:      database.Status,
-		ServerID:    database.ServerID.String(),
-		ContainerID: database.ContainerID,
-		PublicPort:  database.PublicPort,
-		Volume:      database.StoragePath,
-		CreatedAt:   database.CreatedAt,
-		UpdatedAt:   database.UpdatedAt,
+		ID:              database.ID.String(),
+		Name:            database.Name,
+		EnvironmentID:   database.EnvironmentID.String(),
+		EnvironmentName: database.EnvironmentName,
+		ProjectID:       database.ProjectID.String(),
+		ProjectName:     database.ProjectName,
+		Engine:          database.Engine,
+		Version:         database.Version,
+		Status:          database.Status,
+		ServerID:        database.ServerID.String(),
+		ServerName:      database.ServerName,
+		ContainerID:     database.ContainerID,
+		PublicPort:      database.PublicPort,
+		Volume:          database.StoragePath,
+		CreatedAt:       database.CreatedAt,
+		UpdatedAt:       database.UpdatedAt,
 	}
+}
+
+// databaseFilter parses the ?environment_id= and ?project_id= list filters.
+// At most one may be present; a malformed UUID is a 400.
+func databaseFilter(w http.ResponseWriter, r *http.Request) (DatabaseFilter, bool) {
+	var filter DatabaseFilter
+	if raw := strings.TrimSpace(r.URL.Query().Get("environment_id")); raw != "" {
+		envID, err := uuid.Parse(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid environment id"})
+			return DatabaseFilter{}, false
+		}
+		filter.EnvironmentID = envID
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("project_id")); raw != "" {
+		projectID, err := uuid.Parse(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid project id"})
+			return DatabaseFilter{}, false
+		}
+		filter.ProjectID = projectID
+	}
+	return filter, true
 }
 
 // decodeBody decodes a required JSON body into dst. An empty or malformed

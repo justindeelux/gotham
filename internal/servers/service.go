@@ -291,7 +291,10 @@ func (s *ServerService) Get(ctx context.Context, id uuid.UUID) (*Server, error) 
 
 // Delete removes a server, or returns ErrNotFound. A node outside the active
 // team is not deletable; a legacy node stays deletable by any authenticated
-// caller, matching pre-teams behavior.
+// caller, matching pre-teams behavior. A node that still holds applications,
+// services or databases is refused with ErrConflict naming the blocking
+// resources (the FK is RESTRICT, so the database would refuse the delete
+// anyway; the pre-check turns it into the contract's 409).
 func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 	row, err := s.store.GetServerByID(ctx, pgUUID(id))
 	if err != nil {
@@ -306,10 +309,106 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 		}
 		return ErrNotFound
 	}
-	if err := s.store.DeleteServer(ctx, pgUUID(id)); err != nil {
+	if blocking, err := s.blockingResources(ctx, id); err != nil {
+		return err
+	} else if blocking != "" {
+		return fmt.Errorf("%w: server still has resources: %s", ErrConflict, blocking)
+	}
+	volumes, err := s.store.DeleteServerPurging(ctx, pgUUID(id))
+	if err != nil {
+		// A resource created past the pre-check trips the RESTRICT
+		// reference instead: still a 409, with a fresh listing when the
+		// re-read succeeds.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == foreignKeyViolation {
+			if blocking, listErr := s.blockingResources(ctx, id); listErr == nil && blocking != "" {
+				return fmt.Errorf("%w: server still has resources: %s", ErrConflict, blocking)
+			}
+			return fmt.Errorf("%w: server still has resources", ErrConflict)
+		}
 		return fmt.Errorf("delete server: %w", err)
 	}
+	for _, volume := range volumes {
+		if volume == "" {
+			continue
+		}
+		s.logger.Warn("servers: purged database tombstone left its volume on the node",
+			"server_id", id, "volume", volume)
+	}
 	return nil
+}
+
+// blockingResources names the workloads pinned to a server, grouped by kind
+// ("" when the server is free). Each kind shows at most maxBlockers names.
+func (s *ServerService) blockingResources(ctx context.Context, id uuid.UUID) (string, error) {
+	groups := make([]string, 0, 3)
+	applications, err := s.store.ListApplicationsByServer(ctx, pgUUID(id))
+	if err != nil {
+		return "", fmt.Errorf("list server applications: %w", err)
+	}
+	if names := resourceNames(applications); names != "" {
+		groups = append(groups, "applications ("+names+")")
+	}
+	services, err := s.store.ListServicesByServer(ctx, pgUUID(id))
+	if err != nil {
+		return "", fmt.Errorf("list server services: %w", err)
+	}
+	if names := serviceNames(services); names != "" {
+		groups = append(groups, "services ("+names+")")
+	}
+	databases, err := s.store.ListDatabasesByServer(ctx, pgUUID(id))
+	if err != nil {
+		return "", fmt.Errorf("list server databases: %w", err)
+	}
+	if names := databaseNames(databases); names != "" {
+		groups = append(groups, "databases ("+names+")")
+	}
+	return strings.Join(groups, ", "), nil
+}
+
+// maxBlockers caps the names shown per kind in the 409 body.
+const maxBlockers = 5
+
+// blockerNames joins at most maxBlockers names with an "and N more" tail.
+func blockerNames(names []string) string {
+	if len(names) > maxBlockers {
+		return strings.Join(names[:maxBlockers], ", ") +
+			fmt.Sprintf(", and %d more", len(names)-maxBlockers)
+	}
+	return strings.Join(names, ", ")
+}
+
+func resourceNames(rows []sqlc.ListApplicationsByServerRow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		names = append(names, row.Name)
+	}
+	return blockerNames(names)
+}
+
+func serviceNames(rows []sqlc.ListServicesByServerRow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		names = append(names, row.Name)
+	}
+	return blockerNames(names)
+}
+
+func databaseNames(rows []sqlc.ListDatabasesByServerRow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		names = append(names, row.Name)
+	}
+	return blockerNames(names)
 }
 
 // UpdateParams edits a server. A nil field leaves the column unchanged; a
@@ -1014,6 +1113,10 @@ func (s *ServerService) claimUnregisteredServer(ctx context.Context, nodeID stri
 
 // uniqueViolation is PostgreSQL's unique_violation SQLSTATE.
 const uniqueViolation = "23505"
+
+// foreignKeyViolation is PostgreSQL's foreign_key_violation SQLSTATE: a
+// resource created past the delete pre-check trips the RESTRICT reference.
+const foreignKeyViolation = "23503"
 
 // ipFromNodeID returns the node id when it is an IP literal, or "" otherwise,
 // so a hostname node is stored with an empty address rather than a bogus one.

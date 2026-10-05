@@ -104,6 +104,41 @@ func (f *fakeRepository) ServerExists(_ context.Context, _ uuid.UUID, _ teams.Sc
 	return true, nil
 }
 
+// ListServicesByEnvironment implements services.Repository.
+func (f *fakeRepository) ListServicesByEnvironment(_ context.Context, _ uuid.UUID) ([]services.Service, error) {
+	return []services.Service{f.service}, nil
+}
+
+// ListServicesByProject implements services.Repository.
+func (f *fakeRepository) ListServicesByProject(_ context.Context, _ uuid.UUID) ([]services.Service, error) {
+	return []services.Service{f.service}, nil
+}
+
+// NameInEnvironment implements services.Repository.
+func (f *fakeRepository) NameInEnvironment(_ context.Context, _ uuid.UUID, _ string, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
+
+// ResolveEnvironment implements services.Repository.
+func (f *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ uuid.UUID) (services.EnvironmentRef, error) {
+	return services.EnvironmentRef{ID: environmentID}, nil
+}
+
+// ResolveProject implements services.Repository.
+func (f *fakeRepository) ResolveProject(_ context.Context, projectID, _ uuid.UUID) (uuid.UUID, error) {
+	return projectID, nil
+}
+
+// HasActiveDeploy implements services.Repository.
+func (f *fakeRepository) HasActiveDeploy(_ context.Context, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
+
+// HasDeploys implements services.Repository.
+func (f *fakeRepository) HasDeploys(_ context.Context, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
+
 // failingAgent is a node whose compose up fails while quoting the secret.
 type failingAgent struct {
 	message string
@@ -192,10 +227,11 @@ func TestRenderDeployRedactionBoundary(t *testing.T) {
 	// environment go through services.Create unchanged.
 	ctx := context.Background()
 	created, err := svc.Create(ctx, userID, services.CreateRequest{
-		Name:        "wordpress",
-		ServerID:    uuid.New(),
-		ComposeYAML: rendered.ComposeYAML,
-		Env:         rendered.Env,
+		Name:          "wordpress",
+		EnvironmentID: uuid.New(),
+		ServerID:      uuid.New(),
+		ComposeYAML:   rendered.ComposeYAML,
+		Env:           rendered.Env,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

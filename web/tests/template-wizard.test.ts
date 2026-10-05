@@ -59,7 +59,12 @@ const createdService = {
   name: "redis",
   status: "created",
   server_id: "srv-1",
-  project_name: "redis-abc",
+  server_name: "node",
+  environment_id: "env-1",
+  environment_name: "production",
+  project_id: "proj-1",
+  project_name: "shop",
+  compose_project: "redis-abc",
   env: {},
   domains: [],
   created_at: "2026-01-01T00:00:00Z",
@@ -154,6 +159,7 @@ describe("create and deploy", () => {
     await wizard?.handleCreate();
     expect(createService).toHaveBeenCalledWith({
       name: "redis",
+      environment_id: "",
       server_id: "srv-1",
       compose_yaml: "services:\n  redis: {}",
       env: { REDIS_PASSWORD: "secret" },

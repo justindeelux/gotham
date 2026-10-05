@@ -164,10 +164,11 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	// 3. The gallery flow: a service is created from the rendered document and
 	// its environment, then deployed through the existing services surface.
 	created, err := h.compose.Create(ctx, h.userID, services.CreateRequest{
-		Name:        "p7-wp-" + h.suffix,
-		ServerID:    h.serverID,
-		ComposeYAML: rendered.ComposeYAML,
-		Env:         rendered.Env,
+		Name:          "p7-wp-" + h.suffix,
+		EnvironmentID: h.envID,
+		ServerID:      h.serverID,
+		ComposeYAML:   rendered.ComposeYAML,
+		Env:           rendered.Env,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

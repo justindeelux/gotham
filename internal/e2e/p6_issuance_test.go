@@ -167,6 +167,7 @@ func TestP6DNS01Issuance(t *testing.T) {
 		t.Fatalf("create user: %v", err)
 	}
 	t.Cleanup(func() { p6ExecCleanup(t, pool, "DELETE FROM users WHERE id = $1", userRow.ID) })
+	envID := p6SeedEnvironment(t, ctx, pool, st, suffix)
 	serverRow, err := st.CreateServer(ctx, sqlc.CreateServerParams{
 		Name:    "p6-issuance-" + suffix,
 		Ip:      "127.0.0.1",
@@ -225,7 +226,7 @@ func TestP6DNS01Issuance(t *testing.T) {
 	pullCancel()
 	hostPort := freeTCPPort(t)
 	backend := p6RunNginx(t, ctx, engine, "p6-issuance-app-"+suffix, fmt.Sprintf("%d:80", hostPort))
-	appID := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, "issuance-"+suffix, domain, hostPort, false)
+	appID := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "issuance-"+suffix, domain, hostPort, false)
 	t.Cleanup(func() {
 		p6ExecCleanup(t, pool, "DELETE FROM deployments WHERE application_id = $1", appID)
 		p6ExecCleanup(t, pool, "DELETE FROM applications WHERE id = $1", appID)

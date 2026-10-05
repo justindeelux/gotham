@@ -134,7 +134,7 @@ export async function renameProject(
 /**
  * deleteProject deletes a project with its environments and shared
  * variables. A project with resources answers 409
- * (`project still has resources`).
+ * (`project still has resources (including previews)`).
  */
 export async function deleteProject(teamId: string, id: string): Promise<void> {
   await http.delete(`/projects/${id}`, { headers: teamHeaders(teamId) });
@@ -170,7 +170,7 @@ export async function renameEnvironment(
 
 /**
  * deleteEnvironment deletes an empty environment. A non-empty one answers
- * 409 (`environment still has resources`); the last environment of a project
+ * 409 (`environment still has resources (including previews)`); the last environment of a project
  * answers 409 (`a project needs at least one environment`).
  */
 export async function deleteEnvironment(

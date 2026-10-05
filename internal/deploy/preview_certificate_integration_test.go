@@ -105,18 +105,21 @@ func TestCreatePreviewApplicationClonesCertificateIntent(t *testing.T) {
 		}
 	})
 
+	teamID, envID, _ := seedProjectEnvironment(t, ctx, st)
 	baseDomain := fmt.Sprintf("p8-%d.example.com", suffix)
 	base, err := repo.CreateApplication(ctx, Application{
-		UserID:     userID,
-		ServerID:   uuid.UUID(serverRow.ID.Bytes),
-		Name:       fmt.Sprintf("p8-preview-%d", suffix),
-		Provider:   "github",
-		Repo:       "octo/gotham",
-		CloneURL:   "https://github.com/octo/gotham.git",
-		Branch:     "main",
-		BuildPack:  "auto",
-		BaseDomain: baseDomain,
-		Port:       3000,
+		UserID:        userID,
+		TeamID:        teamID,
+		ServerID:      uuid.UUID(serverRow.ID.Bytes),
+		EnvironmentID: envID,
+		Name:          fmt.Sprintf("p8-preview-%d", suffix),
+		Provider:      "github",
+		Repo:          "octo/gotham",
+		CloneURL:      "https://github.com/octo/gotham.git",
+		Branch:        "main",
+		BuildPack:     "auto",
+		BaseDomain:    baseDomain,
+		Port:          3000,
 	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create base application: %v", err)

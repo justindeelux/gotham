@@ -51,11 +51,13 @@ func newTestService(t *testing.T, repo *fakeRepository, agent *fakeAgent) Servic
 func createService(t *testing.T, svc ServiceService, repo *fakeRepository, userID uuid.UUID) Service {
 	t.Helper()
 	serverID := repo.seedServer()
+	envID, _ := repo.seedEnvironment()
 	created, err := svc.Create(context.Background(), userID, CreateRequest{
-		Name:        "wordpress",
-		ServerID:    serverID,
-		ComposeYAML: testDocument,
-		Env:         testEnv,
+		Name:          "wordpress",
+		EnvironmentID: envID,
+		ServerID:      serverID,
+		ComposeYAML:   testDocument,
+		Env:           testEnv,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -69,33 +71,38 @@ func TestCreateValidation(t *testing.T) {
 	svc := newTestService(t, repo, &fakeAgent{})
 	userID := uuid.New()
 	serverID := repo.seedServer()
+	envID, _ := repo.seedEnvironment()
 
 	cases := map[string]struct {
 		req  CreateRequest
 		want error
 	}{
 		"bad name": {
-			req:  CreateRequest{Name: "bad name!", ServerID: serverID, ComposeYAML: testDocument, Env: testEnv},
+			req:  CreateRequest{Name: "bad name!", EnvironmentID: envID, ServerID: serverID, ComposeYAML: testDocument, Env: testEnv},
+			want: ErrValidation,
+		},
+		"missing environment": {
+			req:  CreateRequest{Name: "ok", ServerID: serverID, ComposeYAML: testDocument, Env: testEnv},
 			want: ErrValidation,
 		},
 		"missing server": {
-			req:  CreateRequest{Name: "ok", ComposeYAML: testDocument, Env: testEnv},
+			req:  CreateRequest{Name: "ok", EnvironmentID: envID, ComposeYAML: testDocument, Env: testEnv},
 			want: ErrValidation,
 		},
 		"unknown server": {
-			req:  CreateRequest{Name: "ok", ServerID: uuid.New(), ComposeYAML: testDocument, Env: testEnv},
+			req:  CreateRequest{Name: "ok", EnvironmentID: envID, ServerID: uuid.New(), ComposeYAML: testDocument, Env: testEnv},
 			want: ErrServerNotFound,
 		},
 		"build context": {
-			req:  CreateRequest{Name: "ok", ServerID: serverID, ComposeYAML: "services:\n  web:\n    build: .\n"},
+			req:  CreateRequest{Name: "ok", EnvironmentID: envID, ServerID: serverID, ComposeYAML: "services:\n  web:\n    build: .\n"},
 			want: ErrValidation,
 		},
 		"unresolvable env": {
-			req:  CreateRequest{Name: "ok", ServerID: serverID, ComposeYAML: testDocument},
+			req:  CreateRequest{Name: "ok", EnvironmentID: envID, ServerID: serverID, ComposeYAML: testDocument},
 			want: ErrValidation,
 		},
 		"bad env key": {
-			req: CreateRequest{Name: "ok", ServerID: serverID, ComposeYAML: "services:\n  web:\n    image: nginx\n",
+			req: CreateRequest{Name: "ok", EnvironmentID: envID, ServerID: serverID, ComposeYAML: "services:\n  web:\n    image: nginx\n",
 				Env: map[string]string{"bad-key": "x"}},
 			want: ErrValidation,
 		},
@@ -114,7 +121,7 @@ func TestCreateValidation(t *testing.T) {
 		t.Fatalf("created = %+v", created)
 	}
 	if _, err := svc.Create(context.Background(), userID, CreateRequest{
-		Name: "wordpress", ServerID: created.ServerID, ComposeYAML: testDocument, Env: testEnv,
+		Name: "wordpress", EnvironmentID: created.EnvironmentID, ServerID: created.ServerID, ComposeYAML: testDocument, Env: testEnv,
 	}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate Create = %v, want ErrConflict", err)
 	}
@@ -351,20 +358,32 @@ func TestDeployDoesNotClobberConcurrentEdit(t *testing.T) {
 	}()
 	waitForUp(t, agent)
 
-	name := "updated-during-deploy"
-	if _, err := svc.Update(context.Background(), userID, created.ID, UpdateRequest{Name: &name}); err != nil {
-		t.Fatalf("Update: %v", err)
+	// The update serializes behind the deploy's lifecycle lock: it must not
+	// complete (and must not be clobbered) while the deploy runs.
+	updateDone := make(chan error, 1)
+	go func() {
+		name := "updated-during-deploy"
+		_, err := svc.Update(context.Background(), userID, created.ID, UpdateRequest{Name: &name})
+		updateDone <- err
+	}()
+	select {
+	case err := <-updateDone:
+		t.Fatalf("Update completed during a deploy: %v (want it to wait for the lifecycle lock)", err)
+	case <-time.After(200 * time.Millisecond):
 	}
 	close(gate)
 	if err := <-deployDone; err != nil {
 		t.Fatalf("Deploy: %v", err)
+	}
+	if err := <-updateDone; err != nil {
+		t.Fatalf("Update after deploy: %v", err)
 	}
 
 	after, err := svc.Get(context.Background(), userID, created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if after.Name != name {
+	if after.Name != "updated-during-deploy" {
 		t.Fatalf("the concurrent rename was overwritten by the deploy completion: %q", after.Name)
 	}
 	if after.Status != StatusRunning {

@@ -4,6 +4,7 @@ import {
   cloneURL,
   loadAccount,
   seedNodeAddress,
+  seedProjectEnvironment,
   storageStatePath,
   uniqueSuffix,
 } from "./support";
@@ -101,11 +102,13 @@ test.describe("domains", () => {
     const { server } = (await serverResponse.json()) as {
       server: { id: string };
     };
+    const { environmentId } = await seedProjectEnvironment(request, headers);
 
     const appResponse = await request.post("/api/v1/applications", {
       headers,
       data: {
         name: `ui-e2e-app-${suffix}`,
+        environment_id: environmentId,
         provider: "github",
         repo: "docker/welcome-to-docker",
         clone_url: cloneURL,
@@ -128,6 +131,7 @@ test.describe("domains", () => {
       headers,
       data: {
         name: `ui-e2e-blank-${suffix}`,
+        environment_id: environmentId,
         provider: "github",
         repo: "docker/welcome-to-docker",
         clone_url: cloneURL,

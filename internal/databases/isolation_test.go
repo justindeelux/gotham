@@ -25,10 +25,12 @@ func TestDatabaseTeamIsolation(t *testing.T) {
 
 	// Creation stamps the caller's active team.
 	mineCtx := teams.WithScope(bg, teams.Scope{UserID: bob, TeamID: teamB, Role: teams.RoleAdmin})
+	envID, _ := repo.seedEnvironment()
 	created, _, err := svc.Create(mineCtx, bob, CreateRequest{
-		Name:     "bobs-db",
-		Engine:   "postgres",
-		ServerID: repo.seedServer(),
+		Name:          "bobs-db",
+		Engine:        "postgres",
+		EnvironmentID: envID,
+		ServerID:      repo.seedServer(),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -38,16 +40,17 @@ func TestDatabaseTeamIsolation(t *testing.T) {
 	}
 
 	other := repo.seed(Database{
-		UserID:   alice,
-		TeamID:   teamA,
-		ServerID: repo.seedServer(),
-		Name:     "alices-db",
-		Engine:   "postgres",
-		Status:   StatusRunning,
+		UserID:        alice,
+		TeamID:        teamA,
+		ServerID:      repo.seedServer(),
+		EnvironmentID: envID,
+		Name:          "alices-db",
+		Engine:        "postgres",
+		Status:        StatusRunning,
 	})
 
 	// Team B sees only its own database.
-	databases, err := svc.List(mineCtx, bob)
+	databases, err := svc.List(mineCtx, bob, DatabaseFilter{})
 	if err != nil {
 		t.Fatalf("list team B: %v", err)
 	}
@@ -62,7 +65,7 @@ func TestDatabaseTeamIsolation(t *testing.T) {
 	if _, err := svc.Credentials(aliceCtx, alice, created.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-team Credentials = %v, want ErrNotFound", err)
 	}
-	if _, err := svc.Update(aliceCtx, alice, created.ID, UpdateRequest{Name: "stolen"}); !errors.Is(err, ErrNotFound) {
+	if _, err := svc.Update(aliceCtx, alice, created.ID, UpdateRequest{Name: ptr("stolen")}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-team Update = %v, want ErrNotFound", err)
 	}
 	if err := svc.Delete(aliceCtx, alice, created.ID); !errors.Is(err, ErrNotFound) {
@@ -77,7 +80,7 @@ func TestDatabaseTeamIsolation(t *testing.T) {
 	if _, err := svc.Credentials(viewerCtx, alice, other.ID); !errors.Is(err, teams.ErrForbidden) {
 		t.Fatalf("read_only Credentials = %v, want ErrForbidden (plaintext secrets need owner/admin)", err)
 	}
-	if _, err := svc.Update(viewerCtx, alice, other.ID, UpdateRequest{Name: "renamed"}); !errors.Is(err, teams.ErrForbidden) {
+	if _, err := svc.Update(viewerCtx, alice, other.ID, UpdateRequest{Name: ptr("renamed")}); !errors.Is(err, teams.ErrForbidden) {
 		t.Fatalf("read_only Update = %v, want ErrForbidden", err)
 	}
 	if _, err := svc.Stop(viewerCtx, alice, other.ID); !errors.Is(err, teams.ErrForbidden) {
@@ -96,18 +99,20 @@ func TestDatabaseCreateWithoutTeamContextStaysCreatorScoped(t *testing.T) {
 	svc := newTestService(repo, cs)
 	userID := uuid.New()
 
+	legacyEnvID, _ := repo.seedEnvironment()
 	created, _, err := svc.Create(context.Background(), userID, CreateRequest{
-		Name:     "legacy-db",
-		Engine:   "postgres",
-		ServerID: repo.seedServer(),
+		Name:          "legacy-db",
+		Engine:        "postgres",
+		EnvironmentID: legacyEnvID,
+		ServerID:      repo.seedServer(),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if created.TeamID != uuid.Nil {
-		t.Fatalf("created database team = %s, want unset without a team context", created.TeamID)
+	if created.TeamID != teams.PersonalTeamID(userID) {
+		t.Fatalf("created database team = %s, want the personal team without a team context", created.TeamID)
 	}
-	databases, err := svc.List(context.Background(), userID)
+	databases, err := svc.List(context.Background(), userID, DatabaseFilter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -134,18 +139,19 @@ func TestDatabaseCreateRejectsForeignServer(t *testing.T) {
 	svc := newTestService(repo, &fakeContainers{runID: "container-1"})
 	ctxA := teams.WithScope(context.Background(), teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner})
 
+	envID, _ := repo.seedEnvironment()
 	if _, _, err := svc.Create(ctxA, alice, CreateRequest{
-		Name: "foreign", Engine: "postgres", ServerID: foreignNode,
+		Name: "foreign", Engine: "postgres", EnvironmentID: envID, ServerID: foreignNode,
 	}); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("create on a foreign node = %v, want ErrServerNotFound", err)
 	}
 	if _, _, err := svc.Create(ctxA, alice, CreateRequest{
-		Name: "own", Engine: "postgres", ServerID: ownNode,
+		Name: "own", Engine: "postgres", EnvironmentID: envID, ServerID: ownNode,
 	}); err != nil {
 		t.Fatalf("create on the team's node: %v", err)
 	}
 	if _, _, err := svc.Create(ctxA, alice, CreateRequest{
-		Name: "legacy", Engine: "postgres", ServerID: legacyNode,
+		Name: "legacy", Engine: "postgres", EnvironmentID: envID, ServerID: legacyNode,
 	}); err != nil {
 		t.Fatalf("create on a legacy node: %v", err)
 	}

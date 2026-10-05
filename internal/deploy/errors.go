@@ -10,6 +10,18 @@ var (
 	ErrValidation = errors.New("deploy: validation")
 	// ErrConflict — an active deployment already exists for the application (409).
 	ErrConflict = errors.New("deploy: conflict")
+	// ErrDeployInFlight — a deployment is running, so a server change is
+	// refused (409 with the contract's exact body).
+	ErrDeployInFlight = errors.New("deploy: a deploy is in progress")
+	// ErrPreviewsOpen — the base application has live previews, so a move
+	// or server change is refused (409) until they are closed.
+	ErrPreviewsOpen = errors.New("deploy: close the open previews first")
+	// ErrNameConflict — the target environment already holds the name (409).
+	ErrNameConflict = errors.New("deploy: name already exists in the target environment")
+	// ErrDomainConflict — the domain is already bound to another
+	// application on the (new) node (409 with its own message, not the
+	// deploy-in-flight text).
+	ErrDomainConflict = errors.New("deploy: domain already in use on the target server")
 	// ErrServerNotFound — target server missing or not assigned to the user (404).
 	ErrServerNotFound = errors.New("deploy: server not found")
 	// ErrAgentUnavailable — node agent unreachable; the only retryable failure.

@@ -450,7 +450,8 @@ func (s *Server) routes() (http.Handler, error) {
 		// Managed databases (BE-5.1): same container service as above, so a
 		// database container is created through the shared container service
 		// rather than a second agent path.
-		databases.Mount(api, s.withTeam(), RequireScopes(auth.ScopeDeploy), UserIDFromContext, s.databaseService(containerService))
+		databaseSvc := s.databaseService(containerService)
+		databases.Mount(api, s.withTeam(), RequireScopes(auth.ScopeDeploy), UserIDFromContext, databaseSvc)
 
 		// Backup and restore surface (BE-5.2), same container service and
 		// same feature flag as the databases routes above: a nil service
@@ -466,15 +467,18 @@ func (s *Server) routes() (http.Handler, error) {
 		// API-token scope boundary (reads need read, mutations need deploy;
 		// JWT sessions already hold every scope). A nil service (no database,
 		// no agent dialer, or FEATURE_SERVICES=false) mounts nothing.
-		services.Mount(api, s.withTeam(), UserIDFromContext, s.composeService())
+		composeSvc := s.composeService()
+		services.Mount(api, s.withTeam(), UserIDFromContext, composeSvc)
 
 		// Projects and environments (Phase 13, PE-1): the grouping layer for
 		// every workload. It rides the team chain like the other resource
 		// packages (reads need read, mutations need deploy plus
 		// owner/admin). A nil service (no database) mounts nothing.
-		// Resource counts read zero through ZeroResourceCounter until PE-2
-		// wires the real counter.
-		projects.Mount(api, s.withTeam(), UserIDFromContext, s.projectService())
+		// Resource counts come from the real counter over the resource
+		// tables, and the resources surface lists through the domain
+		// services above (nil services stay nil-safe: the endpoint answers a
+		// clear error when its lister is missing).
+		projects.Mount(api, s.withTeam(), UserIDFromContext, s.projectService(s.deploy, composeSvc, databaseSvc))
 
 		// One-click templates (BE-7.2): the built-in catalog (embedded in
 		// the binary) and the render engine. The surface is read-only and
@@ -897,16 +901,35 @@ func (s *Server) composeService() services.ServiceService {
 }
 
 // projectService builds the projects domain service for the HTTP wiring. It
-// returns nil (no database) so projects.Mount is a no-op.
-func (s *Server) projectService() projects.ProjectService {
+// returns nil (no database) so projects.Mount is a no-op. Counts come from
+// the real resource counter; the resources surface lists through the domain
+// services (a nil service leaves its lister unwired and the endpoint answers
+// a clear error).
+func (s *Server) projectService(deploySvc deploy.DeployService, composeSvc services.ServiceService, databaseSvc databases.DatabaseService) projects.ProjectService {
 	if s.persistence == nil {
 		return nil
 	}
-	return projects.NewDefaultService(projects.Config{
+	cfg := projects.Config{
 		Store:   s.persistence,
-		Counter: projects.ZeroResourceCounter{},
+		Counter: projects.StoreCounter{Store: s.persistence},
 		Logger:  s.logger,
-	})
+	}
+	if deploySvc != nil {
+		if lister, ok := deploySvc.(projects.ApplicationLister); ok {
+			cfg.Applications = lister
+		}
+	}
+	if composeSvc != nil {
+		if lister, ok := composeSvc.(projects.ServiceLister); ok {
+			cfg.Services = lister
+		}
+	}
+	if databaseSvc != nil {
+		if lister, ok := databaseSvc.(projects.DatabaseLister); ok {
+			cfg.Databases = lister
+		}
+	}
+	return projects.NewDefaultService(cfg)
 }
 
 // apiError is the JSON body returned for API failures.

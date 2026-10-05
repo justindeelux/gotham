@@ -46,6 +46,13 @@ type fakeRepository struct {
 	softDeleteErr error
 	deployErr     error
 	serverErr     error
+	// environments holds the seeded environments ResolveEnvironment answers
+	// with; resolveErr fails every environment and project resolution.
+	environments map[uuid.UUID]EnvironmentRef
+	resolveErr   error
+	// activeDeploy, when set, makes HasActiveDeploy report a deploy in
+	// flight (the server-change guard tests).
+	activeDeploy map[uuid.UUID]bool
 }
 
 // Compile-time guarantee that fakeRepository satisfies the seam.
@@ -82,7 +89,7 @@ func (r *fakeRepository) CreateService(_ context.Context, service Service) (Serv
 	}
 	for _, id := range r.order {
 		existing := r.services[id]
-		if existing.UserID == service.UserID && existing.Name == service.Name && r.live(existing) {
+		if existing.EnvironmentID == service.EnvironmentID && existing.Name == service.Name && r.live(existing) {
 			return Service{}, ErrConflict
 		}
 	}
@@ -144,15 +151,29 @@ func (r *fakeRepository) UpdateServiceConfig(_ context.Context, service Service)
 	if !ok || !r.live(existing) {
 		return Service{}, ErrNotFound
 	}
+	// The conflict check runs against the effective environment: an
+	// unchanged placement arrives Nil (the SQL write is conditional).
+	effectiveEnv := service.EnvironmentID
+	if effectiveEnv == uuid.Nil {
+		effectiveEnv = existing.EnvironmentID
+	}
 	for _, id := range r.order {
 		other := r.services[id]
-		if other.UserID == service.UserID && other.Name == service.Name && other.ID != service.ID && r.live(other) {
+		if other.EnvironmentID == effectiveEnv && other.Name == service.Name && other.ID != service.ID && r.live(other) {
 			return Service{}, ErrConflict
 		}
 	}
 	existing.Name = service.Name
 	existing.ComposeYAML = service.ComposeYAML
 	existing.Env = service.Env
+	// Placement columns arrive Nil when the request leaves them alone (the
+	// SQL write is conditional); only a set value moves the row.
+	if service.EnvironmentID != uuid.Nil {
+		existing.EnvironmentID = service.EnvironmentID
+	}
+	if service.ServerID != uuid.Nil {
+		existing.ServerID = service.ServerID
+	}
 	r.services[service.ID] = existing
 	return existing, nil
 }
@@ -255,6 +276,114 @@ func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
 	}
 	r.serverTeams[id] = teamID
 	return id
+}
+
+// seedEnvironment registers an environment the service accepts on create and
+// move; resolveErr fails every resolution instead.
+func (r *fakeRepository) seedEnvironment() (uuid.UUID, uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.environments == nil {
+		r.environments = map[uuid.UUID]EnvironmentRef{}
+	}
+	envID, projectID := uuid.New(), uuid.New()
+	r.environments[envID] = EnvironmentRef{ID: envID, ProjectID: projectID, Name: "env"}
+	return envID, projectID
+}
+
+// ListServicesByEnvironment implements Repository.
+func (r *fakeRepository) ListServicesByEnvironment(_ context.Context, environmentID uuid.UUID) ([]Service, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	services := []Service{}
+	for i := len(r.order) - 1; i >= 0; i-- {
+		service := r.services[r.order[i]]
+		if r.live(service) && service.EnvironmentID == environmentID {
+			services = append(services, service)
+		}
+	}
+	return services, nil
+}
+
+// ListServicesByProject implements Repository.
+func (r *fakeRepository) ListServicesByProject(_ context.Context, projectID uuid.UUID) ([]Service, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	services := []Service{}
+	for i := len(r.order) - 1; i >= 0; i-- {
+		service := r.services[r.order[i]]
+		if r.live(service) && r.environmentProject(service.EnvironmentID) == projectID {
+			services = append(services, service)
+		}
+	}
+	return services, nil
+}
+
+// NameInEnvironment implements Repository.
+func (r *fakeRepository) NameInEnvironment(_ context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range r.order {
+		service := r.services[id]
+		if service.ID != exceptID && service.EnvironmentID == environmentID && service.Name == name && r.live(service) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ResolveEnvironment implements Repository.
+func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ uuid.UUID) (EnvironmentRef, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.resolveErr != nil {
+		return EnvironmentRef{}, r.resolveErr
+	}
+	if ref, ok := r.environments[environmentID]; ok {
+		return ref, nil
+	}
+	return EnvironmentRef{ID: environmentID}, nil
+}
+
+// ResolveProject implements Repository.
+func (r *fakeRepository) ResolveProject(_ context.Context, projectID, _ uuid.UUID) (uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.resolveErr != nil {
+		return uuid.Nil, r.resolveErr
+	}
+	return projectID, nil
+}
+
+// HasActiveDeploy implements Repository.
+func (r *fakeRepository) HasActiveDeploy(_ context.Context, serviceID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.activeDeploy[serviceID] {
+		return true, nil
+	}
+	for _, deploy := range r.deploys[serviceID] {
+		if deploy.State == DeployDeploying {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// HasDeploys implements Repository.
+func (r *fakeRepository) HasDeploys(_ context.Context, serviceID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.deploys[serviceID]) > 0, nil
+}
+
+// environmentProject returns the project of a seeded environment (zero for
+// unknown IDs). Callers hold r.mu.
+func (r *fakeRepository) environmentProject(environmentID uuid.UUID) uuid.UUID {
+	if ref, ok := r.environments[environmentID]; ok {
+		return ref.ProjectID
+	}
+	return uuid.Nil
 }
 
 // fakeAgent is a scriptable ComposeAgent recording every call.

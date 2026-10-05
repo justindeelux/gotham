@@ -64,3 +64,30 @@ WHERE e.id = $1 AND e.project_id = p.id AND p.team_id = $2;
 
 -- name: CountEnvironmentsByProject :one
 SELECT count(*) FROM environments WHERE project_id = $1;
+
+-- name: ListSharedVariables :many
+-- ListSharedVariables returns one scope's variables (environment_id NULL for
+-- the project level), ordered by key. A NULL parameter matches the project
+-- level through IS NOT DISTINCT FROM.
+SELECT * FROM shared_variables
+WHERE project_id = $1 AND environment_id IS NOT DISTINCT FROM $2
+ORDER BY key ASC;
+
+-- name: ListSharedVariablesForEnvironment :many
+-- ListSharedVariablesForEnvironment returns the project-level rows plus one
+-- environment's rows in a single snapshot, so the deploy merge reads both
+-- scopes without a concurrent replace slipping between two reads.
+SELECT * FROM shared_variables
+WHERE project_id = $1 AND (environment_id IS NULL OR environment_id = $2)
+ORDER BY key ASC;
+
+-- name: DeleteSharedVariables :exec
+-- DeleteSharedVariables clears one scope's whole set; the replace path
+-- re-inserts the new set in the same transaction.
+DELETE FROM shared_variables
+WHERE project_id = $1 AND environment_id IS NOT DISTINCT FROM $2;
+
+-- name: InsertSharedVariable :one
+INSERT INTO shared_variables (id, project_id, environment_id, key, value, ciphertext, secret)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING *;

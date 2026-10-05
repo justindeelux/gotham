@@ -98,6 +98,17 @@ type Secret struct {
 	CreatedAt     time.Time
 }
 
+// SharedVariable is one project- or environment-level variable resolved for
+// one application deploy. Plain pairs carry Value; secret pairs carry the
+// sealed Ciphertext end to end (it is opened with providers.OpenSecret when
+// the runtime payload is assembled, exactly like application secrets).
+type SharedVariable struct {
+	Key        string
+	Value      string
+	Ciphertext string
+	Secret     bool
+}
+
 // CertificateIntent is the slice of a domain_certificates row the preview
 // clone copies onto a sibling: the per-application certificate configuration.
 // The preview surface only ever clones an enabled wildcard DNS-01 intent; the

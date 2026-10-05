@@ -177,6 +177,10 @@ type handler struct {
 //	PATCH  /v1/environments/{id}
 //	DELETE /v1/environments/{id}
 //	GET    /v1/environments/{id}/resources
+//	GET    /v1/projects/{id}/variables
+//	PUT    /v1/projects/{id}/variables
+//	GET    /v1/environments/{id}/variables
+//	PUT    /v1/environments/{id}/variables
 //
 // auth wraps the group: the server passes its team chain (RequireAuth,
 // RequireTeam and the owner/admin gate for mutating methods, so a read_only
@@ -199,6 +203,10 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Patch("/v1/environments/{id}", h.updateEnvironment)
 		protected.Delete("/v1/environments/{id}", h.deleteEnvironment)
 		protected.Get("/v1/environments/{id}/resources", h.getEnvironmentResources)
+		protected.Get("/v1/projects/{id}/variables", h.getProjectVariables)
+		protected.Put("/v1/projects/{id}/variables", h.replaceProjectVariables)
+		protected.Get("/v1/environments/{id}/variables", h.getEnvironmentVariables)
+		protected.Put("/v1/environments/{id}/variables", h.replaceEnvironmentVariables)
 	})
 }
 

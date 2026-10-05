@@ -115,6 +115,23 @@ func (q *Queries) DeleteProject(ctx context.Context, arg DeleteProjectParams) (i
 	return result.RowsAffected(), nil
 }
 
+const deleteSharedVariables = `-- name: DeleteSharedVariables :exec
+DELETE FROM shared_variables
+WHERE project_id = $1 AND environment_id IS NOT DISTINCT FROM $2
+`
+
+type DeleteSharedVariablesParams struct {
+	ProjectID     pgtype.UUID `json:"project_id"`
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+}
+
+// DeleteSharedVariables clears one scope's whole set; the replace path
+// re-inserts the new set in the same transaction.
+func (q *Queries) DeleteSharedVariables(ctx context.Context, arg DeleteSharedVariablesParams) error {
+	_, err := q.db.Exec(ctx, deleteSharedVariables, arg.ProjectID, arg.EnvironmentID)
+	return err
+}
+
 const getEnvironment = `-- name: GetEnvironment :one
 SELECT e.id, e.project_id, e.name, e.created_at, e.updated_at
 FROM environments e
@@ -189,6 +206,47 @@ func (q *Queries) GetProjectForUpdate(ctx context.Context, id pgtype.UUID) (Proj
 	return i, err
 }
 
+const insertSharedVariable = `-- name: InsertSharedVariable :one
+INSERT INTO shared_variables (id, project_id, environment_id, key, value, ciphertext, secret)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, project_id, environment_id, key, value, ciphertext, secret, created_at, updated_at
+`
+
+type InsertSharedVariableParams struct {
+	ID            pgtype.UUID `json:"id"`
+	ProjectID     pgtype.UUID `json:"project_id"`
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+	Key           string      `json:"key"`
+	Value         string      `json:"value"`
+	Ciphertext    string      `json:"ciphertext"`
+	Secret        bool        `json:"secret"`
+}
+
+func (q *Queries) InsertSharedVariable(ctx context.Context, arg InsertSharedVariableParams) (SharedVariable, error) {
+	row := q.db.QueryRow(ctx, insertSharedVariable,
+		arg.ID,
+		arg.ProjectID,
+		arg.EnvironmentID,
+		arg.Key,
+		arg.Value,
+		arg.Ciphertext,
+		arg.Secret,
+	)
+	var i SharedVariable
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.EnvironmentID,
+		&i.Key,
+		&i.Value,
+		&i.Ciphertext,
+		&i.Secret,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listEnvironmentsByProject = `-- name: ListEnvironmentsByProject :many
 SELECT id, project_id, name, created_at, updated_at FROM environments
 WHERE project_id = $1
@@ -241,6 +299,94 @@ func (q *Queries) ListProjectsByTeam(ctx context.Context, teamID pgtype.UUID) ([
 			&i.TeamID,
 			&i.Name,
 			&i.Description,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSharedVariables = `-- name: ListSharedVariables :many
+SELECT id, project_id, environment_id, key, value, ciphertext, secret, created_at, updated_at FROM shared_variables
+WHERE project_id = $1 AND environment_id IS NOT DISTINCT FROM $2
+ORDER BY key ASC
+`
+
+type ListSharedVariablesParams struct {
+	ProjectID     pgtype.UUID `json:"project_id"`
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+}
+
+// ListSharedVariables returns one scope's variables (environment_id NULL for
+// the project level), ordered by key. A NULL parameter matches the project
+// level through IS NOT DISTINCT FROM.
+func (q *Queries) ListSharedVariables(ctx context.Context, arg ListSharedVariablesParams) ([]SharedVariable, error) {
+	rows, err := q.db.Query(ctx, listSharedVariables, arg.ProjectID, arg.EnvironmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SharedVariable{}
+	for rows.Next() {
+		var i SharedVariable
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.EnvironmentID,
+			&i.Key,
+			&i.Value,
+			&i.Ciphertext,
+			&i.Secret,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSharedVariablesForEnvironment = `-- name: ListSharedVariablesForEnvironment :many
+SELECT id, project_id, environment_id, key, value, ciphertext, secret, created_at, updated_at FROM shared_variables
+WHERE project_id = $1 AND (environment_id IS NULL OR environment_id = $2)
+ORDER BY key ASC
+`
+
+type ListSharedVariablesForEnvironmentParams struct {
+	ProjectID     pgtype.UUID `json:"project_id"`
+	EnvironmentID pgtype.UUID `json:"environment_id"`
+}
+
+// ListSharedVariablesForEnvironment returns the project-level rows plus one
+// environment's rows in a single snapshot, so the deploy merge reads both
+// scopes without a concurrent replace slipping between two reads.
+func (q *Queries) ListSharedVariablesForEnvironment(ctx context.Context, arg ListSharedVariablesForEnvironmentParams) ([]SharedVariable, error) {
+	rows, err := q.db.Query(ctx, listSharedVariablesForEnvironment, arg.ProjectID, arg.EnvironmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SharedVariable{}
+	for rows.Next() {
+		var i SharedVariable
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.EnvironmentID,
+			&i.Key,
+			&i.Value,
+			&i.Ciphertext,
+			&i.Secret,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {

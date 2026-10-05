@@ -81,6 +81,20 @@ type ProjectService interface {
 	// its project and workloads (404 for others). Previews are included only
 	// when includePreviews is true.
 	GetEnvironmentResources(ctx context.Context, userID, environmentID uuid.UUID, includePreviews bool) (EnvironmentResources, error)
+	// GetProjectVariables returns one project's project-level variables,
+	// secrets masked (viewers may read; a foreign project answers 404).
+	GetProjectVariables(ctx context.Context, userID, projectID uuid.UUID) ([]Variable, error)
+	// ReplaceProjectVariables replaces one project's whole project-level set
+	// and returns it masked (owner/admin). An omitted value for an existing
+	// secret key keeps its sealed ciphertext.
+	ReplaceProjectVariables(ctx context.Context, userID, projectID uuid.UUID, inputs []VariableInput) ([]Variable, error)
+	// GetEnvironmentVariables returns one environment's variables, secrets
+	// masked (viewers may read; a foreign environment answers 404).
+	GetEnvironmentVariables(ctx context.Context, userID, environmentID uuid.UUID) ([]Variable, error)
+	// ReplaceEnvironmentVariables replaces one environment's whole set and
+	// returns it masked (owner/admin). An omitted value for an existing
+	// secret key keeps its sealed ciphertext.
+	ReplaceEnvironmentVariables(ctx context.Context, userID, environmentID uuid.UUID, inputs []VariableInput) ([]Variable, error)
 }
 
 // ApplicationLister lists the applications of one environment for the
@@ -120,6 +134,10 @@ type Config struct {
 	Services ServiceLister
 	// Databases lists an environment's databases for the resources surface.
 	Databases DatabaseLister
+	// Secret seals shared secret values with providers.SealSecret (the same
+	// AES-256-GCM helper as application secrets). The deploy side opens them
+	// with the same key when it builds the runtime payload.
+	Secret string
 	// Logger defaults to slog.Default.
 	Logger *slog.Logger
 }
@@ -145,6 +163,7 @@ type Service struct {
 	applications ApplicationLister
 	services     ServiceLister
 	databases    DatabaseLister
+	secret       string
 	logger       *slog.Logger
 }
 
@@ -165,6 +184,7 @@ func NewService(cfg Config) *Service {
 		applications: cfg.Applications,
 		services:     cfg.Services,
 		databases:    cfg.Databases,
+		secret:       cfg.Secret,
 		logger:       loggerOr(cfg.Logger),
 	}
 }

@@ -55,6 +55,11 @@ type Repository interface {
 	DeleteEnvironmentIfNotLast(ctx context.Context, teamID, environmentID uuid.UUID) (orphanVolumes []string, err error)
 	// CountEnvironments reports how many environments a project holds.
 	CountEnvironments(ctx context.Context, projectID uuid.UUID) (int, error)
+	// ListVariables returns one scope's stored rows (environmentID Nil reads
+	// the project level), ordered by key.
+	ListVariables(ctx context.Context, projectID, environmentID uuid.UUID) ([]SharedVariable, error)
+	// ReplaceVariables swaps one scope's whole set in a transaction.
+	ReplaceVariables(ctx context.Context, projectID, environmentID uuid.UUID, vars []SharedVariable) error
 }
 
 // storeRepository adapts *store.Store to Repository.

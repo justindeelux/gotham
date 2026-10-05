@@ -129,6 +129,12 @@ type fakeRepository struct {
 	// collection reads (item-1 regression).
 	envConfigCalls int
 
+	// sharedProject holds project-level shared variables by project ID and
+	// sharedEnv holds environment-level ones by environment ID for
+	// ListSharedVariables (the deploy-merge seam).
+	sharedProject map[uuid.UUID][]SharedVariable
+	sharedEnv     map[uuid.UUID][]SharedVariable
+
 	// states records every persisted deployment state in order, so tests can
 	// assert the exact state-machine walk.
 	states []State
@@ -717,6 +723,15 @@ func (r *fakeRepository) ListEnvConfig(_ context.Context, appID uuid.UUID) ([]En
 	}
 	r.mu.Unlock()
 	return envVars, secrets, nil
+}
+
+// ListSharedVariables implements Repository: the seeded project and
+// environment scopes for the deploy merge.
+func (r *fakeRepository) ListSharedVariables(_ context.Context, projectID, environmentID uuid.UUID) ([]SharedVariable, []SharedVariable, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]SharedVariable{}, r.sharedProject[projectID]...),
+		append([]SharedVariable{}, r.sharedEnv[environmentID]...), nil
 }
 
 // ListStorages implements Repository (see ListEnvVars for fixture rows).

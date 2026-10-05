@@ -194,3 +194,47 @@ func (s *Store) DeleteEnvironmentGuarded(ctx context.Context, teamID, environmen
 func (s *Store) CountEnvironmentsByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
 	return s.queries.CountEnvironmentsByProject(ctx, projectID)
 }
+
+// ListSharedVariables returns one scope's shared variables (an invalid
+// environment ID reads the project level), ordered by key.
+func (s *Store) ListSharedVariables(ctx context.Context, projectID, environmentID pgtype.UUID) ([]sqlc.SharedVariable, error) {
+	return s.queries.ListSharedVariables(ctx, sqlc.ListSharedVariablesParams{
+		ProjectID:     projectID,
+		EnvironmentID: environmentID,
+	})
+}
+
+// ListSharedVariablesForEnvironment returns the project-level rows plus one
+// environment's rows in a single snapshot, so the deploy merge reads both
+// scopes without a concurrent replace slipping between two reads.
+func (s *Store) ListSharedVariablesForEnvironment(ctx context.Context, projectID, environmentID pgtype.UUID) ([]sqlc.SharedVariable, error) {
+	return s.queries.ListSharedVariablesForEnvironment(ctx, sqlc.ListSharedVariablesForEnvironmentParams{
+		ProjectID:     projectID,
+		EnvironmentID: environmentID,
+	})
+}
+
+// ReplaceSharedVariables swaps one scope's whole set in a transaction: the
+// old rows go, the new ones are inserted, so a PUT either replaces the set or
+// changes nothing.
+func (s *Store) ReplaceSharedVariables(ctx context.Context, projectID, environmentID pgtype.UUID, vars []sqlc.InsertSharedVariableParams) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.DeleteSharedVariables(ctx, sqlc.DeleteSharedVariablesParams{
+		ProjectID:     projectID,
+		EnvironmentID: environmentID,
+	}); err != nil {
+		return err
+	}
+	for _, variable := range vars {
+		if _, err := queries.InsertSharedVariable(ctx, variable); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}

@@ -12,6 +12,7 @@ export default defineConfig({
     "profile-layout.spec.ts",
     "projects-layout.spec.ts",
     "sessions-layout.spec.ts",
+    "shared-variables-layout.spec.ts",
   ],
   workers: 1,
   timeout: 30_000,

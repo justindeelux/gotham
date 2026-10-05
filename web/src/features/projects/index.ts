@@ -14,6 +14,12 @@ export {
   renameProject,
   resourceSummary,
 } from "./api/projects";
+export {
+  getEnvironmentVariables,
+  getProjectVariables,
+  replaceEnvironmentVariables,
+  replaceProjectVariables,
+} from "./api/variables";
 export type {
   CreatedProjectEnvelope,
   CreateProjectInput,
@@ -27,6 +33,34 @@ export type {
   ResourceCounts,
   UpdateProjectInput,
 } from "./api/projects";
+export type {
+  InheritedVariable,
+  SharedVariable,
+  SharedVariableOrigin,
+  SharedVariableWrite,
+  VariableDraft,
+} from "./schemas/variables";
+export {
+  buildVariablesPayload,
+  existingSecretKeysOf,
+  findDuplicateVariableKey,
+  inheritedOriginLabel,
+  isOverriddenBy,
+  isShadowedByEnvironment,
+  isSharedVariableKeyValid,
+  isSharedVariableValueValid,
+  maxSharedVariables,
+  maxSharedVariableKeyLength,
+  parseSharedVariables,
+  rowKeyFromServerError,
+  secretWithoutValueKey,
+  sharedVariableKeySchema,
+  sharedVariablesEnvelopeSchema,
+  sharedVariableSchema,
+  sharedVariableValueSchema,
+  toVariableDrafts,
+  validateVariableDrafts,
+} from "./schemas/variables";
 export {
   createdProjectEnvelopeSchema,
   environmentEnvelopeSchema,
@@ -73,6 +107,11 @@ export { useProjectsPage } from "./composables/useProjectsPage";
 export type { ProjectsPageState } from "./composables/useProjectsPage";
 export { useNameConflict } from "./composables/useNameConflict";
 export type { NameConflictState } from "./composables/useNameConflict";
+export { scopeKey, useSharedVariables } from "./composables/useSharedVariables";
+export type {
+  SharedVariablesScope,
+  SharedVariablesState,
+} from "./composables/useSharedVariables";
 export { submitOnEnter } from "./utils/submitOnEnter";
 export {
   buildServerOptions,

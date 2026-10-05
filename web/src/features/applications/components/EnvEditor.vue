@@ -66,7 +66,7 @@ function removeRow(index: number): void {
         :value="row.key"
         class="mono"
         placeholder="NODE_ENV"
-        aria-label="Variable name"
+        :input-props="{ 'aria-label': 'Variable name', autocomplete: 'off' }"
         :status="row.key !== '' && !isValidKey(row.key) ? 'error' : undefined"
         @update:value="(value: string) => updateRow(index, { key: value })"
       />
@@ -74,7 +74,7 @@ function removeRow(index: number): void {
         :value="row.value"
         class="mono"
         placeholder="production or secret:db-url"
-        aria-label="Variable value"
+        :input-props="{ 'aria-label': 'Variable value', autocomplete: 'off' }"
         @update:value="(value: string) => updateRow(index, { value })"
       />
       <NButton quaternary type="error" aria-label="Remove variable" @click="removeRow(index)">

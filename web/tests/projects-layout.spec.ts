@@ -86,6 +86,12 @@ const detail = {
   ],
 };
 
+// PE-6: one plain variable plus one write-only secret (value never returned).
+const projectVariables = [
+  { key: "NODE_ENV", value: "production", secret: false },
+  { key: "SENTRY_DSN", secret: true },
+];
+
 let server: Server;
 let baseURL = "";
 
@@ -147,6 +153,13 @@ async function mockApi(page: Page): Promise<void> {
   await page.route("**/api/v1/projects/*", async (route) => {
     await route.fulfill({ json: detail });
   });
+  await page.route("**/api/v1/projects/*/variables", async (route) => {
+    if (route.request().method() === "PUT") {
+      await route.fulfill({ json: { variables: projectVariables } });
+      return;
+    }
+    await route.fulfill({ json: { variables: projectVariables } });
+  });
 }
 
 /** gridColumns counts the rendered grid columns of the project cards. */
@@ -196,9 +209,19 @@ test("project detail shows the breadcrumb and environments at both widths", asyn
     );
     await expect(page.locator(".project-page .title")).toHaveText("storefront");
     await expect(page.locator(".env-table")).toContainText("production");
-    // The shared-variables tab is a PE-6 placeholder with its precedence hint.
+    // The shared-variables tab is the PE-6 editor with its precedence hint:
+    // plain values edit in place, secrets stay masked and write-only.
     await page.locator(".n-tabs-tab", { hasText: "Shared variables" }).click();
-    await expect(page.locator(".project-page")).toContainText("PE-6");
+    await expect(page.locator(".project-page")).toContainText(
+      "An environment variable overrides a project one",
+    );
+    // Editor rows are inputs: assert their values, not text content.
+    const editor = page.locator(".project-page .variables-card");
+    await expect(editor.locator("input").nth(0)).toHaveValue("NODE_ENV");
+    await expect(editor.locator("input").nth(2)).toHaveValue("SENTRY_DSN");
+    await expect(
+      page.getByRole("button", { name: "Add variable" }),
+    ).toBeVisible();
   }
 });
 

@@ -206,6 +206,15 @@ commit instead of a tag and a dev stamp (`git checkout -f 0378f65`, build with
   page (secret values are masked everywhere except the node payload).
   Projects list: `/projects`; project detail with environment tabs:
   `/projects/:id`.
+- **Redeploy at `208bc9b` then `8d4d2f7` (2026-10-05, migrations `00034`-`00036`):** Phase 13
+  (projects and environments, plan `docs/plans/13-projects-environments.md`) is live. `00034`/`00035` deliberately
+  truncate applications, databases and services (no production data existed), so resource data from earlier checks
+  is gone; resources now live under project > environment and need a server. Verified through the Playwright MCP:
+  create project, add environment, create a database from the environment page, database Settings, shared variable
+  save, 480px layout; the live check found three defects fixed in PE-8 (see the plan's delivery log). Notes: the CP
+  restart invalidates sessions (ephemeral JWT keys), the SSH tunnel must be reopened after a CP restart, and the
+  agent at `/var/lib/gotham-agent/bin` was not replaced (no protocol change in this phase). Test data on the box:
+  project `storefront` with two databases.
 - The CP's CSP allows exactly one remote image host, `avatars.githubusercontent.com`
   (`img-src 'self' data: https://avatars.githubusercontent.com`), shared with the
   OAuth avatar validator. GitHub OAuth is the only provider, and it has not been

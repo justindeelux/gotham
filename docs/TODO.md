@@ -19,8 +19,8 @@ Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
 - [x] Phase 9 — Self-update & Release (gate G2 approved with conditions): BE-9.1 control-plane self-update merged `390a2fa` (PR #71); BE-9.2 agent remote update merged `ae78888` (PR #72); INFRA-9.1 release pipeline + signed installers merged `9a6268d` (PR #73); install hardening merged `e99ef49` (PR #74); G2 conditions closed: e2e determinism (#79 `8928b49`), agent channel TLS by default + release-environment gating + supply-chain pins (#78 `d716734`), download budget + CLI ownership + CP backoff + wrapper health gate (#77 `4220931`), docs/UI + residual register (#80 `0deee90`); the real newer-release `gotham update` + AUTO_UPDATE exercise and the real agent rollout from the GitHub CDN are proven (M9 evidence below); code residuals closed 2026-10-01 (#92, #93, #96)
 - [x] Phase 11 — UI Alignment side track
 - [x] Phase 12 — User profile management (JUS-25..JUS-29; PRs #167–#172; follow-ups listed in [`plans/12-user-profile.md`](plans/12-user-profile.md))
-- [x] Phase 13 — Projects and environments (JUS-30..JUS-36; PRs #175–#180 plus
-  the PE-7 e2e/docs PR; [`plans/13-projects-environments.md`](plans/13-projects-environments.md)).
+- [x] Phase 13 — Projects and environments (JUS-30..JUS-37; PRs #175–#182 incl.
+  the PE-7 e2e/docs PR and the PE-8 live-check fixes; [`plans/13-projects-environments.md`](plans/13-projects-environments.md)).
   PE-1 projects backend (#175), PE-2 resource attach + guards (#177), PE-3
   shared variables (#178), PE-4 projects web foundation (#176), PE-5
   environment page + nested routes (#179), PE-6 shared-variables UI (#180),

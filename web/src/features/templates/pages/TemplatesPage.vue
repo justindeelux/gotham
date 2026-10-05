@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NButton } from "naive-ui";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useRoute } from "vue-router";
 
 import TemplateGallery from "@/features/templates/components/TemplateGallery.vue";
 import TemplateWizard from "@/features/templates/components/TemplateWizard.vue";
@@ -10,12 +11,28 @@ import { useTemplatesStore } from "@/features/templates/stores/templates";
  * Template library page: the gallery plus the deploy wizard, backed by
  * `GET /api/v1/templates`. The same components back the gallery tab on the
  * services page.
+ *
+ * Scope lands through the query when the user arrives from an environment
+ * page (`?projectId=&environmentId=`), so the wizard takes the same project
+ * and environment; otherwise the wizard's scope picker asks (brief 5).
  */
 
 const templatesStore = useTemplatesStore();
+const route = useRoute();
 
 const wizardOpen = ref(false);
 const wizardSlug = ref("");
+
+/** queryText reads one string query value (the env page links it). */
+function queryText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+/** scopeProjectId preselects the wizard scope from the env-page link. */
+const scopeProjectId = computed<string>(() => queryText(route.query.projectId));
+
+/** scopeEnvironmentId preselects the wizard scope from the env-page link. */
+const scopeEnvironmentId = computed<string>(() => queryText(route.query.environmentId));
 
 /** templatePlaceholder is the engine's only supported placeholder form. */
 const templatePlaceholder = "{{ .field }}";
@@ -75,7 +92,12 @@ onMounted(() => {
       </p>
     </div>
 
-    <TemplateWizard v-model:show="wizardOpen" :slug="wizardSlug" />
+    <TemplateWizard
+      v-model:show="wizardOpen"
+      :slug="wizardSlug"
+      :project-id="scopeProjectId"
+      :environment-id="scopeEnvironmentId"
+    />
   </div>
 </template>
 

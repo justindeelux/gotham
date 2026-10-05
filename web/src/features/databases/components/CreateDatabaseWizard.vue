@@ -46,8 +46,8 @@ const wizard = useCreateDatabaseWizard({
   show: toRef(props, "show"),
   onCreated: (created) => emit("created", created),
   onUpdateShow: (value) => emit("update:show", value),
-  projectId: props.projectId,
-  environmentId: props.environmentId,
+  projectId: toRef(props, "projectId"),
+  environmentId: toRef(props, "environmentId"),
 });
 
 provide(wizardFormKey, wizard.form);

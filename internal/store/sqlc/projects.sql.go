@@ -279,6 +279,48 @@ func (q *Queries) ListEnvironmentsByProject(ctx context.Context, projectID pgtyp
 	return items, nil
 }
 
+const listPreviewBases = `-- name: ListPreviewBases :many
+SELECT application_id, preview_application_id
+FROM preview_deploys
+WHERE preview_application_id = ANY($1)
+  AND team_id = $2
+  AND deleted_at IS NULL
+`
+
+type ListPreviewBasesParams struct {
+	PreviewAppIds []pgtype.UUID `json:"preview_app_ids"`
+	TeamID        pgtype.UUID   `json:"team_id"`
+}
+
+type ListPreviewBasesRow struct {
+	ApplicationID        pgtype.UUID `json:"application_id"`
+	PreviewApplicationID pgtype.UUID `json:"preview_application_id"`
+}
+
+// ListPreviewBases maps preview application rows to their base application
+// for the environment resources surface (PE-5 M1): the preview marker rides
+// the applications row itself, but the base id lives in preview_deploys.
+// Team-scoped, so a foreign preview id simply resolves to no row.
+func (q *Queries) ListPreviewBases(ctx context.Context, arg ListPreviewBasesParams) ([]ListPreviewBasesRow, error) {
+	rows, err := q.db.Query(ctx, listPreviewBases, arg.PreviewAppIds, arg.TeamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPreviewBasesRow{}
+	for rows.Next() {
+		var i ListPreviewBasesRow
+		if err := rows.Scan(&i.ApplicationID, &i.PreviewApplicationID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectsByTeam = `-- name: ListProjectsByTeam :many
 SELECT id, team_id, name, description, created_at, updated_at FROM projects
 WHERE team_id = $1

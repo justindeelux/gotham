@@ -51,8 +51,11 @@ const team = {
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const environmentId = "22222222-2222-4222-8222-222222222222";
+const stagingId = "33333333-3333-4333-8333-333333333333";
+const unknownId = "99999999-9999-4999-8999-999999999999";
 const serverId = "33333333-3333-4333-8333-333333333333";
 const appId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const previewAppId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const serviceId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const databaseId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
@@ -79,8 +82,58 @@ const detail = {
       updated_at: "2026-10-01T00:00:00Z",
       resource_counts: { applications: 1, services: 1, databases: 1 },
     },
+    {
+      id: stagingId,
+      project_id: projectId,
+      name: "staging",
+      created_at: "2026-10-01T00:00:00Z",
+      updated_at: "2026-10-01T00:00:00Z",
+      resource_counts: { applications: 0, services: 0, databases: 0 },
+    },
   ],
 };
+
+const previewRow = {
+  id: previewAppId,
+  name: "storefront-pr-7",
+  environment_id: environmentId,
+  environment_name: "production",
+  project_id: projectId,
+  project_name: "storefront",
+  provider: "public",
+  repo: "medusajs/medusa",
+  clone_url: "https://github.com/medusajs/medusa.git",
+  branch: "pr-7",
+  build_pack: "",
+  base_domain: "",
+  base_domain_disabled: false,
+  port: 3000,
+  host_port: 0,
+  server_id: serverId,
+  server_name: "prod-01",
+  is_preview: true,
+  preview_of: appId,
+  created_at: "2026-10-01T00:00:00Z",
+  updated_at: "2026-10-02T00:00:00Z",
+};
+
+/** resourcesFor answers the envelope for one environment, previews on flag. */
+function resourcesFor(envId: string, withPreviews: boolean) {
+  const environment = detail.environments.find((item) => item.id === envId) ?? detail.environments[0];
+  const full = envId === environmentId;
+  return {
+    environment: { ...environment, project_id: projectId },
+    project: projects[0],
+    applications: full
+      ? [
+          { ...resources.applications[0], is_preview: false },
+          ...(withPreviews ? [previewRow] : []),
+        ]
+      : [],
+    services: full ? resources.services : [],
+    databases: full ? resources.databases : [],
+  };
+}
 
 const resources = {
   environment: detail.environments[0],
@@ -104,6 +157,7 @@ const resources = {
       host_port: 0,
       server_id: serverId,
       server_name: "prod-01",
+      is_preview: false,
       created_at: "2026-10-01T00:00:00Z",
       updated_at: "2026-10-02T00:00:00Z",
     },
@@ -224,8 +278,17 @@ async function mockApi(page: Page): Promise<void> {
   await page.route("**/api/v1/projects/*", async (route) => {
     await route.fulfill({ json: detail });
   });
-  await page.route("**/api/v1/environments/*/resources", async (route) => {
-    await route.fulfill({ json: resources });
+  await page.route("**/api/v1/environments/*/resources*", async (route) => {
+    const url = new URL(route.request().url());
+    const match = url.pathname.match(/\/environments\/([^/]+)\/resources/);
+    const envId = match?.[1] ?? "";
+    if (envId === unknownId) {
+      await route.fulfill({ status: 404, json: { message: "not found" } });
+      return;
+    }
+    await route.fulfill({
+      json: resourcesFor(envId, url.searchParams.get("previews") === "1"),
+    });
   });
   await page.route("**/api/v1/applications/*/deployments*", async (route) => {
     await route.fulfill({
@@ -285,16 +348,64 @@ test("type tabs filter the unified table", async ({ page }) => {
   await expect(page.locator(".resource-table")).not.toContainText("plausible");
 });
 
-test("preview switch refetches with previews=1", async ({ page }) => {
+test("preview switch nests previews under their base with a tag", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
   await page.goto(`${baseURL}/projects/${envPath}`);
   await page.locator(".resource-table").waitFor();
-  const previewRequest = page.waitForRequest((request) =>
-    request.url().includes("/resources?previews=1"),
-  );
+  await expect(page.locator(".resource-table")).not.toContainText("storefront-pr-7");
   await page.locator(".preview-switch .n-switch").click();
-  await previewRequest;
+  const previewRow = page.locator(".resource-table tr.preview-row");
+  await expect(previewRow).toContainText("storefront-pr-7");
+  await expect(previewRow).toContainText("Preview");
+  // Nested directly under the base application row.
+  const rows = page.locator(".resource-table tbody tr");
+  const names = await rows.evaluateAll((elements) =>
+    elements.map((element) => element.querySelector(".resource-name")?.textContent ?? ""),
+  );
+  expect(names.indexOf("storefront-pr-7")).toBe(names.indexOf("storefront") + 1);
+  // Previews stay out of the tab counts.
+  await expect(page.locator(".tabs")).toContainText("All");
+  const allTab = page.locator(".tabs").getByRole("tab", { name: /All/ });
+  await expect(allTab).toContainText("3");
+});
+
+test("sibling switcher navigates to staging", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/projects/${envPath}`);
+  await page.locator(".resource-table").waitFor();
+  await page.locator(".sibling-switch .n-select").click();
+  await page.locator(".n-base-select-option").filter({ hasText: "staging" }).click();
+  await expect(page).toHaveURL(new RegExp(`/environments/${stagingId}$`));
+  await expect(page.locator(".environment-page .title")).toHaveText("staging");
+  await expect(page.locator(".environment-page")).toContainText("Nothing here yet");
+});
+
+test("unknown environment renders the 404 state, not a retry loop", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/projects/${projectId}/environments/${unknownId}`);
+  await expect(
+    page.getByText("This environment does not exist (or belongs to another team)."),
+  ).toBeVisible();
+  await expect(page.locator(".environment-page")).not.toContainText("Retry");
+});
+
+test("wrong project in the URL replaces it with the canonical one", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/projects/${projectId}-wrong/environments/${environmentId}`);
+  await page.locator(".resource-table").waitFor();
+  // The response ids win over the typed URL.
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/environments/${environmentId}$`));
+  await expect(page.locator('nav[aria-label="Breadcrumb"]')).toContainText("storefront");
 });
 
 test("add resource dialog lists the three kinds at both widths", async ({

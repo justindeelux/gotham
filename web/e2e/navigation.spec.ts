@@ -12,9 +12,8 @@ test.use({ storageState: storageStatePath });
  * assert the 4xx bucket is empty for the whole walk.
  *
  * PE-4 (JUS-33): the sidebar links Projects instead of the flat Applications
- * and Databases entries. The walk follows the sidebar for Dashboard, Servers,
- * Projects and Domains, then still reaches the flat Applications and Databases
- * pages by URL (their routes stay until PE-5) and proves they render.
+ * and Databases entries. PE-5 (JUS-34) removed the flat routes: reaching them
+ * by URL redirects to Projects, which the walk proves below.
  */
 test.describe("core navigation", () => {
   test("walks Dashboard, Servers, Projects and Domains cleanly", async ({
@@ -48,24 +47,15 @@ test.describe("core navigation", () => {
       page.getByRole("heading", { name: "Domains & SSL", level: 1 }),
     ).toBeVisible();
 
-    // The flat resource pages keep their routes until PE-5 removes them;
-    // they render the same content as before, reached by URL now that the
-    // sidebar no longer links them.
-    await page.goto("/applications");
-    await expect(page).toHaveURL(/\/applications$/);
-    await expect(
-      page.getByRole("heading", { name: "Applications", level: 1 }),
-    ).toBeVisible();
-    // The page renders its content (provider list and application list cards)
-    // rather than a blank shell. The list itself is asserted in the seeded
-    // applications scenario.
-    await expect(page.getByText("Source providers", { exact: true })).toBeVisible();
-
-    await page.goto("/databases");
-    await expect(page).toHaveURL(/\/databases$/);
-    await expect(
-      page.getByRole("heading", { name: "Databases", level: 1 }),
-    ).toBeVisible();
+    // PE-5 removed the flat resource routes: the old URLs redirect once
+    // to the Projects page instead of rendering.
+    for (const flat of ["/applications", "/services", "/databases"]) {
+      await page.goto(flat);
+      await expect(page).toHaveURL(/\/projects$/);
+      await expect(
+        page.getByRole("heading", { name: "Projects", level: 1 }),
+      ).toBeVisible();
+    }
 
     expect(
       guardrails.apiFailures,

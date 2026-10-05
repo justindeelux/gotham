@@ -6,6 +6,7 @@ import {
   NEmpty,
   NInput,
   NModal,
+  NSelect,
   NSpace,
   NSpin,
   NSwitch,
@@ -59,6 +60,49 @@ function kindLabel(kind: string): string {
     return "Service";
   }
   return "Database";
+}
+
+/** siblingOptions lists the project's environments for the switcher. */
+const siblingOptions = computed<Array<{ label: string; value: string }>>(() =>
+  page.siblings.value.map((environment) => ({
+    label: environment.name,
+    value: environment.id,
+  })),
+);
+
+/** switchEnvironment navigates to a sibling environment of the project. */
+function switchEnvironment(environmentId: string): void {
+  if (environmentId === "" || environmentId === page.environmentId.value) {
+    return;
+  }
+  void router.push({
+    name: "environment-detail",
+    params: { projectId: page.projectId.value, environmentId },
+  });
+}
+
+/**
+ * handleTabKey moves the active type tab with the arrow keys (and Home/End),
+ * following the tablist pattern: the tab activates on focus.
+ */
+function handleTabKey(event: KeyboardEvent, index: number): void {
+  let next: number;
+  if (event.key === "ArrowRight") {
+    next = (index + 1) % tabs.length;
+  } else if (event.key === "ArrowLeft") {
+    next = (index + tabs.length - 1) % tabs.length;
+  } else if (event.key === "Home") {
+    next = 0;
+  } else if (event.key === "End") {
+    next = tabs.length - 1;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  page.tab.value = tabs[next].key;
+  const button = event.currentTarget as HTMLElement | null;
+  const list = button?.parentElement?.querySelectorAll<HTMLElement>(".tab");
+  list?.[next]?.focus();
 }
 
 /** emptyHint names what can be added when the table (or filter) is empty. */
@@ -128,10 +172,22 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
     <NSpin v-if="page.loading.value && !page.resources.value" description="Loading environment…" />
 
     <NSpace v-else-if="page.error.value" vertical :size="8">
-      <NAlert type="error" :show-icon="true">
-        {{ page.error.value }}
-      </NAlert>
-      <div><NButton size="small" @click="void page.reload()">Retry</NButton></div>
+      <NEmpty
+        v-if="page.notFound.value"
+        description="This environment does not exist (or belongs to another team)."
+      >
+        <template #extra>
+          <RouterLink :to="{ name: 'projects' }">
+            <NButton size="small">Back to projects</NButton>
+          </RouterLink>
+        </template>
+      </NEmpty>
+      <template v-else>
+        <NAlert type="error" :show-icon="true">
+          {{ page.error.value }}
+        </NAlert>
+        <div><NButton size="small" @click="void page.reload()">Retry</NButton></div>
+      </template>
     </NSpace>
 
     <template v-else-if="page.resources.value">
@@ -150,6 +206,16 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
             {{ page.resources.value.environment.name }}. Each resource is
             pinned to one server.
           </p>
+          <div v-if="siblingOptions.length > 1" class="sibling-switch">
+            <NText depth="3">Environment</NText>
+            <NSelect
+              :value="page.environmentId.value"
+              :options="siblingOptions"
+              aria-label="Sibling environment"
+              class="sibling-select"
+              @update:value="switchEnvironment"
+            />
+          </div>
         </div>
         <div class="page-actions">
           <NButton disabled title="Shared variables land in PE-6.">
@@ -167,14 +233,18 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
 
       <div class="tabs" role="tablist" aria-label="Resource types">
         <button
-          v-for="entry in tabs"
+          v-for="(entry, index) in tabs"
           :key="entry.key"
           type="button"
           role="tab"
+          :id="`env-tab-${entry.key}`"
+          :aria-selected="page.tab.value === entry.key"
+          :aria-controls="`env-panel-${entry.key}`"
+          :tabindex="page.tab.value === entry.key ? 0 : -1"
           class="tab"
           :class="{ 'is-active': page.tab.value === entry.key }"
-          :aria-selected="page.tab.value === entry.key"
           @click="page.tab.value = entry.key"
+          @keydown="handleTabKey($event, index)"
         >
           {{ entry.label }} <span class="nav-count">{{ tabCount(entry.key) }}</span>
         </button>
@@ -194,7 +264,13 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
         </label>
       </div>
 
-      <NCard v-if="page.visibleRows.value.length > 0" class="resource-card">
+      <NCard
+        v-if="page.visibleRows.value.length > 0"
+        class="resource-card"
+        role="tabpanel"
+        :id="`env-panel-${page.tab.value}`"
+        :aria-labelledby="`env-tab-${page.tab.value}`"
+      >
         <div class="table-wrap">
           <table class="resource-table">
             <thead>
@@ -207,12 +283,21 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in page.visibleRows.value" :key="`${row.kind}:${row.id}`">
+              <tr
+                v-for="row in page.visibleRows.value"
+                :key="`${row.kind}:${row.id}`"
+                :class="{ 'preview-row': row.preview }"
+              >
                 <td data-label="Name">
                   <span class="resource-name">{{ row.name }}</span>
                   <span class="cell-sub mono">{{ row.subtitle }}</span>
                 </td>
-                <td data-label="Type"><NTag size="small">{{ kindLabel(row.kind) }}</NTag></td>
+                <td data-label="Type">
+                  <NSpace :size="4" align="center">
+                    <NTag size="small">{{ kindLabel(row.kind) }}</NTag>
+                    <NTag v-if="row.preview" size="small" type="info">Preview</NTag>
+                  </NSpace>
+                </td>
                 <td data-label="Server" class="mono muted">{{ row.serverName }}</td>
                 <td data-label="Status">
                   <NTag size="small" :type="row.statusTag">{{ row.statusText }}</NTag>
@@ -238,7 +323,7 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
 
       <p class="small muted">
         Preview deployments of an application run in this environment on the
-        same server; flip the switch to list them alongside their base.
+        same server; flip the switch to list them nested under their base.
       </p>
     </template>
 
@@ -272,7 +357,15 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
         </div>
         <NText depth="3">
           Prefer a one-click template?
-          <RouterLink :to="{ name: 'templates' }">Open the template library</RouterLink>
+          <RouterLink
+            :to="{
+              name: 'templates',
+              query: {
+                projectId: page.projectId.value,
+                environmentId: page.environmentId.value,
+              },
+            }"
+          >Open the template library</RouterLink>
           — its wizard takes the same project and environment.
         </NText>
       </NSpace>
@@ -386,6 +479,18 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
   flex-wrap: wrap;
 }
 
+.sibling-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.sibling-select {
+  min-width: 200px;
+  max-width: 320px;
+}
+
 .search {
   max-width: 320px;
 }
@@ -432,6 +537,19 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Preview rows nest under their base application. */
+.preview-row .resource-name {
+  padding-left: var(--space-4);
+  position: relative;
+}
+
+.preview-row .resource-name::before {
+  content: "↳";
+  position: absolute;
+  left: var(--space-1);
+  color: var(--muted);
 }
 
 .cell-sub {

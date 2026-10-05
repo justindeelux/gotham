@@ -1,5 +1,5 @@
 import { http } from "@/shared/api/http";
-import { isApiError, stripErrorPrefix } from "@/features/servers";
+import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
  * Typed client for the compose-service routes served by `internal/services`
@@ -388,7 +388,7 @@ export function describeServiceError(error: unknown): string {
       // message passes through for the move/server-change settings to
       // render inline.
       return (
-        stripErrorPrefix(error.message) ||
+        conflictDetail(stripErrorPrefix(error.message)) ||
         "A service with that name already exists. Pick another name."
       );
     }

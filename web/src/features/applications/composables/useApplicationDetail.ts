@@ -17,6 +17,7 @@ import {
   listPreviews,
 } from "@/features/applications/api/previews";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
+import { resolveEnvironmentScope } from "@/features/projects/utils/canonicalRoutes";
 import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useServersStore } from "@/features/servers";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
@@ -175,10 +176,30 @@ export function useApplicationDetail() {
     if (!appId.value) {
       return;
     }
+    let application: Application | null = null;
     try {
-      await appsStore.fetchApplication(appId.value);
+      application = await appsStore.fetchApplication(appId.value);
     } catch {
       // The store already exposes the error; the alert renders it.
+    }
+    if (application) {
+      // The row ids are the authority: a wrong project/environment in the
+      // URL replaces it with the canonical nested URL instead of rendering
+      // silently. The route watcher reloads from there.
+      const canonical = resolveEnvironmentScope(
+        { projectId: application.project_id, environmentId: application.environment_id },
+        {
+          projectId: String(route.params.projectId ?? ""),
+          environmentId: String(route.params.environmentId ?? ""),
+        },
+      );
+      if (canonical !== null) {
+        await router.replace({
+          name: "application-detail",
+          params: { projectId: canonical.projectId, environmentId: canonical.environmentId, id: appId.value },
+        });
+        return;
+      }
     }
     try {
       await appsStore.fetchDeployments(appId.value);
@@ -412,7 +433,8 @@ export function useApplicationDetail() {
    * node). Only changed fields ride the PUT; a move retargets the nested
    * route to the new environment. The contract's 409 refusals (open
    * previews, in-flight deploy, name collision) render inline through
-   * moveError.
+   * moveError. The navigation is identity-guarded: leaving the resource
+   * mid-request never yanks the user back to it.
    */
   async function handleMove(scope: {
     projectId: string;
@@ -433,11 +455,19 @@ export function useApplicationDetail() {
     if (Object.keys(input).length === 0) {
       return;
     }
+    const targetId = appId.value;
     moveSaving.value = true;
     moveError.value = null;
     try {
-      const updated = await appsStore.update(appId.value, input);
+      const updated = await appsStore.update(targetId, input);
+      if (targetId !== appId.value) {
+        return; // the route moved on while the write was in flight
+      }
       message.success("Location saved");
+      await refreshProjectCounts([current.project_id, updated.project_id]);
+      if (targetId !== appId.value) {
+        return;
+      }
       if (input.environment_id) {
         await router.push({
           name: "application-detail",
@@ -449,13 +479,39 @@ export function useApplicationDetail() {
         });
       }
     } catch (error) {
-      moveError.value = describeApplicationError(error);
+      if (targetId === appId.value) {
+        moveError.value = describeApplicationError(error);
+      }
     } finally {
-      moveSaving.value = false;
+      if (targetId === appId.value) {
+        moveSaving.value = false;
+      }
     }
   }
 
-  watch(appId, () => {
+  /**
+   * refreshProjectCounts invalidates the projects store after a move, so
+   * project/environment counts converge without relying on a remount.
+   */
+  async function refreshProjectCounts(projectIds: string[]): Promise<void> {
+    try {
+      await projectsStore.fetchProjects();
+    } catch {
+      // The store already exposes the error; counts converge on next load.
+    }
+    const detail = projectsStore.detail;
+    if (detail && projectIds.includes(detail.id)) {
+      try {
+        await projectsStore.fetchDetail(detail.id);
+      } catch {
+        // Same as above; the detail alert renders it.
+      }
+    }
+  }
+
+  // The detail route is reused when navigating between applications, and a
+  // move keeps the id while the environment changes: reload on either.
+  watch([appId, () => String(route.params.environmentId ?? "")], () => {
     // Invalidate any in-flight config read for the previous application.
     draftGeneration.bump();
     activeTab.value = "overview";
@@ -463,6 +519,8 @@ export function useApplicationDetail() {
     stoppedForContainer.value = "";
     logDeploymentId.value = "";
     logServerId.value = "";
+    moveSaving.value = false;
+    moveError.value = null;
     envDraft.value = [];
     envError.value = null;
     envLoadedFor.value = "";

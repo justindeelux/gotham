@@ -112,6 +112,10 @@ export interface EnvironmentResourceApplication {
   host_port: number;
   server_id: string;
   server_name: string;
+  /** True for a PR-preview sibling (only present with ?previews=1). */
+  is_preview: boolean;
+  /** Base application id of a preview, empty when none. */
+  preview_of?: string;
   created_at: string;
   updated_at: string;
 }

@@ -1,5 +1,5 @@
 import { useMessage } from "naive-ui";
-import { computed, ref, watch } from "vue";
+import { computed, ref, toValue, watch } from "vue";
 import type { Ref } from "vue";
 
 import { describeServiceError } from "@/features/services";
@@ -40,7 +40,10 @@ import { useTemplatesStore } from "@/features/templates/stores/templates";
 export function useTemplateWizard(
   show: Ref<boolean>,
   slug: Ref<string>,
-  scope: { projectId: string; environmentId: string } = { projectId: "", environmentId: "" },
+  scope: { projectId: string | Ref<string>; environmentId: string | Ref<string> } = {
+    projectId: "",
+    environmentId: "",
+  },
 ): {
   step: Ref<number>;
   detail: Ref<TemplateDetail | null>;
@@ -92,8 +95,8 @@ export function useTemplateWizard(
   const renderError = ref<string | null>(null);
 
   const name = ref("");
-  const scopeProjectId = ref(scope.projectId);
-  const scopeEnvironmentId = ref(scope.environmentId);
+  const scopeProjectId = ref(toValue(scope.projectId));
+  const scopeEnvironmentId = ref(toValue(scope.environmentId));
   const serverId = ref("");
   const createAttempted = ref(false);
   const creating = ref(false);
@@ -175,8 +178,7 @@ export function useTemplateWizard(
     renderError.value = null;
     renderLoading.value = false;
     name.value = "";
-    scopeProjectId.value = scope.projectId;
-    scopeEnvironmentId.value = scope.environmentId;
+    seedScope();
     serverId.value = "";
     createAttempted.value = false;
     creating.value = false;
@@ -185,6 +187,12 @@ export function useTemplateWizard(
     deploying.value = false;
     deployError.value = null;
     deployed.value = false;
+  }
+
+  /** seedScope copies the live route scope into the form. */
+  function seedScope(): void {
+    scopeProjectId.value = toValue(scope.projectId);
+    scopeEnvironmentId.value = toValue(scope.environmentId);
   }
 
   /**
@@ -247,6 +255,9 @@ export function useTemplateWizard(
   /** handleCreate stores the service with the rendered document and its env. */
   async function handleCreate(): Promise<void> {
     createAttempted.value = true;
+    if (creating.value) {
+      return;
+    }
     const rendered = render.value;
     if (
       renderLoading.value ||
@@ -298,9 +309,20 @@ export function useTemplateWizard(
     () => show.value,
     (visible) => {
       if (visible) {
+        // Re-seed from the live scope: the route may have moved while the
+        // wizard was closed, and reset-on-close alone would keep the stale
+        // environment for the next open.
+        seedScope();
         void open();
       }
     },
+  );
+
+  // A route change while the wizard is mounted re-seeds the scope, so the
+  // summary and the payload always name the current environment.
+  watch(
+    [() => toValue(scope.projectId), () => toValue(scope.environmentId)],
+    () => seedScope(),
   );
 
   watch(

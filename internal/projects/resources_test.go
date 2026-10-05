@@ -127,6 +127,29 @@ func TestGetEnvironmentResources(t *testing.T) {
 	}
 }
 
+// TestPreviewBases maps preview rows to their base application and drops
+// unknown ids (PE-5 M1).
+func TestPreviewBases(t *testing.T) {
+	repo := newFakeRepository()
+	owner, teamID := uuid.New(), uuid.New()
+	base, preview := uuid.New(), uuid.New()
+	repo.previewBases[preview] = base
+	svc, ctx := newTestService(repo, newFakeCounter(), owner, teamID, teams.RoleAdmin)
+
+	bases, err := svc.PreviewBases(ctx, owner, []uuid.UUID{preview, uuid.New()})
+	if err != nil {
+		t.Fatalf("PreviewBases: %v", err)
+	}
+	if len(bases) != 1 || bases[preview] != base {
+		t.Fatalf("bases = %v, want only %v -> %v", bases, preview, base)
+	}
+
+	empty, err := svc.PreviewBases(ctx, owner, nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty input = %v, %v; want empty", empty, err)
+	}
+}
+
 // TestEnvironmentResourcesRoute walks the endpoint: the envelope shape,
 // preview filtering and the 404.
 func TestEnvironmentResourcesRoute(t *testing.T) {
@@ -170,5 +193,65 @@ func TestEnvironmentResourcesRoute(t *testing.T) {
 	rec = doRequest(handler, http.MethodGet, "/v1/environments/"+uuid.NewString()+"/resources", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown environment = %d, want 404", rec.Code)
+	}
+}
+
+// TestEnvironmentResourcesPreviewsRoute pins the preview markers (PE-5 M1):
+// with ?previews=1 the preview rides the envelope flagged is_preview with
+// its base id, while the base carries neither.
+func TestEnvironmentResourcesPreviewsRoute(t *testing.T) {
+	owner, teamID := uuid.New(), uuid.New()
+	repo := newFakeRepository()
+	adminCtx := teams.WithScope(context.Background(), teams.Scope{UserID: owner, TeamID: teamID, Role: teams.RoleAdmin})
+	bootstrap := NewService(Config{Repository: repo, Counter: newFakeCounter(), Logger: discardLogger()})
+	project, _, err := bootstrap.CreateProject(adminCtx, owner, "Shop", "")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	environments, err := bootstrap.ListEnvironments(adminCtx, owner, project.ID)
+	if err != nil || len(environments) != 1 {
+		t.Fatalf("environments = %+v, %v", environments, err)
+	}
+	production := environments[0]
+
+	baseID, previewID := uuid.New(), uuid.New()
+	repo.previewBases[previewID] = baseID
+	listers := &fakeListers{
+		applications: []deploy.Application{
+			{ID: baseID, EnvironmentID: production.ID, Name: "web"},
+			{ID: previewID, EnvironmentID: production.ID, Name: "web-pr-7", IsPreview: true},
+		},
+	}
+	handler := newRouteServer(owner, teamID, teams.RoleAdmin, resourcesService(repo, listers))
+
+	rec := doRequest(handler, http.MethodGet, "/v1/environments/"+production.ID.String()+"/resources?previews=1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get resources = %d (body %s), want 200", rec.Code, rec.Body.String())
+	}
+	var envelope environmentResourcesEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(envelope.Applications) != 2 {
+		t.Fatalf("applications = %d, want 2", len(envelope.Applications))
+	}
+	var base, preview *environmentResourceApplication
+	for i := range envelope.Applications {
+		switch envelope.Applications[i].ID {
+		case baseID.String():
+			base = &envelope.Applications[i]
+		case previewID.String():
+			preview = &envelope.Applications[i]
+		}
+	}
+	if base == nil || preview == nil {
+		t.Fatalf("envelope = %+v, want base and preview", envelope.Applications)
+	}
+	if base.IsPreview || base.PreviewOf != "" {
+		t.Errorf("base = is_preview %v preview_of %q, want false and empty", base.IsPreview, base.PreviewOf)
+	}
+	if !preview.IsPreview || preview.PreviewOf != baseID.String() {
+		t.Errorf("preview = is_preview %v preview_of %q, want true and %q",
+			preview.IsPreview, preview.PreviewOf, baseID.String())
 	}
 }

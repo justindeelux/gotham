@@ -1,5 +1,5 @@
 import { http, teamHeaders } from "@/shared/api/http";
-import { isApiError, stripErrorPrefix } from "@/features/servers";
+import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
  * Typed client for the application routes served by `internal/deploy`
@@ -529,7 +529,7 @@ export function describeApplicationError(
       // move), so the message passes through for the move/server-change
       // settings to render inline.
       return (
-        stripErrorPrefix(error.message) ||
+        conflictDetail(stripErrorPrefix(error.message)) ||
         "A deployment is already in progress for this application. " +
           "Wait for it to finish and retry."
       );

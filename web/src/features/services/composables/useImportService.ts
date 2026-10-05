@@ -1,5 +1,5 @@
 import { useMessage } from "naive-ui";
-import { computed, ref, watch } from "vue";
+import { computed, ref, toValue, watch } from "vue";
 import type { Ref } from "vue";
 
 import { describeServiceError } from "@/features/services/api/services";
@@ -17,15 +17,18 @@ import { useServicesStore } from "@/features/services/stores/services";
  */
 export function useImportService(
   show: Ref<boolean>,
-  scope: { projectId: string; environmentId: string } = { projectId: "", environmentId: "" },
+  scope: {
+    projectId: string | Ref<string>;
+    environmentId: string | Ref<string>;
+  } = { projectId: "", environmentId: "" },
   onCreated: (_service: Service) => void = () => undefined,
 ) {
   const message = useMessage();
   const servicesStore = useServicesStore();
 
   const name = ref("");
-  const scopeProjectId = ref(scope.projectId);
-  const scopeEnvironmentId = ref(scope.environmentId);
+  const scopeProjectId = ref(toValue(scope.projectId));
+  const scopeEnvironmentId = ref(toValue(scope.environmentId));
   const serverId = ref("");
   const yaml = ref("");
   const attempted = ref(false);
@@ -49,11 +52,10 @@ export function useImportService(
       : "Select a project and environment.",
   );
 
-  /** reset restores the dialog to the host scope with an empty form. */
+  /** reset restores the dialog to the live host scope with an empty form. */
   function reset(): void {
     name.value = "";
-    scopeProjectId.value = scope.projectId;
-    scopeEnvironmentId.value = scope.environmentId;
+    seedScope();
     serverId.value = "";
     yaml.value = "";
     attempted.value = false;
@@ -61,9 +63,18 @@ export function useImportService(
     importing.value = false;
   }
 
+  /** seedScope copies the live route scope into the form. */
+  function seedScope(): void {
+    scopeProjectId.value = toValue(scope.projectId);
+    scopeEnvironmentId.value = toValue(scope.environmentId);
+  }
+
   /** handleImport stores the pasted document as a new service. */
   async function handleImport(): Promise<void> {
     attempted.value = true;
+    if (importing.value) {
+      return;
+    }
     if (
       !serviceNameSchema.safeParse(name.value).success ||
       !serviceNodeSchema.safeParse(serverId.value).success ||
@@ -94,6 +105,13 @@ export function useImportService(
       reset();
     }
   });
+
+  // A route change while the dialog is mounted re-seeds the scope, so the
+  // summary and the payload always name the current environment.
+  watch(
+    [() => toValue(scope.projectId), () => toValue(scope.environmentId)],
+    () => seedScope(),
+  );
 
   return {
     name,

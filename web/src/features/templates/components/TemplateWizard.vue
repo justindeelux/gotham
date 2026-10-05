@@ -30,8 +30,8 @@ const emit = defineEmits<{
 }>();
 
 const wizard = useTemplateWizard(toRef(props, "show"), toRef(props, "slug"), {
-  projectId: props.projectId,
-  environmentId: props.environmentId,
+  projectId: toRef(props, "projectId"),
+  environmentId: toRef(props, "environmentId"),
 });
 
 function close(): void {

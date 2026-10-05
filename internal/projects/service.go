@@ -95,6 +95,10 @@ type ProjectService interface {
 	// returns it masked (owner/admin). An omitted value for an existing
 	// secret key keeps its sealed ciphertext.
 	ReplaceEnvironmentVariables(ctx context.Context, userID, environmentID uuid.UUID, inputs []VariableInput) ([]Variable, error)
+	// PreviewBases maps preview application rows to their base application
+	// for the resources surface (PE-5 M1). Team-scoped like the read it
+	// annotates; a foreign preview id resolves to no row.
+	PreviewBases(ctx context.Context, userID uuid.UUID, previewAppIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
 }
 
 // ApplicationLister lists the applications of one environment for the
@@ -562,6 +566,19 @@ func (s *Service) GetEnvironmentResources(ctx context.Context, userID, environme
 		Services:     svcs,
 		Databases:    dbs,
 	}, nil
+}
+
+// PreviewBases implements ProjectService: preview application rows map to
+// their base application through preview_deploys, scoped to the active
+// team. Viewers may read, like the resources surface it annotates.
+func (s *Service) PreviewBases(ctx context.Context, userID uuid.UUID, previewAppIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	if userID == uuid.Nil {
+		return nil, ErrNotFound
+	}
+	return s.repo.PreviewBaseIDs(ctx, teamIDFor(ctx, userID), previewAppIDs)
 }
 
 // withProjectCounts attaches the environment and resource counts to a

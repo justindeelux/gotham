@@ -238,6 +238,8 @@ export const environmentResourceApplicationSchema = z.object({
   server_name: z.string(),
   created_at: z.string(),
   updated_at: z.string(),
+  is_preview: z.boolean(),
+  preview_of: z.string().optional(),
 });
 
 /** serviceDomainRouteSchema mirrors one ServiceDomainRoute of a service. */

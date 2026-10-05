@@ -1,6 +1,6 @@
 import { useCopyText } from "@/shared/composables/useCopyText";
 import { useMessage } from "naive-ui";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, reactive, ref, toValue, watch } from "vue";
 import type { InjectionKey, Ref } from "vue";
 
 import {
@@ -43,9 +43,12 @@ interface WizardOptions {
   show: Ref<boolean>;
   onCreated: (_created: CreatedDatabase) => void;
   onUpdateShow: (_value: boolean) => void;
-  /** Preselected scope (the environment page passes its route). */
-  projectId?: string;
-  environmentId?: string;
+  /**
+   * Preselected scope (the host passes its route by ref so a route change
+   * while the wizard is mounted re-seeds the form).
+   */
+  projectId?: string | Ref<string>;
+  environmentId?: string | Ref<string>;
 }
 
 /**
@@ -67,8 +70,8 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   const form = reactive<WizardForm>({
     engine: "postgres",
     version: "",
-    projectId: options.projectId ?? "",
-    environmentId: options.environmentId ?? "",
+    projectId: toValue(options.projectId ?? ""),
+    environmentId: toValue(options.environmentId ?? ""),
     serverId: "",
     name: "",
     exposePublic: false,
@@ -152,12 +155,17 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     created.value = null;
     form.engine = "postgres";
     form.version = "";
-    form.projectId = options.projectId ?? "";
-    form.environmentId = options.environmentId ?? "";
+    seedScope();
     form.serverId = "";
     form.name = "";
     form.exposePublic = false;
     form.publicPort = null;
+  }
+
+  /** seedScope copies the live route scope into the form. */
+  function seedScope(): void {
+    form.projectId = toValue(options.projectId ?? "");
+    form.environmentId = toValue(options.environmentId ?? "");
   }
 
   /** goNext advances one step, or submits on the review step. */
@@ -212,16 +220,25 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     options.onUpdateShow(value);
   }
 
-  // Entering the wizard loads the node list; closing resets the form.
+  // Entering the wizard loads the node list and re-seeds the live scope;
+  // closing resets the form.
   watch(
     () => options.show.value,
     (visible) => {
       if (visible) {
+        seedScope();
         void serversStore.fetchServers().catch(() => undefined);
       } else {
         resetWizard();
       }
     },
+  );
+
+  // A route change while the wizard is mounted re-seeds the scope, so the
+  // summary and the payload always name the current environment.
+  watch(
+    [() => toValue(options.projectId ?? ""), () => toValue(options.environmentId ?? "")],
+    () => seedScope(),
   );
 
   // Switching engine resets the version pick to the engine default.

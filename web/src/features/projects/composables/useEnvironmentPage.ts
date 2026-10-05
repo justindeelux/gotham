@@ -1,5 +1,5 @@
 import { computed, onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
 import type { DeploymentState } from "@/features/applications/api/applications";
 import {
@@ -8,16 +8,21 @@ import {
 import {
   describeProjectError,
   getEnvironmentResources,
+  getProject,
 } from "@/features/projects/api/projects";
 import type {
+  Environment,
   EnvironmentResourceApplication,
   EnvironmentResourceDatabase,
   EnvironmentResources,
 } from "@/features/projects/api/projects";
+import { resolveEnvironmentScope } from "@/features/projects/utils/canonicalRoutes";
 import { serviceStatusTagType } from "@/features/services/api/services";
 import type { Service } from "@/features/services/api/services";
+import { isApiError } from "@/features/servers";
 import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useTeamsStore } from "@/features/teams";
+import { createRequestGeneration } from "@/shared/utils/requestGeneration";
 
 /** Resource kinds shown on the environment page. */
 export type EnvironmentResourceKind = "application" | "service" | "database";
@@ -34,6 +39,8 @@ export interface EnvironmentRow {
   serverName: string;
   statusText: string;
   statusTag: "success" | "warning" | "error" | "default";
+  /** True for a preview row: rendered nested under its base application. */
+  preview: boolean;
   to: { name: string; params: Record<string, string> };
 }
 
@@ -101,7 +108,9 @@ export function databaseSubtitle(database: EnvironmentResourceDatabase): string 
 /**
  * buildEnvironmentRows flattens one resources envelope into unified table
  * rows. Route params ride each row so the table links straight to the nested
- * detail pages.
+ * detail pages. Previews nest directly under their base application (by
+ * preview_of); an orphan preview (base outside the envelope) keeps its tag
+ * and renders after the bases.
  */
 export function buildEnvironmentRows(
   resources: EnvironmentResources,
@@ -111,12 +120,21 @@ export function buildEnvironmentRows(
   environmentId: string,
 ): EnvironmentRow[] {
   const rows: EnvironmentRow[] = [];
-  for (const application of resources.applications) {
+  const previews = resources.applications.filter((application) => application.is_preview);
+  const bases = resources.applications.filter((application) => !application.is_preview);
+  const previewsOf = new Map<string, EnvironmentResourceApplication[]>();
+  for (const preview of previews) {
+    const baseId = preview.preview_of ?? "";
+    const siblings = previewsOf.get(baseId) ?? [];
+    siblings.push(preview);
+    previewsOf.set(baseId, siblings);
+  }
+  const applicationRow = (application: EnvironmentResourceApplication, preview: boolean): EnvironmentRow => {
     const state = applicationStates[application.id] ?? null;
     const view = applicationStatusView(
       state === null && applicationStatesFailed ? "unknown" : state,
     );
-    rows.push({
+    return {
       kind: "application",
       id: application.id,
       name: application.name,
@@ -124,8 +142,24 @@ export function buildEnvironmentRows(
       serverName: application.server_name || "unassigned",
       statusText: view.text,
       statusTag: view.tag,
+      preview,
       to: { name: "application-detail", params: { projectId, environmentId, id: application.id } },
-    });
+    };
+  };
+  for (const application of bases) {
+    rows.push(applicationRow(application, false));
+    for (const preview of previewsOf.get(application.id) ?? []) {
+      rows.push(applicationRow(preview, true));
+    }
+  }
+  // Orphan previews (base unknown or outside the envelope) render last.
+  for (const [baseId, siblings] of previewsOf) {
+    if (bases.some((application) => application.id === baseId)) {
+      continue;
+    }
+    for (const preview of siblings) {
+      rows.push(applicationRow(preview, true));
+    }
   }
   for (const service of resources.services) {
     rows.push({
@@ -136,6 +170,7 @@ export function buildEnvironmentRows(
       serverName: service.server_name,
       statusText: service.status,
       statusTag: serviceStatusTagType(service.status),
+      preview: false,
       to: { name: "service-detail", params: { projectId, environmentId, id: service.id } },
     });
   }
@@ -149,6 +184,7 @@ export function buildEnvironmentRows(
       serverName: database.server_name,
       statusText: view.text,
       statusTag: view.tag,
+      preview: false,
       to: { name: "database-detail", params: { projectId, environmentId, id: database.id } },
     });
   }
@@ -193,6 +229,7 @@ export function filterEnvironmentRows(
  */
 export function useEnvironmentPage() {
   const route = useRoute();
+  const router = useRouter();
   const teamsStore = useTeamsStore();
   const projectsStore = useProjectsStore();
 
@@ -201,7 +238,10 @@ export function useEnvironmentPage() {
 
   const loading = ref(false);
   const error = ref<string | null>(null);
+  /** notFound renders the 404 state (no retry: the URL names nothing). */
+  const notFound = ref(false);
   const resources = ref<EnvironmentResources | null>(null);
+  const siblings = ref<Environment[]>([]);
   const applicationStates = ref<Record<string, DeploymentState | null>>({});
   const applicationStatesFailed = ref(false);
   const tab = ref<EnvironmentResourceTab>("all");
@@ -212,17 +252,25 @@ export function useEnvironmentPage() {
   const importOpen = ref(false);
   const dbWizardOpen = ref(false);
 
+  // Invalidates in-flight reloads when the route or the preview switch
+  // moves on, so a slow response for the previous environment can never
+  // overwrite the current table.
+  const reloadGeneration = createRequestGeneration();
+
   /** rows flattens the envelope into the unified table (unfiltered). */
   const rows = computed<EnvironmentRow[]>(() => {
     if (!resources.value) {
       return [];
     }
+    // Row links ride the response ids, never the typed URL: after a
+    // canonical redirect the route already matches, and before it the
+    // table is empty.
     return buildEnvironmentRows(
       resources.value,
       applicationStates.value,
       applicationStatesFailed.value,
-      projectId.value,
-      environmentId.value,
+      resources.value.project.id,
+      resources.value.environment.id,
     );
   });
 
@@ -231,13 +279,17 @@ export function useEnvironmentPage() {
     filterEnvironmentRows(rows.value, tab.value, search.value),
   );
 
-  /** counts renders the per-tab totals (they follow the preview switch). */
-  const counts = computed<Record<EnvironmentResourceTab, number>>(() => ({
-    all: rows.value.length,
-    applications: rows.value.filter((row) => row.kind === "application").length,
-    services: rows.value.filter((row) => row.kind === "service").length,
-    databases: rows.value.filter((row) => row.kind === "database").length,
-  }));
+  /** counts renders the per-tab totals (previews stay out, like the API counts). */
+  const counts = computed<Record<EnvironmentResourceTab, number>>(() => {
+    // Previews nest under their base but never inflate the totals.
+    const listed = rows.value.filter((row) => !row.preview);
+    return {
+      all: listed.length,
+      applications: listed.filter((row) => row.kind === "application").length,
+      services: listed.filter((row) => row.kind === "service").length,
+      databases: listed.filter((row) => row.kind === "database").length,
+    };
+  });
 
   /** canWrite follows the contract's roles: viewers read, members write. */
   const canWrite = computed<boolean>(() => projectsStore.canWrite);
@@ -247,20 +299,50 @@ export function useEnvironmentPage() {
     if (environmentId.value === "") {
       return;
     }
+    // Every reload supersedes the previous one: bump first, then capture.
+    reloadGeneration.bump();
+    const token = reloadGeneration.current();
     loading.value = true;
     error.value = null;
+    notFound.value = false;
     try {
-      resources.value = await getEnvironmentResources(
+      const next = await getEnvironmentResources(
         teamsStore.activeTeamId,
         environmentId.value,
         showPreviews.value,
       );
+      if (!reloadGeneration.isCurrent(token)) {
+        return; // superseded by a route move or preview toggle
+      }
+      // The response ids are the authority: a wrong project/environment
+      // in the URL replaces it with the canonical nested URL instead of
+      // rendering silently. The route watcher reloads from there.
+      const canonical = resolveEnvironmentScope(
+        { projectId: next.project.id, environmentId: next.environment.id },
+        { projectId: projectId.value, environmentId: environmentId.value },
+      );
+      if (canonical !== null) {
+        resources.value = null;
+        await router.replace({
+          name: "environment-detail",
+          params: { projectId: canonical.projectId, environmentId: canonical.environmentId },
+        });
+        return;
+      }
+      resources.value = next;
+      void loadSiblings(next.project.id);
     } catch (err) {
+      if (!reloadGeneration.isCurrent(token)) {
+        return;
+      }
+      notFound.value = isApiError(err) && err.status === 404;
       error.value = describeProjectError(err);
       resources.value = null;
       return;
     } finally {
-      loading.value = false;
+      if (reloadGeneration.isCurrent(token)) {
+        loading.value = false;
+      }
     }
     const applications = resources.value?.applications ?? [];
     if (applications.length === 0) {
@@ -272,6 +354,9 @@ export function useEnvironmentPage() {
       const { states } = await latestDeploymentStates(
         applications.map((application) => application.id),
       );
+      if (!reloadGeneration.isCurrent(token)) {
+        return;
+      }
       const next: Record<string, DeploymentState | null> = {};
       applications.forEach((application, index) => {
         next[application.id] = states[index];
@@ -279,6 +364,9 @@ export function useEnvironmentPage() {
       applicationStates.value = next;
       applicationStatesFailed.value = false;
     } catch {
+      if (!reloadGeneration.isCurrent(token)) {
+        return;
+      }
       // The table still renders without deploy states; the status column
       // says so instead of claiming "not deployed".
       applicationStates.value = {};
@@ -286,15 +374,33 @@ export function useEnvironmentPage() {
     }
   }
 
+  /**
+   * loadSiblings reads the project's environments for the sibling
+   * switcher. It never touches the projects store detail, so the
+   * ProjectDetailPage state cannot be clobbered from here.
+   */
+  async function loadSiblings(forProjectId: string): Promise<void> {
+    try {
+      const detail = await getProject(teamsStore.activeTeamId, forProjectId);
+      siblings.value = detail.environments;
+    } catch {
+      siblings.value = [];
+    }
+  }
+
   watch(showPreviews, () => {
     void reload();
   });
 
-  watch(environmentId, () => {
-    tab.value = "all";
-    search.value = "";
-    showPreviews.value = false;
-    addOpen.value = false;
+  // A canonical redirect can move the project while the environment stays
+  // the same id, so both params reload the page.
+  watch([projectId, environmentId], ([, nextEnvironment], [, previousEnvironment]) => {
+    if (nextEnvironment !== previousEnvironment) {
+      tab.value = "all";
+      search.value = "";
+      showPreviews.value = false;
+      addOpen.value = false;
+    }
     void reload();
   });
 
@@ -307,7 +413,9 @@ export function useEnvironmentPage() {
     environmentId,
     loading,
     error,
+    notFound,
     resources,
+    siblings,
     tab,
     showPreviews,
     search,

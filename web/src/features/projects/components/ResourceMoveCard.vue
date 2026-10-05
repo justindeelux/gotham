@@ -13,6 +13,14 @@ const props = defineProps<{
   saving: boolean;
   /** Server refusal rendered inline (the contract's exact 409 text). */
   error: string | null;
+  /**
+   * Pinned node: the backend refuses a server change for this resource
+   * (a deployed service, a created database), so the select is disabled
+   * with the reason up front instead of after a failed Save.
+   */
+  serverPinned?: boolean;
+  /** Explanation shown when the node select is pinned. */
+  serverPinnedReason?: string;
 }>();
 
 const emit = defineEmits<{
@@ -77,12 +85,20 @@ function handleSave(): void {
   <NCard title="Server and environment" size="small">
     <div class="move-card">
       <ResourceScopeSummary
+        verb="Located in"
         :project-id="selectedProjectId"
         :environment-id="selectedEnvironmentId"
         @update:project-id="(value) => (selectedProjectId = value)"
         @update:environment-id="(value) => (selectedEnvironmentId = value)"
       />
-      <ServerPicker v-model="selectedServerId" />
+      <ServerPicker v-model="selectedServerId" :disabled="props.serverPinned === true" />
+      <NAlert
+        v-if="props.serverPinned === true && props.serverPinnedReason"
+        type="info"
+        :show-icon="true"
+      >
+        {{ props.serverPinnedReason }}
+      </NAlert>
       <NAlert v-if="props.error" type="error" :show-icon="true">
         {{ props.error }}
       </NAlert>

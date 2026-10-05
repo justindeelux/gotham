@@ -28,7 +28,8 @@ type fakeRepository struct {
 	environments map[uuid.UUID]Environment
 	// variables holds one scope's rows, keyed by project ID with the
 	// environment ID (Nil for the project level) nested inside.
-	variables map[uuid.UUID]map[uuid.UUID][]SharedVariable
+	variables    map[uuid.UUID]map[uuid.UUID][]SharedVariable
+	previewBases map[uuid.UUID]uuid.UUID
 }
 
 func newFakeRepository() *fakeRepository {
@@ -36,6 +37,7 @@ func newFakeRepository() *fakeRepository {
 		projects:     make(map[uuid.UUID]Project),
 		environments: make(map[uuid.UUID]Environment),
 		variables:    make(map[uuid.UUID]map[uuid.UUID][]SharedVariable),
+		previewBases: make(map[uuid.UUID]uuid.UUID),
 	}
 }
 
@@ -217,6 +219,19 @@ func (f *fakeRepository) CountEnvironments(_ context.Context, projectID uuid.UUI
 		}
 	}
 	return count, nil
+}
+
+// PreviewBaseIDs implements Repository over the scripted preview mapping.
+func (f *fakeRepository) PreviewBaseIDs(_ context.Context, _ uuid.UUID, previewAppIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	bases := make(map[uuid.UUID]uuid.UUID, len(previewAppIDs))
+	for _, id := range previewAppIDs {
+		if base, ok := f.previewBases[id]; ok {
+			bases[id] = base
+		}
+	}
+	return bases, nil
 }
 
 // fakeCounter is a ResourceCounter with scripted counts.

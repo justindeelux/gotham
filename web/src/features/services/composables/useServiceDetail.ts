@@ -11,6 +11,7 @@ import type {
   UpdateServiceInput,
 } from "@/features/services/api/services";
 import { isApiError } from "@/features/servers";
+import { resolveEnvironmentScope } from "@/features/projects/utils/canonicalRoutes";
 import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useServersStore } from "@/features/servers";
 import { useServicesStore } from "@/features/services/stores/services";
@@ -209,6 +210,8 @@ export function useServiceDetail(): ServiceDetailContext {
     error.value = null;
     notFound.value = false;
     actionError.value = null;
+    moveSaving.value = false;
+    moveError.value = null;
     composeError.value = null;
     composeEditing.value = false;
     envError.value = null;
@@ -220,6 +223,23 @@ export function useServiceDetail(): ServiceDetailContext {
     try {
       const fetched = await servicesStore.fetchService(id);
       if (token !== loadToken) {
+        return;
+      }
+      // The row ids are the authority: a wrong project/environment in the
+      // URL replaces it with the canonical nested URL instead of rendering
+      // silently. The route watcher reloads from there.
+      const canonical = resolveEnvironmentScope(
+        { projectId: fetched.project_id, environmentId: fetched.environment_id },
+        {
+          projectId: String(route.params.projectId ?? ""),
+          environmentId: String(route.params.environmentId ?? ""),
+        },
+      );
+      if (canonical !== null) {
+        await router.replace({
+          name: "service-detail",
+          params: { projectId: canonical.projectId, environmentId: canonical.environmentId, id },
+        });
         return;
       }
       composeYaml.value = fetched.compose_yaml ?? "";
@@ -419,7 +439,8 @@ export function useServiceDetail(): ServiceDetailContext {
    * node). Only changed fields ride the PATCH; a move retargets the nested
    * route to the new environment. The contract's 409 refusals (in-flight
    * deploy, deployed service, name collision) render inline through
-   * moveError.
+   * moveError. The navigation is identity-guarded: leaving the service
+   * mid-request never yanks the user back to it.
    */
   async function handleMove(scope: {
     projectId: string;
@@ -440,11 +461,19 @@ export function useServiceDetail(): ServiceDetailContext {
     if (Object.keys(input).length === 0) {
       return;
     }
+    const targetId = serviceId.value;
     moveSaving.value = true;
     moveError.value = null;
     try {
-      const updated = await servicesStore.update(serviceId.value, input);
+      const updated = await servicesStore.update(targetId, input);
+      if (targetId !== serviceId.value) {
+        return; // the route moved on while the write was in flight
+      }
       message.success("Location saved");
+      await refreshProjectCounts([current.project_id, updated.project_id]);
+      if (targetId !== serviceId.value) {
+        return;
+      }
       if (input.environment_id) {
         await router.push({
           name: "service-detail",
@@ -456,9 +485,33 @@ export function useServiceDetail(): ServiceDetailContext {
         });
       }
     } catch (err) {
-      moveError.value = describeServiceError(err);
+      if (targetId === serviceId.value) {
+        moveError.value = describeServiceError(err);
+      }
     } finally {
-      moveSaving.value = false;
+      if (targetId === serviceId.value) {
+        moveSaving.value = false;
+      }
+    }
+  }
+
+  /**
+   * refreshProjectCounts invalidates the projects store after a move, so
+   * project/environment counts converge without relying on a remount.
+   */
+  async function refreshProjectCounts(projectIds: string[]): Promise<void> {
+    try {
+      await projectsStore.fetchProjects();
+    } catch {
+      // The store already exposes the error; counts converge on next load.
+    }
+    const detail = projectsStore.detail;
+    if (detail && projectIds.includes(detail.id)) {
+      try {
+        await projectsStore.fetchDetail(detail.id);
+      } catch {
+        // Same as above; the detail alert renders it.
+      }
     }
   }
 
@@ -466,9 +519,9 @@ export function useServiceDetail(): ServiceDetailContext {
     void load();
   });
 
-  // The detail route is reused when navigating between services: reload when the
-  // id changes so the page never shows the previous service's data.
-  watch(serviceId, () => {
+  // The detail route is reused when navigating between services, and a move
+  // keeps the id while the environment changes: reload on either.
+  watch([serviceId, () => String(route.params.environmentId ?? "")], () => {
     void load();
   });
 

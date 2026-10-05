@@ -1,5 +1,6 @@
 import { expect, test } from "./fixtures";
 import {
+  environmentURL,
   loadAccount,
   seedNodeAddress,
   seedProjectEnvironment,
@@ -31,8 +32,8 @@ interface ServicePayload {
  *
  * Covers the catalog rendering, the dynamic form generated from the template
  * schema (required + default), the rendered compose preview, service creation
- * from the render with the secret `env` map, and the service appearing in the
- * compose-services list. The render contract is asserted at the API boundary:
+ * from the render with the secret `env` map, and the service appearing on
+ * the environment page. The render contract is asserted at the API boundary:
  * `compose_yaml` keeps the `${field}` reference while the value travels only
  * in `env`.
  *
@@ -82,7 +83,7 @@ test.describe("services & templates", () => {
       data: { name: nodeName, ip: seedNodeAddress, ssh_user: "root" },
     });
     expect(serverResponse.status(), await serverResponse.text()).toBe(201);
-    const { environmentId } = await seedProjectEnvironment(request, headers);
+    const { projectId, projectName, environmentId } = await seedProjectEnvironment(request, headers);
 
     // ── the gallery loads the live catalog ───────────────────────────────
     await page.goto("/templates");
@@ -146,25 +147,35 @@ test.describe("services & templates", () => {
     const step3 = wizard.locator('[data-testid="wizard-step-3"]');
     await expect(step3).toBeVisible();
     await step3.locator(".field-service-name input").fill(serviceName);
-    await step3.locator(".field-service-node .n-select").click();
+    // The scope summary arrives empty on the flat library: the selects
+    // show immediately, so pick the seeded project and environment there.
+    await step3.locator('[aria-label="Project"]').click();
+    await page
+      .locator(".n-base-select-option")
+      .filter({ hasText: projectName })
+      .click();
+    await step3.locator('[aria-label="Environment"]').click();
+    await page
+      .locator(".n-base-select-option")
+      .filter({ hasText: "production" })
+      .click();
+    // The seeded node is pending (no agent validated it); pending nodes stay
+    // selectable, only offline ones are disabled.
+    await step3.locator(".wizard__metaform .n-select").click();
     await page
       .locator(".n-base-select-option")
       .filter({ hasText: nodeName })
       .click();
+    // The create request carries the scope the wizard shows.
+    const createRequest = page.waitForRequest(
+      (request) =>
+        request.url().endsWith("/api/v1/services") &&
+        request.method() === "POST",
+    );
     // The wizard footer (not the step body) carries the submit button.
-    // Until PE-5 wires the project/environment picker the dialog sends no
-    // environment, so the smoke injects the seeded one at the API boundary.
-    await page.route("**/api/v1/services", async (route) => {
-      if (route.request().method() !== "POST") {
-        await route.continue();
-        return;
-      }
-      const body = route.request().postDataJSON() as Record<string, unknown>;
-      await route.continue({
-        postData: JSON.stringify({ ...body, environment_id: environmentId }),
-      });
-    });
     await wizard.getByRole("button", { name: "Create service" }).click();
+    const createBody = (await createRequest).postDataJSON() as Record<string, unknown>;
+    expect(createBody["environment_id"]).toBe(environmentId);
 
     const created = wizard.locator('[data-testid="wizard-created"]');
     await expect(created).toBeVisible();
@@ -194,17 +205,13 @@ test.describe("services & templates", () => {
     expect(detail.compose_yaml).not.toContain(dbPassword);
     expect(detail.compose_yaml).not.toContain(rootPassword);
 
-    // ── the created service appears in the compose-services list ─────────
+    // ── the created service appears on the environment page ─────────────
     await wizard.getByRole("button", { name: "Close", exact: true }).click();
     await expect(page.locator(".n-modal")).toHaveCount(0);
-    await page.goto("/services");
-    await expect(
-      page.getByRole("heading", { name: "Services", level: 1 }),
-    ).toBeVisible();
-    const card = page.locator(`[data-service="${serviceName}"]`);
-    await expect(card).toHaveCount(1);
-    await expect(card).toContainText("creating");
-    await expect(card).toContainText("no deploys yet");
+    await page.goto(environmentURL(projectId, environmentId));
+    const row = page.locator(".resource-table tbody tr").filter({ hasText: serviceName });
+    await expect(row).toHaveCount(1);
+    await expect(row).toContainText("creating");
 
     // ── secret hygiene: values stay out of the DOM and browser storage ───
     const browserStorage = await page.evaluate(() =>

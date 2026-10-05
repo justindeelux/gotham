@@ -77,10 +77,11 @@ export function loadAccount(): E2EAccount {
 export async function seedProjectEnvironment(
   request: APIRequestContext,
   headers: Record<string, string>,
-): Promise<{ projectId: string; environmentId: string }> {
+): Promise<{ projectId: string; projectName: string; environmentId: string }> {
+  const name = `ui-e2e-${uniqueSuffix()}`;
   const project = await request.post("/api/v1/projects", {
     headers,
-    data: { name: `ui-e2e-${uniqueSuffix()}` },
+    data: { name },
   });
   if (project.status() !== 201) {
     throw new Error(`seed project: ${project.status()} ${await project.text()}`);
@@ -89,5 +90,23 @@ export async function seedProjectEnvironment(
     project: { id: string };
     environments: Array<{ id: string }>;
   };
-  return { projectId: created.id, environmentId: environments[0].id };
+  return { projectId: created.id, projectName: name, environmentId: environments[0].id };
+}
+
+/** environmentURL is the PE-5 environment page for one project/environment. */
+export function environmentURL(projectId: string, environmentId: string): string {
+  return `/projects/${projectId}/environments/${environmentId}`;
+}
+
+/**
+ * nestedURL is one resource's detail page under the PE-5 nested routes
+ * (/projects/:p/environments/:e/{applications,services,databases}/:id).
+ */
+export function nestedURL(
+  projectId: string,
+  environmentId: string,
+  kind: "applications" | "services" | "databases",
+  id: string,
+): string {
+  return `/projects/${projectId}/environments/${environmentId}/${kind}/${id}`;
 }

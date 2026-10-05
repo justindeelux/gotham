@@ -2,13 +2,18 @@ import type { Server, ServerStatus } from "@/features/servers";
 
 /**
  * Pure option builders behind the required server picker (PE-5, Linear
- * JUS-34): every create flow and the resource move card share one
- * definition of which nodes are selectable and why the rest are not.
+ * JUS-34; relaxed per fix round 1 H4): every create flow and the resource
+ * move card share one definition of which nodes are selectable and why the
+ * rest are not.
+ *
+ * The contract only refuses offline nodes ("offline disabled with a
+ * reason"); every other state stays selectable, matching the pre-PE-5
+ * wizards and what the backend accepts on create.
  */
 
 /** isUsableServer reports whether a node may host a new or moved resource. */
 export function isUsableServer(server: Server): boolean {
-  return server.status === "ready";
+  return server.status !== "offline";
 }
 
 /** unusableReason names why a node cannot host resources, for the picker hint. */
@@ -28,9 +33,9 @@ export function unusableReason(status: ServerStatus): string {
 }
 
 /**
- * buildServerOptions maps nodes to select options. Anything but `ready` is
- * disabled: picking it would fail server-side, so the picker refuses it
- * up front instead.
+ * buildServerOptions maps nodes to select options. Offline nodes are
+ * disabled: the picker refuses them up front with the reason below instead
+ * of failing server-side.
  */
 export function buildServerOptions(
   servers: Server[],
@@ -43,25 +48,34 @@ export function buildServerOptions(
 }
 
 /**
- * unusableServerHint lists the nodes the picker disabled, with the reason
- * each one cannot host resources. Empty when every node is usable.
+ * unusableServerHint summarizes the nodes the picker disabled, with the
+ * reason each one cannot host resources. Long fleets collapse to the first
+ * few names plus a remainder ("and 23 more"). Empty when every node is
+ * usable.
  */
 export function unusableServerHint(servers: Server[]): string {
   const blocked = servers.filter((server) => !isUsableServer(server));
   if (blocked.length === 0) {
     return "";
   }
-  return blocked
-    .map((server) => `${server.name} is ${unusableReason(server.status)}`)
-    .join("; ");
+  const shown = blocked
+    .slice(0, 3)
+    .map((server) => `${server.name} is ${unusableReason(server.status)}`);
+  if (blocked.length > shown.length) {
+    shown.push(`and ${blocked.length - shown.length} more`);
+  }
+  return shown.join("; ");
 }
 
 /**
- * singleUsableServerId preselects the node when exactly one usable server
- * exists. A lone offline node is never preselected: it is disabled, so
- * selecting it would leave the form valid-looking but unsubmittable.
+ * singleUsableServerId preselects the node when exactly one server exists
+ * and it is selectable. A lone offline node is never preselected: it is
+ * disabled, so selecting it would leave the form valid-looking but
+ * unsubmittable.
  */
 export function singleUsableServerId(servers: Server[]): string {
-  const usable = servers.filter(isUsableServer);
-  return usable.length === 1 ? usable[0].id : "";
+  if (servers.length === 1 && isUsableServer(servers[0])) {
+    return servers[0].id;
+  }
+  return "";
 }

@@ -1,5 +1,5 @@
 import { http, teamHeaders } from "@/shared/api/http";
-import { isApiError, stripErrorPrefix } from "@/features/servers";
+import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
  * Typed client for the database routes served by `internal/databases`
@@ -271,7 +271,7 @@ export function describeDatabaseError(error: unknown): string {
       // the message passes through for the move/server-change settings to
       // render inline.
       return (
-        stripErrorPrefix(error.message) ||
+        conflictDetail(stripErrorPrefix(error.message)) ||
         "A database with that name already exists."
       );
     }

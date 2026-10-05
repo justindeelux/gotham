@@ -89,6 +89,8 @@ watch(detail.dbId, () => {
             :server-id="detail.database.value.server_id"
             :saving="detail.moveSaving.value"
             :error="detail.moveError.value"
+            server-pinned
+            server-pinned-reason="A database cannot change server once created; only moving it to another environment is possible."
             @save="detail.handleMove"
           />
         </NTabPane>

@@ -38,7 +38,7 @@ const emit = defineEmits<{
  */
 const dialog = useImportService(
   toRef(props, "show"),
-  { projectId: props.projectId, environmentId: props.environmentId },
+  { projectId: toRef(props, "projectId"), environmentId: toRef(props, "environmentId") },
   (service) => emit("created", service),
 );
 </script>

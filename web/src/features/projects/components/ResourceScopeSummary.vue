@@ -4,10 +4,15 @@ import { computed, ref, watch } from "vue";
 
 import { useEnvironmentOptions } from "@/features/projects/composables/useEnvironmentOptions";
 
-const props = defineProps<{
-  projectId: string;
-  environmentId: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    projectId: string;
+    environmentId: string;
+    /** Leading verb: creation flows say "Creating in", settings "Located in". */
+    verb?: string;
+  }>(),
+  { verb: "Creating in" },
+);
 
 const emit = defineEmits<{
   "update:projectId": [value: string];
@@ -63,7 +68,7 @@ function handleProjectChange(projectId: string): void {
   <div class="scope-summary">
     <div v-if="!changing" class="scope-summary__read">
       <NText depth="3">
-        Creating in
+        {{ props.verb }}
         <span class="mono">{{ projectLabel }} / {{ environmentLabel }}</span>.
       </NText>
       <NButton text size="small" @click="changing = true">Change</NButton>

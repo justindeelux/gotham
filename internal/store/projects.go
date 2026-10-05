@@ -278,3 +278,9 @@ func (s *Store) ReplaceSharedVariablesLocked(ctx context.Context, projectID, env
 	}
 	return tx.Commit(ctx)
 }
+
+// ListPreviewBases maps preview application rows to their base application
+// through preview_deploys (PE-5 M1), scoped to the team by the caller.
+func (s *Store) ListPreviewBases(ctx context.Context, params sqlc.ListPreviewBasesParams) ([]sqlc.ListPreviewBasesRow, error) {
+	return s.queries.ListPreviewBases(ctx, params)
+}

@@ -40,6 +40,7 @@ const {
   moveSaving,
   moveError,
   handleMove,
+  deploys,
 } = page;
 </script>
 
@@ -84,6 +85,8 @@ const {
         :server-id="service.server_id"
         :saving="moveSaving"
         :error="moveError"
+        :server-pinned="deploys.length > 0"
+        server-pinned-reason="This service already deployed, so its node is pinned and cannot be changed. Moving it to another environment stays possible."
         @save="handleMove"
       />
 

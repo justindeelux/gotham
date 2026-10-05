@@ -162,6 +162,80 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	}
 }
 
+// TestStoreRepositoryPreviewBaseIDs maps preview application rows to their
+// base through preview_deploys, scoped to the team: a foreign team and an
+// unknown id resolve to no row, and a deleted binding stays invisible.
+func TestStoreRepositoryPreviewBaseIDs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	st := newScratchStore(t)
+	repo := newStoreRepository(st)
+	teamID := seedUser(t, ctx, st, fmt.Sprintf("bases-%d@example.com", time.Now().UnixNano()))
+	otherID := seedUser(t, ctx, st, fmt.Sprintf("bases-other-%d@example.com", time.Now().UnixNano()))
+
+	_, production, err := repo.CreateProject(ctx, teamID, "Shop", "")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	serverID := uuid.New()
+	if _, err := st.DB.Exec(ctx,
+		`INSERT INTO servers (id, name, ip, ssh_user) VALUES ($1, 'node', '[::1]:1', 'root')`,
+		serverID,
+	); err != nil {
+		t.Fatalf("seed server: %v", err)
+	}
+	baseID, previewID := uuid.New(), uuid.New()
+	seeds := map[uuid.UUID]struct {
+		name      string
+		isPreview bool
+	}{baseID: {"web", false}, previewID: {"web-pr-7", true}}
+	for id, seed := range seeds {
+		if _, err := st.DB.Exec(ctx,
+			`INSERT INTO applications (id, user_id, team_id, environment_id, server_id, name, is_preview)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			id, teamID, teamID, production.ID, serverID, seed.name, seed.isPreview,
+		); err != nil {
+			t.Fatalf("seed application %s: %v", seed.name, err)
+		}
+	}
+	if _, err := st.DB.Exec(ctx,
+		`INSERT INTO preview_deploys (application_id, team_id, provider, repo, pr_number, preview_application_id)
+		 VALUES ($1, $2, 'github', 'o/r', 7, $3)`,
+		baseID, teamID, previewID,
+	); err != nil {
+		t.Fatalf("seed preview binding: %v", err)
+	}
+
+	unknown := uuid.New()
+	bases, err := repo.PreviewBaseIDs(ctx, teamID, []uuid.UUID{previewID, unknown})
+	if err != nil {
+		t.Fatalf("PreviewBaseIDs: %v", err)
+	}
+	if len(bases) != 1 || bases[previewID] != baseID {
+		t.Fatalf("bases = %v, want only %v -> %v", bases, previewID, baseID)
+	}
+
+	empty, err := repo.PreviewBaseIDs(ctx, teamID, nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty input = %v, %v; want empty", empty, err)
+	}
+	foreign, err := repo.PreviewBaseIDs(ctx, otherID, []uuid.UUID{previewID})
+	if err != nil || len(foreign) != 0 {
+		t.Fatalf("foreign team = %v, %v; want empty", foreign, err)
+	}
+
+	if _, err := st.DB.Exec(ctx,
+		`UPDATE preview_deploys SET deleted_at = now() WHERE preview_application_id = $1`, previewID,
+	); err != nil {
+		t.Fatalf("delete preview binding: %v", err)
+	}
+	gone, err := repo.PreviewBaseIDs(ctx, teamID, []uuid.UUID{previewID})
+	if err != nil || len(gone) != 0 {
+		t.Fatalf("deleted binding = %v, %v; want empty", gone, err)
+	}
+}
+
 // TestStoreRepositoryUniquenessIsCaseInsensitive asserts the lower(name)
 // indexes reject differently-cased duplicates in the same scope but allow
 // the same name in another scope.

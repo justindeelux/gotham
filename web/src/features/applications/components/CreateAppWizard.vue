@@ -14,8 +14,7 @@ import {
 } from "@/features/applications/composables/useCreateAppWizard";
 import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
 
-interface Props {
-  show: boolean;
+interface Props {  show: boolean;
   /** Project the application is created in (the route's, changeable). */
   projectId?: string;
   /** Environment the application is created in (the route's, changeable). */
@@ -29,8 +28,8 @@ const emit = defineEmits<{
 }>();
 
 const wizard = useCreateAppWizard(toRef(props, "show"), emit, {
-  projectId: props.projectId,
-  environmentId: props.environmentId,
+  projectId: toRef(props, "projectId"),
+  environmentId: toRef(props, "environmentId"),
 });
 provideCreateWizard(wizard);
 </script>

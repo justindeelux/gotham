@@ -15,6 +15,7 @@ import {
   getEnvironmentResources,
   parseEnvironmentResources,
 } from "@/features/projects";
+import { resolveEnvironmentScope } from "@/features/projects/utils/canonicalRoutes";
 import {
   applicationStatusView,
   applicationSubtitle,
@@ -73,6 +74,7 @@ function envelope(overrides = {}) {
         host_port: 0,
         server_id: "33333333-3333-4333-8333-333333333333",
         server_name: "prod-01",
+        is_preview: false,
         created_at: "2026-10-01T00:00:00Z",
         updated_at: "2026-10-02T00:00:00Z",
       },
@@ -258,6 +260,40 @@ describe("buildEnvironmentRows", () => {
     const rows = buildEnvironmentRows(resources, {}, true, "p", "e");
     expect(rows[0]!.statusText).toBe("unknown");
   });
+
+  it("nests previews under their base and keeps them out of the counts", () => {
+    const base = envelope().applications[0];
+    const preview = {
+      ...base,
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      name: "storefront-pr-7",
+      is_preview: true,
+      preview_of: base.id,
+    };
+    const resources = envelope({ applications: [base, preview] }) as unknown as EnvironmentResources;
+    const rows = buildEnvironmentRows(resources, {}, false, "p", "e");
+    const appRows = rows.filter((row) => row.kind === "application");
+    expect(appRows.map((row) => row.name)).toEqual(["storefront", "storefront-pr-7"]);
+    expect(appRows[0]!.preview).toBe(false);
+    expect(appRows[1]!.preview).toBe(true);
+    expect(appRows[1]!.to.params.id).toBe(preview.id);
+  });
+
+  it("renders orphan previews after the bases", () => {
+    const base = envelope().applications[0];
+    const orphan = {
+      ...base,
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      name: "storefront-pr-9",
+      is_preview: true,
+      preview_of: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    };
+    const resources = envelope({ applications: [base, orphan] }) as unknown as EnvironmentResources;
+    const rows = buildEnvironmentRows(resources, {}, false, "p", "e");
+    const appRows = rows.filter((row) => row.kind === "application");
+    expect(appRows.map((row) => row.name)).toEqual(["storefront", "storefront-pr-9"]);
+    expect(appRows.at(-1)!.preview).toBe(true);
+  });
 });
 
 describe("filterEnvironmentRows", () => {
@@ -274,29 +310,71 @@ describe("filterEnvironmentRows", () => {
   });
 });
 
+describe("resolveEnvironmentScope", () => {
+  it("returns null for the canonical URL", () => {
+    expect(
+      resolveEnvironmentScope(
+        { projectId: "p", environmentId: "e" },
+        { projectId: "p", environmentId: "e" },
+      ),
+    ).toBeNull();
+  });
+
+  it("returns the response scope when the URL is wrong", () => {
+    expect(
+      resolveEnvironmentScope(
+        { projectId: "p-real", environmentId: "e-real" },
+        { projectId: "p-typed", environmentId: "e-typed" },
+      ),
+    ).toEqual({ projectId: "p-real", environmentId: "e-real" });
+  });
+
+  it("corrects a right environment under a wrong project", () => {
+    expect(
+      resolveEnvironmentScope(
+        { projectId: "p-real", environmentId: "e" },
+        { projectId: "p-typed", environmentId: "e" },
+      ),
+    ).toEqual({ projectId: "p-real", environmentId: "e" });
+  });
+});
+
 describe("server picker options", () => {
-  it("enables ready nodes and disables the rest", () => {
+  it("disables only offline nodes, every other state stays selectable", () => {
     const servers = [
       server(),
-      server({ id: "s-off", name: "build-02", status: "offline" }),
+      server({ id: "s-pending", name: "build-02", status: "pending" }),
+      server({ id: "s-off", name: "dark-03", status: "offline" }),
     ];
     expect(isUsableServer(servers[0]!)).toBe(true);
-    expect(isUsableServer(servers[1]!)).toBe(false);
+    expect(isUsableServer(servers[1]!)).toBe(true);
+    expect(isUsableServer(servers[2]!)).toBe(false);
     expect(buildServerOptions(servers)).toEqual([
       { label: "prod-01 · 10.0.0.1", value: "33333333-3333-4333-8333-333333333333", disabled: false },
-      { label: "build-02 · 10.0.0.1", value: "s-off", disabled: true },
+      { label: "build-02 · 10.0.0.1", value: "s-pending", disabled: false },
+      { label: "dark-03 · 10.0.0.1", value: "s-off", disabled: true },
     ]);
-    expect(unusableServerHint(servers)).toBe("build-02 is offline");
+    expect(unusableServerHint(servers)).toBe("dark-03 is offline");
     expect(unusableServerHint([servers[0]!])).toBe("");
   });
 
-  it("preselects only a single usable node", () => {
+  it("collapses long blocked fleets with a remainder", () => {
+    const servers = Array.from({ length: 5 }, (_, index) =>
+      server({ id: `s-off-${index}`, name: `dark-0${index}`, status: "offline" }),
+    );
+    expect(unusableServerHint(servers)).toBe(
+      "dark-00 is offline; dark-01 is offline; dark-02 is offline; and 2 more",
+    );
+  });
+
+  it("preselects only a single selectable node", () => {
     const ready = server();
-    const offline = server({ id: "s-off", name: "build-02", status: "offline" });
+    const offline = server({ id: "s-off", name: "dark-03", status: "offline" });
     expect(singleUsableServerId([ready])).toBe(ready.id);
     // A lone offline node is never preselected: it cannot be picked.
     expect(singleUsableServerId([offline])).toBe("");
-    expect(singleUsableServerId([ready, offline])).toBe(ready.id);
+    // Two nodes never preselect, even when only one is selectable.
+    expect(singleUsableServerId([ready, offline])).toBe("");
     expect(singleUsableServerId([ready, server({ id: "s-2", name: "prod-02" })])).toBe("");
     expect(singleUsableServerId([])).toBe("");
   });

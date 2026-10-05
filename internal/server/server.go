@@ -25,6 +25,7 @@ import (
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/notifications"
+	"github.com/justindeelux/gotham/internal/projects"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/server/ws"
@@ -467,6 +468,14 @@ func (s *Server) routes() (http.Handler, error) {
 		// no agent dialer, or FEATURE_SERVICES=false) mounts nothing.
 		services.Mount(api, s.withTeam(), UserIDFromContext, s.composeService())
 
+		// Projects and environments (Phase 13, PE-1): the grouping layer for
+		// every workload. It rides the team chain like the other resource
+		// packages (reads need read, mutations need deploy plus
+		// owner/admin). A nil service (no database) mounts nothing.
+		// Resource counts read zero through ZeroResourceCounter until PE-2
+		// wires the real counter.
+		projects.Mount(api, s.withTeam(), UserIDFromContext, s.projectService())
+
 		// One-click templates (BE-7.2): the built-in catalog (embedded in
 		// the binary) and the render engine. The surface is read-only and
 		// stateless; a rendered document is created and deployed through
@@ -885,6 +894,19 @@ func (s *Server) composeService() services.ServiceService {
 		cfg.Proxy = s.proxy
 	}
 	return services.NewDefaultService(cfg)
+}
+
+// projectService builds the projects domain service for the HTTP wiring. It
+// returns nil (no database) so projects.Mount is a no-op.
+func (s *Server) projectService() projects.ProjectService {
+	if s.persistence == nil {
+		return nil
+	}
+	return projects.NewDefaultService(projects.Config{
+		Store:   s.persistence,
+		Counter: projects.ZeroResourceCounter{},
+		Logger:  s.logger,
+	})
 }
 
 // apiError is the JSON body returned for API failures.

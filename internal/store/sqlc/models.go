@@ -201,6 +201,14 @@ type EnvVar struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type Environment struct {
+	ID        pgtype.UUID        `json:"id"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Name      string             `json:"name"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Invite struct {
 	ID         pgtype.UUID        `json:"id"`
 	TeamID     pgtype.UUID        `json:"team_id"`
@@ -261,6 +269,15 @@ type PrivateKey struct {
 	EncryptedKey string             `json:"encrypted_key"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	TeamID       pgtype.UUID        `json:"team_id"`
+}
+
+type Project struct {
+	ID          pgtype.UUID        `json:"id"`
+	TeamID      pgtype.UUID        `json:"team_id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Provider struct {

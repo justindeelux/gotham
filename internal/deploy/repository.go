@@ -586,8 +586,15 @@ func (r *storeRepository) ListSecrets(ctx context.Context, appID uuid.UUID) ([]S
 // ListSharedVariables implements Repository: the project-level rows and one
 // environment's rows from one snapshot, split by scope so the merge can layer
 // them (project < environment). Secrets stay sealed; buildEnv opens every
-// ciphertext when the payload is assembled.
+// ciphertext when the payload is assembled. A zero project or environment id
+// fails explicitly instead of silently matching no rows.
 func (r *storeRepository) ListSharedVariables(ctx context.Context, projectID, environmentID uuid.UUID) ([]SharedVariable, []SharedVariable, error) {
+	if projectID == uuid.Nil {
+		return nil, nil, fmt.Errorf("%w: application has no project assigned", ErrValidation)
+	}
+	if environmentID == uuid.Nil {
+		return nil, nil, fmt.Errorf("%w: application has no environment assigned", ErrValidation)
+	}
 	rows, err := r.store.ListSharedVariablesForEnvironment(ctx, pgUUID(projectID), pgUUID(environmentID))
 	if err != nil {
 		return nil, nil, fmt.Errorf("deploy: list shared variables: %w", err)

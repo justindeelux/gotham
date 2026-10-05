@@ -214,24 +214,55 @@ func (s *Store) ListSharedVariablesForEnvironment(ctx context.Context, projectID
 	})
 }
 
-// ReplaceSharedVariables swaps one scope's whole set in a transaction: the
-// old rows go, the new ones are inserted, so a PUT either replaces the set or
-// changes nothing.
-func (s *Store) ReplaceSharedVariables(ctx context.Context, projectID, environmentID pgtype.UUID, vars []sqlc.InsertSharedVariableParams) error {
+// ReplaceSharedVariablesLocked swaps one scope's whole set in a transaction
+// that first locks the scope parent: the project row for the project level,
+// the environment row for an environment scope. The lock serializes
+// concurrent PUTs on one scope (under READ COMMITTED two delete-then-insert
+// transactions would otherwise collide on the scope uniqueness index), and
+// the existing set is read inside the same transaction so the
+// keep-ciphertext path cannot restore a value a concurrent PUT replaced. A
+// missing parent answers pgx.ErrNoRows; a parent deleted by a racing
+// transaction trips the foreign key, which the caller maps.
+func (s *Store) ReplaceSharedVariablesLocked(ctx context.Context, projectID, environmentID pgtype.UUID, build func(existing []sqlc.SharedVariable) ([]sqlc.InsertSharedVariableParams, error)) error {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if environmentID.Valid {
+		var parent pgtype.UUID
+		if err := tx.QueryRow(ctx,
+			`SELECT project_id FROM environments WHERE id = $1 FOR UPDATE`, environmentID).Scan(&parent); err != nil {
+			return err
+		}
+	} else {
+		var exist pgtype.UUID
+		if err := tx.QueryRow(ctx,
+			`SELECT id FROM projects WHERE id = $1 FOR UPDATE`, projectID).Scan(&exist); err != nil {
+			return err
+		}
+	}
+
 	queries := s.queries.WithTx(tx)
+	existing, err := queries.ListSharedVariables(ctx, sqlc.ListSharedVariablesParams{
+		ProjectID:     projectID,
+		EnvironmentID: environmentID,
+	})
+	if err != nil {
+		return err
+	}
+	params, err := build(existing)
+	if err != nil {
+		return err
+	}
 	if err := queries.DeleteSharedVariables(ctx, sqlc.DeleteSharedVariablesParams{
 		ProjectID:     projectID,
 		EnvironmentID: environmentID,
 	}); err != nil {
 		return err
 	}
-	for _, variable := range vars {
+	for _, variable := range params {
 		if _, err := queries.InsertSharedVariable(ctx, variable); err != nil {
 			return err
 		}

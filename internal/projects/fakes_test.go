@@ -285,10 +285,18 @@ func (f *fakeRepository) ListVariables(_ context.Context, projectID, environment
 	return rows, nil
 }
 
-// ReplaceVariables implements Repository: the whole set is swapped.
-func (f *fakeRepository) ReplaceVariables(_ context.Context, projectID, environmentID uuid.UUID, vars []SharedVariable) error {
+// ReplaceVariables implements Repository: the whole set is swapped. The
+// build runs under the fake's mutex, mimicking the locked store transaction
+// (concurrent PUTs serialize; the build sees the latest committed set).
+func (f *fakeRepository) ReplaceVariables(_ context.Context, projectID, environmentID uuid.UUID, build func(existing []SharedVariable) ([]SharedVariable, error)) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	existing := append([]SharedVariable{}, f.variables[projectID][environmentID]...)
+	sortSharedVariables(existing)
+	vars, err := build(existing)
+	if err != nil {
+		return err
+	}
 	scopes := f.variables[projectID]
 	if scopes == nil {
 		scopes = make(map[uuid.UUID][]SharedVariable)

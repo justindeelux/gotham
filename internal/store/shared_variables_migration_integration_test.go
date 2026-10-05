@@ -110,6 +110,18 @@ func TestSharedVariablesMigration(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO shared_variables (project_id, key, value) VALUES ($1, 'A', '3')`, projectID); err == nil {
 		t.Fatal("duplicate project-level key inserted, want a uniqueness refusal")
 	}
+	// The composite foreign key: an environment of another project cannot
+	// back a row of this one.
+	var projectB, envB string
+	if err := db.QueryRowContext(ctx, `INSERT INTO projects (team_id, name) VALUES ($1, 'other') RETURNING id`, userID).Scan(&projectB); err != nil {
+		t.Fatalf("insert second project: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `INSERT INTO environments (project_id, name) VALUES ($1, 'other-staging') RETURNING id`, projectB).Scan(&envB); err != nil {
+		t.Fatalf("insert second environment: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO shared_variables (project_id, environment_id, key, value) VALUES ($1, $2, 'X', '9')`, projectID, envB); err == nil {
+		t.Fatal("cross-project environment row inserted, want a foreign-key refusal")
+	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM environments WHERE id = $1`, envID); err != nil {
 		t.Fatalf("delete environment: %v", err)
 	}
@@ -139,5 +151,13 @@ func TestSharedVariablesMigration(t *testing.T) {
 	}
 	if exists {
 		t.Fatal("Down did not drop shared_variables")
+	}
+	// Down stays clean: the environments helper index goes with the table.
+	if err := db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'environments_id_project_idx')`).Scan(&exists); err != nil {
+		t.Fatalf("check helper index after down: %v", err)
+	}
+	if exists {
+		t.Fatal("Down left environments_id_project_idx behind")
 	}
 }

@@ -58,8 +58,11 @@ type Repository interface {
 	// ListVariables returns one scope's stored rows (environmentID Nil reads
 	// the project level), ordered by key.
 	ListVariables(ctx context.Context, projectID, environmentID uuid.UUID) ([]SharedVariable, error)
-	// ReplaceVariables swaps one scope's whole set in a transaction.
-	ReplaceVariables(ctx context.Context, projectID, environmentID uuid.UUID, vars []SharedVariable) error
+	// ReplaceVariables swaps one scope's whole set in a locked transaction
+	// (see Store.ReplaceSharedVariablesLocked). build resolves the new set
+	// from the existing rows inside that transaction, so keep-ciphertext
+	// reads the latest committed set; a missing scope answers ErrNotFound.
+	ReplaceVariables(ctx context.Context, projectID, environmentID uuid.UUID, build func(existing []SharedVariable) ([]SharedVariable, error)) error
 }
 
 // storeRepository adapts *store.Store to Repository.

@@ -2,12 +2,16 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"sort"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -20,6 +24,9 @@ var variableKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // maxVariablesPerScope caps one PUT body per the API contract.
 const maxVariablesPerScope = 128
+
+// maxVariableKeyLength caps one key, matching application env keys.
+const maxVariableKeyLength = 128
 
 // Variable is one shared KEY=VALUE pair as the API sees it. Secret values are
 // write-only: Value is empty when Secret is true, so a secret's plaintext and
@@ -137,16 +144,28 @@ func (s *Service) listVariables(ctx context.Context, projectID, environmentID uu
 }
 
 // replaceVariables validates a PUT body, seals new secret values and swaps
-// the scope's whole set, returning the masked result. The validation runs
-// before any write, so a bad body changes nothing.
+// the scope's whole set, returning the masked result. The new set is resolved
+// from the existing rows inside the repository's locked transaction, so a
+// concurrent PUT cannot slip between the keep-ciphertext read and the write
+// and validation failures change nothing.
 func (s *Service) replaceVariables(ctx context.Context, projectID, environmentID uuid.UUID, inputs []VariableInput) ([]Variable, error) {
 	if len(inputs) > maxVariablesPerScope {
 		return nil, fmt.Errorf("%w: at most %d variables per scope", ErrValidation, maxVariablesPerScope)
 	}
-	existing, err := s.repo.ListVariables(ctx, projectID, environmentID)
+	err := s.repo.ReplaceVariables(ctx, projectID, environmentID, func(existing []SharedVariable) ([]SharedVariable, error) {
+		return s.buildVariableSet(existing, inputs)
+	})
 	if err != nil {
 		return nil, err
 	}
+	return s.listVariables(ctx, projectID, environmentID)
+}
+
+// buildVariableSet resolves a PUT body against the scope's existing rows:
+// keys and values are validated, omitted values on existing secrets keep
+// their ciphertext, and new secret values are sealed. It is pure apart from
+// sealing, so the repository runs it inside the write transaction.
+func (s *Service) buildVariableSet(existing []SharedVariable, inputs []VariableInput) ([]SharedVariable, error) {
 	byKey := make(map[string]SharedVariable, len(existing))
 	for _, row := range existing {
 		byKey[row.Key] = row
@@ -166,6 +185,9 @@ func (s *Service) replaceVariables(ctx context.Context, projectID, environmentID
 			if input.Value != nil {
 				value = *input.Value
 			}
+			if err := validateVariableValue(input.Key, value); err != nil {
+				return nil, err
+			}
 			vars = append(vars, SharedVariable{Key: input.Key, Value: value})
 			continue
 		}
@@ -177,22 +199,39 @@ func (s *Service) replaceVariables(ctx context.Context, projectID, environmentID
 			vars = append(vars, SharedVariable{Key: kept.Key, Ciphertext: kept.Ciphertext, Secret: true})
 			continue
 		}
+		if err := validateVariableValue(input.Key, *input.Value); err != nil {
+			return nil, err
+		}
 		ciphertext, err := providers.SealSecret(s.secret, *input.Value)
 		if err != nil {
 			return nil, fmt.Errorf("projects: seal shared variable %s: %w", input.Key, err)
 		}
 		vars = append(vars, SharedVariable{Key: input.Key, Ciphertext: ciphertext, Secret: true})
 	}
-	if err := s.repo.ReplaceVariables(ctx, projectID, environmentID, vars); err != nil {
-		return nil, err
-	}
-	return s.listVariables(ctx, projectID, environmentID)
+	return vars, nil
 }
 
-// validateVariableKey enforces the contract's key rule: ^[A-Za-z_][A-Za-z0-9_]*$.
+// validateVariableKey enforces the contract's key rule: ^[A-Za-z_][A-Za-z0-9_]*$,
+// at most 128 characters like application env keys.
 func validateVariableKey(key string) error {
 	if !variableKeyPattern.MatchString(key) {
 		return fmt.Errorf("%w: variable key %q must match ^[A-Za-z_][A-Za-z0-9_]*$", ErrValidation, key)
+	}
+	if len(key) > maxVariableKeyLength {
+		return fmt.Errorf("%w: variable key %q must be at most %d characters", ErrValidation, key, maxVariableKeyLength)
+	}
+	return nil
+}
+
+// validateVariableValue rejects what PostgreSQL text columns and container
+// runtimes cannot carry: NUL bytes (which fail the insert with a 500) and
+// invalid UTF-8.
+func validateVariableValue(key, value string) error {
+	if strings.ContainsRune(value, 0) {
+		return fmt.Errorf("%w: variable %q value must not contain NUL", ErrValidation, key)
+	}
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%w: variable %q value must be valid UTF-8", ErrValidation, key)
 	}
 	return nil
 }
@@ -207,21 +246,40 @@ func (r *storeRepository) ListVariables(ctx context.Context, projectID, environm
 	return sharedVariablesFromRows(rows), nil
 }
 
-// ReplaceVariables swaps one scope's whole set in a transaction.
-func (r *storeRepository) ReplaceVariables(ctx context.Context, projectID, environmentID uuid.UUID, vars []SharedVariable) error {
-	params := make([]sqlc.InsertSharedVariableParams, 0, len(vars))
-	for _, variable := range vars {
-		params = append(params, sqlc.InsertSharedVariableParams{
-			ID:            pgUUID(uuid.New()),
-			ProjectID:     pgUUID(projectID),
-			EnvironmentID: pgUUID(environmentID),
-			Key:           variable.Key,
-			Value:         variable.Value,
-			Ciphertext:    variable.Ciphertext,
-			Secret:        variable.Secret,
+// ReplaceVariables swaps one scope's whole set in a locked transaction (see
+// Store.ReplaceSharedVariablesLocked). build resolves the new set from the
+// existing rows inside that transaction, so keep-ciphertext reads the latest
+// committed set; a missing scope answers ErrNotFound.
+func (r *storeRepository) ReplaceVariables(ctx context.Context, projectID, environmentID uuid.UUID, build func(existing []SharedVariable) ([]SharedVariable, error)) error {
+	err := r.store.ReplaceSharedVariablesLocked(ctx, pgUUID(projectID), pgUUID(environmentID),
+		func(existing []sqlc.SharedVariable) ([]sqlc.InsertSharedVariableParams, error) {
+			vars, err := build(sharedVariablesFromRows(existing))
+			if err != nil {
+				return nil, err
+			}
+			params := make([]sqlc.InsertSharedVariableParams, 0, len(vars))
+			for _, variable := range vars {
+				params = append(params, sqlc.InsertSharedVariableParams{
+					ID:            pgUUID(uuid.New()),
+					ProjectID:     pgUUID(projectID),
+					EnvironmentID: pgUUID(environmentID),
+					Key:           variable.Key,
+					Value:         variable.Value,
+					Ciphertext:    variable.Ciphertext,
+					Secret:        variable.Secret,
+				})
+			}
+			return params, nil
 		})
-	}
-	if err := r.store.ReplaceSharedVariables(ctx, pgUUID(projectID), pgUUID(environmentID), params); err != nil {
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		// A parent deleted by a racing transaction trips the foreign key;
+		// a foreign scope reads as 404, never 500.
+		if isForeignKeyViolation(err) {
+			return ErrNotFound
+		}
 		return fmt.Errorf("projects: replace shared variables: %w", err)
 	}
 	return nil

@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -226,5 +227,18 @@ func TestSharedSecretWithBrokenCiphertextFailsClosed(t *testing.T) {
 		t.Fatal("buildRunRequest with a broken shared secret succeeded, want ErrValidation")
 	} else if got := err.Error(); strings.Contains(got, "not-a-sealed-value") || !strings.Contains(got, "DB_PASSWORD") {
 		t.Fatalf("error = %q, want the key name without the ciphertext", got)
+	}
+}
+
+// TestListSharedVariablesRejectsZeroScope pins the defensive guard: a zero
+// project or environment id fails explicitly instead of silently matching no
+// rows and deploying without shared variables.
+func TestListSharedVariablesRejectsZeroScope(t *testing.T) {
+	repo := &storeRepository{}
+	if _, _, err := repo.ListSharedVariables(context.Background(), uuid.Nil, uuid.New()); !errors.Is(err, ErrValidation) {
+		t.Fatalf("zero project = %v, want ErrValidation", err)
+	}
+	if _, _, err := repo.ListSharedVariables(context.Background(), uuid.New(), uuid.Nil); !errors.Is(err, ErrValidation) {
+		t.Fatalf("zero environment = %v, want ErrValidation", err)
 	}
 }

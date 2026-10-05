@@ -10,7 +10,10 @@
 CREATE TABLE shared_variables (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    environment_id uuid REFERENCES environments(id) ON DELETE CASCADE,
+    -- The environment reference is enforced by the composite foreign key
+    -- below (it must name an environment of this row's own project), so the
+    -- column itself carries no inline reference.
+    environment_id uuid,
     key text NOT NULL,
     value text NOT NULL DEFAULT '',
     ciphertext text NOT NULL DEFAULT '',
@@ -24,5 +27,16 @@ CREATE TABLE shared_variables (
 CREATE UNIQUE INDEX shared_variables_scope_key_idx ON shared_variables (project_id, (COALESCE(environment_id, '00000000-0000-0000-0000-000000000000')), key);
 CREATE INDEX shared_variables_environment_idx ON shared_variables (environment_id) WHERE environment_id IS NOT NULL;
 
+-- An environment-level row must belong to its own project: the composite
+-- foreign key ties (environment_id, project_id) to the environment it names.
+-- It needs a unique (id, project_id) on environments (id alone is already the
+-- primary key, so the pair is trivially unique). Project-level rows carry a
+-- NULL environment_id, which always satisfies a composite foreign key.
+CREATE UNIQUE INDEX environments_id_project_idx ON environments (id, project_id);
+ALTER TABLE shared_variables
+    ADD CONSTRAINT shared_variables_environment_project_fkey
+    FOREIGN KEY (environment_id, project_id) REFERENCES environments (id, project_id) ON DELETE CASCADE;
+
 -- +goose Down
 DROP TABLE IF EXISTS shared_variables;
+DROP INDEX IF EXISTS environments_id_project_idx;

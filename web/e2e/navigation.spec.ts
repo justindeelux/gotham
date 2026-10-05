@@ -6,13 +6,18 @@ import { storageStatePath } from "./support";
 test.use({ storageState: storageStatePath });
 
 /**
- * QA-4.1b (b) + FE-6.1: walk the five core pages and prove each heading and
+ * QA-4.1b (b) + FE-6.1: walk the core pages and prove each heading and
  * empty state renders, with no console errors and no failed /api/v1/* request.
  * The console/5xx guardrail is enforced by the fixture teardown; here we also
  * assert the 4xx bucket is empty for the whole walk.
+ *
+ * PE-4 (JUS-33): the sidebar links Projects instead of the flat Applications
+ * and Databases entries. The walk follows the sidebar for Dashboard, Servers,
+ * Projects and Domains, then still reaches the flat Applications and Databases
+ * pages by URL (their routes stay until PE-5) and proves they render.
  */
 test.describe("core navigation", () => {
-  test("walks Dashboard, Servers, Applications, Databases and Domains cleanly", async ({
+  test("walks Dashboard, Servers, Projects and Domains cleanly", async ({
     page,
     guardrails,
   }) => {
@@ -31,7 +36,22 @@ test.describe("core navigation", () => {
       page.getByRole("heading", { name: "Servers", level: 1 }),
     ).toBeVisible();
 
-    await sidebar.getByRole("link", { name: "Applications" }).click();
+    await sidebar.getByRole("link", { name: "Projects" }).click();
+    await expect(page).toHaveURL(/\/projects$/);
+    await expect(
+      page.getByRole("heading", { name: "Projects", level: 1 }),
+    ).toBeVisible();
+
+    await sidebar.getByRole("link", { name: "Domains & SSL" }).click();
+    await expect(page).toHaveURL(/\/domains$/);
+    await expect(
+      page.getByRole("heading", { name: "Domains & SSL", level: 1 }),
+    ).toBeVisible();
+
+    // The flat resource pages keep their routes until PE-5 removes them;
+    // they render the same content as before, reached by URL now that the
+    // sidebar no longer links them.
+    await page.goto("/applications");
     await expect(page).toHaveURL(/\/applications$/);
     await expect(
       page.getByRole("heading", { name: "Applications", level: 1 }),
@@ -41,16 +61,10 @@ test.describe("core navigation", () => {
     // applications scenario.
     await expect(page.getByText("Source providers", { exact: true })).toBeVisible();
 
-    await sidebar.getByRole("link", { name: "Databases" }).click();
+    await page.goto("/databases");
     await expect(page).toHaveURL(/\/databases$/);
     await expect(
       page.getByRole("heading", { name: "Databases", level: 1 }),
-    ).toBeVisible();
-
-    await sidebar.getByRole("link", { name: "Domains & SSL" }).click();
-    await expect(page).toHaveURL(/\/domains$/);
-    await expect(
-      page.getByRole("heading", { name: "Domains & SSL", level: 1 }),
     ).toBeVisible();
 
     expect(

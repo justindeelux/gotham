@@ -78,14 +78,21 @@ func randomPassword() (string, error) {
 
 // deriveIdentifier turns a database name into a lower-case SQL identifier:
 // invalid characters collapse to "_", leading digits and separators are
-// trimmed, and an unrecognisable name falls back to "gotham". The result is
-// truncated to fit the shortest username limit of the supported engines.
+// trimmed, and an unrecognisable name falls back to "gotham". A "pg_"
+// prefix is rewritten with a "gotham_" prefix because PostgreSQL refuses
+// role names starting with "pg_" (initdb: "superuser name ... is
+// disallowed") and the derived username is also the login the image
+// initialises. The result is truncated to fit the shortest username limit
+// of the supported engines.
 func deriveIdentifier(name string) string {
 	identifier := strings.ToLower(strings.TrimSpace(name))
 	identifier = strings.Trim(identifierInvalid.ReplaceAllString(identifier, "_"), "_")
 	identifier = strings.TrimLeft(identifier, "0123456789")
 	if identifier == "" {
 		identifier = "gotham"
+	}
+	if strings.HasPrefix(identifier, "pg_") {
+		identifier = "gotham_" + identifier
 	}
 	if len(identifier) > 32 {
 		identifier = strings.Trim(identifier[:32], "_")

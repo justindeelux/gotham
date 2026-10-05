@@ -25,7 +25,7 @@
           <div>
             <p class="eyebrow">Bản đồ giao diện · control plane v0.9.4</p>
             <h1 class="ov-title">Toàn bộ website Gotham, thiết kế lại theo ngôn ngữ Discord.</h1>
-            <p class="lede mt-4">12 màn hình phủ hết 10 phase trong <span class="inline-code">docs/plans</span>: xác thực, node &amp; agent, Docker, deploy từ Git, database &amp; backup, Traefik/SSL, services &amp; template, preview/team/thông báo, self-update. Dark-first, một accent blurple, rail máy chủ — sidebar — cột nội dung.</p>
+            <p class="lede mt-4">15 screens covering the 10 phases in <span class="inline-code">docs/plans</span> plus Phase 13 (projects &amp; environments): auth, nodes &amp; agents, Docker, deploy from Git, databases &amp; backups, Traefik/SSL, services &amp; templates, previews/teams/notifications, self-update, projects. Dark-first, one blurple accent, server rail — sidebar — content column.</p>
             <div class="row gap-3 wrap mt-6">
               <a class="btn btn-primary" href="dashboard.html">Mở dashboard</a>
               <a class="btn btn-outline" href="#screens">Danh sách màn hình</a>
@@ -61,12 +61,39 @@
             </span>
           </a>
 
+          <a class="screen-card" href="projects.html" data-od-id="screen-projects">
+            <span class="thumb"><span class="thumb-rail"><i></i><i class="on"></i><i></i></span><span class="thumb-side"><i class="on"></i><i></i><i></i><i></i></span><span class="thumb-main"><span class="tiles"><i class="on"></i><i></i><i></i></span><span class="bar"></span><span class="bar w80"></span><span class="bar w60"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Projects</span>
+              <span class="small muted">Project cards (environments, resource counts) with a create dialog.</span>
+              <span class="foot"><span class="tag">Phase 13</span><span class="tag">Cards + dialog</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="project-detail.html" data-od-id="screen-project-detail">
+            <span class="thumb"><span class="thumb-rail"><i></i><i class="on"></i><i></i></span><span class="thumb-side"><i class="on"></i><i></i><i></i></span><span class="thumb-main"><span class="bar w60"></span><span class="bar"></span><span class="bar"></span><span class="bar w40"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Project detail</span>
+              <span class="small muted">Environment tabs and project-level shared variables.</span>
+              <span class="foot"><span class="tag">Phase 13</span><span class="tag">Tabs + variables</span></span>
+            </span>
+          </a>
+
+          <a class="screen-card" href="environment.html" data-od-id="screen-environment">
+            <span class="thumb"><span class="thumb-rail"><i></i><i class="on"></i><i></i></span><span class="thumb-side"><i class="on"></i><i></i><i></i></span><span class="thumb-main"><span class="bar w40"></span><span class="bar"></span><span class="bar"></span><span class="bar w80"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Environment</span>
+              <span class="small muted">One resource table with type tabs (Applications / Services / Databases), a Show previews switch, an Add resource dialog, and a Shared variables section.</span>
+              <span class="foot"><span class="tag">Phase 13</span><span class="tag">Table + dialog</span></span>
+            </span>
+          </a>
+
           <a class="screen-card" href="applications.html" data-od-id="screen-applications">
             <span class="thumb"><span class="thumb-rail"><i></i><i class="on"></i><i></i></span><span class="thumb-side"><i></i><i class="on"></i><i></i><i></i></span><span class="thumb-main"><span class="bar w40"></span><span class="bar"></span><span class="bar"></span><span class="bar w80"></span></span></span>
             <span class="body">
               <span class="fg-2 bold">Ứng dụng</span>
-              <span class="small muted">12 ứng dụng từ Git, 4 build engine, wizard 5 bước từ repo tới container.</span>
-              <span class="foot"><span class="tag">Phase 4</span><span class="tag">Wizard + filter</span></span>
+              <span class="small muted">12 ứng dụng từ Git, 4 build engine, wizard 5 bước từ repo tới container. Since Phase 13, a section of the Environment page.</span>
+              <span class="foot"><span class="tag">Phase 4</span><span class="tag">Environment section</span></span>
             </span>
           </a>
 
@@ -74,8 +101,8 @@
             <span class="thumb"><span class="thumb-rail"><i></i><i class="on"></i><i></i></span><span class="thumb-side"><i class="on"></i><i></i><i></i></span><span class="thumb-main"><span class="bar w60"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar w40"></span></span></span>
             <span class="body">
               <span class="fg-2 bold">Chi tiết ứng dụng</span>
-              <span class="small muted">State machine deploy, log build realtime, env/secret, volume, tên miền, preview PR.</span>
-              <span class="foot"><span class="tag">Phase 4 + 6 + 8</span><span class="tag">Log streaming</span></span>
+              <span class="small muted">State machine deploy, log build realtime, env/secret, volume, tên miền, preview PR. Since Phase 13, nested under the Environment page URL.</span>
+              <span class="foot"><span class="tag">Phase 4 + 6 + 8</span><span class="tag">Resource detail</span></span>
             </span>
           </a>
 
@@ -83,8 +110,8 @@
             <span class="thumb"><span class="thumb-rail"><i></i><i></i><i class="on"></i></span><span class="thumb-side"><i></i><i></i><i class="on"></i></span><span class="thumb-main"><span class="tiles"><i></i><i class="on"></i><i></i></span><span class="bar"></span><span class="bar w60"></span></span></span>
             <span class="body">
               <span class="fg-2 bold">Services &amp; template</span>
-              <span class="small muted">Compose project, editor YAML có kiểm tra, thư viện template deploy 1-click.</span>
-              <span class="foot"><span class="tag">Phase 7</span><span class="tag">Dynamic form</span></span>
+              <span class="small muted">Compose project, editor YAML có kiểm tra, thư viện template deploy 1-click. Since Phase 13, a section of the Environment page.</span>
+              <span class="foot"><span class="tag">Phase 7</span><span class="tag">Environment section</span></span>
             </span>
           </a>
 
@@ -92,8 +119,8 @@
             <span class="thumb"><span class="thumb-rail"><i></i><i></i><i></i></span><span class="thumb-side"><i></i><i class="on"></i><i></i></span><span class="thumb-main"><span class="bar w40"></span><span class="bar"></span><span class="bar w80"></span><span class="bar"></span></span></span>
             <span class="body">
               <span class="fg-2 bold">Cơ sở dữ liệu</span>
-              <span class="small muted">5 engine, credentials, public port, backup ngay, lịch cron, phục hồi, đích S3/R2/MinIO.</span>
-              <span class="foot"><span class="tag">Phase 5</span><span class="tag">Destructive flows</span></span>
+              <span class="small muted">5 engine, credentials, public port, backup ngay, lịch cron, phục hồi, đích S3/R2/MinIO. Since Phase 13, a section of the Environment page.</span>
+              <span class="foot"><span class="tag">Phase 5</span><span class="tag">Environment section</span></span>
             </span>
           </a>
 
@@ -222,7 +249,7 @@
           </div>
         </div>
 
-        <div class="section-title"><h2>Linh kiện dùng chung</h2><span class="meta">một nguồn CSS cho cả 11 màn hình</span></div>
+        <div class="section-title"><h2>Linh kiện dùng chung</h2><span class="meta">one CSS source for all 14 screen cards</span></div>
         <div class="token-grid">
           <div class="token-cell"><p class="t-name">Rail &amp; avatar</p><p class="t-val">.rail-btn .avatar</p><p class="small muted mt-2">Vuông bo 16px → tròn khi hover (350ms), pill trắng 4px đánh dấu node đang mở.</p></div>
           <div class="token-cell"><p class="t-name">Log viewer</p><p class="t-val">.log · data-log</p><p class="small muted mt-2">Stream có tạm dừng, tự cuộn, xoá buffer, tải về; màu theo mức log.</p></div>
@@ -250,6 +277,7 @@
                 <tr><td class="ph">7 · Services</td><td>Compose project, template engine</td><td><a class="link" href="services.html">services.html</a></td><td>Editor YAML có kiểm tra, gallery, form động theo schema</td></tr>
                 <tr><td class="ph">8 · Advanced</td><td>Preview PR, team/RBAC, thông báo, metrics</td><td><a class="link" href="application-detail.html#previews">application-detail.html</a>, <a class="link" href="team-settings.html#notifications">team-settings.html</a></td><td>Preview + TTL, ma trận quyền, 4 kênh, biểu đồ 30 ngày</td></tr>
                 <tr><td class="ph">9 · Self-update</td><td>Cập nhật ký Ed25519, rollback, release</td><td><a class="link" href="team-settings.html#update">team-settings.html</a></td><td>Kiểm tra bản mới, xác minh chữ ký, cập nhật agent từ xa</td></tr>
+                <tr><td class="ph">13 · Projects</td><td>Projects, environments, shared variables</td><td><a class="link" href="projects.html">projects.html</a>, <a class="link" href="project-detail.html">project-detail.html</a>, <a class="link" href="environment.html">environment.html</a></td><td>Project cards, environment tabs, one resource table with type tabs + Add resource dialog and nested URLs; the old <a class="link" href="applications.html">applications.html</a>, <a class="link" href="services.html">services.html</a>, <a class="link" href="databases.html">databases.html</a> are sections of the Environment page</td></tr>
               </tbody>
             </table>
           </div>
@@ -272,7 +300,7 @@
             <div class="card-body">
               <div class="token-grid">
                 <div class="token-cell"><p class="t-name">Khung &amp; hệ thống</p><p class="t-val">assets/gotham-ui.css<br />assets/gotham-views.css<br />assets/gotham-ui.js</p></div>
-                <div class="token-cell"><p class="t-name">Màn hình</p><p class="t-val">index · dashboard<br />applications · application-detail<br />services · databases · files<br />servers · server-detail<br />domains · team-settings<br />login</p></div>
+                <div class="token-cell"><p class="t-name">Màn hình</p><p class="t-val">index · dashboard<br />projects · project-detail · environment<br />applications · application-detail<br />services · databases · files<br />servers · server-detail<br />domains · team-settings<br />login</p></div>
               </div>
               <p class="small muted mt-3">Mở bất kỳ tệp nào trong trình duyệt. Nhấn <span class="kbd">⌘K</span> để mở bảng lệnh, điều hướng chéo giữa các màn hình bằng rail bên trái (máy chủ) và sidebar (nhóm chức năng).</p>
             </div>
@@ -285,7 +313,7 @@
               <span class="brand-mark brand-mark--sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 19V11a7 7 0 0114 0v8" /><path d="M9.5 19v-6.5a2.5 2.5 0 015 0V19" /></svg></span>
               <div><p class="wordmark">Gotham</p><p class="small muted">Self-hosted PaaS · control plane v0.9.4</p></div>
             </div>
-            <p class="small meta">Thiết kế theo design system Discord · 12 màn hình · dữ liệu mẫu từ <span class="mono">docs/plans</span></p>
+            <p class="small meta">Thiết kế theo design system Discord · 15 screens · dữ liệu mẫu từ <span class="mono">docs/plans</span></p>
           </div>
         </div>
 

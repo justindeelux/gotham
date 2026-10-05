@@ -75,8 +75,8 @@ function handleProjectChange(projectId: string): void {
     </div>
 
     <div v-else class="scope-summary__edit">
-      <NAlert v-if="options.projectsError" type="error" :show-icon="true">
-        {{ options.projectsError }}
+      <NAlert v-if="options.projectsError.value" type="error" :show-icon="true">
+        {{ options.projectsError.value }}
       </NAlert>
       <div class="scope-summary__grid">
         <NSelect
@@ -97,8 +97,8 @@ function handleProjectChange(projectId: string): void {
           @update:value="(value: string) => emit('update:environmentId', value)"
         />
       </div>
-      <NAlert v-if="options.environmentsError" type="error" :show-icon="true">
-        {{ options.environmentsError }}
+      <NAlert v-if="options.environmentsError.value" type="error" :show-icon="true">
+        {{ options.environmentsError.value }}
       </NAlert>
       <div class="scope-summary__done">
         <NButton size="small" :disabled="!changeReady" @click="changing = false">

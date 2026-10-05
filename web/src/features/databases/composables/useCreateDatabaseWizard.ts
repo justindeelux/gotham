@@ -69,7 +69,9 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
 
   const form = reactive<WizardForm>({
     engine: "postgres",
-    version: "",
+    // Preselected so the Version select shows the engine default instead
+    // of a blank value (the empty string only renders as a placeholder).
+    version: engineByValue("postgres").defaultVersion,
     projectId: toValue(options.projectId ?? ""),
     environmentId: toValue(options.environmentId ?? ""),
     serverId: "",
@@ -154,7 +156,7 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     errorMessage.value = "";
     created.value = null;
     form.engine = "postgres";
-    form.version = "";
+    form.version = engineByValue(form.engine).defaultVersion;
     seedScope();
     form.serverId = "";
     form.name = "";
@@ -241,11 +243,11 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     () => seedScope(),
   );
 
-  // Switching engine resets the version pick to the engine default.
+  // Switching engine reselects the new engine's default version.
   watch(
     () => form.engine,
     () => {
-      form.version = "";
+      form.version = engineByValue(form.engine).defaultVersion;
     },
   );
 

@@ -51,6 +51,13 @@ func TestGenerateCredentials(t *testing.T) {
 			wantRoot: true,
 		},
 		{
+			name:     "postgres never derives a pg_ username",
+			engine:   EnginePostgres,
+			dbName:   "pg-orders",
+			username: "gotham_pg_orders",
+			database: "gotham_pg_orders",
+		},
+		{
 			name:     "mongodb roots the init database",
 			engine:   EngineMongoDB,
 			dbName:   "catalog",
@@ -127,6 +134,14 @@ func TestDeriveIdentifier(t *testing.T) {
 		{input: "", want: "gotham"},
 		{input: "!!!", want: "gotham"},
 		{input: strings.Repeat("a", 60), want: strings.Repeat("a", 32)},
+		{input: "pg", want: "pg"},
+		{input: "pg-orders", want: "gotham_pg_orders"},
+		{input: "pg_orders", want: "gotham_pg_orders"},
+		{input: "PG-Orders", want: "gotham_pg_orders"},
+		{
+			input: "pg-" + strings.Repeat("a", 60),
+			want:  "gotham_pg_" + strings.Repeat("a", 22),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -134,6 +149,32 @@ func TestDeriveIdentifier(t *testing.T) {
 				t.Errorf("deriveIdentifier(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestGenerateCredentialsNeverDerivesPgPrefix guards the live failure where
+// a database named pg-orders derived the login pg_orders and PostgreSQL's
+// initdb refused it ("role names cannot begin with pg_"), leaving the
+// create in error after the full healthcheck window. Every engine's derived
+// identifiers must stay clear of the pg_ prefix (and the [a-z0-9_] alphabet
+// keeps them valid for MySQL/MariaDB/MongoDB too; Redis uses fixed values).
+func TestGenerateCredentialsNeverDerivesPgPrefix(t *testing.T) {
+	names := []string{"pg-orders", "pg_orders", "PG-ORDERS", "Pg.Reports"}
+	for _, engine := range EngineNames() {
+		for _, name := range names {
+			credentials, err := generateCredentials(engine, name)
+			if err != nil {
+				t.Fatalf("generateCredentials(%s, %q): %v", engine, name, err)
+			}
+			if strings.HasPrefix(credentials.Username, "pg_") {
+				t.Errorf("generateCredentials(%s, %q) username = %q, must not start with pg_",
+					engine, name, credentials.Username)
+			}
+			if strings.HasPrefix(credentials.Database, "pg_") {
+				t.Errorf("generateCredentials(%s, %q) database = %q, must not start with pg_",
+					engine, name, credentials.Database)
+			}
+		}
 	}
 }
 

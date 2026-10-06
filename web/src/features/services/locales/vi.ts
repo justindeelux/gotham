@@ -28,8 +28,9 @@ const vi: typeof en = {
     badRequest: "Yêu cầu không hợp lệ. Kiểm tra tài liệu compose rồi thử lại.",
     notFound: "Không tìm thấy dịch vụ. Có thể nó đã bị xóa.",
     conflictFallback: "Đã có dịch vụ trùng tên. Hãy chọn tên khác.",
+    nodeAgentError: "Lỗi node agent: {detail}",
     nodeUnreachable: "Không kết nối được node agent. Kiểm tra trạng thái node rồi thử lại.",
-    disabled: "Services are disabled on the control plane (FEATURE_SERVICES=false).",
+    disabled: "Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).",
   },
   import: {
     title: "Nhập compose",
@@ -167,7 +168,7 @@ const vi: typeof en = {
     notFound: "Dịch vụ này không tồn tại (hoặc thuộc tài khoản khác).",
     backToProjects: "Về dự án",
     logsTitle: "Nhật ký",
-    logsNote: "docker compose logs -f via the node agent",
+    logsNote: "docker compose logs -f qua node agent",
     serverPinnedReason:
       "Dịch vụ này đã triển khai nên node bị ghim, không thể đổi. Vẫn có thể chuyển sang môi trường khác.",
   },

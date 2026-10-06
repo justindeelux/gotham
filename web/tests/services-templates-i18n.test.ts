@@ -75,9 +75,10 @@ describe("service errors keep raw diagnostics", () => {
     expect(describeServiceError(refusal)).toBe("a deploy is in progress");
     setLocale("vi", null);
     expect(describeServiceError(refusal)).toBe("a deploy is in progress");
+    // The heading localizes; the raw detail stays byte-identical.
     expect(
       describeServiceError({ status: 502, message: "services: down", cause: null }),
-    ).toBe("Node agent error: down");
+    ).toBe("Lỗi node agent: down");
     setLocale("en", null);
     expect(
       describeServiceError({ status: 502, message: "services: down", cause: null }),
@@ -99,10 +100,23 @@ describe("service errors keep raw diagnostics", () => {
       "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     );
     expect(describeServiceError(null)).toBe("Đã xảy ra lỗi. Vui lòng thử lại.");
-    // The disabled-services flag reference is technical and identical.
+    // The UI frame translates; the FEATURE_SERVICES=false token is preserved.
     expect(describeServiceError({ status: 503, message: "", cause: null })).toBe(
-      "Services are disabled on the control plane (FEATURE_SERVICES=false).",
+      "Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).",
     );
+    expect(
+      describeTemplateError({ status: 503, message: "", cause: null }),
+    ).toBe("Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).");
+  });
+
+  it("pairs a localized 502 heading with the byte-identical raw detail", () => {
+    const failure = { status: 502, message: "services: down", cause: null };
+    expect(describeServiceError(failure)).toBe("Node agent error: down");
+    setLocale("vi", null);
+    expect(describeServiceError(failure)).toBe("Lỗi node agent: down");
+    // Unknown diagnostics keep their raw text under the localized heading.
+    const unknown = { status: 502, message: "services: dial 10.0.0.9:2375", cause: null };
+    expect(describeServiceError(unknown)).toBe("Lỗi node agent: dial 10.0.0.9:2375");
   });
 
   it("renders status labels in both locales without touching wire values", () => {
@@ -301,6 +315,19 @@ describe("wizard draft and deploy state survive the language change", () => {
     expect(wizard?.formErrors.value).toEqual({ domain: "This field is required." });
   });
 
+  it("keeps an unsubmitted wizard pristine across the switch", async () => {
+    await openWizard();
+    if (wizard) {
+      wizard.values.value = { domain: "", encryption_key: "" };
+    }
+    // Invalid but never submitted: no feedback in either locale.
+    expect(wizard?.formErrors.value).toEqual({});
+    setLocale("vi", null);
+    expect(wizard?.formErrors.value).toEqual({});
+    expect(wizard?.step.value).toBe(1);
+    expect(wizard?.values.value).toEqual({ domain: "", encryption_key: "" });
+  });
+
   it("re-derives retained wizard failures in the current locale", async () => {
     await openWizard();
     const templates = useTemplatesStore();
@@ -372,6 +399,37 @@ describe("import dialog draft survives the language change", () => {
     expect(dialog?.name.value).toBe("  ");
     expect(dialog?.nameError.value).toBe("Nhập tên dịch vụ.");
     expect(dialog?.nodeError.value).toBe("Chọn một node.");
+    wrapper.unmount();
+    showRef.value = false;
+  });
+
+  it("keeps pre-submit forms pristine across the switch and clears on reset", async () => {
+    const wrapper = mount({
+      render: () => h(NMessageProvider, null, { default: () => h(Harness) }),
+    });
+    showRef.value = true;
+    await flushPromises();
+    // Pre-submit: invalid values entered but never submitted stay quiet,
+    // in both locales.
+    if (dialog) {
+      dialog.name.value = "  ";
+      dialog.serverId.value = "";
+    }
+    expect(dialog?.nameError.value).toBe("");
+    expect(dialog?.nodeError.value).toBe("");
+    expect(dialog?.scopeError.value).toBe("");
+    setLocale("vi", null);
+    expect(dialog?.nameError.value).toBe("");
+    expect(dialog?.nodeError.value).toBe("");
+    expect(dialog?.scopeError.value).toBe("");
+    // After an attempt the feedback shows; reset restores pristine quiet.
+    await dialog?.handleImport();
+    expect(dialog?.nameError.value).toBe("Nhập tên dịch vụ.");
+    dialog?.reset();
+    expect(dialog?.nameError.value).toBe("");
+    expect(dialog?.nodeError.value).toBe("");
+    expect(dialog?.scopeError.value).toBe("");
+    expect(dialog?.name.value).toBe("");
     wrapper.unmount();
     showRef.value = false;
   });

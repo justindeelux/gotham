@@ -27,6 +27,7 @@ const en = {
     badRequest: "Invalid request. Check the compose document and retry.",
     notFound: "Service not found. It may have been deleted already.",
     conflictFallback: "A service with that name already exists. Pick another name.",
+    nodeAgentError: "Node agent error: {detail}",
     nodeUnreachable: "The node agent is unreachable. Check the node status and retry.",
     disabled: "Services are disabled on the control plane (FEATURE_SERVICES=false).",
   },

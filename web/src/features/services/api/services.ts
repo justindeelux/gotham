@@ -386,9 +386,9 @@ export function deployStateTagType(
  * Classification still runs on the raw error (status plus the stripped
  * server message, exactly as before); only the curated fallback summaries
  * resolve in the active locale. Actionable server text passes through
- * untouched. The 502 detail keeps its literal "Node agent error:" framing:
- * it prefixes raw node diagnostics, and the source-based harness pins that
- * exact shape.
+ * untouched. The 502 detail pairs a localized UI heading with the raw node
+ * diagnostic: the heading translates, the detail stays byte-identical, and
+ * English output matches the historical literal exactly.
  */
 export function describeServiceError(error: unknown): string {
   // Tracks the locale when called during render or inside a computed, so
@@ -426,9 +426,17 @@ export function describeServiceError(error: unknown): string {
     }
     if (error.status === 502) {
       const detail = stripErrorPrefix(error.message);
-      return detail
-        ? `Node agent error: ${detail}`
-        : text("services.errors.nodeUnreachable");
+      if (detail === "") {
+        return text("services.errors.nodeUnreachable");
+      }
+      // The heading resolves through the services catalog when it is
+      // registered (the app's synchronous discovery); harnesses that bundle
+      // this module without catalogs keep the exact English baseline.
+      const key = "services.errors.nodeAgentError";
+      if (i18n.global.te(key)) {
+        return String(i18n.global.t(key, { detail }));
+      }
+      return `Node agent error: ${detail}`;
     }
     if (error.status === 503) {
       return text("services.errors.disabled");

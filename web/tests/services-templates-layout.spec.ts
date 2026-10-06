@@ -365,6 +365,10 @@ test("service detail renders history at every width, en and vi", async ({ page }
       const historyTitle =
         locale === "vi" ? "Lịch sử triển khai" : "Deploy history";
       await expect(page.locator(".service-detail-page")).toContainText(historyTitle);
+      // The log heading keeps the literal command with a translated frame.
+      const logsNote =
+        locale === "vi" ? "docker compose logs -f qua node agent" : "docker compose logs -f via the node agent";
+      await expect(page.locator(".service-detail-page")).toContainText(logsNote);
       // Wire values are never translated: ids, compose project, domains.
       await expect(page.locator(".service-detail-page")).toContainText("gotham-svc-1");
       await expect(page.locator(".service-detail-page")).toContainText("blog.example.com:80");
@@ -398,7 +402,7 @@ test("retained deploy-history failure re-derives in the current locale", async (
   await switchLocale(page, "vi");
   // The curated summary switches; the raw node diagnostic stays intact.
   await expect(page.locator('[data-testid="history-unavailable"]')).toContainText(
-    "Không đọc được lịch sử triển khai: Node agent error: dial node",
+    "Không đọc được lịch sử triển khai: Lỗi node agent: dial node",
   );
   await page.screenshot({ path: test.info().outputPath("service-history-vi-900.png") });
 });

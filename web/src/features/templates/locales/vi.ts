@@ -21,7 +21,7 @@ const vi: typeof en = {
     sessionExpired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     invalidValues: "Giá trị mẫu không hợp lệ. Kiểm tra các trường được đánh dấu.",
     notFound: "Không tìm thấy mẫu. Danh mục có thể đã đổi — tải lại trang.",
-    disabled: "Services are disabled on the control plane (FEATURE_SERVICES=false).",
+    disabled: "Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).",
   },
   gallery: {
     empty: "Danh mục chưa có mẫu nào.",

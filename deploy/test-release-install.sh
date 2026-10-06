@@ -1863,11 +1863,11 @@ ADMIN_EMAIL="ops@example.com" ADMIN_PWFILE="${SCRATCH}/admin-pw.txt" ADMIN_TTY="
     || { echo "FAIL: the password file did not arrive verbatim on stdin (JUS-22/a)" >&2; exit 1; }
 grep -q 'Account:  ops@example.com' "${SCRATCH}/a-out.log" \
     || { echo "FAIL: the summary does not show the admin email (JUS-22/a)" >&2; exit 1; }
-if grep -qF "Sup3r \$ecret!" "${SCRATCH}/a-out.log" "${SCRATCH}/a-err.log"; then
+if grep -qF -- "Sup3r \$ecret!" "${SCRATCH}/a-out.log" "${SCRATCH}/a-err.log"; then
     echo "FAIL: the password leaked into the install logs (JUS-22/a)" >&2
     exit 1
 fi
-if grep -qF "Sup3r \$ecret!" "${A_ROOT}/etc/gotham/gotham.env" "${A_STATE}/env" "${A_STATE}/argv"; then
+if grep -qF -- "Sup3r \$ecret!" "${A_ROOT}/etc/gotham/gotham.env" "${A_STATE}/env" "${A_STATE}/argv"; then
     echo "FAIL: the password leaked into the env file, child env or argv (JUS-22/a)" >&2
     exit 1
 fi
@@ -1888,17 +1888,52 @@ grep -q 'Store the password now, it is not shown again' "${SCRATCH}/b-out.log" \
     || { echo "FAIL: the store-it-now line is missing (JUS-22/b)" >&2; exit 1; }
 grep -q 'Account:  gen@example.com' "${SCRATCH}/b-out.log" \
     || { echo "FAIL: the summary does not pair the email with the password (JUS-22/b)" >&2; exit 1; }
-[ "$(grep -o -F "${B_GEN}" "${SCRATCH}/b-out.log" | wc -l)" -eq 1 ] \
+[ "$(grep -oF -e "${B_GEN}" -- "${SCRATCH}/b-out.log" | wc -l)" -eq 1 ] \
     || { echo "FAIL: the generated password is shown more than once (JUS-22/b)" >&2; exit 1; }
-if grep -qF "${B_GEN}" "${SCRATCH}/b-err.log"; then
+if grep -qF -e "${B_GEN}" -- "${SCRATCH}/b-err.log"; then
     echo "FAIL: the generated password leaked onto stderr (JUS-22/b)" >&2
     exit 1
 fi
-if grep -qF "${B_GEN}" "${A_ROOT}/etc/gotham/gotham.env" "${B_STATE}/env" "${B_STATE}/argv"; then
+if grep -qF -e "${B_GEN}" -- "${A_ROOT}/etc/gotham/gotham.env" "${B_STATE}/env" "${B_STATE}/argv"; then
     echo "FAIL: the generated password leaked into the env file, child env or argv (JUS-22/b)" >&2
     exit 1
 fi
 echo "PASS: the generated password is shown once, never logged or stored (JUS-22/b)"
+
+# ---- JUS-40: a leading-hyphen password is matched literally, never as options
+# Without -e/-- a password starting with `-` is parsed as grep options:
+# grep exits 2, and `if grep` misreads the error as "no match", so a
+# secrecy assert passes while blind. The static pin fails on any
+# password-controlled grep lacking -e/--, and the live run through the
+# existing password-file seam checks exit statuses explicitly (0 = found,
+# 1 = absent; anything else fails loudly instead of passing silently).
+HY_BAD="$(grep -E 'grep.*\$\{(B_GEN|H_GEN)\}' "${SCRIPT_DIR}/test-release-install.sh" | grep -v ' -- ' || true)"
+[ -z "${HY_BAD}" ] \
+    || { echo "FAIL: password-controlled grep without -e/-- (JUS-40): ${HY_BAD}" >&2; exit 1; }
+HY_ROOT="${SCRATCH}/root-admin-hyphen"
+HY_STATE="${SCRATCH}/admin-state-hyphen"
+mkdir -p "${HY_STATE}"
+printf '%s' '-lead-Hyphen-S3cret!' >"${SCRATCH}/admin-hyphen-pw.txt"
+chmod 600 "${SCRATCH}/admin-hyphen-pw.txt"
+HY_PW='-lead-Hyphen-S3cret!'
+ADMIN_EMAIL="hyphen@example.com" ADMIN_PWFILE="${SCRATCH}/admin-hyphen-pw.txt" ADMIN_TTY="" \
+    run_admin_install "${HY_ROOT}" "${HY_STATE}" "${SCRATCH}/hy-out.log" "${SCRATCH}/hy-err.log" \
+    || { echo "FAIL: leading-hyphen admin creation failed (JUS-40)" >&2; cat "${SCRATCH}/hy-err.log" >&2; exit 1; }
+[ "$(cat "${HY_STATE}/password")" = "${HY_PW}" ] \
+    || { echo "FAIL: the leading-hyphen password did not arrive verbatim (JUS-40)" >&2; exit 1; }
+HY_RC=0
+grep -qF -e "${HY_PW}" -- "${SCRATCH}/admin-hyphen-pw.txt" 2>/dev/null || HY_RC=$?
+[ "${HY_RC}" -eq 0 ] \
+    || { echo "FAIL: literal match missed a leading-hyphen password, rc=${HY_RC} (JUS-40)" >&2; exit 1; }
+HY_RC=0
+grep -qF -e "${HY_PW}" -- "${SCRATCH}/hy-out.log" "${SCRATCH}/hy-err.log" 2>/dev/null || HY_RC=$?
+[ "${HY_RC}" -eq 1 ] \
+    || { echo "FAIL: log secrecy check inconclusive, rc=${HY_RC} (JUS-40)" >&2; exit 1; }
+HY_RC=0
+grep -qF -e "${HY_PW}" -- "${HY_ROOT}/etc/gotham/gotham.env" "${HY_STATE}/env" "${HY_STATE}/argv" 2>/dev/null || HY_RC=$?
+[ "${HY_RC}" -eq 1 ] \
+    || { echo "FAIL: env/argv secrecy check inconclusive, rc=${HY_RC} (JUS-40)" >&2; exit 1; }
+echo "PASS: leading-hyphen passwords match literally and stay secret (JUS-40)"
 
 # JUS-22/c: rerun idempotency via `admin exists` (no prompt, no failure).
 rm -f "${A_STATE}/argv"
@@ -2116,7 +2151,7 @@ tr -d '\r' <"${SCRATCH}/g-out.log" >"${SCRATCH}/g-out.clean"
     || { echo "FAIL: the tty password did not arrive verbatim (JUS-22/g)" >&2; exit 1; }
 grep -q 'Account:  pty@example.com' "${SCRATCH}/g-out.clean" \
     || { echo "FAIL: the pty summary misses the email (JUS-22/g)" >&2; exit 1; }
-if grep -qF 'PtY-s3cret!' "${SCRATCH}/g-out.clean" "${SCRATCH}/g-err.log"; then
+if grep -qF -- 'PtY-s3cret!' "${SCRATCH}/g-out.clean" "${SCRATCH}/g-err.log"; then
     echo "FAIL: the tty password leaked into the logs (JUS-22/g)" >&2
     exit 1
 fi
@@ -2137,7 +2172,7 @@ H_GEN="$(cat "${H_STATE}/password")"
     || { echo "FAIL: the empty tty password did not generate (JUS-22/h)" >&2; exit 1; }
 grep -q 'Store the password now, it is not shown again' "${SCRATCH}/h-out.clean" \
     || { echo "FAIL: the pty generate summary misses the store-it-now line (JUS-22/h)" >&2; exit 1; }
-if grep -qF "${H_GEN}" "${SCRATCH}/h-err.log"; then
+if grep -qF -e "${H_GEN}" -- "${SCRATCH}/h-err.log"; then
     echo "FAIL: the pty-generated password leaked onto stderr (JUS-22/h)" >&2
     exit 1
 fi
@@ -2355,7 +2390,7 @@ ADMIN_EMAIL="xtrace@example.com" ADMIN_PWFILE="${SCRATCH}/admin-xtrace-pw.txt" A
     || { echo "FAIL: the xtrace run failed (JUS-22/x)" >&2; cat "${SCRATCH}/x-err.log" >&2; exit 1; }
 [ -f "${X_STATE}/users" ] \
     || { echo "FAIL: the xtrace run created no account (JUS-22/x)" >&2; exit 1; }
-if grep -qF "Xtrace \$ecret1!" "${SCRATCH}/x-out.log" "${SCRATCH}/x-err.log"; then
+if grep -qF -- "Xtrace \$ecret1!" "${SCRATCH}/x-out.log" "${SCRATCH}/x-err.log"; then
     echo "FAIL: sh -x printed the password (JUS-22/x)" >&2
     exit 1
 fi

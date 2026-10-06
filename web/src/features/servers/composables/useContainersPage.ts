@@ -6,6 +6,7 @@
 import { useMessage } from "naive-ui";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { ComputedRef } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Container, ContainerAction } from "@/features/servers/api/containers";
 import {
@@ -29,6 +30,7 @@ const pollIntervalMs = 5_000;
 
 export function useContainersPage(serverId: ComputedRef<string>) {
   const message = useMessage();
+  const { t } = useI18n();
 
   const containers = ref<Container[]>([]);
   const loading = ref(false);
@@ -142,7 +144,7 @@ export function useContainersPage(serverId: ComputedRef<string>) {
       } else {
         await restartContainer(serverId.value, row.id);
       }
-      message.success(`${label} requested for ${row.name}`);
+      message.success(t("servers.containers.actionRequested", { action: label, name: row.name }));
       await fetchContainers(false);
     } catch (err) {
       message.error(describeContainerError(err));

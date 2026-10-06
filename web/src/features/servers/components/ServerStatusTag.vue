@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NTag } from "naive-ui";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { ServerStatus } from "@/features/servers/api/servers";
 
@@ -17,14 +18,6 @@ const statusTypes: Record<ServerStatus, TagType> = {
   ready: "success",
   offline: "error",
   error: "error",
-};
-
-const statusLabels: Record<ServerStatus, string> = {
-  pending: "Pending",
-  validating: "Validating",
-  ready: "Ready",
-  offline: "Offline",
-  error: "Error",
 };
 
 /**
@@ -44,10 +37,15 @@ const statusDots: Record<ServerStatus, string> = {
 const pulsing: ReadonlySet<ServerStatus> = new Set(["validating", "offline"]);
 
 const props = withDefaults(defineProps<Props>(), { size: "small" });
+const { t, te } = useI18n();
 
 const tagType = computed<TagType>(() => statusTypes[props.status] ?? "default");
 
-const label = computed<string>(() => statusLabels[props.status] ?? props.status);
+const statusKey = computed<string>(() => `servers.status.${props.status}`);
+
+const label = computed<string>(() =>
+  te(statusKey.value) ? t(statusKey.value) : props.status,
+);
 
 const dotClass = computed<string>(() => statusDots[props.status] ?? "dot--pending");
 

@@ -16,7 +16,7 @@ defineProps<Props>();
 </script>
 
 <template>
-  <NCard class="kpi kpi--live" title="Servers ready" size="small">
+  <NCard class="kpi kpi--live" :title="$t('dashboard.kpi.serversReady')" size="small">
     <NSkeleton v-if="loading && totalCount === 0" text :repeat="2" />
     <template v-else>
       <p class="kpi-value num">
@@ -24,10 +24,9 @@ defineProps<Props>();
       </p>
       <p class="kpi-sub">
         <ServerStatusTag v-if="totalCount > 0" :status="aggregateStatus" />
-        <NText v-else depth="3">No servers yet — add one to begin.</NText>
+        <NText v-else depth="3">{{ $t("dashboard.kpi.noServers") }}</NText>
         <NText v-if="offlineNames" depth="3">
-          {{ offlineNames }}
-          unreachable
+          {{ $t("dashboard.kpi.unreachable", { names: offlineNames }) }}
         </NText>
       </p>
     </template>

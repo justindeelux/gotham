@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { NButton, NPopconfirm, NProgress } from "naive-ui";
+import { useI18n } from "vue-i18n";
 
 import type { Server } from "@/features/servers/api/servers";
 import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
@@ -24,6 +25,8 @@ const emit = defineEmits<{
   containers: [];
   delete: [];
 }>();
+
+const { locale } = useI18n();
 </script>
 
 <template>
@@ -38,22 +41,22 @@ const emit = defineEmits<{
     </div>
 
     <dl class="kv">
-      <dt>Docker</dt>
+      <dt>{{ $t("servers.card.docker") }}</dt>
       <dd class="mono">{{ server.docker_version ?? "—" }}</dd>
-      <dt>Resources</dt>
+      <dt>{{ $t("servers.card.resources") }}</dt>
       <dd class="mono">
         {{ formatBytes(server.total_mem) }} RAM ·
         {{ formatBytes(server.total_disk) }} disk
       </dd>
-      <dt>Agent</dt>
+      <dt>{{ $t("servers.card.agent") }}</dt>
       <dd class="mono">
         {{ server.node_id ?? "—" }} · {{ relativeTime(server.last_seen) }}
       </dd>
-      <dt>SSH</dt>
+      <dt>{{ $t("servers.card.ssh") }}</dt>
       <dd>
-        <span class="inline-code">{{ keyLabel(server) }}</span
+        <span class="inline-code">{{ keyLabel(server, locale) }}</span
         ><template v-if="server.ssh_user">
-          · user <span class="mono">{{ server.ssh_user }}</span>
+          · {{ $t("servers.card.sshUserWord") }} <span class="mono">{{ server.ssh_user }}</span>
         </template>
       </dd>
     </dl>
@@ -101,28 +104,28 @@ const emit = defineEmits<{
     </div>
 
     <div class="node-foot">
-      <span class="tag">{{ containerLabel(server) }}</span>
+      <span class="tag">{{ containerLabel(server, locale) }}</span>
       <NButton size="small" style="margin-left: auto" @click="emit('open')">
-        Open node
+        {{ $t("servers.card.openNode") }}
       </NButton>
       <NButton size="small" @click="emit('edit')">
-        Edit
+        {{ $t("servers.card.edit") }}
       </NButton>
       <NButton
         size="small"
         :loading="validating"
         @click="emit('validate')"
       >
-        Revalidate SSH
+        {{ $t("servers.card.revalidateSsh") }}
       </NButton>
       <NButton size="small" @click="emit('containers')">
-        Containers
+        {{ $t("servers.card.containers") }}
       </NButton>
       <NPopconfirm @positive-click="emit('delete')">
         <template #trigger>
-          <NButton size="small" type="error" secondary>Delete</NButton>
+          <NButton size="small" type="error" secondary>{{ $t("servers.card.delete") }}</NButton>
         </template>
-        Remove {{ server.name }}? Containers on the node are not touched.
+        {{ $t("servers.card.deleteConfirm", { name: server.name }) }}
       </NPopconfirm>
     </div>
   </article>

@@ -19,6 +19,7 @@ import {
   usageText,
 } from "@/features/servers/utils/serverDetailView";
 import { relativeTime } from "@/shared/utils/format";
+import { useI18n } from "vue-i18n";
 
 interface Props {
   server: Server;
@@ -30,6 +31,7 @@ const emit = defineEmits<{
   delete: [];
 }>();
 
+const { locale } = useI18n();
 /** isNarrow stacks the two-column descriptions on small screens. */
 const isNarrow = useMediaQuery("(max-width: 640px)");
 
@@ -39,61 +41,60 @@ const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
 
 <template>
   <NSpace vertical :size="16" style="margin-top: 16px">
-    <NCard title="Node info">
+    <NCard :title="$t('servers.overview.nodeInfo')">
       <NDescriptions :column="descColumns" bordered label-placement="left">
-        <NDescriptionsItem label="Name">
+        <NDescriptionsItem :label="$t('servers.overview.name')">
           {{ server.name }}
         </NDescriptionsItem>
-        <NDescriptionsItem label="Address">
+        <NDescriptionsItem :label="$t('servers.overview.address')">
           <span class="mono">{{ server.ip }}:{{ server.port }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="SSH user">
+        <NDescriptionsItem :label="$t('servers.overview.sshUser')">
           <span class="mono">{{ server.ssh_user }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="Node ID">
+        <NDescriptionsItem :label="$t('servers.overview.nodeId')">
           <span class="mono">{{ fallback(server.node_id) }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="OS">
+        <NDescriptionsItem :label="$t('servers.overview.os')">
           {{ fallback(server.os) }}
         </NDescriptionsItem>
-        <NDescriptionsItem label="Architecture">
+        <NDescriptionsItem :label="$t('servers.overview.arch')">
           {{ fallback(server.arch) }}
         </NDescriptionsItem>
-        <NDescriptionsItem label="Docker">
+        <NDescriptionsItem :label="$t('servers.overview.docker')">
           {{ fallback(server.docker_version) }}
         </NDescriptionsItem>
-        <NDescriptionsItem label="Credential">
-          <span class="mono">{{ authLabel(server) }}</span>
+        <NDescriptionsItem :label="$t('servers.overview.credential')">
+          <span class="mono">{{ authLabel(server, locale) }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="CPU usage">
+        <NDescriptionsItem :label="$t('servers.overview.cpuUsage')">
           {{ usageText(server.cpu_usage) }}
         </NDescriptionsItem>
-        <NDescriptionsItem label="Memory usage">
+        <NDescriptionsItem :label="$t('servers.overview.memUsage')">
           {{ usageText(server.mem_usage) }}
         </NDescriptionsItem>
-        <NDescriptionsItem label="Disk usage">
+        <NDescriptionsItem :label="$t('servers.overview.diskUsage')">
           {{ usageText(server.disk_usage) }}
         </NDescriptionsItem>
-        <NDescriptionsItem label="Containers">
+        <NDescriptionsItem :label="$t('servers.overview.containers')">
           {{ server.container_count ?? "—" }}
         </NDescriptionsItem>
-        <NDescriptionsItem label="Last seen">
+        <NDescriptionsItem :label="$t('servers.overview.lastSeen')">
           {{ relativeTime(server.last_seen) }}
         </NDescriptionsItem>
-        <NDescriptionsItem label="Registered">
+        <NDescriptionsItem :label="$t('servers.overview.registered')">
           {{ relativeTime(server.created_at) }}
         </NDescriptionsItem>
       </NDescriptions>
     </NCard>
 
-    <NCard title="Labels">
-      <NEmpty description="No labels on this node yet." />
+    <NCard :title="$t('servers.overview.labels')">
+      <NEmpty :description="$t('servers.overview.labelsEmpty')" />
     </NCard>
 
-    <NCard title="Danger zone">
+    <NCard :title="$t('servers.overview.dangerZone')">
       <NText depth="3">
-        Deleting a node removes it from the control plane only.
-        Containers, volumes and certificates on the machine are kept.
+        {{ $t("servers.overview.dangerText") }}
       </NText>
       <div style="margin-top: 12px">
         <NPopconfirm
@@ -102,10 +103,10 @@ const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
         >
           <template #trigger>
             <NButton type="error" ghost :loading="deleting">
-              Delete node
+              {{ $t("servers.overview.deleteNode") }}
             </NButton>
           </template>
-          Delete server "{{ server.name }}"?
+          {{ $t("servers.overview.deleteConfirm", { name: server.name }) }}
         </NPopconfirm>
       </div>
     </NCard>

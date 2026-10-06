@@ -9,8 +9,9 @@
 
 import type { FormInst, FormRules } from "naive-ui";
 import { useMessage } from "naive-ui";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import type { ComputedRef, InjectionKey, Ref } from "vue";
+import { useI18n } from "vue-i18n";
 
 import {
   createPrivateKey,
@@ -22,6 +23,7 @@ import {
 } from "@/features/servers/schemas/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
 import { useInFlightGuard } from "@/shared/composables/useInFlightGuard";
+import { onLocaleChange } from "@/shared/i18n";
 import { formatBytes } from "@/shared/utils/format";
 
 export interface ConnectionForm {
@@ -51,7 +53,7 @@ export interface FixedCheck {
 
 export interface AddServerWizardContext {
   step: Ref<number>;
-  stepNames: string[];
+  stepNames: ComputedRef<string[]>;
   form: ConnectionForm;
   formRef: Ref<FormInst | null>;
   setFormRef: (_instance: FormInst | null) => void;
@@ -81,12 +83,7 @@ export interface AddServerWizardContext {
 export const WizardKey: InjectionKey<AddServerWizardContext> = Symbol("add-server-wizard");
 
 /** Fixed probe list — exactly the checks the validate API reports. */
-const FIXED_CHECK_LABELS: Array<{ name: ServerCheckName; label: string }> = [
-  { name: "docker", label: "Docker Engine installed and running" },
-  { name: "cpu", label: "CPU architecture and core count" },
-  { name: "ram", label: "Available RAM" },
-  { name: "disk", label: "Free disk space" },
-];
+const FIXED_CHECK_NAMES: ServerCheckName[] = ["docker", "cpu", "ram", "disk"];
 
 type WizardEmit = {
   (_event: "update:show", _value: boolean): void;
@@ -96,13 +93,25 @@ type WizardEmit = {
 export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
   const serversStore = useServersStore();
   const message = useMessage();
+  const { t } = useI18n();
 
-  const stepNames = ["Connect", "Validate", "Install", "Finish"];
+  const stepNames = computed<string[]>(() => [
+    t("servers.wizard.stepConnect"),
+    t("servers.wizard.stepValidate"),
+    t("servers.wizard.stepInstall"),
+    t("servers.wizard.stepFinish"),
+  ]);
 
   const step = ref(0);
   const formRef = ref<FormInst | null>(null);
   const errorMessage = ref("");
   const validateMessage = ref("");
+  /**
+   * validationAttempted records that the connection form has been validated
+   * at least once, so a language switch can refresh already-visible feedback
+   * without ever surfacing errors on a pristine form.
+   */
+  const validationAttempted = ref(false);
   const validationPassed = ref(false);
   const fixedChecks = ref<FixedCheck[]>(makeIdleChecks());
   const createdServer = ref<Server | null>(null);
@@ -158,20 +167,34 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     () => fixedChecks.value.filter((check) => check.state === "ok").length,
   );
 
+  /** checkLabel renders one fixed probe name in the current locale. */
+  function checkLabel(name: ServerCheckName): string {
+    switch (name) {
+      case "docker":
+        return t("servers.wizard.checkDocker");
+      case "cpu":
+        return t("servers.wizard.checkCpu");
+      case "ram":
+        return t("servers.wizard.checkRam");
+      case "disk":
+        return t("servers.wizard.checkDisk");
+    }
+  }
+
   /** checkSummary reports the real outcome — never a fabricated duration. */
   const checkSummary = computed<string>(() => {
     if (validating.value) {
-      return "Running probes…";
+      return t("servers.wizard.summaryRunning");
     }
     if (!hasRunChecks.value) {
-      return "No probes have run yet.";
+      return t("servers.wizard.summaryIdle");
     }
     const total = fixedChecks.value.length;
     const passed = passedCount.value;
     if (validationPassed.value) {
-      return `${passed}/${total} probes passed — the node is ready for the agent.`;
+      return t("servers.wizard.summaryPassed", { passed, total });
     }
-    return `${passed}/${total} probes passed — fix the failing checks, then retry.`;
+    return t("servers.wizard.summaryFailed", { passed, total });
   });
 
   const hasRunChecks = computed<boolean>(
@@ -241,28 +264,45 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
 
   /** makeIdleChecks returns the fixed probe list in the idle state. */
   function makeIdleChecks(): FixedCheck[] {
-    return FIXED_CHECK_LABELS.map((item) => ({
-      name: item.name,
-      label: item.label,
+    return FIXED_CHECK_NAMES.map((name) => ({
+      name,
+      label: checkLabel(name),
       state: "idle" as CheckState,
-      detail: "Pending",
+      detail: t("servers.wizard.checkPending"),
     }));
   }
 
   /** applyCheckResults maps the API outcome onto the fixed check list. */
   function applyCheckResults(results: CheckResult[]): void {
     const byName = new Map(results.map((item) => [item.name, item]));
-    fixedChecks.value = FIXED_CHECK_LABELS.map((item) => {
-      const result = byName.get(item.name);
+    fixedChecks.value = FIXED_CHECK_NAMES.map((name) => {
+      const result = byName.get(name);
       if (!result) {
-        return { name: item.name, label: item.label, state: "idle" as CheckState, detail: "Pending" };
+        return { name, label: checkLabel(name), state: "idle" as CheckState, detail: t("servers.wizard.checkPending") };
       }
       return {
-        name: item.name,
-        label: item.label,
+        name,
+        label: checkLabel(name),
         state: (result.ok ? "ok" : "fail") as CheckState,
         detail: result.detail,
       };
+    });
+  }
+
+  /**
+   * relabelChecks refreshes the fixed probe labels after a language switch.
+   * States and server-reported details are preserved; only the static probe
+   * names and the idle/running placeholders are re-rendered.
+   */
+  function relabelChecks(): void {
+    fixedChecks.value = fixedChecks.value.map((check) => {
+      let detail = check.detail;
+      if (check.state === "idle") {
+        detail = t("servers.wizard.checkPending");
+      } else if (check.state === "running") {
+        detail = t("servers.wizard.checkRunning");
+      }
+      return { ...check, label: checkLabel(check.name), detail };
     });
   }
 
@@ -276,6 +316,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     }
 
     errorMessage.value = "";
+    validationAttempted.value = true;
     try {
       await formRef.value?.validate();
     } catch {
@@ -339,11 +380,11 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     // A retry starts from "not passed": a previous pass must never remain
     // visible (or unlock Continue) while the new probe runs or after it fails.
     validationPassed.value = false;
-    fixedChecks.value = FIXED_CHECK_LABELS.map((item) => ({
-      name: item.name,
-      label: item.label,
+    fixedChecks.value = FIXED_CHECK_NAMES.map((name) => ({
+      name,
+      label: checkLabel(name),
       state: "running" as CheckState,
-      detail: "Running…",
+      detail: t("servers.wizard.checkRunning"),
     }));
     try {
       const outcome = await serversStore.validate(server.id, form.passphrase || undefined, {
@@ -356,7 +397,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
       validateMessage.value = outcome.message;
       validationPassed.value = outcome.ok;
       if (outcome.ok) {
-        message.success("Validation passed");
+        message.success(t("servers.toasts.validationOk"));
       }
     } catch (error) {
       if (!inFlight.isCurrent(token)) {
@@ -407,6 +448,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     errorMessage.value = "";
     validateMessage.value = "";
     validationPassed.value = false;
+    validationAttempted.value = false;
     fixedChecks.value = makeIdleChecks();
     createdServer.value = null;
     formRef.value?.restoreValidation();
@@ -416,6 +458,20 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
   function setFormRef(instance: FormInst | null): void {
     formRef.value = instance;
   }
+
+  /**
+   * A language switch refreshes already-visible connection feedback without
+   * touching the draft: probe labels re-render, and a previously validated
+   * form re-validates (same visible set, translated). A pristine form is
+   * never validated, so no errors surface on untouched fields.
+   */
+  const stopLocaleWatch = onLocaleChange(() => {
+    relabelChecks();
+    if (validationAttempted.value && formRef.value) {
+      void formRef.value.validate().catch(() => {});
+    }
+  });
+  onBeforeUnmount(stopLocaleWatch);
 
   return {
     step,

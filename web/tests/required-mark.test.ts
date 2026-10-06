@@ -10,7 +10,7 @@
 import { mount } from "@vue/test-utils";
 import type { FormRules } from "naive-ui";
 import { NForm, NFormItem, NInput } from "naive-ui";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 import { h } from "vue";
 
 import { loginRules, registerRules } from "@/features/auth/schemas/auth";
@@ -18,11 +18,26 @@ import {
   connectionRules,
   editRules,
 } from "@/features/servers/schemas/servers";
+import {
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  syncComposerLocale,
+} from "@/shared/i18n";
 
 interface Field {
   path: string;
   label: string;
 }
+
+// Schema messages are catalog keys resolved at validation time; register
+// the catalogs so full-form validate() assertions see the English display
+// text the differential contract pins.
+registerDiscoveredCatalogs();
+
+beforeEach(() => {
+  resetLocaleState();
+  syncComposerLocale("en");
+});
 
 function mountFields(
   model: Record<string, unknown>,

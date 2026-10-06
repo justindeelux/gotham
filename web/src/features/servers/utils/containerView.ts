@@ -1,6 +1,15 @@
 // Pure view helpers for the containers page (extracted from ContainersPage).
 
 import type { Container } from "@/features/servers/api/containers";
+import { activeLocale } from "@/shared/i18n/locale";
+
+import enCatalog from "../locales/en";
+import viCatalog from "../locales/vi";
+
+/** catalogFor selects the servers display dictionary for one locale. */
+function catalogFor(locale?: string | null): typeof enCatalog {
+  return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
+}
 
 /** Status chips mirroring the server-detail mockup toolbar. */
 export type ContainerFilter = "all" | "running" | "exited";
@@ -21,6 +30,11 @@ export function matchesFilter(row: Container, filter: ContainerFilter): boolean 
     default:
       return true;
   }
+}
+
+/** stateLabel renders the raw Docker state, or the unknown fallback. */
+export function stateLabel(state: string, locale?: string | null): string {
+  return state || catalogFor(locale).containers.unknown;
 }
 
 /** Tag type for a raw Docker lifecycle state. */

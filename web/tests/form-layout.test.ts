@@ -327,13 +327,13 @@ describe("JUS-19 AddServerWizard rows", () => {
     // pair would clip by 5px. Neither control may share a row.
     const inRow = rowBlocks(source).some(
       (block) =>
-        block.includes("Authentication method") || block.includes("SSH key mode"),
+        block.includes("servers.wizard.authMethod") || block.includes("servers.wizard.keyModeName"),
     );
     expect(inRow).toBe(false);
   });
 
   it("keeps Key name on its own row", () => {
-    const inRow = rowBlocks(source).some((block) => block.includes('label="Key name"'));
+    const inRow = rowBlocks(source).some((block) => block.includes("servers.wizard.keyName"));
     expect(inRow).toBe(false);
   });
 
@@ -352,15 +352,15 @@ describe("JUS-19 fix 1 EditServerModal: Credentials on its own row", () => {
   });
 
   it("keeps the logical field order with Credentials under its own heading", () => {
-    const order = ["Node name", "IP address or hostname", "SSH port", "SSH user", "Credential change"];
+    const order = ["servers.edit.nodeName", "servers.edit.ipLabel", "servers.edit.portLabel", "servers.edit.sshUser", "servers.edit.credentialChange"];
     let cursor = -1;
     for (const label of order) {
       const next = source.indexOf(label, cursor + 1);
       expect(next, `expected ${label} after position ${cursor}`).toBeGreaterThan(cursor);
       cursor = next;
     }
-    const credentialsHeading = source.indexOf('aria-label="Credentials"');
-    expect(source.indexOf("Credential change", credentialsHeading)).toBeGreaterThan(
+    const credentialsHeading = source.indexOf("servers.edit.credentials");
+    expect(source.indexOf("servers.edit.credentialChange", credentialsHeading)).toBeGreaterThan(
       credentialsHeading,
     );
   });

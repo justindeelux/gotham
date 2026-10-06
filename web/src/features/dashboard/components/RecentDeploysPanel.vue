@@ -26,25 +26,24 @@ const deployments: Deployment[] = [];
 
 <template>
   <div class="section-title">
-    <h2>Recent deploys</h2>
+    <h2>{{ $t("dashboard.deploys.title") }}</h2>
     <NText depth="3" class="mono meta">source: deployments · realtime via Redis</NText>
   </div>
   <NCard size="small">
     <NEmpty
       v-if="deployments.length === 0"
-      description="No deployments yet"
+      :description="$t('dashboard.deploys.empty')"
     >
       <template #extra>
         <NText depth="3">
-          Push an application to see build history, durations, and
-          statuses here.
+          {{ $t("dashboard.deploys.emptyHint") }}
         </NText>
       </template>
     </NEmpty>
     <NSpace vertical :size="12">
       <div class="card-foot">
-        <NText depth="3">Queue: no data yet</NText>
-        <NText depth="3">No build history to show</NText>
+        <NText depth="3">{{ $t("dashboard.deploys.queue") }}</NText>
+        <NText depth="3">{{ $t("dashboard.deploys.noHistory") }}</NText>
       </div>
     </NSpace>
   </NCard>

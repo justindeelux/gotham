@@ -18,6 +18,8 @@ import {
   serversPageSize,
   useServersPage,
 } from "@/features/servers/composables/useServersPage";
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 const {
   serversStore,
@@ -43,19 +45,36 @@ const {
   handleUpdated,
   handleDelete,
 } = useServersPage();
+
+const { t } = useI18n();
+
+/** emptyDescription renders the card empty state for each data condition. */
+const emptyDescription = computed<string>(() =>
+  serversStore.servers.length === 0
+    ? t("servers.page.emptyNone")
+    : t("servers.page.emptyFiltered"),
+);
+
+/** emptyHint points a blank registry at creation, a filtered one at the filters. */
+const emptyHint = computed<string>(() =>
+  serversStore.servers.length === 0
+    ? t("servers.page.emptyNoneHint")
+    : t("servers.page.emptyFilteredHint"),
+);
 </script>
 
 <template>
   <div class="servers-page">
     <div class="page-head">
       <div>
-        <p class="eyebrow">Operations · Node registry</p>
-        <h1>Servers</h1>
+        <p class="eyebrow">{{ $t("servers.page.eyebrow") }}</p>
+        <h1>{{ $t("servers.page.title") }}</h1>
         <p class="page-desc">
-          Each node runs a <code class="inline-code">gotham-agent</code> connected to
-          the gRPC gateway <span class="mono">:9442</span> over server-authenticated
-          TLS. The control plane never calls Docker directly — every command goes
-          through the agent.
+          {{ $t("servers.page.descLead") }}
+          <code class="inline-code">gotham-agent</code>
+          {{ $t("servers.page.descMid") }}
+          <span class="mono">:9442</span>
+          {{ $t("servers.page.descTail") }}
         </p>
       </div>
       <div class="page-actions">
@@ -65,10 +84,10 @@ const {
           :disabled="serversStore.servers.length === 0"
           @click="() => void handleCheckAll()"
         >
-          Check SSH
+          {{ $t("servers.page.checkSsh") }}
         </NButton>
         <NButton type="primary" @click="wizardOpen = true">
-          Add server
+          {{ $t("servers.page.addServer") }}
         </NButton>
       </div>
     </div>
@@ -121,11 +140,7 @@ const {
       <NEmpty
         v-else
         class="servers-empty"
-        :description="
-          serversStore.servers.length === 0
-            ? 'No servers yet'
-            : 'No nodes match the current filters'
-        "
+        :description="emptyDescription"
       >
         <template #icon>
           <NIcon>
@@ -134,14 +149,10 @@ const {
         </template>
         <template #extra>
           <p class="servers-empty-hint">
-            {{
-              serversStore.servers.length === 0
-                ? "Add your first server over SSH to begin."
-                : "Adjust the filters or add a new server over SSH."
-            }}
+            {{ emptyHint }}
           </p>
           <NButton type="primary" @click="wizardOpen = true">
-            Add server
+            {{ $t("servers.page.addServer") }}
           </NButton>
         </template>
       </NEmpty>

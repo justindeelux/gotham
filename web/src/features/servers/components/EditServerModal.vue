@@ -13,11 +13,13 @@ import {
   type FormInst,
   type FormRules,
 } from "naive-ui";
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Server, UpdateServerInput } from "@/features/servers/api/servers";
 import { editRules } from "@/features/servers/schemas/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
+import { onLocaleChange } from "@/shared/i18n";
 
 interface Props {
   show: boolean;
@@ -41,9 +43,16 @@ const emit = defineEmits<{
 }>();
 
 const serversStore = useServersStore();
+const { t } = useI18n();
 const formRef = ref<FormInst | null>(null);
 const errorMessage = ref("");
 const saving = ref(false);
+/**
+ * validationAttempted records that the edit form has been validated at
+ * least once, so a language switch can refresh already-visible feedback
+ * without ever surfacing errors on a pristine form.
+ */
+const validationAttempted = ref(false);
 
 const form = reactive<EditForm>({
   name: "",
@@ -63,12 +72,12 @@ const currentAuth = computed<string>(() => {
     return "";
   }
   if (props.server.ssh_key_id) {
-    return `SSH key ${props.server.ssh_key_id.slice(0, 8)}…`;
+    return t("servers.edit.currentKey", { id: props.server.ssh_key_id.slice(0, 8) });
   }
   if (props.server.has_password) {
-    return "Password stored";
+    return t("servers.edit.currentPassword");
   }
-  return "No credentials stored";
+  return t("servers.edit.currentNone");
 });
 
 /** resetsPin warns when the edit invalidates the pinned host key. */
@@ -100,6 +109,7 @@ function prefill(): void {
   form.keyId = server.ssh_key_id ?? "";
   form.password = "";
   errorMessage.value = "";
+  validationAttempted.value = false;
   formRef.value?.restoreValidation();
 }
 
@@ -124,6 +134,7 @@ async function handleSave(): Promise<void> {
     return;
   }
   errorMessage.value = "";
+  validationAttempted.value = true;
   try {
     await formRef.value?.validate();
   } catch {
@@ -152,18 +163,30 @@ async function handleSave(): Promise<void> {
     emit("update:show", false);
   } catch (error) {
     errorMessage.value =
-      error instanceof Error ? error.message : "Something went wrong. Please try again.";
+      error instanceof Error ? error.message : t("servers.errors.unexpected");
   } finally {
     saving.value = false;
   }
 }
+
+/**
+ * A language switch refreshes already-visible edit feedback without
+ * touching the draft. A pristine form is never validated, so no errors
+ * surface on untouched fields.
+ */
+const stopLocaleWatch = onLocaleChange(() => {
+  if (validationAttempted.value && props.show && formRef.value) {
+    void formRef.value.validate().catch(() => {});
+  }
+});
+onBeforeUnmount(stopLocaleWatch);
 </script>
 
 <template>
   <NModal
     :show="props.show"
     preset="card"
-    title="Edit server"
+    :title="$t('servers.edit.title')"
     :mask-closable="false"
     class="edit-server-modal"
     style="width: 560px; max-width: 96vw"
@@ -181,76 +204,75 @@ async function handleSave(): Promise<void> {
       @submit.prevent="handleSave"
     >
       <div class="connect-form">
-        <section class="connect-group" aria-label="Identity">
-          <h4 class="connect-group__title">Identity</h4>
-          <NFormItem label="Node name" path="name">
-            <NInput v-model:value="form.name" placeholder="build-node-03" :input-props="{ 'aria-label': 'Node name' }" />
-            <span class="field-hint">A short unique name, e.g. build-node-03.</span>
+        <section class="connect-group" :aria-label="$t('servers.edit.identity')">
+          <h4 class="connect-group__title">{{ $t("servers.edit.identity") }}</h4>
+          <NFormItem :label="$t('servers.edit.nodeName')" path="name">
+            <NInput v-model:value="form.name" placeholder="build-node-03" :input-props="{ 'aria-label': $t('servers.edit.nodeName') }" />
+            <span class="field-hint">{{ $t("servers.edit.nodeNameHint") }}</span>
           </NFormItem>
         </section>
 
-        <section class="connect-group" aria-label="Address">
-          <h4 class="connect-group__title">Address</h4>
+        <section class="connect-group" :aria-label="$t('servers.edit.address')">
+          <h4 class="connect-group__title">{{ $t("servers.edit.address") }}</h4>
           <div class="addr-row">
-            <NFormItem label="IP address / hostname" path="ip">
-              <NInput v-model:value="form.ip" placeholder="203.0.113.90" :input-props="{ 'aria-label': 'IP address or hostname' }" />
-              <span class="field-hint">IPv4 or hostname.</span>
+            <NFormItem :label="$t('servers.edit.ipLabel')" path="ip">
+              <NInput v-model:value="form.ip" placeholder="203.0.113.90" :input-props="{ 'aria-label': $t('servers.edit.ipLabel') }" />
+              <span class="field-hint">{{ $t("servers.edit.ipHint") }}</span>
             </NFormItem>
-            <NFormItem label="SSH port" path="port">
-              <NInputNumber v-model:value="form.port" :min="1" :max="65535" placeholder="22" :input-props="{ 'aria-label': 'SSH port' }" />
-              <span class="field-hint">Usually 22.</span>
+            <NFormItem :label="$t('servers.edit.portLabel')" path="port">
+              <NInputNumber v-model:value="form.port" :min="1" :max="65535" placeholder="22" :input-props="{ 'aria-label': $t('servers.edit.portLabel') }" />
+              <span class="field-hint">{{ $t("servers.edit.portHint") }}</span>
             </NFormItem>
           </div>
         </section>
 
-        <section class="connect-group" aria-label="Access">
-          <h4 class="connect-group__title">Access</h4>
-          <NFormItem label="SSH user" path="sshUser">
-            <NInput v-model:value="form.sshUser" placeholder="root" :input-props="{ 'aria-label': 'SSH user' }" />
-            <span class="field-hint">The Unix user the control plane connects as.</span>
+        <section class="connect-group" :aria-label="$t('servers.edit.access')">
+          <h4 class="connect-group__title">{{ $t("servers.edit.access") }}</h4>
+          <NFormItem :label="$t('servers.edit.sshUser')" path="sshUser">
+            <NInput v-model:value="form.sshUser" placeholder="root" :input-props="{ 'aria-label': $t('servers.edit.sshUser') }" />
+            <span class="field-hint">{{ $t("servers.edit.sshUserHint") }}</span>
           </NFormItem>
         </section>
 
-        <section class="connect-group" aria-label="Credentials">
-          <h4 class="connect-group__title">Credentials</h4>
-          <NFormItem label="Credentials">
-            <NRadioGroup v-model:value="form.authMode" size="small" aria-label="Credential change">
-              <NRadioButton value="keep">Keep ({{ currentAuth }})</NRadioButton>
-              <NRadioButton value="key">SSH key</NRadioButton>
-              <NRadioButton value="password">Password</NRadioButton>
+        <section class="connect-group" :aria-label="$t('servers.edit.credentials')">
+          <h4 class="connect-group__title">{{ $t("servers.edit.credentials") }}</h4>
+          <NFormItem :label="$t('servers.edit.credentialLabel')">
+            <NRadioGroup v-model:value="form.authMode" size="small" :aria-label="$t('servers.edit.credentialChange')">
+              <NRadioButton value="keep">{{ $t("servers.edit.keepCurrent", { current: currentAuth }) }}</NRadioButton>
+              <NRadioButton value="key">{{ $t("servers.edit.keyOption") }}</NRadioButton>
+              <NRadioButton value="password">{{ $t("servers.edit.passwordOption") }}</NRadioButton>
             </NRadioGroup>
-            <span class="field-hint">Switching the credential replaces the stored one.</span>
+            <span class="field-hint">{{ $t("servers.edit.credentialHint") }}</span>
           </NFormItem>
 
-          <NFormItem v-if="form.authMode === 'key'" label="Key ID" path="keyId">
-            <NInput v-model:value="form.keyId" placeholder="00000000-0000-0000-0000-000000000000" :input-props="{ 'aria-label': 'Key ID' }" />
-            <span class="field-hint">The UUID of a key already stored on the control plane.</span>
+          <NFormItem v-if="form.authMode === 'key'" :label="$t('servers.edit.keyId')" path="keyId">
+            <NInput v-model:value="form.keyId" placeholder="00000000-0000-0000-0000-000000000000" :input-props="{ 'aria-label': $t('servers.edit.keyId') }" />
+            <span class="field-hint">{{ $t("servers.edit.keyIdHint") }}</span>
           </NFormItem>
 
-          <NFormItem v-if="form.authMode === 'password'" label="New password" path="password">
+          <NFormItem v-if="form.authMode === 'password'" :label="$t('servers.edit.newPassword')" path="password">
             <NInput
               v-model:value="form.password"
               type="password"
               show-password-on="click"
-              placeholder="Leave blank to keep the stored password"
-              :input-props="{ autocomplete: 'new-password', 'aria-label': 'New password' }"
+              :placeholder="$t('servers.edit.newPasswordHint')"
+              :input-props="{ autocomplete: 'new-password', 'aria-label': $t('servers.edit.newPassword') }"
             />
-            <span class="field-hint">Blank keeps the stored password. Stored encrypted, never returned.</span>
+            <span class="field-hint">{{ $t("servers.edit.newPasswordHint") }}</span>
           </NFormItem>
         </section>
 
         <NAlert v-if="resetsPin" type="warning" :show-icon="false">
-          Changing the address, user, or credential resets the pinned host key and
-          returns the node to pending — revalidate it afterwards.
+          {{ $t("servers.edit.pinResetWarning") }}
         </NAlert>
       </div>
     </NForm>
 
     <template #footer>
       <NSpace justify="end" :size="8">
-        <NButton @click="closeModal">Cancel</NButton>
+        <NButton @click="closeModal">{{ $t("servers.edit.cancel") }}</NButton>
         <NButton type="primary" :loading="saving" @click="handleSave">
-          Save changes
+          {{ $t("servers.edit.save") }}
         </NButton>
       </NSpace>
     </template>

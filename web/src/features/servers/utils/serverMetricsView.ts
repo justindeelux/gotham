@@ -1,8 +1,17 @@
 // Pure view helpers for the server metrics tab (extracted from ServerDetailPage).
 
 import type { MetricPoint, MetricStep } from "@/features/servers/api/metrics";
+import { activeLocale } from "@/shared/i18n/locale";
 import type { ChartSeries } from "@/shared/ui/MetricsChart.vue";
 import { formatBytes, toPercent } from "@/shared/utils/format";
+
+import enCatalog from "../locales/en";
+import viCatalog from "../locales/vi";
+
+/** catalogFor selects the servers display dictionary for one locale. */
+function catalogFor(locale?: string | null): typeof enCatalog {
+  return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
+}
 
 /** One metrics range: the API step and the window it is shown over. */
 export interface MetricRange {
@@ -31,6 +40,19 @@ export const metricRanges: MetricRange[] = [
   },
 ];
 
+/** metricRangeHint renders the window hint for one step in the display locale. */
+export function metricRangeHint(step: MetricStep, locale?: string | null): string {
+  const metrics = catalogFor(locale).metrics;
+  switch (step) {
+    case "1h":
+      return metrics.range1h;
+    case "1d":
+      return metrics.range1d;
+    case "1m":
+    default:
+      return metrics.range1m;
+  }
+}
 /** Auto-refresh choices: off unless the operator picks a cadence. */
 export type MetricRefreshChoice = "off" | "15s" | "60s";
 
@@ -84,7 +106,11 @@ export interface MetricChart {
  * buildMetricCharts maps the window's points onto the four real charts.
  * Nothing is synthesized: every series is a projection of the given `points`.
  */
-export function buildMetricCharts(points: MetricPoint[]): MetricChart[] {
+export function buildMetricCharts(
+  points: MetricPoint[],
+  locale?: string | null,
+): MetricChart[] {
+  const metrics = catalogFor(locale).metrics;
   const pointsOf = (select: (_point: MetricPoint) => number): ChartSeries["points"] =>
     points.map((point) => ({
       at: new Date(point.bucket).getTime(),
@@ -97,36 +123,36 @@ export function buildMetricCharts(points: MetricPoint[]): MetricChart[] {
   const write = last ? formatRateValue(last.disk_write_bps) : "";
   return [
     {
-      title: "CPU",
+      title: metrics.chartCpu,
       percent: true,
       series: [
-        { name: "CPU", color: "var(--accent)", points: pointsOf((p) => usage(p.cpu_usage)) },
+        { name: metrics.seriesCpu, color: "var(--accent)", points: pointsOf((p) => usage(p.cpu_usage)) },
       ],
       latest: last ? formatPercentValue(usage(last.cpu_usage)) : "",
     },
     {
-      title: "RAM",
+      title: metrics.chartRam,
       percent: true,
       series: [
-        { name: "RAM", color: "var(--success)", points: pointsOf((p) => usage(p.mem_usage)) },
+        { name: metrics.seriesRam, color: "var(--success)", points: pointsOf((p) => usage(p.mem_usage)) },
       ],
       latest: last ? formatPercentValue(usage(last.mem_usage)) : "",
     },
     {
-      title: "Disk I/O",
+      title: metrics.chartDisk,
       percent: false,
       series: [
-        { name: "Read", color: "var(--accent)", points: pointsOf((p) => p.disk_read_bps) },
-        { name: "Write", color: "var(--warn)", points: pointsOf((p) => p.disk_write_bps) },
+        { name: metrics.seriesRead, color: "var(--accent)", points: pointsOf((p) => p.disk_read_bps) },
+        { name: metrics.seriesWrite, color: "var(--warn)", points: pointsOf((p) => p.disk_write_bps) },
       ],
       latest: last ? `${read} ↓ · ${write} ↑` : "",
     },
     {
-      title: "Network",
+      title: metrics.chartNetwork,
       percent: false,
       series: [
-        { name: "RX", color: "var(--accent)", points: pointsOf((p) => p.net_rx_bps) },
-        { name: "TX", color: "var(--warn)", points: pointsOf((p) => p.net_tx_bps) },
+        { name: metrics.seriesRx, color: "var(--accent)", points: pointsOf((p) => p.net_rx_bps) },
+        { name: metrics.seriesTx, color: "var(--warn)", points: pointsOf((p) => p.net_tx_bps) },
       ],
       latest: last ? `${rx} ↓ · ${tx} ↑` : "",
     },

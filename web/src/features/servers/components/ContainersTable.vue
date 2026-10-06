@@ -8,12 +8,14 @@ import {
   NText,
 } from "naive-ui";
 import type { DataTableColumns } from "naive-ui";
-import { h } from "vue";
+import { computed, h } from "vue";
 import type { HTMLAttributes, VNode } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Container, ContainerAction } from "@/features/servers/api/containers";
 import {
   isRunning,
+  stateLabel,
   stateTagType,
 } from "@/features/servers/utils/containerView";
 
@@ -31,14 +33,16 @@ const emit = defineEmits<{
   openLogs: [row: Container];
 }>();
 
+const { locale, t } = useI18n();
+
 /** stateCell renders the container's lifecycle state as a coloured tag. */
 function stateCell(row: Container): VNode {
-  const title = row.status || row.state || "unknown";
+  const title = row.status || row.state || t("servers.containers.unknown");
   return h("span", { title }, [
     h(
       NTag,
       { type: stateTagType(row.state), size: "small", round: true },
-      { default: () => row.state || "unknown" },
+      { default: () => stateLabel(row.state, locale.value) },
     ),
   ]);
 }
@@ -58,12 +62,13 @@ function portsCell(row: Container): VNode {
  * reading as punctuation alone.
  */
 function statCell(): VNode {
+  const note = t("servers.containers.notReported");
   return h(
     "span",
     {
       class: "mono muted",
-      title: "Not reported by the agent yet",
-      "aria-label": "Not reported by the agent yet",
+      title: note,
+      "aria-label": note,
     },
     "—",
   );
@@ -78,8 +83,8 @@ function uptimeCell(row: Container): VNode {
 function actionButton(
   row: Container,
   action: ContainerAction,
-  label: string,
 ): VNode {
+  const label = t(`servers.containers.${action}`);
   return h(
     NButton,
     {
@@ -98,6 +103,7 @@ function actionButton(
 
 /** logsButton opens the log drawer without triggering the row click. */
 function logsButton(row: Container): VNode {
+  const label = t("servers.containers.logs");
   return h(
     NButton,
     {
@@ -108,7 +114,7 @@ function logsButton(row: Container): VNode {
         emit("openLogs", row);
       },
     },
-    { default: () => "Logs" },
+    { default: () => label },
   );
 }
 
@@ -116,10 +122,10 @@ function logsButton(row: Container): VNode {
 function actionsCell(row: Container): VNode {
   const controls: VNode[] = [];
   if (isRunning(row.state)) {
-    controls.push(actionButton(row, "restart", "Restart"));
-    controls.push(actionButton(row, "stop", "Stop"));
+    controls.push(actionButton(row, "restart"));
+    controls.push(actionButton(row, "stop"));
   } else {
-    controls.push(actionButton(row, "start", "Start"));
+    controls.push(actionButton(row, "start"));
   }
   controls.push(logsButton(row));
   return h(NSpace, { size: 8, align: "center", wrap: false }, {
@@ -127,16 +133,16 @@ function actionsCell(row: Container): VNode {
   });
 }
 
-const columns: DataTableColumns<Container> = [
+const columns = computed<DataTableColumns<Container>>(() => [
   {
-    title: "Name",
+    title: t("servers.containers.tableName"),
     key: "name",
     minWidth: 180,
     ellipsis: { tooltip: true },
     render: (row) => h("span", { class: "mono" }, row.name || row.id),
   },
   {
-    title: "Image",
+    title: t("servers.containers.tableImage"),
     key: "image",
     minWidth: 180,
     ellipsis: { tooltip: true },
@@ -144,43 +150,43 @@ const columns: DataTableColumns<Container> = [
       h("span", { class: "mono muted" }, row.image || "—"),
   },
   {
-    title: "State",
+    title: t("servers.containers.tableState"),
     key: "state",
     width: 140,
     render: (row) => stateCell(row),
   },
   {
-    title: "Ports",
+    title: t("servers.containers.tablePorts"),
     key: "ports",
     minWidth: 140,
     render: (row) => portsCell(row),
   },
   {
-    title: "CPU",
+    title: t("servers.containers.tableCpu"),
     key: "cpu",
     width: 80,
     render: () => statCell(),
   },
   {
-    title: "RAM",
+    title: t("servers.containers.tableRam"),
     key: "ram",
     width: 90,
     render: () => statCell(),
   },
   {
-    title: "Uptime",
+    title: t("servers.containers.tableUptime"),
     key: "uptime",
     minWidth: 140,
     ellipsis: { tooltip: true },
     render: (row) => uptimeCell(row),
   },
   {
-    title: "Actions",
+    title: t("servers.containers.tableActions"),
     key: "actions",
     width: 220,
     render: (row) => actionsCell(row),
   },
-];
+]);
 
 /** rowKey identifies a row by its container id. */
 function rowKey(row: Container): string {

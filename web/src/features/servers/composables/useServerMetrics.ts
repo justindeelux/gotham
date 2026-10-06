@@ -24,6 +24,7 @@ import type {
   MetricRange,
   MetricRefreshChoice,
 } from "@/features/servers/utils/serverMetricsView";
+import { activeLocale } from "@/shared/i18n/locale";
 
 export interface ServerMetricsContext {
   metricRanges: MetricRange[];
@@ -106,9 +107,12 @@ export function useServerMetrics(
 
   /**
    * metricCharts maps the window's points onto the four real charts. Nothing is
-   * synthesized: every series is a projection of the returned `points`.
+   * synthesized: every series is a projection of the returned `points`. Chart
+   * titles follow the display locale; thresholds and values are untouched.
    */
-  const metricCharts = computed<MetricChart[]>(() => buildMetricCharts(metricPoints.value));
+  const metricCharts = computed<MetricChart[]>(() =>
+    buildMetricCharts(metricPoints.value, activeLocale.value),
+  );
 
   /**
    * loadMetrics reads the active step's window. Completion is guarded by both a

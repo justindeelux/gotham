@@ -1,6 +1,15 @@
 // Pure view helpers for the server rail (extracted from ServerRail).
 
 import type { Server, ServerStatus } from "@/features/servers/api/servers";
+import { activeLocale } from "@/shared/i18n/locale";
+
+import enCatalog from "../locales/en";
+import viCatalog from "../locales/vi";
+
+/** catalogFor selects the servers display dictionary for one locale. */
+function catalogFor(locale?: string | null): typeof enCatalog {
+  return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
+}
 
 export const statusDots: Record<ServerStatus, string> = {
   ready: "dot--online",
@@ -30,9 +39,14 @@ export function serverInitials(name: string): string {
   return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
 }
 
-/** serverTip builds the English tooltip for one rail avatar. */
-export function serverTip(server: Server): string {
-  return `${server.name} · ${statusLabels[server.status] ?? server.status}`;
+/** statusLabelFor renders one lifecycle state in the display locale. */
+export function statusLabelFor(status: ServerStatus, locale?: string | null): string {
+  return catalogFor(locale).status[status] ?? status;
+}
+
+/** serverTip builds the tooltip for one rail avatar. */
+export function serverTip(server: Server, locale?: string | null): string {
+  return `${server.name} · ${statusLabelFor(server.status, locale)}`;
 }
 
 /** countAlerts counts servers needing operator attention. */
@@ -42,9 +56,14 @@ export function countAlerts(servers: Server[]): number {
   ).length;
 }
 
-/** alertsLabel renders the alert count as English screen-reader copy. */
-export function alertsLabel(alertCount: number): string {
-  return alertCount === 0
-    ? "No new alerts"
-    : `${alertCount} new alert${alertCount === 1 ? "" : "s"}`;
+/** alertsLabel renders the alert count as screen-reader copy. */
+export function alertsLabel(alertCount: number, locale?: string | null): string {
+  const rail = catalogFor(locale).rail;
+  if (alertCount === 0) {
+    return rail.noAlerts;
+  }
+  if (alertCount === 1) {
+    return rail.alertOne;
+  }
+  return rail.alertOther.replace("{count}", String(alertCount));
 }

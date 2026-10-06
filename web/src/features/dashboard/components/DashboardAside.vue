@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { NAlert, NCard, NEmpty, NSpace, NTag, NText } from "naive-ui";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Server } from "@/features/servers";
 import { useServersStore } from "@/features/servers";
 import { relativeTime } from "@/shared/utils/format";
 
 const serversStore = useServersStore();
+const { t } = useI18n();
 
 /** Bound the widgets so a large fleet is not re-diffed in full every 5s (B4-14). */
 const heartbeatWidgetLimit = 8;
@@ -22,19 +24,26 @@ const offlineServers = computed<Server[]>(() =>
     (server) => server.status === "offline" || server.status === "error",
   ),
 );
+
+/** moreNodesText renders the overflow count in the display locale. */
+const moreNodesText = computed<string>(() =>
+  hiddenHeartbeatCount.value === 1
+    ? t("dashboard.aside.moreOne", { count: 1 })
+    : t("dashboard.aside.moreOther", { count: hiddenHeartbeatCount.value }),
+);
 </script>
 
 <template>
-  <NCard size="small" title="Heartbeat" class="aside-card">
+  <NCard size="small" :title="$t('dashboard.aside.heartbeat')" class="aside-card">
     <template #header-extra>
       <NTag size="small" type="success" :bordered="false">
-        <span class="pulse-dot" aria-hidden="true" />live
+        <span class="pulse-dot" aria-hidden="true" />{{ $t("dashboard.aside.live") }}
       </NTag>
     </template>
     <NEmpty
       v-if="totalCount === 0"
       size="small"
-      description="No heartbeats yet — add a server"
+      :description="$t('dashboard.aside.noHeartbeats')"
     />
     <NSpace v-else vertical :size="8">
       <div
@@ -46,7 +55,7 @@ const offlineServers = computed<Server[]>(() =>
         <NText depth="3" class="mono">{{ relativeTime(server.last_seen) }}</NText>
       </div>
       <NText v-if="hiddenHeartbeatCount > 0" depth="3" class="meta">
-        +{{ hiddenHeartbeatCount }} more node{{ hiddenHeartbeatCount === 1 ? "" : "s" }}
+        {{ moreNodesText }}
       </NText>
     </NSpace>
     <template #footer>
@@ -54,40 +63,39 @@ const offlineServers = computed<Server[]>(() =>
     </template>
   </NCard>
 
-  <NCard size="small" title="Control-plane components" class="aside-card">
+  <NCard size="small" :title="$t('dashboard.aside.components')" class="aside-card">
     <NEmpty
       size="small"
-      description="No component telemetry yet"
+      :description="$t('dashboard.aside.noTelemetry')"
     >
       <template #extra>
         <NText depth="3">
-          Database, cache, and gateway health is not reported yet.
+          {{ $t("dashboard.aside.telemetryNote") }}
         </NText>
       </template>
     </NEmpty>
   </NCard>
 
-  <NCard size="small" title="Team activity" class="aside-card">
+  <NCard size="small" :title="$t('dashboard.aside.teamActivity')" class="aside-card">
     <NEmpty
       size="small"
-      description="No team activity yet"
+      :description="$t('dashboard.aside.noActivity')"
     />
   </NCard>
 
-  <NCard size="small" title="Alerts" class="aside-card">
+  <NCard size="small" :title="$t('dashboard.aside.alerts')" class="aside-card">
     <NSpace v-if="offlineServers.length > 0" vertical :size="8">
       <NAlert
         v-for="server in offlineServers"
         :key="server.id"
         type="error"
         :show-icon="true"
-        :title="`${server.name} unreachable`"
+        :title="$t('dashboard.aside.unreachableTitle', { name: server.name })"
       >
-        Agent heartbeat lost. Last seen
-        {{ relativeTime(server.last_seen) }}.
+        {{ $t("dashboard.aside.heartbeatLost", { time: relativeTime(server.last_seen) }) }}
       </NAlert>
     </NSpace>
-    <NEmpty v-else size="small" description="No alerts — all nodes healthy" />
+    <NEmpty v-else size="small" :description="$t('dashboard.aside.noAlerts')" />
   </NCard>
 </template>
 

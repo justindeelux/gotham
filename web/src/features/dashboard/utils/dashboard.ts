@@ -66,6 +66,16 @@ export interface ApplicationTileView {
   hint: string;
 }
 
+import { activeLocale } from "@/shared/i18n/locale";
+
+import enCatalog from "../locales/en";
+import viCatalog from "../locales/vi";
+
+/** catalogFor selects the dashboard display dictionary for one locale. */
+function catalogFor(locale?: string | null): typeof enCatalog {
+  return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
+}
+
 /** Hint shown under a ready tile whose figure is a lower bound. */
 export const incompleteTileHint = "Some states could not be read";
 
@@ -74,8 +84,13 @@ export const incompleteTileHint = "Some states could not be read";
  * Precedence mirrors the page: loading first, then error (never a false
  * "none yet"), then genuinely empty, then ready. A ready tile with failed
  * reads keeps the "at least N" figure and hint instead of a falsely low one.
+ * The incomplete hint follows the display locale; the figure itself is
+ * locale-independent counts.
  */
-export function applicationTileView(input: ApplicationTileInput): ApplicationTileView {
+export function applicationTileView(
+  input: ApplicationTileInput,
+  locale?: string | null,
+): ApplicationTileView {
   const idle = {
     error: null as string | null,
     countText: "",
@@ -95,6 +110,6 @@ export function applicationTileView(input: ApplicationTileInput): ApplicationTil
     ...idle,
     state: "ready",
     countText: `${incomplete ? "≥" : ""}${input.running}/${input.total}`,
-    hint: incomplete ? incompleteTileHint : "",
+    hint: incomplete ? catalogFor(locale).tiles.incompleteHint : "",
   };
 }

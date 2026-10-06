@@ -9,6 +9,7 @@ import {
 } from "naive-ui";
 import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
+import { useI18n } from "vue-i18n";
 
 import {
   countRunning,
@@ -28,6 +29,7 @@ import ServerHealthSection from "@/features/dashboard/components/ServerHealthSec
 import ServersReadyKpi from "@/features/dashboard/components/ServersReadyKpi.vue";
 
 const serversStore = useServersStore();
+const { locale, t } = useI18n();
 
 /**
  * Applications backing the "Running applications" tile. Read once on mount
@@ -66,7 +68,7 @@ async function fetchApplicationCounts(): Promise<void> {
     applicationTotal.value = 0;
     applicationRunning.value = 0;
     applicationFailedReads.value = 0;
-    applicationsError.value = "Could not load applications";
+    applicationsError.value = t("dashboard.kpi.loadFailed");
   } finally {
     applicationsLoading.value = false;
   }
@@ -77,7 +79,8 @@ async function fetchApplicationCounts(): Promise<void> {
  * (loading / error / empty / ready, plus the "≥N/total" figure and its
  * caveat). The template binds tile.countText / tile.hint directly and
  * formats nothing itself, so every branch is pinned by the ui-truth
- * harness through applicationTileView + buildApplicationTileInput.
+ * harness through applicationTileView + buildApplicationTileInput. The
+ * incomplete hint follows the display locale; counts never do.
  */
 const tile = computed(() =>
   applicationTileView(
@@ -88,6 +91,7 @@ const tile = computed(() =>
       running: applicationRunning.value,
       failedReads: applicationFailedReads.value,
     }),
+    locale.value,
   ),
 );
 
@@ -169,7 +173,7 @@ onMounted(() => {
         :offline-names="offlineServers.map((server) => server.name).join(', ')"
       />
 
-      <NCard class="kpi" title="Running applications" size="small">
+      <NCard class="kpi" :title="$t('dashboard.kpi.applications')" size="small">
         <NSkeleton v-if="tile.state === 'loading'" text :repeat="2" />
         <template v-else-if="tile.state === 'error'">
           <p class="kpi-value num">—</p>
@@ -180,26 +184,26 @@ onMounted(() => {
               quaternary
               @click="() => void fetchApplicationCounts()"
             >
-              Retry
+              {{ $t("dashboard.kpi.retry") }}
             </NButton>
           </p>
         </template>
         <template v-else-if="tile.state === 'ready'">
           <p class="kpi-value num">{{ tile.countText }}</p>
           <p class="kpi-sub">
-            <RouterLink :to="{ name: 'projects' }">View projects</RouterLink>
+            <RouterLink :to="{ name: 'projects' }">{{ $t("dashboard.kpi.viewProjects") }}</RouterLink>
             <NText v-if="tile.hint" depth="3">{{ tile.hint }}</NText>
           </p>
         </template>
-        <NEmpty v-else size="small" description="No applications yet" />
+        <NEmpty v-else size="small" :description="$t('dashboard.kpi.noApplications')" />
       </NCard>
 
-      <NCard class="kpi" title="Deploys in 24h" size="small">
-        <NEmpty size="small" description="No deploy data yet" />
+      <NCard class="kpi" :title="$t('dashboard.kpi.deploys')" size="small">
+        <NEmpty size="small" :description="$t('dashboard.kpi.noDeploys')" />
       </NCard>
 
-      <NCard class="kpi" title="SSL certificates" size="small">
-        <NEmpty size="small" description="No certificate data yet" />
+      <NCard class="kpi" :title="$t('dashboard.kpi.ssl')" size="small">
+        <NEmpty size="small" :description="$t('dashboard.kpi.noSsl')" />
       </NCard>
     </div>
 

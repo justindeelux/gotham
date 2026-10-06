@@ -40,10 +40,10 @@ const summary = computed<string>(() => summaryLine(props.server));
     </div>
     <NSpace class="page-head__actions" align="center" :size="8">
       <NButton @click="emit('edit')">
-        Edit
+        {{ $t("servers.card.edit") }}
       </NButton>
       <NButton :loading="validating" @click="emit('validate')">
-        Validate
+        {{ $t("servers.detail.validateAction") }}
       </NButton>
       <RouterLink
         :to="{ name: 'server-containers', params: { id: server.id } }"
@@ -51,7 +51,7 @@ const summary = computed<string>(() => summaryLine(props.server));
       >
         <template #default="{ navigate }">
           <NButton type="primary" @click="navigate">
-            Open containers
+            {{ $t("servers.detail.openContainers") }}
           </NButton>
         </template>
       </RouterLink>

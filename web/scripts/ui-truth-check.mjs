@@ -632,9 +632,9 @@ async function main() {
       new URL("../src/features/dashboard/pages/DashboardPage.vue", import.meta.url),
       "utf8",
     );
-    const start = source.indexOf('title="Running applications"');
+    const start = source.indexOf("dashboard.kpi.applications");
     assert(start !== -1, "tile card exists");
-    const end = source.indexOf('title="Deploys in 24h"', start);
+    const end = source.indexOf("dashboard.kpi.deploys", start);
     assert(end !== -1, "tile card block ends");
     const block = source.slice(start, end);
     // Every tile branch directive is exactly a tile.state comparison: an

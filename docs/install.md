@@ -190,7 +190,7 @@ the secret handling).
 Prefer to do it by hand (or skipped the prompt with an empty email)?
 
 ```sh
-sudo /var/lib/gotham/bin/gotham admin create --email ops@example.com
+sudo -u gotham -- /var/lib/gotham/bin/gotham admin create --email ops@example.com
 ```
 
 The password prompt is hidden. Useful flags: `--password-stdin` reads the
@@ -211,7 +211,7 @@ Then:
 3. From **Servers**, install an agent on a node (below); the node then reports
    heartbeats and is visible in the UI.
 
-Lost the admin password? `sudo /var/lib/gotham/bin/gotham admin reset-password
+Lost the admin password? `sudo -u gotham -- /var/lib/gotham/bin/gotham admin reset-password
 --email ops@example.com` replaces it and revokes the account's refresh sessions.
 Bearer access tokens are stateless JWTs, so a token already minted stays valid
 until it expires (15 minutes); resetting is not an instant, fleet-wide logout.

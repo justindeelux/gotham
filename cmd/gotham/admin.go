@@ -24,7 +24,7 @@ import (
 
 // adminEnvFile is the service environment file the installer maintains. The
 // admin CLI reads it when run outside systemd (systemd itself exports it via
-// EnvironmentFile), so `sudo gotham admin create` finds GOTHAM_DATABASE_DSN.
+// EnvironmentFile), so `sudo -u gotham -- gotham admin create` finds GOTHAM_DATABASE_DSN.
 const adminEnvFile = "/etc/gotham/gotham.env"
 
 // runAdmin implements `gotham admin`: operator account management on the

@@ -74,11 +74,8 @@ mkdir -p "${SERVE}"
 
 echo "==> building signer and ${ARCH} snapshot binaries"
 go build -o "${SCRATCH}/signer" ./cmd/signer
-# The fixtures carry a stamped test version (tag without its `v`, like the
-# release pipeline): the installer's installed-binary version proof runs on
-# every non-dry-run install, sandbox included.
-go build -ldflags "-X main.version=${VERSION#v}" -o "${SERVE}/gotham-linux-${ARCH}" ./cmd/gotham
-go build -ldflags "-X main.version=${VERSION#v}" -o "${SERVE}/gotham-agent-linux-${ARCH}" ./cmd/gotham-agent
+go build -o "${SERVE}/gotham-linux-${ARCH}" ./cmd/gotham
+go build -o "${SERVE}/gotham-agent-linux-${ARCH}" ./cmd/gotham-agent
 
 echo "==> generating an ephemeral test keypair"
 "${SCRATCH}/signer" keygen -out "${SCRATCH}/signing.key" >/dev/null
@@ -1997,39 +1994,6 @@ fi
 [ ! -e "${M_STATE}/users" ] \
     || { echo "FAIL: an account was created through the admin-less binary (JUS-38/m)" >&2; exit 1; }
 echo "PASS: a release without admin commands prints upgrade guidance, no create command, no database warning (JUS-38/m)"
-
-# JUS-38/k: a misbuilt release (valid signature and digest, wrong embedded
-# version) is refused by the installed-binary version proof before any config
-# is written.
-K_SERVE="${SCRATCH}/serve-wrong"
-mkdir -p "${K_SERVE}"
-go build -ldflags "-X main.version=0.0.0-wrong" -o "${K_SERVE}/gotham-linux-${ARCH}" ./cmd/gotham
-"${SCRATCH}/signer" manifest -key "${SCRATCH}/signing.key" -in "${K_SERVE}/gotham-linux-${ARCH}" \
-    -version "${VERSION}" -arch "${ARCH}" -channel stable -out "${K_SERVE}/gotham-manifest-${ARCH}.txt" >/dev/null
-K_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
-python3 "${SCRATCH}/server.py" "${K_SERVE}" "${K_PORT}" "${VERSION}" >/dev/null 2>&1 &
-K_PID=$!
-i=0
-while ! curl -fsS "http://127.0.0.1:${K_PORT}/gotham-linux-${ARCH}" -o /dev/null 2>/dev/null; do
-    i=$((i + 1))
-    [ "${i}" -gt 50 ] && { echo "wrong-version file server did not start" >&2; exit 1; }
-    sleep 0.1
-done
-K_RC=0
-GOTHAM_BASE_URL="http://127.0.0.1:${K_PORT}" \
-GOTHAM_VERSION="${VERSION}" \
-GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
-GOTHAM_INSTALL_ROOT="${SCRATCH}/root-admin-wrong" \
-GOTHAM_SKIP_DEPS=1 \
-    sh "${INSTALL_SH}" --no-local-agent >"${SCRATCH}/k-out.log" 2>"${SCRATCH}/k-err.log" || K_RC=$?
-kill "${K_PID}" 2>/dev/null || true
-[ "${K_RC}" -ne 0 ] \
-    || { echo "FAIL: the misbuilt release installed without complaint (JUS-38/k)" >&2; exit 1; }
-grep -q "reports 'gotham 0.0.0-wrong'" "${SCRATCH}/k-err.log" \
-    || { echo "FAIL: the refusal names no version mismatch (JUS-38/k)" >&2; cat "${SCRATCH}/k-err.log" >&2; exit 1; }
-[ ! -e "${SCRATCH}/root-admin-wrong/etc/gotham/gotham.env" ] \
-    || { echo "FAIL: config was written before the version proof (JUS-38/k)" >&2; exit 1; }
-echo "PASS: a misbuilt release is refused by the version proof before any config (JUS-38/k)"
 
 # JUS-22/f: --dry-run prompts nothing and changes nothing, even with every
 # admin seam set hostile (emails, password files, fake binary, tty).

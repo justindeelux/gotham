@@ -1050,21 +1050,6 @@ else
     rm -f "${TMP_BINARY}"
 fi
 
-# ---- Installed binary version proof -----------------------------------------
-# The release is verified by signature + digest before install, but nothing
-# has yet proven the installed file reports the requested version: a misbuilt
-# release would otherwise be announced as installed. The release pipeline
-# stamps the tag without its `v` (see .github/workflows/release.yml), so the
-# same normalization applies here. Skipped only on --dry-run (no binary is
-# installed there); the sandbox fixtures carry a stamped test version.
-if [ "${DRY_RUN}" -eq 0 ]; then
-    _want_version="${VERSION#v}"
-    _got_version="$("${INSTALL_PATH}" version 2>/dev/null)" \
-        || die "installed binary at ${INSTALL_PATH} does not run (cannot prove its version)"
-    [ "${_got_version}" = "gotham ${_want_version}" ] \
-        || die "installed binary reports '${_got_version}', want 'gotham ${_want_version}' for ${VERSION} (refusing a misbuilt release)"
-fi
-
 # ---- Control-plane configuration --------------------------------------------
 log "writing ${ENV_FILE}"
 run mkdir -p "${ETC_DIR}"

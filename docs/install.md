@@ -111,8 +111,7 @@ is never replaced by the local default, and local PostgreSQL/Redis are only
 provisioned when the resolved DSN is the built-in local default. The installer
 restarts `gotham.service` after a reinstall, so the just-installed binary is the
 one that runs (without the restart an upgraded host would keep serving the
-previous version). After installing, it proves the binary reports the requested
-version and refuses a mismatch before writing any config. Releases without
+previous version). Releases without
 `admin exists` (`v0.2.0`) skip automatic creation and print the manual
 `admin create` command instead of failing with a database warning; releases
 without any admin commands (`v0.1.0` and earlier) print upgrade guidance

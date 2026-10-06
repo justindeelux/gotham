@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import type { RouteRecordRaw } from "vue-router";
 
 import { useAuthStore } from "@/features/auth";
+import { i18n, onLocaleChange } from "@/shared/i18n";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -17,19 +18,19 @@ const routes: RouteRecordRaw[] = [
         path: "/login",
         name: "login",
         component: () => import("@/features/auth/pages/LoginPage.vue"),
-        meta: { title: "Sign in", publicOnly: true },
+        meta: { titleKey: "titles.login", publicOnly: true },
       },
       {
         path: "/register",
         name: "register",
         component: () => import("@/features/auth/pages/RegisterPage.vue"),
-        meta: { title: "Create account", publicOnly: true },
+        meta: { titleKey: "titles.register", publicOnly: true },
       },
       {
         path: "/oauth/callback",
         name: "oauth-callback",
         component: () => import("@/features/auth/pages/OAuthCallbackPage.vue"),
-        meta: { title: "Signing in" },
+        meta: { titleKey: "titles.oauthCallback" },
       },
     ],
   },
@@ -43,55 +44,55 @@ const routes: RouteRecordRaw[] = [
         path: "dashboard",
         name: "dashboard",
         component: () => import("@/features/dashboard/pages/DashboardPage.vue"),
-        meta: { title: "Dashboard", requiresAuth: true },
+        meta: { titleKey: "titles.dashboard", requiresAuth: true },
       },
       {
         path: "servers",
         name: "servers",
         component: () => import("@/features/servers/pages/ServersPage.vue"),
-        meta: { title: "Servers", requiresAuth: true },
+        meta: { titleKey: "titles.servers", requiresAuth: true },
       },
       {
         path: "servers/:id",
         name: "server-detail",
         component: () => import("@/features/servers/pages/ServerDetailPage.vue"),
-        meta: { title: "Server detail", requiresAuth: true },
+        meta: { titleKey: "titles.serverDetail", requiresAuth: true },
       },
       {
         path: "servers/:id/containers",
         name: "server-containers",
         component: () => import("@/features/servers/pages/ContainersPage.vue"),
-        meta: { title: "Containers", requiresAuth: true },
+        meta: { titleKey: "titles.serverContainers", requiresAuth: true },
       },
       {
         path: "projects",
         name: "projects",
         component: () => import("@/features/projects/pages/ProjectsPage.vue"),
-        meta: { title: "Projects", requiresAuth: true },
+        meta: { titleKey: "titles.projects", requiresAuth: true },
       },
       {
         path: "projects/:projectId",
         name: "project-detail",
         component: () => import("@/features/projects/pages/ProjectDetailPage.vue"),
-        meta: { title: "Project detail", requiresAuth: true },
+        meta: { titleKey: "titles.projectDetail", requiresAuth: true },
       },
       {
         path: "projects/:projectId/environments/:environmentId",
         name: "environment-detail",
         component: () => import("@/features/projects/pages/EnvironmentPage.vue"),
-        meta: { title: "Environment detail", requiresAuth: true },
+        meta: { titleKey: "titles.environmentDetail", requiresAuth: true },
       },
       {
         path: "projects/:projectId/environments/:environmentId/applications/:id",
         name: "application-detail",
         component: () => import("@/features/applications/pages/ApplicationDetailPage.vue"),
-        meta: { title: "Application detail", requiresAuth: true },
+        meta: { titleKey: "titles.applicationDetail", requiresAuth: true },
       },
       {
         path: "projects/:projectId/environments/:environmentId/databases/:id",
         name: "database-detail",
         component: () => import("@/features/databases/pages/DatabaseDetailPage.vue"),
-        meta: { title: "Database detail", requiresAuth: true },
+        meta: { titleKey: "titles.databaseDetail", requiresAuth: true },
       },
       // The flat list pages are gone since PE-5: old bookmarks land on Projects.
       { path: "applications", redirect: { name: "projects" } },
@@ -104,31 +105,31 @@ const routes: RouteRecordRaw[] = [
         path: "domains",
         name: "domains",
         component: () => import("@/features/domains/pages/DomainsPage.vue"),
-        meta: { title: "Domains & SSL", requiresAuth: true },
+        meta: { titleKey: "titles.domains", requiresAuth: true },
       },
       {
         path: "projects/:projectId/environments/:environmentId/services/:id",
         name: "service-detail",
         component: () => import("@/features/services/pages/ServiceDetailPage.vue"),
-        meta: { title: "Service detail", requiresAuth: true },
+        meta: { titleKey: "titles.serviceDetail", requiresAuth: true },
       },
       {
         path: "templates",
         name: "templates",
         component: () => import("@/features/templates/pages/TemplatesPage.vue"),
-        meta: { title: "Template library", requiresAuth: true },
+        meta: { titleKey: "titles.templates", requiresAuth: true },
       },
       {
         path: "teams",
         name: "teams",
         component: () => import("@/features/teams/pages/TeamsPage.vue"),
-        meta: { title: "Teams", requiresAuth: true },
+        meta: { titleKey: "titles.teams", requiresAuth: true },
       },
       {
         path: "settings/notifications",
         name: "notifications",
         component: () => import("@/features/notifications/pages/NotificationsPage.vue"),
-        meta: { title: "Notification channels", requiresAuth: true },
+        meta: { titleKey: "titles.notifications", requiresAuth: true },
       },
       // The bare settings path keeps landing on notifications now that the
       // settings section holds more than one page.
@@ -137,13 +138,13 @@ const routes: RouteRecordRaw[] = [
         path: "settings/profile",
         name: "profile",
         component: () => import("@/features/profile/pages/ProfilePage.vue"),
-        meta: { title: "Profile", requiresAuth: true },
+        meta: { titleKey: "titles.profile", requiresAuth: true },
       },
       {
         path: "invite/accept",
         name: "invite-accept",
         component: () => import("@/features/auth/pages/InviteAcceptPage.vue"),
-        meta: { title: "Team invite", requiresAuth: true },
+        meta: { titleKey: "titles.inviteAccept", requiresAuth: true },
       },
     ],
   },
@@ -167,4 +168,30 @@ router.beforeEach((to) => {
   }
 
   return true;
+});
+
+/**
+ * applyRouteTitle mirrors the active route's titleKey onto document.title in
+ * the current locale ("<page> — Gotham"). Keys (not English strings) live in
+ * meta so a language switch re-renders the title without navigating; route
+ * names, URLs, redirects and active-nav keys are unchanged.
+ */
+export function applyRouteTitle(titleKey: unknown): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  document.title =
+    typeof titleKey === "string" && titleKey !== ""
+      ? `${String(i18n.global.t(titleKey))} — Gotham`
+      : "Gotham";
+}
+
+router.afterEach((to) => {
+  applyRouteTitle(to.meta.titleKey);
+});
+
+// A language switch re-applies the current title without navigating,
+// reloading or touching session state.
+onLocaleChange(() => {
+  applyRouteTitle(router.currentRoute.value.meta.titleKey);
 });

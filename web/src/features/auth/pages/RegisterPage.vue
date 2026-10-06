@@ -10,7 +10,8 @@ import {
   NText,
 } from "naive-ui";
 import type { FormInst, FormRules } from "naive-ui";
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import AuthFootnote from "@/features/auth/components/AuthFootnote.vue";
@@ -21,10 +22,12 @@ import { registerRules } from "@/features/auth/schemas/auth";
 import { describeAuthError, useAuthStore } from "@/features/auth/stores/auth";
 import { authSwitchTarget, safeRedirect } from "@/features/auth/utils/authRedirect";
 import { strengthOf } from "@/features/auth/utils/passwordStrength";
+import { onLocaleChange } from "@/shared/i18n";
 
 // Error convention (shared with LoginPage): client-side validation errors
-// render inline on the field via NFormItem; server-side submit failures render
-// once in the NAlert above the form, with text from describeAuthError.
+// render inline on the field via NFormItem; server-side submit failures keep
+// the raw error and render once in the NAlert above the form through a
+// computed, so a language switch refreshes the banner reactively.
 interface RegisterForm {
   email: string;
   password: string;
@@ -32,6 +35,7 @@ interface RegisterForm {
   terms: boolean;
 }
 
+const { t } = useI18n();
 const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
@@ -39,7 +43,10 @@ const invite = useRegisterInvite();
 
 const formRef = ref<FormInst | null>(null);
 const submitting = ref(false);
-const errorMessage = ref("");
+const rawError = ref<unknown>(null);
+const errorMessage = computed<string>(() =>
+  rawError.value === null ? "" : describeAuthError(rawError.value),
+);
 const form = reactive<RegisterForm>({
   email: "",
   password: "",
@@ -87,19 +94,38 @@ const strength = computed<number>(() => strengthOf(form.password));
 // snapshot), so retyping the password revalidates the confirmation.
 const rules: FormRules = registerRules(() => form.password);
 
+/**
+ * submitAttempted marks that validation feedback has been shown at least
+ * once. A language switch then revalidates so visible errors refresh,
+ * without ever showing errors on a pristine form, clearing the draft,
+ * submitting, or navigating.
+ */
+let submitAttempted = false;
+const stopLocaleWatch = onLocaleChange(() => {
+  if (submitAttempted) {
+    void formRef.value?.validate().catch(() => {});
+  }
+});
+
+onUnmounted(() => {
+  stopLocaleWatch();
+});
+
 /** redirectAfterAuth honours ?redirect when it is a safe local path. */
 async function redirectAfterAuth(): Promise<void> {
   await router.replace(safeRedirect(route.query.redirect) ?? "/dashboard");
 }
 
 async function handleSubmit(): Promise<void> {
-  errorMessage.value = "";
+  rawError.value = null;
 
   try {
     await formRef.value?.validate();
   } catch {
+    submitAttempted = true;
     return;
   }
+  submitAttempted = true;
 
   submitting.value = true;
   try {
@@ -110,7 +136,7 @@ async function handleSubmit(): Promise<void> {
     );
     await redirectAfterAuth();
   } catch (error) {
-    errorMessage.value = describeAuthError(error);
+    rawError.value = error;
   } finally {
     submitting.value = false;
   }
@@ -124,26 +150,27 @@ async function handleSubmit(): Promise<void> {
         <nav
           v-if="authStore.registrationOpen"
           class="auth-switch"
-          aria-label="Sign in or create an account"
+          :aria-label="t('auth.login.switchLabel')"
         >
           <RouterLink :to="authSwitchTarget(route, 'login')">
-            Sign in
+            {{ t("auth.login.title") }}
           </RouterLink>
           <RouterLink to="/register" class="is-active" aria-current="page">
-            Create account
+            {{ t("auth.register.title") }}
           </RouterLink>
         </nav>
 
         <div>
-          <h2 class="auth-title">Create account</h2>
+          <h2 class="auth-title">{{ t("auth.register.title") }}</h2>
           <NText v-if="invite.inviteToken.value" depth="3">
-            You were invited to join
-            <span class="mono">{{ invite.inviteTeam.value || "this team" }}</span
-            >. Choose your credentials to accept.
+            {{ t("auth.register.invitedPrefix") }}
+            <span class="mono">{{ invite.inviteTeam.value || t("auth.register.invitedFallback") }}</span>.
+            {{ t("auth.register.invitedSuffix") }}
           </NText>
           <NText v-else depth="3">
-            The first account on a new instance becomes the
-            <span class="mono">owner</span> of the default team.
+            {{ t("auth.register.firstAccount") }}
+            <span class="mono">{{ t("auth.register.ownerWord") }}</span>
+            {{ t("auth.register.ownerSuffix") }}
           </NText>
         </div>
 
@@ -152,36 +179,35 @@ async function handleSubmit(): Promise<void> {
         </NAlert>
 
         <NForm ref="formRef" :model="form" :rules="rules" @submit.prevent="handleSubmit">
-          <NFormItem label="Email" path="email" :label-props="{ for: 'register-email' }">
+          <NFormItem :label="t('auth.register.emailLabel')" path="email" :label-props="{ for: 'register-email' }">
             <NInput
               v-model:value="form.email"
-              placeholder="you@gotham.dev"
+              :placeholder="t('auth.register.emailPlaceholder')"
               :input-props="{ id: 'register-email', autocomplete: 'email', type: 'email' }"
               @keyup.enter="handleSubmit"
             />
           </NFormItem>
 
           <div class="form-row">
-            <NFormItem label="Password" path="password" :label-props="{ for: 'register-password' }">
+            <NFormItem :label="t('auth.register.passwordLabel')" path="password" :label-props="{ for: 'register-password' }">
               <NSpace vertical :size="8" class="password-field">
                 <NInput
                   v-model:value="form.password"
                   type="password"
                   show-password-on="click"
-                  placeholder="At least 10 characters"
+                  :placeholder="t('auth.register.passwordPlaceholder')"
                   :input-props="{ id: 'register-password', autocomplete: 'new-password' }"
                   @keyup.enter="handleSubmit"
                 />
                 <PasswordStrengthMeter :score="strength" />
                 <span class="field-hint">
-                  At least 10 characters with 2 character classes: lowercase,
-                  uppercase, digits, symbols.
+                  {{ t("auth.register.passwordHint") }}
                 </span>
               </NSpace>
             </NFormItem>
 
             <NFormItem
-              label="Confirm password"
+              :label="t('auth.register.confirmLabel')"
               path="confirmPassword"
               :label-props="{ for: 'register-confirm-password' }"
             >
@@ -189,7 +215,7 @@ async function handleSubmit(): Promise<void> {
                 v-model:value="form.confirmPassword"
                 type="password"
                 show-password-on="click"
-                placeholder="Repeat your password"
+                :placeholder="t('auth.register.confirmPlaceholder')"
                 :input-props="{ id: 'register-confirm-password', autocomplete: 'new-password' }"
                 @keyup.enter="handleSubmit"
               />
@@ -198,7 +224,7 @@ async function handleSubmit(): Promise<void> {
 
           <NFormItem path="terms" :show-label="false">
             <NCheckbox v-model:checked="form.terms">
-              I agree to the Terms of Use and to how this instance stores data.
+              {{ t("auth.register.terms") }}
             </NCheckbox>
           </NFormItem>
 
@@ -209,11 +235,11 @@ async function handleSubmit(): Promise<void> {
             :disabled="invite.inviteChecking.value"
             @click="handleSubmit"
           >
-            Create account
+            {{ t("auth.register.submit") }}
           </NButton>
 
           <div class="auth-divider" aria-hidden="true">
-            <span>or</span>
+            <span>{{ t("auth.register.divider") }}</span>
           </div>
 
           <template v-if="!invite.inviteToken.value">

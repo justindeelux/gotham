@@ -1,17 +1,24 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NSpace, NSpin, NText } from "naive-ui";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
 import { http } from "@/shared/api/http";
 import type { AuthResult } from "@/shared/api/token";
 import { describeAuthError, useAuthStore } from "@/features/auth/stores/auth";
 
+const { t } = useI18n();
 const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
-const loadError = ref("");
+// loadError keeps the raw failure; the banner renders through a computed so
+// a language switch refreshes it reactively.
+const rawError = ref<unknown>(null);
+const loadError = computed<string>(() =>
+  rawError.value === null ? "" : describeAuthError(rawError.value),
+);
 
 /** backToLogin returns to the sign-in page after a failed callback. */
 async function backToLogin(): Promise<void> {
@@ -48,7 +55,7 @@ onMounted(async () => {
 
     await router.replace({ path: "/dashboard" });
   } catch (error) {
-    loadError.value = describeAuthError(error);
+    rawError.value = error;
     clearCode();
   }
 });
@@ -61,13 +68,13 @@ onMounted(async () => {
         <NSpin v-if="!loadError" size="large" />
         <div class="callback-copy">
           <h2 class="callback-title">
-            {{ loadError ? "Sign-in failed" : "Signing you in" }}
+            {{ loadError ? t("auth.oauth.failed") : t("auth.oauth.signingIn") }}
           </h2>
           <NText depth="3">
             {{
               loadError
-                ? "GitHub did not return a usable session."
-                : "Completing GitHub sign-in…"
+                ? t("auth.oauth.noSession")
+                : t("auth.oauth.inProgress")
             }}
           </NText>
         </div>
@@ -75,7 +82,7 @@ onMounted(async () => {
           {{ loadError }}
         </NAlert>
         <NButton v-if="loadError" @click="backToLogin">
-          Back to sign in
+          {{ t("auth.oauth.back") }}
         </NButton>
       </NSpace>
     </NCard>

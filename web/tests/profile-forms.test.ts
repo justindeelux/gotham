@@ -19,6 +19,12 @@ import ChangePasswordForm from "@/features/profile/components/ChangePasswordForm
 import DisplayNameForm from "@/features/profile/components/DisplayNameForm.vue";
 import ProfileIdentityCard from "@/features/profile/components/ProfileIdentityCard.vue";
 import { useAuthStore } from "@/features/auth";
+import {
+  i18n,
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  syncComposerLocale,
+} from "@/shared/i18n";
 import type { User } from "@/shared/api/token";
 
 const mockPatch = vi.mocked(patchDisplayName);
@@ -56,7 +62,7 @@ async function mountChild(child: object): Promise<VueWrapper> {
   // what the exactly-once submit tests need.
   const wrapper = mount(shell(child), {
     attachTo: globalThis.document.body,
-    global: { stubs: { transition: false } },
+    global: { plugins: [i18n], stubs: { transition: false } },
   });
   await nextTick();
   await flushPromises();
@@ -96,6 +102,9 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  registerDiscoveredCatalogs();
+  resetLocaleState();
+  syncComposerLocale("en");
   vi.restoreAllMocks();
   globalThis.document.body.innerHTML = "";
 });
@@ -431,7 +440,7 @@ describe("ChangePasswordForm", () => {
       }),
       {
         attachTo: globalThis.document.body,
-        global: { plugins: [router], stubs: { transition: false } },
+        global: { plugins: [router, i18n], stubs: { transition: false } },
       },
     );
     await flushPromises();

@@ -3,7 +3,7 @@
 import { mount } from "@vue/test-utils";
 import type { FormRules } from "naive-ui";
 import { NForm, NFormItem, NInput } from "naive-ui";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { h } from "vue";
 
 import { authMessages } from "@/features/auth/schemas/auth";
@@ -17,15 +17,37 @@ import {
   profileMessages,
 } from "@/features/profile/schemas/profile";
 import { parseWith } from "@/shared/validation/parse";
+import {
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  resolveValidationMessage,
+  syncComposerLocale,
+} from "@/shared/i18n";
 
-describe("profileMessages are byte-exact", () => {
-  it("pins every catalog string", () => {
+// Schema messages are keys resolved at display time; registration plus the
+// default locale keeps every display assertion on the original English text.
+beforeEach(() => {
+  registerDiscoveredCatalogs();
+  resetLocaleState();
+  syncComposerLocale("en");
+});
+
+describe("profileMessages are message keys with byte-exact English display", () => {
+  it("pins every catalog key and its resolved English text", () => {
     expect(profileMessages.displayNameLength).toBe(
-      "Display name must be 1-64 characters",
+      "profile.validation.displayNameLength",
     );
     expect(profileMessages.currentPasswordRequired).toBe(
-      "Current password is required",
+      "profile.validation.currentPasswordRequired",
     );
+    // Behavior preserved: the keys resolve to the exact previous strings in
+    // the default locale, so visible feedback is unchanged in English.
+    expect(resolveValidationMessage(profileMessages.displayNameLength)).toBe(
+      "Display name must be 1-64 characters",
+    );
+    expect(
+      resolveValidationMessage(profileMessages.currentPasswordRequired),
+    ).toBe("Current password is required");
   });
 });
 
@@ -46,6 +68,9 @@ describe("displayNameFieldSchema", () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues[0]?.message).toBe(
+        profileMessages.displayNameLength,
+      );
+      expect(resolveValidationMessage(result.error.issues[0]?.message ?? "")).toBe(
         "Display name must be 1-64 characters",
       );
     }
@@ -57,6 +82,9 @@ describe("displayNameFieldSchema", () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.issues[0]?.message).toBe(
+          profileMessages.displayNameLength,
+        );
+        expect(resolveValidationMessage(result.error.issues[0]?.message ?? "")).toBe(
           "Display name must be 1-64 characters",
         );
       }
@@ -70,6 +98,9 @@ describe("currentPasswordSchema", () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues[0]?.message).toBe(
+        profileMessages.currentPasswordRequired,
+      );
+      expect(resolveValidationMessage(result.error.issues[0]?.message ?? "")).toBe(
         "Current password is required",
       );
     }
@@ -83,7 +114,10 @@ describe("currentPasswordSchema", () => {
 
 describe("password rules are reused from auth, not duplicated", () => {
   it("keeps the register policy message for the new password", () => {
-    expect(authMessages.passwordPolicy).toBe(
+    expect(authMessages.passwordPolicy).toBe("auth.validation.passwordPolicy");
+    // Behavior preserved: the key resolves to the exact previous string in
+    // the default locale.
+    expect(resolveValidationMessage(authMessages.passwordPolicy)).toBe(
       "Use at least 10 characters with 2 character classes (lowercase, uppercase, digits, symbols)",
     );
   });

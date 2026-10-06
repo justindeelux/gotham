@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { NButton, NPopconfirm, NTag } from "naive-ui";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { AuthSession } from "@/features/profile/schemas/sessions";
 import { deviceLabel } from "@/features/profile/utils/deviceLabel";
+import type { DeviceLocale } from "@/features/profile/utils/deviceLabel";
+import { localeTag } from "@/shared/i18n";
 import { relativeTime } from "@/shared/utils/format";
 
 interface Props {
@@ -16,10 +19,15 @@ const emit = defineEmits<{
   signOut: [session: AuthSession];
 }>();
 
-const label = computed<string>(() => deviceLabel(props.session.user_agent));
+const { t, locale } = useI18n();
+
+/** label renders the "browser on OS" device name in the active locale. */
+const label = computed<string>(() =>
+  deviceLabel(props.session.user_agent, locale.value as DeviceLocale),
+);
 
 const ip = computed<string>(() =>
-  props.session.ip.trim() === "" ? "unknown" : props.session.ip,
+  props.session.ip.trim() === "" ? t("profile.sessions.unknownIp") : props.session.ip,
 );
 
 const createdRelative = computed<string>(() =>
@@ -36,16 +44,17 @@ const activeAbsolute = computed<string>(() =>
 );
 
 /**
- * formatDateTime renders date + time for the hover title. No shared
- * datetime helper exists (shared/utils/format only has the date-only
- * formatDate), so the row formats locally like ProfileIdentityCard does.
+ * formatDateTime renders date + time for the hover title in the active
+ * display locale (not the browser default). No shared datetime helper
+ * exists (shared/utils/format only has the date-only formatDate), so the
+ * row formats locally like ProfileIdentityCard does.
  */
 function formatDateTime(iso: string): string {
   const time = new Date(iso);
   if (Number.isNaN(time.getTime())) {
-    return "unknown";
+    return t("profile.sessions.unknownIp");
   }
-  return time.toLocaleString(undefined, {
+  return time.toLocaleString(localeTag(), {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -60,8 +69,8 @@ function formatDateTime(iso: string): string {
  */
 const confirmText = computed<string>(() =>
   props.session.current
-    ? "Sign out this device? You will be signed out here and returned to the sign-in page."
-    : `Sign out ${label.value}? That device will need to sign in again.`,
+    ? t("profile.sessions.confirmCurrent")
+    : t("profile.sessions.confirmOther", { label: label.value }),
 );
 </script>
 
@@ -70,14 +79,14 @@ const confirmText = computed<string>(() =>
     <div class="session-main">
       <span class="session-label">
         {{ label }}
-        <NTag v-if="session.current" size="small" type="success">This device</NTag>
+        <NTag v-if="session.current" size="small" type="success">{{ t("profile.sessions.thisDevice") }}</NTag>
       </span>
       <span class="small muted session-meta">
-        {{ ip }} · Created
+        {{ ip }} · {{ t("profile.sessions.created") }}
         <time :datetime="session.created_at" :title="createdAbsolute">
           {{ createdRelative }}
         </time>
-        · Last active
+        · {{ t("profile.sessions.lastActive") }}
         <time :datetime="session.last_used_at" :title="activeAbsolute">
           {{ activeRelative }}
         </time>
@@ -85,8 +94,8 @@ const confirmText = computed<string>(() =>
     </div>
     <NPopconfirm
       :positive-button-props="session.current ? { type: 'error' } : undefined"
-      positive-text="Sign out"
-      negative-text="Keep"
+      :positive-text="t('profile.sessions.signOut')"
+      :negative-text="t('profile.sessions.keep')"
       @positive-click="emit('signOut', session)"
     >
       <template #trigger>
@@ -95,7 +104,7 @@ const confirmText = computed<string>(() =>
           :type="session.current ? 'error' : 'default'"
           :loading="busy"
         >
-          Sign out
+          {{ t("profile.sessions.signOut") }}
         </NButton>
       </template>
       {{ confirmText }}

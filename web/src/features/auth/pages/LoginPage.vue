@@ -10,23 +10,27 @@ import {
   useMessage,
 } from "naive-ui";
 import type { FormInst, FormRules } from "naive-ui";
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import { describeAuthError, useAuthStore } from "@/features/auth/stores/auth";
 import { loginRules } from "@/features/auth/schemas/auth";
 import { authSwitchTarget, safeRedirect } from "@/features/auth/utils/authRedirect";
+import { onLocaleChange } from "@/shared/i18n";
 import AuthFootnote from "@/features/auth/components/AuthFootnote.vue";
 import GitHubOAuthButton from "@/features/auth/components/GitHubOAuthButton.vue";
 
 // Error convention (shared with RegisterPage): client-side validation errors
-// render inline on the field via NFormItem; server-side submit failures render
-// once in the NAlert above the form, with text from describeAuthError.
+// render inline on the field via NFormItem; server-side submit failures keep
+// the raw error and render once in the NAlert above the form through a
+// computed, so a language switch refreshes the banner reactively.
 interface LoginForm {
   email: string;
   password: string;
 }
 
+const { t } = useI18n();
 const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
@@ -34,10 +38,30 @@ const message = useMessage();
 
 const formRef = ref<FormInst | null>(null);
 const submitting = ref(false);
-const errorMessage = ref("");
+const rawError = ref<unknown>(null);
+const errorMessage = computed<string>(() =>
+  rawError.value === null ? "" : describeAuthError(rawError.value),
+);
 const form = reactive<LoginForm>({ email: "", password: "" });
 
 const rules: FormRules = loginRules();
+
+/**
+ * submitAttempted marks that validation feedback has been shown at least
+ * once. A language switch then revalidates so visible errors refresh,
+ * without ever showing errors on a pristine form, clearing the draft,
+ * submitting, or navigating.
+ */
+let submitAttempted = false;
+const stopLocaleWatch = onLocaleChange(() => {
+  if (submitAttempted) {
+    void formRef.value?.validate().catch(() => {});
+  }
+});
+
+onUnmounted(() => {
+  stopLocaleWatch();
+});
 
 /** redirectAfterAuth honours ?redirect when it is a safe local path. */
 async function redirectAfterAuth(): Promise<void> {
@@ -45,20 +69,22 @@ async function redirectAfterAuth(): Promise<void> {
 }
 
 async function handleSubmit(): Promise<void> {
-  errorMessage.value = "";
+  rawError.value = null;
 
   try {
     await formRef.value?.validate();
   } catch {
+    submitAttempted = true;
     return;
   }
+  submitAttempted = true;
 
   submitting.value = true;
   try {
     await authStore.login(form.email, form.password);
     await redirectAfterAuth();
   } catch (error) {
-    errorMessage.value = describeAuthError(error);
+    rawError.value = error;
   } finally {
     submitting.value = false;
   }
@@ -70,7 +96,7 @@ onMounted(() => {
   void authStore.fetchAuthConfig();
 
   if (route.query.error === "oauth_failed") {
-    message.error("GitHub sign-in failed. Please try again.");
+    message.error(t("auth.login.oauthFailed"));
     void router.replace({ path: "/login" });
   }
 });
@@ -83,21 +109,20 @@ onMounted(() => {
         <nav
           v-if="authStore.registrationOpen"
           class="auth-switch"
-          aria-label="Sign in or create an account"
+          :aria-label="t('auth.login.switchLabel')"
         >
           <RouterLink to="/login" class="is-active" aria-current="page">
-            Sign in
+            {{ t("auth.login.title") }}
           </RouterLink>
           <RouterLink :to="authSwitchTarget(route, 'register')">
-            Create account
+            {{ t("auth.login.createAccount") }}
           </RouterLink>
         </nav>
 
         <div>
-          <h2 class="auth-title">Sign in</h2>
+          <h2 class="auth-title">{{ t("auth.login.title") }}</h2>
           <NText depth="3">
-            Use your Gotham team account. Sessions use short-lived JWTs with
-            rotating refresh tokens.
+            {{ t("auth.login.subtitle") }}
           </NText>
         </div>
 
@@ -106,21 +131,21 @@ onMounted(() => {
         </NAlert>
 
         <NForm ref="formRef" :model="form" :rules="rules" @submit.prevent="handleSubmit">
-          <NFormItem label="Email" path="email" :label-props="{ for: 'login-email' }">
+          <NFormItem :label="t('auth.login.emailLabel')" path="email" :label-props="{ for: 'login-email' }">
             <NInput
               v-model:value="form.email"
-              placeholder="you@gotham.dev"
+              :placeholder="t('auth.login.emailPlaceholder')"
               :input-props="{ id: 'login-email', autocomplete: 'username', type: 'email' }"
               @keyup.enter="handleSubmit"
             />
           </NFormItem>
 
-          <NFormItem label="Password" path="password" :label-props="{ for: 'login-password' }">
+          <NFormItem :label="t('auth.login.passwordLabel')" path="password" :label-props="{ for: 'login-password' }">
             <NInput
               v-model:value="form.password"
               type="password"
               show-password-on="click"
-              placeholder="Your password"
+              :placeholder="t('auth.login.passwordPlaceholder')"
               :input-props="{ id: 'login-password', autocomplete: 'current-password' }"
               @keyup.enter="handleSubmit"
             />
@@ -132,16 +157,16 @@ onMounted(() => {
             :loading="submitting"
             @click="handleSubmit"
           >
-            Sign in
+            {{ t("auth.login.submit") }}
           </NButton>
 
           <div class="auth-row">
-            <NButton text disabled>Forgot password?</NButton>
-            <span class="auth-hint">Password reset is not available yet.</span>
+            <NButton text disabled>{{ t("auth.login.forgot") }}</NButton>
+            <span class="auth-hint">{{ t("auth.login.resetHint") }}</span>
           </div>
 
           <div class="auth-divider" aria-hidden="true">
-            <span>or</span>
+            <span>{{ t("auth.login.divider") }}</span>
           </div>
 
           <GitHubOAuthButton mode="signin" />

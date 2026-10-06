@@ -7,12 +7,13 @@ import {
   NPopconfirm,
   NSpin,
 } from "naive-ui";
-import { onMounted } from "vue";
+import { computed, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
 
 import SessionRow from "@/features/profile/components/SessionRow.vue";
 import { useSessionsPanel } from "@/features/profile/composables/useSessionsPanel";
-import { profileMessages } from "@/features/profile/schemas/profile";
 
+const { t } = useI18n();
 const {
   sessions,
   others,
@@ -28,21 +29,31 @@ const {
   signOutHere,
 } = useSessionsPanel();
 
+/**
+ * othersConfirmText names the destructive count with whole-sentence keys
+ * (one vs many) instead of plural syntax, so both catalogs stay in parity.
+ */
+const othersConfirmText = computed<string>(() =>
+  others.value.length === 1
+    ? t("profile.sessions.confirmOthersOne", { count: others.value.length })
+    : t("profile.sessions.confirmOthersMany", { count: others.value.length }),
+);
+
 onMounted(() => {
   void load();
 });
 </script>
 
 <template>
-  <NCard title="Active sessions">
+  <NCard :title="t('profile.sessions.title')">
     <!-- Panel-width container for the row stack rule (JUS-19 convention). -->
     <div class="sessions-panel">
       <p class="small muted panel-desc">
-        {{ profileMessages.sessionsIntro }}
+        {{ t("profile.sessions.intro") }}
       </p>
 
       <div v-if="loading && !loaded" class="panel-center">
-        <NSpin aria-label="Loading sessions" />
+        <NSpin :aria-label="t('profile.sessions.loading')" />
       </div>
 
       <template v-else>
@@ -50,12 +61,12 @@ onMounted(() => {
           {{ errorMessage }}
         </NAlert>
         <div v-if="errorMessage" class="panel-actions">
-          <NButton size="small" @click="load">{{ profileMessages.actionRetry }}</NButton>
+          <NButton size="small" @click="load">{{ t("profile.sessions.retry") }}</NButton>
         </div>
 
         <NEmpty
           v-if="loaded && sessions.length === 0"
-          :description="profileMessages.sessionsEmpty"
+          :description="t('profile.sessions.empty')"
         />
 
         <ul v-if="sessions.length > 0" class="session-list">
@@ -70,29 +81,27 @@ onMounted(() => {
 
         <template v-if="needsReauth">
           <NAlert type="warning" :show-icon="true" class="reauth-note">
-            {{ profileMessages.needsReauth }}
+            {{ t("profile.sessions.needsReauth") }}
           </NAlert>
           <div class="panel-actions">
             <NButton size="small" @click="signOutHere">
-              {{ profileMessages.signInAgain }}
+              {{ t("profile.sessions.signInAgain") }}
             </NButton>
           </div>
         </template>
 
         <div class="panel-actions">
           <NPopconfirm
-            positive-text="Sign out others"
-            negative-text="Keep"
+            :positive-text="t('profile.sessions.confirmOthersPositive')"
+            :negative-text="t('profile.sessions.keep')"
             @positive-click="endOtherSessions"
           >
             <template #trigger>
               <NButton :disabled="others.length === 0" :loading="revokingOthers">
-                Sign out all other devices
+                {{ t("profile.sessions.signOutOthers") }}
               </NButton>
             </template>
-            Sign out {{ others.length }} other
-            {{ others.length === 1 ? "session" : "sessions" }}? Those devices
-            will need to sign in again.
+            {{ othersConfirmText }}
           </NPopconfirm>
         </div>
       </template>

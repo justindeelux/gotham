@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NSpin, NText } from "naive-ui";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
 import { acceptInvite, describeTeamError } from "@/features/teams";
@@ -11,18 +12,24 @@ import { acceptInvite, describeTeamError } from "@/features/teams";
  * The recipient posts the token from the query string to
  * `POST /v1/invites/accept` (never a URL path) as the signed-in account whose
  * email the invite names. The token is consumed once and is not stored.
+ *
+ * Static copy renders through the auth catalog; the team error text itself
+ * stays owned by the teams package (I18N-8 localizes its details) and passes
+ * through here as the raw diagnostic under the localized page copy.
  */
+const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
 const token = ref<string>(String(route.query.token ?? ""));
 const accepting = ref(false);
-const error = ref<string | null>(null);
+const rawError = ref<string | null>(null);
+const error = computed<string | null>(() => rawError.value);
 const joined = ref("");
 
 async function handleAccept(): Promise<void> {
   accepting.value = true;
-  error.value = null;
+  rawError.value = null;
   try {
     const team = await acceptInvite(token.value);
     joined.value = team.name;
@@ -30,7 +37,7 @@ async function handleAccept(): Promise<void> {
     // reload or a shared URL cannot replay it.
     scrubToken();
   } catch (err) {
-    error.value = describeTeamError(err);
+    rawError.value = describeTeamError(err);
   } finally {
     accepting.value = false;
   }
@@ -59,25 +66,23 @@ onMounted(() => {
 
 <template>
   <div class="invite-page">
-    <NCard title="Team invite">
+    <NCard :title="t('auth.invite.title')">
       <NSpin :show="accepting">
         <div class="stack">
           <NAlert v-if="joined" type="success" :show-icon="true">
-            You joined {{ joined }}.
+            {{ t("auth.invite.joined", { name: joined }) }}
           </NAlert>
           <NAlert v-else-if="!token" type="warning" :show-icon="true">
-            This link carries no invite token. Open the link from the invite
-            exactly as it was shared.
+            {{ t("auth.invite.noToken") }}
           </NAlert>
           <NAlert v-else-if="error" type="error" :show-icon="true">
             {{ error }}
           </NAlert>
           <NText v-if="!joined" depth="3">
-            Accepting uses the session you are signed in with — sign in with
-            the invited address. Invites are single-use.
+            {{ t("auth.invite.hint") }}
           </NText>
           <NButton type="primary" @click="goToTeams">
-            {{ joined ? "Open teams" : "Back to teams" }}
+            {{ joined ? t("auth.invite.openTeams") : t("auth.invite.backToTeams") }}
           </NButton>
         </div>
       </NSpin>

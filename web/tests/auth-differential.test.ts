@@ -8,9 +8,14 @@
 // unicode-domain addresses the old rule accepts; whitespace-only passwords
 // pass required, exactly as before.
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
+import {
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  syncComposerLocale,
+} from "@/shared/i18n";
 import {
   confirmPasswordSchema,
   emailSchema,
@@ -22,6 +27,15 @@ import {
 } from "@/features/auth/schemas/auth";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 import type { RuleFromOptions } from "@/shared/validation/naiveAdapter";
+
+// Schema messages are namespaced keys resolved at validation time; the
+// English catalog values stay byte-identical to the recorded outcomes, so
+// this contract proves the original behavior in the default locale.
+beforeEach(() => {
+  registerDiscoveredCatalogs();
+  resetLocaleState();
+  syncComposerLocale("en");
+});
 
 interface Outcome {
   ok: boolean;

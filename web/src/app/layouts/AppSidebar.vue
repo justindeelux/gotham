@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NTooltip } from "naive-ui";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { RouterLink, useRoute } from "vue-router";
 
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
@@ -10,6 +11,7 @@ import { activeNavKey, navSections } from "./navigation";
 import { useAppVersion } from "./useAppVersion";
 import { useMobileNav } from "./useMobileNav";
 
+const { t } = useI18n();
 const serversStore = useServersStore();
 const route = useRoute();
 const { sidebarRef } = useMobileNav();
@@ -27,7 +29,7 @@ const activeKey = computed<string>(() => activeNavKey(route.path));
     id="app-nav"
     ref="sidebarRef"
     class="sidebar"
-    aria-label="Product navigation"
+    :aria-label="t('nav.label')"
     tabindex="-1"
   >
     <div class="sidebar-head">
@@ -37,8 +39,8 @@ const activeKey = computed<string>(() => activeNavKey(route.path));
       }}</span>
     </div>
     <nav class="sidebar-body">
-      <template v-for="section in navSections" :key="section.label">
-        <p class="nav-label">{{ section.label }}</p>
+      <template v-for="section in navSections" :key="section.labelKey">
+        <p class="nav-label">{{ t(section.labelKey) }}</p>
         <template v-for="item in section.items" :key="item.key">
           <RouterLink
             v-if="item.to"
@@ -47,7 +49,7 @@ const activeKey = computed<string>(() => activeNavKey(route.path));
             :to="{ name: item.to }"
           >
             <GothamIcon :name="item.icon" />
-            <span>{{ item.label }}</span>
+            <span>{{ t(item.labelKey) }}</span>
             <span v-if="item.key === 'servers'" class="nav-count">{{ serversCount }}</span>
           </RouterLink>
           <NTooltip
@@ -60,14 +62,14 @@ const activeKey = computed<string>(() => activeNavKey(route.path));
                 type="button"
                 class="nav-item is-disabled"
                 aria-disabled="true"
-                :aria-label="`${item.label} — no UI yet`"
+                :aria-label="`${t(item.labelKey)} ${t('nav.stubSuffix')}`"
                 @click.prevent
               >
                 <GothamIcon :name="item.icon" />
-                <span>{{ item.label }}</span>
+                <span>{{ t(item.labelKey) }}</span>
               </button>
             </template>
-            {{ item.label }} — no UI yet
+            {{ t(item.labelKey) }} {{ t("nav.stubSuffix") }}
           </NTooltip>
         </template>
       </template>

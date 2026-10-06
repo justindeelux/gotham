@@ -1,14 +1,17 @@
 import type { FormInst, FormRules } from "naive-ui";
 import { useMessage } from "naive-ui";
-import { computed, reactive, ref } from "vue";
+import { computed, onUnmounted, reactive, ref } from "vue";
+import { useI18n } from "vue-i18n";
 
 import { describeAuthError, strengthOf, useAuthStore } from "@/features/auth";
 import { changePassword } from "@/features/profile/api/profile";
 import { changePasswordRules } from "@/features/profile/schemas/profile";
+import { onLocaleChange } from "@/shared/i18n";
 
 // Error convention (shared with the auth pages): client-side validation
 // errors render inline on the field via NFormItem; server-side submit
-// failures render once in the NAlert above the form.
+// failures keep the raw error and render once in the NAlert above the form
+// through a computed, so a language switch refreshes the banner reactively.
 interface ChangePasswordForm {
   currentPassword: string;
   newPassword: string;
@@ -23,6 +26,7 @@ interface ChangePasswordForm {
  * are cleared.
  */
 export function useChangePasswordForm() {
+  const { t } = useI18n();
   const authStore = useAuthStore();
   const message = useMessage();
 
@@ -36,7 +40,10 @@ export function useChangePasswordForm() {
 
   const formRef = ref<FormInst | null>(null);
   const submitting = ref(false);
-  const errorMessage = ref("");
+  const rawError = ref<unknown>(null);
+  const errorMessage = computed<string>(() =>
+    rawError.value === null ? "" : describeAuthError(rawError.value),
+  );
   const form = reactive<ChangePasswordForm>({
     currentPassword: "",
     newPassword: "",
@@ -52,6 +59,23 @@ export function useChangePasswordForm() {
     changePasswordRules(hasPassword.value, () => form.newPassword),
   );
 
+  /**
+   * submitAttempted marks that validation feedback has been shown at least
+   * once. A language switch then revalidates so visible errors refresh,
+   * without ever showing errors on a pristine form, clearing the draft,
+   * submitting, or navigating.
+   */
+  let submitAttempted = false;
+  const stopLocaleWatch = onLocaleChange(() => {
+    if (submitAttempted) {
+      void formRef.value?.validate().catch(() => {});
+    }
+  });
+
+  onUnmounted(() => {
+    stopLocaleWatch();
+  });
+
   async function handleSubmit(): Promise<void> {
     // Guard: a click on a submit button plus the native submit (or Enter
     // plus the submit event) invoke this twice in the same tick; the second
@@ -60,14 +84,16 @@ export function useChangePasswordForm() {
       return;
     }
     submitting.value = true;
-    errorMessage.value = "";
+    rawError.value = null;
 
     try {
       await formRef.value?.validate();
     } catch {
+      submitAttempted = true;
       submitting.value = false;
       return;
     }
+    submitAttempted = true;
 
     try {
       const result = await changePassword({
@@ -78,9 +104,9 @@ export function useChangePasswordForm() {
       form.currentPassword = "";
       form.newPassword = "";
       form.confirmPassword = "";
-      message.success("Password changed. Other devices were signed out.");
+      message.success(t("profile.password.changed"));
     } catch (error) {
-      errorMessage.value = describeAuthError(error);
+      rawError.value = error;
     } finally {
       submitting.value = false;
     }

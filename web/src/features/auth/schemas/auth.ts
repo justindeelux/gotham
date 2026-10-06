@@ -5,19 +5,21 @@ import { meetsPasswordPolicy } from "@/features/auth/utils/passwordStrength";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 /**
- * Login/register schemas (JUS-23 V1/V2). Message strings are preserved
- * verbatim from the pre-zod Naive UI rules so the migration has zero
- * user-visible diff; the strength meter stays display-only and is not a gate.
+ * Login/register schemas (JUS-23 V1/V2). Messages are namespaced i18n keys
+ * resolved at validation time through ruleFrom/resolveValidationMessage, so
+ * a language switch refreshes visible feedback; the English catalog values
+ * stay byte-identical to the pre-zod Naive UI rules so the migration has
+ * zero user-visible diff in English. The strength meter stays display-only
+ * and is not a gate.
  */
 export const authMessages = {
-  emailRequired: "Email is required",
-  emailInvalid: "Enter a valid email address",
-  passwordRequired: "Password is required",
-  passwordPolicy:
-    "Use at least 10 characters with 2 character classes (lowercase, uppercase, digits, symbols)",
-  confirmRequired: "Please confirm your password",
-  confirmMismatch: "Passwords do not match",
-  termsRequired: "You must accept the terms to create an account",
+  emailRequired: "auth.validation.emailRequired",
+  emailInvalid: "auth.validation.emailInvalid",
+  passwordRequired: "auth.validation.passwordRequired",
+  passwordPolicy: "auth.validation.passwordPolicy",
+  confirmRequired: "auth.validation.confirmRequired",
+  confirmMismatch: "auth.validation.confirmMismatch",
+  termsRequired: "auth.validation.termsRequired",
 } as const;
 
 /**

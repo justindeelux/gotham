@@ -17,6 +17,12 @@ import {
   sessionSchema,
 } from "@/features/profile/schemas/sessions";
 import { parseWith } from "@/shared/validation/parse";
+import {
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  resolveValidationMessage,
+  syncComposerLocale,
+} from "@/shared/i18n";
 import { http } from "@/shared/api/http";
 
 const get = vi.mocked(http.get);
@@ -37,39 +43,46 @@ function session(overrides = {}) {
 }
 
 beforeEach(() => {
+  registerDiscoveredCatalogs();
+  resetLocaleState();
+  syncComposerLocale("en");
   vi.restoreAllMocks();
 });
 
-describe("session messages are byte-exact", () => {
-  it("pins every new catalog string", () => {
-    expect(profileMessages.sessionsLoadFailed).toBe(
-      "Could not load sessions. Try again.",
-    );
-    expect(profileMessages.sessionEndFailed).toBe(
-      "Could not sign out that session. Try again.",
-    );
-    expect(profileMessages.revokeOthersFailed).toBe(
-      "Could not sign out the other sessions. Try again.",
-    );
-    expect(profileMessages.sessionsSignedOut).toBe(
-      "Other devices were signed out.",
-    );
-    expect(profileMessages.sessionSignedOut).toBe("Session signed out.");
-    expect(profileMessages.sessionsSignedOutHere).toBe(
-      "Signed out on this device.",
-    );
-    expect(profileMessages.needsReauth).toBe(
-      "Your sign-in predates session management. Sign in again to manage other sessions.",
-    );
-    expect(profileMessages.sessionsListStale).toBe(
-      "Signed out, but the session list may be out of date.",
-    );
-    expect(profileMessages.sessionsIntro).toBe(
-      "Every device signed in to your account. Ending a session signs that device out; ending this device signs you out here.",
-    );
-    expect(profileMessages.sessionsEmpty).toBe("No active sessions.");
-    expect(profileMessages.actionRetry).toBe("Retry");
-    expect(profileMessages.signInAgain).toBe("Sign in again");
+describe("session messages are keys with byte-exact English display", () => {
+  it("pins every new catalog key and its resolved English text", () => {
+    const cases: Array<[string, string]> = [
+      [profileMessages.sessionsLoadFailed, "Could not load sessions. Try again."],
+      [profileMessages.sessionEndFailed, "Could not sign out that session. Try again."],
+      [
+        profileMessages.revokeOthersFailed,
+        "Could not sign out the other sessions. Try again.",
+      ],
+      [profileMessages.sessionsSignedOut, "Other devices were signed out."],
+      [profileMessages.sessionSignedOut, "Session signed out."],
+      [profileMessages.sessionsSignedOutHere, "Signed out on this device."],
+      [
+        profileMessages.needsReauth,
+        "Your sign-in predates session management. Sign in again to manage other sessions.",
+      ],
+      [
+        profileMessages.sessionsListStale,
+        "Signed out, but the session list may be out of date.",
+      ],
+      [
+        profileMessages.sessionsIntro,
+        "Every device signed in to your account. Ending a session signs that device out; ending this device signs you out here.",
+      ],
+      [profileMessages.sessionsEmpty, "No active sessions."],
+      [profileMessages.actionRetry, "Retry"],
+      [profileMessages.signInAgain, "Sign in again"],
+    ];
+    for (const [key, text] of cases) {
+      // Keys stay namespaced; behavior preserved: each resolves to the
+      // exact previous string in the default locale.
+      expect(key.startsWith("profile.sessions.")).toBe(true);
+      expect(resolveValidationMessage(key)).toBe(text);
+    }
   });
 });
 

@@ -2,17 +2,23 @@
 import { NAvatar, NButton, NDropdown, NInput, NTooltip } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { RouterLink, useRouter } from "vue-router";
 
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
+import LanguageSelect from "@/shared/ui/LanguageSelect.vue";
 import { useAuthStore } from "@/features/auth";
 import { useMobileNav } from "./useMobileNav";
 
+const { t } = useI18n();
 const authStore = useAuthStore();
 const router = useRouter();
 const { mobileNavOpen, toggleNav } = useMobileNav();
 
-const accountOptions: DropdownOption[] = [{ label: "Sign out", key: "sign-out" }];
+/** accountOptions keeps stable keys; labels render in the active locale. */
+const accountOptions = computed<DropdownOption[]>(() => [
+  { label: t("shell.signOut"), key: "sign-out" },
+]);
 
 /**
  * Listener ports shown as topbar chips. They mirror the backend defaults in
@@ -56,7 +62,7 @@ async function handleAccountSelect(key: string | number): Promise<void> {
       quaternary
       circle
       class="nav-toggle"
-      aria-label="Toggle navigation"
+      :aria-label="t('shell.navToggle')"
       aria-controls="app-nav"
       :aria-expanded="mobileNavOpen"
       @click="toggleNav"
@@ -73,34 +79,35 @@ async function handleAccountSelect(key: string | number): Promise<void> {
     <span class="channel-chip" :title="`Agent gRPC port`">gRPC :{{ grpcPort }}</span>
     <NTooltip trigger="hover">
       <template #trigger>
-        <div class="search" role="search" aria-label="Search (coming soon)">
+        <div class="search" role="search" :aria-label="t('shell.searchLabel')">
           <GothamIcon name="search" />
-          <NInput disabled placeholder="Search apps, servers, databases…" aria-label="Search" />
+          <NInput disabled :placeholder="t('shell.searchPlaceholder')" :aria-label="t('shell.searchLabel')" />
           <span class="kbd">⌘K</span>
         </div>
       </template>
-      Search is coming soon
+      {{ t("shell.searchSoon") }}
     </NTooltip>
     <div class="topbar-right">
+      <LanguageSelect />
       <NTooltip trigger="hover">
         <template #trigger>
-          <NButton quaternary circle aria-label="Notifications (coming soon)" class="is-stub">
+          <NButton quaternary circle :aria-label="t('shell.notifications')" class="is-stub">
             <template #icon>
               <GothamIcon name="bell" />
             </template>
           </NButton>
         </template>
-        Notifications — no UI yet
+        {{ t("shell.notifications") }}
       </NTooltip>
       <NTooltip trigger="hover">
         <template #trigger>
-          <NButton quaternary circle aria-label="Docs (coming soon)" class="is-stub">
+          <NButton quaternary circle :aria-label="t('shell.docs')" class="is-stub">
             <template #icon>
               <GothamIcon name="doc" />
             </template>
           </NButton>
         </template>
-        Docs — coming soon
+        {{ t("shell.docsSoon") }}
       </NTooltip>
       <NDropdown
         v-if="authStore.isAuthenticated"
@@ -108,7 +115,7 @@ async function handleAccountSelect(key: string | number): Promise<void> {
         :options="accountOptions"
         @select="handleAccountSelect"
       >
-        <NButton quaternary circle aria-label="Account">
+        <NButton quaternary circle :aria-label="t('shell.account')">
           <template #icon>
             <NAvatar round :size="24" :src="authStore.user?.avatar">
               <!-- NAvatar prefers the default slot over `src`, so the
@@ -121,7 +128,7 @@ async function handleAccountSelect(key: string | number): Promise<void> {
         </NButton>
       </NDropdown>
       <RouterLink v-else to="/login">
-        <NButton quaternary type="primary">Sign in</NButton>
+        <NButton quaternary type="primary">{{ t("shell.signIn") }}</NButton>
       </RouterLink>
     </div>
   </header>

@@ -25,6 +25,12 @@ import SessionRow from "@/features/profile/components/SessionRow.vue";
 import SessionsPanel from "@/features/profile/components/SessionsPanel.vue";
 import { useSessionsPanel } from "@/features/profile/composables/useSessionsPanel";
 import { useAuthStore } from "@/features/auth";
+import {
+  i18n,
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  syncComposerLocale,
+} from "@/shared/i18n";
 import type { User } from "@/shared/api/token";
 import type { AuthSession } from "@/features/profile/schemas/sessions";
 
@@ -101,7 +107,7 @@ function shell(child: object) {
 function mountOptions(router: Router) {
   return {
     attachTo: globalThis.document.body,
-    global: { plugins: [router], stubs: { transition: false } },
+    global: { plugins: [router, i18n], stubs: { transition: false } },
   };
 }
 
@@ -163,6 +169,9 @@ function buttonByLabel(wrapper: VueWrapper, label: string) {
 }
 
 beforeEach(() => {
+  registerDiscoveredCatalogs();
+  resetLocaleState();
+  syncComposerLocale("en");
   vi.restoreAllMocks();
   globalThis.document.body.innerHTML = "";
 });

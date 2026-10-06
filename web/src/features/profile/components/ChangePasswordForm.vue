@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSpace } from "naive-ui";
+import { useI18n } from "vue-i18n";
 
 import PasswordStrengthMeter from "@/features/auth/components/PasswordStrengthMeter.vue";
 import { useAuthStore } from "@/features/auth";
 import { useChangePasswordForm } from "@/features/profile/composables/useChangePasswordForm";
 
+const { t } = useI18n();
 const authStore = useAuthStore();
 const {
   formRef,
@@ -19,7 +21,7 @@ const {
 </script>
 
 <template>
-  <NCard title="Change password">
+  <NCard :title="t('profile.password.title')">
     <NAlert v-if="errorMessage" type="error" :show-icon="true">
       {{ errorMessage }}
     </NAlert>
@@ -40,7 +42,7 @@ const {
       />
       <NFormItem
         v-if="hasPassword"
-        label="Current password"
+        :label="t('profile.password.currentLabel')"
         path="currentPassword"
         :label-props="{ for: 'profile-current-password' }"
       >
@@ -48,7 +50,7 @@ const {
           v-model:value="form.currentPassword"
           type="password"
           show-password-on="click"
-          placeholder="Your current password"
+          :placeholder="t('profile.password.currentPlaceholder')"
           :input-props="{
             id: 'profile-current-password',
             autocomplete: 'current-password',
@@ -59,7 +61,7 @@ const {
 
       <div class="form-row">
         <NFormItem
-          label="New password"
+          :label="t('profile.password.newLabel')"
           path="newPassword"
           :label-props="{ for: 'profile-new-password' }"
         >
@@ -68,20 +70,19 @@ const {
               v-model:value="form.newPassword"
               type="password"
               show-password-on="click"
-              placeholder="At least 10 characters"
+              :placeholder="t('profile.password.newPlaceholder')"
               :input-props="{ id: 'profile-new-password', autocomplete: 'new-password' }"
               @keyup.enter="handleSubmit"
             />
             <PasswordStrengthMeter :score="strength" />
             <span class="field-hint">
-              At least 10 characters with 2 character classes: lowercase,
-              uppercase, digits, symbols.
+              {{ t("profile.password.hint") }}
             </span>
           </NSpace>
         </NFormItem>
 
         <NFormItem
-          label="Confirm new password"
+          :label="t('profile.password.confirmLabel')"
           path="confirmPassword"
           :label-props="{ for: 'profile-confirm-password' }"
         >
@@ -89,7 +90,7 @@ const {
             v-model:value="form.confirmPassword"
             type="password"
             show-password-on="click"
-            placeholder="Repeat the new password"
+            :placeholder="t('profile.password.confirmPlaceholder')"
             :input-props="{
               id: 'profile-confirm-password',
               autocomplete: 'new-password',
@@ -100,7 +101,7 @@ const {
       </div>
 
       <NButton type="primary" :loading="submitting" @click="handleSubmit">
-        Change password
+        {{ t("profile.password.submit") }}
       </NButton>
     </NForm>
   </NCard>

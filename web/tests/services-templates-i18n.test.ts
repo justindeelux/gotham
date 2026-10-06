@@ -74,7 +74,9 @@ describe("service errors keep raw diagnostics", () => {
     };
     expect(describeServiceError(refusal)).toBe("a deploy is in progress");
     setLocale("vi", null);
-    expect(describeServiceError(refusal)).toBe("a deploy is in progress");
+    // Status-classified raw refusals pair a minimal localized frame with the
+    // intact raw detail; refusal distinctions survive the frame.
+    expect(describeServiceError(refusal)).toBe("Xung đột: a deploy is in progress");
     // The heading localizes; the raw detail stays byte-identical.
     expect(
       describeServiceError({ status: 502, message: "services: down", cause: null }),
@@ -109,6 +111,29 @@ describe("service errors keep raw diagnostics", () => {
     ).toBe("Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).");
   });
 
+  it("frames status-classified raw refusals without touching the EN baseline", () => {
+    const badRequest = { status: 400, message: "services: compose invalid", cause: null };
+    const missing = { status: 404, message: "services: gone", cause: null };
+    expect(describeServiceError(badRequest)).toBe("compose invalid");
+    expect(describeServiceError(missing)).toBe("gone");
+    expect(
+      describeTemplateError({ status: 404, message: "templates: gone", cause: null }),
+    ).toBe("gone");
+    setLocale("vi", null);
+    expect(describeServiceError(badRequest)).toBe("Yêu cầu không hợp lệ: compose invalid");
+    expect(describeServiceError(missing)).toBe("Không tìm thấy: gone");
+    expect(
+      describeTemplateError({ status: 404, message: "templates: gone", cause: null }),
+    ).toBe("Không tìm thấy: gone");
+    // Generic and unknown diagnostics keep their pinned raw passthrough.
+    expect(describeServiceError({ status: 500, message: "services: down", cause: null })).toBe(
+      "down",
+    );
+    expect(describeTemplateError({ status: 500, message: "templates: down", cause: null })).toBe(
+      "down",
+    );
+  });
+
   it("pairs a localized 502 heading with the byte-identical raw detail", () => {
     const failure = { status: 502, message: "services: down", cause: null };
     expect(describeServiceError(failure)).toBe("Node agent error: down");
@@ -137,7 +162,7 @@ describe("service errors keep raw diagnostics", () => {
     setLocale("vi", null);
     expect(
       describeTemplateError({ status: 400, message: "templates: bad values", cause: null }),
-    ).toBe("bad values");
+    ).toBe("Giá trị không hợp lệ: bad values");
     expect(describeTemplateError({ status: 400, message: "", cause: null })).toBe(
       "Giá trị mẫu không hợp lệ. Kiểm tra các trường được đánh dấu.",
     );

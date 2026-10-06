@@ -20,7 +20,9 @@ const vi: typeof en = {
   errors: {
     sessionExpired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     invalidValues: "Giá trị mẫu không hợp lệ. Kiểm tra các trường được đánh dấu.",
+    invalidValuesWithDetail: "Giá trị không hợp lệ: {detail}",
     notFound: "Không tìm thấy mẫu. Danh mục có thể đã đổi — tải lại trang.",
+    notFoundWithDetail: "Không tìm thấy: {detail}",
     disabled: "Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).",
   },
   gallery: {

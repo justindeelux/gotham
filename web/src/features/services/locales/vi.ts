@@ -26,8 +26,11 @@ const vi: typeof en = {
   errors: {
     sessionExpired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     badRequest: "Yêu cầu không hợp lệ. Kiểm tra tài liệu compose rồi thử lại.",
+    badRequestWithDetail: "Yêu cầu không hợp lệ: {detail}",
     notFound: "Không tìm thấy dịch vụ. Có thể nó đã bị xóa.",
+    notFoundWithDetail: "Không tìm thấy: {detail}",
     conflictFallback: "Đã có dịch vụ trùng tên. Hãy chọn tên khác.",
+    conflictWithDetail: "Xung đột: {detail}",
     nodeAgentError: "Lỗi node agent: {detail}",
     nodeUnreachable: "Không kết nối được node agent. Kiểm tra trạng thái node rồi thử lại.",
     disabled: "Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).",

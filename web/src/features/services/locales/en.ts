@@ -25,8 +25,11 @@ const en = {
   errors: {
     sessionExpired: "Your session expired. Please sign in again.",
     badRequest: "Invalid request. Check the compose document and retry.",
+    badRequestWithDetail: "{detail}",
     notFound: "Service not found. It may have been deleted already.",
+    notFoundWithDetail: "{detail}",
     conflictFallback: "A service with that name already exists. Pick another name.",
+    conflictWithDetail: "{detail}",
     nodeAgentError: "Node agent error: {detail}",
     nodeUnreachable: "The node agent is unreachable. Check the node status and retry.",
     disabled: "Services are disabled on the control plane (FEATURE_SERVICES=false).",

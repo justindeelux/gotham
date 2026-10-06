@@ -20,7 +20,9 @@ const en = {
   errors: {
     sessionExpired: "Your session expired. Please sign in again.",
     invalidValues: "Invalid template values. Check the highlighted fields.",
+    invalidValuesWithDetail: "{detail}",
     notFound: "Template not found. The catalog may have changed — reload the page.",
+    notFoundWithDetail: "{detail}",
     disabled: "Services are disabled on the control plane (FEATURE_SERVICES=false).",
   },
   gallery: {

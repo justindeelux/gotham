@@ -403,26 +403,26 @@ export function describeServiceError(error: unknown): string {
       return text("services.errors.sessionExpired");
     }
     if (error.status === 400) {
-      return (
-      stripErrorPrefix(error.message) ||
-      text("services.errors.badRequest")
-    );
+      const detail = stripErrorPrefix(error.message);
+      return detail
+        ? text("services.errors.badRequestWithDetail", { detail })
+        : text("services.errors.badRequest");
     }
     if (error.status === 404) {
-      return (
-      stripErrorPrefix(error.message) ||
-      text("services.errors.notFound")
-    );
+      const detail = stripErrorPrefix(error.message);
+      return detail
+        ? text("services.errors.notFoundWithDetail", { detail })
+        : text("services.errors.notFound");
     }
     if (error.status === 409) {
       // The backend names the refusal exactly (a duplicate name, `a deploy
       // is in progress`, `a deployed service cannot change server`), so the
-      // message passes through for the move/server-change settings to
-      // render inline.
-      return (
-        conflictDetail(stripErrorPrefix(error.message)) ||
-        text("services.errors.conflictFallback")
-      );
+      // raw refusal stays intact inside a minimal localized frame for the
+      // move/server-change settings to render inline.
+      const detail = conflictDetail(stripErrorPrefix(error.message));
+      return detail
+        ? text("services.errors.conflictWithDetail", { detail })
+        : text("services.errors.conflictFallback");
     }
     if (error.status === 502) {
       const detail = stripErrorPrefix(error.message);

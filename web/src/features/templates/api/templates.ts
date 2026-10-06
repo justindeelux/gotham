@@ -198,16 +198,18 @@ export function describeTemplateError(error: unknown): string {
       return text("templates.errors.sessionExpired");
     }
     if (error.status === 400) {
-      return (
-      stripErrorPrefix(error.message) ||
-      text("templates.errors.invalidValues")
-    );
+      // The raw refusal stays intact inside a minimal localized frame;
+      // English keeps the historical raw-only baseline exactly.
+      const detail = stripErrorPrefix(error.message);
+      return detail
+        ? text("templates.errors.invalidValuesWithDetail", { detail })
+        : text("templates.errors.invalidValues");
     }
     if (error.status === 404) {
-      return (
-        stripErrorPrefix(error.message) ||
-        text("templates.errors.notFound")
-      );
+      const detail = stripErrorPrefix(error.message);
+      return detail
+        ? text("templates.errors.notFoundWithDetail", { detail })
+        : text("templates.errors.notFound");
     }
     if (error.status === 503) {
       return text("templates.errors.disabled");

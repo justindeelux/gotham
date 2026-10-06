@@ -389,6 +389,36 @@ test("service detail renders history at every width, en and vi", async ({ page }
   }
 });
 
+test("feature-off failure shows the translated frame with the intact token", async ({
+  page,
+}) => {
+  for (const width of widths) {
+    for (const locale of ["en", "vi"] as const) {
+      await page.setViewportSize({ width, height: 900 });
+      await mockApi(page);
+      // The control plane refuses the catalog when services are disabled.
+      await page.route("**/api/v1/templates", async (route) => {
+        await route.fulfill({ status: 503, json: { message: "" } });
+      });
+      await page.goto(`${baseURL}/templates`);
+      await switchLocale(page, locale);
+      const expected =
+        locale === "vi"
+          ? "Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false)."
+          : "Services are disabled on the control plane (FEATURE_SERVICES=false).";
+      await expect(page.locator(".template-gallery")).toContainText(expected);
+      // The retry control stays usable at every width.
+      const retry = locale === "vi" ? "Thử lại" : "Retry";
+      await expect(page.getByRole("button", { name: retry })).toBeVisible();
+      await expectNoOverflow(page, width);
+      await page.screenshot({
+        path: test.info().outputPath(`feature-off-${locale}-${width}.png`),
+      });
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  }
+});
+
 test("retained deploy-history failure re-derives in the current locale", async ({
   page,
 }) => {

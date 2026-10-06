@@ -53,9 +53,19 @@ export function useDatabaseDetail() {
 
   // The detail page owns its own load state: the list store's flags describe the
   // polling list, not this row's fetch, so a failed detail load would otherwise
-  // render an empty shell with no explanation.
+  // render an empty shell with no explanation. The raw failure is retained so
+  // a language switch refreshes the visible banner without a refetch.
   const pageLoading = ref(false);
-  const pageError = ref<string | null>(null);
+  const noSelection = ref(false);
+  const pageErrorRaw = ref<unknown>(null);
+  const pageError = computed<string | null>(() => {
+    if (noSelection.value) {
+      return t("databases.detail.noSelection");
+    }
+    return pageErrorRaw.value === null
+      ? null
+      : describeDatabaseError(pageErrorRaw.value);
+  });
 
   /** isNarrow stacks the two-column descriptions on small screens. */
   const isNarrow = useMediaQuery("(max-width: 640px)");
@@ -185,11 +195,13 @@ export function useDatabaseDetail() {
   /** fetchAll loads the row, its credentials and the node list. */
   async function fetchAll(): Promise<void> {
     if (!dbId.value) {
-      pageError.value = t("databases.detail.noSelection");
+      noSelection.value = true;
+      pageErrorRaw.value = null;
       return;
     }
     pageLoading.value = true;
-    pageError.value = null;
+    noSelection.value = false;
+    pageErrorRaw.value = null;
     try {
       const database = await databasesStore.fetchDatabase(dbId.value);
       // The row ids are the authority: a wrong project/environment in the
@@ -211,7 +223,7 @@ export function useDatabaseDetail() {
         return;
       }
     } catch (error) {
-      pageError.value = describeDatabaseError(error);
+      pageErrorRaw.value = error;
       pageLoading.value = false;
       return;
     }
@@ -230,7 +242,7 @@ export function useDatabaseDetail() {
     renameOpen.value = false;
     renameValue.value = "";
     moveSaving.value = false;
-    moveError.value = null;
+    moveErrorRaw.value = null;
   }
 
   /** handleLifecycle runs one start/stop/restart action. */
@@ -306,7 +318,13 @@ export function useDatabaseDetail() {
   const canWrite = computed<boolean>(() => projectsStore.canWrite);
 
   const moveSaving = ref(false);
-  const moveError = ref<string | null>(null);
+  /** moveErrorRaw retains the move refusal so the inline error refreshes on switch. */
+  const moveErrorRaw = ref<unknown>(null);
+  const moveError = computed<string | null>(() =>
+    moveErrorRaw.value === null
+      ? null
+      : describeDatabaseError(moveErrorRaw.value),
+  );
 
   /**
    * handleMove applies the location settings (move environment, change
@@ -337,7 +355,7 @@ export function useDatabaseDetail() {
     }
     const targetId = dbId.value;
     moveSaving.value = true;
-    moveError.value = null;
+    moveErrorRaw.value = null;
     try {
       const updated = await databasesStore.update(targetId, input);
       if (targetId !== dbId.value) {
@@ -360,7 +378,7 @@ export function useDatabaseDetail() {
       }
     } catch (error) {
       if (targetId === dbId.value) {
-        moveError.value = describeDatabaseError(error);
+        moveErrorRaw.value = error;
       }
     } finally {
       if (targetId === dbId.value) {

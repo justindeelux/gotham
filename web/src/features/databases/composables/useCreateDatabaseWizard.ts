@@ -81,8 +81,20 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
 
   const step = ref(0);
   const submitting = ref(false);
-  const errorMessage = ref("");
   const created = ref<CreatedDatabase | null>(null);
+
+  /** SubmitIssue retains the submit failure so the alert refreshes on switch. */
+  type SubmitIssue = { kind: "scope" } | { kind: "failure"; error: unknown };
+  const submitIssue = ref<SubmitIssue | null>(null);
+  const errorMessage = computed<string>(() => {
+    if (submitIssue.value === null) {
+      return "";
+    }
+    if (submitIssue.value.kind === "scope") {
+      return t("databases.wizard.scopeError");
+    }
+    return describeDatabaseError(submitIssue.value.error);
+  });
 
   const form = reactive<WizardForm>({
     engine: "postgres",
@@ -187,7 +199,7 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   function resetWizard(): void {
     step.value = 0;
     submitting.value = false;
-    errorMessage.value = "";
+    submitIssue.value = null;
     created.value = null;
     form.engine = "postgres";
     form.version = engineByValue(form.engine).defaultVersion;
@@ -227,9 +239,9 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
    */
   async function handleSubmit(): Promise<void> {
     submitting.value = true;
-    errorMessage.value = "";
+    submitIssue.value = null;
     if (form.environmentId === "") {
-      errorMessage.value = String(t("databases.wizard.scopeError"));
+      submitIssue.value = { kind: "scope" };
       submitting.value = false;
       return;
     }
@@ -249,7 +261,7 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
       );
       options.onCreated(created.value);
     } catch (error) {
-      errorMessage.value = describeDatabaseError(error);
+      submitIssue.value = { kind: "failure", error };
     } finally {
       submitting.value = false;
     }

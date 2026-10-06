@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 import {
   createBackup,
@@ -35,22 +35,48 @@ import { mergeBackupsById } from "@/features/databases/utils/storeMerge";
 export const useBackupsStore = defineStore("backups", () => {
   const backupsById = ref<Record<string, DatabaseBackup[]>>({});
   const backupsLoading = ref(false);
-  const backupsError = ref<string | null>(null);
   const backupsActing = ref(false);
 
   const restoresById = ref<Record<string, DatabaseRestore[]>>({});
   const restoresLoading = ref(false);
-  const restoresError = ref<string | null>(null);
 
   const schedulesById = ref<Record<string, BackupSchedule[]>>({});
   const schedulesLoading = ref(false);
-  const schedulesError = ref<string | null>(null);
   const schedulesActing = ref(false);
 
   const targets = ref<BackupTarget[]>([]);
   const targetsLoading = ref(false);
-  const targetsError = ref<string | null>(null);
   const targetsActing = ref(false);
+
+  /**
+   * Retained tab errors keep the raw failure and derive display text in the
+   * current locale, so a language switch refreshes a visible banner without
+   * a refetch. Toasts still use the invocation-time locale and are not replayed.
+   */
+  const backupsErrorRaw = ref<unknown>(null);
+  const restoresErrorRaw = ref<unknown>(null);
+  const schedulesErrorRaw = ref<unknown>(null);
+  const targetsErrorRaw = ref<unknown>(null);
+  const backupsError = computed<string | null>(() =>
+    backupsErrorRaw.value === null
+      ? null
+      : describeBackupError(backupsErrorRaw.value),
+  );
+  const restoresError = computed<string | null>(() =>
+    restoresErrorRaw.value === null
+      ? null
+      : describeBackupError(restoresErrorRaw.value),
+  );
+  const schedulesError = computed<string | null>(() =>
+    schedulesErrorRaw.value === null
+      ? null
+      : describeBackupError(schedulesErrorRaw.value),
+  );
+  const targetsError = computed<string | null>(() =>
+    targetsErrorRaw.value === null
+      ? null
+      : describeBackupError(targetsErrorRaw.value),
+  );
 
   /** backupsOf returns the cached runs of one database, if any. */
   function backupsOf(databaseId: string): DatabaseBackup[] {
@@ -78,7 +104,7 @@ export const useBackupsStore = defineStore("backups", () => {
   /** fetchBackups loads the runs of one database, toggling the loading flag. */
   async function fetchBackups(databaseId: string): Promise<void> {
     backupsLoading.value = true;
-    backupsError.value = null;
+    backupsErrorRaw.value = null;
     try {
       const server = await listBackups(databaseId);
       backupsById.value[databaseId] = mergeBackupsById(
@@ -86,7 +112,7 @@ export const useBackupsStore = defineStore("backups", () => {
         server,
       );
     } catch (err) {
-      backupsError.value = describeBackupError(err);
+      backupsErrorRaw.value = err;
       throw err;
     } finally {
       backupsLoading.value = false;
@@ -101,20 +127,20 @@ export const useBackupsStore = defineStore("backups", () => {
         backupsById.value[databaseId] ?? [],
         server,
       );
-      backupsError.value = null;
+      backupsErrorRaw.value = null;
     } catch (err) {
-      backupsError.value = describeBackupError(err);
+      backupsErrorRaw.value = err;
     }
   }
 
   /** fetchRestores loads the durable restore runs of one database. */
   async function fetchRestores(databaseId: string): Promise<void> {
     restoresLoading.value = true;
-    restoresError.value = null;
+    restoresErrorRaw.value = null;
     try {
       restoresById.value[databaseId] = await listRestores(databaseId);
     } catch (err) {
-      restoresError.value = describeBackupError(err);
+      restoresErrorRaw.value = err;
       throw err;
     } finally {
       restoresLoading.value = false;
@@ -125,9 +151,9 @@ export const useBackupsStore = defineStore("backups", () => {
   async function refreshRestores(databaseId: string): Promise<void> {
     try {
       restoresById.value[databaseId] = await listRestores(databaseId);
-      restoresError.value = null;
+      restoresErrorRaw.value = null;
     } catch (err) {
-      restoresError.value = describeBackupError(err);
+      restoresErrorRaw.value = err;
     }
   }
 
@@ -148,7 +174,7 @@ export const useBackupsStore = defineStore("backups", () => {
       ];
       return backup;
     } catch (err) {
-      backupsError.value = describeBackupError(err);
+      backupsErrorRaw.value = err;
       throw err;
     } finally {
       backupsActing.value = false;
@@ -167,7 +193,7 @@ export const useBackupsStore = defineStore("backups", () => {
         (item) => item.id !== backupId,
       );
     } catch (err) {
-      backupsError.value = describeBackupError(err);
+      backupsErrorRaw.value = err;
       throw err;
     } finally {
       backupsActing.value = false;
@@ -183,7 +209,7 @@ export const useBackupsStore = defineStore("backups", () => {
     try {
       return await restoreBackup(databaseId, backupId);
     } catch (err) {
-      backupsError.value = describeBackupError(err);
+      backupsErrorRaw.value = err;
       throw err;
     } finally {
       backupsActing.value = false;
@@ -193,11 +219,11 @@ export const useBackupsStore = defineStore("backups", () => {
   /** fetchSchedules loads the cron entries of one database. */
   async function fetchSchedules(databaseId: string): Promise<void> {
     schedulesLoading.value = true;
-    schedulesError.value = null;
+    schedulesErrorRaw.value = null;
     try {
       schedulesById.value[databaseId] = await listSchedules(databaseId);
     } catch (err) {
-      schedulesError.value = describeBackupError(err);
+      schedulesErrorRaw.value = err;
       throw err;
     } finally {
       schedulesLoading.value = false;
@@ -227,7 +253,7 @@ export const useBackupsStore = defineStore("backups", () => {
       applySchedule(databaseId, schedule);
       return schedule;
     } catch (err) {
-      schedulesError.value = describeBackupError(err);
+      schedulesErrorRaw.value = err;
       throw err;
     } finally {
       schedulesActing.value = false;
@@ -246,7 +272,7 @@ export const useBackupsStore = defineStore("backups", () => {
       applySchedule(databaseId, schedule);
       return schedule;
     } catch (err) {
-      schedulesError.value = describeBackupError(err);
+      schedulesErrorRaw.value = err;
       throw err;
     } finally {
       schedulesActing.value = false;
@@ -265,7 +291,7 @@ export const useBackupsStore = defineStore("backups", () => {
         schedulesById.value[databaseId] ?? []
       ).filter((item) => item.id !== scheduleId);
     } catch (err) {
-      schedulesError.value = describeBackupError(err);
+      schedulesErrorRaw.value = err;
       throw err;
     } finally {
       schedulesActing.value = false;
@@ -275,11 +301,11 @@ export const useBackupsStore = defineStore("backups", () => {
   /** fetchTargets loads the caller's storage targets. */
   async function fetchTargets(): Promise<void> {
     targetsLoading.value = true;
-    targetsError.value = null;
+    targetsErrorRaw.value = null;
     try {
       targets.value = await listTargets();
     } catch (err) {
-      targetsError.value = describeBackupError(err);
+      targetsErrorRaw.value = err;
       throw err;
     } finally {
       targetsLoading.value = false;
@@ -306,7 +332,7 @@ export const useBackupsStore = defineStore("backups", () => {
       applyTarget(target);
       return target;
     } catch (err) {
-      targetsError.value = describeBackupError(err);
+      targetsErrorRaw.value = err;
       throw err;
     } finally {
       targetsActing.value = false;
@@ -324,7 +350,7 @@ export const useBackupsStore = defineStore("backups", () => {
       applyTarget(target);
       return target;
     } catch (err) {
-      targetsError.value = describeBackupError(err);
+      targetsErrorRaw.value = err;
       throw err;
     } finally {
       targetsActing.value = false;
@@ -338,7 +364,7 @@ export const useBackupsStore = defineStore("backups", () => {
       await deleteTarget(targetId);
       targets.value = targets.value.filter((item) => item.id !== targetId);
     } catch (err) {
-      targetsError.value = describeBackupError(err);
+      targetsErrorRaw.value = err;
       throw err;
     } finally {
       targetsActing.value = false;
@@ -361,18 +387,18 @@ export const useBackupsStore = defineStore("backups", () => {
   function reset(): void {
     backupsById.value = {};
     backupsLoading.value = false;
-    backupsError.value = null;
+    backupsErrorRaw.value = null;
     backupsActing.value = false;
     restoresById.value = {};
     restoresLoading.value = false;
-    restoresError.value = null;
+    restoresErrorRaw.value = null;
     schedulesById.value = {};
     schedulesLoading.value = false;
-    schedulesError.value = null;
+    schedulesErrorRaw.value = null;
     schedulesActing.value = false;
     targets.value = [];
     targetsLoading.value = false;
-    targetsError.value = null;
+    targetsErrorRaw.value = null;
     targetsActing.value = false;
   }
 

@@ -496,6 +496,21 @@ export function useDatabaseBackups(
     }
   }
 
+  /**
+   * targetTestMessage renders one target's retained check result. The raw
+   * server diagnostic passes through in both locales; only the empty
+   * transport failure localizes, at render time so a switch refreshes it.
+   */
+  function targetTestMessage(targetId: string): string {
+    const state = targetTests.value[targetId];
+    if (!state || state.checking) {
+      return "";
+    }
+    return state.message !== ""
+      ? state.message
+      : t("databases.backups.targets.testFailed");
+  }
+
   /** handleTestTarget checks one target's connection and shows the answer. */
   async function handleTestTarget(targetId: string): Promise<void> {
     targetTests.value[targetId] = { checking: true, ok: null, message: "" };
@@ -511,10 +526,7 @@ export function useDatabaseBackups(
         checking: false,
         ok: false,
         message:
-          error instanceof Error
-            ? (stripErrorPrefix(error.message) ||
-              t("databases.backups.targets.testFailed"))
-            : t("databases.backups.targets.testFailed"),
+          error instanceof Error ? stripErrorPrefix(error.message) : "",
       };
     }
   }
@@ -602,6 +614,7 @@ export function useDatabaseBackups(
     openTargetEdit,
     handleSaveTarget,
     handleDeleteTarget,
+    targetTestMessage,
     handleTestTarget,
     resetView,
   };

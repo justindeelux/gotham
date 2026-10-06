@@ -84,7 +84,7 @@ const backups = inject(databaseBackupsKey)!;
                 backups.targetTests.value[target.id].ok ? 'success' : 'error'
               "
             >
-              {{ backups.targetTests.value[target.id].message }}
+              {{ backups.targetTestMessage(target.id) }}
             </NText>
           </div>
           <NSpace class="backup-row__actions" align="center" :size="8">

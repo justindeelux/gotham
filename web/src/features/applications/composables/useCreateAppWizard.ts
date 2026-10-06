@@ -16,6 +16,7 @@ import { useApplicationsStore } from "@/features/applications/stores/application
 import { useProvidersStore } from "@/features/applications/stores/providers";
 import { useServersStore } from "@/features/servers";
 import { cloneUrlFor, suggestAppName } from "@/features/applications/utils/wizardSource";
+import { activeLocale, i18n } from "@/shared/i18n";
 import {
   countDroppedEnvRows,
   hasEnvKeyWarnings,
@@ -122,8 +123,81 @@ export function useCreateAppWizard(
 
   const step = ref(0);
   const submitting = ref(false);
-  const errorMessage = ref("");
-  const sourceError = ref("");
+  /**
+   * submitFailure keeps the submit failure for the retained banner: a missing
+   * scope (curated key) or the raw thrown error. errorMessage derives the
+   * display text in the current locale, so a language switch refreshes the
+   * banner without clearing the draft.
+   */
+  const submitFailure = ref<{ kind: "scope" } | { kind: "error"; error: unknown } | null>(null);
+  /**
+   * noSshUrl flags the private-repo-without-SSH-URL gap; sourceError derives
+   * its display text in the current locale.
+   */
+  const noSshUrl = ref(false);
+
+  /**
+   * tr resolves one applications message in the current locale. Reading
+   * activeLocale pins the calling computed to the language switch.
+   */
+  function tr(key: string, params?: Record<string, string | number>): string {
+    void activeLocale.value;
+    return String(i18n.global.t(key, params ?? {}));
+  }
+
+  /** errorMessage derives the retained submit banner in the current locale. */
+  const errorMessage = computed<string>(() => {
+    if (submitFailure.value === null) {
+      return "";
+    }
+    if (submitFailure.value.kind === "scope") {
+      return tr("applications.wizard.scopeError");
+    }
+    return describeApplicationError(submitFailure.value.error);
+  });
+
+  /** sourceError derives the SSH-URL gap warning in the current locale. */
+  const sourceError = computed<string>(() =>
+    noSshUrl.value ? tr("applications.wizard.noSshUrl") : "",
+  );
+
+  /** stepNames renders the rail labels in the current locale. */
+  const stepNames = computed<string[]>(() => [
+    tr("applications.wizard.steps.source"),
+    tr("applications.wizard.steps.buildPack"),
+    tr("applications.wizard.steps.runtime"),
+    tr("applications.wizard.steps.envStorage"),
+    tr("applications.wizard.steps.deploy"),
+  ]);
+
+  /** buildPacks renders the pack choices in the current locale. */
+  const buildPacks = computed<BuildPackOption[]>(() => [
+    {
+      value: "",
+      label: tr("applications.wizard.packAuto"),
+      hint: tr("applications.wizard.packAutoHint"),
+    },
+    {
+      value: "railpack",
+      label: tr("applications.wizard.packRailpack"),
+      hint: tr("applications.wizard.packRailpackHint"),
+    },
+    {
+      value: "dockerfile",
+      label: tr("applications.wizard.packDockerfile"),
+      hint: tr("applications.wizard.packDockerfileHint"),
+    },
+    {
+      value: "buildpacks",
+      label: tr("applications.wizard.packBuildpacks"),
+      hint: tr("applications.wizard.packBuildpacksHint"),
+    },
+    {
+      value: "static",
+      label: tr("applications.wizard.packStatic"),
+      hint: tr("applications.wizard.packStaticHint"),
+    },
+  ]);
 
   const form = reactive<WizardForm>({
     providerId: "",
@@ -145,10 +219,10 @@ export function useCreateAppWizard(
 
   const providerOptions = computed<Array<{ label: string; value: string }>>(() => [
     ...providersStore.providers.map((item) => ({
-      label: `${item.provider} · ${item.connected ? "connected" : "not connected"}`,
+      label: `${item.provider} · ${item.connected ? tr("applications.wizard.connected") : tr("applications.wizard.notConnected")}`,
       value: item.id,
     })),
-    { label: "Public repository · paste URL", value: PUBLIC_PROVIDER },
+    { label: tr("applications.wizard.publicRepo"), value: PUBLIC_PROVIDER },
   ]);
 
   const isPublicRepo = computed<boolean>(() => form.providerId === PUBLIC_PROVIDER);
@@ -243,7 +317,7 @@ export function useCreateAppWizard(
   });
 
   const buildPackLabel = computed<string>(
-    () => BUILD_PACKS.find((item) => item.value === form.buildPack)?.label ?? "Auto-detect",
+    () => buildPacks.value.find((item) => item.value === form.buildPack)?.label ?? tr("applications.wizard.packAuto"),
   );
 
   /** reviewSource renders the repo headline on the review step. */
@@ -281,7 +355,7 @@ export function useCreateAppWizard(
     (providerId) => {
       form.repoFullName = "";
       form.cloneUrl = "";
-      sourceError.value = "";
+      noSshUrl.value = false;
       if (providerId !== "" && providerId !== PUBLIC_PROVIDER) {
         void loadRepos();
       }
@@ -303,10 +377,9 @@ export function useCreateAppWizard(
       return;
     }
     form.cloneUrl = cloneUrlFor(repo);
-    sourceError.value = "";
+    noSshUrl.value = false;
     if (repo.private && form.cloneUrl === "") {
-      sourceError.value =
-        "The provider reported no SSH URL for this private repository, so a deploy key cannot be used. Pick another repository or make the SSH URL available on the provider.";
+      noSshUrl.value = true;
     }
     if (repo.default_branch) {
       form.branch = repo.default_branch;
@@ -337,9 +410,9 @@ export function useCreateAppWizard(
 
   /** handleSubmit posts the wizard payload, queues the first deploy and reports. */
   async function handleSubmit(): Promise<void> {
-    errorMessage.value = "";
+    submitFailure.value = null;
     if (!scopeValid.value) {
-      errorMessage.value = "Select a project and environment first.";
+      submitFailure.value = { kind: "scope" };
       return;
     }
     submitting.value = true;
@@ -349,20 +422,24 @@ export function useCreateAppWizard(
       // first deployment explicitly and surface whether it was queued.
       try {
         await appsStore.deploy(application.id);
-        message.success(`Application "${application.name}" created and first deploy queued`);
+        message.success(
+          tr("applications.wizard.createdQueued", { name: application.name }),
+        );
       } catch (deployError) {
         message.warning(
-          `Application "${application.name}" was created, but the first deploy could not be queued: ${describeApplicationError(
-            deployError,
-          )}`,
+          tr("applications.wizard.createdDeployFailed", {
+            name: application.name,
+            error: describeApplicationError(deployError),
+          }),
           { duration: 8000 },
         );
       }
       if (webhook && !webhook.installed) {
         message.warning(
-          `Automatic deploys are off: ${
-            webhook.error ?? "the provider hook could not be installed"
-          }`,
+          tr("applications.wizard.webhookOff", {
+            detail:
+              webhook.error ?? tr("applications.wizard.webhookOffDefault"),
+          }),
           { duration: 8000 },
         );
       }
@@ -370,7 +447,7 @@ export function useCreateAppWizard(
       emit("update:show", false);
       resetWizard();
     } catch (error) {
-      errorMessage.value = describeApplicationError(error);
+      submitFailure.value = { kind: "error", error };
     } finally {
       submitting.value = false;
     }
@@ -413,19 +490,20 @@ export function useCreateAppWizard(
     form.baseDomain = "";
     form.env = [{ key: "NODE_ENV", value: "production" }];
     form.storage = [];
-    errorMessage.value = "";
-    sourceError.value = "";
+    submitFailure.value = null;
+    noSshUrl.value = false;
     submitting.value = false;
     // The provider store is a singleton: a stale repo error must not survive
     // into the next wizard with a Retry that no longer applies.
     providersStore.reposError = null;
+    providersStore.reposErrorRaw = null;
   }
 
   return {
     form,
     step,
-    stepNames: STEP_NAMES,
-    buildPacks: BUILD_PACKS,
+    stepNames,
+    buildPacks,
     submitting,
     errorMessage,
     sourceError,

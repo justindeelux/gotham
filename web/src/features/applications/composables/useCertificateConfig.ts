@@ -1,4 +1,5 @@
 import { useMessage } from "naive-ui";
+import { activeLocale, i18n } from "@/shared/i18n";
 import { computed, onMounted, ref, watch, type Ref } from "vue";
 
 import type { Application } from "@/features/applications/api/applications";
@@ -79,13 +80,13 @@ export function useCertificateConfig(application: Ref<Application>) {
       const existing = certificate.value;
       if (existing) {
         await proxyStore.updateCertificateConfig(existing.id, input);
-        message.success("Certificate configuration saved.");
+        message.success(tr("applications.detail.certSaved"));
       } else {
         await proxyStore.createCertificateConfig({
           ...input,
           application_id: application.value.id,
         });
-        message.success("Certificate configuration created.");
+        message.success(tr("applications.detail.certCreated"));
       }
       certificateOpen.value = false;
     } catch (error) {
@@ -104,7 +105,7 @@ export function useCertificateConfig(application: Ref<Application>) {
     certificateError.value = null;
     try {
       await proxyStore.updateCertificateConfig(existing.id, {});
-      message.success("Certificate re-recorded the current application domain.");
+      message.success(tr("applications.detail.certRerecorded"));
     } catch (error) {
       message.error(describeProxyError(error));
     }
@@ -118,10 +119,19 @@ export function useCertificateConfig(application: Ref<Application>) {
     }
     try {
       await proxyStore.removeCertificate(existing.id);
-      message.success("Certificate configuration deleted. The route stays HTTP-only.");
+      message.success(tr("applications.detail.certDeleted"));
     } catch (error) {
       message.error(describeProxyError(error));
     }
+  }
+
+  /**
+   * tr resolves one applications message in the current locale. Reading
+   * activeLocale pins the caller to the language switch.
+   */
+  function tr(key: string): string {
+    void activeLocale.value;
+    return String(i18n.global.t(key));
   }
 
   /** load refreshes the providers and certificates the editor depends on. */

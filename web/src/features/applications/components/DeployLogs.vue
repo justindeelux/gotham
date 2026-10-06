@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import { deployChannel } from "@/features/applications/api/applications";
 import type { Deployment } from "@/features/applications/api/applications";
@@ -11,7 +12,8 @@ import LogViewer from "@/features/servers/components/LogViewer.vue";
  * The control plane publishes agent output on `logs:{serverID}:{deploymentID}`
  * (see `DeployChannel` in `internal/deploy/events.go`), so this wrapper only
  * resolves the channel and reuses the Phase 3 `LogViewer` unchanged — log
- * rendering, pause/follow/clear/download all come from that component.
+ * rendering, pause/follow/clear/download all come from that component. The
+ * streamed output itself is never translated; only the generated heading is.
  */
 
 interface Props {
@@ -23,6 +25,8 @@ interface Props {
 
 const props = defineProps<Props>();
 
+const { t } = useI18n();
+
 const channel = computed<string>(() => {
   if (!props.deployment) {
     return "";
@@ -31,7 +35,9 @@ const channel = computed<string>(() => {
 });
 
 const title = computed<string>(() =>
-  props.deployment ? `deploy ${props.deployment.id.slice(0, 8)} · build log` : "Build log",
+  props.deployment
+    ? String(t("applications.deployLogs.title", { id: props.deployment.id.slice(0, 8) }))
+    : String(t("applications.deployLogs.buildLog")),
 );
 
 const subtitle = computed<string>(() =>
@@ -50,7 +56,7 @@ const subtitle = computed<string>(() =>
     :title="title"
     :subtitle="subtitle"
   />
-  <p v-else class="deploy-logs__empty">Select a deployment to stream its logs.</p>
+  <p v-else class="deploy-logs__empty">{{ t("applications.deployLogs.empty") }}</p>
 </template>
 
 <style scoped>

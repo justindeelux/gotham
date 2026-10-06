@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NTag } from "naive-ui";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { DeploymentState } from "@/features/applications/api/applications";
 
@@ -42,17 +43,22 @@ const pulsing: ReadonlySet<DeploymentState> = new Set([
 
 const props = withDefaults(defineProps<Props>(), { size: "small" });
 
+const { t } = useI18n();
+
 const tagType = computed<TagType>(() => stateTypes[props.state] ?? "default");
 
 const dotClass = computed<string>(() => stateDots[props.state] ?? "dot--queued");
 
 const dotPulse = computed<boolean>(() => pulsing.has(props.state));
+
+/** stateLabel renders the wire state through the display catalog. */
+const stateLabel = computed<string>(() => String(t(`applications.status.${props.state}`)));
 </script>
 
 <template>
   <NTag :type="tagType" :size="size" round>
     <span class="status-dot" :class="[dotClass, { 'dot-pulse': dotPulse }]" aria-hidden="true" />
-    {{ state }}
+    {{ stateLabel }}
   </NTag>
 </template>
 

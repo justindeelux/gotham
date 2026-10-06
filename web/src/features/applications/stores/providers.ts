@@ -7,6 +7,7 @@ import {
   listRepos,
 } from "@/features/applications/api/providers";
 import type { ProviderRepo, SourceProvider } from "@/features/applications/api/providers";
+import { onLocaleChange } from "@/shared/i18n/locale";
 
 export const useProvidersStore = defineStore("providers", () => {
   const providers = ref<SourceProvider[]>([]);
@@ -15,14 +16,33 @@ export const useProvidersStore = defineStore("providers", () => {
   const reposLoading = ref(false);
   const error = ref<string | null>(null);
   const reposError = ref<string | null>(null);
+  /**
+   * errorRaw/reposErrorRaw keep the failures the banners were derived from,
+   * so a language switch re-derives the curated summaries without refetching.
+   */
+  const errorRaw = ref<unknown>(null);
+  const reposErrorRaw = ref<unknown>(null);
+
+  // A retained failure banner re-derives its curated summary when the
+  // language changes; raw diagnostics inside re-resolve to passthrough text.
+  onLocaleChange(() => {
+    if (errorRaw.value !== null) {
+      error.value = describeProviderError(errorRaw.value);
+    }
+    if (reposErrorRaw.value !== null) {
+      reposError.value = describeProviderError(reposErrorRaw.value);
+    }
+  });
 
   /** fetchProviders loads every source provider of the current user. */
   async function fetchProviders(): Promise<void> {
     loading.value = true;
     error.value = null;
+    errorRaw.value = null;
     try {
       providers.value = await listProviders();
     } catch (err) {
+      errorRaw.value = err;
       error.value = describeProviderError(err);
       throw err;
     } finally {
@@ -34,9 +54,11 @@ export const useProvidersStore = defineStore("providers", () => {
   async function fetchRepos(providerId: string): Promise<void> {
     reposLoading.value = true;
     reposError.value = null;
+    reposErrorRaw.value = null;
     try {
       reposByProvider.value[providerId] = await listRepos(providerId);
     } catch (err) {
+      reposErrorRaw.value = err;
       reposError.value = describeProviderError(err);
       throw err;
     } finally {
@@ -66,6 +88,8 @@ export const useProvidersStore = defineStore("providers", () => {
     reposLoading.value = false;
     error.value = null;
     reposError.value = null;
+    errorRaw.value = null;
+    reposErrorRaw.value = null;
   }
 
   return {
@@ -75,6 +99,8 @@ export const useProvidersStore = defineStore("providers", () => {
     reposLoading,
     error,
     reposError,
+    errorRaw,
+    reposErrorRaw,
     reset,
     fetchProviders,
     fetchRepos,

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NButton, NDataTable, NSpace, NText, type DataTableColumns } from "naive-ui";
-import { h, type VNode } from "vue";
+import { computed, h, type VNode } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Deployment } from "@/features/applications/api/applications";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
@@ -20,6 +21,8 @@ const emit = defineEmits<{
   "open-rollback": [deploymentId: string];
 }>();
 
+const { t } = useI18n();
+
 /** errorText renders the deployment error, falling back to an em dash. */
 function errorText(deployment: Deployment): VNode {
   if (!deployment.error) {
@@ -38,7 +41,7 @@ function actionsCell(row: Deployment): VNode {
         quaternary: true,
         onClick: () => emit("show-logs", row.id),
       },
-      { default: () => "Logs" },
+      { default: () => String(t("applications.table.logs")) },
     ),
   ];
   if (row.state === "running") {
@@ -49,28 +52,33 @@ function actionsCell(row: Deployment): VNode {
           size: "small",
           onClick: () => emit("open-rollback", row.id),
         },
-        { default: () => "Rollback" },
+        { default: () => String(t("applications.table.rollback")) },
       ),
     );
   }
   return h(NSpace, { size: 8, align: "center", wrap: false }, { default: () => children });
 }
 
-const columns: DataTableColumns<Deployment> = [
+/**
+ * columns renders the history grid. Computed (not module-static) so a
+ * language switch relabels headers and row buttons without losing the
+ * pagination or scroll position. Raw diagnostics and wire ids stay verbatim.
+ */
+const columns = computed<DataTableColumns<Deployment>>(() => [
   {
-    title: "Deploy",
+    title: String(t("applications.table.deploy")),
     key: "id",
     width: 110,
     render: (row) => h("span", { class: "mono" }, row.id.slice(0, 8)),
   },
   {
-    title: "Kind",
+    title: String(t("applications.table.kind")),
     key: "kind",
     width: 100,
     render: (row) => h("span", { class: "mono" }, row.kind),
   },
   {
-    title: "Image",
+    title: String(t("applications.table.image")),
     key: "image_tag",
     minWidth: 160,
     ellipsis: { tooltip: true },
@@ -80,37 +88,37 @@ const columns: DataTableColumns<Deployment> = [
         : h(NText, { depth: 3 }, { default: () => "—" }),
   },
   {
-    title: "Duration",
+    title: String(t("applications.table.duration")),
     key: "duration",
     width: 90,
     render: (row) => h("span", { class: "tnum" }, durationText(row)),
   },
   {
-    title: "State",
+    title: String(t("applications.table.state")),
     key: "state",
     width: 130,
     render: (row) => h(DeploymentStatusTag, { state: row.state }),
   },
   {
-    title: "Error",
+    title: String(t("applications.table.error")),
     key: "error",
     minWidth: 160,
     ellipsis: { tooltip: true },
     render: (row) => errorText(row),
   },
   {
-    title: "Created",
+    title: String(t("applications.table.created")),
     key: "created_at",
     width: 110,
     render: (row) => relativeTime(row.created_at),
   },
   {
-    title: "Actions",
+    title: String(t("applications.table.actions")),
     key: "actions",
     width: 190,
     render: (row) => actionsCell(row),
   },
-];
+]);
 
 /** rowKey identifies a row by its deployment id. */
 function rowKey(row: Deployment): string {

@@ -1,4 +1,5 @@
 import { http, teamHeaders } from "@/shared/api/http";
+import { i18n } from "@/shared/i18n";
 import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
@@ -498,29 +499,35 @@ export type ApplicationControlAction = "stop" | "start";
  * unreachable node agent and 503 a disabled feature flag. `action` sharpens the
  * 404 copy for the container lifecycle routes, where a 404 means "no container
  * in the target state" rather than "application not found".
+ *
+ * Classification always reads the raw status/message (never translated text);
+ * only the curated summaries below resolve through the current-locale catalog
+ * at invocation time. Raw server diagnostics pass through untouched.
  */
 export function describeApplicationError(
   error: unknown,
   action?: ApplicationControlAction,
 ): string {
+  const t = i18n.global.t.bind(i18n.global);
+  const unexpected = (): string => String(t("common.errors.unexpected"));
   if (isApiError(error)) {
     if (error.status === 401) {
-      return "Your session expired. Please sign in again.";
+      return String(t("applications.errors.sessionExpired"));
     }
     if (error.status === 400) {
       return (
         stripErrorPrefix(error.message) ||
-        "Invalid request. Check the highlighted fields and retry."
+        String(t("applications.errors.invalidRequest"))
       );
     }
     if (error.status === 404) {
       if (action === "stop") {
-        return "No running container to stop. It may already be stopped.";
+        return String(t("applications.errors.noRunningContainer"));
       }
       if (action === "start") {
-        return "No container to start. Deploy the application first.";
+        return String(t("applications.errors.noContainerStart"));
       }
-      return "Application not found. It may have been deleted or belong to another account.";
+      return String(t("applications.errors.notFound"));
     }
     if (error.status === 409) {
       // The backend names the refusal exactly (`a deploy is in progress`
@@ -530,22 +537,22 @@ export function describeApplicationError(
       // settings to render inline.
       return (
         conflictDetail(stripErrorPrefix(error.message)) ||
-        "A deployment is already in progress for this application. " +
-          "Wait for it to finish and retry."
+        String(t("applications.errors.conflictDeploy"))
       );
     }
     if (error.status === 502) {
-      return "The node agent is unreachable. Check the node status and retry.";
+      return String(t("applications.errors.agentUnreachable"));
     }
     if (error.status === 503) {
-      return "Applications are disabled on the control plane (FEATURE_APPLICATIONS=false).";
+      return String(t("applications.errors.appsDisabled"));
     }
-    return stripErrorPrefix(error.message) || "Request failed";
-  }
-  if (error instanceof Error) {
     return (
-      stripErrorPrefix(error.message) || "Something went wrong. Please try again."
+      stripErrorPrefix(error.message) ||
+      String(t("common.errors.requestFailed"))
     );
   }
-  return "Something went wrong. Please try again.";
+  if (error instanceof Error) {
+    return stripErrorPrefix(error.message) || unexpected();
+  }
+  return unexpected();
 }

@@ -8,6 +8,7 @@ import {
   NEmpty,
   NSpace,
 } from "naive-ui";
+import { useI18n } from "vue-i18n";
 
 import type { Application, Deployment } from "@/features/applications/api/applications";
 import DeploymentHistoryTable from "@/features/applications/components/DeploymentHistoryTable.vue";
@@ -33,37 +34,39 @@ const emit = defineEmits<{
   "show-logs": [deploymentId: string];
   "open-rollback": [deploymentId: string];
 }>();
+
+const { t } = useI18n();
 </script>
 
 <template>
   <NSpace vertical :size="16" style="margin-top: 16px">
-    <NCard v-if="props.application" title="Application">
+    <NCard v-if="props.application" :title="t('applications.overview.title')">
       <NDescriptions :column="props.descColumns" bordered label-placement="left">
-        <NDescriptionsItem label="Name">
+        <NDescriptionsItem :label="t('applications.overview.name')">
           <span class="mono">{{ props.application.name }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="Branch">
+        <NDescriptionsItem :label="t('applications.overview.branch')">
           <span class="mono">{{ props.application.branch || "—" }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="Build pack">
-          <span class="mono">{{ props.application.build_pack || "auto" }}</span>
+        <NDescriptionsItem :label="t('applications.overview.buildPack')">
+          <span class="mono">{{ props.application.build_pack || t("applications.overview.auto") }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="Domain">
+        <NDescriptionsItem :label="t('applications.overview.domain')">
           <span class="mono">{{ props.application.base_domain || "—" }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="Port">
+        <NDescriptionsItem :label="t('applications.overview.port')">
           <span class="mono">{{ props.application.port }}:{{ props.application.host_port }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="Node">
-          <span class="mono">{{ props.application.server_name || (props.application.server_id ? props.application.server_id.slice(0, 8) : "unassigned") }}</span>
+        <NDescriptionsItem :label="t('applications.overview.node')">
+          <span class="mono">{{ props.application.server_name || (props.application.server_id ? props.application.server_id.slice(0, 8) : t("applications.overview.unassigned")) }}</span>
         </NDescriptionsItem>
       </NDescriptions>
     </NCard>
-    <NCard v-if="props.latest" :title="`Deploy ${props.latest.id.slice(0, 8)}`">
+    <NCard v-if="props.latest" :title="t('applications.overview.deployTitle', { id: props.latest.id.slice(0, 8) })">
       <template #header-extra>
         <DeploymentStatusTag :state="props.latest.state" />
       </template>
-      <div class="pipeline" role="list" aria-label="Deploy pipeline">
+      <div class="pipeline" role="list" :aria-label="t('applications.overview.pipeline')">
         <template v-for="(step, index) in props.pipelineSteps" :key="step.name">
           <span
             v-if="index > 0"
@@ -77,22 +80,22 @@ const emit = defineEmits<{
         </template>
       </div>
       <NDescriptions :column="props.descColumns" bordered label-placement="left">
-        <NDescriptionsItem label="Kind">
+        <NDescriptionsItem :label="t('applications.overview.kind')">
           <span class="mono">{{ props.latest.kind }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="Image">
+        <NDescriptionsItem :label="t('applications.overview.image')">
           <span class="mono">{{ props.latest.image_tag || "—" }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="Registry image">
+        <NDescriptionsItem :label="t('applications.overview.registryImage')">
           <span class="mono">{{ props.latest.registry_image || "—" }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="Container">
+        <NDescriptionsItem :label="t('applications.overview.container')">
           <span class="mono">{{ props.latest.container_id || "—" }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem label="Duration">
+        <NDescriptionsItem :label="t('applications.overview.duration')">
           {{ durationText(props.latest) }}
         </NDescriptionsItem>
-        <NDescriptionsItem label="Created">
+        <NDescriptionsItem :label="t('applications.overview.created')">
           {{ relativeTime(props.latest.created_at) }}
         </NDescriptionsItem>
       </NDescriptions>
@@ -105,21 +108,21 @@ const emit = defineEmits<{
         {{ props.latest.error }}
       </NAlert>
     </NCard>
-    <NCard v-else title="No deployments yet">
-      <NEmpty description="Queue the first deploy to start the pipeline.">
+    <NCard v-else :title="t('applications.overview.emptyTitle')">
+      <NEmpty :description="t('applications.overview.emptyHint')">
         <template #extra>
           <NButton
             type="primary"
             :loading="props.acting"
             @click="emit('deploy')"
           >
-            Deploy now
+            {{ t("applications.overview.deployNow") }}
           </NButton>
         </template>
       </NEmpty>
     </NCard>
 
-    <NCard title="Recent deployments">
+    <NCard :title="t('applications.overview.recent')">
       <template #header-extra>
         <NButton
           v-if="props.deployments.length > 0"
@@ -127,7 +130,7 @@ const emit = defineEmits<{
           size="small"
           @click="emit('view-all')"
         >
-          View all
+          {{ t("applications.overview.viewAll") }}
         </NButton>
       </template>
       <DeploymentHistoryTable
@@ -136,7 +139,7 @@ const emit = defineEmits<{
         @show-logs="emit('show-logs', $event)"
         @open-rollback="emit('open-rollback', $event)"
       />
-      <NEmpty v-else description="No deployments recorded for this application." />
+      <NEmpty v-else :description="t('applications.overview.noneRecorded')" />
     </NCard>
   </NSpace>
 </template>

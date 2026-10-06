@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { NAlert, NCard, NEmpty, NSpace, NSpin, NTabPane, NTabs } from "naive-ui";
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import ApplicationDeploymentsTab from "@/features/applications/components/ApplicationDeploymentsTab.vue";
 import ApplicationEnvTab from "@/features/applications/components/ApplicationEnvTab.vue";
@@ -15,6 +17,20 @@ import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.
 import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
 
 const detail = useApplicationDetail();
+
+const { t } = useI18n();
+
+/** deploymentsTab names the deployment count; 0/1/many all render. */
+const deploymentsTab = computed<string>(() =>
+  String(t("applications.tabs.deployments", { count: detail.deployments.value.length })),
+);
+
+/** previewsTab names the preview count once loaded; 0/1/many all render. */
+const previewsTab = computed<string>(() =>
+  detail.previewsLoaded.value
+    ? String(t("applications.tabs.previews", { count: detail.previews.value.length }))
+    : String(t("applications.tabs.previewsPlain")),
+);
 </script>
 
 <template>
@@ -27,7 +43,7 @@ const detail = useApplicationDetail();
       :environment-id="detail.application.value.environment_id"
       :resource-name="detail.application.value.name"
     />
-    <nav v-else class="breadcrumb" aria-label="Breadcrumb">
+    <nav v-else class="breadcrumb" :aria-label="t('applications.page.breadcrumb')">
       <span class="muted mono">{{ detail.shortId.value || detail.appId.value }}</span>
     </nav>
 
@@ -60,7 +76,7 @@ const detail = useApplicationDetail();
       />
 
       <NTabs v-model:value="detail.activeTab.value" type="line" animated>
-        <NTabPane name="overview" tab="Overview">
+        <NTabPane name="overview" :tab="t('applications.tabs.overview')">
           <ApplicationOverviewTab
             :application="detail.application.value"
             :latest="detail.latest.value"
@@ -75,7 +91,7 @@ const detail = useApplicationDetail();
           />
         </NTabPane>
 
-        <NTabPane name="deployments" :tab="`Deployments (${detail.deployments.value.length})`">
+        <NTabPane name="deployments" :tab="deploymentsTab">
           <ApplicationDeploymentsTab
             :deployments="detail.deployments.value"
             :loading="detail.appsStore.loading"
@@ -84,7 +100,7 @@ const detail = useApplicationDetail();
           />
         </NTabPane>
 
-        <NTabPane name="logs" tab="Logs">
+        <NTabPane name="logs" :tab="t('applications.tabs.logs')">
           <ApplicationLogsTab
             :log-server-id="detail.logServerId.value"
             :log-deployment-id="detail.logDeploymentId.value"
@@ -98,7 +114,7 @@ const detail = useApplicationDetail();
           />
         </NTabPane>
 
-        <NTabPane name="env" tab="Environment">
+        <NTabPane name="env" :tab="t('applications.tabs.env')">
           <ApplicationEnvTab
             :env-draft="detail.envDraft.value"
             :env-loading="detail.envLoading.value"
@@ -113,7 +129,7 @@ const detail = useApplicationDetail();
           />
         </NTabPane>
 
-        <NTabPane name="storage" tab="Storage">
+        <NTabPane name="storage" :tab="t('applications.tabs.storage')">
           <ApplicationStorageTab
             :storages-draft="detail.storagesDraft.value"
             :storages-loading="detail.storagesLoading.value"
@@ -126,11 +142,11 @@ const detail = useApplicationDetail();
           />
         </NTabPane>
 
-        <NTabPane name="domains" tab="Domains">
+        <NTabPane name="domains" :tab="t('applications.tabs.domains')">
           <div style="margin-top: 16px">
             <DomainEditor v-if="detail.application.value" :application="detail.application.value" />
             <NCard v-else>
-              <NEmpty description="Loading the application…" />
+              <NEmpty :description="t('applications.page.loadingApp')" />
             </NCard>
           </div>
         </NTabPane>
@@ -138,7 +154,7 @@ const detail = useApplicationDetail();
         <NTabPane
           v-if="detail.previewsAvailable.value"
           name="previews"
-          :tab="detail.previewsLoaded.value ? `Previews (${detail.previews.value.length})` : 'Previews'"
+          :tab="previewsTab"
         >
           <ApplicationPreviewsTab
             :previews="detail.previews.value"
@@ -150,7 +166,7 @@ const detail = useApplicationDetail();
           />
         </NTabPane>
 
-        <NTabPane v-if="detail.canWrite.value" name="settings" tab="Settings">
+        <NTabPane v-if="detail.canWrite.value" name="settings" :tab="t('applications.tabs.settings')">
           <ResourceMoveCard
             v-if="detail.application.value"
             :project-id="detail.application.value.project_id"

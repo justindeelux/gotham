@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NDataTable, NEmpty, NSpace, NTag, NText } from "naive-ui";
 import type { DataTableColumns } from "naive-ui";
-import { h } from "vue";
+import { computed, h } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Preview } from "@/features/applications/api/previews";
 import { previewStateTagType, previewURL } from "@/features/applications/api/previews";
@@ -21,16 +22,22 @@ const emit = defineEmits<{
   refresh: [];
 }>();
 
-/** Preview rows shown in the Previews tab, oldest closed last. */
-const previewColumns: DataTableColumns<Preview> = [
+const { t } = useI18n();
+
+/**
+ * Preview rows shown in the Previews tab, oldest closed last. Computed so a
+ * language switch relabels headers without losing table state; hosts, SHAs
+ * and branch names stay verbatim.
+ */
+const previewColumns = computed<DataTableColumns<Preview>>(() => [
   {
-    title: "PR",
+    title: String(t("applications.previewsTab.pr")),
     key: "pr_number",
     width: 90,
     render: (row) => h("span", { class: "mono" }, `#${row.pr_number}`),
   },
   {
-    title: "Branch",
+    title: String(t("applications.previewsTab.branch")),
     key: "branch",
     minWidth: 160,
     ellipsis: { tooltip: true },
@@ -40,7 +47,7 @@ const previewColumns: DataTableColumns<Preview> = [
         : h(NText, { depth: 3 }, { default: () => "—" }),
   },
   {
-    title: "Preview URL",
+    title: String(t("applications.previewsTab.url")),
     key: "host",
     minWidth: 300,
     ellipsis: { tooltip: true },
@@ -59,18 +66,18 @@ const previewColumns: DataTableColumns<Preview> = [
         : h(NText, { depth: 3 }, { default: () => "—" }),
   },
   {
-    title: "State",
+    title: String(t("applications.previewsTab.state")),
     key: "state",
     width: 120,
     render: (row) =>
       h(
         NTag,
         { type: previewStateTagType(row.state), size: "small", round: true },
-        { default: () => row.state },
+        { default: () => String(t(`applications.previewState.${row.state}`)) },
       ),
   },
   {
-    title: "Head",
+    title: String(t("applications.previewsTab.head")),
     key: "head_sha",
     width: 100,
     render: (row) =>
@@ -79,13 +86,13 @@ const previewColumns: DataTableColumns<Preview> = [
         : h(NText, { depth: 3 }, { default: () => "—" }),
   },
   {
-    title: "Created",
+    title: String(t("applications.previewsTab.created")),
     key: "created_at",
     width: 110,
     render: (row) => relativeTime(row.created_at),
   },
   {
-    title: "Deleted",
+    title: String(t("applications.previewsTab.deleted")),
     key: "deleted_at",
     width: 110,
     render: (row) =>
@@ -93,7 +100,7 @@ const previewColumns: DataTableColumns<Preview> = [
         ? relativeTime(row.deleted_at)
         : h(NText, { depth: 3 }, { default: () => "—" }),
   },
-];
+]);
 
 /** previewRowKey identifies a preview row by its binding id. */
 function previewRowKey(row: Preview): string {
@@ -102,14 +109,14 @@ function previewRowKey(row: Preview): string {
 </script>
 
 <template>
-  <NCard style="margin-top: 16px" title="Preview deployments">
+  <NCard style="margin-top: 16px" :title="t('applications.previewsTab.title')">
     <template #header-extra>
       <NButton
         size="small"
         :loading="props.previewsLoading"
         @click="emit('refresh')"
       >
-        Refresh
+        {{ t("applications.previewsTab.refresh") }}
       </NButton>
     </template>
     <NSpace vertical :size="12">
@@ -117,7 +124,7 @@ function previewRowKey(row: Preview): string {
         <NSpace align="center" :size="12" wrap>
           <span>{{ props.previewsError }}</span>
           <NButton size="small" @click="emit('refresh')">
-            Retry
+            {{ t("common.actions.retry") }}
           </NButton>
         </NSpace>
       </NAlert>
@@ -133,22 +140,20 @@ function previewRowKey(row: Preview): string {
       />
       <NEmpty
         v-else-if="!props.previewsLoading && props.previewsLoaded && !props.previewsError"
-        description="No previews for this application yet."
+        :description="t('applications.previewsTab.empty')"
       >
         <template #extra>
           <NText depth="3">
-            A preview is created when a pull request opens against
-            <span class="mono">{{ props.branch || "the watched branch" }}</span>,
-            and torn down when it closes or merges.
+            {{ t("applications.previewsTab.emptyStart") }}
+            <span class="mono">{{ props.branch || t("applications.previewsTab.emptyBranchFallback") }}</span>,
+            {{ t("applications.previewsTab.emptyEnd") }}
           </NText>
         </template>
       </NEmpty>
     </NSpace>
     <template #footer>
       <NText depth="3">
-        Previews are sibling applications: they build the PR head
-        branch on a temporary host, and the base application's sealed
-        secrets and volumes are deliberately not shared with them.
+        {{ t("applications.previewsTab.footer") }}
       </NText>
     </template>
   </NCard>

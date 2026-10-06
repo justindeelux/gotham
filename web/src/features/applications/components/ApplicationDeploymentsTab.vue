@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { NCard, NEmpty, NText } from "naive-ui";
+import { useI18n } from "vue-i18n";
 
 import type { Deployment } from "@/features/applications/api/applications";
 import DeploymentHistoryTable from "@/features/applications/components/DeploymentHistoryTable.vue";
@@ -15,6 +16,8 @@ const emit = defineEmits<{
   "show-logs": [deploymentId: string];
   "open-rollback": [deploymentId: string];
 }>();
+
+const { t } = useI18n();
 </script>
 
 <template>
@@ -27,11 +30,10 @@ const emit = defineEmits<{
       @show-logs="emit('show-logs', $event)"
       @open-rollback="emit('open-rollback', $event)"
     />
-    <NEmpty v-else description="No deployments recorded for this application." />
+    <NEmpty v-else :description="t('applications.deploymentsTab.noneRecorded')" />
     <template #footer>
       <NText depth="3">
-        Rollback only switches the image tag — the old image stays in
-        the internal registry.
+        {{ t("applications.deploymentsTab.footer") }}
       </NText>
     </template>
   </NCard>

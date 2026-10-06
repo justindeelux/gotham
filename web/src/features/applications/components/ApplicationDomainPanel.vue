@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NInput, NSpace, NText } from "naive-ui";
 import { toRef } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Application } from "@/features/applications/api/applications";
 import { useApplicationDomain } from "@/features/applications/composables/useApplicationDomain";
@@ -12,14 +13,15 @@ interface Props {
 const props = defineProps<Props>();
 
 const domain = useApplicationDomain(toRef(props, "application"));
+
+const { t } = useI18n();
 </script>
 
 <template>
-  <NCard title="Application domain">
+  <NCard :title="t('applications.domain.title')">
     <NSpace vertical :size="12">
       <NText depth="3">
-        The control plane routes this hostname to the application container.
-        The certificate configuration records it at save time.
+        {{ t("applications.domain.hint") }}
       </NText>
       <NAlert
         v-if="domain.domainError.value"
@@ -34,7 +36,7 @@ const domain = useApplicationDomain(toRef(props, "application"));
           class="mono"
           style="max-width: 360px"
           placeholder="app.example.com"
-          aria-label="Application base domain"
+          :aria-label="t('applications.domain.baseAria')"
           @keyup.enter="domain.handleSaveDomain"
         />
         <NButton
@@ -42,12 +44,11 @@ const domain = useApplicationDomain(toRef(props, "application"));
           :loading="domain.savingDomain.value"
           @click="domain.handleSaveDomain"
         >
-          Save domain
+          {{ t("applications.domain.save") }}
         </NButton>
       </NSpace>
       <NText depth="3" class="small">
-        Leave empty to remove the domain. HTTP and HTTPS routing only exist
-        while the application has a valid domain.
+        {{ t("applications.domain.emptyHint") }}
       </NText>
     </NSpace>
   </NCard>

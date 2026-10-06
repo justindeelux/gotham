@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { NCard, NSelect, NSpace, NText } from "naive-ui";
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Deployment } from "@/features/applications/api/applications";
 import DeployLogs from "@/features/applications/components/DeployLogs.vue";
@@ -20,6 +22,15 @@ const emit = defineEmits<{
   "update:logServerId": [value: string];
   "update:logDeploymentId": [value: string];
 }>();
+
+const { t } = useI18n();
+
+/** deploymentPlaceholder names the in-flight deployment, if any. */
+const deploymentPlaceholder = computed<string>(() =>
+  props.activeDeploymentId
+    ? String(t("applications.logsTab.streaming", { id: props.activeDeploymentId.slice(0, 8) }))
+    : String(t("applications.logsTab.selectDeployment")),
+);
 </script>
 
 <template>
@@ -29,25 +40,20 @@ const emit = defineEmits<{
         <NSelect
           :value="props.logServerId"
           :options="props.serverOptions"
-          placeholder="Select node"
+          :placeholder="t('applications.logsTab.selectNode')"
           style="width: 260px"
           @update:value="emit('update:logServerId', $event)"
         />
         <NSelect
           :value="props.logDeploymentId"
           :options="props.deploymentOptions"
-          :placeholder="
-            props.activeDeploymentId
-              ? `Streaming: ${props.activeDeploymentId.slice(0, 8)}`
-              : 'Select deployment'
-          "
+          :placeholder="deploymentPlaceholder"
           style="width: 280px"
           @update:value="emit('update:logDeploymentId', $event)"
         />
       </NSpace>
       <NText depth="3">
-        Logs default to the application's node and fall back to the
-        first known one — they stream on
+        {{ t("applications.logsTab.hint") }}
         <span class="mono">logs:{node}:{deployment}</span>.
       </NText>
       <DeployLogs

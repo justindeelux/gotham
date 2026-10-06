@@ -4,7 +4,7 @@
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { defineComponent, h, ref } from "vue";
 
 import {
@@ -16,6 +16,18 @@ import { hostDomainSchema } from "@/features/applications/schemas/applications";
 import { isValidDomain } from "@/features/applications/composables/useApplicationDomain";
 import { useCreateAppWizard } from "@/features/applications/composables/useCreateAppWizard";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
+import {
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  setLocale,
+  syncComposerLocale,
+} from "@/shared/i18n";
+
+beforeEach(() => {
+  registerDiscoveredCatalogs();
+  resetLocaleState();
+  syncComposerLocale("en");
+});
 
 describe("env convention warnings stay non-blocking", () => {
   it("matches recorded recommendations", () => {
@@ -72,6 +84,11 @@ describe("domain schema matches recorded outcomes", () => {
     expect(fieldErrors(hostDomainSchema, "UPPER.example")[0]).toBe(
       "Enter a plain hostname such as app.example.com (letters, digits, hyphens and dots; no wildcard).",
     );
+    setLocale("vi", null);
+    expect(fieldErrors(hostDomainSchema, "UPPER.example")[0]).toBe(
+      "Nhập hostname thuần như app.example.com (chữ cái, chữ số, gạch ngang và dấu chấm; không dùng ký tự đại diện).",
+    );
+    setLocale("en", null);
   });
 });
 

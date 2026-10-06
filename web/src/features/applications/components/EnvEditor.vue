@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NButton, NIcon, NInput, NText } from "naive-ui";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { EnvVar } from "@/features/applications/api/applications";
 import { isRecommendedEnvKey } from "@/features/applications/schemas/env";
@@ -22,6 +23,8 @@ const props = defineProps<Props>();
 const emit = defineEmits<{
   "update:modelValue": [value: EnvVar[]];
 }>();
+
+const { t } = useI18n();
 
 const rows = computed<EnvVar[]>(() => props.modelValue);
 const { keys: rowKeys, insertAt, removeAt } = useStableRowKeys(() => rows.value.length);
@@ -55,7 +58,7 @@ function removeRow(index: number): void {
 <template>
   <div class="env-editor">
     <div v-if="rows.length === 0" class="env-editor__empty">
-      <NText depth="3">No environment variables yet. Add the first one below.</NText>
+      <NText depth="3">{{ t("applications.envEditor.empty") }}</NText>
     </div>
     <div
       v-for="(row, index) in rows"
@@ -66,7 +69,7 @@ function removeRow(index: number): void {
         :value="row.key"
         class="mono"
         placeholder="NODE_ENV"
-        :input-props="{ 'aria-label': 'Variable name', autocomplete: 'off' }"
+        :input-props="{ 'aria-label': t('applications.envEditor.nameAria'), autocomplete: 'off' }"
         :status="row.key !== '' && !isValidKey(row.key) ? 'error' : undefined"
         @update:value="(value: string) => updateRow(index, { key: value })"
       />
@@ -74,25 +77,27 @@ function removeRow(index: number): void {
         :value="row.value"
         class="mono"
         placeholder="production or secret:db-url"
-        :input-props="{ 'aria-label': 'Variable value', autocomplete: 'off' }"
+        :input-props="{ 'aria-label': t('applications.envEditor.valueAria'), autocomplete: 'off' }"
         @update:value="(value: string) => updateRow(index, { value })"
       />
-      <NButton quaternary type="error" aria-label="Remove variable" @click="removeRow(index)">
+      <NButton quaternary type="error" :aria-label="t('applications.envEditor.removeAria')" @click="removeRow(index)">
         <template #icon>
           <NIcon>
             <GothamIcon name="trash" />
           </NIcon>
         </template>
       </NButton>
-      <span v-if="isSecretValue(row.value)" class="env-editor__secret">sealed secret</span>
+      <span v-if="isSecretValue(row.value)" class="env-editor__secret">{{ t("applications.envEditor.sealed") }}</span>
     </div>
     <NButton secondary size="small" @click="addRow">
-      Add variable
+      {{ t("applications.envEditor.add") }}
     </NButton>
     <p class="env-editor__hint">
-      Names must match <code class="inline-code">^[A-Z][A-Z0-9_]*$</code>. Values
-      starting with <code class="inline-code">secret:</code> reference a sealed
-      secret and are never returned by the API.
+      {{ t("applications.envEditor.hintNames") }}
+      <code class="inline-code">^[A-Z][A-Z0-9_]*$</code>.
+      {{ t("applications.envEditor.hintValues") }}
+      <code class="inline-code">secret:</code>
+      {{ t("applications.envEditor.hintValuesRest") }}
     </p>
   </div>
 </template>

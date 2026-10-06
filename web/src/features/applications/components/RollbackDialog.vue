@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { NButton, NModal, NPopconfirm, NRadio, NRadioGroup, NSpace, NText } from "naive-ui";
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Deployment } from "@/features/applications/api/applications";
 import { relativeTime } from "@/shared/utils/format";
@@ -18,20 +20,26 @@ const emit = defineEmits<{
   "update:target": [value: string];
   confirm: [];
 }>();
+
+const { t } = useI18n();
+
+/** confirmText names the actual rollback target; plain text, never HTML. */
+const confirmText = computed<string>(() =>
+  String(t("applications.rollback.confirm", { id: props.rollbackTarget.slice(0, 8) })),
+);
 </script>
 
 <template>
   <NModal
     :show="props.show"
     preset="card"
-    title="Rollback to a previous release"
+    :title="t('applications.rollback.title')"
     style="width: 560px; max-width: 94vw"
     @update:show="emit('update:show', $event)"
   >
     <NSpace vertical :size="12">
       <NText depth="3">
-        The control plane switches the image tag and restarts the container.
-        Environment and volumes stay unchanged.
+        {{ t("applications.rollback.hint") }}
       </NText>
       <NRadioGroup :value="props.rollbackTarget" @update:value="emit('update:target', $event)">
         <NSpace vertical :size="8">
@@ -42,7 +50,7 @@ const emit = defineEmits<{
           >
             <span class="mono">{{ item.id.slice(0, 8) }}</span>
             ·
-            <span class="mono">{{ item.image_tag || "untagged" }}</span>
+            <span class="mono">{{ item.image_tag || t("applications.rollback.untagged") }}</span>
             · {{ relativeTime(item.created_at) }}
           </NRadio>
         </NSpace>
@@ -57,11 +65,10 @@ const emit = defineEmits<{
             :loading="props.rollingBack"
             :disabled="props.rollbackTarget === ''"
           >
-            Rollback
+            {{ t("applications.header.rollback") }}
           </NButton>
         </template>
-        Roll back to {{ props.rollbackTarget.slice(0, 8) }}? The current container
-        is kept for a roll-forward.
+        {{ confirmText }}
       </NPopconfirm>
     </NSpace>
   </NModal>

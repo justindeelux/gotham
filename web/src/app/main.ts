@@ -3,11 +3,15 @@ import { createApp } from "vue";
 
 import App from "./App.vue";
 import { router } from "./router";
+import { installI18n } from "@/shared/i18n";
+import { getLocaleStorage, resolveInitialLocale } from "@/shared/i18n/locale";
+import { staleChunkCopy } from "@/shared/i18n/staleFallback";
 import "@/shared/styles/main.css";
 
 const app = createApp(App);
 
 app.use(createPinia());
+installI18n(app);
 app.use(router);
 
 // A dead session (failed refresh, forced logout) redirects in-app through
@@ -53,12 +57,15 @@ function clearNavigationReloadFlag(): void {
 /**
  * renderReloadFallback overlays a minimal, dependency-free message and reload
  * button, so a user with stale hashed chunks is not stranded. It is appended to
- * the body, outside the mounted app, so the render cannot wipe it.
+ * the body, outside the mounted app, so the render cannot wipe it. Copy comes
+ * from the stored locale (no feature chunk or i18n runtime required).
  */
 function renderReloadFallback(): void {
   if (document.getElementById("gotham-reload-fallback")) {
     return;
   }
+
+  const copy = staleChunkCopy(resolveInitialLocale(getLocaleStorage()));
 
   const overlay = document.createElement("div");
   overlay.id = "gotham-reload-fallback";
@@ -69,12 +76,11 @@ function renderReloadFallback(): void {
     "background:#0f1115;color:#e5e7eb;font:14px system-ui,sans-serif;z-index:9999";
 
   const message = document.createElement("p");
-  message.textContent =
-    "The application could not finish loading. Please reload the page.";
+  message.textContent = copy.message;
 
   const button = document.createElement("button");
   button.type = "button";
-  button.textContent = "Reload";
+  button.textContent = copy.reload;
   button.style.cssText =
     "padding:8px 16px;border-radius:6px;border:1px solid #4b5563;" +
     "background:#1f2937;color:inherit;cursor:pointer";

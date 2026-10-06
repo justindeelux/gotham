@@ -23,6 +23,7 @@ exit criteria, work packages, dependencies, and rollback. Start with the
 | 11 — UI Alignment (side track) | [11-ui-alignment.md](plans/11-ui-alignment.md) |
 | 12 — User profile management | [12-user-profile.md](plans/12-user-profile.md) |
 | 13 — Projects and environments | [13-projects-environments.md](plans/13-projects-environments.md) |
+| 14 — English/Vietnamese UI localization | [14-i18n.md](plans/14-i18n.md) |
 
 Phase status and remaining work live only in [`TODO.md`](TODO.md).
 

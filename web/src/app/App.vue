@@ -10,6 +10,7 @@ import { onMounted } from "vue";
 import { RouterView, useRoute } from "vue-router";
 
 import { useAuthStore } from "@/features/auth";
+import { naiveDateLocale, naiveLocale } from "@/shared/i18n";
 
 const authStore = useAuthStore();
 const route = useRoute();
@@ -229,7 +230,12 @@ const themeOverrides: GlobalThemeOverrides = {
 </script>
 
 <template>
-  <NConfigProvider :theme="darkTheme" :theme-overrides="themeOverrides">
+  <NConfigProvider
+    :theme="darkTheme"
+    :theme-overrides="themeOverrides"
+    :locale="naiveLocale"
+    :date-locale="naiveDateLocale"
+  >
     <NDialogProvider>
       <NMessageProvider>
         <RouterView />

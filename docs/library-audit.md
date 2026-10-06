@@ -44,6 +44,7 @@ google/uuid, redis, goose, minio; `sethvargo/go-retry` and
 | F18 | Go table output | tablewriter / lipgloss | nothing (no table output found) | **SKIP** |
 | F19 | Go request validation (existing code) | go-playground/validator/v10 | domain `validateEnv*` fns | **SKIP** |
 | F20 | validator.js (web, e.g. email/host checks) | validator.js | covered by F1 | **SKIP** |
+| F21 | EN/VI UI localization runtime (web) | vue-i18n `^11.4.13` (MIT, active) | hand-rolled locale state + English-only strings | **DO (landed I18N-1)** |
 
 Bundle-size evidence (measured `vite build` gzip, G1; baseline index chunk
 441.80 kB / 140.00 gzip, after index chunk 441.93 kB / 140.04 gzip):
@@ -323,6 +324,28 @@ needed on first use.
   CommonJS with poor tree-shaking; importing it for `isEmail`/`isIP` pulls
   far more than used.
 - Verdict: **SKIP — covered by the zod migration at a third of the weight.**
+
+### F21 — vue-i18n for EN/VI UI localization — DO (landed I18N-1)
+
+- Location: `web/src/shared/i18n/` (composer, locale persistence/sync,
+  common en/vi catalogs, catalog parity helpers, stale-chunk copy),
+  `web/src/shared/ui/LanguageSelect.vue`, wiring in `app/main.ts`
+  (pre-mount preference + localized stale-chunk fallback) and `app/App.vue`
+  (Naive `locale`/`date-locale`), invocation-time message resolution in
+  `shared/validation/naiveAdapter.ts`, locale-aware `shared/utils/format.ts`
+  and `shared/ui/chartModel.ts tickLabel`.
+- Library: **vue-i18n** `^11.4.13` (MIT, very active), Vue-3-compatible
+  Composition API (`legacy: false`), single global composer,
+  `fallbackLocale: "en"`. Chosen over a hand-rolled interpolator because
+  named parameters, pluralization and fallback already exist, are tested
+  upstream, and every sibling feature package consumes the same contract.
+  No date library (native `Intl` in the existing formatters), no new Pinia
+  store (a `ref` + storage guards + one `storage` listener), no bundler
+  plugin; feature catalogs load synchronously via a literal
+  `import.meta.glob` so fallback never depends on a lazy chunk.
+- Bundle: measured `vite build` gzip delta in the I18N-1 report
+  (`.git/i18n-execution/foundation-report.md`).
+- Verdict: **DO — landed in I18N-1 with the npm lockfile.**
 
 ## Validation migration inventory (mechanical migration list)
 

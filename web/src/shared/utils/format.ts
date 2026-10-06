@@ -1,7 +1,11 @@
 /**
  * Small display formatters shared by the server UI. Deliberately dependency-free
  * so the bundle stays lean and the helpers are trivial to unit-test later.
+ * Date/time wording follows the active UI locale; byte units, thresholds,
+ * null placeholders and invalid-date handling are locale-independent.
  */
+import { localeTag } from "@/shared/i18n/locale";
+import type { Locale } from "@/shared/i18n/locale";
 
 /** Placeholder shown when a value is missing. */
 const emptyPlaceholder = "—";
@@ -134,14 +138,19 @@ export function toPercent(value: number | null | undefined): number {
 }
 
 /** relativeTime renders an ISO timestamp as a short "x ago" / "in x" string. */
-export function relativeTime(iso: string | null | undefined): string {
+export function relativeTime(
+  iso: string | null | undefined,
+  locale?: Locale | null,
+): string {
+  const tag = localeTag(locale);
+  const vietnamese = tag === "vi-VN";
   if (!iso) {
-    return "never";
+    return vietnamese ? "không bao giờ" : "never";
   }
 
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) {
-    return "unknown";
+    return vietnamese ? "không rõ" : "unknown";
   }
 
   const deltaSeconds = Math.round((Date.now() - then) / 1000);
@@ -150,10 +159,19 @@ export function relativeTime(iso: string | null | undefined): string {
 
   /** unit renders the magnitude with the direction that fits the timestamp. */
   const unit = (value: number, suffix: string): string =>
-    future ? `in ${value}${suffix}` : `${value}${suffix} ago`;
+    vietnamese
+      ? future
+        ? `sau ${value}${suffix}`
+        : `${value}${suffix} trước`
+      : future
+        ? `in ${value}${suffix}`
+        : `${value}${suffix} ago`;
 
   if (seconds < 45) {
-    return future ? "in a moment" : "just now";
+    if (future) {
+      return vietnamese ? "sắp tới" : "in a moment";
+    }
+    return vietnamese ? "vừa xong" : "just now";
   }
 
   const minutes = Math.round(seconds / 60);
@@ -180,15 +198,19 @@ export function relativeTime(iso: string | null | undefined): string {
 }
 
 /** formatDate renders an ISO timestamp as a short absolute date ("28 Sep 2026"). */
-export function formatDate(iso: string | null | undefined): string {
+export function formatDate(
+  iso: string | null | undefined,
+  locale?: Locale | null,
+): string {
+  const tag = localeTag(locale);
   if (!iso) {
     return emptyPlaceholder;
   }
   const time = new Date(iso);
   if (Number.isNaN(time.getTime())) {
-    return "unknown";
+    return tag === "vi-VN" ? "không rõ" : "unknown";
   }
-  return time.toLocaleDateString("en-GB", {
+  return time.toLocaleDateString(tag, {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -196,23 +218,35 @@ export function formatDate(iso: string | null | undefined): string {
 }
 
 /** expiryLabel renders how far away (or past) an expiry timestamp is. */
-export function expiryLabel(iso: string | null | undefined): string {
+export function expiryLabel(
+  iso: string | null | undefined,
+  locale?: Locale | null,
+): string {
+  const tag = localeTag(locale);
+  const vietnamese = tag === "vi-VN";
   if (!iso) {
     return emptyPlaceholder;
   }
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) {
-    return "unknown";
+    return vietnamese ? "không rõ" : "unknown";
   }
 
   const now = Date.now();
   const days = Math.round((then - now) / 86_400_000);
   if (days > 0) {
-    return `expires in ${days} day${days === 1 ? "" : "s"}`;
+    return vietnamese
+      ? `hết hạn sau ${days} ngày`
+      : `expires in ${days} day${days === 1 ? "" : "s"}`;
   }
   if (days < 0) {
     const overdue = -days;
-    return `expired ${overdue} day${overdue === 1 ? "" : "s"} ago`;
+    return vietnamese
+      ? `đã hết hạn ${overdue} ngày trước`
+      : `expired ${overdue} day${overdue === 1 ? "" : "s"} ago`;
   }
-  return then >= now ? "expires today" : "expired today";
+  if (then >= now) {
+    return vietnamese ? "hết hạn hôm nay" : "expires today";
+  }
+  return vietnamese ? "đã hết hạn hôm nay" : "expired today";
 }

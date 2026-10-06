@@ -29,6 +29,15 @@ Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
   env, move, environment/service/database/server 409 guards) and docs.
   Live test-box redeploy + check: coordinator-owned (plan §9).
 
+## English/Vietnamese UI localization
+
+- [ ] **In progress (I18N-1 executing).** [`plans/14-i18n.md`](plans/14-i18n.md):
+  shared runtime and language selector, seven feature translation packages, then dual-language
+  browser verification. Linear work packages and the Orca dependency DAG are registered in
+  the plan ([JUS-41](https://linear.app/justin-deelux/issue/JUS-41/gotham-englishvietnamese-ui-localization-i18n),
+  JUS-42 through JUS-50); I18N-1 ([JUS-42](https://linear.app/justin-deelux/issue/JUS-42/i18n-1-shared-runtime-selector-and-presentation-foundations-m))
+  implementation is underway in `ws/p14-i18n-foundation`, I18N-2 through I18N-9 undispatched.
+
 ## Phase 13 residuals (from the PE-2/PE-5/PE-6 reviews; none blocking)
 
 - [ ] **PE-2 R2 — `PATCH /services/{id}` can wait up to the deploy timeout**

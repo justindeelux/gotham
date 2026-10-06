@@ -1,6 +1,8 @@
 import type { FormItemRule } from "naive-ui";
 import { z } from "zod";
 
+import { resolveValidationMessage } from "@/shared/i18n";
+
 export interface RuleFromOptions {
   /**
    * when gates a conditional-required field (e.g. V3 keyName/keyId/password
@@ -28,6 +30,11 @@ export interface RuleFromOptions {
  * returns Error(first issue message) so the schema's message string is what
  * the user sees. Trigger handling is unchanged by the caller. No form is
  * migrated yet; see docs/library-audit.md.
+ *
+ * The stored schema message resolves to display text at invocation time
+ * (see resolveValidationMessage): namespaced message keys translate in the
+ * current locale while legacy English strings pass through byte-identical,
+ * so existing feedback never changes until a feature migrates its catalog.
  *
  * The schema is typed on its output T with unknown input: plain field
  * schemas have identical input/output, and the validator always receives an
@@ -70,7 +77,8 @@ export function rulesFor<T extends Record<string, z.ZodType<unknown, z.ZodTypeDe
 
 /**
  * fieldErrors validates outside Naive UI (plain computed guards, submit
- * checks) and returns every issue message, empty on success. Sync schemas
+ * checks) and returns every issue message, empty on success. Messages
+ * resolve through the same presentation path as ruleFrom. Sync schemas
  * only, like ruleFrom.
  */
 export function fieldErrors<T>(
@@ -81,10 +89,11 @@ export function fieldErrors<T>(
   if (result.success) {
     return [];
   }
-  return result.error.issues.map((issue) => issue.message);
+  return result.error.issues.map((issue) => resolveValidationMessage(issue.message));
 }
 
 /** firstIssueMessage keeps the single user-visible string deterministic. */
 export function firstIssueMessage(error: z.ZodError): string {
-  return error.issues[0]?.message ?? "Invalid value";
+  const message = error.issues[0]?.message ?? "Invalid value";
+  return resolveValidationMessage(message);
 }

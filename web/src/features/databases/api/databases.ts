@@ -1,5 +1,6 @@
 import { http, teamHeaders } from "@/shared/api/http";
 import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
+import { i18n } from "@/shared/i18n";
 
 /**
  * Typed client for the database routes served by `internal/databases`
@@ -259,11 +260,17 @@ export async function restartDatabase(id: string): Promise<Database> {
   return response.data.database;
 }
 
-/** describeDatabaseError maps a thrown error to a user-facing message. */
+/**
+ * describeDatabaseError maps a thrown error to a user-facing message.
+ * Classification stays on the raw status/message (never on translated text);
+ * only the curated summaries resolve through the current locale, while the
+ * useful raw diagnostic from stripErrorPrefix rides along untranslated.
+ */
 export function describeDatabaseError(error: unknown): string {
+  const t = (key: string): string => String(i18n.global.t(key));
   if (isApiError(error)) {
     if (error.status === 404) {
-      return "Database not found. It may have been deleted or belong to another account.";
+      return t("databases.errors.databaseNotFound");
     }
     if (error.status === 409) {
       // The backend names the refusal exactly (a duplicate name, `a deploy
@@ -272,26 +279,25 @@ export function describeDatabaseError(error: unknown): string {
       // render inline.
       return (
         conflictDetail(stripErrorPrefix(error.message)) ||
-        "A database with that name already exists."
+        t("databases.errors.nameTaken")
       );
     }
     if (error.status === 502) {
-      return (
-        "The node agent is unreachable or the healthcheck failed. " +
-        "Check the node status and retry."
-      );
+      return t("databases.errors.databaseAgentUnreachable");
     }
     if (error.status === 503) {
-      return "Databases are disabled on the control plane (FEATURE_DATABASES=false).";
+      return t("databases.errors.featureDisabled");
     }
-    return stripErrorPrefix(error.message) || "Request failed";
+    return (
+      stripErrorPrefix(error.message) || t("common.errors.requestFailed")
+    );
   }
   if (error instanceof Error) {
     return (
-      stripErrorPrefix(error.message) || "Something went wrong. Please try again."
+      stripErrorPrefix(error.message) || t("common.errors.unexpected")
     );
   }
-  return "Something went wrong. Please try again.";
+  return t("common.errors.unexpected");
 }
 
 /**

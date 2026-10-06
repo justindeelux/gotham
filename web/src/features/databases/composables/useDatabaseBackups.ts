@@ -2,6 +2,12 @@ import { useMessage } from "naive-ui";
 import type { SelectOption } from "naive-ui";
 import { computed, onUnmounted, ref, watch } from "vue";
 import type { InjectionKey, Ref } from "vue";
+import { i18n } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
 
 import { describeBackupError } from "@/features/databases/api/backups";
 import type {
@@ -16,6 +22,8 @@ import {
 } from "@/features/databases/schemas/databases";
 import { useBackupsStore } from "@/features/databases/stores/backups";
 import { advanceRestoreStatuses } from "@/features/databases/utils/restoreOutcomes";
+import { stripErrorPrefix } from "@/features/servers";
+import { resolveValidationMessage } from "@/shared/i18n";
 
 export interface TargetTestState {
   checking: boolean;
@@ -25,12 +33,6 @@ export interface TargetTestState {
 
 /** Cron presets offered as chips above the schedule form. */
 export const CRON_PRESETS = ["0 2 * * *", "0 */6 * * *", "0 3 * * 0"];
-
-/** Kind options for the target form. */
-export const TARGET_KIND_OPTIONS: SelectOption[] = [
-  { label: "S3-compatible", value: "s3" },
-  { label: "Local disk", value: "local" },
-];
 
 /**
  * useDatabaseBackups owns the backups tab state for one database: runs,
@@ -110,7 +112,7 @@ export function useDatabaseBackups(
   /** backupTargetOptions lists the destination choices for backup-now. */
   const backupTargetOptions = computed<SelectOption[]>(() => {
     const options: SelectOption[] = [
-      { label: "Local disk (default)", value: "" },
+      { label: t("databases.backups.targets.localDefault"), value: "" },
     ];
     for (const item of backupsStore.targets) {
       options.push({
@@ -121,6 +123,12 @@ export function useDatabaseBackups(
     return options;
   });
 
+  /** targetKindOptions lists the kind choices for the target form. */
+  const targetKindOptions = computed<SelectOption[]>(() => [
+    { label: t("databases.backups.targets.kindS3"), value: "s3" },
+    { label: t("databases.backups.targets.kindLocal"), value: "local" },
+  ]);
+
   /** scheduleTargetOptions reuses the same choices for scheduled runs. */
   const scheduleTargetOptions = computed<SelectOption[]>(
     () => backupTargetOptions.value,
@@ -129,9 +137,12 @@ export function useDatabaseBackups(
   /** targetLabel resolves a schedule's destination for the list rows. */
   function targetLabel(targetId: string | undefined): string {
     if (!targetId) {
-      return "local disk";
+      return t("databases.backups.targets.localDisk");
     }
-    return backupsStore.targetOf(targetId)?.name ?? "deleted target";
+    return (
+      backupsStore.targetOf(targetId)?.name ??
+      t("databases.backups.targets.deletedTarget")
+    );
   }
 
   /** fetchBackupTab loads backups, restores, schedules and targets for the tab. */
@@ -181,7 +192,12 @@ export function useDatabaseBackups(
     }
   }
 
-  /** notifyRestoreOutcomes toasts a restore that just reached a terminal state. */
+  /**
+   * notifyRestoreOutcomes toasts a restore that just reached a terminal
+   * state. A failed restore keeps the raw server diagnostic under the
+   * localized summary, so a restore failure stays distinguishable from a
+   * restored database whose restart failed only by its raw detail.
+   */
   function notifyRestoreOutcomes(): void {
     reconcilePendingRestores();
     for (const outcome of advanceRestoreStatuses(
@@ -189,9 +205,15 @@ export function useDatabaseBackups(
       restores.value,
     )) {
       if (outcome.status === "completed") {
-        message.success("Restore completed");
+        message.success(t("databases.backups.restores.completed"));
+      } else if (outcome.error) {
+        message.error(
+          t("databases.backups.restores.failedWithDetail", {
+            detail: outcome.error,
+          }),
+        );
       } else {
-        message.error(outcome.error || "Restore failed");
+        message.error(t("databases.backups.restores.failed"));
       }
     }
   }
@@ -230,7 +252,7 @@ export function useDatabaseBackups(
   async function handleBackupNow(): Promise<void> {
     try {
       await backupsStore.backupNow(dbId.value, backupTargetId.value);
-      message.success("Backup queued · the dump runs in a temporary container");
+      message.success(t("databases.backups.runs.queued"));
     } catch (error) {
       message.error(describeBackupError(error));
     }
@@ -240,7 +262,7 @@ export function useDatabaseBackups(
   async function handleDeleteBackup(backupId: string): Promise<void> {
     try {
       await backupsStore.removeBackup(dbId.value, backupId);
-      message.success("Backup deleted");
+      message.success(t("databases.backups.runs.deleted"));
     } catch (error) {
       message.error(describeBackupError(error));
     }
@@ -263,7 +285,7 @@ export function useDatabaseBackups(
         dbId.value,
         restoreCandidate.value.id,
       );
-      message.success("Restore queued · the database is stopped while it runs");
+      message.success(t("databases.backups.restores.queued"));
       restoreOpen.value = false;
       restoreCandidate.value = null;
       // Seed the queued status from the 202 answer: the row can reach a terminal
@@ -311,7 +333,7 @@ export function useDatabaseBackups(
   async function handleCreateSchedule(): Promise<void> {
     const cron = scheduleCron.value.trim();
     if (!isCronPresent(scheduleCron.value)) {
-      message.error(databaseMessages.cronRequired);
+      message.error(resolveValidationMessage(databaseMessages.cronRequired));
       return;
     }
     try {
@@ -321,14 +343,16 @@ export function useDatabaseBackups(
           target_id: scheduleTargetId.value,
           enabled: scheduleEnabled.value,
         });
-        message.success(`Schedule updated · next run computed from ${cron}`);
+        message.success(
+          t("databases.backups.schedules.updated", { cron }),
+        );
       } else {
         await backupsStore.addSchedule(dbId.value, {
           cron,
           target_id: scheduleTargetId.value,
           enabled: scheduleEnabled.value,
         });
-        message.success(`Schedule saved · next run computed from ${cron}`);
+        message.success(t("databases.backups.schedules.saved", { cron }));
       }
       resetScheduleForm();
     } catch (error) {
@@ -348,7 +372,11 @@ export function useDatabaseBackups(
   ): Promise<void> {
     try {
       await backupsStore.editSchedule(dbId.value, scheduleId, { cron, enabled });
-      message.success(enabled ? "Schedule enabled" : "Schedule paused");
+      message.success(
+        enabled
+          ? t("databases.backups.schedules.enabled")
+          : t("databases.backups.schedules.paused"),
+      );
     } catch (error) {
       message.error(describeBackupError(error));
     }
@@ -361,7 +389,7 @@ export function useDatabaseBackups(
       if (editingScheduleId.value === scheduleId) {
         resetScheduleForm();
       }
-      message.success("Schedule deleted");
+      message.success(t("databases.backups.schedules.deleted"));
     } catch (error) {
       message.error(describeBackupError(error));
     }
@@ -413,7 +441,7 @@ export function useDatabaseBackups(
       isNew: targetEditingId.value === null,
     });
     if (targetError !== null) {
-      message.error(targetError);
+      message.error(resolveValidationMessage(targetError));
       return;
     }
     try {
@@ -428,7 +456,7 @@ export function useDatabaseBackups(
           access_key: targetAccessKey.value,
           secret_key: targetSecretKey.value,
         });
-        message.success(`Target "${name}" saved · credentials sealed`);
+        message.success(t("databases.backups.targets.saved", { name }));
       } else {
         await backupsStore.editTarget(targetEditingId.value, {
           name,
@@ -441,7 +469,7 @@ export function useDatabaseBackups(
           secret_key: targetSecretKey.value,
         });
         delete targetTests.value[targetEditingId.value];
-        message.success(`Target "${name}" updated`);
+        message.success(t("databases.backups.targets.updated", { name }));
       }
       resetTargetForm();
     } catch (error) {
@@ -462,7 +490,7 @@ export function useDatabaseBackups(
         scheduleTargetId.value = "";
       }
       delete targetTests.value[targetId];
-      message.success(`Target "${name}" deleted`);
+      message.success(t("databases.backups.targets.deleted", { name }));
     } catch (error) {
       message.error(describeBackupError(error));
     }
@@ -482,7 +510,11 @@ export function useDatabaseBackups(
       targetTests.value[targetId] = {
         checking: false,
         ok: false,
-        message: error instanceof Error ? error.message : "Test failed",
+        message:
+          error instanceof Error
+            ? (stripErrorPrefix(error.message) ||
+              t("databases.backups.targets.testFailed"))
+            : t("databases.backups.targets.testFailed"),
       };
     }
   }
@@ -551,6 +583,7 @@ export function useDatabaseBackups(
     hasRunningRestore,
     backupTargetOptions,
     scheduleTargetOptions,
+    targetKindOptions,
     targetLabel,
     fetchBackupTab,
     stopBackupPolling,

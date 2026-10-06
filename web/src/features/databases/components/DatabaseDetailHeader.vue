@@ -5,6 +5,13 @@ import { inject } from "vue";
 import DatabaseStatusTag from "@/features/databases/components/DatabaseStatusTag.vue";
 import { databaseDetailKey } from "@/features/databases/composables/useDatabaseDetail";
 
+import { i18n } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const detail = inject(databaseDetailKey)!;
 </script>
 
@@ -30,34 +37,36 @@ const detail = inject(databaseDetailKey)!;
         :loading="detail.databasesStore.acting"
         @click="() => void detail.handleLifecycle('start')"
       >
-        Start
+        {{ t("databases.detail.actions.start") }}
       </NButton>
       <NButton
         :disabled="!detail.canStop.value"
         :loading="detail.databasesStore.acting"
         @click="() => void detail.handleLifecycle('stop')"
       >
-        Stop
+        {{ t("databases.detail.actions.stop") }}
       </NButton>
       <NButton
         :disabled="!detail.canRestart.value"
         :loading="detail.databasesStore.acting"
         @click="() => void detail.handleLifecycle('restart')"
       >
-        Restart
+        {{ t("databases.detail.actions.restart") }}
       </NButton>
       <NButton :disabled="!detail.database.value" @click="detail.openRename">
-        Rename
+        {{ t("databases.detail.actions.rename") }}
       </NButton>
       <NPopconfirm @positive-click="() => void detail.handleDelete()">
         <template #trigger>
           <NButton type="error" ghost :loading="detail.databasesStore.acting">
-            Delete
+            {{ t("common.actions.delete") }}
           </NButton>
         </template>
-        Delete this database? The container is removed from the node, the
-        volume {{ detail.database.value?.volume ?? "" }} is kept for 7 days before
-        permanent removal.
+        {{
+          t("databases.detail.deleteConfirm", {
+            volume: detail.database.value?.volume ?? "",
+          })
+        }}
       </NPopconfirm>
     </NSpace>
   </div>

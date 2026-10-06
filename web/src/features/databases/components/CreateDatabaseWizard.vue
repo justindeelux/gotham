@@ -50,14 +50,22 @@ const wizard = useCreateDatabaseWizard({
   environmentId: toRef(props, "environmentId"),
 });
 
+import { i18n } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 provide(wizardFormKey, wizard.form);
+
 </script>
 
 <template>
   <NModal
     :show="show"
     preset="card"
-    title="Create database"
+    :title="t('databases.wizard.title')"
     style="width: 640px; max-width: 94vw"
     :mask-closable="false"
     class="form-container"
@@ -65,9 +73,14 @@ provide(wizardFormKey, wizard.form);
   >
     <NSpace vertical :size="16">
       <NText depth="3">
-        Step {{ wizard.step.value + 1 }} of {{ wizardStepNames.length }} · {{ wizardStepNames[wizard.step.value] }}.
-        Each database is a container with its own volume on one node; the
-        credentials are generated server-side and stored encrypted.
+        {{
+          t("databases.wizard.stepOf", {
+            current: wizard.step.value + 1,
+            total: wizardStepNames.length,
+            step: wizard.stepNames.value[wizard.step.value],
+          })
+        }}
+        {{ t("databases.wizard.intro") }}
       </NText>
 
       <NAlert v-if="wizard.errorMessage.value" type="error" :show-icon="true">
@@ -82,7 +95,7 @@ provide(wizardFormKey, wizard.form);
       />
 
       <template v-if="wizard.step.value === 0">
-        <NFormItem label="Engine" :show-feedback="false">
+        <NFormItem :label="t('databases.wizard.engineStep.engine')" :show-feedback="false">
           <NRadioGroup v-model:value="wizard.form.engine">
             <NSpace vertical :size="8">
               <NRadio
@@ -92,23 +105,28 @@ provide(wizardFormKey, wizard.form);
               >
                 {{ engine.label }}
                 <NText depth="3" class="mono">
-                  · {{ engine.repo }}:{{ engine.defaultVersion }} · port
-                  {{ engine.port }}
+                  {{
+                    t("databases.wizard.engineStep.engineMeta", {
+                      repo: engine.repo,
+                      version: engine.defaultVersion,
+                      port: engine.port,
+                    })
+                  }}
                 </NText>
               </NRadio>
             </NSpace>
           </NRadioGroup>
         </NFormItem>
         <div class="form-row">
-          <NFormItem label="Version" :show-feedback="false">
+          <NFormItem :label="t('databases.wizard.engineStep.version')" :show-feedback="false">
             <NSelect
               v-model:value="wizard.form.version"
               :options="wizard.versionOptions.value"
-              :placeholder="`Default: ${wizard.selectedEngine.value.defaultVersion}`"
+              :placeholder="t('databases.wizard.engineStep.defaultVersion', { version: wizard.selectedEngine.value.defaultVersion })"
               clearable
             />
           </NFormItem>
-          <ServerPicker v-model="wizard.form.serverId" label="Node" />
+          <ServerPicker v-model="wizard.form.serverId" :label="t('databases.wizard.engineStep.node')" />
         </div>
       </template>
 
@@ -127,7 +145,7 @@ provide(wizardFormKey, wizard.form);
 
       <NSpace justify="end" :size="8">
         <NButton :disabled="wizard.step.value === 0 || wizard.submitting.value" @click="wizard.goBack">
-          Back
+          {{ t("databases.wizard.back") }}
         </NButton>
         <NButton
           v-if="wizard.created.value === null"
@@ -136,10 +154,10 @@ provide(wizardFormKey, wizard.form);
           :loading="wizard.submitting.value"
           @click="wizard.goNext"
         >
-          {{ wizard.step.value === wizardStepNames.length - 1 ? "Create database" : "Continue" }}
+          {{ wizard.step.value === wizardStepNames.length - 1 ? t("databases.wizard.create") : t("databases.wizard.continue") }}
         </NButton>
         <NButton v-else type="primary" @click="wizard.handleClose(false)">
-          Done
+          {{ t("databases.wizard.done") }}
         </NButton>
       </NSpace>
     </NSpace>

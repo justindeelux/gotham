@@ -22,13 +22,20 @@ import {
 import { isCronPresent } from "@/features/databases/schemas/databases";
 import { relativeTime } from "@/shared/utils/format";
 
+import { i18n } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const backups = inject(databaseBackupsKey)!;
 </script>
 
 <template>
-  <NCard title="Schedules">
+  <NCard :title="t('databases.backups.schedules.title')">
     <template #header-extra>
-      <NText depth="3">Cron in the control plane</NText>
+      <NText depth="3">{{ t("databases.backups.schedules.subtitle") }}</NText>
     </template>
     <NAlert
       v-if="backups.backupsStore.schedulesError"
@@ -60,12 +67,12 @@ const backups = inject(databaseBackupsKey)!;
               </NTag>
             </NSpace>
             <NText depth="3">
-              Next run
+              {{ t("databases.backups.schedules.nextRun") }}
               <span :title="schedule.next_run_at">
                 {{ relativeTime(schedule.next_run_at) }}
               </span>
               <span v-if="schedule.last_run_at">
-                · last
+                · {{ t("databases.backups.schedules.lastRun") }}
                 <span :title="schedule.last_run_at">
                   {{ relativeTime(schedule.last_run_at) }}
                 </span>
@@ -75,7 +82,7 @@ const backups = inject(databaseBackupsKey)!;
           <NSpace class="backup-row__actions" align="center" :size="8">
             <NSwitch
               :value="schedule.enabled"
-              :aria-label="`Enable schedule ${schedule.cron}`"
+              :aria-label="t('databases.backups.schedules.enableAria', { cron: schedule.cron })"
               :loading="backups.backupsStore.schedulesActing"
               @update:value="
                 (enabled: boolean) =>
@@ -86,16 +93,16 @@ const backups = inject(databaseBackupsKey)!;
                   )
               "
             >
-              <template #checked>On</template>
-              <template #unchecked>Off</template>
+              <template #checked>{{ t("databases.backups.schedules.on") }}</template>
+              <template #unchecked>{{ t("databases.backups.schedules.off") }}</template>
             </NSwitch>
             <NButton
               size="small"
               secondary
-              :aria-label="`Edit schedule ${schedule.cron}`"
+              :aria-label="t('databases.backups.schedules.editAria', { cron: schedule.cron })"
               @click="backups.openScheduleEdit(schedule)"
             >
-              Edit
+              {{ t("common.actions.edit") }}
             </NButton>
             <NPopconfirm
               @positive-click="
@@ -107,24 +114,24 @@ const backups = inject(databaseBackupsKey)!;
                   size="small"
                   type="error"
                   ghost
-                  :aria-label="`Delete schedule ${schedule.cron}`"
+                  :aria-label="t('databases.backups.schedules.deleteAria', { cron: schedule.cron })"
                 >
-                  Delete
+                  {{ t("common.actions.delete") }}
                 </NButton>
               </template>
-              Delete this schedule? Past backups stay untouched.
+              {{ t("databases.backups.schedules.deleteConfirm") }}
             </NPopconfirm>
           </NSpace>
         </div>
       </NSpace>
       <NEmpty
         v-else-if="!backups.backupsStore.schedulesLoading"
-        description="No schedules yet — automatic backups are off"
+        :description="t('databases.backups.schedules.empty')"
       />
     </NSpin>
     <div class="schedule-form">
       <NText strong>
-        {{ backups.editingScheduleId.value === null ? "New schedule" : "Edit schedule" }}
+        {{ backups.editingScheduleId.value === null ? t("databases.backups.schedules.newTitle") : t("databases.backups.schedules.editTitle") }}
       </NText>
       <NSpace align="center" :size="8">
         <NButton
@@ -142,21 +149,21 @@ const backups = inject(databaseBackupsKey)!;
           v-model:value="backups.scheduleCron.value"
           class="mono grow"
           placeholder="0 2 * * *"
-          aria-label="Cron expression"
+          :aria-label="t('databases.backups.schedules.cronAria')"
         />
         <NSelect
           v-model:value="backups.scheduleTargetId.value"
           :options="backups.scheduleTargetOptions.value"
-          placeholder="Destination"
-          aria-label="Schedule destination"
+          :placeholder="t('databases.backups.runs.destination')"
+          :aria-label="t('databases.backups.schedules.destinationAria')"
           style="width: 220px"
         />
         <NSwitch
           v-model:value="backups.scheduleEnabled.value"
-          aria-label="Enable the new schedule"
+          :aria-label="t('databases.backups.schedules.enableNewAria')"
         >
-          <template #checked>On</template>
-          <template #unchecked>Off</template>
+          <template #checked>{{ t("databases.backups.schedules.on") }}</template>
+          <template #unchecked>{{ t("databases.backups.schedules.off") }}</template>
         </NSwitch>
         <NButton
           type="primary"
@@ -165,14 +172,14 @@ const backups = inject(databaseBackupsKey)!;
           @click="() => void backups.handleCreateSchedule()"
         >
           {{
-            backups.editingScheduleId.value === null ? "Add schedule" : "Save schedule"
+            backups.editingScheduleId.value === null ? t("databases.backups.schedules.add") : t("databases.backups.schedules.save")
           }}
         </NButton>
         <NButton
           v-if="backups.editingScheduleId.value !== null"
           @click="backups.resetScheduleForm()"
         >
-          Cancel
+          {{ t("common.actions.cancel") }}
         </NButton>
       </div>
     </div>

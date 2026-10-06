@@ -14,18 +14,22 @@ import {
 } from "naive-ui";
 import { inject } from "vue";
 
-import {
-  TARGET_KIND_OPTIONS,
-  databaseBackupsKey,
-} from "@/features/databases/composables/useDatabaseBackups";
+import { databaseBackupsKey } from "@/features/databases/composables/useDatabaseBackups";
+
+import { i18n } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
 
 const backups = inject(databaseBackupsKey)!;
 </script>
 
 <template>
-  <NCard title="Backup targets">
+  <NCard :title="t('databases.backups.targets.title')">
     <template #header-extra>
-      <NText depth="3">S3-compatible storage</NText>
+      <NText depth="3">{{ t("databases.backups.targets.subtitle") }}</NText>
     </template>
     <NAlert
       v-if="backups.backupsStore.targetsError"
@@ -51,24 +55,24 @@ const backups = inject(databaseBackupsKey)!;
             <NSpace align="center" :size="8">
               <NText strong>{{ target.name }}</NText>
               <NTag size="small" :bordered="false">
-                {{ target.kind }}
+                {{ target.kind === "s3" ? t("databases.backups.targets.kindS3") : t("databases.backups.targets.kindLocal") }}
               </NTag>
               <NTag
                 v-if="target.has_credentials"
                 size="small"
                 type="success"
               >
-                Credentials configured
+                {{ t("databases.backups.targets.credsOk") }}
               </NTag>
               <NTag v-else size="small" type="warning">
-                No credentials
+                {{ t("databases.backups.targets.credsMissing") }}
               </NTag>
             </NSpace>
             <NText class="mono backup-row__location" depth="3">
               {{
                 target.kind === "s3"
                   ? `${target.endpoint ?? ""} · ${target.bucket ?? ""}${target.prefix ? ` · ${target.prefix}` : ""}`
-                  : "control plane disk"
+                  : t("databases.backups.targets.controlPlaneDisk")
               }}
             </NText>
             <NText
@@ -87,19 +91,19 @@ const backups = inject(databaseBackupsKey)!;
             <NButton
               size="small"
               secondary
-              :aria-label="`Test target ${target.name}`"
+              :aria-label="t('databases.backups.targets.testAria', { name: target.name })"
               :loading="backups.targetTests.value[target.id]?.checking"
               @click="() => void backups.handleTestTarget(target.id)"
             >
-              Test
+              {{ t("databases.backups.targets.test") }}
             </NButton>
             <NButton
               size="small"
               secondary
-              :aria-label="`Edit target ${target.name}`"
+              :aria-label="t('databases.backups.targets.editAria', { name: target.name })"
               @click="backups.openTargetEdit(target.id)"
             >
-              Edit
+              {{ t("common.actions.edit") }}
             </NButton>
             <NPopconfirm
               @positive-click="
@@ -111,44 +115,41 @@ const backups = inject(databaseBackupsKey)!;
                   size="small"
                   type="error"
                   ghost
-                  :aria-label="`Delete target ${target.name}`"
+                  :aria-label="t('databases.backups.targets.deleteAria', { name: target.name })"
                 >
-                  Delete
+                  {{ t("common.actions.delete") }}
                 </NButton>
               </template>
-              Delete target "{{ target.name }}"? Past backups keep
-              their location but can no longer be read back from
-              this target.
+              {{ t("databases.backups.targets.deleteConfirm", { name: target.name }) }}
             </NPopconfirm>
           </NSpace>
         </div>
       </NSpace>
       <NEmpty
         v-else-if="!backups.backupsStore.targetsLoading"
-        description="No backup targets yet"
+        :description="t('databases.backups.targets.empty')"
       >
         <template #extra>
           <p class="empty-hint">
-            Backups fall back to the control plane disk until an
-            S3-compatible target is configured.
+            {{ t("databases.backups.targets.emptyHint") }}
           </p>
         </template>
       </NEmpty>
     </NSpin>
     <div class="target-form">
       <NText strong>
-        {{ backups.targetEditingId.value === null ? "New target" : "Edit target" }}
+        {{ backups.targetEditingId.value === null ? t("databases.backups.targets.newTitle") : t("databases.backups.targets.editTitle") }}
       </NText>
       <div class="target-form__grid">
         <NInput
           v-model:value="backups.targetName.value"
-          placeholder="Target name"
-          aria-label="Target name"
+          :placeholder="t('databases.backups.targets.namePlaceholder')"
+          :aria-label="t('databases.backups.targets.nameAria')"
         />
         <NSelect
           v-model:value="backups.targetKind.value"
-          :options="TARGET_KIND_OPTIONS"
-          aria-label="Target kind"
+          :options="backups.targetKindOptions.value"
+          :aria-label="t('databases.backups.targets.kindAria')"
         />
       </div>
       <template v-if="backups.targetKind.value === 's3'">
@@ -156,28 +157,28 @@ const backups = inject(databaseBackupsKey)!;
           <NInput
             v-model:value="backups.targetEndpoint.value"
             class="mono"
-            placeholder="https://…endpoint"
-            aria-label="Endpoint"
+            :placeholder="t('databases.backups.targets.endpointPlaceholder')"
+            :aria-label="t('databases.backups.targets.endpointAria')"
           />
           <NInput
             v-model:value="backups.targetRegion.value"
             class="mono"
-            placeholder="Region (e.g. auto)"
-            aria-label="Region"
+            :placeholder="t('databases.backups.targets.regionPlaceholder')"
+            :aria-label="t('databases.backups.targets.regionAria')"
           />
         </div>
         <div class="target-form__grid">
           <NInput
             v-model:value="backups.targetBucket.value"
             class="mono"
-            placeholder="Bucket"
-            aria-label="Bucket"
+            :placeholder="t('databases.backups.targets.bucketPlaceholder')"
+            :aria-label="t('databases.backups.targets.bucketAria')"
           />
           <NInput
             v-model:value="backups.targetPrefix.value"
             class="mono"
-            placeholder="Key prefix (optional)"
-            aria-label="Key prefix"
+            :placeholder="t('databases.backups.targets.prefixPlaceholder')"
+            :aria-label="t('databases.backups.targets.prefixAria')"
           />
         </div>
         <div class="target-form__grid">
@@ -187,10 +188,10 @@ const backups = inject(databaseBackupsKey)!;
             class="mono"
             :placeholder="
               backups.targetEditingId.value === null
-                ? 'Access key'
-                : 'Access key · blank keeps stored keys'
+                ? t('databases.backups.targets.accessKeyPlaceholder')
+                : t('databases.backups.targets.accessKeyEditPlaceholder')
             "
-            aria-label="Access key"
+            :aria-label="t('databases.backups.targets.accessKeyAria')"
           />
           <NInput
             v-model:value="backups.targetSecretKey.value"
@@ -198,15 +199,14 @@ const backups = inject(databaseBackupsKey)!;
             class="mono"
             :placeholder="
               backups.targetEditingId.value === null
-                ? 'Secret key'
-                : 'Secret key · blank keeps stored keys'
+                ? t('databases.backups.targets.secretKeyPlaceholder')
+                : t('databases.backups.targets.secretKeyEditPlaceholder')
             "
-            aria-label="Secret key"
+            :aria-label="t('databases.backups.targets.secretKeyAria')"
           />
         </div>
         <NText depth="3">
-          Secrets are sealed on the server and never shown back —
-          leave the key fields blank to keep the stored ones.
+          {{ t("databases.backups.targets.secretsNote") }}
         </NText>
       </template>
       <NSpace justify="end" :size="8">
@@ -214,7 +214,7 @@ const backups = inject(databaseBackupsKey)!;
           v-if="backups.targetEditingId.value !== null"
           @click="backups.resetTargetForm()"
         >
-          Cancel
+          {{ t("common.actions.cancel") }}
         </NButton>
         <NButton
           type="primary"
@@ -222,7 +222,7 @@ const backups = inject(databaseBackupsKey)!;
           @click="() => void backups.handleSaveTarget()"
         >
           {{
-            backups.targetEditingId.value === null ? "Add target" : "Save target"
+            backups.targetEditingId.value === null ? t("databases.backups.targets.add") : t("databases.backups.targets.save")
           }}
         </NButton>
       </NSpace>

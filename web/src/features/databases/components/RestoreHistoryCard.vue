@@ -13,13 +13,20 @@ import { databaseBackupsKey } from "@/features/databases/composables/useDatabase
 import { statusTagType } from "@/features/databases/utils/backupStatus";
 import { relativeTime } from "@/shared/utils/format";
 
+import { i18n } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const backups = inject(databaseBackupsKey)!;
 </script>
 
 <template>
-  <NCard title="Restore history">
+  <NCard :title="t('databases.backups.restores.title')">
     <template #header-extra>
-      <NText depth="3">Durable result of each queued restore</NText>
+      <NText depth="3">{{ t("databases.backups.restores.subtitle") }}</NText>
     </template>
     <NAlert
       v-if="backups.backupsStore.restoresError"
@@ -39,10 +46,10 @@ const backups = inject(databaseBackupsKey)!;
           <div class="backup-row__main">
             <NSpace align="center" :size="8">
               <NTag :type="statusTagType(restore.status)" size="small">
-                {{ restore.status }}
+                {{ t(`databases.backups.runStatus.${restore.status}`) }}
               </NTag>
               <NText class="mono" depth="3">
-                backup {{ restore.backup_id.slice(0, 8) }}
+                {{ t("databases.backups.restores.backupRef", { id: restore.backup_id.slice(0, 8) }) }}
               </NText>
             </NSpace>
             <NText
@@ -57,7 +64,7 @@ const backups = inject(databaseBackupsKey)!;
                 {{ relativeTime(restore.created_at) }}
               </span>
               <span v-if="restore.finished_at">
-                · finished
+                · {{ t("databases.backups.restores.finished") }}
                 <span :title="restore.finished_at">
                   {{ relativeTime(restore.finished_at) }}
                 </span>

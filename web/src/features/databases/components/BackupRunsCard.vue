@@ -18,18 +18,25 @@ import { databaseBackupsKey } from "@/features/databases/composables/useDatabase
 import { statusTagType } from "@/features/databases/utils/backupStatus";
 import { formatBytes, relativeTime } from "@/shared/utils/format";
 
+import { i18n } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const backups = inject(databaseBackupsKey)!;
 </script>
 
 <template>
-  <NCard title="Backups">
+  <NCard :title="t('databases.backups.runs.title')">
     <template #header-extra>
       <NSpace align="center" :size="8">
         <NSelect
           v-model:value="backups.backupTargetId.value"
           :options="backups.backupTargetOptions.value"
-          placeholder="Destination"
-          aria-label="Backup destination"
+          :placeholder="t('databases.backups.runs.destination')"
+          :aria-label="t('databases.backups.runs.destinationAria')"
           style="width: 220px"
         />
         <NButton
@@ -38,7 +45,7 @@ const backups = inject(databaseBackupsKey)!;
           :disabled="backups.backupsStore.backupsLoading"
           @click="() => void backups.fetchBackupTab()"
         >
-          Refresh
+          {{ t("databases.backups.runs.refresh") }}
         </NButton>
         <NPopconfirm @positive-click="() => void backups.handleBackupNow()">
           <template #trigger>
@@ -47,11 +54,10 @@ const backups = inject(databaseBackupsKey)!;
               type="primary"
               :loading="backups.backupsStore.backupsActing"
             >
-              Backup now
+              {{ t("databases.backups.runs.backupNow") }}
             </NButton>
           </template>
-          A backup stops this database while the dump runs, so it is
-          briefly unavailable. Continue?
+          {{ t("databases.backups.runs.backupConfirm") }}
         </NPopconfirm>
       </NSpace>
     </template>
@@ -69,9 +75,7 @@ const backups = inject(databaseBackupsKey)!;
       :show-icon="false"
       style="margin-bottom: 12px"
     >
-      No S3 target configured — backups are stored on the control
-      plane disk. Add an S3-compatible target below to keep them
-      off-node.
+      {{ t("databases.backups.runs.noTarget") }}
     </NAlert>
     <NSpin :show="backups.backupsStore.backupsLoading">
       <NSpace
@@ -88,21 +92,21 @@ const backups = inject(databaseBackupsKey)!;
           <div class="backup-row__main">
             <NSpace align="center" :size="8">
               <NTag :type="statusTagType(backup.status)" size="small">
-                {{ backup.status }}
+                {{ t(`databases.backups.runStatus.${backup.status}`) }}
               </NTag>
               <NTag size="small" :bordered="false">
-                {{ backup.type }}
+                {{ t(`databases.backups.runType.${backup.type}`) }}
               </NTag>
               <NText class="mono" depth="3">
                 {{
                   backup.status === "running"
-                    ? "size pending"
+                    ? t("databases.backups.runs.sizePending")
                     : formatBytes(backup.size)
                 }}
               </NText>
             </NSpace>
             <NText class="mono backup-row__location">
-              {{ backup.location || "Dump in progress…" }}
+              {{ backup.location || t("databases.backups.runs.dumpInProgress") }}
             </NText>
             <NText
               v-if="backup.error"
@@ -116,7 +120,7 @@ const backups = inject(databaseBackupsKey)!;
                 {{ relativeTime(backup.created_at) }}
               </span>
               <span v-if="backup.schedule_id" class="mono">
-                · scheduled
+                · {{ t("databases.backups.runs.scheduled") }}
               </span>
             </NText>
           </div>
@@ -124,11 +128,11 @@ const backups = inject(databaseBackupsKey)!;
             <NButton
               size="small"
               secondary
-              :aria-label="`Restore backup from ${relativeTime(backup.created_at)}`"
+              :aria-label="t('databases.backups.runs.restoreAria', { when: relativeTime(backup.created_at) })"
               :disabled="backup.status !== 'completed'"
               @click="backups.openRestore(backup)"
             >
-              Restore
+              {{ t("databases.backups.runs.restore") }}
             </NButton>
             <NPopconfirm
               @positive-click="() => void backups.handleDeleteBackup(backup.id)"
@@ -138,26 +142,24 @@ const backups = inject(databaseBackupsKey)!;
                   size="small"
                   type="error"
                   ghost
-                  :aria-label="`Delete backup from ${relativeTime(backup.created_at)}`"
+                  :aria-label="t('databases.backups.runs.deleteAria', { when: relativeTime(backup.created_at) })"
                   :disabled="backup.status === 'running'"
                 >
-                  Delete
+                  {{ t("common.actions.delete") }}
                 </NButton>
               </template>
-              Delete this backup? The stored artifact goes first,
-              then the row. This cannot be undone.
+              {{ t("databases.backups.runs.deleteConfirm") }}
             </NPopconfirm>
           </NSpace>
         </div>
       </NSpace>
       <NEmpty
         v-else-if="!backups.backupsStore.backupsLoading"
-        description="No backups yet"
+        :description="t('databases.backups.runs.empty')"
       >
         <template #extra>
           <p class="empty-hint">
-            Queue a manual backup above, or add a schedule so the
-            control plane dumps this database automatically.
+            {{ t("databases.backups.runs.emptyHint") }}
           </p>
         </template>
       </NEmpty>

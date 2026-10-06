@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { NAlert, NButton, NText } from "naive-ui";
+import { computed } from "vue";
 
 import type { CreatedDatabase } from "@/features/databases/api/databases";
 import type { WizardForm } from "@/features/databases/composables/useCreateDatabaseWizard";
@@ -17,35 +18,47 @@ interface Emits {
   copy: [value: string, label: string];
 }
 
-defineProps<Props>();
+import { i18n } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
+
+const props = defineProps<Props>();
 defineEmits<Emits>();
+
+
+/** portMapping renders the raw ports; only the surrounding words localize. */
+const portMapping = computed<string>(() =>
+  props.form.exposePublic
+    ? `${props.form.publicPort} → ${props.enginePort}`
+    : String(t("databases.wizard.review.publicPortOff")),
+);
 </script>
 
 <template>
   <div v-if="created === null">
-    <NText>Review the database before creating it:</NText>
+    <NText>{{ t("databases.wizard.review.intro") }}</NText>
     <ul class="review-list mono">
-      <li>Engine / image · {{ imagePreview }}</li>
+      <li>{{ t("databases.wizard.review.engineImage", { image: imagePreview }) }}</li>
       <li>
-        Node ·
-        {{ serverLabel }}
+        {{ t("databases.wizard.review.node", { server: serverLabel }) }}
       </li>
-      <li>Name · {{ form.name.trim() }}</li>
+      <li>{{ t("databases.wizard.review.name", { name: form.name.trim() }) }}</li>
       <li>
-        Public port ·
-        {{
-          form.exposePublic
-            ? `${form.publicPort} → ${enginePort}`
-            : `off · internal network only`
-        }}
+        {{ t("databases.wizard.review.publicPort", { mapping: portMapping }) }}
       </li>
-      <li>Volume · kept 7 days after deletion</li>
+      <li>{{ t("databases.wizard.review.volume") }}</li>
     </ul>
   </div>
   <div v-else class="success-panel">
-    <NAlert type="success" :show-icon="true" title="Database created">
-      Container provisioning started on the node. Save these credentials
-      — they stay available on the database detail page.
+    <NAlert
+      type="success"
+      :show-icon="true"
+      :title="t('databases.wizard.review.successTitle')"
+    >
+      {{ t("databases.wizard.review.successBody") }}
     </NAlert>
     <div
       v-for="row in credentialRows"
@@ -59,7 +72,7 @@ defineEmits<Emits>();
         secondary
         @click="$emit('copy', row.value, row.label)"
       >
-        Copy
+        {{ t("databases.detail.credentials.copy") }}
       </NButton>
     </div>
   </div>

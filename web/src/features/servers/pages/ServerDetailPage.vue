@@ -15,7 +15,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 
 import type { Server } from "@/features/servers/api/servers";
-import { describeServerError, getServer } from "@/features/servers/api/servers";
+import { describeServerError, failureText, getServer } from "@/features/servers/api/servers";
 import EditServerModal from "@/features/servers/components/EditServerModal.vue";
 import ServerDetailHeader from "@/features/servers/components/ServerDetailHeader.vue";
 import ServerMetricsTab from "@/features/servers/components/ServerMetricsTab.vue";
@@ -30,14 +30,29 @@ import { useServersStore } from "@/features/servers/stores/servers";
 const route = useRoute();
 const router = useRouter();
 const message = useMessage();
-const { t } = useI18n();
+const { locale, t } = useI18n();
 const serversStore = useServersStore();
 
 const serverId = computed<string>(() => String(route.params.id ?? ""));
 
 const server = ref<Server | null>(null);
 const loading = ref(false);
-const error = ref<string | null>(null);
+/**
+ * fetchFailure keeps the raw last detail failure. The `error` display
+ * derives from it in the current locale, so a language switch re-renders
+ * a retained banner without reloading the server.
+ */
+const fetchFailure = ref<unknown>(null);
+/** error renders the retained failure, or null while healthy. */
+const error = computed<string | null>(() => {
+  if (!serverId.value) {
+    return t("servers.detail.unknownServer");
+  }
+  if (fetchFailure.value === null || fetchFailure.value === undefined) {
+    return null;
+  }
+  return failureText(fetchFailure.value, locale.value);
+});
 const validating = ref(false);
 const deleting = ref(false);
 const editOpen = ref(false);
@@ -50,16 +65,15 @@ provide(ServerMetricsKey, metricsContext);
 /** fetchServer loads one server by route id; 404 surfaces as an error state. */
 async function fetchServer(): Promise<void> {
   if (!serverId.value) {
-    error.value = t("servers.detail.unknownServer");
     return;
   }
   loading.value = true;
-  error.value = null;
+  fetchFailure.value = null;
   try {
     server.value = await getServer(serverId.value);
   } catch (err) {
     server.value = null;
-    error.value = describeServerError(err);
+    fetchFailure.value = err;
   } finally {
     loading.value = false;
   }

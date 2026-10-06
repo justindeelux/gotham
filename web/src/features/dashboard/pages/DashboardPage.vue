@@ -68,7 +68,9 @@ async function fetchApplicationCounts(): Promise<void> {
     applicationTotal.value = 0;
     applicationRunning.value = 0;
     applicationFailedReads.value = 0;
-    applicationsError.value = t("dashboard.kpi.loadFailed");
+    // Retained as a semantic key: the tile resolves display text in the
+    // current locale, so a language switch re-renders without refetching.
+    applicationsError.value = "dashboard.kpi.loadFailed";
   } finally {
     applicationsLoading.value = false;
   }
@@ -80,13 +82,15 @@ async function fetchApplicationCounts(): Promise<void> {
  * caveat). The template binds tile.countText / tile.hint directly and
  * formats nothing itself, so every branch is pinned by the ui-truth
  * harness through applicationTileView + buildApplicationTileInput. The
- * incomplete hint follows the display locale; counts never do.
+ * incomplete hint follows the display locale; counts never do. The retained
+ * load failure is stored as a semantic key and resolved here, so a language
+ * switch re-renders it without refetching.
  */
 const tile = computed(() =>
   applicationTileView(
     buildApplicationTileInput({
       loading: applicationsLoading.value,
-      error: applicationsError.value,
+      error: applicationsError.value ? t(applicationsError.value) : null,
       total: applicationTotal.value,
       running: applicationRunning.value,
       failedReads: applicationFailedReads.value,

@@ -1,10 +1,10 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 import {
   createServer,
   deleteServer,
-  describeServerError,
+  failureText,
   listServers,
   updateServer,
   validateServer,
@@ -18,7 +18,18 @@ const pollIntervalMs = 5_000;
 export const useServersStore = defineStore("servers", () => {
   const servers = ref<Server[]>([]);
   const loading = ref(false);
-  const error = ref<string | null>(null);
+  /**
+   * failure keeps the raw last list failure. The `error` display derives
+   * from it in the current locale, so a language switch re-renders a
+   * retained banner without refetching or touching the poll cadence.
+   */
+  const failure = ref<unknown>(null);
+  /** error renders the retained failure, or null while healthy. */
+  const error = computed<string | null>(() =>
+    failure.value === null || failure.value === undefined
+      ? null
+      : failureText(failure.value),
+  );
 
   // Interval handle kept outside reactive state; the store instance is a
   // singleton so a single handle is enough for the whole app.
@@ -47,7 +58,7 @@ export const useServersStore = defineStore("servers", () => {
     const list = await listServers();
     if (listSync.admit(token)) {
       servers.value = list;
-      error.value = null;
+      failure.value = null;
     }
     return list;
   }
@@ -55,11 +66,11 @@ export const useServersStore = defineStore("servers", () => {
   /** fetchServers loads the list, toggling the loading flag. */
   async function fetchServers(): Promise<void> {
     loading.value = true;
-    error.value = null;
+    failure.value = null;
     try {
       await loadServerList();
     } catch (err) {
-      error.value = describeServerError(err);
+      failure.value = err;
       throw err;
     } finally {
       loading.value = false;
@@ -71,7 +82,7 @@ export const useServersStore = defineStore("servers", () => {
     try {
       await loadServerList();
     } catch (err) {
-      error.value = describeServerError(err);
+      failure.value = err;
     }
   }
 
@@ -144,7 +155,7 @@ export const useServersStore = defineStore("servers", () => {
     stopPolling();
     servers.value = [];
     loading.value = false;
-    error.value = null;
+    failure.value = null;
   }
 
   return {

@@ -235,6 +235,25 @@ export function describeServerError(error: unknown, locale?: string | null): str
 }
 
 /**
+ * failureText renders a retained failure for display in the current locale:
+ * a localized summary plus the useful raw diagnostic as plain text. Raw
+ * classification still happens on the untouched error object (isApiError,
+ * stripErrorPrefix); only this presentation string is localized, resolved
+ * at render time so a language switch re-renders without refetching.
+ */
+export function failureText(error: unknown, locale?: string | null): string {
+  const errors = catalogFor(locale).errors;
+  const raw =
+    isApiError(error) || error instanceof Error ? error.message : "";
+  const detail = stripErrorPrefix(raw ?? "");
+  if (detail === "") {
+    return isApiError(error) ? errors.requestFailed : errors.unexpected;
+  }
+  const summary = isApiError(error) ? errors.requestFailed : errors.unexpected;
+  return `${summary} — ${detail}`;
+}
+
+/**
  * Backend package names whose "<package>: " prefix is internal detail.
  * Regenerate with:
  *   grep -rhoE '(errors\.New|Errorf)\("[a-z][0-9a-z_-]*:' internal \

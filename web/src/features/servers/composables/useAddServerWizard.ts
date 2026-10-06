@@ -15,7 +15,7 @@ import { useI18n } from "vue-i18n";
 
 import {
   createPrivateKey,
-  describeServerError,
+  failureText,
 } from "@/features/servers/api/servers";
 import type { CheckResult, Server, ServerCheckName } from "@/features/servers/api/servers";
 import {
@@ -93,7 +93,7 @@ type WizardEmit = {
 export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
   const serversStore = useServersStore();
   const message = useMessage();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
 
   const stepNames = computed<string[]>(() => [
     t("servers.wizard.stepConnect"),
@@ -104,8 +104,28 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
 
   const step = ref(0);
   const formRef = ref<FormInst | null>(null);
-  const errorMessage = ref("");
-  const validateMessage = ref("");
+  /**
+   * createFailure keeps the raw last create failure; probeFailure keeps the
+   * raw last probe failure or the server's own outcome message. The banner
+   * displays derive from them in the current locale, so a language switch
+   * re-renders retained failures without re-running probes or API calls.
+   */
+  const createFailure = ref<unknown>(null);
+  const probeFailure = ref<unknown>(null);
+  /** errorMessage renders the retained create failure, empty while healthy. */
+  const errorMessage = computed<string>(() =>
+    createFailure.value === null || createFailure.value === undefined
+      ? ""
+      : failureText(createFailure.value, locale.value),
+  );
+  /** validateMessage renders the retained probe failure, empty while healthy. */
+  const validateMessage = computed<string>(() => {
+    const failure = probeFailure.value;
+    if (failure === null || failure === undefined || failure === "") {
+      return "";
+    }
+    return failureText(failure, locale.value);
+  });
   /**
    * validationAttempted records that the connection form has been validated
    * at least once, so a language switch can refresh already-visible feedback
@@ -258,7 +278,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
       return;
     }
     validationPassed.value = false;
-    validateMessage.value = "";
+    probeFailure.value = null;
     fixedChecks.value = makeIdleChecks();
   });
 
@@ -315,7 +335,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
       return;
     }
 
-    errorMessage.value = "";
+    createFailure.value = null;
     validationAttempted.value = true;
     try {
       await formRef.value?.validate();
@@ -359,7 +379,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
       if (!inFlight.isCurrent(token)) {
         return;
       }
-      errorMessage.value = describeServerError(error);
+      createFailure.value = error;
     } finally {
       if (inFlight.isCurrent(token)) {
         creating.value = false;
@@ -376,7 +396,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
 
     const token = inFlight.begin();
     validating.value = true;
-    validateMessage.value = "";
+    probeFailure.value = null;
     // A retry starts from "not passed": a previous pass must never remain
     // visible (or unlock Continue) while the new probe runs or after it fails.
     validationPassed.value = false;
@@ -394,7 +414,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
         return; // the wizard was closed while the probe was in flight
       }
       applyCheckResults(outcome.checks);
-      validateMessage.value = outcome.message;
+      probeFailure.value = outcome.message;
       validationPassed.value = outcome.ok;
       if (outcome.ok) {
         message.success(t("servers.toasts.validationOk"));
@@ -404,7 +424,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
         return;
       }
       fixedChecks.value = makeIdleChecks();
-      validateMessage.value = describeServerError(error);
+      probeFailure.value = error;
       validationPassed.value = false;
     } finally {
       if (inFlight.isCurrent(token)) {
@@ -445,8 +465,8 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     form.keyId = "";
     form.password = "";
     form.trustHostKey = false;
-    errorMessage.value = "";
-    validateMessage.value = "";
+    createFailure.value = null;
+    probeFailure.value = null;
     validationPassed.value = false;
     validationAttempted.value = false;
     fixedChecks.value = makeIdleChecks();

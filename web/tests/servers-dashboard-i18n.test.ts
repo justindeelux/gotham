@@ -5,17 +5,24 @@
 // (isApiError, stripErrorPrefix, conflictDetail) and the describe* detail
 // paths keep their exact semantics; only empty fallbacks localize.
 
-import { mount } from "@vue/test-utils";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { defineComponent, h, ref } from "vue";
+import { flushPromises, mount } from "@vue/test-utils";
+import { NMessageProvider } from "naive-ui";
+import { createPinia, setActivePinia } from "pinia";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { computed, defineComponent, h, ref } from "vue";
 
 import {
   describeServerError,
+  failureText,
   isApiError,
   stripErrorPrefix,
 } from "@/features/servers/api/servers";
 import { describeContainerError } from "@/features/servers/api/containers";
 import { describeMetricsError } from "@/features/servers/api/metrics";
+import { listContainers } from "@/features/servers/api/containers";
+import { listServers } from "@/features/servers/api/servers";
+import { useContainersPage } from "@/features/servers/composables/useContainersPage";
+import { useServersStore } from "@/features/servers/stores/servers";
 import type { Server } from "@/features/servers/api/servers";
 import { containerLabel, keyLabel } from "@/features/servers/utils/serverListView";
 import { authLabel, summaryLine } from "@/features/servers/utils/serverDetailView";
@@ -31,6 +38,7 @@ import {
 import {
   buildMetricCharts,
   metricRangeHint,
+  metricsFailureText,
   refreshMsForChoice,
 } from "@/features/servers/utils/serverMetricsView";
 import {
@@ -51,6 +59,28 @@ import viServers from "@/features/servers/locales/vi";
 import enDashboard from "@/features/dashboard/locales/en";
 import viDashboard from "@/features/dashboard/locales/vi";
 
+vi.mock("@/features/servers/api/containers", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/features/servers/api/containers")
+  >()),
+  listContainers: vi.fn(),
+}));
+
+vi.mock("@/features/servers/api/servers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/features/servers/api/servers")>()),
+  listServers: vi.fn(),
+  getServer: vi.fn().mockRejectedValue(new Error("not found")),
+}));
+
+if (!globalThis.window.matchMedia) {
+  globalThis.window.matchMedia = (() => ({
+    matches: false,
+    media: "",
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  })) as unknown as typeof globalThis.window.matchMedia;
+}
+
 beforeAll(() => {
   registerDiscoveredCatalogs();
 });
@@ -58,6 +88,7 @@ beforeAll(() => {
 beforeEach(() => {
   resetLocaleState();
   syncComposerLocale("en");
+  vi.clearAllMocks();
 });
 
 function server(overrides: Partial<Server> = {}): Server {
@@ -220,6 +251,121 @@ describe("live locale switch", () => {
       await wrapper.vm.$nextTick();
       expect(wrapper.find(".label").text()).toBe("2 container");
       expect(wrapper.find(".selected").text()).toBe("ctr-9");
+    } finally {
+      wrapper.unmount();
+      setLocale("en", null);
+    }
+  });
+});
+
+describe("retained failure display", () => {
+  it("pairs a localized summary with the raw diagnostic", () => {
+    const apiError = { message: "servers: validation failed: ssh dial timeout", status: 500 };
+    expect(failureText(apiError)).toBe(
+      "Request failed — validation failed: ssh dial timeout",
+    );
+    expect(failureText(apiError, "vi")).toBe(
+      "Yêu cầu thất bại — validation failed: ssh dial timeout",
+    );
+    expect(failureText(new Error("proxy: bad gateway"))).toBe(
+      "Something went wrong. Please try again. — bad gateway",
+    );
+    expect(failureText({ message: "", status: 500 })).toBe("Request failed");
+    expect(failureText({ message: "", status: 500 }, "vi")).toBe("Yêu cầu thất bại");
+    expect(failureText(undefined)).toBe("Something went wrong. Please try again.");
+    expect(failureText(undefined, "vi")).toBe("Đã xảy ra lỗi. Vui lòng thử lại.");
+  });
+
+  it("keeps curated metrics summaries while localizing the rest", () => {
+    expect(metricsFailureText(null)).toBeNull();
+    expect(metricsFailureText({ message: "x", status: 401 })).toBe(
+      "Your session expired. Please sign in again.",
+    );
+    expect(metricsFailureText({ message: "x", status: 401 }, "vi")).toBe(
+      "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
+    );
+    expect(metricsFailureText({ message: "x", status: 404 }, "vi")).toBe(
+      "Control plane này chưa bật chỉ số máy chủ (FEATURE_METRICS=false).",
+    );
+    expect(metricsFailureText({ message: "", status: 400 })).toBe(
+      "Invalid metrics range. Pick another range and retry.",
+    );
+    expect(metricsFailureText({ message: "ws: boom", status: 400 }, "vi")).toBe(
+      "Yêu cầu thất bại — boom",
+    );
+    expect(metricsFailureText({ message: "ws: boom", status: 500 })).toBe(
+      "Request failed — boom",
+    );
+  });
+
+  it("re-renders the retained store banner on switch without refetching", async () => {
+    setActivePinia(createPinia());
+    const store = useServersStore();
+    const apiError = {
+      message: "servers: validation failed: ssh dial timeout",
+      status: 500,
+    };
+    vi.mocked(listServers).mockRejectedValueOnce(apiError);
+    await expect(store.fetchServers()).rejects.toBe(apiError);
+    expect(store.error).toBe("Request failed — validation failed: ssh dial timeout");
+    expect(vi.mocked(listServers)).toHaveBeenCalledTimes(1);
+    setLocale("vi", null);
+    expect(store.error).toBe("Yêu cầu thất bại — validation failed: ssh dial timeout");
+    expect(vi.mocked(listServers)).toHaveBeenCalledTimes(1);
+    vi.mocked(listServers).mockResolvedValueOnce([]);
+    await store.fetchServers();
+    expect(store.error).toBeNull();
+    expect(store.servers).toEqual([]);
+  });
+
+  it("re-renders the containers banner without refetching or losing draft state", async () => {
+    const apiError = { message: "containers: dial failed", status: 500 };
+    vi.mocked(listContainers).mockRejectedValueOnce(apiError);
+    let exposed: ReturnType<typeof useContainersPage> | null = null;
+    const Child = defineComponent({
+      name: "ContainersProbeChild",
+      setup() {
+        const page = useContainersPage(computed(() => "srv-1"));
+        exposed = page;
+        return { page };
+      },
+      render() {
+        const page = (this as { page: ReturnType<typeof useContainersPage> }).page;
+        return h("div", [
+          h("span", { class: "banner" }, page.error.value ?? ""),
+          h("span", { class: "filter" }, page.activeFilter.value),
+          h("span", { class: "query" }, page.searchQuery.value),
+        ]);
+      },
+    });
+    const Probe = defineComponent({
+      name: "ContainersProbe",
+      render() {
+        return h(NMessageProvider, () => h(Child));
+      },
+    });
+    const wrapper = mount(Probe, { global: { plugins: [i18n] } });
+    try {
+      await flushPromises();
+      await wrapper.vm.$nextTick();
+      expect(wrapper.find(".banner").text()).toBe(
+        "Request failed — dial failed",
+      );
+      expect(vi.mocked(listContainers)).toHaveBeenCalledTimes(1);
+      if (!exposed) {
+        throw new Error("probe page not exposed");
+      }
+      exposed.searchQuery.value = "ng";
+      exposed.activeFilter.value = "running";
+      await wrapper.vm.$nextTick();
+      setLocale("vi", null);
+      await wrapper.vm.$nextTick();
+      expect(wrapper.find(".banner").text()).toBe("Yêu cầu thất bại — dial failed");
+      expect(vi.mocked(listContainers)).toHaveBeenCalledTimes(1);
+      expect(wrapper.find(".query").text()).toBe("ng");
+      expect(wrapper.find(".filter").text()).toBe("running");
+      expect(exposed.selected.value).toBeNull();
+      expect(exposed.drawerOpen.value).toBe(false);
     } finally {
       wrapper.unmount();
       setLocale("en", null);

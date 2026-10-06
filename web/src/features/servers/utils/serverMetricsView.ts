@@ -1,6 +1,8 @@
 // Pure view helpers for the server metrics tab (extracted from ServerDetailPage).
 
 import type { MetricPoint, MetricStep } from "@/features/servers/api/metrics";
+import { isMetricsDisabled } from "@/features/servers/api/metrics";
+import { failureText, isApiError, stripErrorPrefix } from "@/features/servers/api/servers";
 import { activeLocale } from "@/shared/i18n/locale";
 import type { ChartSeries } from "@/shared/ui/MetricsChart.vue";
 import { formatBytes, toPercent } from "@/shared/utils/format";
@@ -162,4 +164,31 @@ export function buildMetricCharts(
 /** isMetricStep narrows a server-returned step onto the accepted values. */
 export function isMetricStep(value: string): value is MetricStep {
   return value === "1m" || value === "1h" || value === "1d";
+}
+
+/**
+ * metricsFailureText renders a retained metrics failure for display in the
+ * current locale. Curated refusals (expired session, disabled feature flag)
+ * keep their summary-only shape; anything else gets the localized summary
+ * plus the raw diagnostic. Classification stays on the raw error object.
+ */
+export function metricsFailureText(
+  failure: unknown,
+  locale?: string | null,
+): string | null {
+  if (failure === null || failure === undefined) {
+    return null;
+  }
+  const errors = catalogFor(locale).errors;
+  if (isApiError(failure) && failure.status === 401) {
+    return errors.sessionExpired;
+  }
+  if (isMetricsDisabled(failure)) {
+    return errors.metricsDisabled;
+  }
+  if (isApiError(failure) && failure.status === 400) {
+    const detail = stripErrorPrefix(failure.message ?? "");
+    return detail === "" ? errors.metricsRange : failureText(failure, locale);
+  }
+  return failureText(failure, locale);
 }

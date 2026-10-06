@@ -17,6 +17,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { Server, UpdateServerInput } from "@/features/servers/api/servers";
+import { failureText } from "@/features/servers/api/servers";
 import { editRules } from "@/features/servers/schemas/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
 import { onLocaleChange } from "@/shared/i18n";
@@ -43,9 +44,20 @@ const emit = defineEmits<{
 }>();
 
 const serversStore = useServersStore();
-const { t } = useI18n();
+const { locale, t } = useI18n();
 const formRef = ref<FormInst | null>(null);
-const errorMessage = ref("");
+/**
+ * saveFailure keeps the raw last save failure. The banner display derives
+ * from it in the current locale, so a language switch re-renders a retained
+ * failure without resubmitting or touching the draft.
+ */
+const saveFailure = ref<unknown>(null);
+/** errorMessage renders the retained save failure, empty while healthy. */
+const errorMessage = computed<string>(() =>
+  saveFailure.value === null || saveFailure.value === undefined
+    ? ""
+    : failureText(saveFailure.value, locale.value),
+);
 const saving = ref(false);
 /**
  * validationAttempted records that the edit form has been validated at
@@ -108,7 +120,7 @@ function prefill(): void {
   form.authMode = "keep";
   form.keyId = server.ssh_key_id ?? "";
   form.password = "";
-  errorMessage.value = "";
+  saveFailure.value = null;
   validationAttempted.value = false;
   formRef.value?.restoreValidation();
 }
@@ -133,7 +145,7 @@ async function handleSave(): Promise<void> {
   if (!props.server) {
     return;
   }
-  errorMessage.value = "";
+  saveFailure.value = null;
   validationAttempted.value = true;
   try {
     await formRef.value?.validate();
@@ -162,8 +174,7 @@ async function handleSave(): Promise<void> {
     emit("updated", updated);
     emit("update:show", false);
   } catch (error) {
-    errorMessage.value =
-      error instanceof Error ? error.message : t("servers.errors.unexpected");
+    saveFailure.value = error;
   } finally {
     saving.value = false;
   }

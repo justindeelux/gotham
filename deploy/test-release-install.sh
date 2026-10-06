@@ -1712,6 +1712,12 @@ case "${cmd}" in
             echo "fake-admin: database is down" >&2
             exit 1
         fi
+        if [ "${ADMIN_DB_COLLISION:-0}" = "1" ]; then
+            # Genuine database error whose text contains the legacy phrase
+            # without being the exact usage line: must stay a failure.
+            echo 'fake-admin: connect to database: FATAL: database "unknown admin command" does not exist' >&2
+            exit 1
+        fi
         if [ -f "${state}/users" ]; then
             echo "admin-exists: true"
         else
@@ -1821,6 +1827,7 @@ run_admin_install() {
     ADMIN_FLIP_FLOP="${ADMIN_FLIP_FLOP:-0}" \
     ADMIN_LEGACY="${ADMIN_LEGACY:-0}" \
     ADMIN_NOADMIN="${ADMIN_NOADMIN:-0}" \
+    ADMIN_DB_COLLISION="${ADMIN_DB_COLLISION:-0}" \
     ADMIN_STATE_DIR="${_ar_state}" \
     SYSTEMCTL_LOG="${SCRATCH}/admin-systemctl.log" \
     PATH="${R3_SHIM}:${PATH}" \
@@ -1828,7 +1835,7 @@ run_admin_install() {
     _ar_rc=$?
     # One-shot fake controls: never leak them into later runs.
     unset ADMIN_EXISTS_FAIL ADMIN_CREATE_FAIL ADMIN_CREATE_FAIL_ONCE
-    unset ADMIN_FLIP_FLOP ADMIN_XTRACE ADMIN_LEGACY ADMIN_NOADMIN
+    unset ADMIN_FLIP_FLOP ADMIN_XTRACE ADMIN_LEGACY ADMIN_NOADMIN ADMIN_DB_COLLISION
     return "${_ar_rc}"
 }
 # The password must never be passed as a command-line argument: only
@@ -1994,6 +2001,25 @@ fi
 [ ! -e "${M_STATE}/users" ] \
     || { echo "FAIL: an account was created through the admin-less binary (JUS-38/m)" >&2; exit 1; }
 echo "PASS: a release without admin commands prints upgrade guidance, no create command, no database warning (JUS-38/m)"
+
+# JUS-38/d: a genuine database error containing the legacy phrase is not a
+# legacy skip: it warns and exits nonzero (nothing rolled back).
+DC_STATE="${SCRATCH}/admin-state-collision"
+mkdir -p "${DC_STATE}"
+DC_RC=0
+ADMIN_EMAIL="ops@example.com" ADMIN_PWFILE="" ADMIN_TTY="" ADMIN_DB_COLLISION=1 \
+    run_admin_install "${SCRATCH}/root-admin-collision" "${DC_STATE}" "${SCRATCH}/dc-out.log" "${SCRATCH}/dc-err.log" || DC_RC=$?
+[ "${DC_RC}" -ne 0 ] \
+    || { echo "FAIL: a colliding database error exited 0 (JUS-38/d)" >&2; exit 1; }
+grep -q 'could not check for an existing admin account' "${SCRATCH}/dc-err.log" \
+    || { echo "FAIL: the colliding failure names no reason (JUS-38/d)" >&2; cat "${SCRATCH}/dc-err.log" >&2; exit 1; }
+if grep -q 'predates automated admin bootstrap\|has no admin commands' "${SCRATCH}/dc-out.log"; then
+    echo "FAIL: a genuine database error took a legacy skip (JUS-38/d)" >&2
+    exit 1
+fi
+[ ! -e "${DC_STATE}/users" ] \
+    || { echo "FAIL: an account was created although the check failed (JUS-38/d)" >&2; exit 1; }
+echo "PASS: a database error containing the legacy phrase still warns and exits nonzero (JUS-38/d)"
 
 # JUS-22/f: --dry-run prompts nothing and changes nothing, even with every
 # admin seam set hostile (emails, password files, fake binary, tty).

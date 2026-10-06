@@ -925,21 +925,28 @@ admin_phase2_create() {
     fi
 
     _admin_exists_out=""
-    if ! _admin_exists_out="$(_admin_run admin exists 2>"${WORK_DIR}/admin-exists.err")"; then
-        # Releases this installer postdates can fail the probe without any
-        # database problem. v0.1.0 has no `admin` command at all, so it cannot
-        # run the manual command either: point at the upgrade, never at a
-        # command that binary does not have. v0.2.0 has `admin create` (hidden
-        # prompt) but no `admin exists`: print the manual command. Anything
-        # else is the genuine database/config failure below.
-        if grep -q 'unknown command "admin"' "${WORK_DIR}/admin-exists.err" 2>/dev/null; then
+    _admin_exists_status=0
+    _admin_exists_out="$(_admin_run admin exists 2>"${WORK_DIR}/admin-exists.err")" \
+        || _admin_exists_status=$?
+    if [ "${_admin_exists_status}" -ne 0 ]; then
+        # Releases this installer postdates fail the probe with usage exit
+        # status 2 and a single exact diagnostic line, not with a database
+        # error: v0.1.0 has no `admin` command at all (so it cannot run the
+        # manual command either: point at the upgrade), v0.2.0 has
+        # `admin create` (hidden prompt) but no `admin exists` (print the
+        # manual command). Both the status and the complete line must match:
+        # a genuine database error merely containing the phrase stays on the
+        # failure path below.
+        if [ "${_admin_exists_status}" -eq 2 ] \
+            && grep -qx 'unknown command "admin"' "${WORK_DIR}/admin-exists.err" 2>/dev/null; then
             cat "${WORK_DIR}/admin-exists.err" >&2 || true
             log "the installed release has no admin commands; see the upgrade note below"
             ADMIN_STATUS="legacy-upgrade"
             _admin_wipe
             return 0
         fi
-        if grep -q "unknown admin command" "${WORK_DIR}/admin-exists.err" 2>/dev/null; then
+        if [ "${_admin_exists_status}" -eq 2 ] \
+            && grep -qx 'unknown admin command "exists"' "${WORK_DIR}/admin-exists.err" 2>/dev/null; then
             cat "${WORK_DIR}/admin-exists.err" >&2 || true
             log "the installed release predates automated admin bootstrap; skipping (see the manual command below)"
             ADMIN_STATUS="legacy-manual"

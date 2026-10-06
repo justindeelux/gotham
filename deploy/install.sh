@@ -926,6 +926,26 @@ admin_phase2_create() {
 
     _admin_exists_out=""
     if ! _admin_exists_out="$(_admin_run admin exists 2>"${WORK_DIR}/admin-exists.err")"; then
+        # Releases this installer postdates can fail the probe without any
+        # database problem. v0.1.0 has no `admin` command at all, so it cannot
+        # run the manual command either: point at the upgrade, never at a
+        # command that binary does not have. v0.2.0 has `admin create` (hidden
+        # prompt) but no `admin exists`: print the manual command. Anything
+        # else is the genuine database/config failure below.
+        if grep -q 'unknown command "admin"' "${WORK_DIR}/admin-exists.err" 2>/dev/null; then
+            cat "${WORK_DIR}/admin-exists.err" >&2 || true
+            log "the installed release has no admin commands; see the upgrade note below"
+            ADMIN_STATUS="legacy-upgrade"
+            _admin_wipe
+            return 0
+        fi
+        if grep -q "unknown admin command" "${WORK_DIR}/admin-exists.err" 2>/dev/null; then
+            cat "${WORK_DIR}/admin-exists.err" >&2 || true
+            log "the installed release predates automated admin bootstrap; skipping (see the manual command below)"
+            ADMIN_STATUS="legacy-manual"
+            _admin_wipe
+            return 0
+        fi
         cat "${WORK_DIR}/admin-exists.err" >&2 || true
         ADMIN_FAIL_REASON="could not check for an existing admin account (is the database up?)"
         ADMIN_FAILED=1
@@ -1028,6 +1048,21 @@ elif [ "${TEST_MODE}" -eq 1 ]; then
 else
     install -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${TMP_BINARY}" "${INSTALL_PATH}"
     rm -f "${TMP_BINARY}"
+fi
+
+# ---- Installed binary version proof -----------------------------------------
+# The release is verified by signature + digest before install, but nothing
+# has yet proven the installed file reports the requested version: a misbuilt
+# release would otherwise be announced as installed. The release pipeline
+# stamps the tag without its `v` (see .github/workflows/release.yml), so the
+# same normalization applies here. Skipped only on --dry-run (no binary is
+# installed there); the sandbox fixtures carry a stamped test version.
+if [ "${DRY_RUN}" -eq 0 ]; then
+    _want_version="${VERSION#v}"
+    _got_version="$("${INSTALL_PATH}" version 2>/dev/null)" \
+        || die "installed binary at ${INSTALL_PATH} does not run (cannot prove its version)"
+    [ "${_got_version}" = "gotham ${_want_version}" ] \
+        || die "installed binary reports '${_got_version}', want 'gotham ${_want_version}' for ${VERSION} (refusing a misbuilt release)"
 fi
 
 # ---- Control-plane configuration --------------------------------------------
@@ -1212,7 +1247,12 @@ admin_phase2_create
 
 log "starting ${BINARY_NAME}"
 run systemctl daemon-reload
-run systemctl enable --now "${BINARY_NAME}.service"
+run systemctl enable "${BINARY_NAME}.service"
+# Restart, not just enable --now: enable --now leaves an already-running
+# (pre-upgrade) process on the old binary, so the installed version would
+# never actually run. Restart starts a fresh unit and moves an existing one
+# onto the just-installed binary.
+run systemctl restart "${BINARY_NAME}.service"
 
 # ---- Localhost agent (the control plane's first node) -----------------------
 # On by default: install and start the agent on this host, pointed at the
@@ -1350,6 +1390,19 @@ case "${ADMIN_STATUS}" in
   Create it with:
     sudo ${INSTALL_PATH} admin create --email ${ADMIN_EMAIL:-ops@example.com}
   Then open:
+  ${ADMIN_LOGIN_LINE}"
+        ;;
+    legacy-manual)
+        ADMIN_FIRST_LOGIN="  The installed release predates automated admin bootstrap.
+  If no account exists yet, create it with:
+    sudo ${INSTALL_PATH} admin create --email ${ADMIN_EMAIL:-ops@example.com}
+  (answer the hidden password prompt), then open:
+  ${ADMIN_LOGIN_LINE}"
+        ;;
+    legacy-upgrade)
+        ADMIN_FIRST_LOGIN="  The installed release has no admin commands at all, so no account was created.
+  Re-run this installer once a newer release is available (it bootstraps the
+  first admin automatically), then open:
   ${ADMIN_LOGIN_LINE}"
         ;;
     *)

@@ -74,8 +74,11 @@ mkdir -p "${SERVE}"
 
 echo "==> building signer and ${ARCH} snapshot binaries"
 go build -o "${SCRATCH}/signer" ./cmd/signer
-go build -o "${SERVE}/gotham-linux-${ARCH}" ./cmd/gotham
-go build -o "${SERVE}/gotham-agent-linux-${ARCH}" ./cmd/gotham-agent
+# The fixtures carry a stamped test version (tag without its `v`, like the
+# release pipeline): the installer's installed-binary version proof runs on
+# every non-dry-run install, sandbox included.
+go build -ldflags "-X main.version=${VERSION#v}" -o "${SERVE}/gotham-linux-${ARCH}" ./cmd/gotham
+go build -ldflags "-X main.version=${VERSION#v}" -o "${SERVE}/gotham-agent-linux-${ARCH}" ./cmd/gotham-agent
 
 echo "==> generating an ephemeral test keypair"
 "${SCRATCH}/signer" keygen -out "${SCRATCH}/signing.key" >/dev/null
@@ -1094,8 +1097,12 @@ grep -q 'Nothing was rolled back' "${SCRATCH}/r3-err.log" \
     || { echo "FAIL: the CA is missing after the agent failure (R3)" >&2; exit 1; }
 [ -f "${R3_ROOT}/etc/systemd/system/gotham.service" ] \
     || { echo "FAIL: the unit is missing after the agent failure (R3)" >&2; exit 1; }
-grep -q 'systemctl enable --now gotham.service' "${SCRATCH}/r3-systemctl.log" \
+grep -q 'systemctl enable gotham.service' "${SCRATCH}/r3-systemctl.log" \
     || { echo "FAIL: the control plane service was not enabled before the agent failure (R3)" >&2; exit 1; }
+# JUS-38: a reinstall must restart the unit onto the new binary (enable --now
+# alone leaves a pre-upgrade process running the old version).
+grep -q 'systemctl restart gotham.service' "${SCRATCH}/r3-systemctl.log" \
+    || { echo "FAIL: the control plane service was not restarted onto the new binary (R3/JUS-38)" >&2; exit 1; }
 if grep -qE 'systemctl (disable|stop) ' "${SCRATCH}/r3-systemctl.log"; then
     echo "FAIL: the control plane service was touched after the agent failure (R3)" >&2
     exit 1
@@ -1692,6 +1699,18 @@ if [ "${cmd}" = "admin" ]; then
 fi
 case "${cmd}" in
     exists)
+        if [ "${ADMIN_NOADMIN:-0}" = "1" ]; then
+            # Stand-in for a release with no `admin` command at all (v0.1.0):
+            # it can run neither the probe nor the manual create command.
+            echo 'unknown command "admin"' >&2
+            exit 2
+        fi
+        if [ "${ADMIN_LEGACY:-0}" = "1" ]; then
+            # Stand-in for a release with `admin create` but no `admin exists`
+            # (v0.2.0): it cannot run the probe.
+            echo 'unknown admin command "exists"' >&2
+            exit 2
+        fi
         if [ "${ADMIN_EXISTS_FAIL:-0}" = "1" ]; then
             echo "fake-admin: database is down" >&2
             exit 1
@@ -1704,6 +1723,16 @@ case "${cmd}" in
         exit 0
         ;;
     create)
+        if [ "${ADMIN_NOADMIN:-0}" = "1" ]; then
+            echo 'unknown command "admin"' >&2
+            exit 2
+        fi
+        if [ "${ADMIN_LEGACY:-0}" = "1" ]; then
+            # Same-era `admin create` has no --password-stdin either: the
+            # installer must never get this far on such a release.
+            echo "flag provided but not defined: -password-stdin" >&2
+            exit 2
+        fi
         email=""
         stdin_mode=0
         prev=""
@@ -1793,6 +1822,8 @@ run_admin_install() {
     ADMIN_CREATE_FAIL="${ADMIN_CREATE_FAIL:-0}" \
     ADMIN_CREATE_FAIL_ONCE="${ADMIN_CREATE_FAIL_ONCE:-0}" \
     ADMIN_FLIP_FLOP="${ADMIN_FLIP_FLOP:-0}" \
+    ADMIN_LEGACY="${ADMIN_LEGACY:-0}" \
+    ADMIN_NOADMIN="${ADMIN_NOADMIN:-0}" \
     ADMIN_STATE_DIR="${_ar_state}" \
     SYSTEMCTL_LOG="${SCRATCH}/admin-systemctl.log" \
     PATH="${R3_SHIM}:${PATH}" \
@@ -1800,7 +1831,7 @@ run_admin_install() {
     _ar_rc=$?
     # One-shot fake controls: never leak them into later runs.
     unset ADMIN_EXISTS_FAIL ADMIN_CREATE_FAIL ADMIN_CREATE_FAIL_ONCE
-    unset ADMIN_FLIP_FLOP ADMIN_XTRACE
+    unset ADMIN_FLIP_FLOP ADMIN_XTRACE ADMIN_LEGACY ADMIN_NOADMIN
     return "${_ar_rc}"
 }
 # The password must never be passed as a command-line argument: only
@@ -1923,6 +1954,82 @@ grep -q 'admin create --email ops@example.com' "${SCRATCH}/i-out.log" \
 [ -x "${SCRATCH}/root-admin-fail/var/lib/gotham/bin/gotham" ] \
     || { echo "FAIL: the control plane binary is missing after the admin failure (JUS-22/i)" >&2; exit 1; }
 echo "PASS: an exists-check failure warns, keeps the control plane and exits nonzero (JUS-22/i)"
+
+# JUS-38/j: a release with `admin create` but no `admin exists` (v0.2.0)
+# skips automatic creation with the manual command instead of the database
+# warning, and exits 0: the install itself succeeded.
+J_STATE="${SCRATCH}/admin-state-legacy"
+mkdir -p "${J_STATE}"
+ADMIN_EMAIL="legacy@example.com" ADMIN_PWFILE="" ADMIN_TTY="" ADMIN_LEGACY=1 \
+    run_admin_install "${SCRATCH}/root-admin-legacy" "${J_STATE}" "${SCRATCH}/j-out.log" "${SCRATCH}/j-err.log" \
+    || { echo "FAIL: the legacy-release install exited nonzero (JUS-38/j)" >&2; cat "${SCRATCH}/j-err.log" >&2; exit 1; }
+grep -q 'predates automated admin bootstrap' "${SCRATCH}/j-out.log" \
+    || { echo "FAIL: the legacy skip names no reason (JUS-38/j)" >&2; cat "${SCRATCH}/j-out.log" >&2; exit 1; }
+grep -q 'admin create --email legacy@example.com' "${SCRATCH}/j-out.log" \
+    || { echo "FAIL: the legacy skip shows no manual command (JUS-38/j)" >&2; exit 1; }
+if grep -q 'could not check for an existing admin account' "${SCRATCH}/j-out.log" "${SCRATCH}/j-err.log"; then
+    echo "FAIL: the legacy skip raised the database warning (JUS-38/j)" >&2
+    exit 1
+fi
+[ ! -e "${J_STATE}/users" ] \
+    || { echo "FAIL: an account was created through the legacy binary (JUS-38/j)" >&2; exit 1; }
+[ -x "${SCRATCH}/root-admin-legacy/var/lib/gotham/bin/gotham" ] \
+    || { echo "FAIL: the control plane binary is missing after the legacy skip (JUS-38/j)" >&2; exit 1; }
+echo "PASS: a pre-bootstrap release skips admin creation with the manual command, no database warning (JUS-38/j)"
+
+# JUS-38/m: a release with no `admin` command at all (v0.1.0) prints upgrade
+# guidance instead of a manual command that binary cannot run, and exits 0.
+M_STATE="${SCRATCH}/admin-state-noadmin"
+mkdir -p "${M_STATE}"
+ADMIN_EMAIL="noadmin@example.com" ADMIN_PWFILE="" ADMIN_TTY="" ADMIN_NOADMIN=1 \
+    run_admin_install "${SCRATCH}/root-admin-noadmin" "${M_STATE}" "${SCRATCH}/m-out.log" "${SCRATCH}/m-err.log" \
+    || { echo "FAIL: the no-admin install exited nonzero (JUS-38/m)" >&2; cat "${SCRATCH}/m-err.log" >&2; exit 1; }
+grep -q 'has no admin commands' "${SCRATCH}/m-out.log" \
+    || { echo "FAIL: the no-admin skip names no reason (JUS-38/m)" >&2; cat "${SCRATCH}/m-out.log" >&2; exit 1; }
+if grep -q 'admin create --email' "${SCRATCH}/m-out.log"; then
+    echo "FAIL: the no-admin skip prints a create command that binary cannot run (JUS-38/m)" >&2
+    exit 1
+fi
+if grep -q 'could not check for an existing admin account' "${SCRATCH}/m-out.log" "${SCRATCH}/m-err.log"; then
+    echo "FAIL: the no-admin skip raised the database warning (JUS-38/m)" >&2
+    exit 1
+fi
+[ ! -e "${M_STATE}/users" ] \
+    || { echo "FAIL: an account was created through the admin-less binary (JUS-38/m)" >&2; exit 1; }
+echo "PASS: a release without admin commands prints upgrade guidance, no create command, no database warning (JUS-38/m)"
+
+# JUS-38/k: a misbuilt release (valid signature and digest, wrong embedded
+# version) is refused by the installed-binary version proof before any config
+# is written.
+K_SERVE="${SCRATCH}/serve-wrong"
+mkdir -p "${K_SERVE}"
+go build -ldflags "-X main.version=0.0.0-wrong" -o "${K_SERVE}/gotham-linux-${ARCH}" ./cmd/gotham
+"${SCRATCH}/signer" manifest -key "${SCRATCH}/signing.key" -in "${K_SERVE}/gotham-linux-${ARCH}" \
+    -version "${VERSION}" -arch "${ARCH}" -channel stable -out "${K_SERVE}/gotham-manifest-${ARCH}.txt" >/dev/null
+K_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+python3 "${SCRATCH}/server.py" "${K_SERVE}" "${K_PORT}" "${VERSION}" >/dev/null 2>&1 &
+K_PID=$!
+i=0
+while ! curl -fsS "http://127.0.0.1:${K_PORT}/gotham-linux-${ARCH}" -o /dev/null 2>/dev/null; do
+    i=$((i + 1))
+    [ "${i}" -gt 50 ] && { echo "wrong-version file server did not start" >&2; exit 1; }
+    sleep 0.1
+done
+K_RC=0
+GOTHAM_BASE_URL="http://127.0.0.1:${K_PORT}" \
+GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+GOTHAM_INSTALL_ROOT="${SCRATCH}/root-admin-wrong" \
+GOTHAM_SKIP_DEPS=1 \
+    sh "${INSTALL_SH}" --no-local-agent >"${SCRATCH}/k-out.log" 2>"${SCRATCH}/k-err.log" || K_RC=$?
+kill "${K_PID}" 2>/dev/null || true
+[ "${K_RC}" -ne 0 ] \
+    || { echo "FAIL: the misbuilt release installed without complaint (JUS-38/k)" >&2; exit 1; }
+grep -q "reports 'gotham 0.0.0-wrong'" "${SCRATCH}/k-err.log" \
+    || { echo "FAIL: the refusal names no version mismatch (JUS-38/k)" >&2; cat "${SCRATCH}/k-err.log" >&2; exit 1; }
+[ ! -e "${SCRATCH}/root-admin-wrong/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: config was written before the version proof (JUS-38/k)" >&2; exit 1; }
+echo "PASS: a misbuilt release is refused by the version proof before any config (JUS-38/k)"
 
 # JUS-22/f: --dry-run prompts nothing and changes nothing, even with every
 # admin seam set hostile (emails, password files, fake binary, tty).

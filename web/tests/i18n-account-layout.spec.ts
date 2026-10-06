@@ -271,6 +271,17 @@ for (const locale of ["en", "vi"]) {
       await page.goto(`${baseURL}/settings/profile`);
       await page.locator("#profile-new-password").waitFor();
 
+      // Authenticated identity actually resolves: the account card shows
+      // the real display name and email, never the signed-in fallback or
+      // empty facts from a degraded envelope mock.
+      expect(await page.locator(".identity-name").textContent()).toContain(
+        "Ada",
+      );
+      const facts = await page
+        .locator(".identity-facts-wrap")
+        .textContent();
+      expect(facts).toContain("ada@gotham.dev");
+
       const pair = await page.evaluate(() => {
         const first = document.querySelector(
           ".n-card:has(#profile-new-password) .form-row > :first-child",

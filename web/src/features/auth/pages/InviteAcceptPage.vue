@@ -5,6 +5,7 @@ import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
 import { acceptInvite, describeTeamError } from "@/features/teams";
+import { stripErrorPrefix } from "@/features/servers";
 
 /**
  * Invite acceptance: the page the one-time link points at.
@@ -13,9 +14,11 @@ import { acceptInvite, describeTeamError } from "@/features/teams";
  * `POST /v1/invites/accept` (never a URL path) as the signed-in account whose
  * email the invite names. The token is consumed once and is not stored.
  *
- * Static copy renders through the auth catalog; the team error text itself
- * stays owned by the teams package (I18N-8 localizes its details) and passes
- * through here as the raw diagnostic under the localized page copy.
+ * Failure display derives per locale from the retained raw failure object:
+ * the team helper is re-invoked on every evaluation (never a cached
+ * translated string, so I18N-8's locale-aware describer stays compatible),
+ * classification uses only the raw untranslated message, and a failure with
+ * no useful diagnostic renders the single localized fallback.
  */
 const { t } = useI18n();
 const route = useRoute();
@@ -23,33 +26,38 @@ const router = useRouter();
 
 const token = ref<string>(String(route.query.token ?? ""));
 const accepting = ref(false);
-const rawError = ref<string | null>(null);
+/** rawFailure retains the original failure; display derives per locale. */
+const rawFailure = ref<unknown>(null);
 /**
- * teamGenericFallbacks mirrors the generic texts describeTeamError returns
- * when it has no useful diagnostic (teams-owned, I18N-8 localizes the team
- * details). A generic raw renders the localized fallback once instead of
- * `Request failed: Request failed`; any useful raw diagnostic is kept
- * verbatim under the current-locale summary.
+ * error renders the failure for the current locale: failures with no useful
+ * raw diagnostic show the single localized fallback (never a duplicated
+ * generic summary); otherwise the shared summary heads the team diagnostic,
+ * re-derived on every evaluation so a locale-aware team helper is never
+ * read from a stale cached string.
  */
-const teamGenericFallbacks = [
-  "Request failed",
-  "Something went wrong. Please try again.",
-];
 const error = computed<string | null>(() => {
-  if (rawError.value === null) {
+  if (rawFailure.value === null) {
     return null;
   }
-  const raw = rawError.value.trim();
-  if (raw === "" || teamGenericFallbacks.includes(raw)) {
+  if (rawFailureMessage(rawFailure.value) === "") {
     return t("common.errors.unexpected");
   }
-  return `${t("common.errors.requestFailed")}: ${raw}`;
+  return `${t("common.errors.requestFailed")}: ${describeTeamError(rawFailure.value)}`;
 });
 const joined = ref("");
 
+/** rawFailureMessage extracts the stripped raw message, or "" when unusable. */
+function rawFailureMessage(failure: unknown): string {
+  if (typeof failure !== "object" || failure === null) {
+    return "";
+  }
+  const message = (failure as { message?: unknown }).message;
+  return typeof message === "string" ? stripErrorPrefix(message).trim() : "";
+}
+
 async function handleAccept(): Promise<void> {
   accepting.value = true;
-  rawError.value = null;
+  rawFailure.value = null;
   try {
     const team = await acceptInvite(token.value);
     joined.value = team.name;
@@ -57,7 +65,7 @@ async function handleAccept(): Promise<void> {
     // reload or a shared URL cannot replay it.
     scrubToken();
   } catch (err) {
-    rawError.value = describeTeamError(err);
+    rawFailure.value = err;
   } finally {
     accepting.value = false;
   }

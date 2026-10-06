@@ -541,6 +541,43 @@ describe("unknown diagnostics carry a localized summary", () => {
     expect(wrapper.find(".n-alert").text()).toContain(
       "Yêu cầu thất bại: invite consumed",
     );
+    expect(vi.mocked(acceptInvite)).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+    globalThis.document.body.innerHTML = "";
+  });
+
+  it("renders a single localized fallback for a diagnostic-free invite failure", async () => {
+    seedAuth();
+    const accept = vi.mocked(acceptInvite);
+    accept.mockClear();
+    accept.mockRejectedValue({ status: 500, message: "" });
+    const test = testRouter();
+    test.addRoute({
+      path: "/invite/accept",
+      name: "invite-accept",
+      component: { template: "<div />" },
+    });
+    await test.push({ path: "/invite/accept", query: { token: "abc" } });
+    await test.isReady();
+    const wrapper = mount(shell(InviteAcceptPage), {
+      attachTo: globalThis.document.body,
+      global: { plugins: [test, i18n], stubs: { transition: false } },
+    });
+    await flushPromises();
+    await nextTick();
+    await nextTick();
+    // One localized fallback, never a duplicated generic summary, and the
+    // locale switch issues no second accept POST.
+    expect(wrapper.find(".n-alert").text()).toBe(
+      "Something went wrong. Please try again.",
+    );
+    setLocale("vi", null);
+    await nextTick();
+    await flushPromises();
+    expect(wrapper.find(".n-alert").text()).toBe(
+      "Đã xảy ra lỗi. Vui lòng thử lại.",
+    );
+    expect(accept).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });
 });

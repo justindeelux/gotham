@@ -16,11 +16,13 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@intlify/message-compiler": "11.4.13",
     "@vueuse/core": "^15.0.0",
     "axios": "^1.20.0",
     "naive-ui": "^2.45.3",
     "pinia": "^3.0.4",
     "vue": "^3.5.43",
+    "vue-i18n": "^11.4.13",
     "vue-router": "^4.6.4",
     "zod": "^3.25.76"
   },

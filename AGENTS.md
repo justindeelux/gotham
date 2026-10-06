@@ -67,13 +67,24 @@ docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
 
 - `docs/design/` is the UI source of truth: one `*.html` mockup per page + shared tokens in `assets/gotham-ui.css` (+ page CSS in `assets/gotham-views.css`).
 - Any task touching `web/` MUST compare against the matching mockup first and port the gap: extract design tokens (colors, fonts, spacing, radii) from `gotham-ui.css` into the Vue app, theme Naive UI to match — keep Naive UI as the component base, do not rebuild components from raw CSS.
-- UI copy is English (rewrite from the mockups where they differ); code/docs stay English-only per Language below.
+- UI copy is English (rewrite from the mockups where they differ); shipped English copy is the
+  English i18n catalog baseline. Vietnamese lives as translated message values in
+  `web/src/shared/i18n/locales/vi.ts` and `web/src/features/*/locales/vi.ts`, plus three
+  deliberate non-catalog spots: parameterized day-count sentences in
+  `web/src/shared/utils/format.ts` (consume static `time.*` labels from the catalog),
+  the dependency-free stale-chunk copy in `web/src/shared/i18n/staleFallback.ts`
+  (must render without the Vue/i18n runtime), and proper-noun autonyms
+  (`language.names`) consumed by `LanguageSelect.vue`. Code/docs stay English-only
+  per Language below.
 - Mockups for future-phase pages (applications, databases, domains, services, files, team-settings) are references only — implement them when their phase lands, not before.
 - Rebuilt `internal/server/webdist` stays committed; the CI dist-drift check must pass.
 
 ## Language
 
-**English only** in source code, comments, commit messages and docs, replies, and multilingual (i18n) files.
+**English only** in source code, comments, commit messages and docs, replies, and multilingual (i18n) files —
+with one narrow UI-language exception: translated Vietnamese message *values* in
+`web/src/shared/i18n/locales/vi.ts` and `web/src/features/*/locales/vi.ts` may be Vietnamese.
+Message keys, identifiers, comments, docs and replies stay English.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

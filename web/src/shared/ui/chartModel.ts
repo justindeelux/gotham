@@ -1,7 +1,11 @@
 /**
  * Pure geometry for MetricsChart, the dependency-free SVG time-series chart.
- * No Vue, no DOM: every function is unit-tested through chart-model.test.ts.
+ * No Vue components, no DOM: every function is unit-tested through
+ * chart-model.test.ts. Only tickLabel reads the UI locale (for its Intl tag
+ * via shared/i18n/locale, which itself only needs Vue's ref).
  */
+import { localeTag } from "@/shared/i18n/locale";
+import type { Locale } from "@/shared/i18n/locale";
 
 /** One point of a series; `at` is the bucket timestamp in milliseconds. */
 export interface ChartPoint {
@@ -83,15 +87,20 @@ export function areaPath(
 }
 
 /** tickLabel renders a bucket timestamp for the axis. */
-export function tickLabel(at: number, stepMs: number): string {
+export function tickLabel(
+  at: number,
+  stepMs: number,
+  locale?: Locale | null,
+): string {
+  const tag = localeTag(locale);
   const date = new Date(at);
   if (stepMs >= 24 * 60 * 60_000) {
-    return date.toLocaleDateString("en-GB", {
+    return date.toLocaleDateString(tag, {
       day: "numeric",
       month: "short",
     });
   }
-  return date.toLocaleTimeString("en-GB", {
+  return date.toLocaleTimeString(tag, {
     hour: "2-digit",
     minute: "2-digit",
   });

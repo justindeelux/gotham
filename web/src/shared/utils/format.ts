@@ -1,7 +1,14 @@
 /**
- * Small display formatters shared by the server UI. Deliberately dependency-free
- * so the bundle stays lean and the helpers are trivial to unit-test later.
+ * Small display formatters shared by the server UI. Only dependencies are the
+ * locale state and the static common catalogs (no vue-i18n runtime), so the
+ * helpers stay lean and trivial to unit-test. Date/time wording follows the
+ * active UI locale; byte units, thresholds, null placeholders and
+ * invalid-date handling are locale-independent.
  */
+import { activeLocale, localeTag } from "@/shared/i18n/locale";
+import type { Locale } from "@/shared/i18n/locale";
+import enCatalog from "@/shared/i18n/locales/en";
+import viCatalog from "@/shared/i18n/locales/vi";
 
 /** Placeholder shown when a value is missing. */
 const emptyPlaceholder = "—";
@@ -133,62 +140,112 @@ export function toPercent(value: number | null | undefined): number {
   return Math.round(Math.min(Math.max(scaled, 0), 100));
 }
 
-/** relativeTime renders an ISO timestamp as a short "x ago" / "in x" string. */
-export function relativeTime(iso: string | null | undefined): string {
+/**
+ * relativeTime renders an ISO timestamp as a short "x ago" / "in x" string.
+ * English keeps the compact app dialect byte-identical; Vietnamese uses
+ * native Intl.RelativeTimeFormat with the same thresholds and time zone.
+ * Static labels come from the common `time` catalog, never inline copies.
+ */
+export function relativeTime(
+  iso: string | null | undefined,
+  locale?: Locale | null,
+): string {
+  const loc = locale ?? activeLocale.value;
+  const time = loc === "vi" ? viCatalog.time : enCatalog.time;
   if (!iso) {
-    return "never";
+    return time.never;
   }
 
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) {
-    return "unknown";
+    return time.unknown;
   }
 
   const deltaSeconds = Math.round((Date.now() - then) / 1000);
   const future = deltaSeconds < 0;
   const seconds = Math.abs(deltaSeconds);
 
-  /** unit renders the magnitude with the direction that fits the timestamp. */
-  const unit = (value: number, suffix: string): string =>
-    future ? `in ${value}${suffix}` : `${value}${suffix} ago`;
+  if (loc === "en") {
+    /** unit renders the magnitude with the direction that fits the timestamp. */
+    const unit = (value: number, suffix: string): string =>
+      future ? `in ${value}${suffix}` : `${value}${suffix} ago`;
+
+    if (seconds < 45) {
+      return future ? "in a moment" : "just now";
+    }
+
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) {
+      return unit(minutes, "m");
+    }
+
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) {
+      return unit(hours, "h");
+    }
+
+    const days = Math.round(hours / 24);
+    if (days < 30) {
+      return unit(days, "d");
+    }
+
+    const months = Math.round(days / 30);
+    if (months < 12) {
+      return unit(months, "mo");
+    }
+
+    return unit(Math.round(months / 12), "y");
+  }
 
   if (seconds < 45) {
-    return future ? "in a moment" : "just now";
+    return future ? time.inMoment : time.justNow;
   }
+  const relative = new Intl.RelativeTimeFormat("vi-VN", {
+    numeric: "always",
+  });
+  /** signed renders value with the direction that fits the timestamp. */
+  const signed = (
+    value: number,
+    unit: "minute" | "hour" | "day" | "month" | "year",
+  ): string => relative.format(future ? value : -value, unit);
 
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) {
-    return unit(minutes, "m");
+    return signed(minutes, "minute");
   }
 
   const hours = Math.round(minutes / 60);
   if (hours < 24) {
-    return unit(hours, "h");
+    return signed(hours, "hour");
   }
 
   const days = Math.round(hours / 24);
   if (days < 30) {
-    return unit(days, "d");
+    return signed(days, "day");
   }
 
   const months = Math.round(days / 30);
   if (months < 12) {
-    return unit(months, "mo");
+    return signed(months, "month");
   }
 
-  return unit(Math.round(months / 12), "y");
+  return signed(Math.round(months / 12), "year");
 }
 
 /** formatDate renders an ISO timestamp as a short absolute date ("28 Sep 2026"). */
-export function formatDate(iso: string | null | undefined): string {
+export function formatDate(
+  iso: string | null | undefined,
+  locale?: Locale | null,
+): string {
+  const loc = locale ?? activeLocale.value;
   if (!iso) {
     return emptyPlaceholder;
   }
   const time = new Date(iso);
   if (Number.isNaN(time.getTime())) {
-    return "unknown";
+    return (loc === "vi" ? viCatalog : enCatalog).time.unknown;
   }
-  return time.toLocaleDateString("en-GB", {
+  return time.toLocaleDateString(localeTag(loc), {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -196,23 +253,35 @@ export function formatDate(iso: string | null | undefined): string {
 }
 
 /** expiryLabel renders how far away (or past) an expiry timestamp is. */
-export function expiryLabel(iso: string | null | undefined): string {
+export function expiryLabel(
+  iso: string | null | undefined,
+  locale?: Locale | null,
+): string {
+  const loc = locale ?? activeLocale.value;
+  const time = loc === "vi" ? viCatalog.time : enCatalog.time;
   if (!iso) {
     return emptyPlaceholder;
   }
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) {
-    return "unknown";
+    return time.unknown;
   }
 
   const now = Date.now();
   const days = Math.round((then - now) / 86_400_000);
   if (days > 0) {
-    return `expires in ${days} day${days === 1 ? "" : "s"}`;
+    return loc === "vi"
+      ? `hết hạn sau ${days} ngày`
+      : `expires in ${days} day${days === 1 ? "" : "s"}`;
   }
   if (days < 0) {
     const overdue = -days;
-    return `expired ${overdue} day${overdue === 1 ? "" : "s"} ago`;
+    return loc === "vi"
+      ? `đã hết hạn ${overdue} ngày trước`
+      : `expired ${overdue} day${overdue === 1 ? "" : "s"} ago`;
   }
-  return then >= now ? "expires today" : "expired today";
+  if (then >= now) {
+    return time.expiresToday;
+  }
+  return time.expiredToday;
 }

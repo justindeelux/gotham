@@ -1,5 +1,5 @@
 // Mounted provider: Naive locale and HTML language follow the UI locale.
-/* global document: readonly */
+/* global document: readonly, HTMLInputElement: readonly */
 import { mount } from "@vue/test-utils";
 import { dateEnGB, dateViVN, enGB, NConfigProvider, viVN } from "naive-ui";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -54,40 +54,51 @@ describe("mounted provider", () => {
 });
 
 describe("LanguageSelect", () => {
+  const mountSelector = () =>
+    mount(LanguageSelect, {
+      global: { plugins: [i18n] },
+      attachTo: document.body,
+    });
+
   it("offers both autonyms and writes the choice through the setter", async () => {
-    const wrapper = mount(LanguageSelect, { global: { plugins: [i18n] } });
-    const select = wrapper.findComponent({ name: "Select" });
-    const options = select.props("options") as Array<{
-      value: string;
-      label: string;
-    }>;
-    expect(options.map((option) => option.label)).toEqual([
-      "English",
-      "Tiếng Việt",
-    ]);
-    expect(wrapper.text()).toContain("English");
-    setLocale("vi", null);
-    await wrapper.vm.$nextTick();
-    expect(document.documentElement.lang).toBe("vi");
-    wrapper.unmount();
+    const wrapper = mountSelector();
+    try {
+      const labels = wrapper
+        .findAll('input[type="radio"]')
+        .map((input) => input.element.closest("label")?.textContent?.trim());
+      expect(labels).toEqual(["English", "Tiếng Việt"]);
+      expect(wrapper.text()).toContain("English");
+      setLocale("vi", null);
+      await wrapper.vm.$nextTick();
+      expect(document.documentElement.lang).toBe("vi");
+    } finally {
+      wrapper.unmount();
+    }
   });
 
-  it("localizes the accessible name with the current locale", async () => {
-    const wrapper = mount(LanguageSelect, { global: { plugins: [i18n] } });
-    // Naive forwards extra attrs to the widget root only (Select.mjs renders
-    // a plain div; internal Selection.mjs owns the focusable trigger and
-    // exposes no label/role props), so assert both halves: the root carries
-    // the localized widget name, and the real focusable element names itself
-    // from its localized content.
-    const focusable = () => wrapper.find('[tabindex="0"]');
-    const rootName = () => wrapper.find(".n-select").attributes("aria-label");
-    expect(rootName()).toBe("Language");
-    expect(focusable().exists()).toBe(true);
-    expect(focusable().text()).toBe("English");
-    setLocale("vi", null);
-    await wrapper.vm.$nextTick();
-    expect(rootName()).toBe("Ngôn ngữ");
-    expect(focusable().text()).toBe("Tiếng Việt");
-    wrapper.unmount();
+  it("exposes a labeled radiogroup with native named checked radios", async () => {
+    const wrapper = mountSelector();
+    try {
+      const group = wrapper.find('[role="radiogroup"]');
+      expect(group.exists()).toBe(true);
+      expect(group.attributes("aria-label")).toBe("Language");
+      const radios = wrapper.findAll('input[type="radio"]');
+      expect(radios).toHaveLength(2);
+      const nameOf = (index: number): string =>
+        radios[index].element.closest("label")?.textContent?.trim() ?? "";
+      expect(nameOf(0)).toBe("English");
+      expect(nameOf(1)).toBe("Tiếng Việt");
+      const checked = (): string =>
+        radios.find((radio) => (radio.element as HTMLInputElement).checked)?.attributes("value") ?? "";
+      expect(checked()).toBe("en");
+      setLocale("vi", null);
+      await wrapper.vm.$nextTick();
+      expect(group.attributes("aria-label")).toBe("Ngôn ngữ");
+      expect(checked()).toBe("vi");
+      (radios[0].element as HTMLInputElement).focus();
+      expect(document.activeElement).toBe(radios[0].element);
+    } finally {
+      wrapper.unmount();
+    }
   });
 });

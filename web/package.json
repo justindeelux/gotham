@@ -16,6 +16,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@intlify/message-compiler": "11.4.13",
     "@vueuse/core": "^15.0.0",
     "axios": "^1.20.0",
     "naive-ui": "^2.45.3",

@@ -1,22 +1,14 @@
 <script setup lang="ts">
-import { NSelect } from "naive-ui";
-import type { SelectOption } from "naive-ui";
+import { NRadioButton, NRadioGroup } from "naive-ui";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { activeLocale, setLocale } from "@/shared/i18n";
-import type { Locale } from "@/shared/i18n";
 
 const { t } = useI18n();
 
-/** Options use autonyms from the catalog, never translated labels. */
-const options = computed<SelectOption[]>(() => [
-  { value: "en", label: t("language.names.en") },
-  { value: "vi", label: t("language.names.vi") },
-]);
-
-/** value bridges the Naive select model to the locale setter. */
-const value = computed<Locale>({
+/** value bridges the Naive radio model to the locale setter. */
+const value = computed<string>({
   get: () => activeLocale.value,
   set: (locale: string) => {
     setLocale(locale);
@@ -25,18 +17,24 @@ const value = computed<Locale>({
 </script>
 
 <template>
-  <NSelect
-    v-model:value="value"
-    :options="options"
-    :consistent-menu-width="false"
-    size="small"
-    :aria-label="t('language.label')"
+  <div
     class="language-select"
-  />
+    role="radiogroup"
+    :aria-label="t('language.label')"
+  >
+    <NRadioGroup v-model:value="value" size="small">
+      <NRadioButton value="en">
+        {{ t("language.names.en") }}
+      </NRadioButton>
+      <NRadioButton value="vi">
+        {{ t("language.names.vi") }}
+      </NRadioButton>
+    </NRadioGroup>
+  </div>
 </template>
 
 <style scoped>
 .language-select {
-  width: 132px;
+  display: inline-flex;
 }
 </style>

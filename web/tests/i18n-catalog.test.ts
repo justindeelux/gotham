@@ -9,6 +9,7 @@ import {
 } from "@/shared/i18n/catalog";
 import {
   i18n,
+  initI18n,
   loadFeatureCatalogs,
   registerDiscoveredCatalogs,
 } from "@/shared/i18n";
@@ -176,5 +177,18 @@ describe("registerDiscoveredCatalogs", () => {
     } finally {
       i18n.global.locale.value = "en";
     }
+  });
+
+  it("stays idempotent across repeated register/init with a fixture present", () => {
+    registerDiscoveredCatalogs();
+    expect(() => registerDiscoveredCatalogs()).not.toThrow();
+    expect(() => {
+      initI18n();
+      initI18n();
+    }).not.toThrow();
+    expect(i18n.global.te("__i18n_probe__.hello")).toBe(true);
+    expect(String(i18n.global.t("__i18n_probe__.hello", { name: "An" }))).toBe(
+      "Hello An",
+    );
   });
 });

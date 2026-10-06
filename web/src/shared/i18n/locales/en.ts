@@ -23,7 +23,8 @@ const en = {
       admin: "admin",
       readOnly: "read-only",
       member: "Team member",
-    },    status: {
+    },
+    status: {
       unknown: "unknown",
       never: "never",
     },

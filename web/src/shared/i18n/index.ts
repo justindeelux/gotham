@@ -78,6 +78,15 @@ const enMessages = { ...en };
 const viMessages: typeof enMessages = { ...vi };
 
 /**
+ * reservedRoots snapshots the shared top-level roots from the pristine
+ * common catalogs at module scope. mergeLocaleMessage mutates the composer
+ * message objects in place, so recomputing from enMessages/viMessages would
+ * mistake previously registered feature namespaces for reserved roots and
+ * throw on any second registration (dev HMR, re-init, tests).
+ */
+const reservedRoots = [...Object.keys(en), ...Object.keys(vi)];
+
+/**
  * discoverFeatureCatalogs returns the Vite-discovered feature locale files.
  * It runs inside initI18n (never at module top level) so Node harnesses that
  * bundle this module with plain esbuild — which has no import.meta.glob —
@@ -109,11 +118,10 @@ function discoverFeatureCatalogs(): {
  */
 export function registerDiscoveredCatalogs(): void {
   const discovered = discoverFeatureCatalogs();
-  const reserved = [...Object.keys(enMessages), ...Object.keys(viMessages)];
   const enTree: Record<string, unknown> = {};
   const viTree: Record<string, unknown> = {};
-  loadFeatureCatalogs(enTree, discovered.en, reserved);
-  loadFeatureCatalogs(viTree, discovered.vi, reserved);
+  loadFeatureCatalogs(enTree, discovered.en, reservedRoots);
+  loadFeatureCatalogs(viTree, discovered.vi, reservedRoots);
   i18n.global.mergeLocaleMessage("en", enTree);
   i18n.global.mergeLocaleMessage("vi", viTree);
 }

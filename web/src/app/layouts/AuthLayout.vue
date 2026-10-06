@@ -73,7 +73,7 @@ const valueProps = computed<ValueProp[]>(() => [
         </div>
 
         <ul class="stack gap-4 auth-values" data-od-id="auth-values">
-          <li v-for="prop in valueProps" :key="prop.title" class="auth-value">
+          <li v-for="prop in valueProps" :key="prop.icon" class="auth-value">
             <GothamIcon :name="prop.icon" />
             <div>
               <p class="fg-2">{{ prop.title }}</p>

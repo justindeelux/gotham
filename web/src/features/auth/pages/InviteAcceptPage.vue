@@ -24,7 +24,16 @@ const router = useRouter();
 const token = ref<string>(String(route.query.token ?? ""));
 const accepting = ref(false);
 const rawError = ref<string | null>(null);
-const error = computed<string | null>(() => rawError.value);
+/**
+ * error renders the team-owned raw diagnostic under the shared localized
+ * status summary (I18N-8 localizes the team details; until then the raw
+ * text is retained as the useful plain diagnostic, never translated).
+ */
+const error = computed<string | null>(() =>
+  rawError.value === null
+    ? null
+    : `${t("common.errors.requestFailed")}: ${rawError.value}`,
+);
 const joined = ref("");
 
 async function handleAccept(): Promise<void> {

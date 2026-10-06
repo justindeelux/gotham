@@ -21,20 +21,30 @@ vi.mock("@/features/profile/api/sessions", () => ({
   revokeOtherSessions: vi.fn(),
 }));
 
-import { changePassword } from "@/features/profile/api/profile";
+vi.mock("@/features/teams", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/features/teams")>();
+  return { ...actual, acceptInvite: vi.fn() };
+});
+
+import { changePassword, patchDisplayName } from "@/features/profile/api/profile";
 import {
   listSessions,
   revokeOtherSessions,
 } from "@/features/profile/api/sessions";
 import ChangePasswordForm from "@/features/profile/components/ChangePasswordForm.vue";
+import DisplayNameForm from "@/features/profile/components/DisplayNameForm.vue";
 import SessionsPanel from "@/features/profile/components/SessionsPanel.vue";
+import SessionRow from "@/features/profile/components/SessionRow.vue";
 import LoginPage from "@/features/auth/pages/LoginPage.vue";
+import InviteAcceptPage from "@/features/auth/pages/InviteAcceptPage.vue";
 import AuthLayout from "@/app/layouts/AuthLayout.vue";
 import AppTopbar from "@/app/layouts/AppTopbar.vue";
 import { provideMobileNav } from "@/app/layouts/useMobileNav";
 import MeCard from "@/app/layouts/MeCard.vue";
 import LanguageSelect from "@/shared/ui/LanguageSelect.vue";
 import { applyRouteTitle, router } from "@/app/router/index";
+import { acceptInvite } from "@/features/teams";
 import { useAuthStore } from "@/features/auth";
 import { useTeamsStore } from "@/features/teams";
 import {
@@ -47,6 +57,7 @@ import {
 import type { User } from "@/shared/api/token";
 
 const mockChange = vi.mocked(changePassword);
+const mockPatch = vi.mocked(patchDisplayName);
 const mockList = vi.mocked(listSessions);
 const mockRevokeOthers = vi.mocked(revokeOtherSessions);
 
@@ -155,7 +166,7 @@ describe("login live switch", () => {
     wrapper.unmount();
   });
 
-  it("refreshes visible field errors without showing pristine errors", async () => {
+  it("refreshes pre-submit blur errors without showing pristine errors", async () => {
     seedAuth();
     const auth = useAuthStore();
     auth.accessToken = null;
@@ -168,27 +179,27 @@ describe("login live switch", () => {
     await flushPromises();
     expect(wrapper.find(".n-form-item-blank--error").exists()).toBe(false);
 
-    // Submit empty: English feedback appears, then refreshes in Vietnamese
-    // while the typed draft survives.
+    // Blur with a bad value: English feedback appears before any submit.
     setLocale("en", null);
     await nextTick();
     await setInput(wrapper, "#login-email", "not-an-email");
-    const submit = wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Sign in");
-    expect(submit, "expected a submit button").toBeDefined();
-    await submit!.trigger("click");
+    await wrapper.find("#login-email").trigger("blur");
     await flushPromises();
     await nextTick();
     expect(wrapper.find(".n-form-item-feedback").text()).toContain(
       "Enter a valid email address",
     );
+    // Only the blurred field shows feedback; the untouched password does not.
+    expect(wrapper.findAll(".n-form-item-blank--error")).toHaveLength(1);
+
+    // Switching refreshes exactly the visible error; draft and route kept.
     setLocale("vi", null);
     await nextTick();
     await flushPromises();
     expect(wrapper.find(".n-form-item-feedback").text()).toContain(
       "Nhập địa chỉ email hợp lệ",
     );
+    expect(wrapper.findAll(".n-form-item-blank--error")).toHaveLength(1);
     expect(
       (wrapper.find("#login-email").element as HTMLInputElement).value,
     ).toBe("not-an-email");
@@ -277,6 +288,55 @@ describe("shell selector and account menu", () => {
 });
 
 describe("profile banners react to the locale", () => {
+  it("refreshes a pre-submit display-name error and stays pristine after success", async () => {
+    seedAuth();
+    const wrapper = mount(shell(DisplayNameForm), {
+      attachTo: globalThis.document.body,
+      global: { plugins: [i18n], stubs: { transition: false } },
+    });
+    await nextTick();
+    await flushPromises();
+
+    // Blur with a 65-character name: feedback before any submit.
+    await setInput(wrapper, "#profile-display-name", "x".repeat(65));
+    await wrapper.find("#profile-display-name").trigger("blur");
+    await flushPromises();
+    await nextTick();
+    expect(wrapper.find(".n-form-item-feedback").text()).toContain(
+      "Display name must be 1-64 characters",
+    );
+    setLocale("vi", null);
+    await nextTick();
+    await flushPromises();
+    expect(wrapper.find(".n-form-item-feedback").text()).toContain(
+      "Tên hiển thị phải từ 1-64 ký tự",
+    );
+
+    // Fix the value and submit successfully: the banner clears and a later
+    // switch shows no pristine errors on the untouched form.
+    setLocale("en", null);
+    await nextTick();
+    await setInput(wrapper, "#profile-display-name", "Ada L");
+    mockPatch.mockResolvedValue({
+      id: "u-1",
+      email: "ada@gotham.dev",
+      created_at: "2026-03-04T12:00:00Z",
+      display_name: "Ada L",
+    });
+    const submit = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Save display name");
+    await submit!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(mockPatch).toHaveBeenCalledWith("Ada L");
+    setLocale("vi", null);
+    await nextTick();
+    await flushPromises();
+    expect(wrapper.find(".n-form-item-blank--error").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("refreshes a 429 change-password banner without altering policy", async () => {
     seedAuth();
     mockChange.mockRejectedValue({ status: 429, message: "" });
@@ -305,6 +365,60 @@ describe("profile banners react to the locale", () => {
       (wrapper.find("#profile-new-password").element as HTMLInputElement)
         .value,
     ).toBe("new-secret-1234");
+    wrapper.unmount();
+  });
+
+  it("keeps a cleared change-password form pristine on locale switch", async () => {
+    seedAuth();
+    mockChange.mockResolvedValue({
+      user: {
+        id: "u-1",
+        email: "ada@gotham.dev",
+        created_at: "2026-03-04T12:00:00Z",
+        display_name: "Ada",
+        has_password: true,
+        is_platform_admin: false,
+      },
+      access_token: "new-access",
+      token_type: "Bearer",
+      expires_in: 900,
+      refresh_token: "new-refresh",
+    });
+    const wrapper = mount(shell(ChangePasswordForm), {
+      attachTo: globalThis.document.body,
+      global: { plugins: [i18n], stubs: { transition: false } },
+    });
+    await nextTick();
+    await flushPromises();
+    await setInput(wrapper, "#profile-current-password", "old-secret-123");
+    await setInput(wrapper, "#profile-new-password", "new-secret-1234");
+    await setInput(wrapper, "#profile-confirm-password", "new-secret-1234");
+    const submit = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Change password");
+    await submit!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(mockChange).toHaveBeenCalledTimes(1);
+    // Success clears the fields with no errors showing.
+    for (const id of [
+      "#profile-current-password",
+      "#profile-new-password",
+      "#profile-confirm-password",
+    ]) {
+      expect(
+        (wrapper.find(id).element as HTMLInputElement).value,
+        `expected ${id} to clear on success`,
+      ).toBe("");
+    }
+    expect(wrapper.find(".n-form-item-blank--error").exists()).toBe(false);
+    // A later locale switch must not surface required errors on the
+    // cleared pristine fields, and issues no second API call.
+    setLocale("vi", null);
+    await nextTick();
+    await flushPromises();
+    expect(wrapper.find(".n-form-item-blank--error").exists()).toBe(false);
+    expect(mockChange).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });
 
@@ -358,5 +472,132 @@ describe("profile banners react to the locale", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("Đăng nhập lại");
     wrapper.unmount();
+  });
+});
+
+describe("unknown diagnostics carry a localized summary", () => {
+  it("shows a reactive summary plus raw detail on login failure", async () => {
+    seedAuth();
+    const auth = useAuthStore();
+    auth.accessToken = null;
+    auth.user = null;
+    const login = vi.spyOn(auth, "login").mockRejectedValue({
+      status: 401,
+      message: "invalid email or password",
+    });
+    const { wrapper } = await mountWith(LoginPage);
+    await setInput(wrapper, "#login-email", "ada@gotham.dev");
+    await setInput(wrapper, "#login-password", "wrong");
+    const submit = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Sign in");
+    await submit!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(wrapper.find(".n-alert").text()).toContain(
+      "Request failed: invalid email or password",
+    );
+    setLocale("vi", null);
+    await nextTick();
+    await flushPromises();
+    // Localized summary in Vietnamese, raw diagnostic retained verbatim,
+    // no second API call from the switch itself.
+    expect(wrapper.find(".n-alert").text()).toContain(
+      "Yêu cầu thất bại: invalid email or password",
+    );
+    expect(login).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("pairs the common summary with the raw team diagnostic on invite failure", async () => {
+    seedAuth();
+    vi.mocked(acceptInvite).mockRejectedValue({
+      status: 410,
+      message: "teams: invite consumed",
+    });
+    const InviteAcceptPageView = InviteAcceptPage;
+    const test = testRouter();
+    test.addRoute({
+      path: "/invite/accept",
+      name: "invite-accept",
+      component: { template: "<div />" },
+    });
+    await test.push({ path: "/invite/accept", query: { token: "abc" } });
+    await test.isReady();
+    const wrapper = mount(shell(InviteAcceptPageView), {
+      attachTo: globalThis.document.body,
+      global: { plugins: [test, i18n], stubs: { transition: false } },
+    });
+    await flushPromises();
+    await nextTick();
+    await nextTick();
+    expect(wrapper.find(".n-alert").text()).toContain(
+      "Request failed: invite consumed",
+    );
+    setLocale("vi", null);
+    await nextTick();
+    await flushPromises();
+    expect(wrapper.find(".n-alert").text()).toContain(
+      "Yêu cầu thất bại: invite consumed",
+    );
+    wrapper.unmount();
+  });
+});
+
+describe("session row invalid timestamps", () => {
+  it("renders the unknown-time key instead of the unknown-IP key", async () => {
+    seedAuth();
+    const wrapper = mount(SessionRow, {
+      props: {
+        session: {
+          id: "s-bad",
+          user_agent: "Mozilla/5.0 Chrome/126.0",
+          ip: "",
+          created_at: "not-a-date",
+          last_used_at: "also-bad",
+          current: false,
+        },
+        busy: false,
+      },
+      attachTo: globalThis.document.body,
+      global: { plugins: [i18n], stubs: { transition: false } },
+    });
+    await nextTick();
+    const time = wrapper.find("time");
+    expect(time.attributes("title")).toBe("unknown");
+    setLocale("vi", null);
+    await nextTick();
+    expect(wrapper.find("time").attributes("title")).toBe("không rõ");
+    // The IP fallback still uses its own key.
+    expect(wrapper.text()).toContain("không rõ");
+    wrapper.unmount();
+  });
+});
+
+describe("phone topbar keeps essential controls", () => {
+  it("yields search and stubs under 640px without hiding language or account", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { dirname, resolve } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const root = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+    );
+    const topbar = readFileSync(
+      resolve(root, "src/app/layouts/AppTopbar.vue"),
+      "utf8",
+    );
+    const phone = topbar.match(/@media\s*\(max-width:\s*640px\)\s*\{([\s\S]*?)\n\}/);
+    expect(phone, "expected a 640px topbar rule").not.toBeNull();
+    const rule = phone![1];
+    // Non-essential stubs yield room...
+    expect(rule).toMatch(/\.topbar\s+\.search[\s\S]*display:\s*none/);
+    expect(rule).toMatch(/\.is-stub[\s\S]*display:\s*none/);
+    // ...while the language selector and account controls are never hidden.
+    expect(topbar).not.toMatch(
+      /language-select[\s\S]{0,120}?display:\s*none/,
+    );
+    expect(rule).not.toContain("language-select");
   });
 });

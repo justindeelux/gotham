@@ -71,12 +71,12 @@ async function handleAccountSelect(key: string | number): Promise<void> {
         <GothamIcon name="grid" />
       </template>
     </NButton>
-    <span class="status-line" :title="`Serving environment: ${envLabel}`">
+    <span class="status-line" :title="t('shell.envTitle', { env: envLabel })">
       <GothamIcon name="shield" class="status-icon" />
       {{ envLabel }}
     </span>
-    <span class="channel-chip" :title="`Control-plane HTTP port`">CP :{{ cpPort }}</span>
-    <span class="channel-chip" :title="`Agent gRPC port`">gRPC :{{ grpcPort }}</span>
+    <span class="channel-chip" :title="t('shell.cpPortTitle')">CP :{{ cpPort }}</span>
+    <span class="channel-chip" :title="t('shell.grpcPortTitle')">gRPC :{{ grpcPort }}</span>
     <NTooltip trigger="hover">
       <template #trigger>
         <div class="search" role="search" :aria-label="t('shell.searchLabel')">
@@ -97,7 +97,7 @@ async function handleAccountSelect(key: string | number): Promise<void> {
             </template>
           </NButton>
         </template>
-        {{ t("shell.notifications") }}
+        {{ t("shell.notificationsSoon") }}
       </NTooltip>
       <NTooltip trigger="hover">
         <template #trigger>
@@ -251,6 +251,21 @@ async function handleAccountSelect(key: string | number): Promise<void> {
   .topbar .search :deep(.n-input) {
     width: 0;
     padding: 0;
+  }
+}
+
+/* Phone: the language selector plus the account control are essential and
+   always stay visible; the disabled search stub and the coming-soon stub
+   buttons yield instead (the search input is already collapsed above). */
+@media (max-width: 640px) {
+  .topbar .search,
+  .topbar .is-stub {
+    display: none;
+  }
+
+  .topbar {
+    gap: var(--space-2);
+    padding: 0 var(--space-3);
   }
 }
 </style>

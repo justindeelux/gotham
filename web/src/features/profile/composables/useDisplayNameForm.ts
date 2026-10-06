@@ -3,7 +3,7 @@ import { useMessage } from "naive-ui";
 import { computed, onUnmounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { describeAuthError, useAuthStore } from "@/features/auth";
+import { createVisibleValidation, describeAuthError, useAuthStore } from "@/features/auth";
 import { patchDisplayName } from "@/features/profile/api/profile";
 import { displayNameRules } from "@/features/profile/schemas/profile";
 import { onLocaleChange } from "@/shared/i18n";
@@ -40,16 +40,16 @@ export function useDisplayNameForm() {
   const rules: FormRules = displayNameRules();
 
   /**
-   * submitAttempted marks that validation feedback has been shown at least
-   * once. A language switch then revalidates so visible errors refresh,
-   * without ever showing errors on a pristine form, clearing the draft,
-   * submitting, or navigating.
+   * visible tracks paths with currently-shown feedback (input/blur/submit).
+   * A language switch revalidates exactly those paths: already-visible
+   * errors refresh, pristine fields stay clean, and nothing submits or
+   * calls an API. The record clears on success so a cleared form stays
+   * pristine across later switches.
    */
-  let submitAttempted = false;
+  const visible = createVisibleValidation();
+  const trackedRules: FormRules = visible.trackRules(rules);
   const stopLocaleWatch = onLocaleChange(() => {
-    if (submitAttempted) {
-      void formRef.value?.validate().catch(() => {});
-    }
+    visible.refreshVisible(formRef);
   });
 
   onUnmounted(() => {
@@ -69,16 +69,15 @@ export function useDisplayNameForm() {
     try {
       await formRef.value?.validate();
     } catch {
-      submitAttempted = true;
       submitting.value = false;
       return;
     }
-    submitAttempted = true;
 
     try {
       const trimmed = form.displayName.trim();
       const user = await patchDisplayName(trimmed === "" ? null : trimmed);
       authStore.setUser(user);
+      visible.reset();
       message.success(t("profile.displayName.updated"));
     } catch (error) {
       rawError.value = error;
@@ -87,5 +86,5 @@ export function useDisplayNameForm() {
     }
   }
 
-  return { formRef, submitting, errorMessage, form, rules, handleSubmit };
+  return { formRef, submitting, errorMessage, form, rules: trackedRules, handleSubmit };
 }

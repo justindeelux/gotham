@@ -53,6 +53,7 @@ const en = {
     created: "Created",
     lastActive: "Last active",
     unknownIp: "unknown",
+    unknownTime: "unknown",
     unknownDevice: "Unknown device",
     deviceOn: "on",
     signOut: "Sign out",

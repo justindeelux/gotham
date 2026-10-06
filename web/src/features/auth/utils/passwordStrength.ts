@@ -18,14 +18,6 @@ const strengthTables: Record<StrengthLocale, AuthMessages["strength"]> = {
   vi: viCatalog.strength,
 };
 
-export const passwordStrengthLabels = [
-  "Not entered",
-  "Very weak",
-  "Weak",
-  "Fair",
-  "Strong",
-];
-
 /** countCharClasses counts the character classes present (lower, upper, digit, symbol). */
 export function countCharClasses(value: string): number {
   let classes = 0;

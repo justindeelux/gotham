@@ -17,6 +17,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { describeAuthError, useAuthStore } from "@/features/auth/stores/auth";
 import { loginRules } from "@/features/auth/schemas/auth";
 import { authSwitchTarget, safeRedirect } from "@/features/auth/utils/authRedirect";
+import { createVisibleValidation } from "@/features/auth/utils/visibleValidation";
 import { onLocaleChange } from "@/shared/i18n";
 import AuthFootnote from "@/features/auth/components/AuthFootnote.vue";
 import GitHubOAuthButton from "@/features/auth/components/GitHubOAuthButton.vue";
@@ -47,16 +48,14 @@ const form = reactive<LoginForm>({ email: "", password: "" });
 const rules: FormRules = loginRules();
 
 /**
- * submitAttempted marks that validation feedback has been shown at least
- * once. A language switch then revalidates so visible errors refresh,
- * without ever showing errors on a pristine form, clearing the draft,
- * submitting, or navigating.
+ * visible tracks paths with currently-shown feedback (input/blur/submit).
+ * A language switch revalidates exactly those paths: already-visible errors
+ * refresh, pristine fields stay clean, and nothing submits or calls an API.
  */
-let submitAttempted = false;
+const visible = createVisibleValidation();
+const trackedRules: FormRules = visible.trackRules(rules);
 const stopLocaleWatch = onLocaleChange(() => {
-  if (submitAttempted) {
-    void formRef.value?.validate().catch(() => {});
-  }
+  visible.refreshVisible(formRef);
 });
 
 onUnmounted(() => {
@@ -74,10 +73,8 @@ async function handleSubmit(): Promise<void> {
   try {
     await formRef.value?.validate();
   } catch {
-    submitAttempted = true;
     return;
   }
-  submitAttempted = true;
 
   submitting.value = true;
   try {
@@ -130,7 +127,7 @@ onMounted(() => {
           {{ errorMessage }}
         </NAlert>
 
-        <NForm ref="formRef" :model="form" :rules="rules" @submit.prevent="handleSubmit">
+        <NForm ref="formRef" :model="form" :rules="trackedRules" @submit.prevent="handleSubmit">
           <NFormItem :label="t('auth.login.emailLabel')" path="email" :label-props="{ for: 'login-email' }">
             <NInput
               v-model:value="form.email"

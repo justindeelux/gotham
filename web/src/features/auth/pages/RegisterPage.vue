@@ -22,6 +22,7 @@ import { registerRules } from "@/features/auth/schemas/auth";
 import { describeAuthError, useAuthStore } from "@/features/auth/stores/auth";
 import { authSwitchTarget, safeRedirect } from "@/features/auth/utils/authRedirect";
 import { strengthOf } from "@/features/auth/utils/passwordStrength";
+import { createVisibleValidation } from "@/features/auth/utils/visibleValidation";
 import { onLocaleChange } from "@/shared/i18n";
 
 // Error convention (shared with LoginPage): client-side validation errors
@@ -95,16 +96,14 @@ const strength = computed<number>(() => strengthOf(form.password));
 const rules: FormRules = registerRules(() => form.password);
 
 /**
- * submitAttempted marks that validation feedback has been shown at least
- * once. A language switch then revalidates so visible errors refresh,
- * without ever showing errors on a pristine form, clearing the draft,
- * submitting, or navigating.
+ * visible tracks paths with currently-shown feedback (input/blur/submit).
+ * A language switch revalidates exactly those paths: already-visible errors
+ * refresh, pristine fields stay clean, and nothing submits or calls an API.
  */
-let submitAttempted = false;
+const visible = createVisibleValidation();
+const trackedRules: FormRules = visible.trackRules(rules);
 const stopLocaleWatch = onLocaleChange(() => {
-  if (submitAttempted) {
-    void formRef.value?.validate().catch(() => {});
-  }
+  visible.refreshVisible(formRef);
 });
 
 onUnmounted(() => {
@@ -122,10 +121,8 @@ async function handleSubmit(): Promise<void> {
   try {
     await formRef.value?.validate();
   } catch {
-    submitAttempted = true;
     return;
   }
-  submitAttempted = true;
 
   submitting.value = true;
   try {
@@ -178,7 +175,7 @@ async function handleSubmit(): Promise<void> {
           {{ errorMessage }}
         </NAlert>
 
-        <NForm ref="formRef" :model="form" :rules="rules" @submit.prevent="handleSubmit">
+        <NForm ref="formRef" :model="form" :rules="trackedRules" @submit.prevent="handleSubmit">
           <NFormItem :label="t('auth.register.emailLabel')" path="email" :label-props="{ for: 'register-email' }">
             <NInput
               v-model:value="form.email"

@@ -52,7 +52,7 @@ const activeAbsolute = computed<string>(() =>
 function formatDateTime(iso: string): string {
   const time = new Date(iso);
   if (Number.isNaN(time.getTime())) {
-    return t("profile.sessions.unknownIp");
+    return t("profile.sessions.unknownTime");
   }
   return time.toLocaleString(localeTag(), {
     day: "numeric",

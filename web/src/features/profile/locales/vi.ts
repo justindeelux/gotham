@@ -54,6 +54,7 @@ const vi: ProfileMessages = {
     created: "Đã tạo",
     lastActive: "Hoạt động gần nhất",
     unknownIp: "không rõ",
+    unknownTime: "không rõ",
     unknownDevice: "Thiết bị không xác định",
     deviceOn: "trên",
     signOut: "Đăng xuất",

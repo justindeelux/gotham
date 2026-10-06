@@ -72,8 +72,12 @@ const en = {
     searchPlaceholder: "Search apps, servers, databases…",
     searchSoon: "Search is coming soon",
     notifications: "Notifications (coming soon)",
+    notificationsSoon: "Notifications — no UI yet",
     docs: "Docs (coming soon)",
     docsSoon: "Docs — coming soon",
+    envTitle: "Serving environment: {env}",
+    cpPortTitle: "Control-plane HTTP port",
+    grpcPortTitle: "Agent gRPC port",
     account: "Account",
     signIn: "Sign in",
     profile: "Profile",
@@ -100,7 +104,8 @@ const en = {
     notifications: "Notification channels",
     profile: "Profile",
     inviteAccept: "Team invite",
-  },  time: {
+  },
+  time: {
     justNow: "just now",
     inMoment: "in a moment",
     never: "never",

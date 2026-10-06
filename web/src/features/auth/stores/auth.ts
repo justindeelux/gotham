@@ -287,12 +287,13 @@ export function isUnauthorized(error: unknown): boolean {
 }
 
 /**
- * describeAuthError maps a thrown API error to a user-facing message. Known
- * rate-limit refusals and the generic fallback resolve from the shared
- * common catalog for the active locale at call time (so a computed banner
- * refreshes on language switch); any other message keeps the raw
- * server text with only the backend prefix stripped, never translated, so
- * classification and diagnostics stay language-independent.
+ * describeAuthError maps a thrown API error to a user-facing message in the
+ * active locale at call time (so a computed banner refreshes on language
+ * switch). Known rate-limit refusals and the empty fallback resolve to
+ * curated summaries; any other failure gets a localized summary with the
+ * useful raw diagnostic retained as plain text (never translated, never
+ * used for classification), so status checks and `stripErrorPrefix`
+ * semantics stay language-independent.
  */
 export function describeAuthError(error: unknown): string {
   const status = getStatus(error);
@@ -305,13 +306,13 @@ export function describeAuthError(error: unknown): string {
       ? (error as Partial<ApiError>).message
       : undefined;
   if (typeof message === "string" && message.trim() !== "") {
-    return stripErrorPrefix(message);
+    return `${commonErrors().requestFailed}: ${stripErrorPrefix(message)}`;
   }
   return commonErrors().unexpected;
 }
 
 /** commonErrors reads the shared error summaries for the active locale. */
-function commonErrors(): { rateLimited: string; unexpected: string } {
+function commonErrors(): { rateLimited: string; unexpected: string; requestFailed: string } {
   return (activeLocale.value === "vi" ? viCatalog : enCatalog).common.errors;
 }
 

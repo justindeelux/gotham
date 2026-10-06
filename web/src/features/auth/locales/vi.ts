@@ -81,8 +81,8 @@ const vi: AuthMessages = {
   footnote: {
     hashPrefix: "Mật khẩu được băm bằng",
     tokenMid:
-      "· JWT truy cập 15 phút với refresh token xoay vòng 30 ngày · GitHub OAuth qua",
-    interfaceSuffix: "giao diện.",
+      "· JWT truy cập 15 phút với refresh token xoay vòng 30 ngày · GitHub OAuth qua giao diện",
+    interfaceSuffix: ".",
   },
   strength: {
     level0: "Chưa nhập",

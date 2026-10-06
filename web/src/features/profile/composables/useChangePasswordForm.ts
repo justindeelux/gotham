@@ -3,7 +3,7 @@ import { useMessage } from "naive-ui";
 import { computed, onUnmounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { describeAuthError, strengthOf, useAuthStore } from "@/features/auth";
+import { createVisibleValidation, describeAuthError, strengthOf, useAuthStore } from "@/features/auth";
 import { changePassword } from "@/features/profile/api/profile";
 import { changePasswordRules } from "@/features/profile/schemas/profile";
 import { onLocaleChange } from "@/shared/i18n";
@@ -55,21 +55,21 @@ export function useChangePasswordForm() {
   // The confirm rule reads the live new password through a reader (not a
   // snapshot), so retyping the password revalidates the confirmation. Built
   // reactively from hasPassword so a late fetchMe flips the current field.
+  // Validators are wrapped to track visible feedback (see below), so a
+  // language switch refreshes exactly the paths already showing errors.
+  const visible = createVisibleValidation();
   const rules = computed<FormRules>(() =>
-    changePasswordRules(hasPassword.value, () => form.newPassword),
+    visible.trackRules(changePasswordRules(hasPassword.value, () => form.newPassword)),
   );
 
   /**
-   * submitAttempted marks that validation feedback has been shown at least
-   * once. A language switch then revalidates so visible errors refresh,
-   * without ever showing errors on a pristine form, clearing the draft,
-   * submitting, or navigating.
+   * A language switch revalidates exactly the paths with visible feedback
+   * (input/blur/submit): already-visible errors refresh, pristine fields
+   * stay clean, and nothing submits or calls an API. The record clears on
+   * success so the cleared form stays pristine across later switches.
    */
-  let submitAttempted = false;
   const stopLocaleWatch = onLocaleChange(() => {
-    if (submitAttempted) {
-      void formRef.value?.validate().catch(() => {});
-    }
+    visible.refreshVisible(formRef);
   });
 
   onUnmounted(() => {
@@ -89,11 +89,9 @@ export function useChangePasswordForm() {
     try {
       await formRef.value?.validate();
     } catch {
-      submitAttempted = true;
       submitting.value = false;
       return;
     }
-    submitAttempted = true;
 
     try {
       const result = await changePassword({
@@ -104,6 +102,7 @@ export function useChangePasswordForm() {
       form.currentPassword = "";
       form.newPassword = "";
       form.confirmPassword = "";
+      visible.reset();
       message.success(t("profile.password.changed"));
     } catch (error) {
       rawError.value = error;

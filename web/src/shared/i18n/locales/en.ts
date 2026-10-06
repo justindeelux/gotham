@@ -33,6 +33,13 @@ const en = {
       unexpected: "Something went wrong. Please try again.",
       rateLimited: "Too many attempts, please wait",
     },
+    clipboard: {
+      copied: "{label} copied to clipboard",
+      copyFailed: "Could not copy {label}",
+    },
+    chart: {
+      seriesOf: "Time series chart of {names}",
+    },
   },
   validation: {
     invalid: "Invalid value",

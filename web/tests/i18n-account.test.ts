@@ -601,3 +601,31 @@ describe("phone topbar keeps essential controls", () => {
     expect(rule).not.toContain("language-select");
   });
 });
+
+describe("shared chart aria sentence", () => {
+  it("localizes the sentence while keeping raw series names", async () => {
+    const MetricsChart = (
+      await import("@/shared/ui/MetricsChart.vue")
+    ).default;
+    const wrapper = mount(MetricsChart, {
+      props: {
+        series: [
+          { name: "cpu", color: "#fff", points: [{ at: 1, value: 2 }] },
+        ],
+        stepMs: 60_000,
+      },
+      attachTo: globalThis.document.body,
+      global: { plugins: [i18n], stubs: { transition: false } },
+    });
+    await nextTick();
+    expect(wrapper.find("svg").attributes("aria-label")).toBe(
+      "Time series chart of cpu",
+    );
+    setLocale("vi", null);
+    await nextTick();
+    expect(wrapper.find("svg").attributes("aria-label")).toBe(
+      "Biểu đồ chuỗi thời gian của cpu",
+    );
+    wrapper.unmount();
+  });
+});

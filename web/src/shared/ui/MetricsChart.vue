@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import {
   areaPath,
@@ -11,6 +12,8 @@ import {
 import type { ChartPoint, ChartSeries } from "./chartModel";
 
 export type { ChartPoint, ChartSeries };
+
+const { t } = useI18n();
 
 /**
  * Dependency-free SVG time-series chart.
@@ -127,10 +130,11 @@ function latest(series: ChartSeries): string {
   return point ? props.formatValue(point.value) : "—";
 }
 
-/** ariaLabel summarises the chart for screen readers. */
+/** ariaLabel summarises the chart for screen readers. Series names stay
+ * raw technical values; only the sentence renders in the active locale. */
 const ariaLabel = computed<string>(() => {
   const names = props.series.map((item) => item.name).join(", ");
-  return `Time series chart of ${names}`;
+  return t("common.chart.seriesOf", { names });
 });
 </script>
 

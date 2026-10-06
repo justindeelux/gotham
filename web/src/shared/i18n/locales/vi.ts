@@ -34,6 +34,13 @@ const vi: CommonMessages = {
       unexpected: "Đã xảy ra lỗi. Vui lòng thử lại.",
       rateLimited: "Quá nhiều lần thử, vui lòng chờ",
     },
+    clipboard: {
+      copied: "Đã sao chép {label}",
+      copyFailed: "Không thể sao chép {label}",
+    },
+    chart: {
+      seriesOf: "Biểu đồ chuỗi thời gian của {names}",
+    },
   },
   validation: {
     invalid: "Giá trị không hợp lệ",

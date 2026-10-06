@@ -11,6 +11,7 @@ export default defineConfig({
     "form-layout.spec.ts",
     "i18n-account-layout.spec.ts",
     "i18n-settings-layout.spec.ts",
+    "i18n-settings-live.spec.ts",
     "profile-layout.spec.ts",
     "projects-layout.spec.ts",
     "services-templates-layout.spec.ts",

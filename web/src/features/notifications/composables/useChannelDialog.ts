@@ -199,12 +199,15 @@ function createChannelDialogState() {
     }
   });
 
-  const teamOptions = computed<Array<{ label: string; value: string }>>(() =>
-    teamsStore.teams.map((team) => ({
-      label: `${team.name}${team.is_personal ? " (personal)" : ""}`,
+  const teamOptions = computed<Array<{ label: string; value: string }>>(() => {
+    // The personal marker reuses the teams catalog so it refreshes on a
+    // language switch; the team name itself is user data and stays raw.
+    const personal = channelText("teams.page.personal", "personal");
+    return teamsStore.teams.map((team) => ({
+      label: team.is_personal ? `${team.name} (${personal})` : team.name,
       value: team.id,
-    })),
-  );
+    }));
+  });
 
   const activeRole = computed<TeamRole | null>(() => teamsStore.activeTeam?.role ?? null);
   /** Without a teams surface the backend still enforces the role. */

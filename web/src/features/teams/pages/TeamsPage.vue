@@ -84,7 +84,7 @@ const {
 
       <TeamsListCard />
 
-      <NCard v-if="selectedTeam" :title="selectedTeam.name">
+      <NCard v-if="selectedTeam" :title="selectedTeam.name" class="team-card">
         <template #header-extra>
           <NSpace align="center" :size="8">
             <NButton
@@ -161,9 +161,27 @@ const {
   flex-wrap: wrap;
 }
 
+/**
+ * Selected-team header: the title plus Refresh/role tags share one Naive
+ * card header row. At narrow widths the title takes a full row and the
+ * extra block drops below it, so the full team name stays readable in both
+ * languages (adaptation: the shipped card evolved past the team-settings
+ * mockup tabs, which have no card header). A 100% title basis forces the
+ * break — a 100% extra basis would sum to exactly one line and starve the
+ * title instead. No font-size change; wrapping only.
+ */
+.team-card :deep(.n-card-header) {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
 @media (max-width: 860px) {
   .page-actions {
     margin-left: 0;
+  }
+
+  .team-card :deep(.n-card-header__main) {
+    flex: 1 1 100%;
   }
 }
 </style>

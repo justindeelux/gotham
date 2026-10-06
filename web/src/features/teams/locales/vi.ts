@@ -101,7 +101,7 @@ const vi = {
     createdTeam: "Đã tạo nhóm {name}",
     renamed: "Đã đổi tên nhóm",
     deletedTeam: "Đã xóa nhóm {name}",
-    roleChanged: "{email} giờ là {role}",
+    roleChanged: "{email} hiện là {role}",
     removedMember: "Đã gỡ {email}",
     revokedInvite: "Đã thu hồi lời mời tới {email}",
     linkCopied: "Đã sao chép liên kết mời",

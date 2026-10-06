@@ -30,6 +30,7 @@ const vi = {
   },
   card: {
     enabledLabel: "Đang bật",
+    enableAria: "Bật {name}",
     enabled: "đang bật",
     disabled: "đang tắt",
     secretConfigured: "đã đặt bí mật",

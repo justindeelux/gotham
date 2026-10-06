@@ -280,23 +280,49 @@ export function describeChannelError(error: unknown): string {
         )
       );
     }
-    return (
-      stripErrorPrefix(error.message) ||
-      channelText("notifications.errors.requestFailed", "Request failed")
-    );
+    return withChannelStatusDiagnostic(stripErrorPrefix(error.message));
   }
   if (error instanceof Error) {
-    return (
-      stripErrorPrefix(error.message) ||
-      channelText(
-        "notifications.errors.unexpected",
-        "Something went wrong. Please try again.",
-      )
-    );
+    return withChannelDiagnostic(stripErrorPrefix(error.message));
   }
   return channelText(
     "notifications.errors.unexpected",
     "Something went wrong. Please try again.",
   );
+}
+
+/**
+ * withChannelStatusDiagnostic pairs an unknown API failure's raw diagnostic
+ * with the localized request summary (`<summary>: <raw>`). An empty or
+ * already-generic diagnostic renders the summary alone.
+ */
+function withChannelStatusDiagnostic(raw: string): string {
+  const summary = channelText(
+    "notifications.errors.requestFailed",
+    "Request failed",
+  );
+  if (raw === "" || raw === summary) {
+    return summary;
+  }
+  const lead = summary.endsWith(".") ? summary.slice(0, -1) : summary;
+  return `${lead}: ${raw}`;
+}
+
+/**
+ * withChannelDiagnostic pairs an unknown failure's raw diagnostic with a
+ * localized summary (`<summary>: <raw>`). An empty or already-generic
+ * diagnostic renders the summary alone. Known refusal branches above keep
+ * their raw actionable text untouched.
+ */
+function withChannelDiagnostic(raw: string): string {
+  const summary = channelText(
+    "notifications.errors.unexpected",
+    "Something went wrong. Please try again.",
+  );
+  if (raw === "" || raw === summary) {
+    return summary;
+  }
+  const lead = summary.endsWith(".") ? summary.slice(0, -1) : summary;
+  return `${lead}: ${raw}`;
 }
 

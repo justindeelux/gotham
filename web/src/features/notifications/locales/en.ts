@@ -31,6 +31,7 @@ const en = {
   },
   card: {
     enabledLabel: "Enabled",
+    enableAria: "Enable {name}",
     enabled: "enabled",
     disabled: "disabled",
     secretConfigured: "secret configured",

@@ -472,19 +472,46 @@ export function describeProxyError(error: unknown): string {
         )
       );
     }
-    return (
-      stripErrorPrefix(error.message) ||
-      proxyText("domains.errors.requestFailed", "Request failed")
-    );
+    return withProxyStatusDiagnostic(stripErrorPrefix(error.message));
   }
   if (error instanceof Error) {
-    return (
-      stripErrorPrefix(error.message) ||
-      proxyText("domains.errors.unexpected", "Something went wrong. Please try again.")
-    );
+    return withProxyDiagnostic(stripErrorPrefix(error.message));
   }
   return proxyText(
     "domains.errors.unexpected",
     "Something went wrong. Please try again.",
   );
+}
+
+/**
+ * withProxyStatusDiagnostic pairs an unknown API failure's raw diagnostic
+ * with the localized request summary (`<summary>: <raw>`). An empty or
+ * already-generic diagnostic renders the summary alone.
+ */
+function withProxyStatusDiagnostic(raw: string): string {
+  const summary = proxyText("domains.errors.requestFailed", "Request failed");
+  if (raw === "" || raw === summary) {
+    return summary;
+  }
+  const lead = summary.endsWith(".") ? summary.slice(0, -1) : summary;
+  return `${lead}: ${raw}`;
+}
+
+/**
+ * withProxyDiagnostic pairs an unknown failure's raw diagnostic with a
+ * localized summary (`<summary>: <raw>`), derived reactively from the raw
+ * error plus the current locale. An empty or already-generic diagnostic
+ * renders the summary alone, never `Request failed: Request failed`.
+ * Known refusal branches above keep their raw actionable text untouched.
+ */
+function withProxyDiagnostic(raw: string): string {
+  const summary = proxyText(
+    "domains.errors.unexpected",
+    "Something went wrong. Please try again.",
+  );
+  if (raw === "" || raw === summary) {
+    return summary;
+  }
+  const lead = summary.endsWith(".") ? summary.slice(0, -1) : summary;
+  return `${lead}: ${raw}`;
 }

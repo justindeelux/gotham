@@ -28,6 +28,7 @@ import { useEnvironmentPage } from "@/features/projects/composables/useEnvironme
 import type { EnvironmentResourceTab } from "@/features/projects/composables/useEnvironmentPage";
 import { useSharedVariables } from "@/features/projects/composables/useSharedVariables";
 import type { InheritedVariable } from "@/features/projects/schemas/variables";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 /**
  * Environment page (`/projects/:projectId/environments/:environmentId`,
@@ -67,19 +68,30 @@ const projectInherited = computed<InheritedVariable[]>(() =>
   })),
 );
 
+/**
+ * t renders page copy in the active locale (tracks language switches).
+ * Called during render, so tabs, tables and dialogs refresh without
+ * losing the search query, the selected tab or the preview switch.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
+/** tabs lists the resource type tabs with localized labels. */
+const tabs = computed<Array<{ key: EnvironmentResourceTab; label: string }>>(() => [
+  { key: "all", label: t("projects.environment.tabs.all") },
+  { key: "applications", label: t("projects.environment.tabs.applications") },
+  { key: "services", label: t("projects.environment.tabs.services") },
+  { key: "databases", label: t("projects.environment.tabs.databases") },
+]);
+
 /** scrollToVariables jumps to the Shared variables section. */
 function scrollToVariables(): void {
   document
     .querySelector(".variables-section")
     ?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
-
-const tabs: Array<{ key: EnvironmentResourceTab; label: string }> = [
-  { key: "all", label: "All" },
-  { key: "applications", label: "Applications" },
-  { key: "services", label: "Services" },
-  { key: "databases", label: "Databases" },
-];
 
 /** tabCount renders the per-tab total next to its label. */
 function tabCount(tab: EnvironmentResourceTab): number {
@@ -89,12 +101,12 @@ function tabCount(tab: EnvironmentResourceTab): number {
 /** kindLabel renders the resource kind as display text. */
 function kindLabel(kind: string): string {
   if (kind === "application") {
-    return "Application";
+    return t("projects.environment.kinds.application");
   }
   if (kind === "service") {
-    return "Service";
+    return t("projects.environment.kinds.service");
   }
-  return "Database";
+  return t("projects.environment.kinds.database");
 }
 
 /** siblingOptions lists the project's environments for the switcher. */
@@ -121,20 +133,21 @@ function switchEnvironment(environmentId: string): void {
  * following the tablist pattern: the tab activates on focus.
  */
 function handleTabKey(event: KeyboardEvent, index: number): void {
+  const entries = tabs.value;
   let next: number;
   if (event.key === "ArrowRight") {
-    next = (index + 1) % tabs.length;
+    next = (index + 1) % entries.length;
   } else if (event.key === "ArrowLeft") {
-    next = (index + tabs.length - 1) % tabs.length;
+    next = (index + entries.length - 1) % entries.length;
   } else if (event.key === "Home") {
     next = 0;
   } else if (event.key === "End") {
-    next = tabs.length - 1;
+    next = entries.length - 1;
   } else {
     return;
   }
   event.preventDefault();
-  page.tab.value = tabs[next].key;
+  page.tab.value = entries[next].key;
   const button = event.currentTarget as HTMLElement | null;
   const list = button?.parentElement?.querySelectorAll<HTMLElement>(".tab");
   list?.[next]?.focus();
@@ -143,8 +156,8 @@ function handleTabKey(event: KeyboardEvent, index: number): void {
 /** emptyHint names what can be added when the table (or filter) is empty. */
 const emptyHint = computed<string>(() =>
   page.rows.value.length === 0
-    ? "Nothing here yet. Deploy an application, run a service from a template, or create a database."
-    : "No resources match this filter.",
+    ? t("projects.environment.emptyFresh")
+    : t("projects.environment.emptyFiltered"),
 );
 
 /** openCreate opens one create wizard from the Add resource dialog. */
@@ -204,16 +217,16 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
 
 <template>
   <div class="environment-page">
-    <NSpin v-if="page.loading.value && !page.resources.value" description="Loading environment…" />
+    <NSpin v-if="page.loading.value && !page.resources.value" :description="t('projects.environment.loading')" />
 
     <NSpace v-else-if="page.error.value" vertical :size="8">
       <NEmpty
         v-if="page.notFound.value"
-        description="This environment does not exist (or belongs to another team)."
+        :description="t('projects.environment.notFound')"
       >
         <template #extra>
           <RouterLink :to="{ name: 'projects' }">
-            <NButton size="small">Back to projects</NButton>
+            <NButton size="small">{{ t("projects.environment.backToProjects") }}</NButton>
           </RouterLink>
         </template>
       </NEmpty>
@@ -221,7 +234,7 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
         <NAlert type="error" :show-icon="true">
           {{ page.error.value }}
         </NAlert>
-        <div><NButton size="small" @click="void page.reload()">Retry</NButton></div>
+        <div><NButton size="small" @click="void page.reload()">{{ t("common.actions.retry") }}</NButton></div>
       </template>
     </NSpace>
 
@@ -237,16 +250,14 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
             {{ page.resources.value.environment.name }}
           </h1>
           <p class="page-desc">
-            Everything that runs for {{ page.resources.value.project.name }} in
-            {{ page.resources.value.environment.name }}. Each resource is
-            pinned to one server.
+            {{ t("projects.environment.description", { project: page.resources.value.project.name, environment: page.resources.value.environment.name }) }}
           </p>
           <div v-if="siblingOptions.length > 1" class="sibling-switch">
-            <NText depth="3">Environment</NText>
+            <NText depth="3">{{ t("projects.environment.environmentSwitcher") }}</NText>
             <NSelect
               :value="page.environmentId.value"
               :options="siblingOptions"
-              aria-label="Sibling environment"
+              :aria-label="t('projects.environment.siblingAria')"
               class="sibling-select"
               @update:value="switchEnvironment"
             />
@@ -254,19 +265,19 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
         </div>
         <div class="page-actions">
           <NButton @click="scrollToVariables()">
-            Variables
+            {{ t("projects.environment.variablesButton") }}
           </NButton>
           <NButton
             v-if="page.canWrite.value"
             type="primary"
             @click="page.addOpen.value = true"
           >
-            Add resource
+            {{ t("projects.environment.addResource") }}
           </NButton>
         </div>
       </div>
 
-      <div class="tabs" role="tablist" aria-label="Resource types">
+      <div class="tabs" role="tablist" :aria-label="t('projects.environment.tabs.label')">
         <button
           v-for="(entry, index) in tabs"
           :key="entry.key"
@@ -288,14 +299,14 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
       <div class="toolbar">
         <NInput
           v-model:value="page.search.value"
-          placeholder="Search name, detail or node"
-          aria-label="Search resources"
+          :placeholder="t('projects.environment.searchPlaceholder')"
+          :aria-label="t('projects.environment.searchLabel')"
           clearable
           class="search"
         />
         <label class="preview-switch">
-          <NSwitch v-model:value="page.showPreviews.value" aria-label="Show previews" />
-          <NText depth="3">Show previews</NText>
+          <NSwitch v-model:value="page.showPreviews.value" :aria-label="t('projects.environment.showPreviews')" />
+          <NText depth="3">{{ t("projects.environment.showPreviews") }}</NText>
         </label>
       </div>
 
@@ -310,11 +321,11 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
           <table class="resource-table">
             <thead>
               <tr>
-                <th scope="col">Name</th>
-                <th scope="col">Type</th>
-                <th scope="col">Server</th>
-                <th scope="col">Status</th>
-                <th scope="col"><span class="sr-only">Actions</span></th>
+                <th scope="col">{{ t("projects.environment.table.name") }}</th>
+                <th scope="col">{{ t("projects.environment.table.type") }}</th>
+                <th scope="col">{{ t("projects.environment.table.server") }}</th>
+                <th scope="col">{{ t("projects.environment.table.status") }}</th>
+                <th scope="col"><span class="sr-only">{{ t("projects.environment.table.actions") }}</span></th>
               </tr>
             </thead>
             <tbody>
@@ -323,23 +334,23 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
                 :key="`${row.kind}:${row.id}`"
                 :class="{ 'preview-row': row.preview }"
               >
-                <td data-label="Name">
+                <td :data-label="t('projects.environment.table.name')">
                   <span class="resource-name">{{ row.name }}</span>
                   <span class="cell-sub mono">{{ row.subtitle }}</span>
                 </td>
-                <td data-label="Type">
+                <td :data-label="t('projects.environment.table.type')">
                   <NSpace :size="4" align="center">
                     <NTag size="small">{{ kindLabel(row.kind) }}</NTag>
-                    <NTag v-if="row.preview" size="small" type="info">Preview</NTag>
+                    <NTag v-if="row.preview" size="small" type="info">{{ t("projects.environment.preview") }}</NTag>
                   </NSpace>
                 </td>
-                <td data-label="Server" class="mono muted">{{ row.serverName }}</td>
-                <td data-label="Status">
+                <td :data-label="t('projects.environment.table.server')" class="mono muted">{{ row.serverName }}</td>
+                <td :data-label="t('projects.environment.table.status')">
                   <NTag size="small" :type="row.statusTag">{{ row.statusText }}</NTag>
                 </td>
-                <td data-label="Actions" class="actions">
+                <td :data-label="t('projects.environment.table.actions')" class="actions">
                   <RouterLink :to="row.to">
-                    <NButton size="small">Open</NButton>
+                    <NButton size="small">{{ t("projects.detail.open") }}</NButton>
                   </RouterLink>
                 </td>
               </tr>
@@ -351,17 +362,16 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
       <NEmpty v-else :description="emptyHint">
         <template v-if="page.canWrite.value && page.rows.value.length === 0" #extra>
           <NButton type="primary" @click="page.addOpen.value = true">
-            Add resource
+            {{ t("projects.environment.addResource") }}
           </NButton>
         </template>
       </NEmpty>
 
       <p class="small muted">
-        Preview deployments of an application run in this environment on the
-        same server; flip the switch to list them nested under their base.
+        {{ t("projects.environment.previewNote") }}
       </p>
 
-      <section class="variables-section" aria-label="Shared variables">
+      <section class="variables-section" :aria-label="t('projects.variables.title')">
         <SharedVariablesEditor
           :draft="environmentVariables.draft.value"
           :loading="environmentVariables.loading.value"
@@ -374,8 +384,8 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
           :problems="environmentVariables.problems.value"
           :inherited="projectInherited"
           :inherited-loading="projectVariables.loading.value"
-          card-title="Shared variables"
-          precedence-hint="Environment variables override project ones; application variables override both. The project rows above are read-only context."
+          :card-title="t('projects.variables.title')"
+          :precedence-hint="t('projects.variables.environmentPrecedence')"
           @update:draft="environmentVariables.draft.value = $event"
           @save="void environmentVariables.save()"
           @retry="void environmentVariables.retry()"
@@ -387,32 +397,29 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
     <NModal
       v-model:show="page.addOpen.value"
       preset="card"
-      title="Add resource"
+      :title="t('projects.environment.addResource')"
       style="width: 640px; max-width: 94vw"
     >
       <NSpace vertical :size="12">
         <NText depth="3">
-          Creating in
-          <span class="mono">
-            {{ page.resources.value?.project.name }} /
-            {{ page.resources.value?.environment.name }} </span>.
+          {{ t("projects.environment.creatingIn", { project: page.resources.value?.project.name ?? "", environment: page.resources.value?.environment.name ?? "" }) }}
         </NText>
         <div class="kind-grid">
           <button type="button" class="kind-card" @click="openCreate('application')">
-            <span class="kind-title">Application</span>
-            <span class="small muted">From a Git repository</span>
+            <span class="kind-title">{{ t("projects.environment.kindCards.applicationTitle") }}</span>
+            <span class="small muted">{{ t("projects.environment.kindCards.applicationHint") }}</span>
           </button>
           <button type="button" class="kind-card" @click="openCreate('service')">
-            <span class="kind-title">Service</span>
-            <span class="small muted">Compose or template</span>
+            <span class="kind-title">{{ t("projects.environment.kindCards.serviceTitle") }}</span>
+            <span class="small muted">{{ t("projects.environment.kindCards.serviceHint") }}</span>
           </button>
           <button type="button" class="kind-card" @click="openCreate('database')">
-            <span class="kind-title">Database</span>
-            <span class="small muted">PostgreSQL, MySQL, Redis…</span>
+            <span class="kind-title">{{ t("projects.environment.kindCards.databaseTitle") }}</span>
+            <span class="small muted">{{ t("projects.environment.kindCards.databaseHint") }}</span>
           </button>
         </div>
         <NText depth="3">
-          Prefer a one-click template?
+          {{ t("projects.environment.templateHintPrefix") }}
           <RouterLink
             :to="{
               name: 'templates',
@@ -421,8 +428,8 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
                 environmentId: page.environmentId.value,
               },
             }"
-          >Open the template library</RouterLink>
-          — its wizard takes the same project and environment.
+          >{{ t("projects.environment.templateHintLink") }}</RouterLink>
+          {{ t("projects.environment.templateHintSuffix") }}
         </NText>
       </NSpace>
     </NModal>

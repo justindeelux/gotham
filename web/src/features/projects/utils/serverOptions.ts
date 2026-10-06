@@ -1,4 +1,5 @@
 import type { Server, ServerStatus } from "@/features/servers";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 /**
  * Pure option builders behind the required server picker (PE-5, Linear
@@ -9,6 +10,10 @@ import type { Server, ServerStatus } from "@/features/servers";
  * The contract only refuses offline nodes ("offline disabled with a
  * reason"); every other state stays selectable, matching the pre-PE-5
  * wizards and what the backend accepts on create.
+ *
+ * Display strings resolve in the active locale at invocation time
+ * (English output unchanged); server names, ids and wire statuses are
+ * never translated, only the curated reason labels around them.
  */
 
 /** isUsableServer reports whether a node may host a new or moved resource. */
@@ -18,17 +23,21 @@ export function isUsableServer(server: Server): boolean {
 
 /** unusableReason names why a node cannot host resources, for the picker hint. */
 export function unusableReason(status: ServerStatus): string {
+  // Tracks the locale when called during render or inside a computed.
+  void activeLocale.value;
   switch (status) {
     case "offline":
-      return "offline";
+      return String(i18n.global.t("projects.server.reason.offline"));
     case "error":
-      return "in error";
+      return String(i18n.global.t("projects.server.reason.error"));
     case "pending":
-      return "still pending";
+      return String(i18n.global.t("projects.server.reason.pending"));
     case "validating":
-      return "still validating";
+      return String(i18n.global.t("projects.server.reason.validating"));
     default:
-      return `status ${status}`;
+      return String(
+        i18n.global.t("projects.server.reason.other", { status }),
+      );
   }
 }
 
@@ -54,15 +63,29 @@ export function buildServerOptions(
  * usable.
  */
 export function unusableServerHint(servers: Server[]): string {
+  void activeLocale.value;
   const blocked = servers.filter((server) => !isUsableServer(server));
   if (blocked.length === 0) {
     return "";
   }
   const shown = blocked
     .slice(0, 3)
-    .map((server) => `${server.name} is ${unusableReason(server.status)}`);
+    .map((server) =>
+      String(
+        i18n.global.t("projects.server.unusableEntry", {
+          name: server.name,
+          reason: unusableReason(server.status),
+        }),
+      ),
+    );
   if (blocked.length > shown.length) {
-    shown.push(`and ${blocked.length - shown.length} more`);
+    shown.push(
+      String(
+        i18n.global.t("projects.server.andMore", {
+          count: blocked.length - shown.length,
+        }),
+      ),
+    );
   }
   return shown.join("; ");
 }

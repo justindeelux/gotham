@@ -11,6 +11,16 @@ import { defineComponent, h, nextTick } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import type { VueWrapper } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach } from "vitest";
+
+import projectsEn from "@/features/projects/locales/en";
+import projectsVi from "@/features/projects/locales/vi";
+import {
+  i18n,
+  resetLocaleState,
+  setLocale,
+  syncComposerLocale,
+} from "@/shared/i18n";
 
 vi.mock("@/features/projects/api/projects", async (importOriginal) => {
   const actual =
@@ -49,6 +59,19 @@ import { useTeamsStore } from "@/features/teams";
 
 const counts = { applications: 3, services: 1, databases: 2 };
 const emptyCounts = { applications: 0, services: 0, databases: 0 };
+
+// Mounted pages resolve copy through the projects catalog: merge it and run
+// English by default so the pinned copy below keeps proving behavior.
+beforeEach(() => {
+  i18n.global.mergeLocaleMessage("en", { projects: projectsEn });
+  i18n.global.mergeLocaleMessage("vi", { projects: projectsVi });
+  resetLocaleState();
+  syncComposerLocale("en");
+});
+
+afterEach(() => {
+  setLocale("en", null);
+});
 
 function projectRow(overrides: Partial<Project> = {}): Project {
   return {
@@ -299,10 +322,12 @@ describe("projects list page states", () => {
     await clickButton(wrapper, "New project");
     await wrapper.find(".n-modal .n-form-item input").setValue("storefront");
     await clickButton(wrapper, "Create project");
-    // The 409 renders on the name field and the dialog stays open.
+    // The 409 renders on the name field and the dialog stays open. The raw
+    // refusal stays in the conflict state; the field shows the curated
+    // message in the active locale.
     const feedback = wrapper.find(".n-modal .n-form-item-feedback__line");
     expect(feedback.exists()).toBe(true);
-    expect(feedback.text()).toContain("project name already exists");
+    expect(feedback.text()).toContain("This name is already taken.");
     expect(wrapper.text()).toContain("New project");
     // Editing the field clears the inline conflict.
     await wrapper.find(".n-modal .n-form-item input").setValue("storefront-2");

@@ -1,7 +1,6 @@
 import { useMessage } from "naive-ui";
 import { computed, onMounted, ref, toValue, watch } from "vue";
 import type { ComputedRef, Ref } from "vue";
-
 import {
   getEnvironmentVariables,
   getProjectVariables,
@@ -23,6 +22,7 @@ import type {
 } from "@/features/projects/schemas/variables";
 import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useTeamsStore } from "@/features/teams";
+import { i18n } from "@/shared/i18n";
 import { createRequestGeneration } from "@/shared/utils/requestGeneration";
 
 /** SharedVariablesScope names the scope one editor instance manages. */
@@ -50,9 +50,11 @@ export function scopeKey(scope: SharedVariablesScope): string {
 export interface SharedVariablesState {
   draft: Ref<VariableDraft[]>;
   loading: Ref<boolean>;
-  loadError: Ref<string | null>;
+  /** loadError derives display text from the retained raw read failure. */
+  loadError: ComputedRef<string | null>;
   saving: Ref<boolean>;
-  saveError: Ref<string | null>;
+  /** saveError derives display text from the retained raw write failure. */
+  saveError: ComputedRef<string | null>;
   /** loadedFor names the scope whose variables are actually held. */
   loadedFor: Ref<string>;
   /** saveDisabled gates Save: loading, saving, stale scope, or problems. */
@@ -81,9 +83,15 @@ export function useSharedVariables(
 
   const draft = ref<VariableDraft[]>([]);
   const loading = ref(false);
-  const loadError = ref<string | null>(null);
+  const loadFailure: Ref<unknown> = ref(null);
+  const loadError = computed<string | null>(() =>
+    loadFailure.value === null ? null : describeProjectError(loadFailure.value),
+  );
   const saving = ref(false);
-  const saveError = ref<string | null>(null);
+  const saveFailure: Ref<unknown> = ref(null);
+  const saveError = computed<string | null>(() =>
+    saveFailure.value === null ? null : describeProjectError(saveFailure.value),
+  );
   const loadedFor = ref("");
   const storedSecrets = ref<Set<string>>(new Set());
 
@@ -133,7 +141,7 @@ export function useSharedVariables(
     }
     const token = readGeneration.current();
     loading.value = true;
-    loadError.value = null;
+    loadFailure.value = null;
     try {
       const variables = await readScope(scope);
       if (!readGeneration.isCurrent(token)) {
@@ -149,7 +157,7 @@ export function useSharedVariables(
       // Never present a failed read as an empty collection: keep the error
       // state and clear loadedFor so Save stays disabled until a successful
       // read. Unknown server state is never overwritten.
-      loadError.value = describeProjectError(error);
+      loadFailure.value = error;
       loadedFor.value = "";
     } finally {
       if (readGeneration.isCurrent(token)) {
@@ -172,7 +180,7 @@ export function useSharedVariables(
     const teamId = teamsStore.activeTeamId;
     const payload = buildVariablesPayload(draft.value, storedSecrets.value);
     saving.value = true;
-    saveError.value = null;
+    saveFailure.value = null;
     try {
       const saved =
         scope.kind === "project"
@@ -183,14 +191,15 @@ export function useSharedVariables(
       }
       draft.value = toVariableDrafts(saved);
       storedSecrets.value = existingSecretKeysOf(saved);
-      message.success("Shared variables saved. They apply to the next deploy.");
+      message.success(String(i18n.global.t("projects.toast.variablesSaved")));
     } catch (error) {
       if (scopeKey(currentScope()) === key) {
-        saveError.value = describeProjectError(error);
+        saveFailure.value = error;
         // A `secret "X" has no value` 400 means the stored ciphertext is gone
         // (concurrent delete): stop offering the keep path for that key, so
         // the draft asks for a value instead of retrying the 400 forever.
-        const dropped = secretWithoutValueKey(saveError.value);
+        // The classifier runs on the raw refusal, never on display text.
+        const dropped = secretWithoutValueKey(describeProjectError(error));
         if (dropped !== null) {
           const next = new Set(storedSecrets.value);
           next.delete(dropped);
@@ -237,7 +246,7 @@ export function useSharedVariables(
         draft.value = [];
         storedSecrets.value = new Set();
         loadedFor.value = "";
-        saveError.value = null;
+        saveFailure.value = null;
         void load();
       }
     },
@@ -253,7 +262,7 @@ export function useSharedVariables(
       draft.value = [];
       storedSecrets.value = new Set();
       loadedFor.value = "";
-      saveError.value = null;
+      saveFailure.value = null;
       void load();
     },
   );

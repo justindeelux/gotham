@@ -4,6 +4,7 @@ import { computed, ref, watch } from "vue";
 
 import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
 import ServerPicker from "@/features/projects/components/ServerPicker.vue";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 const props = defineProps<{
   projectId: string;
@@ -47,6 +48,15 @@ watch(
   },
 );
 
+/** t renders move-card copy in the active locale (tracks switches). */
+function t(key: string): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key));
+}
+
+/** locatedVerb renders the settings wording ("Located in") translated. */
+const locatedVerb = computed<string>(() => t("projects.scope.locatedIn"));
+
 /** scopeComplete gates Save: the move needs a full target scope and a node. */
 const scopeComplete = computed<boolean>(
   () =>
@@ -82,10 +92,10 @@ function handleSave(): void {
 </script>
 
 <template>
-  <NCard title="Server and environment" size="small">
+  <NCard :title="t('projects.move.title')" size="small">
     <div class="move-card">
       <ResourceScopeSummary
-        verb="Located in"
+        :verb="locatedVerb"
         :project-id="selectedProjectId"
         :environment-id="selectedEnvironmentId"
         @update:project-id="(value) => (selectedProjectId = value)"
@@ -103,8 +113,7 @@ function handleSave(): void {
         {{ props.error }}
       </NAlert>
       <p class="hint">
-        Moving to an environment that already holds this name is refused, as
-        is changing the node while a deploy runs.
+        {{ t("projects.move.hint") }}
       </p>
       <div class="actions">
         <NButton
@@ -114,7 +123,7 @@ function handleSave(): void {
           :disabled="saveDisabled"
           @click="handleSave"
         >
-          Save location
+          {{ t("projects.move.save") }}
         </NButton>
       </div>
     </div>

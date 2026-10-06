@@ -1,4 +1,5 @@
 import { http, teamHeaders } from "@/shared/api/http";
+import { activeLocale, i18n } from "@/shared/i18n";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
 import type { Service } from "@/features/services/api/services";
 import {
@@ -289,13 +290,35 @@ export function projectResourceTotal(project: Project): number {
 
 /**
  * resourceSummary renders counts as display text ("5 applications · 1
- * service · 2 databases"), matching the mockup's card line.
+ * service · 2 databases"), matching the mockup's card line. Kind labels
+ * resolve in the active locale at invocation time so template callers
+ * refresh on a language switch; English output is unchanged.
  */
 export function resourceSummary(counts: ResourceCounts): string {
+  // Tracks the locale when called during render or inside a computed.
+  void activeLocale.value;
+  const unit = (
+    one: string,
+    other: string,
+    count: number,
+  ): string =>
+    String(i18n.global.t(count === 1 ? one : other, { count }));
   const parts = [
-    `${counts.applications} application${counts.applications === 1 ? "" : "s"}`,
-    `${counts.services} service${counts.services === 1 ? "" : "s"}`,
-    `${counts.databases} database${counts.databases === 1 ? "" : "s"}`,
+    unit(
+      "projects.counts.applicationsOne",
+      "projects.counts.applicationsOther",
+      counts.applications,
+    ),
+    unit(
+      "projects.counts.servicesOne",
+      "projects.counts.servicesOther",
+      counts.services,
+    ),
+    unit(
+      "projects.counts.databasesOne",
+      "projects.counts.databasesOther",
+      counts.databases,
+    ),
   ];
   return parts.join(" · ");
 }
@@ -318,39 +341,51 @@ export function isNameTakenError(error: unknown): boolean {
  * backend answers 400 for validation, 403 for an insufficient role, 404 for
  * an id from another team (or a removed row) and 409 for the duplicate-name
  * and non-empty delete protections, and its message is the actionable part.
+ *
+ * Classification still runs on the raw error (status plus the stripped
+ * server message, exactly as before); only the curated fallback summaries
+ * resolve in the active locale. Actionable server text passes through
+ * untouched so secrets stay redacted and diagnostics stay intact.
  */
 export function describeProjectError(error: unknown): string {
+  // Tracks the locale when called during render or inside a computed, so
+  // retained failures refresh on a language switch.
+  void activeLocale.value;
+  const text = (
+    key: string,
+    params?: Record<string, string | number>,
+  ): string => String(i18n.global.t(key, params ?? {}));
   if (isApiError(error)) {
     if (error.status === 401) {
-      return "Your session expired. Please sign in again.";
+      return text("projects.errors.sessionExpired");
     }
     if (error.status === 403) {
       return (
         stripErrorPrefix(error.message) ||
-        "Your team role does not allow this action."
+        text("projects.errors.forbiddenFallback")
       );
     }
     if (error.status === 404) {
       return (
         stripErrorPrefix(error.message) ||
-        "Not found. It may have been removed already."
+        text("projects.errors.notFoundFallback")
       );
     }
     if (error.status === 409) {
       return (
         stripErrorPrefix(error.message) ||
-        "The project changed while you were editing it. Reload and retry."
+        text("projects.errors.conflictFallback")
       );
     }
     if (error.status === 400) {
-      return stripErrorPrefix(error.message) || "Invalid request.";
+      return stripErrorPrefix(error.message) || text("projects.errors.badRequestFallback");
     }
-    return stripErrorPrefix(error.message) || "Request failed";
+    return stripErrorPrefix(error.message) || text("common.errors.requestFailed");
   }
   if (error instanceof Error) {
     return (
-      stripErrorPrefix(error.message) || "Something went wrong. Please try again."
+      stripErrorPrefix(error.message) || text("common.errors.unexpected")
     );
   }
-  return "Something went wrong. Please try again.";
+  return text("common.errors.unexpected");
 }

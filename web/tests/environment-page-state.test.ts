@@ -3,6 +3,16 @@
 // picker options. Pure helpers are pinned row by row; the envelope test pins
 // the contract path and the previews flag.
 import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach } from "vitest";
+
+import projectsEn from "@/features/projects/locales/en";
+import projectsVi from "@/features/projects/locales/vi";
+import {
+  i18n,
+  resetLocaleState,
+  setLocale,
+  syncComposerLocale,
+} from "@/shared/i18n";
 
 vi.mock("@/shared/api/http", () => ({
   http: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -35,6 +45,19 @@ import {
 import type { Server } from "@/features/servers";
 
 const counts = { applications: 1, services: 1, databases: 1 };
+
+// Display helpers resolve through the projects catalog: merge it once and
+// run English by default so the pinned copy below keeps proving behavior.
+beforeEach(() => {
+  i18n.global.mergeLocaleMessage("en", { projects: projectsEn });
+  i18n.global.mergeLocaleMessage("vi", { projects: projectsVi });
+  resetLocaleState();
+  syncComposerLocale("en");
+});
+
+afterEach(() => {
+  setLocale("en", null);
+});
 
 function envelope(overrides = {}) {
   return {

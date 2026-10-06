@@ -7,8 +7,17 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach } from "vitest";
 
 import ResourceScopeSummary from "../src/features/projects/components/ResourceScopeSummary.vue";
+import projectsEn from "../src/features/projects/locales/en";
+import projectsVi from "../src/features/projects/locales/vi";
+import {
+  i18n,
+  resetLocaleState,
+  setLocale,
+  syncComposerLocale,
+} from "../src/shared/i18n";
 
 const { listProjectsMock, getProjectMock } = vi.hoisted(() => ({
   listProjectsMock: vi.fn(),
@@ -23,10 +32,18 @@ vi.mock("@/features/projects/api/projects", () => ({
 }));
 
 beforeEach(() => {
+  i18n.global.mergeLocaleMessage("en", { projects: projectsEn });
+  i18n.global.mergeLocaleMessage("vi", { projects: projectsVi });
+  resetLocaleState();
+  syncComposerLocale("en");
   setActivePinia(createPinia());
   vi.restoreAllMocks();
   listProjectsMock.mockResolvedValue([]);
   getProjectMock.mockResolvedValue({ project: null, environments: [] });
+});
+
+afterEach(() => {
+  setLocale("en", null);
 });
 
 function openChange() {

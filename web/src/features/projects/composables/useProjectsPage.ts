@@ -4,6 +4,7 @@ import type { ComputedRef, Ref } from "vue";
 import { useRouter } from "vue-router";
 
 import { describeProjectError } from "@/features/projects/api/projects";
+import { i18n } from "@/shared/i18n";
 import { useNameConflict } from "@/features/projects/composables/useNameConflict";
 import type { NameConflictState } from "@/features/projects/composables/useNameConflict";
 import {
@@ -27,7 +28,8 @@ export interface ProjectsPageState {
   createName: Ref<string>;
   createDescription: Ref<string>;
   createBusy: Ref<boolean>;
-  createError: Ref<string | null>;
+  /** createError derives display text from the retained raw failure. */
+  createError: ComputedRef<string | null>;
   createConflict: NameConflictState;
   canCreate: ComputedRef<boolean>;
   openCreate(): void;
@@ -50,7 +52,17 @@ export function useProjectsPage(): ProjectsPageState {
   const createName = ref("");
   const createDescription = ref("");
   const createBusy = ref(false);
-  const createError = ref<string | null>(null);
+  /**
+   * createFailure retains the raw create refusal; createError derives its
+   * display text reactively so an open dialog refreshes on a language
+   * switch without losing the typed draft.
+   */
+  const createFailure: Ref<unknown> = ref(null);
+  const createError = computed<string | null>(() =>
+    createFailure.value === null
+      ? null
+      : describeProjectError(createFailure.value),
+  );
   /** createConflict shows a 409 name-taken message on the name field. */
   const createConflict = useNameConflict();
 
@@ -61,7 +73,7 @@ export function useProjectsPage(): ProjectsPageState {
   function openCreate(): void {
     createName.value = "";
     createDescription.value = "";
-    createError.value = null;
+    createFailure.value = null;
     createConflict.clear();
     createOpen.value = true;
   }
@@ -80,20 +92,24 @@ export function useProjectsPage(): ProjectsPageState {
       return;
     }
     createBusy.value = true;
-    createError.value = null;
+    createFailure.value = null;
     try {
       const project = await projectsStore.create({
         name: createName.value,
         description: createDescription.value,
       });
-      message.success(`Created project ${project.name}`);
+      message.success(
+        String(
+          i18n.global.t("projects.toast.createdProject", { name: project.name }),
+        ),
+      );
       createOpen.value = false;
       await router.push({ name: "project-detail", params: { projectId: project.id } });
     } catch (error) {
       // A taken name renders inline on the field; the rest stays in the
       // dialog alert.
       if (!createConflict.take(error)) {
-        createError.value = describeProjectError(error);
+        createFailure.value = error;
       }
     } finally {
       createBusy.value = false;

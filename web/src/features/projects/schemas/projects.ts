@@ -72,18 +72,21 @@ export const environmentEnvelopeSchema = z.object({
 export const projectNameSchema: z.ZodString = z
   .string()
   .trim()
-  .min(1, "Name is required")
-  .max(64, "Name must be 64 characters or fewer");
+  .min(1, "projects.validation.nameRequired")
+  .max(64, "projects.validation.nameMaxLength");
 
 /** environmentNameSchema gates the environment name: 1-64 chars after trim. */
 export const environmentNameSchema: z.ZodString = z
   .string()
   .trim()
-  .min(1, "Name is required")
-  .max(64, "Name must be 64 characters or fewer");
+  .min(1, "projects.validation.nameRequired")
+  .max(64, "projects.validation.nameMaxLength");
 
-/** projectDescriptionSchema gates the optional description (no max yet). */
-export const projectDescriptionSchema: z.ZodString = z.string().trim().max(500);
+/** projectDescriptionSchema gates the optional description (max 500). */
+export const projectDescriptionSchema: z.ZodString = z
+  .string()
+  .trim()
+  .max(500, "projects.validation.descriptionMaxLength");
 
 /** isProjectNameValid is the single source for the project submit gating. */
 export function isProjectNameValid(value: unknown): boolean {

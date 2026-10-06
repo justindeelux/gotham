@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { activeLocale, i18n } from "@/shared/i18n";
 import { parseWith } from "@/shared/validation/parse";
 
 /**
@@ -33,20 +34,20 @@ const loneSurrogatePattern = /[\uD800-\uDFFF]/;
 /** sharedVariableKeySchema gates one key: 1-128 chars, shell identifier. */
 export const sharedVariableKeySchema = z
   .string()
-  .min(1, "Key is required")
-  .max(maxSharedVariableKeyLength, "Key must be 128 characters or fewer")
-  .regex(sharedVariableKeyPattern, "Key must match ^[A-Za-z_][A-Za-z0-9_]*$");
+  .min(1, "projects.validation.keyRequired")
+  .max(maxSharedVariableKeyLength, "projects.validation.keyMaxLength")
+  .regex(sharedVariableKeyPattern, "projects.validation.keyPattern");
 
 /** sharedVariableValueSchema gates one value: no NUL, valid UTF-8. */
 export const sharedVariableValueSchema = z
   .string()
   .refine(
     (value) => !value.includes("\0"),
-    "Value must not contain NUL",
+    "projects.validation.valueNul",
   )
   .refine(
     (value) => !loneSurrogatePattern.test(value),
-    "Value must be valid UTF-8",
+    "projects.validation.valueUtf8",
   );
 
 /** isSharedVariableKeyValid is the single source for the key submit gating. */
@@ -102,7 +103,16 @@ export interface InheritedVariable extends SharedVariable {
 
 /** inheritedOriginLabel renders the origin tag ("from project"). */
 export function inheritedOriginLabel(origin: SharedVariableOrigin): string {
-  return origin === "project" ? "from project" : "from environment";
+  // Reads the active locale so template callers refresh on a language
+  // switch; the wire origin value itself is never translated.
+  void activeLocale.value;
+  return String(
+    i18n.global.t(
+      origin === "project"
+        ? "projects.variables.originProject"
+        : "projects.variables.originEnvironment",
+    ),
+  );
 }
 
 /**
@@ -144,35 +154,50 @@ export function validateVariableDrafts(
   drafts: VariableDraft[],
   existingSecretKeys: ReadonlySet<string>,
 ): string[] {
+  // Every problem resolves through the active locale at invocation time so
+  // visible feedback refreshes on a language switch; English output stays
+  // byte-identical to the previous literals.
+  void activeLocale.value;
+  const text = (
+    key: string,
+    params?: Record<string, string | number>,
+  ): string => String(i18n.global.t(key, params ?? {}));
   const problems: string[] = [];
   if (drafts.length > maxSharedVariables) {
     problems.push(
-      `At most ${maxSharedVariables} variables per scope (currently ${drafts.length}).`,
+      text("projects.variables.problems.cap", {
+        max: maxSharedVariables,
+        count: drafts.length,
+      }),
     );
   }
   const duplicate = findDuplicateVariableKey(drafts);
   if (duplicate !== null) {
-    problems.push(`Duplicate key "${duplicate}".`);
+    problems.push(text("projects.variables.problems.duplicate", { key: duplicate }));
   }
   for (const row of drafts) {
     if (!isSharedVariableKeyValid(row.key)) {
       problems.push(
         row.key === ""
-          ? "Every row needs a key."
-          : `Key "${row.key}" must match ^[A-Za-z_][A-Za-z0-9_]*$ and be 128 characters or fewer.`,
+          ? text("projects.variables.problems.keyMissing")
+          : text("projects.variables.problems.keyInvalid", { key: row.key }),
       );
     }
     if (row.value !== "" && !isSharedVariableValueValid(row.value)) {
-      problems.push(`Value for "${row.key || "?"}" must not contain NUL.`);
+      problems.push(
+        text("projects.variables.problems.valueNul", { key: row.key || "?" }),
+      );
     }
     if (row.secret && row.value === "" && !existingSecretKeys.has(row.key)) {
-      problems.push(`Secret "${row.key || "?"}" needs a value.`);
+      problems.push(
+        text("projects.variables.problems.secretNeedsValue", { key: row.key || "?" }),
+      );
     }
     if (!row.secret && row.value === "" && existingSecretKeys.has(row.key)) {
       // Secret-to-plain with an empty value would silently clear the stored
       // ciphertext (the backend allows it): require an explicit value.
       problems.push(
-        `Saving "${row.key}" as plain with no value clears the stored secret.`,
+        text("projects.variables.problems.clearWarning", { key: row.key }),
       );
     }
   }

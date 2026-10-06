@@ -108,14 +108,24 @@ export function getLocaleStorage(): Storage | null {
 }
 
 /**
- * handleStorageEvent applies another tab's valid change: removal means
- * English, invalid values are ignored. Never writes back, so no loops.
+ * handleStorageEvent applies another tab's valid change: removal (including
+ * a full clear(), which arrives with key null) means English, invalid values
+ * are ignored. Events from a different storage area are ignored. Never
+ * writes back, so no loops.
  */
 export function handleStorageEvent(event: {
   key: string | null;
   newValue: string | null;
+  storageArea?: Storage | null;
 }): void {
-  if (event.key !== localeStorageKey) {
+  if (event.key !== localeStorageKey && event.key !== null) {
+    return;
+  }
+  if (
+    event.storageArea !== undefined &&
+    event.storageArea !== null &&
+    event.storageArea !== getLocaleStorage()
+  ) {
     return;
   }
   if (event.newValue === null) {
@@ -131,20 +141,30 @@ export function handleStorageEvent(event: {
   }
 }
 
+/** localeStorageListener is the named cross-tab handler (removable). */
+function localeStorageListener(event: StorageEvent): void {
+  handleStorageEvent({
+    key: event.key,
+    newValue: event.newValue,
+    storageArea: event.storageArea ?? undefined,
+  });
+}
+
 /** startLocaleSync registers the cross-tab listener exactly once. */
 export function startLocaleSync(): void {
   if (localeSyncStarted || typeof window === "undefined") {
     return;
   }
   localeSyncStarted = true;
-  window.addEventListener("storage", (event) => {
-    handleStorageEvent({ key: event.key, newValue: event.newValue });
-  });
+  window.addEventListener("storage", localeStorageListener);
 }
 
 /** resetLocaleState restores module state for unit tests only. */
 export function resetLocaleState(): void {
   activeLocale.value = fallbackLocale;
+  if (typeof window !== "undefined") {
+    window.removeEventListener("storage", localeStorageListener);
+  }
   localeSyncStarted = false;
   if (typeof document !== "undefined") {
     document.documentElement.lang = fallbackLocale;

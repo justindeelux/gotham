@@ -24,20 +24,22 @@ describe("relativeTime", () => {
     expect(relativeTime("2026-10-06T12:00:10Z")).toBe("in a moment");
   });
 
-  it("covers past and future in Vietnamese", () => {
+  it("covers past and future in Vietnamese via native Intl", () => {
     vi.setSystemTime(new Date("2026-10-06T12:00:00Z"));
     setLocale("vi", null);
-    expect(relativeTime("2026-10-06T11:55:00Z")).toBe("5m trước");
-    expect(relativeTime("2026-10-06T12:05:00Z")).toBe("sau 5m");
+    expect(relativeTime("2026-10-06T11:55:00Z")).toBe("5 phút trước");
+    expect(relativeTime("2026-10-06T12:05:00Z")).toBe("sau 5 phút nữa");
+    expect(relativeTime("2026-10-06T09:00:00Z")).toBe("3 giờ trước");
+    expect(relativeTime("2026-10-04T12:00:00Z")).toBe("2 ngày trước");
     expect(relativeTime("2026-10-06T11:59:50Z")).toBe("vừa xong");
-    expect(relativeTime("2026-10-06T12:00:10Z")).toBe("sắp tới");
+    expect(relativeTime("2026-10-06T12:00:10Z")).toBe("trong giây lát");
   });
 
   it("handles missing and invalid timestamps in both locales", () => {
     expect(relativeTime(null)).toBe("never");
     expect(relativeTime("not-a-date")).toBe("unknown");
     setLocale("vi", null);
-    expect(relativeTime(undefined)).toBe("không bao giờ");
+    expect(relativeTime(undefined)).toBe("Chưa bao giờ");
     expect(relativeTime("not-a-date")).toBe("không rõ");
   });
 });

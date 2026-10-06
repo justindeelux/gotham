@@ -14,5 +14,8 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["tests/**/*.test.ts"],
+    // Temporarily stages the feature-catalog discovery fixture under
+    // src/features/ (removed in teardown); see the setup file.
+    globalSetup: ["tests/i18n-discovery-global-setup.ts"],
   },
 });

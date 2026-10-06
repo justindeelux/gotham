@@ -1,7 +1,8 @@
 /**
  * Pure geometry for MetricsChart, the dependency-free SVG time-series chart.
- * No Vue, no DOM: every function is unit-tested through chart-model.test.ts.
- * Only tickLabel reads the UI locale (for its Intl tag); geometry stays pure.
+ * No Vue components, no DOM: every function is unit-tested through
+ * chart-model.test.ts. Only tickLabel reads the UI locale (for its Intl tag
+ * via shared/i18n/locale, which itself only needs Vue's ref).
  */
 import { localeTag } from "@/shared/i18n/locale";
 import type { Locale } from "@/shared/i18n/locale";

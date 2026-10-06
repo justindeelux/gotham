@@ -2,6 +2,7 @@ import type { FormItemRule } from "naive-ui";
 import { z } from "zod";
 
 import { resolveValidationMessage } from "@/shared/i18n";
+import type { ValidationMessageParams } from "@/shared/i18n";
 
 export interface RuleFromOptions {
   /**
@@ -21,6 +22,12 @@ export interface RuleFromOptions {
    * re-runs on mode change) so the mark follows the mode.
    */
   required?: boolean;
+  /**
+   * params interpolates a namespaced message key (e.g. `{min: 10}` for
+   * "mymodule.form.minLength"). Keys without placeholders ignore it;
+   * legacy strings ignore it too.
+   */
+  params?: ValidationMessageParams;
 }
 
 /**
@@ -54,7 +61,7 @@ export function ruleFrom<T>(
       if (result.success) {
         return true;
       }
-      return new Error(firstIssueMessage(result.error));
+      return new Error(firstIssueMessage(result.error, opts?.params));
     },
   };
 }
@@ -84,16 +91,22 @@ export function rulesFor<T extends Record<string, z.ZodType<unknown, z.ZodTypeDe
 export function fieldErrors<T>(
   schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   value: unknown,
+  params?: ValidationMessageParams,
 ): string[] {
   const result = schema.safeParse(value);
   if (result.success) {
     return [];
   }
-  return result.error.issues.map((issue) => resolveValidationMessage(issue.message));
+  return result.error.issues.map((issue) =>
+    resolveValidationMessage(issue.message, params),
+  );
 }
 
 /** firstIssueMessage keeps the single user-visible string deterministic. */
-export function firstIssueMessage(error: z.ZodError): string {
+export function firstIssueMessage(
+  error: z.ZodError,
+  params?: ValidationMessageParams,
+): string {
   const message = error.issues[0]?.message ?? "Invalid value";
-  return resolveValidationMessage(message);
+  return resolveValidationMessage(message, params);
 }

@@ -16,11 +16,11 @@ import { createI18n } from "vue-i18n";
 import { registerNamespace } from "./catalog";
 import {
   activeLocale,
-  applyDocumentLanguage,
   fallbackLocale,
   getLocaleStorage,
   onLocaleChange,
   resolveInitialLocale,
+  setLocale,
   startLocaleSync,
 } from "./locale";
 import type { Locale } from "./locale";
@@ -42,6 +42,7 @@ export {
   resetLocaleState,
   resolveInitialLocale,
   setLocale,
+  startLocaleSync,
 } from "./locale";
 export { staleChunkCopy } from "./staleFallback";
 
@@ -53,17 +54,21 @@ interface FeatureCatalogModule {
 /**
  * loadFeatureCatalogs registers every discovered feature locale file under
  * its module namespace (`features/<module>/locales/en.ts` -> `module`).
- * A namespace already present keeps its first registration, so the shared
- * `common`/`validation`/`language`/`time` roots cannot be shadowed.
+ * Duplicate namespaces and reserved shared roots (`common`, `validation`,
+ * `language`, `time`) throw loudly instead of silently winning or shadowing.
  */
 export function loadFeatureCatalogs(
   tree: Record<string, unknown>,
   modules: Record<string, FeatureCatalogModule>,
+  reserved: string[] = [],
 ): void {
   for (const [path, module] of Object.entries(modules)) {
     const namespace = /features\/([^/]+)\/locales\/[a-z]+\.ts$/.exec(path)?.[1];
-    if (!namespace || !module?.default || namespace in tree) {
+    if (!namespace || !module?.default) {
       continue;
+    }
+    if (reserved.includes(namespace)) {
+      throw new Error(`reserved i18n namespace: ${namespace}`);
     }
     registerNamespace(tree, namespace, module.default);
   }
@@ -99,14 +104,16 @@ function discoverFeatureCatalogs(): {
 /**
  * registerDiscoveredCatalogs merges every feature locale file into the
  * composer under its module namespace. Missing-side files fall back to
- * English through the global fallbackLocale.
+ * English through the global fallbackLocale. Shared roots cannot be
+ * shadowed: they are reserved from the common catalogs themselves.
  */
 export function registerDiscoveredCatalogs(): void {
   const discovered = discoverFeatureCatalogs();
+  const reserved = [...Object.keys(enMessages), ...Object.keys(viMessages)];
   const enTree: Record<string, unknown> = {};
   const viTree: Record<string, unknown> = {};
-  loadFeatureCatalogs(enTree, discovered.en);
-  loadFeatureCatalogs(viTree, discovered.vi);
+  loadFeatureCatalogs(enTree, discovered.en, reserved);
+  loadFeatureCatalogs(viTree, discovered.vi, reserved);
   i18n.global.mergeLocaleMessage("en", enTree);
   i18n.global.mergeLocaleMessage("vi", viTree);
 }
@@ -132,14 +139,12 @@ onLocaleChange(syncComposerLocale);
  * initI18n registers feature catalogs, applies the stored preference before
  * first mount and starts cross-tab synchronization. Called once from main.ts.
  * Catalogs still load synchronously at startup, so fallback and stale-chunk
- * recovery never depend on a lazy chunk.
+ * recovery never depend on a lazy chunk. Routing through setLocale fans the
+ * initial activation out to onLocaleChange subscribers like any other change.
  */
 export function initI18n(): void {
   registerDiscoveredCatalogs();
-  const initial = resolveInitialLocale(getLocaleStorage());
-  activeLocale.value = initial;
-  syncComposerLocale(initial);
-  applyDocumentLanguage(initial);
+  setLocale(resolveInitialLocale(getLocaleStorage()), getLocaleStorage());
   startLocaleSync();
 }
 
@@ -167,23 +172,34 @@ export const naiveDateLocale = computed<NDateLocale>(() =>
  * Known zod/Naive default English strings with curated localized fallbacks.
  * Only these exact strings map; everything else passes through untouched so
  * legacy feature messages and provider diagnostics keep byte-identical text.
+ * Note the honest exception: bare-schema "Required" renders the curated
+ * "This field is required" even in English (plan §3 wants the fallback, and
+ * no existing test asserts the bare default). Prefer requiredString/
+ * intInRange with namespaced keys for new schemas.
  */
 const defaultMessageKeys: Array<[string, string]> = [
   ["Invalid value", "validation.invalid"],
   ["Required", "validation.required"],
 ];
 
+/** ValidationMessageParams interpolates one namespaced key, when it has any. */
+export type ValidationMessageParams = Record<string, string | number>;
+
 /**
  * resolveValidationMessage maps one stored schema message to display text
  * at invocation time (so a language switch refreshes visible feedback):
  * a registered message key resolves through the composer with English
- * fallback, a known zod default maps to its curated fallback, and any
- * legacy English or provider-supplied string passes through unchanged.
+ * fallback (plus optional interpolation params), a known zod default maps
+ * to its curated fallback, and any legacy English or provider-supplied
+ * string passes through unchanged.
  */
-export function resolveValidationMessage(message: string): string {
+export function resolveValidationMessage(
+  message: string,
+  params?: ValidationMessageParams,
+): string {
   const composer = i18n.global;
-  if (typeof message === "string" && message.includes(".") && composer.te(message)) {
-    return String(composer.t(message));
+  if (composer.te(message)) {
+    return String(composer.t(message, params ?? {}));
   }
   for (const [fallback, key] of defaultMessageKeys) {
     if (message === fallback) {

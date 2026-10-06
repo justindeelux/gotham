@@ -1,16 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-/* global Storage: readonly, document: readonly */
+/* global Storage: readonly, document: readonly, window: readonly, StorageEvent: readonly */
 
 import {
   activeLocale,
   handleStorageEvent,
   isSupportedLocale,
   localeStorageKey,
+  onLocaleChange,
   readStoredLocale,
   resetLocaleState,
   resolveInitialLocale,
   setLocale,
+  startLocaleSync,
   syncComposerLocale,
 } from "@/shared/i18n";
 
@@ -125,11 +127,79 @@ describe("handleStorageEvent (another tab)", () => {
     expect(document.documentElement.lang).toBe("en");
   });
 
+  it("treats a full clear() (null key) as removal to English", () => {
+    setLocale("vi", memoryStorage());
+    handleStorageEvent({ key: null, newValue: null });
+    expect(activeLocale.value).toBe("en");
+    expect(document.documentElement.lang).toBe("en");
+  });
+
   it("ignores invalid values and unrelated keys", () => {
     setLocale("vi", memoryStorage());
     handleStorageEvent({ key: localeStorageKey, newValue: "fr" });
     expect(activeLocale.value).toBe("vi");
     handleStorageEvent({ key: "other-key", newValue: "en" });
     expect(activeLocale.value).toBe("vi");
+  });
+
+  it("ignores events from a different storage area", () => {
+    const foreign = memoryStorage();
+    handleStorageEvent({
+      key: localeStorageKey,
+      newValue: "vi",
+      storageArea: foreign,
+    });
+    expect(activeLocale.value).toBe("en");
+    handleStorageEvent({
+      key: localeStorageKey,
+      newValue: "vi",
+      storageArea: window.localStorage,
+    });
+    expect(activeLocale.value).toBe("vi");
+  });
+});
+
+describe("startLocaleSync", () => {
+  it("registers the cross-tab listener exactly once across resets", () => {
+    const seen: string[] = [];
+    const stop = onLocaleChange((locale) => {
+      seen.push(locale);
+    });
+    try {
+      startLocaleSync();
+      resetLocaleState();
+      startLocaleSync();
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: localeStorageKey,
+          newValue: "vi",
+        }),
+      );
+      expect(seen).toEqual(["vi"]);
+    } finally {
+      stop();
+      resetLocaleState();
+    }
+  });
+});
+
+describe("initI18n", () => {
+  it("fans the initial stored activation out to subscribers", async () => {
+    const { initI18n } = await import("@/shared/i18n");
+    const seen: string[] = [];
+    const stop = onLocaleChange((locale) => {
+      seen.push(locale);
+    });
+    try {
+      window.localStorage.setItem(localeStorageKey, "vi");
+      initI18n();
+      expect(activeLocale.value).toBe("vi");
+      expect(seen).toContain("vi");
+    } finally {
+      stop();
+      window.localStorage.removeItem(localeStorageKey);
+      resetLocaleState();
+      syncComposerLocale("en");
+    }
   });
 });

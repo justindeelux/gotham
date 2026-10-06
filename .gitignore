@@ -51,3 +51,6 @@ web/blob-report/
 
 # Local orchestration handoff (kept untracked)
 docs/ORCHESTRATION.md
+
+# i18n discovery probe staged temporarily by web/tests/i18n-discovery-global-setup.ts
+web/src/features/__i18n_probe__/

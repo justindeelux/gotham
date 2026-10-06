@@ -1,8 +1,14 @@
 /**
  * Catalog checks shared by the foundation test and sibling feature workers.
- * Catalogs are plain nested objects of ICU-free vue-i18n messages using
- * named parameters (`{name}`) and library pluralization (`one | other`).
+ * Catalogs are plain nested objects of vue-i18n messages using named
+ * parameters (`{name}`) and library pluralization (`one | other`).
+ *
+ * Message validity is decided by the real vue-i18n compiler
+ * (`@intlify/message-compiler`, the exact version backing our vue-i18n),
+ * not by a hand-rolled grammar: a message the compiler rejects can never
+ * ship, whatever characters it contains.
  */
+import { baseCompile } from "@intlify/message-compiler";
 
 type Dict = Record<string, unknown>;
 
@@ -29,20 +35,48 @@ export function messageParams(message: string): string[] {
   return [...params].sort();
 }
 
-/** hasBalancedSyntax rejects unbalanced braces and stray interpolation. */
-export function hasBalancedSyntax(message: string): boolean {
+/**
+ * compileError returns null when the vue-i18n compiler accepts a message,
+ * otherwise the compiler's error text. Literal braces, `@` and `|` must use
+ * the documented escapes (`{'{'}`, `{'@'}`, `{'|'}`); nested `{{x}}` and bare
+ * `@` links throw here exactly as they would at render time.
+ */
+export function compileError(message: string): string | null {
+  try {
+    baseCompile(message, {
+      onError: (error) => {
+        throw error;
+      },
+    });
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/**
+ * pluralSegments splits a message on top-level `|` (plural separators),
+ * ignoring pipes inside `{...}` groups such as a literal `{'|'}`.
+ */
+export function pluralSegments(message: string): string[] {
+  const segments: string[] = [];
   let depth = 0;
+  let current = "";
   for (const char of message) {
     if (char === "{") {
       depth += 1;
     } else if (char === "}") {
-      depth -= 1;
-      if (depth < 0) {
-        return false;
-      }
+      depth = Math.max(0, depth - 1);
+    }
+    if (char === "|" && depth === 0) {
+      segments.push(current);
+      current = "";
+    } else {
+      current += char;
     }
   }
-  return depth === 0;
+  segments.push(current);
+  return segments;
 }
 
 export interface ParityIssue {
@@ -52,6 +86,7 @@ export interface ParityIssue {
     | "missing-in-en"
     | "empty"
     | "param-mismatch"
+    | "plural-mismatch"
     | "bad-syntax";
   detail?: string;
 }
@@ -59,8 +94,9 @@ export interface ParityIssue {
 /**
  * checkCatalogParity compares an English reference catalog against its
  * Vietnamese translation: equal leaf-key sets, nonempty translations,
- * matching named parameters, and balanced message syntax on both sides.
- * Returns every issue found; empty means the catalogs agree.
+ * matching named parameters, matching plural-segment counts, and
+ * compiler-accepted message syntax on both sides. Returns every issue
+ * found; empty means the catalogs agree.
  */
 export function checkCatalogParity(en: Dict, vi: Dict): ParityIssue[] {
   const issues: ParityIssue[] = [];
@@ -71,8 +107,9 @@ export function checkCatalogParity(en: Dict, vi: Dict): ParityIssue[] {
     if (typeof value !== "string") {
       continue;
     }
-    if (!hasBalancedSyntax(value)) {
-      issues.push({ key, problem: "bad-syntax", detail: "en" });
+    const enError = compileError(value);
+    if (enError !== null) {
+      issues.push({ key, problem: "bad-syntax", detail: `en: ${enError}` });
     }
     if (!viLeaves.has(key)) {
       issues.push({ key, problem: "missing-in-vi" });
@@ -83,8 +120,9 @@ export function checkCatalogParity(en: Dict, vi: Dict): ParityIssue[] {
       issues.push({ key, problem: "empty" });
       continue;
     }
-    if (!hasBalancedSyntax(translated)) {
-      issues.push({ key, problem: "bad-syntax", detail: "vi" });
+    const viError = compileError(translated);
+    if (viError !== null) {
+      issues.push({ key, problem: "bad-syntax", detail: `vi: ${viError}` });
     }
     const enParams = messageParams(value).join(",");
     const viParams = messageParams(translated).join(",");
@@ -93,6 +131,15 @@ export function checkCatalogParity(en: Dict, vi: Dict): ParityIssue[] {
         key,
         problem: "param-mismatch",
         detail: `en {${enParams}} vs vi {${viParams}}`,
+      });
+    }
+    const enSegments = pluralSegments(value).length;
+    const viSegments = pluralSegments(translated).length;
+    if (enSegments !== viSegments) {
+      issues.push({
+        key,
+        problem: "plural-mismatch",
+        detail: `en ${enSegments} vs vi ${viSegments} segments`,
       });
     }
   }
@@ -108,8 +155,7 @@ export function checkCatalogParity(en: Dict, vi: Dict): ParityIssue[] {
 
 /**
  * registerNamespace merges one namespaced feature catalog into a locale
- * tree, rejecting duplicate namespaces (two files claiming one namespace,
- * or a feature colliding with a shared top-level key such as `common`).
+ * tree, rejecting duplicate namespaces (two files claiming one namespace).
  */
 export function registerNamespace(
   tree: Record<string, unknown>,

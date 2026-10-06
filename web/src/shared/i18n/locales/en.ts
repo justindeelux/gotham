@@ -23,8 +23,7 @@ const en = {
       admin: "admin",
       readOnly: "read-only",
       member: "Team member",
-    },
-    status: {
+    },    status: {
       unknown: "unknown",
       never: "never",
     },
@@ -39,6 +38,10 @@ const en = {
   },
   language: {
     label: "Language",
+    names: {
+      en: "English",
+      vi: "Tiếng Việt",
+    },
   },
   time: {
     justNow: "just now",

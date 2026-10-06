@@ -23,11 +23,11 @@ const vi: CommonMessages = {
       owner: "chủ sở hữu",
       admin: "quản trị viên",
       readOnly: "chỉ đọc",
-      member: "Thành viên",
+      member: "Thành viên nhóm",
     },
     status: {
       unknown: "không rõ",
-      never: "không bao giờ",
+      never: "Chưa bao giờ",
     },
     errors: {
       requestFailed: "Yêu cầu thất bại",
@@ -40,11 +40,15 @@ const vi: CommonMessages = {
   },
   language: {
     label: "Ngôn ngữ",
+    names: {
+      en: "English",
+      vi: "Tiếng Việt",
+    },
   },
   time: {
     justNow: "vừa xong",
-    inMoment: "sắp tới",
-    never: "không bao giờ",
+    inMoment: "trong giây lát",
+    never: "Chưa bao giờ",
     unknown: "không rõ",
     expiresToday: "hết hạn hôm nay",
     expiredToday: "đã hết hạn hôm nay",

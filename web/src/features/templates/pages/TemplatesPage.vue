@@ -6,6 +6,7 @@ import { useRoute } from "vue-router";
 import TemplateGallery from "@/features/templates/components/TemplateGallery.vue";
 import TemplateWizard from "@/features/templates/components/TemplateWizard.vue";
 import { useTemplatesStore } from "@/features/templates/stores/templates";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 /**
  * Template library page: the gallery plus the deploy wizard, backed by
@@ -19,6 +20,15 @@ import { useTemplatesStore } from "@/features/templates/stores/templates";
 
 const templatesStore = useTemplatesStore();
 const route = useRoute();
+
+/**
+ * t renders page copy in the active locale (tracks language switches).
+ * Called during render, so labels refresh without closing the wizard.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
 
 const wizardOpen = ref(false);
 const wizardSlug = ref("");
@@ -51,13 +61,10 @@ onMounted(() => {
 <template>
   <div class="templates-page">
     <div class="page-head">
-      <p class="eyebrow">Operations · one-click templates</p>
-      <h1>Template library</h1>
+      <p class="eyebrow">{{ t("templates.page.eyebrow") }}</p>
+      <h1>{{ t("templates.page.title") }}</h1>
       <p class="page-desc">
-        Pick a template, fill the form, and the control plane renders the
-        compose document before deploying it through the node agent. The form is
-        generated from the template schema, so a new template needs no UI
-        change.
+        {{ t("templates.page.description") }}
       </p>
     </div>
 
@@ -66,7 +73,7 @@ onMounted(() => {
       size="small"
       @click="templatesStore.fetchTemplates().catch(() => undefined)"
     >
-      Retry
+      {{ t("common.actions.retry") }}
     </NButton>
 
     <TemplateGallery
@@ -77,18 +84,18 @@ onMounted(() => {
     />
 
     <div class="callout">
-      <h4>How a template is structured</h4>
+      <h4>{{ t("templates.page.calloutTitle") }}</h4>
       <p>
-        <span class="mono">templates/{slug}/template.yaml</span> declares the
-        name, icon, description and the form fields (type, default, required,
-        validation).
+        {{ t("templates.page.calloutYaml", { file: "templates/{slug}/template.yaml" }) }}
       </p>
       <p>
-        <span class="mono">templates/{slug}/compose.yaml</span> uses
-        <span class="mono">{{ templatePlaceholder }}</span> placeholders. The
-        engine only substitutes strings and never executes code, so a template
-        cannot run commands on a node. Editing a template does not affect a
-        service that is already deployed.
+        {{
+          t("templates.page.calloutComposeUses", {
+            file: "templates/{slug}/compose.yaml",
+            placeholder: templatePlaceholder,
+          })
+        }}
+        {{ t("templates.page.calloutComposeNote") }}
       </p>
     </div>
 

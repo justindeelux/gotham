@@ -2,6 +2,8 @@
 import { NButton, NInput, NSpace } from "naive-ui";
 import { computed, ref, watch } from "vue";
 
+import { activeLocale, i18n } from "@/shared/i18n";
+
 /**
  * Monospace compose document viewer/editor.
  *
@@ -22,13 +24,22 @@ interface Props {
   emptyText?: string;
 }
 
+/**
+ * t renders editor copy in the active locale (tracks language switches).
+ * Called during render, so labels refresh without losing the edit draft.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const props = withDefaults(defineProps<Props>(), {
   editing: false,
   saving: false,
   readonly: false,
-  label: "compose.yaml",
+  label: "",
   minRows: 16,
-  emptyText: "No compose document stored.",
+  emptyText: "",
 });
 
 const emit = defineEmits<{
@@ -59,6 +70,12 @@ watch(
 
 const isDirty = computed<boolean>(() => draft.value !== props.modelValue);
 
+/** labelText is the caller override or the localized compose wording. */
+const labelText = computed<string>(() => props.label || t("services.compose.defaultLabel"));
+
+/** emptyLabel is the caller override or the localized empty wording. */
+const emptyLabel = computed<string>(() => props.emptyText || t("services.compose.emptyText"));
+
 /** startEdit opens the editor seeded with the stored document. */
 function startEdit(): void {
   draft.value = props.modelValue;
@@ -80,10 +97,10 @@ function save(): void {
 <template>
   <section class="compose-editor">
     <header class="compose-editor__head">
-      <span class="compose-editor__label mono">{{ label }}</span>
+      <span class="compose-editor__label mono">{{ labelText }}</span>
       <NSpace :size="8" align="center">
         <template v-if="editing">
-          <NButton size="small" :disabled="saving" @click="cancel">Cancel</NButton>
+          <NButton size="small" :disabled="saving" @click="cancel">{{ t("common.actions.cancel") }}</NButton>
           <NButton
             size="small"
             type="primary"
@@ -91,11 +108,11 @@ function save(): void {
             :disabled="!isDirty"
             @click="save"
           >
-            Save
+            {{ t("common.actions.save") }}
           </NButton>
         </template>
         <NButton v-else size="small" :disabled="readonly" @click="startEdit">
-          Edit
+          {{ t("common.actions.edit") }}
         </NButton>
       </NSpace>
     </header>
@@ -109,13 +126,11 @@ function save(): void {
       :autosize="{ minRows, maxRows: 40 }"
     />
     <pre v-else class="compose-editor__view mono">{{
-      modelValue || emptyText
+      modelValue || emptyLabel
     }}</pre>
 
     <p class="compose-editor__hint">
-      The control plane stores the document exactly as written and validates it
-      against the environment before saving. Saving creates a new version; the
-      running project switches on the next deploy.
+      {{ t("services.compose.hint") }}
     </p>
   </section>
 </template>

@@ -3,7 +3,9 @@ import { NAlert, NButton, NSpace, NTag } from "naive-ui";
 import { RouterLink } from "vue-router";
 
 import type { Service } from "@/features/services";
+import { serviceStatusLabel } from "@/features/services";
 import ServiceLogs from "@/features/services/components/ServiceLogs.vue";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 interface Props {
   created: Service;
@@ -18,13 +20,22 @@ defineProps<Props>();
 const emit = defineEmits<{
   close: [];
 }>();
+
+/**
+ * t renders success-panel copy in the active locale (tracks language
+ * switches). Names, statuses and routes stay raw parameters.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
 </script>
 
 <template>
   <div class="wizard__success" data-testid="wizard-created">
-    <h4>{{ created.name }} created</h4>
+    <h4>{{ t("templates.created.title", { name: created.name }) }}</h4>
     <NSpace :size="8" align="center">
-      <NTag size="small" type="warning">{{ created.status }}</NTag>
+      <NTag size="small" type="warning">{{ serviceStatusLabel(created.status) }}</NTag>
       <NTag size="small" class="mono">{{ created.compose_project }}</NTag>
       <NTag
         v-for="route in created.domains"
@@ -36,8 +47,7 @@ const emit = defineEmits<{
       </NTag>
     </NSpace>
     <p class="wizard__desc">
-      The service row exists; nothing runs yet. Deploy renders the
-      document again on the node and records one deploy row.
+      {{ t("templates.created.description") }}
     </p>
     <NAlert v-if="deployError" type="error" :show-icon="true">
       {{ deployError }}
@@ -54,16 +64,14 @@ const emit = defineEmits<{
         }"
         @click="emit('close')"
       >
-        <NButton size="small">Open service detail</NButton>
+        <NButton size="small">{{ t("templates.created.open") }}</NButton>
       </RouterLink>
-      <NTag v-if="deployed" size="small" type="success">deployed</NTag>
+      <NTag v-if="deployed" size="small" type="success">{{ t("templates.created.deployed") }}</NTag>
     </NSpace>
     <div class="wizard__stub">
-      <h5>Deploy step timeline — backend pending</h5>
+      <h5>{{ t("templates.created.stubTitle") }}</h5>
       <p>
-        The API records one row per deploy (state, error, timestamps)
-        and exposes no per-step progress, so no step timeline is shown
-        here. The detail page lists the history instead.
+        {{ t("templates.created.stubBody") }}
       </p>
     </div>
     <ServiceLogs

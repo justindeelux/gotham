@@ -1,4 +1,5 @@
 import { http } from "@/shared/api/http";
+import { activeLocale, i18n } from "@/shared/i18n";
 import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
@@ -314,8 +315,17 @@ export function serviceLogsPath(
   return `/api/v1/services/${id}/logs${query ? `?${query}` : ""}`;
 }
 
-/** serviceStatusLabel renders the lifecycle state as display text. */
+/** serviceStatusLabel renders the lifecycle state as display text.
+ * Resolves in the active locale at invocation time so template callers
+ * refresh on a language switch; the wire status value itself is never
+ * translated. English output is unchanged. */
 export function serviceStatusLabel(status: ServiceStatus): string {
+  // Tracks the locale when called during render or inside a computed.
+  void activeLocale.value;
+  const key = `services.status.${status}`;
+  if (i18n.global.te(key)) {
+    return String(i18n.global.t(key));
+  }
   return status;
 }
 
@@ -336,8 +346,16 @@ export function serviceStatusTagType(
   }
 }
 
-/** deployStateLabel renders a deploy state as display text. */
+/** deployStateLabel renders a deploy state as display text.
+ * Resolves in the active locale at invocation time; the wire state value
+ * itself is never translated. English output is unchanged. */
 export function deployStateLabel(state: ServiceDeployState): string {
+  // Tracks the locale when called during render or inside a computed.
+  void activeLocale.value;
+  const key = `services.deployState.${state}`;
+  if (i18n.global.te(key)) {
+    return String(i18n.global.t(key));
+  }
   return state;
 }
 
@@ -364,22 +382,36 @@ export function deployStateTagType(
  * duplicate name, 502 an unreachable node agent and 503 a disabled feature
  * flag. Secret material never reaches a message: the control plane redacts
  * every environment value before it is stored or returned.
+ *
+ * Classification still runs on the raw error (status plus the stripped
+ * server message, exactly as before); only the curated fallback summaries
+ * resolve in the active locale. Actionable server text passes through
+ * untouched. The 502 detail keeps its literal "Node agent error:" framing:
+ * it prefixes raw node diagnostics, and the source-based harness pins that
+ * exact shape.
  */
 export function describeServiceError(error: unknown): string {
+  // Tracks the locale when called during render or inside a computed, so
+  // retained failures refresh on a language switch.
+  void activeLocale.value;
+  const text = (
+    key: string,
+    params?: Record<string, string | number>,
+  ): string => String(i18n.global.t(key, params ?? {}));
   if (isApiError(error)) {
     if (error.status === 401) {
-      return "Your session expired. Please sign in again.";
+      return text("services.errors.sessionExpired");
     }
     if (error.status === 400) {
       return (
       stripErrorPrefix(error.message) ||
-      "Invalid request. Check the compose document and retry."
+      text("services.errors.badRequest")
     );
     }
     if (error.status === 404) {
       return (
       stripErrorPrefix(error.message) ||
-      "Service not found. It may have been deleted already."
+      text("services.errors.notFound")
     );
     }
     if (error.status === 409) {
@@ -389,22 +421,22 @@ export function describeServiceError(error: unknown): string {
       // render inline.
       return (
         conflictDetail(stripErrorPrefix(error.message)) ||
-        "A service with that name already exists. Pick another name."
+        text("services.errors.conflictFallback")
       );
     }
     if (error.status === 502) {
       const detail = stripErrorPrefix(error.message);
       return detail
         ? `Node agent error: ${detail}`
-        : "The node agent is unreachable. Check the node status and retry.";
+        : text("services.errors.nodeUnreachable");
     }
     if (error.status === 503) {
-      return "Services are disabled on the control plane (FEATURE_SERVICES=false).";
+      return text("services.errors.disabled");
     }
-    return stripErrorPrefix(error.message) || "Request failed";
+    return stripErrorPrefix(error.message) || text("common.errors.requestFailed");
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
+    return stripErrorPrefix(error.message) || text("common.errors.unexpected");
   }
-  return "Something went wrong. Please try again.";
+  return text("common.errors.unexpected");
 }

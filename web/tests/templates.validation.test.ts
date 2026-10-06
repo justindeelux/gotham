@@ -2,7 +2,7 @@
 // recorded outcomes of the hand-written checkTemplateValue it replaces.
 // Recorded 2026-10-04 from the pre-migration code; every row asserts
 // identical outcome AND identical message string.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   checkTemplateValue,
@@ -10,6 +10,28 @@ import {
 } from "@/features/templates/api/templates";
 import type { TemplateField } from "@/features/templates/api/templates";
 import { templateFieldSchema } from "@/features/templates/schemas/templates";
+import templatesEn from "@/features/templates/locales/en";
+import templatesVi from "@/features/templates/locales/vi";
+import {
+  i18n,
+  resetLocaleState,
+  setLocale,
+  syncComposerLocale,
+} from "@/shared/i18n";
+
+// Validation messages resolve through the templates catalog: merge it once
+// and run English by default so the recorded literals below keep proving
+// the displayed behavior.
+beforeEach(() => {
+  i18n.global.mergeLocaleMessage("en", { templates: templatesEn });
+  i18n.global.mergeLocaleMessage("vi", { templates: templatesVi });
+  resetLocaleState();
+  syncComposerLocale("en");
+});
+
+afterEach(() => {
+  setLocale("en", null);
+});
 
 const fields: TemplateField[] = [
   { key: "title", label: "Title", type: "text", required: true, max_length: 5, pattern: "[a-z]+" },
@@ -105,10 +127,20 @@ describe("template field schemas match recorded outcomes", () => {
     for (const [fi, vi, expected] of recorded) {
       const field = fields[fi];
       const value = probeValues[vi];
+      // Schemas store namespaced keys since I18N-7; the gating outcome is
+      // pinned here while the displayed text is pinned through the
+      // locale-aware check below.
       const parsed = templateFieldSchema(field).safeParse(value);
-      const actual = parsed.success ? null : (parsed.error.issues[0]?.message ?? null);
-      expect({ field: field.key, value, actual }).toEqual({ field: field.key, value, actual: expected });
-      expect(checkTemplateValue(field, value)).toBe(expected);
+      expect({ field: field.key, value, valid: parsed.success }).toEqual({
+        field: field.key,
+        value,
+        valid: expected === null,
+      });
+      expect({ field: field.key, value, actual: checkTemplateValue(field, value) }).toEqual({
+        field: field.key,
+        value,
+        actual: expected,
+      });
     }
   });
 

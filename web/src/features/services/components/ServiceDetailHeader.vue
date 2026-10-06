@@ -2,10 +2,21 @@
 import { NButton, NPopconfirm, NSpace, NTag } from "naive-ui";
 import { RouterLink } from "vue-router";
 
-import { serviceStatusTagType } from "@/features/services/api/services";
+import { serviceStatusLabel, serviceStatusTagType } from "@/features/services/api/services";
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 /** ServiceDetailHeader renders the back link, title tags and actions. */
+
+/**
+ * t renders header copy in the active locale (tracks language switches).
+ * Called during render, so labels refresh without reloading the service.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handleStop, handleDelete } =
   useServiceDetailContext();
 </script>
@@ -27,7 +38,7 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
         "
         class="back"
       >
-        ← {{ service?.environment_name ?? "Projects" }}
+        ← {{ service?.environment_name ?? t("services.header.backFallback") }}
       </RouterLink>
       <h1 class="mono">{{ service?.name ?? serviceId.slice(0, 8) }}</h1>
       <NSpace :size="8" align="center">
@@ -36,7 +47,7 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
           size="small"
           :type="serviceStatusTagType(service.status)"
         >
-          {{ service.status }}
+          {{ serviceStatusLabel(service.status) }}
         </NTag>
         <NTag v-if="service" size="small">{{ serverName }}</NTag>
         <NTag
@@ -60,7 +71,7 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
         :disabled="busy !== null"
         @click="handleDeploy"
       >
-        Deploy
+        {{ t("services.header.deploy") }}
       </NButton>
       <NButton
         v-if="service"
@@ -68,7 +79,7 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
         :disabled="busy !== null"
         @click="handleRestart"
       >
-        Restart
+        {{ t("services.header.restart") }}
       </NButton>
       <NButton
         v-if="service"
@@ -76,7 +87,7 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
         :disabled="busy !== null"
         @click="handleStop"
       >
-        Stop
+        {{ t("services.header.stop") }}
       </NButton>
       <NPopconfirm
         v-if="service"
@@ -84,10 +95,9 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
         @positive-click="handleDelete"
       >
         <template #trigger>
-          <NButton type="error" ghost :disabled="busy !== null">Delete</NButton>
+          <NButton type="error" ghost :disabled="busy !== null">{{ t("services.header.delete") }}</NButton>
         </template>
-        Delete the service {{ service.name }}? The project goes down; its
-        named volumes stay on the node.
+        {{ t("services.header.deleteConfirm", { name: service.name }) }}
       </NPopconfirm>
     </div>
   </div>

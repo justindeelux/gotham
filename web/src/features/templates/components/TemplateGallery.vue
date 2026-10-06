@@ -2,6 +2,8 @@
 import { NAlert, NEmpty, NSpin } from "naive-ui";
 
 import type { TemplateSummary } from "@/features/templates/api/templates";
+import { templateOverlayDescription } from "@/features/templates/api/templates";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 /**
  * Template gallery: cards from `GET /api/v1/templates`.
@@ -24,6 +26,16 @@ withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   select: [slug: string];
 }>();
+
+/**
+ * t renders gallery copy in the active locale (tracks language switches).
+ * Card descriptions resolve through the curated overlay with fallback to
+ * the provider metadata, so unknown templates keep their source copy.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
 
 /**
  * cardMark derives the card mark from the template name. The API `icon` key
@@ -54,12 +66,12 @@ function cardMark(name: string): string {
         >
           <span class="tpl-mark" aria-hidden="true">{{ cardMark(template.name) }}</span>
           <span class="tpl-name">{{ template.name }}</span>
-          <span class="tpl-desc">{{ template.description }}</span>
+          <span class="tpl-desc">{{ templateOverlayDescription(template) }}</span>
         </button>
       </div>
       <NEmpty
         v-else-if="!loading"
-        description="No templates in the catalog."
+        :description="t('templates.gallery.empty')"
       />
     </NSpin>
   </div>

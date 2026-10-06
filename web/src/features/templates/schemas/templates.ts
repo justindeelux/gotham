@@ -1,12 +1,16 @@
 import { z } from "zod";
 
 import type { TemplateField, TemplateValues } from "@/features/templates/api/templates";
-import { firstIssueMessage } from "@/shared/validation/naiveAdapter";
+import { activeLocale, i18n } from "@/shared/i18n";
+import type { ValidationMessageParams } from "@/shared/i18n";
 
 /**
  * Template form schemas (V5). Each builder mirrors `checkTemplateValue` in
  * `api/templates.ts`, which itself mirrors `Field.check` in
- * `internal/templates/render.go`. Message strings are preserved verbatim.
+ * `internal/templates/render.go`. Schemas store namespaced message keys
+ * (see templateMessages); checkTemplateField resolves them to display text
+ * at invocation time, so English output stays identical to the historic
+ * literals while Vietnamese renders from the templates catalog.
  *
  * Deliberate regex exceptions: the field `pattern` is anchored exactly like
  * the server (`^(?:pattern)$`) with uncompilable-pattern-passes, because the
@@ -24,16 +28,20 @@ import { firstIssueMessage } from "@/shared/validation/naiveAdapter";
  * "must be one of"); values over 1024 bytes are server-only errors.
  */
 
-/** Message catalog: exact strings from the hand-written checks. */
+/** Message catalog: namespaced keys resolved at invocation time (I18N-7).
+ * Parameterized entries store the key only; checkTemplateField derives the
+ * interpolation params from the field under validation, so visible feedback
+ * refreshes on a language switch while English output stays byte-identical
+ * to the previous literals. */
 export const templateMessages = {
-  required: "This field is required.",
-  pattern: "Does not match the required format.",
-  wholeNumber: "Must be a whole number.",
-  bool: "Must be true or false.",
-  maxLength: (max: number): string => `Must be at most ${max} characters.`,
-  minNumber: (min: number): string => `Must be at least ${min}.`,
-  maxNumber: (max: number): string => `Must be at most ${max}.`,
-  selectOptions: (options: string[]): string => `Must be one of: ${options.join(", ")}.`,
+  required: "templates.validation.required",
+  pattern: "templates.validation.pattern",
+  wholeNumber: "templates.validation.wholeNumber",
+  bool: "templates.validation.bool",
+  maxLength: "templates.validation.maxLength",
+  minNumber: "templates.validation.minNumber",
+  maxNumber: "templates.validation.maxNumber",
+  selectOptions: "templates.validation.selectOptions",
 } as const;
 
 /** matchesPattern anchors the field pattern exactly like the server does. */
@@ -64,7 +72,7 @@ export function templateFieldSchema(field: TemplateField): z.ZodType<string, z.Z
         if (field.max_length !== undefined && [...value].length > field.max_length) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: templateMessages.maxLength(field.max_length),
+            message: templateMessages.maxLength,
           });
           return;
         }
@@ -89,14 +97,14 @@ export function templateFieldSchema(field: TemplateField): z.ZodType<string, z.Z
         if (field.min !== undefined && parsed < field.min) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: templateMessages.minNumber(field.min),
+            message: templateMessages.minNumber,
           });
           return;
         }
         if (field.max !== undefined && parsed > field.max) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: templateMessages.maxNumber(field.max),
+            message: templateMessages.maxNumber,
           });
         }
       });
@@ -115,7 +123,7 @@ export function templateFieldSchema(field: TemplateField): z.ZodType<string, z.Z
         }
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: templateMessages.selectOptions(field.options ?? []),
+          message: templateMessages.selectOptions,
         });
       });
     default:
@@ -124,12 +132,57 @@ export function templateFieldSchema(field: TemplateField): z.ZodType<string, z.Z
 }
 
 /**
+ * templateMessageParams derives the interpolation params for a stored
+ * validation key from the field under validation. The schema stores the key
+ * only, so the values (limits, options) always come from the live field —
+ * never from a translated string — and switching languages re-renders the
+ * same constraint in the new locale.
+ */
+export function templateMessageParams(
+  field: TemplateField,
+  message: string,
+): ValidationMessageParams | undefined {
+  switch (message) {
+    case templateMessages.maxLength:
+      return field.max_length !== undefined ? { max: field.max_length } : undefined;
+    case templateMessages.minNumber:
+      return field.min !== undefined ? { min: field.min } : undefined;
+    case templateMessages.maxNumber:
+      return field.max !== undefined ? { max: field.max } : undefined;
+    case templateMessages.selectOptions:
+      return { options: (field.options ?? []).join(", ") };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * resolveTemplateMessage renders one stored schema message in the active
+ * locale at invocation time. Namespaced keys resolve through the composer
+ * (with field-derived params when they take any); anything else passes
+ * through unchanged so provider diagnostics stay byte-identical.
+ */
+export function resolveTemplateMessage(field: TemplateField, message: string): string {
+  // Tracks the locale when called during render or inside a computed, so
+  // visible feedback refreshes on a language switch.
+  void activeLocale.value;
+  if (i18n.global.te(message)) {
+    return String(i18n.global.t(message, templateMessageParams(field, message) ?? {}));
+  }
+  return message;
+}
+
+/**
  * checkTemplateField validates one field value, returning the first message.
  * Backs `checkTemplateValue` in `api/templates.ts`.
  */
 export function checkTemplateField(field: TemplateField, value: string): string | null {
   const result = templateFieldSchema(field).safeParse(value);
-  return result.success ? null : firstIssueMessage(result.error);
+  if (result.success) {
+    return null;
+  }
+  const message = result.error.issues[0]?.message ?? "Invalid value";
+  return resolveTemplateMessage(field, message);
 }
 
 /**

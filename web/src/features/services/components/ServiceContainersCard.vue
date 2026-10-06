@@ -4,8 +4,20 @@ import type { DataTableColumns } from "naive-ui";
 
 import type { ComposeServiceContainer } from "@/features/services/api/services";
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
+import { activeLocale, i18n } from "@/shared/i18n";
+import { computed } from "vue";
 
 /** ServiceContainersCard renders the on-demand node containers card. */
+
+/**
+ * t renders card copy in the active locale (tracks language switches).
+ * Called during render, so labels refresh without reloading containers.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const {
   containers,
   containersLoading,
@@ -19,28 +31,29 @@ function containerRowKey(row: ComposeServiceContainer): string {
   return row.container_id;
 }
 
-const containerColumns: DataTableColumns<ComposeServiceContainer> = [
-  { title: "Service", key: "service", width: 140 },
-  { title: "Container", key: "name", minWidth: 220 },
+/** containerColumns resolves headers in the active locale. */
+const containerColumns = computed<DataTableColumns<ComposeServiceContainer>>(() => [
+  { title: t("services.containers.columns.service"), key: "service", width: 140 },
+  { title: t("services.containers.columns.container"), key: "name", minWidth: 220 },
   {
-    title: "Image",
+    title: t("services.containers.columns.image"),
     key: "image",
     minWidth: 200,
     ellipsis: { tooltip: true },
   },
-  { title: "State", key: "state", width: 110 },
-  { title: "Status", key: "status", width: 160 },
-  { title: "Health", key: "health", width: 110 },
-];
+  { title: t("services.containers.columns.state"), key: "state", width: 110 },
+  { title: t("services.containers.columns.status"), key: "status", width: 160 },
+  { title: t("services.containers.columns.health"), key: "health", width: 110 },
+]);
 </script>
 
 <template>
-  <NCard title="Containers">
+  <NCard :title="t('services.containers.title')">
     <template #header-extra>
       <NSpace :size="8" align="center">
-        <NText depth="3" class="small">observed from the node agent</NText>
+        <NText depth="3" class="small">{{ t("services.containers.observedNote") }}</NText>
         <NButton size="small" :loading="containersLoading" @click="loadContainers">
-          Refresh containers
+          {{ t("services.containers.refresh") }}
         </NButton>
       </NSpace>
     </template>
@@ -59,15 +72,13 @@ const containerColumns: DataTableColumns<ComposeServiceContainer> = [
       />
       <NEmpty
         v-else-if="!containersLoading"
-        description="No container list loaded."
+        :description="t('services.containers.empty')"
       >
         <template #extra>
           <p class="empty-hint">
-            Reading the project's containers dials the node agent, so it
-            happens on demand. Without a connected agent the API answers
-            502.
+            {{ t("services.containers.hint") }}
             <template v-if="containersLoaded">
-              The last read returned no containers for this project.
+              {{ t("services.containers.emptyAfterRead") }}
             </template>
           </p>
         </template>

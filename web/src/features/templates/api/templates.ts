@@ -1,4 +1,5 @@
 import { http } from "@/shared/api/http";
+import { activeLocale, i18n } from "@/shared/i18n";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
 import type { ServiceDomainRoute } from "@/features/services";
 import { checkTemplateField, validateTemplateFields } from "@/features/templates/schemas/templates";
@@ -177,28 +178,78 @@ export function buildTemplateRenderValues(
   return payload;
 }
 
-/** describeTemplateError maps a thrown error to a user-facing message. */
+/** describeTemplateError maps a thrown error to a user-facing message.
+ *
+ * Classification still runs on the raw error (status plus the stripped
+ * server message, exactly as before); only the curated fallback summaries
+ * resolve in the active locale. Actionable server text passes through
+ * untouched so secrets stay redacted and diagnostics stay intact.
+ */
 export function describeTemplateError(error: unknown): string {
+  // Tracks the locale when called during render or inside a computed, so
+  // retained failures refresh on a language switch.
+  void activeLocale.value;
+  const text = (
+    key: string,
+    params?: Record<string, string | number>,
+  ): string => String(i18n.global.t(key, params ?? {}));
   if (isApiError(error)) {
     if (error.status === 401) {
-      return "Your session expired. Please sign in again.";
+      return text("templates.errors.sessionExpired");
     }
     if (error.status === 400) {
       return (
       stripErrorPrefix(error.message) ||
-      "Invalid template values. Check the highlighted fields."
+      text("templates.errors.invalidValues")
     );
     }
     if (error.status === 404) {
-      return "Template not found. The catalog may have changed — reload the page.";
+      return (
+        stripErrorPrefix(error.message) ||
+        text("templates.errors.notFound")
+      );
     }
     if (error.status === 503) {
-      return "Services are disabled on the control plane (FEATURE_SERVICES=false).";
+      return text("templates.errors.disabled");
     }
-    return stripErrorPrefix(error.message) || "Request failed";
+    return stripErrorPrefix(error.message) || text("common.errors.requestFailed");
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
+    return stripErrorPrefix(error.message) || text("common.errors.unexpected");
   }
-  return "Something went wrong. Please try again.";
+  return text("common.errors.unexpected");
+}
+
+/**
+ * templateOverlayDescription renders a curated catalog description for a
+ * bundled template slug, falling back to the provider metadata for unknown
+ * or operator-provided templates. The slug itself is never translated.
+ */
+export function templateOverlayDescription(template: TemplateSummary): string {
+  // Tracks the locale when called during render or inside a computed.
+  void activeLocale.value;
+  const key = `templates.overlay.${template.slug}.description`;
+  if (i18n.global.te(key)) {
+    return String(i18n.global.t(key));
+  }
+  return template.description;
+}
+
+/**
+ * templateOverlayFieldHelp renders curated catalog help for one bundled
+ * template field, falling back to the provider help for unknown templates,
+ * unknown fields, or fields without a curated entry. Keys, labels,
+ * placeholders and secret values always stay provider data.
+ */
+export function templateOverlayFieldHelp(
+  slug: string,
+  field: TemplateField,
+): string | undefined {
+  // Tracks the locale when called during render or inside a computed.
+  void activeLocale.value;
+  const key = `templates.overlay.${slug}.fields.${field.key}.help`;
+  if (i18n.global.te(key)) {
+    return String(i18n.global.t(key));
+  }
+  return field.help;
 }

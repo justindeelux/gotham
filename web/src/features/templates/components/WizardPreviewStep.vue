@@ -2,6 +2,7 @@
 import { NAlert, NSpace, NSpin, NTag } from "naive-ui";
 
 import type { TemplateRender } from "@/features/templates/api/templates";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 interface Props {
   renderLoading: boolean;
@@ -11,6 +12,20 @@ interface Props {
 }
 
 defineProps<Props>();
+
+/**
+ * t renders preview copy in the active locale (tracks language switches).
+ * The rendered compose document and secret values stay raw and untranslated.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
+/** unit picks the singular/plural unit label for a count. */
+function unit(one: string, other: string, count: number): string {
+  return t(count === 1 ? one : other, { count });
+}
 </script>
 
 <template>
@@ -21,25 +36,33 @@ defineProps<Props>();
       </NAlert>
       <template v-else-if="render">
         <NSpace :size="8" align="center">
-          <NTag size="small">{{ render.spec.services.length }} services</NTag>
+          <NTag size="small">{{ unit("templates.preview.servicesOne", "templates.preview.servicesOther", render.spec.services.length) }}</NTag>
           <NTag size="small">
-            {{ render.spec.named_volumes.length }} named volumes
+            {{
+              unit(
+                "templates.preview.volumesOne",
+                "templates.preview.volumesOther",
+                render.spec.named_volumes.length,
+              )
+            }}
           </NTag>
           <NTag size="small">
-            {{ render.spec.domains.length }} domain routes
+            {{
+              unit(
+                "templates.preview.domainsOne",
+                "templates.preview.domainsOther",
+                render.spec.domains.length,
+              )
+            }}
           </NTag>
         </NSpace>
         <pre class="wizard__preview mono" data-testid="compose-preview">{{
           render.compose_yaml
         }}</pre>
         <NAlert type="info" :show-icon="true">
-          The engine only substitutes strings. A secret field stays a
-          <span class="mono">${field}</span> reference in this document;
-          its value travels separately in the service environment and is
-          redacted from errors and deploy history.
+          {{ t("templates.preview.secretNote", { ref: "${field}" }) }}
           <template v-if="secretKeys.length > 0">
-            Held separately: <span class="mono">{{ secretKeys.join(", ") }}</span
-            >.
+            {{ t("templates.preview.heldSeparately", { keys: secretKeys.join(", ") }) }}
           </template>
         </NAlert>
       </template>

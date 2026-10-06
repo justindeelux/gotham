@@ -9,6 +9,7 @@ import {
 import { toRef } from "vue";
 
 import { useTemplateWizard } from "@/features/templates/composables/useTemplateWizard";
+import { activeLocale, i18n } from "@/shared/i18n";
 import WizardConfigureStep from "./WizardConfigureStep.vue";
 import WizardCreatedPanel from "./WizardCreatedPanel.vue";
 import WizardFooter from "./WizardFooter.vue";
@@ -37,6 +38,16 @@ const wizard = useTemplateWizard(toRef(props, "show"), toRef(props, "slug"), {
 function close(): void {
   emit("update:show", false);
 }
+
+/**
+ * t renders wizard chrome copy in the active locale (tracks language
+ * switches). Called during render, so steps refresh without losing values.
+ * Template names and slugs stay raw parameters.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
 </script>
 
 <template>
@@ -51,7 +62,7 @@ function close(): void {
     @after-leave="wizard.reset"
   >
     <template #header>
-      Deploy template {{ wizard.detail.value?.name ?? slug }}
+      {{ t("templates.wizard.title", { name: wizard.detail.value?.name ?? slug }) }}
     </template>
 
     <NSpin :show="wizard.detailLoading.value">
@@ -61,9 +72,9 @@ function close(): void {
 
       <div v-else-if="wizard.detail.value" class="wizard">
         <NSteps :current="wizard.step.value" size="small">
-          <NStep title="Configure" description="Fill the template fields" />
-          <NStep title="Compose preview" description="Rendered from the schema" />
-          <NStep title="Create" description="Name the service and pick a node" />
+          <NStep :title="t('templates.wizard.steps.configure')" :description="t('templates.wizard.steps.configureDesc')" />
+          <NStep :title="t('templates.wizard.steps.preview')" :description="t('templates.wizard.steps.previewDesc')" />
+          <NStep :title="t('templates.wizard.steps.create')" :description="t('templates.wizard.steps.createDesc')" />
         </NSteps>
 
         <WizardConfigureStep

@@ -10,6 +10,7 @@ import {
 import { computed } from "vue";
 
 import type { TemplateField, TemplateValues } from "@/features/templates/api/templates";
+import { templateOverlayFieldHelp } from "@/features/templates/api/templates";
 
 /**
  * Renders a form from a template's field schema: text/secret input, number,
@@ -26,11 +27,18 @@ interface Props {
   modelValue: TemplateValues;
   errors?: Record<string, string>;
   disabled?: boolean;
+  /**
+   * Template slug for the curated field-help overlay. When set, help text
+   * resolves through the templates catalog with fallback to the provider
+   * help; unknown slugs always show the provider copy.
+   */
+  slug?: string;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   errors: () => ({}),
   disabled: false,
+  slug: "",
 });
 
 const emit = defineEmits<{
@@ -65,9 +73,21 @@ function numberValue(field: TemplateField): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/**
+ * helpText renders one field's help: the curated catalog overlay for a
+ * bundled template, otherwise the provider help. Field keys, labels and
+ * placeholders always stay provider data.
+ */
+function helpText(field: TemplateField): string | undefined {
+  if (props.slug !== "") {
+    return templateOverlayFieldHelp(props.slug, field);
+  }
+  return field.help;
+}
+
 /** feedbackText shows the validation message, falling back to the help. */
 function feedbackText(field: TemplateField): string {
-  return props.errors[field.key] ?? field.help ?? "";
+  return props.errors[field.key] ?? helpText(field) ?? "";
 }
 
 /** validationStatus marks a field in error without re-validating here. */

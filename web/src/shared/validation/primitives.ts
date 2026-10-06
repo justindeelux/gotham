@@ -18,18 +18,23 @@ export const portSchema = intInRange("Port must be between 1 and 65535", {
 });
 
 /**
- * serviceNameSchema backs "Enter a service name." wherever a service is
- * named: the services import dialog and the template wizard target form.
- * Shared (not per-feature) because both need the identical shape and message.
+ * serviceNameSchema backs the service name wherever a service is named:
+ * the services import dialog and the template wizard target form. Shared
+ * (not per-feature) because both need the identical shape and message. The
+ * message is a services-catalog key (I18N-7, JUS-48 ownership transfer):
+ * predicates, trim and null/undefined behavior are unchanged, and the
+ * display text resolves at invocation time through the shared adapter.
  */
-export const serviceNameSchema = requiredString("Enter a service name.");
+export const serviceNameSchema = requiredString("services.validation.nameRequired");
 
 /**
- * serviceNodeSchema backs "Select a node." wherever a node is picked for a
+ * serviceNodeSchema backs the node pick wherever a node is chosen for a
  * service: the services import dialog and the template wizard target form.
- * The value is a select output (never padded), so no trim is applied.
+ * The value is a select output (never padded), so no trim is applied. The
+ * message is a services-catalog key (I18N-7, JUS-48 ownership transfer);
+ * the min-1 predicate is unchanged.
  */
-export const serviceNodeSchema = z.string().min(1, "Select a node.");
+export const serviceNodeSchema = z.string().min(1, "services.validation.nodeRequired");
 
 /** nonEmptyString trims and rejects blank input with the caller's message. */
 export function nonEmptyString(message: string): z.ZodString {

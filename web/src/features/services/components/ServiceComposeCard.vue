@@ -3,8 +3,18 @@ import { NAlert, NCard, NSpace, NText } from "naive-ui";
 
 import ComposeEditor from "@/features/services/components/ComposeEditor.vue";
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 /** ServiceComposeCard renders the compose.yaml view/edit card. */
+/**
+ * t renders card copy in the active locale (tracks language switches).
+ * Called during render, so labels refresh without losing drafts.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const {
   service,
   error,
@@ -18,10 +28,10 @@ const {
 </script>
 
 <template>
-  <NCard title="compose.yaml">
+  <NCard :title="t('services.compose.title')">
     <template #header-extra>
       <NText depth="3" class="small">
-        saving creates a new version; the running project switches on deploy
+        {{ t("services.compose.savedNote") }}
       </NText>
     </template>
     <NSpace vertical :size="12">
@@ -39,8 +49,8 @@ const {
       <NText v-else depth="3" class="small">
         {{
           error
-            ? "The compose document is unavailable."
-            : "Loading the service configuration…"
+            ? t("services.compose.unavailable")
+            : t("services.compose.loading")
         }}
       </NText>
     </NSpace>

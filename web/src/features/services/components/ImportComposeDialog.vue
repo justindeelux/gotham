@@ -13,6 +13,7 @@ import {
 import { toRef } from "vue";
 
 import { useImportService } from "@/features/services/composables/useImportService";
+import { activeLocale, i18n } from "@/shared/i18n";
 import type { Service } from "@/features/services/api/services";
 import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
 import ServerPicker from "@/features/projects/components/ServerPicker.vue";
@@ -36,6 +37,15 @@ const emit = defineEmits<{
  * ImportComposeDialog renders the compose import modal and its form. Hosted
  * by the environment page with the route's scope (PE-5, Linear JUS-34).
  */
+/**
+ * t renders dialog copy in the active locale (tracks language switches).
+ * Called during render, so labels refresh without losing the typed draft.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const dialog = useImportService(
   toRef(props, "show"),
   { projectId: toRef(props, "projectId"), environmentId: toRef(props, "environmentId") },
@@ -47,7 +57,7 @@ const dialog = useImportService(
   <NModal
     :show="props.show"
     preset="card"
-    title="Import compose"
+    :title="t('services.import.title')"
     style="width: 640px; max-width: 96vw"
     @update:show="(value: boolean) => emit('update:show', value)"
   >
@@ -65,14 +75,12 @@ const dialog = useImportService(
         {{ dialog.importError.value }}
       </NAlert>
       <p class="small muted mb-3">
-        Paste an existing compose document. The control plane stores it
-        verbatim in <span class="mono">services.compose_yaml</span> and
-        validates it before saving.
+        {{ t("services.import.intro", { field: "services.compose_yaml" }) }}
       </p>
       <NForm label-placement="top">
         <div class="import-grid">
           <NFormItem
-            label="Service name"
+            :label="t('services.import.nameLabel')"
             required
             :feedback="dialog.nameError.value"
             :validation-status="dialog.nameError.value ? 'error' : undefined"
@@ -80,45 +88,46 @@ const dialog = useImportService(
           >
             <NInput
               v-model:value="dialog.name.value"
-              placeholder="blog-staging"
-              aria-label="Service name"
+              :placeholder="t('services.import.namePlaceholder')"
+              :aria-label="t('services.import.nameLabel')"
             />
           </NFormItem>
           <ServerPicker
             v-model="dialog.serverId.value"
-            label="Node"
+            :label="t('services.import.nodeLabel')"
             :feedback="dialog.nodeError.value"
           />
         </div>
-        <NFormItem label="compose.yaml" class="field-import-yaml">
+        <NFormItem :label="t('services.import.yamlLabel')" class="field-import-yaml">
           <NInput
             v-model:value="dialog.yaml.value"
             type="textarea"
             class="mono"
             spellcheck="false"
             :autosize="{ minRows: 10, maxRows: 24 }"
-            placeholder="services:&#10;  web:&#10;    image: nginx:1.27-alpine"
-            aria-label="compose.yaml"
+            :placeholder="t('services.import.yamlExample')"
+            :aria-label="t('services.import.yamlLabel')"
           />
         </NFormItem>
       </NForm>
       <NText depth="3" class="small">
-        <span class="mono">{{ dialog.envReference }}</span> references are substituted from
-        the environment before the agent validates the document. A compose
-        service is routed by the
-        <span class="mono">gotham.domain</span> label. Files larger than
-        1&nbsp;MiB are rejected by the API.
+        {{
+          t("services.import.footnote", {
+            env: dialog.envReference,
+            label: "gotham.domain",
+          })
+        }}
       </NText>
     </NSpin>
     <template #footer>
       <NSpace :size="8" justify="end">
-        <NButton @click="emit('update:show', false)">Cancel</NButton>
+        <NButton @click="emit('update:show', false)">{{ t("common.actions.cancel") }}</NButton>
         <NButton
           type="primary"
           :loading="dialog.importing.value"
           @click="dialog.handleImport"
         >
-          Import service
+          {{ t("services.import.submit") }}
         </NButton>
       </NSpace>
     </template>

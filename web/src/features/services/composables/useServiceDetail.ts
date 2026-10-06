@@ -3,7 +3,8 @@ import { computed, inject, onMounted, ref, watch } from "vue";
 import type { ComputedRef, InjectionKey, Ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import { describeServiceError, listServiceContainers } from "@/features/services/api/services";
+import { deployStateLabel, describeServiceError, listServiceContainers } from "@/features/services/api/services";
+import { activeLocale, i18n } from "@/shared/i18n";
 import type {
   ComposeServiceContainer,
   Service,
@@ -110,25 +111,48 @@ export function useServiceDetail(): ServiceDetailContext {
 
   const serviceId = computed<string>(() => String(route.params.id ?? ""));
 
-  const error = ref<string | null>(null);
+  /**
+   * Raw refusals retained per surface; each display error derives from its
+   * refusal in the active locale (see retained below), so an open banner
+   * refreshes on a language switch without losing drafts or refetching.
+   */
+  const loadFailure: Ref<unknown> = ref(null);
   const notFound = ref(false);
 
   const composeYaml = ref("");
   const composeEditing = ref(false);
   const composeSaving = ref(false);
-  const composeError = ref<string | null>(null);
+  const composeFailure: Ref<unknown> = ref(null);
 
   const envDraft = ref<EnvRow[]>([]);
   const envSaving = ref(false);
-  const envError = ref<string | null>(null);
+  const envFailure: Ref<unknown> = ref(null);
 
   const containers = ref<ComposeServiceContainer[]>([]);
   const containersLoading = ref(false);
-  const containersError = ref<string | null>(null);
+  const containersFailure: Ref<unknown> = ref(null);
   const containersLoaded = ref(false);
 
   const busy = ref<string | null>(null);
-  const actionError = ref<string | null>(null);
+  const actionFailure: Ref<unknown> = ref(null);
+
+  /** retained derives display text from a raw refusal in the active locale. */
+  function retained(failure: Ref<unknown>): ComputedRef<string | null> {
+    return computed<string | null>(() => {
+      if (failure.value === null) {
+        return null;
+      }
+      // Tracks the locale when called during render or inside a computed.
+      void activeLocale.value;
+      return describeServiceError(failure.value);
+    });
+  }
+
+  const error = retained(loadFailure);
+  const composeError = retained(composeFailure);
+  const envError = retained(envFailure);
+  const containersError = retained(containersFailure);
+  const actionError = retained(actionFailure);
 
   const service = computed(() => servicesStore.serviceOf(serviceId.value));
   const deploys = computed<ServiceDeploy[]>(() =>
@@ -163,7 +187,15 @@ export function useServiceDetail(): ServiceDetailContext {
    */
   const history = computed(() => servicesStore.historyOf(serviceId.value));
   const historyLoaded = computed<boolean>(() => history.value?.loaded ?? false);
-  const historyUnavailable = computed<string | null>(() => history.value?.error ?? null);
+  const historyUnavailable = computed<string | null>(() => {
+    const failure = history.value?.failure ?? null;
+    if (failure !== null) {
+      // Tracks the locale when called during render or inside a computed.
+      void activeLocale.value;
+      return describeServiceError(failure);
+    }
+    return history.value?.error ?? null;
+  });
   const historyLoading = computed<boolean>(() => history.value?.loading ?? false);
 
   const serverName = computed<string>(() => {
@@ -172,7 +204,12 @@ export function useServiceDetail(): ServiceDetailContext {
       return "—";
     }
     const server = serversStore.servers.find((item) => item.id === current.server_id);
-    return server ? server.name : "unknown node";
+        if (server) {
+      return server.name;
+    }
+    // Tracks the locale when called during render or inside a computed.
+    void activeLocale.value;
+    return String(i18n.global.t("services.overview.unknownNode"));
   });
 
   /**
@@ -207,16 +244,16 @@ export function useServiceDetail(): ServiceDetailContext {
     // and an obsolete completion must never write another service's drafts.
     const id = serviceId.value;
     loadedServiceId.value = "";
-    error.value = null;
+    loadFailure.value = null;
     notFound.value = false;
-    actionError.value = null;
+    actionFailure.value = null;
     moveSaving.value = false;
-    moveError.value = null;
-    composeError.value = null;
+    moveFailure.value = null;
+    composeFailure.value = null;
     composeEditing.value = false;
-    envError.value = null;
+    envFailure.value = null;
     containers.value = [];
-    containersError.value = null;
+    containersFailure.value = null;
     containersLoaded.value = false;
     composeYaml.value = "";
     envDraft.value = [];
@@ -249,7 +286,7 @@ export function useServiceDetail(): ServiceDetailContext {
       if (token !== loadToken) {
         return;
       }
-      error.value = describeServiceError(err);
+      loadFailure.value = err;
       notFound.value = isApiError(err) && err.status === 404;
       return;
     }
@@ -275,7 +312,7 @@ export function useServiceDetail(): ServiceDetailContext {
     }
     const token = loadToken;
     composeSaving.value = true;
-    composeError.value = null;
+    composeFailure.value = null;
     try {
       const updated = await servicesStore.update(id, { compose_yaml: text });
       if (token !== loadToken || id !== serviceId.value) {
@@ -285,10 +322,10 @@ export function useServiceDetail(): ServiceDetailContext {
       }
       composeYaml.value = updated.compose_yaml ?? text;
       composeEditing.value = false;
-      message.success("Compose document saved. Deploy to apply it on the node.");
+      message.success(String(i18n.global.t("services.toast.composeSaved")));
     } catch (err) {
       if (token === loadToken && id === serviceId.value) {
-        composeError.value = describeServiceError(err);
+        composeFailure.value = err;
       }
     } finally {
       composeSaving.value = false;
@@ -331,17 +368,17 @@ export function useServiceDetail(): ServiceDetailContext {
     }
     const token = loadToken;
     envSaving.value = true;
-    envError.value = null;
+    envFailure.value = null;
     try {
       const updated = await servicesStore.update(id, { env });
       if (token !== loadToken || id !== serviceId.value) {
         return;
       }
       envDraft.value = envRows(updated.env ?? {});
-      message.success("Environment saved. It applies to the next deploy.");
+      message.success(String(i18n.global.t("services.toast.envSaved")));
     } catch (err) {
       if (token === loadToken && id === serviceId.value) {
-        envError.value = describeServiceError(err);
+        envFailure.value = err;
       }
     } finally {
       envSaving.value = false;
@@ -351,13 +388,13 @@ export function useServiceDetail(): ServiceDetailContext {
   /** loadContainers reads the project's containers from the node on demand. */
   async function loadContainers(): Promise<void> {
     containersLoading.value = true;
-    containersError.value = null;
+    containersFailure.value = null;
     try {
       containers.value = await listServiceContainers(serviceId.value);
       containersLoaded.value = true;
     } catch (err) {
       containers.value = [];
-      containersError.value = describeServiceError(err);
+      containersFailure.value = err;
     } finally {
       containersLoading.value = false;
     }
@@ -366,12 +403,12 @@ export function useServiceDetail(): ServiceDetailContext {
   /** handleDeploy renders the stored document and starts the project. */
   async function handleDeploy(): Promise<void> {
     busy.value = "deploy";
-    actionError.value = null;
+    actionFailure.value = null;
     try {
       const outcome = await servicesStore.deploy(serviceId.value);
-      message.success(`Deploy ${outcome.deploy.state}.`);
+      message.success(String(i18n.global.t("services.toast.deployState", { state: deployStateLabel(outcome.deploy.state) })));
     } catch (err) {
-      actionError.value = describeServiceError(err);
+      actionFailure.value = err;
     } finally {
       busy.value = null;
     }
@@ -380,12 +417,12 @@ export function useServiceDetail(): ServiceDetailContext {
   /** handleStop takes the project down; named volumes keep their data. */
   async function handleStop(): Promise<void> {
     busy.value = "stop";
-    actionError.value = null;
+    actionFailure.value = null;
     try {
       await servicesStore.stop(serviceId.value);
-      message.success("Service stopped. Named volumes were kept.");
+      message.success(String(i18n.global.t("services.toast.stopped")));
     } catch (err) {
-      actionError.value = describeServiceError(err);
+      actionFailure.value = err;
     } finally {
       busy.value = null;
     }
@@ -394,12 +431,12 @@ export function useServiceDetail(): ServiceDetailContext {
   /** handleRestart restarts a running project, or starts a stopped one. */
   async function handleRestart(): Promise<void> {
     busy.value = "restart";
-    actionError.value = null;
+    actionFailure.value = null;
     try {
       await servicesStore.restart(serviceId.value);
-      message.success("Restart sent to the node agent.");
+      message.success(String(i18n.global.t("services.toast.restartSent")));
     } catch (err) {
-      actionError.value = describeServiceError(err);
+      actionFailure.value = err;
     } finally {
       busy.value = null;
     }
@@ -409,10 +446,10 @@ export function useServiceDetail(): ServiceDetailContext {
   async function handleDelete(): Promise<void> {
     const current = service.value;
     busy.value = "delete";
-    actionError.value = null;
+    actionFailure.value = null;
     try {
       await servicesStore.remove(serviceId.value);
-      message.success("Service deleted. Named volumes were kept on the node.");
+      message.success(String(i18n.global.t("services.toast.deleted")));
       if (current) {
         await router.push({
           name: "environment-detail",
@@ -422,7 +459,7 @@ export function useServiceDetail(): ServiceDetailContext {
         await router.push({ name: "projects" });
       }
     } catch (err) {
-      actionError.value = describeServiceError(err);
+      actionFailure.value = err;
     } finally {
       busy.value = null;
     }
@@ -432,7 +469,9 @@ export function useServiceDetail(): ServiceDetailContext {
   const canWrite = computed<boolean>(() => projectsStore.canWrite);
 
   const moveSaving = ref(false);
-  const moveError = ref<string | null>(null);
+  /** moveFailure retains the raw move refusal; moveError derives its display. */
+  const moveFailure: Ref<unknown> = ref(null);
+  const moveError = retained(moveFailure);
 
   /**
    * handleMove applies the location settings (move environment, change
@@ -463,13 +502,13 @@ export function useServiceDetail(): ServiceDetailContext {
     }
     const targetId = serviceId.value;
     moveSaving.value = true;
-    moveError.value = null;
+    moveFailure.value = null;
     try {
       const updated = await servicesStore.update(targetId, input);
       if (targetId !== serviceId.value) {
         return; // the route moved on while the write was in flight
       }
-      message.success("Location saved");
+      message.success(String(i18n.global.t("services.toast.locationSaved")));
       await refreshProjectCounts([current.project_id, updated.project_id]);
       if (targetId !== serviceId.value) {
         return;
@@ -486,7 +525,7 @@ export function useServiceDetail(): ServiceDetailContext {
       }
     } catch (err) {
       if (targetId === serviceId.value) {
-        moveError.value = describeServiceError(err);
+        moveFailure.value = err;
       }
     } finally {
       if (targetId === serviceId.value) {

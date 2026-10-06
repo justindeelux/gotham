@@ -1,5 +1,8 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import type { Ref } from "vue";
+
+import { activeLocale } from "@/shared/i18n";
 
 import {
   describeTemplateError,
@@ -23,18 +26,36 @@ export const useTemplatesStore = defineStore("templates", () => {
   const templates = ref<TemplateSummary[]>([]);
   const details = ref<Record<string, TemplateDetail>>({});
   const loading = ref(false);
-  const error = ref<string | null>(null);
+  /** listFailure retains the raw catalog refusal; error derives its display. */
+  const listFailure: Ref<unknown> = ref(null);
+  const error = computed<string | null>(() => {
+    if (listFailure.value === null) {
+      return null;
+    }
+    // Tracks the locale when called during render or inside a computed.
+    void activeLocale.value;
+    return describeTemplateError(listFailure.value);
+  });
   const detailLoading = ref(false);
-  const detailError = ref<string | null>(null);
+  /** detailFailure retains the raw detail refusal; detailError derives it. */
+  const detailFailure: Ref<unknown> = ref(null);
+  const detailError = computed<string | null>(() => {
+    if (detailFailure.value === null) {
+      return null;
+    }
+    // Tracks the locale when called during render or inside a computed.
+    void activeLocale.value;
+    return describeTemplateError(detailFailure.value);
+  });
 
   /** fetchTemplates loads the gallery catalog. */
   async function fetchTemplates(): Promise<void> {
     loading.value = true;
-    error.value = null;
+    listFailure.value = null;
     try {
       templates.value = await listTemplates();
     } catch (err) {
-      error.value = describeTemplateError(err);
+      listFailure.value = err;
       throw err;
     } finally {
       loading.value = false;
@@ -53,13 +74,13 @@ export const useTemplatesStore = defineStore("templates", () => {
       return cached;
     }
     detailLoading.value = true;
-    detailError.value = null;
+    detailFailure.value = null;
     try {
       const detail = await getTemplate(slug);
       details.value = { ...details.value, [slug]: detail };
       return detail;
     } catch (err) {
-      detailError.value = describeTemplateError(err);
+      detailFailure.value = err;
       throw err;
     } finally {
       detailLoading.value = false;
@@ -82,9 +103,9 @@ export const useTemplatesStore = defineStore("templates", () => {
     templates.value = [];
     details.value = {};
     loading.value = false;
-    error.value = null;
+    listFailure.value = null;
     detailLoading.value = false;
-    detailError.value = null;
+    detailFailure.value = null;
   }
 
   return {

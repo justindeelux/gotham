@@ -10,7 +10,7 @@ import { createMemoryHistory, createRouter } from "vue-router";
 import { defineComponent, h, nextTick } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import type { VueWrapper } from "@vue/test-utils";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/features/domains/api/proxy", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/features/domains/api/proxy")>();
@@ -36,6 +36,8 @@ import {
   listRedirects,
   updateDNSProvider,
 } from "@/features/domains/api/proxy";
+import domainsEn from "@/features/domains/locales/en";
+import domainsVi from "@/features/domains/locales/vi";
 import { listApplications as listApps } from "@/features/applications";
 import DomainsPage from "@/features/domains/pages/DomainsPage.vue";
 import { provideCertificates } from "@/features/domains/composables/useCertificates";
@@ -44,6 +46,15 @@ import { provideProviders } from "@/features/domains/composables/useProviders";
 import type { ProvidersState } from "@/features/domains/composables/useProviders";
 import { provideRedirects } from "@/features/domains/composables/useRedirects";
 import type { RedirectsState } from "@/features/domains/composables/useRedirects";
+import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
+
+/** Catalogs render through the real composer: register before mounting. */
+beforeEach(() => {
+  resetLocaleState();
+  i18n.global.mergeLocaleMessage("en", { domains: domainsEn });
+  i18n.global.mergeLocaleMessage("vi", { domains: domainsVi });
+  syncComposerLocale("en");
+});
 
 function never<T>(): Promise<T> {
   return new Promise<T>(() => undefined);
@@ -73,7 +84,7 @@ async function mountPage() {
   const router = testRouter();
   await router.isReady();
   const wrapper = mount(shell(DomainsPage), {
-    global: { plugins: [router], stubs: { teleport: true } },
+    global: { plugins: [router, i18n], stubs: { teleport: true } },
   });
   await nextTick();
   await flushPromises();

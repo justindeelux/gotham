@@ -21,17 +21,15 @@ const { openProviderCreate, openProviderEdit, handleToggleProvider, handleDelete
 </script>
 
 <template>
-  <NCard style="margin-top: 16px" title="DNS providers">
+  <NCard style="margin-top: 16px" :title="$t('domains.providers.title')">
     <template #header-extra>
       <NButton size="small" @click="openProviderCreate">
-        Add provider
+        {{ $t("domains.providers.add") }}
       </NButton>
     </template>
     <NSpace vertical :size="12">
       <NText depth="3">
-        Credentials are sealed server-side and never returned by the API.
-        The UI can set or rotate a credential, but cannot display or copy
-        it.
+        {{ $t("domains.providers.sealedNote") }}
       </NText>
       <div
         v-if="proxyStore.providers.length > 0"
@@ -53,28 +51,27 @@ const { openProviderCreate, openProviderEdit, handleToggleProvider, handleDelete
                 size="small"
                 :type="provider.enabled ? 'success' : 'default'"
               >
-                {{ provider.enabled ? "enabled" : "disabled" }}
+                {{ provider.enabled ? $t("domains.providers.enabled") : $t("domains.providers.disabled") }}
               </NTag>
             </div>
             <dl class="kv">
-              <dt>Zones</dt>
+              <dt>{{ $t("domains.providers.zones") }}</dt>
               <dd class="mono">{{ provider.zones.join(", ") }}</dd>
-              <dt>Credential</dt>
+              <dt>{{ $t("domains.providers.credential") }}</dt>
               <dd class="mono">
-                {{ provider.credentials_set ? "set" : "not set" }} · the API
-                never returns the token
+                {{ provider.credentials_set ? $t("domains.providers.credentialSet") : $t("domains.providers.credentialUnset") }} {{ $t("domains.providers.credentialNeverReturned") }}
               </dd>
-              <dt>Updated</dt>
+              <dt>{{ $t("domains.providers.updated") }}</dt>
               <dd>{{ relativeTime(provider.updated_at) }}</dd>
             </dl>
             <NSpace :size="8" align="center" class="channel-actions">
               <NSwitch
                 :value="provider.enabled"
-                :aria-label="`Enable ${provider.name || provider.provider}`"
+                :aria-label="$t('domains.providers.enableLabel', { name: provider.name || provider.provider })"
                 @update:value="(value: boolean) => handleToggleProvider(provider, value)"
               />
               <NButton size="small" @click="openProviderEdit(provider)">
-                Edit &amp; rotate credential
+                {{ $t("domains.providers.editRotate") }}
               </NButton>
               <NPopconfirm
                 :positive-button-props="{ type: 'error' }"
@@ -82,12 +79,10 @@ const { openProviderCreate, openProviderEdit, handleToggleProvider, handleDelete
               >
                 <template #trigger>
                   <NButton size="small" type="error" ghost>
-                    Delete
+                    {{ $t("domains.providers.delete") }}
                   </NButton>
                 </template>
-                Delete the {{ provider.provider }} provider
-                {{ provider.name || "" }}? Providers referenced by a
-                certificate configuration cannot be deleted.
+                {{ $t("domains.providers.deleteConfirm", { provider: provider.provider, name: provider.name || "" }) }}
               </NPopconfirm>
             </NSpace>
           </div>
@@ -95,27 +90,23 @@ const { openProviderCreate, openProviderEdit, handleToggleProvider, handleDelete
       </div>
       <NEmpty
         v-else
-        description="No DNS providers configured."
+        :description="$t('domains.providers.empty')"
       >
         <template #extra>
           <p class="empty-hint">
-            DNS-01 challenges need a provider credential. Wildcard
-            certificates require the DNS-01 challenge.
+            {{ $t("domains.providers.emptyHint") }}
           </p>
           <NButton type="primary" @click="openProviderCreate">
-            Add provider
+            {{ $t("domains.providers.add") }}
           </NButton>
         </template>
       </NEmpty>
       <div class="embed embed--warn">
-        <h4>DNS-01 requires the zone to be delegated to the provider</h4>
+        <h4>{{ $t("domains.providers.dns01Title") }}</h4>
         <p>
-          Let's Encrypt validates through a TXT record
-          <span class="mono">_acme-challenge.&lt;domain&gt;</span> created
-          by the provider. If the zone's nameservers do not point at
-          Cloudflare or DigitalOcean, the order fails with NXDOMAIN. The
-          control plane stores the configured zones; it does not check
-          delegation for you.
+          {{ $t("domains.providers.dns01BodyPre") }}
+          <span class="mono">_acme-challenge.&lt;domain&gt;</span>
+          {{ $t("domains.providers.dns01BodyPost") }}
         </p>
       </div>
     </NSpace>

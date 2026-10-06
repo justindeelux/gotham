@@ -8,7 +8,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h, nextTick } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import type { VueWrapper } from "@vue/test-utils";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/features/notifications/api/notifications", async (importOriginal) => {
   const actual =
@@ -25,12 +25,23 @@ vi.mock("@/features/databases", async (importOriginal) => {
 });
 
 import { listChannels } from "@/features/notifications/api/notifications";
+import notificationsEn from "@/features/notifications/locales/en";
+import notificationsVi from "@/features/notifications/locales/vi";
 import NotificationsPage from "@/features/notifications/pages/NotificationsPage.vue";
 import { provideChannelDialog } from "@/features/notifications/composables/useChannelDialog";
 import type { ChannelDialogState } from "@/features/notifications/composables/useChannelDialog";
 import { listApplications } from "@/features/applications";
 import { listDatabases } from "@/features/databases";
 import { useTeamsStore } from "@/features/teams";
+import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
+
+/** Catalogs render through the real composer: register before mounting. */
+beforeEach(() => {
+  resetLocaleState();
+  i18n.global.mergeLocaleMessage("en", { notifications: notificationsEn });
+  i18n.global.mergeLocaleMessage("vi", { notifications: notificationsVi });
+  syncComposerLocale("en");
+});
 
 function shell(child: object) {
   return defineComponent({
@@ -55,7 +66,7 @@ function seedTeams(): void {
 
 async function mountPage() {
   const wrapper = mount(shell(NotificationsPage), {
-    global: { stubs: { teleport: true } },
+    global: { plugins: [i18n], stubs: { teleport: true } },
   });
   await nextTick();
   await flushPromises();

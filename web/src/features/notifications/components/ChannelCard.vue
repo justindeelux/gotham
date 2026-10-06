@@ -7,6 +7,7 @@ import type {
   TestResult,
 } from "@/features/notifications/api/notifications";
 import {
+  channelText,
   describeChannelError,
   eventLabel,
   kindLabel,
@@ -45,7 +46,11 @@ async function handleToggle(channel: NotificationChannel, enabled: boolean): Pro
 async function handleDelete(channel: NotificationChannel): Promise<void> {
   try {
     await channelsStore.remove(channel.id);
-    message.success(`Deleted ${channel.name}`);
+    message.success(
+      channelText("notifications.toast.deleted", "Deleted {name}", {
+        name: channel.name,
+      }),
+    );
   } catch (error) {
     message.error(describeChannelError(error));
   }
@@ -78,7 +83,7 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
           size="small"
           round
         >
-          {{ props.channel.enabled ? "enabled" : "disabled" }}
+          {{ props.channel.enabled ? $t("notifications.card.enabled") : $t("notifications.card.disabled") }}
         </NTag>
         <NTag
           v-if="props.channel.secrets_configured"
@@ -86,13 +91,13 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
           round
           type="info"
         >
-          secret configured
+          {{ $t("notifications.card.secretConfigured") }}
         </NTag>
       </NSpace>
     </template>
     <template #header-extra>
       <NSpace align="center" :size="8">
-        <NText depth="3" class="small">Enabled</NText>
+        <NText depth="3" class="small">{{ $t("notifications.card.enabledLabel") }}</NText>
         <NSwitch
           :value="props.channel.enabled"
           :disabled="!canMutate"
@@ -123,7 +128,7 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
             :loading="testing"
             @click="void handleTest(props.channel)"
           >
-            Send test
+            {{ $t("notifications.card.sendTest") }}
           </NButton>
           <NText
             v-if="testResult"
@@ -132,12 +137,12 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
             class="small"
             data-test-channel-result
           >
-            {{ testResult.ok ? "Test delivered: " : "Test failed: " }}{{
+            {{ testResult.ok ? $t("notifications.card.testDelivered") : $t("notifications.card.testFailed") }}{{
               testResult.message
             }}
           </NText>
           <NText v-else depth="3" class="small">
-            No test sent yet.
+            {{ $t("notifications.card.noTest") }}
           </NText>
         </NSpace>
         <NSpace align="center" :size="12">
@@ -146,7 +151,7 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
             :disabled="!canMutate"
             @click="openEdit(props.channel)"
           >
-            Edit
+            {{ $t("notifications.card.edit") }}
           </NButton>
           <NPopconfirm
             :positive-button-props="{ type: 'error' }"
@@ -159,14 +164,13 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
                 type="error"
                 :disabled="!canMutate"
               >
-                Delete
+                {{ $t("notifications.card.delete") }}
               </NButton>
             </template>
-            Delete channel "{{ props.channel.name }}"? Deploy and backup
-            notifications stop immediately.
+            {{ $t("notifications.card.deleteConfirm", { name: props.channel.name }) }}
           </NPopconfirm>
           <NText depth="3" class="small">
-            Updated {{ relativeTime(props.channel.updated_at) }}
+            {{ $t("notifications.card.updated") }} {{ relativeTime(props.channel.updated_at) }}
           </NText>
         </NSpace>
       </NSpace>

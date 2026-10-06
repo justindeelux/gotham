@@ -4,7 +4,7 @@ import type { DataTableColumns } from "naive-ui";
 import { computed, h } from "vue";
 
 import type { TeamInvite } from "@/features/teams/api/teams";
-import { roleLabel } from "@/features/teams/api/teams";
+import { roleLabel, teamText } from "@/features/teams/api/teams";
 import { expiryLabel, relativeTime } from "@/shared/utils/format";
 import { useTeamsPageContext } from "@/features/teams/composables/useTeamsPage";
 
@@ -21,32 +21,32 @@ const {
 
 const inviteColumns = computed<DataTableColumns<TeamInvite>>(() => [
   {
-    title: "Email",
+    title: teamText("teams.invites.email", "Email"),
     key: "email",
     minWidth: 220,
     render: (row) => h("span", { class: "mono fg-2" }, row.email),
   },
   {
-    title: "Role",
+    title: teamText("teams.invites.role", "Role"),
     key: "role",
     width: 120,
     render: (row) =>
       h(NTag, { size: "small", round: true }, { default: () => roleLabel(row.role) }),
   },
   {
-    title: "Sent",
+    title: teamText("teams.invites.sent", "Sent"),
     key: "created_at",
     width: 130,
     render: (row) => h("span", { class: "mono" }, relativeTime(row.created_at)),
   },
   {
-    title: "Expires",
+    title: teamText("teams.invites.expires", "Expires"),
     key: "expires_at",
     width: 150,
     render: (row) => h("span", { class: "mono" }, expiryLabel(row.expires_at)),
   },
   {
-    title: "Actions",
+    title: teamText("teams.invites.actions", "Actions"),
     key: "actions",
     width: 120,
     render: (row) =>
@@ -58,8 +58,20 @@ const inviteColumns = computed<DataTableColumns<TeamInvite>>(() => [
         },
         {
           trigger: () =>
-            h(NButton, { size: "small", ghost: true, type: "error" }, { default: () => "Revoke" }),
-          default: () => `Revoke the invite to ${row.email}?`,
+            h(
+              NButton,
+              { size: "small", ghost: true, type: "error" },
+              {
+                default: () =>
+                  teamText("teams.invites.revoke", "Revoke"),
+              },
+            ),
+          default: () =>
+            teamText(
+              "teams.invites.revokeConfirm",
+              "Revoke the invite to {email}?",
+              { email: row.email },
+            ),
         },
       ),
   },
@@ -86,10 +98,10 @@ const inviteColumns = computed<DataTableColumns<TeamInvite>>(() => [
     </NAlert>
     <div v-if="canManage" class="invites-actions">
       <NButton size="small" type="primary" @click="openInvite">
-        Invite member
+        {{ $t("teams.invites.inviteMember") }}
       </NButton>
       <NText depth="3">
-        Invites are single-use and bound to the email address.
+        {{ $t("teams.invites.singleUse") }}
       </NText>
     </div>
     <NDataTable
@@ -103,7 +115,7 @@ const inviteColumns = computed<DataTableColumns<TeamInvite>>(() => [
       data-testid="invites-table"
     />
     <NText v-if="!canManage" depth="3">
-      Your role does not list or manage invites.
+      {{ $t("teams.invites.readOnlyNote") }}
     </NText>
   </NSpace>
 </template>

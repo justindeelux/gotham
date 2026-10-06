@@ -13,6 +13,7 @@ import {
   describeChannelError,
   eventLabel,
 } from "@/features/notifications/api/notifications";
+import { channelText } from "@/features/notifications/api/notifications";
 import { useNotificationsStore } from "@/features/notifications/stores/notifications";
 import { canSubmitChannel } from "@/features/notifications/schemas/notifications";
 import {
@@ -41,7 +42,17 @@ function createChannelDialogState() {
   const formOpen = ref(false);
   const editingId = ref("");
   const saving = ref(false);
-  const formError = ref<string | null>(null);
+  /**
+   * Raw failure behind the dialog alert. The display string derives from it
+   * plus the current locale, so a language switch refreshes a retained
+   * alert without losing the typed draft.
+   */
+  const formErrorRaw = ref<unknown>(null);
+  const formError = computed<string | null>(() =>
+    formErrorRaw.value === null
+      ? null
+      : describeChannelError(formErrorRaw.value),
+  );
   /** Masked secrets as read, so an untouched field is never sent back. */
   const secretOriginals = ref({ webhook_url: "", bot_token: "", password: "" });
 
@@ -94,7 +105,13 @@ function createChannelDialogState() {
       return "";
     }
     const names = events.map((event) => eventLabel(event)).join(", ");
-    return `This channel is subscribed to ${names}, which its resource scope cannot deliver. The stored subscription is kept unchanged unless you edit the events or the scope.`;
+    return channelText(
+      "notifications.dialog.outOfScope",
+      "This channel is subscribed to {names}, which its resource scope " +
+        "cannot deliver. The stored subscription is kept unchanged unless " +
+        "you edit the events or the scope.",
+      { names },
+    );
   });
 
   /**
@@ -104,18 +121,30 @@ function createChannelDialogState() {
   const scopeOptions = computed<
     Array<{ label: string; value: ChannelScope; disabled?: boolean }>
   >(() => [
-    { label: "Team-wide (all resources)", value: "" },
+    {
+      label: channelText(
+        "notifications.dialog.scopeTeamWide",
+        "Team-wide (all resources)",
+      ),
+      value: "",
+    },
     {
       label: applicationsUnavailable.value
-        ? "Application (unavailable)"
-        : "Application",
+        ? channelText(
+            "notifications.dialog.scopeAppUnavailable",
+            "Application (unavailable)",
+          )
+        : channelText("notifications.dialog.scopeApp", "Application"),
       value: "application",
       disabled: applicationsUnavailable.value,
     },
     {
       label: databasesUnavailable.value
-        ? "Database (unavailable)"
-        : "Database",
+        ? channelText(
+            "notifications.dialog.scopeDbUnavailable",
+            "Database (unavailable)",
+          )
+        : channelText("notifications.dialog.scopeDb", "Database"),
       value: "database",
       disabled: databasesUnavailable.value,
     },
@@ -124,13 +153,25 @@ function createChannelDialogState() {
   /** unavailableScopeHint names the resource features that cannot be offered. */
   const unavailableScopeHint = computed<string>(() => {
     if (applicationsUnavailable.value && databasesUnavailable.value) {
-      return "Applications and databases are unavailable on this control plane; the channel can stay team-wide.";
+      return channelText(
+        "notifications.dialog.unavailableBoth",
+        "Applications and databases are unavailable on this control plane; " +
+          "the channel can stay team-wide.",
+      );
     }
     if (applicationsUnavailable.value) {
-      return "Applications are unavailable on this control plane (FEATURE_APPLICATIONS=false); a database scope is still available.";
+      return channelText(
+        "notifications.dialog.unavailableApps",
+        "Applications are unavailable on this control plane " +
+          "(FEATURE_APPLICATIONS=false); a database scope is still available.",
+      );
     }
     if (databasesUnavailable.value) {
-      return "Databases are unavailable on this control plane (FEATURE_DATABASES=false); an application scope is still available.";
+      return channelText(
+        "notifications.dialog.unavailableDbs",
+        "Databases are unavailable on this control plane " +
+          "(FEATURE_DATABASES=false); an application scope is still available.",
+      );
     }
     return "";
   });
@@ -139,11 +180,22 @@ function createChannelDialogState() {
   const eventsHint = computed<string>(() => {
     switch (form.value.resourceType) {
       case "application":
-        return "Applications deliver deploy events; backup events cannot reach this channel.";
+        return channelText(
+          "notifications.dialog.eventsHintApp",
+          "Applications deliver deploy events; backup events cannot reach " +
+            "this channel.",
+        );
       case "database":
-        return "Databases deliver backup events; deploy events cannot reach this channel.";
+        return channelText(
+          "notifications.dialog.eventsHintDb",
+          "Databases deliver backup events; deploy events cannot reach " +
+            "this channel.",
+        );
       default:
-        return "A team-wide channel receives every selected event.";
+        return channelText(
+          "notifications.dialog.eventsHintTeam",
+          "A team-wide channel receives every selected event.",
+        );
     }
   });
 
@@ -186,7 +238,14 @@ function createChannelDialogState() {
       ).map((resource) => ({ label: resource.name, value: resource.id }));
       const current = form.value.resourceId;
       if (current !== "" && !options.some((option) => option.value === current)) {
-        options.unshift({ label: `${current} (missing)`, value: current });
+        options.unshift({
+          label: channelText(
+            "notifications.dialog.missingResource",
+            "{id} (missing)",
+            { id: current },
+          ),
+          value: current,
+        });
       }
       return options;
     },
@@ -234,7 +293,7 @@ function createChannelDialogState() {
     editingId.value = "";
     form.value = emptyChannelForm();
     secretOriginals.value = { webhook_url: "", bot_token: "", password: "" };
-    formError.value = null;
+    formErrorRaw.value = null;
     formOpen.value = true;
   }
 
@@ -272,14 +331,14 @@ function createChannelDialogState() {
       from: channel.config.from ?? "",
       to: channel.config.to?.join(", ") ?? "",
     };
-    formError.value = null;
+    formErrorRaw.value = null;
     formOpen.value = true;
   }
 
   /** handleSave creates or updates the channel. */
   async function handleSave(): Promise<void> {
     saving.value = true;
-    formError.value = null;
+    formErrorRaw.value = null;
     try {
       if (editing.value) {
         await channelsStore.update(editingId.value, {
@@ -289,7 +348,7 @@ function createChannelDialogState() {
           ...resourceScopeInput(form.value),
           config: buildConfig(form.value, secretOriginals.value),
         });
-        message.success("Channel updated");
+        message.success(channelText("notifications.toast.updated", "Channel updated"));
       } else {
         await channelsStore.create({
           name: form.value.name.trim(),
@@ -299,11 +358,11 @@ function createChannelDialogState() {
           ...resourceScopeInput(form.value),
           config: buildConfig(form.value, secretOriginals.value),
         });
-        message.success("Channel created");
+        message.success(channelText("notifications.toast.created", "Channel created"));
       }
       formOpen.value = false;
     } catch (error) {
-      formError.value = describeChannelError(error);
+      formErrorRaw.value = error;
     } finally {
       saving.value = false;
     }

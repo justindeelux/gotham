@@ -12,6 +12,7 @@ import {
   removeMember,
   revokeInvite,
   roleLabel,
+  teamText,
   updateMemberRole,
 } from "@/features/teams/api/teams";
 import { useTeamsStore } from "@/features/teams/stores/teams";
@@ -28,8 +29,8 @@ export interface TeamsPageContext {
   canManage: ComputedRef<boolean>;
   isOwner: ComputedRef<boolean>;
   personalOwnerId: ComputedRef<string>;
-  roleOptions: Array<{ label: string; value: TeamRole }>;
-  inviteRoleOptions: Array<{ label: string; value: TeamRole }>;
+  roleOptions: ComputedRef<Array<{ label: string; value: TeamRole }>>;
+  inviteRoleOptions: ComputedRef<Array<{ label: string; value: TeamRole }>>;
   createOpen: Ref<boolean>;
   createName: Ref<string>;
   createBusy: Ref<boolean>;
@@ -97,21 +98,51 @@ export function useTeamsPage(): TeamsPageContext {
   const createOpen = ref(false);
   const createName = ref("");
   const createBusy = ref(false);
-  const createError = ref<string | null>(null);
+  /**
+   * Raw failures behind the dialog and page alerts. Display strings derive
+   * from these plus the current locale, so a language switch refreshes a
+   * retained alert without losing typed input.
+   */
+  const createErrorRaw = ref<unknown>(null);
+  const createError = computed<string | null>(() =>
+    createErrorRaw.value === null
+      ? null
+      : describeTeamError(createErrorRaw.value),
+  );
 
   const renameOpen = ref(false);
   const renameName = ref("");
   const renameBusy = ref(false);
-  const renameError = ref<string | null>(null);
+  const renameErrorRaw = ref<unknown>(null);
+  const renameError = computed<string | null>(() =>
+    renameErrorRaw.value === null
+      ? null
+      : describeTeamError(renameErrorRaw.value),
+  );
 
-  const teamActionError = ref<string | null>(null);
+  const teamActionErrorRaw = ref<unknown>(null);
+  const teamActionError = computed<string | null>(() =>
+    teamActionErrorRaw.value === null
+      ? null
+      : describeTeamError(teamActionErrorRaw.value),
+  );
   const deleting = ref(false);
 
   // Members.
   const members = ref<TeamMember[]>([]);
   const membersLoading = ref(false);
-  const membersError = ref<string | null>(null);
-  const memberActionError = ref<string | null>(null);
+  const membersErrorRaw = ref<unknown>(null);
+  const membersError = computed<string | null>(() =>
+    membersErrorRaw.value === null
+      ? null
+      : describeTeamError(membersErrorRaw.value),
+  );
+  const memberActionErrorRaw = ref<unknown>(null);
+  const memberActionError = computed<string | null>(() =>
+    memberActionErrorRaw.value === null
+      ? null
+      : describeTeamError(memberActionErrorRaw.value),
+  );
   /** Token of the newest members read; a stale response never writes state. */
   let membersReadToken = 0;
   /** Members with an in-flight mutation, keyed by user id, for the row spinner. */
@@ -120,8 +151,18 @@ export function useTeamsPage(): TeamsPageContext {
   // Invites.
   const invites = ref<TeamInvite[]>([]);
   const invitesLoading = ref(false);
-  const invitesError = ref<string | null>(null);
-  const inviteActionError = ref<string | null>(null);
+  const invitesErrorRaw = ref<unknown>(null);
+  const invitesError = computed<string | null>(() =>
+    invitesErrorRaw.value === null
+      ? null
+      : describeTeamError(invitesErrorRaw.value),
+  );
+  const inviteActionErrorRaw = ref<unknown>(null);
+  const inviteActionError = computed<string | null>(() =>
+    inviteActionErrorRaw.value === null
+      ? null
+      : describeTeamError(inviteActionErrorRaw.value),
+  );
   /** Token of the newest invites read; a stale response never writes state. */
   let invitesReadToken = 0;
 
@@ -192,7 +233,12 @@ export function useTeamsPage(): TeamsPageContext {
   const inviteEmail = ref("");
   const inviteRole = ref<TeamRole>("read_only");
   const inviteBusy = ref(false);
-  const inviteError = ref<string | null>(null);
+  const inviteErrorRaw = ref<unknown>(null);
+  const inviteError = computed<string | null>(() =>
+    inviteErrorRaw.value === null
+      ? null
+      : describeTeamError(inviteErrorRaw.value),
+  );
   /** The one-time create answer; it lives in memory only and is never stored. */
   const createdInvite = ref<CreatedTeamInvite | null>(null);
   const copied = ref(false);
@@ -206,16 +252,25 @@ export function useTeamsPage(): TeamsPageContext {
     isPersonal.value ? selectedTeam.value?.id ?? "" : "",
   );
 
-  const roleOptions: Array<{ label: string; value: TeamRole }> = [
-    { label: "owner", value: "owner" },
-    { label: "admin", value: "admin" },
-    { label: "read-only", value: "read_only" },
-  ];
+  /**
+   * Role select options in the current locale. roleLabel reads the shared
+   * role catalog at invocation time, so the computed refreshes on a
+   * language switch. Values are wire roles and never translated.
+   */
+  const roleOptions = computed<Array<{ label: string; value: TeamRole }>>(
+    () => [
+      { label: roleLabel("owner"), value: "owner" },
+      { label: roleLabel("admin"), value: "admin" },
+      { label: roleLabel("read_only"), value: "read_only" },
+    ],
+  );
 
-  const inviteRoleOptions: Array<{ label: string; value: TeamRole }> = [
-    { label: "admin", value: "admin" },
-    { label: "read-only", value: "read_only" },
-  ];
+  const inviteRoleOptions = computed<Array<{ label: string; value: TeamRole }>>(
+    () => [
+      { label: roleLabel("admin"), value: "admin" },
+      { label: roleLabel("read_only"), value: "read_only" },
+    ],
+  );
 
   /** memberRoleDisabled reports whether a member's role select is locked. */
   function memberRoleDisabled(member: TeamMember): boolean {
@@ -250,15 +305,15 @@ export function useTeamsPage(): TeamsPageContext {
     mutationTokens.clear();
     members.value = [];
     invites.value = [];
-    membersError.value = null;
-    invitesError.value = null;
-    memberActionError.value = null;
-    inviteActionError.value = null;
+    membersErrorRaw.value = null;
+    invitesErrorRaw.value = null;
+    memberActionErrorRaw.value = null;
+    inviteActionErrorRaw.value = null;
     membersLoading.value = false;
     invitesLoading.value = false;
     pendingMemberIds.value = {};
     deleting.value = false;
-    teamActionError.value = null;
+    teamActionErrorRaw.value = null;
     // The invite form belongs to the previous team: its pending submission is
     // now owned by nobody (the guard refuses to clear it), so reset the busy
     // state here or the next team's form would stay loading forever, and close
@@ -272,8 +327,8 @@ export function useTeamsPage(): TeamsPageContext {
     const token = ++membersReadToken;
     const isCurrent = (): boolean =>
       token === membersReadToken && teamsStore.activeTeamId === teamId;
-    membersError.value = null;
-    memberActionError.value = null;
+    membersErrorRaw.value = null;
+    memberActionErrorRaw.value = null;
     if (!teamId) {
       return;
     }
@@ -288,7 +343,7 @@ export function useTeamsPage(): TeamsPageContext {
       if (!isCurrent()) {
         return;
       }
-      membersError.value = describeTeamError(error);
+      membersErrorRaw.value = error;
     } finally {
       // Only the newest read owns the spinner; an obsolete one must not clear a
       // loading state the current read still needs.
@@ -303,8 +358,8 @@ export function useTeamsPage(): TeamsPageContext {
     const token = ++invitesReadToken;
     const isCurrent = (): boolean =>
       token === invitesReadToken && teamsStore.activeTeamId === teamId;
-    invitesError.value = null;
-    inviteActionError.value = null;
+    invitesErrorRaw.value = null;
+    inviteActionErrorRaw.value = null;
     if (!teamId) {
       return;
     }
@@ -319,7 +374,7 @@ export function useTeamsPage(): TeamsPageContext {
       if (!isCurrent()) {
         return;
       }
-      invitesError.value = describeTeamError(error);
+      invitesErrorRaw.value = error;
     } finally {
       if (isCurrent()) {
         invitesLoading.value = false;
@@ -334,16 +389,16 @@ export function useTeamsPage(): TeamsPageContext {
 
   async function handleCreate(): Promise<void> {
     createBusy.value = true;
-    createError.value = null;
+    createErrorRaw.value = null;
     try {
       const team = await teamsStore.create(createName.value.trim());
-      message.success(`Created team ${team.name}`);
+      message.success(teamText("teams.toast.createdTeam", "Created team {name}", { name: team.name }));
       createOpen.value = false;
       createName.value = "";
       // Selecting the new team fires the selection watcher, which reloads the
       // collections; an explicit load here would duplicate that read.
     } catch (error) {
-      createError.value = describeTeamError(error);
+      createErrorRaw.value = error;
     } finally {
       createBusy.value = false;
     }
@@ -352,7 +407,7 @@ export function useTeamsPage(): TeamsPageContext {
   /** openRename prefills the rename dialog with the selected team's name. */
   function openRename(): void {
     renameName.value = selectedTeam.value?.name ?? "";
-    renameError.value = null;
+    renameErrorRaw.value = null;
     renameOpen.value = true;
   }
 
@@ -362,13 +417,13 @@ export function useTeamsPage(): TeamsPageContext {
       return;
     }
     renameBusy.value = true;
-    renameError.value = null;
+    renameErrorRaw.value = null;
     try {
       await teamsStore.rename(team.id, renameName.value.trim());
-      message.success("Team renamed");
+      message.success(teamText("teams.toast.renamed", "Team renamed"));
       renameOpen.value = false;
     } catch (error) {
-      renameError.value = describeTeamError(error);
+      renameErrorRaw.value = error;
     } finally {
       renameBusy.value = false;
     }
@@ -398,11 +453,11 @@ export function useTeamsPage(): TeamsPageContext {
       mutationTokens.get(subject) === token &&
       generation === selectionGeneration;
     deleting.value = true;
-    teamActionError.value = null;
+    teamActionErrorRaw.value = null;
     try {
       await teamsStore.remove(teamId);
       if (teamGone()) {
-        message.success(`Deleted team ${team.name}`);
+        message.success(teamText("teams.toast.deletedTeam", "Deleted team {name}", { name: team.name }));
       }
       // The store falls back to the personal team, whose selection change
       // reloads the collections through the watcher.
@@ -412,7 +467,7 @@ export function useTeamsPage(): TeamsPageContext {
       if (!ownsFeedback()) {
         return;
       }
-      teamActionError.value = describeTeamError(error);
+      teamActionErrorRaw.value = error;
     } finally {
       if (ownsFeedback()) {
         deleting.value = false;
@@ -429,7 +484,7 @@ export function useTeamsPage(): TeamsPageContext {
     const token = beginMutation(member.user_id);
     const owns = (): boolean => ownsMutation(member.user_id, token, teamId, generation);
     setMemberPending(member.user_id, true);
-    memberActionError.value = null;
+    memberActionErrorRaw.value = null;
     try {
       const updated = await updateMemberRole(teamId, member.user_id, role);
       if (!owns()) {
@@ -440,12 +495,12 @@ export function useTeamsPage(): TeamsPageContext {
       members.value = members.value.map((item) =>
         item.user_id === updated.user_id ? updated : item,
       );
-      message.success(`${member.email} is now ${roleLabel(role)}`);
+      message.success(teamText("teams.toast.roleChanged", "{email} is now {role}", { email: member.email, role: roleLabel(role) }));
     } catch (error) {
       if (!owns()) {
         return;
       }
-      memberActionError.value = describeTeamError(error);
+      memberActionErrorRaw.value = error;
     } finally {
       if (owns()) {
         setMemberPending(member.user_id, false);
@@ -462,19 +517,19 @@ export function useTeamsPage(): TeamsPageContext {
     const token = beginMutation(member.user_id);
     const owns = (): boolean => ownsMutation(member.user_id, token, teamId, generation);
     setMemberPending(member.user_id, true);
-    memberActionError.value = null;
+    memberActionErrorRaw.value = null;
     try {
       await removeMember(teamId, member.user_id);
       if (!owns()) {
         return;
       }
       members.value = members.value.filter((item) => item.user_id !== member.user_id);
-      message.success(`Removed ${member.email}`);
+      message.success(teamText("teams.toast.removedMember", "Removed {email}", { email: member.email }));
     } catch (error) {
       if (!owns()) {
         return;
       }
-      memberActionError.value = describeTeamError(error);
+      memberActionErrorRaw.value = error;
     } finally {
       if (owns()) {
         setMemberPending(member.user_id, false);
@@ -486,7 +541,7 @@ export function useTeamsPage(): TeamsPageContext {
   function openInvite(): void {
     inviteEmail.value = "";
     inviteRole.value = "read_only";
-    inviteError.value = null;
+    inviteErrorRaw.value = null;
     inviteOpen.value = true;
   }
 
@@ -500,7 +555,7 @@ export function useTeamsPage(): TeamsPageContext {
     const owns = (): boolean =>
       ownsMutation("invite:create", token, team.id, generation);
     inviteBusy.value = true;
-    inviteError.value = null;
+    inviteErrorRaw.value = null;
     try {
       const invite = await createInvite(
         team.id,
@@ -521,7 +576,7 @@ export function useTeamsPage(): TeamsPageContext {
       if (!owns()) {
         return;
       }
-      inviteError.value = describeTeamError(error);
+      inviteErrorRaw.value = error;
     } finally {
       if (owns()) {
         inviteBusy.value = false;
@@ -538,19 +593,19 @@ export function useTeamsPage(): TeamsPageContext {
     const subject = `invite:${invite.id}`;
     const token = beginMutation(subject);
     const owns = (): boolean => ownsMutation(subject, token, teamId, generation);
-    inviteActionError.value = null;
+    inviteActionErrorRaw.value = null;
     try {
       await revokeInvite(teamId, invite.id);
       if (!owns()) {
         return;
       }
       invites.value = invites.value.filter((item) => item.id !== invite.id);
-      message.success(`Revoked the invite to ${invite.email}`);
+      message.success(teamText("teams.toast.revokedInvite", "Revoked the invite to {email}", { email: invite.email }));
     } catch (error) {
       if (!owns()) {
         return;
       }
-      inviteActionError.value = describeTeamError(error);
+      inviteActionErrorRaw.value = error;
     }
   }
 
@@ -563,9 +618,9 @@ export function useTeamsPage(): TeamsPageContext {
     try {
       await navigator.clipboard.writeText(registerLink(invite.token));
       copied.value = true;
-      message.success("Invite link copied");
+      message.success(teamText("teams.toast.linkCopied", "Invite link copied"));
     } catch {
-      message.warning("Clipboard is unavailable — select the link and copy it manually.");
+      message.warning(teamText("teams.toast.clipboardDenied", "Clipboard is unavailable — select the link and copy it manually."));
     }
   }
 
@@ -582,7 +637,7 @@ export function useTeamsPage(): TeamsPageContext {
       // reads start: no late response may render under the new selection.
       resetTeamContext();
       closeInviteToken();
-      teamActionError.value = null;
+      teamActionErrorRaw.value = null;
       void loadTeam();
     },
   );

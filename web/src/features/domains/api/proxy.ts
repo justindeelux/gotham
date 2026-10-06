@@ -1,5 +1,36 @@
 import { http } from "@/shared/api/http";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
+import { i18n } from "@/shared/i18n";
+
+/**
+ * TextParams interpolates one curated display string (e.g. `{name}`).
+ * Wire values are never keys: they travel as parameter values only.
+ */
+export type TextParams = Record<string, string | number>;
+
+/**
+ * proxyText resolves one domains namespaced key in the current locale at
+ * invocation time, so a language switch refreshes every caller on its next
+ * render. When the feature catalog is not registered (a unit harness
+ * importing this module directly) it falls back to the English literal, so
+ * existing behavior assertions keep passing. Raw API text never passes
+ * through here; see describeProxyError.
+ */
+export function proxyText(
+  key: string,
+  fallback: string,
+  params?: TextParams,
+): string {
+  const composer = i18n.global;
+  if (composer.te(key)) {
+    return String(composer.t(key, params ?? {}));
+  }
+  let out = fallback;
+  for (const [name, value] of Object.entries(params ?? {})) {
+    out = out.replaceAll(`{${name}}`, String(value));
+  }
+  return out;
+}
 
 /**
  * Typed client for the proxy SSL routes served by `internal/proxy`
@@ -344,19 +375,24 @@ export function providerLabel(provider: DNSProviderName): string {
 /**
  * certificateStatusLabel renders the observed status; undefined means the
  * API reported none (no status service configured) and is never invented.
+ * Resolved in the current locale at invocation time; the English literals
+ * below are the fallback when the catalog is not registered.
  */
 export function certificateStatusLabel(
   status: CertificateStatus | undefined,
 ): string {
   switch (status) {
     case "present":
-      return "present";
+      return proxyText("domains.certificates.statusPresent", "present");
     case "absent":
-      return "no certificate";
+      return proxyText("domains.certificates.statusAbsent", "no certificate");
     case "unknown":
-      return "unknown";
+      return proxyText("domains.certificates.statusUnknown", "unknown");
     default:
-      return "not reported";
+      return proxyText(
+        "domains.certificates.statusNotReported",
+        "not reported",
+      );
   }
 }
 
@@ -377,42 +413,78 @@ export function certificateStatusTagType(
 /**
  * describeProxyError maps a thrown error to a user-facing message. The
  * backend returns actionable text for 400/409/503 (see writeSSLError), so a
- * present message wins over the generic fallback.
+ * present message wins over the generic fallback. Classification uses the
+ * raw status and raw message only; curated summaries resolve in the current
+ * locale at invocation time, and the raw diagnostic is preserved verbatim
+ * whenever it carries the actionable detail.
  */
 export function describeProxyError(error: unknown): string {
   if (isApiError(error)) {
     if (error.status === 401) {
-      return "Your session expired. Please sign in again.";
+      return proxyText(
+        "domains.errors.sessionExpired",
+        "Your session expired. Please sign in again.",
+      );
     }
     if (error.status === 403) {
-      return "You need the admin scope to manage domains and SSL. Sign in with an admin account or use an admin API token.";
+      return proxyText(
+        "domains.errors.adminScope",
+        "You need the admin scope to manage domains and SSL. Sign in with an admin account or use an admin API token.",
+      );
     }
     if (error.status === 400 || error.status === 422) {
       return (
       stripErrorPrefix(error.message) ||
-      "Invalid request. Check the highlighted fields and retry."
+      proxyText(
+        "domains.errors.invalidRequest",
+        "Invalid request. Check the highlighted fields and retry.",
+      )
     );
     }
     if (error.status === 404) {
-      return "Not found. It may have been deleted already.";
+      return proxyText(
+        "domains.errors.notFound",
+        "Not found. It may have been deleted already.",
+      );
     }
     if (error.status === 409) {
-      return stripErrorPrefix(error.message) || "The change conflicts with existing state.";
+      return (
+        stripErrorPrefix(error.message) ||
+        proxyText(
+          "domains.errors.conflict",
+          "The change conflicts with existing state.",
+        )
+      );
     }
     if (error.status === 502) {
-      return "The node agent is unreachable. Check the node status and retry.";
+      return proxyText(
+        "domains.errors.nodeUnreachable",
+        "The node agent is unreachable. Check the node status and retry.",
+      );
     }
     if (error.status === 503) {
       return (
         stripErrorPrefix(error.message) ||
-        "The deployment secret is not configured, so credentials cannot " +
-          "be stored (set GOTHAM_SECRET_KEY)."
+        proxyText(
+          "domains.errors.secretNotConfigured",
+          "The deployment secret is not configured, so credentials cannot " +
+            "be stored (set GOTHAM_SECRET_KEY).",
+        )
       );
     }
-    return stripErrorPrefix(error.message) || "Request failed";
+    return (
+      stripErrorPrefix(error.message) ||
+      proxyText("domains.errors.requestFailed", "Request failed")
+    );
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
+    return (
+      stripErrorPrefix(error.message) ||
+      proxyText("domains.errors.unexpected", "Something went wrong. Please try again.")
+    );
   }
-  return "Something went wrong. Please try again.";
+  return proxyText(
+    "domains.errors.unexpected",
+    "Something went wrong. Please try again.",
+  );
 }

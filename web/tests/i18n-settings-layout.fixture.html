@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>i18n settings layout harness (I18N-8)</title>
+<!-- The real global stylesheet under test. -->
+<link rel="stylesheet" href="../src/shared/styles/main.css">
+<style>
+  /* Replicas of the scoped layout rules in the I18N-8 components: the same
+   * class names, display modes and wrap behavior, so overflow findings apply
+   * to the shipped pages. Visual theme (colors, fonts) comes from main.css. */
+  .probe { max-width: 1280px; margin: 0 auto; padding: 16px; }
+  .page-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+  .page-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .grid { display: grid; gap: 16px; }
+  .cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .stat { border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-width: 0; }
+  .domain-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 12px; align-items: center; padding: 10px 12px;
+    border: 1px solid var(--border); min-width: 0;
+  }
+  .redirect-route, .redirect-actions { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+  .team-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; min-width: 0; flex-wrap: wrap; }
+  .btn { border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; white-space: nowrap; }
+  .mono { font-family: var(--font-mono); }
+  @media (max-width: 1024px) { .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 860px) {
+    .page-actions { margin-left: 0; width: 100%; }
+    .domain-row { grid-template-columns: minmax(0, 1fr); }
+    .team-row { flex-wrap: wrap; }
+  }
+  @media (max-width: 640px) { .cols-4 { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+  <!-- English section: longest shipped en strings. -->
+  <div class="probe" id="probe-en" data-lang="en">
+    <div class="page-head" id="en-head">
+      <div>
+        <h1>Notification channels</h1>
+        <p>Deploy and backup events are delivered to the team's channels: Discord and Slack webhooks, a Telegram bot, or SMTP email. Channels are team-scoped, and secrets are write-only — reads only ever show a masked value.</p>
+      </div>
+      <div class="page-actions" id="en-actions">
+        <button class="btn" type="button">Add DNS provider</button>
+        <button class="btn" type="button">Add certificate</button>
+      </div>
+    </div>
+    <div class="grid cols-4" id="en-stats">
+      <div class="stat"><p>Certificate configs</p><p>12 enabled · one per application</p></div>
+      <div class="stat"><p>Wildcard configs</p><p>dns-01 challenge required</p></div>
+      <div class="stat"><p>DNS providers</p><p>3 enabled · credential sealed</p></div>
+      <div class="stat"><p>Applications with a domain</p><p>edited on each application page</p></div>
+    </div>
+    <div class="domain-row" id="en-row">
+      <div class="redirect-route"><span class="mono">shop.example.com</span><span>→</span><span class="mono">storefront.example.com</span></div>
+      <div><span>301</span> <span>permanent</span></div>
+      <div><span>enabled</span> <span>· keeps the path</span></div>
+      <div class="redirect-actions"><button class="btn" type="button">Edit</button><button class="btn" type="button">Delete</button></div>
+    </div>
+    <div class="team-row" id="en-team">
+      <button class="btn" type="button">Production team name</button>
+      <span>personal</span><span>your role: read-only</span>
+      <span><button class="btn" type="button">Rename</button> <button class="btn" type="button">Delete</button></span>
+    </div>
+  </div>
+
+  <!-- Vietnamese section: longest shipped vi strings. -->
+  <div class="probe" id="probe-vi" data-lang="vi" lang="vi">
+    <div class="page-head" id="vi-head">
+      <div>
+        <h1>Kênh thông báo</h1>
+        <p>Sự kiện triển khai và sao lưu được gửi tới các kênh của nhóm: webhook Discord và Slack, bot Telegram, hoặc email SMTP. Kênh thuộc phạm vi nhóm, và thông tin bí mật chỉ ghi — đọc chỉ thấy giá trị đã che.</p>
+      </div>
+      <div class="page-actions" id="vi-actions">
+        <button class="btn" type="button">Thêm nhà cung cấp DNS</button>
+        <button class="btn" type="button">Thêm chứng chỉ</button>
+      </div>
+    </div>
+    <div class="grid cols-4" id="vi-stats">
+      <div class="stat"><p>Cấu hình chứng chỉ</p><p>12 đang bật · một cho mỗi ứng dụng</p></div>
+      <div class="stat"><p>Cấu hình wildcard</p><p>yêu cầu thử thách dns-01</p></div>
+      <div class="stat"><p>Nhà cung cấp DNS</p><p>3 đang bật · thông tin xác thực đã niêm phong</p></div>
+      <div class="stat"><p>Ứng dụng có tên miền</p><p>chỉnh sửa trên từng trang ứng dụng</p></div>
+    </div>
+    <div class="domain-row" id="vi-row">
+      <div class="redirect-route"><span class="mono">shop.example.com</span><span>→</span><span class="mono">storefront.example.com</span></div>
+      <div><span>301</span> <span>vĩnh viễn</span></div>
+      <div><span>đang bật</span> <span>· giữ đường dẫn</span></div>
+      <div class="redirect-actions"><button class="btn" type="button">Sửa</button><button class="btn" type="button">Xóa</button></div>
+    </div>
+    <div class="team-row" id="vi-team">
+      <button class="btn" type="button">Production team name</button>
+      <span>cá nhân</span><span>vai trò của bạn: chỉ đọc</span>
+      <span><button class="btn" type="button">Đổi tên</button> <button class="btn" type="button">Xóa</button></span>
+    </div>
+    <p id="vi-long">Quy tắc do middleware redirectRegex của Traefik áp dụng ở lần đồng bộ cấu hình động tiếp theo — không cần triển khai lại.</p>
+  </div>
+</body>
+</html>

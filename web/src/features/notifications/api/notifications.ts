@@ -1,5 +1,6 @@
 import { http, teamHeaders } from "@/shared/api/http";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
+import { i18n } from "@/shared/i18n";
 
 /**
  * Typed client for the notification-channel routes served by
@@ -166,17 +167,50 @@ export async function testChannel(
   return response.data.check;
 }
 
+/**
+ * TextParams interpolates one curated display string (e.g. `{name}`).
+ * Wire values (event keys, kinds, URLs) are never keys: they travel as
+ * parameter values only.
+ */
+export type TextParams = Record<string, string | number>;
+
+/**
+ * channelText resolves one notifications namespaced key in the current
+ * locale at invocation time, so a language switch refreshes every caller on
+ * its next render. When the feature catalog is not registered (a unit
+ * harness importing this module directly) it falls back to the English
+ * literal, so existing behavior assertions keep passing.
+ */
+export function channelText(
+  key: string,
+  fallback: string,
+  params?: TextParams,
+): string {
+  const composer = i18n.global;
+  if (composer.te(key)) {
+    return String(composer.t(key, params ?? {}));
+  }
+  let out = fallback;
+  for (const [name, value] of Object.entries(params ?? {})) {
+    out = out.replaceAll(`{${name}}`, String(value));
+  }
+  return out;
+}
+
 /** kindLabel renders a channel kind as display text. */
 export function kindLabel(kind: NotificationKind): string {
   switch (kind) {
     case "discord":
-      return "Discord webhook";
+      return channelText("notifications.kinds.discord", "Discord webhook");
     case "slack":
-      return "Slack incoming webhook";
+      return channelText(
+        "notifications.kinds.slack",
+        "Slack incoming webhook",
+      );
     case "telegram":
-      return "Telegram bot";
+      return channelText("notifications.kinds.telegram", "Telegram bot");
     case "email":
-      return "Email (SMTP)";
+      return channelText("notifications.kinds.email", "Email (SMTP)");
     default:
       return kind;
   }
@@ -186,13 +220,25 @@ export function kindLabel(kind: NotificationKind): string {
 export function eventLabel(event: NotificationEventKey): string {
   switch (event) {
     case "deploy_success":
-      return "Deploy succeeded";
+      return channelText(
+        "notifications.events.deploy_success",
+        "Deploy succeeded",
+      );
     case "deploy_failure":
-      return "Deploy failed";
+      return channelText(
+        "notifications.events.deploy_failure",
+        "Deploy failed",
+      );
     case "backup_success":
-      return "Backup succeeded";
+      return channelText(
+        "notifications.events.backup_success",
+        "Backup succeeded",
+      );
     case "backup_failure":
-      return "Backup failed";
+      return channelText(
+        "notifications.events.backup_failure",
+        "Backup failed",
+      );
     default:
       return event;
   }
@@ -207,25 +253,50 @@ export function isFeatureDisabled(error: unknown): boolean {
 export function describeChannelError(error: unknown): string {
   if (isApiError(error)) {
     if (error.status === 401) {
-      return "Your session expired. Please sign in again.";
+      return channelText(
+        "notifications.errors.sessionExpired",
+        "Your session expired. Please sign in again.",
+      );
     }
     if (error.status === 403) {
-      return "Your team role does not allow this action.";
+      return channelText(
+        "notifications.errors.forbiddenRole",
+        "Your team role does not allow this action.",
+      );
     }
     if (error.status === 404) {
-      return (
+      return channelText(
+        "notifications.errors.featureDisabled",
         "Notification channels are not enabled on this control plane " +
-        "(FEATURE_NOTIFICATIONS=false)."
+          "(FEATURE_NOTIFICATIONS=false).",
       );
     }
     if (error.status === 400) {
-      return stripErrorPrefix(error.message) || "Invalid channel configuration.";
+      return (
+        stripErrorPrefix(error.message) ||
+        channelText(
+          "notifications.errors.invalidConfig",
+          "Invalid channel configuration.",
+        )
+      );
     }
-    return stripErrorPrefix(error.message) || "Request failed";
+    return (
+      stripErrorPrefix(error.message) ||
+      channelText("notifications.errors.requestFailed", "Request failed")
+    );
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
+    return (
+      stripErrorPrefix(error.message) ||
+      channelText(
+        "notifications.errors.unexpected",
+        "Something went wrong. Please try again.",
+      )
+    );
   }
-  return "Something went wrong. Please try again.";
+  return channelText(
+    "notifications.errors.unexpected",
+    "Something went wrong. Please try again.",
+  );
 }
 

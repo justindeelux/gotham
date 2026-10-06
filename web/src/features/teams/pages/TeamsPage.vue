@@ -50,14 +50,14 @@ const {
   <div class="teams-page">
     <div class="page-head">
       <div>
-        <p class="eyebrow">Team · Access control</p>
-        <h1>Teams</h1>
+        <p class="eyebrow">{{ $t("teams.page.eyebrow") }}</p>
+        <h1>{{ $t("teams.page.title") }}</h1>
         <p class="page-desc">
-          Every resource belongs to exactly one team, and a member holds one of
-          three roles — <span class="mono">owner</span> /
+          {{ $t("teams.page.descriptionPre") }}
+          <span class="mono">owner</span> /
           <span class="mono">admin</span> /
-          <span class="mono">read-only</span>. Owners manage ownership,
-          admins manage resources and members, read-only members may only look.
+          <span class="mono">read-only</span>.
+          {{ $t("teams.page.descriptionPost") }}
         </p>
       </div>
       <div class="page-actions">
@@ -66,14 +66,14 @@ const {
           type="primary"
           @click="createOpen = true"
         >
-          New team
+          {{ $t("teams.page.newTeam") }}
         </NButton>
       </div>
     </div>
 
-    <NCard v-if="teamsStore.featureDisabled" title="Teams unavailable">
+    <NCard v-if="teamsStore.featureDisabled" :title="$t('teams.page.unavailableTitle')">
       <NEmpty
-        description="Team management is not enabled on this control plane (FEATURE_TEAMS=false)."
+        :description="$t('teams.page.unavailableDesc')"
       />
     </NCard>
 
@@ -92,21 +92,21 @@ const {
               :loading="membersLoading || invitesLoading"
               @click="void loadTeam()"
             >
-              Refresh
+              {{ $t("teams.page.refresh") }}
             </NButton>
-            <NTag v-if="isPersonal" size="small" round>personal</NTag>
+            <NTag v-if="isPersonal" size="small" round>{{ $t("teams.page.personal") }}</NTag>
             <NTag :type="roleTagType(selectedTeam.role)" size="small" round>
-              your role: {{ roleLabel(selectedTeam.role) }}
+              {{ $t("teams.page.yourRole", { role: roleLabel(selectedTeam.role) }) }}
             </NTag>
           </NSpace>
         </template>
 
         <NTabs type="line" animated>
-          <NTabPane name="members" :tab="`Members (${members.length})`">
+          <NTabPane name="members" :tab="$t('teams.page.membersTab', { count: members.length })">
             <TeamMembersPanel />
           </NTabPane>
 
-          <NTabPane name="invites" :tab="`Invites (${invites.length})`">
+          <NTabPane name="invites" :tab="$t('teams.page.invitesTab', { count: invites.length })">
             <TeamInvitesPanel />
           </NTabPane>
         </NTabs>

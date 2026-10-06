@@ -15,24 +15,24 @@ const {
 <template>
   <div class="grid cols-4 kpi-row">
     <div class="stat">
-      <p class="stat-label">Certificate configs</p>
+      <p class="stat-label">{{ $t("domains.stats.certConfigs") }}</p>
       <p class="stat-value num">{{ statText(proxyStore.certificates.length) }}</p>
-      <p class="stat-sub">{{ statText(enabledCertificates) }} enabled · one per application</p>
+      <p class="stat-sub">{{ $t("domains.stats.certConfigsSub", { count: statText(enabledCertificates) }) }}</p>
     </div>
     <div class="stat">
-      <p class="stat-label">Wildcard configs</p>
+      <p class="stat-label">{{ $t("domains.stats.wildcardConfigs") }}</p>
       <p class="stat-value num">{{ statText(wildcardCertificates) }}</p>
-      <p class="stat-sub">dns-01 challenge required</p>
+      <p class="stat-sub">{{ $t("domains.stats.wildcardSub") }}</p>
     </div>
     <div class="stat">
-      <p class="stat-label">DNS providers</p>
+      <p class="stat-label">{{ $t("domains.stats.dnsProviders") }}</p>
       <p class="stat-value num">{{ statText(proxyStore.providers.length) }}</p>
-      <p class="stat-sub">{{ statText(enabledProviders.length) }} enabled · credential sealed</p>
+      <p class="stat-sub">{{ $t("domains.stats.dnsProvidersSub", { count: statText(enabledProviders.length) }) }}</p>
     </div>
     <div class="stat">
-      <p class="stat-label">Applications with a domain</p>
+      <p class="stat-label">{{ $t("domains.stats.appsWithDomain") }}</p>
       <p class="stat-value num">{{ statText(applicationsWithDomain) }}</p>
-      <p class="stat-sub">edited on each application page</p>
+      <p class="stat-sub">{{ $t("domains.stats.appsWithDomainSub") }}</p>
     </div>
   </div>
 </template>

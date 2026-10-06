@@ -1,4 +1,5 @@
 import { allNotificationEvents } from "@/features/notifications/api/notifications";
+import { channelText } from "@/features/notifications/api/notifications";
 import type {
   ChannelConfig,
   NotificationChannel,
@@ -172,15 +173,28 @@ export function resourceScopeInput(
   };
 }
 
-/** configSummary renders the non-secret routing facts of a channel. */
+/**
+ * configSummary renders the non-secret routing facts of a channel. Secret
+ * material aside, every technical value (URLs, hosts, ports, addresses)
+ * renders verbatim; only the framing words resolve in the current locale.
+ */
 export function configSummary(channel: NotificationChannel): string {
   const config = channel.config;
   switch (channel.kind) {
     case "discord":
     case "slack":
-      return config.webhook_url ? `webhook ${config.webhook_url}` : "webhook not configured";
+      return config.webhook_url
+        ? channelText("notifications.configSummary.webhook", "webhook {value}", {
+            value: config.webhook_url,
+          })
+        : channelText(
+            "notifications.configSummary.webhookMissing",
+            "webhook not configured",
+          );
     case "telegram":
-      return `chat ${config.chat_id || "—"}`;
+      return channelText("notifications.configSummary.chat", "chat {id}", {
+        id: config.chat_id || channelText("notifications.configSummary.chatMissing", "—"),
+      });
     case "email":
       return `${config.host || "—"}:${config.port || 587}${
         config.to && config.to.length > 0 ? ` → ${config.to.join(", ")}` : ""
@@ -190,15 +204,22 @@ export function configSummary(channel: NotificationChannel): string {
   }
 }
 
-/** scopeLabel renders the channel's resource scope for the card header. */
+/**
+ * scopeLabel renders the channel's resource scope for the card header.
+ * The resource name itself is user data and stays verbatim.
+ */
 export function scopeLabel(
   channel: NotificationChannel,
   resolveName: (_resourceType: string, _resourceId: string) => string | undefined,
 ): string {
   if (!channel.resource_type || !channel.resource_id) {
-    return "Team-wide";
+    return channelText("notifications.scopeLabel.teamWide", "Team-wide");
   }
   const name =
     resolveName(channel.resource_type, channel.resource_id) ?? channel.resource_id;
-  return channel.resource_type === "application" ? `App: ${name}` : `Database: ${name}`;
+  return channel.resource_type === "application"
+    ? channelText("notifications.scopeLabel.app", "App: {name}", { name })
+    : channelText("notifications.scopeLabel.database", "Database: {name}", {
+        name,
+      });
 }

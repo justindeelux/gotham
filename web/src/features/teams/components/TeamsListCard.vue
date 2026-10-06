@@ -12,9 +12,13 @@ const { teamActionError, deleting, openRename, handleDelete } = useTeamsPageCont
 </script>
 
 <template>
-  <NCard title="Your teams">
+  <NCard :title="$t('teams.list.title')">
     <template #header-extra>
-      <NText depth="3">{{ teamsStore.teams.length }} team(s)</NText>
+      <NText depth="3">{{
+        teamsStore.teams.length === 1
+          ? $t("teams.list.countOne", { count: teamsStore.teams.length })
+          : $t("teams.list.countOther", { count: teamsStore.teams.length })
+      }}</NText>
     </template>
     <NAlert
       v-if="teamActionError"
@@ -42,7 +46,7 @@ const { teamActionError, deleting, openRename, handleDelete } = useTeamsPageCont
         >
           {{ team.name }}
         </NButton>
-        <NTag v-if="team.is_personal" size="small" round>personal</NTag>
+        <NTag v-if="team.is_personal" size="small" round>{{ $t("teams.page.personal") }}</NTag>
         <NTag :type="roleTagType(team.role)" size="small" round>
           {{ roleLabel(team.role) }}
         </NTag>
@@ -55,7 +59,7 @@ const { teamActionError, deleting, openRename, handleDelete } = useTeamsPageCont
             :disabled="team.id !== teamsStore.activeTeamId"
             @click="openRename"
           >
-            Rename
+            {{ $t("teams.list.rename") }}
           </NButton>
           <NPopconfirm
             v-if="team.role === 'owner'"
@@ -70,11 +74,10 @@ const { teamActionError, deleting, openRename, handleDelete } = useTeamsPageCont
                 :disabled="team.is_personal || team.id !== teamsStore.activeTeamId"
                 :loading="deleting && team.id === teamsStore.activeTeamId"
               >
-                Delete
+                {{ $t("teams.list.delete") }}
               </NButton>
             </template>
-            Delete team "{{ team.name }}"? Resources must be moved first —
-            a team that still owns any is refused.
+            {{ $t("teams.list.deleteConfirm", { name: team.name }) }}
           </NPopconfirm>
         </div>
       </div>
@@ -85,7 +88,7 @@ const { teamActionError, deleting, openRename, handleDelete } = useTeamsPageCont
           !teamsStore.error &&
           teamsStore.loaded
         "
-        description="No teams yet."
+        :description="$t('teams.list.empty')"
       />
     </NSpin>
   </NCard>

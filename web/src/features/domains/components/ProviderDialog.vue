@@ -34,7 +34,7 @@ const providerTypeOptions = [
   <NModal
     v-model:show="providerOpen"
     preset="card"
-    :title="editingProvider ? 'Edit DNS provider' : 'Add DNS provider'"
+    :title="editingProvider ? $t('domains.providerDialog.editTitle') : $t('domains.providerDialog.addTitle')"
     style="width: 560px; max-width: 94vw"
     @after-leave="clearProviderCredential"
   >
@@ -44,34 +44,34 @@ const providerTypeOptions = [
       </NAlert>
       <NForm label-placement="top" :show-feedback="false" class="provider-form form-container">
         <div class="form-row">
-          <NFormItem label="Provider" class="field-provider">
+          <NFormItem :label="$t('domains.providerDialog.provider')" class="field-provider">
             <NSelect
               v-model:value="providerForm.provider"
               :options="providerTypeOptions"
-              aria-label="Provider type"
+              :aria-label="$t('domains.providerDialog.providerAria')"
             />
           </NFormItem>
-          <NFormItem label="Name" class="field-name">
+          <NFormItem :label="$t('domains.providerDialog.name')" class="field-name">
             <NInput
               v-model:value="providerForm.name"
-              placeholder="Optional label, e.g. Production Cloudflare"
-              aria-label="Provider name"
+              :placeholder="$t('domains.providerDialog.namePlaceholder')"
+              :aria-label="$t('domains.providerDialog.nameAria')"
             />
           </NFormItem>
         </div>
-        <NFormItem label="Zones" class="field-zones">
+        <NFormItem :label="$t('domains.providerDialog.zones')" class="field-zones">
           <NSelect
             v-model:value="providerForm.zones"
             multiple
             filterable
             tag
             :options="[]"
-            placeholder="Type a zone and press Enter"
-            aria-label="DNS zones"
+            :placeholder="$t('domains.providerDialog.zonesPlaceholder')"
+            :aria-label="$t('domains.providerDialog.zonesAria')"
           />
         </NFormItem>
         <NFormItem
-          :label="editingProvider ? 'Rotate credential (optional)' : 'Credential'"
+          :label="editingProvider ? $t('domains.providerDialog.rotateCredential') : $t('domains.providerDialog.credential')"
           class="field-credential"
         >
           <NInput
@@ -81,33 +81,32 @@ const providerTypeOptions = [
             autocomplete="new-password"
             :placeholder="
               editingProvider
-                ? 'Leave blank to keep the stored credential'
-                : 'API token'
+                ? $t('domains.providerDialog.keepCredentialPlaceholder')
+                : $t('domains.providerDialog.credentialPlaceholder')
             "
-            aria-label="Provider credential"
+            :aria-label="$t('domains.providerDialog.credentialAria')"
           />
         </NFormItem>
-        <NFormItem label="Enabled">
+        <NFormItem :label="$t('domains.providerDialog.enabled')">
           <NSwitch
             v-model:value="providerForm.enabled"
-            aria-label="Provider enabled"
+            :aria-label="$t('domains.providerDialog.enabledAria')"
           />
         </NFormItem>
       </NForm>
       <NText depth="3" class="small">
-        The credential is sent once over the API and sealed server-side; it is
-        never displayed, logged or stored in the browser again.
+        {{ $t("domains.providerDialog.sealedNote") }}
       </NText>
     </NSpace>
     <template #footer>
       <NSpace justify="end" :size="8">
-        <NButton @click="providerOpen = false">Cancel</NButton>
+        <NButton @click="providerOpen = false">{{ $t("domains.providerDialog.cancel") }}</NButton>
         <NButton
           type="primary"
           :loading="providerSaving"
           @click="handleSaveProvider"
         >
-          Save
+          {{ $t("domains.providerDialog.save") }}
         </NButton>
       </NSpace>
     </template>

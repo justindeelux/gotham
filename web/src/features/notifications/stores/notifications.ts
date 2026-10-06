@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 import {
   createChannel,
@@ -38,7 +38,15 @@ export const useNotificationsStore = defineStore("notifications", () => {
   const channels = ref<NotificationChannel[]>([]);
   const loading = ref(false);
   const loaded = ref(false);
-  const error = ref<string | null>(null);
+  /**
+   * Raw failure behind the page alert. The display string derives from it
+   * plus the current locale, so a language switch refreshes a retained
+   * banner without a refetch; classification always sees the raw error.
+   */
+  const errorRaw = ref<unknown>(null);
+  const error = computed<string | null>(() =>
+    errorRaw.value === null ? null : describeChannelError(errorRaw.value),
+  );
   const featureDisabled = ref(false);
 
   /** Team the current list belongs to; empty when no list is held. */
@@ -56,7 +64,7 @@ export const useNotificationsStore = defineStore("notifications", () => {
   function clearList(): void {
     channels.value = [];
     loaded.value = false;
-    error.value = null;
+    errorRaw.value = null;
     featureDisabled.value = false;
   }
 
@@ -91,7 +99,7 @@ export const useNotificationsStore = defineStore("notifications", () => {
       loadedTeamId.value = teamId;
     }
     loading.value = true;
-    error.value = null;
+    errorRaw.value = null;
     try {
       const next = await listChannels(teamId);
       if (!isCurrent()) {
@@ -110,7 +118,7 @@ export const useNotificationsStore = defineStore("notifications", () => {
         channels.value = [];
         return;
       }
-      error.value = describeChannelError(err);
+      errorRaw.value = err;
       throw err;
     } finally {
       // Only the newest read owns the spinner; an obsolete one must not clear

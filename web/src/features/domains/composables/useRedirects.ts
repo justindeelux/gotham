@@ -2,7 +2,7 @@ import { computed, inject, provide, ref } from "vue";
 import type { InjectionKey } from "vue";
 import { useMessage } from "naive-ui";
 
-import { describeProxyError } from "@/features/domains/api/proxy";
+import { describeProxyError, proxyText } from "@/features/domains/api/proxy";
 import type { DomainRedirect, RedirectCode } from "@/features/domains/api/proxy";
 import { useProxyStore } from "@/features/domains/stores/proxy";
 
@@ -28,10 +28,41 @@ export function emptyRedirectForm(): RedirectForm {
   };
 }
 
-export const redirectCodeOptions = [
-  { label: "301 · permanent", value: 301 },
-  { label: "302 · temporary", value: 302 },
-];
+/**
+ * redirectCodeOptions builds the redirect-code select options in the
+ * current locale at invocation time. The numeric wire codes stay raw
+ * values; only the kind words resolve. Call it inside a computed so the
+ * options refresh on a language switch.
+ */
+export function redirectCodeOptions(): Array<{
+  label: string;
+  value: RedirectCode;
+}> {
+  return [
+    {
+      label: proxyText(
+        "domains.redirects.codeOption",
+        "{code} · {kind}",
+        {
+          code: 301,
+          kind: proxyText("domains.redirects.codePermanent", "permanent"),
+        },
+      ),
+      value: 301,
+    },
+    {
+      label: proxyText(
+        "domains.redirects.codeOption",
+        "{code} · {kind}",
+        {
+          code: 302,
+          kind: proxyText("domains.redirects.codeTemporary", "temporary"),
+        },
+      ),
+      value: 302,
+    },
+  ];
+}
 
 /**
  * Redirect state is per page instance (created by provideRedirects in the
@@ -43,11 +74,26 @@ function createRedirectsState() {
 
   const redirectForm = ref<RedirectForm>(emptyRedirectForm());
   const redirectSaving = ref(false);
-  const redirectError = ref<string | null>(null);
+  /**
+   * Raw failures behind the create/edit alerts. Display strings derive from
+   * them plus the current locale, so a language switch refreshes a retained
+   * alert without losing the typed draft.
+   */
+  const redirectErrorRaw = ref<unknown>(null);
+  const redirectError = computed<string | null>(() =>
+    redirectErrorRaw.value === null
+      ? null
+      : describeProxyError(redirectErrorRaw.value),
+  );
   const editingRedirect = ref<DomainRedirect | null>(null);
   const redirectEditOpen = ref(false);
   const redirectEditSaving = ref(false);
-  const redirectEditError = ref<string | null>(null);
+  const redirectEditErrorRaw = ref<unknown>(null);
+  const redirectEditError = computed<string | null>(() =>
+    redirectEditErrorRaw.value === null
+      ? null
+      : describeProxyError(redirectEditErrorRaw.value),
+  );
   const redirectEditForm = ref<RedirectForm>(emptyRedirectForm());
 
   const enabledRedirects = computed<number>(
@@ -58,7 +104,11 @@ function createRedirectsState() {
     proxyStore.applications.map((application) => ({
       label: application.base_domain
         ? `${application.name} · ${application.base_domain}`
-        : `${application.name} · no base domain`,
+        : proxyText(
+            "domains.redirects.appWithoutDomain",
+            "{name} · no base domain",
+            { name: application.name },
+          ),
       value: application.id,
     })),
   );
@@ -74,13 +124,13 @@ function createRedirectsState() {
       preserve_path: redirect.preserve_path,
       enabled: redirect.enabled,
     };
-    redirectEditError.value = null;
+    redirectEditErrorRaw.value = null;
     redirectEditOpen.value = true;
   }
 
   /** handleCreateRedirect stores one rule from the add-redirect form. */
   async function handleCreateRedirect(): Promise<void> {
-    redirectError.value = null;
+    redirectErrorRaw.value = null;
     redirectSaving.value = true;
     try {
       const form = redirectForm.value;
@@ -92,14 +142,16 @@ function createRedirectsState() {
         preserve_path: form.preserve_path,
         enabled: form.enabled,
       });
-      message.success("Redirect rule created.");
+      message.success(
+        proxyText("domains.redirects.created", "Redirect rule created."),
+      );
       // Keep the application so a second rule can be added quickly.
       redirectForm.value = {
         ...emptyRedirectForm(),
         application_id: form.application_id,
       };
     } catch (error) {
-      redirectError.value = describeProxyError(error);
+      redirectErrorRaw.value = error;
     } finally {
       redirectSaving.value = false;
     }
@@ -111,7 +163,7 @@ function createRedirectsState() {
     if (!existing) {
       return;
     }
-    redirectEditError.value = null;
+    redirectEditErrorRaw.value = null;
     redirectEditSaving.value = true;
     try {
       const form = redirectEditForm.value;
@@ -122,10 +174,12 @@ function createRedirectsState() {
         preserve_path: form.preserve_path,
         enabled: form.enabled,
       });
-      message.success("Redirect rule saved.");
+      message.success(
+        proxyText("domains.redirects.saved", "Redirect rule saved."),
+      );
       redirectEditOpen.value = false;
     } catch (error) {
-      redirectEditError.value = describeProxyError(error);
+      redirectEditErrorRaw.value = error;
     } finally {
       redirectEditSaving.value = false;
     }
@@ -138,7 +192,11 @@ function createRedirectsState() {
   ): Promise<void> {
     try {
       await proxyStore.updateRedirectRule(redirect.id, { enabled });
-      message.success(enabled ? "Redirect rule enabled." : "Redirect rule paused.");
+      message.success(
+        enabled
+          ? proxyText("domains.redirects.enabledToast", "Redirect rule enabled.")
+          : proxyText("domains.redirects.pausedToast", "Redirect rule paused."),
+      );
     } catch (error) {
       message.error(describeProxyError(error));
     }
@@ -148,7 +206,9 @@ function createRedirectsState() {
   async function handleDeleteRedirect(redirect: DomainRedirect): Promise<void> {
     try {
       await proxyStore.removeRedirectRule(redirect.id);
-      message.success("Redirect rule deleted.");
+      message.success(
+        proxyText("domains.redirects.deleted", "Redirect rule deleted."),
+      );
     } catch (error) {
       message.error(describeProxyError(error));
     }

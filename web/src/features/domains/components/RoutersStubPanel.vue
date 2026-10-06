@@ -4,17 +4,14 @@ import { RouterLink } from "vue-router";
 </script>
 
 <template>
-  <NCard style="margin-top: 16px" title="Router list — backend pending">
-    <NEmpty description="The generated Traefik routers are not exposed by the API yet.">
+  <NCard style="margin-top: 16px" :title="$t('domains.routers.title')">
+    <NEmpty :description="$t('domains.routers.empty')">
       <template #extra>
         <p class="empty-hint">
-          The control plane generates the file-provider configuration from
-          application state (BE-6.1), but there is no read endpoint for the
-          resulting routers. A live router table arrives in a later backend
-          package; nothing is shown here rather than invented.
+          {{ $t("domains.routers.hint") }}
         </p>
         <RouterLink :to="{ name: 'projects' }">
-          Manage application domains
+          {{ $t("domains.routers.manageDomains") }}
         </RouterLink>
       </template>
     </NEmpty>

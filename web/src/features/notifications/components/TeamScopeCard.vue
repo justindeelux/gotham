@@ -10,14 +10,14 @@ const { teamOptions, activeRole } = useChannelDialog();
 </script>
 
 <template>
-  <NCard title="Team scope">
+  <NCard :title="$t('notifications.scope.title')">
     <NSpace align="center" :size="12" wrap>
       <NSelect
         :value="teamsStore.activeTeamId"
         :options="teamOptions"
         filterable
         style="width: 260px"
-        aria-label="Notification team"
+        :aria-label="$t('notifications.scope.teamAria')"
         @update:value="(value: string) => teamsStore.selectTeam(value)"
       />
       <NTag
@@ -26,11 +26,10 @@ const { teamOptions, activeRole } = useChannelDialog();
         size="small"
         round
       >
-        your role: {{ roleLabel(activeRole) }}
+        {{ $t("notifications.scope.yourRole", { role: roleLabel(activeRole) }) }}
       </NTag>
       <NText depth="3">
-        Channels below belong to this team. A read-only role can look but
-        not change anything.
+        {{ $t("notifications.scope.readOnlyNote") }}
       </NText>
     </NSpace>
   </NCard>

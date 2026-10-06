@@ -24,9 +24,9 @@ const {
 </script>
 
 <template>
-  <NCard style="margin-top: 16px" title="Redirect rules">
+  <NCard style="margin-top: 16px" :title="$t('domains.redirects.rulesTitle')">
     <template #header-extra>
-      <span class="card-tag mono">middleware redirectregex</span>
+      <span class="card-tag mono">{{ $t("domains.redirects.middlewareTag") }}</span>
     </template>
     <NSpace vertical :size="12">
       <NAlert v-if="proxyStore.redirectsError" type="error" :show-icon="true">
@@ -46,7 +46,7 @@ const {
           <div class="redirect-code">
             <NTag size="small">{{ redirect.code }}</NTag>
             <span class="cell-sub">
-              {{ redirect.code === 301 ? "permanent" : "temporary" }}
+              {{ redirect.code === 301 ? $t("domains.redirects.codePermanent") : $t("domains.redirects.codeTemporary") }}
             </span>
           </div>
           <div class="redirect-state">
@@ -56,10 +56,10 @@ const {
               aria-hidden="true"
             ></span>
             <span class="cell-sub">
-              {{ redirect.enabled ? "enabled" : "paused" }}
+              {{ redirect.enabled ? $t("domains.providers.enabled") : $t("domains.redirects.paused") }}
             </span>
             <span v-if="redirect.preserve_path" class="cell-sub">
-              · keeps the path
+              {{ $t("domains.redirects.keepsPath") }}
             </span>
           </div>
           <NSpace
@@ -70,49 +70,45 @@ const {
           >
             <NSwitch
               :value="redirect.enabled"
-              :aria-label="`Enable redirect ${redirect.source_domain}`"
+              :aria-label="$t('domains.redirects.enableRedirectAria', { source: redirect.source_domain })"
               @update:value="(value: boolean) => handleToggleRedirect(redirect, value)"
             />
             <NButton size="small" @click="openRedirectEdit(redirect)">
-              Edit
+              {{ $t("domains.redirects.edit") }}
             </NButton>
             <NPopconfirm
               :positive-button-props="{ type: 'error' }"
               @positive-click="handleDeleteRedirect(redirect)"
             >
               <template #trigger>
-                <NButton size="small" type="error" ghost>Delete</NButton>
+                <NButton size="small" type="error" ghost>{{ $t("domains.redirects.delete") }}</NButton>
               </template>
-              Delete the redirect
-              {{ redirect.source_domain }} → {{ redirect.target_domain }}?
-              Requests to the source stop redirecting.
+              {{ $t("domains.redirects.deleteConfirm", { source: redirect.source_domain, target: redirect.target_domain }) }}
             </NPopconfirm>
           </NSpace>
         </div>
       </div>
       <NEmpty
         v-else-if="!proxyStore.redirectsLoading"
-        description="No redirect rules yet."
+        :description="$t('domains.redirects.empty')"
       >
         <template #extra>
           <p class="empty-hint">
-            A rule sends one exact source host to one exact target host.
-            The target must serve its own certificate.
+            {{ $t("domains.redirects.emptyHint") }}
           </p>
         </template>
       </NEmpty>
       <p v-if="proxyStore.redirects.length > 0" class="cell-sub">
-        {{ proxyStore.redirects.length }} rule{{
-          proxyStore.redirects.length === 1 ? "" : "s"
+        {{
+          proxyStore.redirects.length === 1
+            ? $t("domains.redirects.summaryOne", { total: proxyStore.redirects.length, enabled: enabledRedirects })
+            : $t("domains.redirects.summaryOther", { total: proxyStore.redirects.length, enabled: enabledRedirects })
         }}
-        · {{ enabledRedirects }} enabled. GET answers the stored code;
-        other methods answer 308/307 so they keep their method.
       </p>
     </NSpace>
     <template #footer>
       <NText depth="3" class="small">
-        Rules are applied by Traefik's redirectRegex middleware on the
-        next dynamic configuration sync — no redeploy is needed.
+        {{ $t("domains.redirects.footer") }}
       </NText>
     </template>
   </NCard>

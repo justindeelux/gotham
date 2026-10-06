@@ -11,6 +11,7 @@ import {
   NSwitch,
   NText,
 } from "naive-ui";
+import { computed } from "vue";
 
 import {
   redirectCodeOptions,
@@ -24,13 +25,16 @@ const {
   applicationOptions,
   handleCreateRedirect,
 } = useRedirects();
+
+/** codeOptions refreshes the redirect-code labels on a language switch. */
+const codeOptions = computed(() => redirectCodeOptions());
 </script>
 
 <template>
-  <NCard style="margin-top: 16px" title="Add redirect" class="form-container">
+  <NCard style="margin-top: 16px" :title="$t('domains.redirects.addTitle')" class="form-container">
     <template #header-extra>
       <NText depth="3" class="small">
-        applies after the next config sync
+        {{ $t("domains.redirects.appliesAfter") }}
       </NText>
     </template>
     <NSpace vertical :size="12">
@@ -39,47 +43,47 @@ const {
       </NAlert>
       <NForm label-placement="top" :show-feedback="false" class="redirect-form">
         <div class="redirect-form__fields">
-          <NFormItem label="Application" class="field-application">
+          <NFormItem :label="$t('domains.redirects.application')" class="field-application">
             <NSelect
               v-model:value="redirectForm.application_id"
               :options="applicationOptions"
-              placeholder="Select an application"
-              aria-label="Redirect application"
+              :placeholder="$t('domains.redirects.selectApplication')"
+              :aria-label="$t('domains.redirects.applicationAria')"
             />
           </NFormItem>
-          <NFormItem label="Source domain" class="field-source">
+          <NFormItem :label="$t('domains.redirects.sourceDomain')" class="field-source">
             <NInput
               v-model:value="redirectForm.source_domain"
               placeholder="shop.example.com"
-              aria-label="Redirect source domain"
+              :aria-label="$t('domains.redirects.sourceAria')"
             />
           </NFormItem>
-          <NFormItem label="Target domain" class="field-target">
+          <NFormItem :label="$t('domains.redirects.targetDomain')" class="field-target">
             <NInput
               v-model:value="redirectForm.target_domain"
               placeholder="storefront.example.com"
-              aria-label="Redirect target domain"
+              :aria-label="$t('domains.redirects.targetAria')"
             />
           </NFormItem>
-          <NFormItem label="Redirect code" class="field-code">
+          <NFormItem :label="$t('domains.redirects.redirectCode')" class="field-code">
             <NSelect
               v-model:value="redirectForm.code"
-              :options="redirectCodeOptions"
-              aria-label="Redirect code"
+              :options="codeOptions"
+              :aria-label="$t('domains.redirects.codeAria')"
             />
           </NFormItem>
         </div>
         <div class="redirect-form__bottom">
-          <NFormItem label="Preserve path" class="field-preserve">
+          <NFormItem :label="$t('domains.redirects.preservePath')" class="field-preserve">
             <NSwitch
               v-model:value="redirectForm.preserve_path"
-              aria-label="Redirect preserve path"
+              :aria-label="$t('domains.redirects.preserveAria')"
             />
           </NFormItem>
-          <NFormItem label="Enabled" class="field-enabled">
+          <NFormItem :label="$t('domains.redirects.enabled')" class="field-enabled">
             <NSwitch
               v-model:value="redirectForm.enabled"
-              aria-label="Redirect enabled now"
+              :aria-label="$t('domains.redirects.enabledNowAria')"
             />
           </NFormItem>
           <NButton
@@ -87,13 +91,12 @@ const {
             :loading="redirectSaving"
             @click="handleCreateRedirect"
           >
-            Add redirect
+            {{ $t("domains.redirects.addRedirect") }}
           </NButton>
         </div>
       </NForm>
       <NText depth="3" class="small">
-        Source and target must differ. The code applies to GET; HEAD
-        and every other method answer 308/307, keeping the method.
+        {{ $t("domains.redirects.ruleHint") }}
       </NText>
     </NSpace>
   </NCard>

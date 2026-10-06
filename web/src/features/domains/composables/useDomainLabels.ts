@@ -1,4 +1,4 @@
-import { providerLabel } from "@/features/domains/api/proxy";
+import { providerLabel, proxyText } from "@/features/domains/api/proxy";
 import type { Certificate } from "@/features/domains/api/proxy";
 import { useProxyStore } from "@/features/domains/stores/proxy";
 
@@ -19,7 +19,7 @@ export function useDomainLabels() {
     const provider = proxyStore.providerOf(providerId);
     return provider
       ? provider.name || providerLabel(provider.provider)
-      : "unknown provider";
+      : proxyText("domains.providers.unknownProvider", "unknown provider");
   }
 
   /** applicationName resolves an application id to its display name. */

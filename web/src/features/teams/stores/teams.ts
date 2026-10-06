@@ -30,7 +30,15 @@ export const useTeamsStore = defineStore("teams", () => {
   const teams = ref<Team[]>([]);
   const loading = ref(false);
   const loaded = ref(false);
-  const error = ref<string | null>(null);
+  /**
+   * Raw failure behind the page alert. The display string derives from it
+   * plus the current locale, so a language switch refreshes a retained
+   * banner without a refetch; classification always sees the raw error.
+   */
+  const errorRaw = ref<unknown>(null);
+  const error = computed<string | null>(() =>
+    errorRaw.value === null ? null : describeTeamError(errorRaw.value),
+  );
   const featureDisabled = ref(false);
   const activeTeamId = ref<string>(readStoredTeamId());
 
@@ -67,7 +75,7 @@ export const useTeamsStore = defineStore("teams", () => {
   /** fetchTeams loads the caller's teams, newest first. */
   async function fetchTeams(): Promise<void> {
     loading.value = true;
-    error.value = null;
+    errorRaw.value = null;
     try {
       const next = await listTeams();
       featureDisabled.value = false;
@@ -80,7 +88,7 @@ export const useTeamsStore = defineStore("teams", () => {
         applyTeams([]);
         return;
       }
-      error.value = describeTeamError(err);
+      errorRaw.value = err;
       throw err;
     } finally {
       loading.value = false;
@@ -106,7 +114,7 @@ export const useTeamsStore = defineStore("teams", () => {
     teams.value = [];
     loading.value = false;
     loaded.value = false;
-    error.value = null;
+    errorRaw.value = null;
     featureDisabled.value = false;
     activeTeamId.value = "";
     persistTeamId("");

@@ -1,5 +1,6 @@
 import { http } from "@/shared/api/http";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
+import { i18n } from "@/shared/i18n";
 
 /**
  * Typed client for the team-management routes served by `internal/teams`
@@ -181,9 +182,53 @@ export async function acceptInvite(token: string): Promise<Team> {
   return response.data.team;
 }
 
+/**
+ * TextParams interpolates one curated display string (e.g. `{name}`).
+ * Wire values are never keys: they travel as parameter values only.
+ */
+export type TextParams = Record<string, string | number>;
+
+/**
+ * teamText resolves one namespaced key in the current locale at invocation
+ * time, so a language switch refreshes every caller on its next render.
+ * When the catalog is not registered (a unit harness importing this module
+ * directly) it falls back to the English literal, so existing behavior
+ * assertions keep passing. Raw API text never passes through here.
+ */
+export function teamText(
+  key: string,
+  fallback: string,
+  params?: TextParams,
+): string {
+  const composer = i18n.global;
+  if (composer.te(key)) {
+    return String(composer.t(key, params ?? {}));
+  }
+  let out = fallback;
+  for (const [name, value] of Object.entries(params ?? {})) {
+    out = out.replaceAll(`{${name}}`, String(value));
+  }
+  return out;
+}
+
 /** roleLabel renders a role as display text. */
 export function roleLabel(role: TeamRole): string {
-  return role === "read_only" ? "read-only" : role;
+  return teamText(roleKey(role), role === "read_only" ? "read-only" : role);
+}
+
+/**
+ * roleKey maps a wire role onto the shared role catalog from I18N-1, so the
+ * Teams page, the sidebar MeCard and every invite consumer share one wording.
+ */
+function roleKey(role: TeamRole): string {
+  switch (role) {
+    case "owner":
+      return "common.roles.owner";
+    case "admin":
+      return "common.roles.admin";
+    default:
+      return "common.roles.readOnly";
+  }
 }
 
 /** roleTagType maps a role onto a tag style. */
@@ -206,7 +251,9 @@ export function roleTagType(
  * not loaded yet) falls back to neutral text rather than a guessed role.
  */
 export function meRoleLabel(role: TeamRole | null): string {
-  return role === null ? "Team member" : roleLabel(role);
+  return role === null
+    ? teamText("common.roles.member", "Team member")
+    : roleLabel(role);
 }
 
 /** Retries after the initial role read before the neutral fallback pins. */
@@ -252,44 +299,76 @@ export function isFeatureDisabled(error: unknown): boolean {
  * last-owner / personal-team / non-empty-team protections and 410 for an
  * expired invite, and its message is the actionable part — the internal
  * "<package>: " prefix is stripped for display through the shared
- * stripErrorPrefix helper.
+ * stripErrorPrefix helper. Classification uses the raw status and raw message
+ * only; curated summaries resolve in the current locale at invocation time.
  */
 export function describeTeamError(error: unknown): string {
   if (isApiError(error)) {
     if (error.status === 401) {
-      return "Your session expired. Please sign in again.";
+      return teamText(
+        "teams.errors.sessionExpired",
+        "Your session expired. Please sign in again.",
+      );
     }
     if (error.status === 403) {
       return (
         stripErrorPrefix(error.message) ||
-        "Your team role does not allow this action."
+        teamText(
+          "teams.errors.forbiddenRole",
+          "Your team role does not allow this action.",
+        )
       );
     }
     if (error.status === 404) {
       return (
         stripErrorPrefix(error.message) ||
-        "Not found. It may have been removed already."
+        teamText(
+          "teams.errors.notFound",
+          "Not found. It may have been removed already.",
+        )
       );
     }
     if (error.status === 409) {
       return (
         stripErrorPrefix(error.message) ||
-        "The team changed while you were editing it. Reload and retry."
+        teamText(
+          "teams.errors.conflictChanged",
+          "The team changed while you were editing it. Reload and retry.",
+        )
       );
     }
     if (error.status === 410) {
-      return stripErrorPrefix(error.message) || "This invite expired. Issue a new one.";
+      return (
+        stripErrorPrefix(error.message) ||
+        teamText(
+          "teams.errors.inviteExpired",
+          "This invite expired. Issue a new one.",
+        )
+      );
     }
     if (error.status === 400) {
-      return stripErrorPrefix(error.message) || "Invalid request.";
+      return (
+        stripErrorPrefix(error.message) ||
+        teamText("teams.errors.invalidRequest", "Invalid request.")
+      );
     }
-    return stripErrorPrefix(error.message) || "Request failed";
+    return (
+      stripErrorPrefix(error.message) ||
+      teamText("teams.errors.requestFailed", "Request failed")
+    );
   }
   if (error instanceof Error) {
     return (
-      stripErrorPrefix(error.message) || "Something went wrong. Please try again."
+      stripErrorPrefix(error.message) ||
+      teamText(
+        "teams.errors.unexpected",
+        "Something went wrong. Please try again.",
+      )
     );
   }
-  return "Something went wrong. Please try again.";
+  return teamText(
+    "teams.errors.unexpected",
+    "Something went wrong. Please try again.",
+  );
 }
 

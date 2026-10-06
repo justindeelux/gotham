@@ -1981,6 +1981,22 @@ fi
     || { echo "FAIL: the control plane binary is missing after the legacy skip (JUS-38/j)" >&2; exit 1; }
 echo "PASS: a pre-bootstrap release skips admin creation with the manual command, no database warning (JUS-38/j)"
 
+# JUS-39: every manual admin command the installer prints must run as the
+# service user (gotham.env is root:gotham 0640, group-readable), never root.
+if grep -q 'sudo ${INSTALL_PATH} admin' "${INSTALL_SH}" \
+    || grep -q 'sudo /var/lib/gotham/bin/gotham admin' "${INSTALL_SH}" \
+    || grep -q 'sudo /var/lib/gotham/bin/gotham admin' "${SCRIPT_DIR}/../docs/install.md"; then
+    echo "FAIL: an active manual admin command still runs as root (JUS-39)" >&2
+    exit 1
+fi
+for _jus39_log in "${SCRATCH}/e-out.log" "${SCRATCH}/i-out.log" "${SCRATCH}/j-out.log"; do
+    grep -q 'sudo -u gotham -- .*admin create --email' "${_jus39_log}" \
+        || { echo "FAIL: ${_jus39_log} manual create does not run as the service user (JUS-39)" >&2; exit 1; }
+done
+grep -q 'sudo -u gotham -- .*admin reset-password' "${SCRATCH}/e-out.log" \
+    || { echo "FAIL: the summary reset-password guidance does not run as the service user (JUS-39)" >&2; exit 1; }
+echo "PASS: manual admin guidance runs as the service user, never root (JUS-39)"
+
 # JUS-38/m: a release with no `admin` command at all (v0.1.0) prints upgrade
 # guidance instead of a manual command that binary cannot run, and exits 0.
 M_STATE="${SCRATCH}/admin-state-noadmin"

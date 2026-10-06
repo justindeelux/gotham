@@ -1373,21 +1373,21 @@ case "${ADMIN_STATUS}" in
     no-email)
         ADMIN_FIRST_LOGIN="  No admin account was created (no email given).
   Create it with:
-    sudo ${INSTALL_PATH} admin create --email ops@example.com
+    sudo -u gotham -- ${INSTALL_PATH} admin create --email ops@example.com
   Then open:
   ${ADMIN_LOGIN_LINE}"
         ;;
     failed)
         ADMIN_FIRST_LOGIN="  The admin account could not be created automatically.
   Create it with:
-    sudo ${INSTALL_PATH} admin create --email ${ADMIN_EMAIL:-ops@example.com}
+    sudo -u gotham -- ${INSTALL_PATH} admin create --email ${ADMIN_EMAIL:-ops@example.com}
   Then open:
   ${ADMIN_LOGIN_LINE}"
         ;;
     legacy-manual)
         ADMIN_FIRST_LOGIN="  The installed release predates automated admin bootstrap.
   If no account exists yet, create it with:
-    sudo ${INSTALL_PATH} admin create --email ${ADMIN_EMAIL:-ops@example.com}
+    sudo -u gotham -- ${INSTALL_PATH} admin create --email ${ADMIN_EMAIL:-ops@example.com}
   (answer the hidden password prompt), then open:
   ${ADMIN_LOGIN_LINE}"
         ;;
@@ -1418,7 +1418,7 @@ ${ADMIN_FIRST_LOGIN}
   To add members, create an invite in Teams and send the shown link.
   Platform-global operations (node-wide proxy sync, DNS providers) also require
   the account email in PLATFORM_ADMINS in /etc/gotham/gotham.env. Lost the
-  password? sudo ${INSTALL_PATH} admin reset-password --email <email>.
+  password? sudo -u gotham -- ${INSTALL_PATH} admin reset-password --email <email>.
 
 Self-update checking is enabled by default. To apply new releases unattended,
 add AUTO_UPDATE=true to /etc/gotham/gotham.env (operator edits there are kept

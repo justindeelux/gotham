@@ -8,10 +8,11 @@
 // unicode-domain addresses the old rule accepts; whitespace-only passwords
 // pass required, exactly as before.
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import {
+  activeLocale,
   registerDiscoveredCatalogs,
   resetLocaleState,
   syncComposerLocale,
@@ -25,8 +26,12 @@ import {
   registerRules,
   termsSchema,
 } from "@/features/auth/schemas/auth";
+import { describeAuthError } from "@/features/auth/stores/auth";
+import { createVisibleValidation } from "@/features/auth";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 import type { RuleFromOptions } from "@/shared/validation/naiveAdapter";
+import type { FormInst, FormItemRule } from "naive-ui";
+import type { Ref } from "vue";
 
 // Schema messages are namespaced keys resolved at validation time; the
 // English catalog values stay byte-identical to the recorded outcomes, so
@@ -173,5 +178,101 @@ describe("login and register rule builders", () => {
       "password",
       "terms",
     ]);
+  });
+});
+
+describe("describeAuthError display contract", () => {
+  it("maps curated, raw and degenerate failures in both locales", () => {
+    // 429 and empty/whitespace/non-object resolve to curated summaries.
+    expect(describeAuthError({ status: 429, message: "slow down" })).toBe(
+      "Too many attempts, please wait",
+    );
+    for (const error of [{}, { message: "" }, { message: "   " }, "boom", null, undefined, 42]) {
+      expect(describeAuthError(error)).toBe(
+        "Something went wrong. Please try again.",
+      );
+    }
+    // Messaged unknowns keep a localized summary plus the raw diagnostic:
+    // prefix stripped, never translated, never classified.
+    expect(
+      describeAuthError({ status: 401, message: "auth: invalid credentials" }),
+    ).toBe("Request failed: invalid credentials");
+    expect(
+      describeAuthError({ status: 409, message: "email already registered" }),
+    ).toBe("Request failed: email already registered");
+
+    activeLocale.value = "vi";
+    try {
+      expect(describeAuthError({ status: 429, message: "slow down" })).toBe(
+        "Quá nhiều lần thử, vui lòng chờ",
+      );
+      expect(describeAuthError({})).toBe("Đã xảy ra lỗi. Vui lòng thử lại.");
+      expect(
+        describeAuthError({ status: 401, message: "auth: invalid credentials" }),
+      ).toBe("Yêu cầu thất bại: invalid credentials");
+    } finally {
+      activeLocale.value = "en";
+    }
+  });
+});
+
+describe("createVisibleValidation contract", () => {
+  /** runValidator invokes one wrapped validator with a form value. */
+  function runValidator(rule: FormItemRule, value: unknown): unknown {
+    const validate = rule.validator as unknown as (
+      ..._args: unknown[]
+    ) => unknown;
+    return validate({}, value);
+  }
+
+  it("records failures, clears passes, and ignores promise results", () => {
+    const visible = createVisibleValidation();
+    const tracked = visible.trackRules({ email: [ruleFrom(emailSchema)] });
+    const rule = (tracked.email as FormItemRule[])[0];
+    expect(runValidator(rule, "not-an-email")).toBeInstanceOf(Error);
+    expect(visible.failedCount()).toBe(1);
+    expect(runValidator(rule, "a@example.com")).toBe(true);
+    expect(visible.failedCount()).toBe(0);
+
+    const arrayed = visible.trackRules({
+      other: [{ validator: () => [new Error("x")] } as FormItemRule],
+    });
+    expect(
+      runValidator((arrayed.other as FormItemRule[])[0], "v"),
+    ).toBeInstanceOf(Array);
+    expect(visible.failedCount()).toBe(1);
+
+    const asyncRule = visible.trackRules({
+      slow: [{ validator: () => Promise.resolve() } as FormItemRule],
+    });
+    expect(
+      runValidator((asyncRule.slow as FormItemRule[])[0], "v"),
+    ).toBeInstanceOf(Promise);
+    // The promise result leaves the record unchanged (only the array fail).
+    expect(visible.failedCount()).toBe(1);
+  });
+
+  it("refreshes only tracked paths and proves reset itself", () => {
+    const visible = createVisibleValidation();
+    const tracked = visible.trackRules({ email: [ruleFrom(emailSchema)] });
+    const rule = (tracked.email as FormItemRule[])[0];
+    const formRef = {
+      value: { validate: vi.fn().mockResolvedValue({}) },
+    } as unknown as Ref<FormInst | null>;
+
+    // Empty record: no validation runs at all (pristine switch is a no-op).
+    visible.refreshVisible(formRef);
+    expect(formRef.value?.validate).not.toHaveBeenCalled();
+
+    // One failure: refresh validates exactly that path, nothing else.
+    expect(runValidator(rule, "bad")).toBeInstanceOf(Error);
+    visible.refreshVisible(formRef);
+    expect(formRef.value?.validate).toHaveBeenCalledTimes(1);
+    expect(formRef.value?.validate).toHaveBeenCalledWith(undefined, ["email"]);
+
+    // Reset alone (no reinput clearing paths) empties the record again.
+    visible.reset();
+    visible.refreshVisible(formRef);
+    expect(formRef.value?.validate).toHaveBeenCalledTimes(1);
   });
 });

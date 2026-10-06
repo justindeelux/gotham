@@ -25,15 +25,26 @@ const token = ref<string>(String(route.query.token ?? ""));
 const accepting = ref(false);
 const rawError = ref<string | null>(null);
 /**
- * error renders the team-owned raw diagnostic under the shared localized
- * status summary (I18N-8 localizes the team details; until then the raw
- * text is retained as the useful plain diagnostic, never translated).
+ * teamGenericFallbacks mirrors the generic texts describeTeamError returns
+ * when it has no useful diagnostic (teams-owned, I18N-8 localizes the team
+ * details). A generic raw renders the localized fallback once instead of
+ * `Request failed: Request failed`; any useful raw diagnostic is kept
+ * verbatim under the current-locale summary.
  */
-const error = computed<string | null>(() =>
-  rawError.value === null
-    ? null
-    : `${t("common.errors.requestFailed")}: ${rawError.value}`,
-);
+const teamGenericFallbacks = [
+  "Request failed",
+  "Something went wrong. Please try again.",
+];
+const error = computed<string | null>(() => {
+  if (rawError.value === null) {
+    return null;
+  }
+  const raw = rawError.value.trim();
+  if (raw === "" || teamGenericFallbacks.includes(raw)) {
+    return t("common.errors.unexpected");
+  }
+  return `${t("common.errors.requestFailed")}: ${raw}`;
+});
 const joined = ref("");
 
 async function handleAccept(): Promise<void> {

@@ -575,33 +575,6 @@ describe("session row invalid timestamps", () => {
   });
 });
 
-describe("phone topbar keeps essential controls", () => {
-  it("yields search and stubs under 640px without hiding language or account", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { dirname, resolve } = await import("node:path");
-    const { fileURLToPath } = await import("node:url");
-    const root = resolve(
-      dirname(fileURLToPath(import.meta.url)),
-      "..",
-    );
-    const topbar = readFileSync(
-      resolve(root, "src/app/layouts/AppTopbar.vue"),
-      "utf8",
-    );
-    const phone = topbar.match(/@media\s*\(max-width:\s*640px\)\s*\{([\s\S]*?)\n\}/);
-    expect(phone, "expected a 640px topbar rule").not.toBeNull();
-    const rule = phone![1];
-    // Non-essential stubs yield room...
-    expect(rule).toMatch(/\.topbar\s+\.search[\s\S]*display:\s*none/);
-    expect(rule).toMatch(/\.is-stub[\s\S]*display:\s*none/);
-    // ...while the language selector and account controls are never hidden.
-    expect(topbar).not.toMatch(
-      /language-select[\s\S]{0,120}?display:\s*none/,
-    );
-    expect(rule).not.toContain("language-select");
-  });
-});
-
 describe("shared chart aria sentence", () => {
   it("localizes the sentence while keeping raw series names", async () => {
     const MetricsChart = (

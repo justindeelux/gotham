@@ -7,8 +7,7 @@ const { t } = useI18n();
 <template>
   <p class="auth-footnote">
     {{ t("auth.footnote.hashPrefix") }} <span class="mono">argon2id</span>
-    {{ t("auth.footnote.tokenMid") }} <span class="mono">OAuthProvider</span>
-    {{ t("auth.footnote.interfaceSuffix") }}
+    {{ t("auth.footnote.tokenMid") }} <span class="mono">OAuthProvider</span>{{ t("auth.footnote.interfaceSuffix") }}
   </p>
 </template>
 

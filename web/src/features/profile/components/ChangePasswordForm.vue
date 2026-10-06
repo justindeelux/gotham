@@ -59,45 +59,51 @@ const {
         />
       </NFormItem>
 
-      <div class="form-row">
-        <NFormItem
-          :label="t('profile.password.newLabel')"
-          path="newPassword"
-          :label-props="{ for: 'profile-new-password' }"
-        >
-          <NSpace vertical :size="8" class="password-field">
+      <!-- form-container gives the shared 480px container query an
+        ancestor, so the password pair stacks on narrow panels instead of
+        squeezing side by side (NForm does not merge extra classes onto its
+        root, so a plain wrapper carries it). -->
+      <div class="form-container">
+        <div class="form-row">
+          <NFormItem
+            :label="t('profile.password.newLabel')"
+            path="newPassword"
+            :label-props="{ for: 'profile-new-password' }"
+          >
+            <NSpace vertical :size="8" class="password-field">
+              <NInput
+                v-model:value="form.newPassword"
+                type="password"
+                show-password-on="click"
+                :placeholder="t('profile.password.newPlaceholder')"
+                :input-props="{ id: 'profile-new-password', autocomplete: 'new-password' }"
+                @keyup.enter="handleSubmit"
+              />
+              <PasswordStrengthMeter :score="strength" />
+              <span class="field-hint">
+                {{ t("profile.password.hint") }}
+              </span>
+            </NSpace>
+          </NFormItem>
+
+          <NFormItem
+            :label="t('profile.password.confirmLabel')"
+            path="confirmPassword"
+            :label-props="{ for: 'profile-confirm-password' }"
+          >
             <NInput
-              v-model:value="form.newPassword"
+              v-model:value="form.confirmPassword"
               type="password"
               show-password-on="click"
-              :placeholder="t('profile.password.newPlaceholder')"
-              :input-props="{ id: 'profile-new-password', autocomplete: 'new-password' }"
+              :placeholder="t('profile.password.confirmPlaceholder')"
+              :input-props="{
+                id: 'profile-confirm-password',
+                autocomplete: 'new-password',
+              }"
               @keyup.enter="handleSubmit"
             />
-            <PasswordStrengthMeter :score="strength" />
-            <span class="field-hint">
-              {{ t("profile.password.hint") }}
-            </span>
-          </NSpace>
-        </NFormItem>
-
-        <NFormItem
-          :label="t('profile.password.confirmLabel')"
-          path="confirmPassword"
-          :label-props="{ for: 'profile-confirm-password' }"
-        >
-          <NInput
-            v-model:value="form.confirmPassword"
-            type="password"
-            show-password-on="click"
-            :placeholder="t('profile.password.confirmPlaceholder')"
-            :input-props="{
-              id: 'profile-confirm-password',
-              autocomplete: 'new-password',
-            }"
-            @keyup.enter="handleSubmit"
-          />
-        </NFormItem>
+          </NFormItem>
+        </div>
       </div>
 
       <NButton type="primary" :loading="submitting" @click="handleSubmit">

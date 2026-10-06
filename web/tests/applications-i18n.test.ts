@@ -18,6 +18,8 @@ import en from "@/features/applications/locales/en";
 import vi from "@/features/applications/locales/vi";
 import { durationText } from "@/features/applications/utils/deploymentDuration";
 import type { Deployment } from "@/features/applications/api/applications";
+import { pipelineStepsFor } from "@/features/applications/utils/deployPipeline";
+import ApplicationOverviewTab from "@/features/applications/components/ApplicationOverviewTab.vue";
 import { checkCatalogParity } from "@/shared/i18n/catalog";
 import {
   i18n,
@@ -178,7 +180,8 @@ describe("visible domain feedback follows the locale", () => {
   });
 });
 
-describe("locale-independent display helpers", () => {  it("keeps duration text identical in both locales", () => {
+describe("locale-independent display helpers", () => {
+  it("keeps duration text identical in both locales", () => {
     const deployment = {
       started_at: "2026-01-01T00:00:00Z",
       finished_at: "2026-01-01T00:02:05Z",
@@ -186,5 +189,113 @@ describe("locale-independent display helpers", () => {  it("keeps duration text 
     expect(durationText(deployment)).toBe("2m5s");
     setLocale("vi", null);
     expect(durationText(deployment)).toBe("2m5s");
+  });
+});
+
+describe("deploy pipeline labels", () => {
+  const application = {
+    name: "storefront",
+    branch: "main",
+    build_pack: "dockerfile",
+    base_domain: "app.example.com",
+    port: 3000,
+    host_port: 0,
+    server_name: "node-1",
+    server_id: "server-1",
+  } as never;
+
+  /** deployment builds one deploy row for the pipeline. */
+  function deployment(overrides: Partial<Deployment>): Deployment {
+    return {
+      id: "deploy-12345678",
+      application_id: "app-1",
+      kind: "deploy",
+      state: "building",
+      image_tag: "registry.internal/app:42",
+      registry_image: "registry.internal/app",
+      digest: "",
+      error: "",
+      attempt: 1,
+      container_id: "",
+      rollback_from: "",
+      started_at: "2026-09-01T10:00:00Z",
+      finished_at: null,
+      created_at: "2026-09-01T10:00:00Z",
+      updated_at: "2026-09-01T10:00:00Z",
+      ...overrides,
+    } as Deployment;
+  }
+
+  function mountOverview(latest: Deployment) {
+    return mount(ApplicationOverviewTab, {
+      props: {
+        application,
+        latest,
+        deployments: [latest],
+        pipelineSteps: pipelineStepsFor(latest),
+        descColumns: 2,
+        acting: false,
+      },
+      global: { plugins: [i18n] },
+    });
+  }
+
+  it("renders running steps in English, then Vietnamese, keeping raw names", async () => {
+    const latest = deployment({ state: "running" });
+    const wrapper = mountOverview(latest);
+    const steps = pipelineStepsFor(latest);
+    expect(steps.every((step) => step.mood === "is-done")).toBe(true);
+    expect(wrapper.text()).toContain("building");
+    expect(wrapper.text()).toContain("running");
+    setLocale("vi", null);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("đang build");
+    expect(wrapper.text()).toContain("đang chạy");
+    expect(wrapper.text()).not.toContain("building");
+    // Raw enum data stays intact behind the display labels.
+    expect(pipelineStepsFor(latest).map((step) => step.name)).toEqual(
+      steps.map((step) => step.name),
+    );
+    wrapper.unmount();
+  });
+
+  it("renders the failed terminal node in both locales without marking stages done", async () => {
+    const latest = deployment({ state: "failed", error: "build failed: exit status 1" });
+    const wrapper = mountOverview(latest);
+    const steps = pipelineStepsFor(latest);
+    expect(steps.every((step) => step.mood !== "is-done")).toBe(true);
+    expect(steps[steps.length - 1]).toEqual({ name: "failed", mood: "is-failed" });
+    expect(wrapper.text()).toContain("failed");
+    expect(wrapper.text()).toContain("build failed: exit status 1");
+    setLocale("vi", null);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("thất bại");
+    // The raw server diagnostic is never translated.
+    expect(wrapper.text()).toContain("build failed: exit status 1");
+    wrapper.unmount();
+  });
+
+  it("renders rollback steps with skipped stages in both locales", async () => {
+    const latest = deployment({ kind: "rollback", state: "starting" });
+    const wrapper = mountOverview(latest);
+    const names = pipelineStepsFor(latest).map((step) => step.name);
+    expect(names).not.toContain("cloning");
+    expect(names).not.toContain("building");
+    expect(wrapper.text()).toContain("starting");
+    setLocale("vi", null);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("đang khởi động");
+    expect(pipelineStepsFor(latest).map((step) => step.name)).toEqual(names);
+    wrapper.unmount();
+  });
+
+  it("renders the queued first stage in both locales", async () => {
+    const latest = deployment({ state: "queued" });
+    const wrapper = mountOverview(latest);
+    expect(wrapper.text()).toContain("queued");
+    setLocale("vi", null);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("đang chờ");
+    wrapper.unmount();
   });
 });

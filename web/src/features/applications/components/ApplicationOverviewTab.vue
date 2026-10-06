@@ -75,7 +75,7 @@ const { t } = useI18n();
           >→</span>
           <span class="pipeline__node" :class="step.mood" role="listitem">
             <span class="dot" aria-hidden="true" />
-            {{ step.name }}
+            {{ t(`applications.status.${step.name}`) }}
           </span>
         </template>
       </div>

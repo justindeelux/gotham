@@ -21,9 +21,9 @@ import {
   ShieldCheck,
   Trash2,
   Users,
-} from "lucide-vue-next";
+} from "@lucide/vue";
 
-// Thin adapter over lucide-vue-next: call sites keep using the 19 Gotham
+// Thin adapter over @lucide/vue: call sites keep using the 19 Gotham
 // names with no changes. Per-icon imports keep tree-shaking intact — never
 // import the whole library here.
 export type IconName =
@@ -77,7 +77,7 @@ const components: Record<IconName, Component> = {
 
 const component = computed<Component>(() => components[props.name]);
 
-// lucide-vue-next v1 renders stroke-width verbatim (no 24px-grid scaling),
+// @lucide/vue v1 renders stroke-width verbatim (no 24px-grid scaling),
 // so :stroke-width="1.6" below matches the old hand-drawn paths exactly.
 // Do NOT add absolute-stroke-width: in v1 that flag enables the scaling.
 </script>

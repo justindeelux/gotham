@@ -1,1 +1,0 @@
-import{k as s,U as a,es as d,et as i}from"./index-D1L_Qkdj.js";let n,o;const r=()=>{var t,e;n=d?(e=(t=document)===null||t===void 0?void 0:t.fonts)===null||e===void 0?void 0:e.ready:void 0,o=!1,n!==void 0?n.then(()=>{o=!0}):o=!0};r();function f(t){if(o)return;let e=!1;s(()=>{o||n?.then(()=>{e||t()})}),a(()=>{e=!0})}const{c:l}=i(),c="vueuc-style";export{l as a,c,f as o};

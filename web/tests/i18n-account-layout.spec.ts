@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/* global URL, document, window, HTMLElement, HTMLInputElement:readonly */
+/* global URL, document, window, HTMLElement, HTMLInputElement, requestAnimationFrame:readonly */
 // Real-browser proof for the I18N-2 shell/auth/profile surfaces: the
 // committed webdist is served statically with the control-plane API mocked,
 // a session and locale are seeded in localStorage, and real Chromium
@@ -178,6 +178,47 @@ async function overflowOf(page: Page): Promise<{ scroll: number; inner: number }
     scroll: document.documentElement.scrollWidth,
     inner: window.innerWidth,
   }));
+}
+
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * settledBox measures an element only after webfonts load and its box is
+ * stable across animation frames. Popup entrance transitions and font swaps
+ * can otherwise report pre-final geometry; polling for stability (bounded,
+ * no arbitrary sleeps) makes the measurement deterministic.
+ */
+async function settledBox(
+  page: Page,
+  selector: string,
+): Promise<Box> {
+  await page.evaluate(() => document.fonts.ready);
+  return page.locator(selector).evaluate((node) => {
+    const element = node as HTMLElement;
+    return new Promise<Box>((resolve) => {
+      let last = "";
+      let stable = 0;
+      let guard = 0;
+      const tick = (): void => {
+        const rect = element.getBoundingClientRect();
+        const key = `${rect.x}|${rect.y}|${rect.width}|${rect.height}`;
+        stable = key === last ? stable + 1 : 0;
+        last = key;
+        guard += 1;
+        if (stable >= 2 || guard > 120) {
+          resolve({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+        } else {
+          requestAnimationFrame(tick);
+        }
+      };
+      tick();
+    });
+  });
 }
 
 for (const locale of ["en", "vi"]) {
@@ -393,10 +434,9 @@ for (const locale of ["en", "vi"] as const) {
       await page.getByRole("button", { name: labels.bulk }).click();
       const bulk = page.locator(".n-popconfirm");
       await bulk.waitFor();
-      const bulkBox = await bulk.boundingBox();
-      expect(bulkBox, "expected the bulk popconfirm to measure").not.toBeNull();
-      expect(bulkBox!.x).toBeGreaterThanOrEqual(-1);
-      expect(bulkBox!.x + bulkBox!.width).toBeLessThanOrEqual(width + 1);
+      const bulkBox = await settledBox(page, ".n-popconfirm");
+      expect(bulkBox.x).toBeGreaterThanOrEqual(-1);
+      expect(bulkBox.x + bulkBox.width).toBeLessThanOrEqual(width + 1);
       for (const name of [labels.positiveBulk, labels.negative]) {
         const button = bulk.getByRole("button", { name });
         await expect(button).toBeVisible();
@@ -423,10 +463,9 @@ for (const locale of ["en", "vi"] as const) {
           .click();
         const row = page.locator(".n-popconfirm");
         await row.waitFor();
-        const rowBox = await row.boundingBox();
-        expect(rowBox, `expected row ${index} popconfirm to measure`).not.toBeNull();
-        expect(rowBox!.x).toBeGreaterThanOrEqual(-1);
-        expect(rowBox!.x + rowBox!.width).toBeLessThanOrEqual(width + 1);
+        const rowBox = await settledBox(page, ".n-popconfirm");
+        expect(rowBox.x).toBeGreaterThanOrEqual(-1);
+        expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(width + 1);
         const rowPositive = row.getByRole("button", { name: labels.positiveRow });
         await expect(rowPositive).toBeVisible();
         const rowPositiveBox = await rowPositive.boundingBox();
@@ -450,9 +489,9 @@ for (const locale of ["en", "vi"] as const) {
             () => document.activeElement?.getAttribute("type") === "radio",
           );
           expect(focusIsRadio).toBe(true);
-          const switchedBox = await row.boundingBox();
-          expect(switchedBox!.x).toBeGreaterThanOrEqual(-1);
-          expect(switchedBox!.x + switchedBox!.width).toBeLessThanOrEqual(
+          const switchedBox = await settledBox(page, ".n-popconfirm");
+          expect(switchedBox.x).toBeGreaterThanOrEqual(-1);
+          expect(switchedBox.x + switchedBox.width).toBeLessThanOrEqual(
             width + 1,
           );
           expect(state.apiCalls).toBe(rowCallsBefore);

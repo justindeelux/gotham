@@ -475,8 +475,10 @@ for (const locale of ["en", "vi"] as const) {
           width + 1,
         );
         // Dismiss via negative: closes with no API call. On the last row,
-        // additionally prove an open confirm survives a locale switch
-        // with reactive text, stable focus and zero DELETE/API.
+        // additionally switch locale through the dropdown menu: selecting
+        // from the menu layer dismisses the open confirm (Naive popover
+        // layering) with zero API calls, and the re-opened confirm renders
+        // the flipped text inside the viewport with stable focus.
         const rowCallsBefore = state.apiCalls;
         let dismissName = labels.negative;
         if (index === rowCount - 1) {
@@ -487,8 +489,17 @@ for (const locale of ["en", "vi"] as const) {
           const selector = page.locator(".language-select");
           await selector.click();
           await page.getByRole("menuitemradio").nth(other === "vi" ? 1 : 0).click();
-          await expect(row).toContainText(flipped);
           await expect(selector).toBeFocused();
+          await row.waitFor({ state: "detached" });
+          expect(state.apiCalls).toBe(rowCallsBefore);
+          // Re-open in the new locale: flipped text, contained, dismissible.
+          await page
+            .locator(".session-row")
+            .nth(index)
+            .getByRole("button", { name: other === "vi" ? "Đăng xuất" : "Sign out" })
+            .click();
+          await row.waitFor();
+          await expect(row).toContainText(flipped);
           const switchedBox = await settledBox(page, ".n-popconfirm");
           expect(switchedBox.x).toBeGreaterThanOrEqual(-1);
           expect(switchedBox.x + switchedBox.width).toBeLessThanOrEqual(
@@ -531,7 +542,8 @@ for (const authenticated of [false, true]) {
     await expect(selector).toBeFocused();
     await page.keyboard.press("Space");
     await expect(options.nth(1)).toHaveAttribute("aria-checked", "true");
-    await page.keyboard.press("Escape");
+    await page.getByRole("menuitemradio").nth(1).click();
     await expect(selector).toHaveAttribute("aria-expanded", "false");
   });
 }
+

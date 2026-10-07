@@ -21,16 +21,15 @@ import { beforeEach, describe, expect, it } from "vitest";
 import CertificateForm from "../src/features/domains/components/CertificateForm.vue";
 import domainsEn from "../src/features/domains/locales/en";
 import domainsVi from "../src/features/domains/locales/vi";
-import { i18n, resetLocaleState, syncComposerLocale } from "../src/shared/i18n";
-import DynamicForm from "../src/features/templates/components/DynamicForm.vue";
-import EnvEditor from "../src/features/applications/components/EnvEditor.vue";
-import type { CertificateDraft } from "../src/features/domains/api/proxy";
 import {
   i18n,
   registerDiscoveredCatalogs,
   resetLocaleState,
   syncComposerLocale,
-} from "@/shared/i18n";
+} from "../src/shared/i18n";
+import DynamicForm from "../src/features/templates/components/DynamicForm.vue";
+import EnvEditor from "../src/features/applications/components/EnvEditor.vue";
+import type { CertificateDraft } from "../src/features/domains/api/proxy";
 
 beforeEach(() => {
   registerDiscoveredCatalogs();

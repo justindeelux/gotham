@@ -559,33 +559,33 @@ describe("I18N-8 library plural counts", () => {
 
   it("renders 0/1/many team counts exactly in English", () => {
     const t = i18n.global.t;
-    expect(t("teams.list.count", 0)).toBe("0 teams");
-    expect(t("teams.list.count", 1)).toBe("1 team");
-    expect(t("teams.list.count", 5)).toBe("5 teams");
+    expect(t("teams.list.count", { count: 0 }, { plural: 0 })).toBe("0 teams");
+    expect(t("teams.list.count", { count: 1 }, { plural: 1 })).toBe("1 team");
+    expect(t("teams.list.count", { count: 5 }, { plural: 5 })).toBe("5 teams");
   });
 
   it("renders meaningful Vietnamese team counts", () => {
     setLocale("vi", null);
     const t = i18n.global.t;
-    expect(t("teams.list.count", 0)).toBe("0 nhóm");
-    expect(t("teams.list.count", 1)).toBe("1 nhóm");
-    expect(t("teams.list.count", 5)).toBe("5 nhóm");
+    expect(t("teams.list.count", { count: 0 }, { plural: 0 })).toBe("0 nhóm");
+    expect(t("teams.list.count", { count: 1 }, { plural: 1 })).toBe("1 nhóm");
+    expect(t("teams.list.count", { count: 5 }, { plural: 5 })).toBe("5 nhóm");
   });
 
   it("renders redirect summaries with named total/enabled in both locales", () => {
     const t = i18n.global.t;
     expect(
-      t("domains.redirects.rulesSummary", { total: 1, enabled: 1 }, 1),
+      t("domains.redirects.rulesSummary", { total: 1, enabled: 1 }, { plural: 1 }),
     ).toBe(enRuleOne);
     expect(
-      t("domains.redirects.rulesSummary", { total: 3, enabled: 2 }, 3),
+      t("domains.redirects.rulesSummary", { total: 3, enabled: 2 }, { plural: 3 }),
     ).toBe(enRuleMany);
     setLocale("vi", null);
     expect(
-      t("domains.redirects.rulesSummary", { total: 1, enabled: 1 }, 1),
+      t("domains.redirects.rulesSummary", { total: 1, enabled: 1 }, { plural: 1 }),
     ).toBe(viRuleOne);
     expect(
-      t("domains.redirects.rulesSummary", { total: 3, enabled: 2 }, 3),
+      t("domains.redirects.rulesSummary", { total: 3, enabled: 2 }, { plural: 3 }),
     ).toBe(viRuleMany);
   });
 });

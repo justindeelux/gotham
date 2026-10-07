@@ -106,7 +106,7 @@ const {
               total: proxyStore.redirects.length,
               enabled: enabledRedirects,
             },
-            proxyStore.redirects.length,
+            { plural: proxyStore.redirects.length },
           )
         }}
       </p>

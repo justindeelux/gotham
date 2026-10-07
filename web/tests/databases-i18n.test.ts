@@ -221,7 +221,7 @@ describe("describeBackupError", () => {
         "Đã có một backup hoặc restore đang chạy cho database này.",
       ],
     ];
-    for (const [label, error, enText, viText] of rows) {
+    for (const [label, error, enText] of rows) {
       expect(describeBackupError(error), label).toBe(enText);
     }
     setLocale("vi", null);
@@ -254,7 +254,7 @@ describe("describeBackupError", () => {
         "Đã tồn tại database trùng tên.",
       ],
     ];
-    for (const [label, error, enText, viText] of rows) {
+    for (const [label, error, enText] of rows) {
       expect(describeDatabaseError(error), label).toBe(enText);
     }
     setLocale("vi", null);

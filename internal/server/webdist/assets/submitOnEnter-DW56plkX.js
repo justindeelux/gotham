@@ -1,0 +1,1 @@
+import{bb as s,b0 as i,g as n,p as c}from"./index-CdQmxYu5.js";function f(){const e=c(null),r=n(()=>e.value??void 0),u=n(()=>e.value===null?void 0:"error");function o(){e.value=null}function a(t){return s(t)?(e.value=i(t),!0):!1}return{feedback:r,status:u,clear:o,take:a}}function m(e,r){e.isComposing||e.repeat||(e.preventDefault(),r())}export{m as s,f as u};

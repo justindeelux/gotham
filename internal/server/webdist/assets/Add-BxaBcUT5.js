@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:internal/server/webdist/assets/Add-BxaBcUT5.js
-import{d as o,ch as t,a as r}from"./index-CjhrgSGA.js";var a=o({name:"Add",render(){return(()=>{const e=t("b30130fbba5c5b23");return e[0]||(e[0]=r("svg",{width:"512",height:"512",viewBox:"0 0 512 512",fill:"none",xmlns:"http://www.w3.org/2000/svg"},[r("path",{d:"M256 112V400M400 256H112",stroke:"currentColor","stroke-width":"32","stroke-linecap":"round","stroke-linejoin":"round"})],-1))})()}});export{a as A};
-========
-import{d as o,c9 as t,a as r}from"./index-BJBXRulV.js";var a=o({name:"Add",render(){return(()=>{const e=t("b30130fbba5c5b23");return e[0]||(e[0]=r("svg",{width:"512",height:"512",viewBox:"0 0 512 512",fill:"none",xmlns:"http://www.w3.org/2000/svg"},[r("path",{d:"M256 112V400M400 256H112",stroke:"currentColor","stroke-width":"32","stroke-linecap":"round","stroke-linejoin":"round"})],-1))})()}});export{a as A};
->>>>>>>> e7bedeff (feat(i18n): localize databases, backups and restores in English/Vietnamese (JUS-47)):internal/server/webdist/assets/Add-Cw9VgfMV.js

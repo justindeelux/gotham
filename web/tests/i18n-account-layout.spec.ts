@@ -394,7 +394,8 @@ test("locale switch on login issues no API call and keeps the draft", async ({
   await page.locator("#login-password").fill("secret");
   const callsBefore = state.apiCalls;
   expect(callsBefore).toBeGreaterThan(0);
-  await page.getByText("Tiếng Việt", { exact: true }).click();
+  await page.locator(".language-select").click();
+  await page.getByRole("menuitemradio").nth(1).click();
   await page.locator(".auth-title", { hasText: "Đăng nhập" }).waitFor();
   expect(state.apiCalls).toBe(callsBefore);
   expect(await page.locator("#login-email").inputValue()).toBe("not-an-email");
@@ -474,8 +475,10 @@ for (const locale of ["en", "vi"] as const) {
           width + 1,
         );
         // Dismiss via negative: closes with no API call. On the last row,
-        // additionally prove an open confirm survives a locale switch
-        // with reactive text, stable focus and zero DELETE/API.
+        // additionally switch locale through the dropdown menu: selecting
+        // from the menu layer dismisses the open confirm (Naive popover
+        // layering) with zero API calls, and the re-opened confirm renders
+        // the flipped text inside the viewport with stable focus.
         const rowCallsBefore = state.apiCalls;
         let dismissName = labels.negative;
         if (index === rowCount - 1) {
@@ -483,12 +486,20 @@ for (const locale of ["en", "vi"] as const) {
           const flipped = other === "vi"
             ? "sẽ phải đăng nhập lại"
             : "will need to sign in again";
-          await page.getByText(other === "vi" ? "Tiếng Việt" : "English", { exact: true }).click();
+          const selector = page.locator(".language-select");
+          await selector.click();
+          await page.getByRole("menuitemradio").nth(other === "vi" ? 1 : 0).click();
+          await expect(selector).toBeFocused();
+          await row.waitFor({ state: "detached" });
+          expect(state.apiCalls).toBe(rowCallsBefore);
+          // Re-open in the new locale: flipped text, contained, dismissible.
+          await page
+            .locator(".session-row")
+            .nth(index)
+            .getByRole("button", { name: other === "vi" ? "Đăng xuất" : "Sign out" })
+            .click();
+          await row.waitFor();
           await expect(row).toContainText(flipped);
-          const focusIsRadio = await page.evaluate(
-            () => document.activeElement?.getAttribute("type") === "radio",
-          );
-          expect(focusIsRadio).toBe(true);
           const switchedBox = await settledBox(page, ".n-popconfirm");
           expect(switchedBox.x).toBeGreaterThanOrEqual(-1);
           expect(switchedBox.x + switchedBox.width).toBeLessThanOrEqual(
@@ -503,4 +514,40 @@ for (const locale of ["en", "vi"] as const) {
       }
     });
   }
+}
+
+for (const authenticated of [false, true]) {
+  test(`language dropdown supports keyboard selection on mobile (authenticated: ${authenticated})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    const state: MockState = { apiCalls: 0 };
+    await mockApi(page, state);
+    await seedStorage(page, "en", authenticated);
+    await page.goto(`${baseURL}/${authenticated ? "settings/profile" : "login"}`);
+    const selector = page.locator(".language-select");
+    await expect(selector).toBeVisible();
+    await selector.focus();
+    await page.keyboard.press("Enter");
+    await expect(selector).toHaveAttribute("aria-expanded", "true");
+    const options = page.getByRole("menuitemradio");
+    await expect(options).toHaveCount(2);
+    await expect(options.nth(0)).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(page.locator("html")).toHaveAttribute("lang", "vi");
+    expect(await page.evaluate(() => window.localStorage.getItem("gotham-locale"))).toBe("vi");
+    await expect(selector).toHaveAttribute("aria-expanded", "false");
+    await expect(selector).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(options.nth(1)).toHaveAttribute("aria-checked", "true");
+    await page.getByRole("menuitemradio").nth(1).click();
+    await expect(selector).toHaveAttribute("aria-expanded", "false");
+    await selector.click();
+    await expect(options.nth(1)).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(selector).toHaveAttribute("aria-expanded", "false");
+    await expect(selector).toBeFocused();
+  });
 }

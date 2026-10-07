@@ -1,12 +1,13 @@
 // Mounted provider: Naive locale and HTML language follow the UI locale.
-/* global document: readonly, HTMLInputElement: readonly */
+/* global document: readonly, localStorage: readonly, HTMLElement: readonly */
 import { mount } from "@vue/test-utils";
-import { dateEnGB, dateViVN, enGB, NConfigProvider, viVN } from "naive-ui";
-import { beforeEach, describe, expect, it } from "vitest";
+import { dateEnGB, dateViVN, enGB, NConfigProvider, NDropdown, viVN } from "naive-ui";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
 
 import {
   i18n,
+  localeStorageKey,
   naiveDateLocale,
   naiveLocale,
   resetLocaleState,
@@ -63,40 +64,49 @@ describe("LanguageSelect", () => {
   it("offers both autonyms and writes the choice through the setter", async () => {
     const wrapper = mountSelector();
     try {
-      const labels = wrapper
-        .findAll('input[type="radio"]')
-        .map((input) => input.element.closest("label")?.textContent?.trim());
-      expect(labels).toEqual(["English", "Tiếng Việt"]);
-      expect(wrapper.text()).toContain("English");
-      setLocale("vi", null);
+      await wrapper.get("button").trigger("click");
+      await vi.waitFor(() => {
+        expect(document.querySelectorAll('[role="menuitemradio"]')).toHaveLength(2);
+      });
+      expect(document.querySelector('[role="menu"]')).not.toBeNull();
+      const items = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
+      expect(items.map((item) => item.textContent?.trim())).toEqual([
+        i18n.global.t("language.names.en"),
+        i18n.global.t("language.names.vi"),
+      ]);
+      expect(items[0].getAttribute("aria-checked")).toBe("true");
+      items[1].click();
       await wrapper.vm.$nextTick();
       expect(document.documentElement.lang).toBe("vi");
+      expect(localStorage.getItem(localeStorageKey)).toBe("vi");
+      expect(wrapper.findComponent(NDropdown).props("value")).toBe("vi");
+      expect(wrapper.get("button").attributes("aria-expanded")).toBe("false");
+      await wrapper.get("button").trigger("click");
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="menuitemradio"][aria-checked="true"]')?.textContent)
+          .toBe(i18n.global.t("language.names.vi"));
+      });
     } finally {
       wrapper.unmount();
+      localStorage.removeItem(localeStorageKey);
     }
   });
 
-  it("exposes a labeled radiogroup with native named checked radios", async () => {
+  it("exposes a labeled, focusable icon button and follows external locale changes", async () => {
     const wrapper = mountSelector();
     try {
-      const group = wrapper.find('[role="radiogroup"]');
-      expect(group.exists()).toBe(true);
-      expect(group.attributes("aria-label")).toBe("Language");
-      const radios = wrapper.findAll('input[type="radio"]');
-      expect(radios).toHaveLength(2);
-      const nameOf = (index: number): string =>
-        radios[index].element.closest("label")?.textContent?.trim() ?? "";
-      expect(nameOf(0)).toBe("English");
-      expect(nameOf(1)).toBe("Tiếng Việt");
-      const checked = (): string =>
-        radios.find((radio) => (radio.element as HTMLInputElement).checked)?.attributes("value") ?? "";
-      expect(checked()).toBe("en");
+      const button = wrapper.get("button");
+      expect(button.attributes("aria-label")).toBe("Language");
+      expect(button.attributes("aria-haspopup")).toBe("menu");
+      expect(button.attributes("aria-expanded")).toBe("false");
+      expect(button.find("svg").exists()).toBe(true);
+      expect(wrapper.findComponent(NDropdown).props("value")).toBe("en");
       setLocale("vi", null);
       await wrapper.vm.$nextTick();
-      expect(group.attributes("aria-label")).toBe("Ngôn ngữ");
-      expect(checked()).toBe("vi");
-      (radios[0].element as HTMLInputElement).focus();
-      expect(document.activeElement).toBe(radios[0].element);
+      expect(button.attributes("aria-label")).toBe(i18n.global.t("language.label"));
+      expect(wrapper.findComponent(NDropdown).props("value")).toBe("vi");
+      (button.element as HTMLElement).focus();
+      expect(document.activeElement).toBe(button.element);
     } finally {
       wrapper.unmount();
     }

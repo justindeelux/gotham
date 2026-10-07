@@ -2,7 +2,7 @@ import { useCopyText } from "@/shared/composables/useCopyText";
 import { useMessage } from "naive-ui";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { InjectionKey } from "vue";
-import { i18n } from "@/shared/i18n";
+
 
 /** t resolves a databases/common message in the current locale. */
 function t(key: string, params?: Record<string, string | number>): string {
@@ -23,7 +23,7 @@ import {
   maskConnectionPassword,
 } from "@/features/databases/utils/databaseConnection";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
-import { resolveValidationMessage } from "@/shared/i18n";
+import { i18n, resolveValidationMessage } from "@/shared/i18n";
 import { useDatabasesStore } from "@/features/databases/stores/databases";
 import { resolveEnvironmentScope } from "@/features/projects/utils/canonicalRoutes";
 import { useProjectsStore } from "@/features/projects/stores/projects";

@@ -2,7 +2,7 @@ import { useMessage } from "naive-ui";
 import type { SelectOption } from "naive-ui";
 import { computed, onUnmounted, ref, watch } from "vue";
 import type { InjectionKey, Ref } from "vue";
-import { i18n } from "@/shared/i18n";
+
 
 /** t resolves a databases/common message in the current locale. */
 function t(key: string, params?: Record<string, string | number>): string {
@@ -22,7 +22,7 @@ import {
 } from "@/features/databases/schemas/databases";
 import { useBackupsStore } from "@/features/databases/stores/backups";
 import { advanceRestoreStatuses } from "@/features/databases/utils/restoreOutcomes";
-import { resolveValidationMessage } from "@/shared/i18n";
+import { i18n, resolveValidationMessage } from "@/shared/i18n";
 
 export interface TargetTestState {
   checking: boolean;

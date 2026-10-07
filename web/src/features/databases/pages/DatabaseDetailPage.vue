@@ -54,7 +54,7 @@ watch(detail.dbId, () => {
       :environment-id="detail.database.value.environment_id"
       :resource-name="detail.database.value.name"
     />
-    <nav v-else class="breadcrumb" aria-label="Breadcrumb">
+    <nav v-else class="breadcrumb" :aria-label="t('databases.detail.breadcrumb')">
       <span class="muted mono">{{ detail.shortId.value }}</span>
     </nav>
 

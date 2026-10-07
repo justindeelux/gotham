@@ -44,6 +44,7 @@ const vi: typeof en = {
       "Không kết nối được node agent hoặc tác vụ thất bại trên node. Kiểm tra trạng thái node rồi thử lại.",
   },
   detail: {
+    breadcrumb: "Đường dẫn",
     tabs: {
       overview: "Tổng quan",
       backups: "Sao lưu",

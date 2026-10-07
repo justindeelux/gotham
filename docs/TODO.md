@@ -31,12 +31,13 @@ Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
 
 ## English/Vietnamese UI localization
 
-- [ ] **In progress (I18N-1 executing).** [`plans/14-i18n.md`](plans/14-i18n.md):
-  shared runtime and language selector, seven feature translation packages, then dual-language
-  browser verification. Linear work packages and the Orca dependency DAG are registered in
-  the plan ([JUS-41](https://linear.app/justin-deelux/issue/JUS-41/gotham-englishvietnamese-ui-localization-i18n),
-  JUS-42 through JUS-50); I18N-1 ([JUS-42](https://linear.app/justin-deelux/issue/JUS-42/i18n-1-shared-runtime-selector-and-presentation-foundations-m))
-  implementation is underway in `ws/p14-i18n-foundation`, I18N-2 through I18N-9 undispatched.
+- [x] **Complete 2026-10-07.** [`plans/14-i18n.md`](plans/14-i18n.md): shared
+  runtime and language selector (I18N-1, JUS-42, PR #187), seven feature
+  translation packages (I18N-2 JUS-43 PR #190, I18N-3 JUS-44 PR #189, I18N-4
+  JUS-45 PR #193, I18N-5 JUS-46 PR #191, I18N-6 JUS-47 PR #192, I18N-7 JUS-48
+  PR #194, I18N-8 JUS-49 PR #195) and dual-language browser verification
+  (I18N-9, JUS-50). Parent [JUS-41](https://linear.app/justin-deelux/issue/JUS-41/gotham-englishvietnamese-ui-localization-i18n)
+  tracks delivery; per-package evidence lives in each PR and the plan §11 appendix.
 
 ## Phase 13 residuals (from the PE-2/PE-5/PE-6 reviews; none blocking)
 

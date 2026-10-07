@@ -360,3 +360,76 @@ test("locale switch on login issues no API call and keeps the draft", async ({
   expect(await page.locator("#login-password").inputValue()).toBe("secret");
   expect(page.url()).toContain("/login");
 });
+
+for (const locale of ["en", "vi"] as const) {
+  for (const width of [390, 900, 1280]) {
+    test(`session popconfirms stay inside the viewport at ${width}px in ${locale}`, async ({
+      page,
+    }) => {
+      const labels =
+        locale === "en"
+          ? {
+              bulk: "Sign out all other devices",
+              row: "Sign out",
+              positiveBulk: "Sign out others",
+              positiveRow: "Sign out",
+              negative: "Keep",
+            }
+          : {
+              bulk: "Đăng xuất mọi thiết bị khác",
+              row: "Đăng xuất",
+              positiveBulk: "Đăng xuất các phiên khác",
+              positiveRow: "Đăng xuất",
+              negative: "Giữ lại",
+            };
+      await page.setViewportSize({ width, height: 900 });
+      const state: MockState = { apiCalls: 0 };
+      await mockApi(page, state);
+      await seedStorage(page, locale, true);
+      await page.goto(`${baseURL}/settings/profile`);
+      await page.locator(".session-row").first().waitFor();
+
+      // Bulk confirm: buttons visible and fully inside the viewport.
+      await page.getByRole("button", { name: labels.bulk }).click();
+      const bulk = page.locator(".n-popconfirm");
+      await bulk.waitFor();
+      const bulkBox = await bulk.boundingBox();
+      expect(bulkBox, "expected the bulk popconfirm to measure").not.toBeNull();
+      expect(bulkBox!.x).toBeGreaterThanOrEqual(-1);
+      expect(bulkBox!.x + bulkBox!.width).toBeLessThanOrEqual(width + 1);
+      for (const name of [labels.positiveBulk, labels.negative]) {
+        const button = bulk.getByRole("button", { name });
+        await expect(button).toBeVisible();
+        const box = await button.boundingBox();
+        expect(box, `expected ${name} to measure`).not.toBeNull();
+        expect(box!.x).toBeGreaterThanOrEqual(-1);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+      }
+      // Dismissing via the negative action closes without any API call.
+      const callsBefore = state.apiCalls;
+      await bulk.getByRole("button", { name: labels.negative }).click();
+      await bulk.waitFor({ state: "detached" });
+      expect(state.apiCalls).toBe(callsBefore);
+
+      // Row confirm: same containment for the per-session popconfirm.
+      await page
+        .locator(".session-row")
+        .first()
+        .getByRole("button", { name: labels.row })
+        .click();
+      const row = page.locator(".n-popconfirm");
+      await row.waitFor();
+      const rowBox = await row.boundingBox();
+      expect(rowBox, "expected the row popconfirm to measure").not.toBeNull();
+      expect(rowBox!.x).toBeGreaterThanOrEqual(-1);
+      expect(rowBox!.x + rowBox!.width).toBeLessThanOrEqual(width + 1);
+      const rowPositive = row.getByRole("button", { name: labels.positiveRow });
+      await expect(rowPositive).toBeVisible();
+      const rowPositiveBox = await rowPositive.boundingBox();
+      expect(rowPositiveBox!.x).toBeGreaterThanOrEqual(-1);
+      expect(rowPositiveBox!.x + rowPositiveBox!.width).toBeLessThanOrEqual(
+        width + 1,
+      );
+    });
+  }
+}

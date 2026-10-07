@@ -207,6 +207,20 @@ describe("login live switch", () => {
   });
 });
 
+describe("owned feature catalogs keep key/param/plural parity", () => {
+  it("passes checkCatalogParity for auth and profile", async () => {
+    const { checkCatalogParity } = await import("@/shared/i18n/catalog");
+    const authEn = (await import("@/features/auth/locales/en")).default;
+    const authVi = (await import("@/features/auth/locales/vi")).default;
+    const profileEn = (await import("@/features/profile/locales/en")).default;
+    const profileVi = (await import("@/features/profile/locales/vi")).default;
+    // Same gate the foundation suite runs on the shared catalogs: equal
+    // leaf keys, matching params, valid syntax and equal plural segments.
+    expect(checkCatalogParity(authEn, authVi)).toEqual([]);
+    expect(checkCatalogParity(profileEn, profileVi)).toEqual([]);
+  });
+});
+
 describe("route titles", () => {
   it("stores stable keys for the owned auth/profile routes", () => {
     const routes = router.getRoutes();

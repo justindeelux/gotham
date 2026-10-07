@@ -94,6 +94,7 @@ onMounted(() => {
           <NPopconfirm
             :positive-text="t('profile.sessions.confirmOthersPositive')"
             :negative-text="t('profile.sessions.keep')"
+            :style="{ maxWidth: 'min(26rem, calc(100vw - 32px))' }"
             @positive-click="endOtherSessions"
           >
             <template #trigger>

@@ -65,7 +65,7 @@ const vi: ProfileMessages = {
       "Đăng xuất thiết bị này? Bạn sẽ bị đăng xuất tại đây và quay lại trang đăng nhập.",
     confirmOther: "Đăng xuất {label}? Thiết bị đó sẽ phải đăng nhập lại.",
     confirmOthers:
-      "Đăng xuất {count} phiên khác? Các thiết bị đó sẽ phải đăng nhập lại.",
+      "Đăng xuất {count} phiên khác? Các thiết bị đó sẽ phải đăng nhập lại. | Đăng xuất {count} phiên khác? Các thiết bị đó sẽ phải đăng nhập lại.",
     needsReauth:
       "Lần đăng nhập của bạn có trước quản lý phiên. Hãy đăng nhập lại để quản lý các phiên khác.",
     signInAgain: "Đăng nhập lại",

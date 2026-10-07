@@ -36,6 +36,7 @@ const en = {
     viewAll: "view all servers",
     empty: "No servers yet",
     emptyHint: "Add your first node to see CPU, RAM, and disk health here.",
+    heartbeatMeta: "heartbeat every 10s over gRPC server-authenticated TLS",
     addServer: "Add server",
     containersOne: "{count} container",
     containersOther: "{count} containers",

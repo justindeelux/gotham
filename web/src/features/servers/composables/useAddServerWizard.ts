@@ -124,6 +124,11 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     if (failure === null || failure === undefined || failure === "") {
       return "";
     }
+    // A plain probe string is server-reported verbatim (pre-i18n behavior);
+    // only thrown errors go through the localized failureText.
+    if (typeof failure === "string") {
+      return failure;
+    }
     return failureText(failure, locale.value);
   });
   /**

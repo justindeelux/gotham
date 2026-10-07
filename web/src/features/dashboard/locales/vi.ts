@@ -37,6 +37,7 @@ const vi: DashboardMessages = {
     viewAll: "xem tất cả máy chủ",
     empty: "Chưa có máy chủ nào",
     emptyHint: "Thêm nút đầu tiên để xem tình trạng CPU, RAM và đĩa tại đây.",
+    heartbeatMeta: "heartbeat mỗi 10s qua gRPC server-authenticated TLS",
     addServer: "Thêm máy chủ",
     containersOne: "{count} container",
     containersOther: "{count} container",

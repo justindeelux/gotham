@@ -29,7 +29,7 @@ const moreNodesText = computed<string>(() =>
   <div class="section-title">
     <h2>{{ $t("dashboard.health.title") }}</h2>
     <NText depth="3" class="mono meta">
-      heartbeat every 10s over gRPC server-authenticated TLS
+      {{ $t("dashboard.health.heartbeatMeta") }}
     </NText>
   </div>
   <NEmpty

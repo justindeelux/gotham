@@ -1,45 +1,48 @@
 <script setup lang="ts">
 import { NAlert, NButton, NFormItem, NInput, NSelect, NSpace } from "naive-ui";
+import { useI18n } from "vue-i18n";
 
 import { useCreateWizardState } from "@/features/applications/composables/useCreateAppWizard";
 
 const wizard = useCreateWizardState();
 const { form } = wizard;
+
+const { t } = useI18n();
 </script>
 
 <template>
   <NSpace vertical :size="16">
     <div class="form-row">
-      <NFormItem label="Provider" :show-feedback="true">
+      <NFormItem :label="t('applications.wizard.provider')" :show-feedback="true">
         <NSelect
           v-model:value="form.providerId"
           :options="wizard.providerOptions.value"
           :loading="wizard.providersStore.loading"
-          placeholder="Select a connected provider"
+          :placeholder="t('applications.wizard.providerPlaceholder')"
         />
-        <span class="field-hint">Each provider uses its own OAuth app.</span>
+        <span class="field-hint">{{ t("applications.wizard.providerHint") }}</span>
       </NFormItem>
 
-      <NFormItem v-if="wizard.isPublicRepo.value" label="Clone URL">
+      <NFormItem v-if="wizard.isPublicRepo.value" :label="t('applications.wizard.cloneUrl')">
         <NInput
           v-model:value="form.publicCloneUrl"
           class="mono"
           placeholder="https://github.com/owner/repo.git"
         />
-        <span class="field-hint">Any public repo — no provider connection needed.</span>
+        <span class="field-hint">{{ t("applications.wizard.cloneHint") }}</span>
       </NFormItem>
 
-      <NFormItem v-else label="Repository">
+      <NFormItem v-else :label="t('applications.wizard.repository')">
         <NSelect
           v-model:value="form.repoFullName"
           :options="wizard.repoOptions.value"
           :loading="wizard.providersStore.reposLoading"
           :disabled="form.providerId === ''"
-          placeholder="Select a repository"
+          :placeholder="t('applications.wizard.repositoryPlaceholder')"
           filterable
           @update:value="wizard.handleRepoSelect"
         />
-        <span class="field-hint">Private repos deploy with an SSH deploy key.</span>
+        <span class="field-hint">{{ t("applications.wizard.repoHint") }}</span>
         <NAlert
           v-if="wizard.providersStore.reposError"
           type="error"
@@ -48,7 +51,7 @@ const { form } = wizard;
         >
           <NSpace align="center" :size="12" wrap>
             <span>{{ wizard.providersStore.reposError }}</span>
-            <NButton size="small" @click="void wizard.loadRepos()">Retry</NButton>
+            <NButton size="small" @click="void wizard.loadRepos()">{{ t("common.actions.retry") }}</NButton>
           </NSpace>
         </NAlert>
       </NFormItem>
@@ -59,13 +62,13 @@ const { form } = wizard;
     </NAlert>
 
     <div class="form-row">
-      <NFormItem label="Branch">
+      <NFormItem :label="t('applications.wizard.branch')">
         <NInput v-model:value="form.branch" class="mono" placeholder="main" />
-        <span class="field-hint">Branch listing is not exposed by the API yet — the default branch is prefilled.</span>
+        <span class="field-hint">{{ t("applications.wizard.branchHint") }}</span>
       </NFormItem>
-      <NFormItem label="Application name">
+      <NFormItem :label="t('applications.wizard.appName')">
         <NInput v-model:value="form.name" class="mono" placeholder="storefront" />
-        <span class="field-hint">Lowercase, digits and dashes (3-31 chars). Used for the container and image tag.</span>
+        <span class="field-hint">{{ t("applications.wizard.appNameHint") }}</span>
       </NFormItem>
     </div>
   </NSpace>

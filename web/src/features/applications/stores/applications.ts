@@ -23,6 +23,7 @@ import type {
   StorageMapping,
   UpdateApplicationInput,
 } from "@/features/applications/api/applications";
+import { onLocaleChange } from "@/shared/i18n/locale";
 import { desiredPollIntervalMs } from "@/shared/utils/polling";
 
 /** One deployment-history poll timer per application. */
@@ -38,6 +39,12 @@ export const useApplicationsStore = defineStore("applications", () => {
   const storagesByApp = ref<Record<string, StorageMapping[]>>({});
   const loading = ref(false);
   const error = ref<string | null>(null);
+  /**
+   * errorRaw keeps the failure `error` was derived from, so a language switch
+   * re-derives the curated summary in the new locale without refetching. Raw
+   * server diagnostics inside still pass through untouched.
+   */
+  const errorRaw = ref<unknown>(null);
   const acting = ref(false);
   const savingEnv = ref(false);
   const savingStorages = ref(false);
@@ -83,11 +90,13 @@ export const useApplicationsStore = defineStore("applications", () => {
   async function fetchApplication(appId: string): Promise<Application> {
     loading.value = true;
     error.value = null;
+    errorRaw.value = null;
     try {
       const application = await getApplication(appId);
       applicationsById.value[appId] = application;
       return application;
     } catch (err) {
+      errorRaw.value = err;
       error.value = describeApplicationError(err);
       throw err;
     } finally {
@@ -118,6 +127,7 @@ export const useApplicationsStore = defineStore("applications", () => {
     const epoch = pollEpoch;
     loading.value = true;
     error.value = null;
+    errorRaw.value = null;
     try {
       const deployments = await listDeployments(appId);
       if (epoch !== pollEpoch) {
@@ -129,6 +139,7 @@ export const useApplicationsStore = defineStore("applications", () => {
       if (epoch !== pollEpoch) {
         return;
       }
+      errorRaw.value = err;
       error.value = describeApplicationError(err);
       throw err;
     } finally {
@@ -151,11 +162,13 @@ export const useApplicationsStore = defineStore("applications", () => {
       }
       deploymentsByApp.value[appId] = deployments;
       error.value = null;
+      errorRaw.value = null;
       settlePolling(appId);
     } catch (err) {
       if (epoch !== pollEpoch) {
         return;
       }
+      errorRaw.value = err;
       error.value = describeApplicationError(err);
     }
   }
@@ -247,6 +260,15 @@ export const useApplicationsStore = defineStore("applications", () => {
     pollTimers.clear();
   }
 
+  // A retained failure banner re-derives its curated summary when the
+  // language changes; the draft/route/polling state is untouched, and raw
+  // diagnostics inside re-resolve to the same passthrough text.
+  onLocaleChange(() => {
+    if (errorRaw.value !== null) {
+      error.value = describeApplicationError(errorRaw.value);
+    }
+  });
+
   /**
    * reset drops every cached collection and stops polling, so the next
    * sign-in never sees the previous account's applications. Called on
@@ -260,6 +282,7 @@ export const useApplicationsStore = defineStore("applications", () => {
     storagesByApp.value = {};
     loading.value = false;
     error.value = null;
+    errorRaw.value = null;
     acting.value = false;
     savingEnv.value = false;
     savingStorages.value = false;

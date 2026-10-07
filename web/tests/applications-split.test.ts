@@ -3,17 +3,38 @@
 // events the monoliths rendered before the split.
 
 import { mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import ApplicationHeader from "../src/features/applications/components/ApplicationHeader.vue";
 import ApplicationOverviewTab from "../src/features/applications/components/ApplicationOverviewTab.vue";
 import type { Deployment } from "../src/features/applications/api/applications";
+import {
+  i18n,
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  setLocale,
+  syncComposerLocale,
+} from "@/shared/i18n";
 
 const running = { id: "deploy-12345678", state: "running" } as Deployment;
 
+beforeEach(() => {
+  registerDiscoveredCatalogs();
+  resetLocaleState();
+  syncComposerLocale("en");
+});
+
+/** mountWithI18n provides the composer every localized component requires. */
+function mountWithI18n(component: unknown, options: Record<string, unknown>) {
+  return mount(component as never, {
+    ...(options as object),
+    global: { plugins: [i18n] },
+  } as never);
+}
+
 describe("ApplicationHeader", () => {
   function mountHeader(overrides = {}) {
-    return mount(ApplicationHeader, {
+    return mountWithI18n(ApplicationHeader, {
       props: {
         displayName: "storefront",
         appId: "app-abcdef",
@@ -50,6 +71,18 @@ describe("ApplicationHeader", () => {
     expect(wrapper.text()).toContain("stopped");
   });
 
+  it("renders Vietnamese controls after a live switch without remounting", async () => {
+    const wrapper = mountHeader();
+    expect(wrapper.text()).toContain("Redeploy");
+    setLocale("vi", null);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("Triển khai lại");
+    expect(wrapper.text()).toContain("Quay lui");
+    expect(wrapper.text()).toContain("Dừng");
+    expect(wrapper.text()).toContain("Khởi động");
+    expect(wrapper.text()).not.toContain("Redeploy");
+  });
+
   it("emits deploy, rollback and stop while running", async () => {
     const wrapper = mountHeader();
     const byText = (label: string) =>
@@ -76,7 +109,7 @@ describe("ApplicationHeader", () => {
 // resources are listed on the environment page and open under nested routes.
 describe("ApplicationOverviewTab", () => {
   it("renders the first-deploy empty state without a latest deployment", () => {
-    const wrapper = mount(ApplicationOverviewTab, {
+    const wrapper = mountWithI18n(ApplicationOverviewTab, {
       props: {
         application: null,
         latest: null,
@@ -90,5 +123,22 @@ describe("ApplicationOverviewTab", () => {
     expect(wrapper.text()).toContain("Queue the first deploy to start the pipeline.");
     expect(wrapper.text()).toContain("Recent deployments");
     expect(wrapper.text()).toContain("No deployments recorded for this application.");
+  });
+
+  it("renders the Vietnamese empty state after a live switch", async () => {
+    const wrapper = mountWithI18n(ApplicationOverviewTab, {
+      props: {
+        application: null,
+        latest: null,
+        deployments: [],
+        pipelineSteps: [],
+        descColumns: 2,
+        acting: false,
+      },
+    });
+    setLocale("vi", null);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("Chưa có đợt triển khai nào");
+    expect(wrapper.text()).toContain("Các đợt triển khai gần đây");
   });
 });

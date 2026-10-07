@@ -1,34 +1,57 @@
 <script setup lang="ts">
 import { NAlert, NSpace, NText } from "naive-ui";
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import { useCreateWizardState } from "@/features/applications/composables/useCreateAppWizard";
 
 const wizard = useCreateWizardState();
 const { form } = wizard;
+
+const { t } = useI18n();
+
+/** reviewDroppedText renders the 1/many grammar through library pluralization. */
+const reviewDroppedText = computed<string>(() =>
+  String(
+    t(
+      "applications.wizard.reviewDropped",
+      { count: wizard.droppedEnvRows.value },
+      wizard.droppedEnvRows.value,
+    ),
+  ),
+);
+
+/** envVolumesText renders the raw counts; numbers are locale-independent. */
+const envVolumesText = computed<string>(() =>
+  String(
+    t("applications.wizard.reviewVolumes", {
+      env: form.env.length,
+      storage: form.storage.length,
+    }),
+  ),
+);
 </script>
 
 <template>
   <NSpace vertical :size="12">
-    <NText strong>Summary</NText>
+    <NText strong>{{ t("applications.wizard.reviewTitle") }}</NText>
     <dl class="review">
-      <dt>Application</dt>
+      <dt>{{ t("applications.wizard.reviewApp") }}</dt>
       <dd class="mono">{{ form.name }}</dd>
-      <dt>Source</dt>
+      <dt>{{ t("applications.wizard.reviewSource") }}</dt>
       <dd class="mono">{{ wizard.reviewSource.value }}</dd>
-      <dt>Build pack</dt>
+      <dt>{{ t("applications.wizard.reviewBuildPack") }}</dt>
       <dd>{{ wizard.buildPackLabel.value }}</dd>
-      <dt>Port / domain</dt>
+      <dt>{{ t("applications.wizard.reviewPortDomain") }}</dt>
       <dd class="mono">{{ form.port ?? 3000 }} · {{ form.baseDomain || "—" }}</dd>
-      <dt>Env / volumes</dt>
-      <dd class="mono">{{ form.env.length }} vars · {{ form.storage.length }} volumes</dd>
+      <dt>{{ t("applications.wizard.reviewEnvVolumes") }}</dt>
+      <dd class="mono">{{ envVolumesText }}</dd>
     </dl>
     <NText depth="3">
-      Creating posts the payload to the applications API, then the
-      first deploy queues immediately.
+      {{ t("applications.wizard.reviewIntro") }}
     </NText>
     <NAlert v-if="wizard.droppedEnvRows.value > 0" type="warning" :show-icon="false">
-      {{ wizard.droppedEnvRows.value }} nameless variable row{{ wizard.droppedEnvRows.value === 1 ? "" : "s" }}
-      will be ignored on create.
+      {{ reviewDroppedText }}
     </NAlert>
   </NSpace>
 </template>

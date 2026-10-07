@@ -1,4 +1,5 @@
 import { http } from "@/shared/api/http";
+import { i18n } from "@/shared/i18n";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
@@ -62,11 +63,18 @@ export async function listRepos(providerId: string): Promise<ProviderRepo[]> {
 
 /** describeProviderError maps a thrown error to a user-facing message. */
 export function describeProviderError(error: unknown): string {
+  const t = i18n.global.t.bind(i18n.global);
   if (isApiError(error)) {
-    return stripErrorPrefix(error.message) || "Request failed";
+    const raw = stripErrorPrefix(error.message);
+    return raw
+      ? `${String(t("common.errors.requestFailed"))} ${raw}`
+      : String(t("common.errors.requestFailed"));
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
+    const raw = stripErrorPrefix(error.message);
+    return raw
+      ? `${String(t("common.errors.unexpected"))} ${raw}`
+      : String(t("common.errors.unexpected"));
   }
-  return "Something went wrong. Please try again.";
+  return String(t("common.errors.unexpected"));
 }

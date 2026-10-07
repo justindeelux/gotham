@@ -16,11 +16,12 @@ import { z } from "zod";
  */
 
 /**
- * Message catalog: only strings the UI shows, byte-identical. Gate-only
- * schemas use zod defaults (never surfaced).
+ * Message catalog: only strings the UI shows. Gate-only schemas use zod
+ * defaults (never surfaced). The domain message is a namespaced catalog key
+ * resolved at invocation time, so visible feedback follows a language switch.
  */
 export const applicationMessages = {
-  domain: "Enter a plain hostname such as app.example.com (letters, digits, hyphens and dots; no wildcard).",
+  domain: "applications.validation.domain",
 } as const;
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{2,30}$/;

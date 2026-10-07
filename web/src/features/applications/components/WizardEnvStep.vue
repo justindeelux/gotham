@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { NAlert, NSpace, NText } from "naive-ui";
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import EnvEditor from "@/features/applications/components/EnvEditor.vue";
 import StorageEditor from "@/features/applications/components/StorageEditor.vue";
@@ -7,27 +9,36 @@ import { useCreateWizardState } from "@/features/applications/composables/useCre
 
 const wizard = useCreateWizardState();
 const { form } = wizard;
+
+const { t } = useI18n();
+
+/** droppedText renders the 1/many grammar through library pluralization. */
+const droppedText = computed<string>(() =>
+  String(
+    t(
+      "applications.wizard.droppedRows",
+      { count: wizard.droppedEnvRows.value },
+      wizard.droppedEnvRows.value,
+    ),
+  ),
+);
 </script>
 
 <template>
   <NSpace vertical :size="12">
     <div>
-      <NText strong>Environment variables</NText>
+      <NText strong>{{ t("applications.wizard.envTitle") }}</NText>
       <EnvEditor v-model="form.env" />
     </div>
     <div>
-      <NText strong>Volumes</NText>
+      <NText strong>{{ t("applications.wizard.volumesTitle") }}</NText>
       <StorageEditor v-model="form.storage" />
     </div>
     <NAlert v-if="wizard.envKeyWarnings.value" type="warning" :show-icon="false">
-      One or more variable names do not follow the usual
-      ^[A-Z][A-Z0-9_]*$ convention. The API accepts them, so they are
-      not blocked — but a non-standard name may not be injected as you
-      expect.
+      {{ t("applications.wizard.envConvention") }}
     </NAlert>
     <NAlert v-if="wizard.droppedEnvRows.value > 0" type="warning" :show-icon="false">
-      {{ wizard.droppedEnvRows.value }} variable row{{ wizard.droppedEnvRows.value === 1 ? "" : "s" }}
-      without a name will be ignored on create.
+      {{ droppedText }}
     </NAlert>
   </NSpace>
 </template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NButton, NIcon, NInput, NText } from "naive-ui";
 import { computed } from "vue";
+import { useI18n, I18nT } from "vue-i18n";
 
 import type { StorageMapping } from "@/features/applications/api/applications";
 import { useStableRowKeys } from "@/shared/composables/useStableRowKeys";
@@ -20,6 +21,8 @@ const props = defineProps<Props>();
 const emit = defineEmits<{
   "update:modelValue": [value: StorageMapping[]];
 }>();
+
+const { t } = useI18n();
 
 const rows = computed<StorageMapping[]>(() => props.modelValue);
 const { keys: rowKeys, insertAt, removeAt } = useStableRowKeys(() => rows.value.length);
@@ -51,7 +54,7 @@ function removeRow(index: number): void {
 <template>
   <div class="storage-editor">
     <div v-if="rows.length === 0" class="storage-editor__empty">
-      <NText depth="3">No volumes yet. The container filesystem is ephemeral until a volume is added.</NText>
+      <NText depth="3">{{ t("applications.storageEditor.empty") }}</NText>
     </div>
     <div
       v-for="(row, index) in rows"
@@ -62,24 +65,24 @@ function removeRow(index: number): void {
         :value="row.name"
         class="mono"
         placeholder="uploads"
-        aria-label="Volume name"
+        :input-props="{ 'aria-label': t('applications.storageEditor.nameAria') }"
         @update:value="(value: string) => updateRow(index, { name: value })"
       />
       <NInput
         :value="row.host_path"
         class="mono"
-        placeholder="Optional — Gotham manages it"
-        aria-label="Host path on the node (optional)"
+        :placeholder="t('applications.storageEditor.hostPlaceholder')"
+        :input-props="{ 'aria-label': t('applications.storageEditor.hostAria') }"
         @update:value="(value: string) => updateRow(index, { host_path: value })"
       />
       <NInput
         :value="row.container_path"
         class="mono"
         placeholder="/app/public/uploads"
-        aria-label="Container path"
+        :input-props="{ 'aria-label': t('applications.storageEditor.containerAria') }"
         @update:value="(value: string) => updateRow(index, { container_path: value })"
       />
-      <NButton quaternary type="error" aria-label="Remove volume" @click="removeRow(index)">
+      <NButton quaternary type="error" :aria-label="t('applications.storageEditor.removeAria')" @click="removeRow(index)">
         <template #icon>
           <NIcon>
             <GothamIcon name="trash" />
@@ -88,14 +91,12 @@ function removeRow(index: number): void {
       </NButton>
     </div>
     <NButton secondary size="small" @click="addRow">
-      Add volume
+      {{ t("applications.storageEditor.add") }}
     </NButton>
-    <p class="storage-editor__hint">
-      Data lives on the node, not in the image. Each column is
-      <span class="mono">name → host path → container path</span>. Leave the host
-      path blank for a Gotham-managed volume; an explicit path must be inside
-      <span class="mono">/var/lib/gotham/volumes/&lt;app id&gt;</span>.
-    </p>
+    <i18n-t keypath="applications.storageEditor.hint" tag="p" class="storage-editor__hint">
+      <template #columns><span class="mono">{{ t("applications.storageEditor.columns") }}</span></template>
+      <template #path><span class="mono">/var/lib/gotham/volumes/&lt;app id&gt;</span></template>
+    </i18n-t>
   </div>
 </template>
 

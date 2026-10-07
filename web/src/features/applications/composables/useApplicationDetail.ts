@@ -26,6 +26,7 @@ import { resolveEnvironmentScope } from "@/features/projects/utils/canonicalRout
 import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useTeamsStore } from "@/features/teams";
 import { useServersStore } from "@/features/servers";
+import { activeLocale, i18n } from "@/shared/i18n";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { pipelineStepsFor } from "@/features/applications/utils/deployPipeline";
 import { createRequestGeneration } from "@/shared/utils/requestGeneration";
@@ -52,7 +53,19 @@ export function useApplicationDetail() {
   const rollingBack = ref(false);
   const envDraft = ref<EnvVar[]>([]);
   const envLoading = ref(false);
-  const envError = ref<string | null>(null);
+  /**
+   * envErrorRaw keeps the failure behind the env banner; envError derives its
+   * display text in the current locale so a language switch refreshes the
+   * banner without clearing the draft or refetching.
+   */
+  const envErrorRaw = ref<unknown>(null);
+  const envError = computed<string | null>(() => {
+    if (envErrorRaw.value === null) {
+      return null;
+    }
+    void activeLocale.value;
+    return describeApplicationError(envErrorRaw.value);
+  });
   // `envLoadedFor` names the application whose environment actually loaded. Save
   // is only enabled while it matches the current application, so an empty draft
   // from a failed read (or a draft left over from another application) can never
@@ -60,7 +73,15 @@ export function useApplicationDetail() {
   const envLoadedFor = ref<string>("");
   const storagesDraft = ref<StorageMapping[]>([]);
   const storagesLoading = ref(false);
-  const storagesError = ref<string | null>(null);
+  /** storagesErrorRaw/storagesError mirror the env pair for volumes. */
+  const storagesErrorRaw = ref<unknown>(null);
+  const storagesError = computed<string | null>(() => {
+    if (storagesErrorRaw.value === null) {
+      return null;
+    }
+    void activeLocale.value;
+    return describeApplicationError(storagesErrorRaw.value);
+  });
   const storagesLoadedFor = ref<string>("");
 
   // Inherited shared variables (PE-6): the project's and the environment's
@@ -82,7 +103,15 @@ export function useApplicationDetail() {
   const previews = ref<Preview[]>([]);
   const previewsLoading = ref(false);
   const previewsLoaded = ref(false);
-  const previewsError = ref<string | null>(null);
+  /** previewsErrorRaw/previewsError mirror the env pair for previews. */
+  const previewsErrorRaw = ref<unknown>(null);
+  const previewsError = computed<string | null>(() => {
+    if (previewsErrorRaw.value === null) {
+      return null;
+    }
+    void activeLocale.value;
+    return describePreviewError(previewsErrorRaw.value);
+  });
   const previewsAvailable = ref(true);
 
   /** isNarrow stacks the two-column descriptions on small screens. */
@@ -106,16 +135,25 @@ export function useApplicationDetail() {
   );
 
   /**
+   * tr resolves one applications message in the current locale. Reading
+   * activeLocale pins the calling computed to the language switch.
+   */
+  function tr(key: string, params?: Record<string, string | number>): string {
+    void activeLocale.value;
+    return String(i18n.global.t(key, params ?? {}));
+  }
+
+  /**
    * controlHint explains why stop/start are unavailable, if they are: an
    * in-flight deployment owns the container right now, or no deployment ever
    * started one (the backend would answer 404).
    */
   const controlHint = computed<string | null>(() => {
     if (active.value !== null) {
-      return "A deployment is in progress. Wait for it to finish.";
+      return tr("applications.detail.controlInProgress");
     }
     if (!hasContainer.value) {
-      return "No container to control yet. Deploy the application first.";
+      return tr("applications.detail.controlNoContainer");
     }
     return null;
   });
@@ -178,7 +216,7 @@ export function useApplicationDetail() {
 
   const deploymentOptions = computed<Array<{ label: string; value: string }>>(() =>
     deployments.value.map((item) => ({
-      label: `${item.id.slice(0, 8)} · ${item.kind} · ${item.state}`,
+      label: `${item.id.slice(0, 8)} · ${item.kind} · ${tr(`applications.status.${item.state}`)}`,
       value: item.id,
     })),
   );
@@ -236,7 +274,7 @@ export function useApplicationDetail() {
     }
     const token = draftGeneration.current();
     envLoading.value = true;
-    envError.value = null;
+    envErrorRaw.value = null;
     try {
       const env = await appsStore.fetchEnv(target);
       if (!draftGeneration.isCurrent(token) || target !== appId.value) {
@@ -251,7 +289,7 @@ export function useApplicationDetail() {
       // Never present a failed read as an empty collection: keep the draft in an
       // error state and clear envLoadedFor so Save stays disabled until a
       // successful read. An unknown server state is never overwritten.
-      envError.value = describeApplicationError(error);
+      envErrorRaw.value = error;
       envLoadedFor.value = "";
     } finally {
       if (draftGeneration.isCurrent(token) && target === appId.value) {
@@ -315,7 +353,7 @@ export function useApplicationDetail() {
     }
     const token = draftGeneration.current();
     storagesLoading.value = true;
-    storagesError.value = null;
+    storagesErrorRaw.value = null;
     try {
       const storages = await appsStore.fetchStorages(target);
       if (!draftGeneration.isCurrent(token) || target !== appId.value) {
@@ -327,7 +365,7 @@ export function useApplicationDetail() {
       if (!draftGeneration.isCurrent(token) || target !== appId.value) {
         return;
       }
-      storagesError.value = describeApplicationError(error);
+      storagesErrorRaw.value = error;
       storagesLoadedFor.value = "";
     } finally {
       if (draftGeneration.isCurrent(token) && target === appId.value) {
@@ -347,7 +385,7 @@ export function useApplicationDetail() {
       return;
     }
     previewsLoading.value = true;
-    previewsError.value = null;
+    previewsErrorRaw.value = null;
     try {
       previews.value = await listPreviews(appId.value);
       previewsLoaded.value = true;
@@ -359,7 +397,7 @@ export function useApplicationDetail() {
         previewsAvailable.value = false;
         return;
       }
-      previewsError.value = describePreviewError(error);
+      previewsErrorRaw.value = error;
     } finally {
       previewsLoading.value = false;
     }
@@ -374,7 +412,7 @@ export function useApplicationDetail() {
       return;
     }
     const token = draftGeneration.current();
-    envError.value = null;
+    envErrorRaw.value = null;
     try {
       const saved = await appsStore.saveEnv(target, envDraft.value);
       // Guard by generation as well as id: A→B→A must not let A's old save
@@ -383,12 +421,12 @@ export function useApplicationDetail() {
         return;
       }
       envDraft.value = [...saved];
-      message.success("Environment saved. New variables apply to the next deploy.");
+      message.success(tr("applications.detail.envSaved"));
     } catch (error) {
       if (target !== appId.value || !draftGeneration.isCurrent(token)) {
         return;
       }
-      envError.value = describeApplicationError(error);
+      envErrorRaw.value = error;
     }
   }
 
@@ -399,19 +437,19 @@ export function useApplicationDetail() {
       return;
     }
     const token = draftGeneration.current();
-    storagesError.value = null;
+    storagesErrorRaw.value = null;
     try {
       const saved = await appsStore.saveStorages(target, storagesDraft.value);
       if (target !== appId.value || !draftGeneration.isCurrent(token)) {
         return;
       }
       storagesDraft.value = [...saved];
-      message.success("Volumes saved. They persist on the node across deploys.");
+      message.success(tr("applications.detail.volumesSaved"));
     } catch (error) {
       if (target !== appId.value || !draftGeneration.isCurrent(token)) {
         return;
       }
-      storagesError.value = describeApplicationError(error);
+      storagesErrorRaw.value = error;
     }
   }
 
@@ -419,7 +457,7 @@ export function useApplicationDetail() {
   async function handleDeploy(): Promise<void> {
     try {
       await appsStore.deploy(appId.value);
-      message.success("Deploy queued");
+      message.success(tr("applications.detail.deployQueued"));
     } catch (error) {
       message.error(describeApplicationError(error));
     }
@@ -430,7 +468,7 @@ export function useApplicationDetail() {
     rollingBack.value = true;
     try {
       await appsStore.rollback(appId.value, rollbackTarget.value || undefined);
-      message.success("Rollback queued");
+      message.success(tr("applications.detail.rollbackQueued"));
       rollbackOpen.value = false;
     } catch (error) {
       message.error(describeApplicationError(error));
@@ -447,7 +485,7 @@ export function useApplicationDetail() {
       // so the tag flips and Stop disables (C4-19).
       containerStopped.value = true;
       stoppedForContainer.value = latest.value?.container_id ?? "";
-      message.success("Stop signal sent");
+      message.success(tr("applications.detail.stopSent"));
     } catch (error) {
       message.error(describeApplicationError(error, "stop"));
     }
@@ -459,7 +497,7 @@ export function useApplicationDetail() {
       await appsStore.startApp(appId.value);
       containerStopped.value = false;
       stoppedForContainer.value = "";
-      message.success("Start signal sent");
+      message.success(tr("applications.detail.startSent"));
     } catch (error) {
       message.error(describeApplicationError(error, "start"));
     }
@@ -489,7 +527,15 @@ export function useApplicationDetail() {
   const canWrite = computed<boolean>(() => projectsStore.canWrite);
 
   const moveSaving = ref(false);
-  const moveError = ref<string | null>(null);
+  /** moveErrorRaw/moveError mirror the env pair for location writes. */
+  const moveErrorRaw = ref<unknown>(null);
+  const moveError = computed<string | null>(() => {
+    if (moveErrorRaw.value === null) {
+      return null;
+    }
+    void activeLocale.value;
+    return describeApplicationError(moveErrorRaw.value);
+  });
 
   /**
    * handleMove applies the location settings (move environment, change
@@ -520,13 +566,13 @@ export function useApplicationDetail() {
     }
     const targetId = appId.value;
     moveSaving.value = true;
-    moveError.value = null;
+    moveErrorRaw.value = null;
     try {
       const updated = await appsStore.update(targetId, input);
       if (targetId !== appId.value) {
         return; // the route moved on while the write was in flight
       }
-      message.success("Location saved");
+      message.success(tr("applications.detail.locationSaved"));
       await refreshProjectCounts([current.project_id, updated.project_id]);
       if (targetId !== appId.value) {
         return;
@@ -543,7 +589,7 @@ export function useApplicationDetail() {
       }
     } catch (error) {
       if (targetId === appId.value) {
-        moveError.value = describeApplicationError(error);
+        moveErrorRaw.value = error;
       }
     } finally {
       if (targetId === appId.value) {
@@ -583,21 +629,21 @@ export function useApplicationDetail() {
     logDeploymentId.value = "";
     logServerId.value = "";
     moveSaving.value = false;
-    moveError.value = null;
+    moveErrorRaw.value = null;
     envDraft.value = [];
-    envError.value = null;
+    envErrorRaw.value = null;
     envLoadedFor.value = "";
     envLoading.value = false;
     inheritedVars.value = [];
     inheritedLoading.value = false;
     inheritedReady.value = false;
     storagesDraft.value = [];
-    storagesError.value = null;
+    storagesErrorRaw.value = null;
     storagesLoadedFor.value = "";
     storagesLoading.value = false;
     previews.value = [];
     previewsLoaded.value = false;
-    previewsError.value = null;
+    previewsErrorRaw.value = null;
     previewsAvailable.value = true;
     appsStore.stopAllPolling();
     void fetchAll();

@@ -16,12 +16,32 @@ import { fileURLToPath } from "node:url";
 
 import { mount } from "@vue/test-utils";
 import type { VueWrapper } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import CertificateForm from "../src/features/domains/components/CertificateForm.vue";
 import DynamicForm from "../src/features/templates/components/DynamicForm.vue";
 import EnvEditor from "../src/features/applications/components/EnvEditor.vue";
 import type { CertificateDraft } from "../src/features/domains/api/proxy";
+import {
+  i18n,
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  syncComposerLocale,
+} from "@/shared/i18n";
+
+beforeEach(() => {
+  registerDiscoveredCatalogs();
+  resetLocaleState();
+  syncComposerLocale("en");
+});
+
+/** mountWithI18n provides the composer every localized component requires. */
+function mountWithI18n(component: unknown, options: Record<string, unknown>) {
+  return mount(component as never, {
+    ...(options as object),
+    global: { plugins: [i18n] },
+  } as never) as VueWrapper<never>;
+}
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const mainCss = readFileSync(resolve(webRoot, "src/shared/styles/main.css"), "utf8");
@@ -216,7 +236,7 @@ describe("JUS-19 CertificateForm rows", () => {
 
 describe("JUS-19 EnvEditor single-row variables", () => {
   it("renders each variable as one row: name | value | delete", () => {
-    const wrapper = mount(EnvEditor, {
+    const wrapper = mountWithI18n(EnvEditor, {
       props: { modelValue: [{ key: "NODE_ENV", value: "production" }] },
     });
     const rows = wrapper.findAll(".env-editor__row");
@@ -228,7 +248,7 @@ describe("JUS-19 EnvEditor single-row variables", () => {
   });
 
   it("keeps Add variable, validation and the secret: prefix behaviour", () => {
-    const wrapper = mount(EnvEditor, {
+    const wrapper = mountWithI18n(EnvEditor, {
       props: {
         modelValue: [
           { key: "bad name", value: "x" },
@@ -339,17 +359,17 @@ describe("JUS-19 CreateAppWizard rows", () => {
   const runtimeStep = readSfc("src/features/applications/components/WizardRuntimeStep.vue");
 
   it("pairs Provider|Repository in one row", () => {
-    expectPair(sourceStep, "Select a connected provider", "Select a repository");
+    expectPair(sourceStep, "applications.wizard.providerPlaceholder", "applications.wizard.repositoryPlaceholder");
   });
 
   it("pairs Branch|Application name in a grid row, not a wrapping flex", () => {
-    expectPair(sourceStep, 'label="Branch"', 'label="Application name"');
-    expect(sourceStep).not.toMatch(/<NSpace[^>]*>\s*<NFormItem label="Branch"/);
+    expectPair(sourceStep, "applications.wizard.branch", "applications.wizard.appName");
+    expect(sourceStep).not.toMatch(/<NSpace[^>]*>\s*<NFormItem[^>]*wizard\.branch"/);
   });
 
   it("pairs Node|Domain and Internal port|Host port in their own rows", () => {
-    expectPair(runtimeStep, 'label="Node"', "app.gotham.dev");
-    expectPair(runtimeStep, 'label="Internal port"', "Host port (0 = auto)");
+    expectPair(runtimeStep, "applications.wizard.node", "app.gotham.dev");
+    expectPair(runtimeStep, "applications.wizard.internalPort", "applications.wizard.hostPort");
   });
 });
 

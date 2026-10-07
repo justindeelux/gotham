@@ -12,7 +12,8 @@ import {
   NTag,
   NText,
 } from "naive-ui";
-import { toRef } from "vue";
+import { computed, toRef } from "vue";
+import { useI18n, I18nT } from "vue-i18n";
 import { RouterLink } from "vue-router";
 
 import type { Application } from "@/features/applications/api/applications";
@@ -31,17 +32,28 @@ interface Props {
 const props = defineProps<Props>();
 
 const certs = useCertificateConfig(toRef(props, "application"));
+
+const { t } = useI18n();
+
+/** deleteConfirm names the actual domain being removed, never raw HTML. */
+const deleteConfirm = computed<string>(() =>
+  String(
+    t("applications.cert.deleteConfirm", {
+      domain: props.application.base_domain || String(t("applications.cert.thisApp")),
+    }),
+  ),
+);
 </script>
 
 <template>
-  <NCard title="Certificate configuration">
+  <NCard :title="t('applications.cert.title')">
     <template #header-extra>
       <NButton
         v-if="certs.certificate.value"
         size="small"
         @click="certs.openCertificateEdit"
       >
-        Edit
+        {{ t("applications.cert.edit") }}
       </NButton>
     </template>
     <NSpace vertical :size="12">
@@ -57,13 +69,13 @@ const certs = useCertificateConfig(toRef(props, "application"));
         type="warning"
         :show-icon="true"
       >
-        This configuration still records
-        <span class="mono">{{ certs.certificate.value.domain }}</span>. Saving it again
-        records the current base domain
-        <span class="mono">{{ props.application.base_domain }}</span>.
+      <i18n-t keypath="applications.cert.rerecordHint" tag="span">
+        <template #recorded><span class="mono">{{ certs.certificate.value.domain }}</span></template>
+        <template #current><span class="mono">{{ props.application.base_domain }}</span></template>
+      </i18n-t>
         <NSpace style="margin-top: 8px">
           <NButton size="small" @click="certs.handleRerecordDomain">
-            Re-record domain
+            {{ t("applications.cert.rerecord") }}
           </NButton>
         </NSpace>
       </NAlert>
@@ -75,40 +87,40 @@ const certs = useCertificateConfig(toRef(props, "application"));
           label-placement="left"
           size="small"
         >
-          <NDescriptionsItem label="Recorded domain">
+          <NDescriptionsItem :label="t('applications.cert.recordedDomain')">
             <span class="mono">{{ certs.certificate.value.domain }}</span>
           </NDescriptionsItem>
-          <NDescriptionsItem label="Challenge">
+          <NDescriptionsItem :label="t('applications.cert.challenge')">
             <span class="mono">{{ certs.certificate.value.challenge }}</span>
           </NDescriptionsItem>
-          <NDescriptionsItem label="DNS provider">
+          <NDescriptionsItem :label="t('applications.cert.dnsProvider')">
             <span class="mono">{{ certs.providerName(certs.certificate.value.dns_provider_id) }}</span>
           </NDescriptionsItem>
-          <NDescriptionsItem label="Wildcard">
-            <NTag v-if="certs.certificate.value.wildcard" size="small">requested</NTag>
-            <NText v-else depth="3">no</NText>
+          <NDescriptionsItem :label="t('applications.cert.wildcard')">
+            <NTag v-if="certs.certificate.value.wildcard" size="small">{{ t("applications.cert.requested") }}</NTag>
+            <NText v-else depth="3">{{ t("applications.cert.no") }}</NText>
           </NDescriptionsItem>
-          <NDescriptionsItem label="Enabled">
+          <NDescriptionsItem :label="t('applications.cert.enabled')">
             <NTag :type="certs.certificate.value.enabled ? 'success' : 'default'" size="small">
-              {{ certs.certificate.value.enabled ? "enabled" : "disabled" }}
+              {{ certs.certificate.value.enabled ? t("applications.cert.enabledOn") : t("applications.cert.enabledOff") }}
             </NTag>
           </NDescriptionsItem>
-          <NDescriptionsItem label="Status">
+          <NDescriptionsItem :label="t('applications.cert.status')">
             <NTag size="small" :type="certificateStatusTagType(certs.certificate.value.status)">
               {{ certificateStatusLabel(certs.certificate.value.status) }}
             </NTag>
           </NDescriptionsItem>
-          <NDescriptionsItem label="Expires">
+          <NDescriptionsItem :label="t('applications.cert.expires')">
             <template v-if="certs.certificate.value.status === 'present' && certs.certificate.value.not_after">
               <span class="mono">{{ formatDate(certs.certificate.value.not_after) }}</span>
               <span class="small hint"> · {{ expiryLabel(certs.certificate.value.not_after) }}</span>
             </template>
             <NText v-else-if="certs.certificate.value.status === 'present'" depth="3">
-              not reported
+              {{ t("applications.cert.notReported") }}
             </NText>
             <NText v-else depth="3">—</NText>
           </NDescriptionsItem>
-          <NDescriptionsItem label="Updated">
+          <NDescriptionsItem :label="t('applications.cert.updated')">
             {{ relativeTime(certs.certificate.value.updated_at) }}
           </NDescriptionsItem>
         </NDescriptions>
@@ -119,37 +131,33 @@ const certs = useCertificateConfig(toRef(props, "application"));
           >
             <template #trigger>
               <NButton size="small" type="error" ghost>
-                Delete configuration
+                {{ t("applications.cert.delete") }}
               </NButton>
             </template>
-            Delete the certificate configuration for
-            {{ props.application.base_domain || "this application" }}? The route
-            falls back to plain HTTP.
+            {{ deleteConfirm }}
           </NPopconfirm>
         </NSpace>
         <NText depth="3" class="small">
-          Status and expiry are observed from the node's ACME storage on
-          read. unknown means the node could not be read — never a
-          fabricated status.
+          {{ t("applications.cert.observedNote") }}
         </NText>
       </template>
 
       <NEmpty
         v-else
-        description="No certificate configuration for this application yet."
+        :description="t('applications.cert.empty')"
       >
         <template #extra>
           <NButton type="primary" @click="certs.openCertificateEdit">
-            Configure certificate
+            {{ t("applications.cert.configure") }}
           </NButton>
         </template>
       </NEmpty>
     </NSpace>
     <template #footer>
       <NText depth="3" class="small">
-        One configuration per application.
+        {{ t("applications.cert.footerStart") }}
         <RouterLink :to="{ name: 'domains' }">
-          Manage all certificates and DNS providers
+          {{ t("applications.cert.footerLink") }}
         </RouterLink>
       </NText>
     </template>
@@ -158,7 +166,7 @@ const certs = useCertificateConfig(toRef(props, "application"));
   <NModal
     v-model:show="certs.certificateOpen.value"
     preset="card"
-    :title="certs.certificate.value ? 'Edit certificate configuration' : 'Configure certificate'"
+    :title="certs.certificate.value ? t('applications.cert.editTitle') : t('applications.cert.createTitle')"
     style="width: 560px; max-width: 94vw"
   >
     <NSpace vertical :size="12">
@@ -176,19 +184,18 @@ const certs = useCertificateConfig(toRef(props, "application"));
         lock-application
       />
       <NText depth="3" class="small">
-        The domain is not edited here — it comes from the application's base
-        domain above.
+        {{ t("applications.cert.domainNote") }}
       </NText>
     </NSpace>
     <template #footer>
       <NSpace justify="end" :size="8">
-        <NButton @click="certs.certificateOpen.value = false">Cancel</NButton>
+        <NButton @click="certs.certificateOpen.value = false">{{ t("common.actions.cancel") }}</NButton>
         <NButton
           type="primary"
           :loading="certs.certificateSaving.value"
           @click="certs.handleSaveCertificate"
         >
-          Save
+          {{ t("common.actions.save") }}
         </NButton>
       </NSpace>
     </template>

@@ -1,4 +1,5 @@
 import { useMessage } from "naive-ui";
+import { activeLocale, i18n } from "@/shared/i18n";
 import { computed, onMounted, ref, watch, type Ref } from "vue";
 
 import type { Application } from "@/features/applications/api/applications";
@@ -22,7 +23,22 @@ export function useCertificateConfig(application: Ref<Application>) {
 
   const certificateOpen = ref(false);
   const certificateSaving = ref(false);
-  const certificateError = ref<string | null>(null);
+  /**
+   * certificateErrorRaw keeps the failure behind the dialog banner;
+   * certificateError derives its display text in the current locale, so a
+   * language switch refreshes a retained failure without resubmitting. The
+   * shared describeProxyError stays the single formatter: it resolves at
+   * display time, so a future locale-aware domains helper flows through with
+   * no consumer change.
+   */
+  const certificateErrorRaw = ref<unknown>(null);
+  const certificateError = computed<string | null>(() => {
+    if (certificateErrorRaw.value === null) {
+      return null;
+    }
+    void activeLocale.value;
+    return describeProxyError(certificateErrorRaw.value);
+  });
   const certificateDraft = ref<CertificateDraft>({
     application_id: application.value.id,
     challenge: "http-01",
@@ -45,18 +61,18 @@ export function useCertificateConfig(application: Ref<Application>) {
   /** providerName resolves a stored provider id to its display label. */
   function providerName(providerId: string): string {
     if (!providerId) {
-      return "shared HTTP resolver";
+      return tr("applications.cert.sharedResolver");
     }
     const provider: DNSProvider | null = proxyStore.providerOf(providerId);
     if (!provider) {
-      return "unknown provider";
+      return tr("applications.cert.unknownProvider");
     }
     return `${provider.name || providerLabel(provider.provider)} · ${provider.provider}`;
   }
 
   /** openCertificateEdit seeds the dialog from the stored configuration. */
   function openCertificateEdit(): void {
-    certificateError.value = null;
+    certificateErrorRaw.value = null;
     const existing = certificate.value;
     certificateDraft.value = existing
       ? draftFromCertificate(existing)
@@ -72,24 +88,24 @@ export function useCertificateConfig(application: Ref<Application>) {
 
   /** handleSaveCertificate creates or updates the configuration. */
   async function handleSaveCertificate(): Promise<void> {
-    certificateError.value = null;
+    certificateErrorRaw.value = null;
     certificateSaving.value = true;
     try {
       const input = toCertificateInput(certificateDraft.value);
       const existing = certificate.value;
       if (existing) {
         await proxyStore.updateCertificateConfig(existing.id, input);
-        message.success("Certificate configuration saved.");
+        message.success(tr("applications.detail.certSaved"));
       } else {
         await proxyStore.createCertificateConfig({
           ...input,
           application_id: application.value.id,
         });
-        message.success("Certificate configuration created.");
+        message.success(tr("applications.detail.certCreated"));
       }
       certificateOpen.value = false;
     } catch (error) {
-      certificateError.value = describeProxyError(error);
+      certificateErrorRaw.value = error;
     } finally {
       certificateSaving.value = false;
     }
@@ -101,10 +117,10 @@ export function useCertificateConfig(application: Ref<Application>) {
     if (!existing) {
       return;
     }
-    certificateError.value = null;
+    certificateErrorRaw.value = null;
     try {
       await proxyStore.updateCertificateConfig(existing.id, {});
-      message.success("Certificate re-recorded the current application domain.");
+      message.success(tr("applications.detail.certRerecorded"));
     } catch (error) {
       message.error(describeProxyError(error));
     }
@@ -118,10 +134,19 @@ export function useCertificateConfig(application: Ref<Application>) {
     }
     try {
       await proxyStore.removeCertificate(existing.id);
-      message.success("Certificate configuration deleted. The route stays HTTP-only.");
+      message.success(tr("applications.detail.certDeleted"));
     } catch (error) {
       message.error(describeProxyError(error));
     }
+  }
+
+  /**
+   * tr resolves one applications message in the current locale. Reading
+   * activeLocale pins the caller to the language switch.
+   */
+  function tr(key: string): string {
+    void activeLocale.value;
+    return String(i18n.global.t(key));
   }
 
   /** load refreshes the providers and certificates the editor depends on. */
@@ -135,7 +160,7 @@ export function useCertificateConfig(application: Ref<Application>) {
   watch(
     () => application.value.id,
     () => {
-      certificateError.value = null;
+      certificateErrorRaw.value = null;
       void load();
     },
   );

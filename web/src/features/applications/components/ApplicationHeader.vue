@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { NAvatar, NButton, NSpace, NTag, NText, NTooltip } from "naive-ui";
+import { useI18n } from "vue-i18n";
 
 import type { Deployment } from "@/features/applications/api/applications";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
@@ -26,6 +27,8 @@ const emit = defineEmits<{
   stop: [];
   start: [];
 }>();
+
+const { t } = useI18n();
 </script>
 
 <template>
@@ -33,14 +36,14 @@ const emit = defineEmits<{
     <NAvatar round :size="48">{{ props.initials }}</NAvatar>
     <div class="page-head__title">
       <NSpace align="center" :size="10">
-        <NText strong style="font-size: 20px" class="mono">{{ props.displayName || "Application" }}</NText>
+        <NText strong style="font-size: 20px" class="mono">{{ props.displayName || t("applications.header.fallbackName") }}</NText>
         <DeploymentStatusTag
           v-if="props.latest && !props.containerStopped"
           :state="props.latest.state"
           size="medium"
         />
         <NTag v-else-if="props.containerStopped" type="default" size="medium" round>
-          stopped
+          {{ t("applications.header.stopped") }}
         </NTag>
       </NSpace>
       <NText depth="3" class="mono">{{ props.appId }}</NText>
@@ -51,13 +54,13 @@ const emit = defineEmits<{
         :disabled="props.activeDeploying"
         @click="emit('deploy')"
       >
-        {{ props.activeDeploying ? "Deploying…" : "Redeploy" }}
+        {{ props.activeDeploying ? t("applications.header.deploying") : t("applications.header.redeploy") }}
       </NButton>
       <NButton
         :disabled="!props.canRollback || props.acting"
         @click="emit('rollback')"
       >
-        Rollback
+        {{ t("applications.header.rollback") }}
       </NButton>
       <NTooltip trigger="hover" :disabled="props.controlHint === null">
         <template #trigger>
@@ -66,7 +69,7 @@ const emit = defineEmits<{
             :disabled="props.acting || props.controlHint !== null || !props.containerIsRunning"
             @click="emit('stop')"
           >
-            Stop
+            {{ t("applications.header.stop") }}
           </NButton>
         </template>
         {{ props.controlHint }}
@@ -78,7 +81,7 @@ const emit = defineEmits<{
             :disabled="props.acting || props.controlHint !== null || props.containerIsRunning"
             @click="emit('start')"
           >
-            Start
+            {{ t("applications.header.start") }}
           </NButton>
         </template>
         {{ props.controlHint }}
@@ -109,6 +112,10 @@ const emit = defineEmits<{
 
 .page-head__actions {
   margin-left: auto;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 </style>

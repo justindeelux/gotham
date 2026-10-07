@@ -1,4 +1,5 @@
 import { http } from "@/shared/api/http";
+import { i18n } from "@/shared/i18n";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
@@ -91,17 +92,24 @@ export function isFeatureDisabled(error: unknown): boolean {
 
 /** describePreviewError maps a thrown error to a user-facing message. */
 export function describePreviewError(error: unknown): string {
+  const t = i18n.global.t.bind(i18n.global);
   if (isApiError(error)) {
     if (error.status === 401) {
-      return "Your session expired. Please sign in again.";
+      return String(t("applications.errors.sessionExpired"));
     }
     if (error.status === 404) {
-      return "Preview deployments are not enabled on this control plane (FEATURE_PREVIEWS=false).";
+      return String(t("applications.errors.previewsDisabled"));
     }
-    return stripErrorPrefix(error.message) || "Request failed";
+    const raw = stripErrorPrefix(error.message);
+    return raw
+      ? `${String(t("common.errors.requestFailed"))} ${raw}`
+      : String(t("common.errors.requestFailed"));
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
+    const raw = stripErrorPrefix(error.message);
+    return raw
+      ? `${String(t("common.errors.unexpected"))} ${raw}`
+      : String(t("common.errors.unexpected"));
   }
-  return "Something went wrong. Please try again.";
+  return String(t("common.errors.unexpected"));
 }

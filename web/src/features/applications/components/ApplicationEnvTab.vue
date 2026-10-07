@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NSpace, NSpin, NTag, NText } from "naive-ui";
+import { useI18n } from "vue-i18n";
 
 import type { EnvVar } from "@/features/applications/api/applications";
 import EnvEditor from "@/features/applications/components/EnvEditor.vue";
@@ -32,6 +33,8 @@ const emit = defineEmits<{
   retry: [];
 }>();
 
+const { t } = useI18n();
+
 /**
  * isRowOverridden marks a row the application draft shadows, and — for
  * project rows — a key the environment set already shadows. Deploy
@@ -50,7 +53,7 @@ function isRowOverridden(row: InheritedVariable): boolean {
 </script>
 
 <template>
-  <NCard style="margin-top: 16px" title="Environment variables">
+  <NCard style="margin-top: 16px" :title="t('applications.envTab.title')">
     <template #header-extra>
       <NButton
         type="primary"
@@ -59,7 +62,7 @@ function isRowOverridden(row: InheritedVariable): boolean {
         :disabled="props.saveDisabled"
         @click="emit('save')"
       >
-        Save
+        {{ t("common.actions.save") }}
       </NButton>
     </template>
     <NSpace vertical :size="12">
@@ -70,7 +73,7 @@ function isRowOverridden(row: InheritedVariable): boolean {
       >
         <NSpace align="center" :size="12" wrap>
           <span>{{ props.envError }}</span>
-          <NButton size="small" @click="emit('retry')">Retry</NButton>
+          <NButton size="small" @click="emit('retry')">{{ t("common.actions.retry") }}</NButton>
         </NSpace>
       </NAlert>
       <NSpin :show="props.envLoading">
@@ -79,19 +82,18 @@ function isRowOverridden(row: InheritedVariable): boolean {
           class="inherited"
         >
           <NText depth="3" class="inherited-title">
-            Inherited shared variables (read-only)
+            {{ t("applications.envTab.inheritedTitle") }}
           </NText>
           <NText depth="3">
-            Adding the same key below overrides the inherited value at deploy
-            time: project &lt; environment &lt; application.
+            {{ t("applications.envTab.inheritedHint") }}
           </NText>
           <div v-if="!props.inheritedLoading" class="table-wrap">
             <table class="inherited-table">
               <thead>
                 <tr>
-                  <th scope="col">Key</th>
-                  <th scope="col">Value</th>
-                  <th scope="col">Origin</th>
+                  <th scope="col">{{ t("applications.envTab.key") }}</th>
+                  <th scope="col">{{ t("applications.envTab.value") }}</th>
+                  <th scope="col">{{ t("applications.envTab.origin") }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -99,14 +101,14 @@ function isRowOverridden(row: InheritedVariable): boolean {
                   v-for="row in props.inherited"
                   :key="`${row.origin}:${row.key}`"
                 >
-                  <td class="mono" data-label="Key">
+                  <td class="mono" :data-label="t('applications.envTab.key')">
                     {{ row.key }}
-                    <NTag v-if="row.secret" size="small">secret</NTag>
+                    <NTag v-if="row.secret" size="small">{{ t("applications.envTab.secret") }}</NTag>
                   </td>
-                  <td class="mono muted" data-label="Value">
+                  <td class="mono muted" :data-label="t('applications.envTab.value')">
                     {{ row.secret ? "••••••••" : row.value }}
                   </td>
-                  <td data-label="Origin">
+                  <td :data-label="t('applications.envTab.origin')">
                     <NSpace :size="4" align="center" wrap>
                       <NTag size="small">{{ inheritedOriginLabel(row.origin) }}</NTag>
                       <NTag
@@ -114,7 +116,7 @@ function isRowOverridden(row: InheritedVariable): boolean {
                         size="small"
                         type="warning"
                       >
-                        overridden
+                        {{ t("applications.envTab.overridden") }}
                       </NTag>
                     </NSpace>
                   </td>
@@ -128,8 +130,7 @@ function isRowOverridden(row: InheritedVariable): boolean {
     </NSpace>
     <template #footer>
       <NText depth="3">
-        Saving replaces the whole collection. Sealed secrets stay
-        sealed, and new variables apply to the next deploy.
+        {{ t("applications.envTab.footer") }}
       </NText>
     </template>
   </NCard>

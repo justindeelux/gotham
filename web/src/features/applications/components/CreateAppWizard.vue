@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NAlert, NButton, NModal, NText } from "naive-ui";
-import { toRef } from "vue";
+import { computed, toRef } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Application } from "@/features/applications/api/applications";
 import WizardBuildPackStep from "@/features/applications/components/WizardBuildPackStep.vue";
@@ -32,22 +33,27 @@ const wizard = useCreateAppWizard(toRef(props, "show"), emit, {
   environmentId: toRef(props, "environmentId"),
 });
 provideCreateWizard(wizard);
+
+const { t } = useI18n();
+
+/** stepCounter renders the raw position; numbers stay locale-independent. */
+const stepCounter = computed<string>(() =>
+  String(t("applications.wizard.counter", { current: wizard.step.value + 1, total: 5 })),
+);
 </script>
 
 <template>
   <NModal
     :show="props.show"
     preset="card"
-    title="Create application"
+    :title="t('applications.wizard.title')"
     :mask-closable="false"
     class="wizard-modal"
     style="width: 880px; max-width: 96vw"
     @update:show="wizard.handleShowChange"
   >
     <NText depth="3">
-      Pick a source, build pack, port and domain, then deploy. Source, build
-      pack and runtime are fixed once created; environment variables, volumes
-      and domains can be changed afterwards.
+      {{ t("applications.wizard.intro") }}
     </NText>
 
     <ResourceScopeSummary
@@ -61,7 +67,7 @@ provideCreateWizard(wizard);
       <div class="wizard-rail">
         <ol>
           <li
-            v-for="(label, index) in wizard.stepNames"
+            v-for="(label, index) in wizard.stepNames.value"
             :key="label"
             :class="{
               'is-active': wizard.step.value === index,
@@ -72,7 +78,7 @@ provideCreateWizard(wizard);
           </li>
         </ol>
         <p class="wizard-rail-note">
-          The webhook is created automatically after the first deploy.
+          {{ t("applications.wizard.railNote") }}
         </p>
       </div>
 
@@ -90,24 +96,24 @@ provideCreateWizard(wizard);
         </div>
 
         <div class="wizard-foot">
-          <NButton v-if="wizard.step.value > 0" tertiary @click="wizard.step.value -= 1">Back</NButton>
-          <span class="step-counter">Step {{ wizard.step.value + 1 }} / 5</span>
+          <NButton v-if="wizard.step.value > 0" tertiary @click="wizard.step.value -= 1">{{ t("applications.wizard.back") }}</NButton>
+          <span class="step-counter">{{ stepCounter }}</span>
           <span class="grow" />
           <template v-if="wizard.step.value < 4">
-            <NButton @click="wizard.closeWizard">Cancel</NButton>
+            <NButton @click="wizard.closeWizard">{{ t("applications.wizard.cancel") }}</NButton>
             <NButton type="primary" :disabled="!wizard.canContinue.value" @click="wizard.step.value += 1">
-              Continue
+              {{ t("applications.wizard.cont") }}
             </NButton>
           </template>
           <template v-else>
-            <NButton @click="wizard.closeWizard">Cancel</NButton>
+            <NButton @click="wizard.closeWizard">{{ t("applications.wizard.cancel") }}</NButton>
             <NButton
               type="primary"
               :loading="wizard.submitting.value"
               :disabled="!wizard.sourceValid.value || !wizard.runtimeValid.value || !wizard.scopeValid.value"
               @click="wizard.handleSubmit"
             >
-              Create &amp; deploy
+              {{ t("applications.wizard.create") }}
             </NButton>
           </template>
         </div>

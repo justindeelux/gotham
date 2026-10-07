@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NSpace, NSpin, NText } from "naive-ui";
+import { useI18n } from "vue-i18n";
 
 import type { StorageMapping } from "@/features/applications/api/applications";
 import StorageEditor from "@/features/applications/components/StorageEditor.vue";
@@ -19,10 +20,12 @@ const emit = defineEmits<{
   save: [];
   retry: [];
 }>();
+
+const { t } = useI18n();
 </script>
 
 <template>
-  <NCard style="margin-top: 16px" title="Volumes">
+  <NCard style="margin-top: 16px" :title="t('applications.storageTab.title')">
     <template #header-extra>
       <NButton
         type="primary"
@@ -31,7 +34,7 @@ const emit = defineEmits<{
         :disabled="props.saveDisabled"
         @click="emit('save')"
       >
-        Save
+        {{ t("common.actions.save") }}
       </NButton>
     </template>
     <NSpace vertical :size="12">
@@ -42,7 +45,7 @@ const emit = defineEmits<{
       >
         <NSpace align="center" :size="12" wrap>
           <span>{{ props.storagesError }}</span>
-          <NButton size="small" @click="emit('retry')">Retry</NButton>
+          <NButton size="small" @click="emit('retry')">{{ t("common.actions.retry") }}</NButton>
         </NSpace>
       </NAlert>
       <NSpin :show="props.storagesLoading">
@@ -51,8 +54,7 @@ const emit = defineEmits<{
     </NSpace>
     <template #footer>
       <NText depth="3">
-        Saving replaces the whole collection. Volumes live on the node,
-        so data survives redeploys and rollbacks.
+        {{ t("applications.storageTab.footer") }}
       </NText>
     </template>
   </NCard>

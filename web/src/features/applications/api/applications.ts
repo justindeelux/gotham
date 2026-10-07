@@ -1,4 +1,5 @@
 import { http, teamHeaders } from "@/shared/api/http";
+import { i18n } from "@/shared/i18n";
 import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
@@ -492,60 +493,98 @@ export async function startApplication(appId: string): Promise<Deployment> {
 export type ApplicationControlAction = "stop" | "start";
 
 /**
+ * withRaw pairs a curated summary with its retained raw diagnostic. Unknown
+ * failures require a localized summary with useful plain-text detail (plan
+ * §3): the summary is translated, the diagnostic passes through byte-identical
+ * (still redacted upstream), and an empty diagnostic renders the summary alone.
+ */
+function withRaw(summary: string, raw: string): string {
+  return raw ? `${summary} ${raw}` : summary;
+}
+
+/** conflictSummary maps a raw 409 refusal onto its distinct curated summary. */
+function conflictSummary(raw: string): string {
+  const t = i18n.global.t.bind(i18n.global);
+  if (raw === "") {
+    // No detail to retain: keep the long-standing in-flight fallback copy.
+    return String(t("applications.errors.conflictDeploy"));
+  }
+  if (raw.includes("a deploy is in progress")) {
+    return String(t("applications.errors.conflictDeploy"));
+  }
+  if (raw.includes("close the open previews first")) {
+    return String(t("applications.errors.previewsOpen"));
+  }
+  if (raw.includes("in the target environment")) {
+    return String(t("applications.errors.nameConflict"));
+  }
+  // Any other refusal keeps a generic conflict summary, never the in-flight hint.
+  return String(t("applications.errors.conflict"));
+}
+
+/**
  * describeApplicationError maps a thrown error to a user-facing message. The
  * mapping mirrors `writeServiceError` in `internal/deploy/routes.go`: 404 is
  * a missing (or foreign) application, 409 an in-flight deployment, 502 an
  * unreachable node agent and 503 a disabled feature flag. `action` sharpens the
  * 404 copy for the container lifecycle routes, where a 404 means "no container
  * in the target state" rather than "application not found".
+ *
+ * Classification always reads the raw status/message (never translated text);
+ * only the curated summaries below resolve through the current-locale catalog
+ * at invocation time. Raw server diagnostics pass through untouched.
  */
 export function describeApplicationError(
   error: unknown,
   action?: ApplicationControlAction,
 ): string {
+  const t = i18n.global.t.bind(i18n.global);
+  const unexpected = (): string => String(t("common.errors.unexpected"));
   if (isApiError(error)) {
     if (error.status === 401) {
-      return "Your session expired. Please sign in again.";
+      return String(t("applications.errors.sessionExpired"));
     }
     if (error.status === 400) {
-      return (
-        stripErrorPrefix(error.message) ||
-        "Invalid request. Check the highlighted fields and retry."
+      return withRaw(
+        String(t("applications.errors.invalidRequest")),
+        stripErrorPrefix(error.message),
       );
     }
     if (error.status === 404) {
       if (action === "stop") {
-        return "No running container to stop. It may already be stopped.";
+        return String(t("applications.errors.noRunningContainer"));
       }
       if (action === "start") {
-        return "No container to start. Deploy the application first.";
+        return String(t("applications.errors.noContainerStart"));
       }
-      return "Application not found. It may have been deleted or belong to another account.";
+      return String(t("applications.errors.notFound"));
     }
     if (error.status === 409) {
       // The backend names the refusal exactly (`a deploy is in progress`
       // while one runs, `close the open previews first` for a base
       // application with open previews, or the name-collision text on a
-      // move), so the message passes through for the move/server-change
-      // settings to render inline.
-      return (
-        conflictDetail(stripErrorPrefix(error.message)) ||
-        "A deployment is already in progress for this application. " +
-          "Wait for it to finish and retry."
-      );
+      // move), so each maps to its own curated summary with the raw detail
+      // retained for the move/server-change settings to render inline.
+      // Classification reads the raw English refusal, never display text.
+      const raw = stripErrorPrefix(error.message);
+      return withRaw(conflictSummary(raw), raw === "" ? "" : conflictDetail(raw));
     }
     if (error.status === 502) {
-      return "The node agent is unreachable. Check the node status and retry.";
+      return withRaw(
+        String(t("applications.errors.agentUnreachable")),
+        stripErrorPrefix(error.message),
+      );
     }
     if (error.status === 503) {
-      return "Applications are disabled on the control plane (FEATURE_APPLICATIONS=false).";
+      return String(t("applications.errors.appsDisabled"));
     }
-    return stripErrorPrefix(error.message) || "Request failed";
-  }
-  if (error instanceof Error) {
-    return (
-      stripErrorPrefix(error.message) || "Something went wrong. Please try again."
+    return withRaw(
+      String(t("common.errors.requestFailed")),
+      stripErrorPrefix(error.message),
     );
   }
-  return "Something went wrong. Please try again.";
+  if (error instanceof Error) {
+    return withRaw(unexpected(), stripErrorPrefix(error.message));
+  }
+  return unexpected();
 }

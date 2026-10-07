@@ -80,7 +80,42 @@ async function loadModule(relativePath) {
   };
 }
 
-/** loadInline bundles a small entry that imports both vue and the module. */
+/**
+ * loadLocalizedApplications bundles the applications API together with its
+ * English catalog in one module graph (a separate bundle would carry its own
+ * composer copy). The Node harness has no import.meta.glob discovery, so the
+ * catalog is merged explicitly; the curated English assertions below then
+ * prove the exact shipped copy instead of a missing-key fallback.
+ */
+async function loadLocalizedApplications() {
+  const directory = await mkdtemp(join(tmpdir(), "gotham-fx15b-check-"));
+  const outfile = join(directory, "localized.cjs");
+  await build({
+    stdin: {
+      contents: `import { i18n } from "@/shared/i18n";
+import en from "@/features/applications/locales/en";
+import * as api from "@/features/applications/api/applications";
+i18n.global.mergeLocaleMessage("en", { applications: en });
+export const { describeApplicationError } = api;`,
+      resolveDir: srcDir,
+      sourcefile: "entry.ts",
+      loader: "ts",
+    },
+    outfile,
+    bundle: true,
+    format: "cjs",
+    platform: "node",
+    target: "node20",
+    logLevel: "silent",
+    alias: { "@": srcDir },
+    plugins: [vueStubPlugin],
+  });
+  const module = await import(pathToFileURL(outfile).href);
+  return {
+    module,
+    cleanup: () => rm(directory, { recursive: true, force: true }),
+  };
+}
 async function loadInline(contents, resolveDir) {
   const directory = await mkdtemp(join(tmpdir(), "gotham-fx15b-check-"));
   const outfile = join(directory, "module.mjs");
@@ -108,6 +143,7 @@ function apiError(status, message = "") {
 
 async function main() {
   const applications = await loadModule("../src/features/applications/api/applications.ts");
+  const localizedApplications = await loadLocalizedApplications();
   const format = await loadModule("../src/shared/utils/format.ts");
   const version = await loadModule("../src/features/version/api/version.ts");
   const rowKeys = await loadInline(
@@ -118,7 +154,7 @@ async function main() {
   );
 
   try {
-    const { describeApplicationError } = applications.module;
+    const { describeApplicationError } = localizedApplications.module;
     const { toPercent, USAGE_DANGER_PERCENT } = format.module;
     const { formatVersionTag } = version.module;
     const { ref, useStableRowKeys } = rowKeys.module;
@@ -265,6 +301,7 @@ async function main() {
 
   } finally {
     await applications.cleanup();
+    await localizedApplications.cleanup();
     await format.cleanup();
     await version.cleanup();
     await rowKeys.cleanup();

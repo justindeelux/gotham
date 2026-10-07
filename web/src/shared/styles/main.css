@@ -67,11 +67,6 @@ a {
   text-decoration: none;
 }
 
-a:hover {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
 :focus-visible {
   /* A visible, high-contrast indicator (>=3:1 against every app surface):
    * the accent mixed toward white, drawn as a real outline so it also
